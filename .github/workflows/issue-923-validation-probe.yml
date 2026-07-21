@@ -1,0 +1,76 @@
+name: issue-923-validation-probe
+
+on:
+  push:
+    branches:
+      - agent/issue-923-validation-probe
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TARGET_HEAD: 8cc4f6137998019e2a9159f32674162b3e6ddd7f
+      PR_BASE_SHA: faac4525e5e457f7480f99b5f26fcfd96da6d9d5
+      PR_HEAD_SHA: 8cc4f6137998019e2a9159f32674162b3e6ddd7f
+      OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Checkout exact PR head
+        run: git checkout --detach "$TARGET_HEAD"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: TypeScript foundation
+        run: |
+          npm run ts:smoke
+          npm run typecheck:foundation
+          npm run lint:foundation
+          npm run test:foundation
+          npm run check:pwsh-test-growth
+      - name: Repository structure and policy
+        shell: pwsh
+        run: |
+          ./scripts/verify.ps1
+          ./scripts/check-reusable.ps1
+          ./scripts/check-ci-cheap-wins.ps1
+          ./scripts/check-verify-runtime.ps1
+          ./scripts/check-ci-pipeline-split.ps1
+          ./scripts/lint-self-architect.ps1 -Strict
+      - name: Pester regression
+        shell: pwsh
+        run: |
+          ./scripts/install-pester-ci.ps1
+          ./scripts/test-all.ps1 -SkipNpm
+      - name: Build exact PR Vitest topology
+        shell: bash
+        run: |
+          export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
+          node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard
+      - name: Vitest light lane 1
+        shell: pwsh
+        env:
+          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
+        run: ./scripts/run-vitest-light-lane.ps1 -Shard 1
+      - name: Vitest light lane 2
+        shell: pwsh
+        env:
+          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
+        run: ./scripts/run-vitest-light-lane.ps1 -Shard 2
+      - name: Vitest heavy shard 1
+        shell: pwsh
+        env:
+          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
+        run: ./scripts/run-vitest-heavy-shard.ps1 -Shard 1
+      - name: Vitest heavy shard 2
+        shell: pwsh
+        env:
+          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
+        run: ./scripts/run-vitest-heavy-shard.ps1 -Shard 2
