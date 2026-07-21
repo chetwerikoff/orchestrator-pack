@@ -398,4 +398,57 @@ Describe 'scripts/lint-self-architect.ps1' {
         $body | Should -Match 'return \$blocks\.ToArray\(\)'
     }
 
+
+    # Issue #943 allocation-light exact block indexing.
+    It 'indexes sliding blocks without per-window slices pipelines or encoding' {
+        $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+        $slidingStart = $source.IndexOf('function Get-SlidingBlocks')
+        $slidingEnd = $source.IndexOf('function Get-RenameMap')
+        $duplicateStart = $source.IndexOf('function Find-DuplicateLiteralFindings')
+        $duplicateEnd = $source.IndexOf('function Find-HeuristicDuplicateFindings')
+        $slidingStart | Should -BeGreaterOrEqual 0
+        $slidingEnd | Should -BeGreaterThan $slidingStart
+        $duplicateStart | Should -BeGreaterOrEqual 0
+        $duplicateEnd | Should -BeGreaterThan $duplicateStart
+        $slidingBody = $source.Substring($slidingStart, $slidingEnd - $slidingStart)
+        $duplicateBody = $source.Substring($duplicateStart, $duplicateEnd - $duplicateStart)
+
+        $slidingBody | Should -Match '\$meaningfulPrefix'
+        $slidingBody | Should -Match '\[string\]::Join\("`n", \$Lines, \$start, \$Size\)'
+        $slidingBody | Should -Not -Match '\$Lines\[\$start\.\.'
+        $slidingBody | Should -Not -Match 'Where-Object'
+        $slidingBody | Should -Match 'System\.Collections\.Generic\.List\[object\]'
+        $duplicateBody | Should -Not -Match 'ToBase64String'
+        $duplicateBody | Should -Match '\$blockKey\s*=\s*\[string\]\$block\.text'
+    }
+
+    It 'skips whitespace-only windows while preserving meaningful exact duplicates' {
+        $tempRoot = Join-Path -Path $TestDrive -ChildPath 'lint-allocation-light-windows'
+        $scriptsDir = Join-Path -Path $tempRoot -ChildPath 'scripts'
+        New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+        $configPath = Join-Path $tempRoot 'lint-config.json'
+        @{
+            scanPaths = @('scripts/**')
+            excludePaths = @()
+            scriptExtensions = @('.ts')
+            templateExtensions = @()
+            duplicateLiteralMinLines = 10
+            suppressions = @()
+        } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+        $blank = @(1..12 | ForEach-Object { '   ' })
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'first.ts') -Value $blank -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'second.ts') -Value $blank -Encoding UTF8
+        $rawOutput = & $script:ShellPath -NoProfile -ExecutionPolicy Bypass -File $script:LintScript -FixtureRoot $tempRoot -ConfigPath $configPath -Strict 2>&1
+        $LASTEXITCODE | Should -Be 0
+        ($rawOutput | Out-String) | Should -Not -Match 'duplicate-literal'
+
+        $meaningful = @(1..12 | ForEach-Object { if ($_ -eq 6) { 'meaningful-line' } else { '   ' } })
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'first.ts') -Value $meaningful -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'second.ts') -Value $meaningful -Encoding UTF8
+        $rawOutput = & $script:ShellPath -NoProfile -ExecutionPolicy Bypass -File $script:LintScript -FixtureRoot $tempRoot -ConfigPath $configPath -Strict 2>&1
+        $LASTEXITCODE | Should -Be 1
+        ($rawOutput | Out-String) | Should -Match 'duplicate-literal'
+    }
+
 }

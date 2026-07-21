@@ -304,12 +304,6 @@ function Test-Suppressed {
     return $false
 }
 
-function Test-MeaningfulBlock {
-    param([string[]]$Lines)
-
-    return (($Lines | Where-Object { $_ -match '\S' }).Count -gt 0)
-}
-
 function Get-SlidingBlocks {
     param(
         [string[]]$Lines,
@@ -319,13 +313,23 @@ function Get-SlidingBlocks {
     $blocks = New-Object System.Collections.Generic.List[object]
     if ($Lines.Count -lt $Size) { return $blocks.ToArray() }
 
+    $meaningfulPrefix = [int[]]::new($Lines.Count + 1)
+    for ($index = 0; $index -lt $Lines.Count; $index++) {
+        $meaningfulPrefix[$index + 1] = $meaningfulPrefix[$index]
+        if ($Lines[$index] -match '\S') {
+            $meaningfulPrefix[$index + 1]++
+        }
+    }
+
     for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
-        $slice = @($Lines[$start..($start + $Size - 1)])
-        if (-not (Test-MeaningfulBlock -Lines $slice)) { continue }
+        $endExclusive = $start + $Size
+        if (($meaningfulPrefix[$endExclusive] - $meaningfulPrefix[$start]) -eq 0) {
+            continue
+        }
         $blocks.Add([pscustomobject]@{
-            text      = ($slice -join "`n")
+            text      = [string]::Join("`n", $Lines, $start, $Size)
             startLine = $start + 1
-            endLine   = $start + $Size
+            endLine   = $endExclusive
             lineCount = $Size
         }) | Out-Null
     }
@@ -488,7 +492,7 @@ function Find-DuplicateLiteralFindings {
         $relativePath = $entry.Key
         $blocks = Get-SlidingBlocks -Lines $entry.Value -Size $minStrict
         foreach ($block in $blocks) {
-            $blockKey = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($block.text))
+            $blockKey = [string]$block.text
             if (-not $blockMap.ContainsKey($blockKey)) {
                 $blockMap[$blockKey] = New-Object System.Collections.Generic.List[object]
             }
