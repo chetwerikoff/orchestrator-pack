@@ -1,4 +1,4 @@
-name: issue-923-final-fix-source-extract
+name: issue-923-final-fix-script-extract
 
 on:
   pull_request:
@@ -17,7 +17,7 @@ jobs:
       SOURCE_JOB_ID: '88712704384'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print exact final-fix source and residual findings
+      - name: Extract echoed Python patch as compressed chunks
         shell: bash
         run: |
           set -euo pipefail
@@ -28,29 +28,23 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "$api" > source.log
           python3 - <<'PY'
+          import base64
+          import gzip
           import re
+
           ansi = re.compile(r'\x1b\[[0-9;]*m')
-          lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          needles = (
-              'mutation-semantic-gates.ts', 'real-scope-proof.test.ts',
-              'worker-dispatch-journal.ts', 'foundation.test.ts',
-              'worker-notification-compat.test.ts', 'terminalized-port.test.ts',
-              'replace_once(', 'python3 <<', 'git diff --name-only',
-              '[STRICT]', 'Summary:', 'self_architect_elapsed_seconds=',
-          )
-          selected = set()
-          for index, line in enumerate(lines):
-              if any(needle in line for needle in needles):
-                  for cursor in range(max(0, index - 12), min(len(lines), index + 18)):
-                      selected.add(cursor)
-          print('--- selected windows ---')
-          previous = None
-          for index in sorted(selected):
-              if previous is not None and index > previous + 1:
-                  print('...')
-              print(f'{index + 1}:{lines[index][:2200]}')
-              previous = index
-          print('--- final 50 ---')
-          for index, line in enumerate(lines[-50:], start=max(1, len(lines) - 49)):
-              print(f'{index}:{line[:2200]}')
+          stamp = re.compile(r'^\d{4}-\d{2}-\d{2}T\S+Z\s')
+          raw = open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()
+          lines = [stamp.sub('', ansi.sub('', line), count=1) for line in raw]
+          start = next(i for i, line in enumerate(lines) if line == "python3 <<'PY'")
+          end = next(i for i in range(start + 1, len(lines)) if lines[i] == 'PY')
+          script = '\n'.join(lines[start + 1:end]) + '\n'
+          encoded = base64.b64encode(gzip.compress(script.encode('utf-8'), compresslevel=9)).decode('ascii')
+          print(f'SCRIPT_LINES={end-start-1}')
+          print(f'SCRIPT_SHA256=' + __import__('hashlib').sha256(script.encode()).hexdigest())
+          width = 1400
+          chunks = [encoded[i:i+width] for i in range(0, len(encoded), width)]
+          print(f'CHUNKS={len(chunks)}')
+          for index, chunk in enumerate(chunks):
+              print(f'CHUNK_{index:02d}={chunk}')
           PY
