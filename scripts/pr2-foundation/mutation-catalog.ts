@@ -1,6 +1,6 @@
 import { AC_MUTATION_CONTROLS, type AcceptanceId } from './contracts.ts';
 
-export type MutationStrategy = 'append' | 'delete' | 'create';
+export type MutationStrategy = 'corrupt' | 'delete' | 'create';
 
 export interface MutationBinding {
   ac: AcceptanceId;
@@ -22,7 +22,7 @@ function entries(
       ac,
       mutationId,
       artifactPath,
-      strategy: strategyByMutation[mutationId] ?? 'append',
+      strategy: strategyByMutation[mutationId] ?? 'corrupt',
       failingTestId: `mutation-contract:${ac}:${mutationId}`,
     };
   });
@@ -52,7 +52,7 @@ export const FOUNDATION_MUTATION_CATALOG: readonly MutationBinding[] = Object.fr
     'pr-body-reference-trusted': 'scripts/pr2-foundation/binding.ts',
     'draft-candidate-accepted': 'scripts/pr2-foundation/binding.ts',
     'missing-draft-bit-accepted': 'scripts/pr2-foundation/binding.ts',
-    'legacy-cache-projection-dependency': 'scripts/pr2-foundation/binding.ts',
+    'legacy-cache-projection-dependency': 'scripts/pr2-foundation/worker-notification-target.ts',
     'zero-candidate-bound': 'scripts/pr2-foundation/binding.ts',
     'multiple-candidates-bound': 'scripts/pr2-foundation/binding.ts',
     'bound-head-not-recorded': 'scripts/pr2-foundation/binding.ts',
@@ -104,13 +104,13 @@ export const FOUNDATION_MUTATION_CATALOG: readonly MutationBinding[] = Object.fr
   ...entries('AC8', {
     'suite-self-attests': 'scripts/pr2-foundation/mutation-runner.ts',
     'artifact-hash-delta-missing': 'scripts/pr2-foundation/mutation-runner.ts',
-    'failing-test-identity-missing': 'scripts/pr2-foundation/mutation-target-check.ts',
+    'failing-test-identity-missing': 'scripts/pr2-foundation/mutation-runner.ts',
     'mutation-id-extra': 'scripts/pr2-foundation/mutation-catalog.ts',
     'mutation-id-missing': 'scripts/pr2-foundation/mutation-catalog.ts',
     'restore-hash-mismatch': 'scripts/pr2-foundation/mutation-runner.ts',
   }),
   ...entries('AC9', {
-    'modification-outside-independent-union': 'scripts/pr2-foundation/contracts.ts',
+    'modification-outside-independent-union': 'scripts/pr2-foundation/real-scope-proof.test.ts',
     'manifest-self-authorizes': 'scripts/pr2-foundation/contracts.ts',
     'cutover-path-modified': 'scripts/review-trigger-reconcile.ps1',
     'registry-or-supervisor-modified': 'scripts/orchestrator-wake-supervisor.ps1',
