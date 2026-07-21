@@ -1,4 +1,4 @@
-name: issue-923-self-architect-summary
+name: issue-923-scope-amendment-helper
 
 on:
   pull_request:
@@ -6,62 +6,33 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  issues: read
 
 jobs:
-  summarize:
+  export-issue-body:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      SOURCE_JOB_ID: '88674126173'
-      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Summarize exact self-architect verdict
+      - uses: actions/checkout@v4
+      - name: Export authoritative Issue 923 body through the pack gh wrapper
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${SOURCE_JOB_ID}/logs"
-          curl --fail --silent --show-error --location \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$api" > self-architect.log
+          ./scripts/gh issue view 923 --repo "$GITHUB_REPOSITORY" --json body > issue-923.json
           python3 - <<'PY'
-          from collections import Counter
-          import re
-
-          text = open('self-architect.log', encoding='utf-8-sig', errors='replace').read().splitlines()
-          findings = []
-          summaries = []
-          errors = []
-          path_re = re.compile(r'([A-Za-z0-9_.@/-]+\.(?:ps1|sh|bash|js|ts|mjs|cjs|md|yaml|yml|json|example|template|tpl)):\d+-\d+')
-          finding_re = re.compile(r'\[(STRICT|WARNING)\]\s+([^:]+):\s+(.*?)\s+-\s+')
-          for line in text:
-              if 'Summary:' in line or 'summary:' in line:
-                  summaries.append(line)
-              if '##[error]' in line or 'Process completed with exit code' in line:
-                  errors.append(line)
-              match = finding_re.search(line)
-              if not match:
-                  continue
-              severity, rule, locations = match.groups()
-              files = tuple(dict.fromkeys(path_re.findall(locations)))
-              findings.append((severity, rule, files))
-
-          by_rule = Counter((severity, rule) for severity, rule, _ in findings)
-          by_pair = Counter((severity, rule, files) for severity, rule, files in findings)
-          print(f'total_findings={len(findings)}')
-          print('by_rule:')
-          for key, count in sorted(by_rule.items()):
-              print(f'  {key[0]} {key[1]}: {count}')
-          print('unique_groups:')
-          for (severity, rule, files), count in sorted(by_pair.items(), key=lambda item: (-item[1], item[0])):
-              print(f'  count={count} severity={severity} rule={rule} files={" | ".join(files)}')
-          print('summary_lines:')
-          for line in summaries[-20:]:
-              print(f'  {line}')
-          print('error_lines:')
-          for line in errors[-20:]:
-              print(f'  {line}')
+          import json
+          payload = json.load(open('issue-923.json', encoding='utf-8'))
+          body = payload.get('body')
+          if not isinstance(body, str) or not body.strip():
+              raise SystemExit('issue_923_body_missing')
+          open('issue-923.md', 'w', encoding='utf-8', newline='').write(body)
           PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-923-body
+          path: issue-923.md
+          if-no-files-found: error
+          retention-days: 1
