@@ -1,7 +1,7 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.mjs';
 
 const originalCliEntry = process.argv[1];
 process.argv[1] = 'merge-triage-gate-core-authority-import.mjs';
@@ -254,19 +254,24 @@ function syntheticHarnessReview(review, target) {
   };
 }
 
-function requireLivePrHead(target) {
-  const result = spawnSync('gh', [
-    'pr', 'view', String(target.prNumber), '--repo', target.repoSlug, '--json', 'headRefOid,headRefName',
-  ], {
+function runGh(args, label) {
+  const result = runProcessSync({
+    command: 'gh',
+    args,
     cwd: process.cwd(),
-    env: process.env,
+    inheritParentEnv: true,
     encoding: 'utf8',
-    windowsHide: true,
   });
-  if (result.error || result.status !== 0 || !text(result.stdout)) {
-    throw new Error(text(result.stderr || result.error?.message || result.stdout || `exit ${result.status}`));
+  if (!result.ok || !text(result.stdout)) {
+    throw new Error(`${label}: ${text(result.stderr || result.error || result.stdout || result.outcome)}`);
   }
-  const parsed = JSON.parse(String(result.stdout));
+  return JSON.parse(String(result.stdout));
+}
+
+function requireLivePrHead(target) {
+  const parsed = runGh([
+    'pr', 'view', String(target.prNumber), '--repo', target.repoSlug, '--json', 'headRefOid,headRefName',
+  ], 'live PR head read failed');
   const currentHeadSha = text(parsed?.headRefOid).toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(currentHeadSha)) throw new Error('live PR head is missing or malformed');
   return currentHeadSha;
@@ -281,16 +286,10 @@ function liveReview(target, review) {
   const currentHeadSha = requireLivePrHead(target);
   if (!/^\d+$/.test(review.reviewId)) throw new Error('terminal GitHub review id is not numeric');
   const endpoint = `repos/${target.repoSlug}/pulls/${target.prNumber}/reviews/${review.reviewId}`;
-  const result = spawnSync('gh', ['api', endpoint], {
-    cwd: process.cwd(),
-    env: process.env,
-    encoding: 'utf8',
-    windowsHide: true,
-  });
-  if (result.error || result.status !== 0 || !text(result.stdout)) {
-    throw new Error(text(result.stderr || result.error?.message || result.stdout || `exit ${result.status}`));
-  }
-  return { ...JSON.parse(String(result.stdout)), currentHeadSha };
+  return {
+    ...runGh(['api', endpoint], 'exact GitHub review read failed'),
+    currentHeadSha,
+  };
 }
 
 function verifyLiveReview(target, review) {
