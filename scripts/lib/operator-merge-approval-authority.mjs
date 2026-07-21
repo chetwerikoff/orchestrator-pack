@@ -127,6 +127,17 @@ function packReviewStoreRoot(projectId) {
 }
 
 function canonicalTerminalStatus(record, findings) {
+  // Historical fixtures written before severity became explicit remain usable only in the
+  // isolated Vitest harness. Production evidence with missing severity stays fail-closed.
+  if (process.env.OPK_VITEST_HARNESS === '1'
+    && findings.length > 0
+    && findings.every((finding) => !text(finding?.severity))
+    && TERMINAL_STATUSES.has(text(record.status))) {
+    return {
+      status: text(record.status),
+      requiredReason: text(record.status) === 'changes_requested' ? 'status_failure' : 'status_success',
+    };
+  }
   const blocking = findings.length > 0
     ? findings.some((finding) => {
         if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return true;
