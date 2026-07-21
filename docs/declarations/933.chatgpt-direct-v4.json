@@ -1,0 +1,54 @@
+{
+  "issue_number": 933,
+  "iteration_id": "chatgpt-direct-v4",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "chatgpt-direct-v3",
+  "created_at": "2026-07-21T01:13:46.803Z",
+  "baseline": {
+    "commit_sha": "f22d236b687065bc1df4c3b5912cee2f38aedaf8",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f72c0f42ed7f4c1910f737fdb33dcd9dec58896e7d856fbc5c8b53d5c13ce41f"
+  },
+  "declared_paths": [
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    ".claude/skills/merge-with-local-adoption/WORKFLOW.md",
+    ".cursor/skills/merge-with-local-adoption/SKILL.md",
+    "AGENTS.md",
+    "docs/merge-triage-gate-core.mjs",
+    "docs/merge-triage-gate.d.mts",
+    "docs/merge-triage-gate.mjs",
+    "docs/migration_notes.md",
+    "scripts/lib/gh-inventory-match.d.mts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-rest-routes.d.mts",
+    "scripts/lib/gh-rest-routes.mjs",
+    "scripts/lib/operator-merge-approval.ts",
+    "scripts/operator-merge-approval-authority.test.ts",
+    "scripts/operator-merge-approval.test.ts",
+    "scripts/operator-merge-approval.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:bd0899a71560a0932b89e32fd0fcbe9da472fae1d8513897b2ec189c9af1b21b",
+      "new_active_scope_hash": "sha256:f72c0f42ed7f4c1910f737fdb33dcd9dec58896e7d856fbc5c8b53d5c13ce41f",
+      "changed": {
+        "added": [
+          "docs/merge-triage-gate.d.mts",
+          "docs/migration_notes.md",
+          "scripts/lib/gh-inventory-match.d.mts",
+          "scripts/lib/gh-inventory-match.mjs",
+          "scripts/lib/gh-rest-routes.d.mts",
+          "scripts/lib/gh-rest-routes.mjs",
+          "scripts/operator-merge-approval-authority.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Add live GitHub review authority, shared policy preflight, store-root parity, and operator adoption files required by the current-head review findings",
+      "actor": "chatgpt-direct",
+      "timestamp": "2026-07-21T01:13:46.803Z",
+      "applied": true
+    }
+  ]
+}
