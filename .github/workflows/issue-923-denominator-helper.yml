@@ -1,0 +1,104 @@
+name: issue-923-denominator-helper
+
+on:
+  push:
+    branches:
+      - agent/issue-923-pr2-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite-denominator:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-923-pr2-foundation
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Rewrite exact Issue 923 denominator
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const manifestPath = 'scripts/estate-cut/issue-906.manifest.json';
+          const helperPath = '.github/workflows/issue-923-denominator-helper.yml';
+          const foundation = new Set([
+            'docs/ao-0-10-review-api.mjs',
+            'docs/autonomous-review-retry.mjs',
+            'docs/events-optional-consumer-signal-recovery.d.mts',
+            'docs/events-optional-consumer-signal-recovery.mjs',
+            'docs/orchestrator-wake-filter.mjs',
+            'docs/review-bulk-send-diagnose.mjs',
+            'docs/review-finding-delivery-confirm.mjs',
+            'docs/review-head-ready.mjs',
+            'docs/review-producer-contract.mjs',
+            'docs/review-send-reconcile.mjs',
+            'docs/review-trigger-reconcile.mjs',
+            'docs/review-wake-trigger.mjs',
+            'docs/reviewer-failure-evidence-markers.mjs',
+            'docs/worker-iteration-cycle.mjs',
+            'docs/worker-message-dispatch-observe.mjs',
+            'docs/worker-report-store.mjs',
+          ]);
+          const cutover = new Set([
+            'scripts/lib/Get-ReactionMessagesFromYaml.ps1',
+            'scripts/reaction-config-messages.d.mts',
+            'scripts/reaction-config-messages.mjs',
+            'scripts/review-ready-report-state-seed.ps1',
+            'scripts/review-trigger-reconcile.ps1',
+            'scripts/review-trigger-reeval.ps1',
+          ]);
+          const data = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          const counts = new Map([...foundation, ...cutover].map((path) => [path, 0]));
+          const visit = (value) => {
+            if (Array.isArray(value)) {
+              value.forEach(visit);
+              return;
+            }
+            if (!value || typeof value !== 'object') return;
+            if (typeof value.path === 'string'
+              && Object.prototype.hasOwnProperty.call(value, 'disposition')) {
+              if (foundation.has(value.path)) {
+                value.disposition = 'deleted-now';
+                delete value.owner;
+                counts.set(value.path, counts.get(value.path) + 1);
+              } else if (cutover.has(value.path)) {
+                value.disposition = 'owned-by-PR-2-cutover';
+                value.owner = 'draft-315';
+                counts.set(value.path, counts.get(value.path) + 1);
+              }
+            }
+            Object.values(value).forEach(visit);
+          };
+          visit(data);
+          if (!Array.isArray(data.objectiveStateDomain)) {
+            throw new Error('objectiveStateDomain missing');
+          }
+          if (!data.objectiveStateDomain.includes('owned-by-PR-2-cutover')) {
+            const index = data.objectiveStateDomain.indexOf('owned-by-PR-2');
+            data.objectiveStateDomain.splice(index >= 0 ? index + 1 : data.objectiveStateDomain.length, 0, 'owned-by-PR-2-cutover');
+          }
+          for (const [path, count] of counts) {
+            if (count < 1) throw new Error(`manifest row not found: ${path}`);
+          }
+          fs.writeFileSync(manifestPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+          for (const file of foundation) {
+            if (!fs.existsSync(file)) throw new Error(`foundation doc missing before terminalization: ${file}`);
+            fs.rmSync(file);
+          }
+          fs.rmSync(helperPath);
+          console.log(JSON.stringify({ counts: Object.fromEntries(counts), deleted: [...foundation] }, null, 2));
+          NODE
+      - name: Commit exact denominator transition
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat: terminalize PR 2 foundation denominator"
+          git push origin HEAD:agent/issue-923-pr2-foundation
