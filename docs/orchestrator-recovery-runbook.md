@@ -997,6 +997,10 @@ recovery procedure. Do not assume that a background child will terminalize the d
 
 ## After manual PR merge
 
+When pack-review was the only failing required check and the operator explicitly waived
+it, see [`pack-review-waiver-merge-runbook.md`](pack-review-waiver-merge-runbook.md)
+(status POST + merge) before this section.
+
 When a worker PR is merged on GitHub (human merge per repo policy), AO 0.9.x
 **worker** merge cleanup and **AO-local review** persistence are **decoupled**:
 
