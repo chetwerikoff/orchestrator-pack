@@ -245,6 +245,7 @@ function syntheticHarnessReview(review, target) {
   return {
     id: review.reviewId,
     commitId: target.headSha,
+    currentHeadSha: target.headSha,
     state: 'COMMENTED',
     body: review.body,
     submittedAt: null,
@@ -253,12 +254,31 @@ function syntheticHarnessReview(review, target) {
   };
 }
 
+function requireLivePrHead(target) {
+  const result = spawnSync('gh', [
+    'pr', 'view', String(target.prNumber), '--repo', target.repoSlug, '--json', 'headRefOid,headRefName',
+  ], {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0 || !text(result.stdout)) {
+    throw new Error(text(result.stderr || result.error?.message || result.stdout || `exit ${result.status}`));
+  }
+  const parsed = JSON.parse(String(result.stdout));
+  const currentHeadSha = text(parsed?.headRefOid).toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(currentHeadSha)) throw new Error('live PR head is missing or malformed');
+  return currentHeadSha;
+}
+
 function liveReview(target, review) {
   const fixture = text(process.env[LIVE_REVIEW_FIXTURE_ENV]);
   if (process.env.OPK_VITEST_HARNESS === '1') {
     if (!fixture) return syntheticHarnessReview(review, target);
     return JSON.parse(readFileSync(path.resolve(fixture), 'utf8'));
   }
+  const currentHeadSha = requireLivePrHead(target);
   if (!/^\d+$/.test(review.reviewId)) throw new Error('terminal GitHub review id is not numeric');
   const endpoint = `repos/${target.repoSlug}/pulls/${target.prNumber}/reviews/${review.reviewId}`;
   const result = spawnSync('gh', ['api', endpoint], {
@@ -270,7 +290,7 @@ function liveReview(target, review) {
   if (result.error || result.status !== 0 || !text(result.stdout)) {
     throw new Error(text(result.stderr || result.error?.message || result.stdout || `exit ${result.status}`));
   }
-  return JSON.parse(String(result.stdout));
+  return { ...JSON.parse(String(result.stdout)), currentHeadSha };
 }
 
 function verifyLiveReview(target, review) {
@@ -282,11 +302,13 @@ function verifyLiveReview(target, review) {
   }
   if (!live || typeof live !== 'object' || Array.isArray(live)) return { ok: false, reason: 'github_review_live_payload_malformed' };
   const reviewId = text(live.id);
+  const currentHeadSha = text(live.currentHeadSha).toLowerCase();
   const commitId = text(live.commitId ?? live.commit_id).toLowerCase();
   const state = text(live.state).toUpperCase();
   const actorLogin = text(live.authorLogin ?? live.userLogin ?? live.user?.login);
   const body = String(live.body ?? '');
   if (reviewId !== review.reviewId) return { ok: false, reason: 'github_review_live_identity_mismatch' };
+  if (currentHeadSha !== target.headSha) return { ok: false, reason: 'github_review_live_pr_head_mismatch' };
   if (commitId !== target.headSha) return { ok: false, reason: 'github_review_live_head_mismatch' };
   if (state !== 'COMMENTED') return { ok: false, reason: 'github_review_live_state_mismatch' };
   if (actorLogin.toLowerCase() !== review.actorLogin.toLowerCase()) return { ok: false, reason: 'github_review_live_actor_mismatch' };
@@ -301,7 +323,13 @@ function verifyLiveReview(target, review) {
     || Date.parse(submittedAt) > Date.parse(review.record.completedAtUtc))) {
     return { ok: false, reason: 'github_review_live_timestamp_invalid' };
   }
-  return { ok: true, reviewId, body, bodySha256: sha256(body) };
+  return {
+    ok: true,
+    reviewId,
+    body,
+    bodySha256: sha256(body),
+    syntheticHarness: live.syntheticHarness === true,
+  };
 }
 
 function durableClearanceDecision(input, target, review) {
@@ -359,24 +387,30 @@ export function evaluateDirectOperatorReviewSafety(input = {}) {
 
   const clearance = durableClearanceDecision(input, target, review);
   if (!clearance && review.record.reviewVerdict !== 'clean') {
-    const classification = core.classifyFinding({
-      id: `github-review-${live.reviewId}`,
-      fingerprint: live.bodySha256,
-      title: 'Live GitHub pack review',
-      body: live.body,
-    });
-    if (classification.verdict === core.VERDICT_BLOCK) return {
+    const classifications = live.syntheticHarness
+      ? review.findings.map((finding) => core.classifyFinding(finding))
+      : [core.classifyFinding({
+          id: `github-review-${live.reviewId}`,
+          fingerprint: live.bodySha256,
+          title: 'Live GitHub pack review',
+          body: live.body,
+        })];
+    const block = classifications.filter((classification) => classification.verdict === core.VERDICT_BLOCK);
+    if (block.length > 0) return {
       allow: false,
       reason: 'operator_merge_block_findings',
       reviewRunId: text(review.record.id ?? review.record.runId),
-      classifications: [classification],
+      classifications: block,
     };
-    if (classification.verdict === core.VERDICT_PENDING_ARCHITECT
-      || classification.verdict === core.VERDICT_PENDING_OPERATOR) return {
+    const pending = classifications.filter((classification) => (
+      classification.verdict === core.VERDICT_PENDING_ARCHITECT
+      || classification.verdict === core.VERDICT_PENDING_OPERATOR
+    ));
+    if (pending.length > 0) return {
       allow: false,
       reason: 'operator_merge_pending_adjudication',
       reviewRunId: text(review.record.id ?? review.record.runId),
-      classifications: [classification],
+      classifications: pending,
     };
   }
 
