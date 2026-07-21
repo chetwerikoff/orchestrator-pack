@@ -19,7 +19,8 @@
     "gate-runner-selftest": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/gate-runner",
     "gate-census-generate": "npm run check:node-major --silent && node --experimental-strip-types scripts/gate-runner/census-generator.ts",
     "estate-cut:check": "npm run check:node-major --silent && node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --check",
-    "test:issue-906": "npm run check:node-major --silent && vitest run --config scripts/estate-cut/vitest.config.ts"
+    "test:issue-906": "npm run check:node-major --silent && vitest run --config scripts/estate-cut/vitest.config.ts",
+    "test:contract-mutations": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2-foundation/contract-test-runner.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",
