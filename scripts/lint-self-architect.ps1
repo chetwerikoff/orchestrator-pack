@@ -291,7 +291,7 @@ function Test-Suppressed {
     foreach ($entry in $Config.suppressions) {
         if ($entry.rule -and $entry.rule -ne $Rule) { continue }
         $entryFiles = @($entry.files | ForEach-Object { Normalize-RepoPath $_ })
-        if ($entryFiles.Count -eq 0) { continue }
+        if ($entryFiles.Count -eq 0 -or $entryFiles.Count -ne $Files.Count) { continue }
         $allMatch = $true
         foreach ($file in $Files) {
             if ($entryFiles -notcontains (Normalize-RepoPath $file)) {
@@ -316,20 +316,20 @@ function Get-SlidingBlocks {
         [int]$Size
     )
 
-    $blocks = @()
-    if ($Lines.Count -lt $Size) { return $blocks }
+    $blocks = New-Object System.Collections.Generic.List[object]
+    if ($Lines.Count -lt $Size) { return $blocks.ToArray() }
 
     for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
         $slice = @($Lines[$start..($start + $Size - 1)])
         if (-not (Test-MeaningfulBlock -Lines $slice)) { continue }
-        $blocks += [pscustomobject]@{
+        $blocks.Add([pscustomobject]@{
             text      = ($slice -join "`n")
             startLine = $start + 1
             endLine   = $start + $Size
             lineCount = $Size
-        }
+        }) | Out-Null
     }
-    return $blocks
+    return $blocks.ToArray()
 }
 
 function Get-RenameMap {
@@ -482,6 +482,7 @@ function Find-DuplicateLiteralFindings {
         }
     }
     $requireIntroduced = ($introduced.Count -gt 0)
+    $baseLinesCache = @{}
 
     foreach ($entry in $FileLines.GetEnumerator()) {
         $relativePath = $entry.Key
@@ -505,6 +506,10 @@ function Find-DuplicateLiteralFindings {
         $distinctFiles = @($locations | Select-Object -ExpandProperty file -Unique)
         if ($distinctFiles.Count -lt 2) { continue }
 
+        $rule = 'duplicate-literal'
+        $files = @($distinctFiles)
+        if (Test-Suppressed -Config $Config -Rule $rule -Files $files) { continue }
+
         if ($requireIntroduced) {
             $touchesIntroduced = $false
             $touchesUnchanged = $false
@@ -526,7 +531,6 @@ function Find-DuplicateLiteralFindings {
                 $blockText = (
                     $FileLines[$samplePath][($sampleLoc.startLine - 1)..($sampleLoc.endLine - 1)] -join "`n"
                 )
-                $baseLinesCache = @{}
                 $shouldReport = $false
 
                 if ($touchesUnchanged) {
@@ -563,10 +567,6 @@ function Find-DuplicateLiteralFindings {
         }
 
         $lineCount = $locations[0].lineCount
-        $rule = 'duplicate-literal'
-        $files = @($distinctFiles)
-        if (Test-Suppressed -Config $Config -Rule $rule -Files $files) { continue }
-
         $severity = if ($lineCount -ge $minStrict) { 'strict' } else { 'warning' }
         $rationale = "Exact duplicate prompt literal ($lineCount lines) across $($distinctFiles.Count) files; centralize into one source of truth."
         $findingLocations = @(
