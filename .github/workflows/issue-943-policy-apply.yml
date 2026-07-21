@@ -1,0 +1,201 @@
+name: issue-943-policy-apply
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: issue-943-policy-apply
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_BRANCH: agent/issue-943-self-architect-hot-loop
+      TARGET_HEAD: e6f6e7d6f18f94862ed39c87c486515486c79e29
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-943-self-architect-hot-loop
+          fetch-depth: 0
+      - name: Apply allocation-light exact block indexing
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str, label: str) -> None:
+              source = path.read_text(encoding='utf-8')
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one match, found {count}')
+              path.write_text(source.replace(old, new, 1), encoding='utf-8')
+
+          lint_path = Path('scripts/lint-self-architect.ps1')
+          old_hot_loop = r'''function Test-MeaningfulBlock {
+              param([string[]]$Lines)
+
+              return (($Lines | Where-Object { $_ -match '\S' }).Count -gt 0)
+          }
+
+          function Get-SlidingBlocks {
+              param(
+                  [string[]]$Lines,
+                  [int]$Size
+              )
+
+              $blocks = New-Object System.Collections.Generic.List[object]
+              if ($Lines.Count -lt $Size) { return $blocks.ToArray() }
+
+              for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
+                  $slice = @($Lines[$start..($start + $Size - 1)])
+                  if (-not (Test-MeaningfulBlock -Lines $slice)) { continue }
+                  $blocks.Add([pscustomobject]@{
+                      text      = ($slice -join "`n")
+                      startLine = $start + 1
+                      endLine   = $start + $Size
+                      lineCount = $Size
+                  }) | Out-Null
+              }
+              return $blocks.ToArray()
+          }
+          '''
+          new_hot_loop = r'''function Get-SlidingBlocks {
+              param(
+                  [string[]]$Lines,
+                  [int]$Size
+              )
+
+              $blocks = New-Object System.Collections.Generic.List[object]
+              if ($Lines.Count -lt $Size) { return $blocks.ToArray() }
+
+              $meaningfulPrefix = [int[]]::new($Lines.Count + 1)
+              for ($index = 0; $index -lt $Lines.Count; $index++) {
+                  $meaningfulPrefix[$index + 1] = $meaningfulPrefix[$index]
+                  if ($Lines[$index] -match '\S') {
+                      $meaningfulPrefix[$index + 1]++
+                  }
+              }
+
+              for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
+                  $endExclusive = $start + $Size
+                  if (($meaningfulPrefix[$endExclusive] - $meaningfulPrefix[$start]) -eq 0) {
+                      continue
+                  }
+                  $blocks.Add([pscustomobject]@{
+                      text      = [string]::Join("`n", $Lines, $start, $Size)
+                      startLine = $start + 1
+                      endLine   = $endExclusive
+                      lineCount = $Size
+                  }) | Out-Null
+              }
+              return $blocks.ToArray()
+          }
+          '''
+          replace_once(lint_path, old_hot_loop, new_hot_loop, 'sliding block hot loop')
+          replace_once(
+              lint_path,
+              '            $blockKey = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($block.text))\n',
+              '            $blockKey = [string]$block.text\n',
+              'exact block dictionary key',
+          )
+
+          test_path = Path('tests/powershell/Lint-SelfArchitect.Tests.ps1')
+          source = test_path.read_text(encoding='utf-8')
+          marker = "\n}\n"
+          if not source.endswith(marker):
+              raise SystemExit('test file closing marker missing')
+          addition = r'''
+
+              # Issue #943 allocation-light exact block indexing.
+              It 'indexes sliding blocks without per-window slices pipelines or encoding' {
+                  $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+                  $slidingStart = $source.IndexOf('function Get-SlidingBlocks')
+                  $slidingEnd = $source.IndexOf('function Get-RenameMap')
+                  $duplicateStart = $source.IndexOf('function Find-DuplicateLiteralFindings')
+                  $duplicateEnd = $source.IndexOf('function Find-HeuristicDuplicateFindings')
+                  $slidingStart | Should -BeGreaterOrEqual 0
+                  $slidingEnd | Should -BeGreaterThan $slidingStart
+                  $duplicateStart | Should -BeGreaterOrEqual 0
+                  $duplicateEnd | Should -BeGreaterThan $duplicateStart
+                  $slidingBody = $source.Substring($slidingStart, $slidingEnd - $slidingStart)
+                  $duplicateBody = $source.Substring($duplicateStart, $duplicateEnd - $duplicateStart)
+
+                  $slidingBody | Should -Match '\$meaningfulPrefix'
+                  $slidingBody | Should -Match '\[string\]::Join\("`n", \$Lines, \$start, \$Size\)'
+                  $slidingBody | Should -Not -Match '\$Lines\[\$start\.\.'
+                  $slidingBody | Should -Not -Match 'Where-Object'
+                  $slidingBody | Should -Match 'System\.Collections\.Generic\.List\[object\]'
+                  $duplicateBody | Should -Not -Match 'ToBase64String'
+                  $duplicateBody | Should -Match '\$blockKey\s*=\s*\[string\]\$block\.text'
+              }
+
+              It 'skips whitespace-only windows while preserving meaningful exact duplicates' {
+                  $tempRoot = Join-Path -Path $TestDrive -ChildPath 'lint-allocation-light-windows'
+                  $scriptsDir = Join-Path -Path $tempRoot -ChildPath 'scripts'
+                  New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+                  $configPath = Join-Path $tempRoot 'lint-config.json'
+                  @{
+                      scanPaths = @('scripts/**')
+                      excludePaths = @()
+                      scriptExtensions = @('.ts')
+                      templateExtensions = @()
+                      duplicateLiteralMinLines = 10
+                      suppressions = @()
+                  } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+                  $blank = @(1..12 | ForEach-Object { '   ' })
+                  Set-Content -LiteralPath (Join-Path $scriptsDir 'first.ts') -Value $blank -Encoding UTF8
+                  Set-Content -LiteralPath (Join-Path $scriptsDir 'second.ts') -Value $blank -Encoding UTF8
+                  $rawOutput = & $script:ShellPath -NoProfile -ExecutionPolicy Bypass -File $script:LintScript -FixtureRoot $tempRoot -ConfigPath $configPath -Strict 2>&1
+                  $LASTEXITCODE | Should -Be 0
+                  ($rawOutput | Out-String) | Should -Not -Match 'duplicate-literal'
+
+                  $meaningful = @(1..12 | ForEach-Object { if ($_ -eq 6) { 'meaningful-line' } else { '   ' } })
+                  Set-Content -LiteralPath (Join-Path $scriptsDir 'first.ts') -Value $meaningful -Encoding UTF8
+                  Set-Content -LiteralPath (Join-Path $scriptsDir 'second.ts') -Value $meaningful -Encoding UTF8
+                  $rawOutput = & $script:ShellPath -NoProfile -ExecutionPolicy Bypass -File $script:LintScript -FixtureRoot $tempRoot -ConfigPath $configPath -Strict 2>&1
+                  $LASTEXITCODE | Should -Be 1
+                  ($rawOutput | Out-String) | Should -Match 'duplicate-literal'
+              }
+          '''
+          test_path.write_text(source[:-len(marker)] + addition + marker, encoding='utf-8')
+          PY
+
+          expected="$RUNNER_TEMP/expected-paths"
+          actual="$RUNNER_TEMP/actual-paths"
+          cat > "$expected" <<'EOF'
+          scripts/lint-self-architect.ps1
+          tests/powershell/Lint-SelfArchitect.Tests.ps1
+          EOF
+          git diff --name-only | sort > "$actual"
+          sort -o "$expected" "$expected"
+          diff -u "$expected" "$actual"
+          git diff --check
+      - name: Verify Issue 943 policy
+        shell: pwsh
+        run: |
+          ./scripts/install-pester-ci.ps1
+          Invoke-Pester ./tests/powershell/Lint-SelfArchitect.Tests.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/verify.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/check-reusable.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Commit and push verified policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/lint-self-architect.ps1 tests/powershell/Lint-SelfArchitect.Tests.ps1
+          git commit -m 'perf: make self-architect block indexing allocation-light'
+          git push origin HEAD:"$TARGET_BRANCH"
