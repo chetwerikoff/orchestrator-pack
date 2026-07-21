@@ -64,17 +64,28 @@ def main() -> None:
         "        $helperBody | Should -Match '\\$blockKey\\s*=\\s*\\[string\\]::Join'\n",
         "changed-first key location",
     )
-    tests = replace_once(
-        tests,
-        "        $finderBody | Should -Match '\\$blockText\\s*=\\s*\\[string\\]\\$pair\\.Key'\n",
-        "        $finderBody | Should -Match '\\$blockText\\s*=\\s*\\[string\\]\\$pair\\.Key'\n"
-        "        $singletonIndex = $finderBody.IndexOf('if ($rawLocations.Count -lt 2)')\n"
-        "        $sortIndex = $finderBody.IndexOf('$locations = @($rawLocations | Sort-Object file, startLine)')\n"
-        "        $singletonIndex | Should -BeGreaterOrEqual 0\n"
-        "        $singletonIndex | Should -BeLessThan $sortIndex\n"
-        "        $finderBody | Should -Match 'System\\.Collections\\.Generic\\.HashSet\\[string\\]'\n",
-        "singleton-before-sort regression",
-    )
+    addition = r'''
+
+    It 'skips singleton duplicate groups before sorting locations' {
+        $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+        $finderStart = $source.IndexOf('function Find-DuplicateLiteralFindings')
+        $finderEnd = $source.IndexOf('function Find-HeuristicDuplicateFindings')
+        $finderStart | Should -BeGreaterOrEqual 0
+        $finderEnd | Should -BeGreaterThan $finderStart
+        $finderBody = $source.Substring($finderStart, $finderEnd - $finderStart)
+
+        $singletonIndex = $finderBody.IndexOf('if ($rawLocations.Count -lt 2)')
+        $sortIndex = $finderBody.IndexOf('$locations = @($rawLocations | Sort-Object file, startLine)')
+        $singletonIndex | Should -BeGreaterOrEqual 0
+        $singletonIndex | Should -BeLessThan $sortIndex
+        $finderBody | Should -Match 'System\.Collections\.Generic\.HashSet\[string\]'
+    }
+'''
+    marker = "\n}\n"
+    insert_at = tests.rfind(marker)
+    if insert_at < 0:
+        raise SystemExit("pester closing marker missing")
+    tests = tests[:insert_at] + textwrap.dedent(addition) + tests[insert_at:]
     tests_path.write_text(tests, encoding="utf-8")
 
     expected = sorted(
