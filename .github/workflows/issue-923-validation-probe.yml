@@ -1,4 +1,4 @@
-name: issue-923-scope-amendment-helper
+name: issue-923-atomic-fix-input
 
 on:
   pull_request:
@@ -6,50 +6,30 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
-  amend-issue-scope:
+  export-input:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Record the one-shot exact existing-file scope amendment
-        env:
-          GH_TOKEN: ${{ github.token }}
+        with:
+          ref: 50722cde9571877d482dfb893d925a23d32617fa
+          fetch-depth: 0
+      - name: Export exact head inputs
         shell: bash
         run: |
           set -euo pipefail
-          ./scripts/gh issue view 923 --repo "$GITHUB_REPOSITORY" --json body > issue-923.json
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          marker = '## Scope amendment — justified dormant-mirror lint suppressions (2026-07-21; amendment 1/1)'
-          payload = json.loads(Path('issue-923.json').read_text(encoding='utf-8'))
-          body = payload.get('body')
-          if not isinstance(body, str) or not body.strip():
-              raise SystemExit('issue_923_body_missing')
-          if marker in body:
-              Path('issue-923.updated.md').write_text(body, encoding='utf-8')
-              raise SystemExit(0)
-
-          amendment = '''## Scope amendment — justified dormant-mirror lint suppressions (2026-07-21; amendment 1/1)
-
-The exact PR #939 head was run through the full strict self-architect command outside the workflow's 10-minute cap. It produced 8,357 `duplicate-literal` findings, all and only between the sixteen legacy-live `docs/**` compatibility modules named by AC7 and their dormant TypeScript authority ports under `scripts/pr2-foundation/terminalized/**`. The legacy modules cannot be deleted or made prose-only in this foundation because current live wrappers still execute them, while AC1 forbids activating the TypeScript ports before draft 315.
-
-This one-shot amendment adds exactly one merge-base-existing path to **Files in scope**:
-
-- `scripts/lint-self-architect.config.json`, limited solely to adding exactly sixteen `duplicate-literal` suppression entries. Each entry must name one exact AC7 legacy-source/TypeScript-port pair and include a reason tying the temporary mirror to Issue #923 and draft 315 cutover.
-
-No `excludePaths` change, scan-path change, extension change, threshold change, wildcard/directory suppression, workflow timeout/skip, or suppression for any other rule or file is authorized. Tests and contracts already under the predeclared `scripts/pr2-foundation/**` addition root must prove exact pair equality, reject broad suppressions, and keep the TypeScript ports dormant. This amendment does not change the 16/6 denominator, activate a new reader, or authorize any other existing path.
-'''
-          anchor = '## Acceptance criteria'
-          index = body.find(anchor)
-          if index < 0:
-              raise SystemExit('acceptance_criteria_anchor_missing')
-          updated = body[:index].rstrip() + '\n\n' + amendment.rstrip() + '\n\n' + body[index:]
-          Path('issue-923.updated.md').write_text(updated, encoding='utf-8')
-          PY
-          gh issue edit 923 --repo "$GITHUB_REPOSITORY" --body-file issue-923.updated.md
+          mkdir -p payload/scripts/pr2-foundation
+          cp scripts/lint-self-architect.config.json payload/scripts/
+          cp scripts/pr2-foundation/contracts.ts payload/scripts/pr2-foundation/
+          cp scripts/pr2-foundation/terminalized-port.test.ts payload/scripts/pr2-foundation/
+          git rev-parse 'HEAD^{tree}' > payload/base-tree-sha.txt
+          git rev-parse HEAD > payload/base-commit-sha.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-923-atomic-fix-input
+          path: payload
+          if-no-files-found: error
+          retention-days: 1
