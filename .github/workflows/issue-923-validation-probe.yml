@@ -1,4 +1,4 @@
-name: issue-923-lane-one-stack
+name: issue-923-residual-focused-failure
 
 on:
   pull_request:
@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88704808829'
+      SOURCE_JOB_ID: '88709369923'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print lane-one assertion context
+      - name: Print residual focused-test failure
         shell: bash
         run: |
           set -euo pipefail
@@ -26,14 +26,14 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$api" > lane.log
+            "$api" > residual.log
           python3 - <<'PY'
           import re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
-          lines = [ansi.sub('', line) for line in open('lane.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
+          lines = [ansi.sub('', line) for line in open('residual.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
           for index, line in enumerate(lines):
-              if 'AssertionError: expected [] to have a length of 1 but got +0' not in line:
+              if not any(token in line for token in ('AssertionError:', ' FAIL ', 'failed', 'Error:')):
                   continue
-              for cursor in range(max(0, index - 12), min(len(lines), index + 24)):
+              for cursor in range(max(0, index - 8), min(len(lines), index + 20)):
                   print(f'{cursor + 1}:{lines[cursor]}')
           PY
