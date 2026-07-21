@@ -381,4 +381,20 @@ Describe 'scripts/lint-self-architect.ps1' {
         @(Compare-Object -ReferenceObject ($expectedLegacy | Sort-Object) -DifferenceObject ($actualLegacy | Sort-Object)).Count | Should -Be 0
     }
 
+
+
+    It 'builds sliding windows without quadratic array concatenation' {
+        $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+        $start = $source.IndexOf('function Get-SlidingBlocks')
+        $end = $source.IndexOf('function Get-RenameMap')
+        $start | Should -BeGreaterOrEqual 0
+        $end | Should -BeGreaterThan $start
+        $body = $source.Substring($start, $end - $start)
+
+        $body | Should -Match 'System\.Collections\.Generic\.List\[object\]'
+        $body | Should -Match '\$blocks\.Add\('
+        $body | Should -Not -Match '\$blocks\s*\+='
+        $body | Should -Match 'return \$blocks\.ToArray\(\)'
+    }
+
 }

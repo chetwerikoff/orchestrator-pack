@@ -316,20 +316,20 @@ function Get-SlidingBlocks {
         [int]$Size
     )
 
-    $blocks = @()
-    if ($Lines.Count -lt $Size) { return $blocks }
+    $blocks = New-Object System.Collections.Generic.List[object]
+    if ($Lines.Count -lt $Size) { return $blocks.ToArray() }
 
     for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
         $slice = @($Lines[$start..($start + $Size - 1)])
         if (-not (Test-MeaningfulBlock -Lines $slice)) { continue }
-        $blocks += [pscustomobject]@{
+        $blocks.Add([pscustomobject]@{
             text      = ($slice -join "`n")
             startLine = $start + 1
             endLine   = $start + $Size
             lineCount = $Size
-        }
+        }) | Out-Null
     }
-    return $blocks
+    return $blocks.ToArray()
 }
 
 function Get-RenameMap {
