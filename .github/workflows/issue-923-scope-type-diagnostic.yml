@@ -1,0 +1,44 @@
+name: issue-923-scope-type-diagnostic
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  capture:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-pr2-foundation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Capture exact diagnostics
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          mkdir -p diagnostics
+          set +e
+          npx tsc --project tsconfig.base.json --noEmit > diagnostics/typecheck.log 2>&1
+          echo $? > diagnostics/typecheck.exit
+          gh pr diff "$PR_NUMBER" --name-only > diagnostics/changed-paths.txt 2>&1
+          gh issue view 923 --json body -q .body > diagnostics/issue-body.md 2>&1
+          set -e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-923-scope-type-diagnostic
+          path: diagnostics
+          if-no-files-found: error
