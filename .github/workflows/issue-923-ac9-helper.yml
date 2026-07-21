@@ -1,4 +1,4 @@
-name: issue-923-ac9-post-residual
+name: issue-923-ac9-post-residual-disabled
 
 on:
   pull_request:
@@ -9,93 +9,11 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  fix:
-    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+  disabled:
+    if: ${{ false }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      PRE_RESIDUAL_HEAD: 4901a274d1f6ec980d2974f3f729a26dcd1cc751
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Wait for verified residual commit
-        shell: bash
-        run: |
-          set -euo pipefail
-          for _ in $(seq 1 240); do
-            git fetch origin agent/issue-923-pr2-foundation
-            current="$(git rev-parse origin/agent/issue-923-pr2-foundation)"
-            if [ "$current" != "$PRE_RESIDUAL_HEAD" ]; then
-              echo "residual_head=$current"
-              git checkout -B agent/issue-923-pr2-foundation origin/agent/issue-923-pr2-foundation
-              exit 0
-            fi
-            sleep 5
-          done
-          echo 'residual helper did not publish a new head' >&2
-          exit 1
-      - name: Preserve declaration history across main merge
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path: str, old: str, new: str) -> None:
-              file = Path(path)
-              text = file.read_text(encoding='utf-8')
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{path}: expected one match, found {count}')
-              file.write_text(text.replace(old, new, 1), encoding='utf-8')
-
-          replace_once(
-              'scripts/pr2-foundation/real-scope-proof.test.ts',
-              """      'log',
-                '--diff-filter=A',
-          """,
-              """      'log',
-                '--full-history',
-                '--diff-filter=A',
-          """,
-          )
-          replace_once(
-              'scripts/pr2-foundation/mutation-semantic-gates.ts',
-              "  'AC9:declaration-created-after-implementation': textGate('scripts/pr2-foundation/real-scope-proof.test.ts', ['declarationIndex']),\n",
-              "  'AC9:declaration-created-after-implementation': textGate('scripts/pr2-foundation/real-scope-proof.test.ts', ['--full-history', 'declarationCommitSha']),\n",
-          )
-          PY
-          expected="$RUNNER_TEMP/expected-paths"
-          actual="$RUNNER_TEMP/actual-paths"
-          printf '%s\n' \
-            scripts/pr2-foundation/mutation-semantic-gates.ts \
-            scripts/pr2-foundation/real-scope-proof.test.ts \
-            | sort > "$expected"
-          git diff --name-only | sort > "$actual"
-          diff -u "$expected" "$actual"
-          git diff --check
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add --pathspec-from-file="$expected"
-          git commit -m 'test: preserve declaration proof through base merge'
-      - name: Verify AC9 proof and semantic gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm ci --include=dev
-          npm run check:node-major
-          npx tsc --project tsconfig.base.json --noEmit
-          npm test -- \
-            scripts/pr2-foundation/real-scope-proof.test.ts \
-            scripts/pr2-foundation/mutation-semantic-gates.test.ts
-      - name: Push verified AC9 fix
-        shell: bash
-        run: git push origin HEAD:agent/issue-923-pr2-foundation
+      - run: echo disabled
