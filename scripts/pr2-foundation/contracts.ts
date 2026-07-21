@@ -98,22 +98,35 @@ export interface DeclarationSnapshotShape {
   declared_globs: string[];
 }
 
-export function validateEstateSplit(rows: Array<{
+export interface EstateDenominatorRow {
   path: string;
-  disposition: string;
-  owner?: string;
-}>): { ok: true; result: 'foundation-16-cutover-6' } | { ok: false; reason: string } {
-  const byPath = new Map(rows.map((row) => [row.path, row]));
-  if (byPath.size !== rows.length) return { ok: false, reason: 'duplicate_manifest_row' };
+  terminalState: string;
+  replacementOwner?: string;
+}
+
+export function validateEstateSplit(
+  rows: EstateDenominatorRow[],
+): { ok: true; result: 'foundation-16-cutover-6' } | { ok: false; reason: string } {
+  const expected = new Set<string>([...FOUNDATION_DOC_ROWS, ...CUTOVER_ROWS]);
+  const relevant = rows.filter((row) => expected.has(row.path));
+  const byPath = new Map(relevant.map((row) => [row.path, row]));
+  if (relevant.length !== expected.size || byPath.size !== expected.size) {
+    return { ok: false, reason: 'denominator_not_exactly_twenty_two_rows' };
+  }
   for (const path of FOUNDATION_DOC_ROWS) {
     const row = byPath.get(path);
-    if (!row || row.disposition === 'owned-by-PR-2' || row.disposition === 'owned-by-PR-2-cutover') {
+    if (!row || row.terminalState !== 'deleted-now') {
       return { ok: false, reason: `foundation_row_not_terminal:${path}` };
+    }
+    if (row.replacementOwner) {
+      return { ok: false, reason: `foundation_row_owner_survived:${path}` };
     }
   }
   for (const path of CUTOVER_ROWS) {
     const row = byPath.get(path);
-    if (!row || row.disposition !== 'owned-by-PR-2-cutover' || row.owner !== 'draft-315') {
+    if (!row
+      || row.terminalState !== 'owned-by-PR-2-cutover'
+      || row.replacementOwner !== 'draft 315') {
       return { ok: false, reason: `cutover_row_invalid:${path}` };
     }
   }
