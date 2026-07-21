@@ -1,4 +1,4 @@
-name: issue-941-base-window-cache-failure-summary
+name: issue-943-changed-first-failure-summary
 
 on:
   pull_request:
@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88725474028'
+      SOURCE_JOB_ID: '88734204679'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print exact Issue 941 publisher failure
+      - name: Print exact changed-first publisher failure
         shell: bash
         run: |
           set -euo pipefail
@@ -32,14 +32,18 @@ jobs:
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
           needles = (
-              'expected one match', 'expected 2 matches', 'found ',
-              'Traceback', 'SystemExit', '##[error]', 'Process completed with exit code',
+              'Traceback', 'SystemExit', 'expected ', 'found ', 'missing',
+              '##[error]', 'Process completed with exit code', 'diff --check',
           )
           print('--- matched ---')
-          for index, line in enumerate(lines, start=1):
+          selected = set()
+          for index, line in enumerate(lines):
               if any(needle in line for needle in needles):
-                  print(f'{index}:{line[:2200]}')
-          print('--- final 40 ---')
-          for index, line in enumerate(lines[-40:], start=max(1, len(lines) - 39)):
-              print(f'{index}:{line[:2200]}')
+                  for cursor in range(max(0, index - 3), min(len(lines), index + 5)):
+                      selected.add(cursor)
+          for index in sorted(selected):
+              print(f'{index + 1}:{lines[index][:3000]}')
+          print('--- final 60 ---')
+          for index, line in enumerate(lines[-60:], start=max(1, len(lines) - 59)):
+              print(f'{index}:{line[:3000]}')
           PY
