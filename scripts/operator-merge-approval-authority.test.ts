@@ -176,6 +176,7 @@ function seedReview(options: ReviewFixtureOptions = {}): {
   process.env.PACK_REVIEW_RUN_STORE_ROOT = reviewStore;
   process.env.OPK_OPERATOR_MERGE_GITHUB_REVIEW_FIXTURE = liveFixture;
   process.env.OPERATOR_MERGE_APPROVAL_STORE_ROOT = approvalRoot;
+  process.env.ORCHESTRATOR_PACK_STATE_ROOT = stateRoot;
   setOperatorEnvironment();
   return { stateRoot, approvalRoot, body };
 }
