@@ -254,6 +254,9 @@ export async function resolveVerifiedWorkerNotificationTarget(input: {
   // terminated predecessor after restore/replacement.
   const owner = resolvePrOwnerSessionForNudge({
     prNumber: input.prNumber,
+    headSha: input.headSha,
+    sessions,
+    openPrs,
   });
   if (!owner.ok) throw new Error(owner.reason);
   const ownerSessionId = owner.ownerSessionId.trim();
