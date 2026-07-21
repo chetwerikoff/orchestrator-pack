@@ -1,4 +1,4 @@
-name: issue-923-current-ci-failure-summary
+name: issue-923-light-failure-summary
 
 on:
   pull_request:
@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      SOURCE_JOB_IDS: '88704713303 88704808829 88704808843'
+      SOURCE_JOB_IDS: '88704808829 88704808843'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Summarize current-head failures
+      - name: Summarize light-lane failures
         shell: bash
         run: |
           set -euo pipefail
@@ -31,25 +31,16 @@ jobs:
           done
           python3 - <<'PY'
           import re
-          ids = ['88704713303', '88704808829', '88704808843']
+          ids = ['88704808829', '88704808843']
           ansi = re.compile(r'\x1b\[[0-9;]*m')
-          needles = (
-              '[FAIL]', 'AssertionError:', 'failureMessages', 'Test Files', 'Tests ',
-              'Process completed with exit code', '##[error]', 'expected ', 'received ',
-          )
           for job_id in ids:
               print(f'===== job {job_id} =====')
               lines = open(f'job-{job_id}.log', encoding='utf-8-sig', errors='replace').read().splitlines()
-              emitted = set()
-              for index, raw in enumerate(lines):
-                  line = ansi.sub('', raw)
-                  if not any(needle in line for needle in needles):
-                      continue
-                  for cursor in range(max(0, index - 2), min(len(lines), index + 4)):
-                      candidate = ansi.sub('', lines[cursor])
-                      key = (cursor, candidate)
-                      if key in emitted:
-                          continue
-                      emitted.add(key)
-                      print(f'{cursor + 1}:{candidate[:5000]}')
+              selected = []
+              for line in lines:
+                  clean = ansi.sub('', line)
+                  if any(token in clean for token in ('failureMessages', 'AssertionError:', 'Test Files', 'Tests ', 'Process completed with exit code', '##[error]')):
+                      selected.append(clean[:7000])
+              for line in selected[-40:]:
+                  print(line)
           PY
