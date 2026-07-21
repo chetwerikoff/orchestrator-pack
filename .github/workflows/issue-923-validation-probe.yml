@@ -1,4 +1,4 @@
-name: issue-923-final-fix-failure-tail
+name: issue-923-final-fix-failure-summary
 
 on:
   pull_request:
@@ -17,7 +17,7 @@ jobs:
       SOURCE_JOB_ID: '88712704384'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print final final-fix failure lines
+      - name: Print exact final-fix verifier failure
         shell: bash
         run: |
           set -euo pipefail
@@ -31,6 +31,16 @@ jobs:
           import re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          for index, line in enumerate(lines[-70:], start=max(1, len(lines) - 69)):
-              print(f'{index}:{line}')
+          needles = (
+              '[FAIL]', '[STRICT]', 'Summary:', 'self_architect_elapsed_seconds=',
+              'Process completed with exit code', '##[error]', 'AssertionError:',
+              'Test Files', 'Tests ', 'pipeline', 'elapsed_seconds=', 'failed', 'FAIL ',
+          )
+          print('--- matched ---')
+          for index, line in enumerate(lines, start=1):
+              if any(needle in line for needle in needles):
+                  print(f'{index}:{line[:1600]}')
+          print('--- final ---')
+          for index, line in enumerate(lines[-35:], start=max(1, len(lines) - 34)):
+              print(f'{index}:{line[:1600]}')
           PY
