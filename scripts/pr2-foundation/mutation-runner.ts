@@ -99,7 +99,7 @@ async function invokeChecker(
     command: process.execPath,
     args: [
       '--experimental-strip-types',
-      resolve('scripts/pr2-foundation/mutation-target-check.ts'),
+      resolve('scripts/pr2-foundation/mutation-semantic-check.ts'),
       '--key',
       `${binding.ac}:${binding.mutationId}`,
     ],
