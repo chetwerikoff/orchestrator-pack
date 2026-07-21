@@ -1,4 +1,4 @@
-name: issue-943-changed-first-failure-slice
+name: issue-943-changed-first-retry-summary
 
 on:
   pull_request:
@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88734204679'
+      SOURCE_JOB_ID: '88735123590'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print changed-first failure slice
+      - name: Print retry terminal diagnostics
         shell: bash
         run: |
           set -euo pipefail
@@ -31,6 +31,6 @@ jobs:
           import re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          for index in range(585, min(len(lines), 625)):
-              print(f'{index + 1}:{lines[index][:5000]}')
+          for index, line in enumerate(lines[-100:], start=max(1, len(lines) - 99)):
+              print(f'{index}:{line[:5000]}')
           PY
