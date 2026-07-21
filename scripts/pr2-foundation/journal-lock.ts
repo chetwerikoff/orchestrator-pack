@@ -71,9 +71,13 @@ function readLockRaw(lockPath: string): string | null {
 }
 
 function ownerIsStale(owner: JournalLockOwner | null, mtimeMs: number, nowMs: number): boolean {
-  const ageAnchor = owner?.acquiredAtMs ?? mtimeMs;
-  if (nowMs - ageAnchor >= lockStaleMs()) return true;
-  return owner !== null && !processAlive(owner.pid);
+  if (owner) {
+    // A valid live PID owns the lock regardless of age. Age is only a fallback
+    // for malformed/legacy ownerless lock bytes; otherwise a slow canonical
+    // journal child could be unlinked while it is still writing.
+    return !processAlive(owner.pid);
+  }
+  return nowMs - mtimeMs >= lockStaleMs();
 }
 
 /**
