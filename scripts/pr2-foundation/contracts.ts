@@ -19,6 +19,9 @@ export const FOUNDATION_DOC_ROWS = Object.freeze([
   'docs/worker-report-store.mjs',
 ] as const);
 
+export const FOUNDATION_LINT_SUPPRESSION_CONFIG_PATH =
+  'scripts/lint-self-architect.config.json';
+
 export const CUTOVER_ROWS = Object.freeze([
   'scripts/lib/Get-ReactionMessagesFromYaml.ps1',
   'scripts/reaction-config-messages.d.mts',
@@ -46,6 +49,7 @@ export const EXACT_EXISTING_SCOPE_PATHS = Object.freeze([
   'scripts/pack-review-worker-notification.cases.ts',
   'tests/external-output-references/capture-manifest.json',
   'scripts/vitest-ci-lanes.config.json',
+  FOUNDATION_LINT_SUPPRESSION_CONFIG_PATH,
   'package.json',
   'docs/migration_notes.md',
   'docs/orchestrator-recovery-runbook.md',
