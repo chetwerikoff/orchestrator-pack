@@ -71,4 +71,14 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
       'scripts/pr2-foundation/terminalized/worker-report-store.ts',
     ))).toBe(true);
   });
+
+  it('rewrites actual imports without rewriting string-based consumer inventories', () => {
+    const source = readFileSync(path.resolve('scripts/session-pr-binding-resolver.test.ts'), 'utf8');
+    expect(source).toContain(
+      "} from './pr2-foundation/terminalized/review-trigger-reconcile.ts';",
+    );
+    expect(source).toContain("'docs/review-trigger-reconcile.mjs',");
+    expect(source).toContain("'docs/review-finding-delivery-confirm.mjs',");
+    expect(source).toContain("'docs/review-wake-trigger.mjs',");
+  });
 });
