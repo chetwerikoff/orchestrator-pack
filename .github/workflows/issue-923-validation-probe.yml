@@ -1,4 +1,4 @@
-name: issue-923-residual-focused-tail
+name: issue-923-residual-final-45
 
 on:
   pull_request:
@@ -17,7 +17,7 @@ jobs:
       SOURCE_JOB_ID: '88709369923'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print final residual focused-test failure
+      - name: Print final 45 residual log lines
         shell: bash
         run: |
           set -euo pipefail
@@ -31,6 +31,6 @@ jobs:
           import re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('residual.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          for index, line in enumerate(lines[-120:], start=max(1, len(lines) - 119)):
+          for index, line in enumerate(lines[-45:], start=max(1, len(lines) - 44)):
               print(f'{index}:{line}')
           PY
