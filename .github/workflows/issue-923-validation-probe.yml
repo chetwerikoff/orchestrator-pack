@@ -1,96 +1,50 @@
-name: issue-941-hot-loop-fix
+name: issue-941-pr939-overlay-validation
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply:
+  validate:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    env:
+      PR_939_HEAD: 50722cde9571877d482dfb893d925a23d32617fa
+      PR_939_BASE: faac4525e5e457f7480f99b5f26fcfd96da6d9d5
+      POLICY_HEAD: 730245a15151ac87d5bce9de319e9ee6ec482cd4
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: agent/issue-941-self-architect-migration-pairs
           fetch-depth: 0
-      - name: Replace quadratic sliding-block accumulation
+      - name: Assemble exact PR 939 head with Issue 941 policy overlay
         shell: bash
         run: |
           set -euo pipefail
-          python3 <<'PY'
-          from pathlib import Path
-
-          script_path = Path('scripts/lint-self-architect.ps1')
-          source = script_path.read_text()
-          old = '''    $blocks = @()
-              if ($Lines.Count -lt $Size) { return $blocks }
-          
-              for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
-                  $slice = @($Lines[$start..($start + $Size - 1)])
-                  if (-not (Test-MeaningfulBlock -Lines $slice)) { continue }
-                  $blocks += [pscustomobject]@{
-                      text      = ($slice -join "`n")
-                      startLine = $start + 1
-                      endLine   = $start + $Size
-                      lineCount = $Size
-                  }
-              }
-              return $blocks
-          '''
-          new = '''    $blocks = New-Object System.Collections.Generic.List[object]
-              if ($Lines.Count -lt $Size) { return $blocks.ToArray() }
-          
-              for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
-                  $slice = @($Lines[$start..($start + $Size - 1)])
-                  if (-not (Test-MeaningfulBlock -Lines $slice)) { continue }
-                  $blocks.Add([pscustomobject]@{
-                      text      = ($slice -join "`n")
-                      startLine = $start + 1
-                      endLine   = $start + $Size
-                      lineCount = $Size
-                  }) | Out-Null
-              }
-              return $blocks.ToArray()
-          '''
-          if source.count(old) != 1:
-              raise SystemExit(f'sliding block implementation match count: {source.count(old)}')
-          script_path.write_text(source.replace(old, new, 1))
-
-          test_path = Path('tests/powershell/Lint-SelfArchitect.Tests.ps1')
-          tests = test_path.read_text().rstrip()
-          marker = "builds sliding windows without quadratic array concatenation"
-          if marker in tests:
-              raise SystemExit('hot-loop regression already present')
-          if not tests.endswith('}'):
-              raise SystemExit('unexpected test file ending')
-          addition = r'''
-
-              It 'builds sliding windows without quadratic array concatenation' {
-                  $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
-                  $start = $source.IndexOf('function Get-SlidingBlocks')
-                  $end = $source.IndexOf('function Get-RenameMap')
-                  $start | Should -BeGreaterOrEqual 0
-                  $end | Should -BeGreaterThan $start
-                  $body = $source.Substring($start, $end - $start)
-
-                  $body | Should -Match 'System\.Collections\.Generic\.List\[object\]'
-                  $body | Should -Match '\$blocks\.Add\('
-                  $body | Should -Not -Match '\$blocks\s*\+='
-                  $body | Should -Match 'return \$blocks\.ToArray\(\)'
-              }
-          '''
-          test_path.write_text(tests[:-1] + addition + '\n}\n')
-          PY
-      - name: Commit optimized lint loop
+          git fetch origin "$PR_939_HEAD" "$POLICY_HEAD"
+          git checkout --detach "$PR_939_HEAD"
+          test "$(git rev-parse HEAD)" = "$PR_939_HEAD"
+          git checkout "$POLICY_HEAD" -- \
+            scripts/lint-self-architect.ps1 \
+            scripts/lint-self-architect.config.json
+      - name: Run strict self-architect within the existing budget
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/lint-self-architect.ps1 tests/powershell/Lint-SelfArchitect.Tests.ps1
-          git commit -m "perf: make self-architect sliding windows linear"
-          git push origin HEAD:agent/issue-941-self-architect-migration-pairs
+          started="$(date +%s)"
+          set +e
+          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
+            -Strict \
+            -BaseRef "$PR_939_BASE" \
+            -HeadRef "$PR_939_HEAD" \
+            > self-architect.log 2>&1
+          status=$?
+          set -e
+          elapsed=$(( $(date +%s) - started ))
+          cat self-architect.log
+          echo "elapsed_seconds=$elapsed"
+          test "$status" -eq 0
+          test "$elapsed" -lt 600
