@@ -22,25 +22,49 @@ jobs:
         run: |
           set -euo pipefail
           git checkout origin/main -- scripts/lib/WorkerReportStore.ps1
-          node <<'NODE'
-          const fs = require('node:fs');
+          python <<'PY'
+          from pathlib import Path
+          import re
 
-          const foundationPath = 'scripts/pr2-foundation/foundation.test.ts';
-          let foundation = fs.readFileSync(foundationPath, 'utf8');
-          const oldFoundation = `    for (const file of FOUNDATION_DOC_ROWS) {\n      expect(existsSync(path.join(repoRoot, file))).toBe(false);\n    }`;
-          const newFoundation = `    for (const file of FOUNDATION_DOC_ROWS) {\n      const source = path.join(repoRoot, file);\n      expect(existsSync(source), file).toBe(true);\n      expect(readFileSync(source, 'utf8'), file)\n        .toMatch(/^\\/\\/ Issue #923 foundation-terminalized:/);\n    }`;
-          if (!foundation.includes(oldFoundation)) throw new Error('AC7 filesystem assertion not found');
-          foundation = foundation.replace(oldFoundation, newFoundation);
-          fs.writeFileSync(foundationPath, foundation, 'utf8');
+          foundation_path = Path('scripts/pr2-foundation/foundation.test.ts')
+          foundation = foundation_path.read_text()
+          foundation, count = re.subn(
+              r"    for \(const file of FOUNDATION_DOC_ROWS\) \{\n      expect\(existsSync\(path\.join\(repoRoot, file\)\)\)\.toBe\(false\);\n    \}",
+              """    for (const file of FOUNDATION_DOC_ROWS) {
+              const source = path.join(repoRoot, file);
+              expect(existsSync(source), file).toBe(true);
+              expect(readFileSync(source, 'utf8'), file)
+                .toMatch(/^\\/\\/ Issue #923 foundation-terminalized:/);
+            }""",
+              foundation,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit('AC7 filesystem assertion not found')
+          foundation_path.write_text(foundation)
 
-          const portPath = 'scripts/pr2-foundation/terminalized-port.test.ts';
-          let port = fs.readFileSync(portPath, 'utf8');
-          const oldPort = `  it('launches the terminalized worker-report store through the canonical Node 22 TypeScript bridge', () => {\n    const wrapper = readFileSync(path.resolve('scripts/lib/WorkerReportStore.ps1'), 'utf8');\n    expect(wrapper).toContain('scripts/lib/Invoke-TypeScriptCli.ts');\n    expect(wrapper).toContain("'--experimental-strip-types'");\n    expect(wrapper).toContain("'--script', $Script:WorkerReportStoreCli");\n    expect(wrapper).toContain('exited \\${LASTEXITCODE}: $stderr');\n    expect(wrapper).not.toContain(\n      'Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerReportStoreCli',\n    );\n  });`;
-          const newPort = `  it('keeps the worker-report PowerShell edge byte-compatible and the TypeScript authority dormant', () => {\n    const wrapper = readFileSync(path.resolve('scripts/lib/WorkerReportStore.ps1'), 'utf8');\n    expect(wrapper).toContain("'docs/worker-report-store.mjs'");\n    expect(wrapper).toContain(\n      'Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerReportStoreCli',\n    );\n    expect(wrapper).not.toContain('scripts/lib/Invoke-TypeScriptCli.ts');\n    expect(wrapper).not.toContain("'--experimental-strip-types'");\n    expect(existsSync(path.resolve(\n      'scripts/pr2-foundation/terminalized/worker-report-store.ts',\n    ))).toBe(true);\n  });`;
-          if (!port.includes(oldPort)) throw new Error('worker-report bridge assertion not found');
-          port = port.replace(oldPort, newPort);
-          fs.writeFileSync(portPath, port, 'utf8');
-          NODE
+          port_path = Path('scripts/pr2-foundation/terminalized-port.test.ts')
+          port = port_path.read_text()
+          pattern = re.compile(
+              r"  it\('launches the terminalized worker-report store through the canonical Node 22 TypeScript bridge',[\s\S]*?\n  \}\);",
+          )
+          replacement = """  it('keeps the worker-report PowerShell edge byte-compatible and the TypeScript authority dormant', () => {
+              const wrapper = readFileSync(path.resolve('scripts/lib/WorkerReportStore.ps1'), 'utf8');
+              expect(wrapper).toContain("'docs/worker-report-store.mjs'");
+              expect(wrapper).toContain(
+                'Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerReportStoreCli',
+              );
+              expect(wrapper).not.toContain('scripts/lib/Invoke-TypeScriptCli.ts');
+              expect(wrapper).not.toContain("'--experimental-strip-types'");
+              expect(existsSync(path.resolve(
+                'scripts/pr2-foundation/terminalized/worker-report-store.ts',
+              ))).toBe(true);
+            });"""
+          port, count = pattern.subn(replacement, port, count=1)
+          if count != 1:
+              raise SystemExit('worker-report bridge assertion not found')
+          port_path.write_text(port)
+          PY
       - name: Commit final fixes to PR 939
         shell: bash
         run: |
