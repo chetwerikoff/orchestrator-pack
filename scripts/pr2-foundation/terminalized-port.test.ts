@@ -38,8 +38,19 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     for (const workflow of [
       '.github/workflows/issue-923-scope-type-diagnostic.yml',
       '.github/workflows/issue-923-final-cleanup-helper.yml',
+      '.github/workflows/issue-923-final-diagnostics.yml',
     ]) {
       expect(existsSync(path.resolve(workflow)), workflow).toBe(false);
     }
+  });
+
+  it('launches the terminalized worker-report store through the canonical Node 22 TypeScript bridge', () => {
+    const wrapper = readFileSync(path.resolve('scripts/lib/WorkerReportStore.ps1'), 'utf8');
+    expect(wrapper).toContain('scripts/lib/Invoke-TypeScriptCli.ts');
+    expect(wrapper).toContain("'--experimental-strip-types'");
+    expect(wrapper).toContain("'--script', $Script:WorkerReportStoreCli");
+    expect(wrapper).not.toContain(
+      'Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerReportStoreCli',
+    );
   });
 });
