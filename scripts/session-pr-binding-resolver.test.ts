@@ -507,8 +507,8 @@ describe('session-pr-binding sole-path contract', () => {
     'docs/review-trigger-reeval.mjs',
     'docs/review-ready-report-state-seed.mjs',
     'docs/review-ready-stuck-guard.mjs',
-    'docs/review-finding-delivery-confirm.mjs',
-    'docs/review-wake-trigger.mjs',
+    'scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts',
+    'scripts/pr2-foundation/terminalized/review-wake-trigger.ts',
     'docs/worker-nudge-gate.mjs',
   ];
 

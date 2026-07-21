@@ -44,8 +44,42 @@ function Invoke-WorkerReportStoreCli {
         [hashtable]$Payload
     )
 
-    return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerReportStoreCli `
-        -Subcommand $Subcommand -Payload $Payload -Label 'worker-report-store' -JsonDepth 30
+    $json = $Payload | ConvertTo-Json -Depth 30 -Compress
+    $inputBytes = [System.Text.Encoding]::UTF8.GetByteCount($json)
+    if ($inputBytes -gt $Script:MechanicalTransportEnvelopeBytes) {
+        throw "worker-report-store.ts $Subcommand payload exceeds transport envelope ($inputBytes > $($Script:MechanicalTransportEnvelopeBytes))"
+    }
+
+    $tempPaths = New-MechanicalTransportTempPaths
+    $inputPath = $tempPaths.InputPath
+    $outputPath = $tempPaths.OutputPath
+    $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $launcher = Join-Path $repoRoot 'scripts/lib/Invoke-TypeScriptCli.ts'
+    try {
+        Write-MechanicalTransportPrivateFile -Path $inputPath -Content $json
+        $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $node) {
+  throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run worker-report-store.ts.'
+        }
+        $nodeArgs = @(
+  '--experimental-strip-types',
+  $launcher,
+  '--repo-root', $repoRoot,
+  '--script', $Script:WorkerReportStoreCli,
+  '--',
+  $Subcommand,
+  '--input-file', $inputPath,
+  '--output-file', $outputPath
+        )
+        $stderr = & $node.Source @nodeArgs 2>&1
+        if ($LASTEXITCODE -ne 0) {
+  throw "worker-report-store.ts $Subcommand exited $LASTEXITCODE: $stderr"
+        }
+        return Read-MechanicalNodeFilterCliOutput -OutputPath $outputPath -Label 'worker-report-store' -Subcommand $Subcommand
+    }
+    finally {
+        Remove-MechanicalTransportTempPaths -Paths @($inputPath, $outputPath)
+    }
 }
 
 function Get-WorkerReportStoreState {
