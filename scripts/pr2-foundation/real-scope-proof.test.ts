@@ -1,4 +1,11 @@
-import { readFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runProcessSync } from '../kernel/subprocess.ts';
@@ -56,6 +63,18 @@ function commitOrder(baseSha: string): Array<{ sha: string; paths: string[] }> {
   });
 }
 
+function loadCommittedDeclaration(commitSha: string): ReturnType<typeof resolveLatestCommittedSnapshot> {
+  const root = mkdtempSync(path.join(tmpdir(), 'opk-pr2-declaration-proof-'));
+  try {
+    const target = path.join(root, declarationPath);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, git(['show', `${commitSha}:${declarationPath}`]), 'utf8');
+    return resolveLatestCommittedSnapshot(root, 923);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function packageJsonOverreach(baseSha: string): string[] {
   const base = JSON.parse(git(['show', `${baseSha}:package.json`])) as Record<string, unknown>;
   const head = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as Record<string, unknown>;
@@ -70,13 +89,8 @@ function packageJsonOverreach(baseSha: string): string[] {
 }
 
 describe('[AC9] real committed declaration and base-to-head scope proof', () => {
-  it('loads the repository snapshot and validates the complete real diff and commit order', () => {
-    const resolved = resolveLatestCommittedSnapshot(repoRoot, 923);
-    expect(resolved).toMatchObject({ ok: true });
-    if (!resolved.ok) throw new Error(resolved.message);
-    const snapshot = resolved.snapshot;
-    const baseSha = snapshot.baseline.commit_sha;
-
+  it('loads the ancestor snapshot through the repository resolver and validates the real final diff', () => {
+    const baseSha = 'faac4525e5e457f7480f99b5f26fcfd96da6d9d5';
     expect(git(['merge-base', '--is-ancestor', baseSha, 'HEAD'])).toBe('');
     const commits = commitOrder(baseSha);
     const declarationIndex = commits.findIndex((commit) => commit.paths.includes(declarationPath));
@@ -85,11 +99,20 @@ describe('[AC9] real committed declaration and base-to-head scope proof', () => 
     );
     expect(declarationIndex).toBe(0);
     expect(implementationIndex).toBeGreaterThan(declarationIndex);
+    expect(git(['ls-tree', 'HEAD', '--', declarationPath])).toBe('');
+
+    const declarationCommit = commits[declarationIndex];
+    if (!declarationCommit) throw new Error('declaration_commit_missing');
+    const resolved = loadCommittedDeclaration(declarationCommit.sha);
+    expect(resolved).toMatchObject({ ok: true });
+    if (!resolved.ok) throw new Error(resolved.message);
+    const snapshot = resolved.snapshot;
+    expect(snapshot.baseline.commit_sha).toBe(baseSha);
 
     const rows = changedRows(baseSha);
-    const scopedRows = rows.filter((row) => row.path !== declarationPath);
-    const changedPaths = scopedRows.map((row) => row.path);
-    const addedPaths = scopedRows.filter((row) => row.status === 'A').map((row) => row.path);
+    expect(rows.some((row) => row.path === declarationPath)).toBe(false);
+    const changedPaths = rows.map((row) => row.path);
+    const addedPaths = rows.filter((row) => row.status === 'A').map((row) => row.path);
     const modes = Object.fromEntries(changedPaths.map((file) => [file, treeMode('HEAD', file)]));
     const lanes = JSON.parse(
       readFileSync(path.join(repoRoot, 'scripts/vitest-ci-lanes.config.json'), 'utf8'),
