@@ -6,8 +6,7 @@ import {
   renameSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import {
   buildDeterministicDeliveryId,
   evaluateDeterministicJournalAdmission,
@@ -45,6 +44,7 @@ import {
   resolveVerifiedWorkerNotificationTarget,
   type VerifiedWorkerNotificationTarget,
 } from './worker-notification-target.ts';
+import { resolveWorkerMessageDispatchJournalPath } from './wake-supervisor-state-root.ts';
 
 export interface WorkerNotificationOptions {
   trustedPackRoot: string;
@@ -101,10 +101,7 @@ function parseTarget(options: WorkerNotificationOptions): {
 }
 
 function defaultDispatchJournalPath(): string {
-  const explicit = trim(process.env.AO_WORKER_MESSAGE_DISPATCH_JOURNAL);
-  if (explicit) return resolve(explicit);
-  const stateRoot = trim(process.env.XDG_STATE_HOME) || join(homedir(), '.local', 'state');
-  return join(stateRoot, 'orchestrator-pack-wake-supervisor', 'worker-message-dispatch-journal.json');
+  return resolveWorkerMessageDispatchJournalPath();
 }
 
 function readJournal(file: string): Record<string, unknown> {
