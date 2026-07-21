@@ -1,0 +1,40 @@
+name: issue-923-final-diagnostics
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-pr2-foundation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Capture exact failures
+        shell: bash
+        run: |
+          mkdir -p diagnostics
+          set +e
+          npx tsc --project tsconfig.base.json --noEmit > diagnostics/typecheck.log 2>&1
+          echo $? > diagnostics/typecheck.exit
+          npm test -- --reporter=verbose > diagnostics/vitest-all.log 2>&1
+          echo $? > diagnostics/vitest-all.exit
+          npm run test:contract-mutations -- --ac AC8 > diagnostics/mutations-ac8.log 2>&1
+          echo $? > diagnostics/mutations-ac8.exit
+          set -e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-923-final-diagnostics
+          path: diagnostics
+          if-no-files-found: error
