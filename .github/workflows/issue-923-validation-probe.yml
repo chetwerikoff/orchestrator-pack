@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      TARGET_HEAD: 8cc4f6137998019e2a9159f32674162b3e6ddd7f
+      TARGET_HEAD: 2f7acc58b79f90621108cb6b37353ef5306b8751
       PR_BASE_SHA: faac4525e5e457f7480f99b5f26fcfd96da6d9d5
       PR_HEAD_SHA: 8cc4f6137998019e2a9159f32674162b3e6ddd7f
       OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1'
@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Checkout exact PR head
+      - name: Checkout exact PR merge ref
         run: git checkout --detach "$TARGET_HEAD"
       - uses: actions/setup-node@v4
         with:
@@ -111,13 +111,26 @@ jobs:
           OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
         run: ./scripts/run-vitest-heavy-shard.ps1 -Shard 2
       - name: Enforce aggregate
+        if: always()
         env:
-          RESULTS: >-
-            ${{ steps.typescript.outcome }} ${{ steps.verify.outcome }} ${{ steps.reusable.outcome }}
-            ${{ steps.cheap.outcome }} ${{ steps.verify_runtime.outcome }} ${{ steps.pipeline.outcome }}
-            ${{ steps.architect.outcome }} ${{ steps.pester.outcome }} ${{ steps.topology.outcome }}
-            ${{ steps.light1.outcome }} ${{ steps.light2.outcome }}
-            ${{ steps.heavy1.outcome }} ${{ steps.heavy2.outcome }}
+          TYPESCRIPT: ${{ steps.typescript.outcome }}
+          VERIFY: ${{ steps.verify.outcome }}
+          REUSABLE: ${{ steps.reusable.outcome }}
+          CHEAP: ${{ steps.cheap.outcome }}
+          VERIFY_RUNTIME: ${{ steps.verify_runtime.outcome }}
+          PIPELINE: ${{ steps.pipeline.outcome }}
+          ARCHITECT: ${{ steps.architect.outcome }}
+          PESTER: ${{ steps.pester.outcome }}
+          TOPOLOGY: ${{ steps.topology.outcome }}
+          LIGHT1: ${{ steps.light1.outcome }}
+          LIGHT2: ${{ steps.light2.outcome }}
+          HEAVY1: ${{ steps.heavy1.outcome }}
+          HEAVY2: ${{ steps.heavy2.outcome }}
         run: |
-          echo "$RESULTS"
-          test "${RESULTS//success/}" = "            "
+          failures=0
+          for name in TYPESCRIPT VERIFY REUSABLE CHEAP VERIFY_RUNTIME PIPELINE ARCHITECT PESTER TOPOLOGY LIGHT1 LIGHT2 HEAVY1 HEAVY2; do
+            value="${!name}"
+            echo "$name=$value"
+            if [ "$value" != "success" ]; then failures=1; fi
+          done
+          exit "$failures"
