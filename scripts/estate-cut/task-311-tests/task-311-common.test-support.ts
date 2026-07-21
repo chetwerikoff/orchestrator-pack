@@ -212,7 +212,7 @@ function sameStringSet(actual: readonly string[], expected: readonly string[]): 
 
 export function validateMutationArray(ac: AcId, rows: readonly MutationRecord[]): void {
   const expected = fixture.mutationControls[ac];
-  invariant(sameStringSet(rows.map((row) => row.mutationId}, expected), `${ac} mutationId set drifted`);
+  invariant(sameStringSet(rows.map((row) => row.mutationId), expected), `${ac} mutationId set drifted`);
   for (const row of rows) {
     invariant(row.executed === true, `${ac}/${row.mutationId} was not executed`);
     invariant(row.negativeOutcome === 'red', `${ac}/${row.mutationId} did not go red`);
