@@ -1,13 +1,18 @@
-import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { mutationBinding } from './mutation-catalog.ts';
 
 function gitStatus(file: string): string {
-  return execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all', '--', file], {
+  const result = runProcessSync({
+    command: 'git',
+    args: ['status', '--porcelain=v1', '--untracked-files=all', '--', file],
     cwd: path.resolve('.'),
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
+    inheritParentEnv: true,
+  });
+  if (!result.ok) {
+    throw new Error(`git_status_failed:${result.stderr || result.error || result.outcome}`);
+  }
+  return result.stdout.trim();
 }
 
 function main(): void {
