@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      TARGET_HEAD: 2f7acc58b79f90621108cb6b37353ef5306b8751
       PR_BASE_SHA: faac4525e5e457f7480f99b5f26fcfd96da6d9d5
       PR_HEAD_SHA: 8cc4f6137998019e2a9159f32674162b3e6ddd7f
       OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1'
@@ -22,7 +21,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: Checkout exact PR merge ref
-        run: git checkout --detach "$TARGET_HEAD"
+        run: |
+          git fetch origin refs/pull/939/merge
+          git checkout --detach FETCH_HEAD
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
