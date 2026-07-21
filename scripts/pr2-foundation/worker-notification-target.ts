@@ -249,9 +249,11 @@ export async function resolveVerifiedWorkerNotificationTarget(input: {
   ]);
   if (appStateVersion !== VERIFIED_AO_VERSION) throw new Error('preflight_version_unverifiable');
   const openPrs = await loadOpenPrs(repoSlug);
+  // Resolve the current exact-head owner independently. requestedSessionId is
+  // diagnostic lineage context from the review run and may legitimately be a
+  // terminated predecessor after restore/replacement.
   const owner = resolvePrOwnerSessionForNudge({
     prNumber: input.prNumber,
-    sessionId: input.requestedSessionId,
     headSha: input.headSha,
     sessions,
     openPrs,
