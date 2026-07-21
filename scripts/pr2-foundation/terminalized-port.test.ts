@@ -57,4 +57,11 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
       'Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerReportStoreCli',
     );
   });
+
+  it('treats the TypeScript implementation as sibling readiness, not a pre-existing data file', () => {
+    const source = readFileSync(path.resolve('scripts/lib/worker-status-store.mjs'), 'utf8');
+    expect(source).toContain("'terminalized',\n    'worker-report-store.ts'");
+    expect(source).not.toContain('workerReportStorePresent = reportStorePath');
+    expect(source).not.toContain("existsSync(join(docsDir, 'worker-report-store.mjs'))");
+  });
 });
