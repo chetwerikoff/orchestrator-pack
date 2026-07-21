@@ -14,5 +14,6 @@
     "tests/powershell/Lint-SelfArchitect.Tests.ps1"
   ],
   "declared_globs": [],
+
   "amendments": []
 }
