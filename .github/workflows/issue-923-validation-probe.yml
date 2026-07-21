@@ -1,4 +1,4 @@
-name: issue-923-light-failure-summary
+name: issue-923-lane-one-stack
 
 on:
   pull_request:
@@ -9,38 +9,31 @@ permissions:
   contents: read
 
 jobs:
-  summarize:
+  extract:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     env:
-      SOURCE_JOB_IDS: '88704808829 88704808843'
+      SOURCE_JOB_ID: '88704808829'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Summarize light-lane failures
+      - name: Print lane-one assertion context
         shell: bash
         run: |
           set -euo pipefail
-          for job_id in $SOURCE_JOB_IDS; do
-            api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs"
-            curl --fail --silent --show-error --location \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "$api" > "job-${job_id}.log"
-          done
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${SOURCE_JOB_ID}/logs"
+          curl --fail --silent --show-error --location \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api" > lane.log
           python3 - <<'PY'
           import re
-          ids = ['88704808829', '88704808843']
           ansi = re.compile(r'\x1b\[[0-9;]*m')
-          for job_id in ids:
-              print(f'===== job {job_id} =====')
-              lines = open(f'job-{job_id}.log', encoding='utf-8-sig', errors='replace').read().splitlines()
-              selected = []
-              for line in lines:
-                  clean = ansi.sub('', line)
-                  if any(token in clean for token in ('failureMessages', 'AssertionError:', 'Test Files', 'Tests ', 'Process completed with exit code', '##[error]')):
-                      selected.append(clean[:7000])
-              for line in selected[-40:]:
-                  print(line)
+          lines = [ansi.sub('', line) for line in open('lane.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
+          for index, line in enumerate(lines):
+              if 'AssertionError: expected [] to have a length of 1 but got +0' not in line:
+                  continue
+              for cursor in range(max(0, index - 12), min(len(lines), index + 24)):
+                  print(f'{cursor + 1}:{lines[cursor]}')
           PY
