@@ -1,4 +1,4 @@
-name: issue-943-changed-first-failure-summary
+name: issue-943-changed-first-failure-slice
 
 on:
   pull_request:
@@ -17,7 +17,7 @@ jobs:
       SOURCE_JOB_ID: '88734204679'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print exact changed-first publisher failure
+      - name: Print changed-first failure slice
         shell: bash
         run: |
           set -euo pipefail
@@ -31,19 +31,6 @@ jobs:
           import re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          needles = (
-              'Traceback', 'SystemExit', 'expected ', 'found ', 'missing',
-              '##[error]', 'Process completed with exit code', 'diff --check',
-          )
-          print('--- matched ---')
-          selected = set()
-          for index, line in enumerate(lines):
-              if any(needle in line for needle in needles):
-                  for cursor in range(max(0, index - 3), min(len(lines), index + 5)):
-                      selected.add(cursor)
-          for index in sorted(selected):
-              print(f'{index + 1}:{lines[index][:3000]}')
-          print('--- final 60 ---')
-          for index, line in enumerate(lines[-60:], start=max(1, len(lines) - 59)):
-              print(f'{index}:{line[:3000]}')
+          for index in range(585, min(len(lines), 625)):
+              print(f'{index + 1}:{lines[index][:5000]}')
           PY
