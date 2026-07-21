@@ -39,6 +39,7 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
       '.github/workflows/issue-923-scope-type-diagnostic.yml',
       '.github/workflows/issue-923-final-cleanup-helper.yml',
       '.github/workflows/issue-923-final-diagnostics.yml',
+      '.github/workflows/issue-923-regression-diagnostics.yml',
     ]) {
       expect(existsSync(path.resolve(workflow)), workflow).toBe(false);
     }
@@ -49,6 +50,7 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     expect(wrapper).toContain('scripts/lib/Invoke-TypeScriptCli.ts');
     expect(wrapper).toContain("'--experimental-strip-types'");
     expect(wrapper).toContain("'--script', $Script:WorkerReportStoreCli");
+    expect(wrapper).toContain('exited ${LASTEXITCODE}: $stderr');
     expect(wrapper).not.toContain(
       'Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:WorkerReportStoreCli',
     );
