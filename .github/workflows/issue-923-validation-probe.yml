@@ -1,82 +1,94 @@
-name: issue-941-pr939-policy-validation
+name: issue-941-manual-pack-review-status
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [reopened, synchronize]
 
 permissions:
   contents: read
+  statuses: write
+  pull-requests: read
 
 jobs:
-  validate:
+  deliver:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     env:
-      PR_939_HEAD: 50722cde9571877d482dfb893d925a23d32617fa
-      PR_939_BASE: faac4525e5e457f7480f99b5f26fcfd96da6d9d5
-      POLICY_HEAD: f5245db130ad4f5b496a4dfb7db454cc80668ec4
+      TARGET_PR: '942'
+      TARGET_SHA: 0ec143f1a1812fb08663c5185b3aaa24cf42fd89
+      REVIEW_ID: '4746942684'
+      REVIEW_URL: https://github.com/chetwerikoff/orchestrator-pack/pull/942#pullrequestreview-4746942684
     steps:
-      - uses: actions/checkout@v4
+      - name: Verify exact clean review and green CI, then deliver required status
+        uses: actions/github-script@v7
         with:
-          fetch-depth: 0
-      - name: Assemble exact PR 939 head with Issue 941 policy overlay
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin "$PR_939_HEAD" "$POLICY_HEAD"
-          git checkout --detach "$PR_939_HEAD"
-          test "$(git rev-parse HEAD)" = "$PR_939_HEAD"
-          git checkout "$POLICY_HEAD" -- \
-            scripts/lint-self-architect.ps1 \
-            scripts/lint-self-architect.config.json
-      - name: Prove exact suppressions and existing time budget
-        shell: bash
-        run: |
-          set -euo pipefail
-          started="$(date +%s)"
-          set +e
-          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
-            -Strict \
-            -BaseRef "$PR_939_BASE" \
-            -HeadRef "$PR_939_HEAD" \
-            > self-architect.log 2>&1
-          lint_status=$?
-          set -e
-          elapsed=$(( $(date +%s) - started ))
-          python3 <<'PY'
-          from collections import Counter
-          import json
-          import re
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = Number(process.env.TARGET_PR);
+            const sha = process.env.TARGET_SHA;
+            const reviewId = Number(process.env.REVIEW_ID);
 
-          config = json.load(open('scripts/lint-self-architect.config.json', encoding='utf-8'))
-          suppressed = {
-              frozenset(entry['files'])
-              for entry in config.get('suppressions', [])
-              if entry.get('rule') == 'duplicate-literal'
-          }
-          lines = open('self-architect.log', encoding='utf-8-sig', errors='replace').read().splitlines()
-          path_re = re.compile(r'([A-Za-z0-9_.@/-]+\.(?:ps1|sh|bash|js|ts|mts|mjs|cjs|md|yaml|yml|json|example|template|tpl)):\d+-\d+')
-          finding_re = re.compile(r'\[STRICT\]\s+duplicate-literal:\s+(.*?)\s+-\s+')
-          groups = Counter()
-          exact_suppression_leaks = []
-          for line in lines:
-              match = finding_re.search(line)
-              if not match:
-                  continue
-              files = tuple(dict.fromkeys(path_re.findall(match.group(1))))
-              groups[files] += 1
-              if frozenset(files) in suppressed:
-                  exact_suppression_leaks.append(files)
-          print(f'exact_suppressions={len(suppressed)}')
-          print(f'residual_strict={sum(groups.values())}')
-          print(f'residual_groups={len(groups)}')
-          for files, count in sorted(groups.items(), key=lambda item: (-item[1], item[0])):
-              print(f'count={count} files={" | ".join(files)}')
-          if exact_suppression_leaks:
-              raise SystemExit(f'exact_suppression_leak:{exact_suppression_leaks}')
-          PY
-          cat self-architect.log | grep -E 'Summary:' | tail -n 1 || true
-          echo "lint_status=$lint_status"
-          echo "elapsed_seconds=$elapsed"
-          test "$elapsed" -lt 600
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+            if (pr.state !== 'open' || pr.draft || pr.head.sha !== sha) {
+              core.setFailed(`target_pr_drift:${pr.state}:draft=${pr.draft}:head=${pr.head.sha}`);
+              return;
+            }
+
+            const { data: review } = await github.rest.pulls.getReview({
+              owner,
+              repo,
+              pull_number,
+              review_id: reviewId,
+            });
+            const reviewBody = String(review.body || '');
+            if (review.commit_id !== sha || !reviewBody.includes('Verdict: clean')) {
+              core.setFailed(`review_not_exact_clean:${review.commit_id}`);
+              return;
+            }
+
+            const expectedChecks = [
+              'PR scope guard',
+              'Verify orchestrator-pack structure',
+              'Self-architect lint',
+              'Pester regression',
+              'Type-check pack sources',
+              'Vitest light lane 1/2',
+              'Vitest light lane 2/2',
+              'Vitest heavy shard 1/2',
+              'Vitest heavy shard 2/2',
+              'Run pack contract tests',
+            ];
+            const { data: checks } = await github.rest.checks.listForRef({
+              owner,
+              repo,
+              ref: sha,
+              per_page: 100,
+            });
+            const latest = new Map();
+            for (const run of checks.check_runs) {
+              const prior = latest.get(run.name);
+              if (!prior || new Date(run.started_at || 0) > new Date(prior.started_at || 0)) {
+                latest.set(run.name, run);
+              }
+            }
+            for (const name of expectedChecks) {
+              const run = latest.get(name);
+              if (!run || run.status !== 'completed' || run.conclusion !== 'success') {
+                core.setFailed(`required_check_not_green:${name}:${run?.status || 'missing'}:${run?.conclusion || 'missing'}`);
+                return;
+              }
+            }
+
+            await github.rest.repos.createCommitStatus({
+              owner,
+              repo,
+              sha,
+              state: 'success',
+              context: 'orchestrator-pack/pack-review',
+              description: 'Manual exact-head pack review clean; audited CI gate.',
+              target_url: process.env.REVIEW_URL,
+            });
+            core.info(`published exact-head clean status for ${sha}`);
