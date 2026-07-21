@@ -157,7 +157,7 @@ head.
 
 **Operator waiver (explicit only):** when the operator **explicitly** authorizes merging
 with the open pack-review finding and every **other** required context is already green,
-follow [`docs/pack-review-waiver-merge-runbook.md`](../../docs/pack-review-waiver-merge-runbook.md)
+follow [`docs/pack-review-waiver-merge-runbook.md`](../../../docs/pack-review-waiver-merge-runbook.md)
 — post a newer `success` commit status on the exact PR head SHA (Statuses API), then
 merge normally and continue this skill from Step 4. Record the waiver verbatim in Step 10.
 Waiver does not clear findings in the pack store or GitHub comments.
