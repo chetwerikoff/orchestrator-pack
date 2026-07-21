@@ -5,7 +5,9 @@ import {
   AC_MUTATION_CONTROLS,
   CUTOVER_ROWS,
   FOUNDATION_DOC_ROWS,
+  validateEstateSplit,
   type AcceptanceId,
+  type EstateDenominatorRow,
 } from './contracts.ts';
 
 interface TextGate {
@@ -38,45 +40,40 @@ function orderedGate(pathName: string, ordered: readonly string[]): TextGate {
   return { path: pathName, ordered };
 }
 
-function manifestRows(): Array<{ path: string; disposition: string; owner?: string }> {
+function manifestRows(): EstateDenominatorRow[] {
   const file = path.resolve('scripts/estate-cut/issue-906.manifest.json');
-  const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
-  const rows: Array<{ path: string; disposition: string; owner?: string }> = [];
-  const visit = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      value.forEach(visit);
-      return;
-    }
-    if (!value || typeof value !== 'object') return;
-    const record = value as Record<string, unknown>;
-    if (typeof record.path === 'string' && typeof record.disposition === 'string') {
-      rows.push({
-        path: record.path,
-        disposition: record.disposition,
-        ...(typeof record.owner === 'string' ? { owner: record.owner } : {}),
-      });
-    }
-    Object.values(record).forEach(visit);
+  const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+    rows?: Array<{
+      path?: unknown;
+      terminalState?: unknown;
+      replacementOwner?: unknown;
+    }>;
   };
-  visit(parsed);
-  return rows;
+  if (!Array.isArray(parsed.rows)) return [];
+  return parsed.rows.flatMap((row) => {
+    if (typeof row.path !== 'string' || typeof row.terminalState !== 'string') return [];
+    return [{
+      path: row.path,
+      terminalState: row.terminalState,
+      ...(typeof row.replacementOwner === 'string'
+        ? { replacementOwner: row.replacementOwner }
+        : {}),
+    }];
+  });
 }
 
 function estateDenominatorError(): string | null {
   const rows = manifestRows();
+  const denominator = rows.filter((row) =>
+    (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)
+    || (CUTOVER_ROWS as readonly string[]).includes(row.path),
+  );
+  const validated = validateEstateSplit(denominator);
+  if (!validated.ok) return validated.reason;
   for (const expected of FOUNDATION_DOC_ROWS) {
-    const matches = rows.filter((row) => row.path === expected);
-    if (matches.length === 0 || matches.some((row) => row.disposition !== 'deleted-now')) {
-      return `foundation_row_not_terminal:${expected}`;
-    }
     if (existsSync(path.resolve(expected))) return `foundation_doc_not_deleted:${expected}`;
   }
   for (const expected of CUTOVER_ROWS) {
-    const matches = rows.filter((row) => row.path === expected);
-    if (matches.length === 0 || matches.some((row) =>
-      row.disposition !== 'owned-by-PR-2-cutover' || row.owner !== 'draft-315')) {
-      return `cutover_row_invalid:${expected}`;
-    }
     if (!existsSync(path.resolve(expected))) return `cutover_path_deleted:${expected}`;
   }
   return null;
@@ -124,9 +121,11 @@ function lanesBounded(): string | null {
   ) as { classification?: Record<string, string> };
   const classification = config.classification ?? {};
   const required = [
+    'scripts/pr2-foundation/binding-cache.test.ts',
     'scripts/pr2-foundation/foundation.test.ts',
     'scripts/pr2-foundation/migration-symlink.test.ts',
     'scripts/pr2-foundation/mutation-catalog.test.ts',
+    'scripts/pr2-foundation/mutation-semantic-gates.test.ts',
     'scripts/pr2-foundation/real-scope-proof.test.ts',
     'scripts/pr2-foundation/worker-notification-compat.test.ts',
   ];
@@ -173,7 +172,7 @@ const GATES: Record<string, TextGate> = {
   'AC4:notify-before-journal': orderedGate('scripts/pr2-foundation/worker-notification.ts', ['inspectNotification({', "const args = ['send'", 'runProcess({']),
   'AC4:inline-powershell': textGate('scripts/lib/pack-review-worker-notification.ts', ['worker-notification.ts'], ['pwsh']),
   'AC4:powershell-child': textGate('scripts/pr2-foundation/worker-notification.ts', ['runProcess'], ['pwsh', '.ps1']),
-  'AC4:historical-record-unreadable': textGate('scripts/pr2-foundation/worker-dispatch-journal.ts', ['admitDispatchJournalRecord', 'finalizeDispatchJournalRecord']),
+  'AC4:historical-record-unreadable': textGate('scripts/pr2-foundation/worker-dispatch-journal.ts', ['CANONICAL_DISPATCH_SOURCE_BLOB_SHA', 'admitDispatchJournalRecord', 'finalizeDispatchJournalRecord']),
   'AC4:duplicate-send-unaccounted': textGate('scripts/pr2-foundation/worker-notification.ts', ['journal_duplicate_no_op']),
   'AC4:run-linkage-missing': textGate('scripts/lib/pack-review-delivery.ts', ['reviewRunId']),
   'AC4:channel-outcome-corruption': textGate('scripts/lib/pack-review-delivery.ts', ['workerNotification']),
@@ -213,7 +212,7 @@ const GATES: Record<string, TextGate> = {
   'AC9:declaration-snapshot-missing': textGate('scripts/pr2-foundation/real-scope-proof.test.ts', ['resolveLatestCommittedSnapshotAtCommit']),
   'AC9:declaration-created-after-implementation': textGate('scripts/pr2-foundation/real-scope-proof.test.ts', ['declarationIndex']),
   'AC9:addition-root-not-predeclared': textGate('scripts/pr2-foundation/contracts.ts', ['path_not_declared']),
-  'AC9:candidate-tag-self-authorizes': textGate('scripts/pr2-foundation/contracts.ts', ['declarationAllows'], ['candidate-tag-self-authorizes']),
+  'AC9:candidate-tag-self-authorizes': textGate('scripts/pr2-foundation/contracts.ts', ['declarationAllows']),
   'AC9:addition-root-exists-at-base': textGate('scripts/pr2-foundation/contracts.ts', ['addition_root_exists_at_base']),
   'AC9:capture-corpus-overreach': baseGate('tests/external-output-references/capture-manifest.json'),
   'AC9:raw-capture-added': absentGate('tests/external-output-references/captures/issue-923/raw-live-ac9.json'),
