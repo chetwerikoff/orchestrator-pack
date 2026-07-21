@@ -1,4 +1,4 @@
-name: issue-923-final-validation
+name: issue-923-final-ac9-diagnostic
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  diagnose:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -31,12 +31,20 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --include=dev
-      - name: Validate previous failures
+      - name: Capture light lane 1
         shell: bash
         run: |
-          set -euo pipefail
-          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1
+          mkdir -p diagnostics
+          set +e
           export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
-          node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard
+          node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard > diagnostics/topology.log 2>&1
+          echo $? > diagnostics/topology.exit
           export OPK_VITEST_TOPOLOGY_PLAN_PATH="$GITHUB_WORKSPACE/scripts/vitest-heavy-topology.plan.json"
-          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 1
+          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 1 > diagnostics/light1.log 2>&1
+          echo $? > diagnostics/light1.exit
+          set -e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-923-final-ac9
+          path: diagnostics
+          if-no-files-found: error
