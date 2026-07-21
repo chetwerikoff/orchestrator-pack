@@ -61,6 +61,7 @@
     "scripts/pr2-foundation/foundation.test.ts": "heavy",
     "scripts/pr2-foundation/migration-symlink.test.ts": "light",
     "scripts/pr2-foundation/mutation-catalog.test.ts": "light",
+    "scripts/pr2-foundation/mutation-semantic-gates.test.ts": "light",
     "scripts/pr2-foundation/real-scope-proof.test.ts": "light",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "light",
     "scripts/review-delivery.test.ts": "light",
