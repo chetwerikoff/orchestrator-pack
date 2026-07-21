@@ -65,8 +65,8 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     const source = readFileSync(path.resolve('scripts/lib/worker-status-store.mjs'), 'utf8');
     expect(source).toContain('workerReportStorePresent = reportStorePath');
     expect(source).toContain("existsSync(join(docsDir, 'worker-report-store.mjs'))");
-    expect(source).not.toContain("'terminalized',
-    'worker-report-store.ts'");
+    expect(source).not.toContain("join(packRoot, 'scripts', 'pr2-foundation', 'terminalized'");
+    expect(source).not.toContain('worker-report-store.ts');
     expect(existsSync(path.resolve(
       'scripts/pr2-foundation/terminalized/worker-report-store.ts',
     ))).toBe(true);
