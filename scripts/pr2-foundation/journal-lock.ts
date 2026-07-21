@@ -144,7 +144,10 @@ export async function withCrashRecoverableFileLock<T>(
         ? String((error as { code?: unknown }).code ?? '')
         : '';
       if (code !== 'EEXIST') throw error;
-      if (reclaimStaleJournalLock(lockPath)) continue;
+      if (reclaimStaleJournalLock(lockPath)) {
+        attempt -= 1;
+        continue;
+      }
       if (attempt === attempts) throw new Error('journal_busy');
       await delay(200 * attempt);
     } finally {
