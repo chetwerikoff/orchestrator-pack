@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  diagnose:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -29,109 +29,27 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --include=dev
-      - id: typescript
-        name: TypeScript foundation
-        continue-on-error: true
-        run: |
-          npm run ts:smoke
-          npm run typecheck:foundation
-          npm run lint:foundation
-          npm run test:foundation
-          npm run check:pwsh-test-growth
-      - id: verify
-        name: Verify structure
-        continue-on-error: true
-        shell: pwsh
-        run: ./scripts/verify.ps1
-      - id: reusable
-        name: Reusable policy
-        continue-on-error: true
-        shell: pwsh
-        run: ./scripts/check-reusable.ps1
-      - id: cheap
-        name: CI cheap-wins policy
-        continue-on-error: true
-        shell: pwsh
-        run: ./scripts/check-ci-cheap-wins.ps1
-      - id: verify_runtime
-        name: Verify runtime policy
-        continue-on-error: true
-        shell: pwsh
-        run: ./scripts/check-verify-runtime.ps1
-      - id: pipeline
-        name: CI pipeline split policy
-        continue-on-error: true
-        shell: pwsh
-        run: ./scripts/check-ci-pipeline-split.ps1
-      - id: architect
-        name: Self-architect strict
-        continue-on-error: true
-        shell: pwsh
-        run: ./scripts/lint-self-architect.ps1 -Strict
-      - name: Install Pester
-        shell: pwsh
-        run: ./scripts/install-pester-ci.ps1
-      - id: pester
-        name: Pester regression
-        continue-on-error: true
-        shell: pwsh
-        run: ./scripts/test-all.ps1 -SkipNpm
-      - id: topology
-        name: Build exact PR Vitest topology
-        continue-on-error: true
+      - name: Capture exact failures
         shell: bash
         run: |
+          mkdir -p diagnostics
+          set +e
+          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1 > diagnostics/pipeline.log 2>&1
+          echo $? > diagnostics/pipeline.exit
           export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
-          node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard
-      - id: light1
-        name: Vitest light lane 1
-        continue-on-error: true
-        shell: pwsh
-        env:
-          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
-        run: ./scripts/run-vitest-light-lane.ps1 -Shard 1
-      - id: light2
-        name: Vitest light lane 2
-        continue-on-error: true
-        shell: pwsh
-        env:
-          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
-        run: ./scripts/run-vitest-light-lane.ps1 -Shard 2
-      - id: heavy1
-        name: Vitest heavy shard 1
-        continue-on-error: true
-        shell: pwsh
-        env:
-          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
-        run: ./scripts/run-vitest-heavy-shard.ps1 -Shard 1
-      - id: heavy2
-        name: Vitest heavy shard 2
-        continue-on-error: true
-        shell: pwsh
-        env:
-          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
-        run: ./scripts/run-vitest-heavy-shard.ps1 -Shard 2
-      - name: Enforce aggregate
-        if: always()
-        env:
-          TYPESCRIPT: ${{ steps.typescript.outcome }}
-          VERIFY: ${{ steps.verify.outcome }}
-          REUSABLE: ${{ steps.reusable.outcome }}
-          CHEAP: ${{ steps.cheap.outcome }}
-          VERIFY_RUNTIME: ${{ steps.verify_runtime.outcome }}
-          PIPELINE: ${{ steps.pipeline.outcome }}
-          ARCHITECT: ${{ steps.architect.outcome }}
-          PESTER: ${{ steps.pester.outcome }}
-          TOPOLOGY: ${{ steps.topology.outcome }}
-          LIGHT1: ${{ steps.light1.outcome }}
-          LIGHT2: ${{ steps.light2.outcome }}
-          HEAVY1: ${{ steps.heavy1.outcome }}
-          HEAVY2: ${{ steps.heavy2.outcome }}
+          node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard > diagnostics/topology.log 2>&1
+          echo $? > diagnostics/topology.exit
+          OPK_VITEST_TOPOLOGY_PLAN_PATH="$GITHUB_WORKSPACE/scripts/vitest-heavy-topology.plan.json" pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 1 > diagnostics/light1.log 2>&1
+          echo $? > diagnostics/light1.exit
+          OPK_VITEST_TOPOLOGY_PLAN_PATH="$GITHUB_WORKSPACE/scripts/vitest-heavy-topology.plan.json" pwsh -NoProfile -File ./scripts/run-vitest-heavy-shard.ps1 -Shard 2 > diagnostics/heavy2.log 2>&1
+          echo $? > diagnostics/heavy2.exit
+          set -e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-923-exact-failures
+          path: diagnostics
+          if-no-files-found: error
+      - name: Print exit summary
+        shell: bash
         run: |
-          failures=0
-          for name in TYPESCRIPT VERIFY REUSABLE CHEAP VERIFY_RUNTIME PIPELINE ARCHITECT PESTER TOPOLOGY LIGHT1 LIGHT2 HEAVY1 HEAVY2; do
-            value="${!name}"
-            echo "$name=$value"
-            if [ "$value" != "success" ]; then failures=1; fi
-          done
-          exit "$failures"
+          cat diagnostics/*.exit
