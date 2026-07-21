@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,7 +13,6 @@ import path, { delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BINDING_SOURCE_BACKFILL_RESOLVER } from '../../../docs/pr-session-binding-cache.mjs';
-import { preRunHeadReadyRecheck } from '../../../docs/review-head-ready.mjs';
 import { type GithubReviewTransport } from '../../lib/github-review-reconciliation.js';
 import {
   PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
@@ -115,6 +115,15 @@ export interface RunnerEntryOptions {
   journalWriter?: PackReviewJournalWriter;
   expectedPr?: number;
   expectedHead?: string;
+}
+
+interface TriggerBoundaryScenario {
+  name: string;
+  result: { started?: boolean; reason?: string };
+  observedRecheck: Record<string, unknown>;
+  freshReadCount: number;
+  runnerInvocations: number;
+  deliveryInvocations: number;
 }
 
 const supportDir = path.dirname(fileURLToPath(import.meta.url));
@@ -403,69 +412,294 @@ export function greenCiChecks(): Array<Record<string, string>> {
   ];
 }
 
+function runTriggerBoundaryScenario(name: string): TriggerBoundaryScenario {
+  const root = tempRoot('task-311-ac5-boundary-');
+  const scriptPath = path.join(root, 'scenario.ps1');
+  const sourcePath = path.join(repoRoot, 'scripts/review-trigger-reconcile.ps1');
+  const capturePath = path.join(repoRoot, fixture.capture.path);
+  const reconcileCli = path.join(repoRoot, 'docs/review-trigger-reconcile.mjs');
+  const plannedHead = '7'.repeat(40);
+  const freshHead = '8'.repeat(40);
+  const script = `
+$ErrorActionPreference = 'Stop'
+$SourcePath = ${psString(sourcePath)}
+$CapturePath = ${psString(capturePath)}
+$ReconcileCli = ${psString(reconcileCli)}
+$ScenarioName = ${psString(name)}
+$PrNumber = ${fixture.assembly.prNumber}
+$PlannedHead = ${psString(plannedHead)}
+$AdvancedHead = ${psString(freshHead)}
+$Session = (Get-Content -LiteralPath $CapturePath -Raw | ConvertFrom-Json).data[0]
+
+$source = Get-Content -LiteralPath $SourcePath -Raw
+$marker = '$intervalMinutes = Get-ReconcileIntervalMinutes'
+$markerIndex = $source.IndexOf($marker)
+if ($markerIndex -lt 0) { throw 'review-trigger-reconcile main marker missing' }
+$prefix = $source.Substring(0, $markerIndex)
+$prefix = [regex]::Replace($prefix, '^#requires[^\r\n]*\r?\n', '')
+$scriptsRoot = Split-Path -Parent $SourcePath
+$escapedScriptsRoot = $scriptsRoot.Replace("'", "''")
+$prefix = $prefix.Replace('$PSScriptRoot', "'$escapedScriptsRoot'")
+. ([scriptblock]::Create($prefix))
+
+$script:FreshReadCount = 0
+$script:RunnerInvocations = 0
+$script:DeliveryInvocations = 0
+$script:ObservedRecheck = $null
+$script:FreshHead = $AdvancedHead
+$script:ForceAllowDrift = $false
+$script:EmitDelivery = $true
+$script:UseFixtureSnapshot = $false
+$script:CiGreen = $true
+
+switch ($ScenarioName) {
+  'baseline-drift' { }
+  'baseline-unchanged' { $script:FreshHead = $PlannedHead }
+  'fault-run-after-drift' { $script:ForceAllowDrift = $true; $script:EmitDelivery = $false }
+  'fault-delivery-after-drift' { $script:ForceAllowDrift = $true; $script:EmitDelivery = $true }
+  'fault-no-reread' { $script:FreshHead = $PlannedHead; $script:UseFixtureSnapshot = $true }
+  'fault-deny-unchanged' { $script:FreshHead = $PlannedHead; $script:CiGreen = $false }
+  default { throw "unknown TASK-311 AC5 scenario: $ScenarioName" }
+}
+
+function New-Task311Snapshot {
+  param([string]$Head, [bool]$ChecksGreen)
+  $checks = @(
+    @{ name = 'Verify orchestrator-pack structure'; state = 'SUCCESS' },
+    @{ name = 'PR scope guard'; state = 'SUCCESS' },
+    @{ name = 'Run pack contract tests'; state = $(if ($ChecksGreen) { 'SUCCESS' } else { 'FAILURE' }) },
+    @{ name = 'Self-architect lint'; state = 'SUCCESS' }
+  )
+  $key = [string]$PrNumber
+  $ciChecksByPr = @{}
+  $ciChecksByPr[$key] = $checks
+  $requiredNamesByPr = @{}
+  $requiredNamesByPr[$key] = @($checks | ForEach-Object { [string]$_.name })
+  $lookupFailedByPr = @{}
+  $lookupFailedByPr[$key] = $false
+  $sessionDetails = @{}
+  $sessionDetails[[string]$Session.id] = $Session
+  return @{
+    openPrs = @(@{ number = $PrNumber; headRefOid = $Head; headRefName = "issue-$PrNumber-task-311"; headCommittedAt = '2026-07-06T05:00:00.000Z' })
+    reviewRuns = @()
+    sessions = @($Session)
+    sessionDetailsById = $sessionDetails
+    ciChecksByPr = $ciChecksByPr
+    requiredCheckNamesByPr = $requiredNamesByPr
+    requiredCheckLookupFailedByPr = $lookupFailedByPr
+    aoEvents = @()
+    dispatchJournal = @{}
+    workerDeliveries = @()
+    reactionMessages = @{}
+    reactionConfigUnavailable = $false
+    cycleState = @{}
+    sharedCycleState = @{}
+    legacyNudged = @{}
+    repoRoot = $RepoRoot
+  }
+}
+
+function Get-PreRunRecheckSnapshot {
+  param([int]$PrNumber, [string]$Project, [string]$ConfigYaml = '', [hashtable]$ClaimResult = $null)
+  $script:FreshReadCount++
+  return New-Task311Snapshot -Head $script:FreshHead -ChecksGreen $script:CiGreen
+}
+
+function Invoke-ReconcileFilterCli {
+  param([string]$Subcommand, [hashtable]$Payload)
+  if ($Subcommand -ne 'preRunRecheck') { throw "unexpected TASK-311 filter command: $Subcommand" }
+  $json = $Payload | ConvertTo-Json -Compress -Depth 30
+  $output = $json | & node $ReconcileCli $Subcommand 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "real preRunRecheck CLI failed: $(@($output) -join ' ')" }
+  $observed = (@($output) -join [Environment]::NewLine) | ConvertFrom-Json
+  $script:ObservedRecheck = $observed
+  if ($script:ForceAllowDrift -and -not [bool]$observed.emitReviewRun) {
+    return [pscustomobject]@{ emitReviewRun = $true; reason = 'task311_fault_force_allow'; decision = $observed.decision }
+  }
+  return $observed
+}
+
+function Get-ReviewTriggerInvocationLine { param([string]$SessionId); return "ao-review run --session $SessionId" }
+function Test-ReviewMechanicalForbiddenCommand { param([string]$CommandLine) }
+function Get-AoReviewRuns { param([string]$Project); return @() }
+function Acquire-ReviewStartClaim {
+  param([int]$PrNumber, [string]$HeadSha, [string]$Surface, [array]$ReviewRuns, [string]$ProjectId, [string]$StartReason, [scriptblock]$LogWriter)
+  return @{ acquired = $true; key = "pr-$PrNumber-$HeadSha"; claimId = 'task311-claim'; holder = @{} }
+}
+function Complete-ReviewStartClaimPreRunRecheckDenied { param($ClaimResult, $Recheck, [array]$ReviewRuns); return @{ ok = $true } }
+function Complete-ReviewStartClaim { param($ClaimResult, [string]$Outcome, [array]$ReviewRuns, [hashtable]$Extra); return @{ ok = $true } }
+function Release-ReviewStartClaimAfterRunFailure { param($ClaimResult, [array]$ReviewRuns, [string]$Failure); return @{ ok = $true } }
+function Complete-ReviewStartClaimAfterRunInvoke { param($ClaimResult, [array]$ReviewRuns, [scriptblock]$ResolveReviewRuns, [scriptblock]$LogWriter); return @{ ok = $true } }
+function Confirm-ReviewStartClaimLaunchGate { param($ClaimResult, [array]$ReviewRuns, [string]$DecisionSource, [scriptblock]$LogWriter); return @{ ok = $true } }
+function Invoke-ReviewerWorkspacePreflight { param([string]$RepoRoot) }
+function Get-OrchestratorSideEffectLockPath { param([string]$LockFileName); return (Join-Path ([System.IO.Path]::GetTempPath()) $LockFileName) }
+function Write-OrchestratorSideProcessProgress { param([string]$ChildId, [string]$Phase) }
+function Write-ReconcileLog { param([string]$Message) }
+function Invoke-OrchestratorSideEffectFenced {
+  param([string]$LockPath, [scriptblock]$Action)
+  & $Action
+  return @{ ok = $true }
+}
+function Invoke-Task311ObservedDelivery { $script:DeliveryInvocations++ }
+function Invoke-AoReviewTriggerForWorker {
+  param([string]$SessionId)
+  $script:RunnerInvocations++
+  if ($script:EmitDelivery) { Invoke-Task311ObservedDelivery }
+  return @{ ok = $true; httpStatus = 200 }
+}
+
+$fixtureSnapshot = $null
+if ($script:UseFixtureSnapshot) {
+  $fixtureSnapshot = New-Task311Snapshot -Head $PlannedHead -ChecksGreen $script:CiGreen
+}
+$result = Invoke-PlannedReviewRun -SessionId ([string]$Session.id) -ReviewCommand 'task311-real-trigger-boundary' `
+  -PrNumber $PrNumber -HeadSha $PlannedHead -Project 'orchestrator-pack' -FixtureSnapshot $fixtureSnapshot `
+  -TrackingState @{} -StartReason 'task_311_ac5_boundary'
+
+[ordered]@{
+  name = $ScenarioName
+  result = $result
+  observedRecheck = $script:ObservedRecheck
+  freshReadCount = $script:FreshReadCount
+  runnerInvocations = $script:RunnerInvocations
+  deliveryInvocations = $script:DeliveryInvocations
+} | ConvertTo-Json -Compress -Depth 20
+`;
+  writeFileSync(scriptPath, script, 'utf8');
+  try {
+    const result = runProcessSync({
+      command: 'pwsh',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath],
+      cwd: repoRoot,
+      env: process.env,
+      inheritParentEnv: false,
+      encoding: 'utf8',
+    });
+    invariant(result.exitCode === 0, `TASK-311 AC5 boundary scenario ${name} failed\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
+    const jsonLine = result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1);
+    invariant(jsonLine, `TASK-311 AC5 boundary scenario ${name} produced no JSON`);
+    return JSON.parse(jsonLine) as TriggerBoundaryScenario;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function validateDriftBoundaryScenario(candidate: TriggerBoundaryScenario): void {
+  const drift = candidate.observedRecheck as any;
+  invariant(drift?.emitReviewRun === false, 'advanced head emitted review run');
+  invariant(drift?.reason === 'pre_run_recheck_head_advanced', 'advanced head reason drifted');
+  invariant(drift?.decision?.reason === 'head_advanced_since_plan', 'advanced head decision drifted');
+  invariant(candidate.freshReadCount === 1, 'current head was not freshly read at the trigger boundary');
+  invariant(candidate.runnerInvocations === 0, 'advanced head reached the real review-trigger seam');
+  invariant(candidate.deliveryInvocations === 0, 'advanced head reached the observed delivery seam');
+  invariant(candidate.result.started === false && candidate.result.reason === 'pre_run_recheck_head_advanced', 'trigger boundary did not abort the drifted head');
+}
+
+function validateUnchangedBoundaryScenario(candidate: TriggerBoundaryScenario): void {
+  const unchanged = candidate.observedRecheck as any;
+  invariant(unchanged?.emitReviewRun === true, 'unchanged head was wrongly denied');
+  invariant(candidate.freshReadCount === 1, 'unchanged-head path did not refresh current PR state');
+  invariant(candidate.runnerInvocations === 1, 'unchanged-head path did not cross the real review-trigger seam exactly once');
+  invariant(candidate.deliveryInvocations === 1, 'unchanged-head path did not reach the observed delivery seam exactly once');
+  invariant(candidate.result.started === true, 'unchanged-head trigger boundary did not start review');
+}
+
+function executeAc5Mutation(
+  mutationId: string,
+  negativeScenario: string,
+  validateNegative: (scenario: TriggerBoundaryScenario) => void,
+  restoredScenario: string,
+  validateRestored: (scenario: TriggerBoundaryScenario) => void,
+): MutationRecord {
+  const negative = runTriggerBoundaryScenario(negativeScenario);
+  let red = false;
+  try {
+    validateNegative(negative);
+  } catch {
+    red = true;
+  }
+  invariant(red, `AC5/${mutationId} actual trigger-boundary mutation unexpectedly stayed green`);
+  validateRestored(runTriggerBoundaryScenario(restoredScenario));
+  return mutationRecord(mutationId);
+}
+
 function validateReviewStartEvidence(candidate: Record<string, unknown>): void {
   const value = candidate as any;
   invariant(value.headDecision === 'stale-head-review-start-denied', 'stale-head marker missing');
-  invariant(value.drift?.emitReviewRun === false, 'advanced head emitted review run');
-  invariant(value.drift?.reason === 'pre_run_recheck_head_advanced', 'advanced head reason drifted');
-  invariant(value.drift?.decision?.reason === 'head_advanced_since_plan', 'advanced head decision drifted');
-  invariant(value.runnerInvocations === 0, 'advanced head reached runner');
-  invariant(value.deliveryInvocations === 0, 'advanced head reached delivery');
-  invariant(value.freshReadCount === 1, 'current head was not freshly read');
-  invariant(value.unchanged?.emitReviewRun === true, 'unchanged head was wrongly denied');
+  invariant(value.triggerBoundary === 'scripts/review-trigger-reconcile.ps1#Invoke-PlannedReviewRun', 'real review-trigger boundary evidence missing');
+  validateDriftBoundaryScenario({
+    name: 'evidence-drift',
+    result: value.driftResult,
+    observedRecheck: value.drift,
+    freshReadCount: value.freshReadCount,
+    runnerInvocations: value.runnerInvocations,
+    deliveryInvocations: value.deliveryInvocations,
+  });
+  validateUnchangedBoundaryScenario({
+    name: 'evidence-unchanged',
+    result: value.unchangedResult,
+    observedRecheck: value.unchanged,
+    freshReadCount: value.unchangedFreshReadCount,
+    runnerInvocations: value.unchangedRunnerInvocations,
+    deliveryInvocations: value.unchangedDeliveryInvocations,
+  });
 }
 
 export function runStaleHeadGate(): { reviewStart: Record<string, unknown>; mutations: MutationRecord[] } {
-  const { row: session } = readCapture();
   const plannedHead = '7'.repeat(40);
   const freshHead = '8'.repeat(40);
-  const common = {
-    reviewRuns: [],
-    sessions: [session as any],
-    ciChecks: greenCiChecks(),
-    ownerResolution: { sessionId: String(session.id), reason: 'capture_owner', failClosed: false },
-    nowMs: Date.parse('2026-07-19T02:00:00.000Z'),
-  };
-  const evaluate = (headRefOid: string, ciChecks = common.ciChecks) => preRunHeadReadyRecheck({
-    prNumber: fixture.assembly.prNumber,
-    headSha: plannedHead,
-    sessionId: String(session.id),
-    startReason: 'task_311_stale_head',
-  }, {
-    ...common,
-    ciChecks,
-    openPrs: [{ number: fixture.assembly.prNumber, headRefOid, headRefName: `issue-${fixture.assembly.prNumber}-task-311`, headCommittedAt: '2026-07-06T05:00:00.000Z' }],
-  });
-  const drift = evaluate(freshHead);
-  const unchanged = evaluate(plannedHead);
+  const drift = runTriggerBoundaryScenario('baseline-drift');
+  const unchanged = runTriggerBoundaryScenario('baseline-unchanged');
+  validateDriftBoundaryScenario(drift);
+  validateUnchangedBoundaryScenario(unchanged);
+
   const reviewStart = {
     headDecision: 'stale-head-review-start-denied',
+    triggerBoundary: 'scripts/review-trigger-reconcile.ps1#Invoke-PlannedReviewRun',
     plannedHead,
     freshHead,
-    drift,
-    unchanged,
-    freshReadCount: 1,
-    runnerInvocations: drift.emitReviewRun ? 1 : 0,
-    deliveryInvocations: drift.emitReviewRun ? 1 : 0,
+    drift: drift.observedRecheck,
+    driftResult: drift.result,
+    freshReadCount: drift.freshReadCount,
+    runnerInvocations: drift.runnerInvocations,
+    deliveryInvocations: drift.deliveryInvocations,
+    unchanged: unchanged.observedRecheck,
+    unchangedResult: unchanged.result,
+    unchangedFreshReadCount: unchanged.freshReadCount,
+    unchangedRunnerInvocations: unchanged.runnerInvocations,
+    unchangedDeliveryInvocations: unchanged.deliveryInvocations,
   };
   validateReviewStartEvidence(reviewStart);
+
   const rows = [
-    expectBehaviorRedSync('AC5', 'advanced-head-run-emitted', () => {
-      const staleRead = evaluate(plannedHead);
-      validateReviewStartEvidence({ ...reviewStart, drift: staleRead, runnerInvocations: staleRead.emitReviewRun ? 1 : 0 });
-    }, () => validateReviewStartEvidence(reviewStart)),
-    expectBehaviorRedSync('AC5', 'advanced-head-delivery-emitted', () => {
-      const staleRead = evaluate(plannedHead);
-      validateReviewStartEvidence({ ...reviewStart, drift: staleRead, deliveryInvocations: staleRead.emitReviewRun ? 1 : 0 });
-    }, () => validateReviewStartEvidence(reviewStart)),
-    expectBehaviorRedSync('AC5', 'current-head-not-reread', () => {
-      const staleRead = evaluate(plannedHead);
-      validateReviewStartEvidence({ ...reviewStart, drift: staleRead, freshReadCount: 0 });
-    }, () => validateReviewStartEvidence(reviewStart)),
-    expectBehaviorRedSync('AC5', 'unchanged-head-wrongly-denied', () => {
-      const denied = evaluate(plannedHead, [{ name: 'Run pack contract tests', state: 'FAILURE' }]);
-      validateReviewStartEvidence({ ...reviewStart, unchanged: denied });
-    }, () => validateReviewStartEvidence(reviewStart)),
+    executeAc5Mutation(
+      'advanced-head-run-emitted',
+      'fault-run-after-drift',
+      validateDriftBoundaryScenario,
+      'baseline-drift',
+      validateDriftBoundaryScenario,
+    ),
+    executeAc5Mutation(
+      'advanced-head-delivery-emitted',
+      'fault-delivery-after-drift',
+      validateDriftBoundaryScenario,
+      'baseline-drift',
+      validateDriftBoundaryScenario,
+    ),
+    executeAc5Mutation(
+      'current-head-not-reread',
+      'fault-no-reread',
+      validateDriftBoundaryScenario,
+      'baseline-drift',
+      validateDriftBoundaryScenario,
+    ),
+    executeAc5Mutation(
+      'unchanged-head-wrongly-denied',
+      'fault-deny-unchanged',
+      validateUnchangedBoundaryScenario,
+      'baseline-unchanged',
+      validateUnchangedBoundaryScenario,
+    ),
   ];
   validateMutationArray('AC5', rows);
   return { reviewStart, mutations: rows };

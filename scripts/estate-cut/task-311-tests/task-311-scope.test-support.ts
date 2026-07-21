@@ -2,8 +2,10 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -16,6 +18,8 @@ import {
   fixture,
   invariant,
   repoRoot,
+  runGit,
+  tempRoot,
   validateMutationArray,
   type EgressAttempt,
   type EgressTrap,
@@ -457,6 +461,48 @@ function intentionalEgressControl(trap: EgressTrap): MutationRecord {
   return mutationRecord('intentional-external-egress');
 }
 
+function readTrackedGitPath(root: string, relative: string): ChangedPath {
+  const staged = runGit(['ls-files', '--stage', '--', relative], root).trim();
+  invariant(staged, `git index did not contain ${relative}`);
+  const mode = staged.split(/\s+/, 1)[0] ?? '';
+  return { status: 'A', path: relative, mode };
+}
+
+function nonRegularArtifactControl(baseline: ScopeProofSnapshot): MutationRecord {
+  const root = tempRoot('task-311-real-symlink-control-');
+  try {
+    runGit(['init', '-q'], root);
+    runGit(['config', 'user.email', 'task311@example.invalid'], root);
+    runGit(['config', 'user.name', 'task311'], root);
+    const relative = fixture.scope.expectedAddedPaths[0]!;
+    const absolute = path.join(root, relative);
+    const target = path.join(path.dirname(absolute), 'target.txt');
+    mkdirSync(path.dirname(absolute), { recursive: true });
+    writeFileSync(target, 'target\n', 'utf8');
+    symlinkSync(path.basename(target), absolute, 'file');
+    invariant(lstatSync(absolute).isSymbolicLink(), 'non-regular control did not plant a real symlink');
+    runGit(['add', '--', relative], root);
+    const tracked = readTrackedGitPath(root, relative);
+    invariant(tracked.mode === '120000', `real symlink was not recorded with git mode 120000 (got ${tracked.mode || '<missing>'})`);
+
+    const candidate = cloneSnapshot(baseline);
+    const index = candidate.changes.findIndex((change) => change.path === relative);
+    invariant(index >= 0, 'real symlink control target missing from immutable scope snapshot');
+    candidate.changes[index] = tracked;
+    let red = false;
+    try {
+      validateScopeProofSnapshot(candidate);
+    } catch {
+      red = true;
+    }
+    invariant(red, 'AC6/non-regular-artifact real symlink unexpectedly stayed green');
+    validateScopeProofSnapshot(cloneSnapshot(baseline));
+    return mutationRecord('non-regular-artifact');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 export function runScopeGate(trap: EgressTrap): { scope: Record<string, unknown>; mutations: MutationRecord[] } {
   const processWide = trap as Partial<ProcessWideEgressTrap>;
   invariant(trap.active === true, 'egress trap is inactive');
@@ -481,11 +527,7 @@ export function runScopeGate(trap: EgressTrap): { scope: Record<string, unknown>
     expectScopeControlRed(baseline, 'production-or-core-edit', (candidate) => {
       candidate.changes.push({ status: 'M', path: 'packages/core/src/index.ts', mode: '100644' });
     }),
-    expectScopeControlRed(baseline, 'non-regular-artifact', (candidate) => {
-      const row = candidate.changes.find((change) => change.path === fixture.scope.expectedAddedPaths[0]);
-      invariant(row, 'immutable non-regular control target missing');
-      row.mode = '120000';
-    }),
+    nonRegularArtifactControl(baseline),
     intentionalEgressControl(trap),
     expectScopeControlRed(baseline, 'untraced-ao-field', (candidate) => {
       candidate.captureSelectors.push('$.data[0].prNumber');
@@ -508,6 +550,7 @@ export function runScopeGate(trap: EgressTrap): { scope: Record<string, unknown>
         laneConfig: fixture.scope.laneConfig,
         addedPaths: fixture.scope.expectedAddedPaths,
         heavyTests: fixture.scope.expectedHeavyTests,
+        realSymlinkControl: true,
       },
       trap: {
         active: trap.active,
