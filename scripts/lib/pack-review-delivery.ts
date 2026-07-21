@@ -46,6 +46,7 @@ export interface PackReviewWorkerNotificationResult {
 export interface PackReviewWorkerNotificationRequest {
   message: string;
   idempotencyKey: string;
+  reviewRunId?: string;
 }
 
 export type PackReviewWorkerNotifier = (
@@ -429,6 +430,7 @@ export async function deliverPackReviewVerdict(
           `Merge status: ${classification.requiredStatus}`,
         ].join('\n'),
         idempotencyKey: workerKey,
+        reviewRunId: options.run.id,
       });
       if (notified.state !== 'delivered') deliveryFailed = true;
       recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));
@@ -594,6 +596,7 @@ export async function sendPackReviewWorkerNotification(options: {
         sessionId,
         message: options.request.message,
         idempotencyKey: options.request.idempotencyKey,
+        reviewRunId: options.request.reviewRunId,
       });
     }
     return { state: 'delivered', reason: 'fixture_dispatched' };
