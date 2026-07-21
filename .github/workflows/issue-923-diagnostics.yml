@@ -1,0 +1,40 @@
+name: issue-923-diagnostics
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-pr2-foundation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Capture diagnostics
+        shell: bash
+        run: |
+          mkdir -p diagnostics
+          set +e
+          npm run test:foundation > diagnostics/test-foundation.log 2>&1
+          echo $? > diagnostics/test-foundation.exit
+          npm test -- scripts/pr2-foundation --reporter=verbose > diagnostics/pr2-vitest.log 2>&1
+          echo $? > diagnostics/pr2-vitest.exit
+          npx tsc -p scripts/tsconfig.json --noEmit > diagnostics/pack-typecheck.log 2>&1
+          echo $? > diagnostics/pack-typecheck.exit
+          set -e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-923-diagnostics
+          path: diagnostics
+          if-no-files-found: error
