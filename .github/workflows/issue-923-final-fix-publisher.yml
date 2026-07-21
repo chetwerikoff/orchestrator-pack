@@ -1,19 +1,104 @@
-name: issue-923-final-fix-publisher-v2-disabled
+name: issue-923-final-fix-publisher-v3
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  group: issue-923-final-fix-publisher-v2
+  group: issue-923-final-fix-publisher-v3
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  disabled:
-    if: ${{ false }}
+  publish:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TARGET_BRANCH: agent/issue-923-pr2-foundation
+      TARGET_HEAD: 4901a274d1f6ec980d2974f3f729a26dcd1cc751
+      PATCH_SOURCE_COMMIT: dd1916d6650bea279f49eb0e3c0e34f08932475e
     steps:
-      - run: echo disabled
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-923-pr2-foundation
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Apply final bounded fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
+          git fetch origin agent/issue-923-validation-probe
+          git show "$PATCH_SOURCE_COMMIT:.github/workflows/issue-923-final-fix-publisher.yml" > "$RUNNER_TEMP/publisher-v2.yml"
+          python3 <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('/home/runner/work/_temp/publisher-v2.yml').read_text(encoding='utf-8').splitlines()
+          start = next(i for i, line in enumerate(workflow) if line.strip() == "python3 <<'PY'") + 1
+          end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
+          script = textwrap.dedent('\n'.join(workflow[start:end])) + '\n'
+          exec(compile(script, '<publisher-v2-patch>', 'exec'), {'__name__': '__main__'})
+
+          path = Path('scripts/pr2-foundation/worker-notification-compat.test.ts')
+          source = path.read_text(encoding='utf-8')
+          old = "    expect(source).toContain('worker-message-dispatch-observe.mjs');\n"
+          new = "    expect(source).toContain('worker-message-dispatch-observe');\n"
+          if source.count(old) != 1:
+              raise SystemExit(f'canonical journal assertion match count: {source.count(old)}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+
+          expected="$RUNNER_TEMP/expected-paths"
+          actual="$RUNNER_TEMP/actual-paths"
+          cat > "$expected" <<'EOF'
+          scripts/pr2-foundation/foundation.test.ts
+          scripts/pr2-foundation/mutation-semantic-gates.ts
+          scripts/pr2-foundation/mutation-target-check.ts
+          scripts/pr2-foundation/real-scope-proof.test.ts
+          scripts/pr2-foundation/terminalized-port.test.ts
+          scripts/pr2-foundation/terminalized/orchestrator-wake-filter.ts
+          scripts/pr2-foundation/worker-dispatch-journal.ts
+          scripts/pr2-foundation/worker-notification-compat.test.ts
+          scripts/pr2-foundation/worker-nudge-gate.ts
+          EOF
+          git diff --name-only | sort > "$actual"
+          sort -o "$expected" "$expected"
+          diff -u "$expected" "$actual"
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add --pathspec-from-file="$expected"
+          git commit -m 'fix: close final Issue 923 CI gaps'
+      - name: Verify bounded final fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --include=dev
+          npm run check:node-major
+          npx tsc --project tsconfig.base.json --noEmit
+          OPK_VITEST_HARNESS=1 npx vitest run \
+            scripts/pr2-foundation/foundation.test.ts \
+            scripts/pr2-foundation/terminalized-port.test.ts \
+            scripts/pr2-foundation/mutation-catalog.test.ts \
+            scripts/pr2-foundation/mutation-semantic-gates.test.ts \
+            scripts/pr2-foundation/real-scope-proof.test.ts \
+            scripts/pr2-foundation/worker-notification-compat.test.ts
+          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1
+          started="$(date +%s)"
+          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
+            -Strict \
+            -BaseRef origin/main \
+            -HeadRef HEAD
+          elapsed=$(( $(date +%s) - started ))
+          echo "self_architect_elapsed_seconds=$elapsed"
+          test "$elapsed" -lt 600
+      - name: Push verified final fix
+        shell: bash
+        run: git push origin HEAD:"$TARGET_BRANCH"
