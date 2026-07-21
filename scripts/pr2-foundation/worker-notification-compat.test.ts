@@ -14,6 +14,10 @@ import { DEFAULT_FOUNDATION_CONFIG } from './config.ts';
 import { withJournalLock } from './journal-lock.ts';
 import { createTestRootRegistry } from './test-root.ts';
 import {
+  resolveWakeSupervisorStateRoot,
+  resolveWorkerMessageDispatchJournalPath,
+} from './wake-supervisor-state-root.ts';
+import {
   admitDispatchJournalRecord,
   DISPATCH_OUTCOME_IN_FLIGHT,
   finalizeDispatchJournalRecord,
@@ -31,7 +35,7 @@ const testRoots = createTestRootRegistry();
 const originalAoBaseDir = process.env.AO_BASE_DIR;
 const originalLockStaleMs = process.env.AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS;
 
-function workerSession(): AoSessionRow {
+function workerSession(overrides: Partial<AoSessionRow> = {}): AoSessionRow {
   return {
     createdAt: '2026-07-20T00:00:00.000Z',
     harness: 'cursor',
@@ -43,6 +47,7 @@ function workerSession(): AoSessionRow {
     role: 'worker',
     status: 'working',
     updatedAt: '2026-07-20T00:10:00.000Z',
+    ...overrides,
   };
 }
 
@@ -156,6 +161,78 @@ describe('[AC4] TypeScript notification compatibility', () => {
       ownerSessionId: 'worker-923',
       generation: 'worker-923',
     });
+  });
+
+  it('delivers to a successor exact-head owner when the review session is stale', async () => {
+    const root = testRoots.create('opk-pr2-successor-target-');
+    process.env.AO_BASE_DIR = path.join(root, 'ao-base');
+    const successor = workerSession({
+      id: 'worker-923-successor',
+      createdAt: '2026-07-20T01:00:00.000Z',
+      lastActivityAt: '2026-07-20T01:10:00.000Z',
+      updatedAt: '2026-07-20T01:10:00.000Z',
+    });
+    const result = await resolveVerifiedWorkerNotificationTarget({
+      trustedPackRoot: root,
+      repoRoot: root,
+      projectId: 'orchestrator-pack',
+      requestedSessionId: 'worker-923',
+      prNumber: 923,
+      headSha: 'a'.repeat(40),
+      config: DEFAULT_FOUNDATION_CONFIG.notification,
+      dependencies: {
+        loadAoVersion: async () => '0.10.3',
+        loadSessions: async () => [
+          workerSession({ isTerminated: true, status: 'terminated' }),
+          successor,
+        ],
+        loadOpenPrs: async () => [openPr()],
+        resolveRepoSlug: async () => 'chetwerikoff/orchestrator-pack',
+      },
+    });
+    expect(result).toMatchObject({
+      sessionId: 'worker-923-successor',
+      targetId: 'worker-923-successor',
+      targetGeneration: 'worker-923-successor',
+      workerTarget: 'worker-923-successor:worker-923-successor',
+    });
+    const claimPath = path.join(
+      process.env.AO_BASE_DIR,
+      'projects',
+      'orchestrator-pack',
+      'pr-ownership-claims',
+      'pr-923.json',
+    );
+    expect(JSON.parse(readFileSync(claimPath, 'utf8'))).toMatchObject({
+      ownerSessionId: 'worker-923-successor',
+      generation: 'worker-923-successor',
+    });
+  });
+
+  it('matches canonical wake-supervisor state-root precedence on Linux and Windows', () => {
+    expect(resolveWakeSupervisorStateRoot({
+      env: {
+        AO_WAKE_SUPERVISOR_STATE_DIR: '/override/wake',
+        XDG_STATE_HOME: '/ignored/xdg',
+      },
+      platform: 'linux',
+      homeDir: '/home/test',
+    })).toBe('/override/wake');
+    expect(resolveWorkerMessageDispatchJournalPath({
+      env: { XDG_STATE_HOME: '/state' },
+      platform: 'linux',
+      homeDir: '/home/test',
+    })).toBe('/state/orchestrator-pack-wake-supervisor/worker-message-dispatch-journal.json');
+    expect(resolveWorkerMessageDispatchJournalPath({
+      env: { LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' },
+      platform: 'win32',
+      homeDir: 'C:\\Users\\test',
+    })).toBe('C:\\Users\\test\\AppData\\Local\\orchestrator-pack-wake-supervisor\\worker-message-dispatch-journal.json');
+    expect(resolveWakeSupervisorStateRoot({
+      env: {},
+      platform: 'linux',
+      homeDir: '/home/test',
+    })).toBe('/home/test/.local/state/orchestrator-pack-wake-supervisor');
   });
 
   it('fails closed when live AO version provenance is not exactly 0.10.3', async () => {
@@ -272,14 +349,19 @@ describe('[AC4] TypeScript notification compatibility', () => {
     await expect(withJournalLock(journalPath, 1, async () => 'recovered')).resolves.toBe('recovered');
     expect(existsSync(lockPath)).toBe(false);
 
-    writeFileSync(lockPath, `${JSON.stringify({
-      schemaVersion: 1,
-      pid: process.pid,
-      nonce: 'live-owner',
-      acquiredAtMs: Date.now(),
-    })}\n`, 'utf8');
-    await expect(withJournalLock(journalPath, 1, async () => 'must-not-run')).rejects.toThrow('journal_busy');
-    expect(existsSync(lockPath)).toBe(true);
+    for (const [nonce, acquiredAtMs] of [
+      ['live-owner-current', Date.now()],
+      ['live-owner-old', Date.now() - 10_000],
+    ] as const) {
+      writeFileSync(lockPath, `${JSON.stringify({
+        schemaVersion: 1,
+        pid: process.pid,
+        nonce,
+        acquiredAtMs,
+      })}\n`, 'utf8');
+      await expect(withJournalLock(journalPath, 1, async () => 'must-not-run')).rejects.toThrow('journal_busy');
+      expect(existsSync(lockPath)).toBe(true);
+    }
   });
 
   it('contains no PowerShell child while retaining target, claim, fence, and canonical journal calls', () => {
