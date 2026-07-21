@@ -1,0 +1,21 @@
+{
+  "issue_number": 923,
+  "iteration_id": "chatgpt-issue-923",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-21T04:06:00.000Z",
+  "baseline": {
+    "commit_sha": "faac4525e5e457f7480f99b5f26fcfd96da6d9d5",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:36d5cb37ff06a2e00abf867d4d2fccc64ac6d5c9da145f0b6743271e8e326e7f"
+  },
+  "declared_paths": [
+    "package.json",
+    "scripts/lib/pack-review-worker-notification.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [
+    "scripts/pr2-foundation/**"
+  ],
+  "amendments": []
+}
