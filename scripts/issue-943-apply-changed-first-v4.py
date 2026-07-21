@@ -23,21 +23,21 @@ def main() -> None:
 
     lint_path = Path("scripts/lint-self-architect.ps1")
     lint = lint_path.read_text(encoding="utf-8")
-    old_group = """              foreach ($pair in $blockMap.GetEnumerator()) {
-                  $locations = @($pair.Value | Sort-Object file, startLine)
-                  $distinctFiles = @($locations | Select-Object -ExpandProperty file -Unique)
-                  if ($distinctFiles.Count -lt 2) { continue }
+    old_group = """    foreach ($pair in $blockMap.GetEnumerator()) {
+        $locations = @($pair.Value | Sort-Object file, startLine)
+        $distinctFiles = @($locations | Select-Object -ExpandProperty file -Unique)
+        if ($distinctFiles.Count -lt 2) { continue }
 """
-    new_group = """              foreach ($pair in $blockMap.GetEnumerator()) {
-                  $rawLocations = $pair.Value
-                  if ($rawLocations.Count -lt 2) { continue }
-                  $distinctFileSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
-                  foreach ($location in $rawLocations) {
-                      [void]$distinctFileSet.Add([string]$location.file)
-                  }
-                  if ($distinctFileSet.Count -lt 2) { continue }
-                  $locations = @($rawLocations | Sort-Object file, startLine)
-                  $distinctFiles = @($distinctFileSet)
+    new_group = """    foreach ($pair in $blockMap.GetEnumerator()) {
+        $rawLocations = $pair.Value
+        if ($rawLocations.Count -lt 2) { continue }
+        $distinctFileSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($location in $rawLocations) {
+            [void]$distinctFileSet.Add([string]$location.file)
+        }
+        if ($distinctFileSet.Count -lt 2) { continue }
+        $locations = @($rawLocations | Sort-Object file, startLine)
+        $distinctFiles = @($distinctFileSet)
 """
     lint = replace_once(lint, old_group, new_group, "singleton duplicate group")
     lint_path.write_text(lint, encoding="utf-8")
