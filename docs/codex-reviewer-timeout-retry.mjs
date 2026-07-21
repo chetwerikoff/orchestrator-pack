@@ -10,8 +10,8 @@ import {
   extractReviewerFailureClass,
   countSameHeadFailuresByClass,
   resolveRunFailureText,
-} from './reviewer-failure-evidence-markers.mjs';
-import { findFailedOrCancelledRunForHead } from './review-trigger-reconcile.mjs';
+} from '../scripts/pr2-foundation/terminalized/reviewer-failure-evidence-markers.ts';
+import { findFailedOrCancelledRunForHead } from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
 
 export {
   TIMEOUT_NO_VERDICT_FAILURE_CLASS,
@@ -23,10 +23,10 @@ export {
   extractReviewerFailureClass,
   countSameHeadFailuresByClass,
   resolveRunFailureText,
-} from './reviewer-failure-evidence-markers.mjs';
+} from '../scripts/pr2-foundation/terminalized/reviewer-failure-evidence-markers.ts';
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} reviewRuns
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} reviewRuns
  * @param {number} prNumber
  * @param {string} headSha
  * @param {{ maxRetries?: number }} [options]
@@ -69,7 +69,7 @@ export function evaluateTimeoutRetryEligibility(reviewRuns, prNumber, headSha, o
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun | null | undefined} run
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun | null | undefined} run
  */
 export function buildTimeoutRetryObserved(run) {
   const evidence = extractReviewerEvidenceFromText(resolveRunFailureText(run));

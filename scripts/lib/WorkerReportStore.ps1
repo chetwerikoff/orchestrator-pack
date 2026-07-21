@@ -7,7 +7,7 @@
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'Gh-FleetInventoryCache.ps1')
 
-$Script:WorkerReportStoreCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/worker-report-store.mjs'
+$Script:WorkerReportStoreCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'scripts/pr2-foundation/terminalized/worker-report-store.ts'
 $Script:PackWorkerReportStoreSurface = 'pack-worker-report-store'
 
 function Get-WorkerReportStorePath {

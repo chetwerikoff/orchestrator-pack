@@ -9,8 +9,8 @@ import {
   normalizeRepoSlugFromPrUrl,
   parsePrNumberFromPrUrl,
 } from './review-handoff-wake-admission.mjs';
-import { getReportState } from './review-finding-delivery-confirm.mjs';
-import { hasReadyForReviewForHead, preRunHeadReadyRecheck } from './review-head-ready.mjs';
+import { getReportState } from '../scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts';
+import { hasReadyForReviewForHead, preRunHeadReadyRecheck } from '../scripts/pr2-foundation/terminalized/review-head-ready.ts';
 import {
   REPORT_STATE_SEED_START_REASON,
   createWatchEntry,
@@ -28,7 +28,7 @@ import {
   resolveHeadOwningWorkerSessionId,
   sessionMatchesPr,
   toArray,
-} from './review-trigger-reconcile.mjs';
+} from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
 
 /** Poll classification for supervised report-state seed child. */
 export const REPORT_STATE_POLL_CLASS = 'report_state_poll';
@@ -142,7 +142,7 @@ export function isAcceptedReadyForReviewReport(report) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession} session
  */
 export function resolveSessionRepoSlug(session, fallbackRepoSlug = '') {
   const prUrl = String(session?.pr ?? session?.prUrl ?? '').trim();
@@ -150,7 +150,7 @@ export function resolveSessionRepoSlug(session, fallbackRepoSlug = '') {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession} session
  */
 export function resolveSessionPrNumber(session) {
   const direct = Number(session?.prNumber);
@@ -161,14 +161,14 @@ export function resolveSessionPrNumber(session) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession} session
  */
 export function resolveSessionProjectId(session) {
   return String(session?.project ?? session?.projectId ?? '').trim();
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession} session
  * @param {string} [supervisedProject]
  */
 export function sessionMatchesSupervisedProject(session, supervisedProject = '') {
@@ -386,7 +386,7 @@ export function hasTerminalHandoffOutcome(input) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} sessions
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession[]} sessions
  * @param {string} [fallbackRepoSlug]
  */
 
@@ -395,7 +395,7 @@ export function hasTerminalHandoffOutcome(input) {
  * Gh open-PR lists are supervised-repo scoped; foreign-repo sessions must not
  * inherit a colliding prNumber head from the local repository.
  *
- * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} openPrs
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').OpenPr[]} openPrs
  * @param {string} repoSlug
  * @param {number} prNumber
  * @param {string} [supervisedRepoSlug]
@@ -427,7 +427,7 @@ export function collectStatusSessionsForPoll(sessions, supervisedProject = '') {
 /**
  * Find latest accepted ready_for_review report on a session (emission order).
  *
- * @param {import('./review-trigger-reconcile.mjs').AoSession} session
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession} session
  */
 export function findLatestAcceptedReadyForReviewReport(session) {
   for (const report of toArray(session?.reports)) {
@@ -440,12 +440,12 @@ export function findLatestAcceptedReadyForReviewReport(session) {
 /**
  * Latest accepted ready_for_review across every session row for one PR.
  *
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} sessions
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession[]} sessions
  */
 export function findLatestAcceptedReadyForReviewAcrossSessions(sessions) {
   /** @type {Record<string, unknown> | null} */
   let latestReport = null;
-  /** @type {import('./review-trigger-reconcile.mjs').AoSession | null} */
+  /** @type {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession | null} */
   let latestSession = null;
   let latestMs = -1;
 
@@ -467,9 +467,9 @@ export function findLatestAcceptedReadyForReviewAcrossSessions(sessions) {
 
 /**
  * @param {object} input
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.sessions]
- * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession[]} [input.sessions]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').OpenPr[]} [input.openPrs]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} [input.reviewRuns]
  * @param {Record<string, object>} [input.bindingByKey]
  * @param {Record<string, unknown>} [input.handoffRecords]
  * @param {Set<string> | string[]} [input.terminalClaimKeys]
@@ -516,7 +516,7 @@ export function planReportStatePollTick(input) {
 
   const supervisedRepoSlug = String(input.fallbackRepoSlug ?? '').trim().toLowerCase();
 
-  /** @type {Map<string, { sessions: import('./review-trigger-reconcile.mjs').AoSession[], prNumber: number, repoSlug: string }>} */
+  /** @type {Map<string, { sessions: import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession[], prNumber: number, repoSlug: string }>} */
   const headsByScanKey = new Map();
 
   for (const session of sessions) {

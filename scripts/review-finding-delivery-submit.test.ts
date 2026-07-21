@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DELIVERY_STATE_ESCALATED,
   planDeliveryConfirmActions,
-} from '../docs/review-finding-delivery-confirm.mjs';
+} from './pr2-foundation/terminalized/review-finding-delivery-confirm.ts';
 import {
   assertSubmitArgvIsEnterOnly,
   buildSubmitDecisionKey,

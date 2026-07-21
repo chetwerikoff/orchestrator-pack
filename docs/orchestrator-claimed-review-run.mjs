@@ -9,7 +9,7 @@ import {
   evaluateHeadReadyForReview,
   preRunHeadReadyRecheck,
   resolveCurrentPrHeadSha,
-} from './review-head-ready.mjs';
+} from '../scripts/pr2-foundation/terminalized/review-head-ready.ts';
 import {
   COVERED_TERMINAL_REVIEW_STATUSES,
   IN_FLIGHT_REVIEW_STATUSES,
@@ -21,8 +21,8 @@ import {
   normalizeSha,
   resolveHeadCommittedAtMs,
   toArray,
-} from './review-trigger-reconcile.mjs';
-import { resolveFailedRunRetryEligibility } from './autonomous-review-retry.mjs';
+} from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
+import { resolveFailedRunRetryEligibility } from '../scripts/pr2-foundation/terminalized/autonomous-review-retry.ts';
 import { isScopedGhInfraTransportFailure } from './review-start-preflight-shield.mjs';
 import {
   evaluateAutonomousGatePreflight,
@@ -76,7 +76,7 @@ export function isNormalizedHeadSha(sha) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} reviewRuns
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} reviewRuns
  * @param {number} prNumber
  * @param {string} headSha
  */
@@ -88,7 +88,7 @@ export function selectCurrentHeadRows(reviewRuns, prNumber, headSha) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} rows
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} rows
  */
 export function classifyCurrentHeadCoverage(rows) {
   const list = toArray(rows);
@@ -170,7 +170,7 @@ export function classifyCurrentHeadCoverage(rows) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} reviewRuns
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} reviewRuns
  * @param {number} prNumber
  * @param {string} headSha
  */
@@ -182,7 +182,7 @@ export function evaluateCurrentHeadCoverage(reviewRuns, prNumber, headSha) {
 /**
  * @param {object} input
  * @param {'free' | 'held_by_other' | 'prior_terminal'} input.claimWindow
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} input.reviewRuns
  * @param {number} input.prNumber
  * @param {string} input.headSha
  */
@@ -210,9 +210,9 @@ export function evaluateScenarioMatrixCell({ claimWindow, reviewRuns, prNumber, 
  * @param {object} input
  * @param {number} input.prNumber
  * @param {string} [input.eventHeadSha]
- * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.sessions]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').OpenPr[]} [input.openPrs]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} [input.reviewRuns]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession[]} [input.sessions]
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
  * @param {boolean} [input.requiredCheckLookupFailed]

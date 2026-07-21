@@ -12,7 +12,7 @@ import {
   evaluateFirstSendCandidate,
   planReviewSendActions,
   preSendRecheck,
-} from '../docs/review-send-reconcile.mjs';
+} from './pr2-foundation/terminalized/review-send-reconcile.ts';
 import {
   AFFIRMATIVE_LIVE_RUNTIME,
   classifyRuntimeField,
@@ -21,7 +21,7 @@ import {
   isRuntimeFieldLive,
   TERMINAL_RUNTIME_VALUES,
 } from '../docs/session-runtime-liveness.mjs';
-import { isSessionAlive } from '../docs/worker-message-dispatch-observe.mjs';
+import { isSessionAlive } from './pr2-foundation/terminalized/worker-message-dispatch-observe.ts';
 import { evaluateSubmitDecision } from '../docs/worker-message-submit-reconcile.mjs';
 import { loadVariantCatalog } from './external-output-shape-guard.mjs';
 

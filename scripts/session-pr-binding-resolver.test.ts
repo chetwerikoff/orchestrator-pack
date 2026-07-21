@@ -21,7 +21,7 @@ import {
   resolveWorkerSessionId,
   sessionMatchesPr,
   sessionOwnsRunHead,
-} from '../docs/review-trigger-reconcile.mjs';
+} from './pr2-foundation/terminalized/review-trigger-reconcile.ts';
 import { planCiFailureReactionRecords } from '../docs/ci-failure-notification.mjs';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');

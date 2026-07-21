@@ -254,12 +254,9 @@ export async function resolveVerifiedWorkerNotificationTarget(input: {
   // terminated predecessor after restore/replacement.
   const owner = resolvePrOwnerSessionForNudge({
     prNumber: input.prNumber,
-    headSha: input.headSha,
-    sessions,
-    openPrs,
   });
-  if (!booleanResult(owner, 'ok')) throw new Error(String(owner.reason ?? 'pr_owner_unresolved'));
-  const ownerSessionId = String(owner.ownerSessionId ?? '').trim();
+  if (!owner.ok) throw new Error(owner.reason);
+  const ownerSessionId = owner.ownerSessionId.trim();
   if (!ownerSessionId) throw new Error('pr_owner_unresolved');
 
   const { worktree, sessionMeta } = sessionMetadata(input.projectId, ownerSessionId);
@@ -272,7 +269,7 @@ export async function resolveVerifiedWorkerNotificationTarget(input: {
       existingClaim,
       sessionMeta,
     })
-    : {};
+    : { resumeLineage: false, reason: 'missing_context' };
   const sync = syncPrOwnershipClaimRecord({
     prNumber: input.prNumber,
     ownerSessionId,

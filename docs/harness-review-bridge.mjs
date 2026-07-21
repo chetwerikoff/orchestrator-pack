@@ -3,7 +3,7 @@
  * Vitest: scripts/harness-review-bridge.test.ts
  */
 import { join } from 'node:path';
-import { classifyReviewerHarnessAbort } from './ao-0-10-review-api.mjs';
+import { classifyReviewerHarnessAbort } from '../scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts';
 
 export { classifyReviewerHarnessAbort };
 

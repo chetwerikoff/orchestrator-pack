@@ -25,7 +25,7 @@ import {
   writePrSessionBindingCacheFile,
   writePrSessionBindingCacheFileWithCas,
 } from '../docs/pr-session-binding-cache.mjs';
-import { resolveHeadOwningWorkerSessionId } from '../docs/review-trigger-reconcile.mjs';
+import { resolveHeadOwningWorkerSessionId } from './pr2-foundation/terminalized/review-trigger-reconcile.ts';
 
 function isLiveWorkerSession(session: Record<string, unknown>) {
   const status = String(session?.status ?? '').toLowerCase();

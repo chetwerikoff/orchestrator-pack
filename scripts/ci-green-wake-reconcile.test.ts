@@ -26,7 +26,7 @@ import {
   type PlanCiGreenWakeInput,
 } from '../docs/ci-green-wake-reconcile.mjs';
 import type { AoSession } from '../docs/review-trigger-reconcile.d.mts';
-import { QUIESCENCE_DEBOUNCE_MS } from '../docs/worker-iteration-cycle.mjs';
+import { QUIESCENCE_DEBOUNCE_MS } from './pr2-foundation/terminalized/worker-iteration-cycle.ts';
 import { liveWorker, packGreenCiChecks, packRedCiChecks } from './_test-worker-session-fixtures.js';
 
 const fixturesDir = path.join(

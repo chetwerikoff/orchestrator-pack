@@ -5,13 +5,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
-import { resolveCurrentPrHeadSha } from './review-head-ready.mjs';
-import { findSessionById, normalizeSha, toArray } from './review-trigger-reconcile.mjs';
+import { resolveCurrentPrHeadSha } from '../scripts/pr2-foundation/terminalized/review-head-ready.ts';
+import { findSessionById, normalizeSha, toArray } from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
 import {
   getNotificationData,
   isRecord,
   nonEmptyString,
-} from './orchestrator-wake-filter.mjs';
+} from '../scripts/pr2-foundation/terminalized/orchestrator-wake-filter.ts';
 
 export const HANDOFF_WAKE_KIND = 'ready_for_review';
 export const REVIEW_PENDING_HANDOFF_SEMANTIC_TYPE = 'review.pending';
@@ -195,10 +195,10 @@ export function parsePrNumberFromPrUrl(prUrl) {
  * @param {Record<string, unknown>} input.event
  * @param {string} [input.supervisedProjectId]
  * @param {string} [input.supervisedRepoSlug]
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.supervisedSessions]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession[]} [input.supervisedSessions]
  * @param {boolean} [input.sessionLookupFailed]
  * @param {boolean} [input.supervisedRepoLookupFailed]
- * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').OpenPr[]} [input.openPrs]
  * @param {boolean} [input.openPrLookupFailed]
  */
 export function evaluateHandoffIdentityAdmission(input) {

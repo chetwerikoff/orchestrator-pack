@@ -9,7 +9,7 @@ import {
   getReportState,
   getReportTimestampMs,
   sessionOwnsRunHead,
-} from './review-finding-delivery-confirm.mjs';
+} from '../scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts';
 
 export { DELIVERY_STATE_ESCALATED, DELIVERY_STATE_UNCONFIRMED };
 import { isRuntimeAlive } from './session-runtime-liveness.mjs';
@@ -25,7 +25,7 @@ import {
   sessionMatchesIdentifier,
   sessionMatchesPr,
   toArray,
-} from './review-trigger-reconcile.mjs';
+} from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
 
 export { isRuntimeAlive } from './session-runtime-liveness.mjs';
 

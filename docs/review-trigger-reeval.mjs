@@ -13,8 +13,8 @@ import {
   hasReadyForReviewForHead,
   preRunHeadReadyRecheck,
   resolveCurrentPrHeadSha,
-} from './review-head-ready.mjs';
-import { getReportState } from './review-finding-delivery-confirm.mjs';
+} from '../scripts/pr2-foundation/terminalized/review-head-ready.ts';
+import { getReportState } from '../scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts';
 import {
   buildReviewRunArgv,
   findSessionById,
@@ -29,8 +29,8 @@ import {
   resolveHeadCommittedAtMs,
   resolveHeadOwningWorkerSessionId,
   toArray,
-} from './review-trigger-reconcile.mjs';
-import { evaluateWakeReviewTrigger } from './review-wake-trigger.mjs';
+} from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
+import { evaluateWakeReviewTrigger } from '../scripts/pr2-foundation/terminalized/review-wake-trigger.ts';
 import { evaluateReviewCycleCapGate } from './review-cycle-cap.mjs';
 
 /** Captured incident wake→readiness delay (PR #234/opk-27 ~77 s). */
@@ -263,7 +263,7 @@ export function mergeWatchState(existing, incoming, nowMs = Date.now()) {
 }
 
 /**
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null | undefined} session
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession | null | undefined} session
  * @param {string} headSha
  * @param {{ headCommittedAtMs?: number }} [options]
  */
@@ -301,7 +301,7 @@ export function hasInProgressReportForHead(session, headSha, options = {}) {
  * @param {object} input
  * @param {number} input.prNumber
  * @param {string} input.headSha
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} [input.session]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession | null} [input.session]
  * @param {boolean} [input.hadCompletionWake]
  */
 export function evaluateBackstopOnlyZeroSignal(input) {
@@ -332,7 +332,7 @@ export function evaluateBackstopOnlyZeroSignal(input) {
 
 /**
  * @param {object} input
- * @param {import('./review-trigger-reconcile.mjs').AoSession | null} input.session
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession | null} input.session
  * @param {string} input.headSha
  * @param {number | null | undefined} input.priorReadyMs
  * @param {{ headCommittedAtMs?: number }} [input.bindingOptions]
@@ -380,9 +380,9 @@ export function detectReadinessTransition(input) {
  * @param {number} [input.readinessObservedMs]
  * @param {number} [input.nowMs]
  * @param {boolean} [input.snapshotError]
- * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.sessions]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').OpenPr[]} [input.openPrs]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} [input.reviewRuns]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession[]} [input.sessions]
  * @param {Array<{ name?: string, state?: string, conclusion?: string, status?: string }>} [input.ciChecks]
  * @param {string[]} [input.requiredCheckNames]
  * @param {boolean} [input.requiredCheckLookupFailed]
@@ -468,9 +468,9 @@ export function evaluateHeadReviewTriggerDecision(input) {
  * @param {object} input
  * @param {object} input.entry
  * @param {number} input.nowMs
- * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} input.openPrs
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} input.sessions
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').OpenPr[]} input.openPrs
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} input.reviewRuns
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession[]} input.sessions
  * @param {Record<string, Array<{ name?: string, state?: string, conclusion?: string, status?: string }>> | Array<{ prNumber?: number, checks?: unknown[] }>} [input.ciChecksByPr]
  * @param {Record<string, string[]> | Array<{ prNumber?: number, requiredCheckNames?: string[] }>} [input.requiredCheckNamesByPr]
  * @param {Record<string, boolean> | Array<{ prNumber?: number, failed?: boolean }>} [input.requiredCheckLookupFailedByPr]
@@ -565,9 +565,9 @@ export function evaluateDeferredWatchEntry(input) {
 /**
  * @param {object} input
  * @param {Record<string, object>} [input.watchEntries]
- * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} [input.sessions]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').OpenPr[]} [input.openPrs]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} [input.reviewRuns]
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession[]} [input.sessions]
  * @param {number} [input.nowMs]
  * @param {Record<string, boolean>} [input.snapshotErrorsByKey]
  */
@@ -755,9 +755,9 @@ export function revertTriggeredWatchOnAbort(entries, watchKey, nowMs = Date.now(
 
 /**
  * @param {object} input
- * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} input.openPrs
- * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} input.reviewRuns
- * @param {import('./review-trigger-reconcile.mjs').AoSession[]} input.sessions
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').OpenPr[]} input.openPrs
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} input.reviewRuns
+ * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession[]} input.sessions
  * @param {Record<string, object>} [input.existingWatches]
  * @param {number} [input.nowMs]
  */

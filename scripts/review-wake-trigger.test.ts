@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { isCompletionMergeIntentWake } from '../docs/orchestrator-wake-filter.mjs';
-import { planReconcileActions, unwrapReconcilePlanResult } from '../docs/review-trigger-reconcile.mjs';
+import { isCompletionMergeIntentWake } from './pr2-foundation/terminalized/orchestrator-wake-filter.ts';
+import { planReconcileActions, unwrapReconcilePlanResult } from './pr2-foundation/terminalized/review-trigger-reconcile.ts';
 import {
   WAKE_TO_RUN_DECISION_MAX_MS,
   amendMergeWakeMessage,
@@ -13,7 +13,7 @@ import {
   evaluateWakeReviewTrigger,
   findForbiddenReviewWakeCommands,
   isCompletionMergeIntentWake as isCompletionWakeFromTrigger,
-} from '../docs/review-wake-trigger.mjs';
+} from './pr2-foundation/terminalized/review-wake-trigger.ts';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

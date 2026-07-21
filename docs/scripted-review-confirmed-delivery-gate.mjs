@@ -4,7 +4,7 @@
  */
 import { readStdinJson, resolveBoundedInt, runStdinJsonCli, toArray } from './review-mechanical-cli.mjs';
 import { isLiveWorkerSession, normalizeSha } from './review-reconcile-primitives.mjs';
-import { sessionOwnsRunHead } from './review-trigger-reconcile.mjs';
+import { sessionOwnsRunHead } from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
 import {
   evaluateHarnessContentShapeStage,
   mapContentShapeToGateTerminal,

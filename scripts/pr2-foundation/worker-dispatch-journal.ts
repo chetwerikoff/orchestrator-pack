@@ -118,7 +118,7 @@ function advanceDispatchFenceLifecycle(
     ...record,
     dispatchOutcome: outcome,
     fenceLifecycle: uncertain ? FENCE_LIFECYCLE_FAILED_UNCERTAIN : FENCE_LIFECYCLE_COMPLETED,
-  } as DispatchJournalRecord;
+  } as unknown as DispatchJournalRecord;
 }
 
 function worstCaseDispatchJournalRecord(record: DispatchJournalRecord): DispatchJournalRecord {
