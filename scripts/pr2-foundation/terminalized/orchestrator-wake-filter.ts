@@ -19,6 +19,24 @@ import {
 } from '../../../docs/review-handoff-wake-admission.mjs';
 import { mapEngineStateToBoardStatus } from './review-producer-contract.ts';
 
+export interface AoWebhookEvent {
+  id?: string;
+  type?: string;
+  priority?: string;
+  sessionId?: string;
+  projectId?: string;
+  timestamp?: string;
+  message?: string;
+  data?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface AoWebhookBody {
+  type?: string;
+  event?: AoWebhookEvent;
+  [key: string]: unknown;
+}
+
 export const DEFAULT_WAKE_DEDUP_WINDOW_MS = 30_000;
 /** Low-frequency heartbeat interval (15 minutes). See docs/orchestrator-wake-runbook.md */
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;

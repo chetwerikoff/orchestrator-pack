@@ -285,9 +285,6 @@ export async function resolveVerifiedWorkerNotificationTarget(input: {
   const target = resolveWorkerTargetFromPrClaim({
     prNumber: input.prNumber,
     sessionId: ownerSessionId,
-    headSha: input.headSha,
-    sessions,
-    openPrs,
     prClaims: [sync.record],
     claimRecord: sync.record,
   });
