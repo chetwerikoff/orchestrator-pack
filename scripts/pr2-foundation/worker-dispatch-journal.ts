@@ -1,5 +1,13 @@
-import { execFileSync } from 'node:child_process';
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runProcessSync } from '../kernel/subprocess.ts';
 
 export const DISPATCH_OUTCOME_DISPATCHED = 'dispatched' as const;
 export const DISPATCH_OUTCOME_SEND_FAILED = 'send_failed' as const;
@@ -50,26 +58,44 @@ const CANONICAL_DISPATCH_CLI = fileURLToPath(
   new URL('../../docs/worker-message-dispatch-observe.mjs', import.meta.url),
 );
 
-function parseCanonicalOutput(stdout: string, subcommand: string): unknown {
-  const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).reverse();
-  for (const line of lines) {
-    try {
-      return JSON.parse(line) as unknown;
-    } catch {
-      // Ignore diagnostics and keep looking for the structured terminal line.
-    }
+function parseCanonicalOutput(text: string, subcommand: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error(`canonical_dispatch_${subcommand}_no_json`);
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch (error) {
+    throw new Error(
+      `canonical_dispatch_${subcommand}_invalid_json:${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-  throw new Error(`canonical_dispatch_${subcommand}_no_json`);
 }
 
 function invokeCanonicalDispatch<T>(subcommand: string, payload: unknown): T {
-  const stdout = execFileSync(process.execPath, [CANONICAL_DISPATCH_CLI, subcommand], {
-    input: `${JSON.stringify(payload)}\n`,
-    encoding: 'utf8',
-    env: process.env,
-    maxBuffer: 4 * 1024 * 1024,
-  });
-  return parseCanonicalOutput(stdout, subcommand) as T;
+  const root = mkdtempSync(join(tmpdir(), 'opk-pr2-dispatch-'));
+  const inputFile = join(root, 'input.json');
+  const outputFile = join(root, 'output.json');
+  try {
+    writeFileSync(inputFile, `${JSON.stringify(payload)}\n`, { encoding: 'utf8', mode: 0o600 });
+    const result = runProcessSync({
+      command: process.execPath,
+      args: [
+        CANONICAL_DISPATCH_CLI,
+        subcommand,
+        '--input-file',
+        inputFile,
+        '--output-file',
+        outputFile,
+      ],
+      inheritParentEnv: true,
+    });
+    if (!result.ok) {
+      const detail = result.stderr || result.error || result.stdout || result.outcome;
+      throw new Error(`canonical_dispatch_${subcommand}_failed:${detail}`);
+    }
+    return parseCanonicalOutput(readFileSync(outputFile, 'utf8'), subcommand) as T;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 /**
