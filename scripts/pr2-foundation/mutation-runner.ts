@@ -62,10 +62,10 @@ function atomicReplace(file: string, content: Buffer | string, mode = 0o600): vo
   chmodSync(file, mode);
 }
 
-function markerFor(file: string, key: string): string {
-  if (file.endsWith('.json')) return ' \n';
-  if (file.endsWith('.ps1')) return `\n# OPK_MUTATION ${key}\n`;
-  return `\n// OPK_MUTATION ${key}\n`;
+function corruptedContent(file: string, key: string): string {
+  if (file.endsWith('.json')) return '{}\n';
+  if (file.endsWith('.ps1')) return `# semantic kill mutation ${key}\n`;
+  return `// semantic kill mutation ${key}\n`;
 }
 
 function applyMutation(binding: MutationBinding, file: string, snapshot: ArtifactSnapshot): void {
@@ -80,11 +80,8 @@ function applyMutation(binding: MutationBinding, file: string, snapshot: Artifac
     atomicReplace(file, `${JSON.stringify({ mutation: key })}\n`, 0o600);
     return;
   }
-  if (!snapshot.existed) throw new Error(`mutation_append_target_missing:${key}`);
-  atomicReplace(file, Buffer.concat([
-    snapshot.bytes,
-    Buffer.from(markerFor(file, key), 'utf8'),
-  ]), snapshot.mode);
+  if (!snapshot.existed) throw new Error(`mutation_corrupt_target_missing:${key}`);
+  atomicReplace(file, corruptedContent(file, key), snapshot.mode);
 }
 
 function restoreArtifact(file: string, snapshot: ArtifactSnapshot): void {
@@ -120,7 +117,9 @@ export async function runBoundMutation(
   const snapshot = snapshotArtifact(artifactPath);
   const artifactHashBefore = snapshot.existed ? digest(snapshot.bytes) : 'sha256:absent';
   const clean = await invokeChecker(binding);
-  if (!clean.ok) throw new Error(`mutation_precondition_dirty:${binding.failingTestId}`);
+  if (!clean.ok || !clean.stdout.includes(binding.failingTestId)) {
+    throw new Error(`mutation_precondition_failed:${binding.failingTestId}:${clean.stderr || clean.stdout}`);
+  }
 
   applyMutation(binding, artifactPath, snapshot);
   const artifactHashAfter = artifactDigest(artifactPath);
