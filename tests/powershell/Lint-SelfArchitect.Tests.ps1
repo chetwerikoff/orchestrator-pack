@@ -451,4 +451,27 @@ Describe 'scripts/lint-self-architect.ps1' {
         ($rawOutput | Out-String) | Should -Match 'duplicate-literal'
     }
 
+
+    It 'caches exact base windows once per path and size' {
+        $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+        $noveltyStart = $source.IndexOf('function Test-IsBlockNovelAtPath')
+        $noveltyEnd = $source.IndexOf('function Get-LineSimilarity')
+        $duplicateStart = $source.IndexOf('function Find-DuplicateLiteralFindings')
+        $duplicateEnd = $source.IndexOf('function Find-HeuristicDuplicateFindings')
+        $noveltyStart | Should -BeGreaterOrEqual 0
+        $noveltyEnd | Should -BeGreaterThan $noveltyStart
+        $duplicateStart | Should -BeGreaterOrEqual 0
+        $duplicateEnd | Should -BeGreaterThan $duplicateStart
+        $noveltyBody = $source.Substring($noveltyStart, $noveltyEnd - $noveltyStart)
+        $duplicateBody = $source.Substring($duplicateStart, $duplicateEnd - $duplicateStart)
+
+        $noveltyBody | Should -Match 'BaseBlockCache'
+        $noveltyBody | Should -Match 'System\.Collections\.Generic\.HashSet\[string\]'
+        $noveltyBody | Should -Match 'StringComparer\]::Ordinal'
+        $noveltyBody | Should -Not -Match '\$Lines\[\$start\.\.'
+        $noveltyBody | Should -Not -Match 'Test-BlockExistsInLines'
+        ([regex]::Matches($duplicateBody, '\$baseBlockCache\s*=\s*@\{\}')).Count | Should -Be 1
+        ([regex]::Matches($duplicateBody, '-BaseBlockCache \$baseBlockCache')).Count | Should -Be 2
+    }
+
 }

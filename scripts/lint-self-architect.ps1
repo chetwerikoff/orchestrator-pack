@@ -395,25 +395,6 @@ function Get-BaseFileLines {
     }
 }
 
-function Test-BlockExistsInLines {
-    param(
-        [string[]]$Lines,
-        [string]$BlockText,
-        [int]$Size
-    )
-
-    if ($Lines.Count -lt $Size) { return $false }
-
-    for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
-        $candidate = ($Lines[$start..($start + $Size - 1)] -join "`n")
-        if ($candidate -eq $BlockText) {
-            return $true
-        }
-    }
-
-    return $false
-}
-
 function Test-IsBlockNovelAtPath {
     param(
         [string]$Root,
@@ -422,11 +403,13 @@ function Test-IsBlockNovelAtPath {
         [string]$BlockText,
         [int]$Size,
         [hashtable]$BaseLinesCache,
+        [hashtable]$BaseBlockCache,
         [hashtable]$RenameMap
     )
 
     $normalized = Normalize-RepoPath $RelativePath
     $lookupKey = $normalized.ToLowerInvariant()
+    $baseSourcePath = $normalized
     if (-not $BaseLinesCache.ContainsKey($normalized)) {
         $baseLinesCache[$normalized] = Get-BaseFileLines -Root $Root -BaseRef $BaseRef -RelativePath $normalized
     }
@@ -437,6 +420,7 @@ function Test-IsBlockNovelAtPath {
         if (-not $BaseLinesCache.ContainsKey($renamedFrom)) {
             $baseLinesCache[$renamedFrom] = Get-BaseFileLines -Root $Root -BaseRef $BaseRef -RelativePath $renamedFrom
         }
+        $baseSourcePath = $renamedFrom
         $baseLines = $baseLinesCache[$renamedFrom]
     }
 
@@ -444,7 +428,16 @@ function Test-IsBlockNovelAtPath {
         return $true
     }
 
-    return -not (Test-BlockExistsInLines -Lines $baseLines -BlockText $BlockText -Size $Size)
+    $cacheKey = '{0}`0{1}' -f $baseSourcePath, $Size
+    if (-not $BaseBlockCache.ContainsKey($cacheKey)) {
+        $blockSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($block in (Get-SlidingBlocks -Lines $baseLines -Size $Size)) {
+            [void]$blockSet.Add([string]$block.text)
+        }
+        $BaseBlockCache[$cacheKey] = $blockSet
+    }
+
+    return -not $BaseBlockCache[$cacheKey].Contains($BlockText)
 }
 
 function Get-LineSimilarity {
@@ -487,6 +480,7 @@ function Find-DuplicateLiteralFindings {
     }
     $requireIntroduced = ($introduced.Count -gt 0)
     $baseLinesCache = @{}
+    $baseBlockCache = @{}
 
     foreach ($entry in $FileLines.GetEnumerator()) {
         $relativePath = $entry.Key
@@ -542,7 +536,7 @@ function Find-DuplicateLiteralFindings {
                         $changedPath = Normalize-RepoPath $loc.file
                         if (-not $introduced.ContainsKey($changedPath.ToLowerInvariant())) { continue }
 
-                        if (Test-IsBlockNovelAtPath -Root $Root -BaseRef $BaseRef -RelativePath $changedPath -BlockText $blockText -Size $sampleLoc.lineCount -BaseLinesCache $baseLinesCache -RenameMap $renameMap) {
+                        if (Test-IsBlockNovelAtPath -Root $Root -BaseRef $BaseRef -RelativePath $changedPath -BlockText $blockText -Size $sampleLoc.lineCount -BaseLinesCache $baseLinesCache -BaseBlockCache $baseBlockCache -RenameMap $renameMap) {
                             $shouldReport = $true
                             break
                         }
@@ -554,7 +548,7 @@ function Find-DuplicateLiteralFindings {
                         $introducedPath = Normalize-RepoPath $file
                         if (-not $introduced.ContainsKey($introducedPath.ToLowerInvariant())) { continue }
 
-                        if (Test-IsBlockNovelAtPath -Root $Root -BaseRef $BaseRef -RelativePath $introducedPath -BlockText $blockText -Size $sampleLoc.lineCount -BaseLinesCache $baseLinesCache -RenameMap $renameMap) {
+                        if (Test-IsBlockNovelAtPath -Root $Root -BaseRef $BaseRef -RelativePath $introducedPath -BlockText $blockText -Size $sampleLoc.lineCount -BaseLinesCache $baseLinesCache -BaseBlockCache $baseBlockCache -RenameMap $renameMap) {
                             $novelIntroducedCount++
                         }
                     }
