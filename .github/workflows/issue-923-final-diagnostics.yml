@@ -22,6 +22,7 @@ jobs:
           cache: npm
       - run: npm ci --include=dev
       - name: Capture pipeline and Vitest diagnostics
+        continue-on-error: true
         shell: pwsh
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -30,6 +31,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path diagnostics -Force | Out-Null
           function Invoke-Captured([string]$Name, [scriptblock]$Command) {
+            $global:LASTEXITCODE = 0
             try {
               & $Command *> "diagnostics/$Name.log"
               $code = if ($LASTEXITCODE -is [int]) { $LASTEXITCODE } else { 0 }
@@ -39,6 +41,7 @@ jobs:
               $code = 1
             }
             Set-Content "diagnostics/$Name.exit" ([string]$code)
+            $global:LASTEXITCODE = 0
           }
           Invoke-Captured 'pipeline-split' { ./scripts/check-ci-pipeline-split.ps1 }
           $env:OPK_CHANGED_VITEST_FILES = node scripts/emit-pr-changed-paths-manifest.mjs --base $env:PR_BASE_SHA --head $env:PR_HEAD_SHA
@@ -48,12 +51,15 @@ jobs:
           Invoke-Captured 'light-2' { ./scripts/run-vitest-light-lane.ps1 -Shard 2 }
           Invoke-Captured 'heavy-1' { ./scripts/run-vitest-heavy-shard.ps1 -Shard 1 }
           Invoke-Captured 'heavy-2' { ./scripts/run-vitest-heavy-shard.ps1 -Shard 2 }
+          exit 0
       - name: Install Pester
         shell: pwsh
         run: ./scripts/install-pester-ci.ps1
       - name: Capture Pester diagnostics
+        continue-on-error: true
         shell: pwsh
         run: |
+          $global:LASTEXITCODE = 0
           try {
             ./scripts/test-all.ps1 -SkipNpm *> diagnostics/pester.log
             $code = if ($LASTEXITCODE -is [int]) { $LASTEXITCODE } else { 0 }
@@ -63,7 +69,9 @@ jobs:
             $code = 1
           }
           Set-Content diagnostics/pester.exit ([string]$code)
+          exit 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: issue-923-final-diagnostics
           path: diagnostics
