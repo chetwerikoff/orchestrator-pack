@@ -28,49 +28,96 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --include=dev
-      - name: TypeScript foundation
+      - id: typescript
+        name: TypeScript foundation
+        continue-on-error: true
         run: |
           npm run ts:smoke
           npm run typecheck:foundation
           npm run lint:foundation
           npm run test:foundation
           npm run check:pwsh-test-growth
-      - name: Repository structure and policy
+      - id: verify
+        name: Verify structure
+        continue-on-error: true
         shell: pwsh
-        run: |
-          ./scripts/verify.ps1
-          ./scripts/check-reusable.ps1
-          ./scripts/check-ci-cheap-wins.ps1
-          ./scripts/check-verify-runtime.ps1
-          ./scripts/check-ci-pipeline-split.ps1
-          ./scripts/lint-self-architect.ps1 -Strict
-      - name: Pester regression
+        run: ./scripts/verify.ps1
+      - id: reusable
+        name: Reusable policy
+        continue-on-error: true
         shell: pwsh
-        run: |
-          ./scripts/install-pester-ci.ps1
-          ./scripts/test-all.ps1 -SkipNpm
-      - name: Build exact PR Vitest topology
+        run: ./scripts/check-reusable.ps1
+      - id: cheap
+        name: CI cheap-wins policy
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/check-ci-cheap-wins.ps1
+      - id: verify_runtime
+        name: Verify runtime policy
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/check-verify-runtime.ps1
+      - id: pipeline
+        name: CI pipeline split policy
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/check-ci-pipeline-split.ps1
+      - id: architect
+        name: Self-architect strict
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/lint-self-architect.ps1 -Strict
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - id: pester
+        name: Pester regression
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/test-all.ps1 -SkipNpm
+      - id: topology
+        name: Build exact PR Vitest topology
+        continue-on-error: true
         shell: bash
         run: |
           export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
           node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard
-      - name: Vitest light lane 1
+      - id: light1
+        name: Vitest light lane 1
+        continue-on-error: true
         shell: pwsh
         env:
           OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
         run: ./scripts/run-vitest-light-lane.ps1 -Shard 1
-      - name: Vitest light lane 2
+      - id: light2
+        name: Vitest light lane 2
+        continue-on-error: true
         shell: pwsh
         env:
           OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
         run: ./scripts/run-vitest-light-lane.ps1 -Shard 2
-      - name: Vitest heavy shard 1
+      - id: heavy1
+        name: Vitest heavy shard 1
+        continue-on-error: true
         shell: pwsh
         env:
           OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
         run: ./scripts/run-vitest-heavy-shard.ps1 -Shard 1
-      - name: Vitest heavy shard 2
+      - id: heavy2
+        name: Vitest heavy shard 2
+        continue-on-error: true
         shell: pwsh
         env:
           OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
         run: ./scripts/run-vitest-heavy-shard.ps1 -Shard 2
+      - name: Enforce aggregate
+        env:
+          RESULTS: >-
+            ${{ steps.typescript.outcome }} ${{ steps.verify.outcome }} ${{ steps.reusable.outcome }}
+            ${{ steps.cheap.outcome }} ${{ steps.verify_runtime.outcome }} ${{ steps.pipeline.outcome }}
+            ${{ steps.architect.outcome }} ${{ steps.pester.outcome }} ${{ steps.topology.outcome }}
+            ${{ steps.light1.outcome }} ${{ steps.light2.outcome }}
+            ${{ steps.heavy1.outcome }} ${{ steps.heavy2.outcome }}
+        run: |
+          echo "$RESULTS"
+          test "${RESULTS//success/}" = "            "
