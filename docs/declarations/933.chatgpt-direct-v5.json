@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "c05c542014ee26ddddcb8a8fa53d212ac3bca20f",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:1d3d4f8c521335365f9a44eba1f6603ebadd1df57b604a72e303adf74c8774ed"
+    "active_scope_hash": "sha256:ed48351daa9fc29c916a85cae18a05858a6a371ad0757de143e059a87f94fe77"
   },
   "declared_paths": [
     ".claude/skills/merge-with-local-adoption/SKILL.md",
@@ -34,7 +34,7 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:f72c0f42ed7f4c1910f737fdb33dcd9dec58896e7d856fbc5c8b53d5c13ce41f",
-      "new_active_scope_hash": "sha256:1d3d4f8c521335365f9a44eba1f6603ebadd1df57b604a72e303adf74c8774ed",
+      "new_active_scope_hash": "sha256:ed48351daa9fc29c916a85cae18a05858a6a371ad0757de143e059a87f94fe77",
       "changed": {
         "added": [
           "scripts/lib/operator-merge-approval-authority.d.mts",
