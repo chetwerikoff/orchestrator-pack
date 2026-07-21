@@ -1,0 +1,292 @@
+name: issue-941-base-window-cache-publisher
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: issue-941-base-window-cache-publisher
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_BRANCH: fix/issue-941-base-window-cache
+      TARGET_HEAD: 296dff446d365cb3c0aba92b93ab16a95ee51fd3
+      PR939_HEAD: 4901a274d1f6ec980d2974f3f729a26dcd1cc751
+      PR939_BASE: 296dff446d365cb3c0aba92b93ab16a95ee51fd3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/issue-941-base-window-cache
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Apply bounded novelty-cache optimization
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
+          python3 <<'PY'
+          from pathlib import Path
+
+          def read(path: str) -> str:
+              return Path(path).read_text(encoding='utf-8')
+
+          def write(path: str, text: str) -> None:
+              Path(path).write_text(text, encoding='utf-8')
+
+          def replace_once(path: str, old: str, new: str, label: str) -> None:
+              source = read(path)
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one match, found {count}')
+              write(path, source.replace(old, new, 1))
+
+          def replace_exact_count(path: str, old: str, new: str, expected: int, label: str) -> None:
+              source = read(path)
+              count = source.count(old)
+              if count != expected:
+                  raise SystemExit(f'{label}: expected {expected} matches, found {count}')
+              write(path, source.replace(old, new))
+
+          lint = 'scripts/lint-self-architect.ps1'
+
+          replace_once(
+              lint,
+              '''    $blocks = New-Object System.Collections.Generic.List[object]
+            if ($Lines.Count -lt $Size) { return $blocks.ToArray() }
+
+            for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
+                $slice = @($Lines[$start..($start + $Size - 1)])
+                if (-not (Test-MeaningfulBlock -Lines $slice)) { continue }
+                $blocks.Add([pscustomobject]@{
+                    text      = ($slice -join "`n")
+                    startLine = $start + 1
+                    endLine   = $start + $Size
+                    lineCount = $Size
+                }) | Out-Null
+            }
+            return $blocks.ToArray()
+          ''',
+              '''    $blocks = New-Object System.Collections.Generic.List[object]
+            if ($Lines.Count -lt $Size) { return $blocks.ToArray() }
+
+            for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
+                $blockText = [string]::Join("`n", $Lines, $start, $Size)
+                if ($blockText -notmatch '\\S') { continue }
+                $blocks.Add([pscustomobject]@{
+                    text      = $blockText
+                    startLine = $start + 1
+                    endLine   = $start + $Size
+                    lineCount = $Size
+                }) | Out-Null
+            }
+            return $blocks.ToArray()
+          ''',
+              'sliding window allocation',
+          )
+
+          replace_once(
+              lint,
+              '''function Test-BlockExistsInLines {
+            param(
+                [string[]]$Lines,
+                [string]$BlockText,
+                [int]$Size
+            )
+
+            if ($Lines.Count -lt $Size) { return $false }
+
+            for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
+                $candidate = ($Lines[$start..($start + $Size - 1)] -join "`n")
+                if ($candidate -eq $BlockText) {
+                    return $true
+                }
+            }
+
+            return $false
+          }
+          ''',
+              '''function Test-BlockExistsInLines {
+            param(
+                [string[]]$Lines,
+                [string]$BlockText,
+                [int]$Size,
+                [hashtable]$BlockCache,
+                [string]$CacheKey
+            )
+
+            if (-not $BlockCache.ContainsKey($CacheKey)) {
+                $blocks = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+                if ($Lines.Count -ge $Size) {
+                    for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
+                        [void]$blocks.Add([string]::Join("`n", $Lines, $start, $Size))
+                    }
+                }
+                $BlockCache[$CacheKey] = $blocks
+            }
+
+            return $BlockCache[$CacheKey].Contains($BlockText)
+          }
+          ''',
+              'base block membership function',
+          )
+
+          replace_once(
+              lint,
+              '''        [int]$Size,
+                [hashtable]$BaseLinesCache,
+                [hashtable]$RenameMap
+          ''',
+              '''        [int]$Size,
+                [hashtable]$BaseLinesCache,
+                [hashtable]$BaseBlockCache,
+                [hashtable]$RenameMap
+          ''',
+              'novelty cache parameters',
+          )
+
+          replace_once(
+              lint,
+              '''    $baseLines = $baseLinesCache[$normalized]
+            if ($baseLines.Count -eq 0 -and $RenameMap -and $RenameMap.ContainsKey($lookupKey)) {
+                $renamedFrom = $RenameMap[$lookupKey]
+                if (-not $BaseLinesCache.ContainsKey($renamedFrom)) {
+                    $baseLinesCache[$renamedFrom] = Get-BaseFileLines -Root $Root -BaseRef $BaseRef -RelativePath $renamedFrom
+                }
+                $baseLines = $baseLinesCache[$renamedFrom]
+            }
+
+            if ($baseLines.Count -eq 0) {
+                return $true
+            }
+
+            return -not (Test-BlockExistsInLines -Lines $baseLines -BlockText $BlockText -Size $Size)
+          ''',
+              '''    $basePath = $normalized
+            $baseLines = $baseLinesCache[$normalized]
+            if ($baseLines.Count -eq 0 -and $RenameMap -and $RenameMap.ContainsKey($lookupKey)) {
+                $renamedFrom = $RenameMap[$lookupKey]
+                if (-not $BaseLinesCache.ContainsKey($renamedFrom)) {
+                    $baseLinesCache[$renamedFrom] = Get-BaseFileLines -Root $Root -BaseRef $BaseRef -RelativePath $renamedFrom
+                }
+                $basePath = $renamedFrom
+                $baseLines = $baseLinesCache[$renamedFrom]
+            }
+
+            if ($baseLines.Count -eq 0) {
+                return $true
+            }
+
+            $blockCacheKey = "$($basePath.ToLowerInvariant())|$Size"
+            return -not (Test-BlockExistsInLines -Lines $baseLines -BlockText $BlockText -Size $Size -BlockCache $BaseBlockCache -CacheKey $blockCacheKey)
+          ''',
+              'base block membership lookup',
+          )
+
+          replace_once(
+              lint,
+              '''    $requireIntroduced = ($introduced.Count -gt 0)
+            $baseLinesCache = @{}
+
+            foreach ($entry in $FileLines.GetEnumerator()) {
+          ''',
+              '''    $requireIntroduced = ($introduced.Count -gt 0)
+            $baseLinesCache = @{}
+            $baseBlockCache = @{}
+
+            foreach ($entry in $FileLines.GetEnumerator()) {
+          ''',
+              'shared base block cache',
+          )
+
+          replace_exact_count(
+              lint,
+              '-BaseLinesCache $baseLinesCache -RenameMap $renameMap',
+              '-BaseLinesCache $baseLinesCache -BaseBlockCache $baseBlockCache -RenameMap $renameMap',
+              2,
+              'novelty call sites',
+          )
+
+          tests = 'tests/powershell/Lint-SelfArchitect.Tests.ps1'
+          replace_once(
+              tests,
+              "        ([regex]::Matches($body, '\\$baseLinesCache\\s*=\\s*@\\{\\}')).Count | Should -Be 1\n",
+              "        ([regex]::Matches($body, '\\$baseLinesCache\\s*=\\s*@\\{\\}')).Count | Should -Be 1\n        ([regex]::Matches($body, '\\$baseBlockCache\\s*=\\s*@\\{\\}')).Count | Should -Be 1\n        $body | Should -Match '-BaseBlockCache \\$baseBlockCache'\n",
+              'shared cache assertions',
+          )
+
+          replace_once(
+              tests,
+              "    It 'declares exactly the sixteen Issue 923 migration pairs without wildcards' {\n",
+              "    It 'indexes each base file sliding-window set once for novelty membership' {\n        $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8\n        $start = $source.IndexOf('function Test-BlockExistsInLines')\n        $end = $source.IndexOf('function Get-LineSimilarity')\n        $start | Should -BeGreaterOrEqual 0\n        $end | Should -BeGreaterThan $start\n        $body = $source.Substring($start, $end - $start)\n\n        $body | Should -Match 'System\\.Collections\\.Generic\\.HashSet\\[string\\]'\n        $body | Should -Match '\\$BlockCache\\[\\$CacheKey\\]\\s*=\\s*\\$blocks'\n        $body | Should -Match '\\.Contains\\(\\$BlockText\\)'\n        ([regex]::Matches($body, 'for \\(\\$start = 0')).Count | Should -Be 1\n    }\n\n    It 'declares exactly the sixteen Issue 923 migration pairs without wildcards' {\n",
+              'base membership regression',
+          )
+
+          replace_once(
+              tests,
+              "        $body | Should -Match '\\$blocks\\.Add\\('\n        $body | Should -Not -Match '\\$blocks\\s*\\+='\n        $body | Should -Match 'return \\$blocks\\.ToArray\\(\\)'\n",
+              "        $body | Should -Match '\\$blocks\\.Add\\('\n        $body | Should -Not -Match '\\$blocks\\s*\\+='\n        $body | Should -Match '\\[string\\]::Join'\n        $body | Should -Not -Match '\\$Lines\\[\\$start\\.\\.'\n        $body | Should -Match 'return \\$blocks\\.ToArray\\(\\)'\n",
+              'sliding allocation regression',
+          )
+          PY
+
+          expected="$RUNNER_TEMP/expected-paths"
+          actual="$RUNNER_TEMP/actual-paths"
+          printf '%s\n' \
+            scripts/lint-self-architect.ps1 \
+            tests/powershell/Lint-SelfArchitect.Tests.ps1 \
+            | sort > "$expected"
+          git diff --name-only | sort > "$actual"
+          diff -u "$expected" "$actual"
+          git diff --check
+      - name: Verify focused policy and exact PR 939 budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --include=dev
+          npm run check:node-major
+          pwsh -NoProfile -File ./scripts/install-pester-ci.ps1
+          pwsh -NoProfile -Command '$result = Invoke-Pester -Path @("./tests/powershell/Lint-SelfArchitect.Tests.ps1", "./scripts/lint-self-architect.diff-mode.Tests.ps1") -PassThru; if ($result.FailedCount -gt 0) { exit 1 }'
+          pwsh -NoProfile -File ./scripts/verify.ps1
+          pwsh -NoProfile -File ./scripts/check-reusable.ps1
+
+          git fetch origin agent/issue-923-pr2-foundation main
+          benchmark="$RUNNER_TEMP/pr939-benchmark"
+          git worktree add --detach "$benchmark" "$PR939_HEAD"
+          cp scripts/lint-self-architect.ps1 "$benchmark/scripts/lint-self-architect.ps1"
+          pushd "$benchmark"
+          started="$(date +%s)"
+          set +e
+          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
+            -Strict \
+            -BaseRef "$PR939_BASE" \
+            -HeadRef "$PR939_HEAD" \
+            > "$RUNNER_TEMP/pr939-self-architect.log" 2>&1
+          lint_status=$?
+          set -e
+          elapsed=$(( $(date +%s) - started ))
+          popd
+          tail -n 25 "$RUNNER_TEMP/pr939-self-architect.log"
+          echo "pr939_lint_status=$lint_status"
+          echo "pr939_self_architect_elapsed_seconds=$elapsed"
+          test "$lint_status" -eq 0 -o "$lint_status" -eq 1
+          test "$elapsed" -lt 600
+      - name: Commit and push verified optimization
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/lint-self-architect.ps1 tests/powershell/Lint-SelfArchitect.Tests.ps1
+          git commit -m 'perf: cache self-architect base windows'
+          git push origin HEAD:"$TARGET_BRANCH"
