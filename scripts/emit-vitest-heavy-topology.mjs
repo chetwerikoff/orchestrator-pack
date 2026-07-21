@@ -3,7 +3,7 @@
  * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
  * (Issue #695).
  */
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -135,6 +135,9 @@ const artifact = {
   lightShardMatrix: result.lightShards.map((entry) => entry.shard),
   lightShards: result.lightShards,
   heavyShards: result.heavyShards,
+  issue923Manifest: JSON.parse(
+    readFileSync(join(repoRoot, 'scripts/estate-cut/issue-906.manifest.json'), 'utf8'),
+  ),
 };
 writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 2)}\n`);
 
@@ -152,4 +155,4 @@ if (result.topology.fallbackClassification === 'fixed-fallback') {
 if (ghaOutput) {
   writeGhaOutput(artifact);
 }
-console.log(JSON.stringify(artifact));
+console.log(JSON.stringify({ ...artifact, issue923Manifest: '[embedded-in-artifact]' }));
