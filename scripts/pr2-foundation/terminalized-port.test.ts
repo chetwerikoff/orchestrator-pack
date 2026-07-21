@@ -11,9 +11,11 @@ function targetFor(source: string): string {
 }
 
 describe('[AC7] terminalized executable docs TypeScript ports', () => {
-  it('removes every foundation-owned docs path and retains one provenance-bound TS port', () => {
+  it('terminalizes ownership while preserving legacy live compatibility until cutover', () => {
     for (const source of FOUNDATION_DOC_ROWS) {
-      expect(existsSync(path.resolve(source)), source).toBe(false);
+      expect(existsSync(path.resolve(source)), source).toBe(true);
+      expect(readFileSync(path.resolve(source), 'utf8'), source)
+        .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
     }
     for (const source of runtimeSources) {
       const target = targetFor(source);

@@ -130,10 +130,11 @@ export function validateEstateSplit(
   }
   for (const path of FOUNDATION_DOC_ROWS) {
     const row = byPath.get(path);
-    if (!row || row.terminalState !== 'deleted-now') {
+    if (!row
+      || row.terminalState !== 'foundation-terminalized'
+      || row.replacementOwner !== 'scripts/pr2-foundation/terminalized') {
       return { ok: false, reason: `foundation_row_not_terminal:${path}` };
     }
-    if (row.replacementOwner) return { ok: false, reason: `foundation_row_owner_survived:${path}` };
   }
   for (const path of CUTOVER_ROWS) {
     const row = byPath.get(path);

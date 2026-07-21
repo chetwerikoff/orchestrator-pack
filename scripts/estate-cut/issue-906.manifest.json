@@ -7,6 +7,7 @@
     "deleted-now",
     "kept",
     "owned-by-PR-2",
+    "foundation-terminalized",
     "owned-by-PR-2-cutover",
     "pr1-artifact"
   ],
@@ -30669,9 +30670,10 @@
     {
       "path": "docs/ao-0-10-review-api.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "3fc3345d882af84c07900863ee914c51f001c8f25724cba8643ece0c28c07aa3",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/ao-0-10-review-harness-adoption.md",
@@ -30772,9 +30774,10 @@
     {
       "path": "docs/autonomous-review-retry.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "7dc176f873b634414b9de5dc094d589ba5782685f150adf908d0b5edbbda3eb6",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/autonomous-review-start-capabilities.json",
@@ -33599,16 +33602,18 @@
     {
       "path": "docs/events-optional-consumer-signal-recovery.d.mts",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "09bfdc155c53bb97d929acae7f697261669d40da1d6b7beef11aa8dee1ee9ae1",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/events-optional-consumer-signal-recovery.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "751f2115dfd8d9f43235540490e8d648a14e990756d7dd3e73baf79a0665e25c",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/examples/fleet-hygiene-sentinel.cron.example",
@@ -34168,9 +34173,10 @@
     {
       "path": "docs/orchestrator-wake-filter.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "dac3b0074bb5337b16b3308321b02b45355a34ba2b37c8007141035fd19d6731",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/orchestrator-wake-runbook.md",
@@ -34280,9 +34286,10 @@
     {
       "path": "docs/review-bulk-send-diagnose.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "1dbf989d175134d595f7a14e1433cd38c35b8629122464631905edd024b2c820",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/review-cycle-cap.d.mts",
@@ -34329,9 +34336,10 @@
     {
       "path": "docs/review-finding-delivery-confirm.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "c2b1b223623c59801ed5a9a89f5b24e8e286ad68120a47797adcee3f7c5c8343",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/review-handoff-wake-admission.d.mts",
@@ -34371,9 +34379,10 @@
     {
       "path": "docs/review-head-ready.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "3cc001e75079edb737dee422ffd9e15130b29ea343860c695b12e2fd753ccc40",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/review-mechanical-cli.d.mts",
@@ -34462,9 +34471,10 @@
     {
       "path": "docs/review-producer-contract.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "5046178a6ba8a18895495b7ed601b71f620d4e8bc780d2af2351da387e16af03",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/review-ready-report-state-seed.d.mts",
@@ -34539,9 +34549,10 @@
     {
       "path": "docs/review-send-reconcile.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "de118365dbf5fe6698b4120a539e2ece7934f36c8b988e650d10d7da2317ed64",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/review-start-claim-lifecycle.d.mts",
@@ -34665,9 +34676,10 @@
     {
       "path": "docs/review-trigger-reconcile.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "54c891d3f0f18dea0d56f3ee14dd4d6a60ccc31852dfffe40e666c1af724f806",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/review-trigger-reeval.d.mts",
@@ -34693,9 +34705,10 @@
     {
       "path": "docs/review-wake-trigger.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "d363317cfac64845733ce97e6f04a045aed05e1521fdb34e2d48275c787e8e1c",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/reviewer-failure-evidence-markers.d.mts",
@@ -34707,9 +34720,10 @@
     {
       "path": "docs/reviewer-failure-evidence-markers.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "34acfdbe7f31b04a4211c15211c9bd57526c8c7c6d4ca473ded974e5478dbadc",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/reviewer-failure-evidence.d.mts",
@@ -35015,9 +35029,10 @@
     {
       "path": "docs/worker-iteration-cycle.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "1e6053309b355d0879ffcb8412bbf1a17f2771a11305794af8db61f838fca0e2",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/worker-message-dispatch-observe.d.mts",
@@ -35036,9 +35051,10 @@
     {
       "path": "docs/worker-message-dispatch-observe.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "bf9c756694c99154b827297cc4501f13a97fb6ae0c8bf55afa6ccf74ce5f7505",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "docs/worker-message-submit-busy-dispatch-smoke-markers.json",
@@ -35127,9 +35143,10 @@
     {
       "path": "docs/worker-report-store.mjs",
       "baseTracked": true,
-      "terminalState": "deleted-now",
+      "terminalState": "foundation-terminalized",
       "baseSha256": "fd387377cc875b429ba13b5ba4b01849ceee87a0b66c568df426aeb19c9ac69c",
-      "reason": "terminalized by Issue #923 PR 2 foundation"
+      "reason": "ownership terminalized by Issue #923; legacy live compatibility retained until draft 315 cutover",
+      "replacementOwner": "scripts/pr2-foundation/terminalized"
     },
     {
       "path": "package-lock.json",

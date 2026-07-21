@@ -71,7 +71,11 @@ function estateDenominatorError(): string | null {
   const validated = validateEstateSplit(denominator);
   if (!validated.ok) return validated.reason;
   for (const expected of FOUNDATION_DOC_ROWS) {
-    if (existsSync(path.resolve(expected))) return `foundation_doc_not_deleted:${expected}`;
+    const source = path.resolve(expected);
+    if (!existsSync(source)) return `foundation_compatibility_missing:${expected}`;
+    if (!readFileSync(source, 'utf8').startsWith('// Issue #923 foundation-terminalized:')) {
+      return `foundation_terminal_marker_missing:${expected}`;
+    }
   }
   for (const expected of CUTOVER_ROWS) {
     if (!existsSync(path.resolve(expected))) return `cutover_path_deleted:${expected}`;
