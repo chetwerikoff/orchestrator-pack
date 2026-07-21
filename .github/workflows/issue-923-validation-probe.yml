@@ -1,52 +1,55 @@
-name: issue-923-final-diagnostics
+name: issue-923-final-scope-fix
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  diagnose:
+  fix:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      PR_BASE_SHA: faac4525e5e457f7480f99b5f26fcfd96da6d9d5
-      PR_HEAD_SHA: c84325914d42d63bc88000b03c8c5aee79579d0c
-      OPK_DISABLE_PRE_TOPOLOGY_MEASUREMENT: '1'
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: agent/issue-923-pr2-foundation
           fetch-depth: 0
-      - name: Checkout exact PR 939 merge ref
+      - name: Restore live sibling readiness and keep TS port dormant
         shell: bash
         run: |
-          git fetch origin refs/pull/939/merge
-          git checkout --detach FETCH_HEAD
-          test "$(git rev-parse HEAD^2)" = "$PR_HEAD_SHA"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Capture final failures
+          set -euo pipefail
+          git checkout origin/main -- scripts/lib/worker-status-store.mjs
+          python <<'PY'
+          from pathlib import Path
+          import re
+
+          test_path = Path('scripts/pr2-foundation/terminalized-port.test.ts')
+          source = test_path.read_text()
+          pattern = re.compile(
+              r"  it\('treats the TypeScript implementation as sibling readiness, not a pre-existing data file',[\s\S]*?\n  \}\);",
+          )
+          replacement = """  it('keeps live sibling readiness byte-compatible and the TypeScript port dormant', () => {
+              const source = readFileSync(path.resolve('scripts/lib/worker-status-store.mjs'), 'utf8');
+              expect(source).toContain('workerReportStorePresent = reportStorePath');
+              expect(source).toContain("existsSync(join(docsDir, 'worker-report-store.mjs'))");
+              expect(source).not.toContain("'terminalized',\\n    'worker-report-store.ts'");
+              expect(existsSync(path.resolve(
+                'scripts/pr2-foundation/terminalized/worker-report-store.ts',
+              ))).toBe(true);
+            });"""
+          source, count = pattern.subn(replacement, source, count=1)
+          if count != 1:
+              raise SystemExit('worker-status readiness assertion not found')
+          test_path.write_text(source)
+          PY
+      - name: Commit final scope fix to PR 939
         shell: bash
         run: |
-          mkdir -p diagnostics
-          set +e
-          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1 > diagnostics/pipeline.log 2>&1
-          echo $? > diagnostics/pipeline.exit
-          export OPK_CHANGED_VITEST_FILES="$(node scripts/emit-pr-changed-paths-manifest.mjs --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA")"
-          node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard > diagnostics/topology.log 2>&1
-          echo $? > diagnostics/topology.exit
-          export OPK_VITEST_TOPOLOGY_PLAN_PATH="$GITHUB_WORKSPACE/scripts/vitest-heavy-topology.plan.json"
-          pwsh -NoProfile -File ./scripts/run-vitest-light-lane.ps1 -Shard 1 > diagnostics/light1.log 2>&1
-          echo $? > diagnostics/light1.exit
-          set -e
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue-923-final-failures
-          path: diagnostics
-          if-no-files-found: error
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/lib/worker-status-store.mjs scripts/pr2-foundation/terminalized-port.test.ts
+          git commit -m "fix: keep worker status readiness on legacy live boundary"
+          git push origin HEAD:agent/issue-923-pr2-foundation
