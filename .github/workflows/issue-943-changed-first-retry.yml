@@ -1,4 +1,4 @@
-name: issue-943-changed-first-retry-v3
+name: issue-943-changed-first-retry-v4
 
 on:
   pull_request:
@@ -32,7 +32,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Reapply exact changed-first patch and align structural regressions
+      - name: Reapply changed-first patch and skip singleton groups before sorting
         shell: bash
         run: |
           set -euo pipefail
@@ -50,6 +50,28 @@ jobs:
           end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
           script = textwrap.dedent('\n'.join(workflow[start:end])) + '\n'
           exec(compile(script, '<changed-first-patch>', 'exec'), {'__name__': '__main__'})
+
+          lint_path = Path('scripts/lint-self-architect.ps1')
+          lint = lint_path.read_text(encoding='utf-8')
+          old_group = """              foreach ($pair in $blockMap.GetEnumerator()) {
+                  $locations = @($pair.Value | Sort-Object file, startLine)
+                  $distinctFiles = @($locations | Select-Object -ExpandProperty file -Unique)
+                  if ($distinctFiles.Count -lt 2) { continue }
+"""
+          new_group = """              foreach ($pair in $blockMap.GetEnumerator()) {
+                  $rawLocations = $pair.Value
+                  if ($rawLocations.Count -lt 2) { continue }
+                  $distinctFileSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+                  foreach ($location in $rawLocations) {
+                      [void]$distinctFileSet.Add([string]$location.file)
+                  }
+                  if ($distinctFileSet.Count -lt 2) { continue }
+                  $locations = @($rawLocations | Sort-Object file, startLine)
+                  $distinctFiles = @($distinctFileSet)
+"""
+          if lint.count(old_group) != 1:
+              raise SystemExit(f'singleton group match count: {lint.count(old_group)}')
+          lint_path.write_text(lint.replace(old_group, new_group, 1), encoding='utf-8')
 
           tests_path = Path('tests/powershell/Lint-SelfArchitect.Tests.ps1')
           tests = tests_path.read_text(encoding='utf-8')
@@ -71,6 +93,16 @@ jobs:
                   "        $helperBody | Should -Not -Match 'ToBase64String'\n"
                   "        $helperBody | Should -Match '\\$blockKey\\s*=\\s*\\[string\\]::Join'\n",
                   'changed-first key location',
+              ),
+              (
+                  "        $finderBody | Should -Match '\\$blockText\\s*=\\s*\\[string\\]\\$pair\\.Key'\n",
+                  "        $finderBody | Should -Match '\\$blockText\\s*=\\s*\\[string\\]\\$pair\\.Key'\n"
+                  "        $singletonIndex = $finderBody.IndexOf('if ($rawLocations.Count -lt 2)')\n"
+                  "        $sortIndex = $finderBody.IndexOf('$locations = @($rawLocations | Sort-Object file, startLine)')\n"
+                  "        $singletonIndex | Should -BeGreaterOrEqual 0\n"
+                  "        $singletonIndex | Should -BeLessThan $sortIndex\n"
+                  "        $finderBody | Should -Match 'System\\.Collections\\.Generic\\.HashSet\\[string\\]'\n",
+                  'singleton-before-sort regression',
               ),
           ]
           for old, new, label in replacements:
