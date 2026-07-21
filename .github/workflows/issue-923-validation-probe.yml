@@ -1,4 +1,4 @@
-name: issue-943-changed-first-retry-summary
+name: issue-943-changed-first-latest-summary
 
 on:
   pull_request:
@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88735123590'
+      SOURCE_JOB_ID: '88735851896'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print retry terminal diagnostics
+      - name: Print exact changed-first terminal diagnostics
         shell: bash
         run: |
           set -euo pipefail
@@ -31,6 +31,16 @@ jobs:
           import re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          for index, line in enumerate(lines[-100:], start=max(1, len(lines) - 99)):
-              print(f'{index}:{line[:5000]}')
+          needles = (
+              'pr939_', 'self_architect_elapsed_seconds=', 'Summary:', 'No findings.',
+              '[STRICT]', '[FAIL]', 'AssertionError:', 'Test Files', 'Tests ',
+              'Process completed with exit code', '##[error]', 'scope_', 'Changed files:',
+          )
+          print('--- matched ---')
+          for index, line in enumerate(lines, start=1):
+              if any(needle in line for needle in needles):
+                  print(f'{index}:{line[:3000]}')
+          print('--- final 25 ---')
+          for index, line in enumerate(lines[-25:], start=max(1, len(lines) - 24)):
+              print(f'{index}:{line[:3000]}')
           PY
