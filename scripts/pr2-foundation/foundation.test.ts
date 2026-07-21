@@ -2,13 +2,10 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -41,17 +38,12 @@ import {
   buildDormantScheduler,
   runDormantMergeActuator,
 } from './scheduler.ts';
+import { createTestRootRegistry } from './test-root.ts';
 
-const roots: string[] = [];
+const testRoots = createTestRootRegistry();
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const HEAD_A = 'a'.repeat(40);
 const HEAD_B = 'b'.repeat(40);
-
-function tempRoot(prefix: string): string {
-  const root = mkdtempSync(path.join(tmpdir(), prefix));
-  roots.push(root);
-  return root;
-}
 
 function session(overrides: Partial<AoSessionRow> = {}): AoSessionRow {
   return {
@@ -93,7 +85,7 @@ function cache(overrides: Partial<BindingCacheRecord> = {}): BindingCacheRecord 
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  testRoots.cleanup();
 });
 
 describe('[AC1] inert foundation', () => {
@@ -232,7 +224,7 @@ describe('[AC5] synthetic migration journal', () => {
     'before_commit',
     'after_commit',
   ] as const)('recovers exactly once after %s', (crashAt) => {
-    const root = tempRoot(`opk-pr2-migration-${crashAt}-`);
+    const root = testRoots.create(`opk-pr2-migration-${crashAt}-`);
     const source = path.join(root, 'source.json');
     const target = path.join(root, 'target.json');
     const journal = path.join(root, 'journal.json');
@@ -266,7 +258,7 @@ describe('[AC5] synthetic migration journal', () => {
   });
 
   it('rejects torn journals and any live-root import before opening live contents', () => {
-    const root = tempRoot('opk-pr2-migration-negative-');
+    const root = testRoots.create('opk-pr2-migration-negative-');
     const source = path.join(root, 'source.json');
     const target = path.join(root, 'target.json');
     const journal = path.join(root, 'journal.json');
@@ -279,7 +271,7 @@ describe('[AC5] synthetic migration journal', () => {
       fixtureRoot: root,
       journalKey: 'J-torn',
     })).toEqual({ ok: false, reason: 'corrupt_journal' });
-    const live = tempRoot('opk-live-store-');
+    const live = testRoots.create('opk-live-store-');
     const liveSource = path.join(live, 'secret.json');
     writeFileSync(liveSource, 'must-not-open', 'utf8');
     expect(runSyntheticMigration({
@@ -310,7 +302,7 @@ describe('[AC6] trusted runtime catalog and platform guard', () => {
   });
 
   it('allows cleanup only for an identity-stable owned regular directory on Linux', () => {
-    const root = tempRoot('opk-pr2-cleanup-');
+    const root = testRoots.create('opk-pr2-cleanup-');
     const target = path.join(root, 'owned', 'candidate');
     mkdirSync(target, { recursive: true });
     const before = statSync(target);
