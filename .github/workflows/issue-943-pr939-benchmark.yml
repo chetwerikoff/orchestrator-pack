@@ -1,8 +1,12 @@
-name: issue-943-pr939-benchmark
+name: issue-943-pr939-benchmark-v2
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+
+concurrency:
+  group: issue-943-pr939-benchmark-v2
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -11,17 +15,17 @@ jobs:
   benchmark:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     env:
       PR_939_HEAD: 4901a274d1f6ec980d2974f3f729a26dcd1cc751
-      POLICY_HEAD: 44da81d0684d5cd6eb3e6ab24d3ad26aa709dd2e
+      POLICY_HEAD: 9b33c5007416280bcdc42b9f3c96f0b60119e253
       PATCH_SOURCE_COMMIT: dd1916d6650bea279f49eb0e3c0e34f08932475e
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/issue-923-pr2-foundation
           fetch-depth: 0
-      - name: Assemble exact PR 939 patch with Issue 943 policy
+      - name: Assemble exact PR 939 patch with cached Issue 943 policy
         shell: bash
         run: |
           set -euo pipefail
