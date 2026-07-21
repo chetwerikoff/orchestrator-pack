@@ -1,4 +1,4 @@
-name: issue-923-final-fix-failure-summary
+name: issue-923-final-fix-source-extract
 
 on:
   pull_request:
@@ -17,7 +17,7 @@ jobs:
       SOURCE_JOB_ID: '88712704384'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print exact final-fix verifier failure
+      - name: Print exact final-fix source and residual findings
         shell: bash
         run: |
           set -euo pipefail
@@ -32,15 +32,25 @@ jobs:
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
           needles = (
-              '[FAIL]', '[STRICT]', 'Summary:', 'self_architect_elapsed_seconds=',
-              'Process completed with exit code', '##[error]', 'AssertionError:',
-              'Test Files', 'Tests ', 'pipeline', 'elapsed_seconds=', 'failed', 'FAIL ',
+              'mutation-semantic-gates.ts', 'real-scope-proof.test.ts',
+              'worker-dispatch-journal.ts', 'foundation.test.ts',
+              'worker-notification-compat.test.ts', 'terminalized-port.test.ts',
+              'replace_once(', 'python3 <<', 'git diff --name-only',
+              '[STRICT]', 'Summary:', 'self_architect_elapsed_seconds=',
           )
-          print('--- matched ---')
-          for index, line in enumerate(lines, start=1):
+          selected = set()
+          for index, line in enumerate(lines):
               if any(needle in line for needle in needles):
-                  print(f'{index}:{line[:1600]}')
-          print('--- final ---')
-          for index, line in enumerate(lines[-35:], start=max(1, len(lines) - 34)):
-              print(f'{index}:{line[:1600]}')
+                  for cursor in range(max(0, index - 12), min(len(lines), index + 18)):
+                      selected.add(cursor)
+          print('--- selected windows ---')
+          previous = None
+          for index in sorted(selected):
+              if previous is not None and index > previous + 1:
+                  print('...')
+              print(f'{index + 1}:{lines[index][:2200]}')
+              previous = index
+          print('--- final 50 ---')
+          for index, line in enumerate(lines[-50:], start=max(1, len(lines) - 49)):
+              print(f'{index}:{line[:2200]}')
           PY
