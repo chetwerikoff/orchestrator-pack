@@ -7,6 +7,7 @@
     "deleted-now",
     "kept",
     "owned-by-PR-2",
+    "owned-by-PR-2-cutover",
     "pr1-artifact"
   ],
   "rootSet": {
@@ -30668,10 +30669,9 @@
     {
       "path": "docs/ao-0-10-review-api.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "3fc3345d882af84c07900863ee914c51f001c8f25724cba8643ece0c28c07aa3",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/ao-0-10-review-harness-adoption.md",
@@ -30772,10 +30772,9 @@
     {
       "path": "docs/autonomous-review-retry.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "7dc176f873b634414b9de5dc094d589ba5782685f150adf908d0b5edbbda3eb6",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/autonomous-review-start-capabilities.json",
@@ -33600,18 +33599,16 @@
     {
       "path": "docs/events-optional-consumer-signal-recovery.d.mts",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "09bfdc155c53bb97d929acae7f697261669d40da1d6b7beef11aa8dee1ee9ae1",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/events-optional-consumer-signal-recovery.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "751f2115dfd8d9f43235540490e8d648a14e990756d7dd3e73baf79a0665e25c",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/examples/fleet-hygiene-sentinel.cron.example",
@@ -34171,10 +34168,9 @@
     {
       "path": "docs/orchestrator-wake-filter.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "dac3b0074bb5337b16b3308321b02b45355a34ba2b37c8007141035fd19d6731",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/orchestrator-wake-runbook.md",
@@ -34284,10 +34280,9 @@
     {
       "path": "docs/review-bulk-send-diagnose.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "1dbf989d175134d595f7a14e1433cd38c35b8629122464631905edd024b2c820",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/review-cycle-cap.d.mts",
@@ -34334,10 +34329,9 @@
     {
       "path": "docs/review-finding-delivery-confirm.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "c2b1b223623c59801ed5a9a89f5b24e8e286ad68120a47797adcee3f7c5c8343",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/review-handoff-wake-admission.d.mts",
@@ -34377,10 +34371,9 @@
     {
       "path": "docs/review-head-ready.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "3cc001e75079edb737dee422ffd9e15130b29ea343860c695b12e2fd753ccc40",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/review-mechanical-cli.d.mts",
@@ -34469,10 +34462,9 @@
     {
       "path": "docs/review-producer-contract.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "5046178a6ba8a18895495b7ed601b71f620d4e8bc780d2af2351da387e16af03",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/review-ready-report-state-seed.d.mts",
@@ -34547,10 +34539,9 @@
     {
       "path": "docs/review-send-reconcile.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "de118365dbf5fe6698b4120a539e2ece7934f36c8b988e650d10d7da2317ed64",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/review-start-claim-lifecycle.d.mts",
@@ -34674,10 +34665,9 @@
     {
       "path": "docs/review-trigger-reconcile.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "54c891d3f0f18dea0d56f3ee14dd4d6a60ccc31852dfffe40e666c1af724f806",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/review-trigger-reeval.d.mts",
@@ -34703,10 +34693,9 @@
     {
       "path": "docs/review-wake-trigger.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "d363317cfac64845733ce97e6f04a045aed05e1521fdb34e2d48275c787e8e1c",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/reviewer-failure-evidence-markers.d.mts",
@@ -34718,10 +34707,9 @@
     {
       "path": "docs/reviewer-failure-evidence-markers.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "34acfdbe7f31b04a4211c15211c9bd57526c8c7c6d4ca473ded974e5478dbadc",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/reviewer-failure-evidence.d.mts",
@@ -35027,10 +35015,9 @@
     {
       "path": "docs/worker-iteration-cycle.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "1e6053309b355d0879ffcb8412bbf1a17f2771a11305794af8db61f838fca0e2",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/worker-message-dispatch-observe.d.mts",
@@ -35049,10 +35036,9 @@
     {
       "path": "docs/worker-message-dispatch-observe.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "bf9c756694c99154b827297cc4501f13a97fb6ae0c8bf55afa6ccf74ce5f7505",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "docs/worker-message-submit-busy-dispatch-smoke-markers.json",
@@ -35141,10 +35127,9 @@
     {
       "path": "docs/worker-report-store.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "deleted-now",
       "baseSha256": "fd387377cc875b429ba13b5ba4b01849ceee87a0b66c568df426aeb19c9ac69c",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "terminalized by Issue #923 PR 2 foundation"
     },
     {
       "path": "package-lock.json",
@@ -40316,10 +40301,10 @@
     {
       "path": "scripts/lib/Get-ReactionMessagesFromYaml.ps1",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "owned-by-PR-2-cutover",
+      "replacementOwner": "draft 315",
       "baseSha256": "7f349a1975385bbd252666cd8fa28009c3c8c05dc2a7b65405397a2cc25bfe18",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "reassigned to draft 315 PR 2-cutover activation"
     },
     {
       "path": "scripts/lib/Get-ReconcileChecksByPr.ps1",
@@ -42198,18 +42183,18 @@
     {
       "path": "scripts/reaction-config-messages.d.mts",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "owned-by-PR-2-cutover",
+      "replacementOwner": "draft 315",
       "baseSha256": "4a6964c127a22daadeb7cbfdea0a8f05efc96bc6c38b0705c75a5106917b0bde",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "reassigned to draft 315 PR 2-cutover activation"
     },
     {
       "path": "scripts/reaction-config-messages.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "owned-by-PR-2-cutover",
+      "replacementOwner": "draft 315",
       "baseSha256": "2767207fce118a0a70c9ae17bcb9cdefa508612bb63f590a73008373bc9c4138",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "reassigned to draft 315 PR 2-cutover activation"
     },
     {
       "path": "scripts/reaction-config-messages.test.ts",
@@ -42377,10 +42362,10 @@
     {
       "path": "scripts/review-ready-report-state-seed.ps1",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "owned-by-PR-2-cutover",
+      "replacementOwner": "draft 315",
       "baseSha256": "e89c4fa0713011a2ff4d9c80d8e5b2e68678c0d4d8f5176580725258c9f822a8",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "reassigned to draft 315 PR 2-cutover activation"
     },
     {
       "path": "scripts/review-ready-report-state-seed.test.ts",
@@ -42538,10 +42523,10 @@
     {
       "path": "scripts/review-trigger-reconcile.ps1",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "owned-by-PR-2-cutover",
+      "replacementOwner": "draft 315",
       "baseSha256": "20762cfc1549a1c7d03516b87da7c8d0a6d9daf9606cac99d27f3cc3ee1864d8",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "reassigned to draft 315 PR 2-cutover activation"
     },
     {
       "path": "scripts/review-trigger-reconcile.test.ts",
@@ -42553,10 +42538,10 @@
     {
       "path": "scripts/review-trigger-reeval.ps1",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2",
-      "replacementOwner": "Cut-and-build PR 2: TypeScript scheduler and typed runtime configuration",
+      "terminalState": "owned-by-PR-2-cutover",
+      "replacementOwner": "draft 315",
       "baseSha256": "301a202f6eadfdabd21ecfd70c2d0a72f680c42f4cc9f4b2d8a2e57158140721",
-      "reason": "load-bearing PR 1 compatibility closure is frozen for PR 2 ownership"
+      "reason": "reassigned to draft 315 PR 2-cutover activation"
     },
     {
       "path": "scripts/review-trigger-reeval.test.ts",

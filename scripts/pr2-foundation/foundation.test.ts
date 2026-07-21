@@ -328,12 +328,20 @@ describe('[AC6] trusted runtime catalog and platform guard', () => {
 });
 
 describe('[AC7] estate split', () => {
-  it('requires exactly 16 terminal foundation rows and six draft-315 cutover rows', () => {
-    const rows = [
-      ...FOUNDATION_DOC_ROWS.map((entry) => ({ path: entry, disposition: 'deleted-now' })),
-      ...CUTOVER_ROWS.map((entry) => ({ path: entry, disposition: 'owned-by-PR-2-cutover', owner: 'draft-315' })),
-    ];
-    expect(validateEstateSplit(rows)).toEqual({ ok: true, result: 'foundation-16-cutover-6' });
-    expect(validateEstateSplit(rows.filter((row) => row.path !== FOUNDATION_DOC_ROWS[0]))).toMatchObject({ ok: false });
+  it('validates the real manifest and filesystem denominator', () => {
+    const manifest = JSON.parse(
+      readFileSync(path.join(repoRoot, 'scripts/estate-cut/issue-906.manifest.json'), 'utf8'),
+    ) as { rows?: Array<{ path: string; terminalState: string; replacementOwner?: string }> };
+    const denominator = (manifest.rows ?? []).filter((row) =>
+      (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)
+      || (CUTOVER_ROWS as readonly string[]).includes(row.path),
+    );
+    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-16-cutover-6' });
+    for (const file of FOUNDATION_DOC_ROWS) {
+      expect(existsSync(path.join(repoRoot, file))).toBe(false);
+    }
+    for (const file of CUTOVER_ROWS) {
+      expect(existsSync(path.join(repoRoot, file))).toBe(true);
+    }
   });
 });
