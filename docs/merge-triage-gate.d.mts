@@ -67,6 +67,7 @@ export interface MergeTriageGateResult {
 export interface MergePolicyResult {
   allow: boolean;
   reason: string;
+  [key: string]: unknown;
 }
 
 export declare function sha256(value: unknown): string;
@@ -101,6 +102,9 @@ export declare function computeOpenFindingsSnapshotHash(
 ): string;
 export declare function runMergeTriageGate(input?: Record<string, unknown>): MergeTriageGateResult;
 export declare function evaluateMergePolicy(input?: Record<string, unknown>): MergePolicyResult;
+export declare function evaluateDirectOperatorReviewSafety(
+  input?: Record<string, unknown>,
+): MergePolicyResult;
 export declare function readArchitectInbox(input?: Record<string, unknown>): {
   pending: Array<Record<string, unknown>>;
 };
