@@ -1,4 +1,4 @@
-name: issue-943-pr939-benchmark-v2
+name: issue-943-pr939-benchmark-disabled
 
 on:
   pull_request:
@@ -12,70 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  benchmark:
-    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+  disabled:
+    if: ${{ false }}
     runs-on: ubuntu-latest
-    timeout-minutes: 12
-    env:
-      PR_939_HEAD: 4901a274d1f6ec980d2974f3f729a26dcd1cc751
-      POLICY_HEAD: 9b33c5007416280bcdc42b9f3c96f0b60119e253
-      PATCH_SOURCE_COMMIT: dd1916d6650bea279f49eb0e3c0e34f08932475e
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/issue-923-pr2-foundation
-          fetch-depth: 0
-      - name: Assemble exact PR 939 patch with cached Issue 943 policy
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$PR_939_HEAD"
-          git fetch origin agent/issue-923-validation-probe agent/issue-943-self-architect-hot-loop
-          test "$(git rev-parse origin/agent/issue-943-self-architect-hot-loop)" = "$POLICY_HEAD"
-          git show "$PATCH_SOURCE_COMMIT:.github/workflows/issue-923-final-fix-publisher.yml" > "$RUNNER_TEMP/publisher-v2.yml"
-          python3 <<'PY'
-          from pathlib import Path
-          import os
-          import subprocess
-          import textwrap
-
-          workflow = Path(os.environ['RUNNER_TEMP'], 'publisher-v2.yml').read_text(encoding='utf-8').splitlines()
-          start = next(i for i, line in enumerate(workflow) if line.strip() == "python3 <<'PY'") + 1
-          end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
-          script = textwrap.dedent('\n'.join(workflow[start:end])) + '\n'
-          exec(compile(script, '<publisher-v2-patch>', 'exec'), {'__name__': '__main__'})
-
-          path = Path('scripts/pr2-foundation/worker-notification-compat.test.ts')
-          source = path.read_text(encoding='utf-8')
-          old = "    expect(source).toContain('worker-message-dispatch-observe.mjs');\n"
-          new = "    expect(source).toContain('worker-message-dispatch-observe');\n"
-          if source.count(old) != 1:
-              raise SystemExit(f'canonical assertion match count: {source.count(old)}')
-          path.write_text(source.replace(old, new, 1), encoding='utf-8')
-
-          optimized = subprocess.check_output([
-              'git', 'show',
-              f"{os.environ['POLICY_HEAD']}:scripts/lint-self-architect.ps1",
-          ], text=True)
-          Path('scripts/lint-self-architect.ps1').write_text(optimized, encoding='utf-8')
-          PY
-          git diff --check
-      - name: Prove strict zero-findings inside the existing budget
-        shell: bash
-        run: |
-          set -euo pipefail
-          started="$(date +%s)"
-          set +e
-          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
-            -Strict \
-            -BaseRef origin/main \
-            -HeadRef HEAD | tee "$RUNNER_TEMP/self-architect.log"
-          status=${PIPESTATUS[0]}
-          set -e
-          elapsed=$(( $(date +%s) - started ))
-          echo "self_architect_elapsed_seconds=$elapsed"
-          cat "$RUNNER_TEMP/self-architect.log"
-          test "$status" -eq 0
-          grep -F 'No findings.' "$RUNNER_TEMP/self-architect.log"
-          grep -F 'Summary: strict=0 warning=0' "$RUNNER_TEMP/self-architect.log"
-          test "$elapsed" -lt 600
+      - run: echo disabled
