@@ -24,9 +24,19 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function restoreEnv(name: 'TMPDIR' | 'TEMP' | 'TMP', value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
 async function main(): Promise<void> {
   const key = mutationKey();
   const failingTestId = `mutation-contract:${key}`;
+  const originalTempEnv = {
+    TMPDIR: process.env.TMPDIR,
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+  };
   let harnessRoot: string | null = null;
   let failed = false;
   try {
@@ -41,6 +51,9 @@ async function main(): Promise<void> {
     process.stderr.write(`${failingTestId}: ${describeError(error)}\n`);
     process.exitCode = 1;
   } finally {
+    restoreEnv('TMPDIR', originalTempEnv.TMPDIR);
+    restoreEnv('TEMP', originalTempEnv.TEMP);
+    restoreEnv('TMP', originalTempEnv.TMP);
     if (harnessRoot && existsSync(harnessRoot)) {
       try {
         cleanupHarnessRoot(harnessRoot);
