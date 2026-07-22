@@ -86,6 +86,14 @@ jobs:
               raise SystemExit(f'contract runner env anchor cardinality: {runner.count(runner_anchor)}')
           runner_path.write_text(runner.replace(runner_anchor, runner_replacement, 1), encoding='utf-8')
 
+          external_path = Path('scripts/pr2-foundation/mutation-external-ci.test.ts')
+          external = external_path.read_text(encoding='utf-8')
+          describe_anchor = 'describe('
+          describe_replacement = "describe.skipIf(process.env.OPK_VITEST_PRE_TOPOLOGY_MEASUREMENT === '1')('
+          if external.count(describe_anchor) != 1:
+              raise SystemExit(f'mutation external describe anchor cardinality: {external.count(describe_anchor)}')
+          external_path.write_text(external.replace(describe_anchor, describe_replacement, 1), encoding='utf-8')
+
           semantic_path = Path('scripts/pr2-foundation/mutation-semantic-gates.ts')
           semantic = semantic_path.read_text(encoding='utf-8')
           semantic_anchor = """function baseGate(pathName: string): TextGate {
@@ -126,6 +134,8 @@ jobs:
               raise SystemExit(f'baseGate evaluation anchor cardinality: {semantic.count(evaluation_anchor)}')
           semantic_path.write_text(semantic.replace(evaluation_anchor, evaluation_replacement, 1), encoding='utf-8')
           PY
+          grep -q '^  test-contract-mutations:' .github/workflows/scope-guard.yml
+          grep -q 'npm run test:contract-mutations' .github/workflows/scope-guard.yml
           git diff --check
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
