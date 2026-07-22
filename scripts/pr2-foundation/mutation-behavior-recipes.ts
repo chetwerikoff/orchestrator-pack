@@ -10,16 +10,16 @@ interface TextRecipe {
 
 const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
   'AC1:scheduler-acquirer-running': {
-    anchor: 'running: false',
-    replacement: 'running: true',
+    anchor: '    running: false,\n    claimAcquirer: false,',
+    replacement: '    running: true,\n    claimAcquirer: false,',
   },
   'AC1:activation-epoch-enforced': {
-    anchor: 'activationEpochEnforced: false',
-    replacement: 'activationEpochEnforced: true',
+    anchor: '    activationEpochEnforced: false,\n    pollIntervalMs:',
+    replacement: '    activationEpochEnforced: true,\n    pollIntervalMs:',
   },
   'AC1:dormant-config-reader-live': {
-    anchor: 'running: false',
-    replacement: "running: process.env.OPK_PR2_FOUNDATION_SCHEDULER_RUNNING === '1'",
+    anchor: '    running: false,\n    claimAcquirer: false,',
+    replacement: "    running: process.env.OPK_PR2_FOUNDATION_SCHEDULER_RUNNING === '1',\n    claimAcquirer: false,",
   },
   'AC1:notification-config-reader-absent': {
     anchor: 'config = notificationConfig(options.foundationConfig ?? {});',
@@ -62,8 +62,8 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     replacement: 'config = notificationConfig({});',
   },
   'AC3:foundation-config-activates-non-notification-consumer': {
-    anchor: 'executed: false',
-    replacement: 'executed: true',
+    anchor: "return { ok: true, executed: false, reason: 'foundation_inert' };",
+    replacement: "return { ok: true, executed: true, reason: 'foundation_inert' };",
   },
 });
 
