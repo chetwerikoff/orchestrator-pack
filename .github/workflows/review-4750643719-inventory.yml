@@ -21,13 +21,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "HEAD=$(git rev-parse HEAD)"
-          echo 'TERMINALIZED_IMPORTS_BEGIN'
-          grep -RIn --include='*.mjs' --include='*.mts' "scripts/pr2-foundation/terminalized" docs || true
-          echo 'TERMINALIZED_IMPORTS_END'
-          echo 'CUSTOM_GATES_BEGIN'
-          grep -n "custom:" scripts/pr2-foundation/mutation-semantic-gates.ts || true
-          echo 'CUSTOM_GATES_END'
-          echo 'MUTATION_FILE_COUNT_BEGIN'
-          node --experimental-strip-types -e "import('./scripts/pr2-foundation/mutation-catalog.ts').then(m=>console.log(m.FOUNDATION_MUTATION_CATALOG.length))"
-          echo 'MUTATION_FILE_COUNT_END'
+          {
+            echo "HEAD=$(git rev-parse HEAD)"
+            echo 'TERMINALIZED_IMPORTS_BEGIN'
+            grep -RIn --include='*.mjs' --include='*.mts' "scripts/pr2-foundation/terminalized" docs || true
+            echo 'TERMINALIZED_IMPORTS_END'
+            echo 'CUSTOM_GATES_BEGIN'
+            grep -n "custom:" scripts/pr2-foundation/mutation-semantic-gates.ts || true
+            echo 'CUSTOM_GATES_END'
+            echo 'MUTATION_FILE_COUNT_BEGIN'
+            node --experimental-strip-types -e "import('./scripts/pr2-foundation/mutation-catalog.ts').then(m=>console.log(m.FOUNDATION_MUTATION_CATALOG.length))"
+            echo 'MUTATION_FILE_COUNT_END'
+          } > inventory.txt
+          cat inventory.txt
+      - name: Upload inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-4750643719-inventory
+          path: inventory.txt
+          if-no-files-found: error
