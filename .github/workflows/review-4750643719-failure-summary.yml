@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88832365483'
+      SOURCE_JOB_ID: '88851151283'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print mutation plan audit failures
+      - name: Print latest publisher failure
         shell: bash
         run: |
           set -euo pipefail
@@ -31,8 +31,15 @@ jobs:
           import re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          print('--- plan failures ---')
+          needles = (
+              'cardinality', 'SyntaxError', '##[error]', 'Process completed with exit code',
+              'test-contract-mutations', 'mutation external', 'grep -q', 'Traceback', 'SystemExit',
+          )
+          print('--- matched ---')
           for index, line in enumerate(lines, start=1):
-              if 'PLAN_FAIL ' in line or 'PLAN_SUMMARY ' in line or '##[error]' in line:
+              if any(needle in line for needle in needles):
                   print(f'{index}:{line[:7000]}')
+          print('--- final 80 ---')
+          for index, line in enumerate(lines[-80:], start=max(1, len(lines) - 79)):
+              print(f'{index}:{line[:7000]}')
           PY
