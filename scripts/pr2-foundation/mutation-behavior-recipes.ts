@@ -106,8 +106,8 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     replacement: "return { ok: true, executed: true, reason: 'foundation_inert' };",
   },
   'AC4:notify-before-journal': {
-    anchor: '    const inspected = await inspectNotification({',
-    replacement: '    await runProcess({ command: config.aoPath, args: [], allowEmptyStdout: true, timeoutMs: 1 });\n    const inspected = await inspectNotification({',
+    anchor: "  try {\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
+    replacement: "  try {\n    await runProcess({ command: config.aoPath, args: [], allowEmptyStdout: true, timeoutMs: 1 });\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
   },
   'AC4:historical-record-unreadable': {
     anchor: '  return canonicalFinalizeDispatchJournalRecord(\n    journal,\n    deliveryId,',
