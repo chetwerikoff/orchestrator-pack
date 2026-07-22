@@ -95,13 +95,38 @@ function cleanupFailClosed(): void {
   }
 }
 
+interface EstateManifest {
+  rows?: Array<Record<string, unknown>>;
+}
+
+function parseEstateManifest(text: string): EstateManifest {
+  const value = JSON.parse(text) as EstateManifest;
+  invariant(Array.isArray(value.rows), 'estate_manifest_rows_missing');
+  return value;
+}
+
+function unrelatedEstateRows(manifest: EstateManifest): Array<Record<string, unknown>> {
+  const issue923Rows = new Set<string>([
+    ...FOUNDATION_DOC_ROWS,
+    ...CUTOVER_ROWS,
+  ]);
+  return (manifest.rows ?? [])
+    .filter((row) => typeof row.path === 'string' && !issue923Rows.has(row.path))
+    .sort((left, right) => String(left.path).localeCompare(String(right.path)));
+}
+
 function estateSplitValid(): void {
-  const manifest = JSON.parse(
+  const manifest = parseEstateManifest(
     readFileSync(path.resolve('scripts/estate-cut/issue-906.manifest.json'), 'utf8'),
-  ) as { rows?: Array<{ path: string; terminalState: string; replacementOwner?: string }> };
+  );
   const denominator = (manifest.rows ?? []).filter((row) =>
-    (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)
-    || (CUTOVER_ROWS as readonly string[]).includes(row.path));
+    typeof row.path === 'string'
+    && ((FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)
+      || (CUTOVER_ROWS as readonly string[]).includes(row.path))) as Array<{
+        path: string;
+        terminalState: string;
+        replacementOwner?: string;
+      }>;
   const result = validateEstateSplit(denominator);
   invariant(result.ok && result.result === 'foundation-16-cutover-6', 'estate_split_invalid');
   invariant(denominator.length === 22, `estate_denominator_size:${denominator.length}`);
@@ -115,18 +140,38 @@ function estateSplitValid(): void {
   for (const file of CUTOVER_ROWS) invariant(existsSync(path.resolve(file)), `cutover_row_deleted:${file}`);
 }
 
-function estateGeneratorClean(): void {
-  const result = runProcessSync({
-    command: process.execPath,
-    args: [
-      '--experimental-strip-types',
-      path.resolve('scripts/estate-cut/manifest-generator.mjs'),
-      '--check',
-    ],
+function estateUnrelatedRowsUnchanged(): void {
+  const baseRef = process.env.GITHUB_BASE_REF?.trim() || 'main';
+  const mergeBaseResult = runProcessSync({
+    command: 'git',
+    args: ['merge-base', 'HEAD', `origin/${baseRef}`],
     cwd: path.resolve('.'),
     inheritParentEnv: true,
   });
-  invariant(result.ok, `estate_manifest_drift:${result.stderr || result.stdout || result.error || result.outcome}`);
+  invariant(
+    mergeBaseResult.ok,
+    `estate_merge_base_failed:${mergeBaseResult.stderr || mergeBaseResult.stdout || mergeBaseResult.error || mergeBaseResult.outcome}`,
+  );
+  const mergeBase = mergeBaseResult.stdout.trim();
+  invariant(/^[0-9a-f]{40}$/u.test(mergeBase), `estate_merge_base_invalid:${mergeBase}`);
+  const baseManifestResult = runProcessSync({
+    command: 'git',
+    args: ['show', `${mergeBase}:scripts/estate-cut/issue-906.manifest.json`],
+    cwd: path.resolve('.'),
+    inheritParentEnv: true,
+  });
+  invariant(
+    baseManifestResult.ok,
+    `estate_base_manifest_failed:${baseManifestResult.stderr || baseManifestResult.stdout || baseManifestResult.error || baseManifestResult.outcome}`,
+  );
+  const candidate = parseEstateManifest(
+    readFileSync(path.resolve('scripts/estate-cut/issue-906.manifest.json'), 'utf8'),
+  );
+  const base = parseEstateManifest(baseManifestResult.stdout);
+  invariant(
+    JSON.stringify(unrelatedEstateRows(candidate)) === JSON.stringify(unrelatedEstateRows(base)),
+    'unrelated_manifest_rows_changed',
+  );
 }
 
 function mutationCatalogSetStrict(): void {
@@ -287,7 +332,7 @@ async function main(): Promise<void> {
   if (probe === 'runtime-catalog-fail-closed') runtimeCatalogFailClosed();
   else if (probe === 'cleanup-fail-closed') cleanupFailClosed();
   else if (probe === 'estate-split-valid') estateSplitValid();
-  else if (probe === 'estate-generator-clean') estateGeneratorClean();
+  else if (probe === 'estate-unrelated-rows-unchanged') estateUnrelatedRowsUnchanged();
   else if (probe === 'mutation-catalog-set-strict') mutationCatalogSetStrict();
   else if (probe === 'mutation-evidence-set-strict') mutationEvidenceSetStrict();
   else if (probe === 'lane-config-bounded') laneConfigBounded();
