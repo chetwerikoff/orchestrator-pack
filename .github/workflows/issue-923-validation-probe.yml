@@ -1,4 +1,4 @@
-name: issue-943-compiled-hotpaths-failure-summary
+name: issue-943-compiled-hotpaths-result
 
 on:
   pull_request:
@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88807398637'
+      SOURCE_JOB_ID: '88808038993'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print exact compiled-hotpaths apply failure
+      - name: Print verified compiled-hotpaths result
         shell: bash
         run: |
           set -euo pipefail
@@ -32,15 +32,16 @@ jobs:
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
           needles = (
-              'expected one match', 'match count', 'changed_path_mismatch', 'diff_check_failed',
-              'Traceback', 'SystemExit', 'Error:', '##[error]', 'Process completed with exit code',
-              'paired result class', 'compiled paired method', 'paired PowerShell hot loop',
+              'pr939_', 'self_architect_elapsed_seconds=', 'Summary:', 'No findings.',
+              'Tests completed', 'Tests Passed', 'Tests Failed', '[FAIL]', '[PASS]',
+              'Process completed with exit code', '##[error]', 'Changed files:',
+              'perf: compile self-architect hot paths',
           )
           print('--- matched ---')
           for index, line in enumerate(lines, start=1):
               if any(needle in line for needle in needles):
                   print(f'{index}:{line[:5000]}')
-          print('--- final 55 ---')
-          for index, line in enumerate(lines[-55:], start=max(1, len(lines) - 54)):
+          print('--- final 50 ---')
+          for index, line in enumerate(lines[-50:], start=max(1, len(lines) - 49)):
               print(f'{index}:{line[:5000]}')
           PY
