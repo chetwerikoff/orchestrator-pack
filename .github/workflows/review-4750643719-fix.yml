@@ -57,20 +57,34 @@ jobs:
           python3 "$RUNNER_TEMP/apply.py"
           python3 <<'PY'
           from pathlib import Path
-          path = Path('scripts/pr2-foundation/worker-nudge-gate.ts')
-          source = path.read_text(encoding='utf-8')
-          anchor = """export function hashNudgeMessageContent(message: string): string {
+
+          gate_path = Path('scripts/pr2-foundation/worker-nudge-gate.ts')
+          gate = gate_path.read_text(encoding='utf-8')
+          gate_anchor = """export function hashNudgeMessageContent(message: string): string {
           """
-          insertion = """export function canonicalStoreId(storePath: string): string {
+          gate_insertion = """export function canonicalStoreId(storePath: string): string {
             const canonical = canonicalizeStorePath(storePath);
             return canonical ? createHash('sha256').update(canonical).digest('hex').slice(0, 24) : '';
           }
 
           export function hashNudgeMessageContent(message: string): string {
           """
-          if source.count(anchor) != 1:
-              raise SystemExit(f'canonicalStoreId insertion anchor cardinality: {source.count(anchor)}')
-          path.write_text(source.replace(anchor, insertion, 1), encoding='utf-8')
+          if gate.count(gate_anchor) != 1:
+              raise SystemExit(f'canonicalStoreId insertion anchor cardinality: {gate.count(gate_anchor)}')
+          gate_path.write_text(gate.replace(gate_anchor, gate_insertion, 1), encoding='utf-8')
+
+          runner_path = Path('scripts/pr2-foundation/contract-test-runner.ts')
+          runner = runner_path.read_text(encoding='utf-8')
+          runner_anchor = """    env: { OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1' },
+          """
+          runner_replacement = """    env: {
+                OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1',
+                OPK_VITEST_HARNESS: '1',
+              },
+          """
+          if runner.count(runner_anchor) != 1:
+              raise SystemExit(f'contract runner env anchor cardinality: {runner.count(runner_anchor)}')
+          runner_path.write_text(runner.replace(runner_anchor, runner_replacement, 1), encoding='utf-8')
           PY
           git diff --check
           git config user.name github-actions[bot]
