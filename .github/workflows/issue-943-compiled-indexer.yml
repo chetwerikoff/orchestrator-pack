@@ -1,11 +1,11 @@
-name: issue-943-compiled-indexer
+name: issue-943-compiled-hotpaths
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  group: issue-943-compiled-indexer
+  group: issue-943-compiled-hotpaths
   cancel-in-progress: true
 
 permissions:
@@ -19,7 +19,8 @@ jobs:
     env:
       TARGET_BRANCH: agent/issue-943-self-architect-hot-loop
       TARGET_HEAD: 8c5b1e2de60daec8c39eddbf5ec9c8972c20f288
-      HELPER_COMMIT: ce83cc719bf0e6c34535753701af94dd9e1f1495
+      INDEX_HELPER_COMMIT: ce83cc719bf0e6c34535753701af94dd9e1f1495
+      PAIRED_HELPER_COMMIT: bb61d9972743ee50f16f6a3e3cacc86021a50558
       PR939_HEAD: 4901a274d1f6ec980d2974f3f729a26dcd1cc751
       PR939_BASE: 296dff446d365cb3c0aba92b93ab16a95ee51fd3
       FINAL_PATCH_COMMIT: dd1916d6650bea279f49eb0e3c0e34f08932475e
@@ -34,14 +35,16 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Apply compiled exact indexer
+      - name: Apply compiled exact and paired hot paths
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
-          git fetch origin "$HELPER_COMMIT"
-          git show "$HELPER_COMMIT:scripts/issue-943-apply-compiled-indexer.py" > "$RUNNER_TEMP/apply.py"
-          python3 "$RUNNER_TEMP/apply.py"
+          git fetch origin "$INDEX_HELPER_COMMIT" "$PAIRED_HELPER_COMMIT"
+          git show "$INDEX_HELPER_COMMIT:scripts/issue-943-apply-compiled-indexer.py" > "$RUNNER_TEMP/apply-index.py"
+          git show "$PAIRED_HELPER_COMMIT:scripts/issue-943-augment-compiled-paired.py" > "$RUNNER_TEMP/apply-paired.py"
+          python3 "$RUNNER_TEMP/apply-index.py"
+          python3 "$RUNNER_TEMP/apply-paired.py"
           git diff --check
 
       - name: Verify policy and exact PR 939 budget
@@ -115,5 +118,5 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add scripts/lint-self-architect.ps1 tests/powershell/Lint-SelfArchitect.Tests.ps1
-          git commit -m 'perf: compile exact self-architect indexing'
+          git commit -m 'perf: compile self-architect hot paths'
           git push origin HEAD:"$TARGET_BRANCH"
