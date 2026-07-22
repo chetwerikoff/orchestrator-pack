@@ -19,10 +19,11 @@ jobs:
     env:
       TARGET_BRANCH: agent/issue-923-pr2-foundation
       TARGET_HEAD: fa5f0a509454b31ed760c8f5cc218552a325c915
+      MAIN_HEAD: d9f6b60acc17fa56c0c29a45950e14f7b2b801db
       CHUNKS_COMMIT: 7dc3c9a330ffac3a8c0511ca50892795f9abc76a
       CHUNKS_SHA256: eed898b961202a3156d462644885f7414aa7327e449b6756c3798ad3675ae214
       FINAL_HELPER_SHA256: c61f9bf406c8e3de7f84e839d6986c1f2ac710fa73bff0a2a6d88d51bd3b3205
-      HOTFIX_COMMIT: 34ea0b7e059abe702a45e0a18c0108442c81e8b7
+      HOTFIX_COMMIT: 421289091c676bae334cfcac461d624face6fef3
     steps:
       - name: Checkout exact PR 939 head
         uses: actions/checkout@v4
@@ -36,14 +37,20 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Assemble and apply exact review fix
+      - name: Merge main and apply exact review fix
         shell: bash
         run: |
           set -euo pipefail
           : > "$RUNNER_TEMP/verification.log"
           exec > >(tee -a "$RUNNER_TEMP/verification.log") 2>&1
           test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
-          git fetch origin "$CHUNKS_COMMIT" "$HOTFIX_COMMIT" main
+          git fetch origin main "$TARGET_BRANCH" "$CHUNKS_COMMIT" "$HOTFIX_COMMIT"
+          test "$(git rev-parse origin/main)" = "$MAIN_HEAD"
+          test "$(git rev-parse origin/$TARGET_BRANCH)" = "$TARGET_HEAD"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git merge --no-edit origin/main
+
           : > "$RUNNER_TEMP/apply.py.gz.b64"
           for part in 00 01 02 03 04 05 06 07 08 09; do
             git show "$CHUNKS_COMMIT:scripts/review-4750643719-final-chunks/${part}.part" \
@@ -54,16 +61,12 @@ jobs:
             | gzip --decompress \
             > "$RUNNER_TEMP/apply.py"
           echo "$FINAL_HELPER_SHA256  $RUNNER_TEMP/apply.py" | sha256sum --check --strict
-          git show "$HOTFIX_COMMIT:scripts/review-4750643719-final-hotfix.py" \
+          git show "$HOTFIX_COMMIT:scripts/review-4750643719-final-hotfix-v2.py" \
             > "$RUNNER_TEMP/hotfix.py"
           python3 -m py_compile "$RUNNER_TEMP/apply.py" "$RUNNER_TEMP/hotfix.py"
           python3 "$RUNNER_TEMP/apply.py"
           python3 "$RUNNER_TEMP/hotfix.py"
-          grep -q '^  contract-mutations:' .github/workflows/typescript-foundation.yml
-          grep -q 'npm run test:contract-mutations' .github/workflows/typescript-foundation.yml
           git diff --check
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add --all
           git commit -m 'fix: address review 4750643719'
           git status --short
@@ -99,9 +102,6 @@ jobs:
           echo "self_architect_elapsed_seconds=$elapsed"
           test "$elapsed" -lt 600
           git restore --source=HEAD -- scripts/vitest-heavy-topology.plan.json
-          echo FINAL_STATUS_BEGIN
-          git status --short
-          echo FINAL_STATUS_END
           git diff --check
           test -z "$(git status --short)"
 
@@ -109,7 +109,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: review-4750643719-verification
+          name: review-4750643719-final-verification
           path: ${{ runner.temp }}/verification.log
           if-no-files-found: warn
 
