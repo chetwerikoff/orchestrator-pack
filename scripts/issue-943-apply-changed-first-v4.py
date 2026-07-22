@@ -13,6 +13,15 @@ def replace_once(source: str, old: str, new: str, label: str) -> str:
     return source.replace(old, new, 1)
 
 
+def replace_function(source: str, name: str, next_name: str, replacement: str) -> str:
+    start_marker = f"function {name} {{"
+    end_marker = f"function {next_name} {{"
+    start = source.index(start_marker)
+    end = source.index(end_marker, start)
+    body = textwrap.dedent(replacement).strip("\n") + "\n\n"
+    return source[:start] + body + source[end:]
+
+
 def main() -> None:
     source_workflow = Path(os.environ["SOURCE_WORKFLOW"])
     workflow = source_workflow.read_text(encoding="utf-8").splitlines()
@@ -23,6 +32,114 @@ def main() -> None:
 
     lint_path = Path("scripts/lint-self-architect.ps1")
     lint = lint_path.read_text(encoding="utf-8")
+    lint = replace_function(
+        lint,
+        "Read-TextLines",
+        "Get-FileKind",
+        r'''
+        function Read-TextLines {
+            param([string]$FullPath)
+
+            if (-not (Test-Path -LiteralPath $FullPath -PathType Leaf)) {
+                return @()
+            }
+
+            $lines = [System.IO.File]::ReadAllLines($FullPath, [System.Text.Encoding]::UTF8)
+            for ($index = 0; $index -lt $lines.Count; $index++) {
+                $lines[$index] = $lines[$index].TrimEnd()
+            }
+            return $lines
+        }
+        ''',
+    )
+    lint = replace_function(
+        lint,
+        "Add-SlidingBlockLocations",
+        "Find-DuplicateLiteralFindings",
+        r'''
+        function Add-SlidingBlockLocations {
+            param(
+                [string[]]$Lines,
+                [int]$Size,
+                [string]$RelativePath,
+                [object]$BlockMap,
+                [object]$CandidateEdges,
+                [switch]$ExistingKeysOnly
+            )
+
+            if ($Lines.Count -lt $Size) { return }
+            $middleOffset = [int][Math]::Floor($Size / 2)
+
+            if ($ExistingKeysOnly) {
+                # Changed blocks are already known to be meaningful. Probe unchanged
+                # windows by three exact anchors before allocating the full block text.
+                for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
+                    $firstLine = [string]$Lines[$start]
+                    if (-not $CandidateEdges.ContainsKey($firstLine)) { continue }
+                    $middleMap = $CandidateEdges[$firstLine]
+                    $middleLine = [string]$Lines[$start + $middleOffset]
+                    if (-not $middleMap.ContainsKey($middleLine)) { continue }
+                    $lastLine = [string]$Lines[$start + $Size - 1]
+                    $lastLines = $middleMap[$middleLine]
+                    if (-not $lastLines.Contains($lastLine)) { continue }
+
+                    $blockKey = [string]::Join("`n", $Lines, $start, $Size)
+                    if (-not $BlockMap.ContainsKey($blockKey)) { continue }
+                    $BlockMap[$blockKey].Add([pscustomobject]@{
+                            file      = $RelativePath
+                            startLine = $start + 1
+                            endLine   = $start + $Size
+                            lineCount = $Size
+                        })
+                }
+                return
+            }
+
+            $meaningfulPrefix = [int[]]::new($Lines.Count + 1)
+            for ($index = 0; $index -lt $Lines.Count; $index++) {
+                $meaningfulPrefix[$index + 1] = $meaningfulPrefix[$index]
+                if ($Lines[$index] -match '\S') {
+                    $meaningfulPrefix[$index + 1]++
+                }
+            }
+
+            for ($start = 0; $start -le ($Lines.Count - $Size); $start++) {
+                $endExclusive = $start + $Size
+                if (($meaningfulPrefix[$endExclusive] - $meaningfulPrefix[$start]) -eq 0) {
+                    continue
+                }
+
+                $blockKey = [string]::Join("`n", $Lines, $start, $Size)
+                if (-not $BlockMap.ContainsKey($blockKey)) {
+                    $BlockMap[$blockKey] = New-Object System.Collections.Generic.List[object]
+                }
+                $firstLine = [string]$Lines[$start]
+                $middleLine = [string]$Lines[$start + $middleOffset]
+                $lastLine = [string]$Lines[$endExclusive - 1]
+                if (-not $CandidateEdges.ContainsKey($firstLine)) {
+                    $CandidateEdges[$firstLine] = New-Object 'System.Collections.Generic.Dictionary[string, object]' ([System.StringComparer]::Ordinal)
+                }
+                $middleMap = $CandidateEdges[$firstLine]
+                if (-not $middleMap.ContainsKey($middleLine)) {
+                    $middleMap[$middleLine] = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+                }
+                [void]$middleMap[$middleLine].Add($lastLine)
+                $BlockMap[$blockKey].Add([pscustomobject]@{
+                        file      = $RelativePath
+                        startLine = $start + 1
+                        endLine   = $endExclusive
+                        lineCount = $Size
+                    })
+            }
+        }
+        ''',
+    )
+    lint = replace_once(
+        lint,
+        "    $candidateEdges = @{}\n",
+        "    $candidateEdges = New-Object 'System.Collections.Generic.Dictionary[string, object]' ([System.StringComparer]::Ordinal)\n",
+        "ordinal candidate edge dictionary",
+    )
     old_group = """    foreach ($pair in $blockMap.GetEnumerator()) {
         $locations = @($pair.Value | Sort-Object file, startLine)
         $distinctFiles = @($locations | Select-Object -ExpandProperty file -Unique)
@@ -79,6 +196,33 @@ def main() -> None:
         $singletonIndex | Should -BeGreaterOrEqual 0
         $singletonIndex | Should -BeLessThan $sortIndex
         $finderBody | Should -Match 'System\.Collections\.Generic\.HashSet\[string\]'
+    }
+
+    It 'probes unchanged windows with exact first middle and last anchors' {
+        $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+        $helperStart = $source.IndexOf('function Add-SlidingBlockLocations')
+        $helperEnd = $source.IndexOf('function Find-DuplicateLiteralFindings')
+        $helperBody = $source.Substring($helperStart, $helperEnd - $helperStart)
+        $existingStart = $helperBody.IndexOf('if ($ExistingKeysOnly)')
+        $prefixStart = $helperBody.IndexOf('$meaningfulPrefix')
+
+        $existingStart | Should -BeGreaterOrEqual 0
+        $existingStart | Should -BeLessThan $prefixStart
+        $helperBody | Should -Match '\$middleOffset'
+        $helperBody | Should -Match '\$middleMap\.ContainsKey\(\$middleLine\)'
+        $helperBody | Should -Match '\$lastLines\.Contains\(\$lastLine\)'
+        $helperBody | Should -Match 'Dictionary\[string, object\]'
+    }
+
+    It 'reads and trims corpus lines without a per-file PowerShell pipeline' {
+        $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+        $readStart = $source.IndexOf('function Read-TextLines')
+        $readEnd = $source.IndexOf('function Get-FileKind')
+        $readBody = $source.Substring($readStart, $readEnd - $readStart)
+
+        $readBody | Should -Match 'System\.IO\.File\]::ReadAllLines'
+        $readBody | Should -Not -Match 'ForEach-Object'
+        $readBody | Should -Match '\.TrimEnd\(\)'
     }
 '''
     marker = "\n}\n"
