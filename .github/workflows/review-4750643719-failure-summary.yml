@@ -15,51 +15,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_IDS: '88912024167 88912077012'
+      SOURCE_JOB_ID: '88912024167'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Publish bounded current-head failure summaries
+      - name: Publish self-architect failure context
         shell: bash
         run: |
           set -euo pipefail
-          : > combined.log
-          for job_id in ${SOURCE_JOB_IDS}; do
-            api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs"
-            echo "===== JOB ${job_id} =====" >> combined.log
-            curl --fail --silent --show-error --location \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "$api" >> combined.log
-            printf '\n' >> combined.log
-          done
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${SOURCE_JOB_ID}/logs"
+          curl --fail --silent --show-error --location \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api" > source.log
           python3 - <<'PY'
           import re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
-          lines = [ansi.sub('', line) for line in open('combined.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          needles = (
-              '===== JOB',
-              'self-architect',
-              'architect-',
-              'FAIL',
-              'Error:',
-              'AssertionError',
-              'expected',
-              'received',
-              'Test Files',
-              'Tests ',
-              'mutation-contract:',
-              'independent_',
-              '##[error]',
-              'Process completed with exit code',
-          )
-          matched = [(index, line) for index, line in enumerate(lines, start=1)
-                     if any(needle.lower() in line.lower() for needle in needles)]
+          lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
+          selected = []
+          for index, line in enumerate(lines):
+              if '== self-architect lint ==' in line:
+                  selected.extend((offset + 1, lines[offset]) for offset in range(index, min(index + 30, len(lines))))
           with open('summary.md', 'w', encoding='utf-8') as output:
-              output.write('## PR #939 current-head failure summary\n\n')
-              output.write('Source jobs: `88912024167`, `88912077012`\n\n')
+              output.write('## PR #939 self-architect failure context\n\n')
+              output.write('Source job: `88912024167`\n\n')
               output.write('```text\n')
-              for index, line in matched[-240:]:
+              for index, line in selected:
                   output.write(f'{index}:{line[:5000]}\n')
               output.write('```\n')
           PY
