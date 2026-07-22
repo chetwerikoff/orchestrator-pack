@@ -22,18 +22,12 @@ jobs:
         run: |
           set -euo pipefail
           echo "HEAD=$(git rev-parse HEAD)"
-          echo '--- terminalized imports under docs ---'
+          echo 'TERMINALIZED_IMPORTS_BEGIN'
           grep -RIn --include='*.mjs' --include='*.mts' "scripts/pr2-foundation/terminalized" docs || true
-          echo '--- mutation semantic gate custom entries ---'
+          echo 'TERMINALIZED_IMPORTS_END'
+          echo 'CUSTOM_GATES_BEGIN'
           grep -n "custom:" scripts/pr2-foundation/mutation-semantic-gates.ts || true
-          echo '--- current mutation runner apply block ---'
-          sed -n '1,220p' scripts/pr2-foundation/mutation-runner.ts
-          echo '--- current contract runner ---'
-          sed -n '1,180p' scripts/pr2-foundation/contract-test-runner.ts
-          echo '--- migration journal parser ---'
-          sed -n '155,245p' scripts/pr2-foundation/migration-journal.ts
-          echo '--- worker notification admission/success ---'
-          sed -n '145,225p' scripts/pr2-foundation/worker-notification.ts
-          sed -n '455,500p' scripts/pr2-foundation/worker-notification.ts
-          echo '--- claim namespace ---'
-          sed -n '115,150p' scripts/pr2-foundation/worker-nudge-claim-store.ts
+          echo 'CUSTOM_GATES_END'
+          echo 'MUTATION_FILE_COUNT_BEGIN'
+          node --experimental-strip-types -e "import('./scripts/pr2-foundation/mutation-catalog.ts').then(m=>console.log(m.FOUNDATION_MUTATION_CATALOG.length))"
+          echo 'MUTATION_FILE_COUNT_END'
