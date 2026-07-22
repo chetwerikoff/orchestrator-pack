@@ -105,6 +105,10 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     anchor: "return { ok: true, executed: false, reason: 'foundation_inert' };",
     replacement: "return { ok: true, executed: true, reason: 'foundation_inert' };",
   },
+  'AC4:historical-record-unreadable': {
+    anchor: '  return canonicalFinalizeDispatchJournalRecord(\n    journal,\n    deliveryId,',
+    replacement: '  return canonicalFinalizeDispatchJournalRecord(\n    {},\n    deliveryId,',
+  },
 });
 
 function applyTextRecipe(
