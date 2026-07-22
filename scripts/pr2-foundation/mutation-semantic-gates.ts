@@ -214,7 +214,7 @@ const GATES: Record<string, TextGate> = {
   'AC9:cutover-path-modified': baseGate('scripts/review-trigger-reconcile.ps1'),
   'AC9:registry-or-supervisor-modified': baseGate('scripts/orchestrator-wake-supervisor.ps1'),
   'AC9:declaration-snapshot-missing': textGate('scripts/pr2-foundation/real-scope-proof.test.ts', ['resolveLatestCommittedSnapshotAtCommit']),
-  'AC9:declaration-created-after-implementation': textGate('scripts/pr2-foundation/real-scope-proof.test.ts', ['declarationIndex']),
+  'AC9:declaration-created-after-implementation': textGate('scripts/pr2-foundation/real-scope-proof.test.ts', ['--full-history', 'declarationCommitSha']),
   'AC9:addition-root-not-predeclared': textGate('scripts/pr2-foundation/contracts.ts', ['addition_not_declared']),
   'AC9:candidate-tag-self-authorizes': textGate('scripts/pr2-foundation/contracts.ts', ['declarationAllows']),
   'AC9:addition-root-exists-at-base': textGate('scripts/pr2-foundation/contracts.ts', ['addition_root_exists_at_base']),

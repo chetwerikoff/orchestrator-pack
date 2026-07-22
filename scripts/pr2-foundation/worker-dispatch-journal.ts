@@ -1,13 +1,34 @@
+import {
+  AO_PASTE_CHAR_THRESHOLD,
+  admitDispatchJournalRecord as canonicalAdmitDispatchJournalRecord,
+  classifyDeliveryPath,
+  DELIVERY_PATH_PENDING_DRAFT,
+  DELIVERY_PATH_SELF_SUBMITTED,
+  deriveMessageShape,
+  DISPATCH_OUTCOME_DISPATCHED,
+  DISPATCH_OUTCOME_IN_FLIGHT,
+  DISPATCH_OUTCOME_SEND_FAILED,
+  DISPATCH_OUTCOME_UNKNOWN,
+  DRAFT_STATE_AUTO_SUBMITTED,
+  DRAFT_STATE_DRAFT_PRESENT,
+  finalizeDispatchJournalRecord as canonicalFinalizeDispatchJournalRecord,
+} from './terminalized/worker-message-dispatch-observe.ts';
+
+export {
+  AO_PASTE_CHAR_THRESHOLD,
+  classifyDeliveryPath,
+  DELIVERY_PATH_PENDING_DRAFT,
+  DELIVERY_PATH_SELF_SUBMITTED,
+  deriveMessageShape,
+  DISPATCH_OUTCOME_DISPATCHED,
+  DISPATCH_OUTCOME_IN_FLIGHT,
+  DISPATCH_OUTCOME_SEND_FAILED,
+  DISPATCH_OUTCOME_UNKNOWN,
+  DRAFT_STATE_AUTO_SUBMITTED,
+  DRAFT_STATE_DRAFT_PRESENT,
+};
+
 export const CANONICAL_DISPATCH_SOURCE_BLOB_SHA = 'ffae6481d77e47b6bfded236a7f19b1d1fa5dfc5' as const;
-export const AO_PASTE_CHAR_THRESHOLD = 200;
-export const DISPATCH_OUTCOME_DISPATCHED = 'dispatched' as const;
-export const DISPATCH_OUTCOME_SEND_FAILED = 'send_failed' as const;
-export const DISPATCH_OUTCOME_IN_FLIGHT = 'dispatch_in_flight' as const;
-export const DISPATCH_OUTCOME_UNKNOWN = 'dispatch_unknown' as const;
-export const DRAFT_STATE_AUTO_SUBMITTED = 'auto_submitted' as const;
-export const DRAFT_STATE_DRAFT_PRESENT = 'draft_present' as const;
-export const DELIVERY_PATH_PENDING_DRAFT = 'pending-draft' as const;
-export const DELIVERY_PATH_SELF_SUBMITTED = 'self-submitted' as const;
 
 const FENCE_LIFECYCLE_PENDING = 'pending' as const;
 const FENCE_LIFECYCLE_COMPLETED = 'completed' as const;
@@ -150,63 +171,16 @@ function evaluateDispatchJournalAdmission(
   return { ok: true };
 }
 
-export function classifyDeliveryPath(shape: {
-  charLength?: number;
-  lineCount?: number;
-  multiline?: boolean;
-}): NotificationMessageShape['deliveryPath'] {
-  const charLength = Number(shape.charLength ?? 0);
-  const lineCount = Number(shape.lineCount ?? 0);
-  const multiline = Boolean(shape.multiline) || lineCount > 1;
-  return multiline || charLength > AO_PASTE_CHAR_THRESHOLD
-    ? DELIVERY_PATH_PENDING_DRAFT
-    : DELIVERY_PATH_SELF_SUBMITTED;
-}
-
-/** Exact TypeScript port of the canonical deleted docs classifier. */
-export function deriveMessageShape(message: string, senderSessionId = ''): NotificationMessageShape {
-  const text = String(message ?? '');
-  const prefix = senderSessionId ? `[from ${senderSessionId}] ` : '';
-  const effective = prefix ? `${prefix}${text}` : text;
-  const lineCount = effective.length === 0 ? 0 : effective.split('\n').length;
-  return {
-    charLength: effective.length,
-    lineCount,
-    multiline: lineCount > 1,
-    deliveryPath: classifyDeliveryPath({
-      charLength: effective.length,
-      lineCount,
-      multiline: lineCount > 1,
-    }),
-  };
-}
-
-/**
- * Exact bounded admission semantics ported from docs/worker-message-dispatch-observe.mjs
- * blob CANONICAL_DISPATCH_SOURCE_BLOB_SHA before that estate row is terminalized.
- */
+/** Typed facade over the terminalized canonical admission implementation. */
 export function admitDispatchJournalRecord(
   journal: DispatchJournal,
   record: DispatchJournalRecord,
   nowMs = Date.now(),
 ): CanonicalAdmitResult {
-  let nextJournal = compactDispatchJournal(journal ?? {}, nowMs).journal;
-  const pendingRecord = withPendingDispatchFence(record);
-  const admission = evaluateDispatchJournalAdmission(nextJournal, pendingRecord);
-  if (!admission.ok) {
-    return {
-      ok: false,
-      reason: admission.reason,
-      backpressure: Boolean(admission.backpressure),
-      journal: nextJournal,
-    };
-  }
-  const deliveryId = trimString(pendingRecord.deliveryId);
-  nextJournal = { ...nextJournal, [deliveryId]: pendingRecord };
-  return { ok: true, journal: nextJournal, record: pendingRecord };
+  return canonicalAdmitDispatchJournalRecord(journal, record, nowMs) as CanonicalAdmitResult;
 }
 
-/** Exact canonical finalization, fence transition, and terminal compaction semantics. */
+/** Typed facade over the terminalized canonical finalization implementation. */
 export function finalizeDispatchJournalRecord(
   journal: DispatchJournal,
   deliveryId: string,
@@ -214,16 +188,11 @@ export function finalizeDispatchJournalRecord(
   nowMs = Date.now(),
   draftState = '',
 ): CanonicalFinalizeResult {
-  const nextJournal = { ...(journal ?? {}) };
-  const key = trimString(deliveryId);
-  const current = nextJournal[key];
-  if (!key || !current || typeof current !== 'object' || Array.isArray(current)) {
-    return { ok: false, reason: 'not_found', journal: nextJournal };
-  }
-  let record = advanceDispatchFenceLifecycle(current as Record<string, unknown>, dispatchOutcome);
-  const resolvedDraftState = trimString(draftState);
-  if (resolvedDraftState) record = { ...record, draftState: resolvedDraftState };
-  nextJournal[key] = record;
-  const compacted = compactDispatchJournal(nextJournal, nowMs);
-  return { ok: true, journal: compacted.journal, record, evicted: !compacted.journal[key] };
+  return canonicalFinalizeDispatchJournalRecord(
+    journal,
+    deliveryId,
+    dispatchOutcome,
+    nowMs,
+    draftState,
+  ) as CanonicalFinalizeResult;
 }

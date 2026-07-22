@@ -19,7 +19,7 @@ import {
 } from '../../../docs/review-handoff-wake-admission.mjs';
 import { mapEngineStateToBoardStatus } from './review-producer-contract.ts';
 
-export interface AoWebhookEvent {
+export type AoWebhookEvent = Record<string, unknown> & {
   id?: string;
   type?: string;
   priority?: string;
@@ -28,8 +28,7 @@ export interface AoWebhookEvent {
   timestamp?: string;
   message?: string;
   data?: Record<string, unknown>;
-  [key: string]: unknown;
-}
+};
 
 export interface AoWebhookBody {
   type?: string;

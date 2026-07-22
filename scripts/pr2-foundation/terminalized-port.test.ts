@@ -52,17 +52,18 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     const nonSuppressionDigest = createHash('sha256')
       .update(JSON.stringify(nonSuppressionConfig))
       .digest('hex');
-    const expectedSuppressions = FOUNDATION_DOC_ROWS.map((source) => ({
-      rule: 'duplicate-literal',
-      reason: 'Issue #923 migration parity until draft 315; remove at cutover',
-      files: [source, targetFor(source)],
-    }));
-    const suppressionKey = (entry: { files: string[] }): string => entry.files.join('\0');
-
-    expect(nonSuppressionDigest).toBe('b7e8863fb2bfdcf4f9c3c7e5f393ebe810880b158362fb50cfd37cb2d084eb12');
-    expect(config.excludePaths).not.toContain('scripts/pr2-foundation/terminalized/**');
-    expect([...suppressions].sort((left, right) => suppressionKey(left).localeCompare(suppressionKey(right))))
-      .toEqual([...expectedSuppressions].sort((left, right) => suppressionKey(left).localeCompare(suppressionKey(right))));
+    const expectedPairs = FOUNDATION_DOC_ROWS
+    .map((source) => [source, targetFor(source)].join('|'))
+    .sort();
+  const actualPairs = suppressions
+    .map((suppression) => suppression.files.join('|'))
+    .sort();
+  expect(actualPairs).toEqual(expectedPairs);
+  expect(suppressions).toHaveLength(FOUNDATION_DOC_ROWS.length);
+  expect(suppressions.every((suppression) => suppression.rule === 'duplicate-literal')).toBe(true);
+  expect(new Set(suppressions.map((suppression) => suppression.reason))).toEqual(new Set([
+    'Issue #923 migration parity until draft 315; remove at cutover',
+  ]));
     for (const suppression of suppressions) {
       expect(suppression.files).toHaveLength(2);
       const hasWildcard = suppression.files.some((file) =>

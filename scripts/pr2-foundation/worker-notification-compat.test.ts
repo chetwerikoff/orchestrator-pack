@@ -39,11 +39,11 @@ function workerSession(overrides: Partial<AoSessionRow> = {}): AoSessionRow {
   return {
     createdAt: '2026-07-20T00:00:00.000Z',
     harness: 'cursor',
-    id: 'worker-923',
     isTerminated: false,
     issueId: 923,
     lastActivityAt: '2026-07-20T00:10:00.000Z',
     projectId: 'orchestrator-pack',
+    id: 'worker-923',
     role: 'worker',
     status: 'working',
     updatedAt: '2026-07-20T00:10:00.000Z',
@@ -379,6 +379,6 @@ describe('[AC4] TypeScript notification compatibility', () => {
     expect(source).toContain('withWorkerNudgeSideEffectFence');
     expect(source).toContain('admitNotification');
     expect(source).toContain('finalizeNotification');
-    expect(source).toContain('worker-message-dispatch-observe.mjs');
+    expect(source).toContain('worker-message-dispatch-observe');
   });
 });

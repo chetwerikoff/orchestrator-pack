@@ -188,12 +188,13 @@ export function resolveWorkerTargetFromPrClaim(input: {
   if (!claim || ownerSessionId !== requestedSessionId || !targetId || !targetGeneration) {
     return { ok: false, reason: 'pr_claim_unresolved', verifiable: false };
   }
+  const resolvedWorkerTarget = `${targetId}:${targetGeneration}`;
   return {
     ok: true,
     verifiable: true,
     targetId,
     targetGeneration,
-    workerTarget: `${targetId}:${targetGeneration}`,
+    workerTarget: resolvedWorkerTarget,
     logicalWorkerId: targetId,
     sessionGeneration: targetGeneration,
     rawSessionId: requestedSessionId,

@@ -201,18 +201,22 @@ describe('[AC3] typed config authority', () => {
 
 describe('[AC4] pure TypeScript journal-compatible notification', () => {
   it('contains no PowerShell and invokes the canonical dispatch journal CLI', () => {
-    const files = [
-      'scripts/lib/pack-review-worker-notification.ts',
-      'scripts/pr2-foundation/worker-notification.ts',
-      'scripts/pr2-foundation/worker-dispatch-journal.ts',
-    ];
-    const source = files.map((file) => readFileSync(path.join(repoRoot, file), 'utf8')).join('\n');
-    expect(source).not.toMatch(/\bpwsh\b/i);
-    expect(source).not.toMatch(/\.ps1\b/i);
-    expect(source).toContain('worker-message-dispatch-observe.mjs');
-    expect(source).toContain('admitDispatchJournalRecord');
-    expect(source).toContain('finalizeDispatchJournalRecord');
-  });
+  const source = [
+    'scripts/lib/pack-review-worker-notification.ts',
+    'scripts/pr2-foundation/worker-notification.ts',
+    'scripts/pr2-foundation/worker-dispatch-journal.ts',
+  ].map((file) => readFileSync(path.join(repoRoot, file), 'utf8')).join('\n');
+  for (const forbidden of [/\bpwsh\b/i, /\.ps1\b/i]) {
+    expect(source).not.toMatch(forbidden);
+  }
+  for (const required of [
+    'worker-message-dispatch-observe',
+    'admitDispatchJournalRecord',
+    'finalizeDispatchJournalRecord',
+  ]) {
+    expect(source).toContain(required);
+  }
+});
 });
 
 describe('[AC5] synthetic migration journal', () => {

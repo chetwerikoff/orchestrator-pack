@@ -150,6 +150,7 @@ describe('[AC9] real committed declaration and base-to-head scope proof', () => 
 
     const declarationCommits = git([
       'log',
+      '--full-history',
       '--diff-filter=A',
       '--format=%H',
       `${declarationBaseSha}..HEAD`,
