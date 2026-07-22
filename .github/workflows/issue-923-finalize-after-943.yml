@@ -1,0 +1,133 @@
+name: issue-923-finalize-after-943
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: issue-923-finalize-after-943
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: agent/issue-923-pr2-foundation
+      TARGET_HEAD: 4901a274d1f6ec980d2974f3f729a26dcd1cc751
+      MAIN_HEAD: 8d43d6afc6b15e82a19be4ba243b1ad445eb0b86
+      FINAL_PATCH_COMMIT: dd1916d6650bea279f49eb0e3c0e34f08932475e
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-923-pr2-foundation
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Synchronize verified prerequisite and apply bounded final patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
+          git fetch origin main "$FINAL_PATCH_COMMIT"
+          test "$(git rev-parse origin/main)" = "$MAIN_HEAD"
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git merge --no-edit origin/main
+          test -z "$(git status --porcelain)"
+
+          git show "$FINAL_PATCH_COMMIT:.github/workflows/issue-923-final-fix-publisher.yml" > "$RUNNER_TEMP/final-publisher.yml"
+          RUNNER_TEMP="$RUNNER_TEMP" python3 <<'PY'
+          from pathlib import Path
+          import os
+          import textwrap
+
+          workflow = Path(os.environ['RUNNER_TEMP'], 'final-publisher.yml').read_text(encoding='utf-8').splitlines()
+          start = next(i for i, line in enumerate(workflow) if line.strip() == "python3 <<'PY'") + 1
+          end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
+          script = textwrap.dedent('\n'.join(workflow[start:end])) + '\n'
+          exec(compile(script, '<issue-923-final-patch>', 'exec'), {'__name__': '__main__'})
+
+          path = Path('scripts/pr2-foundation/worker-notification-compat.test.ts')
+          source = path.read_text(encoding='utf-8')
+          old = "    expect(source).toContain('worker-message-dispatch-observe.mjs');\n"
+          new = "    expect(source).toContain('worker-message-dispatch-observe');\n"
+          count = source.count(old)
+          if count != 1:
+              raise SystemExit(f'canonical assertion match count: {count}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+
+          expected="$RUNNER_TEMP/expected-paths"
+          actual="$RUNNER_TEMP/actual-paths"
+          cat > "$expected" <<'EOF'
+          scripts/pr2-foundation/foundation.test.ts
+          scripts/pr2-foundation/mutation-semantic-gates.ts
+          scripts/pr2-foundation/mutation-target-check.ts
+          scripts/pr2-foundation/real-scope-proof.test.ts
+          scripts/pr2-foundation/terminalized-port.test.ts
+          scripts/pr2-foundation/terminalized/orchestrator-wake-filter.ts
+          scripts/pr2-foundation/worker-dispatch-journal.ts
+          scripts/pr2-foundation/worker-notification-compat.test.ts
+          scripts/pr2-foundation/worker-nudge-gate.ts
+          EOF
+          sort -o "$expected" "$expected"
+          git diff --name-only | sort > "$actual"
+          diff -u "$expected" "$actual"
+          git diff --check
+
+          git add --pathspec-from-file="$expected"
+          git commit -m 'fix: close final Issue 923 review gaps'
+          test -z "$(git status --porcelain)"
+          git diff --check origin/main...HEAD
+
+      - name: Verify exact finalized head
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --include=dev
+          npm run check:node-major
+          npx tsc --project tsconfig.base.json --noEmit
+          OPK_VITEST_HARNESS=1 npx vitest run \
+            scripts/pr2-foundation/foundation.test.ts \
+            scripts/pr2-foundation/terminalized-port.test.ts \
+            scripts/pr2-foundation/mutation-catalog.test.ts \
+            scripts/pr2-foundation/mutation-semantic-gates.test.ts \
+            scripts/pr2-foundation/real-scope-proof.test.ts \
+            scripts/pr2-foundation/worker-notification-compat.test.ts
+          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1
+          pwsh -NoProfile -File ./scripts/verify.ps1
+          pwsh -NoProfile -File ./scripts/check-reusable.ps1
+
+          started="$(date +%s)"
+          set +e
+          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
+            -Strict \
+            -BaseRef origin/main \
+            -HeadRef HEAD | tee "$RUNNER_TEMP/self-architect.log"
+          lint_status=${PIPESTATUS[0]}
+          set -e
+          elapsed=$(( $(date +%s) - started ))
+          echo "final_head=$(git rev-parse HEAD)"
+          echo "self_architect_status=$lint_status"
+          echo "self_architect_elapsed_seconds=$elapsed"
+          test "$lint_status" -eq 0
+          grep -F 'No findings.' "$RUNNER_TEMP/self-architect.log"
+          grep -F 'Summary: strict=0 warning=0' "$RUNNER_TEMP/self-architect.log"
+          test "$elapsed" -lt 600
+
+      - name: Push verified finalized head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse origin/$TARGET_BRANCH)" = "$TARGET_HEAD"
+          git push origin HEAD:"$TARGET_BRANCH"
