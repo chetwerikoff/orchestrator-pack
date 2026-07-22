@@ -1,5 +1,6 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 
+import { existsSync } from 'node:fs';
 import {
   applyOpkVitestHarnessEnv,
   cleanupHarnessRoot,
@@ -40,7 +41,7 @@ async function main(): Promise<void> {
     process.stderr.write(`${failingTestId}: ${describeError(error)}\n`);
     process.exitCode = 1;
   } finally {
-    if (harnessRoot) {
+    if (harnessRoot && existsSync(harnessRoot)) {
       try {
         cleanupHarnessRoot(harnessRoot);
       } catch (error) {
