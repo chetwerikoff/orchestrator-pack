@@ -45,7 +45,6 @@ jobs:
           matched = [(index, line) for index, line in enumerate(lines, start=1)
                      if any(needle.lower() in line.lower() for needle in needles)]
           with open('summary.md', 'w', encoding='utf-8') as output:
-              output.write('<!-- pr939-mutation-failure-summary -->\n')
               output.write('## PR #939 mutation failure summary\n\n')
               output.write('Source job: `88896109807`\n\n')
               output.write('```text\n')
@@ -53,4 +52,4 @@ jobs:
                   output.write(f'{index}:{line[:5000]}\n')
               output.write('```\n')
           PY
-          gh pr comment -R "$GITHUB_REPOSITORY" 940 --body-file summary.md
+          gh pr edit -R "$GITHUB_REPOSITORY" 940 --body-file summary.md
