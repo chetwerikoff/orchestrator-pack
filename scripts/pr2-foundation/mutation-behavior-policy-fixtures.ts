@@ -66,15 +66,13 @@ function cleanupFailClosed(): void {
 
     const swap = path.join(ownedRoot, 'swap');
     mkdirSync(swap, { recursive: true });
-    const before = statSync(swap);
-    rmSync(swap, { recursive: true, force: true });
-    mkdirSync(swap, { recursive: true });
+    const current = statSync(swap);
     const swapped = cleanupOwnedFixtureRoot({
       target: swap,
       ownedRoot,
       enabled: true,
       platform: 'linux',
-      beforeIdentity: { dev: before.dev, ino: before.ino },
+      beforeIdentity: { dev: current.dev, ino: current.ino + 1 },
     });
     invariant(!swapped.ok && swapped.reason === 'swap_after_check_delete_refused', 'swap_after_check_deleted');
     invariant(existsSync(swap), 'swapped_target_deleted');
