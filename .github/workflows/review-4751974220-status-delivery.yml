@@ -39,7 +39,7 @@ jobs:
           if (String(review.id) !== process.env.REVIEW_ID || review.commit_id !== expectedHead) {
             throw new Error(`review/head mismatch: review=${review.id} commit=${review.commit_id}`);
           }
-          const body = String(review.body ?? '');
+          const body = String(review.body ?? '').replace(/\*/g, '');
           if (!/Verdict:\s*clean\s*[—-]\s*0 findings/i.test(body)) {
             throw new Error('review is not an exact clean zero-finding verdict');
           }
@@ -49,5 +49,5 @@ jobs:
             -f context='orchestrator-pack/pack-review' \
             -f description="Pack review clean: review ${REVIEW_ID}, 0 findings"
           ./scripts/gh api "repos/${GITHUB_REPOSITORY}/commits/${TARGET_HEAD}/status" \
-            --jq '.statuses[] | select(.context=="orchestrator-pack/pack-review") | {state,description,created_at} ' \
+            --jq '.statuses[] | select(.context=="orchestrator-pack/pack-review") | {state,description,created_at}' \
             | head -n 1
