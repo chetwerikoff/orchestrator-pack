@@ -89,7 +89,7 @@ jobs:
           external_path = Path('scripts/pr2-foundation/mutation-external-ci.test.ts')
           external = external_path.read_text(encoding='utf-8')
           describe_anchor = 'describe('
-          describe_replacement = "describe.skipIf(process.env.OPK_VITEST_PRE_TOPOLOGY_MEASUREMENT === '1')('
+          describe_replacement = "describe.skipIf(process.env.OPK_VITEST_PRE_TOPOLOGY_MEASUREMENT === '1')("
           if external.count(describe_anchor) != 1:
               raise SystemExit(f'mutation external describe anchor cardinality: {external.count(describe_anchor)}')
           external_path.write_text(external.replace(describe_anchor, describe_replacement, 1), encoding='utf-8')
