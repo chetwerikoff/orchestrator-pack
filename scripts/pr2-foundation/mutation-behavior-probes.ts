@@ -182,15 +182,15 @@ addProbe(['AC4:powershell-child'], () => requireSource(
 addProbe(['AC4:historical-record-unreadable'], () => runBehaviorFixture('historical-journal-readable'));
 addProbe(['AC4:duplicate-send-unaccounted'], () => requireSource(
   'scripts/pr2-foundation/worker-notification.ts',
-  ['journal_duplicate_no_op'],
+  ["if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };"],
 ));
 addProbe(['AC4:run-linkage-missing'], () => requireSource(
   'scripts/lib/pack-review-delivery.ts',
-  ['reviewRunId'],
+  ['reviewRunId: options.run.id'],
 ));
 addProbe(['AC4:channel-outcome-corruption'], () => requireSource(
   'scripts/lib/pack-review-delivery.ts',
-  ['workerNotification'],
+  ["recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));"],
 ));
 
 addProbe(['AC5:journal-key-omitted'], () => runBehaviorFixture('migration-journal-key-required'));
