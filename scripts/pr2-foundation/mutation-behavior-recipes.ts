@@ -105,6 +105,10 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     anchor: "return { ok: true, executed: false, reason: 'foundation_inert' };",
     replacement: "return { ok: true, executed: true, reason: 'foundation_inert' };",
   },
+  'AC4:notify-before-journal': {
+    anchor: '    const inspected = await inspectNotification({',
+    replacement: '    await runProcess({ command: config.aoPath, args: [], allowEmptyStdout: true, timeoutMs: 1 });\n    const inspected = await inspectNotification({',
+  },
   'AC4:historical-record-unreadable': {
     anchor: '  return canonicalFinalizeDispatchJournalRecord(\n    journal,\n    deliveryId,',
     replacement: '  return canonicalFinalizeDispatchJournalRecord(\n    {},\n    deliveryId,',
@@ -137,7 +141,154 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     anchor: '  for (const liveRoot of liveRootBoundaries(liveStoreRoots)) {',
     replacement: '  for (const liveRoot of ([] as string[])) {',
   },
+  'AC6:catalog-surface-omitted': {
+    anchor: "    if (!candidateById.has(required.id)) return { ok: false, reason: 'catalog_surface_omitted', surface: required.id };",
+    replacement: "    if (false) return { ok: false, reason: 'catalog_surface_omitted', surface: required.id };",
+  },
+  'AC6:candidate-catalog-downgrade': {
+    anchor: '    if (CLASS_RANK[next.classification] < CLASS_RANK[base.classification]) {',
+    replacement: '    if (false) {',
+  },
+  'AC6:symlink-cleanup': {
+    anchor: "  if (metadata.isSymbolicLink()) return { ok: false, reason: 'symlink_cleanup_refused' };",
+    replacement: "  if (false) return { ok: false, reason: 'symlink_cleanup_refused' };",
+  },
+  'AC6:swap-after-check-delete': {
+    anchor: '  if (input.beforeIdentity\n    && (current.dev !== input.beforeIdentity.dev || current.ino !== input.beforeIdentity.ino)) {',
+    replacement: '  if (false) {',
+  },
+  'AC6:unsupported-platform-cleanup-enabled': {
+    anchor: '  if (!platformSupportsDestructiveCleanup({ platform: input.platform, wslInterop: input.wslInterop })) {',
+    replacement: '  if (false) {',
+  },
+  'AC8:suite-self-attests': {
+    anchor: "resolve('scripts/pr2-foundation/mutation-semantic-check.ts')",
+    replacement: "resolve('scripts/pr2-foundation/mutation-semantic-gates.ts')",
+  },
+  'AC8:artifact-hash-delta-missing': {
+    anchor: '  if (artifactHashAfter === artifactHashBefore) {',
+    replacement: '  if (false) {',
+  },
+  'AC8:failing-test-identity-missing': {
+    anchor: '    if (negative.ok || !negativeText.includes(binding.failingTestId)) {',
+    replacement: '    if (false) {',
+  },
+  'AC8:restore-hash-mismatch': {
+    anchor: '  if (restoredHash !== artifactHashBefore) {',
+    replacement: '  if (false) {',
+  },
+  'AC8:mutation-id-extra': {
+    anchor: 'export const FOUNDATION_MUTATION_CATALOG: readonly MutationBinding[] = Object.freeze([',
+    replacement: "export const FOUNDATION_MUTATION_CATALOG: readonly MutationBinding[] = Object.freeze([\n  { ac: 'AC1', mutationId: 'unexpected-extra', artifactPath: 'scripts/pr2-foundation/scheduler.ts', strategy: 'bounded-semantic', failingTestId: 'mutation-contract:AC1:unexpected-extra' },",
+  },
+  'AC8:mutation-id-missing': {
+    anchor: "    'registry-changed': 'scripts/orchestrator-side-process-registry.json',\n",
+    replacement: '',
+  },
+  'AC9:manifest-self-authorizes': {
+    anchor: '  const exactExisting = new Set<string>([...EXACT_EXISTING_SCOPE_PATHS, ...FOUNDATION_DOC_ROWS].map(normalize));',
+    replacement: "  const exactExisting = new Set<string>([...EXACT_EXISTING_SCOPE_PATHS, ...FOUNDATION_DOC_ROWS, 'README.md'].map(normalize));",
+  },
+  'AC9:addition-root-not-predeclared': {
+    anchor: '      if (!declarationAllows(changed, declaration)) {',
+    replacement: '      if (false) {',
+  },
+  'AC9:candidate-tag-self-authorizes': {
+    anchor: '  const normalized = normalize(path);\n  if (declaration.declared_paths.map(normalize).includes(normalized)) return true;',
+    replacement: "  const normalized = normalize(path);\n  if (normalized.startsWith('candidate/')) return true;\n  if (declaration.declared_paths.map(normalize).includes(normalized)) return true;",
+  },
+  'AC9:addition-root-exists-at-base': {
+    anchor: '    if (base.has(addedPath)) return { ok: false, reason: `addition_root_exists_at_base:${addedPath}` };',
+    replacement: '    if (false) return { ok: false, reason: `addition_root_exists_at_base:${addedPath}` };',
+  },
+  'AC9:symlink-mode': {
+    anchor: "    if (mode === '120000') return { ok: false, reason: `symlink_mode:${changed}` };",
+    replacement: "    if (false) return { ok: false, reason: `symlink_mode:${changed}` };",
+  },
+  'AC9:gitlink-mode': {
+    anchor: "    if (mode === '160000') return { ok: false, reason: `gitlink_mode:${changed}` };",
+    replacement: "    if (false) return { ok: false, reason: `gitlink_mode:${changed}` };",
+  },
+  'AC9:multi-revert-plan': {
+    anchor: "  if (input.revertCommitCount !== 1) return { ok: false, reason: 'multi_revert_plan' };",
+    replacement: "  if (false) return { ok: false, reason: 'multi_revert_plan' };",
+  },
+  'AC9:new-powershell-logic-added': {
+    anchor: "    if (changed.endsWith('.ps1') && added.has(changed)) {",
+    replacement: '    if (false) {',
+  },
+  'AC9:package-json-overreach': {
+    anchor: 'npm run check:node-major --silent && node --experimental-strip-types scripts/pr2-foundation/contract-test-runner.ts',
+    replacement: 'npm run check:node-major --silent && node --experimental-strip-types scripts/pr2-foundation/contract-test-runner.ts && echo overreach',
+  },
 });
+
+const ESTATE_MUTATION_KEYS = new Set([
+  'AC7:denominator-read-from-head',
+  'AC7:foundation-row-omitted',
+  'AC7:cutover-row-deleted',
+  'AC7:cutover-owner-generic',
+  'AC7:split-not-sixteen-six',
+  'AC7:unrelated-manifest-row-changed',
+]);
+
+function applyEstateMutation(key: string, source: string | null): BoundedSemanticMutation {
+  if (source === null) throw new Error(`mutation_target_missing:${key}`);
+  const document = JSON.parse(source) as { rows?: Array<Record<string, unknown>> };
+  const rows = document.rows ?? [];
+  const foundationPath = 'docs/ao-0-10-review-api.mjs';
+  const cutoverPath = 'scripts/lib/Get-ReactionMessagesFromYaml.ps1';
+  if (key === 'AC7:denominator-read-from-head') {
+    const row = rows.find((candidate) => candidate.path === foundationPath);
+    if (row) rows.push({ ...row });
+  } else if (key === 'AC7:foundation-row-omitted') {
+    document.rows = rows.filter((candidate) => candidate.path !== foundationPath);
+  } else if (key === 'AC7:cutover-row-deleted') {
+    document.rows = rows.filter((candidate) => candidate.path !== cutoverPath);
+  } else if (key === 'AC7:cutover-owner-generic') {
+    const row = rows.find((candidate) => candidate.path === cutoverPath);
+    if (row) row.replacementOwner = 'generic-owner';
+  } else if (key === 'AC7:split-not-sixteen-six') {
+    const row = rows.find((candidate) => candidate.path === foundationPath);
+    if (row) row.terminalState = 'owned-by-PR-2-cutover';
+  } else {
+    const relevant = new Set([foundationPath, cutoverPath]);
+    const row = rows.find((candidate) => typeof candidate.path === 'string' && !relevant.has(String(candidate.path)));
+    if (row) row.reason = `${String(row.reason ?? '')}:mutation-overreach`;
+  }
+  const fallback = buildBoundedSemanticMutation(key, source);
+  return {
+    artifactPath: fallback.artifactPath,
+    kind: 'replace',
+    content: `${JSON.stringify(document, null, 2)}\n`,
+    affectedOccurrences: 1,
+    anchor: key,
+  };
+}
+
+const LANE_MUTATION_KEYS = new Set([
+  'AC9:test-classification-missing',
+  'AC9:lane-config-overreach',
+]);
+
+function applyLaneMutation(key: string, source: string | null): BoundedSemanticMutation {
+  if (source === null) throw new Error(`mutation_target_missing:${key}`);
+  const document = JSON.parse(source) as { classification?: Record<string, string> };
+  const classification = document.classification ?? {};
+  if (key === 'AC9:test-classification-missing') {
+    delete classification['scripts/pr2-foundation/mutation-semantic-gates.test.ts'];
+  } else {
+    classification['scripts/pr2-foundation/unexpected.test.ts'] = 'light';
+  }
+  const fallback = buildBoundedSemanticMutation(key, source);
+  return {
+    artifactPath: fallback.artifactPath,
+    kind: 'replace',
+    content: `${JSON.stringify(document, null, 2)}\n`,
+    affectedOccurrences: 1,
+    anchor: key,
+  };
+}
 
 function applyTextRecipe(
   key: string,
@@ -163,12 +314,16 @@ export function buildBehavioralMutation(
   key: string,
   source: string | null,
 ): BoundedSemanticMutation {
+  if (ESTATE_MUTATION_KEYS.has(key)) return applyEstateMutation(key, source);
+  if (LANE_MUTATION_KEYS.has(key)) return applyLaneMutation(key, source);
   const recipe = EXECUTABLE_RECIPES[key];
   return recipe
     ? applyTextRecipe(key, source, recipe)
     : buildBoundedSemanticMutation(key, source);
 }
 
-export const EXECUTABLE_BEHAVIOR_MUTATION_KEYS = Object.freeze(
-  Object.keys(EXECUTABLE_RECIPES).sort(),
-);
+export const EXECUTABLE_BEHAVIOR_MUTATION_KEYS = Object.freeze([
+  ...Object.keys(EXECUTABLE_RECIPES),
+  ...ESTATE_MUTATION_KEYS,
+  ...LANE_MUTATION_KEYS,
+].sort());
