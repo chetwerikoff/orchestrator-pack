@@ -5,43 +5,160 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  actions: read
-  contents: read
-  pull-requests: write
+  contents: write
 
 jobs:
-  extract:
+  apply:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     env:
-      SOURCE_JOB_ID: '88912024167'
-      GH_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: agent/issue-923-pr2-foundation
+      EXPECTED_HEAD: b8b59b59b442344281fc37a133fc6b124ed29a03
     steps:
-      - name: Publish self-architect failure context
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+      - name: Centralize session fixtures
         shell: bash
         run: |
           set -euo pipefail
-          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${SOURCE_JOB_ID}/logs"
-          curl --fail --silent --show-error --location \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$api" > source.log
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           python3 - <<'PY'
-          import re
-          ansi = re.compile(r'\x1b\[[0-9;]*m')
-          lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          selected = []
-          for index, line in enumerate(lines):
-              if '== self-architect lint ==' in line:
-                  selected.extend((offset + 1, lines[offset]) for offset in range(index, min(index + 30, len(lines))))
-          with open('summary.md', 'w', encoding='utf-8') as output:
-              output.write('## PR #939 self-architect failure context\n\n')
-              output.write('Source job: `88912024167`\n\n')
-              output.write('```text\n')
-              for index, line in selected:
-                  output.write(f'{index}:{line[:5000]}\n')
-              output.write('```\n')
+          from pathlib import Path
+
+          helper = Path('scripts/pr2-foundation/binding-test-fixtures.ts')
+          helper.write_text("""import type { AoSessionRow } from './binding.ts';
+
+const SESSION_TIMES = Object.freeze({
+  createdAt: '2026-07-20T00:00:00.000Z',
+  activityAt: '2026-07-20T00:10:00.000Z',
+});
+
+export function makeAoSession(overrides: Partial<AoSessionRow> = {}): AoSessionRow {
+  const base: AoSessionRow = {
+    createdAt: SESSION_TIMES.createdAt,
+    harness: 'cursor', id: 'session-923', isTerminated: false, issueId: 923,
+    lastActivityAt: SESSION_TIMES.activityAt,
+    projectId: 'orchestrator-pack', role: 'worker', status: 'working',
+    updatedAt: SESSION_TIMES.activityAt,
+  };
+  return { ...base, ...overrides };
+}
+""", encoding='utf-8')
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}')
+              file.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace_once(
+              'scripts/pr2-foundation/foundation.test.ts',
+              "} from './binding.ts';\n",
+              "} from './binding.ts';\nimport { makeAoSession } from './binding-test-fixtures.ts';\n",
+          )
+          replace_once(
+              'scripts/pr2-foundation/foundation.test.ts',
+              """function session(overrides: Partial<AoSessionRow> = {}): AoSessionRow {
+  return {
+    createdAt: '2026-07-20T00:00:00.000Z',
+    harness: 'cursor',
+    id: 'session-923',
+    isTerminated: false,
+    issueId: 923,
+    lastActivityAt: '2026-07-20T00:10:00.000Z',
+    projectId: 'orchestrator-pack',
+    role: 'worker',
+    status: 'working',
+    updatedAt: '2026-07-20T00:10:00.000Z',
+    ...overrides,
+  };
+}
+""",
+              """function session(overrides: Partial<AoSessionRow> = {}): AoSessionRow {
+  return makeAoSession(overrides);
+}
+""",
+          )
+
+          replace_once(
+              'scripts/pr2-foundation/binding-cache.test.ts',
+              "} from './binding.ts';\n",
+              "} from './binding.ts';\nimport { makeAoSession } from './binding-test-fixtures.ts';\n",
+          )
+          replace_once(
+              'scripts/pr2-foundation/binding-cache.test.ts',
+              """function session(): AoSessionRow {
+  return {
+    createdAt: '2026-07-20T00:00:00.000Z',
+    harness: 'cursor',
+    id: 'session-current',
+    isTerminated: false,
+    issueId: 923,
+    lastActivityAt: '2026-07-20T00:10:00.000Z',
+    projectId: 'orchestrator-pack',
+    role: 'worker',
+    status: 'working',
+    updatedAt: '2026-07-20T00:10:00.000Z',
+  };
+}
+""",
+              """function session(): AoSessionRow {
+  return makeAoSession({ id: 'session-current' });
+}
+""",
+          )
+
+          replace_once(
+              'scripts/pr2-foundation/mutation-behavior-fixtures.ts',
+              "} from './binding.ts';\n",
+              "} from './binding.ts';\nimport { makeAoSession } from './binding-test-fixtures.ts';\n",
+          )
+          replace_once(
+              'scripts/pr2-foundation/mutation-behavior-fixtures.ts',
+              """function session(): AoSessionRow {
+  return {
+    createdAt: '2026-07-20T00:00:00.000Z',
+    harness: 'cursor',
+    id: 'session-923',
+    isTerminated: false,
+    issueId: 923,
+    lastActivityAt: '2026-07-20T00:10:00.000Z',
+    projectId: 'orchestrator-pack',
+    role: 'worker',
+    status: 'working',
+    updatedAt: '2026-07-20T00:10:00.000Z',
+  };
+}
+""",
+              """function session(): AoSessionRow {
+  return makeAoSession();
+}
+""",
+          )
           PY
-          gh pr edit -R "$GITHUB_REPOSITORY" 940 --body-file summary.md
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: pwsh -NoLogo -NoProfile -File scripts/lint-self-architect.ps1 -Mode strict
+      - run: node scripts/run-vitest-with-harness.mjs run scripts/pr2-foundation/mutation-semantic-gates.test.ts
+      - name: Commit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/pr2-foundation/binding-test-fixtures.ts \
+            scripts/pr2-foundation/foundation.test.ts \
+            scripts/pr2-foundation/binding-cache.test.ts \
+            scripts/pr2-foundation/mutation-behavior-fixtures.ts
+          git commit -m "test: centralize foundation session fixtures"
+          git push origin "HEAD:${TARGET_BRANCH}"
