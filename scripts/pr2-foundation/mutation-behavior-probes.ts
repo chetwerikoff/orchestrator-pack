@@ -139,12 +139,26 @@ addProbe(['AC1:legacy-starter-disabled'], () => assertDigest('scripts/review-tri
 addProbe(['AC1:non-notification-runtime-delta'], () => assertDigest('scripts/pack-review-runner.ts'));
 
 addProbe(['AC2:raw-live-capture-committed'], () => assertAbsent('tests/external-output-references/captures/issue-923/raw-live.json'));
+addProbe(['AC2:capture-metadata-secret-scan-omitted'], () => runBehaviorFixture('capture-secret-rejected'));
+addProbe(['AC2:schema-shape-changed'], () => runBehaviorFixture('schema-exact'));
+addProbe([
+  'AC2:preflight-missing',
+  'AC2:preflight-empty-fleet-accepted',
+  'AC2:preflight-version-unverifiable-accepted',
+], () => runBehaviorFixture('preflight-fail-closed'));
 addProbe([
   'AC2:hypothetical-prs-or-branch-trust',
   'AC2:pr-body-reference-trusted',
 ], () => runBehaviorFixture('pr-body-not-trusted'));
 addProbe(['AC2:draft-candidate-accepted'], () => runBehaviorFixture('draft-rejected'));
 addProbe(['AC2:missing-draft-bit-accepted'], () => runBehaviorFixture('missing-draft-rejected'));
+addProbe([
+  'AC2:ambiguous-live-issue-index-zero',
+  'AC2:zero-candidate-bound',
+  'AC2:multiple-candidates-bound',
+  'AC2:bound-head-not-recorded',
+], () => runBehaviorFixture('binding-fail-closed'));
+addProbe(['AC2:cross-repo-candidate-accepted'], () => runBehaviorFixture('cross-repo-rejected'));
 addProbe(['AC2:per-session-detail-call'], () => requireSource(
   'scripts/pr2-foundation/worker-notification-target.ts',
   ["args: ['session', 'ls', '--json']"],
@@ -161,6 +175,7 @@ addProbe([
   'AC3:malformed-value-defaulted',
   'AC3:invalid-config-accepted',
   'AC3:unknown-config-key-ignored',
+  'AC3:notification-key-not-consumed-live',
   'AC3:foundation-config-activates-non-notification-consumer',
 ], () => runBehaviorFixture('config-fail-closed'));
 
