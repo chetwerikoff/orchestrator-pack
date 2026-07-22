@@ -10,10 +10,6 @@ import {
   EXECUTABLE_BEHAVIOR_MUTATION_KEYS,
 } from './mutation-behavior-recipes.ts';
 import { FOUNDATION_MUTATION_CATALOG } from './mutation-catalog.ts';
-import {
-  evaluateSemanticMutationGate,
-  failingTestIdForMutation,
-} from './mutation-semantic-gates.ts';
 
 function mutationKeys(): string[] {
   return Object.entries(AC_MUTATION_CONTROLS).flatMap(([ac, ids]) =>
@@ -25,14 +21,14 @@ const importsMutationRecipes = /(?:from\s+|import\s*\(\s*)['"]\.\/mutation-behav
 const importsSemanticGates = /(?:from\s+|import\s*\(\s*)['"]\.\/mutation-semantic-gates\.ts['"]/u;
 
 describe('[AC8] independent behavioral mutation probes', () => {
-  it('keeps every non-executable fallback structural gate green on the clean head', () => {
-    const executable = new Set(EXECUTABLE_BEHAVIOR_MUTATION_KEYS);
-    for (const key of mutationKeys().filter((candidate) => !executable.has(candidate))) {
-      expect(evaluateSemanticMutationGate(key), key).toEqual({
-        ok: true,
-        failingTestId: failingTestIdForMutation(key),
-      });
-    }
+  it('binds every declared control to an explicit behavioral mutation without semantic-gate fallback', () => {
+    const expected = mutationKeys().sort();
+    expect([...EXECUTABLE_BEHAVIOR_MUTATION_KEYS]).toEqual(expected);
+
+    const recipes = readFileSync(path.resolve('scripts/pr2-foundation/mutation-behavior-recipes.ts'), 'utf8');
+    expect(recipes).not.toMatch(importsSemanticGates);
+    expect(recipes).not.toContain('buildBoundedSemanticMutation');
+    expect(recipes).toContain('behavioral_mutation_recipe_set_mismatch');
   });
 
   it('builds a bounded non-empty mutation plan for every declared control', () => {
