@@ -1,11 +1,11 @@
-name: issue-943-changed-first-publisher-v6
+name: issue-943-changed-first-publisher-v7
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  group: issue-943-changed-first-publisher-v6
+  group: issue-943-changed-first-publisher-v7
   cancel-in-progress: true
 
 permissions:
@@ -21,6 +21,7 @@ jobs:
       TARGET_HEAD: 8c5b1e2de60daec8c39eddbf5ec9c8972c20f288
       PATCH_WORKFLOW_COMMIT: 123b57c04bd146eb0b0b5863140df946ce06aa0b
       PROBE_SCRIPT_COMMIT: 2f7e7f24356f645ac193a0c095309524aaad10c4
+      TEST_FIX_COMMIT: 25bc39128bb081dee990a4372c981d4c4d176ebd
       PR939_HEAD: 4901a274d1f6ec980d2974f3f729a26dcd1cc751
       PR939_BASE: 296dff446d365cb3c0aba92b93ab16a95ee51fd3
       FINAL_PATCH_COMMIT: dd1916d6650bea279f49eb0e3c0e34f08932475e
@@ -38,10 +39,13 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
-          git fetch origin "$PATCH_WORKFLOW_COMMIT" "$PROBE_SCRIPT_COMMIT"
+          git fetch origin "$PATCH_WORKFLOW_COMMIT" "$PROBE_SCRIPT_COMMIT" "$TEST_FIX_COMMIT"
           git show "$PATCH_WORKFLOW_COMMIT:.github/workflows/issue-943-policy-apply.yml" > "$RUNNER_TEMP/source-workflow.yml"
           git show "$PROBE_SCRIPT_COMMIT:scripts/issue-943-apply-changed-first-v4.py" > "$RUNNER_TEMP/apply.py"
+          git show "$TEST_FIX_COMMIT:scripts/issue-943-fix-triple-anchor-test.py" > "$RUNNER_TEMP/fix-test.py"
           SOURCE_WORKFLOW="$RUNNER_TEMP/source-workflow.yml" python3 "$RUNNER_TEMP/apply.py"
+          python3 "$RUNNER_TEMP/fix-test.py"
+          git diff --check
       - name: Verify policy and exact PR 939 budget
         shell: bash
         run: |
