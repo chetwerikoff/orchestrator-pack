@@ -134,6 +134,30 @@ jobs:
               raise SystemExit(f'baseGate evaluation anchor cardinality: {semantic.count(evaluation_anchor)}')
           semantic_path.write_text(semantic.replace(evaluation_anchor, evaluation_replacement, 1), encoding='utf-8')
 
+          contracts_path = Path('scripts/pr2-foundation/contracts.ts')
+          contracts = contracts_path.read_text(encoding='utf-8')
+          contracts_anchor = """    if (added.has(changed)) {
+              if (!declarationAllows(changed, declaration)) {
+                return { ok: false, reason: `addition_not_declared:${changed}` };
+              }
+            } else if (!exactExisting.has(changed) && !derived.has(changed)) {
+              return { ok: false, reason: `modification_outside_independent_union:${changed}` };
+            }
+          """
+          contracts_replacement = """    const declaredBaselineAddition = !base.has(changed)
+              && declarationAllows(changed, declaration);
+            if (added.has(changed) || declaredBaselineAddition) {
+              if (!declarationAllows(changed, declaration)) {
+                return { ok: false, reason: `addition_not_declared:${changed}` };
+              }
+            } else if (!exactExisting.has(changed) && !derived.has(changed)) {
+              return { ok: false, reason: `modification_outside_independent_union:${changed}` };
+            }
+          """
+          if contracts.count(contracts_anchor) != 1:
+              raise SystemExit(f'declared baseline addition anchor cardinality: {contracts.count(contracts_anchor)}')
+          contracts_path.write_text(contracts.replace(contracts_anchor, contracts_replacement, 1), encoding='utf-8')
+
           foundation_workflow_path = Path('.github/workflows/typescript-foundation.yml')
           foundation_workflow = foundation_workflow_path.read_text(encoding='utf-8').rstrip()
           if '\n  contract-mutations:\n' in foundation_workflow:
