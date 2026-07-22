@@ -1,6 +1,8 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -212,13 +214,31 @@ function historicalJournalReadable(): void {
   );
 }
 
-function migrationJournalKeyRequired(): void {
-  const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'opk-mutation-journal-key-'));
+function withMigrationFixture(run: (paths: {
+  fixtureRoot: string;
+  sourcePath: string;
+  targetPath: string;
+  journalPath: string;
+}) => void): void {
+  const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'opk-mutation-migration-'));
   try {
     const sourcePath = path.join(fixtureRoot, 'source.json');
     const targetPath = path.join(fixtureRoot, 'target.json');
     const journalPath = path.join(fixtureRoot, 'journal.json');
     writeFileSync(sourcePath, '{"fixture":true}\n', 'utf8');
+    run({ fixtureRoot, sourcePath, targetPath, journalPath });
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
+function readJournalState(journalPath: string): string {
+  const parsed = JSON.parse(readFileSync(journalPath, 'utf8')) as { state?: unknown };
+  return String(parsed.state ?? '');
+}
+
+function migrationJournalKeyRequired(): void {
+  withMigrationFixture(({ fixtureRoot, sourcePath, targetPath, journalPath }) => {
     const result = runSyntheticMigration({
       fixtureRoot,
       sourcePath,
@@ -230,9 +250,98 @@ function migrationJournalKeyRequired(): void {
     invariant(!result.ok && result.reason === 'journal_key_required', 'empty_journal_key_accepted');
     invariant(!existsSync(journalPath), 'journal_created_without_key');
     invariant(!existsSync(targetPath), 'target_created_without_key');
-  } finally {
-    rmSync(fixtureRoot, { recursive: true, force: true });
-  }
+  });
+}
+
+function migrationPrepareBeforeEffects(): void {
+  withMigrationFixture(({ fixtureRoot, sourcePath, targetPath, journalPath }) => {
+    const result = runSyntheticMigration({
+      fixtureRoot,
+      sourcePath,
+      targetPath,
+      journalPath,
+      journalKey: 'fixture-key',
+      now: '2026-07-20T00:00:00.000Z',
+      crashAt: 'before_prepare',
+    });
+    invariant(!result.ok && result.reason === 'injected_crash:before_prepare', 'before_prepare_not_injected');
+    invariant(!existsSync(journalPath), 'journal_written_before_prepare_boundary');
+    invariant(!existsSync(targetPath), 'target_mutated_before_prepare');
+  });
+}
+
+function migrationPreparedBeforeImport(): void {
+  withMigrationFixture(({ fixtureRoot, sourcePath, targetPath, journalPath }) => {
+    const result = runSyntheticMigration({
+      fixtureRoot,
+      sourcePath,
+      targetPath,
+      journalPath,
+      journalKey: 'fixture-key',
+      now: '2026-07-20T00:00:00.000Z',
+      crashAt: 'before_import',
+    });
+    invariant(!result.ok && result.reason === 'injected_crash:before_import', 'before_import_not_injected');
+    invariant(existsSync(journalPath), 'prepared_journal_missing');
+    invariant(readJournalState(journalPath) === 'prepared', 'journal_advanced_before_import');
+    invariant(!existsSync(targetPath), 'target_written_before_import_boundary');
+  });
+}
+
+function migrationReplayIdempotent(): void {
+  withMigrationFixture(({ fixtureRoot, sourcePath, targetPath, journalPath }) => {
+    const input = {
+      fixtureRoot,
+      sourcePath,
+      targetPath,
+      journalPath,
+      journalKey: 'fixture-key',
+      now: '2026-07-20T00:00:00.000Z',
+    };
+    const first = runSyntheticMigration(input);
+    invariant(first.ok && first.reason === 'committed', 'initial_migration_not_committed');
+    const before = readFileSync(targetPath, 'utf8');
+    const replay = runSyntheticMigration({ ...input, now: '2026-07-20T00:01:00.000Z' });
+    invariant(replay.ok && replay.reason === 'already_committed' && replay.replayed === true, 'committed_marker_reimported');
+    invariant(readFileSync(targetPath, 'utf8') === before, 'replay_changed_target_bytes');
+  });
+}
+
+function migrationTornJournalRejected(): void {
+  withMigrationFixture(({ fixtureRoot, sourcePath, targetPath, journalPath }) => {
+    writeFileSync(journalPath, '{"schemaVersion":1,"state":"prepared"', 'utf8');
+    const result = runSyntheticMigration({
+      fixtureRoot,
+      sourcePath,
+      targetPath,
+      journalPath,
+      journalKey: 'fixture-key',
+      now: '2026-07-20T00:00:00.000Z',
+    });
+    invariant(!result.ok && result.reason === 'corrupt_journal', 'torn_journal_accepted');
+    invariant(!existsSync(targetPath), 'target_written_from_torn_journal');
+  });
+}
+
+function migrationLiveRootRefused(): void {
+  withMigrationFixture(({ fixtureRoot, targetPath, journalPath }) => {
+    const liveRoot = path.join(fixtureRoot, 'live-store');
+    mkdirSync(liveRoot, { recursive: true });
+    const liveSource = path.join(liveRoot, 'source.json');
+    writeFileSync(liveSource, '{"live":true}\n', 'utf8');
+    const result = runSyntheticMigration({
+      fixtureRoot,
+      sourcePath: liveSource,
+      targetPath,
+      journalPath,
+      liveStoreRoots: [liveRoot],
+      journalKey: 'fixture-key',
+      now: '2026-07-20T00:00:00.000Z',
+    });
+    invariant(!result.ok && result.reason === 'foundation_live_import_forbidden', 'live_store_import_allowed');
+    invariant(!existsSync(journalPath), 'journal_created_for_live_store');
+    invariant(!existsSync(targetPath), 'target_created_from_live_store');
+  });
 }
 
 async function main(): Promise<void> {
@@ -250,6 +359,11 @@ async function main(): Promise<void> {
   else if (probe === 'config-fail-closed') configFailClosed();
   else if (probe === 'historical-journal-readable') historicalJournalReadable();
   else if (probe === 'migration-journal-key-required') migrationJournalKeyRequired();
+  else if (probe === 'migration-prepare-before-effects') migrationPrepareBeforeEffects();
+  else if (probe === 'migration-prepared-before-import') migrationPreparedBeforeImport();
+  else if (probe === 'migration-replay-idempotent') migrationReplayIdempotent();
+  else if (probe === 'migration-torn-rejected') migrationTornJournalRejected();
+  else if (probe === 'migration-live-root-refused') migrationLiveRootRefused();
   else throw new Error(`unknown_behavior_fixture:${probe}`);
   process.stdout.write(`behavior-fixture:${probe}:passed\n`);
 }
