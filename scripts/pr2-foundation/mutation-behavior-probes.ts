@@ -44,8 +44,6 @@ function runFixture(file: string, probe: string): void {
     args: ['--experimental-strip-types', path.resolve(file), '--probe', probe],
     cwd: path.resolve('.'),
     inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: 120_000,
   });
   if (!result.ok) {
     throw new Error(`independent_fixture_failed:${probe}:${result.stderr || result.stdout || result.error || result.outcome}`);
