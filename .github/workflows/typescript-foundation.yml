@@ -98,3 +98,47 @@ jobs:
         run: npm ci --include=dev
       - name: Enforce committed PowerShell child-test baseline
         run: npm run check:pwsh-test-growth
+
+  contract-mutations:
+    name: Contract mutation evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install from frozen lockfile
+        run: npm ci --include=dev
+      - name: Enforce pinned Node major
+        run: npm run check:node-major
+      - name: Detect complete mutation surface
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const required = [
+            'scripts/pr2-foundation/mutation-runner.ts',
+            'scripts/pr2-foundation/mutation-catalog.ts',
+            'scripts/pr2-foundation/mutation-semantic-gates.ts',
+          ];
+          const present = required.filter((file) => fs.existsSync(file));
+          const command = pkg.scripts?.['test:contract-mutations'];
+          if (!command && present.length > 0) {
+            throw new Error(`partial mutation surface without test:contract-mutations: ${present.join(',')}`);
+          }
+          if (command && present.length !== required.length) {
+            throw new Error(`test:contract-mutations without complete mutation surface: ${present.length}/${required.length}`);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `run_evidence=${command ? 'true' : 'false'}\n`);
+          console.log(command ? 'complete mutation surface detected' : 'mutation surface absent');
+          NODE
+      - name: Run external red-green mutation evidence
+        if: steps.detect.outputs.run_evidence == 'true'
+        run: npm run test:contract-mutations
