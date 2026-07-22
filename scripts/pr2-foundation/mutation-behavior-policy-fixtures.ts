@@ -115,6 +115,38 @@ function unrelatedEstateRows(manifest: EstateManifest): Array<Record<string, unk
     .sort((left, right) => String(left.path).localeCompare(String(right.path)));
 }
 
+function readFileAtCommit(commit: string, file: string): string {
+  const root = mkdtempSync(path.join(tmpdir(), 'opk-estate-archive-'));
+  const archivePath = path.join(root, 'base.tar');
+  try {
+    const archiveResult = runProcessSync({
+      command: 'git',
+      args: ['archive', '--format=tar', `--output=${archivePath}`, commit, file],
+      cwd: path.resolve('.'),
+      inheritParentEnv: true,
+    });
+    invariant(
+      archiveResult.ok,
+      `estate_base_archive_failed:${archiveResult.stderr || archiveResult.stdout || archiveResult.error || archiveResult.outcome}`,
+    );
+    const archive = readFileSync(archivePath);
+    for (let offset = 0; offset + 512 <= archive.length;) {
+      const header = archive.subarray(offset, offset + 512);
+      if (header.every((byte) => byte === 0)) break;
+      const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/u, '');
+      const sizeText = header.subarray(124, 136).toString('ascii').replace(/\0/g, '').trim();
+      const size = Number.parseInt(sizeText || '0', 8);
+      invariant(Number.isSafeInteger(size) && size >= 0, `estate_archive_size_invalid:${sizeText}`);
+      const bodyOffset = offset + 512;
+      if (name === file) return archive.subarray(bodyOffset, bodyOffset + size).toString('utf8');
+      offset = bodyOffset + Math.ceil(size / 512) * 512;
+    }
+    throw new Error(`estate_archive_entry_missing:${file}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function estateSplitValid(): void {
   const manifest = parseEstateManifest(
     readFileSync(path.resolve('scripts/estate-cut/issue-906.manifest.json'), 'utf8'),
@@ -154,20 +186,13 @@ function estateUnrelatedRowsUnchanged(): void {
   );
   const mergeBase = mergeBaseResult.stdout.trim();
   invariant(/^[0-9a-f]{40}$/u.test(mergeBase), `estate_merge_base_invalid:${mergeBase}`);
-  const baseManifestResult = runProcessSync({
-    command: 'git',
-    args: ['show', `${mergeBase}:scripts/estate-cut/issue-906.manifest.json`],
-    cwd: path.resolve('.'),
-    inheritParentEnv: true,
-  });
-  invariant(
-    baseManifestResult.ok,
-    `estate_base_manifest_failed:${baseManifestResult.stderr || baseManifestResult.stdout || baseManifestResult.error || baseManifestResult.outcome}`,
-  );
   const candidate = parseEstateManifest(
     readFileSync(path.resolve('scripts/estate-cut/issue-906.manifest.json'), 'utf8'),
   );
-  const base = parseEstateManifest(baseManifestResult.stdout);
+  const base = parseEstateManifest(readFileAtCommit(
+    mergeBase,
+    'scripts/estate-cut/issue-906.manifest.json',
+  ));
   invariant(
     JSON.stringify(unrelatedEstateRows(candidate)) === JSON.stringify(unrelatedEstateRows(base)),
     'unrelated_manifest_rows_changed',
