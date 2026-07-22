@@ -19,7 +19,8 @@ jobs:
     env:
       TARGET_BRANCH: agent/issue-923-pr2-foundation
       TARGET_HEAD: fa5f0a509454b31ed760c8f5cc218552a325c915
-      FINAL_HELPER_COMMIT: b263212c522facff18b3d15280ea41e1852214e9
+      CHUNKS_COMMIT: 7dc3c9a330ffac3a8c0511ca50892795f9abc76a
+      CHUNKS_SHA256: eed898b961202a3156d462644885f7414aa7327e449b6756c3798ad3675ae214
       FINAL_HELPER_SHA256: c61f9bf406c8e3de7f84e839d6986c1f2ac710fa73bff0a2a6d88d51bd3b3205
     steps:
       - name: Checkout exact PR 939 head
@@ -34,16 +35,21 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Decode and apply exact review fix
+      - name: Assemble and apply exact review fix
         shell: bash
         run: |
           set -euo pipefail
           : > "$RUNNER_TEMP/verification.log"
           exec > >(tee -a "$RUNNER_TEMP/verification.log") 2>&1
           test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
-          git fetch origin "$FINAL_HELPER_COMMIT" main
-          git show "$FINAL_HELPER_COMMIT:scripts/review-4750643719-final-exact.py.gz.b64" \
-            | base64 --decode \
+          git fetch origin "$CHUNKS_COMMIT" main
+          : > "$RUNNER_TEMP/apply.py.gz.b64"
+          for part in 00 01 02 03 04 05 06 07 08 09; do
+            git show "$CHUNKS_COMMIT:scripts/review-4750643719-final-chunks/${part}.part" \
+              >> "$RUNNER_TEMP/apply.py.gz.b64"
+          done
+          echo "$CHUNKS_SHA256  $RUNNER_TEMP/apply.py.gz.b64" | sha256sum --check --strict
+          base64 --decode "$RUNNER_TEMP/apply.py.gz.b64" \
             | gzip --decompress \
             > "$RUNNER_TEMP/apply.py"
           echo "$FINAL_HELPER_SHA256  $RUNNER_TEMP/apply.py" | sha256sum --check --strict
