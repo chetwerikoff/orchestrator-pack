@@ -398,4 +398,117 @@ Describe 'scripts/lint-self-architect.ps1' {
         $body | Should -Match 'return \$blocks\.ToArray\(\)'
     }
 
+
+    # Issue #943 allocation-light exact block indexing.
+    It 'indexes sliding blocks without per-window slices pipelines or encoding' {
+        $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+        $slidingStart = $source.IndexOf('function Get-SlidingBlocks')
+        $slidingEnd = $source.IndexOf('function Get-RenameMap')
+        $duplicateStart = $source.IndexOf('function Find-DuplicateLiteralFindings')
+        $duplicateEnd = $source.IndexOf('function Find-HeuristicDuplicateFindings')
+        $slidingStart | Should -BeGreaterOrEqual 0
+        $slidingEnd | Should -BeGreaterThan $slidingStart
+        $duplicateStart | Should -BeGreaterOrEqual 0
+        $duplicateEnd | Should -BeGreaterThan $duplicateStart
+        $slidingBody = $source.Substring($slidingStart, $slidingEnd - $slidingStart)
+        $duplicateBody = $source.Substring($duplicateStart, $duplicateEnd - $duplicateStart)
+
+        $slidingBody | Should -Match '\$meaningfulPrefix'
+        $slidingBody | Should -Match '\[string\]::Join\("`n", \$Lines, \$start, \$Size\)'
+        $slidingBody | Should -Not -Match '\$Lines\[\$start\.\.'
+        $slidingBody | Should -Not -Match 'Where-Object'
+        $slidingBody | Should -Match 'System\.Collections\.Generic\.List\[object\]'
+        $source | Should -Not -Match 'ToBase64String'
+        $source | Should -Match 'SelfArchitectExactBlockIndexer'
+        $source | Should -Match 'HashSet<SelfArchitectAnchorKey>'
+        $duplicateBody | Should -Match 'SelfArchitectExactBlockIndexer\]::Build'
+        $duplicateBody | Should -Not -Match 'Get-SlidingBlocks -Lines \$entry\.Value'
+    }
+
+    It 'skips whitespace-only windows while preserving meaningful exact duplicates' {
+        $tempRoot = Join-Path -Path $TestDrive -ChildPath 'lint-allocation-light-windows'
+        $scriptsDir = Join-Path -Path $tempRoot -ChildPath 'scripts'
+        New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+        $configPath = Join-Path $tempRoot 'lint-config.json'
+        @{
+            scanPaths = @('scripts/**')
+            excludePaths = @()
+            scriptExtensions = @('.ts')
+            templateExtensions = @()
+            duplicateLiteralMinLines = 10
+            suppressions = @()
+        } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $configPath -Encoding UTF8
+
+        $blank = @(1..12 | ForEach-Object { '   ' })
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'first.ts') -Value $blank -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'second.ts') -Value $blank -Encoding UTF8
+        $rawOutput = & $script:ShellPath -NoProfile -ExecutionPolicy Bypass -File $script:LintScript -FixtureRoot $tempRoot -ConfigPath $configPath -Strict 2>&1
+        $LASTEXITCODE | Should -Be 0
+        ($rawOutput | Out-String) | Should -Not -Match 'duplicate-literal'
+
+        $meaningful = @(1..12 | ForEach-Object { if ($_ -eq 6) { 'meaningful-line' } else { '   ' } })
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'first.ts') -Value $meaningful -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $scriptsDir 'second.ts') -Value $meaningful -Encoding UTF8
+        $rawOutput = & $script:ShellPath -NoProfile -ExecutionPolicy Bypass -File $script:LintScript -FixtureRoot $tempRoot -ConfigPath $configPath -Strict 2>&1
+        $LASTEXITCODE | Should -Be 1
+        ($rawOutput | Out-String) | Should -Match 'duplicate-literal'
+    }
+
+
+    It 'caches exact base windows once per path and size' {
+        $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+        $noveltyStart = $source.IndexOf('function Test-IsBlockNovelAtPath')
+        $noveltyEnd = $source.IndexOf('function Get-LineSimilarity')
+        $duplicateStart = $source.IndexOf('function Find-DuplicateLiteralFindings')
+        $duplicateEnd = $source.IndexOf('function Find-HeuristicDuplicateFindings')
+        $noveltyStart | Should -BeGreaterOrEqual 0
+        $noveltyEnd | Should -BeGreaterThan $noveltyStart
+        $duplicateStart | Should -BeGreaterOrEqual 0
+        $duplicateEnd | Should -BeGreaterThan $duplicateStart
+        $noveltyBody = $source.Substring($noveltyStart, $noveltyEnd - $noveltyStart)
+        $duplicateBody = $source.Substring($duplicateStart, $duplicateEnd - $duplicateStart)
+
+        $noveltyBody | Should -Match 'BaseBlockCache'
+        $noveltyBody | Should -Match 'System\.Collections\.Generic\.HashSet\[string\]'
+        $noveltyBody | Should -Match 'StringComparer\]::Ordinal'
+        $noveltyBody | Should -Not -Match '\$Lines\[\$start\.\.'
+        $noveltyBody | Should -Not -Match 'Test-BlockExistsInLines'
+        ([regex]::Matches($duplicateBody, '\$baseBlockCache\s*=\s*@\{\}')).Count | Should -Be 1
+        ([regex]::Matches($duplicateBody, '-BaseBlockCache \$baseBlockCache')).Count | Should -Be 2
+    }
+
+
+It 'uses compiled exact candidate indexing with full-string verification' {
+    $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+    $helperStart = $source.IndexOf('function Initialize-SelfArchitectExactBlockIndexer')
+    $helperEnd = $source.IndexOf('function Get-SlidingBlocks')
+    $helperStart | Should -BeGreaterOrEqual 0
+    $helperEnd | Should -BeGreaterThan $helperStart
+    $helperBody = $source.Substring($helperStart, $helperEnd - $helperStart)
+
+    $helperBody | Should -Match 'Add-Type -TypeDefinition'
+    $helperBody | Should -Match 'HashSet<SelfArchitectAnchorKey>'
+    $helperBody | Should -Match 'string\.Join\("\\n", lines, start, size\)'
+    $helperBody | Should -Match 'blockMap\.TryGetValue\(blockText, out locations\)'
+    $helperBody | Should -Match 'StringComparison\.Ordinal'
+    $helperBody | Should -Not -Match 'ToBase64String'
+}
+
+
+It 'evaluates paired-edit windows in compiled code with the same best-match contract' {
+    $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+    $pairedStart = $source.IndexOf('function Find-PairedEditFindings')
+    $pairedEnd = $source.IndexOf('function Write-FindingLine')
+    $pairedStart | Should -BeGreaterOrEqual 0
+    $pairedEnd | Should -BeGreaterThan $pairedStart
+    $pairedBody = $source.Substring($pairedStart, $pairedEnd - $pairedStart)
+
+    $source | Should -Match 'class SelfArchitectPairedMatch'
+    $source | Should -Match 'FindBestPairedMatch'
+    $source | Should -Match 'overlapRatio > best\.overlapRatio'
+    $pairedBody | Should -Match 'SelfArchitectExactBlockIndexer\]::FindBestPairedMatch'
+    $pairedBody | Should -Not -Match 'for \(\$si = 0'
+    $pairedBody | Should -Not -Match 'for \(\$ti = 0'
+}
+
 }
