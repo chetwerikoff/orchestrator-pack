@@ -103,6 +103,7 @@ jobs:
           function baseGate(pathName: string): TextGate {
             return {
               path: pathName,
+              baseEqual: true,
               custom: () => {
                 const expected = IMMUTABLE_BASE_SHA256[pathName];
                 if (!expected) return `base_digest_missing:${pathName}`;
@@ -116,7 +117,14 @@ jobs:
           """
           if semantic.count(semantic_anchor) != 1:
               raise SystemExit(f'baseGate anchor cardinality: {semantic.count(semantic_anchor)}')
-          semantic_path.write_text(semantic.replace(semantic_anchor, semantic_replacement, 1), encoding='utf-8')
+          semantic = semantic.replace(semantic_anchor, semantic_replacement, 1)
+          evaluation_anchor = """  if (gate.baseEqual && !baseBlobMatches(gate.path)) {
+          """
+          evaluation_replacement = """  if (gate.baseEqual && !gate.custom && !baseBlobMatches(gate.path)) {
+          """
+          if semantic.count(evaluation_anchor) != 1:
+              raise SystemExit(f'baseGate evaluation anchor cardinality: {semantic.count(evaluation_anchor)}')
+          semantic_path.write_text(semantic.replace(evaluation_anchor, evaluation_replacement, 1), encoding='utf-8')
           PY
           git diff --check
           git config user.name github-actions[bot]
