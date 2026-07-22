@@ -1,0 +1,90 @@
+name: review-4750643719-fix
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: review-4750643719-fix
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: agent/issue-923-pr2-foundation
+      TARGET_HEAD: fa5f0a509454b31ed760c8f5cc218552a325c915
+      HELPER_COMMIT: 5c2d0742f2ab65c116ce06a4a2f6149d020d61e5
+      HELPER_SHA256: 975ec3e9536858b3961f08d4b5e81ada0226019829bbd3e4c207034909c01363
+    steps:
+      - name: Checkout exact PR 939 head
+        uses: actions/checkout@v4
+        with:
+          ref: agent/issue-923-pr2-foundation
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Decode and apply bounded review fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
+          git fetch origin "$HELPER_COMMIT" main
+          git show "$HELPER_COMMIT:scripts/review-4750643719-apply.py.gz.b64" \
+            | base64 --decode \
+            | gzip --decompress \
+            > "$RUNNER_TEMP/apply.py"
+          echo "$HELPER_SHA256  $RUNNER_TEMP/apply.py" | sha256sum --check --strict
+          python3 "$RUNNER_TEMP/apply.py"
+          git diff --check
+
+      - name: Verify exact patched head
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --include=dev
+          npm run check:node-major
+          npm run typecheck:foundation
+          npm run lint:foundation
+          npm run test:contract-mutations
+          OPK_VITEST_HARNESS=1 npx vitest run \
+            scripts/pr2-foundation/worker-notification-compat.test.ts \
+            scripts/pr2-foundation/migration-symlink.test.ts \
+            scripts/pr2-foundation/terminalized-port.test.ts \
+            scripts/pr2-foundation/mutation-catalog.test.ts \
+            scripts/pr2-foundation/mutation-semantic-gates.test.ts \
+            scripts/pr2-foundation/real-scope-proof.test.ts \
+            scripts/pr2-foundation/foundation.test.ts
+          pwsh -NoProfile -File ./scripts/verify.ps1
+          pwsh -NoProfile -File ./scripts/check-reusable.ps1
+          pwsh -NoProfile -File ./scripts/check-ci-pipeline-split.ps1
+          started="$(date +%s)"
+          pwsh -NoProfile -File ./scripts/lint-self-architect.ps1 \
+            -Strict \
+            -BaseRef origin/main \
+            -HeadRef HEAD
+          elapsed=$(( $(date +%s) - started ))
+          echo "self_architect_elapsed_seconds=$elapsed"
+          test "$elapsed" -lt 600
+          git diff --check
+
+      - name: Commit and push verified fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse origin/$TARGET_BRANCH)" = "$TARGET_HEAD"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add --all
+          git commit -m 'fix: address review 4750643719'
+          git push origin HEAD:"$TARGET_BRANCH"
