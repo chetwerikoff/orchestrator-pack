@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/review-wake-trigger.ts.
 /**
  * Event-driven review trigger on completion wakes (Issue #207, #625).
  * Vitest: scripts/review-wake-trigger.test.ts

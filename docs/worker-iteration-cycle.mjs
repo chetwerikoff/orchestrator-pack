@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/worker-iteration-cycle.ts.
 /**
  * Shared worker-iteration cycle state machine (Issue #332).
  * Vitest: scripts/worker-iteration-cycle.test.ts

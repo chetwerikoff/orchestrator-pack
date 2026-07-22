@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/worker-message-dispatch-observe.ts.
 /**
  * AO-attributed worker message delivery observation (Issue #232).
  * Vitest: scripts/worker-message-submit-reconcile.test.ts

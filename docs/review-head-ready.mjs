@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/review-head-ready.ts.
 /**
  * Canonical "head ready for review" predicate (Issue #195).
  * Shared by report-driven triggers, ROUND PROGRESSION, and review-trigger-reconcile.

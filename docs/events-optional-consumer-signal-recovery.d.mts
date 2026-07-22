@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.d.ts.
 export declare const REPORT_RECEIPT_SURFACE_FOLLOWUP: string;
 
 export declare const SIGNAL_SOURCES: Readonly<{

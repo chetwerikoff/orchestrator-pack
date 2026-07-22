@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/worker-report-store.ts.
 /**
  * Pack-owned worker report store (Issue #717).
  * Vitest: scripts/worker-report-store.test.ts

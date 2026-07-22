@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/review-bulk-send-diagnose.ts.
 /**
  * Read-only Gate 0 diagnostic: undelivered/delivered changes_requested and stuck open findings (Issue #140, #625).
  * Vitest: scripts/review-bulk-send-diagnose.test.ts

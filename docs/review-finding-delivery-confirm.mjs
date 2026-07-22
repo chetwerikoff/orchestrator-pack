@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts.
 /**
  * Sender-side review-finding delivery confirmation (Issue #171).
  * Vitest: scripts/review-finding-delivery-confirm.test.ts

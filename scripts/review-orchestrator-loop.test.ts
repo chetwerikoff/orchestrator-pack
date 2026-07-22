@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { isHeadCovered } from '../docs/review-trigger-reconcile.mjs';
+import { isHeadCovered } from './pr2-foundation/terminalized/review-trigger-reconcile.ts';
 import {
   evaluatePrNumberLessMergedRun,
   evaluateReviewRunWithRecheck,

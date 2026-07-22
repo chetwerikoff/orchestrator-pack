@@ -1,4 +1,4 @@
-import type { AoWebhookBody } from '../docs/orchestrator-wake-filter.mjs';
+import type { AoWebhookBody } from './pr2-foundation/terminalized/orchestrator-wake-filter.ts';
 
 export function notificationEvent(
   overrides: Partial<NonNullable<AoWebhookBody['event']>> & {

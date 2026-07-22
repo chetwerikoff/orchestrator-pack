@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts.
 /**
  * AO 0.10 session-scoped review HTTP primitives (Issue #623).
  * Capture-backed shapes: tests/external-output-references/variants/ao-0-10-review-api/

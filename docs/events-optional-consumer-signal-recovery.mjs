@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.ts.
 /**
  * Events-optional consumer signal recovery helpers (Issue #700).
  * Vitest: scripts/events-optional-consumer-signal-recovery.test.ts

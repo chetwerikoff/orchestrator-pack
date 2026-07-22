@@ -22,7 +22,7 @@ import {
   selectSurvivingDelivery,
   DISPATCH_SOURCE_REVIEW_SEND,
   DISPATCH_SOURCE_AO_SEND,
-} from '../docs/worker-message-dispatch-observe.mjs';
+} from './pr2-foundation/terminalized/worker-message-dispatch-observe.ts';
 import { readReactionMessagesFromYamlFile } from './reaction-config-messages.mjs';
 import {
   applySubmitOutcomes,

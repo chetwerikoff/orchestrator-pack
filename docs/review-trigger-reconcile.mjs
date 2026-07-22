@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts.
 /**
  * State-derived review-trigger reconciliation (Issue #163).
  * Vitest: scripts/review-trigger-reconcile.test.ts

@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/reviewer-failure-evidence-markers.ts.
 /**
  * Leaf reviewer failure-class markers shared by timeout retry and post-run enrichment.
  */

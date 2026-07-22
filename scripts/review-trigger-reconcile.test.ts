@@ -12,7 +12,7 @@ import {
 import {
   NOT_READY_COMPONENT_PRECEDENCE,
   choosePrimaryNotReadyComponent,
-} from '../docs/review-head-ready.mjs';
+} from './pr2-foundation/terminalized/review-head-ready.ts';
 import {
   readPrSessionBindingCacheFile,
   resolvePrSessionBindingCachePath,
@@ -39,8 +39,8 @@ import {
   unwrapReconcilePlanResult,
   type PlanReconcileInput,
   type ReconcileAction,
-} from '../docs/review-trigger-reconcile.mjs';
-import { NUDGE_EXPIRY_MS, QUIESCENCE_DEBOUNCE_MS, CYCLE_SURFACE_READY_FOR_REVIEW, commitReviewStartedCycleState, buildOwnerCycleKey, normalizeCanonicalRepoIdentity } from '../docs/worker-iteration-cycle.mjs';
+} from './pr2-foundation/terminalized/review-trigger-reconcile.ts';
+import { NUDGE_EXPIRY_MS, QUIESCENCE_DEBOUNCE_MS, CYCLE_SURFACE_READY_FOR_REVIEW, commitReviewStartedCycleState, buildOwnerCycleKey, normalizeCanonicalRepoIdentity } from './pr2-foundation/terminalized/worker-iteration-cycle.ts';
 import { mergeLegacyNudgedWithPendingJournal } from '../docs/ci-green-wake-reconcile.mjs';
 
 const greenChecks = [

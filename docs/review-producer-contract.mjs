@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/review-producer-contract.ts.
 /**
  * AO 0.10 review producer contract — normalized run rows for pack reconcile scripts (Issues #626, #625).
  * Maps GET /api/v1/sessions/{id}/reviews PRReviewState + latestRun to status+verdict vocabulary.

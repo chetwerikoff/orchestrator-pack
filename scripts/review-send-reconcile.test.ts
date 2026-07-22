@@ -13,7 +13,7 @@ import {
   resolveOpenFindingCount,
   resolveSentFindingCount,
   verifyRunSentStateAfterSend,
-} from '../docs/review-send-reconcile.mjs';
+} from './pr2-foundation/terminalized/review-send-reconcile.ts';
 
 const HEAD = 'abc123def456';
 const PR = 202;

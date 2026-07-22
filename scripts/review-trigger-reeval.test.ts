@@ -9,8 +9,8 @@ import {
   REVIEW_CYCLE_CAP_T1_ISSUE_BODY,
   REVIEW_CYCLE_CAP_T2_ISSUE_BODY,
 } from './_review-cycle-cap-tier-fixture.js';
-import { evaluateWakePayload } from '../docs/orchestrator-wake-filter.mjs';
-import { planReconcileActions, unwrapReconcilePlanResult, type OpenPr } from '../docs/review-trigger-reconcile.mjs';
+import { evaluateWakePayload } from './pr2-foundation/terminalized/orchestrator-wake-filter.ts';
+import { planReconcileActions, unwrapReconcilePlanResult, type OpenPr } from './pr2-foundation/terminalized/review-trigger-reconcile.ts';
 import {
   DEFERRED_WATCH_WINDOW_MS,
   INCIDENT_WAKE_TO_READINESS_DELAY_MS,
@@ -40,7 +40,7 @@ import {
   REVIEW_CYCLE_CAP_BUDGET_EXHAUSTED,
   TERMINAL_CLEAN_EARLY_STOP,
 } from '../docs/review-cycle-cap.mjs';
-import { evaluateWakeReviewTrigger } from '../docs/review-wake-trigger.mjs';
+import { evaluateWakeReviewTrigger } from './pr2-foundation/terminalized/review-wake-trigger.ts';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

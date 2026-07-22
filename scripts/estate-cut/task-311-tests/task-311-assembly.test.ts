@@ -18,7 +18,7 @@ import {
   registerPrSessionBindingRecord,
   resolvePrSessionBindingForConsumer,
 } from '../../../docs/pr-session-binding-cache.mjs';
-import { preRunHeadReadyRecheck } from '../../../docs/review-head-ready.mjs';
+import { preRunHeadReadyRecheck } from '../../pr2-foundation/terminalized/review-head-ready.ts';
 import { resolveSessionPrBinding } from '../../../docs/session-pr-binding-resolver.mjs';
 import {
   type GithubReviewCaptureAction,

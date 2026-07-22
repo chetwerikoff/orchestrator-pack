@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/review-send-reconcile.ts.
 /**
  * REMOVED on AO 0.10 — auto-delivery supersedes first-send reconcile (Issues #202, #210, #625).
  * Exports retained for import stability; planReviewSendActions returns empty actions.

@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/autonomous-review-retry.ts.
 /**
  * Pack-owned post-run review failure enrichment and autonomous retry decision (Issue #539).
  * Vitest: scripts/autonomous-review-retry.test.ts

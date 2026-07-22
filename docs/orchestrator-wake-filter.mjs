@@ -1,3 +1,4 @@
+// Issue #923 foundation-terminalized: legacy live compatibility retained until draft 315 cutover; dormant TypeScript authority: scripts/pr2-foundation/terminalized/orchestrator-wake-filter.ts.
 /**
  * AO webhook payload → orchestrator wake decision (plain ESM for node without tsx).
  * Vitest coverage: scripts/orchestrator-wake-listener.test.ts,

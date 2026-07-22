@@ -20,9 +20,9 @@ import {
   parseLastActivityAgeMs,
   preRunHeadReadyRecheck,
   QUIESCENCE_DEBOUNCE_MS,
-} from '../docs/review-head-ready.mjs';
-import { reportCoversHead } from '../docs/review-trigger-reconcile.mjs';
-import { NUDGE_EXPIRY_MS } from '../docs/worker-iteration-cycle.mjs';
+} from './pr2-foundation/terminalized/review-head-ready.ts';
+import { reportCoversHead } from './pr2-foundation/terminalized/review-trigger-reconcile.ts';
+import { NUDGE_EXPIRY_MS } from './pr2-foundation/terminalized/worker-iteration-cycle.ts';
 
 const fixturesDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
