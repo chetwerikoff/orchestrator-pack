@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88830565799'
+      SOURCE_JOB_ID: '88831660406'
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Print exact publisher failure
@@ -34,13 +34,14 @@ jobs:
           needles = (
               'expected one match', 'match count', 'missing', 'unexpected_changed_paths',
               'Traceback', 'SystemExit', 'Error:', '##[error]', 'Process completed with exit code',
-              'stale_target_head', 'cardinality', 'SyntaxError',
+              'stale_target_head', 'cardinality', 'SyntaxError', 'error TS', 'FAIL ', 'AssertionError',
+              'Tests Failed', 'Tests failed', 'npm ERR', 'mutation_', 'not ok', 'failed:',
           )
           print('--- matched ---')
           for index, line in enumerate(lines, start=1):
               if any(needle in line for needle in needles):
                   print(f'{index}:{line[:5000]}')
-          print('--- final 80 ---')
-          for index, line in enumerate(lines[-80:], start=max(1, len(lines) - 79)):
+          print('--- final 140 ---')
+          for index, line in enumerate(lines[-140:], start=max(1, len(lines) - 139)):
               print(f'{index}:{line[:5000]}')
           PY
