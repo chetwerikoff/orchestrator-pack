@@ -19,15 +19,17 @@ jobs:
         with:
           script: |
             const jobId = 88917895433;
-            const response = await github.request('GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs', {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              job_id: jobId,
-              request: { parseSuccessResponseBody: false },
+            const url = `https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/actions/jobs/${jobId}/logs`;
+            const response = await fetch(url, {
+              headers: {
+                accept: 'application/vnd.github+json',
+                authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+                'x-github-api-version': '2022-11-28',
+              },
+              redirect: 'follow',
             });
-            const raw = Buffer.isBuffer(response.data)
-              ? response.data.toString('utf8')
-              : String(response.data ?? '');
+            if (!response.ok) throw new Error(`job_log_fetch_failed:${response.status}`);
+            const raw = await response.text();
             const ansi = /\u001b\[[0-9;]*m/g;
             const lines = raw.split(/\r?\n/).map((line) => line.replace(ansi, ''));
             const needles = [
@@ -54,3 +56,5 @@ jobs:
               pull_number: 940,
               body,
             });
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
