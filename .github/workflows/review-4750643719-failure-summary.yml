@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88851151283'
+      SOURCE_JOB_ID: '88858852388'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print latest publisher failure
+      - name: Print status delivery failure
         shell: bash
         run: |
           set -euo pipefail
@@ -32,14 +32,15 @@ jobs:
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
           needles = (
-              'cardinality', 'SyntaxError', '##[error]', 'Process completed with exit code',
-              'test-contract-mutations', 'mutation external', 'grep -q', 'Traceback', 'SystemExit',
+              'not covered', 'inventory', 'unsupported', 'error', 'Error', '##[error]',
+              'Process completed with exit code', 'review/head mismatch', 'stale or ineligible',
+              'not an exact clean', 'HTTP', 'status',
           )
           print('--- matched ---')
           for index, line in enumerate(lines, start=1):
               if any(needle in line for needle in needles):
                   print(f'{index}:{line[:7000]}')
-          print('--- final 80 ---')
-          for index, line in enumerate(lines[-80:], start=max(1, len(lines) - 79)):
+          print('--- final 60 ---')
+          for index, line in enumerate(lines[-60:], start=max(1, len(lines) - 59)):
               print(f'{index}:{line[:7000]}')
           PY
