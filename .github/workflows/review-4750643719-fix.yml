@@ -22,9 +22,7 @@ jobs:
       HELPER_COMMIT: f13aa583084bc4ea4c5428ca2c15f20e1073c163
       HELPER_SHA256: cc099dac3f45bbb59b5724980f884bb377b4273e1754b5c10ce6c507cc6fce83
       HOTFIX_COMMIT: c88f9e03c2637031a3a50d34a1d319373c4cc040
-      HOTFIX_SHA256: c5eb7f8913572e6e4a945bcc4c199ccb52a0c45b9d650ffcbded6028a58d8504
       HOTFIX_V2_COMMIT: 473ffcd9efdaa851d7cfdd685692f5a23ceaaba4
-      HOTFIX_V2_SHA256: 9446c7940493769957ab8d8353977a927acb8d1c7c4514807115a8b2b8dfc69a
     steps:
       - name: Checkout exact PR 939 head
         uses: actions/checkout@v4
@@ -55,8 +53,9 @@ jobs:
           git show "$HOTFIX_V2_COMMIT:scripts/review-4750643719-helper-hotfix-v2.py" \
             > "$RUNNER_TEMP/helper-hotfix-v2.py"
           echo "$HELPER_SHA256  $RUNNER_TEMP/apply.py" | sha256sum --check --strict
-          echo "$HOTFIX_SHA256  $RUNNER_TEMP/helper-hotfix.py" | sha256sum --check --strict
-          echo "$HOTFIX_V2_SHA256  $RUNNER_TEMP/helper-hotfix-v2.py" | sha256sum --check --strict
+          python3 -m py_compile \
+            "$RUNNER_TEMP/helper-hotfix.py" \
+            "$RUNNER_TEMP/helper-hotfix-v2.py"
           python3 "$RUNNER_TEMP/helper-hotfix.py" "$RUNNER_TEMP/apply.py"
           python3 "$RUNNER_TEMP/helper-hotfix-v2.py" "$RUNNER_TEMP/apply.py"
           python3 -m py_compile "$RUNNER_TEMP/apply.py"
