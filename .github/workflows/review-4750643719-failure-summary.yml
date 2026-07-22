@@ -47,10 +47,10 @@ jobs:
           with open('summary.md', 'w', encoding='utf-8') as output:
               output.write('<!-- pr939-mutation-failure-summary -->\n')
               output.write('## PR #939 mutation failure summary\n\n')
-              output.write(f'Source job: `{88896109807}`\n\n')
+              output.write('Source job: `88896109807`\n\n')
               output.write('```text\n')
               for index, line in matched[-120:]:
                   output.write(f'{index}:{line[:5000]}\n')
               output.write('```\n')
           PY
-          gh pr comment 940 --body-file summary.md
+          gh pr comment -R "$GITHUB_REPOSITORY" 940 --body-file summary.md
