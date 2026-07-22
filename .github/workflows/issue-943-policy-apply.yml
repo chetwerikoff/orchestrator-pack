@@ -1,11 +1,11 @@
-name: issue-943-changed-first-publisher-v5
+name: issue-943-changed-first-publisher-v6
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  group: issue-943-changed-first-publisher-v5
+  group: issue-943-changed-first-publisher-v6
   cancel-in-progress: true
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
       TARGET_BRANCH: agent/issue-943-self-architect-hot-loop
       TARGET_HEAD: 8c5b1e2de60daec8c39eddbf5ec9c8972c20f288
       PATCH_WORKFLOW_COMMIT: 123b57c04bd146eb0b0b5863140df946ce06aa0b
-      PROBE_SCRIPT_COMMIT: b5e451728bdf070c685ce93dec9614e7bde75e47
+      PROBE_SCRIPT_COMMIT: 2f7e7f24356f645ac193a0c095309524aaad10c4
       PR939_HEAD: 4901a274d1f6ec980d2974f3f729a26dcd1cc751
       PR939_BASE: 296dff446d365cb3c0aba92b93ab16a95ee51fd3
       FINAL_PATCH_COMMIT: dd1916d6650bea279f49eb0e3c0e34f08932475e
