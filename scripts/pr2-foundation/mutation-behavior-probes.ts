@@ -208,6 +208,8 @@ addProbe(['AC4:channel-outcome-corruption'], () => requireSource(
   ['workerNotification'],
 ));
 
+addProbe(['AC5:journal-key-omitted'], () => runBehaviorFixture('migration-journal-key-required'));
+
 addProbe(['AC8:suite-self-attests'], () => {
   requireSource('scripts/pr2-foundation/mutation-semantic-check.ts', ['mutation-behavior-probes.ts'], ['mutation-semantic-gates.ts']);
   requireSource('scripts/pr2-foundation/mutation-runner.ts', ['mutation-semantic-check.ts', 'mutation-behavior-recipes.ts'], ['git status']);
