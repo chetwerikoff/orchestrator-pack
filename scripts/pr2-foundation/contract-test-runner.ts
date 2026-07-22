@@ -1,3 +1,5 @@
+import '../toolchain/native-entrypoint-preflight.ts';
+
 import { resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { AC_MUTATION_CONTROLS, type AcceptanceId } from './contracts.ts';
