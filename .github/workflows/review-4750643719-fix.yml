@@ -19,10 +19,8 @@ jobs:
     env:
       TARGET_BRANCH: agent/issue-923-pr2-foundation
       TARGET_HEAD: fa5f0a509454b31ed760c8f5cc218552a325c915
-      HELPER_COMMIT: f13aa583084bc4ea4c5428ca2c15f20e1073c163
-      HELPER_SHA256: cc099dac3f45bbb59b5724980f884bb377b4273e1754b5c10ce6c507cc6fce83
-      HOTFIX_COMMIT: c88f9e03c2637031a3a50d34a1d319373c4cc040
-      HOTFIX_V2_COMMIT: 473ffcd9efdaa851d7cfdd685692f5a23ceaaba4
+      FINAL_HELPER_COMMIT: b263212c522facff18b3d15280ea41e1852214e9
+      FINAL_HELPER_SHA256: c61f9bf406c8e3de7f84e839d6986c1f2ac710fa73bff0a2a6d88d51bd3b3205
     steps:
       - name: Checkout exact PR 939 head
         uses: actions/checkout@v4
@@ -36,28 +34,19 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Decode and apply bounded review fix
+      - name: Decode and apply exact review fix
         shell: bash
         run: |
           set -euo pipefail
           : > "$RUNNER_TEMP/verification.log"
           exec > >(tee -a "$RUNNER_TEMP/verification.log") 2>&1
           test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
-          git fetch origin "$HELPER_COMMIT" "$HOTFIX_COMMIT" "$HOTFIX_V2_COMMIT" main
-          git show "$HELPER_COMMIT:scripts/review-4750643719-finalize.py.gz.b64" \
+          git fetch origin "$FINAL_HELPER_COMMIT" main
+          git show "$FINAL_HELPER_COMMIT:scripts/review-4750643719-final-exact.py.gz.b64" \
             | base64 --decode \
             | gzip --decompress \
             > "$RUNNER_TEMP/apply.py"
-          git show "$HOTFIX_COMMIT:scripts/review-4750643719-helper-hotfix.py" \
-            > "$RUNNER_TEMP/helper-hotfix.py"
-          git show "$HOTFIX_V2_COMMIT:scripts/review-4750643719-helper-hotfix-v2.py" \
-            > "$RUNNER_TEMP/helper-hotfix-v2.py"
-          echo "$HELPER_SHA256  $RUNNER_TEMP/apply.py" | sha256sum --check --strict
-          python3 -m py_compile \
-            "$RUNNER_TEMP/helper-hotfix.py" \
-            "$RUNNER_TEMP/helper-hotfix-v2.py"
-          python3 "$RUNNER_TEMP/helper-hotfix.py" "$RUNNER_TEMP/apply.py"
-          python3 "$RUNNER_TEMP/helper-hotfix-v2.py" "$RUNNER_TEMP/apply.py"
+          echo "$FINAL_HELPER_SHA256  $RUNNER_TEMP/apply.py" | sha256sum --check --strict
           python3 -m py_compile "$RUNNER_TEMP/apply.py"
           python3 "$RUNNER_TEMP/apply.py"
           git diff --check
