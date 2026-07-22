@@ -178,6 +178,11 @@ addProbe([
   'AC3:notification-key-not-consumed-live',
   'AC3:foundation-config-activates-non-notification-consumer',
 ], () => runBehaviorFixture('config-fail-closed'));
+addProbe(['AC3:untyped-live-key'], () => requireSource(
+  'scripts/pr2-foundation/config.ts',
+  ['parseFoundationConfig'],
+  ['process.env'],
+));
 
 addProbe(['AC4:inline-powershell'], () => requireSource(
   'scripts/lib/pack-review-worker-notification.ts',
