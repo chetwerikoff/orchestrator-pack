@@ -38,46 +38,26 @@ function addProbe(keys: readonly string[], probe: Probe): void {
   }
 }
 
-function keysFor(ac: keyof typeof AC_MUTATION_CONTROLS): string[] {
-  return AC_MUTATION_CONTROLS[ac].map((mutationId) => `${ac}:${mutationId}`);
-}
-
-function runVitest(files: readonly string[]): void {
-  const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+function runFixture(file: string, probe: string): void {
   const result = runProcessSync({
-    command,
-    args: ['vitest', 'run', ...files],
+    command: process.execPath,
+    args: ['--experimental-strip-types', path.resolve(file), '--probe', probe],
     cwd: path.resolve('.'),
     inheritParentEnv: true,
-    env: {
-      OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1',
-      OPK_VITEST_HARNESS: '1',
-    },
-    allowEmptyStdout: true,
-    timeoutMs: 180_000,
+    allowEmptyStdout: false,
+    timeoutMs: 120_000,
   });
   if (!result.ok) {
-    throw new Error(`behavioral_vitest_failed:${files.join(',')}:${result.stderr || result.stdout || result.error || result.outcome}`);
+    throw new Error(`independent_fixture_failed:${probe}:${result.stderr || result.stdout || result.error || result.outcome}`);
   }
 }
 
 function runBehaviorFixture(probe: string): void {
-  const result = runProcessSync({
-    command: process.execPath,
-    args: [
-      '--experimental-strip-types',
-      path.resolve('scripts/pr2-foundation/mutation-behavior-fixtures.ts'),
-      '--probe',
-      probe,
-    ],
-    cwd: path.resolve('.'),
-    inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: 60_000,
-  });
-  if (!result.ok) {
-    throw new Error(`behavior_fixture_failed:${probe}:${result.stderr || result.stdout || result.error || result.outcome}`);
-  }
+  runFixture('scripts/pr2-foundation/mutation-behavior-fixtures.ts', probe);
+}
+
+function runPolicyFixture(probe: string): void {
+  runFixture('scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts', probe);
 }
 
 function assertDigest(file: string): void {
@@ -97,46 +77,19 @@ function requireSource(file: string, required: readonly string[], forbidden: rea
   for (const token of forbidden) invariant(!text.includes(token), `independent_forbidden_present:${file}:${token}`);
 }
 
-addProbe(keysFor('AC1'), () => runVitest([
-  'scripts/pr2-foundation/foundation.test.ts',
-  'scripts/pr2-foundation/review-4750643719-regression.test.ts',
-]));
-addProbe(keysFor('AC2'), () => runVitest([
-  'scripts/pr2-foundation/foundation.test.ts',
-  'scripts/pr2-foundation/worker-notification-compat.test.ts',
-]));
-addProbe(keysFor('AC3'), () => runVitest([
-  'scripts/pr2-foundation/foundation.test.ts',
-  'scripts/pr2-foundation/review-4750643719-regression.test.ts',
-]));
-addProbe(keysFor('AC4'), () => runVitest([
-  'scripts/pr2-foundation/foundation.test.ts',
-  'scripts/pr2-foundation/worker-notification-compat.test.ts',
-  'scripts/pr2-foundation/review-4750643719-regression.test.ts',
-]));
-addProbe(keysFor('AC5'), () => runVitest([
-  'scripts/pr2-foundation/foundation.test.ts',
-  'scripts/pr2-foundation/review-4750643719-regression.test.ts',
-]));
-addProbe(keysFor('AC6'), () => runVitest(['scripts/pr2-foundation/foundation.test.ts']));
-addProbe(keysFor('AC7'), () => runVitest(['scripts/pr2-foundation/foundation.test.ts']));
-addProbe(keysFor('AC8'), () => runVitest([
-  'scripts/pr2-foundation/mutation-catalog.test.ts',
-  'scripts/pr2-foundation/mutation-semantic-gates.test.ts',
-]));
-addProbe(keysFor('AC9'), () => runVitest([
-  'scripts/pr2-foundation/real-scope-proof.test.ts',
-  'scripts/pr2-foundation/mutation-semantic-gates.test.ts',
-]));
-
 addProbe([
   'AC1:scheduler-acquirer-running',
   'AC1:activation-epoch-enforced',
   'AC1:dormant-config-reader-live',
 ], () => runBehaviorFixture('scheduler-inert'));
 addProbe(['AC1:registry-changed'], () => assertDigest('scripts/orchestrator-side-process-registry.json'));
+addProbe(['AC1:live-store-opened'], () => runBehaviorFixture('migration-live-root-refused'));
 addProbe(['AC1:legacy-starter-disabled'], () => assertDigest('scripts/review-trigger-reconcile.ps1'));
 addProbe(['AC1:non-notification-runtime-delta'], () => assertDigest('scripts/pack-review-runner.ts'));
+addProbe(['AC1:notification-config-reader-absent'], () => requireSource(
+  'scripts/pr2-foundation/worker-notification.ts',
+  ['config = notificationConfig(options.foundationConfig ?? {});'],
+));
 
 addProbe(['AC2:raw-live-capture-committed'], () => assertAbsent('tests/external-output-references/captures/issue-923/raw-live.json'));
 addProbe(['AC2:capture-metadata-secret-scan-omitted'], () => runBehaviorFixture('capture-secret-rejected'));
@@ -171,7 +124,6 @@ addProbe(['AC2:legacy-cache-projection-dependency'], () => requireSource(
 ));
 
 addProbe([
-  'AC3:untyped-live-key',
   'AC3:malformed-value-defaulted',
   'AC3:invalid-config-accepted',
   'AC3:unknown-config-key-ignored',
@@ -184,6 +136,11 @@ addProbe(['AC3:untyped-live-key'], () => requireSource(
   ['process.env'],
 ));
 
+addProbe(['AC4:notify-before-journal'], () => requireSource(
+  'scripts/pr2-foundation/worker-notification.ts',
+  ['const inspected = await inspectNotification({'],
+  ['await runProcess({ command: config.aoPath, args: [], allowEmptyStdout: true, timeoutMs: 1 });'],
+));
 addProbe(['AC4:inline-powershell'], () => requireSource(
   'scripts/lib/pack-review-worker-notification.ts',
   ['worker-notification.ts'],
@@ -218,9 +175,23 @@ addProbe(['AC5:marker-crash-reimports'], () => runBehaviorFixture('migration-rep
 addProbe(['AC5:torn-journal-accepted'], () => runBehaviorFixture('migration-torn-rejected'));
 addProbe(['AC5:live-store-import-allowed'], () => runBehaviorFixture('migration-live-root-refused'));
 
+addProbe([
+  'AC6:catalog-surface-omitted',
+  'AC6:candidate-catalog-downgrade',
+], () => runPolicyFixture('runtime-catalog-fail-closed'));
+addProbe([
+  'AC6:symlink-cleanup',
+  'AC6:swap-after-check-delete',
+  'AC6:unsupported-platform-cleanup-enabled',
+], () => runPolicyFixture('cleanup-fail-closed'));
+
+addProbe(AC_MUTATION_CONTROLS.AC7.map((id) => `AC7:${id}`), () => runPolicyFixture('estate-split-valid'));
+addProbe(AC_MUTATION_CONTROLS.AC7.map((id) => `AC7:${id}`), () => runPolicyFixture('estate-generator-clean'));
+
 addProbe(['AC8:suite-self-attests'], () => {
   requireSource('scripts/pr2-foundation/mutation-semantic-check.ts', ['mutation-behavior-probes.ts'], ['mutation-semantic-gates.ts']);
   requireSource('scripts/pr2-foundation/mutation-runner.ts', ['mutation-semantic-check.ts', 'mutation-behavior-recipes.ts'], ['git status']);
+  requireSource('scripts/pr2-foundation/mutation-behavior-probes.ts', ['mutation-behavior-policy-fixtures.ts'], ['mutation-semantic-gates.ts']);
 });
 addProbe(['AC8:artifact-hash-delta-missing'], () => requireSource(
   'scripts/pr2-foundation/mutation-runner.ts',
@@ -234,15 +205,31 @@ addProbe(['AC8:restore-hash-mismatch'], () => requireSource(
   'scripts/pr2-foundation/mutation-runner.ts',
   ['restore_hash_mismatch'],
 ));
+addProbe([
+  'AC8:mutation-id-extra',
+  'AC8:mutation-id-missing',
+], () => runPolicyFixture('mutation-catalog-set-strict'));
+addProbe([
+  'AC8:mutation-id-extra',
+  'AC8:mutation-id-missing',
+], () => runPolicyFixture('mutation-evidence-set-strict'));
 
-addProbe(['AC9:cutover-path-modified'], () => assertDigest('scripts/review-trigger-reconcile.ps1'));
-addProbe(['AC9:registry-or-supervisor-modified'], () => assertDigest('scripts/orchestrator-wake-supervisor.ps1'));
-addProbe(['AC9:capture-corpus-overreach'], () => assertDigest('tests/external-output-references/capture-manifest.json'));
-addProbe(['AC9:raw-capture-added'], () => assertAbsent('tests/external-output-references/captures/issue-923/raw-live-ac9.json'));
+addProbe([
+  'AC9:manifest-self-authorizes',
+  'AC9:addition-root-not-predeclared',
+  'AC9:candidate-tag-self-authorizes',
+  'AC9:addition-root-exists-at-base',
+  'AC9:symlink-mode',
+  'AC9:gitlink-mode',
+  'AC9:multi-revert-plan',
+  'AC9:new-powershell-logic-added',
+], () => runPolicyFixture('scope-fail-closed'));
 addProbe(['AC9:modification-outside-independent-union'], () => requireSource(
   'scripts/pr2-foundation/real-scope-proof.test.ts',
-  ['validateFoundationScope'],
+  ['validateFoundationScope', 'currentDiff.changedPaths'],
 ));
+addProbe(['AC9:cutover-path-modified'], () => assertDigest('scripts/review-trigger-reconcile.ps1'));
+addProbe(['AC9:registry-or-supervisor-modified'], () => assertDigest('scripts/orchestrator-wake-supervisor.ps1'));
 addProbe(['AC9:declaration-snapshot-missing'], () => requireSource(
   'scripts/pr2-foundation/real-scope-proof.test.ts',
   ['resolveLatestCommittedSnapshotAtCommit'],
@@ -251,6 +238,13 @@ addProbe(['AC9:declaration-created-after-implementation'], () => requireSource(
   'scripts/pr2-foundation/real-scope-proof.test.ts',
   ['--full-history', 'declarationCommitSha'],
 ));
+addProbe(['AC9:capture-corpus-overreach'], () => assertDigest('tests/external-output-references/capture-manifest.json'));
+addProbe(['AC9:raw-capture-added'], () => assertAbsent('tests/external-output-references/captures/issue-923/raw-live-ac9.json'));
+addProbe([
+  'AC9:test-classification-missing',
+  'AC9:lane-config-overreach',
+], () => runPolicyFixture('lane-config-bounded'));
+addProbe(['AC9:package-json-overreach'], () => runPolicyFixture('package-script-exact'));
 
 const EXPECTED_KEYS = Object.entries(AC_MUTATION_CONTROLS).flatMap(([ac, ids]) =>
   ids.map((mutationId) => `${ac}:${mutationId}`),
