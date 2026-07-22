@@ -170,8 +170,8 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     replacement: '  if (false) {',
   },
   'AC8:failing-test-identity-missing': {
-    anchor: '    if (negative.ok || !negativeText.includes(binding.failingTestId)) {',
-    replacement: '    if (false) {',
+    anchor: '  if (negative.ok || !negativeText.includes(failingTestId)) {',
+    replacement: '  if (false) {',
   },
   'AC8:restore-hash-mismatch': {
     anchor: '  if (restoredHash !== artifactHashBefore) {',
