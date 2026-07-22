@@ -7,6 +7,7 @@ on:
 permissions:
   actions: read
   contents: read
+  pull-requests: write
 
 jobs:
   extract:
@@ -14,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88888352511'
+      SOURCE_JOB_ID: '88896109807'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print policy lint failure
+      - name: Publish bounded mutation failure summary
         shell: bash
         run: |
           set -euo pipefail
@@ -31,12 +32,25 @@ jobs:
           import re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          needles = ('node-contract', 'runtime-', 'direct native', 'policy checks', '##[error]', 'Process completed with exit code')
-          print('--- matched ---')
-          for index, line in enumerate(lines, start=1):
-              if any(needle.lower() in line.lower() for needle in needles):
-                  print(f'{index}:{line[:7000]}')
-          print('--- final 120 ---')
-          for index, line in enumerate(lines[-120:], start=max(1, len(lines) - 119)):
-              print(f'{index}:{line[:7000]}')
+          needles = (
+              'mutation-contract:',
+              'mutation_',
+              'independent_',
+              'artifact_',
+              'specific_failing_test',
+              'restore_',
+              '##[error]',
+              'Process completed with exit code',
+          )
+          matched = [(index, line) for index, line in enumerate(lines, start=1)
+                     if any(needle.lower() in line.lower() for needle in needles)]
+          with open('summary.md', 'w', encoding='utf-8') as output:
+              output.write('<!-- pr939-mutation-failure-summary -->\n')
+              output.write('## PR #939 mutation failure summary\n\n')
+              output.write(f'Source job: `{88896109807}`\n\n')
+              output.write('```text\n')
+              for index, line in matched[-120:]:
+                  output.write(f'{index}:{line[:5000]}\n')
+              output.write('```\n')
           PY
+          gh pr comment 940 --body-file summary.md
