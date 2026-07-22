@@ -62,6 +62,25 @@ function runVitest(files: readonly string[]): void {
   }
 }
 
+function runBehaviorFixture(probe: string): void {
+  const result = runProcessSync({
+    command: process.execPath,
+    args: [
+      '--experimental-strip-types',
+      path.resolve('scripts/pr2-foundation/mutation-behavior-fixtures.ts'),
+      '--probe',
+      probe,
+    ],
+    cwd: path.resolve('.'),
+    inheritParentEnv: true,
+    allowEmptyStdout: false,
+    timeoutMs: 60_000,
+  });
+  if (!result.ok) {
+    throw new Error(`behavior_fixture_failed:${probe}:${result.stderr || result.stdout || result.error || result.outcome}`);
+  }
+}
+
 function assertDigest(file: string): void {
   const expected = IMMUTABLE_DIGESTS[file];
   invariant(expected, `probe_digest_missing:${file}`);
@@ -111,10 +130,22 @@ addProbe(keysFor('AC9'), () => runVitest([
   'scripts/pr2-foundation/mutation-semantic-gates.test.ts',
 ]));
 
+addProbe([
+  'AC1:scheduler-acquirer-running',
+  'AC1:activation-epoch-enforced',
+  'AC1:dormant-config-reader-live',
+], () => runBehaviorFixture('scheduler-inert'));
 addProbe(['AC1:registry-changed'], () => assertDigest('scripts/orchestrator-side-process-registry.json'));
 addProbe(['AC1:legacy-starter-disabled'], () => assertDigest('scripts/review-trigger-reconcile.ps1'));
 addProbe(['AC1:non-notification-runtime-delta'], () => assertDigest('scripts/pack-review-runner.ts'));
+
 addProbe(['AC2:raw-live-capture-committed'], () => assertAbsent('tests/external-output-references/captures/issue-923/raw-live.json'));
+addProbe([
+  'AC2:hypothetical-prs-or-branch-trust',
+  'AC2:pr-body-reference-trusted',
+], () => runBehaviorFixture('pr-body-not-trusted'));
+addProbe(['AC2:draft-candidate-accepted'], () => runBehaviorFixture('draft-rejected'));
+addProbe(['AC2:missing-draft-bit-accepted'], () => runBehaviorFixture('missing-draft-rejected'));
 addProbe(['AC2:per-session-detail-call'], () => requireSource(
   'scripts/pr2-foundation/worker-notification-target.ts',
   ["args: ['session', 'ls', '--json']"],
@@ -125,11 +156,15 @@ addProbe(['AC2:legacy-cache-projection-dependency'], () => requireSource(
   ['collectOpenPrSnapshot'],
   ['Gh-FleetInventoryCache'],
 ));
-addProbe(['AC3:untyped-live-key'], () => requireSource(
-  'scripts/pr2-foundation/config.ts',
-  ['parseFoundationConfig'],
-  ['process.env'],
-));
+
+addProbe([
+  'AC3:untyped-live-key',
+  'AC3:malformed-value-defaulted',
+  'AC3:invalid-config-accepted',
+  'AC3:unknown-config-key-ignored',
+  'AC3:foundation-config-activates-non-notification-consumer',
+], () => runBehaviorFixture('config-fail-closed'));
+
 addProbe(['AC4:inline-powershell'], () => requireSource(
   'scripts/lib/pack-review-worker-notification.ts',
   ['worker-notification.ts'],
@@ -152,9 +187,10 @@ addProbe(['AC4:channel-outcome-corruption'], () => requireSource(
   'scripts/lib/pack-review-delivery.ts',
   ['workerNotification'],
 ));
+
 addProbe(['AC8:suite-self-attests'], () => {
   requireSource('scripts/pr2-foundation/mutation-semantic-check.ts', ['mutation-behavior-probes.ts'], ['mutation-semantic-gates.ts']);
-  requireSource('scripts/pr2-foundation/mutation-runner.ts', ['mutation-semantic-check.ts'], ['git status']);
+  requireSource('scripts/pr2-foundation/mutation-runner.ts', ['mutation-semantic-check.ts', 'mutation-behavior-recipes.ts'], ['git status']);
 });
 addProbe(['AC8:artifact-hash-delta-missing'], () => requireSource(
   'scripts/pr2-foundation/mutation-runner.ts',
@@ -168,6 +204,7 @@ addProbe(['AC8:restore-hash-mismatch'], () => requireSource(
   'scripts/pr2-foundation/mutation-runner.ts',
   ['restore_hash_mismatch'],
 ));
+
 addProbe(['AC9:cutover-path-modified'], () => assertDigest('scripts/review-trigger-reconcile.ps1'));
 addProbe(['AC9:registry-or-supervisor-modified'], () => assertDigest('scripts/orchestrator-wake-supervisor.ps1'));
 addProbe(['AC9:capture-corpus-overreach'], () => assertDigest('tests/external-output-references/capture-manifest.json'));
