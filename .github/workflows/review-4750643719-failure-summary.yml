@@ -26,49 +26,52 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           python3 - <<'PY'
+          import re
           from pathlib import Path
+
           path = Path('scripts/pr2-foundation/mutation-behavior-recipes.ts')
           text = path.read_text(encoding='utf-8')
-          replacements = [
-              (
-                  """interface TextRecipe {
+
+          old_interface = """interface TextRecipe {
             anchor: string;
             replacement: string;
-          }""",
-                  """interface TextRecipe {
+          }"""
+          new_interface = """interface TextRecipe {
             anchor: string;
             replacement: string;
             expectedOccurrences?: number;
-          }""",
-              ),
-              (
-                  """  'AC4:duplicate-send-unaccounted': {
-            anchor: \"  try {\\n    const inspected = await inspectNotification({\\n      deliveryKey,\\n      findingsHash,\\n      maxAttempts: config.maxJournalAttempts,\\n    });\\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\\n  } catch (error) {\",
-            replacement: \"  try {\\n    const inspected = await inspectNotification({\\n      deliveryKey,\\n      findingsHash,\\n      maxAttempts: config.maxJournalAttempts,\\n    });\\n    if (false && inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\\n  } catch (error) {\",
-          },""",
-                  """  'AC4:duplicate-send-unaccounted': {
+          }"""
+          if text.count(old_interface) != 1:
+              raise SystemExit('TextRecipe interface shape drifted')
+          text = text.replace(old_interface, new_interface)
+
+          pattern = re.compile(
+              r"  'AC4:duplicate-send-unaccounted': \{.*?\n  \},\n  'AC4:run-linkage-missing': \{",
+              re.S,
+          )
+          replacement = """  'AC4:duplicate-send-unaccounted': {
             anchor: \"if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\",
             replacement: \"if (false && inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\",
             expectedOccurrences: 2,
-          },""",
-              ),
-              (
-                  """  const affectedOccurrences = source.split(recipe.anchor).length - 1;
+          },
+          'AC4:run-linkage-missing': {"""
+          text, count = pattern.subn(replacement, text)
+          if count != 1:
+              raise SystemExit(f'duplicate recipe block cardinality={count}')
+
+          old_cardinality = """  const affectedOccurrences = source.split(recipe.anchor).length - 1;
             if (affectedOccurrences !== 1) {
               throw new Error(`behavior_mutation_anchor_cardinality:${key}:${affectedOccurrences}`);
-            }""",
-                  """  const affectedOccurrences = source.split(recipe.anchor).length - 1;
+            }"""
+          new_cardinality = """  const affectedOccurrences = source.split(recipe.anchor).length - 1;
             const expectedOccurrences = recipe.expectedOccurrences ?? 1;
             if (affectedOccurrences !== expectedOccurrences) {
               throw new Error(`behavior_mutation_anchor_cardinality:${key}:${affectedOccurrences}:${expectedOccurrences}`);
-            }""",
-              ),
-          ]
-          for old, new in replacements:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'expected one replacement, found {count}: {old[:100]}')
-              text = text.replace(old, new)
+            }"""
+          if text.count(old_cardinality) != 1:
+              raise SystemExit('cardinality guard shape drifted')
+          text = text.replace(old_cardinality, new_cardinality)
+
           path.write_text(text, encoding='utf-8')
           PY
       - uses: actions/setup-node@v4
