@@ -12,6 +12,7 @@ export interface BehavioralMutation {
 interface TextRecipe {
   anchor: string;
   replacement: string;
+  expectedOccurrences?: number;
 }
 
 const TEXT_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
@@ -140,10 +141,11 @@ const TEXT_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     replacement: '  return canonicalFinalizeDispatchJournalRecord(\n    {},\n    deliveryId,',
   },
   'AC4:duplicate-send-unaccounted': {
-    anchor: "  try {\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
-    replacement: "  try {\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (false && inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
-  },
-  'AC4:run-linkage-missing': {
+  anchor: "if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };",
+  replacement: "if (false && inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };",
+  expectedOccurrences: 2,
+},
+'AC4:run-linkage-missing': {
     anchor: '        reviewRunId: options.run.id,',
     replacement: "        reviewRunId: '',",
   },
@@ -307,13 +309,14 @@ function bindingPath(key: string): string {
 function applyTextRecipe(key: string, source: string | null, recipe: TextRecipe): BehavioralMutation {
   if (source === null) throw new Error(`mutation_target_missing:${key}`);
   const affectedOccurrences = source.split(recipe.anchor).length - 1;
-  if (affectedOccurrences !== 1) {
-    throw new Error(`behavior_mutation_anchor_cardinality:${key}:${affectedOccurrences}`);
+  const expectedOccurrences = recipe.expectedOccurrences ?? 1;
+  if (affectedOccurrences !== expectedOccurrences) {
+    throw new Error(`behavior_mutation_anchor_cardinality:${key}:${affectedOccurrences}:${expectedOccurrences}`);
   }
   return {
     artifactPath: bindingPath(key),
     kind: 'replace',
-    content: source.replace(recipe.anchor, recipe.replacement),
+    content: source.split(recipe.anchor).join(recipe.replacement),
     affectedOccurrences,
     anchor: recipe.anchor,
   };
