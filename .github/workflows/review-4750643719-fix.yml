@@ -178,10 +178,11 @@ jobs:
           scope = scope.replace(old_needs, new_needs, 1)
           aggregate_step = """      - name: Fail-closed full-regression aggregate
           """
-          mutation_gate = """      - name: Require contract mutation evidence
+          mutation_expression = '$' + '{{ needs.test-contract-mutations.result }}'
+          mutation_gate = f"""      - name: Require contract mutation evidence
                 shell: bash
                 env:
-                  CONTRACT_MUTATIONS_RESULT: ${{ needs.test-contract-mutations.result }}
+                  CONTRACT_MUTATIONS_RESULT: {mutation_expression}
                 run: test "$CONTRACT_MUTATIONS_RESULT" = "success"
           
                 - name: Fail-closed full-regression aggregate
