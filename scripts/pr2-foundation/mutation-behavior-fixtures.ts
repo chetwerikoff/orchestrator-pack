@@ -1,4 +1,12 @@
 import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import {
   branchMatchesIssue,
   captureLeakReason,
   collectOpenPrSnapshot,
@@ -15,12 +23,13 @@ import {
   notificationConfig,
   parseFoundationConfig,
 } from './config.ts';
+import { runSyntheticMigration } from './migration-journal.ts';
+import { buildDormantScheduler, runDormantMergeActuator } from './scheduler.ts';
 import {
   DISPATCH_OUTCOME_DISPATCHED,
   DRAFT_STATE_DRAFT_PRESENT,
   finalizeDispatchJournalRecord,
 } from './worker-dispatch-journal.ts';
-import { buildDormantScheduler, runDormantMergeActuator } from './scheduler.ts';
 
 function invariant(condition: unknown, reason: string): asserts condition {
   if (!condition) throw new Error(reason);
@@ -203,6 +212,29 @@ function historicalJournalReadable(): void {
   );
 }
 
+function migrationJournalKeyRequired(): void {
+  const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'opk-mutation-journal-key-'));
+  try {
+    const sourcePath = path.join(fixtureRoot, 'source.json');
+    const targetPath = path.join(fixtureRoot, 'target.json');
+    const journalPath = path.join(fixtureRoot, 'journal.json');
+    writeFileSync(sourcePath, '{"fixture":true}\n', 'utf8');
+    const result = runSyntheticMigration({
+      fixtureRoot,
+      sourcePath,
+      targetPath,
+      journalPath,
+      journalKey: '   ',
+      now: '2026-07-20T00:00:00.000Z',
+    });
+    invariant(!result.ok && result.reason === 'journal_key_required', 'empty_journal_key_accepted');
+    invariant(!existsSync(journalPath), 'journal_created_without_key');
+    invariant(!existsSync(targetPath), 'target_created_without_key');
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
 async function main(): Promise<void> {
   const probeIndex = process.argv.indexOf('--probe');
   const probe = probeIndex >= 0 ? String(process.argv[probeIndex + 1] ?? '') : '';
@@ -217,6 +249,7 @@ async function main(): Promise<void> {
   else if (probe === 'cross-repo-rejected') await crossRepoRejected();
   else if (probe === 'config-fail-closed') configFailClosed();
   else if (probe === 'historical-journal-readable') historicalJournalReadable();
+  else if (probe === 'migration-journal-key-required') migrationJournalKeyRequired();
   else throw new Error(`unknown_behavior_fixture:${probe}`);
   process.stdout.write(`behavior-fixture:${probe}:passed\n`);
 }
