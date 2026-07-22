@@ -1,6 +1,7 @@
 import {
   existsSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -28,6 +29,7 @@ import {
   finalizeWorkerNudgeClaim,
   markWorkerNudgeSendAttempted,
   persistWorkerNudgeMessageHash,
+  workerNudgeClaimNamespace,
 } from './worker-nudge-claim-store.ts';
 import { resolveVerifiedWorkerNotificationTarget } from './worker-notification-target.ts';
 
@@ -289,6 +291,75 @@ describe('[AC4] TypeScript notification compatibility', () => {
       reason: 'materially_new_content',
       escalate: true,
     });
+  });
+
+  it('retries D4 sends after uncertain finalization and crashed send-attempt recovery', async () => {
+    const root = testRoots.create('opk-pr2-claim-d4-');
+    process.env.AO_BASE_DIR = path.join(root, 'ao-base');
+    const base = {
+      prNumber: 923,
+      cycleKey: `stdout:sha256:${'c'.repeat(64)}`,
+      intentClass: 'review-findings',
+      workerTarget: 'worker-923:generation-d4',
+      sessionId: 'worker-923',
+      targetId: 'worker-923',
+      targetGeneration: 'generation-d4',
+      surface: 'scripted-review-stdout-delivery',
+      projectId: 'orchestrator-pack',
+      message: 'Pack review completed for PR #923.',
+    };
+    const records = (): Array<Record<string, unknown>> => {
+      const directory = path.join(workerNudgeClaimNamespace('orchestrator-pack'), 'terminal');
+      return readdirSync(directory)
+        .filter((name) => name.endsWith('.json'))
+        .map((name) => JSON.parse(readFileSync(path.join(directory, name), 'utf8')) as Record<string, unknown>);
+    };
+
+    const uncertain = await acquireWorkerNudgeClaim(base);
+    expect(uncertain).toMatchObject({ acquired: true });
+    if (!uncertain.acquired) throw new Error(uncertain.reason);
+    expect(await persistWorkerNudgeMessageHash(uncertain, base.message)).toMatchObject({ ok: true });
+    expect(await markWorkerNudgeSendAttempted(uncertain)).toEqual({ ok: true });
+    expect(await finalizeWorkerNudgeClaim(uncertain, 'UNCERTAIN', {
+      reason: 'dispatch_timeout',
+    })).toMatchObject({ ok: true });
+
+    const retry = await acquireWorkerNudgeClaim(base);
+    expect(retry).toMatchObject({ acquired: true });
+    if (!retry.acquired) throw new Error(retry.reason);
+    expect(retry.claim.holder.processGuid).not.toBe(uncertain.claim.holder.processGuid);
+    expect(records()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: 'UNCERTAIN', state: 'UNCERTAIN' }),
+    ]));
+    expect(await persistWorkerNudgeMessageHash(retry, base.message)).toMatchObject({ ok: true });
+    expect(await markWorkerNudgeSendAttempted(retry)).toEqual({ ok: true });
+    expect(await finalizeWorkerNudgeClaim(retry, 'SENT')).toMatchObject({ ok: true });
+
+    const interruptedBase = {
+      ...base,
+      cycleKey: `${base.cycleKey}:interrupted`,
+    };
+    const interrupted = await acquireWorkerNudgeClaim(interruptedBase);
+    expect(interrupted).toMatchObject({ acquired: true });
+    if (!interrupted.acquired) throw new Error(interrupted.reason);
+    expect(await persistWorkerNudgeMessageHash(interrupted, interruptedBase.message)).toMatchObject({ ok: true });
+    expect(await markWorkerNudgeSendAttempted(interrupted)).toEqual({ ok: true });
+
+    const recovered = await acquireWorkerNudgeClaim(interruptedBase);
+    expect(recovered).toMatchObject({ acquired: true });
+    if (!recovered.acquired) throw new Error(recovered.reason);
+    expect(recovered.claim.holder.processGuid).not.toBe(interrupted.claim.holder.processGuid);
+    expect(records()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        phase: 'UNCERTAIN',
+        state: 'UNCERTAIN',
+        recoveredFromPhase: 'SEND_ATTEMPTED',
+        retryAllowed: true,
+      }),
+    ]));
+    expect(await persistWorkerNudgeMessageHash(recovered, interruptedBase.message)).toMatchObject({ ok: true });
+    expect(await markWorkerNudgeSendAttempted(recovered)).toEqual({ ok: true });
+    expect(await finalizeWorkerNudgeClaim(recovered, 'SENT')).toMatchObject({ ok: true });
   });
 
   it('uses the canonical bounded journal for historical bytes, fence transitions, and capacity refusal', () => {
