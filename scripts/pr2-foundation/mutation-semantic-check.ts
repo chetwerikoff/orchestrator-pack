@@ -1,10 +1,5 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 
-import {
-  behavioralProbeIdForMutation,
-  runBehavioralMutationProbe,
-} from './mutation-behavior-probes.ts';
-
 function mutationKey(): string {
   const keyIndex = process.argv.indexOf('--key');
   const key = keyIndex >= 0 ? String(process.argv[keyIndex + 1] ?? '') : '';
@@ -12,10 +7,11 @@ function mutationKey(): string {
   return key;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const key = mutationKey();
-  const failingTestId = behavioralProbeIdForMutation(key);
+  const failingTestId = `mutation-contract:${key}`;
   try {
+    const { runBehavioralMutationProbe } = await import('./mutation-behavior-probes.ts');
     runBehavioralMutationProbe(key);
   } catch (error) {
     process.stderr.write(`${failingTestId}: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -24,9 +20,7 @@ function main(): void {
   process.stdout.write(`${failingTestId}: passed\n`);
 }
 
-try {
-  main();
-} catch (error) {
+main().catch((error) => {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(2);
-}
+});
