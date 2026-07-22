@@ -1,0 +1,39 @@
+name: review-4750643719-inventory
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-923-pr2-foundation
+          fetch-depth: 0
+      - name: Inventory exact seams
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HEAD=$(git rev-parse HEAD)"
+          echo '--- terminalized imports under docs ---'
+          grep -RIn --include='*.mjs' --include='*.mts' "scripts/pr2-foundation/terminalized" docs || true
+          echo '--- mutation semantic gate custom entries ---'
+          grep -n "custom:" scripts/pr2-foundation/mutation-semantic-gates.ts || true
+          echo '--- current mutation runner apply block ---'
+          sed -n '1,220p' scripts/pr2-foundation/mutation-runner.ts
+          echo '--- current contract runner ---'
+          sed -n '1,180p' scripts/pr2-foundation/contract-test-runner.ts
+          echo '--- migration journal parser ---'
+          sed -n '155,245p' scripts/pr2-foundation/migration-journal.ts
+          echo '--- worker notification admission/success ---'
+          sed -n '145,225p' scripts/pr2-foundation/worker-notification.ts
+          sed -n '455,500p' scripts/pr2-foundation/worker-notification.ts
+          echo '--- claim namespace ---'
+          sed -n '115,150p' scripts/pr2-foundation/worker-nudge-claim-store.ts
