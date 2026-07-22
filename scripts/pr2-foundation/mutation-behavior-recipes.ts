@@ -6,6 +6,7 @@ import {
 interface TextRecipe {
   anchor: string;
   replacement: string;
+  artifactPath?: string;
 }
 
 const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
@@ -185,6 +186,21 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     anchor: "    'registry-changed': 'scripts/orchestrator-side-process-registry.json',\n",
     replacement: '',
   },
+  'AC9:modification-outside-independent-union': {
+    artifactPath: 'scripts/pr2-foundation/real-scope-proof.ts',
+    anchor: '  const changedPaths = rows.map((row) => row.path);',
+    replacement: "  const changedPaths = [...rows.map((row) => row.path), 'README.md'];",
+  },
+  'AC9:declaration-snapshot-missing': {
+    artifactPath: 'scripts/pr2-foundation/real-scope-proof.ts',
+    anchor: '  const resolved = resolveLatestCommittedSnapshotAtCommit(repoRoot, declarationCommitSha);',
+    replacement: '  const resolved = resolveLatestCommittedSnapshot(repoRoot, 923);',
+  },
+  'AC9:declaration-created-after-implementation': {
+    artifactPath: 'scripts/pr2-foundation/real-scope-proof.ts',
+    anchor: '  const declarationCommitSha = declarationCommits[0];',
+    replacement: "  const declarationCommitSha = git(repoRoot, ['rev-parse', 'HEAD']);",
+  },
   'AC9:manifest-self-authorizes': {
     anchor: '  const exactExisting = new Set<string>([...EXACT_EXISTING_SCOPE_PATHS, ...FOUNDATION_DOC_ROWS].map(normalize));',
     replacement: "  const exactExisting = new Set<string>([...EXACT_EXISTING_SCOPE_PATHS, ...FOUNDATION_DOC_ROWS, 'README.md'].map(normalize));",
@@ -300,9 +316,9 @@ function applyTextRecipe(
   if (affectedOccurrences !== 1) {
     throw new Error(`behavior_mutation_anchor_cardinality:${key}:${affectedOccurrences}`);
   }
-  const fallback = buildBoundedSemanticMutation(key, source);
+  const artifactPath = recipe.artifactPath ?? buildBoundedSemanticMutation(key, source).artifactPath;
   return {
-    artifactPath: fallback.artifactPath,
+    artifactPath,
     kind: 'replace',
     content: source.replace(recipe.anchor, recipe.replacement),
     affectedOccurrences,
