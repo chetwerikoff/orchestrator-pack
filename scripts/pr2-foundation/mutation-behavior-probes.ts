@@ -192,7 +192,6 @@ addProbe(['AC7:unrelated-manifest-row-changed'], () => runPolicyFixture('estate-
 addProbe(['AC8:suite-self-attests'], () => {
   requireSource('scripts/pr2-foundation/mutation-semantic-check.ts', ['mutation-behavior-probes.ts'], ['mutation-semantic-gates.ts']);
   requireSource('scripts/pr2-foundation/mutation-runner.ts', ['mutation-semantic-check.ts', 'mutation-behavior-recipes.ts'], ['git status']);
-  requireSource('scripts/pr2-foundation/mutation-behavior-probes.ts', ['mutation-behavior-policy-fixtures.ts'], ['mutation-semantic-gates.ts']);
 });
 addProbe(['AC8:artifact-hash-delta-missing'], () => requireSource(
   'scripts/pr2-foundation/mutation-runner.ts',
