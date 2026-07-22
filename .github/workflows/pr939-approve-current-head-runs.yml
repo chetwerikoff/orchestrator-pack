@@ -21,6 +21,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for run in 29900807301 29900807336 29900807279 29900807314; do
+          for run in 29909826406 29909826415 29909826430 29909826555; do
             ./scripts/gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run}/approve"
           done
