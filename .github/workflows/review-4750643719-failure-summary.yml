@@ -5,57 +5,86 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  actions: read
-  pull-requests: write
+  contents: write
 
 jobs:
-  extract:
+  apply:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     env:
-      GITHUB_TOKEN: ${{ github.token }}
+      TARGET_BRANCH: agent/issue-923-pr2-foundation
+      EXPECTED_HEAD: d60eaffef853d1c4c3b696561737523ab3103949
     steps:
-      - name: Publish bounded explicit-mutation failure
-        uses: actions/github-script@v7
+      - uses: actions/checkout@v4
         with:
-          script: |
-            const jobId = 88923478737;
-            const url = `https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/actions/jobs/${jobId}/logs`;
-            const response = await fetch(url, {
-              headers: {
-                accept: 'application/vnd.github+json',
-                authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-                'x-github-api-version': '2022-11-28',
-              },
-              redirect: 'follow',
-            });
-            if (!response.ok) throw new Error(`job_log_fetch_failed:${response.status}`);
-            const raw = await response.text();
-            const ansi = /\u001b\[[0-9;]*m/g;
-            const lines = raw.split(/\r?\n/).map((line) => line.replace(ansi, ''));
-            const needles = [
-              'mutation-contract:', 'mutation_', 'behavior_mutation', 'independent_',
-              'artifact_', 'specific_failing_test', 'restore_', '##[error]',
-              'Process completed with exit code',
-            ];
-            const matched = lines
-              .map((line, index) => ({ line, index: index + 1 }))
-              .filter(({ line }) => needles.some((needle) => line.includes(needle)))
-              .slice(-120);
-            const body = [
-              '## PR #939 explicit-mutation failure summary',
-              '',
-              `Source job: \`${jobId}\``,
-              '',
-              '```text',
-              ...matched.map(({ line, index }) => `${index}:${line.slice(0, 5000)}`),
-              '```',
-              '',
-            ].join('\n');
-            await github.rest.pulls.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: 940,
-              body,
-            });
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+      - name: Mutate both duplicate-send guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/pr2-foundation/mutation-behavior-recipes.ts')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  """interface TextRecipe {
+            anchor: string;
+            replacement: string;
+          }""",
+                  """interface TextRecipe {
+            anchor: string;
+            replacement: string;
+            expectedOccurrences?: number;
+          }""",
+              ),
+              (
+                  """  'AC4:duplicate-send-unaccounted': {
+            anchor: \"  try {\\n    const inspected = await inspectNotification({\\n      deliveryKey,\\n      findingsHash,\\n      maxAttempts: config.maxJournalAttempts,\\n    });\\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\\n  } catch (error) {\",
+            replacement: \"  try {\\n    const inspected = await inspectNotification({\\n      deliveryKey,\\n      findingsHash,\\n      maxAttempts: config.maxJournalAttempts,\\n    });\\n    if (false && inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\\n  } catch (error) {\",
+          },""",
+                  """  'AC4:duplicate-send-unaccounted': {
+            anchor: \"if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\",
+            replacement: \"if (false && inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\",
+            expectedOccurrences: 2,
+          },""",
+              ),
+              (
+                  """  const affectedOccurrences = source.split(recipe.anchor).length - 1;
+            if (affectedOccurrences !== 1) {
+              throw new Error(`behavior_mutation_anchor_cardinality:${key}:${affectedOccurrences}`);
+            }""",
+                  """  const affectedOccurrences = source.split(recipe.anchor).length - 1;
+            const expectedOccurrences = recipe.expectedOccurrences ?? 1;
+            if (affectedOccurrences !== expectedOccurrences) {
+              throw new Error(`behavior_mutation_anchor_cardinality:${key}:${affectedOccurrences}:${expectedOccurrences}`);
+            }""",
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one replacement, found {count}: {old[:100]}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
+          PY
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck:foundation
+      - run: node --experimental-strip-types scripts/pr2-foundation/contract-test-runner.ts --ac AC4
+      - name: Commit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/pr2-foundation/mutation-behavior-recipes.ts
+          git commit -m "test: mutate both duplicate-send guards"
+          git push origin "HEAD:${TARGET_BRANCH}"
