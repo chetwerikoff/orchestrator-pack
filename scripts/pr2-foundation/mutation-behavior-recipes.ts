@@ -113,6 +113,30 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     anchor: "  if (!input.journalKey.trim()) return { ok: false, reason: 'journal_key_required' };",
     replacement: "  if (false) return { ok: false, reason: 'journal_key_required' };",
   },
+  'AC5:prepared-after-mutation': {
+    anchor: "      inject(input.crashAt, 'before_prepare');",
+    replacement: "      writeFileSync(targetPath.path, sourceBytes, { mode: 0o600 });\n      inject(input.crashAt, 'before_prepare');",
+  },
+  'AC5:imported-before-durable-import': {
+    anchor: "      inject(input.crashAt, 'before_import');",
+    replacement: "      writeAtomic(journalPath.path, { ...record, state: 'imported', importedDigest: sourceDigest, importedAt: now });\n      inject(input.crashAt, 'before_import');",
+  },
+  'AC5:committed-before-imported': {
+    anchor: "      inject(input.crashAt, 'before_import');",
+    replacement: "      writeAtomic(journalPath.path, { ...record, state: 'committed', committedAt: now });\n      inject(input.crashAt, 'before_import');",
+  },
+  'AC5:marker-crash-reimports': {
+    anchor: "    if (record.state === 'committed') {",
+    replacement: '    if (false) {',
+  },
+  'AC5:torn-journal-accepted': {
+    anchor: "  } catch {\n    return { ok: false, reason: 'corrupt_journal' };\n  }",
+    replacement: "  } catch {\n    return { ok: true, record: null };\n  }",
+  },
+  'AC5:live-store-import-allowed': {
+    anchor: '  for (const liveRoot of liveRootBoundaries(liveStoreRoots)) {',
+    replacement: '  for (const liveRoot of ([] as string[])) {',
+  },
 });
 
 function applyTextRecipe(
