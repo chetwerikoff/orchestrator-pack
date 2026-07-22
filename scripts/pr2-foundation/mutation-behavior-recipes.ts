@@ -25,6 +25,10 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     anchor: 'config = notificationConfig(options.foundationConfig ?? {});',
     replacement: 'config = notificationConfig({});',
   },
+  'AC2:capture-metadata-secret-scan-omitted': {
+    anchor: "if (forbidden.some((pattern) => pattern.test(text))) return 'capture_metadata_secret_scan_failed';",
+    replacement: "if (false) return 'capture_metadata_secret_scan_failed';",
+  },
   'AC2:schema-shape-changed': {
     anchor: "  'updatedAt',\n] as const",
     replacement: "  'updatedAt',\n  'branch',\n] as const",
@@ -32,6 +36,18 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
   'AC2:hypothetical-prs-or-branch-trust': {
     anchor: 'return forms.some((pattern) => pattern.test(normalized));',
     replacement: 'return true;',
+  },
+  'AC2:preflight-missing': {
+    anchor: "if (input.command !== 'ao session ls --json') return { ok: false, reason: 'preflight_command_mismatch' };",
+    replacement: "if (false) return { ok: false, reason: 'preflight_command_mismatch' };",
+  },
+  'AC2:preflight-empty-fleet-accepted': {
+    anchor: 'if (!Array.isArray(input.sessions) || input.sessions.length === 0) {',
+    replacement: 'if (false) {',
+  },
+  'AC2:preflight-version-unverifiable-accepted': {
+    anchor: 'if (input.appStateVersion !== VERIFIED_AO_VERSION)',
+    replacement: 'if (false)',
   },
   'AC2:ambiguous-live-issue-index-zero': {
     anchor: 'const ambiguous = eligible.length > 1;',
@@ -49,13 +65,37 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     anchor: "typeof value.isDraft !== 'boolean'",
     replacement: 'false',
   },
+  'AC2:zero-candidate-bound': {
+    anchor: "    if (eligible.length === 0) {\n      return {\n        bound: false,\n        classId: 'B1',\n        sessionId: session.id,\n        reason: 'no_source',\n        ...(rejectedCache ? { context: { rejectedCache } } : {}),\n      };\n    }",
+    replacement: "    if (eligible.length === 0) {\n      return {\n        bound: true,\n        classId: 'B2',\n        sessionId: session.id,\n        prNumber: 0,\n        currentHeadSha: '0'.repeat(40),\n        source: 'issue_correlation',\n        boundAt: now,\n      };\n    }",
+  },
+  'AC2:multiple-candidates-bound': {
+    anchor: 'const ambiguous = eligible.length > 1;',
+    replacement: 'const ambiguous = false;',
+  },
+  'AC2:bound-head-not-recorded': {
+    anchor: "      classId: 'B2',\n      sessionId: session.id,\n      prNumber: live!.number,\n      currentHeadSha: live!.headRefOid,\n      source: 'issue_correlation',",
+    replacement: "      classId: 'B2',\n      sessionId: session.id,\n      prNumber: live!.number,\n      currentHeadSha: '0'.repeat(40),\n      source: 'issue_correlation',",
+  },
+  'AC2:cross-repo-candidate-accepted': {
+    anchor: 'value.repoSlug !== configuredRepo',
+    replacement: 'false',
+  },
   'AC3:untyped-live-key': {
     anchor: 'export function parseFoundationConfig(input: unknown = {}): FoundationConfigResult {\n',
     replacement: "export function parseFoundationConfig(input: unknown = {}): FoundationConfigResult {\n  void process.env.OPK_PR2_FOUNDATION_CONFIG;\n",
   },
+  'AC3:malformed-value-defaulted': {
+    anchor: "if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {",
+    replacement: 'if (false) {',
+  },
   'AC3:invalid-config-accepted': {
-    anchor: 'if (!isRecord(input))',
-    replacement: 'if (false)',
+    anchor: "if (!isRecord(input)) return { ok: false, reason: 'invalid_config', path: '$' };",
+    replacement: 'if (!isRecord(input)) return { ok: true, config: DEFAULT_FOUNDATION_CONFIG };',
+  },
+  'AC3:unknown-config-key-ignored': {
+    anchor: 'const unknown = Object.keys(value).find((key) => !allowed.has(key));',
+    replacement: 'const unknown = undefined;',
   },
   'AC3:notification-key-not-consumed-live': {
     anchor: 'config = notificationConfig(options.foundationConfig ?? {});',
