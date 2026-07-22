@@ -41,6 +41,12 @@ interface ArtifactSnapshot {
   mode: number;
 }
 
+export interface CheckerObservation {
+  readonly ok: boolean;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
 function digest(value: Buffer | string): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
@@ -115,6 +121,36 @@ async function invokeChecker(
   });
 }
 
+export function assertArtifactHashChanged(
+  artifactHashBefore: string,
+  artifactHashAfter: string,
+  failingTestId: string,
+): void {
+  if (artifactHashAfter === artifactHashBefore) {
+    throw new Error(`artifact_hash_delta_missing:${failingTestId}`);
+  }
+}
+
+export function assertSpecificFailingTestObserved(
+  failingTestId: string,
+  negative: CheckerObservation,
+): void {
+  const negativeText = `${negative.stdout}\n${negative.stderr}`;
+  if (negative.ok || !negativeText.includes(failingTestId)) {
+    throw new Error(`specific_failing_test_not_observed:${failingTestId}`);
+  }
+}
+
+export function assertArtifactHashRestored(
+  artifactHashBefore: string,
+  restoredHash: string,
+  failingTestId: string,
+): void {
+  if (restoredHash !== artifactHashBefore) {
+    throw new Error(`restore_hash_mismatch:${failingTestId}`);
+  }
+}
+
 export async function runBoundMutation(
   binding: MutationBinding,
 ): Promise<MutationRunnerEvidence> {
@@ -128,25 +164,22 @@ export async function runBoundMutation(
 
   const affectedOccurrences = applyMutation(binding, artifactPath, snapshot);
   const artifactHashAfter = artifactDigest(artifactPath);
-  if (artifactHashAfter === artifactHashBefore) {
+  try {
+    assertArtifactHashChanged(artifactHashBefore, artifactHashAfter, binding.failingTestId);
+  } catch (error) {
     restoreArtifact(artifactPath, snapshot);
-    throw new Error(`artifact_hash_delta_missing:${binding.failingTestId}`);
+    throw error;
   }
 
   try {
     const negative = await invokeChecker(binding);
-    const negativeText = `${negative.stdout}\n${negative.stderr}`;
-    if (negative.ok || !negativeText.includes(binding.failingTestId)) {
-      throw new Error(`specific_failing_test_not_observed:${binding.failingTestId}`);
-    }
+    assertSpecificFailingTestObserved(binding.failingTestId, negative);
   } finally {
     restoreArtifact(artifactPath, snapshot);
   }
 
   const restoredHash = artifactDigest(artifactPath);
-  if (restoredHash !== artifactHashBefore) {
-    throw new Error(`restore_hash_mismatch:${binding.failingTestId}`);
-  }
+  assertArtifactHashRestored(artifactHashBefore, restoredHash, binding.failingTestId);
   const restored = await invokeChecker(binding);
   if (!restored.ok || !restored.stdout.includes(binding.failingTestId)) {
     throw new Error(`restored_verification_failed:${binding.failingTestId}`);
