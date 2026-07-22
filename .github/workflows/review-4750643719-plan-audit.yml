@@ -1,0 +1,108 @@
+name: review-4750643719-plan-audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_HEAD: fa5f0a509454b31ed760c8f5cc218552a325c915
+      HELPER_COMMIT: 5c2d0742f2ab65c116ce06a4a2f6149d020d61e5
+      HELPER_SHA256: 975ec3e9536858b3961f08d4b5e81ada0226019829bbd3e4c207034909c01363
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-923-pr2-foundation
+          fetch-depth: 0
+      - name: Apply candidate without publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
+          git fetch origin "$HELPER_COMMIT"
+          git show "$HELPER_COMMIT:scripts/review-4750643719-apply.py.gz.b64" \
+            | base64 --decode \
+            | gzip --decompress \
+            > "$RUNNER_TEMP/apply.py"
+          echo "$HELPER_SHA256  $RUNNER_TEMP/apply.py" | sha256sum --check --strict
+          APPLY="$RUNNER_TEMP/apply.py" python3 <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ['APPLY'])
+          source = path.read_text(encoding='utf-8')
+          old_target = '\n'.join([
+              '"""    inheritParentEnv: true,',
+              '    allowEmptyStdout: true,',
+              '    timeoutMs: 10 * 60 * 1_000,',
+              '  });',
+              '"""',
+          ])
+          new_target = '\n'.join([
+              '"""  const result = await runProcess({',
+              '    command: process.execPath,',
+              '    args,',
+              "    cwd: resolve('.'),",
+              '    inheritParentEnv: true,',
+              '    allowEmptyStdout: true,',
+              '    timeoutMs: 300_000,',
+              '  });',
+              '"""',
+          ])
+          old_replacement = '\n'.join([
+              '"""    inheritParentEnv: true,',
+              "    env: { OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1' },",
+              '    allowEmptyStdout: true,',
+              '    timeoutMs: 10 * 60 * 1_000,',
+              '  });',
+              '"""',
+          ])
+          new_replacement = '\n'.join([
+              '"""  const result = await runProcess({',
+              '    command: process.execPath,',
+              '    args,',
+              "    cwd: resolve('.'),",
+              '    inheritParentEnv: true,',
+              "    env: { OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1' },",
+              '    allowEmptyStdout: true,',
+              '    timeoutMs: 300_000,',
+              '  });',
+              '"""',
+          ])
+          if source.count(old_target) != 1 or source.count(old_replacement) != 1:
+              raise SystemExit('contract runner helper hotfix cardinality')
+          source = source.replace(old_target, new_target, 1)
+          source = source.replace(old_replacement, new_replacement, 1)
+          path.write_text(source, encoding='utf-8')
+          PY
+          python3 "$RUNNER_TEMP/apply.py"
+      - name: Audit every mutation plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --experimental-strip-types --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          import { FOUNDATION_MUTATION_CATALOG } from './scripts/pr2-foundation/mutation-catalog.ts';
+          import { buildBoundedSemanticMutation } from './scripts/pr2-foundation/mutation-semantic-gates.ts';
+          let failed = 0;
+          for (const binding of FOUNDATION_MUTATION_CATALOG) {
+            const key = `${binding.ac}:${binding.mutationId}`;
+            const source = binding.strategy === 'create' ? '' : readFileSync(binding.artifactPath, 'utf8');
+            try {
+              const plan = buildBoundedSemanticMutation(key, source);
+              if (!plan.content || plan.content === source) throw new Error('mutation_no_semantic_delta');
+              console.log(`PLAN_OK ${key} ${binding.artifactPath} ${plan.description}`);
+            } catch (error) {
+              failed += 1;
+              console.log(`PLAN_FAIL ${key} ${binding.artifactPath} ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+          console.log(`PLAN_SUMMARY total=${FOUNDATION_MUTATION_CATALOG.length} failed=${failed}`);
+          if (failed) process.exit(1);
+          JS
