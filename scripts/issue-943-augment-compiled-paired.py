@@ -16,23 +16,23 @@ def main() -> None:
     lint_path = Path("scripts/lint-self-architect.ps1")
     lint = lint_path.read_text(encoding="utf-8")
 
-    location_class_end = '''        public sealed class SelfArchitectBlockLocation
-        {
-            public string file;
-            public int startLine;
-            public int endLine;
-            public int lineCount;
-        }
+    location_class_end = '''    public sealed class SelfArchitectBlockLocation
+    {
+        public string file;
+        public int startLine;
+        public int endLine;
+        public int lineCount;
+    }
 
 '''
-    paired_class = '''        public sealed class SelfArchitectPairedMatch
-        {
-            public int si;
-            public int ti;
-            public int size;
-            public int matching;
-            public double overlapRatio;
-        }
+    paired_class = '''    public sealed class SelfArchitectPairedMatch
+    {
+        public int si;
+        public int ti;
+        public int size;
+        public int matching;
+        public double overlapRatio;
+    }
 
 '''
     lint = replace_once(
@@ -42,62 +42,62 @@ def main() -> None:
         "paired result class",
     )
 
-    method_marker = '''            private static void AddWindows(
+    method_marker = '''        private static void AddWindows(
 '''
-    paired_method = r'''            public static SelfArchitectPairedMatch FindBestPairedMatch(
-                object scriptValue,
-                object templateValue,
-                int size,
-                int stride,
-                int overlapMin,
-                double overlapRatioMin)
+    paired_method = r'''public static SelfArchitectPairedMatch FindBestPairedMatch(
+    object scriptValue,
+    object templateValue,
+    int size,
+    int stride,
+    int overlapMin,
+    double overlapRatioMin)
+{
+    string[] scriptLines = ToLines(scriptValue);
+    string[] templateLines = ToLines(templateValue);
+    if (size <= 0 || scriptLines.Length < size || templateLines.Length < size)
+    {
+        return null;
+    }
+    if (stride < 1) { stride = 1; }
+
+    SelfArchitectPairedMatch best = null;
+    for (int si = 0; si <= scriptLines.Length - size; si += stride)
+    {
+        for (int ti = 0; ti <= templateLines.Length - size; ti += stride)
+        {
+            int matching = 0;
+            for (int k = 0; k < size; k++)
             {
-                string[] scriptLines = ToLines(scriptValue);
-                string[] templateLines = ToLines(templateValue);
-                if (size <= 0 || scriptLines.Length < size || templateLines.Length < size)
+                if (string.Equals(scriptLines[si + k], templateLines[ti + k], StringComparison.Ordinal))
                 {
-                    return null;
+                    matching++;
                 }
-                if (stride < 1) { stride = 1; }
-
-                SelfArchitectPairedMatch best = null;
-                for (int si = 0; si <= scriptLines.Length - size; si += stride)
-                {
-                    for (int ti = 0; ti <= templateLines.Length - size; ti += stride)
-                    {
-                        int matching = 0;
-                        for (int k = 0; k < size; k++)
-                        {
-                            if (string.Equals(scriptLines[si + k], templateLines[ti + k], StringComparison.Ordinal))
-                            {
-                                matching++;
-                            }
-                        }
-
-                        if (matching < overlapMin || matching == size) { continue; }
-                        double overlapRatio = (double)matching / size;
-                        if (overlapRatio < overlapRatioMin) { continue; }
-                        if (best == null || overlapRatio > best.overlapRatio)
-                        {
-                            best = new SelfArchitectPairedMatch
-                            {
-                                si = si,
-                                ti = ti,
-                                size = size,
-                                matching = matching,
-                                overlapRatio = overlapRatio
-                            };
-                        }
-                    }
-                }
-                return best;
             }
+
+            if (matching < overlapMin || matching == size) { continue; }
+            double overlapRatio = (double)matching / size;
+            if (overlapRatio < overlapRatioMin) { continue; }
+            if (best == null || overlapRatio > best.overlapRatio)
+            {
+                best = new SelfArchitectPairedMatch
+                {
+                    si = si,
+                    ti = ti,
+                    size = size,
+                    matching = matching,
+                    overlapRatio = overlapRatio
+                };
+            }
+        }
+    }
+    return best;
+}
 
 '''
     lint = replace_once(
         lint,
         method_marker,
-        textwrap.dedent(paired_method) + method_marker,
+        textwrap.indent(paired_method, "        ") + method_marker,
         "compiled paired method",
     )
 
