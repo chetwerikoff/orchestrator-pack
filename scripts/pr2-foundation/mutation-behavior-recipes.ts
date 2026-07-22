@@ -163,7 +163,7 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
   },
   'AC8:suite-self-attests': {
     anchor: "resolve('scripts/pr2-foundation/mutation-semantic-check.ts')",
-    replacement: "resolve('scripts/pr2-foundation/mutation-semantic-gates.ts')",
+    replacement: "resolve('scripts/pr2-foundation/mutation-self-attesting-check.fixture.ts')",
   },
   'AC8:artifact-hash-delta-missing': {
     anchor: '  if (artifactHashAfter === artifactHashBefore) {',
