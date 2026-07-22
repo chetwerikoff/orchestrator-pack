@@ -7,7 +7,6 @@ import { AC_MUTATION_CONTROLS } from './contracts.ts';
 type Probe = () => void;
 
 const PROBES = new Map<string, Probe>();
-const FOUNDATION_CONFIG = 'scripts/toolchain/vitest-foundation.config.ts';
 
 const IMMUTABLE_DIGESTS: Readonly<Record<string, string>> = Object.freeze({
   'scripts/orchestrator-side-process-registry.json': 'b1c945541db67d48cdbf7c44777ae478e3cf11bd66255a82f7852767f0e0f39a',
@@ -47,7 +46,7 @@ function runVitest(files: readonly string[]): void {
   const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   const result = runProcessSync({
     command,
-    args: ['vitest', 'run', '--config', FOUNDATION_CONFIG, ...files],
+    args: ['vitest', 'run', ...files],
     cwd: path.resolve('.'),
     inheritParentEnv: true,
     env: {
