@@ -109,6 +109,10 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     anchor: '  return canonicalFinalizeDispatchJournalRecord(\n    journal,\n    deliveryId,',
     replacement: '  return canonicalFinalizeDispatchJournalRecord(\n    {},\n    deliveryId,',
   },
+  'AC5:journal-key-omitted': {
+    anchor: "  if (!input.journalKey.trim()) return { ok: false, reason: 'journal_key_required' };",
+    replacement: "  if (false) return { ok: false, reason: 'journal_key_required' };",
+  },
 });
 
 function applyTextRecipe(
