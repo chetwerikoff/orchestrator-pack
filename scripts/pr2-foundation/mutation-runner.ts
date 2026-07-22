@@ -17,7 +17,7 @@ import {
   type MutationBinding,
 } from './mutation-catalog.ts';
 import type { AcceptanceId } from './contracts.ts';
-import { buildBoundedSemanticMutation } from './mutation-semantic-gates.ts';
+import { buildBehavioralMutation } from './mutation-behavior-recipes.ts';
 
 export interface MutationRunnerEvidence {
   ac: AcceptanceId;
@@ -67,7 +67,7 @@ function atomicReplace(file: string, content: Buffer | string, mode = 0o600): vo
 function applyMutation(binding: MutationBinding, file: string, snapshot: ArtifactSnapshot): number {
   const key = `${binding.ac}:${binding.mutationId}`;
   const source = snapshot.existed ? snapshot.bytes.toString('utf8') : null;
-  const mutation = buildBoundedSemanticMutation(key, source);
+  const mutation = buildBehavioralMutation(key, source);
   if (mutation.artifactPath !== binding.artifactPath) {
     throw new Error(`mutation_artifact_mismatch:${key}:${mutation.artifactPath}:${binding.artifactPath}`);
   }
@@ -109,7 +109,7 @@ async function invokeChecker(
     cwd: resolve('.'),
     inheritParentEnv: true,
     allowEmptyStdout: true,
-    timeoutMs: 30_000,
+    timeoutMs: 180_000,
   });
 }
 
