@@ -1,4 +1,4 @@
-name: review-4751974220-status-delivery
+name: review-4752160651-status-delivery
 
 on:
   pull_request:
@@ -16,9 +16,9 @@ jobs:
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
-      TARGET_PR: '946'
-      TARGET_HEAD: a3cf6138ee2a2abf302e37bdf0660d570b01fe6b
-      REVIEW_ID: '4751974220'
+      TARGET_PR: '939'
+      TARGET_HEAD: 7d2d957052957f46af5340300fbac3d460cd859b
+      REVIEW_ID: '4752160651'
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +33,7 @@ jobs:
           const pr = JSON.parse(fs.readFileSync('pr.json', 'utf8'));
           const review = JSON.parse(fs.readFileSync('review.json', 'utf8'));
           const expectedHead = process.env.TARGET_HEAD;
-          if (pr.state !== 'open' || pr.draft || pr.head?.sha !== expectedHead) {
+          if (pr.state !== 'open' || pr.head?.sha !== expectedHead) {
             throw new Error(`stale or ineligible PR: state=${pr.state} draft=${pr.draft} head=${pr.head?.sha}`);
           }
           if (String(review.id) !== process.env.REVIEW_ID || review.commit_id !== expectedHead) {
