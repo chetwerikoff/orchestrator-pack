@@ -123,6 +123,10 @@ jobs:
           elapsed=$(( $(date +%s) - started ))
           echo "self_architect_elapsed_seconds=$elapsed"
           test "$elapsed" -lt 600
+          git restore --source=HEAD -- scripts/vitest-heavy-topology.plan.json
+          echo FINAL_STATUS_BEGIN
+          git status --short
+          echo FINAL_STATUS_END
           git diff --check
           test -z "$(git status --short)"
 
