@@ -1,4 +1,4 @@
-name: issue-943-triple-anchor-apply-summary
+name: issue-943-triple-anchor-benchmark-result
 
 on:
   pull_request:
@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88796865378'
+      SOURCE_JOB_ID: '88797325988'
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Print exact triple-anchor apply failure
+      - name: Print exact triple-anchor benchmark result
         shell: bash
         run: |
           set -euo pipefail
@@ -32,14 +32,15 @@ jobs:
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
           needles = (
-              'expected one match', 'match count', 'changed_path_mismatch', 'diff_check_failed',
-              'Traceback', 'SystemExit', 'Error:', '##[error]', 'Process completed with exit code',
+              'pr939_', 'self_architect_elapsed_seconds=', 'Summary:', 'No findings.',
+              '[STRICT]', '[FAIL]', 'Tests completed', 'Tests Passed', 'Tests Failed',
+              'Process completed with exit code', '##[error]', 'Changed files:',
           )
           print('--- matched ---')
           for index, line in enumerate(lines, start=1):
               if any(needle in line for needle in needles):
                   print(f'{index}:{line[:5000]}')
-          print('--- final 40 ---')
-          for index, line in enumerate(lines[-40:], start=max(1, len(lines) - 39)):
+          print('--- final 45 ---')
+          for index, line in enumerate(lines[-45:], start=max(1, len(lines) - 44)):
               print(f'{index}:{line[:5000]}')
           PY
