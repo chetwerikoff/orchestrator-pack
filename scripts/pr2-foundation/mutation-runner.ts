@@ -17,6 +17,7 @@ import {
   type MutationBinding,
 } from './mutation-catalog.ts';
 import type { AcceptanceId } from './contracts.ts';
+import { buildBoundedSemanticMutation } from './mutation-semantic-gates.ts';
 
 export interface MutationRunnerEvidence {
   ac: AcceptanceId;
@@ -29,6 +30,7 @@ export interface MutationRunnerEvidence {
   negativeOutcome: 'failed';
   restoredHash: string;
   restoredOutcome: 'passed';
+  affectedOccurrences: number;
 }
 
 interface ArtifactSnapshot {
@@ -62,26 +64,27 @@ function atomicReplace(file: string, content: Buffer | string, mode = 0o600): vo
   chmodSync(file, mode);
 }
 
-function corruptedContent(file: string, key: string): string {
-  if (file.endsWith('.json')) return '{}\n';
-  if (file.endsWith('.ps1')) return `# semantic kill mutation ${key}\n`;
-  return `// semantic kill mutation ${key}\n`;
-}
-
-function applyMutation(binding: MutationBinding, file: string, snapshot: ArtifactSnapshot): void {
+function applyMutation(binding: MutationBinding, file: string, snapshot: ArtifactSnapshot): number {
   const key = `${binding.ac}:${binding.mutationId}`;
-  if (binding.strategy === 'delete') {
-    if (!snapshot.existed) throw new Error(`mutation_delete_target_missing:${key}`);
-    rmSync(file, { force: true });
-    return;
+  const source = snapshot.existed ? snapshot.bytes.toString('utf8') : null;
+  const mutation = buildBoundedSemanticMutation(key, source);
+  if (mutation.artifactPath !== binding.artifactPath) {
+    throw new Error(`mutation_artifact_mismatch:${key}:${mutation.artifactPath}:${binding.artifactPath}`);
   }
-  if (binding.strategy === 'create') {
+  if (binding.strategy === 'create' && mutation.kind !== 'create') {
+    throw new Error(`mutation_strategy_mismatch:${key}:create:${mutation.kind}`);
+  }
+  if (binding.strategy === 'bounded-semantic' && mutation.kind === 'create') {
+    throw new Error(`mutation_strategy_mismatch:${key}:bounded-semantic:create`);
+  }
+  if (mutation.kind === 'create') {
     if (snapshot.existed) throw new Error(`mutation_create_target_exists:${key}`);
-    atomicReplace(file, `${JSON.stringify({ mutation: key })}\n`, 0o600);
-    return;
+    atomicReplace(file, mutation.content, 0o600);
+  } else {
+    if (!snapshot.existed) throw new Error(`mutation_target_missing:${key}`);
+    atomicReplace(file, mutation.content, snapshot.mode);
   }
-  if (!snapshot.existed) throw new Error(`mutation_corrupt_target_missing:${key}`);
-  atomicReplace(file, corruptedContent(file, key), snapshot.mode);
+  return mutation.affectedOccurrences;
 }
 
 function restoreArtifact(file: string, snapshot: ArtifactSnapshot): void {
@@ -121,7 +124,7 @@ export async function runBoundMutation(
     throw new Error(`mutation_precondition_failed:${binding.failingTestId}:${clean.stderr || clean.stdout}`);
   }
 
-  applyMutation(binding, artifactPath, snapshot);
+  const affectedOccurrences = applyMutation(binding, artifactPath, snapshot);
   const artifactHashAfter = artifactDigest(artifactPath);
   if (artifactHashAfter === artifactHashBefore) {
     restoreArtifact(artifactPath, snapshot);
@@ -158,6 +161,7 @@ export async function runBoundMutation(
     negativeOutcome: 'failed',
     restoredHash,
     restoredOutcome: 'passed',
+    affectedOccurrences,
   };
 }
 

@@ -7,7 +7,7 @@ import {
   resolveBoundedInt,
   runStdinJsonCli,
 } from './review-mechanical-cli.mjs';
-import { normalizeSha, toArray } from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
+import { normalizeSha, toArray } from './review-trigger-reconcile.mjs';
 import {
   countAmbiguousUnconfirmedPeers,
   getConfirmationAnchorMs,
@@ -16,7 +16,7 @@ import {
   isLinkedSessionLiveOwner,
   isPendingSentDeliveryRun,
   resolveSendObservedAtMs,
-} from '../scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts';
+} from './review-finding-delivery-confirm.mjs';
 import { resolveEventSessionId } from './terminal-flood-detect.mjs';
 
 /** Default: at most one submit attempt per (runId, head SHA). */
@@ -145,11 +145,11 @@ export function isSessionFloodActive(floodActiveSessions, sessionId) {
 
 /**
  * @param {object} input
- * @param {import('../scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts').ReviewRun} input.run
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').AoSession[]} input.sessions
- * @param {import('../scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts').DeliveryTrackingState} input.tracking
- * @param {import('../scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts').ReviewRun[]} input.allRuns
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').OpenPr[]} [input.openPrs]
+ * @param {import('./review-finding-delivery-confirm.mjs').ReviewRun} input.run
+ * @param {import('./review-trigger-reconcile.mjs').AoSession[]} input.sessions
+ * @param {import('./review-finding-delivery-confirm.mjs').DeliveryTrackingState} input.tracking
+ * @param {import('./review-finding-delivery-confirm.mjs').ReviewRun[]} input.allRuns
+ * @param {import('./review-trigger-reconcile.mjs').OpenPr[]} [input.openPrs]
  * @param {Array<Record<string, unknown>>} [input.aoEvents]
  * @param {Record<string, boolean>} [input.floodActiveSessions]
  * @param {number} input.nowMs

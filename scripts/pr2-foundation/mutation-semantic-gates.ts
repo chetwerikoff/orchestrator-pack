@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
@@ -28,8 +29,27 @@ function textGate(
   return { path: pathName, required, forbidden };
 }
 
+const IMMUTABLE_BASE_SHA256: Readonly<Record<string, string>> = Object.freeze({
+  'scripts/orchestrator-side-process-registry.json': 'b1c945541db67d48cdbf7c44777ae478e3cf11bd66255a82f7852767f0e0f39a',
+  'scripts/review-trigger-reconcile.ps1': '20762cfc1549a1c7d03516b87da7c8d0a6d9daf9606cac99d27f3cc3ee1864d8',
+  'scripts/pack-review-runner.ts': '20889c052830aa8d8039e0099bd97234ced63cc226342512e0f24a1f26b4afec',
+  'scripts/orchestrator-wake-supervisor.ps1': 'c84ebfe9166960f1b4079f86019f9eaa997276680a6e42f8db5d402e71cf3391',
+  'tests/external-output-references/capture-manifest.json': '82ac82a443123b90dd688a31f1af5f00b9058e96c4f536f8ae691ed01e917987',
+});
+
 function baseGate(pathName: string): TextGate {
-  return { path: pathName, baseEqual: true };
+  return {
+    path: pathName,
+    baseEqual: true,
+    custom: () => {
+      const expected = IMMUTABLE_BASE_SHA256[pathName];
+      if (!expected) return `base_digest_missing:${pathName}`;
+      const actual = createHash('sha256')
+        .update(readFileSync(path.resolve(pathName)))
+        .digest('hex');
+      return actual === expected ? null : `base_byte_mismatch:${pathName}`;
+    },
+  };
 }
 
 function absentGate(pathName: string): TextGate {
@@ -64,12 +84,19 @@ function manifestRows(): EstateDenominatorRow[] {
 
 function estateDenominatorError(): string | null {
   const rows = manifestRows();
-  const denominator = rows.filter((row) =>
-    (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)
-    || (CUTOVER_ROWS as readonly string[]).includes(row.path),
-  );
+  const denominatorPaths = new Set<string>([...FOUNDATION_DOC_ROWS, ...CUTOVER_ROWS]);
+  const denominator = rows.filter((row) => denominatorPaths.has(row.path));
   const validated = validateEstateSplit(denominator);
   if (!validated.ok) return validated.reason;
+  const currentDocument = JSON.parse(readFileSync(path.resolve('scripts/estate-cut/issue-906.manifest.json'), 'utf8')) as { rows?: Array<Record<string, unknown>> };
+  const unrelatedRows = (currentDocument.rows ?? [])
+    .filter((row) => !denominatorPaths.has(String(row.path ?? '')));
+  const unrelatedDigest = createHash('sha256')
+    .update(JSON.stringify(unrelatedRows))
+    .digest('hex');
+  if (unrelatedDigest !== 'bcee6d3b13909570027234322b192532a47a221215851d1aa29517be541edba4') {
+    return 'unrelated_manifest_row_changed';
+  }
   for (const expected of FOUNDATION_DOC_ROWS) {
     const source = path.resolve(expected);
     if (!existsSync(source)) return `foundation_compatibility_missing:${expected}`;
@@ -119,23 +146,50 @@ function packageJsonBounded(): string | null {
     : 'package_json_overreach';
 }
 
+const FOUNDATION_TEST_LANES = Object.freeze([
+  'scripts/pr2-foundation/binding-cache.test.ts',
+  'scripts/pr2-foundation/foundation.test.ts',
+  'scripts/pr2-foundation/migration-symlink.test.ts',
+  'scripts/pr2-foundation/mutation-catalog.test.ts',
+  'scripts/pr2-foundation/mutation-external-ci.test.ts',
+  'scripts/pr2-foundation/mutation-semantic-gates.test.ts',
+  'scripts/pr2-foundation/real-scope-proof.test.ts',
+  'scripts/pr2-foundation/review-4750643719-regression.test.ts',
+  'scripts/pr2-foundation/review-head-ready.test.ts',
+  'scripts/pr2-foundation/terminalized-port.test.ts',
+  'scripts/pr2-foundation/worker-notification-compat.test.ts',
+]);
+
 function lanesBounded(): string | null {
-  const config = JSON.parse(
-    readFileSync(path.resolve('scripts/vitest-ci-lanes.config.json'), 'utf8'),
-  ) as { classification?: Record<string, string> };
+  const configPath = path.resolve('scripts/vitest-ci-lanes.config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown> & {
+    classification?: Record<string, string>;
+  };
   const classification = config.classification ?? {};
-  const required = [
-    'scripts/pr2-foundation/binding-cache.test.ts',
-    'scripts/pr2-foundation/foundation.test.ts',
-    'scripts/pr2-foundation/migration-symlink.test.ts',
-    'scripts/pr2-foundation/mutation-catalog.test.ts',
-    'scripts/pr2-foundation/mutation-semantic-gates.test.ts',
-    'scripts/pr2-foundation/real-scope-proof.test.ts',
-    'scripts/pr2-foundation/worker-notification-compat.test.ts',
-  ];
-  return required.every((file) => typeof classification[file] === 'string')
+  if (!FOUNDATION_TEST_LANES.every((file) => typeof classification[file] === 'string')) {
+    return 'test_classification_missing';
+  }
+  const base = gitOutput(['merge-base', 'origin/main', 'HEAD'])
+    || gitOutput(['merge-base', 'main', 'HEAD']);
+  if (!base) return 'base_unresolved';
+  const baseText = gitOutput(['show', `${base}:scripts/vitest-ci-lanes.config.json`]);
+  if (!baseText) return 'base_lanes_missing';
+  const normalized = JSON.parse(JSON.stringify(config)) as Record<string, unknown> & {
+    classification?: Record<string, string>;
+  };
+  const baseline = JSON.parse(baseText) as Record<string, unknown> & {
+    classification?: Record<string, string>;
+  };
+  for (const file of FOUNDATION_TEST_LANES) delete normalized.classification?.[file];
+  normalized.classification = Object.fromEntries(
+    Object.entries(normalized.classification ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+  );
+  baseline.classification = Object.fromEntries(
+    Object.entries(baseline.classification ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+  );
+  return JSON.stringify(normalized) === JSON.stringify(baseline)
     ? null
-    : 'test_classification_missing';
+    : 'lane_config_overreach';
 }
 
 const GATES: Record<string, TextGate> = {
@@ -239,6 +293,139 @@ if (Object.keys(GATES).length !== expectedKeys.size
   throw new Error('semantic_mutation_gate_set_mismatch');
 }
 
+
+export interface BoundedSemanticMutation {
+  artifactPath: string;
+  kind: 'replace' | 'append' | 'create' | 'json';
+  content: string;
+  affectedOccurrences: number;
+  anchor: string;
+}
+
+function mutationReplacement(key: string): string {
+  return `__OPK_MUTATION_${Buffer.from(key, 'utf8').toString('hex')}__`;
+}
+
+function replaceAllExact(source: string, anchor: string, replacement: string): {
+  content: string;
+  affectedOccurrences: number;
+} {
+  const affectedOccurrences = source.split(anchor).length - 1;
+  if (affectedOccurrences <= 0) throw new Error(`mutation_anchor_missing:${anchor}`);
+  return { content: source.split(anchor).join(replacement), affectedOccurrences };
+}
+
+function mutateEstateManifest(key: string, source: string): BoundedSemanticMutation {
+  const document = JSON.parse(source) as { rows?: Array<Record<string, unknown>> };
+  const rows = document.rows;
+  if (!Array.isArray(rows)) throw new Error('mutation_manifest_rows_missing');
+  const foundation = new Set<string>(FOUNDATION_DOC_ROWS);
+  const cutover = new Set<string>(CUTOVER_ROWS);
+  const firstFoundation = rows.findIndex((row) => foundation.has(String(row.path ?? '')));
+  const firstCutover = rows.findIndex((row) => cutover.has(String(row.path ?? '')));
+  if (firstFoundation < 0 || firstCutover < 0) throw new Error('mutation_manifest_denominator_missing');
+  if (key === 'AC7:foundation-row-omitted' || key === 'AC7:split-not-sixteen-six') {
+    rows.splice(firstFoundation, 1);
+  } else if (key === 'AC7:cutover-row-deleted') {
+    rows.splice(firstCutover, 1);
+  } else if (key === 'AC7:cutover-owner-generic') {
+    rows[firstCutover] = { ...rows[firstCutover], replacementOwner: 'generic-owner' };
+  } else if (key === 'AC7:unrelated-manifest-row-changed') {
+    const index = rows.findIndex((row) => !foundation.has(String(row.path ?? '')) && !cutover.has(String(row.path ?? '')));
+    if (index < 0) throw new Error('mutation_unrelated_manifest_row_missing');
+    rows[index] = { ...rows[index], reason: `${String(rows[index]?.reason ?? '')}:mutation` };
+  } else {
+    rows[firstFoundation] = { ...rows[firstFoundation], terminalState: 'kept' };
+  }
+  return {
+    artifactPath: 'scripts/estate-cut/issue-906.manifest.json',
+    kind: 'json',
+    content: `${JSON.stringify(document, null, 2)}\n`,
+    affectedOccurrences: 1,
+    anchor: key,
+  };
+}
+
+function mutateLanes(key: string, source: string): BoundedSemanticMutation {
+  const document = JSON.parse(source) as Record<string, unknown> & {
+    classification?: Record<string, string>;
+  };
+  if (key === 'AC9:test-classification-missing') {
+    if (!document.classification || !(FOUNDATION_TEST_LANES[0] in document.classification)) {
+      throw new Error('mutation_lane_entry_missing');
+    }
+    delete document.classification[FOUNDATION_TEST_LANES[0]!];
+  } else {
+    document.lightMaxWorkers = Number(document.lightMaxWorkers ?? 0) + 1;
+  }
+  return {
+    artifactPath: 'scripts/vitest-ci-lanes.config.json',
+    kind: 'json',
+    content: `${JSON.stringify(document, null, 2)}\n`,
+    affectedOccurrences: 1,
+    anchor: key,
+  };
+}
+
+export function buildBoundedSemanticMutation(
+  key: string,
+  source: string | null,
+): BoundedSemanticMutation {
+  const gate = GATES[key];
+  if (!gate) throw new Error(`semantic_mutation_gate_missing:${key}`);
+  if (gate.absent) {
+    if (source !== null) throw new Error(`mutation_create_target_exists:${key}`);
+    return {
+      artifactPath: gate.path,
+      kind: 'create',
+      content: `${JSON.stringify({ mutation: key })}\n`,
+      affectedOccurrences: 1,
+      anchor: 'absent-artifact',
+    };
+  }
+  if (source === null) throw new Error(`mutation_target_missing:${key}`);
+  if (key.startsWith('AC7:')) return mutateEstateManifest(key, source);
+  if (key === 'AC9:test-classification-missing' || key === 'AC9:lane-config-overreach') {
+    return mutateLanes(key, source);
+  }
+  if (key === 'AC9:package-json-overreach') {
+    const document = JSON.parse(source) as Record<string, unknown>;
+    document.review4750643719Mutation = key;
+    return {
+      artifactPath: gate.path,
+      kind: 'json',
+      content: `${JSON.stringify(document, null, 2)}\n`,
+      affectedOccurrences: 1,
+      anchor: key,
+    };
+  }
+  if (gate.baseEqual) {
+    return {
+      artifactPath: gate.path,
+      kind: 'append',
+      content: `${source}${source.endsWith('\n') ? '' : '\n'}// ${mutationReplacement(key)}\n`,
+      affectedOccurrences: 1,
+      anchor: 'base-blob-equality',
+    };
+  }
+  const anchor = gate.required?.[0] ?? gate.ordered?.[0];
+  if (anchor) {
+    const mutation = replaceAllExact(source, anchor, mutationReplacement(key));
+    return { artifactPath: gate.path, kind: 'replace', anchor, ...mutation };
+  }
+  const forbidden = gate.forbidden?.[0];
+  if (forbidden) {
+    return {
+      artifactPath: gate.path,
+      kind: 'append',
+      content: `${source}${source.endsWith('\n') ? '' : '\n'}// ${forbidden}\n`,
+      affectedOccurrences: 1,
+      anchor: forbidden,
+    };
+  }
+  throw new Error(`bounded_semantic_mutation_unavailable:${key}`);
+}
+
 export function failingTestIdForMutation(key: string): string {
   return `mutation-contract:${key}`;
 }
@@ -258,7 +445,7 @@ export function evaluateSemanticMutationGate(key: string): {
       : { ok: true, failingTestId };
   }
   if (!existsSync(file)) return { ok: false, failingTestId, reason: `artifact_missing:${gate.path}` };
-  if (gate.baseEqual && !baseBlobMatches(gate.path)) {
+  if (gate.baseEqual && !gate.custom && !baseBlobMatches(gate.path)) {
     return { ok: false, failingTestId, reason: `base_byte_mismatch:${gate.path}` };
   }
   if (gate.custom) {

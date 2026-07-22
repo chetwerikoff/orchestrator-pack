@@ -12,6 +12,8 @@ describe('[AC8] external mutation catalog', () => {
     expect([...actual].sort()).toEqual([...expected].sort());
     for (const binding of FOUNDATION_MUTATION_CATALOG) {
       expect(binding.artifactPath).not.toMatch(/^\/|^[A-Za-z]:[\\/]/);
+      expect(binding.strategy).not.toBe('corrupt');
+      expect(binding.strategy).not.toBe('delete');
       expect(binding.failingTestId).toBe(`mutation-contract:${binding.ac}:${binding.mutationId}`);
     }
   });

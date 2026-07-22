@@ -6,6 +6,7 @@ import {
   closeSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -14,7 +15,7 @@ import {
 } from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
 import path from 'node:path';
-import { hashNudgeMessageContent } from './worker-nudge-gate.ts';
+import { canonicalStoreId, hashNudgeMessageContent } from './worker-nudge-gate.ts';
 
 export type WorkerNudgeClaimPhase =
   | 'CLAIMED'
@@ -122,9 +123,18 @@ function claimKey(input: {
   ].join('-');
 }
 
-export function workerNudgeClaimNamespace(projectId = 'orchestrator-pack'): string {
+export function workerNudgeClaimProjectNamespace(projectId = 'orchestrator-pack'): string {
   const base = process.env.AO_BASE_DIR?.trim() || path.join(homedir(), '.agent-orchestrator');
   return path.join(base, 'projects', projectId.trim() || 'orchestrator-pack', 'worker-nudge-claims');
+}
+
+export function workerNudgeClaimNamespace(projectId = 'orchestrator-pack'): string {
+  const root = workerNudgeClaimProjectNamespace(projectId);
+  const override = process.env.AO_WORKER_NUDGE_CLAIM_DIR?.trim();
+  if (!override) return root;
+  const candidate = existsSync(override) ? realpathSync(override) : override;
+  const storeId = canonicalStoreId(candidate);
+  return storeId ? path.join(root, 'by-store-id', storeId) : root;
 }
 
 function claimPath(namespace: string, key: string): string {

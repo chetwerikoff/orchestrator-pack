@@ -61,6 +61,7 @@ interface JournalAdmission {
   duplicate: boolean;
   deliveryId: string;
   journalPath: string;
+  deliveryPath: string;
 }
 
 function writeCapture(file: string, payload: Record<string, unknown>): void {
@@ -154,6 +155,7 @@ async function admitNotification(input: {
   deliveryKey: string;
   findingsHash: string;
   message: string;
+  reviewRunId: string;
   maxAttempts: number;
 }): Promise<JournalAdmission> {
   const journalPath = defaultDispatchJournalPath();
@@ -168,6 +170,7 @@ async function admitNotification(input: {
         duplicate: true,
         deliveryId: String(deterministic.deliveryId ?? ''),
         journalPath,
+        deliveryPath: '',
       };
     }
     if (!deterministic.ok
@@ -178,7 +181,14 @@ async function admitNotification(input: {
     const computedId = buildDeterministicDeliveryId(input.sessionId, input.deliveryKey);
     const deliveryId = String(deterministic.deliveryId ?? computedId ?? '').trim();
     if (!deliveryId) throw new Error('invalid_delivery_id');
-    if (deterministic.action === 'resume') return { duplicate: false, deliveryId, journalPath };
+    if (deterministic.action === 'resume') {
+      const existingRecord = journal[deliveryId];
+      const deliveryPath = existingRecord && typeof existingRecord === 'object' && !Array.isArray(existingRecord)
+        ? trim((existingRecord as Record<string, unknown>).deliveryPath)
+        : '';
+      if (!deliveryPath) throw new Error('resume_delivery_path_missing');
+      return { duplicate: false, deliveryId, journalPath, deliveryPath };
+    }
 
     const shape = deriveMessageShape(input.message, trim(process.env.AO_SESSION_ID));
     const nowMs = Date.now();
@@ -204,11 +214,12 @@ async function admitNotification(input: {
       adoptionProbeRunIdHash: '',
       deterministicKey: input.deliveryKey,
       findingsHash: input.findingsHash,
+      reviewRunId: input.reviewRunId,
     };
     const admitted = admitDispatchJournalRecord(journal, record, nowMs);
     if (!admitted.ok) throw new Error(admitted.reason);
     writeJournalAtomic(journalPath, admitted.journal);
-    return { duplicate: false, deliveryId, journalPath };
+    return { duplicate: false, deliveryId, journalPath, deliveryPath: shape.deliveryPath };
   });
 }
 
@@ -415,6 +426,7 @@ export async function sendPackReviewWorkerNotification(
         deliveryKey,
         findingsHash,
         message: options.request.message,
+        reviewRunId: trim(options.request.reviewRunId),
         maxAttempts: config.maxJournalAttempts,
       });
     } catch (error) {
@@ -471,7 +483,9 @@ export async function sendPackReviewWorkerNotification(
         admission,
         claim,
         journalOutcome: DISPATCH_OUTCOME_DISPATCHED,
-        draftState: DRAFT_STATE_AUTO_SUBMITTED,
+        draftState: admission.deliveryPath === 'self-submitted'
+          ? DRAFT_STATE_AUTO_SUBMITTED
+          : DRAFT_STATE_DRAFT_PRESENT,
         claimOutcome: 'SENT',
         maxAttempts: config.maxJournalAttempts,
       });

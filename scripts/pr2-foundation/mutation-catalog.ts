@@ -1,6 +1,6 @@
 import { AC_MUTATION_CONTROLS, type AcceptanceId } from './contracts.ts';
 
-export type MutationStrategy = 'corrupt' | 'delete' | 'create';
+export type MutationStrategy = 'bounded-semantic' | 'create';
 
 export interface MutationBinding {
   ac: AcceptanceId;
@@ -22,7 +22,7 @@ function entries(
       ac,
       mutationId,
       artifactPath,
-      strategy: strategyByMutation[mutationId] ?? 'corrupt',
+      strategy: strategyByMutation[mutationId] ?? 'bounded-semantic',
       failingTestId: `mutation-contract:${ac}:${mutationId}`,
     };
   });

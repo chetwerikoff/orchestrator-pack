@@ -13,16 +13,16 @@ import {
   commitOwnerCyclePatch,
   evaluateWorkerIterationCycleForPr,
   NUDGE_EXPIRY_MS,
-} from '../scripts/pr2-foundation/terminalized/worker-iteration-cycle.ts';
+} from './worker-iteration-cycle.mjs';
 import {
   getReportState,
-} from '../scripts/pr2-foundation/terminalized/review-finding-delivery-confirm.ts';
+} from './review-finding-delivery-confirm.mjs';
 import {
   findLatestReportForHead,
   isRuntimeAlive,
   classifyRequiredCiLevel,
 } from './review-ready-stuck-guard.mjs';
-import { mergeWorkerDeliveriesFromPlanInput } from '../scripts/pr2-foundation/terminalized/review-head-ready.ts';
+import { mergeWorkerDeliveriesFromPlanInput } from './review-head-ready.mjs';
 import {
   findSessionById,
   getSessionIdentifier,
@@ -32,11 +32,11 @@ import {
   resolveHeadOwningWorkerSessionId,
   sessionOwnsRunHead,
   toArray,
-} from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
+} from './review-trigger-reconcile.mjs';
 import { resolveBindingRepoSlug, resolvePrSessionBindingForConsumer } from './pr-session-binding-cache.mjs';
 export { resolvePrSessionBindingForConsumer };
 
-export { resolveHeadOwningWorkerSessionId } from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
+export { resolveHeadOwningWorkerSessionId } from './review-trigger-reconcile.mjs';
 export { classifyRequiredCiLevel } from './review-ready-stuck-guard.mjs';
 /** Default tick cadence: 1 minute (fast path; far below report-stale ~30m). */
 export const DEFAULT_CI_GREEN_WAKE_INTERVAL_MS = 60 * 1000;
@@ -231,7 +231,7 @@ export function normalizeRequiredCheckLookupFailedByPr(lookupFailedByPr) {
  * @param {Array<Record<string, unknown>>} [input.aoEvents]
  * @param {Record<string, unknown>} [input.dispatchJournal]
  * @param {Record<string, string>} [input.reactionMessages]
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} [input.reviewRuns]
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [input.reviewRuns]
  * @param {number} [input.nowMs]
  * @param {string} [input.repoRoot]
  */
@@ -496,7 +496,7 @@ function evaluateCiGreenNudgeRecheck(cycleEval) {
  * @param {Array<Record<string, unknown>>} [fresh.workerDeliveries]
  * @param {Array<Record<string, unknown>>} [fresh.aoEvents]
  * @param {Record<string, unknown>} [fresh.dispatchJournal]
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} [fresh.reviewRuns]
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} [fresh.reviewRuns]
  * @param {Record<string, unknown>} [fresh.cycleState]
  * @param {Record<string, { sessionId?: string, sentAtMs?: number }>} [fresh.nudged]
  * @param {number} [fresh.nowMs]

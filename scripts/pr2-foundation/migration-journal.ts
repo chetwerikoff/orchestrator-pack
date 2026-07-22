@@ -157,20 +157,45 @@ function writeAtomic(file: string, value: unknown): void {
   renameSync(temporary, file);
 }
 
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isoTimestamp(value: unknown): value is string {
+  return nonEmptyString(value) && Number.isFinite(Date.parse(value));
+}
+
+function validMigrationJournalRecord(value: unknown): value is MigrationJournalRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (record.schemaVersion !== 1
+    || !nonEmptyString(record.journalKey)
+    || !nonEmptyString(record.sourcePath)
+    || !nonEmptyString(record.targetPath)
+    || !nonEmptyString(record.sourceDigest)
+    || !nonEmptyString(record.archiveIdentity)
+    || !isoTimestamp(record.preparedAt)
+    || !['prepared', 'imported', 'committed'].includes(String(record.state ?? ''))) {
+    return false;
+  }
+  if (record.state === 'prepared') {
+    return record.importedDigest === undefined
+      && record.importedAt === undefined
+      && record.committedAt === undefined;
+  }
+  if (!nonEmptyString(record.importedDigest) || !isoTimestamp(record.importedAt)) return false;
+  return record.state === 'imported'
+    ? record.committedAt === undefined
+    : isoTimestamp(record.committedAt);
+}
+
 export function readMigrationJournal(file: string):
   | { ok: true; record: MigrationJournalRecord | null }
   | { ok: false; reason: 'corrupt_journal' } {
   if (!existsSync(file)) return { ok: true, record: null };
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8')) as MigrationJournalRecord;
-    if (!parsed
-      || parsed.schemaVersion !== 1
-      || typeof parsed.journalKey !== 'string'
-      || !['prepared', 'imported', 'committed'].includes(parsed.state)
-      || typeof parsed.sourceDigest !== 'string'
-      || typeof parsed.archiveIdentity !== 'string') {
-      return { ok: false, reason: 'corrupt_journal' };
-    }
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+    if (!validMigrationJournalRecord(parsed)) return { ok: false, reason: 'corrupt_journal' };
     return { ok: true, record: parsed };
   } catch {
     return { ok: false, reason: 'corrupt_journal' };

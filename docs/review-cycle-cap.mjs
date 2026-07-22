@@ -12,7 +12,7 @@ import {
   toArray,
 } from './review-reconcile-primitives.mjs';
 import { isPrMergedOnGitHub } from './review-orchestrator-loop.mjs';
-import { resolveCurrentPrHeadSha } from '../scripts/pr2-foundation/terminalized/review-head-ready.ts';
+import { resolveCurrentPrHeadSha } from './review-head-ready.mjs';
 import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 
 export const REVIEW_CYCLE_CAP_SCHEMA_VERSION = 1;
@@ -81,7 +81,7 @@ export function resolveTierAndCap(input = {}) {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun | undefined | null} run
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
  */
 export function resolveOpenFindingCount(run) {
   const open = Number(run?.openFindingCount);
@@ -104,14 +104,14 @@ export function resolveOpenFindingCount(run) {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun | undefined | null} run
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
  */
 export function isRunInFlight(run) {
   return IN_FLIGHT_REVIEW_STATUSES.has(resolveAuthoritativeReviewRunStatus(run));
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun | undefined | null} run
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
  */
 export function isCleanTerminalRun(run) {
   const status = resolveAuthoritativeReviewRunStatus(run);
@@ -122,7 +122,7 @@ export function isCleanTerminalRun(run) {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun | undefined | null} run
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
  */
 export function isCommentedTerminalRun(run) {
   return resolveAuthoritativeReviewRunStatus(run) === 'commented'
@@ -138,7 +138,7 @@ export function isZeroFindingFailedOrCancelled(run) {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun | undefined | null} run
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
  */
 export function isReaperKilledWithoutVerdict(run) {
   if (run?.reaperKilled === true) {
@@ -152,7 +152,7 @@ export function isReaperKilledWithoutVerdict(run) {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun | undefined | null} run
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
  */
 export function isSupersededRun(run) {
   if (run?.superseded === true) {
@@ -163,7 +163,7 @@ export function isSupersededRun(run) {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun | undefined | null} run
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
  * @param {string} [currentHeadSha]
  */
 export function resolveTerminalHeadSnapshot(run, currentHeadSha = '') {
@@ -182,7 +182,7 @@ export function resolveTerminalHeadSnapshot(run, currentHeadSha = '') {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun | undefined | null} run
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
  * @param {string} [currentHeadSha]
  */
 export function isStaleHeadTerminal(run, currentHeadSha = '') {
@@ -195,7 +195,7 @@ export function isStaleHeadTerminal(run, currentHeadSha = '') {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun | undefined | null} run
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun | undefined | null} run
  * @param {string} [currentHeadSha]
  */
 export function classifyTerminalRun(run, currentHeadSha = '') {
@@ -239,7 +239,7 @@ export function classifyTerminalRun(run, currentHeadSha = '') {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} runs
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} runs
  */
 function sortRunsByRecency(runs) {
   return [...toArray(runs)].sort((a, b) => {
@@ -255,7 +255,7 @@ function sortRunsByRecency(runs) {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} runs
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} runs
  * @param {number} prNumber
  * @param {string} currentHeadSha
  */
@@ -268,7 +268,7 @@ function resolveRunCompletionMs(run) {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} runs
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} runs
  * @param {string | null | undefined} cycleOpenedAtUtc
  */
 export function filterRunsWithinCycleBoundary(runs, cycleOpenedAtUtc) {
@@ -288,7 +288,7 @@ export function filterRunsWithinCycleBoundary(runs, cycleOpenedAtUtc) {
 
 export function deriveDistinctHeadBudget(runs, prNumber, currentHeadSha) {
   const forPr = toArray(runs).filter((run) => Number(run?.prNumber) === prNumber);
-  /** @type {Map<string, { run: import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun, runMs: number, classification: ReturnType<typeof classifyTerminalRun> }>} */
+  /** @type {Map<string, { run: import('./review-trigger-reconcile.mjs').ReviewRun, runMs: number, classification: ReturnType<typeof classifyTerminalRun> }>} */
   const latestByTarget = new Map();
   for (const run of forPr) {
     const target = normalizeSha(run?.targetSha);
@@ -322,7 +322,7 @@ export function deriveDistinctHeadBudget(runs, prNumber, currentHeadSha) {
 }
 
 /**
- * @param {import('../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts').ReviewRun[]} runs
+ * @param {import('./review-trigger-reconcile.mjs').ReviewRun[]} runs
  * @param {number} prNumber
  * @param {string} currentHeadSha
  */

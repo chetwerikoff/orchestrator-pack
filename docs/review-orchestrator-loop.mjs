@@ -9,14 +9,14 @@ import {
   isHeadCovered,
   isRunCoveringHead,
   normalizeSha,
-} from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
-import { evaluateHeadReadyForReview } from '../scripts/pr2-foundation/terminalized/review-head-ready.ts';
+} from './review-trigger-reconcile.mjs';
+import { evaluateHeadReadyForReview } from './review-head-ready.mjs';
 
 export {
   evaluateHeadReadyForReview,
   hasReadyForReviewForHead,
   preRunHeadReadyRecheck,
-} from '../scripts/pr2-foundation/terminalized/review-head-ready.ts';
+} from './review-head-ready.mjs';
 
 /** @typedef {{ id?: string, prNumber?: number | null, targetSha?: string, status?: string, prReviewStatus?: string, findingCount?: number, linkedSessionId?: string, reviewerSessionId?: string, body?: string, deliveredAt?: string | null, deliveredFindingCount?: number }} ReviewRun */
 /** @typedef {{ name?: string, sessionId?: string, id?: string, role?: string, prNumber?: number | null, pr?: string | null, status?: string }} AoSession */
@@ -28,7 +28,7 @@ export {
   isHeadCovered,
   isRunCoveringHead,
   normalizeSha,
-} from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
+} from './review-trigger-reconcile.mjs';
 
 /**
  * Plain uncovered path: no covered/in-flight run; not failed/cancelled discipline.

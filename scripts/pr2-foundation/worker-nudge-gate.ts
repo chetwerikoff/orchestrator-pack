@@ -45,6 +45,11 @@ export function canonicalizeStorePath(storePath: string): string {
   return normalized.toLowerCase();
 }
 
+export function canonicalStoreId(storePath: string): string {
+  const canonical = canonicalizeStorePath(storePath);
+  return canonical ? createHash('sha256').update(canonical).digest('hex').slice(0, 24) : '';
+}
+
 export function hashNudgeMessageContent(message: string): string {
   const normalized = String(message ?? '').replace(/\r\n/g, '\n').trim();
   return normalized ? createHash('sha256').update(normalized, 'utf8').digest('hex') : '';

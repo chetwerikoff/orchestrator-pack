@@ -13,7 +13,7 @@ import {
   normalizeSha,
   sessionMatchesIdentifier,
   toArray,
-} from '../scripts/pr2-foundation/terminalized/review-trigger-reconcile.ts';
+} from './review-trigger-reconcile.mjs';
 import {
   hasInterveningInputActivity,
   isSessionFloodActive,
@@ -34,7 +34,7 @@ import {
   DISPATCH_SOURCE_REVIEW_SEND,
   mergeDeliveryRecords,
   selectSurvivingDelivery,
-} from '../scripts/pr2-foundation/terminalized/worker-message-dispatch-observe.ts';
+} from './worker-message-dispatch-observe.mjs';
 import {
   compactWorkerMessageSubmitTracking,
   convergeOversizedReconcileState,

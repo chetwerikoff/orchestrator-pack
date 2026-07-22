@@ -35,6 +35,8 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (process.env.OPK_CONTRACT_MUTATION_CI_NESTED === '1') return;
+
   const args = [
     resolve('node_modules/vitest/vitest.mjs'),
     'run',
@@ -56,6 +58,10 @@ async function main(): Promise<void> {
     args,
     cwd: resolve('.'),
     inheritParentEnv: true,
+    env: {
+      OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1',
+      OPK_VITEST_HARNESS: '1',
+    },
     allowEmptyStdout: true,
     timeoutMs: 300_000,
   });
