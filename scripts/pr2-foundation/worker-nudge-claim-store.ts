@@ -293,7 +293,8 @@ function terminalHit(
     .sort((left, right) => right.mtimeMs - left.mtimeMs);
   for (const file of files) {
     const record = asClaimRecord(readJsonRecord(path.join(directory, file.name)));
-    if (!record || !['SENT', 'UNCERTAIN'].includes(String(record.phase))) continue;
+    // D4: uncertain attempts remain durable history, but only SENT deduplicates.
+    if (!record || record.phase !== 'SENT') continue;
     if (record.key === key || record.tupleKey === tupleKey) {
       return { record, phase: String(record.phase) };
     }
@@ -416,33 +417,37 @@ export async function acquireWorkerNudgeClaim(input: {
       }
       const existing = asClaimRecord(existingRaw);
       if (existing) {
-        if (['SENT', 'UNCERTAIN'].includes(existing.phase)) {
+        if (existing.phase === 'SENT') {
           return { acquired: false, reason: 'already_served', path: activePath, namespace, key };
         }
-        const leaseExpired = existing.phase === 'CLAIMED'
-          && existing.claimLeaseExpiresAtMs <= Date.now();
-        if (existing.phase === 'CLAIMED' && !leaseExpired) {
-          return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
-        }
-        if (existing.phase === 'SEND_ATTEMPTED') {
+        if (existing.phase === 'SEND_ATTEMPTED' || existing.phase === 'UNCERTAIN') {
+          // D4 intentionally retries at least once. Archive the uncertain attempt,
+          // then install a fresh claim so duplicate delivery can be accounted for.
           moveToTerminal(namespace, activePath, existing, 'UNCERTAIN', {
             recoveredBy: replacement.holder,
+            recoveredFromPhase: existing.phase,
+            retryAllowed: true,
           });
-          return { acquired: false, reason: 'uncertain_prior', path: activePath, namespace, key };
+        } else {
+          const leaseExpired = existing.phase === 'CLAIMED'
+            && existing.claimLeaseExpiresAtMs <= Date.now();
+          if (existing.phase === 'CLAIMED' && !leaseExpired) {
+            return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
+          }
+          const acquiredAtMs = Date.parse(existing.acquiredAtUtc);
+          const staleByAge = !Number.isFinite(acquiredAtMs)
+            || Date.now() - acquiredAtMs >= claimStaleMs();
+          if (!leaseExpired && !staleByAge && existing.phase === 'CLAIMED') {
+            return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
+          }
+          moveToTerminal(
+            namespace,
+            activePath,
+            existing,
+            existing.phase === 'FAILED_DEFINITIVE' ? 'released_stale' : 'recovered_stale',
+            { recoveredBy: replacement.holder },
+          );
         }
-        const acquiredAtMs = Date.parse(existing.acquiredAtUtc);
-        const staleByAge = !Number.isFinite(acquiredAtMs)
-          || Date.now() - acquiredAtMs >= claimStaleMs();
-        if (!leaseExpired && !staleByAge && existing.phase === 'CLAIMED') {
-          return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
-        }
-        moveToTerminal(
-          namespace,
-          activePath,
-          existing,
-          existing.phase === 'FAILED_DEFINITIVE' ? 'released_stale' : 'recovered_stale',
-          { recoveredBy: replacement.holder },
-        );
       }
 
       writeJsonAtomic(activePath, replacement, false);
