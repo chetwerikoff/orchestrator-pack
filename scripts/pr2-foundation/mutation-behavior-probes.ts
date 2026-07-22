@@ -3,6 +3,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import { AC_MUTATION_CONTROLS } from './contracts.ts';
+import {
+  assertArtifactHashChanged,
+  assertArtifactHashRestored,
+  assertSpecificFailingTestObserved,
+} from './mutation-runner.ts';
 
 type Probe = () => void;
 
@@ -73,6 +78,16 @@ function requireSource(file: string, required: readonly string[], forbidden: rea
   const text = source(file);
   for (const token of required) invariant(text.includes(token), `independent_required_missing:${file}:${token}`);
   for (const token of forbidden) invariant(!text.includes(token), `independent_forbidden_present:${file}:${token}`);
+}
+
+function expectError(action: () => void, expectedPrefix: string, reason: string): void {
+  let observed = '';
+  try {
+    action();
+  } catch (error) {
+    observed = error instanceof Error ? error.message : String(error);
+  }
+  invariant(observed.startsWith(expectedPrefix), `${reason}:${observed || 'no_error'}`);
 }
 
 addProbe([
@@ -193,17 +208,31 @@ addProbe(['AC8:suite-self-attests'], () => {
   requireSource('scripts/pr2-foundation/mutation-semantic-check.ts', ['mutation-behavior-probes.ts'], ['mutation-semantic-gates.ts']);
   requireSource('scripts/pr2-foundation/mutation-runner.ts', ['mutation-semantic-check.ts', 'mutation-behavior-recipes.ts'], ['git status']);
 });
-addProbe(['AC8:artifact-hash-delta-missing'], () => requireSource(
-  'scripts/pr2-foundation/mutation-runner.ts',
-  ['artifactHashAfter === artifactHashBefore'],
+addProbe(['AC8:artifact-hash-delta-missing'], () => expectError(
+  () => assertArtifactHashChanged('sha256:same', 'sha256:same', 'mutation-contract:AC8:artifact-hash-delta-missing'),
+  'artifact_hash_delta_missing:mutation-contract:AC8:artifact-hash-delta-missing',
+  'artifact_hash_delta_guard_disabled',
 ));
-addProbe(['AC8:failing-test-identity-missing'], () => requireSource(
-  'scripts/pr2-foundation/mutation-runner.ts',
-  ['specific_failing_test_not_observed'],
+addProbe(['AC8:failing-test-identity-missing'], () => expectError(
+  () => assertSpecificFailingTestObserved(
+    'mutation-contract:AC8:failing-test-identity-missing',
+    {
+      ok: false,
+      stdout: '',
+      stderr: 'mutation-contract:AC8:some-other-failure: failed',
+    },
+  ),
+  'specific_failing_test_not_observed:mutation-contract:AC8:failing-test-identity-missing',
+  'failing_test_identity_guard_disabled',
 ));
-addProbe(['AC8:restore-hash-mismatch'], () => requireSource(
-  'scripts/pr2-foundation/mutation-runner.ts',
-  ['restore_hash_mismatch'],
+addProbe(['AC8:restore-hash-mismatch'], () => expectError(
+  () => assertArtifactHashRestored(
+    'sha256:before',
+    'sha256:after',
+    'mutation-contract:AC8:restore-hash-mismatch',
+  ),
+  'restore_hash_mismatch:mutation-contract:AC8:restore-hash-mismatch',
+  'restore_hash_guard_disabled',
 ));
 addProbe([
   'AC8:mutation-id-extra',
