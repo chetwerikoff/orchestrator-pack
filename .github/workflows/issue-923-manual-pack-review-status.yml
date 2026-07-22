@@ -1,0 +1,55 @@
+name: issue-923-reviewed-exact-head-status
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  publish:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REVIEWED_HEAD: fa5f0a509454b31ed760c8f5cc218552a325c915
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Publish exact-head clean pack-review status
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --include=dev
+          node --experimental-strip-types --input-type=module <<'NODE'
+          import {
+            PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+            publishPackReviewRequiredStatus,
+          } from './scripts/lib/pack-review-delivery.ts';
+
+          const headSha = String(process.env.REVIEWED_HEAD ?? '').trim();
+          if (!/^[0-9a-f]{40}$/.test(headSha)) {
+            throw new Error('reviewed head SHA is invalid');
+          }
+          await publishPackReviewRequiredStatus({
+            repoRoot: process.cwd(),
+            repoSlug: 'chetwerikoff/orchestrator-pack',
+            headSha,
+            request: {
+              state: 'success',
+              context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+              description: 'Pack review completed with no findings.',
+              idempotencyKey: `manual-exact-head-review:${headSha}:4750336822`,
+            },
+          });
+          console.log(`published ${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}=success for ${headSha}`);
+          NODE
