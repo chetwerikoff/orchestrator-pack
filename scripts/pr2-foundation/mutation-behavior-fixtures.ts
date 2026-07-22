@@ -1,3 +1,5 @@
+import '../toolchain/native-entrypoint-preflight.ts';
+
 import {
   existsSync,
   mkdirSync,
