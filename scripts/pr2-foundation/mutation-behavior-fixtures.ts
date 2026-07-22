@@ -15,6 +15,11 @@ import {
   notificationConfig,
   parseFoundationConfig,
 } from './config.ts';
+import {
+  DISPATCH_OUTCOME_DISPATCHED,
+  DRAFT_STATE_DRAFT_PRESENT,
+  finalizeDispatchJournalRecord,
+} from './worker-dispatch-journal.ts';
 import { buildDormantScheduler, runDormantMergeActuator } from './scheduler.ts';
 
 function invariant(condition: unknown, reason: string): asserts condition {
@@ -170,6 +175,34 @@ function configFailClosed(): void {
   invariant(live.timeoutMs === 12_345, 'notification_config_not_consumed');
 }
 
+function historicalJournalReadable(): void {
+  const deliveryId = 'legacy-delivery-923';
+  const legacyRecord = {
+    deliveryId,
+    sessionId: 'legacy-session',
+    deliveredAtMs: 1_700_000_000_000,
+    source: 'legacy-pack-send',
+    sourceKey: 'legacy-source-key',
+    deliveryPath: 'pending-draft',
+    messageShape: { charLength: 91, lineCount: 6 },
+    dispatchOutcome: 'in-flight',
+    draftState: 'draft_present',
+    legacyOpaqueField: { preserved: true, version: 7 },
+  };
+  const finalized = finalizeDispatchJournalRecord(
+    { [deliveryId]: legacyRecord },
+    deliveryId,
+    DISPATCH_OUTCOME_DISPATCHED,
+    1_700_000_000_100,
+    DRAFT_STATE_DRAFT_PRESENT,
+  );
+  invariant(finalized.ok, 'historical_record_unreadable');
+  invariant(
+    JSON.stringify(finalized.record.legacyOpaqueField) === JSON.stringify(legacyRecord.legacyOpaqueField),
+    'historical_unknown_fields_dropped',
+  );
+}
+
 async function main(): Promise<void> {
   const probeIndex = process.argv.indexOf('--probe');
   const probe = probeIndex >= 0 ? String(process.argv[probeIndex + 1] ?? '') : '';
@@ -183,6 +216,7 @@ async function main(): Promise<void> {
   else if (probe === 'binding-fail-closed') bindingFailClosed();
   else if (probe === 'cross-repo-rejected') await crossRepoRejected();
   else if (probe === 'config-fail-closed') configFailClosed();
+  else if (probe === 'historical-journal-readable') historicalJournalReadable();
   else throw new Error(`unknown_behavior_fixture:${probe}`);
   process.stdout.write(`behavior-fixture:${probe}:passed\n`);
 }
