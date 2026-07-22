@@ -127,8 +127,6 @@ function estateGeneratorClean(): void {
     ],
     cwd: path.resolve('.'),
     inheritParentEnv: true,
-    allowEmptyStdout: true,
-    timeoutMs: 120_000,
   });
   invariant(result.ok, `estate_manifest_drift:${result.stderr || result.stdout || result.error || result.outcome}`);
 }
