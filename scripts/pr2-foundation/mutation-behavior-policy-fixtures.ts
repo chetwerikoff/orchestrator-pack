@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import {
   AC_MUTATION_CONTROLS,
   CUTOVER_ROWS,
@@ -20,6 +21,7 @@ import {
   type AcceptanceId,
   type DeclarationSnapshotShape,
 } from './contracts.ts';
+import { FOUNDATION_MUTATION_CATALOG } from './mutation-catalog.ts';
 import {
   FOUNDATION_RUNTIME_CATALOG,
   cleanupOwnedFixtureRoot,
@@ -113,6 +115,29 @@ function estateSplitValid(): void {
   for (const file of CUTOVER_ROWS) invariant(existsSync(path.resolve(file)), `cutover_row_deleted:${file}`);
 }
 
+function estateGeneratorClean(): void {
+  const result = runProcessSync({
+    command: process.execPath,
+    args: [
+      '--experimental-strip-types',
+      path.resolve('scripts/estate-cut/manifest-generator.mjs'),
+      '--check',
+    ],
+    cwd: path.resolve('.'),
+    inheritParentEnv: true,
+    allowEmptyStdout: true,
+    timeoutMs: 120_000,
+  });
+  invariant(result.ok, `estate_manifest_drift:${result.stderr || result.stdout || result.error || result.outcome}`);
+}
+
+function mutationCatalogSetStrict(): void {
+  const expected = Object.entries(AC_MUTATION_CONTROLS).flatMap(([ac, ids]) =>
+    ids.map((mutationId) => `${ac}:${mutationId}`)).sort();
+  const actual = FOUNDATION_MUTATION_CATALOG.map((row) => `${row.ac}:${row.mutationId}`).sort();
+  invariant(JSON.stringify(actual) === JSON.stringify(expected), 'mutation_catalog_control_set_mismatch');
+}
+
 function mutationEvidenceSetStrict(): void {
   const rows = Object.entries(AC_MUTATION_CONTROLS).flatMap(([ac, ids]) => ids.map((mutationId) => ({
     ac: ac as AcceptanceId,
@@ -134,6 +159,43 @@ function mutationEvidenceSetStrict(): void {
     { ...rows[0]!, mutationId: 'unexpected-extra' },
   ]);
   invariant(!extra.ok && extra.reason === 'mutation_id_set_mismatch', 'extra_mutation_id_accepted');
+}
+
+function laneConfigBounded(): void {
+  const config = JSON.parse(readFileSync(path.resolve('scripts/vitest-ci-lanes.config.json'), 'utf8')) as {
+    classification?: Record<string, string>;
+  };
+  const expected: Record<string, string> = {
+    'scripts/pr2-foundation/binding-cache.test.ts': 'light',
+    'scripts/pr2-foundation/foundation.test.ts': 'heavy',
+    'scripts/pr2-foundation/migration-symlink.test.ts': 'light',
+    'scripts/pr2-foundation/mutation-catalog.test.ts': 'light',
+    'scripts/pr2-foundation/mutation-external-ci.test.ts': 'heavy',
+    'scripts/pr2-foundation/mutation-semantic-gates.test.ts': 'light',
+    'scripts/pr2-foundation/real-scope-proof.test.ts': 'light',
+    'scripts/pr2-foundation/review-4750643719-regression.test.ts': 'light',
+    'scripts/pr2-foundation/review-head-ready.test.ts': 'light',
+    'scripts/pr2-foundation/terminalized-port.test.ts': 'light',
+    'scripts/pr2-foundation/worker-notification-compat.test.ts': 'light',
+  };
+  for (const [file, lane] of Object.entries(expected)) {
+    invariant(config.classification?.[file] === lane, `lane_classification_invalid:${file}`);
+  }
+  const unexpected = Object.keys(config.classification ?? {})
+    .filter((file) => file.startsWith('scripts/pr2-foundation/') && file.endsWith('.test.ts'))
+    .filter((file) => !(file in expected));
+  invariant(unexpected.length === 0, `lane_config_overreach:${unexpected.join(',')}`);
+}
+
+function packageScriptExact(): void {
+  const pkg = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8')) as {
+    scripts?: Record<string, string>;
+  };
+  invariant(
+    pkg.scripts?.['test:contract-mutations']
+      === 'npm run check:node-major --silent && node --experimental-strip-types scripts/pr2-foundation/contract-test-runner.ts',
+    'contract_mutation_script_overreach',
+  );
 }
 
 function scopeFixture(): {
@@ -180,7 +242,7 @@ function scopeFailClosed(): void {
     ...base,
     changedPaths: ['README.md'],
     addedPaths: [],
-    modes: { README: '100644', 'README.md': '100644' },
+    modes: { 'README.md': '100644' },
   }, 'modification_outside_independent_union');
   expectScopeFailure({
     ...base,
@@ -188,6 +250,13 @@ function scopeFailClosed(): void {
     addedPaths: ['scripts/pr2-foundation/undeclared.ts'],
     declaration: { ...declaration, declared_globs: [], declared_paths: [] },
     modes: { 'scripts/pr2-foundation/undeclared.ts': '100644' },
+  }, 'addition_not_declared');
+  expectScopeFailure({
+    ...base,
+    changedPaths: ['candidate/self-authorized.ts'],
+    addedPaths: ['candidate/self-authorized.ts'],
+    declaration: { ...declaration, declared_globs: [], declared_paths: [] },
+    modes: { 'candidate/self-authorized.ts': '100644' },
   }, 'addition_not_declared');
   expectScopeFailure({
     ...base,
@@ -220,7 +289,11 @@ async function main(): Promise<void> {
   if (probe === 'runtime-catalog-fail-closed') runtimeCatalogFailClosed();
   else if (probe === 'cleanup-fail-closed') cleanupFailClosed();
   else if (probe === 'estate-split-valid') estateSplitValid();
+  else if (probe === 'estate-generator-clean') estateGeneratorClean();
+  else if (probe === 'mutation-catalog-set-strict') mutationCatalogSetStrict();
   else if (probe === 'mutation-evidence-set-strict') mutationEvidenceSetStrict();
+  else if (probe === 'lane-config-bounded') laneConfigBounded();
+  else if (probe === 'package-script-exact') packageScriptExact();
   else if (probe === 'scope-fail-closed') scopeFailClosed();
   else throw new Error(`unknown_policy_fixture:${probe}`);
   process.stdout.write(`policy-fixture:${probe}:passed\n`);
