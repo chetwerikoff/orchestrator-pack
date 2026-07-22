@@ -45,6 +45,47 @@ jobs:
             | gzip --decompress \
             > "$RUNNER_TEMP/apply.py"
           echo "$HELPER_SHA256  $RUNNER_TEMP/apply.py" | sha256sum --check --strict
+          APPLY="$RUNNER_TEMP/apply.py" python3 <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ['APPLY'])
+          source = path.read_text(encoding='utf-8')
+          old = '''        """    inheritParentEnv: true,
+              allowEmptyStdout: true,
+              timeoutMs: 10 * 60 * 1_000,
+            });
+          """,
+                  """    inheritParentEnv: true,
+              env: { OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1' },
+              allowEmptyStdout: true,
+              timeoutMs: 10 * 60 * 1_000,
+            });
+          """,
+          '''
+          new = '''        """  const result = await runProcess({
+              command: process.execPath,
+              args,
+              cwd: resolve('.'),
+              inheritParentEnv: true,
+              allowEmptyStdout: true,
+              timeoutMs: 300_000,
+            });
+          """,
+                  """  const result = await runProcess({
+              command: process.execPath,
+              args,
+              cwd: resolve('.'),
+              inheritParentEnv: true,
+              env: { OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1' },
+              allowEmptyStdout: true,
+              timeoutMs: 300_000,
+            });
+          """,
+          '''
+          if source.count(old) != 1:
+              raise SystemExit(f'helper hotfix match count: {source.count(old)}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
           python3 "$RUNNER_TEMP/apply.py"
           git diff --check
 
