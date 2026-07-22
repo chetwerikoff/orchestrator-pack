@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SOURCE_JOB_ID: '88886274595'
+      SOURCE_JOB_ID: '88888352511'
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Print policy lint failure
@@ -31,7 +31,7 @@ jobs:
           import re
           ansi = re.compile(r'\x1b\[[0-9;]*m')
           lines = [ansi.sub('', line) for line in open('source.log', encoding='utf-8-sig', errors='replace').read().splitlines()]
-          needles = ('FAIL', 'forbidden', 'policy', 'Promise', 'subprocess', '##[error]', 'Process completed with exit code')
+          needles = ('node-contract', 'runtime-', 'direct native', 'policy checks', '##[error]', 'Process completed with exit code')
           print('--- matched ---')
           for index, line in enumerate(lines, start=1):
               if any(needle.lower() in line.lower() for needle in needles):
