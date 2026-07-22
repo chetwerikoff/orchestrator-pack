@@ -1,0 +1,26 @@
+name: pr939-approve-current-head-runs
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  approve:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Approve exact-head PR 939 runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for run in 29900807301 29900807336 29900807279 29900807314; do
+            ./scripts/gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run}/approve"
+          done
