@@ -1,0 +1,34 @@
+name: review-4750643719-checkout
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-923-pr2-foundation
+          fetch-depth: 0
+      - name: Export exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "fa5f0a509454b31ed760c8f5cc218552a325c915"
+          git bundle create "$RUNNER_TEMP/pr939.bundle" --all
+          tar --exclude=.git -czf "$RUNNER_TEMP/pr939-checkout.tar.gz" .
+          sha256sum "$RUNNER_TEMP/pr939.bundle" "$RUNNER_TEMP/pr939-checkout.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: review-4750643719-checkout
+          path: |
+            ${{ runner.temp }}/pr939.bundle
+            ${{ runner.temp }}/pr939-checkout.tar.gz
+          if-no-files-found: error
