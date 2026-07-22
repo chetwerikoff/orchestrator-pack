@@ -1,15 +1,20 @@
-import {
-  buildBoundedSemanticMutation,
-  type BoundedSemanticMutation,
-} from './mutation-semantic-gates.ts';
+import { AC_MUTATION_CONTROLS } from './contracts.ts';
+import { mutationBinding } from './mutation-catalog.ts';
+
+export interface BehavioralMutation {
+  artifactPath: string;
+  kind: 'replace' | 'create';
+  content: string;
+  affectedOccurrences: number;
+  anchor: string;
+}
 
 interface TextRecipe {
   anchor: string;
   replacement: string;
-  artifactPath?: string;
 }
 
-const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
+const TEXT_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
   'AC1:scheduler-acquirer-running': {
     anchor: '    running: false,\n    claimAcquirer: false,',
     replacement: '    running: true,\n    claimAcquirer: false,',
@@ -17,6 +22,10 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
   'AC1:activation-epoch-enforced': {
     anchor: '    activationEpochEnforced: false,\n    pollIntervalMs:',
     replacement: '    activationEpochEnforced: true,\n    pollIntervalMs:',
+  },
+  'AC1:live-store-opened': {
+    anchor: '  for (const liveRoot of liveRootBoundaries(liveStoreRoots)) {',
+    replacement: '  for (const liveRoot of ([] as string[])) {',
   },
   'AC1:dormant-config-reader-live': {
     anchor: '    running: false,\n    claimAcquirer: false,',
@@ -54,6 +63,10 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     anchor: 'const ambiguous = eligible.length > 1;',
     replacement: 'const ambiguous = false;',
   },
+  'AC2:per-session-detail-call': {
+    anchor: "      args: ['session', 'ls', '--json'],",
+    replacement: "      args: ['session', 'get', input.requestedSessionId, '--json'],",
+  },
   'AC2:pr-body-reference-trusted': {
     anchor: 'return forms.some((pattern) => pattern.test(normalized));',
     replacement: "return forms.some((pattern) => pattern.test(normalized)) || normalized.includes(`Closes #${issueId}`);",
@@ -65,6 +78,10 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
   'AC2:missing-draft-bit-accepted': {
     anchor: "typeof value.isDraft !== 'boolean'",
     replacement: 'false',
+  },
+  'AC2:legacy-cache-projection-dependency': {
+    anchor: '  const openPrs = await loadOpenPrs(repoSlug);',
+    replacement: "  const openPrs = await loadOpenPrs('Gh-FleetInventoryCache');",
   },
   'AC2:zero-candidate-bound': {
     anchor: "    if (eligible.length === 0) {\n      return {\n        bound: false,\n        classId: 'B1',\n        sessionId: session.id,\n        reason: 'no_source',\n        ...(rejectedCache ? { context: { rejectedCache } } : {}),\n      };\n    }",
@@ -87,7 +104,7 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     replacement: "export function parseFoundationConfig(input: unknown = {}): FoundationConfigResult {\n  void process.env.OPK_PR2_FOUNDATION_CONFIG;\n",
   },
   'AC3:malformed-value-defaulted': {
-    anchor: "if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {",
+    anchor: 'if (typeof value !== \'number\' || !Number.isInteger(value) || value <= 0) {',
     replacement: 'if (false) {',
   },
   'AC3:invalid-config-accepted': {
@@ -110,9 +127,29 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     anchor: "  try {\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
     replacement: "  try {\n    await runProcess({ command: config.aoPath, args: [], allowEmptyStdout: true, timeoutMs: 1 });\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
   },
+  'AC4:inline-powershell': {
+    anchor: '// Pure Node 22 adapter. Journal mutation lives in the typed',
+    replacement: "// Pure Node 22 adapter. Journal mutation lives in the typed\nvoid 'pwsh -NoProfile -File inline-notification.ps1';",
+  },
+  'AC4:powershell-child': {
+    anchor: '      const result = await runProcess({\n        command: config.aoPath,\n        args,',
+    replacement: "      const result = await runProcess({\n        command: 'pwsh',\n        args: ['-NoProfile', '-File', 'worker-notification.ps1'],",
+  },
   'AC4:historical-record-unreadable': {
     anchor: '  return canonicalFinalizeDispatchJournalRecord(\n    journal,\n    deliveryId,',
     replacement: '  return canonicalFinalizeDispatchJournalRecord(\n    {},\n    deliveryId,',
+  },
+  'AC4:duplicate-send-unaccounted': {
+    anchor: "  try {\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
+    replacement: "  try {\n    const inspected = await inspectNotification({\n      deliveryKey,\n      findingsHash,\n      maxAttempts: config.maxJournalAttempts,\n    });\n    if (false && inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\n  } catch (error) {",
+  },
+  'AC4:run-linkage-missing': {
+    anchor: '        reviewRunId: options.run.id,',
+    replacement: "        reviewRunId: '',",
+  },
+  'AC4:channel-outcome-corruption': {
+    anchor: "      recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));",
+    replacement: "      recordChannelOutcome('workerNotification', outcome('succeeded', notified.reason, workerKey, options.clock));",
   },
   'AC5:journal-key-omitted': {
     anchor: "  if (!input.journalKey.trim()) return { ok: false, reason: 'journal_key_required' };",
@@ -187,17 +224,14 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
     replacement: '',
   },
   'AC9:modification-outside-independent-union': {
-    artifactPath: 'scripts/pr2-foundation/real-scope-proof.ts',
     anchor: '  const changedPaths = rows.map((row) => row.path);',
     replacement: "  const changedPaths = [...rows.map((row) => row.path), 'README.md'];",
   },
   'AC9:declaration-snapshot-missing': {
-    artifactPath: 'scripts/pr2-foundation/real-scope-proof.ts',
     anchor: '  const resolved = resolveLatestCommittedSnapshotAtCommit(repoRoot, declarationCommitSha);',
     replacement: '  const resolved = resolveLatestCommittedSnapshot(repoRoot, 923);',
   },
   'AC9:declaration-created-after-implementation': {
-    artifactPath: 'scripts/pr2-foundation/real-scope-proof.ts',
     anchor: '  const declarationCommitSha = declarationCommits[0];',
     replacement: "  const declarationCommitSha = git(repoRoot, ['rev-parse', 'HEAD']);",
   },
@@ -239,16 +273,87 @@ const EXECUTABLE_RECIPES: Readonly<Record<string, TextRecipe>> = Object.freeze({
   },
 });
 
-const ESTATE_MUTATION_KEYS = new Set([
-  'AC7:denominator-read-from-head',
-  'AC7:foundation-row-omitted',
-  'AC7:cutover-row-deleted',
-  'AC7:cutover-owner-generic',
-  'AC7:split-not-sixteen-six',
-  'AC7:unrelated-manifest-row-changed',
+const IMMUTABLE_MUTATION_KEYS = new Set([
+  'AC1:registry-changed',
+  'AC1:legacy-starter-disabled',
+  'AC1:non-notification-runtime-delta',
+  'AC9:cutover-path-modified',
+  'AC9:registry-or-supervisor-modified',
+  'AC9:capture-corpus-overreach',
 ]);
 
-function applyEstateMutation(key: string, source: string | null): BoundedSemanticMutation {
+const CREATE_MUTATION_KEYS = new Set([
+  'AC2:raw-live-capture-committed',
+  'AC9:raw-capture-added',
+]);
+
+const ESTATE_MUTATION_KEYS = new Set(
+  AC_MUTATION_CONTROLS.AC7.map((id) => `AC7:${id}`),
+);
+
+const LANE_MUTATION_KEYS = new Set([
+  'AC9:test-classification-missing',
+  'AC9:lane-config-overreach',
+]);
+
+const ALL_MUTATION_KEYS = Object.entries(AC_MUTATION_CONTROLS).flatMap(([ac, ids]) =>
+  ids.map((mutationId) => `${ac}:${mutationId}`),
+);
+
+function bindingPath(key: string): string {
+  return mutationBinding(key).artifactPath;
+}
+
+function applyTextRecipe(key: string, source: string | null, recipe: TextRecipe): BehavioralMutation {
+  if (source === null) throw new Error(`mutation_target_missing:${key}`);
+  const affectedOccurrences = source.split(recipe.anchor).length - 1;
+  if (affectedOccurrences !== 1) {
+    throw new Error(`behavior_mutation_anchor_cardinality:${key}:${affectedOccurrences}`);
+  }
+  return {
+    artifactPath: bindingPath(key),
+    kind: 'replace',
+    content: source.replace(recipe.anchor, recipe.replacement),
+    affectedOccurrences,
+    anchor: recipe.anchor,
+  };
+}
+
+function applyImmutableMutation(key: string, source: string | null): BehavioralMutation {
+  if (source === null) throw new Error(`mutation_target_missing:${key}`);
+  const artifactPath = bindingPath(key);
+  let content: string;
+  if (artifactPath.endsWith('.json')) {
+    const parsed = JSON.parse(source) as unknown;
+    const marker = { __opkBehaviorMutation: key };
+    content = Array.isArray(parsed)
+      ? `${JSON.stringify([...parsed, marker], null, 2)}\n`
+      : `${JSON.stringify({ ...(parsed as Record<string, unknown>), ...marker }, null, 2)}\n`;
+  } else {
+    const comment = artifactPath.endsWith('.ps1') ? '#' : '//';
+    content = `${source}${source.endsWith('\n') ? '' : '\n'}${comment} ${key}\n`;
+  }
+  return {
+    artifactPath,
+    kind: 'replace',
+    content,
+    affectedOccurrences: 1,
+    anchor: 'immutable-byte-contract',
+  };
+}
+
+function applyCreateMutation(key: string, source: string | null): BehavioralMutation {
+  if (source !== null) throw new Error(`mutation_create_target_exists:${key}`);
+  return {
+    artifactPath: bindingPath(key),
+    kind: 'create',
+    content: `${JSON.stringify({ mutation: key })}\n`,
+    affectedOccurrences: 1,
+    anchor: 'absent-artifact-contract',
+  };
+}
+
+function applyEstateMutation(key: string, source: string | null): BehavioralMutation {
   if (source === null) throw new Error(`mutation_target_missing:${key}`);
   const document = JSON.parse(source) as { rows?: Array<Record<string, unknown>> };
   const rows = document.rows ?? [];
@@ -272,9 +377,8 @@ function applyEstateMutation(key: string, source: string | null): BoundedSemanti
     const row = rows.find((candidate) => typeof candidate.path === 'string' && !relevant.has(String(candidate.path)));
     if (row) row.reason = `${String(row.reason ?? '')}:mutation-overreach`;
   }
-  const fallback = buildBoundedSemanticMutation(key, source);
   return {
-    artifactPath: fallback.artifactPath,
+    artifactPath: bindingPath(key),
     kind: 'replace',
     content: `${JSON.stringify(document, null, 2)}\n`,
     affectedOccurrences: 1,
@@ -282,12 +386,7 @@ function applyEstateMutation(key: string, source: string | null): BoundedSemanti
   };
 }
 
-const LANE_MUTATION_KEYS = new Set([
-  'AC9:test-classification-missing',
-  'AC9:lane-config-overreach',
-]);
-
-function applyLaneMutation(key: string, source: string | null): BoundedSemanticMutation {
+function applyLaneMutation(key: string, source: string | null): BehavioralMutation {
   if (source === null) throw new Error(`mutation_target_missing:${key}`);
   const document = JSON.parse(source) as { classification?: Record<string, string> };
   const classification = document.classification ?? {};
@@ -296,9 +395,8 @@ function applyLaneMutation(key: string, source: string | null): BoundedSemanticM
   } else {
     classification['scripts/pr2-foundation/unexpected.test.ts'] = 'light';
   }
-  const fallback = buildBoundedSemanticMutation(key, source);
   return {
-    artifactPath: fallback.artifactPath,
+    artifactPath: bindingPath(key),
     kind: 'replace',
     content: `${JSON.stringify(document, null, 2)}\n`,
     affectedOccurrences: 1,
@@ -306,40 +404,27 @@ function applyLaneMutation(key: string, source: string | null): BoundedSemanticM
   };
 }
 
-function applyTextRecipe(
-  key: string,
-  source: string | null,
-  recipe: TextRecipe,
-): BoundedSemanticMutation {
-  if (source === null) throw new Error(`mutation_target_missing:${key}`);
-  const affectedOccurrences = source.split(recipe.anchor).length - 1;
-  if (affectedOccurrences !== 1) {
-    throw new Error(`behavior_mutation_anchor_cardinality:${key}:${affectedOccurrences}`);
-  }
-  const artifactPath = recipe.artifactPath ?? buildBoundedSemanticMutation(key, source).artifactPath;
-  return {
-    artifactPath,
-    kind: 'replace',
-    content: source.replace(recipe.anchor, recipe.replacement),
-    affectedOccurrences,
-    anchor: recipe.anchor,
-  };
-}
-
-export function buildBehavioralMutation(
-  key: string,
-  source: string | null,
-): BoundedSemanticMutation {
-  if (ESTATE_MUTATION_KEYS.has(key)) return applyEstateMutation(key, source);
-  if (LANE_MUTATION_KEYS.has(key)) return applyLaneMutation(key, source);
-  const recipe = EXECUTABLE_RECIPES[key];
-  return recipe
-    ? applyTextRecipe(key, source, recipe)
-    : buildBoundedSemanticMutation(key, source);
-}
-
-export const EXECUTABLE_BEHAVIOR_MUTATION_KEYS = Object.freeze([
-  ...Object.keys(EXECUTABLE_RECIPES),
+const EXPLICIT_MUTATION_KEYS = new Set([
+  ...Object.keys(TEXT_RECIPES),
+  ...IMMUTABLE_MUTATION_KEYS,
+  ...CREATE_MUTATION_KEYS,
   ...ESTATE_MUTATION_KEYS,
   ...LANE_MUTATION_KEYS,
-].sort());
+]);
+
+if (EXPLICIT_MUTATION_KEYS.size !== ALL_MUTATION_KEYS.length
+  || ALL_MUTATION_KEYS.some((key) => !EXPLICIT_MUTATION_KEYS.has(key))) {
+  throw new Error('behavioral_mutation_recipe_set_mismatch');
+}
+
+export function buildBehavioralMutation(key: string, source: string | null): BehavioralMutation {
+  const recipe = TEXT_RECIPES[key];
+  if (recipe) return applyTextRecipe(key, source, recipe);
+  if (IMMUTABLE_MUTATION_KEYS.has(key)) return applyImmutableMutation(key, source);
+  if (CREATE_MUTATION_KEYS.has(key)) return applyCreateMutation(key, source);
+  if (ESTATE_MUTATION_KEYS.has(key)) return applyEstateMutation(key, source);
+  if (LANE_MUTATION_KEYS.has(key)) return applyLaneMutation(key, source);
+  throw new Error(`behavioral_mutation_recipe_missing:${key}`);
+}
+
+export const EXECUTABLE_BEHAVIOR_MUTATION_KEYS = Object.freeze([...EXPLICIT_MUTATION_KEYS].sort());
