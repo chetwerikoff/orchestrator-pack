@@ -50,36 +50,44 @@ jobs:
           import os
           path = Path(os.environ['APPLY'])
           source = path.read_text(encoding='utf-8')
-          old_target = '''"""    inheritParentEnv: true,
-              allowEmptyStdout: true,
-              timeoutMs: 10 * 60 * 1_000,
-            });
-          """'''.replace('              ', '    ').replace('            ', '  ')
-          new_target = '''"""  const result = await runProcess({
-              command: process.execPath,
-              args,
-              cwd: resolve('.'),
-              inheritParentEnv: true,
-              allowEmptyStdout: true,
-              timeoutMs: 300_000,
-            });
-          """'''.replace('              ', '    ').replace('            ', '  ')
-          old_replacement = '''"""    inheritParentEnv: true,
-              env: { OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1' },
-              allowEmptyStdout: true,
-              timeoutMs: 10 * 60 * 1_000,
-            });
-          """'''.replace('              ', '    ').replace('            ', '  ')
-          new_replacement = '''"""  const result = await runProcess({
-              command: process.execPath,
-              args,
-              cwd: resolve('.'),
-              inheritParentEnv: true,
-              env: { OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1' },
-              allowEmptyStdout: true,
-              timeoutMs: 300_000,
-            });
-          """'''.replace('              ', '    ').replace('            ', '  ')
+          old_target = '\n'.join([
+              '"""    inheritParentEnv: true,',
+              '    allowEmptyStdout: true,',
+              '    timeoutMs: 10 * 60 * 1_000,',
+              '  });',
+              '"""',
+          ])
+          new_target = '\n'.join([
+              '"""  const result = await runProcess({',
+              '    command: process.execPath,',
+              '    args,',
+              "    cwd: resolve('.'),",
+              '    inheritParentEnv: true,',
+              '    allowEmptyStdout: true,',
+              '    timeoutMs: 300_000,',
+              '  });',
+              '"""',
+          ])
+          old_replacement = '\n'.join([
+              '"""    inheritParentEnv: true,',
+              "    env: { OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1' },",
+              '    allowEmptyStdout: true,',
+              '    timeoutMs: 10 * 60 * 1_000,',
+              '  });',
+              '"""',
+          ])
+          new_replacement = '\n'.join([
+              '"""  const result = await runProcess({',
+              '    command: process.execPath,',
+              '    args,',
+              "    cwd: resolve('.'),",
+              '    inheritParentEnv: true,',
+              "    env: { OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1' },",
+              '    allowEmptyStdout: true,',
+              '    timeoutMs: 300_000,',
+              '  });',
+              '"""',
+          ])
           if source.count(old_target) != 1 or source.count(old_replacement) != 1:
               raise SystemExit(
                   f'helper hotfix target counts: {source.count(old_target)}, {source.count(old_replacement)}'
