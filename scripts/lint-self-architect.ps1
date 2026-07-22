@@ -304,6 +304,284 @@ function Test-Suppressed {
     return $false
 }
 
+function Initialize-SelfArchitectExactBlockIndexer {
+    if ('OrchestratorPack.SelfArchitectExactBlockIndexer' -as [type]) { return }
+
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Text.RegularExpressions;
+
+namespace OrchestratorPack
+{
+    public sealed class SelfArchitectBlockLocation
+    {
+        public string file;
+        public int startLine;
+        public int endLine;
+        public int lineCount;
+    }
+
+    public sealed class SelfArchitectPairedMatch
+    {
+        public int si;
+        public int ti;
+        public int size;
+        public int matching;
+        public double overlapRatio;
+    }
+
+    internal struct SelfArchitectAnchorKey : IEquatable<SelfArchitectAnchorKey>
+    {
+        private readonly string first;
+        private readonly string quarter;
+        private readonly string middle;
+        private readonly string last;
+
+        public SelfArchitectAnchorKey(string[] lines, int start, int size)
+        {
+            first = lines[start] ?? string.Empty;
+            quarter = lines[start + (size / 3)] ?? string.Empty;
+            middle = lines[start + ((size * 2) / 3)] ?? string.Empty;
+            last = lines[start + size - 1] ?? string.Empty;
+        }
+
+        public bool Equals(SelfArchitectAnchorKey other)
+        {
+            return string.Equals(first, other.first, StringComparison.Ordinal)
+                && string.Equals(quarter, other.quarter, StringComparison.Ordinal)
+                && string.Equals(middle, other.middle, StringComparison.Ordinal)
+                && string.Equals(last, other.last, StringComparison.Ordinal);
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is SelfArchitectAnchorKey && Equals((SelfArchitectAnchorKey)obj);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = 17;
+                hash = (hash * 31) + StringComparer.Ordinal.GetHashCode(first);
+                hash = (hash * 31) + StringComparer.Ordinal.GetHashCode(quarter);
+                hash = (hash * 31) + StringComparer.Ordinal.GetHashCode(middle);
+                hash = (hash * 31) + StringComparer.Ordinal.GetHashCode(last);
+                return hash;
+            }
+        }
+    }
+
+    public static class SelfArchitectExactBlockIndexer
+    {
+        private static readonly Regex MeaningfulLine = new Regex(@"\S", RegexOptions.CultureInvariant);
+
+        public static Dictionary<string, List<SelfArchitectBlockLocation>> Build(
+            IDictionary fileLines,
+            IEnumerable introducedPaths,
+            int size)
+        {
+            var changed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (introducedPaths != null)
+            {
+                var onePath = introducedPaths as string;
+                if (onePath != null)
+                {
+                    changed.Add(NormalizePath(onePath));
+                }
+                else
+                {
+                    foreach (object item in introducedPaths)
+                    {
+                        if (item != null)
+                        {
+                            changed.Add(NormalizePath(item.ToString()));
+                        }
+                    }
+                }
+            }
+
+            var blockMap = new Dictionary<string, List<SelfArchitectBlockLocation>>(StringComparer.Ordinal);
+            var anchors = new HashSet<SelfArchitectAnchorKey>();
+            bool requireChanged = changed.Count > 0;
+
+            if (requireChanged)
+            {
+                foreach (DictionaryEntry entry in fileLines)
+                {
+                    string path = NormalizePath(entry.Key == null ? string.Empty : entry.Key.ToString());
+                    if (!changed.Contains(path)) { continue; }
+                    AddWindows(ToLines(entry.Value), size, path, blockMap, anchors, false);
+                }
+
+                if (blockMap.Count > 0)
+                {
+                    foreach (DictionaryEntry entry in fileLines)
+                    {
+                        string path = NormalizePath(entry.Key == null ? string.Empty : entry.Key.ToString());
+                        if (changed.Contains(path)) { continue; }
+                        AddWindows(ToLines(entry.Value), size, path, blockMap, anchors, true);
+                    }
+                }
+            }
+            else
+            {
+                foreach (DictionaryEntry entry in fileLines)
+                {
+                    string path = NormalizePath(entry.Key == null ? string.Empty : entry.Key.ToString());
+                    AddWindows(ToLines(entry.Value), size, path, blockMap, anchors, false);
+                }
+            }
+
+            return blockMap;
+        }
+
+        public static SelfArchitectPairedMatch FindBestPairedMatch(
+            object scriptValue,
+            object templateValue,
+            int size,
+            int stride,
+            int overlapMin,
+            double overlapRatioMin)
+        {
+            string[] scriptLines = ToLines(scriptValue);
+            string[] templateLines = ToLines(templateValue);
+            if (size <= 0 || scriptLines.Length < size || templateLines.Length < size)
+            {
+                return null;
+            }
+            if (stride < 1) { stride = 1; }
+
+            SelfArchitectPairedMatch best = null;
+            for (int si = 0; si <= scriptLines.Length - size; si += stride)
+            {
+                for (int ti = 0; ti <= templateLines.Length - size; ti += stride)
+                {
+                    int matching = 0;
+                    for (int k = 0; k < size; k++)
+                    {
+                        if (string.Equals(scriptLines[si + k], templateLines[ti + k], StringComparison.Ordinal))
+                        {
+                            matching++;
+                        }
+                    }
+
+                    if (matching < overlapMin || matching == size) { continue; }
+                    double overlapRatio = (double)matching / size;
+                    if (overlapRatio < overlapRatioMin) { continue; }
+                    if (best == null || overlapRatio > best.overlapRatio)
+                    {
+                        best = new SelfArchitectPairedMatch
+                        {
+                            si = si,
+                            ti = ti,
+                            size = size,
+                            matching = matching,
+                            overlapRatio = overlapRatio
+                        };
+                    }
+                }
+            }
+            return best;
+        }
+
+        private static void AddWindows(
+            string[] lines,
+            int size,
+            string path,
+            Dictionary<string, List<SelfArchitectBlockLocation>> blockMap,
+            HashSet<SelfArchitectAnchorKey> anchors,
+            bool existingKeysOnly)
+        {
+            if (size <= 0 || lines.Length < size) { return; }
+
+            int[] meaningfulPrefix = null;
+            if (!existingKeysOnly)
+            {
+                meaningfulPrefix = new int[lines.Length + 1];
+                for (int index = 0; index < lines.Length; index++)
+                {
+                    meaningfulPrefix[index + 1] = meaningfulPrefix[index];
+                    if (MeaningfulLine.IsMatch(lines[index] ?? string.Empty))
+                    {
+                        meaningfulPrefix[index + 1]++;
+                    }
+                }
+            }
+
+            for (int start = 0; start <= lines.Length - size; start++)
+            {
+                if (!existingKeysOnly && meaningfulPrefix[start + size] == meaningfulPrefix[start])
+                {
+                    continue;
+                }
+
+                var anchor = new SelfArchitectAnchorKey(lines, start, size);
+                if (existingKeysOnly && !anchors.Contains(anchor)) { continue; }
+
+                string blockText = string.Join("\n", lines, start, size);
+                List<SelfArchitectBlockLocation> locations;
+                if (existingKeysOnly)
+                {
+                    if (!blockMap.TryGetValue(blockText, out locations)) { continue; }
+                }
+                else
+                {
+                    if (!blockMap.TryGetValue(blockText, out locations))
+                    {
+                        locations = new List<SelfArchitectBlockLocation>();
+                        blockMap.Add(blockText, locations);
+                    }
+                    anchors.Add(anchor);
+                }
+
+                locations.Add(new SelfArchitectBlockLocation
+                {
+                    file = path,
+                    startLine = start + 1,
+                    endLine = start + size,
+                    lineCount = size
+                });
+            }
+        }
+
+        private static string[] ToLines(object value)
+        {
+            var typed = value as string[];
+            if (typed != null) { return typed; }
+
+            var list = value as IList;
+            if (list != null)
+            {
+                var lines = new string[list.Count];
+                for (int index = 0; index < list.Count; index++)
+                {
+                    lines[index] = list[index] == null ? string.Empty : list[index].ToString();
+                }
+                return lines;
+            }
+
+            var enumerable = value as IEnumerable;
+            if (enumerable == null) { return new string[0]; }
+            var collected = new List<string>();
+            foreach (object item in enumerable)
+            {
+                collected.Add(item == null ? string.Empty : item.ToString());
+            }
+            return collected.ToArray();
+        }
+
+        private static string NormalizePath(string path)
+        {
+            return (path ?? string.Empty).Replace('\\', '/').TrimStart('.', '/');
+        }
+    }
+}
+'@
+}
+
 function Get-SlidingBlocks {
     param(
         [string[]]$Lines,
@@ -471,7 +749,6 @@ function Find-DuplicateLiteralFindings {
     if ($BaseRef -and $HeadRef) {
         $renameMap = Get-RenameMap -Root $Root -BaseRef $BaseRef -HeadRef $HeadRef
     }
-    $blockMap = New-Object 'System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[object]]'
     $introduced = @{}
     foreach ($path in $IntroducedInPaths) {
         if ($path) {
@@ -482,22 +759,12 @@ function Find-DuplicateLiteralFindings {
     $baseLinesCache = @{}
     $baseBlockCache = @{}
 
-    foreach ($entry in $FileLines.GetEnumerator()) {
-        $relativePath = $entry.Key
-        $blocks = Get-SlidingBlocks -Lines $entry.Value -Size $minStrict
-        foreach ($block in $blocks) {
-            $blockKey = [string]$block.text
-            if (-not $blockMap.ContainsKey($blockKey)) {
-                $blockMap[$blockKey] = New-Object System.Collections.Generic.List[object]
-            }
-            $blockMap[$blockKey].Add([pscustomobject]@{
-                    file      = $relativePath
-                    startLine = $block.startLine
-                    endLine   = $block.endLine
-                    lineCount = $block.lineCount
-                })
-        }
-    }
+    Initialize-SelfArchitectExactBlockIndexer
+    $blockMap = [OrchestratorPack.SelfArchitectExactBlockIndexer]::Build(
+        $FileLines,
+        $IntroducedInPaths,
+        $minStrict
+    )
 
     foreach ($pair in $blockMap.GetEnumerator()) {
         $locations = @($pair.Value | Sort-Object file, startLine)
@@ -672,33 +939,15 @@ function Find-PairedEditFindings {
             $templateLines = $FileLines[$templatePath]
             if ($scriptLines.Count -lt $minLines -or $templateLines.Count -lt $minLines) { continue }
 
-            $bestMatch = $null
-            for ($si = 0; $si -le ($scriptLines.Count - $size); $si += $stride) {
-                for ($ti = 0; $ti -le ($templateLines.Count - $size); $ti += $stride) {
-                    $matching = 0
-                    for ($k = 0; $k -lt $size; $k++) {
-                        if ($scriptLines[$si + $k] -eq $templateLines[$ti + $k]) {
-                            $matching++
-                        }
-                    }
-
-                    if ($matching -lt $overlapMin) { continue }
-
-                    $overlapRatio = [double]$matching / $size
-                    if ($overlapRatio -lt $overlapRatioMin) { continue }
-                    if ($matching -eq $size) { continue }
-
-                    if (-not $bestMatch -or $overlapRatio -gt $bestMatch.overlapRatio) {
-                        $bestMatch = [pscustomobject]@{
-                            si           = $si
-                            ti           = $ti
-                            size         = $size
-                            matching     = $matching
-                            overlapRatio = $overlapRatio
-                        }
-                    }
-                }
-            }
+            Initialize-SelfArchitectExactBlockIndexer
+            $bestMatch = [OrchestratorPack.SelfArchitectExactBlockIndexer]::FindBestPairedMatch(
+                $scriptLines,
+                $templateLines,
+                $size,
+                $stride,
+                $overlapMin,
+                $overlapRatioMin
+            )
 
             if ($bestMatch) {
                 $rule = 'paired-edit-divergence'

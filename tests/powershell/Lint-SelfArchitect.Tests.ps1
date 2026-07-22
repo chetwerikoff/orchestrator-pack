@@ -418,8 +418,11 @@ Describe 'scripts/lint-self-architect.ps1' {
         $slidingBody | Should -Not -Match '\$Lines\[\$start\.\.'
         $slidingBody | Should -Not -Match 'Where-Object'
         $slidingBody | Should -Match 'System\.Collections\.Generic\.List\[object\]'
-        $duplicateBody | Should -Not -Match 'ToBase64String'
-        $duplicateBody | Should -Match '\$blockKey\s*=\s*\[string\]\$block\.text'
+        $source | Should -Not -Match 'ToBase64String'
+        $source | Should -Match 'SelfArchitectExactBlockIndexer'
+        $source | Should -Match 'HashSet<SelfArchitectAnchorKey>'
+        $duplicateBody | Should -Match 'SelfArchitectExactBlockIndexer\]::Build'
+        $duplicateBody | Should -Not -Match 'Get-SlidingBlocks -Lines \$entry\.Value'
     }
 
     It 'skips whitespace-only windows while preserving meaningful exact duplicates' {
@@ -473,5 +476,39 @@ Describe 'scripts/lint-self-architect.ps1' {
         ([regex]::Matches($duplicateBody, '\$baseBlockCache\s*=\s*@\{\}')).Count | Should -Be 1
         ([regex]::Matches($duplicateBody, '-BaseBlockCache \$baseBlockCache')).Count | Should -Be 2
     }
+
+
+It 'uses compiled exact candidate indexing with full-string verification' {
+    $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+    $helperStart = $source.IndexOf('function Initialize-SelfArchitectExactBlockIndexer')
+    $helperEnd = $source.IndexOf('function Get-SlidingBlocks')
+    $helperStart | Should -BeGreaterOrEqual 0
+    $helperEnd | Should -BeGreaterThan $helperStart
+    $helperBody = $source.Substring($helperStart, $helperEnd - $helperStart)
+
+    $helperBody | Should -Match 'Add-Type -TypeDefinition'
+    $helperBody | Should -Match 'HashSet<SelfArchitectAnchorKey>'
+    $helperBody | Should -Match 'string\.Join\("\\n", lines, start, size\)'
+    $helperBody | Should -Match 'blockMap\.TryGetValue\(blockText, out locations\)'
+    $helperBody | Should -Match 'StringComparison\.Ordinal'
+    $helperBody | Should -Not -Match 'ToBase64String'
+}
+
+
+It 'evaluates paired-edit windows in compiled code with the same best-match contract' {
+    $source = Get-Content -LiteralPath $script:LintScript -Raw -Encoding UTF8
+    $pairedStart = $source.IndexOf('function Find-PairedEditFindings')
+    $pairedEnd = $source.IndexOf('function Write-FindingLine')
+    $pairedStart | Should -BeGreaterOrEqual 0
+    $pairedEnd | Should -BeGreaterThan $pairedStart
+    $pairedBody = $source.Substring($pairedStart, $pairedEnd - $pairedStart)
+
+    $source | Should -Match 'class SelfArchitectPairedMatch'
+    $source | Should -Match 'FindBestPairedMatch'
+    $source | Should -Match 'overlapRatio > best\.overlapRatio'
+    $pairedBody | Should -Match 'SelfArchitectExactBlockIndexer\]::FindBestPairedMatch'
+    $pairedBody | Should -Not -Match 'for \(\$si = 0'
+    $pairedBody | Should -Not -Match 'for \(\$ti = 0'
+}
 
 }
