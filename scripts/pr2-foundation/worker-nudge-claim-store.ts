@@ -420,23 +420,46 @@ export async function acquireWorkerNudgeClaim(input: {
         if (existing.phase === 'SENT') {
           return { acquired: false, reason: 'already_served', path: activePath, namespace, key };
         }
-        if (existing.phase === 'SEND_ATTEMPTED' || existing.phase === 'UNCERTAIN') {
-          // D4 intentionally retries at least once. Archive the uncertain attempt,
-          // then install a fresh claim so duplicate delivery can be accounted for.
+        const nowMs = Date.now();
+        const leaseExpiresAtMs = Number(existing.claimLeaseExpiresAtMs);
+        const leaseExpired = !Number.isFinite(leaseExpiresAtMs) || leaseExpiresAtMs <= nowMs;
+        const acquiredAtMs = Date.parse(existing.acquiredAtUtc);
+        const staleByAge = !Number.isFinite(acquiredAtMs)
+          || nowMs - acquiredAtMs >= claimStaleMs();
+
+        if (existing.phase === 'SEND_ATTEMPTED') {
+          const holderAlive = processAlive(Number(existing.holder.pid));
+          if (holderAlive && !leaseExpired && !staleByAge) {
+            return {
+              acquired: false,
+              reason: 'claimed',
+              path: activePath,
+              namespace,
+              key,
+              phase: existing.phase,
+            };
+          }
           moveToTerminal(namespace, activePath, existing, 'UNCERTAIN', {
             recoveredBy: replacement.holder,
             recoveredFromPhase: existing.phase,
+            recoveryFence: !holderAlive
+              ? 'owner_dead'
+              : leaseExpired
+                ? 'lease_expired'
+                : 'stale',
+            retryAllowed: true,
+          });
+        } else if (existing.phase === 'UNCERTAIN') {
+          moveToTerminal(namespace, activePath, existing, 'UNCERTAIN', {
+            recoveredBy: replacement.holder,
+            recoveredFromPhase: existing.phase,
+            recoveryFence: 'uncertain_terminalization_replay',
             retryAllowed: true,
           });
         } else {
-          const leaseExpired = existing.phase === 'CLAIMED'
-            && existing.claimLeaseExpiresAtMs <= Date.now();
           if (existing.phase === 'CLAIMED' && !leaseExpired) {
             return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
           }
-          const acquiredAtMs = Date.parse(existing.acquiredAtUtc);
-          const staleByAge = !Number.isFinite(acquiredAtMs)
-            || Date.now() - acquiredAtMs >= claimStaleMs();
           if (!leaseExpired && !staleByAge && existing.phase === 'CLAIMED') {
             return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
           }
