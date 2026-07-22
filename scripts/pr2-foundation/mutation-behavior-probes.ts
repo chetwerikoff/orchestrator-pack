@@ -63,6 +63,18 @@ function runPolicyFixture(probe: string): void {
   runFixture('scripts/pr2-foundation/mutation-behavior-policy-fixtures.ts', probe);
 }
 
+function runVitestFile(file: string): void {
+  const result = runProcessSync({
+    command: process.execPath,
+    args: [path.resolve('node_modules/vitest/vitest.mjs'), 'run', file],
+    cwd: path.resolve('.'),
+    inheritParentEnv: true,
+  });
+  if (!result.ok) {
+    throw new Error(`independent_vitest_failed:${file}:${result.stderr || result.stdout || result.error || result.outcome}`);
+  }
+}
+
 function assertDigest(file: string): void {
   const expected = IMMUTABLE_DIGESTS[file];
   invariant(expected, `probe_digest_missing:${file}`);
@@ -253,20 +265,13 @@ addProbe([
   'AC9:multi-revert-plan',
   'AC9:new-powershell-logic-added',
 ], () => runPolicyFixture('scope-fail-closed'));
-addProbe(['AC9:modification-outside-independent-union'], () => requireSource(
-  'scripts/pr2-foundation/real-scope-proof.test.ts',
-  ['validateFoundationScope', 'currentDiff.changedPaths'],
-));
+addProbe([
+  'AC9:modification-outside-independent-union',
+  'AC9:declaration-snapshot-missing',
+  'AC9:declaration-created-after-implementation',
+], () => runVitestFile('scripts/pr2-foundation/real-scope-proof.test.ts'));
 addProbe(['AC9:cutover-path-modified'], () => assertDigest('scripts/review-trigger-reconcile.ps1'));
 addProbe(['AC9:registry-or-supervisor-modified'], () => assertDigest('scripts/orchestrator-wake-supervisor.ps1'));
-addProbe(['AC9:declaration-snapshot-missing'], () => requireSource(
-  'scripts/pr2-foundation/real-scope-proof.test.ts',
-  ['resolveLatestCommittedSnapshotAtCommit'],
-));
-addProbe(['AC9:declaration-created-after-implementation'], () => requireSource(
-  'scripts/pr2-foundation/real-scope-proof.test.ts',
-  ['--full-history', 'declarationCommitSha'],
-));
 addProbe(['AC9:capture-corpus-overreach'], () => assertDigest('tests/external-output-references/capture-manifest.json'));
 addProbe(['AC9:raw-capture-added'], () => assertAbsent('tests/external-output-references/captures/issue-923/raw-live-ac9.json'));
 addProbe([
