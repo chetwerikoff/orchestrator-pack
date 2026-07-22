@@ -36,7 +36,7 @@ function invariant(condition: unknown, reason: string): asserts condition {
 
 function runtimeCatalogFailClosed(): void {
   invariant(validateRuntimeCatalog(FOUNDATION_RUNTIME_CATALOG, FOUNDATION_RUNTIME_CATALOG).ok, 'clean_catalog_rejected');
-  const omitted = validateRuntimeCatalog(FOUNDATION_RUNTIME_CATALOG, FOUNDATION_RUNTIME_CATALOG.slice(1));
+  const omitted = validateRuntimeCatalog([], FOUNDATION_RUNTIME_CATALOG.slice(1));
   invariant(!omitted.ok && omitted.reason === 'catalog_surface_omitted', 'catalog_omission_accepted');
   const downgraded = FOUNDATION_RUNTIME_CATALOG.map((row) => row.id === 'worker-notification'
     ? { ...row, classification: 'dormant' as const }
