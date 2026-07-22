@@ -187,7 +187,7 @@ addProbe([
 ], () => runPolicyFixture('cleanup-fail-closed'));
 
 addProbe(AC_MUTATION_CONTROLS.AC7.map((id) => `AC7:${id}`), () => runPolicyFixture('estate-split-valid'));
-addProbe(AC_MUTATION_CONTROLS.AC7.map((id) => `AC7:${id}`), () => runPolicyFixture('estate-generator-clean'));
+addProbe(['AC7:unrelated-manifest-row-changed'], () => runPolicyFixture('estate-unrelated-rows-unchanged'));
 
 addProbe(['AC8:suite-self-attests'], () => {
   requireSource('scripts/pr2-foundation/mutation-semantic-check.ts', ['mutation-behavior-probes.ts'], ['mutation-semantic-gates.ts']);
