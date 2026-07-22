@@ -209,6 +209,14 @@ addProbe(['AC4:channel-outcome-corruption'], () => requireSource(
 ));
 
 addProbe(['AC5:journal-key-omitted'], () => runBehaviorFixture('migration-journal-key-required'));
+addProbe(['AC5:prepared-after-mutation'], () => runBehaviorFixture('migration-prepare-before-effects'));
+addProbe([
+  'AC5:imported-before-durable-import',
+  'AC5:committed-before-imported',
+], () => runBehaviorFixture('migration-prepared-before-import'));
+addProbe(['AC5:marker-crash-reimports'], () => runBehaviorFixture('migration-replay-idempotent'));
+addProbe(['AC5:torn-journal-accepted'], () => runBehaviorFixture('migration-torn-rejected'));
+addProbe(['AC5:live-store-import-allowed'], () => runBehaviorFixture('migration-live-root-refused'));
 
 addProbe(['AC8:suite-self-attests'], () => {
   requireSource('scripts/pr2-foundation/mutation-semantic-check.ts', ['mutation-behavior-probes.ts'], ['mutation-semantic-gates.ts']);
