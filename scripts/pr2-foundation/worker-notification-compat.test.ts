@@ -29,13 +29,16 @@ import {
   finalizeWorkerNudgeClaim,
   markWorkerNudgeSendAttempted,
   persistWorkerNudgeMessageHash,
+  withWorkerNudgeSideEffectFence,
   workerNudgeClaimNamespace,
+  type WorkerNudgeClaimHandle,
 } from './worker-nudge-claim-store.ts';
 import { resolveVerifiedWorkerNotificationTarget } from './worker-notification-target.ts';
 
 const testRoots = createTestRootRegistry();
 const originalAoBaseDir = process.env.AO_BASE_DIR;
 const originalLockStaleMs = process.env.AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS;
+const originalSideProcessStateDir = process.env.AO_SIDE_PROCESS_STATE_DIR;
 
 function workerSession(overrides: Partial<AoSessionRow> = {}): AoSessionRow {
   return {
@@ -93,6 +96,8 @@ afterEach(() => {
   } else {
     process.env.AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS = originalLockStaleMs;
   }
+  if (originalSideProcessStateDir === undefined) delete process.env.AO_SIDE_PROCESS_STATE_DIR;
+  else process.env.AO_SIDE_PROCESS_STATE_DIR = originalSideProcessStateDir;
   testRoots.cleanup();
 });
 
@@ -293,7 +298,7 @@ describe('[AC4] TypeScript notification compatibility', () => {
     });
   });
 
-  it('retries D4 sends after uncertain finalization and crashed send-attempt recovery', async () => {
+  it('retries D4 sends after uncertain finalization and dead-owner send-attempt recovery', async () => {
     const root = testRoots.create('opk-pr2-claim-d4-');
     process.env.AO_BASE_DIR = path.join(root, 'ao-base');
     const base = {
@@ -345,6 +350,20 @@ describe('[AC4] TypeScript notification compatibility', () => {
     expect(await persistWorkerNudgeMessageHash(interrupted, interruptedBase.message)).toMatchObject({ ok: true });
     expect(await markWorkerNudgeSendAttempted(interrupted)).toEqual({ ok: true });
 
+    expect(await acquireWorkerNudgeClaim(interruptedBase)).toMatchObject({
+      acquired: false,
+      reason: 'claimed',
+      phase: 'SEND_ATTEMPTED',
+    });
+    const interruptedRecord = JSON.parse(readFileSync(interrupted.path, 'utf8')) as WorkerNudgeClaimHandle['claim'];
+    writeFileSync(interrupted.path, `${JSON.stringify({
+      ...interruptedRecord,
+      holder: {
+        ...interruptedRecord.holder,
+        pid: 2_147_483_647,
+      },
+    })}\n`, 'utf8');
+
     const recovered = await acquireWorkerNudgeClaim(interruptedBase);
     expect(recovered).toMatchObject({ acquired: true });
     if (!recovered.acquired) throw new Error(recovered.reason);
@@ -354,12 +373,72 @@ describe('[AC4] TypeScript notification compatibility', () => {
         phase: 'UNCERTAIN',
         state: 'UNCERTAIN',
         recoveredFromPhase: 'SEND_ATTEMPTED',
+        recoveryFence: 'owner_dead',
         retryAllowed: true,
       }),
     ]));
     expect(await persistWorkerNudgeMessageHash(recovered, interruptedBase.message)).toMatchObject({ ok: true });
     expect(await markWorkerNudgeSendAttempted(recovered)).toEqual({ ok: true });
     expect(await finalizeWorkerNudgeClaim(recovered, 'SENT')).toMatchObject({ ok: true });
+  });
+
+  it('does not steal a live send-attempt while its side-effect fence is held', async () => {
+    const root = testRoots.create('opk-pr2-claim-live-fence-');
+    process.env.AO_BASE_DIR = path.join(root, 'ao-base');
+    process.env.AO_SIDE_PROCESS_STATE_DIR = path.join(root, 'side-process');
+    const base = {
+      prNumber: 923,
+      cycleKey: `stdout:sha256:${'d'.repeat(64)}`,
+      intentClass: 'review-findings',
+      workerTarget: 'worker-923:generation-live',
+      sessionId: 'worker-923',
+      targetId: 'worker-923',
+      targetGeneration: 'generation-live',
+      surface: 'scripted-review-stdout-delivery',
+      projectId: 'orchestrator-pack',
+      message: 'Pack review completed for PR #923.',
+    };
+    let releaseSend!: () => void;
+    const sendHeld = new Promise<void>((resolvePromise) => {
+      releaseSend = resolvePromise;
+    });
+    let publishStarted!: (claim: WorkerNudgeClaimHandle) => void;
+    const sendStarted = new Promise<WorkerNudgeClaimHandle>((resolvePromise) => {
+      publishStarted = resolvePromise;
+    });
+
+    const firstFence = withWorkerNudgeSideEffectFence(async () => {
+      const first = await acquireWorkerNudgeClaim(base);
+      if (!first.acquired) throw new Error(first.reason);
+      expect(await persistWorkerNudgeMessageHash(first, base.message)).toMatchObject({ ok: true });
+      expect(await markWorkerNudgeSendAttempted(first)).toEqual({ ok: true });
+      publishStarted(first);
+      await sendHeld;
+      return first;
+    });
+
+    const liveClaim = await sendStarted;
+    expect(await acquireWorkerNudgeClaim(base)).toMatchObject({
+      acquired: false,
+      reason: 'claimed',
+      phase: 'SEND_ATTEMPTED',
+    });
+    expect(JSON.parse(readFileSync(liveClaim.path, 'utf8'))).toMatchObject({
+      phase: 'SEND_ATTEMPTED',
+      holder: { processGuid: liveClaim.claim.holder.processGuid, pid: process.pid },
+    });
+
+    releaseSend();
+    const firstResult = await firstFence;
+    expect(firstResult).toMatchObject({ ok: true });
+    if (!firstResult.ok) throw new Error(firstResult.reason);
+    expect(await finalizeWorkerNudgeClaim(firstResult.value, 'SENT')).toMatchObject({ ok: true });
+    expect(await acquireWorkerNudgeClaim(base)).toMatchObject({
+      acquired: false,
+      reason: 'already_served',
+      terminal: true,
+      phase: 'SENT',
+    });
   });
 
   it('uses the canonical bounded journal for historical bytes, fence transitions, and capacity refusal', () => {
