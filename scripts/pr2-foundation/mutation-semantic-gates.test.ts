@@ -28,6 +28,8 @@ describe('[AC8] independent behavioral mutation probes', () => {
     const recipes = readFileSync(path.resolve('scripts/pr2-foundation/mutation-behavior-recipes.ts'), 'utf8');
     expect(recipes).not.toMatch(importsSemanticGates);
     expect(recipes).not.toContain('buildBoundedSemanticMutation');
+    expect(recipes).not.toContain('GATES[');
+    expect(recipes).toContain("from './mutation-catalog.ts'");
     expect(recipes).toContain('behavioral_mutation_recipe_set_mismatch');
   });
 
