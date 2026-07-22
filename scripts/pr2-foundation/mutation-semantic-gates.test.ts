@@ -22,8 +22,9 @@ function mutationKeys(): string[] {
 }
 
 describe('[AC8] independent behavioral mutation probes', () => {
-  it('passes every legacy structural gate on the clean repository head', () => {
-    for (const key of mutationKeys()) {
+  it('keeps every non-executable fallback structural gate green on the clean head', () => {
+    const executable = new Set(EXECUTABLE_BEHAVIOR_MUTATION_KEYS);
+    for (const key of mutationKeys().filter((candidate) => !executable.has(candidate))) {
       expect(evaluateSemanticMutationGate(key), key).toEqual({
         ok: true,
         failingTestId: failingTestIdForMutation(key),
@@ -57,7 +58,7 @@ describe('[AC8] independent behavioral mutation probes', () => {
     const fixtures = readFileSync(path.resolve('scripts/pr2-foundation/mutation-behavior-fixtures.ts'), 'utf8');
     const runner = readFileSync(path.resolve('scripts/pr2-foundation/mutation-runner.ts'), 'utf8');
 
-    expect(checker).toContain("from './mutation-behavior-probes.ts'");
+    expect(checker).toContain("await import('./mutation-behavior-probes.ts')");
     expect(checker).not.toContain('mutation-semantic-gates.ts');
     expect(probes).not.toContain('mutation-behavior-recipes.ts');
     expect(fixtures).not.toContain('mutation-behavior-recipes.ts');
@@ -72,6 +73,9 @@ describe('[AC8] independent behavioral mutation probes', () => {
       'AC2:draft-candidate-accepted',
       'AC2:missing-draft-bit-accepted',
       'AC3:invalid-config-accepted',
+      'AC9:modification-outside-independent-union',
+      'AC9:declaration-snapshot-missing',
+      'AC9:declaration-created-after-implementation',
     ]));
 
     const scheduler = readFileSync(path.resolve('scripts/pr2-foundation/scheduler.ts'), 'utf8');
@@ -84,6 +88,13 @@ describe('[AC8] independent behavioral mutation probes', () => {
 
     const config = readFileSync(path.resolve('scripts/pr2-foundation/config.ts'), 'utf8');
     const invalidConfigMutant = buildBehavioralMutation('AC3:invalid-config-accepted', config);
-    expect(invalidConfigMutant.content).toContain('if (false)');
+    expect(invalidConfigMutant.content).toContain('return { ok: true, config: DEFAULT_FOUNDATION_CONFIG };');
+
+    const scopeProof = readFileSync(path.resolve('scripts/pr2-foundation/real-scope-proof.ts'), 'utf8');
+    const outsideUnionMutant = buildBehavioralMutation(
+      'AC9:modification-outside-independent-union',
+      scopeProof,
+    );
+    expect(outsideUnionMutant.content).toContain("'README.md'");
   });
 });
