@@ -159,7 +159,7 @@ jobs:
                 - name: Run external red-green mutation evidence
                   run: npm run test:contract-mutations
           """
-          foundation_workflow_path.write_text(foundation_workflow + mutation_job + '\n', encoding='utf-8')
+          foundation_workflow_path.write_text((foundation_workflow + mutation_job).rstrip() + '\n', encoding='utf-8')
           PY
           grep -q '^  contract-mutations:' .github/workflows/typescript-foundation.yml
           grep -q 'npm run test:contract-mutations' .github/workflows/typescript-foundation.yml
