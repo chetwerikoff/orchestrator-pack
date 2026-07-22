@@ -14,71 +14,161 @@ jobs:
     timeout-minutes: 15
     env:
       TARGET_BRANCH: agent/issue-923-pr2-foundation
-      EXPECTED_HEAD: d60eaffef853d1c4c3b696561737523ab3103949
+      EXPECTED_HEAD: 651c2472852ef30da84cdcbbe4ce184a9a85ac09
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
-      - name: Mutate every duplicate-send guard occurrence
+      - name: Restore D4 at-least-once retries
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           python3 - <<'PY'
-          import re
           from pathlib import Path
 
-          path = Path('scripts/pr2-foundation/mutation-behavior-recipes.ts')
-          text = path.read_text(encoding='utf-8')
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}')
+              path.write_text(text.replace(old, new), encoding='utf-8')
 
-          old_interface = """interface TextRecipe {
-            anchor: string;
-            replacement: string;
-          }"""
-          new_interface = """interface TextRecipe {
-            anchor: string;
-            replacement: string;
-            expectedOccurrences?: number;
-          }"""
-          if text.count(old_interface) != 1:
-              raise SystemExit('TextRecipe interface shape drifted')
-          text = text.replace(old_interface, new_interface)
-
-          pattern = re.compile(
-              r"  'AC4:duplicate-send-unaccounted': \{.*?\n  \},\n  'AC4:run-linkage-missing': \{",
-              re.S,
+          claim_store = Path('scripts/pr2-foundation/worker-nudge-claim-store.ts')
+          replace_once(
+              claim_store,
+              "    if (!record || !['SENT', 'UNCERTAIN'].includes(String(record.phase))) continue;",
+              "    // D4: uncertain attempts are durable evidence, not terminal dedupe authority.\n"
+              "    if (!record || record.phase !== 'SENT') continue;",
           )
-          replacement = """  'AC4:duplicate-send-unaccounted': {
-            anchor: \"if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\",
-            replacement: \"if (false && inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\",
-            expectedOccurrences: 2,
-          },
-          'AC4:run-linkage-missing': {"""
-          text, count = pattern.subn(replacement, text)
-          if count != 1:
-              raise SystemExit(f'duplicate recipe block cardinality={count}')
 
-          old_cardinality = """  const affectedOccurrences = source.split(recipe.anchor).length - 1;
-            if (affectedOccurrences !== 1) {
-              throw new Error(`behavior_mutation_anchor_cardinality:${key}:${affectedOccurrences}`);
-            }"""
-          new_cardinality = """  const affectedOccurrences = source.split(recipe.anchor).length - 1;
-            const expectedOccurrences = recipe.expectedOccurrences ?? 1;
-            if (affectedOccurrences !== expectedOccurrences) {
-              throw new Error(`behavior_mutation_anchor_cardinality:${key}:${affectedOccurrences}:${expectedOccurrences}`);
-            }"""
-          if text.count(old_cardinality) != 1:
-              raise SystemExit('cardinality guard shape drifted')
-          text = text.replace(old_cardinality, new_cardinality)
+          old_existing = """      if (existing) {
+            if (['SENT', 'UNCERTAIN'].includes(existing.phase)) {
+              return { acquired: false, reason: 'already_served', path: activePath, namespace, key };
+            }
+            const leaseExpired = existing.phase === 'CLAIMED'
+              && existing.claimLeaseExpiresAtMs <= Date.now();
+            if (existing.phase === 'CLAIMED' && !leaseExpired) {
+              return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
+            }
+            if (existing.phase === 'SEND_ATTEMPTED') {
+              moveToTerminal(namespace, activePath, existing, 'UNCERTAIN', {
+                recoveredBy: replacement.holder,
+              });
+              return { acquired: false, reason: 'uncertain_prior', path: activePath, namespace, key };
+            }
+            const acquiredAtMs = Date.parse(existing.acquiredAtUtc);
+            const staleByAge = !Number.isFinite(acquiredAtMs)
+              || Date.now() - acquiredAtMs >= claimStaleMs();
+            if (!leaseExpired && !staleByAge && existing.phase === 'CLAIMED') {
+              return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
+            }
+            moveToTerminal(
+              namespace,
+              activePath,
+              existing,
+              existing.phase === 'FAILED_DEFINITIVE' ? 'released_stale' : 'recovered_stale',
+              { recoveredBy: replacement.holder },
+            );
+          }
+"""
+          new_existing = """      if (existing) {
+            if (existing.phase === 'SENT') {
+              return { acquired: false, reason: 'already_served', path: activePath, namespace, key };
+            }
+            if (existing.phase === 'SEND_ATTEMPTED' || existing.phase === 'UNCERTAIN') {
+              // D4 intentionally retries at least once. Preserve the uncertain attempt,
+              // then install a fresh claim so the journal can account for a duplicate.
+              moveToTerminal(namespace, activePath, existing, 'UNCERTAIN', {
+                recoveredBy: replacement.holder,
+                recoveredFromPhase: existing.phase,
+                retryAllowed: true,
+              });
+            } else {
+              const leaseExpired = existing.phase === 'CLAIMED'
+                && existing.claimLeaseExpiresAtMs <= Date.now();
+              if (existing.phase === 'CLAIMED' && !leaseExpired) {
+                return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
+              }
+              const acquiredAtMs = Date.parse(existing.acquiredAtUtc);
+              const staleByAge = !Number.isFinite(acquiredAtMs)
+                || Date.now() - acquiredAtMs >= claimStaleMs();
+              if (!leaseExpired && !staleByAge && existing.phase === 'CLAIMED') {
+                return { acquired: false, reason: 'claimed', path: activePath, namespace, key };
+              }
+              moveToTerminal(
+                namespace,
+                activePath,
+                existing,
+                existing.phase === 'FAILED_DEFINITIVE' ? 'released_stale' : 'recovered_stale',
+                { recoveredBy: replacement.holder },
+              );
+            }
+          }
+"""
+          replace_once(claim_store, old_existing, new_existing)
 
-          old_content = '    content: source.replace(recipe.anchor, recipe.replacement),'
-          new_content = '    content: source.split(recipe.anchor).join(recipe.replacement),'
-          if text.count(old_content) != 1:
-              raise SystemExit('text replacement implementation drifted')
-          text = text.replace(old_content, new_content)
+          test_path = Path('scripts/pr2-foundation/worker-notification-compat.test.ts')
+          insertion_point = """  it('uses the canonical bounded journal for historical bytes, fence transitions, and capacity refusal', () => {
+"""
+          d4_test = """  it('retries D4 sends after uncertain finalization and crashed send-attempt recovery', async () => {
+            const root = testRoots.create('opk-pr2-claim-d4-');
+            process.env.AO_BASE_DIR = path.join(root, 'ao-base');
+            const base = {
+              prNumber: 923,
+              cycleKey: `stdout:sha256:${'c'.repeat(64)}`,
+              intentClass: 'review-findings',
+              workerTarget: 'worker-923:generation-d4',
+              sessionId: 'worker-923',
+              targetId: 'worker-923',
+              targetGeneration: 'generation-d4',
+              surface: 'scripted-review-stdout-delivery',
+              projectId: 'orchestrator-pack',
+              message: 'Pack review completed for PR #923.',
+            };
 
-          path.write_text(text, encoding='utf-8')
+            const uncertain = await acquireWorkerNudgeClaim(base);
+            expect(uncertain).toMatchObject({ acquired: true });
+            if (!uncertain.acquired) throw new Error(uncertain.reason);
+            expect(await persistWorkerNudgeMessageHash(uncertain, base.message)).toMatchObject({ ok: true });
+            expect(await markWorkerNudgeSendAttempted(uncertain)).toEqual({ ok: true });
+            expect(await finalizeWorkerNudgeClaim(uncertain, 'UNCERTAIN', {
+              reason: 'dispatch_timeout',
+            })).toMatchObject({ ok: true });
+
+            const retry = await acquireWorkerNudgeClaim(base);
+            expect(retry).toMatchObject({ acquired: true });
+            if (!retry.acquired) throw new Error(retry.reason);
+            expect(retry.claim.holder.processGuid).not.toBe(uncertain.claim.holder.processGuid);
+            expect(await persistWorkerNudgeMessageHash(retry, base.message)).toMatchObject({ ok: true });
+            expect(await markWorkerNudgeSendAttempted(retry)).toEqual({ ok: true });
+            expect(await finalizeWorkerNudgeClaim(retry, 'SENT')).toMatchObject({ ok: true });
+
+            const interruptedBase = {
+              ...base,
+              cycleKey: `${base.cycleKey}:interrupted`,
+            };
+            const interrupted = await acquireWorkerNudgeClaim(interruptedBase);
+            expect(interrupted).toMatchObject({ acquired: true });
+            if (!interrupted.acquired) throw new Error(interrupted.reason);
+            expect(await persistWorkerNudgeMessageHash(interrupted, interruptedBase.message)).toMatchObject({ ok: true });
+            expect(await markWorkerNudgeSendAttempted(interrupted)).toEqual({ ok: true });
+
+            const recovered = await acquireWorkerNudgeClaim(interruptedBase);
+            expect(recovered).toMatchObject({ acquired: true });
+            if (!recovered.acquired) throw new Error(recovered.reason);
+            expect(recovered.claim.holder.processGuid).not.toBe(interrupted.claim.holder.processGuid);
+            expect(await persistWorkerNudgeMessageHash(recovered, interruptedBase.message)).toMatchObject({ ok: true });
+            expect(await markWorkerNudgeSendAttempted(recovered)).toEqual({ ok: true });
+            expect(await finalizeWorkerNudgeClaim(recovered, 'SENT')).toMatchObject({ ok: true });
+          });
+
+"""
+          test_text = test_path.read_text(encoding='utf-8')
+          if test_text.count(insertion_point) != 1:
+              raise SystemExit('D4 test insertion point drifted')
+          test_path.write_text(test_text.replace(insertion_point, d4_test + insertion_point), encoding='utf-8')
           PY
       - uses: actions/setup-node@v4
         with:
@@ -86,7 +176,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck:foundation
-      - run: node --experimental-strip-types scripts/pr2-foundation/contract-test-runner.ts --ac AC4
+      - run: node scripts/run-vitest-with-harness.mjs run scripts/pr2-foundation/worker-notification-compat.test.ts
       - name: Commit and push
         shell: bash
         run: |
@@ -94,6 +184,7 @@ jobs:
           git diff --check
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/pr2-foundation/mutation-behavior-recipes.ts
-          git commit -m "test: mutate every duplicate-send guard"
+          git add scripts/pr2-foundation/worker-nudge-claim-store.ts \
+            scripts/pr2-foundation/worker-notification-compat.test.ts
+          git commit -m "fix: retry uncertain worker notifications"
           git push origin "HEAD:${TARGET_BRANCH}"
