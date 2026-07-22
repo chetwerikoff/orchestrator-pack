@@ -133,6 +133,62 @@ jobs:
           if semantic.count(evaluation_anchor) != 1:
               raise SystemExit(f'baseGate evaluation anchor cardinality: {semantic.count(evaluation_anchor)}')
           semantic_path.write_text(semantic.replace(evaluation_anchor, evaluation_replacement, 1), encoding='utf-8')
+
+          scope_path = Path('.github/workflows/scope-guard.yml')
+          scope = scope_path.read_text(encoding='utf-8')
+          aggregate_marker = "\n  test-aggregate:\n"
+          mutation_job = """
+          
+            test-contract-mutations:
+              name: Contract mutation evidence
+              needs: classify-pr-changes
+              if: |
+                !cancelled() &&
+                (needs.classify-pr-changes.result == 'skipped' ||
+                 needs.classify-pr-changes.outputs.markdown_only != 'true')
+              runs-on: ubuntu-latest
+              timeout-minutes: 20
+              permissions:
+                contents: read
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+                  with:
+                    fetch-depth: 0
+          
+                - name: Setup Node.js
+                  uses: actions/setup-node@v4
+                  with:
+                    node-version: '22'
+                    cache: npm
+          
+                - name: Install npm dependencies
+                  run: npm ci --include=dev
+          
+                - name: Run external contract mutation evidence
+                  run: npm run test:contract-mutations
+          """
+          if scope.count(aggregate_marker) != 1:
+              raise SystemExit(f'aggregate marker cardinality: {scope.count(aggregate_marker)}')
+          scope = scope.replace(aggregate_marker, mutation_job + aggregate_marker, 1)
+          old_needs = "needs: [classify-pr-changes, plan-vitest-ci-topology, test-typecheck, test-vitest-light, test-vitest-heavy, test-pester]"
+          new_needs = "needs: [classify-pr-changes, plan-vitest-ci-topology, test-typecheck, test-vitest-light, test-vitest-heavy, test-pester, test-contract-mutations]"
+          if scope.count(old_needs) != 1:
+              raise SystemExit(f'aggregate needs cardinality: {scope.count(old_needs)}')
+          scope = scope.replace(old_needs, new_needs, 1)
+          aggregate_step = """      - name: Fail-closed full-regression aggregate
+          """
+          mutation_gate = """      - name: Require contract mutation evidence
+                shell: bash
+                env:
+                  CONTRACT_MUTATIONS_RESULT: ${{ needs.test-contract-mutations.result }}
+                run: test "$CONTRACT_MUTATIONS_RESULT" = "success"
+          
+                - name: Fail-closed full-regression aggregate
+          """
+          if scope.count(aggregate_step) != 1:
+              raise SystemExit(f'aggregate step cardinality: {scope.count(aggregate_step)}')
+          scope_path.write_text(scope.replace(aggregate_step, mutation_gate, 1), encoding='utf-8')
           PY
           grep -q '^  test-contract-mutations:' .github/workflows/scope-guard.yml
           grep -q 'npm run test:contract-mutations' .github/workflows/scope-guard.yml
