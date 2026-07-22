@@ -74,6 +74,7 @@ describe('[AC8] independent behavioral mutation probes', () => {
       'AC2:draft-candidate-accepted',
       'AC2:missing-draft-bit-accepted',
       'AC3:invalid-config-accepted',
+      'AC4:duplicate-send-unaccounted',
       'AC9:modification-outside-independent-union',
       'AC9:declaration-snapshot-missing',
       'AC9:declaration-created-after-implementation',
@@ -90,6 +91,13 @@ describe('[AC8] independent behavioral mutation probes', () => {
     const config = readFileSync(path.resolve('scripts/pr2-foundation/config.ts'), 'utf8');
     const invalidConfigMutant = buildBehavioralMutation('AC3:invalid-config-accepted', config);
     expect(invalidConfigMutant.content).toContain('return { ok: true, config: DEFAULT_FOUNDATION_CONFIG };');
+
+    const notification = readFileSync(path.resolve('scripts/pr2-foundation/worker-notification.ts'), 'utf8');
+    const duplicateMutant = buildBehavioralMutation('AC4:duplicate-send-unaccounted', notification);
+    expect(duplicateMutant.affectedOccurrences).toBe(2);
+    expect(duplicateMutant.content).not.toContain(
+      "if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };",
+    );
 
     const scopeProof = readFileSync(path.resolve('scripts/pr2-foundation/real-scope-proof.ts'), 'utf8');
     const outsideUnionMutant = buildBehavioralMutation(
