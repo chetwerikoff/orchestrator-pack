@@ -21,6 +21,9 @@ function mutationKeys(): string[] {
   );
 }
 
+const importsMutationRecipes = /(?:from\s+|import\s*\(\s*)['"]\.\/mutation-behavior-recipes\.ts['"]/u;
+const importsSemanticGates = /(?:from\s+|import\s*\(\s*)['"]\.\/mutation-semantic-gates\.ts['"]/u;
+
 describe('[AC8] independent behavioral mutation probes', () => {
   it('keeps every non-executable fallback structural gate green on the clean head', () => {
     const executable = new Set(EXECUTABLE_BEHAVIOR_MUTATION_KEYS);
@@ -59,10 +62,10 @@ describe('[AC8] independent behavioral mutation probes', () => {
     const runner = readFileSync(path.resolve('scripts/pr2-foundation/mutation-runner.ts'), 'utf8');
 
     expect(checker).toContain("await import('./mutation-behavior-probes.ts')");
-    expect(checker).not.toContain('mutation-semantic-gates.ts');
-    expect(probes).not.toContain('mutation-behavior-recipes.ts');
-    expect(fixtures).not.toContain('mutation-behavior-recipes.ts');
-    expect(fixtures).not.toContain('mutation-semantic-gates.ts');
+    expect(checker).not.toMatch(importsSemanticGates);
+    expect(probes).not.toMatch(importsMutationRecipes);
+    expect(fixtures).not.toMatch(importsMutationRecipes);
+    expect(fixtures).not.toMatch(importsSemanticGates);
     expect(runner).toContain("from './mutation-behavior-recipes.ts'");
   });
 
