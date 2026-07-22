@@ -4,13 +4,15 @@ on:
   push:
     branches:
       - agent/issue-928-cutover
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
   archive:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
