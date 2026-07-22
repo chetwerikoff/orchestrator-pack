@@ -21,6 +21,8 @@ jobs:
       TARGET_HEAD: fa5f0a509454b31ed760c8f5cc218552a325c915
       HELPER_COMMIT: f13aa583084bc4ea4c5428ca2c15f20e1073c163
       HELPER_SHA256: cc099dac3f45bbb59b5724980f884bb377b4273e1754b5c10ce6c507cc6fce83
+      HOTFIX_COMMIT: c88f9e03c2637031a3a50d34a1d319373c4cc040
+      HOTFIX_SHA256: c5eb7f8913572e6e4a945bcc4c199ccb52a0c45b9d650ffcbded6028a58d8504
     steps:
       - name: Checkout exact PR 939 head
         uses: actions/checkout@v4
@@ -41,49 +43,16 @@ jobs:
           : > "$RUNNER_TEMP/verification.log"
           exec > >(tee -a "$RUNNER_TEMP/verification.log") 2>&1
           test "$(git rev-parse HEAD)" = "$TARGET_HEAD"
-          git fetch origin "$HELPER_COMMIT" main
+          git fetch origin "$HELPER_COMMIT" "$HOTFIX_COMMIT" main
           git show "$HELPER_COMMIT:scripts/review-4750643719-finalize.py.gz.b64" \
             | base64 --decode \
             | gzip --decompress \
             > "$RUNNER_TEMP/apply.py"
+          git show "$HOTFIX_COMMIT:scripts/review-4750643719-helper-hotfix.py" \
+            > "$RUNNER_TEMP/helper-hotfix.py"
           echo "$HELPER_SHA256  $RUNNER_TEMP/apply.py" | sha256sum --check --strict
-          APPLY="$RUNNER_TEMP/apply.py" python3 <<'PY'
-          from pathlib import Path
-          import os
-          path = Path(os.environ['APPLY'])
-          source = path.read_text(encoding='utf-8')
-          old = '''replace_once(
-              'scripts/pr2-foundation/worker-notification.ts',
-              """      deterministicKey: input.deliveryKey,
-                findingsHash: input.findingsHash,
-          """,
-              """      deterministicKey: input.deliveryKey,
-                findingsHash: input.findingsHash,
-                reviewRunId: input.reviewRunId,
-          """,
-              'notification persisted reviewRunId',
-          )
-          '''
-          new = '''replace_once(
-              'scripts/pr2-foundation/worker-notification.ts',
-              """      adoptionProbeRunIdHash: '',
-                deterministicKey: input.deliveryKey,
-                findingsHash: input.findingsHash,
-              };
-          """,
-              """      adoptionProbeRunIdHash: '',
-                deterministicKey: input.deliveryKey,
-                findingsHash: input.findingsHash,
-                reviewRunId: input.reviewRunId,
-              };
-          """,
-              'notification persisted reviewRunId',
-          )
-          '''
-          if source.count(old) != 1:
-              raise SystemExit(f'notification helper hotfix cardinality: {source.count(old)}')
-          path.write_text(source.replace(old, new, 1), encoding='utf-8')
-          PY
+          echo "$HOTFIX_SHA256  $RUNNER_TEMP/helper-hotfix.py" | sha256sum --check --strict
+          python3 "$RUNNER_TEMP/helper-hotfix.py" "$RUNNER_TEMP/apply.py"
           python3 -m py_compile "$RUNNER_TEMP/apply.py"
           python3 "$RUNNER_TEMP/apply.py"
           git diff --check
