@@ -125,9 +125,12 @@ addProbe([
   'AC3:malformed-value-defaulted',
   'AC3:invalid-config-accepted',
   'AC3:unknown-config-key-ignored',
-  'AC3:notification-key-not-consumed-live',
   'AC3:foundation-config-activates-non-notification-consumer',
 ], () => runBehaviorFixture('config-fail-closed'));
+addProbe(['AC3:notification-key-not-consumed-live'], () => runFixture(
+  'scripts/pr2-foundation/mutation-notification-config.fixture.ts',
+  'notification-config-consumed-live',
+));
 addProbe(['AC3:untyped-live-key'], () => requireSource(
   'scripts/pr2-foundation/config.ts',
   ['parseFoundationConfig'],
