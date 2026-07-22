@@ -19,7 +19,6 @@ import {
   sanitizerIdentity,
   sanitizeAoSessions,
   validateAoPreflight,
-  type AoSessionRow,
   type OpenPrSnapshotRow,
 } from './binding.ts';
 import {
@@ -29,6 +28,7 @@ import {
 } from './config.ts';
 import { runSyntheticMigration } from './migration-journal.ts';
 import { buildDormantScheduler, runDormantMergeActuator } from './scheduler.ts';
+import { fixtureAoSession } from './test-fixtures.ts';
 import {
   DISPATCH_OUTCOME_DISPATCHED,
   DRAFT_STATE_DRAFT_PRESENT,
@@ -39,19 +39,8 @@ function invariant(condition: unknown, reason: string): asserts condition {
   if (!condition) throw new Error(reason);
 }
 
-function session(): AoSessionRow {
-  return {
-    createdAt: '2026-07-20T00:00:00.000Z',
-    harness: 'cursor',
-    id: 'session-923',
-    isTerminated: false,
-    issueId: 923,
-    lastActivityAt: '2026-07-20T00:10:00.000Z',
-    projectId: 'orchestrator-pack',
-    role: 'worker',
-    status: 'working',
-    updatedAt: '2026-07-20T00:10:00.000Z',
-  };
+function session() {
+  return fixtureAoSession();
 }
 
 function openPr(draft = false, overrides: Partial<OpenPrSnapshotRow> = {}): OpenPrSnapshotRow {
