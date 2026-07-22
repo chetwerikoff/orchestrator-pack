@@ -5,87 +5,57 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  actions: read
+  pull-requests: write
 
 jobs:
-  apply:
+  extract:
     if: github.event.pull_request.head.ref == 'agent/issue-923-validation-probe'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     env:
-      TARGET_BRANCH: agent/issue-923-pr2-foundation
-      EXPECTED_HEAD: c8caa51120fe2c5b1c102d17a35be6bf0eecd664
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Publish bounded explicit-mutation failure
+        uses: actions/github-script@v7
         with:
-          ref: ${{ env.TARGET_BRANCH }}
-          fetch-depth: 0
-      - name: Strengthen independent mutation probes
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('scripts/pr2-foundation/mutation-behavior-probes.ts')
-          text = path.read_text(encoding='utf-8')
-
-          replacements = [
-              (
-                  """addProbe(['AC4:duplicate-send-unaccounted'], () => requireSource(
-            'scripts/pr2-foundation/worker-notification.ts',
-            ['journal_duplicate_no_op'],
-          ));""",
-                  """addProbe(['AC4:duplicate-send-unaccounted'], () => requireSource(
-            'scripts/pr2-foundation/worker-notification.ts',
-            [\"if (inspected.duplicate) return { state: 'delivered', reason: 'journal_duplicate_no_op' };\"],
-          ));""",
-              ),
-              (
-                  """addProbe(['AC4:run-linkage-missing'], () => requireSource(
-            'scripts/lib/pack-review-delivery.ts',
-            ['reviewRunId'],
-          ));""",
-                  """addProbe(['AC4:run-linkage-missing'], () => requireSource(
-            'scripts/lib/pack-review-delivery.ts',
-            ['reviewRunId: options.run.id'],
-          ));""",
-              ),
-              (
-                  """addProbe(['AC4:channel-outcome-corruption'], () => requireSource(
-            'scripts/lib/pack-review-delivery.ts',
-            ['workerNotification'],
-          ));""",
-                  """addProbe(['AC4:channel-outcome-corruption'], () => requireSource(
-            'scripts/lib/pack-review-delivery.ts',
-            [\"recordChannelOutcome('workerNotification', outcome(notified.state, notified.reason, workerKey, options.clock));\"],
-          ));""",
-              ),
-          ]
-
-          for old, new in replacements:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'expected one probe replacement, found {count}: {old[:80]}')
-              text = text.replace(old, new)
-
-          path.write_text(text, encoding='utf-8')
-          PY
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck:foundation
-      - run: node scripts/run-vitest-with-harness.mjs run scripts/pr2-foundation/mutation-semantic-gates.test.ts
-      - name: Commit and push
-        shell: bash
-        run: |
-          set -euo pipefail
-          git diff --check
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/pr2-foundation/mutation-behavior-probes.ts
-          git commit -m "test: strengthen independent mutation probes"
-          git push origin "HEAD:${TARGET_BRANCH}"
+          script: |
+            const jobId = 88923478737;
+            const url = `https://api.github.com/repos/${context.repo.owner}/${context.repo.repo}/actions/jobs/${jobId}/logs`;
+            const response = await fetch(url, {
+              headers: {
+                accept: 'application/vnd.github+json',
+                authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+                'x-github-api-version': '2022-11-28',
+              },
+              redirect: 'follow',
+            });
+            if (!response.ok) throw new Error(`job_log_fetch_failed:${response.status}`);
+            const raw = await response.text();
+            const ansi = /\u001b\[[0-9;]*m/g;
+            const lines = raw.split(/\r?\n/).map((line) => line.replace(ansi, ''));
+            const needles = [
+              'mutation-contract:', 'mutation_', 'behavior_mutation', 'independent_',
+              'artifact_', 'specific_failing_test', 'restore_', '##[error]',
+              'Process completed with exit code',
+            ];
+            const matched = lines
+              .map((line, index) => ({ line, index: index + 1 }))
+              .filter(({ line }) => needles.some((needle) => line.includes(needle)))
+              .slice(-120);
+            const body = [
+              '## PR #939 explicit-mutation failure summary',
+              '',
+              `Source job: \`${jobId}\``,
+              '',
+              '```text',
+              ...matched.map(({ line, index }) => `${index}:${line.slice(0, 5000)}`),
+              '```',
+              '',
+            ].join('\n');
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: 940,
+              body,
+            });
