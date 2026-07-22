@@ -47,6 +47,43 @@ jobs:
             | gzip --decompress \
             > "$RUNNER_TEMP/apply.py"
           echo "$HELPER_SHA256  $RUNNER_TEMP/apply.py" | sha256sum --check --strict
+          APPLY="$RUNNER_TEMP/apply.py" python3 <<'PY'
+          from pathlib import Path
+          import os
+          path = Path(os.environ['APPLY'])
+          source = path.read_text(encoding='utf-8')
+          old = '''replace_once(
+              'scripts/pr2-foundation/worker-notification.ts',
+              """      deterministicKey: input.deliveryKey,
+                findingsHash: input.findingsHash,
+          """,
+              """      deterministicKey: input.deliveryKey,
+                findingsHash: input.findingsHash,
+                reviewRunId: input.reviewRunId,
+          """,
+              'notification persisted reviewRunId',
+          )
+          '''
+          new = '''replace_once(
+              'scripts/pr2-foundation/worker-notification.ts',
+              """      adoptionProbeRunIdHash: '',
+                deterministicKey: input.deliveryKey,
+                findingsHash: input.findingsHash,
+              };
+          """,
+              """      adoptionProbeRunIdHash: '',
+                deterministicKey: input.deliveryKey,
+                findingsHash: input.findingsHash,
+                reviewRunId: input.reviewRunId,
+              };
+          """,
+              'notification persisted reviewRunId',
+          )
+          '''
+          if source.count(old) != 1:
+              raise SystemExit(f'notification helper hotfix cardinality: {source.count(old)}')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
           python3 -m py_compile "$RUNNER_TEMP/apply.py"
           python3 "$RUNNER_TEMP/apply.py"
           git diff --check
