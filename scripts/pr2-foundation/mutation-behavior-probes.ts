@@ -194,6 +194,7 @@ addProbe(['AC4:powershell-child'], () => requireSource(
   ['runProcess'],
   ['pwsh', '.ps1'],
 ));
+addProbe(['AC4:historical-record-unreadable'], () => runBehaviorFixture('historical-journal-readable'));
 addProbe(['AC4:duplicate-send-unaccounted'], () => requireSource(
   'scripts/pr2-foundation/worker-notification.ts',
   ['journal_duplicate_no_op'],
