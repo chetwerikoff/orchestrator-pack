@@ -1,16 +1,25 @@
 ---
 name: discuss-with-gpt
-description: Use when the user asks to author a task draft/issue AND involve GPT (the custom ChatGPT project) to challenge the approach first — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". Wraps create-issue-draft: author → GPT adversarial loop (≤3 iterations, evaluate-don't-obey) → normal architect review → sync. Browser-GPT twin of adversarial-draft-review. Skip plain "создай драфт" with no «с gpt» marker. For «с кодексом» use adversarial-draft-review, not this skill.
+description: Use when the user asks to adversarially challenge a LOCAL draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". Standalone GPT adversarial loop (≤3 fresh-chat passes, evaluate-don't-obey) over a local markdown artifact; also the canonical browser-turn mechanics home (driver, Chrome preconditions, pass states, tab rules) that create-issue-draft's competitive stage and chat turns run on. GPT-authored Issue tasks (Issue link + chat link) go to create-issue-draft. Browser-GPT twin of adversarial-draft-review; for «с кодексом» use that skill. Skip plain "создай драфт" with no «с gpt» marker.
 ---
 
 # discuss-with-gpt
 
-Inserts a **GPT adversarial challenge loop** between draft authoring and the
-normal architect review in
-[`create-issue-draft`](../create-issue-draft/SKILL.md). Twin of
-[`adversarial-draft-review`](../adversarial-draft-review/SKILL.md), but the
-challenge runs against a **custom GPT in automation Chrome** (Playwright driver),
-not the Codex CLI.
+Runs a **GPT adversarial challenge loop** over a local draft/artifact against
+a **custom GPT in automation Chrome** (Playwright driver). Twin of
+[`adversarial-draft-review`](../adversarial-draft-review/SKILL.md) (Codex CLI).
+
+Two roles under the GPT-chat authoring flow
+([`create-issue-draft`](../create-issue-draft/SKILL.md)):
+
+- **Standalone** — challenge a local artifact (a draft not yet a GPT-authored
+  Issue, a proposal, a `study-external-source` adoption) on user request.
+- **Mechanics home** — `create-issue-draft`'s competitive stage (fresh chat
+  per pass) and its same-chat browser turns run on this skill's machinery:
+  the driver (`--new-chat` / `--chat-url`), `launch-chrome.sh`, pass states,
+  tab rules, and polling discipline below are the canonical reference; the
+  one-shot `gpt-authoring-turn.mjs` scratchpad tool is rebuilt from this
+  driver's mechanics.
 
 **Trust model differs from Codex.** Codex returns process-level JSON. This path
 drives a mutable browser UI + ChatGPT product + custom GPT + prose output. A
@@ -18,8 +27,8 @@ weak/stale/wrong-tab pass can masquerade as "review passed." The driver hardens
 with **per-pass `PASS_ID` + draft `SHA256` echo**, but treat the result as a
 *validated best-effort* artifact, not a guaranteed one.
 
-Everything else — draft structure, 5-mode framework, decision logging, normal
-`codex review`, sync gate, `gh issue create` — stays owned by `create-issue-draft`.
+Issue-body floors, ledger normalization, tier gate, decision logging, and
+acceptance stay owned by `create-issue-draft`.
 
 ## When to invoke
 
@@ -27,6 +36,7 @@ Everything else — draft structure, 5-mode framework, decision logging, normal
 |---------|-------|
 | «с gpt» / «с гпт» / «обсуди с gpt» / «драфт с gpt» / "draft with gpt" | **this skill** |
 | «с кодексом» / "with codex" | [`adversarial-draft-review`](../adversarial-draft-review/SKILL.md) |
+| GPT-authored Issue task (Issue link + chat link) | `create-issue-draft` — competitive stage built in (fresh chat per pass on this driver's mechanics) |
 | plain «создай драфт» (no marker) | `create-issue-draft` directly |
 | bug/root-cause consult («почему упал…») | `investigate-root-cause` / `codex:rescue` |
 
@@ -156,17 +166,15 @@ Rules:
 
 ## Flow
 
-### 1. Author the draft
+### 1. Obtain the artifact
 
-After relocation (Issue #579), the **Cursor draft-author session** owns this step
-and the GPT adversarial loop below — not the architect's live session. Delegate
-to an isolated draft-author session running `create-issue-draft` from the
-architect's brief. Explicit wrapper invocation still floors the effective tier
-at least to **T2** per #189. When relocation is inactive or the delegate returns
-incomplete, fall back to architect-as-author per `create-issue-draft`.
-
-Follow `create-issue-draft`'s structure and framework triggers →
-`docs/issues_drafts/NN-<slug>.md`. **Stop before** "Codex review the draft" + sync.
+The loop challenges an existing **local** artifact — a draft file, proposal,
+or `study-external-source` adoption (any markdown path). This skill authors
+nothing. GPT-authored Issues are challenged inside `create-issue-draft`
+(competitive stage — fresh chat per pass on this driver's mechanics), not by
+invoking this skill standalone. Explicit wrapper invocation floors the
+effective tier at ≥ **T2** (`create-issue-draft` tier gate, wrapper
+inheritance).
 
 ### 2. Run the GPT adversarial pass
 
@@ -263,9 +271,13 @@ Clean stop requires final pass `STATE=completed_valid` with `last-pass accepted=
 If a later step (e.g. normal codex review) materially changes the draft, log
 `post-GPT change not re-reviewed` or re-run GPT.
 
-### 7. Hand back to `create-issue-draft`
+### 7. Hand back
 
-Resume from "Codex review the draft" onward. GPT loop **never replaces** architect review.
+Standalone runs: the artifact continues on its normal path (architect review,
+then publish when asked). Competitive-stage runs follow `create-issue-draft`'s
+pipeline — captures land as `pass-NN-competitive.capture.txt` in the draft's
+`.review/` dir, findings are relayed to the task chat. The GPT loop **never
+replaces** the architectural review stage.
 
 ### 8. Publish
 

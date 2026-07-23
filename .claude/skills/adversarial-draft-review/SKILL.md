@@ -1,17 +1,24 @@
 ---
 name: adversarial-draft-review
-description: Use when the user asks to author a task draft/issue AND involve Codex to challenge the approach first — triggers «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход», "draft with codex", "adversarial draft", "challenge the approach". Wraps create-issue-draft: author → adversarial Codex challenge loop (≤3 iterations, evaluate-don't-obey) → normal architect review → sync. Skip plain "создай драфт" with no «с кодексом»/adversarial marker — that goes straight to create-issue-draft.
+description: Use when the user asks to adversarially challenge a LOCAL draft/spec artifact with Codex — triggers «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход», "draft with codex", "adversarial draft", "challenge the approach". Standalone Codex challenge loop (≤3 cold passes, evaluate-don't-obey) over a local markdown artifact; also the recorded-substitution engine for create-issue-draft's competitive stage when browser GPT is unavailable. GPT-authored Issue tasks (Issue link + chat link) go to create-issue-draft — its competitive stage is built in. Skip plain "создай драфт" with no «с кодексом»/adversarial marker.
 ---
 
 # adversarial-draft-review
 
-Inserts an **adversarial Codex challenge loop** between draft authoring and the
-normal architect review in
-[`create-issue-draft`](../create-issue-draft/SKILL.md). Codex CLI twin of
-[`discuss-with-gpt`](../discuss-with-gpt/SKILL.md).
+Runs an **adversarial Codex challenge loop** over a local draft/spec artifact.
+Codex CLI twin of [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md).
 
-Authoring structure, 5-mode framework, decision logging, normal `codex review`,
-sync gate, and `gh issue create` stay owned by `create-issue-draft`.
+Two roles under the GPT-chat authoring flow
+([`create-issue-draft`](../create-issue-draft/SKILL.md)):
+
+- **Standalone** — the user asks to challenge a local artifact (a draft not
+  yet a GPT-authored Issue, a proposal, a spec rewrite).
+- **Recorded substitution** — engine for `create-issue-draft`'s competitive
+  stage **only** when browser GPT is unavailable (Chrome/CDP down and the
+  operator cannot raise it); record the substitution in the ledger notes.
+
+Issue-body floors, ledger normalization, tier gate, decision logging, and
+acceptance stay owned by `create-issue-draft`.
 
 ## When to invoke
 
@@ -19,6 +26,7 @@ sync gate, and `gh issue create` stay owned by `create-issue-draft`.
 |---------|-------|
 | «с кодексом» / «придирчиво» / «оспорь подход» / "draft with codex" | **this skill** |
 | «с gpt» / «с гпт» | [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md) |
+| GPT-authored Issue task (Issue link + chat link) | `create-issue-draft` — competitive stage built in (browser GPT) |
 | plain «создай драфт» (no marker) | `create-issue-draft` directly |
 | bug/root-cause consult | `investigate-root-cause` / `codex:rescue` |
 
@@ -29,17 +37,15 @@ Skip if Codex CLI / companion runtime unavailable — fall back to
 
 ## Flow
 
-### 1. Author the draft
+### 1. Obtain the artifact
 
-After relocation (Issue #579), the **Cursor draft-author session** owns this step
-and the adversarial loop below — not the architect's live session. Delegate to
-an isolated draft-author session running `create-issue-draft` from the
-architect's brief. Explicit wrapper invocation still floors the effective tier
-at least to **T2** per #189. When relocation is inactive or the delegate returns
-incomplete, fall back to architect-as-author per `create-issue-draft`.
-
-Follow `create-issue-draft`'s structure and framework triggers →
-`docs/issues_drafts/NN-<slug>.md`. **Stop before** "Codex review the draft" + sync.
+The loop challenges an existing **local** artifact — a draft file, proposal,
+or spec rewrite (any markdown path). This skill authors nothing. GPT-authored
+Issues are challenged inside `create-issue-draft` (competitive stage), not
+here; when acting as its recorded substitution, pull the current Issue body to
+a local file first and challenge that revision. Explicit wrapper invocation
+floors the effective tier at ≥ **T2** (`create-issue-draft` tier gate, wrapper
+inheritance).
 
 ### 2. Run the adversarial pass
 
@@ -103,10 +109,13 @@ Attack the current draft afresh for NEW weaknesses only.
 
 Never resume a single Codex thread across iterations — it softens into agreement.
 
-### 7. Hand back to `create-issue-draft`
+### 7. Hand back
 
-Resume from "Codex review the draft" onward. Adversarial loop **never replaces**
-architect review.
+Standalone runs: the artifact continues on its normal path (architect review,
+then publish when asked). Substitution runs: return to `create-issue-draft`'s
+pipeline — captures land as `pass-NN-competitive.capture.txt` in the draft's
+`.review/` dir, findings are relayed to the task chat. The adversarial loop
+**never replaces** the architectural review stage.
 
 ### 8. Publish
 
