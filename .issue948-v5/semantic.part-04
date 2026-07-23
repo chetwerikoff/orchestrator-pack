@@ -1,0 +1,87 @@
+diff --git a/scripts/lint-self-architect.config.json b/scripts/lint-self-architect.config.json
+index 610b5ef2..dadb8643 100644
+--- a/scripts/lint-self-architect.config.json
++++ b/scripts/lint-self-architect.config.json
+@@ -18,7 +18,9 @@
+     "scripts/vitest-heavy-topology.plan.json",
+     "scripts/contract-evidence-validator.mjs",
+     "scripts/contract-evidence-validator.d.mts",
+-    "scripts/gate-runner/census/**"
++    "scripts/gate-runner/census/**",
++    "scripts/pr2a/planning-manifest.json",
++    "scripts/vitest-live-store-inventory.json"
+   ],
+   "scriptExtensions": [
+     ".ps1",
+@@ -177,6 +179,14 @@
+         "docs/events-optional-consumer-signal-recovery.d.mts",
+         "scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.d.ts"
+       ]
++    },
++    {
++      "rule": "duplicate-literal",
++      "reason": "Issue #948 owner-mechanism manifest intentionally mirrors canonical catalog coverage for mechanical cross-checking",
++      "files": [
++        "scripts/orchestrator-message-catalog.json",
++        "scripts/orchestrator-message-owner-mechanisms.manifest.json"
++      ]
+     }
+   ]
+ }
+diff --git a/scripts/pr2a/closure-receipt.ts b/scripts/pr2a/closure-receipt.ts
+index 48fb3033..e04a4063 100644
+--- a/scripts/pr2a/closure-receipt.ts
++++ b/scripts/pr2a/closure-receipt.ts
+@@ -1,11 +1,10 @@
+ #!/usr/bin/env node
+ import '../toolchain/native-entrypoint-preflight.ts';
+ 
+-import { createHash } from 'node:crypto';
+ import { readFileSync } from 'node:fs';
+ import path from 'node:path';
+ import { runProcessSync } from '../kernel/subprocess.ts';
+-import { D928, stableJson, type PlanningManifest } from './contracts.ts';
++import { D928, sha256, stableJson, type PlanningManifest } from './contracts.ts';
+ import { buildConformanceReport } from './final-conformance.ts';
+ 
+ const repoRoot = path.resolve(process.cwd());
+@@ -36,9 +35,6 @@ function git(args: string[]): string {
+   return result.stdout;
+ }
+ 
+-function sha256(value: string | Buffer): string {
+-  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+-}
+ 
+ function readAt(ref: string, file: string): string {
+   return git(['show', `${ref}:${file}`]);
+diff --git a/scripts/pr2a/final-conformance.ts b/scripts/pr2a/final-conformance.ts
+index c44a02bb..b0704424 100644
+--- a/scripts/pr2a/final-conformance.ts
++++ b/scripts/pr2a/final-conformance.ts
+@@ -1,7 +1,6 @@
+ #!/usr/bin/env node
+ import '../toolchain/native-entrypoint-preflight.ts';
+ 
+-import { createHash } from 'node:crypto';
+ import { existsSync, readFileSync } from 'node:fs';
+ import path from 'node:path';
+ import { runProcessSync } from '../kernel/subprocess.ts';
+@@ -10,6 +9,7 @@ import {
+   D928,
+   FOUNDATION_COMMIT,
+   normalizeRepoPath,
++  sha256,
+   type PlanningManifest,
+ } from './contracts.ts';
+ 
+@@ -74,9 +74,6 @@ function git(args: string[], allowExitOne = false): string {
+   return result.stdout;
+ }
+ 
+-function sha256(value: string | Buffer): string {
+-  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+-}
+ 
+ function readAt(ref: string, file: string): string {
+   return git(['show', `${ref}:${file}`]);
