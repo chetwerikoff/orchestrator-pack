@@ -1,0 +1,33 @@
+name: Temporary Issue 948 Toolchain Export
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pester exactly as repository CI
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Export verification toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .toolchain-export/bin
+          cp "$(command -v gh)" .toolchain-export/bin/gh
+          cp -a "$HOME/.local/share/powershell/Modules/Pester" .toolchain-export/Pester
+          gh --version > .toolchain-export/gh-version.txt
+          pwsh -NoProfile -Command '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1).Version.ToString()' > .toolchain-export/pester-version.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-verification-toolchain
+          path: .toolchain-export
+          include-hidden-files: true
+          retention-days: 1
