@@ -98,8 +98,15 @@ the merge-with-backlog analog.
    ~/.local/state/create-issue-draft/<N>-<slug>/        # $WORKDIR
      docs/issues_drafts/<N>-<slug>.md                   # $ANCHOR — current revision (guards + sync helper read this)
      docs/issues_drafts/.review/<N>-<slug>/             # $REVIEW_DIR — captures, ledger, chats.md, receipts
+     tests/fixtures/task-complexity-tier-calibration.json  # copied from the repo at setup (see below)
      r01/ r02/ …                                        # immutable pulled revisions (parity evidence)
    ```
+
+   Copy `tests/fixtures/task-complexity-tier-calibration.json` from the
+   repository into the same relative spot at setup — the sync helper's
+   tier-marker screen loads it relative to `cwd`, and the parity-edit path
+   runs the helper from `$WORKDIR`; without the copy it exits `ENOENT`
+   before editing. Refresh the copy if the repo fixture changes mid-task.
 
    The workdir mirrors the repo's `docs/issues_drafts` layout **on purpose**:
    the tooling derives paths three different ways — the stage guard from
