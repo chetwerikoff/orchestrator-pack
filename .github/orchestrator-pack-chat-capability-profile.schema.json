@@ -38,35 +38,25 @@
       "maxLength": 128
     },
     "capabilities": {
-      "type": "array",
-      "minItems": 7,
-      "maxItems": 64,
-      "items": {
-        "$ref": "#/$defs/capability"
+      "type": "object",
+      "minProperties": 7,
+      "maxProperties": 64,
+      "propertyNames": {
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+        "maxLength": 128
       },
-      "allOf": [
-        {
-          "$ref": "#/$defs/requireRepositoryRead"
-        },
-        {
-          "$ref": "#/$defs/requireTextPublication"
-        },
-        {
-          "$ref": "#/$defs/requireGitPublication"
-        },
-        {
-          "$ref": "#/$defs/requireIssuePrWrite"
-        },
-        {
-          "$ref": "#/$defs/requireCiObservation"
-        },
-        {
-          "$ref": "#/$defs/requireReviewObservation"
-        },
-        {
-          "$ref": "#/$defs/requireLongProcessHandling"
-        }
-      ]
+      "required": [
+        "repository-read",
+        "text-publication",
+        "commit-tree-ref-publication",
+        "issue-pr-create-update",
+        "ci-runs-jobs-logs-read",
+        "review-observation",
+        "long-process-handling"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/capability"
+      }
     }
   },
   "$defs": {
@@ -123,7 +113,6 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "name",
         "status",
         "evidence",
         "testedAt",
@@ -131,12 +120,6 @@
         "preferredFallback"
       ],
       "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-        },
         "status": {
           "enum": [
             "proven",
@@ -196,111 +179,6 @@
           }
         }
       ]
-    },
-    "requireRepositoryRead": {
-      "contains": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "name": {
-            "const": "repository-read"
-          }
-        }
-      },
-      "minContains": 1,
-      "maxContains": 1
-    },
-    "requireTextPublication": {
-      "contains": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "name": {
-            "const": "text-publication"
-          }
-        }
-      },
-      "minContains": 1,
-      "maxContains": 1
-    },
-    "requireGitPublication": {
-      "contains": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "name": {
-            "const": "commit-tree-ref-publication"
-          }
-        }
-      },
-      "minContains": 1,
-      "maxContains": 1
-    },
-    "requireIssuePrWrite": {
-      "contains": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "name": {
-            "const": "issue-pr-create-update"
-          }
-        }
-      },
-      "minContains": 1,
-      "maxContains": 1
-    },
-    "requireCiObservation": {
-      "contains": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "name": {
-            "const": "ci-runs-jobs-logs-read"
-          }
-        }
-      },
-      "minContains": 1,
-      "maxContains": 1
-    },
-    "requireReviewObservation": {
-      "contains": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "name": {
-            "const": "review-observation"
-          }
-        }
-      },
-      "minContains": 1,
-      "maxContains": 1
-    },
-    "requireLongProcessHandling": {
-      "contains": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "name": {
-            "const": "long-process-handling"
-          }
-        }
-      },
-      "minContains": 1,
-      "maxContains": 1
     }
   }
 }
