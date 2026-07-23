@@ -83,6 +83,8 @@ const REVIEWED_FINAL_OPERATIONS = Object.freeze([
   ['scripts/pack-review-runner.ts', 'modify'],
   ['scripts/pr2-foundation/contract-test-runner.ts', 'modify'],
   ['scripts/pr2-foundation/runtime-catalog.ts', 'modify'],
+  ['scripts/pr2-foundation/terminalized-port.test.ts', 'modify'],
+  ['tests/powershell/Lint-SelfArchitect.Tests.ps1', 'modify'],
   ['scripts/pr2a/closure-receipt.ts', 'add'],
   ['scripts/pr2a/final-conformance.test.ts', 'add'],
   ['scripts/pr2a/final-conformance.ts', 'add'],
