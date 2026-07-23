@@ -136,6 +136,16 @@ The profile Issue is operational metadata. It is not:
 
 A new chat locates the profile by searching the current repository for the exact marker and selecting the single open, non-pull-request Issue whose profile key matches the current environment.
 
+The JSON payload inside the profile Issue must validate against the tracked strict schema:
+
+```text
+.github/orchestrator-pack-chat-capability-profile.schema.json
+```
+
+The tracked schema is normative for JSON structure, required fields, enums, timestamp formats, expiry representation, and forbidden extra properties. Marker uniqueness, open-Issue selection, authorization, expiry evaluation, and live capability truth still require repository/helper or operator checks; JSON Schema alone does not make the Issue transactional or current.
+
+A profile that fails schema validation is corrupt and must not be used.
+
 The profile key is:
 
 ```text
@@ -156,11 +166,11 @@ It must not contain tokens, cookies, credentials, secret URLs, or private data.
 
 If no matching profile exists, create one only when the current executor has authority and real non-destructive evidence to record. If it cannot be created, treat the profile as unavailable and perform only the bounded capability checks required by the current task.
 
-If more than one matching open profile exists, the marker or JSON is corrupt, repository identity differs, or the fingerprint is ambiguous:
+If more than one matching open profile exists, the marker or JSON is corrupt, repository identity differs, the fingerprint is ambiguous, or schema validation fails:
 
 - do not choose by guess;
 - mark the profile unavailable;
-- report the ambiguity;
+- report the ambiguity or validation errors;
 - use bounded current-task checks until an operator repairs or explicitly selects the canonical profile.
 
 ### Required profile contents
@@ -182,7 +192,7 @@ Each capability entry must record:
 - transport or tool;
 - status: `proven | available-but-unproven | unavailable | degraded`;
 - concrete evidence and test time;
-- `expiresAt`, or `no-expiry` with rationale;
+- exactly one of `expiresAt` or `noExpiryRationale`;
 - known limits;
 - preferred fallback.
 
@@ -191,10 +201,8 @@ The normal minimum profile covers:
 ```text
 repository read
 text publication
-commit/tree creation
-branch create/update
-remote read-back
-PR create/update
+commit/tree/ref publication and remote read-back
+Issue/PR create and update
 CI runs/jobs/logs read
 review observation
 long-process handling
@@ -220,21 +228,23 @@ A missing unused capability does not block full chat execution.
 At task start:
 
 1. locate the canonical profile by marker and profile key;
-2. verify repository identity, fingerprint, and JSON integrity;
-3. ignore expired entries;
-4. use only entries whose evidence applies to the current task and permission class;
-5. run short liveness checks for mutable facts.
+2. validate the JSON payload against `.github/orchestrator-pack-chat-capability-profile.schema.json`;
+3. verify repository identity and environment fingerprint;
+4. ignore expired entries;
+5. use only entries whose evidence applies to the current task and permission class;
+6. run short liveness checks for mutable facts.
 
 Only an authenticated repository collaborator acting as the current standalone executor or the explicit operator may update the profile.
 
 Every profile update must:
 
+- remain valid against the tracked schema;
 - preserve a bounded human-readable transition history;
 - state what changed and why;
 - replace only affected entries;
 - keep secrets out of the Issue.
 
-A capability entry expires at its stated `expiresAt`. Mutable authorization, network, connector, and service-availability evidence should have bounded expiry. Stable format or transport semantics may use `no-expiry` only when the rationale is recorded.
+A capability entry expires at its stated `expiresAt`. Mutable authorization, network, connector, and service-availability evidence should have bounded expiry. Stable format or transport semantics may use `noExpiryRationale` only when the rationale is recorded.
 
 The whole profile is stale when:
 
@@ -874,6 +884,8 @@ Mode C ends with `handoff prepared`, not `completed`.
 ## 16. Operating formula
 
 > Capabilities live in a canonical repository Issue, are keyed to repository and environment identity, and are reused only while current and unambiguous.
+>
+> Capability JSON must validate against the strict tracked schema in `.github/orchestrator-pack-chat-capability-profile.schema.json`; the Issue remains the mutable instance.
 >
 > Each task checks current liveness, starts in `provisional-B` or C, and uses the first real checkpoint to confirm B or downgrade.
 >
