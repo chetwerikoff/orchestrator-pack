@@ -21,10 +21,18 @@ The user provides:
 1. **GitHub Issue link** — the task GPT created (`#N`).
 2. **Authoring-chat link** — the browser-GPT chat where the task was authored.
 
-Both are required for the full flow. A task with no authoring chat (rare,
-legacy) falls back to architect-as-author against the same floors — record the
-fallback reason; the pre-07-20 local-authoring procedure lives in git history
-of this file.
+**Brief-only entry (no Issue yet).** A plain «создай драфт» request with only
+a task brief starts here too — the missing artifacts are created by the same
+author. Compose a self-contained authoring message from the brief
+(problem/goal, advisory tier prior, constraints/out-of-scope, verified
+grounding pointers); the cursor helper opens a **new** chat with it — that
+chat becomes the **task chat** for the whole flow — and GPT authors the spec
+against the Issue-body floors below and **creates the GitHub Issue itself**
+(first body line `GitHub Issue: #N` once known). Proceed from Intake with the
+returned Issue number and chat URL. The architect authors only the brief,
+never the spec. Only when the browser is unavailable and the operator cannot
+raise it: architect-as-author against the same floors, fallback reason
+recorded.
 
 Skip on: typo fixes, rename-only refactors, one-file mechanical CI tweaks
 (below-ladder skip line — see Tier gate).
@@ -63,9 +71,11 @@ architectural-review chat mid-flow.
    relayed to the task chat for fixes; ≤ 3 passes.
 5. **Architectural review** — dedicated review chat, ≤ 4 passes; findings
    relayed to the task chat for fixes.
-6. **Final architect lens** — overengineering + missed-items first.
-7. **Final architectural pass** — same dedicated review chat, one pass over
-   the post-lens state.
+6. **Final architect lens** — overengineering + missed-items first. All
+   tiers: light checklist on T1/T2, full per-mechanism ceremony on T3.
+7. **Final architectural pass** — always on T3 (same dedicated review chat,
+   one pass over the post-lens state); on T1/T2 only when the final lens
+   changed content — one verification round within the same review chat.
 8. **Acceptance** — all floors green, ledger complete, issue→draft reconcile,
    queue-index row.
 
@@ -78,11 +88,14 @@ the merge-with-backlog analog.
 1. Pull the Issue body through the pack wrapper (REST, never GraphQL):
 
    ```bash
-   scripts/gh api repos/chetwerikoff/orchestrator-pack/issues/<N> --jq .body > <scratch>/issue-<N>-r01.md
+   scripts/gh api repos/chetwerikoff/orchestrator-pack/issues/<N> --jq .body > <scratch>/rNN/NN-<slug>.md
    ```
 
-   Keep every pulled revision (`r01`, `r02`, …) in the session scratchpad —
-   they are the parity evidence between rounds.
+   Keep every pulled revision in the session scratchpad, one directory per
+   revision (`r01/`, `r02/`, …) with the file always named by the
+   **canonical draft basename** `NN-<slug>.md` — guards derive draft
+   identity and capture paths from the basename, so a `issue-<N>-rNN.md`
+   name breaks them. Revisions are the parity evidence between rounds.
 2. Pick the draft number: `NN = max(queue index, disk) + 1` (check
    [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) **and**
    `docs/issues_drafts/` — never disk alone). The mirror path is
@@ -212,6 +225,10 @@ Per pass:
 
 ## Step 6 — Final architect lens
 
+Runs at **every tier**: on T1/T2 as a light checklist over the axes
+(including the tier-downgrade consideration), on T3 with the full
+per-mechanism ceremony below.
+
 Focus order: **оверинженерия** and **что пропустили** first, then the
 remaining axes as a delta check against lens-01.
 
@@ -241,7 +258,8 @@ remaining axes as a delta check against lens-01.
 
 ## Step 7 — Final architectural pass
 
-One pass in the **same dedicated review chat** over the post-lens state:
+Always on T3; on T1/T2 only when the final lens changed content. One pass in
+the **same dedicated review chat** over the post-lens state:
 current Issue body (fresh revision, UNTRUSTED-wrapped) + the lens-driven
 changes summary. Save verbatim to
 `.review/NN-<slug>/pass-NN-final.capture.txt`. Findings → step-3 loop; a
@@ -274,10 +292,13 @@ user explicitly asks to publish — then invoke
 Two cases touch tracked draft bytes from this flow, both content-neutral:
 
 - **Mid-flight parity patches** (fence syntax, header shape, capture-block
-  insertion) and **the final mirror write**: run via a Sonnet worker with
-  `AO_579_SONNET_OVERRIDE=1`, or bare-architect with
+  insertion) and **the final mirror write**: bare-architect Edit/Write with
   `AO_DRAFT_AUTHOR_FALLBACK_REASON="issue-to-draft reconcile mirror (#N)"` —
-  always record which channel and why.
+  the only override `scripts/guard-direct-edit.mjs` recognizes for gated
+  draft files — or a Sonnet worker session (runs outside the architect's
+  edit hook entirely). `AO_579_SONNET_OVERRIDE=1` belongs to the
+  browser-driver path, not the edit guard. Always record which channel and
+  why.
 - After any local mechanical patch that must reach the Issue, re-sync with
   the helper (never raw `gh issue edit`):
 
@@ -379,11 +400,16 @@ screen still runs first — a danger-marked one-liner cannot use the skip line.
    below-T3 assignment, or marker hit + skipped competitive stage →
    **blocking escalation** to the operator. Unparseable text → T3.
 2. **Stage selection:**
-   - **T1:** no competitive stage; one architectural pass.
+   - **T1:** no competitive stage; one architectural pass; light final lens
+     (axes as checklist, incl. tier-downgrade consideration); a final
+     architectural round only if the lens changed content.
    - **T2:** no competitive stage (unless red-flag markers); architectural
-     ≤ 3 passes.
-   - **T3:** full pipeline — competitive ≤ 3 → architectural ≤ 4 → final
-     lens → final architectural ×1.
+     ≤ 3 passes; light final lens; a final architectural round only if the
+     lens changed content.
+   - **T3:** full pipeline — competitive ≤ 3 → architectural ≤ 4 → full
+     final lens → final architectural ×1 (always).
+   The pass ceilings bound the finding loop; the post-lens verification
+   round is the ×1 on top, not a ceiling consumer.
    - **T3-critical** (task matches the L4-condition list in Issue #574 /
      `docs/issues_drafts/187-task-complexity-tier-rubric.md`): competitive
      stage mandatory; the spec must carry a rollback/migration note plus
@@ -543,6 +569,13 @@ stage-completeness (T3 only) → contract-evidence / positive-outcome /
 parked-root → finding-ledger (when captures exist). The finding-ledger guard
 validates **every** `*.capture.txt` in the review dir against the ledger —
 early competitive findings cannot vanish behind a later `NO_FINDINGS` pass.
+
+**When each guard runs.** Mid-flight rounds re-run the **body-only** guards
+(tier-gate, contract-evidence / positive-outcome / parked-root) against the
+canonical-basename scratch copy. Stage-completeness and finding-ledger run at
+**acceptance**, against the reconciled mirror at its canonical path and
+`.review/NN-<slug>/` — running them against a scratch path makes them derive
+a wrong capture directory and fail spuriously.
 
 ## Review artifacts and finding-disposition ledger
 
