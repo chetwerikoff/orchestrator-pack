@@ -33,10 +33,11 @@ acceptance stay owned by `create-issue-draft`.
 **Creation triggers with only a brief** («создай задачу с кодексом», "draft
 with codex" with no existing artifact): author first via
 `create-issue-draft`'s **brief-only entry** — this skill authors nothing.
-Then run this loop over the accepted local mirror; or, when the user's
-intent is a Codex challenge *during* authoring, record it as
-operator-directed Codex substitution of the competitive stage inside that
-flow.
+Then run this loop as an **additional standalone Codex challenge** over the
+pulled final body (workdir anchor copy). It never replaces the competitive
+stage: that stage is browser-GPT always, and Codex substitution inside the
+flow remains outage-only — a user's «с кодексом» buys an extra Codex loop on
+top, not a competitive-stage swap.
 
 Do not impose by default — adversarial pass is a paid Codex run.
 

@@ -11,6 +11,12 @@ description: >-
 
 # Publish issue draft
 
+> **Legacy-drafts only (operator decision 2026-07-23).** New GPT-authored
+> tasks are **mirrorless**: `create-issue-draft` produces no local draft file
+> and no queue-index row — there is nothing for this skill to persist. Invoke
+> this skill only for the pre-existing legacy drafts in
+> `docs/issues_drafts/**` (edits, batches, re-syncs of historical specs).
+
 The GitHub **Issue** is the live queue and the source of truth a worker reads
 (`ao spawn`, scope guard, planner all read the issue body). Landing the local
 draft *file* in `main` is a separate, optional act of repo snapshotting.

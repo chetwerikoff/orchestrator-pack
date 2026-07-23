@@ -520,7 +520,8 @@ clean.
 ## Issue-body floors
 
 The Issue body must satisfy the same structure and fences the guards enforce.
-Guards always read the **workdir anchor** (`$WORKDIR/<N>-<slug>.md`) —
+Guards always read the **workdir anchor**
+(`$ANCHOR` = `$WORKDIR/docs/issues_drafts/<N>-<slug>.md`, per Intake) —
 re-pull before running them so the anchor is the freshest revision.
 
 ### Body structure (fixed order)
