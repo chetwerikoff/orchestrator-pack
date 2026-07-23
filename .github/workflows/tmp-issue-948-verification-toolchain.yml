@@ -33,3 +33,4 @@ jobs:
           name: issue-948-verification-toolchain
           path: /tmp/issue-948-verification-toolchain
           retention-days: 1
+# synchronize trigger
