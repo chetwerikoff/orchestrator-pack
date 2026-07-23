@@ -96,22 +96,34 @@ the merge-with-backlog analog.
 
    ```
    ~/.local/state/create-issue-draft/<N>-<slug>/        # $WORKDIR
-     <N>-<slug>.md                                      # current-revision anchor (guards read this)
+     docs/issues_drafts/<N>-<slug>.md                   # $ANCHOR — current revision (guards + sync helper read this)
+     docs/issues_drafts/.review/<N>-<slug>/             # $REVIEW_DIR — captures, ledger, chats.md, receipts
      r01/ r02/ …                                        # immutable pulled revisions (parity evidence)
-     docs/issues_drafts/.review/<N>-<slug>/             # $REVIEW_DIR — captures, ledger, chats.md
    ```
 
-   The nested `$REVIEW_DIR` shape exists because the stage guard derives its
-   capture location as `<repo-root>/docs/issues_drafts/.review/<stem>` —
-   passing `--repo-root $WORKDIR` redirects it fully outside the repository.
-2. **Pull the Issue body** through the pack wrapper (REST, never GraphQL),
-   writing the immutable revision **and** refreshing the anchor:
+   The workdir mirrors the repo's `docs/issues_drafts` layout **on purpose**:
+   the tooling derives paths three different ways — the stage guard from
+   `--repo-root`, the sync helper's ledger validator from
+   `dirname(draft)/.review/<stem>`, its tier-gate validator from `cwd` — and
+   this shape satisfies all of them at once while staying fully outside the
+   repository.
+
+   **Anchor format is draft format, not raw body:** line 1 = `# <Issue
+   title>` (the title carries the tier prefix), line 2 = blank, then the
+   verbatim Issue body. The sync helper strips exactly the first two lines
+   (`lines.slice(2)`), and the tier gate checks the H1 prefix against the
+   fence — a raw-body anchor breaks both.
+2. **Pull title + body** through the pack wrapper (REST, never GraphQL),
+   composing the draft-format anchor and the immutable revision copy:
 
    ```bash
-   scripts/gh api repos/chetwerikoff/orchestrator-pack/issues/<N> --jq .body > $WORKDIR/rNN/<N>-<slug>.md
-   cp $WORKDIR/rNN/<N>-<slug>.md $WORKDIR/<N>-<slug>.md
+   scripts/gh api repos/chetwerikoff/orchestrator-pack/issues/<N> \
+     --jq '"# " + .title + "\n\n" + .body' > $WORKDIR/rNN/<N>-<slug>.md
+   cp $WORKDIR/rNN/<N>-<slug>.md $ANCHOR
    ```
 
+   Pulling the **title** every revision is load-bearing: the tier prefix
+   lives there, and floors must catch a stale title, not only a stale fence.
    Repeat both on every re-pull; revisions are diffed between rounds.
 3. Run the **tier gate** (below) against the anchor. The recomputed tier
    decides the competitive directive and pass ceilings.
@@ -322,7 +334,11 @@ All of the following, in order; any failure blocks acceptance:
    fix round.
 3. **Ledger complete** — every capture's findings normalized; protected
    findings `addressed`; capped exits carry open questions.
-4. Report: Issue URL, tier, pass counts per stage, capped-exit questions if
+4. **Live title prefix matches the final tier** — re-pull and check the
+   Issue **title** carries `[T<final>]` (or no prefix on skip-line): a
+   correct fence with a stale title fails acceptance (the title is where
+   workers and humans read the tier).
+5. Report: Issue URL, tier, pass counts per stage, capped-exit questions if
    any, chat URLs, workdir path.
 
 Nothing is committed or written into the repository: no draft file, no
@@ -334,16 +350,22 @@ the task artifact; the workdir holds the audit trail.
 Purely mechanical format fixes (fence syntax, header shape, capture-block
 bytes) that GPT keeps mangling may be applied by the architect directly to
 the **workdir anchor copy**, then pushed to the Issue with the sync helper
-(never raw `gh issue edit`):
+(never raw `gh issue edit`). Run it **from `$WORKDIR` as cwd** — the helper
+re-validates tier-gate / stage / ledger guard receipts before editing
+(fail-closed), and its three receipt lookups resolve into the workdir layout
+only from there; run the floors first so the receipts exist:
 
 ```bash
-node scripts/publish-issue-body-sync.ts edit --draft-path $WORKDIR/<N>-<slug>.md --issue-number <N> --repo chetwerikoff/orchestrator-pack
+cd $WORKDIR && node /abs/path/to/repo/scripts/publish-issue-body-sync.ts edit \
+  --draft-path docs/issues_drafts/<N>-<slug>.md --issue-number <N> --repo chetwerikoff/orchestrator-pack
 ```
 
-No tracked file is touched, so no edit-hook override is involved. Content
-fixes are **never** pushed this way — they belong to the GPT author via the
-task chat. After a parity push, re-pull (new `rNN/`) so revision history
-stays gapless.
+The helper syncs `anchor minus its first two lines` (H1 + blank) as the
+body — draft-format anchor required. Confirm with its read-only `verify`
+mode after the push. No tracked file is touched, so no edit-hook override is
+involved. Content fixes are **never** pushed this way — they belong to the
+GPT author via the task chat. After a parity push, re-pull (new `rNN/`) so
+revision history stays gapless.
 
 ## Browser-turn mechanics
 
@@ -481,7 +503,7 @@ screen still runs first — a danger-marked one-liner cannot use the skip line.
 ### Mechanical guard
 
 ```bash
-node scripts/tier-gate-guard.ts --text-file $WORKDIR/<N>-<slug>.md --draft-path $WORKDIR/<N>-<slug>.md
+node scripts/tier-gate-guard.ts --text-file $ANCHOR --draft-path $ANCHOR
 ```
 
 Fails closed (non-zero) when red-flag markers coincide with below-T3
@@ -605,7 +627,7 @@ Node 22 native strip-types runs the `.ts` entry points directly — no `tsx`,
 no PowerShell wrappers (the old `check-*.ps1` guards are removed):
 
 ```bash
-ANCHOR=$WORKDIR/<N>-<slug>.md
+ANCHOR=$WORKDIR/docs/issues_drafts/<N>-<slug>.md
 node scripts/tier-gate-guard.ts --text-file $ANCHOR --draft-path $ANCHOR
 node scripts/draft-discipline.mjs positive-outcome --draft $ANCHOR
 node scripts/draft-discipline.mjs parked-root --draft $ANCHOR
@@ -703,6 +725,13 @@ This flow writes **nothing** into the repository:
   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) are
   **legacy, read-only history** — valuable as the prior-art survey corpus,
   untouched by this flow.
+
+**Authority note (operator decision 2026-07-23).** `AGENTS.md` and
+`docs/tiering.md` still describe drafts as `docs/issues_drafts/**` artifacts
+mapped through the queue index — the mirrorless contract here supersedes
+them by operator decision; their canon updates are queued (blocked by the
+PR2 foundation freeze as of 07-23). Until those land, this skill is the
+authoritative procedure for GPT-authored tasks.
 
 ## Cross-issue contract changes
 
