@@ -1,0 +1,38 @@
+name: Temporary Issue 948 Toolchain Export
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Export local test toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .toolchain-export
+          tar -czf .toolchain-export/node_modules.tar.gz node_modules
+          pwsh_path="$(command -v pwsh)"
+          pwsh_root="$(dirname "$(readlink -f "$pwsh_path")")"
+          tar -czf .toolchain-export/pwsh.tar.gz -C "$(dirname "$pwsh_root")" "$(basename "$pwsh_root")"
+          printf '%s\n' "$pwsh_root" > .toolchain-export/pwsh-root.txt
+          node --version > .toolchain-export/node-version.txt
+          pwsh -NoProfile -Command '$PSVersionTable | ConvertTo-Json -Compress' > .toolchain-export/pwsh-version.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-test-toolchain
+          path: .toolchain-export
+          include-hidden-files: true
+          retention-days: 1
