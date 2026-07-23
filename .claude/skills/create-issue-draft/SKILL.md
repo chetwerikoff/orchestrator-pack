@@ -252,8 +252,11 @@ remaining axes as a delta check against lens-01.
    downgrade the marker screen contradicts is invalid). Stages already run
    at the higher tier stay valid; a downgrade never retro-waives captures or
    ledger entries.
-6. Write per-axis and per-mechanism verdicts to
-   `.review/NN-<slug>/presync-architect-lens.md`.
+6. Record the lens verdict as
+   `.review/NN-<slug>/pass-NN-architectural-lens.capture.txt` — this exact
+   stage name is what the stage guard counts, strictly after the
+   competitive anchor. Per-axis and per-mechanism detail goes to
+   `presync-architect-lens.md` alongside.
 7. Any `fix-required` outcome → one more task-chat fix round (step 3), then
    re-run this lens as a delta.
 
@@ -263,22 +266,25 @@ Always on T3; on T1/T2 only when the final lens changed content. One pass in
 the **same dedicated review chat** over the post-lens state:
 current Issue body (fresh revision, UNTRUSTED-wrapped) + the lens-driven
 changes summary. Save verbatim to
-`.review/NN-<slug>/pass-NN-final.capture.txt`. Findings → step-3 loop; a
-clean pass closes review.
+`.review/NN-<slug>/pass-NN-architectural-final.capture.txt` (guard-canonical
+stage name). Findings → step-3 loop; a clean pass closes review.
 
 ## Step 8 — Acceptance and reconcile
 
 All of the following, in order; any failure blocks acceptance:
 
-1. **Floors green** on the final pulled revision (guard order below).
-2. **Ledger complete** — every capture's findings normalized; protected
+1. **Reconcile the local draft mirror first** — write the final Issue body
+   (H1 = Issue title with tier prefix; `GitHub Issue: #N` line) to
+   `docs/issues_drafts/NN-<slug>.md`. Direction is **issue→draft**: the
+   Issue is the source of truth; the mirror must match it byte-for-byte
+   modulo the H1/issue-line frame. Bare-architect Edit/Write of draft files
+   is blocked by the #579 hook — use the sanctioned channel (below). The
+   mirror must exist before the acceptance guards run — they read it.
+2. **Floors green** over the reconciled mirror — the full guard sequence
+   including stage-completeness and finding-ledger (guard order below). A
+   red floor sends the flow back to a fix round; re-reconcile after.
+3. **Ledger complete** — every capture's findings normalized; protected
    findings `addressed`; capped exits carry open questions.
-3. **Reconcile the local draft mirror** — write the final Issue body (H1 =
-   Issue title with tier prefix; `GitHub Issue: #N` line) to
-   `docs/issues_drafts/NN-<slug>.md`. Direction is **issue→draft**: the Issue
-   is the source of truth; the mirror must match it byte-for-byte modulo the
-   H1/issue-line frame. Bare-architect Edit/Write of draft files is blocked
-   by the #579 hook — use the sanctioned channel (below).
 4. **Queue-index row** — on the sync-only default the tracked index stays
    untouched: record `index row: pending publish` in the acceptance report;
    the row is added and committed by the publish tooling when the user asks
@@ -423,8 +429,11 @@ screen still runs first — a danger-marked one-liner cannot use the skip line.
    round is the ×1 on top, not a ceiling consumer.
    - **T3-critical** (task matches the L4-condition list in Issue #574 /
      `docs/issues_drafts/187-task-complexity-tier-rubric.md`): competitive
-     stage mandatory; the spec must carry a rollback/migration note plus
-     crash/race/stale-state test.
+     **+ Codex mandatory — GPT and Codex together** (an independent Codex
+     architectural pass in addition to the GPT review chat; not an outage
+     substitution), per the authoritative per-tier contract in
+     [`docs/tiering.md`](../../docs/tiering.md). The spec must carry a
+     rollback/migration note plus a crash/race/stale-state test.
 3. **Never-skipped floor (every tier):** worker-safety contract (Goal,
    denylist/allowed-roots, Acceptance criteria, Verification), #366
    contract-evidence, #221 behavior-kind, finding-ledger/carve-out guard.
@@ -601,17 +610,24 @@ draft path, never a scratch path, so capture locations resolve correctly.
 
 ```
 docs/issues_drafts/.review/NN-<slug>/
-  chats.md                             # task-chat + review-chat URLs
-  lens-01-architect.md                 # six-axis lens verdict
-  round-NN-author-reply.md             # verbatim author replies
-  pass-NN-competitive.capture.txt      # verbatim reviewer output
-  pass-NN-architectural.capture.txt
-  pass-NN-final.capture.txt
-  presync-architect-lens.md            # final lens verdicts
+  chats.md                                 # task-chat + review-chat URLs
+  lens-01-architect.md                     # six-axis entry-lens verdict
+  round-NN-author-reply.md                 # verbatim author replies
+  pass-NN-competitive.capture.txt          # verbatim reviewer output
+  pass-NN-architectural.capture.txt        # architectural finding-loop passes
+  pass-NN-architectural-lens.capture.txt   # final architect lens
+  pass-NN-architectural-final.capture.txt  # final architectural pass
+  presync-architect-lens.md                # per-mechanism keep/cut detail
   finding-disposition-ledger.json
 ```
 
-Pass numbers are one chronological sequence across stages. Ledger JSON:
+Pass numbers are one chronological sequence across stages. **Capture names
+are a guard contract:** `stage-completeness-core.ts` recognizes exactly the
+stages `competitive`, `architectural`, `architectural-lens`,
+`architectural-final` and requires the T3 sequence competitive →
+architectural-lens → architectural-final in strictly increasing pass order.
+Never invent variants (`pass-NN-final`, `pass-NN-lens`) — the guard reports
+them as missing stages. Ledger JSON:
 
 ```json
 {
