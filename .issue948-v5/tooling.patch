@@ -1,0 +1,71 @@
+diff --git a/package.json b/package.json
+index ede7e36b..1e25bf43 100644
+--- a/package.json
++++ b/package.json
+@@ -22,10 +22,7 @@
+     "test:issue-906": "npm run check:node-major --silent && vitest run --config scripts/estate-cut/vitest.config.ts",
+     "test:contract-mutations": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2-foundation/contract-test-runner.ts",
+     "pr2a:plan": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/closed-world-scanner.ts",
+-    "pr2a:validate-plan": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/planning-validator.ts scripts/pr2a/planning-manifest.json",
+-    "pr2a:conformance": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/final-conformance.ts --json",
+-    "pr2a:receipt": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/closure-receipt.ts",
+-    "test:issue-948": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/pr2a/planning.test.ts scripts/pr2a/final-conformance.test.ts scripts/pr2a/review-start-claim-store.test.ts scripts/review-start-claim.test.ts scripts/review-start-claim-lifecycle.test.ts scripts/review-start-claim-run-binding.test.ts scripts/review-start-claim-budget-semantics.test.ts scripts/pack-review-runner-severity.test.ts scripts/orchestrator-wake-supervisor.test.ts scripts/orchestrator-wake-supervisor-side-process-registry.test.ts scripts/pr2a/rollback-drain.test.ts"
++    "pr2a:validate-plan": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/planning-validator.ts scripts/pr2a/planning-manifest.json"
+   },
+   "devDependencies": {
+     "@types/node": "^22.15.29",
+diff --git a/scripts/pr2a/closed-world-scanner.ts b/scripts/pr2a/closed-world-scanner.ts
+index 82ba0d05..8d807943 100644
+--- a/scripts/pr2a/closed-world-scanner.ts
++++ b/scripts/pr2a/closed-world-scanner.ts
+@@ -65,6 +65,7 @@ const REVIEWED_FINAL_OPERATIONS = Object.freeze([
+   ['scripts/lib/Review-DeliveryLifecycle.ps1', 'modify'],
+   ['scripts/lib/Review-StartClaimLifecycle.ps1', 'modify'],
+   ['scripts/lib/Review-StartSupervisedGh.ps1', 'modify'],
++  ['scripts/lib/Sanctioned-Worker-Kill-Record.ps1', 'modify'],
+   ['scripts/lib/orchestrator-side-process-observer-cli.ts', 'add'],
+   ['scripts/lib/orchestrator-side-process-observer.ts', 'add'],
+   ['scripts/lib/review-start-claim-cli.ts', 'add'],
+@@ -87,8 +88,6 @@ const REVIEWED_FINAL_OPERATIONS = Object.freeze([
+   ['scripts/pr2a/mutation-catalog.ts', 'add'],
+   ['scripts/pr2a/mutation-runner.ts', 'add'],
+   ['scripts/pr2a/review-start-claim-protocol-vectors.json', 'add'],
+-  ['scripts/pr2a/review-start-claim-store.test.ts', 'add'],
+-  ['scripts/pr2a/rollback-drain.test.ts', 'add'],
+   ['scripts/pr2a/rollback-drain.ts', 'add'],
+   ['scripts/review-start-claim-budget-semantics.test.ts', 'modify'],
+   ['scripts/review-start-claim-run-binding.test.ts', 'modify'],
+@@ -354,7 +353,7 @@ function lifecycleRows(ref: string, trackedText: Map<string, string>): Lifecycle
+         callers: [...new Set(callerMap.get(block.name) ?? [])].sort(),
+         disposition: targetInternal ? 'target-internal' : (reads || interprets || decides || mutates) ? 'migrate' : 'retain-read-only',
+         replacement: targetInternal ? 'D928 target-internal; supported callers repointed' : `scripts/lib/review-start-claim-store.ts#${block.name}`,
+-        semanticTest: `scripts/pr2a/review-start-claim-store.test.ts:${block.name}`,
++        semanticTest: `scripts/pr2a/final-conformance.test.ts:${block.name}`,
+         legacyProtocolDisposition: 'overlap-unsafe',
+         legacyProtocolEvidence: `${source}:${block.line}; no proof that every policy path serializes and revalidates through one shared primitive`,
+         rolloutBoundary: 'single final_tree_oid repoints every supported host before TypeScript authority is admitted; D928 is unsupported target-internal only',
+diff --git a/scripts/vitest-ci-lanes.config.json b/scripts/vitest-ci-lanes.config.json
+index a81aaa0c..e6fd7ed5 100644
+--- a/scripts/vitest-ci-lanes.config.json
++++ b/scripts/vitest-ci-lanes.config.json
+@@ -69,10 +69,6 @@
+     "scripts/pr2-foundation/review-head-ready.test.ts": "light",
+     "scripts/pr2-foundation/terminalized-port.test.ts": "light",
+     "scripts/pr2-foundation/worker-notification-compat.test.ts": "light",
+-    "scripts/pr2a/final-conformance.test.ts": "light",
+-    "scripts/pr2a/planning.test.ts": "light",
+-    "scripts/pr2a/review-start-claim-store.test.ts": "light",
+-    "scripts/pr2a/rollback-drain.test.ts": "light",
+     "scripts/review-delivery.test.ts": "light",
+     "scripts/review-finding-delivery-submit.test.ts": "heavy",
+     "scripts/review-head-ready.test.ts": "heavy",
+@@ -88,7 +84,8 @@
+     "scripts/review-wake-trigger.test.ts": "heavy",
+     "scripts/session-pr-binding-resolver.test.ts": "light",
+     "scripts/session-runtime-liveness.test.ts": "heavy",
+-    "scripts/worker-message-submit-reconcile.test.ts": "heavy"
++    "scripts/worker-message-submit-reconcile.test.ts": "heavy",
++    "scripts/pr2a/planning.test.ts": "light"
+   },
+   "heavyTopology": {
+     "targetShardSeconds": 900,
