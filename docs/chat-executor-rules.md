@@ -31,8 +31,10 @@ AGENTS.md read: <blob SHA>
 Chat executor rules read: <blob SHA>
 Default branch HEAD: <commit SHA>
 Execution ID: <unique ID>
-Execution mode: B | C
+Execution mode: provisional-B | C
 ```
+
+At startup, `provisional-B` means the reusable capability profile and current liveness checks support a candidate publication path, but the current session has not yet proved it. It is not confirmed Mode B and does not authorize a large local implementation or a promise to reach `ready for review`. Choose Mode C immediately when no reliable candidate publication path exists.
 
 A blob SHA identifies exact file contents. A commit SHA identifies the repository commit whose tree was read.
 
@@ -128,7 +130,12 @@ A normal task does not repeat the full capability investigation. Check only curr
 - the selected publishing transport is available;
 - a real task branch can be created or reused.
 
-The first real task commit is the session canary:
+Choose the initial state before the canary:
+
+- `provisional-B` when the reusable capability profile and current liveness checks support every operation required by the task, but current-session publication has not yet been proved;
+- `C` when no reliable candidate publication path is available.
+
+`provisional-B` is a transient startup state, not a confirmed execution mode. It must resolve through the first real task commit, which is the session canary:
 
 ```text
 create a meaningful task checkpoint
@@ -137,11 +144,13 @@ create a meaningful task checkpoint
     -> compare them with the intended commit/tree
 ```
 
-Do this before a large local implementation.
+On success, transition `provisional-B -> B`. If the selected transport fails, either remain `provisional-B` while switching to another already-proven candidate transport and rerun the canary, or transition to Mode C when no reliable candidate remains.
+
+Do this before a large local implementation. Do not begin one while the state is still `provisional-B`.
 
 ### Mode B — full chat execution
 
-Mode B is available when the current capability profile and canary support the operations required by the task:
+Mode B is confirmed only when the current capability profile supports the operations required by the task and the current-session canary has succeeded:
 
 ```text
 edit
@@ -156,7 +165,7 @@ Publication may use shell Git, the GitHub object API, the contents API, or anoth
 
 Historically proven PR and CI capabilities do not need a fake per-task test. Confirm them through the first real PR and CI run. An unexpected failure causes an explicit downgrade, escalation, or transport change.
 
-Only Mode B permits a promise to implement the Issue and bring its PR to `ready for review`.
+Only confirmed Mode B permits a promise to implement the Issue and bring its PR to `ready for review`.
 
 ### Mode C — implementation handoff
 
@@ -180,7 +189,7 @@ The terminal Mode C status is:
 handoff prepared
 ```
 
-Upgrade to Mode B only after a remote write transaction and read-back succeed.
+A Mode C session may move to `provisional-B` when a reliable candidate transport becomes available. It becomes confirmed Mode B only after a remote write transaction and read-back succeed.
 
 ## 6. Remote publication
 
@@ -407,6 +416,8 @@ Recommended machine-readable fields:
 }
 ```
 
+The `mode` field accepts `provisional-B`, `B`, or `C`. Record the canary transition that confirms B or downgrades to C in `Recent transitions`.
+
 Follow it with:
 
 ```markdown
@@ -505,6 +516,9 @@ Scrub CI and process logs before quoting them. Capability evidence may name a no
 Track orthogonal state rather than one vague status:
 
 ```text
+mode =
+  provisional-B | B | C
+
 work =
   analyzing | implementing | testing | preparing-handoff
 
@@ -573,7 +587,7 @@ Mode C ends with `handoff prepared`, not `completed`.
 
 > Capabilities are investigated rarely and reused across chats.
 
-> Each task checks current liveness and proves publication with its first real checkpoint.
+> Each task checks current liveness, starts in `provisional-B` or C, and uses the first real checkpoint to confirm B or downgrade.
 
 > Active work produces a GitHub-visible heartbeat every 15–20 minutes.
 
