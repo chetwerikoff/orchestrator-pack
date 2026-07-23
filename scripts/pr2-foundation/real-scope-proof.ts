@@ -1,7 +1,6 @@
 import {
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -17,6 +16,9 @@ import {
 
 const DECLARATION_PATH = 'docs/declarations/923.chatgpt-issue-923.json';
 const DECLARATION_BASE_SHA = 'faac4525e5e457f7480f99b5f26fcfd96da6d9d5';
+const FOUNDATION_IMPLEMENTATION_BASE_SHA = 'd9f6b60acc17fa56c0c29a45950e14f7b2b801db';
+const FOUNDATION_TERMINAL_SHA = '1c040b1f75e4553af7cfbe992264eea9afd5f95e';
+const FOUNDATION_MERGE_SHA = 'b967dfe156838039e1d6d137e7064dc9d1b10b4d';
 
 export interface RealScopeProofResult {
   ok: true;
@@ -40,8 +42,12 @@ function git(repoRoot: string, args: string[]): string {
   return result.stdout.trim();
 }
 
-function changedRows(repoRoot: string, baseSha: string): Array<{ status: string; path: string }> {
-  const output = git(repoRoot, ['diff', '--name-status', '--find-renames=0', `${baseSha}...HEAD`]);
+function changedRows(
+  repoRoot: string,
+  baseSha: string,
+  headSha: string,
+): Array<{ status: string; path: string }> {
+  const output = git(repoRoot, ['diff', '--name-status', '--find-renames=0', `${baseSha}...${headSha}`]);
   if (!output) return [];
   return output.split(/\r?\n/).map((line) => {
     const [status = '', ...pathParts] = line.split('\t');
@@ -74,9 +80,9 @@ function resolveLatestCommittedSnapshotAtCommit(
   }
 }
 
-function packageJsonOverreach(repoRoot: string, baseSha: string): string[] {
+function packageJsonOverreach(repoRoot: string, baseSha: string, headSha: string): string[] {
   const base = JSON.parse(git(repoRoot, ['show', `${baseSha}:package.json`])) as Record<string, unknown>;
-  const head = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')) as Record<string, unknown>;
+  const head = JSON.parse(git(repoRoot, ['show', `${headSha}:package.json`])) as Record<string, unknown>;
   const baseScripts = { ...((base.scripts as Record<string, string>) ?? {}) };
   const headScripts = { ...((head.scripts as Record<string, string>) ?? {}) };
   delete headScripts['test:contract-mutations'];
@@ -139,6 +145,7 @@ function expectedConsumerRewrite(consumer: string, baseText: string): string {
 function derivedConsumerRewrites(
   repoRoot: string,
   baseSha: string,
+  headSha: string,
   rows: Array<{ status: string; path: string }>,
 ): string[] {
   const exact = new Set<string>([...EXACT_EXISTING_SCOPE_PATHS, ...FOUNDATION_DOC_ROWS]);
@@ -146,7 +153,7 @@ function derivedConsumerRewrites(
   for (const row of rows) {
     if (row.status !== 'M' || exact.has(row.path)) continue;
     const baseText = git(repoRoot, ['show', `${baseSha}:${row.path}`]);
-    const headText = readFileSync(path.join(repoRoot, row.path), 'utf8').trimEnd();
+    const headText = git(repoRoot, ['show', `${headSha}:${row.path}`]).trimEnd();
     const expected = expectedConsumerRewrite(row.path, baseText).trimEnd();
     if (expected === headText) derived.push(row.path);
   }
@@ -155,7 +162,10 @@ function derivedConsumerRewrites(
 
 export function runRealFoundationScopeProof(repoRoot = path.resolve('.')): RealScopeProofResult {
   const currentBaseSha = git(repoRoot, ['rev-parse', 'origin/main']);
-  git(repoRoot, ['merge-base', '--is-ancestor', DECLARATION_BASE_SHA, currentBaseSha]);
+  git(repoRoot, ['merge-base', '--is-ancestor', DECLARATION_BASE_SHA, FOUNDATION_IMPLEMENTATION_BASE_SHA]);
+  git(repoRoot, ['merge-base', '--is-ancestor', FOUNDATION_IMPLEMENTATION_BASE_SHA, FOUNDATION_TERMINAL_SHA]);
+  git(repoRoot, ['merge-base', '--is-ancestor', FOUNDATION_TERMINAL_SHA, FOUNDATION_MERGE_SHA]);
+  git(repoRoot, ['merge-base', '--is-ancestor', FOUNDATION_MERGE_SHA, currentBaseSha]);
   git(repoRoot, ['merge-base', '--is-ancestor', currentBaseSha, 'HEAD']);
 
   const declarationCommits = git(repoRoot, [
@@ -163,7 +173,7 @@ export function runRealFoundationScopeProof(repoRoot = path.resolve('.')): RealS
     '--full-history',
     '--diff-filter=A',
     '--format=%H',
-    `${DECLARATION_BASE_SHA}..HEAD`,
+    `${DECLARATION_BASE_SHA}..${FOUNDATION_TERMINAL_SHA}`,
     '--',
     DECLARATION_PATH,
   ]).split(/\r?\n/).filter(Boolean);
@@ -179,21 +189,31 @@ export function runRealFoundationScopeProof(repoRoot = path.resolve('.')): RealS
       .split(/\r?\n/).filter(Boolean)) === JSON.stringify([DECLARATION_PATH]),
     'declaration_commit_not_isolated',
   );
-  invariant(git(repoRoot, ['ls-tree', 'HEAD', '--', DECLARATION_PATH]) === '', 'declaration_present_in_head');
+  invariant(
+    git(repoRoot, ['ls-tree', FOUNDATION_TERMINAL_SHA, '--', DECLARATION_PATH]) === '',
+    'declaration_present_in_terminal_tree',
+  );
 
   const resolved = resolveLatestCommittedSnapshotAtCommit(repoRoot, declarationCommitSha);
   invariant(resolved.ok, resolved.ok ? 'declaration_snapshot_unreachable' : resolved.message);
   const snapshot = resolved.snapshot;
   invariant(snapshot.baseline.commit_sha === DECLARATION_BASE_SHA, 'declaration_baseline_changed');
 
-  const rows = changedRows(repoRoot, currentBaseSha);
-  invariant(!rows.some((row) => row.path === DECLARATION_PATH), 'declaration_in_current_delta');
+  const rows = changedRows(repoRoot, FOUNDATION_IMPLEMENTATION_BASE_SHA, FOUNDATION_TERMINAL_SHA);
+  invariant(!rows.some((row) => row.path === DECLARATION_PATH), 'declaration_in_implementation_delta');
   const changedPaths = rows.map((row) => row.path);
   const addedPaths = rows.filter((row) => row.status === 'A').map((row) => row.path);
-  const derivedRewritePaths = derivedConsumerRewrites(repoRoot, currentBaseSha, rows);
-  const modes = Object.fromEntries(changedPaths.map((file) => [file, treeMode(repoRoot, 'HEAD', file)]));
+  const derivedRewritePaths = derivedConsumerRewrites(
+    repoRoot,
+    FOUNDATION_IMPLEMENTATION_BASE_SHA,
+    FOUNDATION_TERMINAL_SHA,
+    rows,
+  );
+  const modes = Object.fromEntries(
+    changedPaths.map((file) => [file, treeMode(repoRoot, FOUNDATION_TERMINAL_SHA, file)]),
+  );
   const lanes = JSON.parse(
-    readFileSync(path.join(repoRoot, 'scripts/vitest-ci-lanes.config.json'), 'utf8'),
+    git(repoRoot, ['show', `${FOUNDATION_TERMINAL_SHA}:scripts/vitest-ci-lanes.config.json`]),
   ) as { classification: Record<string, string> };
 
   const validated = validateFoundationScope({
@@ -206,7 +226,11 @@ export function runRealFoundationScopeProof(repoRoot = path.resolve('.')): RealS
     derivedRewritePaths,
     modes,
     laneClassification: lanes.classification,
-    packageJsonChangedKeys: packageJsonOverreach(repoRoot, currentBaseSha),
+    packageJsonChangedKeys: packageJsonOverreach(
+      repoRoot,
+      FOUNDATION_IMPLEMENTATION_BASE_SHA,
+      FOUNDATION_TERMINAL_SHA,
+    ),
     revertCommitCount: 1,
   });
   invariant(validated.ok, validated.ok ? 'scope_validation_unreachable' : validated.reason);
