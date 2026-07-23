@@ -1,0 +1,79 @@
+diff --git a/package.json b/package.json
+index ede7e36b..b1273510 100644
+--- a/package.json
++++ b/package.json
+@@ -25,7 +25,7 @@
+     "pr2a:validate-plan": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/planning-validator.ts scripts/pr2a/planning-manifest.json",
+     "pr2a:conformance": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/final-conformance.ts --json",
+     "pr2a:receipt": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/closure-receipt.ts",
+-    "test:issue-948": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/pr2a/planning.test.ts scripts/pr2a/final-conformance.test.ts scripts/pr2a/review-start-claim-store.test.ts scripts/review-start-claim.test.ts scripts/review-start-claim-lifecycle.test.ts scripts/review-start-claim-run-binding.test.ts scripts/review-start-claim-budget-semantics.test.ts scripts/pack-review-runner-severity.test.ts scripts/orchestrator-wake-supervisor.test.ts scripts/orchestrator-wake-supervisor-side-process-registry.test.ts scripts/pr2a/rollback-drain.test.ts"
++    "test:issue-948": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/pr2a/planning.test.ts scripts/pr2a/final-conformance.test.ts scripts/review-start-claim.test.ts scripts/review-start-claim-lifecycle.test.ts scripts/review-start-claim-run-binding.test.ts scripts/review-start-claim-budget-semantics.test.ts scripts/pack-review-runner-severity.test.ts scripts/orchestrator-wake-supervisor.test.ts scripts/orchestrator-wake-supervisor-side-process-registry.test.ts"
+   },
+   "devDependencies": {
+     "@types/node": "^22.15.29",
+diff --git a/scripts/check-review-start-claim-guard.ps1 b/scripts/check-review-start-claim-guard.ps1
+index a54913db..f598af55 100644
+--- a/scripts/check-review-start-claim-guard.ps1
++++ b/scripts/check-review-start-claim-guard.ps1
+@@ -87,9 +87,27 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
+             $violations += "Issue #948 final conformance requires Node 22 (found $major)"
+         }
+         else {
+-            & $node.Source --experimental-strip-types $conformancePath --ref HEAD *> $null
+-            if ($LASTEXITCODE -ne 0) {
+-                $violations += 'Issue #948 final conformance rejected the current HEAD'
++            $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
++            if (-not $git) {
++                $violations += 'Git is required for Issue #948 tree-bound final conformance'
++            }
++            else {
++                $shallow = (& $git.Source -C $RepoRoot rev-parse --is-shallow-repository 2>$null | Out-String).Trim()
++                if ($LASTEXITCODE -ne 0) {
++                    $violations += 'Issue #948 final conformance could not inspect repository history depth'
++                }
++                elseif ($shallow -eq 'true') {
++                    & $git.Source -C $RepoRoot fetch --no-tags --unshallow origin *> $null
++                    if ($LASTEXITCODE -ne 0) {
++                        $violations += 'Issue #948 final conformance could not recover the reviewed planning history from origin'
++                    }
++                }
++            }
++            if ($violations.Count -eq 0) {
++                & $node.Source --experimental-strip-types $conformancePath --ref HEAD *> $null
++                if ($LASTEXITCODE -ne 0) {
++                    $violations += 'Issue #948 final conformance rejected the current HEAD'
++                }
+             }
+         }
+     }
+diff --git a/scripts/lib/Orchestrator-WakeSupervisor.ps1 b/scripts/lib/Orchestrator-WakeSupervisor.ps1
+index f9c43dd2..e21b0896 100644
+--- a/scripts/lib/Orchestrator-WakeSupervisor.ps1
++++ b/scripts/lib/Orchestrator-WakeSupervisor.ps1
+@@ -10,7 +10,6 @@
+ . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgress.ps1')
+ . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessHealth.ps1')
+ . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessProgressEvidence.ps1')
+-. (Join-Path $PSScriptRoot 'Orchestrator-SideProcessCrashBackoff.ps1')
+ . (Join-Path $PSScriptRoot 'Get-ProcessCommandLine.ps1')
+ 
+ $Script:OrchestratorSideProcessPackRoot = (Resolve-Path (Join-Path $PSScriptRoot '..' '..')).Path
+diff --git a/scripts/lib/Sanctioned-Worker-Kill-Record.ps1 b/scripts/lib/Sanctioned-Worker-Kill-Record.ps1
+index 2193989c..b71dfdef 100644
+--- a/scripts/lib/Sanctioned-Worker-Kill-Record.ps1
++++ b/scripts/lib/Sanctioned-Worker-Kill-Record.ps1
+@@ -23,7 +23,7 @@ function Invoke-SanctionedWorkerKillRecordCli {
+     param([string[]]$Arguments)
+ 
+     $cli = Get-SanctionedWorkerKillRecordCliPath
+-    $nodeArgs = @('--experimental-strip-types', $Script:OpkTypeScriptLauncher, '--script', $cli, '--')
++    $nodeArgs = @('--no-warnings', '--experimental-strip-types', $Script:OpkTypeScriptLauncher, '--script', $cli, '--')
+     $output = & $Script:OpkTsNode.Source @nodeArgs @Arguments 2>&1
+     if ($LASTEXITCODE -ne 0) {
+         throw "sanctioned-worker-kill-record.ts exited $LASTEXITCODE`: $($output | Out-String)"
+diff --git a/scripts/mechanical-json-state.Tests.ps1 b/scripts/mechanical-json-state.Tests.ps1
+index 9cab02d7..ad9ed445 100644
+--- a/scripts/mechanical-json-state.Tests.ps1
++++ b/scripts/mechanical-json-state.Tests.ps1
+@@ -420,7 +420,6 @@ Describe 'supervisor bounded recovery' {
+ Describe
