@@ -1,0 +1,122 @@
+ 'crash backoff stale progress (#701)' {
+     BeforeAll {
+         . (Join-Path $script:LibDir 'Orchestrator-SideProcessProgressEvidence.ps1')
+-        . (Join-Path $script:LibDir 'Orchestrator-SideProcessCrashBackoff.ps1')
+         . (Join-Path $script:LibDir 'Orchestrator-WakeSupervisor.ps1')
+     }
+ 
+@@ -453,25 +452,5 @@ Describe 'crash backoff stale progress (#701)' {
+             -ChildPid 22222 -ChildStartedMs $childStartedMs | Should -Be $true
+     }
+ 
+-    It 'classifies long-lived exit with stale on-disk progress as rapid for backoff' {
+-        $stateRoot = New-TempCrashBackoffStateRoot
+-        $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot $stateRoot
+-        New-Item -ItemType Directory -Path $paths.ProgressDir -Force | Out-Null
+-        $childId = 'listener'
+-        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+-        $childStartedMs = $nowMs - 10000
+-        $staleProgress = @{
+-            childId        = $childId
+-            pid            = 11111
+-            lastProgressMs = ($childStartedMs - 60000)
+-        }
+-        $progressPath = Join-Path $paths.ProgressDir "$childId.progress.json"
+-        $staleProgress | ConvertTo-Json -Compress | Set-Content -LiteralPath $progressPath -Encoding utf8 -NoNewline
+ 
+-        $decision = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed -Paths $paths -ChildId $childId `
+-            -ChildStartedMs $childStartedMs -ChildPid 22222 -LogWriter { param([string]$Message) }
+-
+-        $decision.rapidExit | Should -Be $true
+-        $decision.rapidExits | Should -Be 1
+-    }
+ }
+diff --git a/scripts/pr2a/final-conformance.test.ts b/scripts/pr2a/final-conformance.test.ts
+index b08ffe6b..cc1da84a 100644
+--- a/scripts/pr2a/final-conformance.test.ts
++++ b/scripts/pr2a/final-conformance.test.ts
+@@ -1,5 +1,17 @@
+ import { createHash } from 'node:crypto';
+-import { describe, expect, it } from 'vitest';
++import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import path from 'node:path';
++import { afterEach, describe, expect, it } from 'vitest';
++import { runProcess, runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
++import {
++  acquireReviewStartClaim,
++  assertSupportedClaimPlatform,
++  atomicWriteJson,
++  claimPath,
++  completeReviewStartClaim,
++  readClaimRecord,
++} from '../lib/review-start-claim-store.ts';
+ import { validateClosureEvidenceBundle, validateFinalVerificationAgainstReceipt, type ClosureEvidenceBundle, type FinalVerificationEvidence } from './closure-receipt.ts';
+ import { stableJson } from './contracts.ts';
+ import {
+@@ -7,6 +19,96 @@ import {
+   validateBridgeSource,
+   validateRunnerSource,
+ } from './final-conformance.ts';
++import {
++  exportDetachedRollbackDrain,
++  readProcessIdentity,
++  sameProcess,
++  validateRollbackDrainArtifact,
++  type RollbackDrainArtifact,
++} from './rollback-drain.ts';
++
++const repoRoot = path.resolve(import.meta.dirname, '../..');
++const bridgePath = path.join(repoRoot, 'scripts/lib/Review-StartClaimLifecycle.ps1');
++const storeUrl = new URL('../lib/review-start-claim-store.ts', import.meta.url).href;
++const claimRoots: string[] = [];
++const claimChildren: Array<{ controller: AbortController; result: Promise<ProcessResult> }> = [];
++
++function makeRoot(prefix: string): string {
++  const value = mkdtempSync(path.join(tmpdir(), prefix));
++  claimRoots.push(value);
++  return value;
++}
++
++function waitForFiles(paths: string[], timeoutMs = 30_000): Promise<void> {
++  return new Promise((resolve, reject) => {
++    const deadline = Date.now() + timeoutMs;
++    const timer = setInterval(() => {
++      if (paths.every((file) => existsSync(file) && statSync(file).size > 0)) {
++        clearInterval(timer);
++        resolve();
++      } else if (Date.now() >= deadline) {
++        clearInterval(timer);
++        reject(new Error(`timed out waiting for ${paths.join(',')}`));
++      }
++    }, 20);
++  });
++}
++
++function spawnTsClaim(namespace: string, resultPath: string, startPath: string, releasePath: string): void {
++  const code = `
++    import { acquireReviewStartClaim } from ${JSON.stringify(storeUrl)};
++    import { existsSync, writeFileSync } from 'node:fs';
++    while (!existsSync(${JSON.stringify(startPath)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
++    const result = acquireReviewStartClaim({ prNumber: 948, headSha: 'a'.repeat(40), surface: 'ts-overlap', namespace: ${JSON.stringify(namespace)}, reviewRuns: [] });
++    writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ acquired: result.acquired, reason: result.reason ?? '' }));
++    while (!existsSync(${JSON.stringify(releasePath)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
++  `;
++  const controller = new AbortController();
++  const result = runProcess({
++    command: process.execPath,
++    args: ['--no-warnings', '--experimental-strip-types', '--input-type=module', '-e', code],
++    cwd: repoRoot,
++    inheritParentEnv: true,
++    signal: controller.signal,
++    timeoutMs: 60_000,
++    allowEmptyStdout: true,
++  });
++  claimChildren.push({ controller, result });
++}
++
++function spawnBridgeClaim(namespace: string, resultPath: string, startPath: string, releasePath: string): void {
++  const ps = `
++    $ErrorActionPreference='Stop'
++    . '${bridgePath.replaceAll("'", "''")}'
++    while (-not (Test-Path -LiteralPath '${startPath.replaceAll("'", "''")}')) { Start-Sleep -Mill
