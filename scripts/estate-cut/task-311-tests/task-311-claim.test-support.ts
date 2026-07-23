@@ -47,7 +47,7 @@ function expectActualRowRed(
 
 export function runClaimMatrix(): { claim: Record<string, unknown>; mutations: MutationRecord[] } {
   const root = tempRoot('task-311-claim-');
-  const helperPath = path.join(repoRoot, 'scripts', 'lib', 'Review-StartClaim.ps1');
+  const helperPath = path.join(repoRoot, 'scripts', 'lib', 'Review-StartClaimLifecycle.ps1');
   const shaA = 'a'.repeat(40);
   const shaB = 'b'.repeat(40);
   try {

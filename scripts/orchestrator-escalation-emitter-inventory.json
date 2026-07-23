@@ -30,8 +30,8 @@
       "anchor": "escalation branch"
     },
     {
-      "file": "scripts/lib/Review-StartClaim.ps1",
-      "anchor": "escalation path"
+      "file": "scripts/lib/review-start-claim-store.ts",
+      "anchor": "escalation lifecycle operations"
     },
     {
       "file": "scripts/lib/Review-StartEnvelopeLedger.ps1",
