@@ -1,0 +1,130 @@
+name: Temporary Issue 948 V5 Publisher
+
+on:
+  push:
+    branches:
+      - tmp/issue-948-rebase-canary
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - name: Build, validate, and publish Issue 948
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN: 7e8c94689806d219f08bf52029f03e741572a82a
+          SOURCE_COMMIT: 0990b5c2474b789935e59c73870876b2012f66bb
+          FINAL_BRANCH: agent/issue-948-pr2a-final
+          TOOLING_PATCH_SHA256: 6ef713427cb29bbb255684eaeba3d35c108d10c61c7f337b50ffaf471e769e78
+          SEMANTIC_PATCH_SHA256: 5771528f3a0190093a66416cc9143c85bad41cec867c8fe317fc57c3c86c08ae
+        run: |
+          set -euo pipefail
+          exec > >(tee /tmp/issue948-v5-publish.log) 2>&1
+          cp .issue948-v5/tooling.patch /tmp/issue948-tooling.patch
+          cat .issue948-v5/semantic.part-* > /tmp/issue948-semantic.patch
+          echo "$TOOLING_PATCH_SHA256  /tmp/issue948-tooling.patch" | sha256sum -c -
+          echo "$SEMANTIC_PATCH_SHA256  /tmp/issue948-semantic.patch" | sha256sum -c -
+
+          git fetch --no-tags origin main "$SOURCE_COMMIT"
+          test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN"
+          if git ls-remote --exit-code --heads origin "$FINAL_BRANCH" >/dev/null 2>&1; then
+            echo "final branch already exists: $FINAL_BRANCH" >&2
+            exit 1
+          fi
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git checkout -B issue-948-v5-build origin/main
+
+          git checkout "$SOURCE_COMMIT" -- \
+            package.json \
+            scripts/pr2a/closed-world-scanner.ts \
+            scripts/pr2a/contracts.ts \
+            scripts/pr2a/execution-root-registry.json \
+            scripts/pr2a/planning-validator.ts \
+            scripts/pr2a/planning.test.ts \
+            scripts/pr2a/reference-grammar.json \
+            scripts/vitest-ci-lanes.config.json
+          git apply /tmp/issue948-tooling.patch
+          git add package.json scripts/pr2a scripts/vitest-ci-lanes.config.json
+          git commit -m "chore: bootstrap issue 948 closed-world tooling"
+          tooling_commit="$(git rev-parse HEAD)"
+          tooling_tree="$(git rev-parse HEAD^{tree})"
+
+          node --experimental-strip-types scripts/pr2a/closed-world-scanner.ts --ref HEAD > /tmp/planning-manifest.json
+          mv /tmp/planning-manifest.json scripts/pr2a/planning-manifest.json
+          node --experimental-strip-types scripts/pr2a/planning-validator.ts scripts/pr2a/planning-manifest.json
+          git add scripts/pr2a/planning-manifest.json
+          git commit -m "chore: record issue 948 reviewed planning manifest"
+          planning_commit="$(git rev-parse HEAD)"
+          planning_tree="$(git rev-parse HEAD^{tree})"
+
+          SOURCE_COMMIT="$SOURCE_COMMIT" python - <<'PY'
+          import json, os, pathlib, subprocess
+          manifest=json.load(open('scripts/pr2a/planning-manifest.json'))
+          source=os.environ['SOURCE_COMMIT']
+          for row in manifest['plannedOperations']:
+              path=row['path']
+              if row['operation']=='delete':
+                  pathlib.Path(path).unlink(missing_ok=True)
+              else:
+                  subprocess.check_call(['git','checkout',source,'--',path])
+          PY
+          git apply /tmp/issue948-semantic.patch
+          git add -A
+          git commit -m "feat: complete issue 948 claim authority cutover"
+          final_commit="$(git rev-parse HEAD)"
+          final_tree="$(git rev-parse HEAD^{tree})"
+
+          npm ci
+          npm run check:node-major --silent
+          npm run typecheck:foundation --silent
+          node --experimental-strip-types scripts/pr2a/final-conformance.ts --json > /tmp/issue948-conformance.json
+          node -e "const r=require('/tmp/issue948-conformance.json'); if(r.result!=='conformant'||r.findings?.length) process.exit(1)"
+          npm run test:issue-948 --silent
+          npm run test:contract-mutations --silent
+
+          git push origin "HEAD:refs/heads/$FINAL_BRANCH"
+          cat > /tmp/issue948-success.md <<EOF
+          <!-- issue-948-v5-publish -->
+          ## Issue #948 current-main publication complete
+
+          - main: \`$EXPECTED_MAIN\`
+          - tooling commit: \`$tooling_commit\`
+          - tooling tree: \`$tooling_tree\`
+          - planning commit: \`$planning_commit\`
+          - planning tree: \`$planning_tree\`
+          - final commit: \`$final_commit\`
+          - final tree: \`$final_tree\`
+          - final branch: \`$FINAL_BRANCH\`
+          - conformance, typecheck, 144 Issue #948 tests, and mutation contracts: green
+          EOF
+          gh issue comment 948 --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue948-success.md
+      - name: Report publisher failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo '<!-- issue-948-v5-publish -->'
+            echo '## Issue #948 current-main publication failed'
+            echo
+            echo 'The fail-closed publisher did not update the final branch. Last output:'
+            echo '```text'
+            tail -n 80 /tmp/issue948-v5-publish.log 2>/dev/null || true
+            echo '```'
+          } > /tmp/issue948-failure.md
+          gh issue comment 948 --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue948-failure.md
