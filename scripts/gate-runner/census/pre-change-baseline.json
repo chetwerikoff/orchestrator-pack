@@ -1241,8 +1241,12 @@
       "sourceKind": "check-script",
       "sourcePath": "scripts/check-side-process-launch-contract.ps1",
       "marker": "check-side-process-launch-contract.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "PowerShell side-process launch contract guard and its verify invocation are retired by Issue #948 after every surviving assertion is bound to mandatory TypeScript final conformance.",
+        "replacement": "scripts/pr2a/final-conformance.ts plus launch-argv validator registration enforce byte-identical D928 targets, empty executable reverse closure, and exact reviewed diff conformance."
+      }
     },
     {
       "id": "check-script:scripts/check-side-process-registry-709-711-sequencing.ps1",
@@ -3035,8 +3039,12 @@
       "sourceKind": "verify-script-member",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/check-side-process-launch-contract.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-with-reason",
+      "retirementJustification": {
+        "reasonCode": "superseded-contract",
+        "behavior": "PowerShell side-process launch contract guard and its verify invocation are retired by Issue #948 after every surviving assertion is bound to mandatory TypeScript final conformance.",
+        "replacement": "scripts/pr2a/final-conformance.ts plus launch-argv validator registration enforce byte-identical D928 targets, empty executable reverse closure, and exact reviewed diff conformance."
+      }
     },
     {
       "id": "verify-script:scripts/check-side-process-registry-709-711-sequencing.ps1",
