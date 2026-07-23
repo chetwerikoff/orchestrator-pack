@@ -1,0 +1,32 @@
+name: Temporary Issue 948 Verification Toolchain
+
+on:
+  push:
+    branches:
+      - tmp/issue-948-verification-toolchain
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Pester exactly as repository CI
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Package verification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/issue-948-verification-toolchain/bin
+          cp "$(command -v gh)" /tmp/issue-948-verification-toolchain/bin/gh
+          cp -a "$HOME/.local/share/powershell/Modules/Pester" /tmp/issue-948-verification-toolchain/Pester
+          gh --version > /tmp/issue-948-verification-toolchain/gh-version.txt
+          pwsh -NoProfile -Command '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1).Version.ToString()' > /tmp/issue-948-verification-toolchain/pester-version.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-verification-toolchain
+          path: /tmp/issue-948-verification-toolchain
+          retention-days: 1
