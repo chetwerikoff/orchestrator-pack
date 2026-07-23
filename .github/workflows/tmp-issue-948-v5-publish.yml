@@ -25,7 +25,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_COMMIT: 0990b5c2474b789935e59c73870876b2012f66bb
-          FINAL_BRANCH: agent/issue-948-pr2a-final
+          FINAL_BRANCH: agent/issue-948-pr2a-final-v5
           TOOLING_PATCH_SHA256: 6ef713427cb29bbb255684eaeba3d35c108d10c61c7f337b50ffaf471e769e78
           SEMANTIC_PATCH_SHA256: 5771528f3a0190093a66416cc9143c85bad41cec867c8fe317fc57c3c86c08ae
         run: |
