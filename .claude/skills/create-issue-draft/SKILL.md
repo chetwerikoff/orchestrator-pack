@@ -234,10 +234,23 @@ Per pass:
 architectural loop converges and **before the final lens**, run one
 independent **Codex** architectural pass over the current pulled body file —
 engine per [`adversarial-draft-review`](../adversarial-draft-review/SKILL.md)
-mechanics. Save it as the next `pass-NN-architectural.capture.txt` in the
-same chronological sequence (findings in plain text, no code fences),
-normalize its findings into the ledger, and relay them through the task chat
-like any pass. The final lens must see its findings.
+mechanics. The companion emits JSON — and `finding-ledger-guard.mjs` scans
+only plain `type:` lines, so **raw JSON in a capture is invisible to the
+guard** (a JSON `"type":"security"` finding passes with an empty ledger).
+Save the raw JSON verdict alongside as
+`pass-NN-architectural.codex.json` (verbatim provenance) and write the
+capture `pass-NN-architectural.capture.txt` as a **1:1 mechanical
+transcription into plain `type:` lines** — no code fences, no fields
+dropped. Normalize into the ledger and relay through the task chat like any
+pass. The final lens must see its findings.
+
+**Engine note (operator decision 2026-07-23).** The architectural stage —
+including the final pass — runs in the dedicated **browser-GPT review chat**;
+Codex appears as the mandatory T3-critical addition above and as recorded
+outage substitution. `docs/tiering.md` predates this decision where it names
+Codex as the per-pass architectural engine — the flow here is authoritative
+until that doc's follow-up update lands (queued; blocked by the PR2
+foundation freeze as of 07-23).
 
 ## Step 6 — Final architect lens
 
