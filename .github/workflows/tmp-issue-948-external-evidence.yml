@@ -1,0 +1,66 @@
+name: Temporary Issue 948 External Evidence
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  capture:
+    if: github.head_ref == 'tmp/issue-948-external-evidence'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Capture live Issue 928
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          gh api "repos/${REPOSITORY}/issues/928" > evidence/issue-928.json
+          node <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const issue = JSON.parse(fs.readFileSync('evidence/issue-928.json', 'utf8'));
+          const body = String(issue.body || '');
+          fs.writeFileSync('evidence/issue-928-body.md', body);
+          const sha256 = value => `sha256:${crypto.createHash('sha256').update(value).digest('hex')}`;
+          const evidence = {
+            schemaVersion: 1,
+            result: 'pass',
+            url: issue.html_url,
+            repository: process.env.REPOSITORY,
+            issue: 928,
+            revisionIdentity: `node_id:${issue.node_id};updated_at:${issue.updated_at}`,
+            updatedAt: issue.updated_at,
+            capturedAt: new Date().toISOString(),
+            actor: process.env.ACTOR,
+            tool: 'GitHub Actions gh api REST',
+            bodySha256: sha256(body),
+            requirements: {
+              consumesPr2aTsAuthority: body.includes('already-live #948 TypeScript claim authority') || body.includes('#948 TypeScript claim authority'),
+              consumesReceiptAsPrecedent: body.includes("closure receipt and tooling are precedent/input only") || body.includes("receipt precedent"),
+              independentlyRecomputesCurrentClosure: body.includes('independently recomputes the reverse executable-reference closure'),
+              invariantBasedRefusal: body.includes('Admission refuses if any executable reference') && body.includes('unresolved-reference set is non-empty'),
+              historicalInventoryEqualityNotRequired: body.includes('not historical inventory') || body.includes('not require exact historical inventory') || body.includes('precedent/input only'),
+            },
+          };
+          if (Object.values(evidence.requirements).some(value => value !== true)) {
+            evidence.result = 'fail';
+            fs.writeFileSync('evidence/external-928-evidence.json', `${JSON.stringify(evidence, null, 2)}\n`);
+            console.error(JSON.stringify(evidence));
+            process.exit(1);
+          }
+          fs.writeFileSync('evidence/external-928-evidence.json', `${JSON.stringify(evidence, null, 2)}\n`);
+          console.log(JSON.stringify(evidence));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-external-928-evidence
+          path: evidence
+          retention-days: 7
+          if-no-files-found: error
