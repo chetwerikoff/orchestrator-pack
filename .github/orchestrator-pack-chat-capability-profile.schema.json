@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/chetwerikoff/orchestrator-pack/main/.github/orchestrator-pack-chat-capability-profile.schema.json",
+  "title": "orchestrator-pack standalone chat capability profile",
+  "description": "Strict structure for the JSON payload embedded in the canonical operational capability-profile Issue.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "repository",
+    "profileKey",
+    "createdAt",
+    "updatedAt",
+    "ownerOrLastUpdater",
+    "capabilities"
+  ],
+  "properties": {
+    "schema": {
+      "const": "orchestrator-pack-chat-capability-profile/v1"
+    },
+    "repository": {
+      "$ref": "#/$defs/repository"
+    },
+    "profileKey": {
+      "$ref": "#/$defs/profileKey"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ownerOrLastUpdater": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/capability"
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/requireRepositoryRead"
+        },
+        {
+          "$ref": "#/$defs/requireTextPublication"
+        },
+        {
+          "$ref": "#/$defs/requireGitPublication"
+        },
+        {
+          "$ref": "#/$defs/requireIssuePrWrite"
+        },
+        {
+          "$ref": "#/$defs/requireCiObservation"
+        },
+        {
+          "$ref": "#/$defs/requireReviewObservation"
+        },
+        {
+          "$ref": "#/$defs/requireLongProcessHandling"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "fullName"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fullName": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "minLength": 3,
+          "maxLength": 200
+        }
+      }
+    },
+    "profileKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environmentToolFingerprint",
+        "authPrincipal",
+        "permissionClass"
+      ],
+      "properties": {
+        "environmentToolFingerprint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "authPrincipal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "permissionClass": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status",
+        "evidence",
+        "testedAt",
+        "knownLimits",
+        "preferredFallback"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "status": {
+          "enum": [
+            "proven",
+            "available-but-unproven",
+            "unavailable",
+            "degraded"
+          ]
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "testedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "noExpiryRationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "knownLimits": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "preferredFallback": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "expiresAt"
+          ],
+          "not": {
+            "required": [
+              "noExpiryRationale"
+            ]
+          }
+        },
+        {
+          "required": [
+            "noExpiryRationale"
+          ],
+          "not": {
+            "required": [
+              "expiresAt"
+            ]
+          }
+        }
+      ]
+    },
+    "requireRepositoryRead": {
+      "contains": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "const": "repository-read"
+          }
+        }
+      },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requireTextPublication": {
+      "contains": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "const": "text-publication"
+          }
+        }
+      },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requireGitPublication": {
+      "contains": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "const": "commit-tree-ref-publication"
+          }
+        }
+      },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requireIssuePrWrite": {
+      "contains": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "const": "issue-pr-create-update"
+          }
+        }
+      },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requireCiObservation": {
+      "contains": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "const": "ci-runs-jobs-logs-read"
+          }
+        }
+      },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requireReviewObservation": {
+      "contains": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "const": "review-observation"
+          }
+        }
+      },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "requireLongProcessHandling": {
+      "contains": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "const": "long-process-handling"
+          }
+        }
+      },
+      "minContains": 1,
+      "maxContains": 1
+    }
+  }
+}
