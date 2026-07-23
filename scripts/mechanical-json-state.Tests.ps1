@@ -318,7 +318,7 @@ Describe 'review trigger reeval watch fail-closed' {
 
 Describe 'supervisor side-effect drain exemption' {
     BeforeAll {
-        . (Join-Path $script:LibDir 'Orchestrator-SideProcessSupervisor.ps1')
+        . (Join-Path $script:LibDir 'Orchestrator-WakeSupervisor.ps1')
     }
 
     function script:New-TempSupervisorStateRoot {
@@ -421,7 +421,7 @@ Describe 'crash backoff stale progress (#701)' {
     BeforeAll {
         . (Join-Path $script:LibDir 'Orchestrator-SideProcessProgressEvidence.ps1')
         . (Join-Path $script:LibDir 'Orchestrator-SideProcessCrashBackoff.ps1')
-        . (Join-Path $script:LibDir 'Orchestrator-SideProcessSupervisor.ps1')
+        . (Join-Path $script:LibDir 'Orchestrator-WakeSupervisor.ps1')
     }
 
     function script:New-TempCrashBackoffStateRoot {

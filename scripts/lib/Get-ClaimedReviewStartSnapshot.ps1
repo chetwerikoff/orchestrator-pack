@@ -78,7 +78,7 @@ function Get-ClaimedReviewStartSnapshot {
     }
     $reviewRuns = @(
         . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')
-        . (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
+        . (Join-Path $PSScriptRoot 'Review-StartClaimLifecycle.ps1')
         $namespace = if ($ClaimResult -and [string]$ClaimResult.namespace) {
             [string]$ClaimResult.namespace
         }
