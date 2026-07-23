@@ -1,0 +1,23 @@
+name: Temporary Issue 948 Source Export
+
+on:
+  push:
+    branches:
+      - tmp/issue-948-source-export
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-source-b967dfe
+          path: |
+            .
+            !.git/**
+          include-hidden-files: true
+          retention-days: 1
