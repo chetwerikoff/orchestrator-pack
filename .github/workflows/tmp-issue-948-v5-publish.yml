@@ -37,7 +37,8 @@ jobs:
           echo "$TOOLING_PATCH_SHA256  /tmp/issue948-tooling.patch" | sha256sum -c -
           echo "$SEMANTIC_PATCH_SHA256  /tmp/issue948-semantic.patch" | sha256sum -c -
 
-          git fetch --no-tags origin main "$SOURCE_COMMIT"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags origin "$SOURCE_COMMIT"
           test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN"
           if git ls-remote --exit-code --heads origin "$FINAL_BRANCH" >/dev/null 2>&1; then
             echo "final branch already exists: $FINAL_BRANCH" >&2
