@@ -1,731 +1,151 @@
-#requires -Version 5.1
-<#
-  Issue #417 lifecycle extensions for review-start claims.
+#requires -Version 7.0
+<#+
+  Issue #948 passive PowerShell-to-Node transport.
+  This file intentionally contains no claim interpretation, locking, lifecycle policy, or mutation.
+  Every operation is executed by scripts/lib/review-start-claim-store.ts through the bounded typed CLI.
 #>
 
-. (Join-Path $PSScriptRoot 'Review-RunLiveness.ps1')
-. (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
-. (Join-Path $PSScriptRoot 'Review-StartEnvelopeExternalIo.ps1')
-. (Join-Path $PSScriptRoot 'Review-StartClaimRunBinding.ps1')
+$Script:ReviewStartClaimTsCli = Join-Path $PSScriptRoot 'review-start-claim-cli.ts'
 
-$Script:ReviewStartClaimLifecycleCli = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'docs/review-start-claim-lifecycle.mjs'
-
-function Get-ReviewStartClaimLocalHostName {
-    try { return [System.Net.Dns]::GetHostName().ToLowerInvariant() } catch { return 'unknown-host' }
-}
-
-function Get-ReviewStartClaimLifecycleConfig {
-    return Invoke-ReviewStartClaimLifecycleCli -Subcommand 'validate-config' -Payload @{}
-}
-
-function Invoke-ReviewStartClaimLifecycleCli {
-    param(
-        [string]$Subcommand,
-        [hashtable]$Payload
-    )
-    return Invoke-MechanicalNodeFilterCli -FilterCliPath $Script:ReviewStartClaimLifecycleCli `
-        -Subcommand $Subcommand -Payload $Payload -Label 'review-start-claim-lifecycle' -JsonDepth 30
-}
-
-function Get-ReviewStartClaimAuditDir {
-    param([string]$Namespace)
-    return (Join-Path $Namespace 'audit')
-}
-
-function Initialize-ReviewStartClaimAuditDir {
-    param([string]$Namespace)
-    $dir = Get-ReviewStartClaimAuditDir -Namespace $Namespace
-    if (-not (Test-Path -LiteralPath $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+function ConvertTo-ReviewStartClaimBridgeHashtable {
+    param([object]$Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $result = @{}
+        foreach ($key in $Value.Keys) { $result[[string]$key] = ConvertTo-ReviewStartClaimBridgeHashtable $Value[$key] }
+        return $result
     }
-    return $dir
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $result = @{}
+        foreach ($property in $Value.PSObject.Properties) { $result[$property.Name] = ConvertTo-ReviewStartClaimBridgeHashtable $property.Value }
+        return $result
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        return @($Value | ForEach-Object { ConvertTo-ReviewStartClaimBridgeHashtable $_ })
+    }
+    return $Value
 }
 
-function Write-ReviewStartClaimTransitionAudit {
+function Sync-ReviewStartClaimBridgeResult {
+    param([hashtable]$ClaimResult, [object]$Result)
+    if (-not $ClaimResult -or -not $Result -or -not $Result.claimResult) { return }
+    $replacement = ConvertTo-ReviewStartClaimBridgeHashtable $Result.claimResult
+    $ClaimResult.Clear()
+    foreach ($key in $replacement.Keys) { $ClaimResult[$key] = $replacement[$key] }
+}
+
+function Invoke-ReviewStartClaimTsOperation {
     param(
-        [string]$Namespace,
-        [object]$PriorRecord,
-        [string]$Outcome,
-        [string]$DecisionSource,
-        [hashtable]$Extra = @{},
-        [string]$NewState = 'terminal'
+        [Parameter(Mandatory)][string]$Operation,
+        [hashtable]$Payload = @{},
+        [hashtable]$ClaimResult = $null
     )
 
-    $auditDir = Initialize-ReviewStartClaimAuditDir -Namespace $Namespace
-    $path = Join-Path $auditDir "$([guid]::NewGuid().ToString('n')).json"
-    $record = @{
-        kind           = 'claim_transition'
-        key            = [string]$PriorRecord.key
-        prNumber       = [int]$PriorRecord.prNumber
-        headSha        = [string]$PriorRecord.headSha
-        priorState     = [string]$PriorRecord.state
-        newState       = $NewState
-        outcome        = $Outcome
-        decisionSource = $DecisionSource
-        atUtc          = (Get-Date).ToUniversalTime().ToString('o')
+    if (-not $IsLinux) { throw 'unsupported_claim_platform' }
+    if (-not (Test-Path -LiteralPath $Script:ReviewStartClaimTsCli -PathType Leaf)) {
+        throw "review-start claim TypeScript authority missing: $Script:ReviewStartClaimTsCli"
     }
-    foreach ($key in $Extra.Keys) { $record[$key] = $Extra[$key] }
-    ($record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $path -Encoding UTF8
-    return $path
+    $node = Get-Command node -ErrorAction Stop
+    $major = (& $node.Source -p 'process.versions.node.split(".")[0]').Trim()
+    if ($major -ne '22') { throw "unsupported_node_major:$major" }
+
+    $json = $Payload | ConvertTo-Json -Compress -Depth 50
+    $start = [System.Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $node.Source
+    $start.UseShellExecute = $false
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    [void]$start.ArgumentList.Add('--experimental-strip-types')
+    [void]$start.ArgumentList.Add($Script:ReviewStartClaimTsCli)
+    [void]$start.ArgumentList.Add($Operation)
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    if (-not $process.Start()) { throw "review-start claim TypeScript launch failed: $Operation" }
+    $process.StandardInput.Write($json)
+    $process.StandardInput.Close()
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) {
+        throw "review-start claim TypeScript operation failed ($Operation): $($stderr.Trim())"
+    }
+    if (-not $stdout.Trim()) { return $null }
+    $result = $stdout | ConvertFrom-Json -AsHashtable -Depth 50
+    Sync-ReviewStartClaimBridgeResult -ClaimResult $ClaimResult -Result $result
+    return $result
 }
 
-function Update-ReviewStartClaimRecordFields {
-    param(
-        [hashtable]$ClaimResult,
-        [hashtable]$Fields,
-        [string[]]$ClearFields = @()
-    )
+function Resolve-ReviewStartClaimNamespace {
+    param([string]$ProjectId = 'orchestrator-pack', [string]$Namespace = '')
+    return Invoke-ReviewStartClaimTsOperation 'Resolve-ReviewStartClaimNamespace' @{ ProjectId = $ProjectId; Namespace = $Namespace }
+}
+function Get-ReviewStartClaimProjectNamespace { param([string]$ProjectId = 'orchestrator-pack') return Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartClaimProjectNamespace' @{ ProjectId = $ProjectId } }
+function Get-ReviewStartClaimPath { param([string]$Namespace, [int]$PrNumber, [string]$HeadSha) return Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartClaimPath' @{ Namespace = $Namespace; PrNumber = $PrNumber; HeadSha = $HeadSha } }
+function Get-ReviewStartClaimLockDir { param([string]$Namespace, [int]$PrNumber, [string]$HeadSha) return Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartClaimLockDir' @{ Namespace = $Namespace; PrNumber = $PrNumber; HeadSha = $HeadSha } }
+function Get-ReviewStartClaimTerminalDir { param([string]$Namespace) return Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartClaimTerminalDir' @{ Namespace = $Namespace } }
+function Get-ReviewStartClaimAuditDir { param([string]$Namespace) return Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartClaimAuditDir' @{ Namespace = $Namespace } }
+function Initialize-ReviewStartClaimNamespace { param([string]$Namespace) Invoke-ReviewStartClaimTsOperation 'Initialize-ReviewStartClaimNamespace' @{ Namespace = $Namespace } | Out-Null }
+function Read-ReviewStartClaimRecord { param([string]$Path) return Invoke-ReviewStartClaimTsOperation 'Read-ReviewStartClaimRecord' @{ Path = $Path } }
+function Write-ReviewStartClaimAtomic { param([string]$Path, [object]$Record) Invoke-ReviewStartClaimTsOperation 'Write-ReviewStartClaimAtomic' @{ Path = $Path; Record = $Record } | Out-Null }
+function New-ReviewStartClaimHolder { param([string]$Surface) return Invoke-ReviewStartClaimTsOperation 'New-ReviewStartClaimHolder' @{ Surface = $Surface; HolderContext = @{ pid = $PID; host = [System.Net.Dns]::GetHostName(); generation = if ($env:AO_CHILD_GENERATION) { $env:AO_CHILD_GENERATION } elseif ($env:AO_SESSION_ID) { $env:AO_SESSION_ID } else { '' } } } }
+function New-ReviewStartClaimActiveRecord {
+    param([int]$PrNumber, [string]$HeadSha, [string]$Surface, [string]$Reason = '', [object]$RecoveredFrom = $null, [int64]$PriorFirstAttemptMonotonicMs = 0)
+    return Invoke-ReviewStartClaimTsOperation 'New-ReviewStartClaimActiveRecord' @{ PrNumber = $PrNumber; HeadSha = $HeadSha; Surface = $Surface; Reason = $Reason; RecoveredFrom = $RecoveredFrom; PriorFirstAttemptMonotonicMs = $PriorFirstAttemptMonotonicMs; HolderContext = @{ pid = $PID; host = [System.Net.Dns]::GetHostName(); generation = if ($env:AO_CHILD_GENERATION) { $env:AO_CHILD_GENERATION } elseif ($env:AO_SESSION_ID) { $env:AO_SESSION_ID } else { '' } } }
+}
+function Get-ReviewStartClaimVisibleRunId { param([array]$ReviewRuns, [int]$PrNumber, [string]$HeadSha) return Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartClaimVisibleRunId' @{ ReviewRuns = @($ReviewRuns); PrNumber = $PrNumber; HeadSha = $HeadSha } }
+function Format-ReviewStartClaimHolder { param([object]$Holder) return Invoke-ReviewStartClaimTsOperation 'Format-ReviewStartClaimHolder' @{ Holder = $Holder } }
+function Get-ReviewStartClaimStaleMinutes {
+    param([scriptblock]$LogWriter = $null)
+    $result = Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartClaimStaleMinutes' @{ IncludeDiagnostics = $true }
+    if ($LogWriter) { foreach ($message in @($result.warnings)) { & $LogWriter ([string]$message) } }
+    return [int]$result.value
+}
+function Prune-ReviewStartClaimTerminalRecords { param([string]$Namespace) Invoke-ReviewStartClaimTsOperation 'Prune-ReviewStartClaimTerminalRecords' @{ Namespace = $Namespace } | Out-Null }
 
-    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
-    $lockDir = Get-ReviewStartClaimLockDir -Namespace $ClaimResult.namespace -PrNumber ([int]$ClaimResult.claim.prNumber) -HeadSha ([string]$ClaimResult.claim.headSha)
-    if (-not (Enter-ReviewStartClaimMutex -LockDir $lockDir)) { return @{ ok = $false; reason = 'busy' } }
-    try {
-        $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
-        if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
-        if ([string]$read.record.holder.processGuid -ne [string]$ClaimResult.claim.holder.processGuid) {
-            Invoke-ReviewStartClaimOwnershipLossCleanup -ClaimResult $ClaimResult
-            return @{ ok = $false; reason = 'lost_ownership'; holder = $read.record.holder }
-        }
-        $record = @{}
-        $read.record.PSObject.Properties | ForEach-Object { $record[$_.Name] = $_.Value }
-        foreach ($key in $Fields.Keys) { $record[$key] = $Fields[$key] }
-        foreach ($key in @($ClearFields)) { $record.Remove($key) | Out-Null }
-        ($record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $ClaimResult.path -Encoding UTF8
-        foreach ($key in $Fields.Keys) { $ClaimResult.claim[$key] = $Fields[$key] }
-        foreach ($key in @($ClearFields)) { $ClaimResult.claim.Remove($key) | Out-Null }
-        return @{ ok = $true; record = $record }
-    }
-    finally {
-        Exit-ReviewStartClaimMutex -LockDir $lockDir
+function Acquire-ReviewStartClaim {
+    param([int]$PrNumber, [string]$HeadSha, [string]$Surface, [array]$ReviewRuns = @(), [string]$Namespace = '', [string]$ProjectId = 'orchestrator-pack', [string]$StartReason = '', [scriptblock]$LogWriter = $null)
+    return Invoke-ReviewStartClaimTsOperation 'Acquire-ReviewStartClaim' @{
+        PrNumber = $PrNumber; HeadSha = $HeadSha; Surface = $Surface; ReviewRuns = @($ReviewRuns)
+        Namespace = $Namespace; ProjectId = $ProjectId; StartReason = $StartReason
+        HolderContext = @{ pid = $PID; host = [System.Net.Dns]::GetHostName(); generation = if ($env:AO_CHILD_GENERATION) { $env:AO_CHILD_GENERATION } elseif ($env:AO_SESSION_ID) { $env:AO_SESSION_ID } else { '' } }
     }
 }
+function Test-ReviewStartClaimOwnership { param([hashtable]$ClaimResult) return [bool](Invoke-ReviewStartClaimTsOperation 'Test-ReviewStartClaimOwnership' @{ ClaimResult = $ClaimResult } $ClaimResult) }
+function Test-ReviewStartClaimRunVisible { param([array]$ReviewRuns, [int]$PrNumber, [string]$HeadSha) return [bool](Invoke-ReviewStartClaimTsOperation 'Test-ReviewStartClaimRunVisible' @{ ReviewRuns = @($ReviewRuns); PrNumber = $PrNumber; HeadSha = $HeadSha }) }
+function Test-ReviewStartClaimRetryEligible { param([array]$ReviewRuns, [int]$PrNumber, [string]$HeadSha) return [bool](Invoke-ReviewStartClaimTsOperation 'Test-ReviewStartClaimRetryEligible' @{ ReviewRuns = @($ReviewRuns); PrNumber = $PrNumber; HeadSha = $HeadSha }) }
+function Update-ReviewStartClaimRecordFields { param([hashtable]$ClaimResult, [hashtable]$Fields, [string[]]$ClearFields = @()) return Invoke-ReviewStartClaimTsOperation 'Update-ReviewStartClaimRecordFields' @{ ClaimResult = $ClaimResult; Fields = $Fields; ClearFields = @($ClearFields) } $ClaimResult }
+function Bind-ReviewStartClaimToVisibleRun { param([hashtable]$ClaimResult, [array]$ReviewRuns = @()) return Invoke-ReviewStartClaimTsOperation 'Bind-ReviewStartClaimToVisibleRun' @{ ClaimResult = $ClaimResult; ReviewRuns = @($ReviewRuns) } $ClaimResult }
+function Complete-ReviewStartClaim { param([hashtable]$ClaimResult, [string]$Outcome, [array]$ReviewRuns = @(), [hashtable]$Extra = @{}) return Invoke-ReviewStartClaimTsOperation 'Complete-ReviewStartClaim' @{ ClaimResult = $ClaimResult; Outcome = $Outcome; ReviewRuns = @($ReviewRuns); Extra = $Extra } $ClaimResult }
+function Release-ReviewStartClaimAfterRunFailure { param([hashtable]$ClaimResult, [array]$ReviewRuns = @(), [string]$Failure = '') return Invoke-ReviewStartClaimTsOperation 'Release-ReviewStartClaimAfterRunFailure' @{ ClaimResult = $ClaimResult; ReviewRuns = @($ReviewRuns); Failure = $Failure } $ClaimResult }
+function Complete-ReviewStartClaimPreRunRecheckDenied { param([hashtable]$ClaimResult, [hashtable]$Recheck, [array]$ReviewRuns = @(), [switch]$DryRun) return Invoke-ReviewStartClaimTsOperation 'Complete-ReviewStartClaimPreRunRecheckDenied' @{ ClaimResult = $ClaimResult; Recheck = $Recheck; ReviewRuns = @($ReviewRuns); DryRun = [bool]$DryRun } $ClaimResult }
+function Release-ReviewStartClaimAfterRecheckException { param([hashtable]$ClaimResult, [switch]$DryRun, [object]$ErrorRecord) return Invoke-ReviewStartClaimTsOperation 'Release-ReviewStartClaimAfterRecheckException' @{ ClaimResult = $ClaimResult; DryRun = [bool]$DryRun; ErrorRecord = [string]$ErrorRecord } $ClaimResult }
+function Release-ReviewStartClaimForTerminalizedRun { param([int]$PrNumber, [string]$HeadSha, [string]$ProjectId = 'orchestrator-pack', [string]$Namespace = '', [string]$RunId = '', [string]$RunCreatedAtUtc = '', [array]$ReviewRuns = @(), [scriptblock]$LogWriter = $null) return Invoke-ReviewStartClaimTsOperation 'Release-ReviewStartClaimForTerminalizedRun' @{ PrNumber = $PrNumber; HeadSha = $HeadSha; ProjectId = $ProjectId; Namespace = $Namespace; RunId = $RunId; RunCreatedAtUtc = $RunCreatedAtUtc; ReviewRuns = @($ReviewRuns) } }
+function Resolve-ReviewStartClaimEscalation { param([int]$PrNumber, [string]$HeadSha, [array]$ReviewRuns = @(), [string]$Namespace = '', [string]$ProjectId = 'orchestrator-pack', [scriptblock]$LogWriter = $null) return Invoke-ReviewStartClaimTsOperation 'Resolve-ReviewStartClaimEscalation' @{ PrNumber = $PrNumber; HeadSha = $HeadSha; ReviewRuns = @($ReviewRuns); Namespace = $Namespace; ProjectId = $ProjectId } }
 
-function Set-ReviewStartClaimHoldStarted {
-    param([hashtable]$ClaimResult)
-    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false } }
-    # Launch gate always (re)starts the hold clock so mandatory pre-launch work does not consume it.
-    $now = (Get-Date).ToUniversalTime().ToString('o')
-    return Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields @{ holdStartedAtUtc = $now }
-}
-
-function Confirm-ReviewStartClaimLaunchGate {
-    param(
-        [hashtable]$ClaimResult,
-        [array]$ReviewRuns = @(),
-        [string]$DecisionSource = 'hold_budget',
-        [scriptblock]$LogWriter = $null
-    )
-
-    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
-    $bindingProjectId = Resolve-ReviewStartClaimBindingProjectId -ClaimResult $ClaimResult
-    $bindingGate = Test-AutomatedReviewLaunchClaimGate -ClaimResult $ClaimResult -PrNumber ([int]$ClaimResult.claim.prNumber) `
-        -HeadSha ([string]$ClaimResult.claim.headSha) -ProjectId $bindingProjectId
-    if (-not $bindingGate.ok) {
-        if ($LogWriter) { & $LogWriter "review-start-claim: launch binding denied key=$($ClaimResult.key) reason=$($bindingGate.reason)" }
-        return @{ ok = $false; reason = [string]$bindingGate.reason; bindingGate = $bindingGate.gate }
-    }
-    $holdStart = Set-ReviewStartClaimHoldStarted -ClaimResult $ClaimResult
-    if (-not $holdStart.ok) {
-        $reason = if ([string]$holdStart.reason -eq 'lost_ownership') { 'claim_ownership_lost' } else { [string]$holdStart.reason }
-        return @{ ok = $false; reason = $reason }
-    }
-    $hold = Test-ReviewStartClaimHoldBudgetExceeded -ClaimResult $ClaimResult
-    if ($hold.exceeded) {
-        Invoke-ReviewStartClaimReclaimOrphan -Namespace $ClaimResult.namespace -Path $ClaimResult.path -Record $ClaimResult.claim `
-            -ReviewRuns @($ReviewRuns) -DecisionSource $DecisionSource -LogWriter $LogWriter | Out-Null
-        if ($LogWriter) { & $LogWriter "review-start-claim: hold budget exceeded key=$($ClaimResult.key)" }
-        return @{ ok = $false; reason = 'hold_budget_exceeded' }
-    }
-    if (-not (Test-ReviewStartClaimOwnership -ClaimResult $ClaimResult)) {
-        return @{ ok = $false; reason = 'claim_ownership_lost' }
-    }
-    $pending = Set-ReviewStartClaimLaunchPending -ClaimResult $ClaimResult
-    if (-not $pending.ok) {
-        $reason = if ([string]$pending.reason -eq 'lost_ownership') { 'claim_ownership_lost' } else { [string]$pending.reason }
-        return @{ ok = $false; reason = $reason }
-    }
-    try {
-        . (Join-Path $PSScriptRoot 'Review-StartEnvelopeLedger.ps1')
-        Reset-ReviewStartEnvelopeLedgerForPreflightSuccess -Namespace $ClaimResult.namespace `
-            -PrNumber ([int]$ClaimResult.claim.prNumber) -HeadSha ([string]$ClaimResult.claim.headSha) | Out-Null
-    }
-    catch {
-        Write-Warning "review-start-envelope-ledger preflight reset failed: $_"
-    }
-    return @{ ok = $true }
-}
-
-function Set-ReviewStartClaimLaunchPending {
-    param(
-        [hashtable]$ClaimResult,
-        [int]$BudgetMs = 0
-    )
-
-    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
-    $config = Get-ReviewStartClaimLifecycleConfig
-    $budget = if ($BudgetMs -gt 0) { $BudgetMs } else { [int]$config.config.launchPendingBudgetMs }
-    $now = (Get-Date).ToUniversalTime().ToString('o')
-    return Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields @{
-        launchPending = @{
-            atUtc    = $now
-            budgetMs = $budget
-        }
-        launchPendingInvokedAtUtc = $now
-    }
-}
-
-function Get-ReviewStartClaimActiveRecords {
-    param([string]$Namespace)
-    $records = @()
-    foreach ($file in @(Get-ChildItem -LiteralPath $Namespace -File -Filter 'pr-*.json' -ErrorAction SilentlyContinue)) {
-        $read = Read-ReviewStartClaimRecord -Path $file.FullName
-        if ($read.ok -and [string]$read.record.state -eq 'active') {
-            $records += $read.record
-        }
-    }
-    return $records
-}
-
-function Invoke-ReviewStartClaimTerminalizeFromDecision {
-    param(
-        [string]$Namespace,
-        [string]$Path,
-        [object]$Record,
-        [object]$Decision,
-        [string]$DecisionSource,
-        [array]$ReviewRuns = @(),
-        [switch]$MutexAlreadyHeld
-    )
-
-    $outcome = [string]$Decision.outcome
-    if (-not $outcome) { return @{ ok = $false; reason = 'missing_outcome' } }
-    $lockDir = Get-ReviewStartClaimLockDir -Namespace $Namespace -PrNumber ([int]$Record.prNumber) -HeadSha ([string]$Record.headSha)
-    if (-not $MutexAlreadyHeld) {
-        if (-not (Enter-ReviewStartClaimMutex -LockDir $lockDir)) { return @{ ok = $false; reason = 'busy' } }
-    }
-    try {
-        $read = Read-ReviewStartClaimRecord -Path $Path
-        if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
-        if ([string]$read.record.state -ne 'active') { return @{ ok = $false; reason = 'not_active' } }
-        if ([string]$read.record.holder.processGuid -ne [string]$Record.holder.processGuid) {
-            return @{ ok = $false; reason = 'lost_ownership' }
-        }
-        $extra = @{
-            decisionReason = [string]$Decision.reason
-            decisionSource = $DecisionSource
-        }
-        if ($Decision.warn) { $extra.warn = $true }
-        if ($Decision.coveredRunId) { $extra.coveredRunId = [string]$Decision.coveredRunId }
-        if ($Decision.liveness) { $extra.holderLiveness = $Decision.liveness }
-        if ($Decision.hold) { $extra.hold = $Decision.hold }
-        if ($Decision.launch) { $extra.launch = $Decision.launch }
-        if ($Decision.visibility) { $extra.visibility = $Decision.visibility }
-        $extra.runStoreEvidence = @{
-            inFlightCount = @($ReviewRuns | Where-Object {
-                Test-ReviewStartClaimRunMatchesKey -Run $_ -PrNumber ([int]$Record.prNumber) -NormalizedHeadSha ([string]$Record.headSha)
-            }).Count
-        }
-        $terminalPath = Move-ReviewStartClaimToTerminal -Namespace $Namespace -ActivePath $Path -Record $read.record `
-            -Outcome $outcome -Extra $extra
-        $auditPath = Write-ReviewStartClaimTransitionAudit -Namespace $Namespace -PriorRecord $read.record `
-            -Outcome $outcome -DecisionSource $DecisionSource -Extra $extra
-        return @{ ok = $true; terminalPath = $terminalPath; auditPath = $auditPath; outcome = $outcome }
-    }
-    finally {
-        if (-not $MutexAlreadyHeld) {
-            Exit-ReviewStartClaimMutex -LockDir $lockDir
-        }
-    }
-}
-
-
-function Test-ReviewStartClaimPostAcquireSideEffectAudit {
-    param(
-        [string]$Namespace,
-        [string]$ClaimKey
-    )
-
-    if (-not $Namespace -or -not $ClaimKey) { return $false }
-    $auditDir = Get-ReviewStartClaimAuditDir -Namespace $Namespace
-    if (-not (Test-Path -LiteralPath $auditDir)) { return $false }
-    foreach ($file in @(Get-ChildItem -LiteralPath $auditDir -File -Filter '*.json' -ErrorAction SilentlyContinue)) {
-        try {
-            $record = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
-        }
-        catch {
-            continue
-        }
-        if ([string]$record.key -ne [string]$ClaimKey) { continue }
-        $source = [string]$record.decisionSource
-        $outcome = [string]$record.outcome
-        if ($source -in @('post_run_invoke', 'post_run_visibility', 'hold_budget')) { return $true }
-        if ($outcome -eq 'run_started') { return $true }
-    }
-    return $false
-}
-
-function Annotate-ReviewStartClaimWorktreeAllowConsumed {
-    param(
-        [string]$Namespace,
-        [string]$Path,
-        [object]$Record,
-        [string]$CanonicalPath
-    )
-
-    if (-not $Namespace -or -not $Path -or -not $Record -or -not $CanonicalPath) {
-        return @{ ok = $false; reason = 'claim_consume_invalid' }
-    }
-
-    $lockDir = Get-ReviewStartClaimLockDir -Namespace $Namespace -PrNumber ([int]$Record.prNumber) -HeadSha ([string]$Record.headSha)
-    if (-not (Enter-ReviewStartClaimMutexWithRetry -LockDir $lockDir)) {
-        return @{ ok = $false; reason = 'busy' }
-    }
-    try {
-        $read = Read-ReviewStartClaimRecord -Path $Path
-        if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
-        if ([string]$read.record.state -ne 'active') { return @{ ok = $false; reason = 'not_active' } }
-        if ([string]$read.record.headSha -ne [string]$Record.headSha) {
-            return @{ ok = $false; reason = 'claim_head_mismatch' }
-        }
-        if ([string]$read.record.holder.processGuid -ne [string]$Record.holder.processGuid) {
-            return @{ ok = $false; reason = 'claim_lost' }
-        }
-        if ($read.record.worktreeAllowConsumed) {
-            return @{ ok = $false; reason = 'claim_already_consumed' }
-        }
-        $liveness = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'classify-holder' -Payload @{
-            holder    = $read.record.holder
-            localHost = (Get-ReviewStartClaimLocalHostName)
-        }
-        if ([string]$liveness.outcome -ne 'alive') {
-            return @{ ok = $false; reason = 'claim_holder_not_live'; detail = [string]$liveness.outcome }
-        }
-        $now = (Get-Date).ToUniversalTime().ToString('o')
-        $gateHolder = New-ReviewStartClaimHolder -Surface 'autonomous-review-worktree-gate'
-        $annotation = @{
-            atUtc                  = $now
-            worktreeCanonicalPath  = $CanonicalPath
-            consumedBy             = 'autonomous-review-worktree-gate'
-            annotatedByProcessGuid = [string]$gateHolder.processGuid
-        }
-        $updated = @{}
-        $read.record.PSObject.Properties | ForEach-Object { $updated[$_.Name] = $_.Value }
-        $updated.worktreeAllowConsumed = $annotation
-        ($updated | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $Path -Encoding UTF8
-        $auditPath = Write-ReviewStartClaimTransitionAudit -Namespace $Namespace -PriorRecord $read.record `
-            -Outcome 'worktree_allow_consumed' -DecisionSource 'worktree_gate' -Extra @{
-                worktreeCanonicalPath = $CanonicalPath
-                consumedBy            = 'autonomous-review-worktree-gate'
-                holderProcessGuid     = [string]$read.record.holder.processGuid
-                foreignWriter         = $true
-            } -NewState 'active'
-        return @{ ok = $true; reason = 'worktree_allow_consumed'; auditPath = $auditPath }
-    }
-    finally {
-        Exit-ReviewStartClaimMutex -LockDir $lockDir
-    }
-}
-
-function Mark-ReviewStartClaimForeignHolderBlocking {
-    param(
-        [string]$Namespace,
-        [string]$Path,
-        [object]$Record,
-        [object]$Decision,
-        [string]$DecisionSource,
-        [array]$ReviewRuns = @(),
-        [scriptblock]$LogWriter = $null
-    )
-
-    $lockDir = Get-ReviewStartClaimLockDir -Namespace $Namespace -PrNumber ([int]$Record.prNumber) -HeadSha ([string]$Record.headSha)
-    if (-not (Enter-ReviewStartClaimMutex -LockDir $lockDir)) { return @{ ok = $false; reason = 'busy' } }
-    try {
-        $read = Read-ReviewStartClaimRecord -Path $Path
-        if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
-        if ([string]$read.record.state -ne 'active') { return @{ ok = $false; reason = 'not_active' } }
-        if ([string]$read.record.holder.processGuid -ne [string]$Record.holder.processGuid) {
-            return @{ ok = $false; reason = 'lost_ownership' }
-        }
-        if ($read.record.manualResolutionRequired) {
-            return @{ ok = $true; skipped = $true; blocking = $true; outcome = [string]$read.record.manualResolutionRequired.outcome }
-        }
-        $now = (Get-Date).ToUniversalTime().ToString('o')
-        $record = @{}
-        $read.record.PSObject.Properties | ForEach-Object { $record[$_.Name] = $_.Value }
-        $record.manualResolutionRequired = @{
-            outcome        = [string]$Decision.outcome
-            reason         = [string]$Decision.reason
-            decisionSource = $DecisionSource
-            atUtc          = $now
-        }
-        ($record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $Path -Encoding UTF8
-        $extra = @{
-            decisionReason = [string]$Decision.reason
-            decisionSource = $DecisionSource
-            blocking       = $true
-        }
-        $auditPath = Write-ReviewStartClaimTransitionAudit -Namespace $Namespace -PriorRecord $read.record `
-            -Outcome ([string]$Decision.outcome) -DecisionSource $DecisionSource -Extra $extra -NewState 'active'
-        if ($LogWriter) {
-            & $LogWriter "review-start-claim: WARN foreign holder blocking key=$($Record.key) audit=$auditPath"
-        }
-        return @{ ok = $true; auditPath = $auditPath; blocking = $true; outcome = [string]$Decision.outcome }
-    }
-    finally {
-        Exit-ReviewStartClaimMutex -LockDir $lockDir
-    }
-}
-
-function Invoke-ReviewStartClaimReclaimOrphan {
-    param(
-        [string]$Namespace,
-        [string]$Path,
-        [object]$Record,
-        [array]$ReviewRuns = @(),
-        [string]$DecisionSource = 'reclaim',
-        [string]$ProjectId = '',
-        [scriptblock]$LogWriter = $null
-    )
-
-    $bindingProjectId = if ([string]$ProjectId) { [string]$ProjectId } else { Resolve-ReviewStartClaimProjectIdFromNamespace -Namespace $Namespace }
-    $decision = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'evaluate' -Payload @{
-        claim                       = $Record
-        reviewRuns                  = @($ReviewRuns)
-        localHost                   = Get-ReviewStartClaimLocalHostName
-        nowMs                       = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        postAcquireSideEffectAudit  = (Test-ReviewStartClaimPostAcquireSideEffectAudit -Namespace $Namespace -ClaimKey ([string]$Record.key))
-        projectNamespace            = $bindingProjectId
-    }
-    if ($decision.action -eq 'skip' -or $decision.action -eq 'block') {
-        return @{ reclaimed = $false; decision = $decision }
-    }
-    if ($decision.action -eq 'mark_manual') {
-        $result = Mark-ReviewStartClaimForeignHolderBlocking -Namespace $Namespace -Path $Path -Record $Record `
-            -Decision $decision -DecisionSource $DecisionSource -ReviewRuns $ReviewRuns -LogWriter $LogWriter
-        return @{ reclaimed = $false; manual = $true; blocking = $true; result = $result; decision = $decision }
-    }
-    if ($decision.action -eq 'reconcile') {
-        $outcome = [string]$decision.outcome
-        $extra = @{ reason = [string]$decision.reason }
-        if ($decision.runId) { $extra.boundRunId = [string]$decision.runId }
-        if ($decision.binding) { $extra.binding = $decision.binding }
-        $claimResult = @{
-            acquired  = $true
-            namespace = $Namespace
-            path      = $Path
-            claim     = $Record
-            key       = [string]$Record.key
-        }
-        $result = Complete-ReviewStartClaim -ClaimResult $claimResult -Outcome $outcome -ReviewRuns @($ReviewRuns) -Extra $extra
-        if ($LogWriter) {
-            & $LogWriter "review-start-claim-run-binding: reconciled key=$($Record.key) outcome=$outcome reason=$($decision.reason)"
-        }
-        return @{ action = 'reconcile'; outcome = $outcome; reason = [string]$decision.reason; result = $result }
-    }
-    if ($decision.action -eq 'terminalize') {
-        $result = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $Namespace -Path $Path -Record $Record `
-            -Decision $decision -DecisionSource $DecisionSource -ReviewRuns $ReviewRuns
-        if ($LogWriter -and $result.ok) {
-            $level = if ($decision.warn) { 'WARN' } else { 'INFO' }
-            & $LogWriter "review-start-claim: $level reclaimed orphan key=$($Record.key) outcome=$($decision.outcome) audit=$($result.auditPath)"
-        }
-        return @{ reclaimed = [bool]$result.ok; result = $result; decision = $decision }
-    }
-    return @{ reclaimed = $false; decision = $decision }
-}
-
-function Invoke-ReviewStartClaimReaperSweep {
-    param(
-        [string]$Namespace = '',
-        [string]$ProjectId = 'orchestrator-pack',
-        [array]$ReviewRuns = @(),
-        [scriptblock]$LogWriter = $null
-    )
-
-    $resolved = Resolve-ReviewStartClaimNamespace -ProjectId $ProjectId -Namespace $Namespace
-    Initialize-ReviewStartClaimNamespace -Namespace $resolved
-    $active = @(Get-ReviewStartClaimActiveRecords -Namespace $resolved)
-    $sweep = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'sweep' -Payload (Get-ReviewStartClaimLifecycleMonotonicPayload @{
-        activeClaims     = @($active)
-        reviewRuns       = @($ReviewRuns)
-        localHost        = Get-ReviewStartClaimLocalHostName
-        projectNamespace = $ProjectId
-    })
-    $results = @()
-    foreach ($entry in @($sweep.actions)) {
-        $key = [string]$entry.key
-        $claim = $active | Where-Object { [string]$_.key -eq $key } | Select-Object -First 1
-        if (-not $claim) { continue }
-        $path = Get-ReviewStartClaimPath -Namespace $resolved -PrNumber ([int]$claim.prNumber) -HeadSha ([string]$claim.headSha)
-        $decision = $entry.decision
-        if ($decision.action -eq 'skip' -or $decision.action -eq 'block') {
-            $results += @{ key = $key; action = $decision.action; reason = $decision.reason }
-            continue
-        }
-        $reclaim = Invoke-ReviewStartClaimReclaimOrphan -Namespace $resolved -Path $path -Record $claim `
-            -ReviewRuns $ReviewRuns -DecisionSource 'reaper' -ProjectId $ProjectId -LogWriter $LogWriter
-        $results += @{
-            key       = $key
-            action    = $decision.action
-            outcome   = $decision.outcome
-            reclaimed = [bool]$reclaim.reclaimed
-        }
-    }
-    return @{
-        ok        = $true
-        namespace = $resolved
-        scanned   = $active.Count
-        results   = $results
-        batchReads = 1
-    }
-}
-
-function Test-ReviewStartClaimHoldBudgetExceeded {
-    param([hashtable]$ClaimResult)
-
-    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ exceeded = $false } }
-    $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
-    if (-not $read.ok) { return @{ exceeded = $false; reason = 'unreadable' } }
-    $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    return Invoke-ReviewStartClaimLifecycleCli -Subcommand 'hold-budget' -Payload (Get-ReviewStartClaimLifecycleMonotonicPayload @{
-        claim = $read.record
-    })
-}
-
-
-function Write-ReviewStartClaimRunStartedAudit {
-    param(
-        [hashtable]$ClaimResult,
-        [object]$PriorRecord,
-        [string]$TerminalPath,
-        [string]$DecisionSource = 'post_run_invoke'
-    )
-
-    if (-not $ClaimResult -or -not $PriorRecord) { return '' }
-    $extra = @{ terminalPath = $TerminalPath }
-    if ($PriorRecord.worktreeAllowConsumed) {
-        $extra.worktreeAllowConsumed = $PriorRecord.worktreeAllowConsumed
-    }
-    return Write-ReviewStartClaimTransitionAudit -Namespace $ClaimResult.namespace -PriorRecord $PriorRecord `
-        -Outcome 'run_started' -DecisionSource $DecisionSource -Extra $extra
-}
-
-function Wait-ReviewStartClaimPostInvokeVisibility {
-    param(
-        [hashtable]$ClaimResult,
-        [array]$ReviewRuns = @(),
-        [scriptblock]$ResolveReviewRuns = $null,
-        [scriptblock]$LogWriter = $null
-    )
-
-    $config = Get-ReviewStartClaimLifecycleConfig
-    $pollMs = 250
-    $runs = @($ReviewRuns)
-    while ($true) {
-        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        if ($ResolveReviewRuns) {
-            $runs = @(& $ResolveReviewRuns)
-        }
-        $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
-        if (-not $read.ok) { return @{ ok = $false; reason = 'ambiguous_claim'; detail = $read.reason } }
-        Bind-ReviewStartClaimToVisibleRun -ClaimResult $ClaimResult -ReviewRuns $runs | Out-Null
-        $complete = Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'run_started' -ReviewRuns $runs
-        if ($complete.ok) {
-            $auditPath = Write-ReviewStartClaimRunStartedAudit -ClaimResult $ClaimResult -PriorRecord $read.record -TerminalPath $complete.terminalPath -DecisionSource 'post_run_visibility'
-            return @{ ok = $true; terminalPath = $complete.terminalPath; outcome = 'run_started'; auditPath = $auditPath }
-        }
-        $fence = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'visibility-fence' -Payload @{
-            claim      = $read.record
-            reviewRuns = @($runs)
-            nowMs      = $nowMs
-        }
-        if ($fence.shouldFence) {
-            $terminal = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $ClaimResult.namespace -Path $ClaimResult.path `
-                -Record $read.record -Decision @{
-                    action     = 'terminalize'
-                    outcome    = 'run_not_visible_fenced'
-                    reason     = [string]$fence.reason
-                    visibility = $fence
-                } -DecisionSource 'post_run_visibility' -ReviewRuns $runs
-            if ($LogWriter) {
-                & $LogWriter "review-start-claim: WARN run_not_visible_fenced key=$($ClaimResult.key) audit=$($terminal.auditPath)"
-            }
-            return @{ ok = [bool]$terminal.ok; reason = 'run_not_visible_fenced'; terminalPath = $terminal.terminalPath; outcome = 'run_not_visible_fenced'; fenced = $true; fence = $fence }
-        }
-
-        $envelope = Invoke-ReviewStartClaimLifecycleCli -Subcommand 'readiness-envelope' -Payload (Get-ReviewStartClaimLifecycleMonotonicPayload @{
-            claim = $read.record
-        })
-        if ($envelope.exceeded) {
-            $terminal = Invoke-ReviewStartClaimTerminalizeFromDecision -Namespace $ClaimResult.namespace -Path $ClaimResult.path `
-                -Record $read.record -Decision @{
-                    action     = 'terminalize'
-                    outcome    = 'run_not_visible_fenced'
-                    reason     = 'readiness_envelope_exceeded'
-                    visibility = $fence
-                    envelope   = $envelope
-                } -DecisionSource 'post_run_visibility' -ReviewRuns $runs
-            if ($LogWriter) {
-                & $LogWriter "review-start-claim: WARN readiness envelope exceeded during visibility wait key=$($ClaimResult.key) audit=$($terminal.auditPath)"
-            }
-            return @{ ok = [bool]$terminal.ok; reason = 'run_not_visible_fenced'; terminalPath = $terminal.terminalPath; outcome = 'run_not_visible_fenced'; fenced = $true; envelope = $envelope }
-        }
-
-        $pendingMs = [DateTimeOffset]::Parse([string]$read.record.visibilityPendingAtUtc).ToUnixTimeMilliseconds()
-        $visibilityAgeMs = [Math]::Max(0, $nowMs - $pendingMs)
-        $visibilityBudgetMs = [int]$config.config.visibilityBudgetMs
-        $remainingMs = [Math]::Min([int]$envelope.remainingMs, [Math]::Max(0, $visibilityBudgetMs - $visibilityAgeMs))
-        if ($remainingMs -le 0) { continue }
-        Start-Sleep -Milliseconds ([Math]::Min($pollMs, $remainingMs))
-    }
-}
-
+function Get-ReviewStartClaimLocalHostName { return Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartClaimLocalHostName' @{} }
+function Get-ReviewStartClaimLifecycleConfig { return Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartClaimLifecycleConfig' @{} }
+function Invoke-ReviewStartClaimLifecycleCli { param([string]$Subcommand, [hashtable]$Payload) return Invoke-ReviewStartClaimTsOperation 'Invoke-ReviewStartClaimLifecycleCli' @{ Subcommand = $Subcommand; Payload = $Payload } }
+function Set-ReviewStartClaimHoldStarted { param([hashtable]$ClaimResult) return Invoke-ReviewStartClaimTsOperation 'Set-ReviewStartClaimHoldStarted' @{ ClaimResult = $ClaimResult } $ClaimResult }
+function Set-ReviewStartClaimLaunchPending { param([hashtable]$ClaimResult, [int]$BudgetMs = 0) return Invoke-ReviewStartClaimTsOperation 'Set-ReviewStartClaimLaunchPending' @{ ClaimResult = $ClaimResult; BudgetMs = $BudgetMs } $ClaimResult }
+function Confirm-ReviewStartClaimLaunchGate { param([hashtable]$ClaimResult, [array]$ReviewRuns = @(), [string]$DecisionSource = 'hold_budget', [scriptblock]$LogWriter = $null) return Invoke-ReviewStartClaimTsOperation 'Confirm-ReviewStartClaimLaunchGate' @{ ClaimResult = $ClaimResult; ReviewRuns = @($ReviewRuns); DecisionSource = $DecisionSource } $ClaimResult }
+function Get-ReviewStartClaimActiveRecords { param([string]$Namespace) return @(Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartClaimActiveRecords' @{ Namespace = $Namespace }) }
+function Invoke-ReviewStartClaimReaperSweep { param([string]$Namespace = '', [string]$ProjectId = 'orchestrator-pack', [array]$ReviewRuns = @(), [scriptblock]$LogWriter = $null) return Invoke-ReviewStartClaimTsOperation 'Invoke-ReviewStartClaimReaperSweep' @{ Namespace = $Namespace; ProjectId = $ProjectId; ReviewRuns = @($ReviewRuns) } }
+function Test-ReviewStartClaimHoldBudgetExceeded { param([hashtable]$ClaimResult) return Invoke-ReviewStartClaimTsOperation 'Test-ReviewStartClaimHoldBudgetExceeded' @{ ClaimResult = $ClaimResult } $ClaimResult }
 function Complete-ReviewStartClaimAfterRunInvoke {
-    param(
-        [hashtable]$ClaimResult,
-        [array]$ReviewRuns = @(),
-        [scriptblock]$ResolveReviewRuns = $null,
-        [scriptblock]$LogWriter = $null
-    )
-
-    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
-    $priorRead = Read-ReviewStartClaimRecord -Path $ClaimResult.path
-    Bind-ReviewStartClaimToVisibleRun -ClaimResult $ClaimResult -ReviewRuns $ReviewRuns | Out-Null
-    $complete = Complete-ReviewStartClaim -ClaimResult $ClaimResult -Outcome 'run_started' -ReviewRuns $ReviewRuns
-    if ($complete.ok) {
-        $auditPath = ''
-        if ($priorRead.ok) {
-            $auditPath = Write-ReviewStartClaimRunStartedAudit -ClaimResult $ClaimResult -PriorRecord $priorRead.record `
-                -TerminalPath $complete.terminalPath -DecisionSource 'post_run_invoke'
-        }
-        return @{ ok = $true; terminalPath = $complete.terminalPath; outcome = 'run_started'; auditPath = $auditPath }
-    }
-
-    if ($complete.reason -eq 'run_not_visible') {
-        $now = (Get-Date).ToUniversalTime().ToString('o')
-        $pendingRead = Read-ReviewStartClaimRecord -Path $ClaimResult.path
-        $fields = @{ invokeCompletedAtUtc = $now }
-        if (-not $pendingRead.record.visibilityPendingAtUtc) {
-            $fields.visibilityPendingAtUtc = $now
-        }
-        Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields $fields -ClearFields @('launchPending') | Out-Null
-        if ($LogWriter) {
-            & $LogWriter "review-start-claim: waiting for post-invoke visibility key=$($ClaimResult.key)"
-        }
-        return Wait-ReviewStartClaimPostInvokeVisibility -ClaimResult $ClaimResult -ReviewRuns $ReviewRuns `
-            -ResolveReviewRuns $ResolveReviewRuns -LogWriter $LogWriter
-    }
-    return $complete
+    param([hashtable]$ClaimResult, [array]$ReviewRuns = @(), [scriptblock]$ResolveReviewRuns = $null, [scriptblock]$LogWriter = $null)
+    $runs = if ($ResolveReviewRuns) { @(& $ResolveReviewRuns) } else { @($ReviewRuns) }
+    return Invoke-ReviewStartClaimTsOperation 'Complete-ReviewStartClaimAfterRunInvoke' @{ ClaimResult = $ClaimResult; ReviewRuns = $runs } $ClaimResult
 }
-
-function Sync-ReviewStartClaimReclaimBeforeSkip {
-    param(
-        [string]$Namespace,
-        [string]$Path,
-        [object]$Record,
-        [array]$ReviewRuns = @(),
-        [scriptblock]$LogWriter = $null
-    )
-
-    $reclaim = Invoke-ReviewStartClaimReclaimOrphan -Namespace $Namespace -Path $Path -Record $Record `
-        -ReviewRuns $ReviewRuns -DecisionSource 'acquire_sync' -LogWriter $LogWriter
-    return $reclaim
-}
-
-
-function Stop-ReviewStartSupervisedGhChild {
-    param([int]$ProcessId)
-    if ($ProcessId -le 0) { return @{ stopped = $false; reason = 'no_pid' } }
-    try {
-        $proc = Get-Process -Id $ProcessId -ErrorAction Stop
-        if ($proc -and -not $proc.HasExited) {
-            Stop-Process -Id $ProcessId -Force -ErrorAction Stop
-            return @{ stopped = $true }
-        }
-        return @{ stopped = $false; reason = 'already_exited' }
-    }
-    catch {
-        return @{ stopped = $false; reason = 'not_running' }
-    }
-}
-
-function Invoke-ReviewStartClaimOwnershipLossCleanup {
-    param([hashtable]$ClaimResult)
-    if (-not $ClaimResult -or -not $ClaimResult.claim) { return }
-
-    $stalePid = 0
-    $staleActive = $ClaimResult.claim.activeInfraPause
-    if ($staleActive -and $staleActive.supervisedGhPid) {
-        $parsed = 0
-        if ([int]::TryParse([string]$staleActive.supervisedGhPid, [ref]$parsed) -and $parsed -gt 0) {
-            $stalePid = $parsed
-        }
-    }
-
-    if ($stalePid -le 0 -and $ClaimResult.path) {
-        $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
-        if ($read.ok -and [string]$read.record.holder.processGuid -eq [string]$ClaimResult.claim.holder.processGuid) {
-            $diskActive = $read.record.activeInfraPause
-            if ($diskActive -and $diskActive.supervisedGhPid) {
-                $parsed = 0
-                if ([int]::TryParse([string]$diskActive.supervisedGhPid, [ref]$parsed) -and $parsed -gt 0) {
-                    $stalePid = $parsed
-                }
-            }
-        }
-    }
-
-    if ($stalePid -gt 0) {
-        Stop-ReviewStartSupervisedGhChild -ProcessId $stalePid | Out-Null
-    }
-}
-
-function Start-ReviewStartClaimInfraPause {
-    param(
-        [hashtable]$ClaimResult,
-        [int]$SupervisedGhPid = 0
-    )
-    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
-    $mono = Get-ReviewStartMonotonicNowMs
-    $begin = Invoke-ReviewStartEnvelopeExternalIoCli -Subcommand 'begin-pause' -Payload @{
-        nowMonotonicMs  = $mono
-        supervisedGhPid = if ($SupervisedGhPid -gt 0) { $SupervisedGhPid } else { $null }
-    }
-    return Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields @{
-        activeInfraPause = $begin.activeInfraPause
-    }
-}
-
-function Complete-ReviewStartClaimInfraPause {
-    param(
-        [hashtable]$ClaimResult,
-        [string]$Stderr = '',
-        [switch]$TimedOut,
-        [hashtable]$Classification = $null
-    )
-    if (-not $ClaimResult -or -not $ClaimResult.acquired) { return @{ ok = $false; reason = 'no_claim' } }
-    $read = Read-ReviewStartClaimRecord -Path $ClaimResult.path
-    if (-not $read.ok) { return @{ ok = $false; reason = 'unreadable' } }
-    $mono = Get-ReviewStartMonotonicNowMs
-    $closePayload = @{
-        claim          = $read.record
-        nowMonotonicMs = $mono
-        stderr         = $Stderr
-        timedOut       = [bool]$TimedOut
-    }
-    if ($Classification) {
-        $closePayload.classification = $Classification
-    }
-    $closed = Invoke-ReviewStartEnvelopeExternalIoCli -Subcommand 'close-pause' -Payload $closePayload
-    if (-not $closed.closed) { return @{ ok = $false; reason = [string]$closed.reason } }
-    $clear = @()
-    if ($closed.clearActiveInfraPause) { $clear += 'activeInfraPause' }
-    $update = Update-ReviewStartClaimRecordFields -ClaimResult $ClaimResult -Fields @{
-        infraPauseSegments = @($closed.infraPauseSegments)
-    } -ClearFields $clear
-    return @{
-        ok             = [bool]$update.ok
-        classification = $closed.classification
-        failureClass   = [string]$closed.classification.failureClass
-    }
-}
+function Wait-ReviewStartClaimPostInvokeVisibility { param([hashtable]$ClaimResult, [array]$ReviewRuns = @(), [scriptblock]$ResolveReviewRuns = $null, [scriptblock]$LogWriter = $null) return Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $ClaimResult -ReviewRuns $ReviewRuns -ResolveReviewRuns $ResolveReviewRuns -LogWriter $LogWriter }
+function Start-ReviewStartClaimInfraPause { param([hashtable]$ClaimResult, [int]$SupervisedGhPid = 0) return Invoke-ReviewStartClaimTsOperation 'Start-ReviewStartClaimInfraPause' @{ ClaimResult = $ClaimResult; SupervisedGhPid = $SupervisedGhPid } $ClaimResult }
+function Complete-ReviewStartClaimInfraPause { param([hashtable]$ClaimResult, [string]$Stderr = '', [switch]$TimedOut, [hashtable]$Classification = $null) return Invoke-ReviewStartClaimTsOperation 'Complete-ReviewStartClaimInfraPause' @{ ClaimResult = $ClaimResult; Stderr = $Stderr; TimedOut = [bool]$TimedOut; Classification = $Classification } $ClaimResult }
+function Annotate-ReviewStartClaimWorktreeAllowConsumed { param([string]$Namespace, [string]$Path, [object]$Record, [string]$CanonicalPath) return Invoke-ReviewStartClaimTsOperation 'Annotate-ReviewStartClaimWorktreeAllowConsumed' @{ Namespace = $Namespace; Path = $Path; Record = $Record; CanonicalPath = $CanonicalPath } }
+function Mark-ReviewStartClaimForeignHolderBlocking { param([string]$Namespace, [string]$Path, [object]$Record, [object]$Decision, [string]$DecisionSource, [array]$ReviewRuns = @(), [scriptblock]$LogWriter = $null) return Invoke-ReviewStartClaimTsOperation 'Mark-ReviewStartClaimForeignHolderBlocking' @{ Namespace = $Namespace; Path = $Path; Record = $Record; Decision = $Decision; DecisionSource = $DecisionSource; ReviewRuns = @($ReviewRuns) } }
+function Invoke-ReviewStartClaimReclaimOrphan { param([string]$Namespace, [string]$Path, [object]$Record, [array]$ReviewRuns = @(), [string]$DecisionSource = 'reclaim', [string]$ProjectId = '', [scriptblock]$LogWriter = $null) return Invoke-ReviewStartClaimTsOperation 'Invoke-ReviewStartClaimReclaimOrphan' @{ Namespace = $Namespace; Path = $Path; Record = $Record; ReviewRuns = @($ReviewRuns); DecisionSource = $DecisionSource; ProjectId = $ProjectId } }
+function Sync-ReviewStartClaimReclaimBeforeSkip { param([string]$Namespace, [string]$Path, [object]$Record, [array]$ReviewRuns = @(), [scriptblock]$LogWriter = $null) return Invoke-ReviewStartClaimReclaimOrphan -Namespace $Namespace -Path $Path -Record $Record -ReviewRuns $ReviewRuns -DecisionSource 'acquire_sync' -LogWriter $LogWriter }
+function Invoke-ReviewStartClaimOwnershipLossCleanup { param([hashtable]$ClaimResult) return Invoke-ReviewStartClaimTsOperation 'Invoke-ReviewStartClaimOwnershipLossCleanup' @{ ClaimResult = $ClaimResult } $ClaimResult }
+function Stop-ReviewStartSupervisedGhChild { param([int]$ProcessId) return Invoke-ReviewStartClaimTsOperation 'Stop-ReviewStartSupervisedGhChild' @{ ProcessId = $ProcessId } }
+function Get-ReviewStartTargetStateRecheckDenial { param([hashtable]$Snapshot) return Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartTargetStateRecheckDenial' @{ Snapshot = $Snapshot } }
+function Get-ReviewStartSupervisedGhInfraTransportFailure { param([object]$TransportFailure) return Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartSupervisedGhInfraTransportFailure' @{ TransportFailure = $TransportFailure } }
+function Get-ReviewStartSupervisedGhInfraTransportRecheckDenial { param([hashtable]$Snapshot) return Invoke-ReviewStartClaimTsOperation 'Get-ReviewStartSupervisedGhInfraTransportRecheckDenial' @{ Snapshot = $Snapshot } }
