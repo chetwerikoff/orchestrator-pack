@@ -44,6 +44,7 @@ const REVIEWED_FINAL_OPERATIONS = Object.freeze([
   ['scripts/fixtures/side-process-launch-contract/registry-mismatch.json', 'delete'],
   ['scripts/fixtures/side-process-launch-contract/registry-validateset-mismatch.json', 'delete'],
   ['scripts/fixtures/side-process-launch-contract/validateset-mismatch-child.ps1', 'delete'],
+  ['scripts/gate-runner/census.test.ts', 'modify'],
   ['scripts/gate-runner/census.ts', 'modify'],
   ['scripts/gate-runner/census/generation.json', 'modify'],
   ['scripts/gate-runner/census/pre-change-baseline.json', 'modify'],
