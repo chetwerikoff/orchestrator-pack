@@ -84,7 +84,8 @@
     "scripts/review-wake-trigger.test.ts": "heavy",
     "scripts/session-pr-binding-resolver.test.ts": "light",
     "scripts/session-runtime-liveness.test.ts": "heavy",
-    "scripts/worker-message-submit-reconcile.test.ts": "heavy"
+    "scripts/worker-message-submit-reconcile.test.ts": "heavy",
+    "scripts/pr2a/planning.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,
