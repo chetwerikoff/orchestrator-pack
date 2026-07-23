@@ -1,0 +1,25 @@
+name: Temporary Issue 948 Git Export
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-git-b967dfe
+          path: |
+            .
+            !.github/workflows/tmp-issue-948-source-export.yml
+          include-hidden-files: true
+          retention-days: 1
