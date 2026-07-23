@@ -30,6 +30,14 @@ acceptance stay owned by `create-issue-draft`.
 | plain «создай драфт» (no marker) | `create-issue-draft` directly |
 | bug/root-cause consult | `investigate-root-cause` / `codex:rescue` |
 
+**Creation triggers with only a brief** («создай задачу с кодексом», "draft
+with codex" with no existing artifact): author first via
+`create-issue-draft`'s **brief-only entry** — this skill authors nothing.
+Then run this loop over the accepted local mirror; or, when the user's
+intent is a Codex challenge *during* authoring, record it as
+operator-directed Codex substitution of the competitive stage inside that
+flow.
+
 Do not impose by default — adversarial pass is a paid Codex run.
 
 Skip if Codex CLI / companion runtime unavailable — fall back to

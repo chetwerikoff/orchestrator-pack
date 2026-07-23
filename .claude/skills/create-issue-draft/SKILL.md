@@ -279,7 +279,11 @@ All of the following, in order; any failure blocks acceptance:
    is the source of truth; the mirror must match it byte-for-byte modulo the
    H1/issue-line frame. Bare-architect Edit/Write of draft files is blocked
    by the #579 hook — use the sanctioned channel (below).
-4. **Queue-index row** — draft path ↔ `#N` (see Index section).
+4. **Queue-index row** — on the sync-only default the tracked index stays
+   untouched: record `index row: pending publish` in the acceptance report;
+   the row is added and committed by the publish tooling when the user asks
+   to publish (see Index section). Until then the Issue itself is the
+   discoverable queue entry.
 5. Report: Issue URL, tier, pass counts per stage, capped-exit questions if
    any, chat URLs.
 
@@ -312,13 +316,19 @@ Two cases touch tracked draft bytes from this flow, both content-neutral:
 
 ## Browser-turn mechanics
 
-**Tool.** One-shot turn driver `gpt-authoring-turn.mjs` in the session
-scratchpad (`--message-file`, `--out`, `--timeout`,
-`STATE=ok|quota|challenge|login|stream_timeout`). If lost, rebuild from the
-mechanics of `.claude/skills/discuss-with-gpt/driver.mjs` (composer
-`#prompt-textarea`, send-button, stop-button busy-wait, anchor on the new
+**Tool.** One-shot turn driver `gpt-authoring-turn.mjs` (`--message-file`,
+`--out`, `--timeout`, `STATE=ok|quota|challenge|login|stream_timeout`). It
+lives in the **session scratchpad**, so a fresh session starts without it —
+**bootstrap is an architect step, not a helper step**: before the first
+browser turn, the architect writes the one-shot tool into the scratchpad,
+porting the mechanics verbatim from the tracked
+`.claude/skills/discuss-with-gpt/driver.mjs` (composer `#prompt-textarea`,
+send-button, stop-button busy-wait, anchor on the new
 `[data-message-author-role="assistant"]`, «Continue generating» autoclick).
-The flow needs both modes:
+The helper never writes browser code (spark-probe rule) — it only executes
+the tool the architect hands it. A tracked, parameterized turn helper is the
+durable fix — queue it as its own task through this very flow; never land it
+ad hoc from the architect seat. The flow needs both modes:
 
 - `--new-chat` — competitive passes (already supported);
 - `--chat-url <url>` — task-chat and review-chat turns (navigate to the
@@ -640,10 +650,13 @@ Normalization rules (unchanged from the Codex-era flow):
 At acceptance:
 
 1. The mirror draft carries `GitHub Issue: #N`.
-2. A registry row maps draft path → `#N`. **Do not hand-edit the tracked
-   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md)** — the row
-   is added via the publish/sync tooling ([`publish-issue-draft`](../publish-issue-draft/SKILL.md))
-   and staged selectively when the spec is published. No open/closed/shipped
+2. The registry row (draft path → `#N`) is **owned by the publish tooling**
+   ([`publish-issue-draft`](../publish-issue-draft/SKILL.md)): it is added
+   and selectively staged when the user asks to publish. On the sync-only
+   default the tracked
+   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) stays
+   untouched and the acceptance report records the row as **pending
+   publish**. **Never hand-edit the tracked index.** No open/closed/shipped
    columns — live state stays in GitHub.
 
 ## Cross-issue contract changes
