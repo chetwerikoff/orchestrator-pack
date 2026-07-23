@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - tmp/issue-948-rebase-canary
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -11,6 +14,7 @@ permissions:
 
 jobs:
   publish:
+    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'tmp/issue-948-verification-toolchain'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
