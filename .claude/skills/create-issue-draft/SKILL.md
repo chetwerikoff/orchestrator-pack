@@ -93,9 +93,10 @@ the merge-with-backlog analog.
 
    Keep every pulled revision in the session scratchpad, one directory per
    revision (`r01/`, `r02/`, …) with the file always named by the
-   **canonical draft basename** `NN-<slug>.md` — guards derive draft
-   identity and capture paths from the basename, so a `issue-<N>-rNN.md`
-   name breaks them. Revisions are the parity evidence between rounds.
+   **canonical draft basename** `NN-<slug>.md`. Draft identity for the
+   guards is carried explicitly via `--draft-path` (see the floors
+   commands); the canonical basename keeps revisions unambiguous and
+   diff-able between rounds — they are the parity evidence.
 2. Pick the draft number: `NN = max(queue index, disk) + 1` (check
    [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) **and**
    `docs/issues_drafts/` — never disk alone). The mirror path is
@@ -303,7 +304,7 @@ Two cases touch tracked draft bytes from this flow, both content-neutral:
   the helper (never raw `gh issue edit`):
 
   ```bash
-  node --import tsx scripts/publish-issue-body-sync.ts edit --draft-path docs/issues_drafts/NN-<slug>.md --issue-number <N> --repo chetwerikoff/orchestrator-pack
+  node scripts/publish-issue-body-sync.ts edit --draft-path docs/issues_drafts/NN-<slug>.md --issue-number <N> --repo chetwerikoff/orchestrator-pack
   ```
 
   Content fixes are **never** pushed this way — they belong to the GPT author
@@ -432,8 +433,8 @@ screen still runs first — a danger-marked one-liner cannot use the skip line.
 
 ### Mechanical guard
 
-```powershell
-pwsh -NoProfile -File scripts/check-tier-gate-guard.ps1 -DraftPath <body-file>
+```bash
+node scripts/tier-gate-guard.ts --text-file <body-file> --draft-path docs/issues_drafts/NN-<slug>.md
 ```
 
 Fails closed (non-zero) when red-flag markers coincide with below-T3
@@ -553,16 +554,25 @@ re-validated against the cited capture before it enters the body.
 
 ### Mechanical floors — commands and order
 
-```powershell
-pwsh -NoProfile -File scripts/check-tier-gate-guard.ps1 -DraftPath <body-file>
-pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath <body-file>
-pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath <body-file>
-pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath <body-file>
-pwsh -NoProfile -File scripts/check-stage-completeness-guard.ps1 -DraftPath <body-file>
-pwsh -NoProfile -File scripts/check-finding-ledger-guard.ps1 `
-  -CapturesDir docs/issues_drafts/.review/NN-<slug> `
-  -LedgerPath docs/issues_drafts/.review/NN-<slug>/finding-disposition-ledger.json
+Node 22 native strip-types runs the `.ts` entry points directly — no `tsx`,
+no PowerShell wrappers (the old `check-*.ps1` guards are removed):
+
+```bash
+node scripts/tier-gate-guard.ts --text-file <scratch>/rNN/NN-<slug>.md --draft-path docs/issues_drafts/NN-<slug>.md
+node scripts/draft-discipline.mjs positive-outcome --draft <scratch>/rNN/NN-<slug>.md
+node scripts/draft-discipline.mjs parked-root --draft <scratch>/rNN/NN-<slug>.md
+node scripts/draft-discipline.mjs contract-evidence --draft <scratch>/rNN/NN-<slug>.md
+node scripts/stage-completeness-guard.ts --text-file docs/issues_drafts/NN-<slug>.md --draft-path docs/issues_drafts/NN-<slug>.md
+node scripts/finding-ledger-guard.mjs \
+  --ledger docs/issues_drafts/.review/NN-<slug>/finding-disposition-ledger.json \
+  --captures-dir docs/issues_drafts/.review/NN-<slug> \
+  --draft-path docs/issues_drafts/NN-<slug>.md
 ```
+
+`--text-file` carries the revision under check (scratch pull mid-flight, the
+reconciled mirror at acceptance); `--draft-path` always carries the
+**canonical** draft path — that is how the guards resolve draft identity and
+capture locations regardless of where the checked text lives.
 
 Guard order (independent — any failure blocks acceptance): tier-gate →
 stage-completeness (T3 only) → contract-evidence / positive-outcome /
@@ -571,11 +581,11 @@ validates **every** `*.capture.txt` in the review dir against the ledger —
 early competitive findings cannot vanish behind a later `NO_FINDINGS` pass.
 
 **When each guard runs.** Mid-flight rounds re-run the **body-only** guards
-(tier-gate, contract-evidence / positive-outcome / parked-root) against the
-canonical-basename scratch copy. Stage-completeness and finding-ledger run at
-**acceptance**, against the reconciled mirror at its canonical path and
-`.review/NN-<slug>/` — running them against a scratch path makes them derive
-a wrong capture directory and fail spuriously.
+(tier-gate, contract-evidence / positive-outcome / parked-root) with
+`--text-file` / `--draft` pointing at the scratch revision. Stage-completeness
+and finding-ledger run at **acceptance**, over the reconciled mirror and
+`.review/NN-<slug>/` — and always with `--draft-path` set to the canonical
+draft path, never a scratch path, so capture locations resolve correctly.
 
 ## Review artifacts and finding-disposition ledger
 
