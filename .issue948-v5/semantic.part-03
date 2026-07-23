@@ -1,0 +1,92 @@
+-Path '${file.replaceAll("'", "''")}' | ConvertTo-Json -Compress -Depth 20`;
++    const result = runProcessSync({
++      command: 'pwsh', args: ['-NoProfile', '-Command', command], cwd: repoRoot, inheritParentEnv: true,
++    });
++    expect(result.ok, result.stderr || result.error).toBe(true);
++    const bridged = JSON.parse(result.stdout).record as Record<string, unknown>;
++    expect(bridged).toMatchObject({
++      schemaVersion: record.schemaVersion, key: record.key, prNumber: record.prNumber,
++      headSha: record.headSha, state: record.state, holder: record.holder,
++      startReason: record.startReason, projectNamespace: record.projectNamespace,
++      firstAttemptAtMonotonicMs: record.firstAttemptAtMonotonicMs,
++      readinessStartMonotonicMs: record.readinessStartMonotonicMs,
++    });
++  });
++});
++
++describe('Issue #948 detached rollback drain', () => {
++  it('exports self-contained bytes and drains only the fenced process identity', async () => {
++    const controller = new AbortController();
++    let pid = 0;
++    const childResult = runProcess({
++      command: process.execPath,
++      args: ['-e', 'setInterval(() => {}, 1000)'],
++      inheritParentEnv: true,
++      signal: controller.signal,
++      timeoutMs: 60_000,
++      allowEmptyStdout: true,
++      onSpawn: (value) => { pid = value; },
++    });
++    expect(pid).toBeGreaterThan(1);
++    rollbackChildren.push({ pid, controller, result: childResult });
++    const identity = readProcessIdentity(pid);
++    expect(identity).not.toBeNull();
++
++    const output = mkdtempSync(path.join(tmpdir(), 'opk-pr2a-drain-'));
++    rollbackRoots.push(output);
++    const exported = exportDetachedRollbackDrain(output, 'candidate-generation-1', [pid]);
++    const artifact = JSON.parse(readFileSync(exported.artifactPath, 'utf8')) as RollbackDrainArtifact;
++    expect(() => validateRollbackDrainArtifact(artifact)).not.toThrow();
++
++    const result = await runProcess({
++      command: process.execPath,
++      args: ['--experimental-strip-types', exported.runnerPath, 'drain', '--artifact', exported.artifactPath],
++      inheritParentEnv: true,
++      timeoutMs: 30_000,
++      allowEmptyStdout: false,
++    });
++    expect(result.ok, result.stderr || result.error).toBe(true);
++    expect(JSON.parse(result.stdout) as { drained: number[] }).toMatchObject({ drained: expect.arrayContaining([pid]) });
++    await new Promise((resolve) => setTimeout(resolve, 100));
++    expect(sameProcess(identity!)).toBe(false);
++  });
++
++  it('refuses a tampered artifact', () => {
++    const artifact: RollbackDrainArtifact = {
++      schemaVersion: 1,
++      issue: 948,
++      candidateGeneration: 'candidate-generation-2',
++      entryBlocked: true,
++      createdAtUtc: new Date().toISOString(),
++      processes: [{ pid: 999_999, startTimeTicks: '1', bootId: 'boot' }],
++      digest: 'sha256:bad',
++    };
++    expect(() => validateRollbackDrainArtifact(artifact)).toThrow('rollback_artifact_digest_invalid');
++  });
++});
+diff --git a/scripts/pr2a/mutation-runner.ts b/scripts/pr2a/mutation-runner.ts
+index b82b4af4..72152e15 100644
+--- a/scripts/pr2a/mutation-runner.ts
++++ b/scripts/pr2a/mutation-runner.ts
+@@ -84,7 +84,7 @@ function buildRepositoryContext(): RepositoryContext {
+     storeSource: source('scripts/lib/review-start-claim-store.ts'),
+     bridgeSource,
+     receiptSource: source('scripts/pr2a/closure-receipt.ts'),
+-    claimStoreTestSource: source('scripts/pr2a/review-start-claim-store.test.ts'),
++    claimStoreTestSource: source('scripts/pr2a/final-conformance.test.ts'),
+   };
+ }
+ 
+diff --git a/scripts/vitest-ci-lanes.config.json b/scripts/vitest-ci-lanes.config.json
+index a81aaa0c..70d05eb8 100644
+--- a/scripts/vitest-ci-lanes.config.json
++++ b/scripts/vitest-ci-lanes.config.json
+@@ -71,8 +71,6 @@
+     "scripts/pr2-foundation/worker-notification-compat.test.ts": "light",
+     "scripts/pr2a/final-conformance.test.ts": "light",
+     "scripts/pr2a/planning.test.ts": "light",
+-    "scripts/pr2a/review-start-claim-store.test.ts": "light",
+-    "scripts/pr2a/rollback-drain.test.ts": "light",
+     "scripts/review-delivery.test.ts": "light",
+     "scripts/review-finding-delivery-submit.test.ts": "heavy",
+     "scripts/review-head-ready.test.ts": "heavy",
