@@ -1,0 +1,30 @@
+name: Temporary Issue 948 V6 Log Export
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  export:
+    if: github.event.pull_request.head.ref == 'tmp/issue-948-verification-toolchain'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Export failed publisher log
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/issue948-v6-log
+          gh run view 30027362287 --repo "$GITHUB_REPOSITORY" --log > /tmp/issue948-v6-log/full.log
+          tail -n 300 /tmp/issue948-v6-log/full.log > /tmp/issue948-v6-log/tail.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-v6-publisher-log
+          path: /tmp/issue948-v6-log
+          retention-days: 1
