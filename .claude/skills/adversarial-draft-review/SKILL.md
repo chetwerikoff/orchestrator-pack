@@ -121,9 +121,10 @@ Never resume a single Codex thread across iterations — it softens into agreeme
 
 Standalone runs: the artifact continues on its normal path (architect review,
 then publish when asked). Substitution runs: return to `create-issue-draft`'s
-pipeline — captures land as `pass-NN-competitive.capture.txt` in the draft's
-`.review/` dir, findings are relayed to the task chat. The adversarial loop
-**never replaces** the architectural review stage.
+pipeline — captures land as `pass-NN-competitive.capture.txt` in the task's
+review workdir (`$REVIEW_DIR`, see that skill's Intake), findings are relayed
+to the task chat. The adversarial loop **never replaces** the architectural
+review stage.
 
 ### 8. Publish
 

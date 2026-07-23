@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT authoring-chat link, and the architect runs the lens → fix → competitive → architectural-review → final-lens pipeline over it, with GPT applying every fix directly to the Issue. Covers chat topology (one task chat, fresh chat per competitive pass, one dedicated review chat), the six-axis architect lens, browser-turn mechanics via the cursor helper, mandatory issue-body floors (tier gate, fences, contract evidence, discipline guards), the finding-disposition ledger, and issue→draft reconciliation. Invoke on every new GPT-authored task. Do not invoke for tiny docs typos or rename-only refactors.
+description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT authoring-chat link (or only a brief: GPT then authors and creates the Issue by default), and the architect runs the lens → fix → competitive → architectural-review → final-lens pipeline over it, with GPT applying every fix directly to the Issue. Covers chat topology (one task chat, fresh chat per competitive pass, one dedicated review chat), the six-axis architect lens, browser-turn mechanics via the cursor helper, mandatory issue-body floors (tier gate, fences, contract evidence, discipline guards), and the finding-disposition ledger. The Issue is the only task artifact — no local draft mirror, no queue-index row; working artifacts live in an out-of-repo workdir. Invoke on every new GPT-authored task. Do not invoke for tiny docs typos or rename-only refactors.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -8,8 +8,10 @@ description: Use when accepting a GPT-chat-authored task for `orchestrator-pack`
 Tasks are authored by the operator's **browser GPT** (custom ChatGPT project
 «orchestrator-pack»). GPT creates the GitHub Issue and **edits it directly**
 throughout the flow. The **architect** (this session) never authors the spec:
-it runs lens passes, orders review stages, re-runs mechanical floors after
-every edit round, and reconciles the local draft mirror at acceptance. Specs
+it runs lens passes, orders review stages, and re-runs mechanical floors
+after every edit round. **The Issue is the only task artifact** — the flow
+writes no tracked files: no local draft mirror, no queue-index row; pulled
+revisions, captures, and the ledger live in an out-of-repo workdir. Specs
 are later picked up by Cursor (planner+worker) under AO orchestration — the
 planner picks file names, function shapes, library choices; the spec sets
 boundaries and acceptance criteria. **Over-specification is a bug.**
@@ -44,7 +46,7 @@ Skip on: typo fixes, rename-only refactors, one-file mechanical CI tweaks
 | Party | Owns | Never does |
 |-------|------|------------|
 | **GPT author** (task chat) | Spec content; every content fix; edits the Issue directly | — |
-| **Architect** (this session) | Lens passes; competitive-review directive; floors after every round; finding dispositions oversight; reconcile; acceptance | Authoring spec content; editing the Issue (except sanctioned mechanical parity edits) |
+| **Architect** (this session) | Lens passes; competitive-review directive; floors after every round; finding dispositions oversight; acceptance | Authoring spec content; editing the Issue (except mechanical parity edits via the sync helper) |
 | **Cursor helper** (hands) | Executes browser turns with the ready tool; returns verbatim output + STATE | Writing browser code; touching message content; making judgments |
 | **Reviewer GPT sessions** | Competitive critique (fresh chats); architectural review (dedicated chat) | Editing the Issue |
 
@@ -78,8 +80,9 @@ architectural-review chat mid-flow.
 7. **Final architectural pass** — always on T3 (same dedicated review chat,
    one pass over the post-lens state); on T1/T2 only when the final lens
    changed content — one verification round within the same review chat.
-8. **Acceptance** — all floors green, ledger complete, issue→draft reconcile,
-   queue-index row.
+8. **Acceptance** — final pass clean over the accepted revision, all floors
+   green, ledger complete, report. Nothing is written to the repository —
+   the Issue is the only artifact.
 
 A stage ends early on `NO_FINDINGS`. A capped exit (pass ceiling reached with
 findings open) is allowed only with open questions recorded in the ledger —
@@ -87,29 +90,35 @@ the merge-with-backlog analog.
 
 ## Step 1 — Intake
 
-1. Pull the Issue body through the pack wrapper (REST, never GraphQL):
+1. **Stand up the workdir.** Task identity is the **Issue number** —
+   `<N>-<slug>` (slug from the Issue title). Everything the flow produces
+   lives in an out-of-repo, session-survivable workdir:
 
-   ```bash
-   scripts/gh api repos/chetwerikoff/orchestrator-pack/issues/<N> --jq .body > <scratch>/rNN/NN-<slug>.md
+   ```
+   ~/.local/state/create-issue-draft/<N>-<slug>/        # $WORKDIR
+     <N>-<slug>.md                                      # current-revision anchor (guards read this)
+     r01/ r02/ …                                        # immutable pulled revisions (parity evidence)
+     docs/issues_drafts/.review/<N>-<slug>/             # $REVIEW_DIR — captures, ledger, chats.md
    ```
 
-   Keep every pulled revision in the session scratchpad, one directory per
-   revision (`r01/`, `r02/`, …) with the file always named by the
-   **canonical draft basename** `NN-<slug>.md`. Draft identity for the
-   guards is carried explicitly via `--draft-path` (see the floors
-   commands); the canonical basename keeps revisions unambiguous and
-   diff-able between rounds — they are the parity evidence.
-2. Pick the draft number: `NN = max(queue index, disk) + 1` (check
-   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) **and**
-   `docs/issues_drafts/` — never disk alone). The mirror path is
-   `docs/issues_drafts/NN-<slug>.md`; the review dir is
-   `docs/issues_drafts/.review/NN-<slug>/`.
-3. Run the **tier gate** (below) against the pulled body. The recomputed tier
+   The nested `$REVIEW_DIR` shape exists because the stage guard derives its
+   capture location as `<repo-root>/docs/issues_drafts/.review/<stem>` —
+   passing `--repo-root $WORKDIR` redirects it fully outside the repository.
+2. **Pull the Issue body** through the pack wrapper (REST, never GraphQL),
+   writing the immutable revision **and** refreshing the anchor:
+
+   ```bash
+   scripts/gh api repos/chetwerikoff/orchestrator-pack/issues/<N> --jq .body > $WORKDIR/rNN/<N>-<slug>.md
+   cp $WORKDIR/rNN/<N>-<slug>.md $WORKDIR/<N>-<slug>.md
+   ```
+
+   Repeat both on every re-pull; revisions are diffed between rounds.
+3. Run the **tier gate** (below) against the anchor. The recomputed tier
    decides the competitive directive and pass ceilings.
 4. Run the floors once (they will fail on a fresh GPT body missing fences —
    that is lens-verdict input, not a stop).
 5. Record the task-chat URL and (later) the review-chat URL in
-   `.review/NN-<slug>/chats.md`.
+   `$REVIEW_DIR/chats.md`.
 
 ## Step 2 — Architect lens pass 1 (six axes)
 
@@ -155,7 +164,7 @@ in-session and say so in the final status.
    missing operator-adoption steps, missing floors (fences, denylist,
    verification).
 
-**Output.** Write the verdict to `.review/NN-<slug>/lens-01-architect.md`:
+**Output.** Write the verdict to `$REVIEW_DIR/lens-01-architect.md`:
 numbered findings, each tagged `fix-required` | `recommend` | `question`, plus
 the **competitive directive** (`competitive: yes|no`, with the tier basis).
 Findings here are architect findings — they are relayed for fixing, not
@@ -170,13 +179,13 @@ entered in the reviewer ledger.
    instruction to **edit the GitHub Issue directly** and reply with a change
    summary plus per-finding dispositions.
 2. Cursor helper posts it into the **task chat** (same chat, `--chat-url`).
-3. Save the reply verbatim to `.review/NN-<slug>/round-NN-author-reply.md`.
+3. Save the reply verbatim to `$REVIEW_DIR/round-NN-author-reply.md`.
 4. **Verify the Issue actually changed** — re-pull the body (`rNN+1`), diff
    against the prior revision. A chat reply without an Issue edit is an
    unfinished round.
 5. Re-run the floors on the new revision. Content failures → next relay;
    purely mechanical formatting gaps (fence syntax, header shape) may be
-   patched by the sanctioned mechanical-edit channel (below) with parity
+   patched via the mechanical parity-edit path (Step 8) with parity
    re-sync.
 
 The same relay loop carries competitive and architectural findings in later
@@ -202,7 +211,7 @@ Per pass:
    captures, so fenced findings are invisible to enforcement and protected
    findings could silently escape the ledger.
 2. Cursor helper runs it with `--new-chat`.
-3. Save verbatim to `.review/NN-<slug>/pass-NN-competitive.capture.txt`.
+3. Save verbatim to `$REVIEW_DIR/pass-NN-competitive.capture.txt`.
 4. Normalize findings into the ledger; relay them to the task chat (step-3
    loop); re-pull; re-run floors.
 5. Repeat until `NO_FINDINGS` or **3 passes**.
@@ -226,7 +235,7 @@ Per pass:
    the chat has history, but the body changed since the last round; always
    send the fresh revision.
 2. Cursor helper posts it (`--chat-url` = review chat).
-3. Save verbatim to `.review/NN-<slug>/pass-NN-architectural.capture.txt`.
+3. Save verbatim to `$REVIEW_DIR/pass-NN-architectural.capture.txt`.
 4. Ledger + relay to task chat + re-pull + floors, as in step 4.
 5. Repeat until `NO_FINDINGS` or **4 passes**.
 
@@ -281,7 +290,7 @@ remaining axes as a delta check against lens-01.
    at the higher tier stay valid; a downgrade never retro-waives captures or
    ledger entries.
 6. Record the lens verdict as
-   `.review/NN-<slug>/pass-NN-architectural-lens.capture.txt` — this exact
+   `$REVIEW_DIR/pass-NN-architectural-lens.capture.txt` — this exact
    stage name is what the stage guard counts, strictly after the
    competitive anchor. Per-axis and per-mechanism detail goes to
    `presync-architect-lens.md` alongside.
@@ -294,59 +303,47 @@ Always on T3; on T1/T2 only when the final lens changed content. One pass in
 the **same dedicated review chat** over the post-lens state:
 current Issue body (fresh revision, UNTRUSTED-wrapped) + the lens-driven
 changes summary. Save verbatim to
-`.review/NN-<slug>/pass-NN-architectural-final.capture.txt` (guard-canonical
+`$REVIEW_DIR/pass-NN-architectural-final.capture.txt` (guard-canonical
 stage name). Findings → step-3 loop; a clean pass closes review.
 
-## Step 8 — Acceptance and reconcile
+## Step 8 — Acceptance
 
 All of the following, in order; any failure blocks acceptance:
 
-1. **Reconcile the local draft mirror first** — write the final Issue body
-   (H1 = Issue title with tier prefix; `GitHub Issue: #N` line) to
-   `docs/issues_drafts/NN-<slug>.md`. Direction is **issue→draft**: the
-   Issue is the source of truth; the mirror must match it byte-for-byte
-   modulo the H1/issue-line frame. Bare-architect Edit/Write of draft files
-   is blocked by the #579 hook — use the sanctioned channel (below). The
-   mirror must exist before the acceptance guards run — they read it.
-2. **Floors green** over the reconciled mirror — the full guard sequence
-   including stage-completeness and finding-ledger (guard order below). A
-   red floor sends the flow back to a fix round; re-reconcile after.
+1. **Final pass clean over the accepted revision.** If the final
+   architectural pass produced findings, the fix round does **not** end the
+   flow — re-pull and **repeat the final pass** in the same review chat
+   until it is clean over the revision being accepted. Acceptance never
+   proceeds on a final capture older than the last content change. Two
+   non-converging repeat rounds → operator escalation.
+2. **Floors green** over the current workdir anchor — the full guard
+   sequence including stage-completeness (`--repo-root $WORKDIR`) and
+   finding-ledger (guard order below). A red floor sends the flow back to a
+   fix round.
 3. **Ledger complete** — every capture's findings normalized; protected
    findings `addressed`; capped exits carry open questions.
-4. **Queue-index row** — on the sync-only default the tracked index stays
-   untouched: record `index row: pending publish` in the acceptance report;
-   the row is added and committed by the publish tooling when the user asks
-   to publish (see Index section). Until then the Issue itself is the
-   discoverable queue entry.
-5. Report: Issue URL, tier, pass counts per stage, capped-exit questions if
-   any, chat URLs.
+4. Report: Issue URL, tier, pass counts per stage, capped-exit questions if
+   any, chat URLs, workdir path.
 
-The Issue is the queue — the flow ends **sync-only** by default (mirror and
-captures stay local). Commit/PR/merge of the spec to `main` only when the
-user explicitly asks to publish — then invoke
-[`publish-issue-draft`](../publish-issue-draft/SKILL.md).
+Nothing is committed or written into the repository: no draft file, no
+queue-index row, no tracked captures. The Issue **is** the queue entry and
+the task artifact; the workdir holds the audit trail.
 
-### Sanctioned mechanical-edit channel
+### Mechanical parity edits (no tracked writes)
 
-Two cases touch tracked draft bytes from this flow, both content-neutral:
+Purely mechanical format fixes (fence syntax, header shape, capture-block
+bytes) that GPT keeps mangling may be applied by the architect directly to
+the **workdir anchor copy**, then pushed to the Issue with the sync helper
+(never raw `gh issue edit`):
 
-- **Mid-flight parity patches** (fence syntax, header shape, capture-block
-  insertion) and **the final mirror write**: bare-architect Edit/Write with
-  `AO_DRAFT_AUTHOR_FALLBACK_REASON="issue-to-draft reconcile mirror (#N)"` —
-  the only override `scripts/guard-direct-edit.mjs` recognizes for gated
-  draft files — or a Sonnet worker session (runs outside the architect's
-  edit hook entirely). `AO_579_SONNET_OVERRIDE=1` belongs to the
-  browser-driver path, not the edit guard. Always record which channel and
-  why.
-- After any local mechanical patch that must reach the Issue, re-sync with
-  the helper (never raw `gh issue edit`):
+```bash
+node scripts/publish-issue-body-sync.ts edit --draft-path $WORKDIR/<N>-<slug>.md --issue-number <N> --repo chetwerikoff/orchestrator-pack
+```
 
-  ```bash
-  node scripts/publish-issue-body-sync.ts edit --draft-path docs/issues_drafts/NN-<slug>.md --issue-number <N> --repo chetwerikoff/orchestrator-pack
-  ```
-
-  Content fixes are **never** pushed this way — they belong to the GPT author
-  via the task chat.
+No tracked file is touched, so no edit-hook override is involved. Content
+fixes are **never** pushed this way — they belong to the GPT author via the
+task chat. After a parity push, re-pull (new `rNN/`) so revision history
+stays gapless.
 
 ## Browser-turn mechanics
 
@@ -484,7 +481,7 @@ screen still runs first — a danger-marked one-liner cannot use the skip line.
 ### Mechanical guard
 
 ```bash
-node scripts/tier-gate-guard.ts --text-file <body-file> --draft-path docs/issues_drafts/NN-<slug>.md
+node scripts/tier-gate-guard.ts --text-file $WORKDIR/<N>-<slug>.md --draft-path $WORKDIR/<N>-<slug>.md
 ```
 
 Fails closed (non-zero) when red-flag markers coincide with below-T3
@@ -494,8 +491,8 @@ clean.
 ## Issue-body floors
 
 The Issue body must satisfy the same structure and fences the guards enforce.
-Mid-flight, run guards against the freshest pulled revision (scratch file);
-at acceptance, against the reconciled mirror.
+Guards always read the **workdir anchor** (`$WORKDIR/<N>-<slug>.md`) —
+re-pull before running them so the anchor is the freshest revision.
 
 ### Body structure (fixed order)
 
@@ -504,9 +501,9 @@ The H1 (= Issue title) carries the tier prefix. First body line:
 
 1. **Prerequisite** — issues that must merge first **plus** already-merged
    issues this task builds on (from the prior-art survey), each with a
-   one-line "already does". Reference draft path + GitHub `#N` (via
-   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md)); never
-   cite a bare draft prefix as an issue number.
+   one-line "already does". Cite **GitHub issue numbers `#N` directly**
+   (resolve live state via `scripts/gh`); legacy draft files may be cited by
+   path as historical context only — never as the task's identity.
 2. **Goal** — one paragraph; outcome, not method. Then the
    `complexity-tier` fence.
 3. **Binding surface** — what the repo commits to; concrete on contracts,
@@ -608,21 +605,24 @@ Node 22 native strip-types runs the `.ts` entry points directly — no `tsx`,
 no PowerShell wrappers (the old `check-*.ps1` guards are removed):
 
 ```bash
-node scripts/tier-gate-guard.ts --text-file <scratch>/rNN/NN-<slug>.md --draft-path docs/issues_drafts/NN-<slug>.md
-node scripts/draft-discipline.mjs positive-outcome --draft <scratch>/rNN/NN-<slug>.md
-node scripts/draft-discipline.mjs parked-root --draft <scratch>/rNN/NN-<slug>.md
-node scripts/draft-discipline.mjs contract-evidence --draft <scratch>/rNN/NN-<slug>.md
-node scripts/stage-completeness-guard.ts --text-file docs/issues_drafts/NN-<slug>.md --draft-path docs/issues_drafts/NN-<slug>.md
+ANCHOR=$WORKDIR/<N>-<slug>.md
+node scripts/tier-gate-guard.ts --text-file $ANCHOR --draft-path $ANCHOR
+node scripts/draft-discipline.mjs positive-outcome --draft $ANCHOR
+node scripts/draft-discipline.mjs parked-root --draft $ANCHOR
+node scripts/draft-discipline.mjs contract-evidence --draft $ANCHOR
+node scripts/stage-completeness-guard.ts --text-file $ANCHOR --draft-path $ANCHOR --repo-root $WORKDIR
 node scripts/finding-ledger-guard.mjs \
-  --ledger docs/issues_drafts/.review/NN-<slug>/finding-disposition-ledger.json \
-  --captures-dir docs/issues_drafts/.review/NN-<slug> \
-  --draft-path docs/issues_drafts/NN-<slug>.md
+  --ledger $REVIEW_DIR/finding-disposition-ledger.json \
+  --captures-dir $REVIEW_DIR \
+  --draft-path $ANCHOR
 ```
 
-`--text-file` carries the revision under check (scratch pull mid-flight, the
-reconciled mirror at acceptance); `--draft-path` always carries the
-**canonical** draft path — that is how the guards resolve draft identity and
-capture locations regardless of where the checked text lives.
+Run them from the repository root: `contract-evidence` validates `capture@`
+rows against the **repository's** capture manifest (do not point its
+`--repo-root` at the workdir). Only the stage-completeness guard takes
+`--repo-root $WORKDIR` — that is what redirects its derived
+`docs/issues_drafts/.review/<stem>` location into the out-of-repo
+`$REVIEW_DIR`.
 
 Guard order (independent — any failure blocks acceptance): tier-gate →
 stage-completeness (T3 only) → contract-evidence / positive-outcome /
@@ -631,16 +631,15 @@ validates **every** `*.capture.txt` in the review dir against the ledger —
 early competitive findings cannot vanish behind a later `NO_FINDINGS` pass.
 
 **When each guard runs.** Mid-flight rounds re-run the **body-only** guards
-(tier-gate, contract-evidence / positive-outcome / parked-root) with
-`--text-file` / `--draft` pointing at the scratch revision. Stage-completeness
-and finding-ledger run at **acceptance**, over the reconciled mirror and
-`.review/NN-<slug>/` — and always with `--draft-path` set to the canonical
-draft path, never a scratch path, so capture locations resolve correctly.
+(tier-gate, contract-evidence / positive-outcome / parked-root) over the
+refreshed anchor. Stage-completeness and finding-ledger run at
+**acceptance** (the required captures only exist once the stages ran) — same
+anchor, plus `--repo-root $WORKDIR` / explicit `$REVIEW_DIR` paths.
 
 ## Review artifacts and finding-disposition ledger
 
 ```
-docs/issues_drafts/.review/NN-<slug>/
+$REVIEW_DIR/   (= $WORKDIR/docs/issues_drafts/.review/<N>-<slug>/ — out of repo)
   chats.md                                 # task-chat + review-chat URLs
   lens-01-architect.md                     # six-axis entry-lens verdict
   round-NN-author-reply.md                 # verbatim author replies
@@ -663,7 +662,7 @@ them as missing stages. Ledger JSON:
 ```json
 {
   "version": 1,
-  "draft": "docs/issues_drafts/NN-<slug>.md",
+  "draft": "<N>-<slug>.md",
   "findings": [
     {
       "id": "stable-id",
@@ -692,28 +691,27 @@ Normalization rules (unchanged from the Codex-era flow):
   reasoned risk-acceptance note; never `rejected`, never omitted. Contested
   protected findings escalate to the operator.
 
-## Update the issue queue index
+## No local mirror, no queue index
 
-At acceptance:
+This flow writes **nothing** into the repository:
 
-1. The mirror draft carries `GitHub Issue: #N`.
-2. The registry row (draft path → `#N`) is **owned by the publish tooling**
-   ([`publish-issue-draft`](../publish-issue-draft/SKILL.md)): it is added
-   and selectively staged when the user asks to publish. On the sync-only
-   default the tracked
-   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) stays
-   untouched and the acceptance report records the row as **pending
-   publish**. **Never hand-edit the tracked index.** No open/closed/shipped
-   columns — live state stays in GitHub.
+- **No draft mirror.** The Issue body is the spec; the workdir anchor is a
+  working copy for guards and diffs, never committed.
+- **No queue-index row.** GitHub Issues **are** the queue; discover live
+  state via `scripts/gh` (`gh issue list/view`), never via a registry file.
+- `docs/issues_drafts/**` and
+  [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) are
+  **legacy, read-only history** — valuable as the prior-art survey corpus,
+  untouched by this flow.
 
 ## Cross-issue contract changes
 
-A change affecting ≥ 2 specs lands as **one** coordinated update: every
-affected draft mirror, every corresponding Issue body (each via its own
-author path), and the relevant section of
-`docs/issues_drafts/00-architecture-decisions.md` / `docs/architecture.md` in
-the same PR when published. Never let mirrors drift from the decision they
-descend from.
+A change affecting ≥ 2 specs lands as **one coordinated round**: a fix round
+in **each** affected Issue's task chat (every body updated before any of
+them is accepted), plus the decision-log update
+(`docs/issues_drafts/00-architecture-decisions.md` / `docs/architecture.md`)
+in the same change set. Never let sibling Issues drift from the decision
+they descend from.
 
 ## Decision logging
 
@@ -746,9 +744,11 @@ corrected spec.
   substitute Codex while browser GPT is reachable.
 - Edit the Issue with raw `gh issue edit` — parity edits go through
   `scripts/publish-issue-body-sync.ts edit`; content goes through the author.
-- Accept with a red guard, an incomplete ledger, or captures missing for any
-  pass that ran.
+- Accept with a red guard, an incomplete ledger, captures missing for any
+  pass that ran, or a final capture older than the last content change.
+- Write tracked draft files or queue-index rows — the Issue is the only task
+  artifact; everything else lives in the out-of-repo workdir.
 - Kill a running browser turn to rush acceptance — wait for STATE, 30-min
   timeout, `nohup` + Monitor.
-- Publish the mirror to `main` without an explicit user ask — the Issue is
-  the queue; the flow is sync-only by default.
+- Commit workdir artifacts (revisions, captures, ledger) into the repository
+  — they are the task's local audit trail, not repo content.

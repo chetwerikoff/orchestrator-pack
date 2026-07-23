@@ -275,9 +275,10 @@ If a later step (e.g. normal codex review) materially changes the draft, log
 
 Standalone runs: the artifact continues on its normal path (architect review,
 then publish when asked). Competitive-stage runs follow `create-issue-draft`'s
-pipeline — captures land as `pass-NN-competitive.capture.txt` in the draft's
-`.review/` dir, findings are relayed to the task chat. The GPT loop **never
-replaces** the architectural review stage.
+pipeline — captures land as `pass-NN-competitive.capture.txt` in the task's
+review workdir (`$REVIEW_DIR`, see that skill's Intake), findings are relayed
+to the task chat. The GPT loop **never replaces** the architectural review
+stage.
 
 ### 8. Publish
 
