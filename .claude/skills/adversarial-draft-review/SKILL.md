@@ -67,9 +67,15 @@ node "$SCRIPT" adversarial-review --wait --json --scope working-tree \
   "Challenge the SPEC at docs/issues_drafts/NN-<slug>.md only. Question whether this is the right approach, its hidden assumptions, missing acceptance criteria, hidden coupling, contract drift, and where the design fails under real conditions. Ignore other working-tree changes."
 ```
 
-- Draft as untracked working-tree change → `--scope working-tree` picks it up.
-  **Caveat:** review targets the whole tree — scope focus text to the draft path
-  and disregard findings outside it, or author when the tree is clean.
+- `--scope working-tree` sees only **uncommitted changes inside the repo
+  tree**. A legacy untracked draft qualifies as-is. A committed/clean
+  artifact, or an out-of-repo workdir anchor (mirrorless flow), does **not**
+  — copy it first to an untracked scratch path inside the repo (e.g.
+  `.review-challenge/<N>-<slug>.md`), name **that real path** in the focus
+  text, and delete the copy after the loop. Never leave the focus text
+  pointing at a path the scope does not contain.
+  **Caveat:** review targets the whole tree — scope focus text to the
+  artifact path and disregard findings outside it.
 - `--json` returns: `verdict` (`approve` | `needs-attention`), `summary`,
   `findings[]` (`severity`, `title`, `body`, `file`, `line_start`, `line_end`,
   `confidence`, `recommendation`), `next_steps[]`.
