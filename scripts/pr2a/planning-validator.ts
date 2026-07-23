@@ -3,6 +3,7 @@ import '../toolchain/native-entrypoint-preflight.ts';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { runProcess } from '../kernel/subprocess.ts';
 import { runProcessSync } from '../kernel/subprocess.mjs';
 import { D928, stableJson, type PlanningManifest } from './contracts.ts';
 
@@ -31,7 +32,7 @@ export function validatePlanningManifest(manifest: PlanningManifest): { ok: true
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const file = process.argv[2];
   if (!file) throw new Error('usage: planning-validator.ts <manifest.json>');
   const manifest = JSON.parse(readFileSync(file, 'utf8')) as PlanningManifest;
@@ -51,11 +52,13 @@ function main(): void {
       inheritParentEnv: true,
     });
     if (!add.ok) throw new Error(add.stderr || add.error || 'planning_worktree_add_failed');
-    const recompute = runProcessSync({
+    const recompute = await runProcess({
       command: process.execPath,
       args: ['--experimental-strip-types', 'scripts/pr2a/closed-world-scanner.ts', '--ref', 'HEAD'],
       cwd: checkout,
       inheritParentEnv: true,
+      allowEmptyStdout: false,
+      timeoutMs: 120_000,
     });
     if (!recompute.ok) throw new Error(recompute.stderr || recompute.error || 'planning_recompute_failed');
     const rebuilt = JSON.parse(recompute.stdout) as PlanningManifest;
@@ -74,4 +77,9 @@ function main(): void {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) main();
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}
