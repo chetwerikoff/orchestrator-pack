@@ -80,7 +80,6 @@ const REVIEWED_FINAL_OPERATIONS = Object.freeze([
   ['scripts/orchestrator-wake-supervisor.test.ts', 'modify'],
   ['scripts/pack-review-runner.ts', 'modify'],
   ['scripts/pr2-foundation/contract-test-runner.ts', 'modify'],
-  ['scripts/pr2-foundation/real-scope-proof.test.ts', 'modify'],
   ['scripts/pr2-foundation/runtime-catalog.ts', 'modify'],
   ['scripts/pr2a/closure-receipt.ts', 'add'],
   ['scripts/pr2a/final-conformance.test.ts', 'add'],
