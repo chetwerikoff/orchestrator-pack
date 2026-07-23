@@ -69,3 +69,15 @@ index a81aaa0c..e6fd7ed5 100644
    },
    "heavyTopology": {
      "targetShardSeconds": 900,
+diff --git a/scripts/pr2a/closed-world-scanner.ts b/scripts/pr2a/closed-world-scanner.ts
+index 8d807943..7a63bfa6 100644
+--- a/scripts/pr2a/closed-world-scanner.ts
++++ b/scripts/pr2a/closed-world-scanner.ts
+@@ -52,6 +52,7 @@ const REVIEWED_FINAL_OPERATIONS = Object.freeze([
+   ['scripts/invoke-manual-review-run.ps1', 'modify'],
+   ['scripts/invoke-testmode-fleet-reaper.ps1', 'modify'],
+   ['scripts/launch-argv-validators.manifest.json', 'modify'],
++  ['scripts/lint-self-architect.config.json', 'modify'],
+   ['scripts/lib/Autonomous-ReviewWorktreeGate.ps1', 'modify'],
+   ['scripts/lib/Get-ClaimedReviewStartSnapshot.ps1', 'modify'],
+   ['scripts/lib/Harness-PnRetriggerState.ps1', 'modify'],
