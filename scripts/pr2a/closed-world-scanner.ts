@@ -1,7 +1,7 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 
 import { existsSync, readFileSync } from 'node:fs';
-import { runProcessSync } from '../kernel/subprocess.mjs';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import path from 'node:path';
 import {
   D928,
@@ -27,14 +27,85 @@ const scannerPath = 'scripts/pr2a/closed-world-scanner.ts';
 const grammarPath = 'scripts/pr2a/reference-grammar.json';
 const registryPath = 'scripts/pr2a/execution-root-registry.json';
 
+const REVIEWED_FINAL_OPERATIONS = Object.freeze([
+  ['package.json', 'modify'],
+  ['scripts/_test-review-start-preflight-shield-fixture.ts', 'modify'],
+  ['scripts/check-ao-dead-argv-bypass.ps1', 'modify'],
+  ['scripts/check-review-start-claim-guard.ps1', 'modify'],
+  ['scripts/check-side-process-launch-contract.ps1', 'delete'],
+  ['scripts/estate-cut/task-311-tests/task-311-claim.test-support.ts', 'modify'],
+  ['scripts/fixtures/mechanical-json-state/state-coverage-manifest.json', 'modify'],
+  ['scripts/fixtures/review-start-envelope-external-io/steal-claim-then-hang.ps1', 'modify'],
+  ['scripts/fixtures/side-process-launch-contract/gate-child-mismatch.ps1', 'delete'],
+  ['scripts/fixtures/side-process-launch-contract/mandatory-shorthand-mismatch.ps1', 'delete'],
+  ['scripts/fixtures/side-process-launch-contract/mismatch-child.ps1', 'delete'],
+  ['scripts/fixtures/side-process-launch-contract/registry-mandatory-params-mismatch.json', 'delete'],
+  ['scripts/fixtures/side-process-launch-contract/registry-mandatory-shorthand-mismatch.json', 'delete'],
+  ['scripts/fixtures/side-process-launch-contract/registry-mismatch.json', 'delete'],
+  ['scripts/fixtures/side-process-launch-contract/registry-validateset-mismatch.json', 'delete'],
+  ['scripts/fixtures/side-process-launch-contract/validateset-mismatch-child.ps1', 'delete'],
+  ['scripts/gate-runner/census.ts', 'modify'],
+  ['scripts/gate-runner/census/generation.json', 'modify'],
+  ['scripts/gate-runner/census/pre-change-baseline.json', 'modify'],
+  ['scripts/harness-post-submit-pn-reconcile.ps1', 'modify'],
+  ['scripts/invoke-manual-review-run.ps1', 'modify'],
+  ['scripts/invoke-testmode-fleet-reaper.ps1', 'modify'],
+  ['scripts/launch-argv-validators.manifest.json', 'modify'],
+  ['scripts/lib/Autonomous-ReviewWorktreeGate.ps1', 'modify'],
+  ['scripts/lib/Get-ClaimedReviewStartSnapshot.ps1', 'modify'],
+  ['scripts/lib/Harness-PnRetriggerState.ps1', 'modify'],
+  ['scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1', 'modify'],
+  ['scripts/lib/Invoke-ReviewTriggerReeval.ps1', 'modify'],
+  ['scripts/lib/Invoke-ReviewWakeTrigger.ps1', 'modify'],
+  ['scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1', 'modify'],
+  ['scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1', 'modify'],
+  ['scripts/lib/Orchestrator-FleetHygiene.ps1', 'modify'],
+  ['scripts/lib/Orchestrator-WakeSupervisor.ps1', 'modify'],
+  ['scripts/lib/Review-DeliveryLifecycle.ps1', 'modify'],
+  ['scripts/lib/Review-StartClaimLifecycle.ps1', 'modify'],
+  ['scripts/lib/Review-StartSupervisedGh.ps1', 'modify'],
+  ['scripts/lib/orchestrator-side-process-observer-cli.ts', 'add'],
+  ['scripts/lib/orchestrator-side-process-observer.ts', 'add'],
+  ['scripts/lib/review-start-claim-cli.ts', 'add'],
+  ['scripts/lib/review-start-claim-store.ts', 'add'],
+  ['scripts/mechanical-json-state.Tests.ps1', 'modify'],
+  ['scripts/orchestrator-escalation-emitter-inventory.json', 'modify'],
+  ['scripts/orchestrator-fleet-hygiene-sentinel.ps1', 'modify'],
+  ['scripts/orchestrator-message-audit-roots.manifest.json', 'modify'],
+  ['scripts/orchestrator-message-owner-mechanisms.manifest.json', 'modify'],
+  ['scripts/orchestrator-message-protected-runtime.manifest.json', 'modify'],
+  ['scripts/orchestrator-wake-supervisor-orphan-integration.shared.ts', 'modify'],
+  ['scripts/orchestrator-wake-supervisor-side-process-registry.test.ts', 'modify'],
+  ['scripts/orchestrator-wake-supervisor.test.ts', 'modify'],
+  ['scripts/pack-review-runner.ts', 'modify'],
+  ['scripts/pr2-foundation/runtime-catalog.ts', 'modify'],
+  ['scripts/pr2a/closure-receipt.ts', 'add'],
+  ['scripts/pr2a/final-conformance.test.ts', 'add'],
+  ['scripts/pr2a/final-conformance.ts', 'add'],
+  ['scripts/pr2a/review-start-claim-protocol-vectors.json', 'add'],
+  ['scripts/pr2a/review-start-claim-store.test.ts', 'add'],
+  ['scripts/pr2a/rollback-drain.test.ts', 'add'],
+  ['scripts/pr2a/rollback-drain.ts', 'add'],
+  ['scripts/review-start-claim-budget-semantics.test.ts', 'modify'],
+  ['scripts/review-start-claim-run-binding.test.ts', 'modify'],
+  ['scripts/review-start-claim.test.ts', 'modify'],
+  ['scripts/review-trigger-reconcile.ps1', 'modify'],
+  ['scripts/run-review-ready-seed-liveness-fixture.ps1', 'modify'],
+  ['scripts/run-review-ready-seed-revalidation-fixture.ps1', 'modify'],
+  ['scripts/scripted-review-confirmed-delivery-gate.ps1', 'modify'],
+  ['scripts/supervisor-recovery.test-helpers.ts', 'modify'],
+  ['scripts/verify.ps1', 'modify'],
+  ['scripts/vitest-ci-lanes.config.json', 'modify'],
+  ['scripts/vitest-live-store-inventory.json', 'modify'],
+  ['tsconfig.json', 'modify'],
+] as const satisfies readonly (readonly [string, 'add' | 'modify' | 'delete'])[]);
+
 function git(args: string[]): string {
   const result = runProcessSync({
     command: 'git',
     args,
     cwd: repoRoot,
     inheritParentEnv: true,
-    allowEmptyStdout: true,
-    timeoutMs: 120_000,
   });
   if (!result.ok) throw new Error(result.stderr || result.error || `git_${args.join('_')}_failed`);
   return result.stdout;
@@ -76,14 +147,14 @@ function listTree(ref: string): TreeEntry[] {
   return raw.split('\0').filter(Boolean).map((line) => {
     const match = /^(\d+)\s+(\w+)\s+([0-9a-f]+)\s+(-|\d+)\t(.+)$/u.exec(line);
     if (!match) throw new Error(`unparseable_tree_row:${line}`);
-    return { mode: match[1], type: match[2], sha: match[3], size: match[4] === '-' ? 0 : Number(match[4]), path: normalizeRepoPath(match[5]) };
+    return { mode: match[1]!, type: match[2]!, sha: match[3]!, size: match[4] === '-' ? 0 : Number(match[4]), path: normalizeRepoPath(match[5]!) };
   }).sort((a, b) => a.path.localeCompare(b.path));
 }
 
 function globRegex(glob: string): RegExp {
   let expression = '^';
   for (let i = 0; i < glob.length; i += 1) {
-    const char = glob[i];
+    const char = glob[i]!;
     if (char === '*') {
       if (glob[i + 1] === '*') { i += 1; expression += '.*'; }
       else expression += '[^/]*';
@@ -156,7 +227,7 @@ function literalReferences(source: string, text: string, tracked: Set<string>): 
   ];
   for (const [regex, primitiveClass] of patterns) {
     let match: RegExpExecArray | null;
-    while ((match = regex.exec(text)) !== null) add(match[1], match.index, primitiveClass, match[0]);
+    while ((match = regex.exec(text)) !== null) add(match[1]!, match.index, primitiveClass, match[0]);
   }
   return [...new Map(rows.map((row) => [`${row.target}\0${row.line}\0${row.primitiveClass}`, row])).values()]
     .sort((a, b) => a.target.localeCompare(b.target) || a.line - b.line || a.primitiveClass.localeCompare(b.primitiveClass));
@@ -184,11 +255,13 @@ function targetReferenceRows(ref: string, byPath: Map<string, TrackedFileRow>): 
   for (const rawLine of result.stdout.split(/\r?\n/u).filter(Boolean)) {
     const match = /^[^:]+:([^:]+):(\d+):(.*)$/u.exec(rawLine);
     if (!match) continue;
-    const source = normalizeRepoPath(match[1]);
-    const line = Number(match[2]);
-    const selector = match[3];
+    const source = normalizeRepoPath(match[1]!);
+    const line = Number(match[2]!);
+    const selector = match[3]!;
     const sourceRow = byPath.get(source);
     if (!sourceRow) continue;
+    const reviewedOperation = REVIEWED_FINAL_OPERATIONS.some(([pathName]) => pathName === source);
+    if (!(D928 as readonly string[]).includes(source) && !reviewedOperation) continue;
     const targets = (TARGET_LIBRARIES as readonly string[]).filter((target) => selector.includes(path.posix.basename(target)));
     for (const target of targets) {
       const primitiveClass = source.endsWith('.ps1')
@@ -237,7 +310,7 @@ function referenceDisposition(source: string, target: string): Pick<ReferenceRow
 function functionBlocks(text: string): Array<{ name: string; line: number; body: string }> {
   const headers = [...text.matchAll(/^function\s+([A-Za-z0-9_-]+)\s*\{/gmiu)];
   return headers.map((header, index) => ({
-    name: header[1],
+    name: header[1]!,
     line: lineAt(text, header.index ?? 0),
     body: text.slice(header.index ?? 0, headers[index + 1]?.index ?? text.length),
   }));
@@ -262,7 +335,7 @@ function lifecycleRows(ref: string, trackedText: Map<string, string>): Lifecycle
       const mutates = /(?:Set-Content|Write-|Remove-Item|Move-|New-Item|Stop-Process|Update-|Complete-|Release-|Acquire-|Terminalize|Reclaim|Prune-)/iu.test(block.name + block.body);
       const decides = /(?:\bif\s*\(|\bswitch\s*\(|\breturn\s+@\{|reason\s*=|outcome\s*=|action\s*=)/iu.test(block.body);
       const interprets = reads && /(?:state|status|holder|generation|stale|active|terminal|visible|eligible|budget|liveness|launch|outcome)/iu.test(block.body);
-      const persistedFields = [...new Set([...block.body.matchAll(/(?:record|claim|terminal)\.([A-Za-z][A-Za-z0-9]*)/gmu)].map((match) => match[1]))].sort();
+      const persistedFields = [...new Set([...block.body.matchAll(/(?:record|claim|terminal)\.([A-Za-z][A-Za-z0-9]*)/gmu)].map((match) => match[1]!))].sort();
       const targetInternal = source === 'scripts/lib/Review-StartClaim.ps1';
       rows.push({
         source,
@@ -302,25 +375,12 @@ export function buildPlanningManifest(ref: string): PlanningManifest {
   });
   const byPath = new Map(denominator.map((row) => [row.path, row]));
   const references = targetReferenceRows(ref, byPath);
-  const planned = new Map<string, { path: string; operation: 'add' | 'modify' | 'delete'; reason: string }>();
-  for (const row of references) {
-    if (row.operation === 'retain') continue;
-    planned.set(row.source, { path: row.source, operation: row.operation, reason: `${row.disposition}:${row.target}` });
-  }
-  for (const pathName of [
-    'scripts/lib/review-start-claim-store.ts',
-    'scripts/lib/review-start-claim-cli.ts',
-    'scripts/pr2a/review-start-claim-store.test.ts',
-    'scripts/pr2a/closure-receipt.ts',
-    'scripts/pr2a/final-conformance.ts',
-  ]) planned.set(pathName, { path: pathName, operation: 'add', reason: 'Issue #948 required TypeScript authority/evidence' });
-  planned.set(LIFECYCLE_LIBRARY, { path: LIFECYCLE_LIBRARY, operation: 'modify', reason: 'replace PowerShell policy with passive typed PowerShell-to-Node bridge' });
-  planned.set('scripts/pack-review-runner.ts', { path: 'scripts/pack-review-runner.ts', operation: 'modify', reason: 'runner imports TypeScript authority directly; no claim pwsh' });
-  planned.set('scripts/check-review-start-claim-guard.ps1', { path: 'scripts/check-review-start-claim-guard.ps1', operation: 'modify', reason: 'enforce TypeScript authority and empty external reverse closure' });
-  planned.set('scripts/verify.ps1', { path: 'scripts/verify.ps1', operation: 'modify', reason: 'remove only retired launch-contract block' });
-  planned.set('scripts/mechanical-json-state.Tests.ps1', { path: 'scripts/mechanical-json-state.Tests.ps1', operation: 'modify', reason: 'retire/repoint supervisor-dependent cases' });
-  planned.set('package.json', { path: 'package.json', operation: 'modify', reason: 'add Issue #948 checks' });
-  planned.set('scripts/vitest-ci-lanes.config.json', { path: 'scripts/vitest-ci-lanes.config.json', operation: 'modify', reason: 'classify new tests' });
+  const planned = new Map<string, { path: string; operation: 'add' | 'modify' | 'delete'; reason: string }>(
+    REVIEWED_FINAL_OPERATIONS.map(([pathName, operation]) => [
+      pathName,
+      { path: pathName, operation, reason: 'Issue #948 reviewed exact final operation' },
+    ]),
+  );
   const d928Sha256 = Object.fromEntries(D928.map((file) => [file, sha256(readAt(ref, file))]));
   const manifest: PlanningManifest = {
     schemaVersion: 1,

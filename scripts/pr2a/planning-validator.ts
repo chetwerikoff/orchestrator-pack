@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
-import { runProcessSync } from '../kernel/subprocess.mjs';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { D928, stableJson, type PlanningManifest } from './contracts.ts';
 
 export function validatePlanningManifest(manifest: PlanningManifest): { ok: true } | { ok: false; reasons: string[] } {

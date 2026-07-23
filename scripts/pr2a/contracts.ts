@@ -26,7 +26,7 @@ export const DENYLIST = Object.freeze([
 ] as const);
 
 export function stableJson(value: unknown): string {
-  return `${JSON.stringify(value, null, 2)}\n`;
+  return `${JSON.stringify(value)}\n`;
 }
 
 export function sha256(value: string | Buffer): string {
