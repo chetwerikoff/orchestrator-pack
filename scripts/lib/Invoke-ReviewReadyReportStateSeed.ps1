@@ -13,7 +13,7 @@
 . (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'Gh-FleetSeedSnapshotReadEconomy.ps1')
 . (Join-Path $PSScriptRoot 'MechanicalReconcileNode.ps1')
-. (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
+. (Join-Path $PSScriptRoot 'Review-StartClaimLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'Get-SupervisedRepoSlug.ps1')
 
 function Get-ReviewReadyReportStateSeedTerminalClaimKeys {

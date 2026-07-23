@@ -7,7 +7,10 @@
       "implementation": {
         "file": "scripts/lib/Record-WorkerMessageDispatch.ps1",
         "function": "Register-WorkerMessageDispatch",
-        "claimKeyFields": ["deliveryId", "sourceKey"]
+        "claimKeyFields": [
+          "deliveryId",
+          "sourceKey"
+        ]
       }
     },
     "none": {
@@ -22,25 +25,48 @@
       "implementation": {
         "file": "docs/ci-failure-notification.mjs",
         "function": "episodeKeyString",
-        "claimKeyFields": ["repo", "prNumber", "headSha", "redPeriod", "targetId", "targetGeneration"]
+        "claimKeyFields": [
+          "repo",
+          "prNumber",
+          "headSha",
+          "redPeriod",
+          "targetId",
+          "targetGeneration"
+        ]
       },
       "defaultCoverage": {
-        "recipientKeys": ["head-owning-worker", "specific-session"],
-        "intentKeys": ["ci-failure-fix", "red-status"],
-        "messageClassIds": ["ci-failure-reaction-routed", "ci-failure-reconcile-ping"]
+        "recipientKeys": [
+          "head-owning-worker",
+          "specific-session"
+        ],
+        "intentKeys": [
+          "ci-failure-fix",
+          "red-status"
+        ],
+        "messageClassIds": [
+          "ci-failure-reaction-routed",
+          "ci-failure-reconcile-ping"
+        ]
       }
     },
     "issue-267": {
       "issue": 267,
       "label": "review-start (PR, head) claim",
       "implementation": {
-        "file": "scripts/lib/Review-StartClaim.ps1",
-        "function": "Acquire-ReviewStartClaim",
-        "claimKeyFields": ["prNumber", "targetSha"]
+        "file": "scripts/lib/review-start-claim-store.ts",
+        "function": "acquireReviewStartClaim",
+        "claimKeyFields": [
+          "prNumber",
+          "targetSha"
+        ]
       },
       "defaultCoverage": {
-        "recipientKeys": ["orchestrator-session"],
-        "intentKeys": ["wake-nudge"],
+        "recipientKeys": [
+          "orchestrator-session"
+        ],
+        "intentKeys": [
+          "wake-nudge"
+        ],
         "messageClassIds": []
       }
     },

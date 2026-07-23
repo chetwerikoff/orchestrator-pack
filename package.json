@@ -22,7 +22,10 @@
     "test:issue-906": "npm run check:node-major --silent && vitest run --config scripts/estate-cut/vitest.config.ts",
     "test:contract-mutations": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2-foundation/contract-test-runner.ts",
     "pr2a:plan": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/closed-world-scanner.ts",
-    "pr2a:validate-plan": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/planning-validator.ts scripts/pr2a/planning-manifest.json"
+    "pr2a:validate-plan": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/planning-validator.ts scripts/pr2a/planning-manifest.json",
+    "pr2a:conformance": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/final-conformance.ts --json",
+    "pr2a:receipt": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/closure-receipt.ts",
+    "test:issue-948": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/pr2a/planning.test.ts scripts/pr2a/final-conformance.test.ts scripts/review-start-claim.test.ts scripts/review-start-claim-lifecycle.test.ts scripts/review-start-claim-run-binding.test.ts scripts/review-start-claim-budget-semantics.test.ts scripts/pack-review-runner-severity.test.ts scripts/orchestrator-wake-supervisor.test.ts scripts/orchestrator-wake-supervisor-side-process-registry.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

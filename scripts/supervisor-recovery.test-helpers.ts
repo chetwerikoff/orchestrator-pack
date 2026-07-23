@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const repoRoot = path.resolve(import.meta.dirname, '..');
-export const supervisorScript = path.join(repoRoot, 'scripts/orchestrator-wake-supervisor.ps1');
+export const supervisorScript = path.join(repoRoot, 'scripts/lib/Orchestrator-WakeSupervisor.ps1');
 export const fixtureDir = path.join(repoRoot, 'scripts/fixtures/orchestrator-wake-supervisor');
 
 export const supervisorHookTimeoutMs = 180_000;

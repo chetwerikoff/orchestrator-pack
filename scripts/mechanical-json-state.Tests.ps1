@@ -318,7 +318,7 @@ Describe 'review trigger reeval watch fail-closed' {
 
 Describe 'supervisor side-effect drain exemption' {
     BeforeAll {
-        . (Join-Path $script:LibDir 'Orchestrator-SideProcessSupervisor.ps1')
+        . (Join-Path $script:LibDir 'Orchestrator-WakeSupervisor.ps1')
     }
 
     function script:New-TempSupervisorStateRoot {
@@ -420,8 +420,7 @@ Describe 'supervisor bounded recovery' {
 Describe 'crash backoff stale progress (#701)' {
     BeforeAll {
         . (Join-Path $script:LibDir 'Orchestrator-SideProcessProgressEvidence.ps1')
-        . (Join-Path $script:LibDir 'Orchestrator-SideProcessCrashBackoff.ps1')
-        . (Join-Path $script:LibDir 'Orchestrator-SideProcessSupervisor.ps1')
+        . (Join-Path $script:LibDir 'Orchestrator-WakeSupervisor.ps1')
     }
 
     function script:New-TempCrashBackoffStateRoot {
@@ -453,25 +452,5 @@ Describe 'crash backoff stale progress (#701)' {
             -ChildPid 22222 -ChildStartedMs $childStartedMs | Should -Be $true
     }
 
-    It 'classifies long-lived exit with stale on-disk progress as rapid for backoff' {
-        $stateRoot = New-TempCrashBackoffStateRoot
-        $paths = Get-OrchestratorWakeSupervisorPaths -StateRoot $stateRoot
-        New-Item -ItemType Directory -Path $paths.ProgressDir -Force | Out-Null
-        $childId = 'listener'
-        $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        $childStartedMs = $nowMs - 10000
-        $staleProgress = @{
-            childId        = $childId
-            pid            = 11111
-            lastProgressMs = ($childStartedMs - 60000)
-        }
-        $progressPath = Join-Path $paths.ProgressDir "$childId.progress.json"
-        $staleProgress | ConvertTo-Json -Compress | Set-Content -LiteralPath $progressPath -Encoding utf8 -NoNewline
 
-        $decision = Test-OrchestratorWakeSupervisorChildCrashRestartAllowed -Paths $paths -ChildId $childId `
-            -ChildStartedMs $childStartedMs -ChildPid 22222 -LogWriter { param([string]$Message) }
-
-        $decision.rapidExit | Should -Be $true
-        $decision.rapidExits | Should -Be 1
-    }
 }

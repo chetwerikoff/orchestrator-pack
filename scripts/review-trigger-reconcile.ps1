@@ -51,7 +51,7 @@ $Script:DefaultIntervalMinutes = 10
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewerWorkspacePreflight.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideEffectFence.ps1')
-. (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-StartClaimLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoReviewApi.ps1')
 . (Join-Path $PSScriptRoot 'lib/Get-ReconcileChecksByPr.ps1')
 . (Join-Path $PSScriptRoot 'lib/Record-WorkerMessageDispatch.ps1')
