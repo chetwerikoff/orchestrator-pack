@@ -224,9 +224,19 @@ remaining axes as a delta check against lens-01.
    automatic failure nor proof of thoroughness.
 4. Verify no accepted finding or brief requirement was watered down across
    the fix rounds (axis 5 of lens-01).
-5. Write per-axis and per-mechanism verdicts to
+5. **Tier-downgrade consideration** — recompute tier over the final text.
+   When the lens cuts removed the drivers of the higher tier (the #574
+   rubric now reads lower and the marker screen no longer hits), the
+   architect may **downgrade** the tier here — the only sanctioned downgrade
+   point in the flow. Record the rationale in `presync-architect-lens.md`;
+   update the `complexity-tier` fence and H1/Issue title via the task chat;
+   re-run the tier-gate guard (the fail-closed marker floor is unchanged — a
+   downgrade the marker screen contradicts is invalid). Stages already run
+   at the higher tier stay valid; a downgrade never retro-waives captures or
+   ledger entries.
+6. Write per-axis and per-mechanism verdicts to
    `.review/NN-<slug>/presync-architect-lens.md`.
-6. Any `fix-required` outcome → one more task-chat fix round (step 3), then
+7. Any `fix-required` outcome → one more task-chat fix round (step 3), then
    re-run this lens as a delta.
 
 ## Step 7 — Final architectural pass
@@ -332,7 +342,10 @@ ask the operator — do not improvise a browser.
 Runs at **intake** and again on the **final revision** before acceptance. The
 gate **recomputes** tier from the Issue body via the Issue #574 rubric; any
 tier stated by GPT or the operator is an advisory prior only — override
-upward, never downward (#574 monotonic rule). The H1 / Issue title carries
+upward, never downward (#574 monotonic rule). Exception: the **final
+architect lens** is the single sanctioned downgrade point — an explicit
+architect decision over the final text, still bounded by the marker screen
+(see the final-lens step). The H1 / Issue title carries
 the tier prefix `[T1]`/`[T2]`/`[T3]`; skip-line inputs omit it.
 
 ### `complexity-tier` fence (mandatory unless on the #237 skip line)
@@ -384,6 +397,8 @@ screen still runs first — a danger-marked one-liner cannot use the skip line.
    stages, resume. Never accept below the recomputed tier.
 5. **Final-revision drift recompute:** scope growth from accepted findings
    can raise tier — upward drift before acceptance escalates to the operator.
+   Downward movement happens only via the final-lens tier-downgrade
+   consideration, never as a silent gate recompute.
 6. **Wrapper inheritance:** `adversarial-draft-review` and `discuss-with-gpt`
    route through this gate. Explicit user invocation of an adversarial
    wrapper floors the effective tier at ≥ T2 and preserves the requested
