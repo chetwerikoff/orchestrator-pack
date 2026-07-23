@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { buildPlanningManifest } from './closed-world-scanner.ts';
 import { D928, FOUNDATION_COMMIT } from './contracts.ts';
@@ -5,7 +6,8 @@ import { validatePlanningManifest } from './planning-validator.ts';
 
 describe('Issue #948 planning tooling bootstrap', () => {
   it('classifies every tracked file and closes the known target reverse references', () => {
-    const manifest = buildPlanningManifest('HEAD');
+    const reviewed = JSON.parse(readFileSync('scripts/pr2a/planning-manifest.json', 'utf8'));
+    const manifest = buildPlanningManifest(reviewed.lineage.planningCommit);
     expect(manifest.issue).toBe(948);
     expect(manifest.lineage.foundationCommit).toBe(FOUNDATION_COMMIT);
     expect(manifest.denominator.length).toBeGreaterThan(1000);
