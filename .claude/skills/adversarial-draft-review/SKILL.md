@@ -1,6 +1,6 @@
 ---
 name: adversarial-draft-review
-description: Use when the user asks to adversarially challenge a LOCAL draft/spec artifact with Codex — triggers «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход», "draft with codex", "adversarial draft", "challenge the approach". Standalone Codex challenge loop (≤3 cold passes, evaluate-don't-obey) over a local markdown artifact; also the recorded-substitution engine for create-issue-draft's competitive stage when browser GPT is unavailable. GPT-authored Issue tasks (Issue link + chat link) go to create-issue-draft — its competitive stage is built in. Skip plain "создай драфт" with no «с кодексом»/adversarial marker.
+description: Use when the user asks to adversarially challenge a draft/spec artifact with Codex — triggers «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход», "draft with codex", "adversarial draft", "challenge the approach". With only a brief and no artifact, route through create-issue-draft's brief-only entry and run the requested Codex loop in-flow before Issue acceptance. Otherwise run the standalone Codex challenge loop (≤3 cold passes, evaluate-don't-obey) over a local markdown artifact. Also the recorded-substitution engine for create-issue-draft when browser GPT is unavailable. Skip plain "создай драфт" with no «с кодексом»/adversarial marker.
 ---
 
 # adversarial-draft-review
@@ -31,13 +31,14 @@ acceptance stay owned by `create-issue-draft`.
 | bug/root-cause consult | `investigate-root-cause` / `codex:rescue` |
 
 **Creation triggers with only a brief** («создай задачу с кодексом», "draft
-with codex" with no existing artifact): author first via
-`create-issue-draft`'s **brief-only entry** — this skill authors nothing.
-Then run this loop as an **additional standalone Codex challenge** over the
-pulled final body (workdir anchor copy). It never replaces the competitive
-stage: that stage is browser-GPT always, and Codex substitution inside the
-flow remains outage-only — a user's «с кодексом» buys an extra Codex loop on
-top, not a competitive-stage swap.
+with codex" with no existing artifact): route immediately through
+`create-issue-draft`'s **brief-only entry** and record the explicit Codex
+wrapper request — this skill authors nothing. `create-issue-draft` runs this
+Codex loop on its current workdir anchor **after the browser-GPT architectural
+loop and before the final lens / Issue acceptance**. Accepted or partially
+accepted findings are relayed through the task chat, the Issue is edited and
+re-pulled, and body floors run before review continues. It never replaces the
+browser-GPT competitive stage; outage substitution remains a separate mode.
 
 Do not impose by default — adversarial pass is a paid Codex run.
 
@@ -48,11 +49,11 @@ Skip if Codex CLI / companion runtime unavailable — fall back to
 
 ### 1. Obtain the artifact
 
-The loop challenges an existing **local** artifact — a draft file, proposal,
-or spec rewrite (any markdown path). This skill authors nothing. GPT-authored
-Issues are challenged inside `create-issue-draft` (competitive stage), not
-here; when acting as its recorded substitution, pull the current Issue body to
-a local file first and challenge that revision. Explicit wrapper invocation
+The standalone loop challenges an existing **local** artifact — a draft file,
+proposal, or spec rewrite (any markdown path). This skill authors nothing.
+When `create-issue-draft` invokes it for an explicit brief-only Codex request
+or as recorded outage substitution, target the current workdir anchor; do not
+wait until the Issue has already been accepted. Explicit wrapper invocation
 floors the effective tier at ≥ **T2** (`create-issue-draft` tier gate, wrapper
 inheritance).
 
@@ -127,11 +128,12 @@ Never resume a single Codex thread across iterations — it softens into agreeme
 ### 7. Hand back
 
 Standalone runs: the artifact continues on its normal path (architect review,
-then publish when asked). Substitution runs: return to `create-issue-draft`'s
-pipeline — captures land as `pass-NN-competitive.capture.txt` in the task's
-review workdir (`$REVIEW_DIR`, see that skill's Intake), findings are relayed
-to the task chat. The adversarial loop **never replaces** the architectural
-review stage.
+then publish when asked). In-flow wrapper runs return to `create-issue-draft`
+**before acceptance**; raw JSON lands as `pass-NN-architectural.codex.json`,
+plain finding transcription as `pass-NN-architectural.capture.txt`, and
+accepted findings are relayed to the task chat. Recorded browser-outage
+substitution instead uses `pass-NN-competitive.capture.txt`. The adversarial
+loop **never replaces** the architectural review stage.
 
 ### 8. Publish
 

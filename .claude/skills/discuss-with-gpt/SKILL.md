@@ -1,6 +1,6 @@
 ---
 name: discuss-with-gpt
-description: Use when the user asks to adversarially challenge a LOCAL draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". Standalone GPT adversarial loop (≤3 fresh-chat passes, evaluate-don't-obey) over a local markdown artifact; also the canonical browser-turn mechanics home (driver, Chrome preconditions, pass states, tab rules) that create-issue-draft's competitive stage and chat turns run on. GPT-authored Issue tasks (Issue link + chat link) go to create-issue-draft. Browser-GPT twin of adversarial-draft-review; for «с кодексом» use that skill. Skip plain "создай драфт" with no «с gpt» marker.
+description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". With only a brief and no artifact, route through create-issue-draft's brief-only entry and preserve the requested GPT competitive stage before acceptance. Otherwise run the standalone GPT adversarial loop (≤3 fresh-chat passes, evaluate-don't-obey) over a local markdown artifact. Also the canonical browser-turn mechanics home for create-issue-draft. Browser-GPT twin of adversarial-draft-review; for «с кодексом» use that skill. Skip plain "создай драфт" with no «с gpt» marker.
 ---
 
 # discuss-with-gpt
@@ -39,6 +39,13 @@ acceptance stay owned by `create-issue-draft`.
 | GPT-authored Issue task (Issue link + chat link) | `create-issue-draft` — competitive stage built in (fresh chat per pass on this driver's mechanics) |
 | plain «создай драфт» (no marker) | `create-issue-draft` directly |
 | bug/root-cause consult («почему упал…») | `investigate-root-cause` / `codex:rescue` |
+
+**Brief-only GPT creation route.** For «создай задачу с gpt» / "draft with
+gpt" with no existing local artifact or Issue, do **not** start the standalone
+driver. Route immediately to `create-issue-draft`'s brief-only entry and record
+that this wrapper was explicitly requested. That flow creates the Issue and
+forces its browser-GPT competitive stage before acceptance; accepted findings
+are relayed through the task chat and therefore change the Issue itself.
 
 Do not impose this loop by default — it spends ChatGPT quota and browser time.
 
@@ -168,13 +175,14 @@ Rules:
 
 ### 1. Obtain the artifact
 
-The loop challenges an existing **local** artifact — a draft file, proposal,
-or `study-external-source` adoption (any markdown path). This skill authors
-nothing. GPT-authored Issues are challenged inside `create-issue-draft`
-(competitive stage — fresh chat per pass on this driver's mechanics), not by
-invoking this skill standalone. Explicit wrapper invocation floors the
-effective tier at ≥ **T2** (`create-issue-draft` tier gate, wrapper
-inheritance).
+The standalone loop challenges an existing **local** artifact — a draft file,
+proposal, or `study-external-source` adoption (any markdown path). This skill
+authors nothing. For a brief-only creation trigger, use the route above:
+`create-issue-draft` owns authoring and invokes this browser machinery as its
+forced competitive stage before acceptance. GPT-authored Issues are otherwise
+challenged inside `create-issue-draft`, not by invoking this skill standalone.
+Explicit wrapper invocation floors the effective tier at ≥ **T2**
+(`create-issue-draft` tier gate, wrapper inheritance).
 
 ### 2. Run the GPT adversarial pass
 
@@ -274,10 +282,11 @@ If a later step (e.g. normal codex review) materially changes the draft, log
 ### 7. Hand back
 
 Standalone runs: the artifact continues on its normal path (architect review,
-then publish when asked). Competitive-stage runs follow `create-issue-draft`'s
-pipeline — captures land as `pass-NN-competitive.capture.txt` in the task's
-review workdir (`$REVIEW_DIR`, see that skill's Intake), findings are relayed
-to the task chat. The GPT loop **never replaces** the architectural review
+then publish when asked). Brief-only creation and competitive-stage runs stay
+inside `create-issue-draft` **before acceptance** — captures land as
+`pass-NN-competitive.capture.txt` in the task's review workdir (`$REVIEW_DIR`,
+see that skill's Intake), and accepted findings are relayed to the task chat so
+the Issue is updated. The GPT loop **never replaces** the architectural review
 stage.
 
 ### 8. Publish

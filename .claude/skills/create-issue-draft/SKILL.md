@@ -213,8 +213,12 @@ reviewer chat → Issue directly.
 
 ## Step 4 — Competitive stage (fresh chat per pass)
 
-Runs only when the lens directive ordered it. Basis: **T3 always; T2 with
-red-flag markers**; operator waiver only by direct operator word (recorded
+Runs when the lens directive ordered it **or** when a brief-only
+`discuss-with-gpt` trigger routed into this flow. The explicit wrapper request
+is itself a requested adversarial stage: wrapper inheritance floors the task
+at ≥ T2 and forces this stage **before acceptance**, even when ordinary tier
+selection would skip it. Otherwise the basis is **T3 always; T2 with red-flag
+markers**; operator waiver only by direct operator word (recorded
 `competitive-stage-waiver.json`). The competitive engine is **browser GPT,
 always** — even though the author is GPT too; each pass is a **fresh chat**,
 so the reviewer session shares no context with the author chat.
@@ -258,27 +262,42 @@ Per pass:
 4. Ledger + relay to task chat + re-pull + floors, as in step 4.
 5. Repeat until `NO_FINDINGS` or **4 passes**.
 
+**Explicit Codex wrapper (brief-only, before acceptance).** When a
+brief-only `adversarial-draft-review` trigger routed into this flow, run its
+Codex challenge loop **here**, after the browser-GPT architectural loop and
+before the final lens — never after Issue acceptance. Each pass targets the
+current pulled anchor. Save the companion's raw JSON as
+`pass-NN-architectural.codex.json`, mechanically transcribe every finding to
+plain `type:` lines in `pass-NN-architectural.capture.txt`, normalize the
+ledger, and relay accepted/partially accepted findings through the task chat.
+After each Issue edit, re-pull and re-run the body floors before the next pass.
+Stop under the wrapper's three-pass convergence rule. This is an additional
+in-flow challenge, not a replacement for the browser-GPT competitive stage.
+
 **T3-critical addition (mandatory, not a substitution).** After the GPT
 architectural loop converges and **before the final lens**, run one
 independent **Codex** architectural pass over the current pulled body file —
 engine per [`adversarial-draft-review`](../adversarial-draft-review/SKILL.md)
-mechanics. The companion emits JSON — and `finding-ledger-guard.mjs` scans
-only plain `type:` lines, so **raw JSON in a capture is invisible to the
-guard** (a JSON `"type":"security"` finding passes with an empty ledger).
-Save the raw JSON verdict alongside as
-`pass-NN-architectural.codex.json` (verbatim provenance) and write the
-capture `pass-NN-architectural.capture.txt` as a **1:1 mechanical
-transcription into plain `type:` lines** — no code fences, no fields
-dropped. Normalize into the ledger and relay through the task chat like any
-pass. The final lens must see its findings.
+mechanics. A qualifying explicit-wrapper loop above satisfies this addition
+when its final required pass ran over the current post-GPT revision; do not
+pay for a duplicate pass. Otherwise run the pass now. The companion emits
+JSON — and `finding-ledger-guard.mjs` scans only plain `type:` lines, so **raw
+JSON in a capture is invisible to the guard** (a JSON
+`"type":"security"` finding passes with an empty ledger). Save the raw JSON
+verdict alongside as `pass-NN-architectural.codex.json` (verbatim provenance)
+and write the capture `pass-NN-architectural.capture.txt` as a **1:1
+mechanical transcription into plain `type:` lines** — no code fences, no
+fields dropped. Normalize into the ledger and relay through the task chat
+like any pass. The final lens must see its findings.
 
 **Engine note (operator decision 2026-07-23).** The architectural stage —
 including the final pass — runs in the dedicated **browser-GPT review chat**;
-Codex appears as the mandatory T3-critical addition above and as recorded
-outage substitution. `docs/tiering.md` predates this decision where it names
-Codex as the per-pass architectural engine — the flow here is authoritative
-until that doc's follow-up update lands (queued; blocked by the PR2
-foundation freeze as of 07-23).
+Codex appears as an explicit wrapper-requested in-flow challenge, the
+mandatory T3-critical addition above, or a recorded outage substitution.
+`docs/tiering.md` predates this decision where it names Codex as the per-pass
+architectural engine — the flow here is authoritative until that doc's
+follow-up update lands (queued; blocked by the PR2 foundation freeze as of
+07-23).
 
 ## Step 6 — Final architect lens
 
@@ -323,18 +342,22 @@ the **same dedicated review chat** over the post-lens state:
 current Issue body (fresh revision, UNTRUSTED-wrapped) + the lens-driven
 changes summary. Save verbatim to
 `$REVIEW_DIR/pass-NN-architectural-final.capture.txt` (guard-canonical
-stage name). Findings → step-3 loop; a clean pass closes review.
+stage name). A clean pass closes review. Findings → step-3 fix loop, then
+**return to step 6 and write a newer architectural-lens capture** before the
+next final pass. Never place two final captures after the same latest lens.
 
 ## Step 8 — Acceptance
 
 All of the following, in order; any failure blocks acceptance:
 
-1. **Final pass clean over the accepted revision.** If the final
-   architectural pass produced findings, the fix round does **not** end the
-   flow — re-pull and **repeat the final pass** in the same review chat
-   until it is clean over the revision being accepted. Acceptance never
+1. **Final pass clean over the accepted revision.** If a final pass
+   produced findings, preserve that capture and ledger evidence, relay the
+   fix, re-pull, then **re-run step 6 as a delta lens** and write its newer
+   `architectural-lens` capture. Only then run exactly one new final pass in
+   the same review chat. This keeps the guard contract: exactly one
+   `architectural-final` exists after the latest lens. Acceptance never
    proceeds on a final capture older than the last content change. Two
-   non-converging repeat rounds → operator escalation.
+   non-converging fix → lens → final cycles → operator escalation.
 2. **Floors green** over the current workdir anchor — the full guard
    sequence including stage-completeness (`--repo-root $WORKDIR`) and
    finding-ledger (guard order below). A red floor sends the flow back to a
@@ -376,416 +399,162 @@ revision history stays gapless.
 
 ## Browser-turn mechanics
 
-**Tool.** One-shot turn driver `gpt-authoring-turn.mjs` (`--message-file`,
-`--out`, `--timeout`, `STATE=ok|quota|challenge|login|stream_timeout`). It
-lives in the **session scratchpad**, so a fresh session starts without it —
-**bootstrap is an architect step, not a helper step**: before the first
-browser turn, the architect writes the one-shot tool into the scratchpad,
-porting the mechanics verbatim from the tracked
-`.claude/skills/discuss-with-gpt/driver.mjs` (composer `#prompt-textarea`,
-send-button, stop-button busy-wait, anchor on the new
-`[data-message-author-role="assistant"]`, «Continue generating» autoclick).
-The helper never writes browser code (spark-probe rule) — it only executes
-the tool the architect hands it. A tracked, parameterized turn helper is the
-durable fix — queue it as its own task through this very flow; never land it
-ad hoc from the architect seat. The flow needs both modes:
+Use the canonical browser machinery from [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md): a logged-in automation Chrome, its tracked driver semantics, `--new-chat` for competitive passes, and `--chat-url` for task/review-chat turns. Bootstrap the one-shot scratchpad helper from that driver before the first turn; the Cursor helper only executes the prepared command and returns the verbatim output plus `STATE`.
 
-- `--new-chat` — competitive passes (already supported);
-- `--chat-url <url>` — task-chat and review-chat turns (navigate to the
-  existing chat, post, await the new assistant message).
-  `discuss-with-gpt/driver.mjs` already implements `--chat-url` with tab
-  reuse by chat id (see that skill's **Tabs** section) — port that mechanics
-  into the one-shot tool if it lacks the mode; scratchpad tool, untracked,
-  no worker needed.
-
-**Message format (every turn):**
-
-- Ask for the reply in one outer **`~~~markdown`** tilde fence — inner
-  backtick fences then survive verbatim (an outer ``` fence breaks on the
-  first inner ```). The captured code-block text loses the fence itself and
-  starts with a language label line — strip with `tail -n +2`. The outer
-  fence therefore never reaches the saved capture; but any **inner**
-  backtick fence does — which is why reviewer findings must stay plain text
-  (the ledger guard strips fenced blocks; see the competitive step).
-- Payload bodies (Issue text) go between nonce markers and are framed as
-  UNTRUSTED DATA; instructions live outside the markers.
-- New-chat messages are fully self-contained. Same-chat turns may rely on
-  chat context for framing but still carry the current Issue revision when
-  the turn reviews or amends text.
-
-**Timeouts.** `--timeout 1800000` (30 min) for authoring/fix/review turns —
-15 min cuts large replies mid-stream (`stream_timeout` with partial). Run the
-helper under `nohup` + Monitor, not a foreground wait.
-
-**Cursor helper contract — hands only.** Give the helper the ready tool, the
-exact argv, and the message file. It runs the command, waits, returns the
-verbatim output file and STATE. It must not write or modify browser code,
-must not edit message content, must not retry creatively. `STATE != ok` →
-report to the architect: `quota` = wait/report operator; `login`/`challenge`
-= operator action required; `stream_timeout` = check partial + one re-run.
-The #579 hook cuts the tracked driver path from the architect seat — the
-helper (or the `AO_579_SONNET_OVERRIDE=1` prefix on a sanctioned invocation)
-is the execution channel.
-
-**Chrome.** A live CDP Chrome on the Windows side is required
-(`.claude/skills/discuss-with-gpt/launch-chrome.sh`, port 9222,
-`--remote-allow-origins=*`, user-data-dir in `C:\...` form). If it is not up,
-ask the operator — do not improvise a browser.
+Every prompt must be self-contained, wrap the current Issue body as UNTRUSTED DATA between nonce markers, and request one outer `~~~markdown` fence so inner backtick fences survive. Competitive passes use fresh chats; architectural and final passes reuse the single dedicated review chat. Save every returned pass verbatim before interpretation. Default timeout is 30 minutes under `nohup` + Monitor. `STATE != ok` is reported, not improvised around; browser unavailability may use Codex only where this skill explicitly permits it and the substitution is ledgered.
 
 ## Tier gate (recompute authority — Issue #576)
 
-Runs at **intake** and again on the **final revision** before acceptance. The
-gate **recomputes** tier from the Issue body via the Issue #574 rubric; any
-tier stated by GPT or the operator is an advisory prior only — override
-upward, never downward (#574 monotonic rule). Exception: the **final
-architect lens** is the single sanctioned downgrade point — an explicit
-architect decision over the final text, still bounded by the marker screen
-(see the final-lens step). The H1 / Issue title carries
-the tier prefix `[T1]`/`[T2]`/`[T3]`; skip-line inputs omit it.
+Run at intake and again on the final revision. The mechanical guard recomputes the tier from the live Issue body; GPT/operator tier statements are upward-only priors. The final architect lens is the only sanctioned downgrade point, and only after the marker screen is clear.
 
-### `complexity-tier` fence (mandatory unless on the #237 skip line)
+### `complexity-tier` fence
 
-Immediately after **Goal** (or after `behavior-kind` when present), exactly
-one fenced block:
+Immediately after **Goal** (or after `behavior-kind` when present), exactly one fence:
 
-````markdown
 ```complexity-tier
 tier: T1
 advisory-prior: T1
 ```
-````
 
-Below-ladder skip-line inputs (operator/config/one-line/typo), after the
-marker screen passes:
+Below-ladder skip-line inputs use:
 
-````markdown
 ```complexity-tier
 skip-line: true
 ```
-````
 
-Skip-line inputs carry no tier and no design/adversarial ceremony; the marker
-screen still runs first — a danger-marked one-liner cannot use the skip line.
+The title/H1 carries `[T1]`, `[T2]`, or `[T3]`; skip-line inputs omit it.
 
 ### Recompute rules
 
-1. **Marker screen** — fail-closed red-flag screen via
-   `scripts/lib/tier-marker-screen.ts` (#574 vocabulary). Marker hit +
-   below-T3 assignment, or marker hit + skipped competitive stage →
-   **blocking escalation** to the operator. Unparseable text → T3.
-2. **Stage selection:**
-   - **T1:** no competitive stage; one architectural pass; light final lens
-     (axes as checklist, incl. tier-downgrade consideration); a final
-     architectural round only if the lens changed content.
-   - **T2:** no competitive stage (unless red-flag markers); architectural
-     ≤ 3 passes; light final lens; a final architectural round only if the
-     lens changed content.
-   - **T3:** full pipeline — competitive ≤ 3 → architectural ≤ 4 → full
-     final lens → final architectural ×1 (always).
-   The pass ceilings bound the finding loop; the post-lens verification
-   round is the ×1 on top, not a ceiling consumer.
-   - **T3-critical** (task matches the L4-condition list in Issue #574 /
-     `docs/issues_drafts/187-task-complexity-tier-rubric.md`): competitive
-     **+ Codex mandatory — GPT and Codex together** (an independent Codex
-     architectural pass in addition to the GPT review chat; not an outage
-     substitution), per the authoritative per-tier contract in
-     [`docs/tiering.md`](../../docs/tiering.md). The spec must carry a
-     rollback/migration note plus a crash/race/stale-state test.
-3. **Never-skipped floor (every tier):** worker-safety contract (Goal,
-   denylist/allowed-roots, Acceptance criteria, Verification), #366
-   contract-evidence, #221 behavior-kind, finding-ledger/carve-out guard.
-   Only competitive/design ceremony is tier-gated.
-4. **Mid-flight upward recompute:** stop, raise the fence, update the H1 /
-   Issue-title prefix (via the task chat — GPT edits the Issue), run skipped
-   stages, resume. Never accept below the recomputed tier.
-5. **Final-revision drift recompute:** scope growth from accepted findings
-   can raise tier — upward drift before acceptance escalates to the operator.
-   Downward movement happens only via the final-lens tier-downgrade
-   consideration, never as a silent gate recompute.
-6. **Wrapper inheritance:** `adversarial-draft-review` and `discuss-with-gpt`
-   route through this gate. Explicit user invocation of an adversarial
-   wrapper floors the effective tier at ≥ T2 and preserves the requested
-   adversarial stage even when recompute yields T1.
-
-### Mechanical guard
+1. Run `scripts/lib/tier-marker-screen.ts`; a red marker with a below-T3 assignment, or a red marker with skipped mandatory stages, blocks acceptance. Unparseable input becomes T3.
+2. T1: no competitive stage; one architectural pass; light final lens; final architectural pass only when the lens changed content.
+3. T2: competitive stage only when red-flagged or explicitly requested; architectural ≤3; light final lens; final architectural pass only when the lens changed content.
+4. T3: competitive ≤3 → architectural ≤4 → full final lens → exactly one final architectural pass after the latest lens.
+5. T3-critical additionally requires one independent Codex architectural pass. A qualifying explicit-wrapper Codex loop over the current post-GPT revision satisfies this once; do not duplicate it.
+6. Mid-flight upward recompute raises the fence/title, runs skipped stages, and resumes. Downward movement is allowed only by the final lens and never erases captures or ledger rows.
+7. Explicit `adversarial-draft-review` / `discuss-with-gpt` wrapper invocation floors the effective tier at T2 and preserves the requested stage even if the ordinary rubric would skip it.
 
 ```bash
-node scripts/tier-gate-guard.ts --text-file $ANCHOR --draft-path $ANCHOR
+node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
 ```
-
-Fails closed (non-zero) when red-flag markers coincide with below-T3
-assignment or skipped stages; emits a tier-fence / skip-line receipt when
-clean.
 
 ## Issue-body floors
 
-The Issue body must satisfy the same structure and fences the guards enforce.
-Guards always read the **workdir anchor**
-(`$ANCHOR` = `$WORKDIR/docs/issues_drafts/<N>-<slug>.md`, per Intake) —
-re-pull before running them so the anchor is the freshest revision.
+The Issue body is the spec. Guards always read the freshly pulled workdir anchor.
 
-### Body structure (fixed order)
+### Fixed body order
 
-The H1 (= Issue title) carries the tier prefix. First body line:
-`GitHub Issue: #N`.
+1. **Prerequisite** — must-merge-first plus already-merged prior art, cited by GitHub Issue number with one-line contribution.
+2. **Goal** — outcome, not method.
+3. `behavior-kind` when action-producing.
+4. `complexity-tier`.
+5. **Binding surface** — observable contracts and required operator adoption; avoid function names, signatures, internal layouts, or library pins.
+6. **Files in scope** — coarse roots or specific new files; mark `(new)`.
+7. **Files out of scope**.
+8. `denylist`; add `allowed-roots` when the task must remain in a subtree. Always deny `vendor/**` and `packages/core/**`.
+9. **Acceptance criteria** — observable, testable, and numbered.
+10. **Upgrade-safety check** — no AO core/vendor edits, unsupported YAML, or undeclared secrets.
+11. **Verification** — maps 1:1 to acceptance criteria.
 
-1. **Prerequisite** — issues that must merge first **plus** already-merged
-   issues this task builds on (from the prior-art survey), each with a
-   one-line "already does". Cite **GitHub issue numbers `#N` directly**
-   (resolve live state via `scripts/gh`); legacy draft files may be cited by
-   path as historical context only — never as the task's identity.
-2. **Goal** — one paragraph; outcome, not method. Then the
-   `complexity-tier` fence.
-3. **Binding surface** — what the repo commits to; concrete on contracts,
-   deliberately vague on implementation. **Operator adoption** bullet
-   required when in-scope files touch operator-facing surfaces
-   (`agent-orchestrator.yaml.example`, runbooks, documented operator env
-   vars, machine-local config, reactions requiring `ao stop`/`ao start`).
-4. **Files in scope** — coarse directories or specific new files, new files
-   marked `(new)`; no function names/signatures.
-5. **Files out of scope** — explicit list.
-6. **Denylist** — mandatory fenced block (three backticks + `denylist`, one
-   path per line). Always include `vendor/**` and `packages/core/**`. Add an
-   `allowed-roots` fence when the task must stay inside a subtree.
-   `_shared/issue_parser` matches only literal triple-backtick
-   ` ```denylist ` / ` ```allowed-roots ` fences.
-7. **Acceptance criteria** — observable, testable bullets; provable without
-   reading anyone's mind.
-8. **Upgrade-safety check** — explicit invariants (no AO core / vendor
-   edits, no unsupported YAML, no new repo secrets unless declared).
-9. **Verification** — exactly how the planner proves done; match acceptance
-   criteria 1:1 where possible.
+Literal fences recognized by repository tooling:
 
-**Planner-freedom guard.** The spec must not leak function signatures, import
-paths, folder layout, or library pins. A spec the planner has to ask "which
-name?" about, or whose structure a reviewer flags as mandated style, is the
-bug — order a loosening fix round, never patch planner output to fit.
+```denylist
+vendor/**
+packages/core/**
+```
 
-### Behavior kind and positive outcome (Issue #221)
+```allowed-roots
+.claude/skills/**
+.cursor/skills/**
+```
 
-Every action-producing spec declares its kind right after **Goal**:
+### Behavior kind and positive outcome
 
-````markdown
+Action-producing specs declare:
+
 ```behavior-kind
 action-producing
 ```
-````
 
-(`record-only` only when every success path is pure observability. The
-taxonomy backstop — `scripts/draft-discipline-action-taxonomy.json` — flags
-action verbs declared `record-only`; resolve before acceptance.)
+They also carry at least one realistic positive-outcome fence:
 
-Action-producing specs need ≥ 1 fenced block under **Acceptance criteria**:
-
-````markdown
 ```positive-outcome
 asserts: <observable action on realistic input>
 input: realistic
 ```
-````
 
-External-tool input (CLI JSON, webhook, `gh`/`ao` capture) requires
-`input: external-tool-output` + `provenance: capture-backed` (or
-`sample-backed` under the draft-#76 golden-sample guard). A
-plausible-but-impossible fixture must not satisfy the criterion.
+External-tool assertions add `input: external-tool-output` and `provenance: capture-backed` (or `sample-backed` under the golden-sample guard). Do not satisfy acceptance with impossible fixtures.
 
 ### Parked root causes
 
-Deferring a suspected root cause requires a fenced `parked-root-cause` block
-with `cause`, `evidence`, `reason-deferred`, `follow-up-issue: #N`,
-`resolution-policy`. The follow-up issue must exist and carry the declared
-cause. Vague causes fail the discipline guard.
+Deferring a suspected root cause requires a `parked-root-cause` fence with cause, evidence, reason deferred, follow-up Issue number, and resolution policy. The follow-up Issue must exist and carry the cause.
 
-### Contract evidence grounding (Issue #366)
+### Contract evidence
 
-Every upstream datum bound in **Binding surface**, **Acceptance criteria**,
-or **Verification** must be grounded in the body's `contract-evidence` block
-(`contract-evidence: none` when the spec binds nothing upstream). Row format:
+Every upstream datum in Binding surface, Acceptance criteria, or Verification is represented in `contract-evidence`, or the block says `contract-evidence: none`. Capture-backed rows carry a stable binding id/type, producer, evidence selector/token, and expected value/behavior. External producers (`ao`, `gh`, `codex`) always need captured provenance; belief markers and self-attestation are inadmissible.
 
-```contract-evidence
-binding-id: ao:reportState:fixing_ci
-binding-type: structured
-binding: ao worker report fixing_ci state
-producer: ao
-evidence: capture@ao-worker-report/fixing_ci
-selector: $.reportState
-expected: fixing_ci
-```
-
-- `capture@` rows need machine-readable `binding-id` + `binding-type`
-  (`structured` | `unstructured` | `cli-behavior`); structured rows carry
-  `selector`+`expected`, unstructured carry `token`; CLI rows require
-  manifest exit 0 plus behavior-specific output — help-text flag mentions are
-  insufficient.
-- `NEW(produced-by AC#N)` only for repo-owned producers, with a
-  `producer-emission` fence in AC#N (proof-command / proof-capture). External
-  producers (`ao`, `gh`, `codex`) always need captures.
-- No third option: belief markers and self-attested verdicts are
-  inadmissible. Captures are architect work — GPT cannot take live captures;
-  when a round needs new capture evidence, the architect produces the
-  capture + manifest entry and hands the row text to the author via the task
-  chat (mechanical parity channel for the fence bytes if needed).
-
-Coworker may collect candidate bindings (bulk lookup), but every row is
-re-validated against the cited capture before it enters the body.
-
-### Mechanical floors — commands and order
-
-Node 22 native strip-types runs the `.ts` entry points directly — no `tsx`,
-no PowerShell wrappers (the old `check-*.ps1` guards are removed):
+### Mechanical floor order
 
 ```bash
-ANCHOR=$WORKDIR/docs/issues_drafts/<N>-<slug>.md
-node scripts/tier-gate-guard.ts --text-file $ANCHOR --draft-path $ANCHOR
-node scripts/draft-discipline.mjs positive-outcome --draft $ANCHOR
-node scripts/draft-discipline.mjs parked-root --draft $ANCHOR
-node scripts/draft-discipline.mjs contract-evidence --draft $ANCHOR
-node scripts/stage-completeness-guard.ts --text-file $ANCHOR --draft-path $ANCHOR --repo-root $WORKDIR
+ANCHOR="$WORKDIR/docs/issues_drafts/<N>-<slug>.md"
+node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
+node scripts/draft-discipline.mjs positive-outcome --draft "$ANCHOR"
+node scripts/draft-discipline.mjs parked-root --draft "$ANCHOR"
+node scripts/draft-discipline.mjs contract-evidence --draft "$ANCHOR"
+node scripts/stage-completeness-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR" --repo-root "$WORKDIR"
 node scripts/finding-ledger-guard.mjs \
-  --ledger $REVIEW_DIR/finding-disposition-ledger.json \
-  --captures-dir $REVIEW_DIR \
-  --draft-path $ANCHOR
+  --ledger "$REVIEW_DIR/finding-disposition-ledger.json" \
+  --captures-dir "$REVIEW_DIR" \
+  --draft-path "$ANCHOR"
 ```
 
-Run them from the repository root: `contract-evidence` validates `capture@`
-rows against the **repository's** capture manifest (do not point its
-`--repo-root` at the workdir). Only the stage-completeness guard takes
-`--repo-root $WORKDIR` — that is what redirects its derived
-`docs/issues_drafts/.review/<stem>` location into the out-of-repo
-`$REVIEW_DIR`.
+Run body-only floors after each refreshed Issue revision. Run stage completeness and finding-ledger guards at acceptance, when the required captures exist. `contract-evidence` validates capture rows against the repository capture manifest, so invoke it from repository root; only stage completeness receives `--repo-root "$WORKDIR"` to redirect its derived review directory.
 
-Guard order (independent — any failure blocks acceptance): tier-gate →
-stage-completeness (T3 only) → contract-evidence / positive-outcome /
-parked-root → finding-ledger (when captures exist). The finding-ledger guard
-validates **every** `*.capture.txt` in the review dir against the ledger —
-early competitive findings cannot vanish behind a later `NO_FINDINGS` pass.
+## Review artifacts and finding ledger
 
-**When each guard runs.** Mid-flight rounds re-run the **body-only** guards
-(tier-gate, contract-evidence / positive-outcome / parked-root) over the
-refreshed anchor. Stage-completeness and finding-ledger run at
-**acceptance** (the required captures only exist once the stages ran) — same
-anchor, plus `--repo-root $WORKDIR` / explicit `$REVIEW_DIR` paths.
+All artifacts live outside the repository under `$REVIEW_DIR`:
 
-## Review artifacts and finding-disposition ledger
-
-```
-$REVIEW_DIR/   (= $WORKDIR/docs/issues_drafts/.review/<N>-<slug>/ — out of repo)
-  chats.md                                 # task-chat + review-chat URLs
-  lens-01-architect.md                     # six-axis entry-lens verdict
-  round-NN-author-reply.md                 # verbatim author replies
-  pass-NN-competitive.capture.txt          # verbatim reviewer output
-  pass-NN-architectural.capture.txt        # architectural finding-loop passes
-  pass-NN-architectural-lens.capture.txt   # final architect lens
-  pass-NN-architectural-final.capture.txt  # final architectural pass
-  presync-architect-lens.md                # per-mechanism keep/cut detail
-  finding-disposition-ledger.json
+```text
+chats.md
+lens-01-architect.md
+round-NN-author-reply.md
+pass-NN-competitive.capture.txt
+pass-NN-architectural.capture.txt
+pass-NN-architectural.codex.json
+pass-NN-architectural-lens.capture.txt
+pass-NN-architectural-final.capture.txt
+presync-architect-lens.md
+finding-disposition-ledger.json
 ```
 
-Pass numbers are one chronological sequence across stages. **Capture names
-are a guard contract:** `stage-completeness-core.ts` recognizes exactly the
-stages `competitive`, `architectural`, `architectural-lens`,
-`architectural-final` and requires the T3 sequence competitive →
-architectural-lens → architectural-final in strictly increasing pass order.
-Never invent variants (`pass-NN-final`, `pass-NN-lens`) — the guard reports
-them as missing stages. Ledger JSON:
+Pass numbers form one chronological sequence. Guard-recognized stage names are `competitive`, `architectural`, `architectural-lens`, and `architectural-final`. T3 requires competitive → latest lens → exactly one final after that latest lens. A final that finds issues remains immutable evidence; after the fix, write a newer lens and only then one newer final. Directly retrying a final after the same lens is invalid.
 
-```json
-{
-  "version": 1,
-  "draft": "<N>-<slug>.md",
-  "findings": [
-    {
-      "id": "stable-id",
-      "summary": "one-line summary",
-      "type": "security | scope-violation | spec | quality | test | ci",
-      "disposition": "addressed",
-      "rejectReason": "required when disposition is rejected"
-    }
-  ]
-}
-```
+Capture every reviewer response verbatim before editing. Normalize every typed finding into the ledger with a stable id, summary, type (`security`, `scope-violation`, `spec`, `quality`, `test`, `ci`), disposition, and reason when rejected. Reworded findings retain their id. `NO_FINDINGS` adds no row; it never erases earlier rows. Security and scope-violation findings can close only as addressed with real evidence or explicit operator risk acceptance.
 
-Normalization rules (unchanged from the Codex-era flow):
-
-- Capture **every** reviewer pass verbatim before any fix round.
-- Every typed finding in a capture appears in the ledger; re-worded findings
-  keep their `id` across passes; `NO_FINDINGS` passes add no rows.
-- Dispositions are proposed by the GPT author in its task-chat reply and
-  **ratified by the architect** — the architect owns the ledger.
-- Non-protected findings may be rejected as **correct but disproportionate**:
-  the `rejectReason` must tie the verdict to blast radius, reversibility, and
-  failure impact and name the cheaper sufficient alternative; "out of scope"
-  or "too complex" alone is invalid.
-- `type: security` / `type: scope-violation` (#51): `disposition: addressed`
-  only — reached by real defense, surface elimination, or an explicit
-  reasoned risk-acceptance note; never `rejected`, never omitted. Contested
-  protected findings escalate to the operator.
+For Codex, preserve raw companion JSON as `pass-NN-architectural.codex.json` and transcribe findings 1:1 into the plain capture so the ledger guard can scan them. A browser-outage substitution is recorded separately from an explicit wrapper or T3-critical addition.
 
 ## No local mirror, no queue index
 
-This flow writes **nothing** into the repository:
-
-- **No draft mirror.** The Issue body is the spec; the workdir anchor is a
-  working copy for guards and diffs, never committed.
-- **No queue-index row.** GitHub Issues **are** the queue; discover live
-  state via `scripts/gh` (`gh issue list/view`), never via a registry file.
-- `docs/issues_drafts/**` and
-  [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) are
-  **legacy, read-only history** — valuable as the prior-art survey corpus,
-  untouched by this flow.
-
-**Authority note (operator decision 2026-07-23).** `AGENTS.md` and
-`docs/tiering.md` still describe drafts as `docs/issues_drafts/**` artifacts
-mapped through the queue index — the mirrorless contract here supersedes
-them by operator decision; their canon updates are queued (blocked by the
-PR2 foundation freeze as of 07-23). Until those land, this skill is the
-authoritative procedure for GPT-authored tasks.
+The GitHub Issue is the only task artifact. The workdir anchor, pulled revisions, captures, chat URLs, and ledger are local audit state and are never committed. This flow does not create or update `docs/issues_drafts/**` or `docs/issue_queue_index.md`; those paths are legacy read-only prior-art sources. Discover live queue state through `scripts/gh` Issue/PR queries.
 
 ## Cross-issue contract changes
 
-A change affecting ≥ 2 specs lands as **one coordinated round**: a fix round
-in **each** affected Issue's task chat (every body updated before any of
-them is accepted), plus the decision-log update
-(`docs/issues_drafts/00-architecture-decisions.md` / `docs/architecture.md`)
-in the same change set. Never let sibling Issues drift from the decision
-they descend from.
+A change affecting two or more specs is one coordinated round: every affected Issue is updated before any is accepted, and the corresponding architecture decision is updated in the same change set. Never let sibling Issues drift from the decision they inherit.
 
-## Decision logging
+## Decision logging and reviewer lessons
 
-Architectural decisions the planner needs across iterations go to
-`docs/issues_drafts/00-architecture-decisions.md` (next letter section) or
-`docs/architecture.md` DD-entries, synced to Issue #3 in the same PR, with
-every affected draft updated alongside. If a decision invalidates an open
-reviewer finding or in-flight planner action, say so where the planner will
-see it.
-
-## Fold reviewer lessons back
-
-A reviewer finding on a merged PR is signal the spec missed something. The
-durable fix is a new fix round on the upstream Issue (task chat), not a patch
-to the implementation — the next planner iteration re-converges on the
-corrected spec.
+Durable architectural decisions go to `docs/issues_drafts/00-architecture-decisions.md` or `docs/architecture.md`, synced to Issue #3 in the same PR when repository policy requires it. Reviewer findings on merged work are folded back into the upstream Issue/spec flow, not patched only in the implementation.
 
 ## Don't
 
-- Author or rewrite spec content yourself — content fixes belong to the GPT
-  author in the task chat; your editing surface is lens verdicts, ledger
-  ratification, captures, and sanctioned mechanical parity patches only.
-- Run a review pass in the task chat, reuse a competitive chat, or open a
-  second architectural-review chat.
-- Trust a chat reply as a fix — the round closes only when the re-pulled
-  Issue body actually changed and floors re-ran.
-- Let the cursor helper write browser code or touch message content — it
-  executes the ready tool verbatim (the spark-probe incident rule).
-- Skip the competitive stage on T3 without a recorded operator waiver;
-  substitute Codex while browser GPT is reachable.
-- Edit the Issue with raw `gh issue edit` — parity edits go through
-  `scripts/publish-issue-body-sync.ts edit`; content goes through the author.
-- Accept with a red guard, an incomplete ledger, captures missing for any
-  pass that ran, or a final capture older than the last content change.
-- Write tracked draft files or queue-index rows — the Issue is the only task
-  artifact; everything else lives in the out-of-repo workdir.
-- Kill a running browser turn to rush acceptance — wait for STATE, 30-min
-  timeout, `nohup` + Monitor.
-- Commit workdir artifacts (revisions, captures, ledger) into the repository
-  — they are the task's local audit trail, not repo content.
+- Author or rewrite spec content from the architect seat; content fixes go through the GPT task chat. The architect may only create the initial brief and sanctioned mechanical parity fixes.
+- Run review in the task chat, reuse a competitive chat, or create a second architectural-review chat.
+- Treat a chat reply as a fix without re-pulling and diffing the Issue.
+- Skip a requested GPT/Codex wrapper stage, run it after acceptance, or silently substitute engines.
+- Retry a final architectural pass without a newer final lens.
+- Accept with a stale final capture, red guard, incomplete ledger, missing required capture, or stale title/fence tier.
+- Use raw `gh issue edit`; mechanical parity edits go through `scripts/publish-issue-body-sync.ts edit` from `$WORKDIR`.
+- Let the Cursor helper write browser code, alter message content, or make judgments; it executes the prepared tool only.
+- Write tracked draft mirrors, queue-index rows, captures, or workdir artifacts.
+- Hand-edit `.cursor/skills/**` pointers; regenerate them with `scripts/generate-skill-pointers.ps1`.
+- Over-specify implementation details that belong to the planner.
