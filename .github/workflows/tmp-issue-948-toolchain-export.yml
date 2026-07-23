@@ -20,11 +20,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p .toolchain-export/bin
+          mkdir -p .toolchain-export/bin .toolchain-export/Pester
           cp "$(command -v gh)" .toolchain-export/bin/gh
-          cp -a "$HOME/.local/share/powershell/Modules/Pester" .toolchain-export/Pester
+          pester_base="$(pwsh -NoProfile -Command '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1).ModuleBase')"
+          pester_version="$(pwsh -NoProfile -Command '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1).Version.ToString()')"
+          test -n "$pester_base"
+          cp -a "$pester_base" ".toolchain-export/Pester/$pester_version"
           gh --version > .toolchain-export/gh-version.txt
-          pwsh -NoProfile -Command '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1).Version.ToString()' > .toolchain-export/pester-version.txt
+          printf '%s\n' "$pester_version" > .toolchain-export/pester-version.txt
+          printf '%s\n' "$pester_base" > .toolchain-export/pester-module-base.txt
       - uses: actions/upload-artifact@v4
         with:
           name: issue-948-verification-toolchain
