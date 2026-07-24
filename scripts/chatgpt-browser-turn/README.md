@@ -73,7 +73,7 @@ Never resend after possible delivery merely because the caller missed the termin
 
 Parallel operation is fail-closed. Without current positive capability evidence bound to the exact candidate digest, build digest, configured profile/CDP digest, and Gate-B digest, the helper serializes at configured-profile scope.
 
-Even with positive capability evidence, every invocation rechecks the current service-issued witness surface before send. Missing or contradictory witness evidence downgrades capability visibly and falls back to exclusive profile execution. Same-conversation turns remain serialized or refused. Causal success requires an exact service-issued submitted user-message ID and assistant-message ID linked as its reply; DOM order/count/timing/text similarity never creates `ok`.
+Even with positive capability evidence, every invocation rechecks the current service-issued witness surface immediately before dispatch. Missing or contradictory witness evidence downgrades capability visibly and produces a zero-send profile-scoped refusal rather than allowing a stale parallel admission. Same-conversation turns remain serialized or refused. Causal success requires an exact service-issued submitted user-message ID and exactly one assistant-message ID linked as its reply; DOM order/count/timing/text similarity never creates `ok`, and ambiguous user or assistant observations fail closed.
 
 ## Publication safety
 
@@ -89,7 +89,23 @@ Deterministic Gate-B coverage is in `scripts/toolchain/chatgpt-browser-turn.test
 npm run test:issue-964
 ```
 
-Before the first real ChatGPT turn with a newly built candidate, the operator must run a live smoke against the dedicated automation profile and record the exact candidate/build/config/gate digests. The live smoke must demonstrate at least:
+For the exact candidate/profile/CDP that will be characterized, first query the capability surface and record the emitted `expected_binding` object:
+
+```bash
+npm run chatgpt-browser-turn -- capability \
+  --profile /absolute/path/to/automation-profile \
+  --cdp http://127.0.0.1:9222
+```
+
+The `candidate_digest`, `build_digest`, `config_digest`, and `gate_digest` in `expected_binding` are the Gate-B binding for that exact runtime candidate. For the operator-controlled live characterization invocation only, export that exact gate digest before running the successful serialized existing-chat turn:
+
+```bash
+export CHATGPT_BROWSER_TURN_GATE_B_DIGEST='<expected_binding.gate_digest>'
+```
+
+Do not reuse a value after any candidate or Gate-B test-source change. A successful turn can create positive capability evidence only when the live witness surface is present and this environment value equals the current `gate_digest`. Query `capability` again after characterization and retain its browser provenance, evidence digest, observation/expiry timestamps, and downgrade generation as Gate-C telemetry. If the result is not `state: ok`, parallel smoke is not admitted; fallback remains configured-profile serialization.
+
+Before the first real ChatGPT turn with a newly built candidate, the operator must run a live smoke against the dedicated automation profile. The live smoke must demonstrate at least:
 
 1. one existing-chat success with a service-issued user-to-assistant causal witness and byte-verified publication;
 2. one fresh-chat success with canonical conversation identity;
@@ -97,11 +113,18 @@ Before the first real ChatGPT turn with a newly built candidate, the operator mu
 4. destination collision leaves external bytes untouched and produces the correct pre-send or post-delivery state;
 5. `status/list`, exact `clear`, opaque quarantine/tombstone, and `publication-status` remain usable after a forced interrupted run.
 
-Do not mint positive parallel capability evidence from a synthetic test alone. The CLI accepts Gate-B binding only when the live runtime witness is present and the supplied Gate-B digest matches the exact current gate source digest.
+Do not mint positive parallel capability evidence from a synthetic test alone. Parallel characterization proceeds only after the serialized live success above, and every parallel invocation must independently retain current witness availability and exact capability binding until dispatch.
 
 ## Retained recovery copy and rollback
 
-Before first live use, create a digest-pinned recovery copy outside the working tree containing:
+Before first live use, choose and record an absolute recovery root outside the working tree. The canonical operator-local layout is the resolved home directory plus `.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`; for example:
+
+```bash
+RECOVERY_ROOT="$(realpath "$HOME")/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>"
+printf '%s\n' "$RECOVERY_ROOT"
+```
+
+Record the printed absolute path alongside the live characterization evidence. Populate that directory with:
 
 - `scripts/chatgpt-browser-turn.ts`;
 - the complete `scripts/chatgpt-browser-turn/` directory;
