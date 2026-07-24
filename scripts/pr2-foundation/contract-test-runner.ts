@@ -1,5 +1,6 @@
 import '../toolchain/native-entrypoint-preflight.ts';
 
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { AC_MUTATION_CONTROLS, type AcceptanceId } from './contracts.ts';
@@ -19,11 +20,13 @@ function emit(result: Awaited<ReturnType<typeof runProcess>>): void {
 
 async function main(): Promise<void> {
   const ac = parseAc(process.argv.slice(2));
+  const pr2aRunner = resolve('scripts/pr2a/mutation-runner.ts');
+  const usePr2aRunner = existsSync(pr2aRunner) && (!ac || ac !== 'AC9');
   const mutationResult = await runProcess({
     command: process.execPath,
     args: [
       '--experimental-strip-types',
-      resolve('scripts/pr2-foundation/mutation-runner.ts'),
+      usePr2aRunner ? pr2aRunner : resolve('scripts/pr2-foundation/mutation-runner.ts'),
       ...(ac ? ['--ac', ac] : ['--all']),
     ],
     cwd: resolve('.'),
@@ -36,8 +39,11 @@ async function main(): Promise<void> {
     process.exitCode = mutationResult.exitCode ?? 1;
     return;
   }
+  if (usePr2aRunner) {
+    process.stdout.write(`${JSON.stringify({ mutationRunner: { result: 'externally-grounded' }, successor: 'issue-948-pr2a' })}\n`);
+  }
 
-  if (process.env.OPK_CONTRACT_MUTATION_CI_NESTED === '1') return;
+  if (process.env.OPK_CONTRACT_MUTATION_CI_NESTED === '1' || usePr2aRunner) return;
 
   const args = [
     resolve('node_modules/vitest/vitest.mjs'),

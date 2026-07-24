@@ -17,9 +17,9 @@ export const FOUNDATION_RUNTIME_CATALOG: readonly RuntimeSurface[] = Object.free
   { id: 'worker-notification', category: 'notification', path: 'scripts/lib/pack-review-worker-notification.ts', classification: 'live-replaced' },
   { id: 'typed-config', category: 'config', path: 'scripts/pr2-foundation/config.ts', classification: 'live-replaced' },
   { id: 'migration-journal', category: 'migration', path: 'scripts/pr2-foundation/migration-journal.ts', classification: 'dormant' },
-  { id: 'claim-acquisition', category: 'claim', path: 'scripts/lib/Review-StartClaim.ps1', classification: 'live-unchanged' },
+  { id: 'claim-acquisition', category: 'claim', path: 'scripts/lib/review-start-claim-store.ts', classification: 'live-replaced' },
   { id: 'side-process-registry', category: 'registry', path: 'scripts/orchestrator-side-process-registry.json', classification: 'live-unchanged' },
-  { id: 'wake-supervisor', category: 'supervisor', path: 'scripts/orchestrator-wake-supervisor.ps1', classification: 'live-unchanged' },
+  { id: 'wake-supervisor', category: 'supervisor', path: 'scripts/lib/Orchestrator-WakeSupervisor.ps1', classification: 'live-replaced' },
   { id: 'legacy-starters', category: 'starter', path: 'scripts/review-trigger-reconcile.ps1', classification: 'live-unchanged' },
 ]);
 

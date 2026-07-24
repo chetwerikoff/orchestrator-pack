@@ -1,5 +1,4 @@
 import './toolchain/native-entrypoint-preflight.ts';
-import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -11,6 +10,12 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
+import {
+  acquireReviewStartClaim,
+  completeAfterRunInvoke,
+  releaseAfterRunFailure,
+  type ClaimResult,
+} from './lib/review-start-claim-store.ts';
 import {
   createPackReviewRun,
   getPackReviewRun,
@@ -107,7 +112,7 @@ interface ClaimLease {
 
 const RUNNER_RELATIVE_PATH = 'scripts/pack-review-runner.ts';
 const REVIEWER_RELATIVE_PATH = 'scripts/invoke-pack-review.ps1';
-const CLAIM_RELATIVE_PATH = 'scripts/lib/Review-StartClaim.ps1';
+const CLAIM_RELATIVE_PATH = 'scripts/lib/review-start-claim-store.ts';
 const DEFAULT_PROJECT_ID = 'orchestrator-pack';
 const DEFAULT_BASE_REF = 'origin/main';
 const DEFAULT_TIMEOUT_SECONDS = 45 * 60;
@@ -427,45 +432,6 @@ function writeRunLogs(storeRoot: string, runId: string, stdout: string, stderr: 
   writeFileSync(join(dir, `${runId}.stderr.log`), stderr, 'utf8');
 }
 
-const CLAIM_LEASE_SCRIPT = String.raw`
-$ErrorActionPreference = 'Stop'
-. $env:PACK_REVIEW_CLAIM_LIB
-$runsRaw = Get-Content -LiteralPath $env:PACK_REVIEW_CLAIM_RUNS -Raw -Encoding UTF8
-$runsParsed = if ($runsRaw.Trim()) { $runsRaw | ConvertFrom-Json } else { @() }
-$runs = @($runsParsed)
-$claim = Acquire-ReviewStartClaim -PrNumber ([int]$env:PACK_REVIEW_CLAIM_PR) -HeadSha $env:PACK_REVIEW_CLAIM_HEAD -Surface $env:PACK_REVIEW_CLAIM_SURFACE -ReviewRuns $runs -ProjectId $env:PACK_REVIEW_CLAIM_PROJECT -StartReason $env:PACK_REVIEW_CLAIM_REASON
-($claim | ConvertTo-Json -Depth 30 -Compress) | Set-Content -LiteralPath $env:PACK_REVIEW_CLAIM_RESULT -Encoding UTF8
-if (-not $claim.acquired) { exit 3 }
-New-Item -ItemType File -Path $env:PACK_REVIEW_CLAIM_READY -Force | Out-Null
-while (-not (Test-Path -LiteralPath $env:PACK_REVIEW_CLAIM_RELEASE -PathType Leaf)) {
-  try { Get-Process -Id ([int]$env:PACK_REVIEW_CLAIM_PARENT_PID) -ErrorAction Stop | Out-Null } catch { exit 4 }
-  Start-Sleep -Milliseconds 200
-}
-$release = Get-Content -LiteralPath $env:PACK_REVIEW_CLAIM_RELEASE -Raw -Encoding UTF8 | ConvertFrom-Json
-$releaseRuns = @($release.reviewRuns)
-if ([string]$release.action -eq 'run_started') {
-  $complete = Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $claim -ReviewRuns $releaseRuns
-} else {
-  $complete = Release-ReviewStartClaimAfterRunFailure -ClaimResult $claim -ReviewRuns $releaseRuns -Failure ([string]$release.detail)
-}
-($complete | ConvertTo-Json -Depth 30 -Compress) | Set-Content -LiteralPath $env:PACK_REVIEW_CLAIM_COMPLETE -Encoding UTF8
-if (-not $complete.ok) { exit 5 }
-`;
-
-async function waitForFile(path: string, processPromise: Promise<ProcessResult>, timeoutMs = 30_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!existsSync(path)) {
-    const settled = await Promise.race([
-      processPromise.then((result) => ({ process: result })),
-      new Promise<{ tick: true }>((resolveTick) => setTimeout(() => resolveTick({ tick: true }), 50)),
-    ]);
-    if ('process' in settled) {
-      throw new Error(`review claim helper exited before readiness: ${trim(settled.process.stderr || settled.process.stdout || settled.process.error)}`);
-    }
-    if (Date.now() >= deadline) throw new Error('review claim helper readiness timed out');
-  }
-}
-
 async function acquireClaimLease(options: {
   trustedPackRoot: string;
   claimPath: string;
@@ -477,13 +443,8 @@ async function acquireClaimLease(options: {
   startReason: string;
   resumeRunId?: string;
 }): Promise<ClaimLease> {
-  const directory = join(options.storeRoot, 'claim-leases', `claim-${randomUUID()}`);
-  mkdirSync(directory, { recursive: true });
-  const runsFile = join(directory, 'runs.json');
-  const resultFile = join(directory, 'claim.json');
-  const readyFile = join(directory, 'ready');
-  const releaseFile = join(directory, 'release.json');
-  const completeFile = join(directory, 'complete.json');
+  void options.trustedPackRoot;
+  void options.claimPath;
   const visibleRuns = listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot });
   const claimRuns = options.resumeRunId
     ? visibleRuns.map((candidate) => candidate.id === options.resumeRunId
@@ -495,62 +456,35 @@ async function acquireClaimLease(options: {
         }
       : candidate)
     : visibleRuns;
-  writeFileSync(runsFile, `${JSON.stringify(claimRuns)}\n`, 'utf8');
-
-  const helperPromise = runProcess({
-    command: 'pwsh',
-    args: ['-NoProfile', '-Command', CLAIM_LEASE_SCRIPT],
-    cwd: options.trustedPackRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: true,
-    env: {
-      PACK_REVIEW_CLAIM_LIB: options.claimPath,
-      PACK_REVIEW_CLAIM_RUNS: runsFile,
-      PACK_REVIEW_CLAIM_RESULT: resultFile,
-      PACK_REVIEW_CLAIM_READY: readyFile,
-      PACK_REVIEW_CLAIM_RELEASE: releaseFile,
-      PACK_REVIEW_CLAIM_COMPLETE: completeFile,
-      PACK_REVIEW_CLAIM_PARENT_PID: String(process.pid),
-      PACK_REVIEW_CLAIM_PR: String(options.prNumber),
-      PACK_REVIEW_CLAIM_HEAD: options.headSha,
-      PACK_REVIEW_CLAIM_PROJECT: options.projectId,
-      PACK_REVIEW_CLAIM_SURFACE: options.surface,
-      PACK_REVIEW_CLAIM_REASON: options.startReason,
-    },
+  const claim = acquireReviewStartClaim({
+    prNumber: options.prNumber,
+    headSha: options.headSha,
+    surface: options.surface,
+    reviewRuns: claimRuns,
+    projectId: options.projectId,
+    startReason: options.startReason,
   });
-
-  try {
-    await waitForFile(resultFile, helperPromise);
-    const claim = JSON.parse(readFileSync(resultFile, 'utf8')) as { acquired?: boolean; reason?: string };
-    if (!claim.acquired) {
-      await helperPromise;
-      return {
-        acquired: false,
-        reason: trim(claim.reason) || 'claimed',
-        directory,
-        release: async () => undefined,
-      };
-    }
-    await waitForFile(readyFile, helperPromise);
+  if (!claim.acquired) {
     return {
-      acquired: true,
-      reason: 'acquired',
-      directory,
-      release: async (action, reviewRuns, detail = '') => {
-        writeFileSync(releaseFile, `${JSON.stringify({ action, reviewRuns, detail })}\n`, 'utf8');
-        const helper = await helperPromise;
-        if (!helper.ok) throw new Error(`review claim helper completion failed: ${trim(helper.stderr || helper.stdout || helper.error)}`);
-        if (!existsSync(completeFile)) throw new Error('review claim helper wrote no completion result');
-        const completion = JSON.parse(readFileSync(completeFile, 'utf8')) as { ok?: boolean; reason?: string };
-        if (!completion.ok) throw new Error(`review claim completion failed: ${trim(completion.reason) || 'unknown'}`);
-      },
+      acquired: false,
+      reason: trim(claim.reason) || 'claimed',
+      directory: '',
+      release: async () => undefined,
     };
-  } catch (error) {
-    if (!existsSync(releaseFile)) {
-      writeFileSync(releaseFile, `${JSON.stringify({ action: 'failure', reviewRuns: [], detail: describeError(error) })}\n`, 'utf8');
-    }
-    throw error;
   }
+  return {
+    acquired: true,
+    reason: 'acquired',
+    directory: '',
+    release: async (action, reviewRuns, detail = '') => {
+      const completion = action === 'run_started'
+        ? completeAfterRunInvoke(claim as ClaimResult, reviewRuns)
+        : releaseAfterRunFailure(claim as ClaimResult, reviewRuns, detail);
+      if (completion.ok !== true) {
+        throw new Error(`review claim completion failed: ${trim(completion.reason) || 'unknown'}`);
+      }
+    },
+  };
 }
 
 function findJournaledDeliveryResumeCandidate(options: {
@@ -934,7 +868,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     };
   } finally {
     if (worktree) await removeReviewWorktree(target.sourceRepoRoot, worktree);
-    if (claimLease) rmSync(claimLease.directory, { recursive: true, force: true });
+    if (claimLease?.directory) rmSync(claimLease.directory, { recursive: true, force: true });
   }
 }
 

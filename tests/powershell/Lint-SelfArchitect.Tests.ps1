@@ -345,11 +345,22 @@ Describe 'scripts/lint-self-architect.ps1' {
         ([regex]::Matches($body, '\$baseLinesCache\s*=\s*@\{\}')).Count | Should -Be 1
     }
 
-    It 'declares exactly the sixteen Issue 923 migration pairs without wildcards' {
+    It 'declares exactly sixteen Issue 923 pairs and one Issue 948 pair without wildcards' {
         $configPath = Join-Path $script:RepoRoot 'scripts/lint-self-architect.config.json'
         $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        $suppressions = @($config.suppressions | Where-Object { $_.rule -eq 'duplicate-literal' })
-        $suppressions.Count | Should -Be 16
+        $duplicateSuppressions = @($config.suppressions | Where-Object { $_.rule -eq 'duplicate-literal' })
+        $issue923Reason = 'Issue #923 migration parity until draft 315; remove at cutover'
+        $issue948Reason = 'Issue #948 owner-mechanism manifest intentionally mirrors canonical catalog coverage for mechanical cross-checking'
+        $issue923Suppressions = @($duplicateSuppressions | Where-Object { $_.reason -eq $issue923Reason })
+        $issue948Suppressions = @($duplicateSuppressions | Where-Object { $_.reason -eq $issue948Reason })
+        $unexpectedSuppressions = @($duplicateSuppressions | Where-Object {
+            $_.reason -ne $issue923Reason -and $_.reason -ne $issue948Reason
+        })
+
+        $duplicateSuppressions.Count | Should -Be 17
+        $issue923Suppressions.Count | Should -Be 16
+        $issue948Suppressions.Count | Should -Be 1
+        $unexpectedSuppressions.Count | Should -Be 0
 
         $expectedLegacy = @(
             'docs/ao-0-10-review-api.mjs',
@@ -370,7 +381,7 @@ Describe 'scripts/lint-self-architect.ps1' {
             'docs/worker-report-store.mjs'
         )
         $actualLegacy = @()
-        foreach ($entry in $suppressions) {
+        foreach ($entry in $issue923Suppressions) {
             @($entry.files).Count | Should -Be 2
             ($entry.files -join "`n") | Should -Not -Match '[*?\[\]]'
             $legacy = @($entry.files | Where-Object { $_ -like 'docs/*.mjs' -or $_ -like 'docs/*.d.mts' })
@@ -380,6 +391,14 @@ Describe 'scripts/lint-self-architect.ps1' {
             $actualLegacy += $legacy[0]
         }
         @(Compare-Object -ReferenceObject ($expectedLegacy | Sort-Object) -DifferenceObject ($actualLegacy | Sort-Object)).Count | Should -Be 0
+
+        $expected948Files = @(
+            'scripts/orchestrator-message-catalog.json',
+            'scripts/orchestrator-message-owner-mechanisms.manifest.json'
+        )
+        @($issue948Suppressions[0].files).Count | Should -Be 2
+        ($issue948Suppressions[0].files -join "`n") | Should -Not -Match '[*?\[\]]'
+        @(Compare-Object -ReferenceObject ($expected948Files | Sort-Object) -DifferenceObject (@($issue948Suppressions[0].files) | Sort-Object)).Count | Should -Be 0
     }
 
 

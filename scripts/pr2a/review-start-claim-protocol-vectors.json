@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "issue": 948,
+  "vectors": [
+    {
+      "id": "legacy-active-v1",
+      "record": {
+        "schemaVersion": 1,
+        "key": "pr-948-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "prNumber": 948,
+        "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "active",
+        "holder": {
+          "surface": "legacy-powershell",
+          "pid": 2147483000,
+          "host": "legacy-host",
+          "generation": "legacy-generation",
+          "processGuid": "legacy-guid"
+        },
+        "acquiredAtUtc": "2026-07-23T00:00:00.000Z",
+        "startReason": "automatic",
+        "projectNamespace": "orchestrator-pack",
+        "firstAttemptAtMonotonicMs": 1000,
+        "readinessStartMonotonicMs": 1000
+      },
+      "expect": {
+        "readable": true,
+        "keyStable": true,
+        "foreignHolderFailsClosed": true
+      }
+    },
+    {
+      "id": "candidate-active-v1",
+      "record": {
+        "schemaVersion": 1,
+        "key": "pr-949-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "prNumber": 949,
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "state": "active",
+        "holder": {
+          "surface": "pack-review-runner",
+          "pid": 1,
+          "host": "candidate-host",
+          "generation": "candidate-generation",
+          "processGuid": "candidate-guid",
+          "startTimeTicks": "123",
+          "bootIdHash": "boot-hash"
+        },
+        "acquiredAtUtc": "2026-07-23T00:00:00.000Z",
+        "startReason": "manual",
+        "projectNamespace": "orchestrator-pack",
+        "firstAttemptAtMonotonicMs": 2000,
+        "readinessStartMonotonicMs": 2000,
+        "launchPending": {
+          "atUtc": "2026-07-23T00:00:01.000Z",
+          "budgetMs": 30000
+        }
+      },
+      "expect": {
+        "readable": true,
+        "unknownFieldsPreserved": true,
+        "generationFenced": true
+      }
+    }
+  ]
+}

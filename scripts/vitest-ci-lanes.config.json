@@ -69,6 +69,8 @@
     "scripts/pr2-foundation/review-head-ready.test.ts": "light",
     "scripts/pr2-foundation/terminalized-port.test.ts": "light",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "light",
+    "scripts/pr2a/final-conformance.test.ts": "light",
+    "scripts/pr2a/planning.test.ts": "light",
     "scripts/review-delivery.test.ts": "light",
     "scripts/review-finding-delivery-submit.test.ts": "heavy",
     "scripts/review-head-ready.test.ts": "heavy",

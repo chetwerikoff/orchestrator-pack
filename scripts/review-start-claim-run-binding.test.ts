@@ -541,7 +541,7 @@ describe('review-start-claim-run-binding', () => {
     const projectId = 'orchestrator-pack';
     const headSha = 'a7f0e4d190556d2a61082878e82c6e5164f6a31e';
     const gateLib = path.join(repoRoot, 'scripts/lib/Autonomous-ReviewWorktreeGate.ps1');
-    const claimLib = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
+    const claimLib = path.join(repoRoot, 'scripts/lib/Review-StartClaimLifecycle.ps1');
     const target = path.join(aoBase, 'projects', projectId, 'code-reviews', 'workspaces', 'opk-rev-test');
     try {
       const result = JSON.parse(

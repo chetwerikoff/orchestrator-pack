@@ -18,7 +18,9 @@
     "scripts/vitest-heavy-topology.plan.json",
     "scripts/contract-evidence-validator.mjs",
     "scripts/contract-evidence-validator.d.mts",
-    "scripts/gate-runner/census/**"
+    "scripts/gate-runner/census/**",
+    "scripts/pr2a/planning-manifest.json",
+    "scripts/vitest-live-store-inventory.json"
   ],
   "scriptExtensions": [
     ".ps1",
@@ -176,6 +178,14 @@
       "files": [
         "docs/events-optional-consumer-signal-recovery.d.mts",
         "scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.d.ts"
+      ]
+    },
+    {
+      "rule": "duplicate-literal",
+      "reason": "Issue #948 owner-mechanism manifest intentionally mirrors canonical catalog coverage for mechanical cross-checking",
+      "files": [
+        "scripts/orchestrator-message-catalog.json",
+        "scripts/orchestrator-message-owner-mechanisms.manifest.json"
       ]
     }
   ]
