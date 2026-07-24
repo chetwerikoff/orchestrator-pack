@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT authoring-chat link (or only a brief: GPT then authors and creates the Issue by default), and the architect runs the lens → fix → competitive → architectural-review → final-lens pipeline over it, with GPT applying every fix directly to the Issue. Covers chat topology (one task chat, fresh chat per competitive pass, one dedicated review chat), the six-axis architect lens, browser-turn mechanics via the cursor helper, mandatory issue-body floors (tier gate, fences, contract evidence, discipline guards), and the finding-disposition ledger. The Issue is the only task artifact — no local draft mirror, no queue-index row; working artifacts live in an out-of-repo workdir. Invoke on every new GPT-authored task. Do not invoke for tiny docs typos or rename-only refactors.
+description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT authoring-chat link (or only a brief: GPT then authors and creates the Issue by default), and the architect runs the lens → fix → browser-GPT competitive → Codex architectural-review → final-lens pipeline, with GPT applying every content fix directly to the Issue. Covers one task chat, fresh browser-GPT competitive chats, mandatory Codex architectural review at every tier and Codex final verification whenever the tier flow requires it under the current `docs/tiering.md` canon, T3-critical L4 classification and rollback/migration plus crash/race/stale-state floors, browser-turn mechanics, issue-body guards, and the finding-disposition ledger. The Issue is the only live task artifact — no tracked draft mirror or queue-index row; audit artifacts live in an out-of-repo workdir. Invoke on every new GPT-authored task. Do not invoke for tiny docs typos or rename-only refactors.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -47,8 +47,8 @@ qualify for the below-ladder skip line.
 | GPT author in task chat | Spec content, every content fix, direct Issue edits | Review its own spec |
 | Architect | Lens passes, stage ordering, evidence, floors, disposition ratification, acceptance | Author content fixes or bypass the task chat |
 | Cursor helper | Execute the prepared browser command and return verbatim output + state | Write browser code, alter prompts, judge findings |
-| Reviewer GPT chats | Competitive and architectural critique | Edit the Issue |
-| Codex | Explicit wrapper pass, T3-critical independent pass, or recorded browser-outage substitution | Silently replace an available browser stage |
+| Reviewer GPT chats | Competitive critique in fresh chats | Edit the Issue or replace canonical Codex architectural review |
+| Codex | Mandatory architectural review and final verification at every tier; explicit wrapper loop when requested; recorded competitive-stage browser-outage substitution | Be skipped, silently waived, or replaced by browser GPT while current `docs/tiering.md` remains authoritative |
 
 ## Chat topology
 
@@ -56,22 +56,23 @@ qualify for the below-ladder skip line.
 |--------|------|----------|
 | Authoring, fixes, finding relays | one **task chat** | whole flow |
 | Competitive review | **fresh chat per pass** | one pass |
-| Architectural review and final verification | one **dedicated review chat** | first architectural pass through final pass |
+| Architectural review and final verification | **Codex review process; no browser chat** | one cold invocation per pass |
 | Architect lenses | no browser chat | in-session |
 
 Never review in the task chat, relay fixes anywhere except the task chat, reuse a
-competitive chat, or create a second architectural-review chat.
+competitive chat, or substitute a browser-GPT review chat for the canonical Codex
+architectural stages.
 
 ## Pipeline
 
 1. Intake: pull title/body, create workdir, recompute tier, run body floors.
 2. Architect lens 1: six axes plus competitive directive.
 3. Task-chat fix round; re-pull, diff, and rerun body floors.
-4. Competitive stage when selected or explicitly requested, ≤3 fresh-chat passes.
-5. Architectural review in one dedicated chat, per-tier ceiling.
-6. Explicit Codex wrapper and/or T3-critical independent Codex pass when required.
+4. Browser-GPT competitive stage when selected or explicitly requested, ≤3 fresh-chat passes.
+5. Mandatory Codex architectural review at every tier, using the current per-tier ceiling.
+6. Additional explicit Codex wrapper loop when requested; T3-critical classification and safety floors when triggered.
 7. Final architect lens, including the only sanctioned downgrade decision.
-8. Exactly one final architectural pass after the latest final-lens capture.
+8. Exactly one Codex final architectural pass after the latest final-lens capture when the tier flow requires it.
 9. Acceptance only over the current Issue revision with all floors and ledger green.
 
 A review stage ends early on `NO_FINDINGS`. A capped exit is allowed only when
@@ -111,8 +112,9 @@ scripts/gh api repos/chetwerikoff/orchestrator-pack/issues/<N> \
 cp "$WORKDIR/rNN/<N>-<slug>.md" "$ANCHOR"
 ```
 
-Pull the title every time because the tier prefix lives in it. Record task-chat
-and review-chat URLs in `$REVIEW_DIR/chats.md`.
+Pull the title every time because the tier prefix lives in it. Record the task-chat
+URL and each competitive-chat URL in `$REVIEW_DIR/chats.md`; Codex stages have no
+browser-chat URL.
 
 ## Step 2 — Architect lens 1
 
@@ -170,42 +172,78 @@ Stop on a valid no-accepted-finding pass or at cap 3 with open questions recorde
 A browser outage may use a recorded stage-specific Codex substitution only when
 the operator cannot restore the browser.
 
-## Step 5 — Architectural review and Codex stages
+## Step 5 — Codex architectural review
 
-Create one dedicated browser-GPT review chat on the first pass and reuse it. Each
-pass carries the current Issue revision even though chat history exists. Save
-verbatim as `pass-NN-architectural.capture.txt`, normalize findings, relay fixes,
-re-pull, and rerun body floors. Ceiling: T1 one light pass, T2 ≤3, T3 ≤4.
+The live default-branch [`docs/tiering.md`](../../docs/tiering.md) is the
+architectural-engine authority until its separately scoped canon-alignment task
+lands. Therefore **every tier uses Codex for architectural review**; browser GPT
+remains the author and competitive reviewer, not the canonical architectural
+reviewer.
+
+Run a fresh cold Codex invocation over the current absolute anchor on every pass.
+Because the companion uses `--scope working-tree`, first copy the current anchor to
+a uniquely named untracked `.review-challenge/<N>-<slug>-pass-NN.md` path in the
+trusted checkout, focus the review on that exact path, and delete the copy after
+the pass. Never reuse a stale scratch copy.
+
+1. use the Codex companion mechanics from
+   [`adversarial-draft-review`](../adversarial-draft-review/SKILL.md), focused on
+   the current spec only;
+2. preserve raw JSON as `pass-NN-architectural.codex.json`;
+3. mechanically transcribe all findings 1:1 into plain `type:` lines in
+   `pass-NN-architectural.capture.txt` so the ledger guard can see them;
+4. normalize findings, relay accepted fixes through the task chat, re-pull the
+   Issue, and rerun body floors;
+5. start the next pass as a new cold Codex thread.
+
+Per-tier ceiling: T1 one light Codex pass, T2 ≤3 Codex passes, T3 ≤4 Codex
+passes. Early stop and capped-exit rules remain unchanged.
 
 ### Explicit Codex wrapper
 
 When brief-only `adversarial-draft-review` was explicitly requested, run its
-cold Codex loop over the current anchor after browser-GPT architectural review
-and before final lens. Preserve raw JSON as
-`pass-NN-architectural.codex.json`; transcribe every finding 1:1 into plain
-`type:` lines in `pass-NN-architectural.capture.txt`; relay accepted findings
-through the task chat and rerun body floors. Cap: three passes under that skill's
-convergence rule.
+additional cold challenge loop after browser-GPT competitive review and **before**
+the canonical Codex architectural stage. The explicit wrapper never replaces the
+mandatory architectural review, even though both use Codex; they are independent
+cold review roles. Relay accepted findings through the task chat and rerun body
+floors. Cap: three passes under that skill's convergence rule.
 
-### T3-critical addition
+### T3-critical classification and mandatory floors
 
-T3-critical tasks require an independent Codex architectural pass over the
-current post-GPT revision. The final required pass of an explicit wrapper loop
-satisfies this once when it reviewed that same current revision; do not duplicate
-it. The final lens must see all Codex findings.
+Classify a task as **T3-critical** whenever it matches any L4 condition in Issue
+#574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md`. The author or
+operator's declared tier is only a prior: the architect must perform this
+classification at intake, after material scope change, and before acceptance.
+While an L4 condition remains, the task cannot be downgraded below T3.
+
+T3-critical means **GPT and Codex together**: the normal T3 browser-GPT
+competitive stage and the mandatory Codex architectural/final stages must all
+run. It also adds two non-waivable Issue-body floors:
+
+- an explicit rollback or migration note appropriate to the change, including
+  the safe reversal/transition boundary and operator action when applicable;
+- at least one realistic acceptance criterion and matching verification for the
+  relevant crash, race, or stale-state failure mode. If more than one of those
+  classes is material, cover each material class rather than choosing the easiest
+  single test.
+
+The final architect lens must re-check the L4 classification and both floors.
+Missing classification evidence, rollback/migration coverage, or realistic
+crash/race/stale-state verification blocks acceptance.
 
 ### Codex unavailability
 
 Availability is fail-closed:
 
-- an explicit non-T3-critical wrapper blocks before final lens/acceptance until
-  Codex is restored or the operator directly waives the requested extra stage;
-  record the waiver in ledger notes and final report;
-- the T3-critical Codex addition is mandatory and cannot be waived;
-- when Codex was selected as a browser-outage substitute and is also unavailable,
-  the replaced stage remains blocked.
+- the canonical Codex architectural review and Codex final verification are
+  mandatory at every tier and cannot be waived or replaced by browser GPT;
+- an additional explicit non-T3-critical wrapper blocks until Codex is restored
+  or the operator directly waives only that **extra** wrapper stage; record the
+  waiver in ledger notes and final report;
+- if Codex was selected to replace an unavailable browser-GPT competitive stage
+  and is also unavailable, that competitive stage remains blocked.
 
-Never call an unavailable/skipped Codex stage complete.
+Never call an unavailable or skipped Codex stage complete.
 
 ## Step 6 — Final architect lens
 
@@ -225,9 +263,11 @@ then reruns this lens as a new delta capture.
 
 ## Step 7 — Final architectural pass
 
-T3 always runs one; T1/T2 run one only when the final lens changed content. Use
-the same dedicated review chat and current Issue revision. Save as
-`pass-NN-architectural-final.capture.txt`.
+T3 always runs one; T1/T2 run one only when the final lens changed content. Run
+a fresh cold **Codex** review over the current Issue revision and save the plain
+transcription as `pass-NN-architectural-final.capture.txt` with raw JSON
+provenance alongside. Browser GPT cannot substitute for this canonical final
+architectural stage.
 
 If it finds issues:
 
@@ -249,8 +289,10 @@ Acceptance requires, in order:
 3. every typed finding normalized, protected findings addressed, capped risks
    recorded;
 4. live Issue title prefix matching the final tier;
-5. no required explicit wrapper or T3-critical Codex stage silently skipped;
-6. report Issue URL, tier, pass counts, chat URLs, workdir, waivers, and risks.
+5. no canonical Codex architectural/final stage, requested wrapper, or
+   T3-critical classification/safety floor skipped;
+6. report Issue URL, tier, pass counts, competitive chat URLs, workdir, waivers,
+   T3-critical classification result, and risks.
 
 Two non-converging `fix -> newer lens -> final` cycles escalate to the operator.
 
@@ -289,9 +331,11 @@ revision history remains gapless.
 ## Browser-turn mechanics
 
 Use [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md) as the canonical browser
-mechanics source: logged-in dedicated automation Chrome, tracked driver
-semantics, `--new-chat` for competitive passes, and `--chat-url` for task/review
-turns. The Cursor helper executes a prepared command only.
+mechanics source for **task-chat authoring/fixes and competitive review only**:
+logged-in dedicated automation Chrome, tracked driver semantics, `--new-chat`
+for competitive passes, and `--chat-url` for task-chat turns. Architectural and
+final verification use Codex and do not create or reuse a browser review chat.
+The Cursor helper executes a prepared browser command only.
 
 Every review/amendment prompt is self-contained, carries the current Issue body
 as UNTRUSTED DATA between nonce markers, and requests one outer `~~~markdown`
@@ -299,9 +343,11 @@ fence so inner backtick fences survive. Save each response verbatim before
 interpretation. Use the documented long timeout/polling discipline. Non-success
 states are reported, not improvised around.
 
-A stage-specific Codex outage substitution preserves the replaced guard stage
-name (`competitive`, `architectural`, or `architectural-final`), stores raw JSON
-alongside the plain 1:1 finding transcription, and is recorded separately.
+A Codex browser-outage substitution is relevant only to an unavailable
+**competitive** browser-GPT stage. Preserve the `competitive` capture name, store
+raw JSON beside the plain 1:1 finding transcription, and record the substitution.
+The `architectural` and `architectural-final` stages are already canonical Codex
+stages, not browser stages with a substitution path.
 
 ## Tier gate
 
@@ -317,18 +363,35 @@ skipped mandatory stage blocks acceptance; unparseable input becomes T3.
 
 Tier stages:
 
-- T1: no competitive stage; one light architectural pass; light final lens;
-  final verification only after lens-driven content change.
-- T2: competitive only when red-flagged or explicitly requested;
-  architectural ≤3; light final lens; final verification only after lens-driven
-  content change.
-- T3: competitive ≤3; architectural ≤4; full final lens; exactly one final pass
-  after the latest lens.
-- T3-critical: T3 plus one mandatory independent Codex pass.
+- T1: no competitive stage; one light **Codex** architectural pass; light final
+  lens; one Codex final verification only after lens-driven content change.
+- T2: browser-GPT competitive only when red-flagged or explicitly requested;
+  **Codex** architectural ≤3; light final lens; one Codex final verification only
+  after lens-driven content change.
+- T3: browser-GPT competitive ≤3; **Codex** architectural ≤4; full final lens;
+  exactly one Codex final pass after the latest lens.
+- T3-critical: classify from the Issue #574 L4-condition list; run the full T3
+  GPT+Codex pipeline and require the rollback/migration plus realistic
+  crash/race/stale-state floors below.
 
 Explicit adversarial wrappers floor the effective tier at T2 and preserve their
 requested stage. Upward recompute runs skipped stages. Downward movement occurs
 only at final lens and never erases evidence.
+
+### T3-critical floor details
+
+The L4 classification is independent of the literal `complexity-tier` fence. At
+intake and final recompute, cite the matched L4 condition(s) in the architect
+record. An L4 task is not acceptance-ready unless the live Issue contains:
+
+1. a rollback/migration note describing the safe rollback or migration boundary,
+   data/state compatibility, and required operator action; and
+2. numbered acceptance criteria plus matching verification that exercise every
+   material crash, race, and stale-state class with realistic inputs.
+
+These are additive to all never-skipped worker-safety, behavior-kind,
+contract-evidence, stage-completeness, and finding-ledger floors. They are not
+satisfied by a generic risk paragraph, a happy-path unit test, or a waiver.
 
 ## Mandatory Issue-body floors
 
@@ -431,12 +494,26 @@ node scripts/finding-ledger-guard.mjs \
   --draft-path "$ANCHOR"
 ```
 
-Run body-only floors after every refreshed Issue revision. Run stage completeness
-and finding-ledger at acceptance. Contract evidence stays rooted in the trusted
-repository; only stage completeness receives `$WORKDIR` as its explicit derived
-artifact root.
+Run body-only guards after every Issue revision. Stage completeness and the
+finding-ledger guard run at acceptance. Contract evidence uses tracked manifests
+from the trusted repository root; stage completeness alone receives the workdir
+as repo root to locate out-of-repo captures.
 
-## Review artifacts and ledger
+## Finding ledger
+
+Every reviewer capture is immutable evidence. The ledger records a stable id,
+summary, type (`security`, `scope-violation`, `spec`, `quality`, `test`, `ci`),
+disposition, and reject reason when applicable.
+
+- Accepted/partial findings are fixed through the task chat.
+- Rejected non-protected findings need a proportionality reason tied to blast
+  radius, reversibility, failure impact, and a cheaper sufficient alternative.
+- Security and scope-violation findings cannot be rejected; address them with
+  real defense/evidence or obtain explicit operator risk acceptance.
+- `NO_FINDINGS` never erases prior findings.
+- Capped exits preserve unresolved questions in the ledger and final report.
+
+## Review artifacts
 
 All durable audit artifacts remain outside the repository:
 
@@ -480,12 +557,15 @@ to the repository's architecture decision surface under its own scoped change.
 ## Don't
 
 - Author content fixes from the architect seat.
-- Review in the task chat or create the wrong chat topology.
+- Review in the task chat, create a browser architectural-review chat, or let
+  browser GPT replace the canonical Codex architectural/final stages.
 - Trust a chat reply without a live Issue re-pull and diff.
 - Run parity sync from `$WORKDIR`; use trusted repo cwd + absolute anchor.
 - Omit `behavior-kind` or `allowed-roots` from any task/skip-line body.
-- Skip a requested GPT/Codex stage silently.
-- Waive the T3-critical Codex addition.
+- Skip a requested GPT/Codex stage or any canonical Codex architectural/final
+  stage silently.
+- Miss the Issue #574 L4 classification or waive/dilute the T3-critical
+  rollback/migration and crash/race/stale-state floors.
 - Retry a final pass without a newer final-lens capture.
 - Accept with stale captures/title, red floors, or incomplete ledger.
 - Use raw `gh issue edit`; use the sanctioned body-sync helper for parity only.
