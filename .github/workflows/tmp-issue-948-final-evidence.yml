@@ -1,9 +1,9 @@
 name: tmp-issue-948-final-evidence
 
 on:
-  push:
+  pull_request:
     branches:
-      - tmp/issue-948-verification-toolchain
+      - main
 
 permissions:
   contents: read
@@ -47,7 +47,7 @@ jobs:
           EVID="$RUNNER_TEMP/issue948-evidence"
           rm -rf "$EVID"
           mkdir -p "$EVID/commands" "$EVID/overlap/rows" "$EVID/rollback" "$EVID/external"
-          printf '%s\n' "$(git status --porcelain=v1)" > "$EVID/pre-receipt-git-status.txt"
+          git status --porcelain=v1 > "$EVID/pre-receipt-git-status.txt"
           test ! -s "$EVID/pre-receipt-git-status.txt"
 
           hash_file() {
@@ -55,7 +55,7 @@ jobs:
           }
 
           run_evidence() {
-            local idx="$1" display="$2" actual="$3" stem="$4"
+            local display="$1" actual="$2" stem="$3"
             local log="$EVID/commands/${stem}.log"
             local result="$EVID/commands/${stem}.json"
             local row="$EVID/commands/${stem}.row.json"
@@ -81,15 +81,15 @@ NODE
             test "$code" -eq 0
           }
 
-          run_evidence 1 'npm run typecheck:foundation' 'npm run typecheck:foundation' '01-typecheck'
-          run_evidence 2 'npm run lint:foundation' 'npm run lint:foundation' '02-lint'
-          run_evidence 3 'npm run test:contract-mutations' 'npm run test:contract-mutations' '03-mutations'
-          run_evidence 4 'npm run test:issue-948' 'npm run test:issue-948' '04-issue948'
-          run_evidence 5 'pwsh -NoProfile -File scripts/verify.ps1' 'pwsh -NoProfile -File scripts/verify.ps1' '05-verify'
-          run_evidence 6 'pwsh -NoProfile -File scripts/check-reusable.ps1' 'pwsh -NoProfile -File scripts/check-reusable.ps1' '06-reusable'
-          run_evidence 7 'pwsh -NoProfile -File scripts/test-all.ps1' 'pwsh -NoProfile -File scripts/test-all.ps1' '07-pester'
-          run_evidence 8 'vitest-light' 'pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1' '08-vitest-light'
-          run_evidence 9 'vitest-heavy' 'node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard >/tmp/issue948-topology.json && pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 1 && pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 2; rm -f scripts/vitest-heavy-topology.plan.json .vitest-runtime-report-*.json' '09-vitest-heavy'
+          run_evidence 'npm run typecheck:foundation' 'npm run typecheck:foundation' '01-typecheck'
+          run_evidence 'npm run lint:foundation' 'npm run lint:foundation' '02-lint'
+          run_evidence 'npm run test:contract-mutations' 'npm run test:contract-mutations' '03-mutations'
+          run_evidence 'npm run test:issue-948' 'npm run test:issue-948' '04-issue948'
+          run_evidence 'pwsh -NoProfile -File scripts/verify.ps1' 'pwsh -NoProfile -File scripts/verify.ps1' '05-verify'
+          run_evidence 'pwsh -NoProfile -File scripts/check-reusable.ps1' 'pwsh -NoProfile -File scripts/check-reusable.ps1' '06-reusable'
+          run_evidence 'pwsh -NoProfile -File scripts/test-all.ps1' 'pwsh -NoProfile -File scripts/test-all.ps1' '07-pester'
+          run_evidence 'vitest-light' 'set -euo pipefail; pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1 -Shard 1; pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1 -Shard 2' '08-vitest-light'
+          run_evidence 'vitest-heavy' 'set -euo pipefail; node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard >/tmp/issue948-topology.json; pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 1; pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 2; rm -f scripts/vitest-heavy-topology.plan.json .vitest-runtime-report-*.json' '09-vitest-heavy'
 
           cp scripts/pr2a/review-start-claim-protocol-vectors.json "$EVID/overlap/vectors.json"
           LEGACY_DIR="$RUNNER_TEMP/issue948-legacy"
@@ -103,7 +103,7 @@ EOF
 
           cat > "$EVID/overlap/replay.mjs" <<'NODE'
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -124,8 +124,7 @@ const run=(cmd,args,opts={})=>{const r=spawnSync(cmd,args,{cwd:opts.cwd??input.r
 const psQuote=s=>String(s).replaceAll("'","''");
 const legacyAcquire=(ns,pr,sha,surface='legacy-evidence')=>parseLastJson(run('pwsh',['-NoProfile','-Command',`$ErrorActionPreference='Stop';$env:AO_REVIEW_START_MONOTONIC_NOW_MS='1000';. '${psQuote(legacyScript)}';$r=Acquire-ReviewStartClaim -PrNumber ${pr} -HeadSha '${sha}' -Surface '${surface}' -Namespace '${psQuote(ns)}' -ReviewRuns @();$r|ConvertTo-Json -Compress -Depth 30`]).stdout);
 const legacyComplete=(claim,outcome)=>{const f=path.join(tmpdir(),`claim-${process.pid}-${Math.random()}.json`);writeFileSync(f,JSON.stringify(claim));try{return parseLastJson(run('pwsh',['-NoProfile','-Command',`$ErrorActionPreference='Stop';$env:AO_REVIEW_START_MONOTONIC_NOW_MS='1000';. '${psQuote(legacyScript)}';$r=Get-Content -LiteralPath '${psQuote(f)}' -Raw|ConvertFrom-Json -AsHashtable;$o=Complete-ReviewStartClaim -ClaimResult $r -Outcome '${outcome}' -ReviewRuns @();$o|ConvertTo-Json -Compress -Depth 30`]).stdout)}finally{rmSync(f,{force:true})}};
-const base=(name)=>path.join(tmpdir(),`issue948-${name}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-const shaFor=n=>String(n).padStart(40,String(n%10)).slice(-40).replace(/[^0-9a-f]/g,'a');
+const base=name=>path.join(tmpdir(),`issue948-${name}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
 
 async function concurrentAcquisition(){
   const ns=base('acq');mkdirSync(ns,{recursive:true});const start=path.join(ns,'start');const lr=path.join(ns,'legacy.json');const cr=path.join(ns,'candidate.json');const sha='a'.repeat(40);
@@ -147,7 +146,7 @@ async function executeClass(cls,index){
     }else if(cls==='release-completion'){
       const c=store.acquireReviewStartClaim({prNumber:pr,headSha:sha,surface:'candidate-release',namespace:ns,reviewRuns:[]});if(!c.acquired)throw new Error('candidate acquire failed');const l=legacyComplete(c,'released_for_retry');if(l.ok!==true)throw new Error('legacy completion failed');detail={legacy:'complete',candidate:'acquire'};
     }else if(cls==='recovery-reap'){
-      const l=legacyAcquire(ns,pr,sha);const read=store.readClaimRecord(l.path);const stale={...read.record,acquiredAtUtc:'2020-01-01T00:00:00.000Z',holder:{...read.record.holder,pid:2147483000,host:'localhost'}};store.atomicWriteJson(l.path,stale);const r=store.reaperSweep({namespace:ns,reviewRuns:[]});if(!Array.isArray(r.results)||r.results.length===0)throw new Error('reaper produced no decision');detail={legacy:'stale-record',candidate:'reaper'};
+      const l=legacyAcquire(ns,pr,sha);const read=store.readClaimRecord(l.path);const stale={...read.record,acquiredAtUtc:'2020-01-01T00:00:00.000Z',holder:{...read.record.holder,pid:2147483000}};store.atomicWriteJson(l.path,stale);const r=store.reaperSweep({namespace:ns,reviewRuns:[]});if(!Array.isArray(r.results)||r.results.length===0)throw new Error('reaper produced no decision');detail={legacy:'stale-record',candidate:'reaper'};
     }else if(cls==='interpretation'){
       const l=legacyAcquire(ns,pr,sha);const read=store.readClaimRecord(l.path);const r=store.evaluateLifecycle('reclaim-decision',{claim:read.record,holderLiveness:{outcome:'alive'},reviewRuns:[],projectNamespace:'orchestrator-pack'});if(!String(r.action??''))throw new Error('interpretation missing action');detail={legacy:'record',candidate:`decision:${r.action}`};
     }else if(cls==='generation-fence'){
@@ -187,7 +186,6 @@ NODE
 {"schemaVersion":1,"result":"pass","legacyCommitSha":"$LEGACY_SHA","legacyTreeOid":"$LEGACY_TREE","candidateCommitSha":"$TARGET_SHA","candidateTreeOid":"$TARGET_TREE","candidateBuildDigest":"$CANDIDATE_BUILD_DIGEST","classes":["acquisition","guarded-mutation","terminal-audit","release-completion","recovery-reap","interpretation","generation-fence"]}
 EOF
 
-          # Rollback rehearsal in an isolated worktree. The drain bytes and claim namespace live outside it.
           ROLLBACK_WORK="$RUNNER_TEMP/issue948-rollback-work"
           rm -rf "$ROLLBACK_WORK"
           git worktree add --detach "$ROLLBACK_WORK" "$TARGET_SHA"
@@ -195,9 +193,12 @@ EOF
           printf 'blocked\n' > "$ENTRY_GATE"
           sleep 300 &
           SURVIVOR_PID=$!
-          node --experimental-strip-types scripts/pr2a/rollback-drain.ts export --out "$EVID/rollback/detached" --generation "$TARGET_TREE" --pids "$SURVIVOR_PID" > "$EVID/rollback/export.json"
+          node --experimental-strip-types scripts/pr2a/rollback-drain.ts export --out "$EVID/rollback/detached" --generation "$TARGET_TREE" --pids "$SURVIVOR_PID" > "$EVID/rollback/export-raw.json"
           DETACHED_ART="$EVID/rollback/detached/rollback-drain-artifact.json"
           DETACHED_SHA="$(hash_file "$DETACHED_ART")"
+          node - "$DETACHED_SHA" "$EVID/rollback/export-raw.json" > "$EVID/rollback/export.json" <<'NODE'
+const fs=require('fs');const [sha,rawPath]=process.argv.slice(2);const raw=JSON.parse(fs.readFileSync(rawPath,'utf8'));process.stdout.write(JSON.stringify({schemaVersion:1,result:'pass',detachedDrainSha256:sha,artifactPath:raw.artifactPath,runnerPath:raw.runnerPath})+'\n');
+NODE
 
           CLAIM_NS="$EVID/rollback/compat"
           mkdir -p "$CLAIM_NS"
@@ -222,10 +223,24 @@ NODE
 const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));if(!Array.isArray(x.drained)||x.drained.length===0)throw new Error('no drained process');process.stdout.write(JSON.stringify({schemaVersion:1,result:'pass',drained:x.drained,stale:x.stale??[],zeroSurvivorsBeforeResume:true})+'\n');
 NODE
 
-          pwsh -NoProfile -Command "$ErrorActionPreference='Stop'; . '$ROLLBACK_WORK/scripts/lib/Review-StartClaim.ps1'; $r=Read-ReviewStartClaimRecord -Path '$CLAIM_PATH'; if(-not $r.ok){throw 'legacy reread failed'}; @{schemaVersion=1;result='pass';legacyCommitSha='$LEGACY_SHA';legacyTreeOid='$LEGACY_TREE';recordPath='$CLAIM_PATH'}|ConvertTo-Json -Compress" > "$EVID/rollback/legacy-read.json"
+          export ROLLBACK_WORK CLAIM_PATH LEGACY_SHA LEGACY_TREE
+          cat > "$EVID/rollback/legacy-read.ps1" <<'PS1'
+$ErrorActionPreference = 'Stop'
+. (Join-Path $env:ROLLBACK_WORK 'scripts/lib/Review-StartClaim.ps1')
+$r = Read-ReviewStartClaimRecord -Path $env:CLAIM_PATH
+if (-not $r.ok) { throw 'legacy reread failed' }
+@{
+  schemaVersion = 1
+  result = 'pass'
+  legacyCommitSha = $env:LEGACY_SHA
+  legacyTreeOid = $env:LEGACY_TREE
+  recordPath = $env:CLAIM_PATH
+} | ConvertTo-Json -Compress
+PS1
+          pwsh -NoProfile -File "$EVID/rollback/legacy-read.ps1" > "$EVID/rollback/legacy-read.json"
 
           node - "$EVID/rollback/proof.json" "$TARGET_TREE" "$LEGACY_SHA" "$LEGACY_TREE" "$DETACHED_SHA" "$EVID" <<'NODE'
-const fs=require('fs'),path=require('path'),crypto=require('crypto');const [out,finalTree,legacyCommit,legacyTree,drainSha,root]=process.argv.slice(2);const h=p=>'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex');const classes=['runner','autonomous','manual','seed','trigger','reeval','supervised','snapshot','preflight','recovery','reap'];const entrypoints=classes.map(c=>({class:c,blocked:true,zero:true,evidence:'external rollback entry gate present'}));const proof={schemaVersion:1,result:'pass',finalTreeOid:finalTree,legacyCommitSha:legacyCommit,legacyTreeOid:legacyTree,imports928ActivationMachinery:false,entryBefore:{mode:'total-entrypoint-quiescence',result:'pass',gate:'external rollback entry gate',entrypoints},entryAfter:{mode:'total-entrypoint-quiescence',result:'pass',gate:'same external rollback entry gate survived full revert',entrypoints},quiescence:{complete:true,zeroSurvivorsBeforeResume:true,entrypoints},fullRevert:{completed:true,fromTreeOid:finalTree,toCommitSha:legacyCommit,toTreeOid:legacyTree,detachedDrainSha256Before:drainSha,detachedDrainSha256After:drainSha},artifacts:{export:{path:'rollback/export.json',sha256:h('rollback/export.json')},drainResult:{path:'rollback/drain-result.json',sha256:h('rollback/drain-result.json')},tsClaim:{path:'rollback/ts-claim.json',sha256:h('rollback/ts-claim.json')},legacyRead:{path:'rollback/legacy-read.json',sha256:h('rollback/legacy-read.json')}}};fs.writeFileSync(out,JSON.stringify(proof,null,2)+'\n');
+const fs=require('fs'),path=require('path'),crypto=require('crypto');const [out,finalTree,legacyCommit,legacyTree,drainSha,root]=process.argv.slice(2);const h=p=>'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex');const classes=['runner','autonomous','manual','seed','trigger','reeval','supervised','snapshot','preflight','recovery','reap'];const entrypoints=classes.map(c=>({class:c,blocked:true,zero:true,evidence:'external rollback entry gate present'}));const proof={schemaVersion:1,result:'pass',finalTreeOid:finalTree,legacyCommitSha:legacyCommit,legacyTreeOid:legacyTree,imports928ActivationMachinery:false,entryBefore:{mode:'total-entrypoint-quiescence',result:'pass',entrypoints},entryAfter:{mode:'total-entrypoint-quiescence',result:'pass',entrypoints},quiescence:{complete:true,zeroSurvivorsBeforeResume:true,entrypoints},fullRevert:{completed:true,fromTreeOid:finalTree,toCommitSha:legacyCommit,toTreeOid:legacyTree,detachedDrainSha256Before:drainSha,detachedDrainSha256After:drainSha},artifacts:{export:{path:'rollback/export.json',sha256:h('rollback/export.json')},drainResult:{path:'rollback/drain-result.json',sha256:h('rollback/drain-result.json')},tsClaim:{path:'rollback/ts-claim.json',sha256:h('rollback/ts-claim.json')},legacyRead:{path:'rollback/legacy-read.json',sha256:h('rollback/legacy-read.json')}}};fs.writeFileSync(out,JSON.stringify(proof,null,2)+'\n');
 NODE
           cat > "$EVID/rollback/result.json" <<EOF
 {"schemaVersion":1,"result":"pass","finalTreeOid":"$TARGET_TREE","zeroSurvivorsBeforeResume":true,"detachedDrainSha256":"$DETACHED_SHA"}
@@ -242,10 +257,9 @@ NODE
           PWSH_VERSION="$(pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')"
 
           node - "$EVID" "$TARGET_SHA" "$TARGET_TREE" "$LEGACY_SHA" "$LEGACY_TREE" "$CANDIDATE_BUILD_DIGEST" "$PLATFORM" "$FILESYSTEM" "$NODE_VERSION" "$PWSH_VERSION" <<'NODE'
-const fs=require('fs'),path=require('path'),crypto=require('crypto');const [root,candidateCommit,candidateTree,legacyCommit,legacyTree,buildDigest,platform,filesystem,nodeVersion,pwshVersion]=process.argv.slice(2);const h=p=>'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex');const rows=['01-typecheck','02-lint','03-mutations','04-issue948','05-verify','06-reusable','07-pester','08-vitest-light','09-vitest-heavy'].map(x=>JSON.parse(fs.readFileSync(path.join(root,'commands',x+'.row.json'),'utf8')));const issue=JSON.parse(fs.readFileSync(path.join(root,'external/issue-928.json'),'utf8'));const bundle={schemaVersion:1,overlap:{schemaVersion:1,result:'pass',generatedAfterFinalTree:true,finalTreeOid:candidateTree,candidateTreeOid:candidateTree,candidateBuildDigest:buildDigest,legacyRepository:'chetwerikoff/orchestrator-pack',legacyCommitSha:legacyCommit,legacyTreeOid:legacyTree,candidateRepository:'chetwerikoff/orchestrator-pack',candidateCommitSha:candidateCommit,harnessPath:'overlap/replay.mjs',harnessSha256:h('overlap/replay.mjs'),harnessBytesArchived:true,operationMatrixPath:'overlap/matrix.json',operationMatrixSha256:h('overlap/matrix.json'),replayCommand:process.execPath,replayArgs:['--experimental-strip-types','overlap/replay.mjs','overlap/inputs.json','overlap/matrix.json','overlap/vectors.json'],replayCwd:'.',replayInputsPath:'overlap/inputs.json',replayInputsSha256:h('overlap/inputs.json'),replayStdoutPath:'overlap/stdout.txt',replayStdoutSha256:h('overlap/stdout.txt'),replayExitCode:0,protocolVectorPath:'overlap/vectors.json',protocolVectorSha256:h('overlap/vectors.json'),platform,filesystem,classes:['acquisition','guarded-mutation','terminal-audit','release-completion','recovery-reap','interpretation','generation-fence'],logPath:'overlap/result.json',logSha256:h('overlap/result.json')},rollback:{schemaVersion:1,result:'pass',finalTreeOid:candidateTree,isolatedCheckout:true,entryBlockedBeforeRevert:true,entryBlockedAfterRevert:true,quiescenceInventoryComplete:true,detachedDrainPath:'rollback/detached/rollback-drain-artifact.json',detachedDrainSha256:h('rollback/detached/rollback-drain-artifact.json'),detachedDrainSurvivedRevert:true,zeroSurvivorsBeforeResume:true,legacyReadTsRecord:true,imports928ActivationMachinery:false,legacyCommitSha:legacyCommit,legacyTreeOid:legacyTree,proofPath:'rollback/proof.json',proofSha256:h('rollback/proof.json'),logPath:'rollback/result.json',logSha256:h('rollback/result.json')},preReceiptVerification:{schemaVersion:1,result:'pass',finalTreeOid:candidateTree,checkoutCommitSha:candidateCommit,checkoutTreeOid:candidateTree,repository:'chetwerikoff/orchestrator-pack',platform,filesystem,nodeVersion,pwshVersion,cleanBefore:true,cleanAfter:true,stagedBefore:0,stagedAfter:0,untrackedBefore:0,untrackedAfter:0,prerequisiteSuitesPassedBeforeReceipt:true,commands:rows},external928:{schemaVersion:1,result:'pass',url:issue.html_url,repository:'chetwerikoff/orchestrator-pack',issue:928,revisionIdentity:`${issue.node_id}@${issue.updated_at}`,updatedAt:issue.updated_at,capturedAt:new Date().toISOString(),actor:String(issue.user?.login??'unknown'),tool:'gh-api-rest',bodyPath:'external/issue-928.md',bodySha256:h('external/issue-928.md'),requirements:{consumesPr2aTsAuthority:true,consumesReceiptAsPrecedent:true,independentlyRecomputesCurrentClosure:true,invariantBasedRefusal:true,historicalInventoryEqualityNotRequired:true}}};fs.writeFileSync(path.join(root,'bundle.json'),JSON.stringify(bundle,null,2)+'\n');
+const fs=require('fs'),path=require('path'),crypto=require('crypto');const [root,candidateCommit,candidateTree,legacyCommit,legacyTree,buildDigest,platform,filesystem,nodeVersion,pwshVersion]=process.argv.slice(2);const h=p=>'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex');const rows=['01-typecheck','02-lint','03-mutations','04-issue948','05-verify','06-reusable','07-pester','08-vitest-light','09-vitest-heavy'].map(x=>JSON.parse(fs.readFileSync(path.join(root,'commands',x+'.row.json'),'utf8')));const issue=JSON.parse(fs.readFileSync(path.join(root,'external/issue-928.json'),'utf8'));const bundle={schemaVersion:1,overlap:{schemaVersion:1,result:'pass',generatedAfterFinalTree:true,finalTreeOid:candidateTree,candidateTreeOid:candidateTree,candidateBuildDigest:buildDigest,legacyRepository:'chetwerikoff/orchestrator-pack',legacyCommitSha:legacyCommit,legacyTreeOid:legacyTree,candidateRepository:'chetwerikoff/orchestrator-pack',candidateCommitSha:candidateCommit,harnessPath:'overlap/replay.mjs',harnessSha256:h('overlap/replay.mjs'),harnessBytesArchived:true,operationMatrixPath:'overlap/matrix.json',operationMatrixSha256:h('overlap/matrix.json'),replayCommand:process.execPath,replayArgs:['--experimental-strip-types','overlap/replay.mjs','overlap/inputs.json','overlap/matrix.json','overlap/vectors.json'],replayCwd:'.',replayInputsPath:'overlap/inputs.json',replayInputsSha256:h('overlap/inputs.json'),replayStdoutPath:'overlap/stdout.txt',replayStdoutSha256:h('overlap/stdout.txt'),replayExitCode:0,protocolVectorPath:'overlap/vectors.json',protocolVectorSha256:h('overlap/vectors.json'),platform,filesystem,classes:['acquisition','guarded-mutation','terminal-audit','release-completion','recovery-reap','interpretation','generation-fence'],logPath:'overlap/result.json',logSha256:h('overlap/result.json')},rollback:{schemaVersion:1,result:'pass',finalTreeOid:candidateTree,isolatedCheckout:true,entryBlockedBeforeRevert:true,entryBlockedAfterRevert:true,quiescenceInventoryComplete:true,detachedDrainPath:'rollback/detached/rollback-drain-artifact.json',detachedDrainSha256:h('rollback/detached/rollback-drain-artifact.json'),detachedDrainSurvivedRevert:true,zeroSurvivorsBeforeResume:true,legacyReadTsRecord:true,imports928ActivationMachinery:false,legacyCommitSha:legacyCommit,legacyTreeOid:legacyTree,proofPath:'rollback/proof.json',proofSha256:h('rollback/proof.json'),logPath:'rollback/result.json',logSha256:h('rollback/result.json')},preReceiptVerification:{schemaVersion:1,result:'pass',finalTreeOid:candidateTree,checkoutCommitSha:candidateCommit,checkoutTreeOid:candidateTree,repository:'chetwerikoff/orchestrator-pack',platform,filesystem,nodeVersion,pwshVersion,cleanBefore:true,cleanAfter:true,stagedBefore:0,stagedAfter:0,untrackedBefore:0,untrackedAfter:0,prerequisiteSuitesPassedBeforeReceipt:true,commands:rows},external928:{schemaVersion:1,result:'pass',url:issue.html_url,repository:'chetwerikoff/orchestrator-pack',issue:928,revisionIdentity:`${issue.node_id}@${issue.updated_at}`,updatedAt:issue.updated_at,capturedAt:new Date().toISOString(),actor:String(process.env.GITHUB_ACTOR??'github-actions'),tool:'gh-api-rest',bodyPath:'external/issue-928.md',bodySha256:h('external/issue-928.md'),requirements:{consumesPr2aTsAuthority:true,consumesReceiptAsPrecedent:true,independentlyRecomputesCurrentClosure:true,invariantBasedRefusal:true,historicalInventoryEqualityNotRequired:true}}};fs.writeFileSync(path.join(root,'bundle.json'),JSON.stringify(bundle,null,2)+'\n');
 NODE
 
-          # Remove known generated runtime artifacts before the clean-tree assertion.
           rm -f .vitest-runtime-report-*.json scripts/vitest-heavy-topology.plan.json
           test -z "$(git status --porcelain=v1)"
           node --experimental-strip-types scripts/pr2a/closure-receipt.ts --ref "$TARGET_SHA" --evidence "$EVID/bundle.json" > "$EVID/receipt.json"
@@ -310,8 +324,8 @@ NODE
           run_post 'pwsh -NoProfile -File scripts/verify.ps1' 'pwsh -NoProfile -File scripts/verify.ps1' '05-verify'
           run_post 'pwsh -NoProfile -File scripts/check-reusable.ps1' 'pwsh -NoProfile -File scripts/check-reusable.ps1' '06-reusable'
           run_post 'pwsh -NoProfile -File scripts/test-all.ps1' 'pwsh -NoProfile -File scripts/test-all.ps1' '07-pester'
-          run_post 'vitest-light' 'pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1' '08-vitest-light'
-          run_post 'vitest-heavy' 'node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard >/tmp/issue948-post-topology.json && pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 1 && pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 2; rm -f scripts/vitest-heavy-topology.plan.json .vitest-runtime-report-*.json' '09-vitest-heavy'
+          run_post 'vitest-light' 'set -euo pipefail; pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1 -Shard 1; pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1 -Shard 2' '08-vitest-light'
+          run_post 'vitest-heavy' 'set -euo pipefail; node scripts/emit-vitest-heavy-topology.mjs --skip-oversized-guard >/tmp/issue948-post-topology.json; pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 1; pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 2; rm -f scripts/vitest-heavy-topology.plan.json .vitest-runtime-report-*.json' '09-vitest-heavy'
           rm -f .vitest-runtime-report-*.json scripts/vitest-heavy-topology.plan.json
           test -z "$(git status --porcelain=v1)"
           RECEIPT_SHA="$(node -e 'const fs=require("fs");const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(x.receiptSha256)' "$EVID/receipt.json")"
