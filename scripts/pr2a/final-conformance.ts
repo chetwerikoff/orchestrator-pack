@@ -116,7 +116,7 @@ const declaredSourceInvariants: readonly DeclaredSourceInvariant[] = Object.free
 
   { ac: 'AC5', mutationId: 'receipt-final-tree-or-lineage-invalid', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'return observedCommitSha === expectedCommitSha || gitTreeOid(observedCommitSha) === expectedTreeOid;' },
   { ac: 'AC5', mutationId: 'receipt-self-asserts-unverifiable-tree', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'function verifyArtifact(' },
-  { ac: 'AC5', mutationId: 'receipt-final-invariant-incomplete', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'buildConformanceReport(ref)' },
+  { ac: 'AC5', mutationId: 'receipt-final-invariant-incomplete', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: "const conformance = buildConformanceReport(ref);\n  if (conformance.result !== 'conformant') throw new Error(`final_conformance_failed:${conformance.findings.map((row) => row.code).join(',')}`);" },
   { ac: 'AC5', mutationId: 'overlap-harness-or-job-bytes-unbound', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'verifyArtifact(evidenceRoot, overlap.harnessPath' },
   { ac: 'AC5', mutationId: 'overlap-operation-matrix-missing', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'verifyOverlapStructuredArtifacts(overlap, evidenceRoot, findings);' },
   { ac: 'AC5', mutationId: 'overlap-replay-command-missing', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'verifyReplay(overlap, evidenceRoot, findings);' },
