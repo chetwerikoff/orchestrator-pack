@@ -179,6 +179,7 @@ export function validateClaimImplementationReachability(files: Array<{ path: str
     'scripts/lib/review-start-claim-store.ts',
     'scripts/pr2a/final-conformance.ts',
     'scripts/pr2a/final-conformance.test.ts',
+    'scripts/pr2a/closure-receipt.ts',
     'scripts/pr2a/mutation-runner.ts',
     'scripts/pr2a/planning.test.ts',
   ]);
