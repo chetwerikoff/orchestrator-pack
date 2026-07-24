@@ -1,4 +1,4 @@
-name: issue-948-heavy-diagnostic
+name: issue-948-scoped-detector-fix
 
 on:
   push:
@@ -7,72 +7,78 @@ on:
   pull_request:
 
 permissions:
-  contents: read
-
-env:
-  TARGET_HEAD: 0e2f948c0122a0d3413be50720e60b9e8bb9f1bc
+  contents: write
 
 jobs:
-  heavy-shard-1:
+  patch-and-cleanup:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TARGET_HEAD }}
+          ref: tmp/issue-948-verification-toolchain
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Write exact failing shard plan
-        shell: pwsh
+      - name: Apply operation-scoped detector bindings
+        shell: bash
         run: |
-          @'
-          {"heavyShardCount":2,"heavyFiles":[],"heavyShards":[{"shard":1,"files":["plugins/ao-scope-guard/tests/agent_wrap.test.ts","plugins/ao-scope-guard/tests/integration.test.ts","plugins/ao-token-chain-ledger/tests/integration.test.ts","scripts/contract-evidence-legacy-list-guard.test.ts","scripts/kernel/subprocess.test.ts","scripts/pr2-foundation/mutation-external-ci.test.ts","scripts/review-finding-delivery-submit.test.ts","scripts/review-orchestrator-loop.test.ts","scripts/review-start-claim-run-binding.test.ts","scripts/review-start-claim.test.ts","scripts/review-trigger-reeval.test.ts","scripts/session-runtime-liveness.test.ts"],"totalRuntimeMs":860000}],"lightFiles":[],"lightShards":[],"postMergeWallclockFiles":[],"parkedFiles":[],"discovered":[]}
-          '@ | Set-Content -LiteralPath scripts/vitest-heavy-topology.plan.json -NoNewline
-      - name: Reproduce heavy shard 1
-        shell: pwsh
-        env:
-          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
-        run: |
-          ./scripts/run-vitest-heavy-shard.ps1 -Shard 1 *> heavy-diagnostic.log
-          $code = $LASTEXITCODE
-          Get-Content -LiteralPath heavy-diagnostic.log
-          exit $code
-      - name: Upload heavy diagnostic
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-948-heavy-diagnostic
-          path: heavy-diagnostic.log
-          if-no-files-found: error
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
 
-  mutation-evidence:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TARGET_HEAD }}
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Reproduce mutation evidence
-        shell: pwsh
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          fc = 'scripts/pr2a/final-conformance.ts'
+          replace_once(
+              fc,
+              "  { ac: 'AC2', mutationId: 'record-reread-under-exclusion-omitted', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: \"const read = readClaimRecord(required.path);\\n    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };\" },",
+              "  { ac: 'AC2', mutationId: 'record-reread-under-exclusion-omitted', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: \"const read = readClaimRecord(required.path);\\n    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };\\n    if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };\" },",
+          )
+          replace_once(
+              fc,
+              "  { ac: 'AC2', mutationId: 'generation-fence-weakened', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: \"if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\" },",
+              "  { ac: 'AC2', mutationId: 'generation-fence-weakened', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: \"if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };\" },",
+          )
+          replace_once(
+              fc,
+              "  { ac: 'AC2', mutationId: 'crash-point-breaks-single-authority', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: 'const lock = claimLockDir(required.namespace, required.claim.prNumber, required.claim.headSha);' },",
+              "  { ac: 'AC2', mutationId: 'crash-point-breaks-single-authority', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: \"const lock = claimLockDir(required.namespace, required.claim.prNumber, required.claim.headSha);\\n  return withMutex(lock, () => {\\n    const read = readClaimRecord(required.path);\\n    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };\\n    if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };\" },",
+          )
+
+          mr = 'scripts/pr2a/mutation-runner.ts'
+          replace_once(
+              mr,
+              "defineReplace('AC2','record-reread-under-exclusion-omitted','scripts/lib/review-start-claim-cli.ts',\"const read = readClaimRecord(required.path);\\n    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };\",\"const read = { ok: true, record: required.claim } as ReadRecordResult;\");",
+              "defineReplace('AC2','record-reread-under-exclusion-omitted','scripts/lib/review-start-claim-cli.ts',\"const read = readClaimRecord(required.path);\\n    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };\\n    if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };\",\"const read = { ok: true, record: required.claim } as ReadRecordResult;\\n    if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };\");",
+          )
+          replace_once(
+              mr,
+              "defineReplace('AC2','generation-fence-weakened','scripts/lib/review-start-claim-cli.ts',\"if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\",\"if (false) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\");",
+              "defineReplace('AC2','generation-fence-weakened','scripts/lib/review-start-claim-cli.ts',\"if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };\",\"if (false) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };\");",
+          )
+          replace_once(
+              mr,
+              "defineReplace('AC2','crash-point-breaks-single-authority','scripts/lib/review-start-claim-cli.ts',\"const lock = claimLockDir(required.namespace, required.claim.prNumber, required.claim.headSha);\",\"const lock = '';\");",
+              "defineReplace('AC2','crash-point-breaks-single-authority','scripts/lib/review-start-claim-cli.ts',\"const lock = claimLockDir(required.namespace, required.claim.prNumber, required.claim.headSha);\\n  return withMutex(lock, () => {\\n    const read = readClaimRecord(required.path);\\n    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };\\n    if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };\",\"const lock = '';\\n  return withMutex(lock, () => {\\n    const read = readClaimRecord(required.path);\\n    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };\\n    if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };\");",
+          )
+          PY
+          git rm .github/workflows/issue-948-heavy-diagnostic.yml
+          git diff --check
+          git status --short
+      - name: Commit scoped detector fix and remove diagnostic workflow
+        shell: bash
         run: |
-          npm run test:contract-mutations *> mutation-diagnostic.log
-          $code = $LASTEXITCODE
-          Get-Content -LiteralPath mutation-diagnostic.log
-          exit $code
-      - name: Upload mutation diagnostic
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-948-mutation-diagnostic
-          path: mutation-diagnostic.log
-          if-no-files-found: error
+          set -euo pipefail
+          git config user.name 'orchestrator-pack-ci'
+          git config user.email 'orchestrator-pack-ci@users.noreply.github.com'
+          git add scripts/pr2a/final-conformance.ts scripts/pr2a/mutation-runner.ts .github/workflows/issue-948-heavy-diagnostic.yml
+          git commit -m 'fix(issue-948): bind mutations to concrete operations'
+          git push origin HEAD:tmp/issue-948-verification-toolchain
