@@ -2,15 +2,15 @@
 
 Worker **pre-flight** (blocking marker check before implementation) lives in
 [`AGENTS.md`](../AGENTS.md) (**Review / CI / Handoff worker contract**).
-This page holds the full tier rubric and per-tier draft-review flow for architects and draft authors.
+This page holds the full tier rubric and per-tier draft-review flow for architects and task-spec authors.
 
 ## Task complexity tier rubric
 
 Classify every incoming task into **T1**, **T2**, or **T3** before choosing
 authoring ceremony. The tier measures **how much ceremony** the task warrants —
 not implementation shape. **Orthogonal to behavior-kind:** both are intake
-declarations on one draft; behavior-kind classifies action shape, this rubric
-classifies complexity/ceremony. Neither replaces the other.
+declarations on one task specification; behavior-kind classifies action shape,
+this rubric classifies complexity/ceremony. Neither replaces the other.
 
 **Below the ladder — no tier.** Reuse the **#237 design-analysis skip line**
 verbatim: operator/runtime steps, config or YAML changes, one-line spec or rule
@@ -75,45 +75,84 @@ committed calibration sample.
 
 ## Per-tier draft-review flow
 
-Governs **create-issue-draft spec review** only. Worker **PR-code** review
-(`prompts/codex_review_prompt.md`, orchestrator `ao-review run`) is unchanged.
+Governs **create-issue-draft task-spec review** only. Worker **PR-code** review
+(`prompts/codex_review_prompt.md`, pack review runner) is unchanged.
 
-**Roles.** The **architect** authors the task brief, assigns intake tier, runs the
-T3 architect lens pass, and is the escalation target. The **draft author** — the
-Cursor drafting session working from that brief — authors the spec and runs the
-review loop. The draft author owns accept/reject on competitive and architectural
-stages; the architect does **not** re-decide accepted findings.
+For newly authored tasks, the GitHub Issue is the sole live task specification
+and queue entry. The mirrorless flow creates no tracked or in-repository draft or
+queue-index artifact. Its working anchor, immutable pulled revisions, reviewer
+captures, chat references, finding-disposition ledger, and related audit state
+remain outside the repository. Pre-existing `docs/issues_drafts/**` and
+`docs/issue_queue_index.md` content is legacy prior art, not the live artifact for
+new work. `.claude/skills/create-issue-draft/SKILL.md` owns the exact procedure and
+out-of-repository layout.
+
+### Roles and mixed-engine topology
+
+- **Browser GPT author.** Browser GPT is the default task-spec author. One task
+  chat owns authoring, every content fix, direct edits to the live GitHub Issue,
+  and proposed finding dispositions.
+- **Authoring fallback.** When the browser is unavailable and the operator cannot
+  raise it, the architect may use the separately recorded **architect-as-author**
+  fallback.
+- **Architect.** The architect writes the brief, applies the architect lenses,
+  controls stage ordering and tier recomputation, and ratifies finding
+  dispositions. It does not reopen addressed findings; on T3 the final lens
+  re-judges only the reject partition. The architect does not replace the task
+  chat for normal content fixes.
+- **Browser GPT competitive review.** When the existing tier or an explicit
+  request selects a competitive stage, each pass runs in a fresh browser-GPT
+  chat. The stage ceiling remains three passes.
+- **Browser GPT architectural review.** Every ordinary architectural pass and
+  every final-verification pass runs in a fresh browser-GPT chat. Review history
+  from one pass is not reused as input to another; only the persistent task chat
+  carries authoring/fix continuity.
+- **Codex.** Codex is not the default architectural-review engine. Its sanctioned
+  roles are: the mandatory independent addition for T3-critical tasks; a recorded
+  substitution for a browser-GPT review stage only when the browser is unavailable
+  and the operator cannot raise it; and an explicitly user-requested standalone
+  `adversarial-draft-review` challenge loop added on top of the normal flow.
+
+A Codex substitution is captured, normalized, and dispositioned like the stage it
+replaces. It creates no browser review-chat continuity; when browser-GPT review
+resumes, the next browser review pass still starts in a fresh chat. An explicit
+`adversarial-draft-review` loop never replaces the GPT competitive stage or the
+normal architectural stage.
 
 ### Per-tier pipeline (ceilings, not quotas)
 
-Clean `NO_FINDINGS` ends a stage early. Stage caps compose with shipped contracts
-(#37 adversarial ≤3, architectural ≤4 + final 1 = 5 Codex iterations) — they do
-not override them.
+Clean `NO_FINDINGS` ends a stage early. The post-lens final-verification round is
+an additional ×1 round and is not charged against the ordinary architectural
+ceiling.
 
 | Tier | Stages |
 |------|--------|
-| **T1** | One light architectural (Codex) pass. |
-| **T2** | Architectural (Codex) review, up to **3** passes; first `NO_FINDINGS` ends and publishes. No competitive stage. Architect re-enters only on drift. |
-| **T3** | Competitive adversarial (**GPT** by default; **Codex** substitutes when GPT is unavailable — record substitution) up to **3** → architectural (Codex) up to **4** → **architect lens** pass **1** → final architectural (Codex) over architect edits **1**. |
+| **T1** | One light browser-GPT architectural pass in a fresh chat; after the final architect lens, one additional fresh-chat browser-GPT final-verification round only when the lens changed content. |
+| **T2** | Browser-GPT architectural review, up to **3** fresh-chat passes; first `NO_FINDINGS` ends the ordinary stage. After the final architect lens, one additional fresh-chat browser-GPT final-verification round only when the lens changed content. No competitive stage unless separately selected by an explicit wrapper contract. |
+| **T3** | Competitive adversarial browser-GPT review up to **3** fresh-chat passes → browser-GPT architectural review up to **4** fresh-chat passes → final architect lens → mandatory fresh-chat browser-GPT final-verification round **1**. |
 
 **T3-critical** (within-T3 graduation): gated by the **L4-condition list recorded
 in Issue #574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md` Decisions**
-(cite by reference — do not restate). When T3-critical: competitive **+Codex is
-mandatory** (GPT and Codex together); draft must include rollback/migration note
-plus crash/race/stale-state test. Non-critical T3 uses the default pipeline above.
+(cite by reference — do not restate). T3-critical requires qualifying independent
+**GPT and Codex together**: the normal browser-GPT participation plus a mandatory
+independent Codex addition. It also requires the existing rollback/migration note
+and crash/race/stale-state test floors. A Codex outage substitution for a
+browser-GPT stage never satisfies the GPT half of this requirement. Without
+qualifying independent GPT participation, acceptance is blocked or deferred.
 
 ### Finding-disposition ledger + normalization
 
-Reviewers cannot be relied on for structured output. Per pass the draft author:
+Reviewers cannot be relied on for structured output. Per pass the authoring flow:
 
 1. Captures **raw reviewer output verbatim** (audit anchor).
-2. **Normalizes** every emitted finding into a draft-bound disposition ledger with
-   stable `id`, `summary`, `type`, and `disposition` — `addressed` or `rejected`
-   plus one-line `rejectReason`.
+2. **Normalizes** every emitted finding into the disposition ledger with stable
+   `id`, `summary`, `type`, and `disposition` — `addressed` or `rejected` plus
+   one-line `rejectReason`.
 
-Ledger format: JSON at `docs/issues_drafts/.review/<draft-stem>/finding-disposition-ledger.json`
-(see `.claude/skills/create-issue-draft/SKILL.md`). Verbatim captures live alongside
-as `pass-NN-<stage>.capture.txt`.
+The ledger and verbatim `pass-NN-<stage>.capture.txt` files live in the
+out-of-repository audit workdir defined by
+`.claude/skills/create-issue-draft/SKILL.md`; they are not tracked task artifacts.
+The existing guard receives that review directory explicitly.
 
 **Completeness:** a finding present in capture but absent from the ledger is a
 silent drop — invalid. `NO_FINDINGS` passes owe no rows. Re-worded findings on
@@ -145,7 +184,7 @@ axis is qualitative and is **not** the T1/T2/T3 ceremony tier.
 Findings with `type: security` or `type: scope-violation` (#51 vocabulary) have
 exactly one valid disposition: `addressed`. The guard fails when a protected
 finding is `rejected` **or omitted** while present in capture. Contested protected
-findings **escalate to the architect** — never self-waivable by the draft author.
+findings **escalate to the architect** — never self-waivable by the authoring flow.
 
 The carve-out protects the **outcome** (the risk is explicitly resolved or owned),
 not one prescribed mechanism. `addressed` may be reached by eliminating the
@@ -157,44 +196,42 @@ choice never permits `rejected` and never permits silent omission.
 
 **Guard:** `scripts/check-finding-ledger-guard.ps1 -CapturesDir …` (or
 `check-draft-discipline.ps1 -Command finding-ledger`) validates **every**
-`*.capture.txt` under the draft review directory against the ledger — not only the
-final pass — and runs **pre-sync** alongside other draft-discipline checks; non-zero
-exit blocks issue sync/publish. Omission detection is layered and fails
-closed: typed `type:` tags are checked directly; conservative protected-signal
-hits in capture with no matching ledger row also fail (false positives escalate to
-the architect; unparseable prose never passes silently).
+`*.capture.txt` under the supplied review directory against the ledger — not only
+the final pass — and runs pre-acceptance alongside other draft-discipline checks;
+non-zero exit blocks acceptance/publication. Omission detection is layered and
+fails closed: typed `type:` tags are checked directly; conservative
+protected-signal hits in capture with no matching ledger row also fail (false
+positives escalate to the architect; unparseable prose never passes silently).
 
 ### Simplification lens
 
-On competitive and architectural stages the reviewer prompt
-(`prompts/codex_draft_review_prompt.md`) mandates the four-question lens: what can
-be simplified / must not be simplified / is excess / is missing. Lens findings
-flow through the normal ledger and remain subject to the carve-out. The architect
-applies the same lens on the T3 lens pass. Simplification and excess judgments
-weigh every major mechanism against the artifact's stated stakes, its cost and
-risk, and the cheapest sufficient alternative — not against ceremony tier alone.
+The existing review contract, including the four-question lens in
+`prompts/codex_draft_review_prompt.md`, mandates: what can be simplified / must
+not be simplified / is excess / is missing. Lens findings flow through the
+normal ledger and remain subject to the carve-out. The architect applies the
+same lens on the final architect lens. Simplification and excess judgments weigh
+every major mechanism against the artifact's stated stakes, its cost and risk,
+and the cheapest sufficient alternative — not against ceremony tier alone.
 
-### Architect T3 lens pass
+### Final architect lens and tier movement
 
-On T3 only, after architectural review converges: architect audits the ledger's
-**reject partition** (re-judges rejects; does **not** re-open accepts), may edit
-the draft, then one final architectural (Codex) pass verifies those edits.
+After the ordinary review stages converge, the final architect lens recomputes
+the tier and checks the ledger before acceptance. It is the **only sanctioned
+tier-downgrade point**. A downgrade is invalid while the marker screen still
+requires the higher tier. Every intake, mid-flight, post-fix, and pre-acceptance
+recomputation outside this lens remains monotonic upward/fail-up; accepted
+findings that grow scope can only preserve or raise the tier.
 
-The lens capture (for example `presync-architect-lens.md`) MUST also record, for
-each major mechanism in the resulting draft, an explicit **keep** or **cut**
-verdict with the artifact's stated stakes × mechanism cost/risk × cheapest
-sufficient alternative. Repackaging or splitting an over-built mechanism across
-sibling drafts is not, by itself, an **излишне** cut: the lens must record a
-substantive reduction or explicitly keep the total mechanism.
+For T3, the lens retains the existing stronger contract: audit the ledger's
+**reject partition** (re-judge rejects; do **not** reopen accepts), and record for
+each major mechanism an explicit **keep** or **cut** verdict using the artifact's
+stated stakes × mechanism cost/risk × cheapest sufficient alternative.
+Repackaging or splitting an over-built mechanism across sibling tasks is not, by
+itself, an **излишне** cut: the lens must record a substantive reduction or
+explicitly keep the total mechanism.
 
 If a low/contained-stakes artifact exits adversarial review with approximately
 100% of findings `addressed`, record that as a **proportionality smell** in the
 same lens capture and run one re-examination pass. The smell is neither an
 automatic failure nor evidence of thoroughness; it prompts a fresh check for
 correct-but-disproportionate machinery.
-
-### Drift escalation
-
-After review, tier is recomputed (draft C / Issue #189). Upward drift — including
-scope growth from accepted findings — escalates to the architect before publish.
-Downward drift is impossible (#574 monotonic rule).
