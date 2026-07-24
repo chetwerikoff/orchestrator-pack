@@ -1,0 +1,69 @@
+name: issue-948-ac5-hardening
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp/issue-948-verification-toolchain
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Scope remaining AC5 bindings to runtime checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}: {old}")
+              p.write_text(text.replace(old, new, 1))
+
+          fc = 'scripts/pr2a/final-conformance.ts'
+          replace_once(
+              fc,
+              "  { ac: 'AC5', mutationId: 'overlap-evidence-generated-before-final-tree', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'overlap.generatedAfterFinalTree !== true' },",
+              "  { ac: 'AC5', mutationId: 'overlap-evidence-generated-before-final-tree', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: \"if (overlap.result !== 'pass' || overlap.generatedAfterFinalTree !== true) findings.push('overlap-evidence-generated-before-final-tree');\" },",
+          )
+          replace_once(
+              fc,
+              "  { ac: 'AC5', mutationId: '928-admission-skips-current-recompute', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'external-928-body-contract-mismatch' },",
+              "  { ac: 'AC5', mutationId: '928-admission-skips-current-recompute', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: \"findings.push('external-928-body-contract-mismatch');\" },",
+          )
+
+          mr = 'scripts/pr2a/mutation-runner.ts'
+          replace_once(
+              mr,
+              "defineReplace('AC5','overlap-evidence-generated-before-final-tree','scripts/pr2a/closure-receipt.ts',\"overlap.generatedAfterFinalTree !== true\",\"false\");",
+              "defineReplace('AC5','overlap-evidence-generated-before-final-tree','scripts/pr2a/closure-receipt.ts',\"if (overlap.result !== 'pass' || overlap.generatedAfterFinalTree !== true) findings.push('overlap-evidence-generated-before-final-tree');\",\"if (overlap.result !== 'pass' || false) findings.push('overlap-evidence-generated-before-final-tree');\");",
+          )
+          replace_once(
+              mr,
+              "defineReplace('AC5','928-admission-skips-current-recompute','scripts/pr2a/closure-receipt.ts',\"external-928-body-contract-mismatch\",\"external-928-body-shape-only\");",
+              "defineReplace('AC5','928-admission-skips-current-recompute','scripts/pr2a/closure-receipt.ts',\"findings.push('external-928-body-contract-mismatch');\",\"findings.push('external-928-body-shape-only');\");",
+          )
+          PY
+          git diff --check
+          git status --short
+      - name: Commit and push AC5 hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'orchestrator-pack-ci'
+          git config user.email 'orchestrator-pack-ci@users.noreply.github.com'
+          git add scripts/pr2a/final-conformance.ts scripts/pr2a/mutation-runner.ts
+          git commit -m 'fix(issue-948): scope AC5 mutations to runtime checks'
+          git push origin HEAD:tmp/issue-948-verification-toolchain
