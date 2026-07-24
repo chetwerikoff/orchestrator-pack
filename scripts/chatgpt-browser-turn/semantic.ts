@@ -11,6 +11,28 @@ export type SemanticNode =
   | { type: 'line_break' }
   | { type: 'group'; children: SemanticNode[] };
 
+export const SEMANTIC_UI_FILTER = {
+  skippedTags: ['button', 'svg', 'script', 'style', 'noscript', 'time'],
+  testidPattern: 'copy|feedback|thumb|citation.*(?:chip|hover)|code.*badge|toolbar|control',
+  classPattern: 'sr-only|visually-hidden',
+} as const;
+
+export interface SemanticElementDescriptor {
+  readonly tag: string;
+  readonly ariaHidden?: string | null;
+  readonly testid?: string | null;
+  readonly className?: string | null;
+}
+
+export function shouldSkipSemanticElement(element: SemanticElementDescriptor): boolean {
+  const tag = element.tag.toLowerCase();
+  if ((SEMANTIC_UI_FILTER.skippedTags as readonly string[]).includes(tag)) return true;
+  if (element.ariaHidden === 'true') return true;
+  if (new RegExp(SEMANTIC_UI_FILTER.testidPattern, 'i').test(element.testid ?? '')) return true;
+  if (new RegExp(SEMANTIC_UI_FILTER.classPattern, 'i').test(element.className ?? '')) return true;
+  return false;
+}
+
 function normalizeNewlines(value: string): string {
   return value.replace(/\r\n?/g, '\n');
 }
