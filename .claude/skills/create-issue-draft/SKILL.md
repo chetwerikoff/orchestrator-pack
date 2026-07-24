@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: GPT then authors and creates the Issue by default), and the architect runs lens → task-chat fix → browser-GPT competitive → browser-GPT architectural review in one dedicated review chat → final lens → browser-GPT final verification when required. Covers Issue-only live task state, mixed-engine Codex additions/substitutions, T3-critical L4 classification and safety floors, browser-turn mechanics, issue-body guards, and the finding-disposition ledger. The Issue is the only live task artifact; audit artifacts live in an out-of-repo workdir. Invoke on every new GPT-authored task. Do not invoke for tiny typo, rename-only, or one-file mechanical CI fixes.
+description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: GPT then authors and creates the Issue by default), and the architect runs lens → task-chat fix → browser-GPT competitive → browser-GPT architectural review in one dedicated review chat → final lens → browser-GPT final verification when required. Covers Issue-only live task state, mixed-engine Codex additions/substitutions, T3-critical L4 classification and safety floors, browser-turn mechanics, issue-body guards, and the finding-disposition ledger. The Issue is the only live task artifact; audit artifacts live in an out-of-repo workdir. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from `docs/tiering.md`. Do not invoke when that skip line applies.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -37,8 +37,8 @@ Explicit wrapper routing is preserved:
 - brief-only `adversarial-draft-review` floors the effective tier at T2 and
   requires the requested Codex loop before the final lens and acceptance.
 
-Skip only typo, rename-only, or one-file mechanical CI changes that genuinely
-qualify for the below-ladder skip line.
+Apply the canonical **Below the ladder — no tier** rule from `docs/tiering.md`.
+When that rule applies, skip this authoring ceremony; otherwise continue here.
 
 ## Roles
 
@@ -217,7 +217,7 @@ the plain capture, store raw JSON alongside it, and record the substitution.
 
 A substitution runs outside the dedicated browser review chat and never replaces
 that chat. If browser-GPT review resumes, the next architectural turn continues
-in the same dedicated review chat. For T3-critical tasks, a substitution does
+in the same dedicated browser review chat. For T3-critical tasks, a substitution does
 not satisfy the independent GPT half.
 
 ### Explicit Codex wrapper
