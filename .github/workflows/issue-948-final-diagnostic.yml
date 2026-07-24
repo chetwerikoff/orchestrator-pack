@@ -1,0 +1,67 @@
+name: issue-948-final-diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_HEAD: c37b39b6e38f0afa9dd28e74b72f78d927b231a5
+
+jobs:
+  claim-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_HEAD }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Reproduce claim drift guard
+        shell: pwsh
+        run: |
+          ./scripts/check-review-start-claim-guard.ps1 *> claim-drift.log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath claim-drift.log
+          exit $code
+      - name: Upload claim drift log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-claim-drift
+          path: claim-drift.log
+          if-no-files-found: error
+
+  ac5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_HEAD }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Reproduce AC5
+        shell: bash
+        run: |
+          set +e
+          node --experimental-strip-types scripts/pr2a/mutation-runner.ts --ac AC5 > mutation-AC5.log 2>&1
+          status=$?
+          cat mutation-AC5.log
+          exit "$status"
+      - name: Upload AC5 log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-ac5-final
+          path: mutation-AC5.log
+          if-no-files-found: error
