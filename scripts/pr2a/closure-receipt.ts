@@ -29,6 +29,37 @@ export const REQUIRED_FINAL_COMMANDS = [
   'vitest-heavy',
 ] as const;
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
+const FULL_SHA = /^[0-9a-f]{40}$/u;
+const UNSUPPORTED_FILESYSTEMS = new Set([
+  '9p', 'drvfs', 'cifs', 'smbfs', 'nfs', 'nfs4', 'fuseblk', 'fuse.sshfs',
+]);
+
+export const CLOSURE_SOURCE_REQUIREMENTS = Object.freeze([
+  ['function verifyArtifact', 'receipt-self-asserts-unverifiable-tree'],
+  ['function verifyCommandLogs', 'receipt-generated-before-prerequisite-suites'],
+  ['function verifyReplay', 'overlap-replay-command-missing'],
+  ['function validateVerificationEnvironment', 'final-evidence-tree-or-platform-stale'],
+  ['verification.nodeVersion', 'verification-node-version-unbound'],
+  ['verification.pwshVersion', 'verification-pwsh-version-unbound'],
+  ['verification.filesystem', 'verification-filesystem-unbound'],
+  ['preReceiptVerification.nodeVersion', 'pre-receipt-node-version-unbound'],
+  ['preReceiptVerification.pwshVersion', 'pre-receipt-pwsh-version-unbound'],
+  ['preReceiptVerification.filesystem', 'pre-receipt-filesystem-unbound'],
+  ['command-result-tree-binding-mismatch', 'receipt-final-tree-or-lineage-invalid'],
+  ['overlap-replay-not-bound-to-harness-and-inputs', 'overlap-harness-or-job-bytes-unbound'],
+  ['overlap-operation-matrix-content-mismatch', 'overlap-operation-matrix-missing'],
+  ['sameTreeCommit(overlap.candidateCommitSha, expected.finalCommitSha, expected.finalTreeOid)', 'overlap-candidate-binding-mismatch'],
+  ['gitTreeOid(overlap.candidateCommitSha)', 'candidate-build-not-derived-from-final-tree'],
+  ['buildCandidateBuildProvenance', 'candidate-build-attestation-invalid'],
+  ['overlap.generatedAfterFinalTree !== true', 'overlap-evidence-generated-before-final-tree'],
+  ['prerequisiteSuitesPassedBeforeReceipt', 'receipt-generated-before-prerequisite-suites'],
+  ['buildConformanceReport(ref)', 'independent-pr2a-recompute-disagrees'],
+  ['external-928-body-contract-mismatch', '928-admission-skips-current-recompute'],
+  ['historicalInventoryEqualityNotRequired', '928-admission-requires-historical-inventory-equality'],
+  ['receipt-and-final-verification-tree-differ', 'receipt-and-final-verification-tree-differ'],
+  ['final-checks-on-dirty-worktree', 'final-checks-on-dirty-worktree'],
+  ['verifyArtifact(evidenceRoot', 'evidence-tree-differs-from-executed-bytes'],
+] as const);
 
 function git(args: string[]): string {
   const result = runProcessSync({ command: 'git', args, cwd: repoRoot, inheritParentEnv: true });
@@ -38,6 +69,10 @@ function git(args: string[]): string {
 function readAt(ref: string, file: string): string { return git(['show', `${ref}:${file}`]); }
 function digestStructured(value: unknown): string { return sha256(stableJson(value)); }
 function unique(findings: string[]): string[] { return [...new Set(findings)].sort(); }
+function major(version: string): number {
+  const match = /^v?(\d+)(?:\.|$)/u.exec(String(version ?? '').trim());
+  return match ? Number(match[1]) : 0;
+}
 
 export interface VerificationCommandEvidence {
   command: string;
@@ -229,6 +264,68 @@ function parseJsonArtifact(bytes: Buffer | null, code: string, findings: string[
   }
 }
 
+function mountInfoForPath(target: string): { mount: string; fsType: string } | null {
+  if (process.platform !== 'linux') return null;
+  try {
+    const canonical = path.resolve(target);
+    const rows = readFileSync('/proc/self/mountinfo', 'utf8').split(/\r?\n/u).filter(Boolean);
+    let best: { mount: string; fsType: string } | null = null;
+    for (const row of rows) {
+      const split = row.split(' - ');
+      if (split.length !== 2) continue;
+      const left = split[0]?.split(' ') ?? [];
+      const right = split[1]?.split(' ') ?? [];
+      const mount = String(left[4] ?? '').replace(/\\040/gu, ' ');
+      const fsType = String(right[0] ?? '');
+      if (!mount || !(canonical === mount || (mount === '/' ? canonical.startsWith('/') : canonical.startsWith(`${mount}/`)))) continue;
+      if (!best || mount.length > best.mount.length) best = { mount, fsType };
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
+function observedPwshVersion(): string | null {
+  const result = runProcessSync({
+    command: 'pwsh',
+    args: ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  return result.ok ? result.stdout.trim() : null;
+}
+
+function validateVerificationEnvironment(
+  verification: Pick<PreReceiptVerificationEvidence, 'repository' | 'platform' | 'filesystem' | 'nodeVersion' | 'pwshVersion'>,
+  evidenceRoot: string,
+  prefix: string,
+  findings: string[],
+): void {
+  if (verification.repository !== 'chetwerikoff/orchestrator-pack') findings.push(`${prefix}-repository-invalid`);
+  const platformClaim = String(verification.platform ?? '').trim().toLowerCase();
+  if (process.platform !== 'linux' || !['linux', 'wsl2'].includes(platformClaim)) {
+    findings.push(`${prefix}-platform-unsupported`);
+  }
+  if (major(process.version) !== 22 || major(verification.nodeVersion) !== 22
+    || verification.nodeVersion.replace(/^v/u, '') !== process.version.replace(/^v/u, '')) {
+    findings.push(`${prefix}-node-version-mismatch`);
+  }
+  const pwsh = observedPwshVersion();
+  if (!pwsh || major(pwsh) !== 7 || major(verification.pwshVersion) !== 7
+    || verification.pwshVersion.replace(/^v/u, '') !== pwsh.replace(/^v/u, '')) {
+    findings.push(`${prefix}-pwsh-version-mismatch`);
+  }
+  const root = path.resolve(evidenceRoot || repoRoot);
+  if (/^\/mnt\/[a-z](?:\/|$)/iu.test(root)) findings.push(`${prefix}-filesystem-unsupported`);
+  const mount = mountInfoForPath(root);
+  const claimedFs = String(verification.filesystem ?? '').trim().toLowerCase();
+  if (!mount || !claimedFs || UNSUPPORTED_FILESYSTEMS.has(mount.fsType.toLowerCase())
+    || claimedFs !== mount.fsType.toLowerCase()) {
+    findings.push(`${prefix}-filesystem-mismatch`);
+  }
+}
+
 function verifyCommandLogs(
   root: string,
   rows: VerificationCommandEvidence[],
@@ -244,7 +341,7 @@ function verifyCommandLogs(
       continue;
     }
     if (row.exitCode !== 0) findings.push(`mandatory-command-or-lane-fails:${command}`);
-    if (row.checkoutCommitSha !== expectedCommitSha || row.checkoutTreeOid !== expectedTreeOid) {
+    if (!sameTreeCommit(row.checkoutCommitSha, expectedCommitSha, expectedTreeOid) || row.checkoutTreeOid !== expectedTreeOid) {
       findings.push(`command-result-tree-binding-mismatch:${command}`);
     }
     const resultBytes = verifyArtifact(root, row.resultPath, row.resultSha256, `command-result:${command}`, findings);
@@ -253,7 +350,8 @@ function verifyCommandLogs(
       if (String(result.command ?? '') !== command || Number(result.exitCode) !== 0) {
         findings.push(`command-result-content-mismatch:${command}`);
       }
-      if (String(result.checkoutCommitSha ?? '') !== expectedCommitSha || String(result.checkoutTreeOid ?? '') !== expectedTreeOid) {
+      if (!sameTreeCommit(String(result.checkoutCommitSha ?? ''), expectedCommitSha, expectedTreeOid)
+        || String(result.checkoutTreeOid ?? '') !== expectedTreeOid) {
         findings.push(`command-result-tree-binding-mismatch:${command}`);
       }
       const started = Date.parse(String(result.startedAtUtc ?? ''));
@@ -292,9 +390,13 @@ function verifyReplay(overlap: OverlapEvidence, evidenceRoot: string, findings: 
 }
 
 function gitTreeOid(commitSha: string): string | null {
-  if (!/^[0-9a-f]{40}$/u.test(commitSha)) return null;
+  if (!FULL_SHA.test(commitSha)) return null;
   const result = runProcessSync({ command: 'git', args: ['rev-parse', `${commitSha}^{tree}`], cwd: repoRoot, inheritParentEnv: true });
-  return result.ok && /^[0-9a-f]{40}$/u.test(result.stdout.trim()) ? result.stdout.trim() : null;
+  return result.ok && FULL_SHA.test(result.stdout.trim()) ? result.stdout.trim() : null;
+}
+function sameTreeCommit(observedCommitSha: string, expectedCommitSha: string, expectedTreeOid: string): boolean {
+  if (!FULL_SHA.test(observedCommitSha) || !FULL_SHA.test(expectedCommitSha) || !FULL_SHA.test(expectedTreeOid)) return false;
+  return observedCommitSha === expectedCommitSha || gitTreeOid(observedCommitSha) === expectedTreeOid;
 }
 
 function verifyOverlapStructuredArtifacts(overlap: OverlapEvidence, evidenceRoot: string, findings: string[]): void {
@@ -325,6 +427,14 @@ function verifyOverlapStructuredArtifacts(overlap: OverlapEvidence, evidenceRoot
   }
 }
 
+export function validateClosureReceiptSourceContract(source: string): string[] {
+  const findings: string[] = [];
+  for (const [token, code] of CLOSURE_SOURCE_REQUIREMENTS) {
+    if (!source.includes(token)) findings.push(code);
+  }
+  return unique(findings);
+}
+
 export function validateFinalVerificationAgainstReceipt(
   verification: FinalVerificationEvidence,
   receipt: Record<string, unknown>,
@@ -340,8 +450,9 @@ export function validateFinalVerificationAgainstReceipt(
   if (!DIGEST.test(receiptSha256) || receiptSha256 !== expectedReceiptSha256) findings.push('receipt-digest-invalid');
   if (verification.result !== 'pass' || verification.receiptSha256 !== receiptSha256) findings.push('final-verification-receipt-mismatch');
   if (verification.finalTreeOid !== finalTreeOid || verification.checkoutTreeOid !== finalTreeOid) findings.push('receipt-and-final-verification-tree-differ');
-  if (verification.checkoutCommitSha !== finalCommitSha) findings.push('final-evidence-commit-stale');
+  if (!sameTreeCommit(verification.checkoutCommitSha, finalCommitSha, finalTreeOid)) findings.push('final-evidence-commit-stale');
   if (!verification.cleanBefore || !verification.cleanAfter || verification.stagedBefore !== 0 || verification.stagedAfter !== 0 || verification.untrackedBefore !== 0 || verification.untrackedAfter !== 0) findings.push('final-checks-on-dirty-worktree');
+  validateVerificationEnvironment(verification, evidenceRoot, 'final-verification', findings);
   if (evidenceRoot) verifyCommandLogs(evidenceRoot, verification.commands, finalCommitSha, finalTreeOid, findings);
   return unique(findings);
 }
@@ -387,12 +498,18 @@ export function validateClosureEvidenceBundle(
   if (!overlap.harnessBytesArchived) findings.push('overlap-harness-or-job-bytes-unbound');
   if (REQUIRED_OVERLAP_CLASSES.some((name) => !overlap.classes.includes(name))) findings.push('overlap-operation-matrix-missing');
   if (overlap.legacyRepository !== 'chetwerikoff/orchestrator-pack'
-    || !/^[0-9a-f]{40}$/u.test(overlap.legacyCommitSha)
-    || !/^[0-9a-f]{40}$/u.test(overlap.legacyTreeOid)
+    || !FULL_SHA.test(overlap.legacyCommitSha)
+    || !FULL_SHA.test(overlap.legacyTreeOid)
     || gitTreeOid(overlap.legacyCommitSha) !== overlap.legacyTreeOid) findings.push('overlap-legacy-binding-invalid');
   if (overlap.candidateRepository !== 'chetwerikoff/orchestrator-pack'
-    || overlap.candidateCommitSha !== expected.finalCommitSha
-    || gitTreeOid(overlap.candidateCommitSha) !== expected.finalTreeOid) findings.push('overlap-candidate-commit-invalid');
+    || !sameTreeCommit(overlap.candidateCommitSha, expected.finalCommitSha, expected.finalTreeOid)) findings.push('overlap-candidate-commit-invalid');
+  validateVerificationEnvironment({
+    repository: overlap.candidateRepository,
+    platform: overlap.platform,
+    filesystem: overlap.filesystem,
+    nodeVersion: process.version,
+    pwshVersion: observedPwshVersion() ?? '',
+  }, evidenceRoot, 'overlap', findings);
   if (evidenceRoot) {
     verifyArtifact(evidenceRoot, overlap.harnessPath, overlap.harnessSha256, 'overlap-harness', findings);
     verifyArtifact(evidenceRoot, overlap.replayInputsPath, overlap.replayInputsSha256, 'overlap-replay-inputs', findings);
@@ -424,9 +541,10 @@ export function validateClosureEvidenceBundle(
   }
 
   if (preReceiptVerification.result !== 'pass' || preReceiptVerification.finalTreeOid !== expected.finalTreeOid || preReceiptVerification.checkoutTreeOid !== expected.finalTreeOid) findings.push('receipt-prerequisite-tree-differ');
-  if (preReceiptVerification.checkoutCommitSha !== expected.finalCommitSha) findings.push('receipt-prerequisite-commit-stale');
+  if (!sameTreeCommit(preReceiptVerification.checkoutCommitSha, expected.finalCommitSha, expected.finalTreeOid)) findings.push('receipt-prerequisite-commit-stale');
   if (!preReceiptVerification.cleanBefore || !preReceiptVerification.cleanAfter || preReceiptVerification.stagedBefore !== 0 || preReceiptVerification.stagedAfter !== 0 || preReceiptVerification.untrackedBefore !== 0 || preReceiptVerification.untrackedAfter !== 0) findings.push('receipt-prerequisites-on-dirty-worktree');
   if (!preReceiptVerification.prerequisiteSuitesPassedBeforeReceipt) findings.push('receipt-generated-before-prerequisite-suites');
+  validateVerificationEnvironment(preReceiptVerification, evidenceRoot, 'pre-receipt', findings);
   if (evidenceRoot) verifyCommandLogs(evidenceRoot, preReceiptVerification.commands, expected.finalCommitSha, expected.finalTreeOid, findings);
 
   if (external928.result !== 'pass' || external928.issue !== 928 || external928.repository !== 'chetwerikoff/orchestrator-pack') findings.push('external-928-sync-evidence-missing');
@@ -452,6 +570,8 @@ export function validateClosureEvidenceBundle(
 }
 
 export function buildClosureReceipt(ref: string, evidence: ClosureEvidenceBundle, evidenceRoot: string): Record<string, unknown> {
+  const sourceFindings = validateClosureReceiptSourceContract(readAt(ref, 'scripts/pr2a/closure-receipt.ts'));
+  if (sourceFindings.length > 0) throw new Error(`closure_source_contract_invalid:${sourceFindings.join(',')}`);
   const conformance = buildConformanceReport(ref);
   if (conformance.result !== 'conformant') throw new Error(`final_conformance_failed:${conformance.findings.map((row) => row.code).join(',')}`);
   const manifest = JSON.parse(readAt(ref, 'scripts/pr2a/planning-manifest.json')) as PlanningManifest;
@@ -515,23 +635,30 @@ function arg(name: string): string | null {
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
   try {
-    const ref = arg('--ref') ?? 'HEAD';
-    const finalVerificationFile = arg('--final-verification');
-    const receiptFile = arg('--receipt');
-    if (finalVerificationFile || receiptFile) {
-      if (!finalVerificationFile || !receiptFile) throw new Error('usage: closure-receipt.ts --final-verification <evidence.json> --receipt <receipt.json>');
-      const verificationPath = path.resolve(finalVerificationFile);
-      const verification = JSON.parse(readFileSync(verificationPath, 'utf8')) as FinalVerificationEvidence;
-      const receipt = JSON.parse(readFileSync(path.resolve(receiptFile), 'utf8')) as Record<string, unknown>;
-      const findings = validateFinalVerificationAgainstReceipt(verification, receipt, path.dirname(verificationPath));
+    const sourceFile = arg('--validate-source');
+    if (sourceFile) {
+      const findings = validateClosureReceiptSourceContract(readFileSync(path.resolve(sourceFile), 'utf8'));
       process.stdout.write(stableJson({ result: findings.length === 0 ? 'pass' : 'fail', findings }));
       if (findings.length > 0) process.exitCode = 1;
     } else {
-      const evidenceFile = arg('--evidence');
-      if (!evidenceFile) throw new Error('usage: closure-receipt.ts --ref <ref> --evidence <bundle.json>');
-      const evidencePath = path.resolve(evidenceFile);
-      const evidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as ClosureEvidenceBundle;
-      process.stdout.write(stableJson(buildClosureReceipt(ref, evidence, path.dirname(evidencePath))));
+      const ref = arg('--ref') ?? 'HEAD';
+      const finalVerificationFile = arg('--final-verification');
+      const receiptFile = arg('--receipt');
+      if (finalVerificationFile || receiptFile) {
+        if (!finalVerificationFile || !receiptFile) throw new Error('usage: closure-receipt.ts --final-verification <evidence.json> --receipt <receipt.json>');
+        const verificationPath = path.resolve(finalVerificationFile);
+        const verification = JSON.parse(readFileSync(verificationPath, 'utf8')) as FinalVerificationEvidence;
+        const receipt = JSON.parse(readFileSync(path.resolve(receiptFile), 'utf8')) as Record<string, unknown>;
+        const findings = validateFinalVerificationAgainstReceipt(verification, receipt, path.dirname(verificationPath));
+        process.stdout.write(stableJson({ result: findings.length === 0 ? 'pass' : 'fail', findings }));
+        if (findings.length > 0) process.exitCode = 1;
+      } else {
+        const evidenceFile = arg('--evidence');
+        if (!evidenceFile) throw new Error('usage: closure-receipt.ts --ref <ref> --evidence <bundle.json>');
+        const evidencePath = path.resolve(evidenceFile);
+        const evidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as ClosureEvidenceBundle;
+        process.stdout.write(stableJson(buildClosureReceipt(ref, evidence, path.dirname(evidencePath))));
+      }
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
