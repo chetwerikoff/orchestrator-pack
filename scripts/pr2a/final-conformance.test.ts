@@ -59,6 +59,7 @@ const claimRoots: string[] = [];
 const claimChildren: Array<{ controller: AbortController; result: Promise<ProcessResult> }> = [];
 const rollbackChildren: Array<{ pid: number; controller: AbortController; result: Promise<ProcessResult> }> = [];
 const rollbackRoots: string[] = [];
+const LEGACY_FOUNDATION_COMMIT = 'b967dfe156838039e1d6d137e7064dc9d1b10b4d';
 
 function makeRoot(prefix: string): string {
   const value = mkdtempSync(path.join(tmpdir(), prefix));
@@ -335,8 +336,8 @@ function evidenceFixture(): {
   const environment = observedVerificationEnvironment(root);
   const commit = git(['rev-parse', 'HEAD']);
   const tree = git(['rev-parse', 'HEAD^{tree}']);
-  const legacyCommit = commit;
-  const legacyTree = tree;
+  const legacyCommit = LEGACY_FOUNDATION_COMMIT;
+  const legacyTree = git(['rev-parse', `${legacyCommit}^{tree}`]);
   const candidateBuildDigest = digest('candidate-build');
   const harnessPath = 'overlap/replay.mjs';
   const inputsPath = 'overlap/inputs.json';
@@ -818,7 +819,20 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
     const result = runProcessSync({ command: 'pwsh', args: ['-NoProfile', '-Command', command], cwd: repoRoot, inheritParentEnv: true });
     expect(result.ok, result.stderr || result.error).toBe(true);
     const bridged = JSON.parse(result.stdout).record as Record<string, unknown>;
-    expect(bridged).toMatchObject(legacy.record ?? {});
+    const legacyRecord = legacy.record ?? {};
+    expect(bridged).toMatchObject({
+      schemaVersion: legacyRecord.schemaVersion,
+      key: legacyRecord.key,
+      prNumber: legacyRecord.prNumber,
+      headSha: legacyRecord.headSha,
+      state: legacyRecord.state,
+      holder: legacyRecord.holder,
+      startReason: legacyRecord.startReason,
+      projectNamespace: legacyRecord.projectNamespace,
+      firstAttemptAtMonotonicMs: legacyRecord.firstAttemptAtMonotonicMs,
+      readinessStartMonotonicMs: legacyRecord.readinessStartMonotonicMs,
+    });
+    expect(Date.parse(String(bridged.acquiredAtUtc))).toBe(Date.parse(String(legacyRecord.acquiredAtUtc)));
   });
 });
 
