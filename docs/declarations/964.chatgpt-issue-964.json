@@ -1,0 +1,32 @@
+{
+  "issue_number": 964,
+  "iteration_id": "chatgpt-issue-964",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-24T08:19:37.000Z",
+  "baseline": {
+    "commit_sha": "76fca35897b787e3bd05bc07e5ea12c86aa7eb7b",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:4e6622056cd570dacd3adc83599d04d4b46f103a73a5bf84ea06ad7088355158"
+  },
+  "declared_paths": [
+    "package.json",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/coordination.ts",
+    "scripts/chatgpt-browser-turn/input.ts",
+    "scripts/chatgpt-browser-turn/profile-probe.ts",
+    "scripts/chatgpt-browser-turn/publication.ts",
+    "scripts/chatgpt-browser-turn/runtime-binding.ts",
+    "scripts/chatgpt-browser-turn/semantic.ts",
+    "scripts/chatgpt-browser-turn/state.ts",
+    "scripts/chatgpt-browser-turn/storage-common.ts",
+    "scripts/chatgpt-browser-turn/storage.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
