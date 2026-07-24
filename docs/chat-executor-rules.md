@@ -126,6 +126,8 @@ After every new commit or history rewrite:
 
 Missing, pending, cancelled, failed, or earlier-head required checks are not green for the current head.
 
+For GitHub Actions diagnostics, the available GitHub transport can fetch decoded job logs directly by job ID. A practical path is `run -> jobs -> failed job ID -> decoded job log`; the returned log includes step stdout/stderr. This is one available way to inspect the exact CI failure without first creating a separate artifact solely to capture command output.
+
 Before ready-for-review or merge, there must be no known current material blocker/major finding left unresolved. A fixed finding may be closed. A rejected finding may be explicitly adjudicated. A finding made irrelevant by a later operator-approved contract change or by removal of the affected code/text does not remain permanent administrative debt.
 
 Use GitHub review/thread state and explicit reviewer/operator decisions directly; do not maintain a separate finding-state ledger merely to restate them.
