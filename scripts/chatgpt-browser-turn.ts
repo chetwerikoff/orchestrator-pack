@@ -634,9 +634,24 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     const isInput = message.startsWith('input_invalid:');
     const isOutput = message.startsWith('output_conflict:');
-    const state: TurnState = isInput ? 'input_invalid' : isOutput ? 'output_conflict' : 'driver_error';
-    const scope: FailureScope = isInput || isOutput ? 'invocation' : possibleDelivery ? 'conversation' : 'machine';
-    const cause = isInput || isOutput ? message : possibleDelivery ? 'driver_exception_after_possible_delivery' : 'driver_exception_before_send';
+    const isUiContract = message.startsWith('ui_contract_mismatch:');
+    const state: TurnState = isInput
+      ? 'input_invalid'
+      : isOutput
+        ? 'output_conflict'
+        : isUiContract
+          ? 'ui_contract_mismatch'
+          : 'driver_error';
+    const scope: FailureScope = isInput || isOutput || isUiContract
+      ? 'invocation'
+      : possibleDelivery
+        ? 'conversation'
+        : 'machine';
+    const cause = isInput || isOutput || isUiContract
+      ? message
+      : possibleDelivery
+        ? 'driver_exception_after_possible_delivery'
+        : 'driver_exception_before_send';
 
     if (incidentId) {
       if (possibleDelivery) {
