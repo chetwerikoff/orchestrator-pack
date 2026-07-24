@@ -142,3 +142,106 @@ jobs:
       - name: Run external red-green mutation evidence
         if: steps.detect.outputs.run_evidence == 'true'
         run: npm run test:contract-mutations
+
+  issue948-final-evidence-pre:
+    name: Issue 948 final evidence pre-receipt
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 955
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      issues: read
+    env:
+      TARGET_SHA: 516a09c253b60f82f30b1a79ec4dd49a62eaba35
+      LEGACY_SHA: b967dfe156838039e1d6d137e7064dc9d1b10b4d
+      AO_REVIEW_START_MONOTONIC_NOW_MS: '1000'
+    steps:
+      - name: Checkout temporary producer
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: carrier
+          fetch-depth: 0
+      - name: Checkout frozen candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          path: target
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: target/package-lock.json
+      - name: Install candidate dependencies
+        working-directory: target
+        run: npm ci --include=dev
+      - name: Install candidate Pester
+        working-directory: target
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Produce frozen candidate evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash "$GITHUB_WORKSPACE/carrier/.github/issue-948-final-evidence.sh" pre "$GITHUB_WORKSPACE/target" "$RUNNER_TEMP/issue948-evidence"
+      - name: Upload pre-receipt evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-pre-receipt-v5
+          path: ${{ runner.temp }}/issue948-evidence
+          if-no-files-found: warn
+          retention-days: 30
+
+  issue948-final-evidence-post:
+    name: Issue 948 final evidence post-final
+    needs: issue948-final-evidence-pre
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 955 && needs.issue948-final-evidence-pre.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      issues: read
+    env:
+      TARGET_SHA: 516a09c253b60f82f30b1a79ec4dd49a62eaba35
+      LEGACY_SHA: b967dfe156838039e1d6d137e7064dc9d1b10b4d
+      AO_REVIEW_START_MONOTONIC_NOW_MS: '1000'
+    steps:
+      - name: Checkout temporary producer
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: carrier
+          fetch-depth: 0
+      - name: Checkout frozen candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          path: target
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: target/package-lock.json
+      - name: Install candidate dependencies
+        working-directory: target
+        run: npm ci --include=dev
+      - name: Install candidate Pester
+        working-directory: target
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - uses: actions/download-artifact@v4
+        with:
+          name: issue-948-pre-receipt-v5
+          path: ${{ runner.temp }}/issue948-evidence
+      - name: Verify receipt in fresh frozen checkout
+        run: bash "$GITHUB_WORKSPACE/carrier/.github/issue-948-final-evidence.sh" post "$GITHUB_WORKSPACE/target" "$RUNNER_TEMP/issue948-evidence"
+      - name: Upload final evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-final-evidence-v5
+          path: ${{ runner.temp }}/issue948-evidence
+          if-no-files-found: error
+          retention-days: 30
