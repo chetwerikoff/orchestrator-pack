@@ -292,6 +292,21 @@ describe('issue 964 causal witness gate', () => {
   });
 });
 
+describe('issue 964 configured profile identity', () => {
+  it('collapses filesystem, Windows/WSL, and case aliases into one lock namespace', () => {
+    const actual = join(root, 'Profile-Actual');
+    const alias = join(root, 'profile-alias');
+    mkdirSync(actual);
+    symlinkSync(actual, alias, 'dir');
+    expect(configuredProfileKey(actual, cdp)).toBe(configuredProfileKey(alias, cdp));
+
+    if (process.platform !== 'win32') {
+      expect(configuredProfileKey('C:\\Users\\Automation\\Profile', cdp))
+        .toBe(configuredProfileKey('/mnt/c/users/automation/profile/', cdp));
+    }
+  });
+});
+
 describe('issue 964 result contract', () => {
   it('keeps stable exit-code families', () => {
     expect(turnExitCode('ok')).toBe(0);
