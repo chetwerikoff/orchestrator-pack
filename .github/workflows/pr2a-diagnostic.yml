@@ -7,9 +7,9 @@ permissions:
   contents: read
 
 jobs:
-  capture:
+  conformance:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - name: Checkout exact head
         uses: actions/checkout@v4
@@ -25,36 +25,19 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=dev
 
-      - name: Capture conformance and failing shard
+      - name: Capture conformance
         shell: bash
         run: |
           set +e
           mkdir -p .pr2a-diagnostic
           node --experimental-strip-types scripts/pr2a/final-conformance.ts --ref HEAD --json > .pr2a-diagnostic/final-conformance.log 2>&1
           printf '%s\n' "$?" > .pr2a-diagnostic/final-conformance.exit
-          node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 \
-            plugins/ao-scope-guard/tests/agent_wrap.test.ts \
-            plugins/ao-scope-guard/tests/integration.test.ts \
-            plugins/ao-token-chain-ledger/tests/integration.test.ts \
-            scripts/contract-evidence-legacy-list-guard.test.ts \
-            scripts/kernel/subprocess.test.ts \
-            scripts/pr2-foundation/mutation-external-ci.test.ts \
-            scripts/review-finding-delivery-submit.test.ts \
-            scripts/review-orchestrator-loop.test.ts \
-            scripts/review-start-claim-run-binding.test.ts \
-            scripts/review-start-claim.test.ts \
-            scripts/review-trigger-reeval.test.ts \
-            scripts/session-runtime-liveness.test.ts \
-            > .pr2a-diagnostic/heavy-shard-1.log 2>&1
-          printf '%s\n' "$?" > .pr2a-diagnostic/heavy-shard-1.exit
-          npm run test:issue-948 > .pr2a-diagnostic/issue-948.log 2>&1
-          printf '%s\n' "$?" > .pr2a-diagnostic/issue-948.exit
           exit 0
 
       - name: Upload diagnostic artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pr2a-diagnostic-${{ github.sha }}
+          name: pr2a-conformance-${{ github.sha }}
           path: .pr2a-diagnostic
           if-no-files-found: error
