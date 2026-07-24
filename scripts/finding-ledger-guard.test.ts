@@ -164,6 +164,17 @@ describe('finding ledger review economics #975', () => {
       expect(result.ok, result.errors.join('\n')).toBe(true);
     });
 
+    it('does not let a pre-adoption marker self-elect M2 authority', () => {
+      const result = run(
+        [
+          cap('pass-01-architectural.capture.txt', 500, markedFinding('OLD', { persistent: '' })),
+          cap('pass-02-architectural.capture.txt', 1_100, markedClean()),
+        ],
+        [row('OLD')],
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    });
+
     it('fails an unmarked post-adoption reviewer even when a later marker exists', () => {
       const result = run(
         [
@@ -511,6 +522,18 @@ describe('finding ledger review economics #975', () => {
           cap('pass-03-architectural-final.capture.txt', 1_300, markedClean()),
           cap('pass-04-architectural-lens.capture.txt', 1_400, 'newer same-episode lens'),
           cap('pass-05-architectural-final.capture.txt', 1_500, markedClean()),
+        ],
+        [],
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    });
+
+    it('does not require M5 clean token on post-lens architectural-final evidence', () => {
+      const result = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'first lens'),
+          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
         ],
         [],
       );
