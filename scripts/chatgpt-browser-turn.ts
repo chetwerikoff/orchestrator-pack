@@ -410,7 +410,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         if (!witnessSurface) downgradeCapability(profileKey);
         safeRelease(scheduleLock);
         scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
-        capability = rechecked;
+        capability = capabilityStatus(profileKey, expectedBinding);
         if (!scheduleLock) {
           if (opened.owned) await opened.page.close().catch(() => {});
           safeReleaseDestination(reservation);
