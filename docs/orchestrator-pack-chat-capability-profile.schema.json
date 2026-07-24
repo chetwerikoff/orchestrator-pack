@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/chetwerikoff/orchestrator-pack/main/docs/orchestrator-pack-chat-capability-profile.schema.json",
   "title": "orchestrator-pack standalone chat capability profile",
-  "description": "Strict structure for the JSON payload embedded in the canonical operational capability-profile Issue.",
+  "description": "Strict structure for transport and observation capability evidence. A profile is not task ownership, a lock, a lease, or write authority.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -42,8 +42,17 @@
       "minProperties": 7,
       "maxProperties": 64,
       "propertyNames": {
-        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
-        "maxLength": 128
+        "allOf": [
+          {
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "maxLength": 128
+          },
+          {
+            "not": {
+              "pattern": "(?:receipt|ownership|takeover|claim|lease|lock)"
+            }
+          }
+        ]
       },
       "required": [
         "repository-read",
