@@ -44,7 +44,21 @@ jobs:
       - name: Install from frozen lockfile
         run: npm ci --include=dev
       - name: Typecheck without emit
-        run: npm run typecheck:foundation
+        id: typecheck
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck:foundation > pr2a-typecheck-diagnostic.log 2>&1
+          status=$?
+          cat pr2a-typecheck-diagnostic.log
+          exit "$status"
+      - name: Upload typecheck diagnostic
+        if: failure() && steps.typecheck.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr2a-typecheck-diagnostic
+          path: pr2a-typecheck-diagnostic.log
+          if-no-files-found: error
 
   lint:
     name: TypeScript policy lint
@@ -140,5 +154,19 @@ jobs:
           console.log(command ? 'complete mutation surface detected' : 'mutation surface absent');
           NODE
       - name: Run external red-green mutation evidence
+        id: mutations
         if: steps.detect.outputs.run_evidence == 'true'
-        run: npm run test:contract-mutations
+        shell: bash
+        run: |
+          set +e
+          npm run test:contract-mutations > pr2a-mutation-diagnostic.log 2>&1
+          status=$?
+          cat pr2a-mutation-diagnostic.log
+          exit "$status"
+      - name: Upload mutation diagnostic
+        if: failure() && steps.mutations.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr2a-mutation-diagnostic
+          path: pr2a-mutation-diagnostic.log
+          if-no-files-found: error
