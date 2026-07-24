@@ -6,11 +6,13 @@ import { sha256 } from './storage-common.ts';
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = dirname(MODULE_DIR);
+const REPO_ROOT = dirname(SCRIPTS_DIR);
+const CDP_OWNER_VERIFIER = join(REPO_ROOT, '.claude', 'skills', 'discuss-with-gpt', 'verify-cdp-owner.mjs');
 
 function digestFiles(paths: readonly string[]): string {
   const parts: Buffer[] = [];
   for (const path of [...paths].sort()) {
-    const identity = relative(SCRIPTS_DIR, path).replaceAll('\\', '/');
+    const identity = relative(REPO_ROOT, path).replaceAll('\\', '/');
     parts.push(Buffer.from(`${identity}\0`, 'utf8'));
     parts.push(readFileSync(path));
     parts.push(Buffer.from('\0', 'utf8'));
@@ -22,7 +24,7 @@ function runtimeFiles(): string[] {
   const modules = readdirSync(MODULE_DIR)
     .filter((name) => name.endsWith('.ts'))
     .map((name) => join(MODULE_DIR, name));
-  return [join(SCRIPTS_DIR, 'chatgpt-browser-turn.ts'), ...modules];
+  return [join(SCRIPTS_DIR, 'chatgpt-browser-turn.ts'), ...modules, CDP_OWNER_VERIFIER];
 }
 
 export function candidateDigest(): string {
