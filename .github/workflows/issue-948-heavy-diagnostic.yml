@@ -1,0 +1,51 @@
+name: issue-948-heavy-diagnostic
+
+on:
+  push:
+    branches:
+      - tmp/issue-948-verification-toolchain
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f8e5661ae41258e80498171e19f9c6f0896742c8
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Run isolated external mutation test
+        shell: bash
+        run: |
+          set +e
+          export CI=true
+          export OPK_VITEST_HARNESS=1
+          START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          npm test -- scripts/pr2-foundation/mutation-external-ci.test.ts --reporter=default --reporter=json --outputFile=mutation-external.json > mutation-external.log 2>&1
+          TEST_EXIT=$?
+          END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          printf '{"target":"f8e5661ae41258e80498171e19f9c6f0896742c8","startedAt":"%s","completedAt":"%s","testExit":%s}\n' "$START" "$END" "$TEST_EXIT" > diagnostic-meta.json
+          set +e
+          node scripts/enforce-vitest-runtime-budget.mjs mutation-external.json > mutation-budget.log 2>&1
+          BUDGET_EXIT=$?
+          printf '{"testExit":%s,"budgetExit":%s}\n' "$TEST_EXIT" "$BUDGET_EXIT" > diagnostic-result.json
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-heavy-diagnostic
+          path: |
+            mutation-external.json
+            mutation-external.log
+            mutation-budget.log
+            diagnostic-meta.json
+            diagnostic-result.json
+          if-no-files-found: error
