@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "76fca35897b787e3bd05bc07e5ea12c86aa7eb7b",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:4e6622056cd570dacd3adc83599d04d4b46f103a73a5bf84ea06ad7088355158"
+    "active_scope_hash": "sha256:0eaa04bf93ca9455de6933c3eef9d03cc0e977877c56b48310ec674ec68fdd2a"
   },
   "declared_paths": [
     "package.json",
@@ -24,9 +24,25 @@
     "scripts/chatgpt-browser-turn/storage-common.ts",
     "scripts/chatgpt-browser-turn/storage.ts",
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:4e6622056cd570dacd3adc83599d04d4b46f103a73a5bf84ea06ad7088355158",
+      "new_active_scope_hash": "sha256:0eaa04bf93ca9455de6933c3eef9d03cc0e977877c56b48310ec674ec68fdd2a",
+      "changed": {
+        "added": [
+          "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Add deterministic regressions for pack review 4773714081 crash-recovery and product-wall findings",
+      "actor": "chat-review-fix-4773714081",
+      "timestamp": "2026-07-24T14:20:10.142Z",
+      "applied": true
+    }
+  ]
 }

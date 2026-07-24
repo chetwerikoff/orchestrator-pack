@@ -36,10 +36,13 @@ export function buildDigest(): string {
 }
 
 export function gateDigest(): string {
-  const testPath = join(SCRIPTS_DIR, 'toolchain', 'chatgpt-browser-turn.test.ts');
+  const testPaths = [
+    join(SCRIPTS_DIR, 'toolchain', 'chatgpt-browser-turn.test.ts'),
+    join(SCRIPTS_DIR, 'toolchain', 'chatgpt-browser-turn.review-fixes.test.ts'),
+  ];
   let testDigest = 'test-not-present';
   try {
-    testDigest = sha256(readFileSync(testPath));
+    testDigest = digestFiles(testPaths);
   } catch {
     // A retained recovery copy does not require Gate-B source files.
   }

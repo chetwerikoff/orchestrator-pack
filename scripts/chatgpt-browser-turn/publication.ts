@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   closeSync,
   fsyncSync,
+  fstatSync,
   lstatSync,
   openSync,
   readFileSync,
@@ -34,6 +35,10 @@ export interface PublicationRecordV1 {
   readonly output_sha256?: string;
   readonly created_at: string;
   readonly updated_at: string;
+}
+
+export interface PublicationTestHooks {
+  readonly afterPreparedRecord?: () => void;
 }
 
 function validInvocationId(invocationId: string): boolean {
@@ -159,6 +164,14 @@ function pidAlive(pid: number): boolean {
   return true;
 }
 
+function safeUnlink(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Best effort only; no body bytes have been written before the prepared record is durable.
+  }
+}
+
 type NoReplaceMvMode = 'none-fail' | 'no-clobber';
 let noReplaceMvMode: NoReplaceMvMode | null | undefined;
 
@@ -221,6 +234,7 @@ export function publishReply(
   outputPath: string,
   outputIdentity: string,
   reply: string,
+  testHooks: PublicationTestHooks = {},
 ): PublicationStatusV1 {
   if (!validInvocationId(invocationId)) {
     return status(profileKey, invocationId, 'recovery_required', undefined, 'publication_invocation_invalid');
@@ -238,39 +252,64 @@ export function publishReply(
 
   const tempPath = join(parent, `.${basename(finalPath)}.${invocationId}.${randomUUID()}.tmp`);
   let fd = -1;
+  let record: PublicationRecordV1 | undefined;
   try {
     fd = openSync(tempPath, 'wx', 0o600);
+    const parentStat = statSync(parent, { bigint: true });
+    const tempStat = fstatSync(fd, { bigint: true });
+    if (parentStat.dev !== tempStat.dev) {
+      closeSync(fd);
+      fd = -1;
+      safeUnlink(tempPath);
+      return status(profileKey, invocationId, 'recovery_required', finalPath, 'publication_cross_filesystem');
+    }
+
+    const now = new Date().toISOString();
+    record = {
+      schema: PUBLICATION_SCHEMA,
+      version: 1,
+      configured_profile_key: profileKey,
+      invocation_id: invocationId,
+      output_path: finalPath,
+      output_identity: outputIdentity,
+      temp_path: tempPath,
+      temp_dev: String(tempStat.dev),
+      temp_ino: String(tempStat.ino),
+      owner_pid: process.pid,
+      state: 'prepared',
+      created_at: now,
+      updated_at: now,
+    };
+    try {
+      writeRecord(profileKey, record);
+    } catch {
+      closeSync(fd);
+      fd = -1;
+      safeUnlink(tempPath);
+      return status(profileKey, invocationId, 'recovery_required', finalPath, 'publication_record_prepare_failed');
+    }
+
+    testHooks.afterPreparedRecord?.();
     writeFileSync(fd, reply, 'utf8');
     fsyncSync(fd);
-  } catch {
+  } catch (error) {
     if (fd >= 0) closeSync(fd);
+    if (error instanceof Error && error.message.startsWith('test_crash:')) throw error;
+    if (record) {
+      try {
+        record = { ...record, failure_cause: 'publication_temp_write_failed', updated_at: new Date().toISOString() };
+        writeRecord(profileKey, record);
+      } catch {
+        // The already-durable prepared record remains the recovery anchor.
+      }
+    }
     return status(profileKey, invocationId, 'recovery_required', finalPath, 'publication_temp_write_failed');
   }
   closeSync(fd);
 
-  const parentStat = statSync(parent, { bigint: true });
-  const tempStat = statSync(tempPath, { bigint: true });
-  if (parentStat.dev !== tempStat.dev) {
-    return status(profileKey, invocationId, 'recovery_required', finalPath, 'publication_cross_filesystem');
+  if (!record || !sameObject(tempPath, record.temp_dev, record.temp_ino)) {
+    return status(profileKey, invocationId, 'recovery_required', finalPath, 'publication_identity_unreadable');
   }
-
-  const now = new Date().toISOString();
-  let record: PublicationRecordV1 = {
-    schema: PUBLICATION_SCHEMA,
-    version: 1,
-    configured_profile_key: profileKey,
-    invocation_id: invocationId,
-    output_path: finalPath,
-    output_identity: outputIdentity,
-    temp_path: tempPath,
-    temp_dev: String(tempStat.dev),
-    temp_ino: String(tempStat.ino),
-    owner_pid: process.pid,
-    state: 'prepared',
-    created_at: now,
-    updated_at: now,
-  };
-  writeRecord(profileKey, record);
 
   try {
     if (entryExists(finalPath)) {
@@ -372,6 +411,9 @@ export function publicationStatus(profileKey: string, invocationId: string): Pub
   if (record.state === 'collision') {
     return status(profileKey, invocationId, 'recovery_required', record.output_path, record.failure_cause ?? 'publication_commit_collision');
   }
+  if (record.failure_cause) {
+    return status(profileKey, invocationId, 'recovery_required', record.output_path, record.failure_cause);
+  }
   if (exactTempExists) {
     const alive = pidAlive(record.owner_pid);
     return status(
@@ -382,7 +424,7 @@ export function publicationStatus(profileKey: string, invocationId: string): Pub
       alive ? 'publication_in_progress' : 'prepared_without_live_owner',
     );
   }
-  return status(profileKey, invocationId, 'recovery_required', record.output_path, record.failure_cause ?? 'publication_identity_missing');
+  return status(profileKey, invocationId, 'recovery_required', record.output_path, 'publication_identity_missing');
 }
 
 export function discardUncommittedPublication(profileKey: string, invocationId: string, outputIdentity: string): boolean {

@@ -1,4 +1,10 @@
-import { loadChromium, type BrowserConfig, verifyProfile } from './ui-adapter.ts';
+import {
+  classifyProductWall,
+  loadChromium,
+  productStatusText,
+  type BrowserConfig,
+  verifyProfile,
+} from './ui-adapter.ts';
 
 export interface ProfileReadyProbe {
   readonly ready: boolean;
@@ -7,27 +13,10 @@ export interface ProfileReadyProbe {
 }
 
 async function probePage(page: any): Promise<ProfileReadyProbe | { ready: true; state: 'ready'; cause: 'composer_ready_no_wall' } | null> {
-  const composer = (await page.locator('#prompt-textarea').count().catch(() => 0)) > 0;
-  const productSurface = page.locator([
-    '[role="alert"]',
-    '[role="dialog"]',
-    '[data-testid*="quota"]',
-    '[data-testid*="limit"]',
-    '[data-testid*="challenge"]',
-    '[data-testid*="login"]',
-  ].join(','));
-  const texts = await productSurface.allInnerTexts().catch(() => [] as string[]);
-  let text = texts.slice(0, 8).join('\n');
-  if (!composer) text += `\n${(await page.locator('body').innerText().catch(() => '')).slice(0, 20_000)}`;
-
-  if (/verify you are human|checking your browser|just a moment|unusual activity/i.test(text)) {
-    return { ready: false, state: 'challenge', cause: 'challenge_detected' };
-  }
-  if (/you(?:'|’)ve reached|usage limit|message limit|reached the current usage|please try again later/i.test(text)) {
-    return { ready: false, state: 'quota', cause: 'quota_detected' };
-  }
-  if (!composer && /log in|sign in/i.test(text)) return { ready: false, state: 'login', cause: 'login_required' };
-  return composer ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall' } : null;
+  const surface = await productStatusText(page);
+  const wall = classifyProductWall(surface);
+  if (wall.state) return { ready: false, state: wall.state, cause: wall.cause! };
+  return surface.composer ? { ready: true, state: 'ready', cause: 'composer_ready_no_wall' } : null;
 }
 
 export async function probeProfileReady(config: BrowserConfig): Promise<ProfileReadyProbe> {

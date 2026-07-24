@@ -16,7 +16,7 @@
     "check:pwsh-test-growth": "npm run check:node-major --silent && node --experimental-strip-types scripts/toolchain/check-pwsh-test-growth.ts",
     "test:foundation": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts",
     "test:issue-900": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/toolchain/node22-runtime-policy.spec.ts",
-    "test:issue-964": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/toolchain/chatgpt-browser-turn.test.ts",
+    "test:issue-964": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/toolchain/chatgpt-browser-turn.test.ts scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "chatgpt-browser-turn": "npm run check:node-major --silent && node --experimental-strip-types scripts/chatgpt-browser-turn.ts",
     "gate-runner-selftest": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/gate-runner",
     "gate-census-generate": "npm run check:node-major --silent && node --experimental-strip-types scripts/gate-runner/census-generator.ts",

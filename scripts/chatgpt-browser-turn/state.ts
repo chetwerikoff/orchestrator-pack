@@ -402,6 +402,7 @@ export function statusList(profileKey: string): ControlResultV1 {
         kind: 'blocking_tombstone',
         generation: tombstone.generation,
         evidence_token: tombstone.source_digest,
+        cause: tombstone.state === 'preparing' ? 'quarantine_preparation_incomplete' : undefined,
         opaque: true,
       });
       const quarantinePath = join(d.quarantine, tombstone.quarantine_name);
@@ -534,9 +535,117 @@ function parseOpaqueIdentity(identity: string): { area: OpaqueArea; name: string
   return { area: area as OpaqueArea, name, digest };
 }
 
+function opaqueSourceDirectory(profileKey: string, area: OpaqueArea): string {
+  const d = profileDirs(profileKey);
+  if (area === 'records') return d.records;
+  if (area === 'publications') return d.publications;
+  return d.root;
+}
+
+function matchingTombstones(
+  profileKey: string,
+  parsed: { area: OpaqueArea; name: string; digest: string },
+  generation: number,
+): Array<{ path: string; tombstone: TombstoneV1 }> {
+  const d = profileDirs(profileKey);
+  const matches: Array<{ path: string; tombstone: TombstoneV1 }> = [];
+  for (const name of readdirSync(d.tombstones).sort()) {
+    const path = join(d.tombstones, name);
+    let tombstone: TombstoneV1;
+    try {
+      tombstone = readTombstone(path, profileKey);
+    } catch {
+      continue;
+    }
+    if (tombstone.source_area === parsed.area
+      && tombstone.source_name === parsed.name
+      && tombstone.source_generation === generation
+      && tombstone.source_digest === parsed.digest) {
+      matches.push({ path, tombstone });
+    }
+  }
+  return matches;
+}
+
+function finishQuarantine(
+  profileKey: string,
+  parsed: { area: OpaqueArea; name: string; digest: string },
+  requestedIdentity: string,
+  generation: number,
+  tombstonePath: string,
+  tombstone: TombstoneV1,
+): ControlResultV1 {
+  const d = profileDirs(profileKey);
+  const source = opaquePath(profileKey, parsed.area, parsed.name);
+  if (!source) return control('clear', 'profile_blocked', profileKey, 'opaque_path_invalid');
+  const quarantinePath = join(d.quarantine, tombstone.quarantine_name);
+  const sourceExists = existsSync(source);
+  const quarantineExists = existsSync(quarantinePath);
+
+  if (tombstone.state === 'active') {
+    if (sourceExists || !quarantineExists) return control('clear', 'profile_blocked', profileKey, 'quarantine_active_state_inconsistent');
+    try {
+      if (sha256(regularBytes(quarantinePath)) !== tombstone.source_digest) {
+        return control('clear', 'evidence_changed', profileKey, 'quarantine_bytes_changed');
+      }
+    } catch {
+      return control('clear', 'profile_blocked', profileKey, 'quarantine_bytes_unreadable');
+    }
+    return control('clear', 'quarantined', profileKey);
+  }
+
+  if (sourceExists && quarantineExists) {
+    return control('clear', 'profile_blocked', profileKey, 'quarantine_preparation_ambiguous');
+  }
+  if (!sourceExists && !quarantineExists) {
+    return control('clear', 'profile_blocked', profileKey, 'quarantine_preparation_missing_bytes');
+  }
+
+  if (sourceExists) {
+    let current: StatusItemV1;
+    try {
+      current = opaqueStatusItem(profileKey, parsed.area, parsed.name);
+    } catch {
+      return control('clear', 'profile_blocked', profileKey, 'opaque_record_unreadable');
+    }
+    if (current.identity !== requestedIdentity
+      || current.generation !== generation
+      || current.evidence_token !== parsed.digest) {
+      return control('clear', 'stale_generation', profileKey);
+    }
+    try {
+      renameSync(source, quarantinePath);
+      fsyncDirectory(d.quarantine);
+      fsyncDirectory(opaqueSourceDirectory(profileKey, parsed.area));
+    } catch {
+      return control('clear', 'profile_blocked', profileKey, 'quarantine_move_incomplete');
+    }
+  }
+
+  try {
+    if (sha256(regularBytes(quarantinePath)) !== tombstone.source_digest) {
+      return control('clear', 'evidence_changed', profileKey, 'quarantine_bytes_changed');
+    }
+  } catch {
+    return control('clear', 'profile_blocked', profileKey, 'quarantine_bytes_unreadable');
+  }
+
+  const active: TombstoneV1 = { ...tombstone, state: 'active', updated_at: new Date().toISOString() };
+  atomicJson(tombstonePath, active);
+  return control('clear', 'quarantined', profileKey);
+}
+
 export function quarantineOpaque(profileKey: string, identity: string, generation: number): ControlResultV1 {
   const parsed = parseOpaqueIdentity(identity);
   if (!parsed) return control('clear', 'not_found', profileKey);
+
+  const existing = matchingTombstones(profileKey, parsed, generation);
+  if (existing.length > 1) return control('clear', 'profile_blocked', profileKey, 'duplicate_quarantine_preparation');
+  if (existing.length === 1) {
+    const match = existing[0]!;
+    return finishQuarantine(profileKey, parsed, identity, generation, match.path, match.tombstone);
+  }
+
   const source = opaquePath(profileKey, parsed.area, parsed.name);
   if (!source || !existsSync(source)) return control('clear', 'not_found', profileKey);
   let current: StatusItemV1;
@@ -553,7 +662,7 @@ export function quarantineOpaque(profileKey: string, identity: string, generatio
   const tombstoneIdentity = `tombstone-${randomUUID()}`;
   const quarantineName = `${tombstoneIdentity}.opaque`;
   const now = new Date().toISOString();
-  let tombstone: TombstoneV1 = {
+  const tombstone: TombstoneV1 = {
     schema: 'chatgpt-browser-turn-tombstone/v1',
     version: 1,
     configured_profile_key: profileKey,
@@ -570,12 +679,7 @@ export function quarantineOpaque(profileKey: string, identity: string, generatio
   };
   const tombstonePath = join(d.tombstones, `${tombstoneIdentity}.json`);
   atomicJson(tombstonePath, tombstone);
-  renameSync(source, join(d.quarantine, quarantineName));
-  fsyncDirectory(d.quarantine);
-  fsyncDirectory(parsed.area === 'capability' ? d.root : parsed.area === 'records' ? d.records : d.publications);
-  tombstone = { ...tombstone, state: 'active', updated_at: new Date().toISOString() };
-  atomicJson(tombstonePath, tombstone);
-  return control('clear', 'quarantined', profileKey);
+  return finishQuarantine(profileKey, parsed, identity, generation, tombstonePath, tombstone);
 }
 
 export function adjudicateTombstone(
@@ -601,6 +705,7 @@ export function adjudicateTombstone(
     return control('clear', 'profile_blocked', profileKey, 'tombstone_incompatible');
   }
   if (tombstone.identity !== identity || tombstone.generation !== generation) return control('clear', 'stale_generation', profileKey);
+  if (tombstone.state !== 'active') return control('clear', 'profile_blocked', profileKey, 'quarantine_preparation_incomplete');
   const quarantinePath = join(d.quarantine, tombstone.quarantine_name);
   let quarantineBytes: Buffer;
   try {

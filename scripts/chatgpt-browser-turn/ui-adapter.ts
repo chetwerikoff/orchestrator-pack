@@ -213,7 +213,12 @@ export async function runtimeWitnessSurfaceAvailable(page: any): Promise<boolean
   return assistantParents.some((parent) => userIds.has(parent));
 }
 
-async function productStatusText(page: any): Promise<{ text: string; composer: boolean }> {
+export interface ProductStatusSurface {
+  readonly text: string;
+  readonly composer: boolean;
+}
+
+export async function productStatusText(page: any): Promise<ProductStatusSurface> {
   const composer = (await page.locator('#prompt-textarea').count().catch(() => 0)) > 0;
   const selectors = [
     '[role="alert"]',
@@ -222,7 +227,10 @@ async function productStatusText(page: any): Promise<{ text: string; composer: b
     '[data-testid*="limit"]',
     '[data-testid*="challenge"]',
     '[data-testid*="login"]',
+    '[data-testid*="auth"]',
     '[data-testid*="error"]',
+    'a[href*="/auth/login"]',
+    'a[href*="/auth/signup"]',
   ];
   const parts: string[] = [];
   for (const selector of selectors) {
@@ -233,15 +241,10 @@ async function productStatusText(page: any): Promise<{ text: string; composer: b
       if (text) parts.push(text);
     }
   }
-  if (!composer) {
-    const body = (await page.locator('body').innerText().catch(() => '')).slice(0, 20_000);
-    if (body) parts.push(body);
-  }
   return { text: parts.join('\n'), composer };
 }
 
-async function pageWalls(page: any): Promise<{ state?: string; cause?: string }> {
-  const surface = await productStatusText(page);
+export function classifyProductWall(surface: ProductStatusSurface): { state?: 'quota'|'challenge'|'login'; cause?: string } {
   if (/verify you are human|checking your browser|just a moment|unusual activity/i.test(surface.text)) {
     return { state: 'challenge', cause: 'challenge_detected' };
   }
@@ -250,6 +253,10 @@ async function pageWalls(page: any): Promise<{ state?: string; cause?: string }>
   }
   if (!surface.composer && /log in|sign in/i.test(surface.text)) return { state: 'login', cause: 'login_required' };
   return {};
+}
+
+async function pageWalls(page: any): Promise<{ state?: string; cause?: string }> {
+  return classifyProductWall(await productStatusText(page));
 }
 
 async function semanticNodes(locator: any): Promise<SemanticNode[]> {

@@ -49,7 +49,7 @@ npm run chatgpt-browser-turn -- clear \
   --identity <opaque-identity> --generation <n> --quarantine
 ```
 
-Quarantine does not unblock the profile. It creates a blocking tombstone and preserves the original bytes. Final adjudication requires an operator-supplied evidence file and its expected SHA-256:
+Quarantine does not unblock the profile. It creates a blocking tombstone and preserves the original bytes. If the process is interrupted while that tombstone is still `preparing`, repeating the same exact quarantine request resumes the recorded move instead of creating a second tombstone. Final adjudication requires an operator-supplied evidence file and its expected SHA-256:
 
 ```bash
 npm run chatgpt-browser-turn -- clear \
@@ -77,13 +77,13 @@ Even with positive capability evidence, every invocation rechecks the current br
 
 ## Publication safety
 
-The helper writes the complete reply to a same-directory `0600` temporary file, `fsync`s it, persists a prepared publication record, and then uses an atomic Linux no-clobber rename primitive with copy fallback disabled. The final inode must match the prepared temp inode before `ok` is possible. The parent directory is then `fsync`ed and the final byte length/SHA-256 are recorded.
+The helper creates a same-directory `0600` temporary file and durably persists a prepared publication record bound to that empty temp inode before writing any reply body bytes. It then writes and `fsync`s the complete reply and uses an atomic Linux no-clobber rename primitive with copy fallback disabled. The final inode must match the prepared temp inode before `ok` is possible. The parent directory is then `fsync`ed and the final byte length/SHA-256 are recorded. A crash after the prepared record but before or during body write therefore leaves a discoverable publication recovery anchor rather than an untracked body-bearing temporary.
 
 A crash after rename but before result emission is recoverable by `publication-status` from the inode witness. A destination that appears before the no-clobber commit remains untouched and yields `recovery_required` with the complete temp retained.
 
 ## Gate B and first live use
 
-Deterministic Gate-B coverage is in `scripts/toolchain/chatgpt-browser-turn.test.ts` and is run by the repository Vitest lanes plus:
+Deterministic Gate-B coverage is in `scripts/toolchain/chatgpt-browser-turn.test.ts` and the review-regression companion `scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts`; both are run by the repository Vitest lanes plus:
 
 ```bash
 npm run test:issue-964
