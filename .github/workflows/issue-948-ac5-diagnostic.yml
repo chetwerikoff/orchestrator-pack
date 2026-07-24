@@ -1,0 +1,40 @@
+name: issue-948-ac5-diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_HEAD: 27e02fd494f6fc5a9086c7d04754bcb12fec50b8
+
+jobs:
+  ac5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_HEAD }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Run AC5 mutation group
+        shell: bash
+        run: |
+          set +e
+          node --experimental-strip-types scripts/pr2a/mutation-runner.ts --ac AC5 > mutation-AC5.log 2>&1
+          status=$?
+          cat mutation-AC5.log
+          exit "$status"
+      - name: Upload AC5 diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-ac5-diagnostic
+          path: mutation-AC5.log
+          if-no-files-found: error
