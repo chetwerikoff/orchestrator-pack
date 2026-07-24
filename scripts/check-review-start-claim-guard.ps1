@@ -104,9 +104,16 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
                 }
             }
             if ($violations.Count -eq 0) {
-                & $node.Source --experimental-strip-types $conformancePath --ref HEAD *> $null
+                $conformanceOutput = @(& $node.Source --experimental-strip-types $conformancePath --ref HEAD 2>&1 | ForEach-Object { [string]$_ })
                 if ($LASTEXITCODE -ne 0) {
-                    $violations += 'Issue #948 final conformance rejected the current HEAD'
+                    $detail = ($conformanceOutput -join ' ').Trim()
+                    if ($detail.Length -gt 1800) { $detail = $detail.Substring(0, 1800) + '...[truncated]' }
+                    if ($detail) {
+                        $violations += "Issue #948 final conformance rejected the current HEAD: $detail"
+                    }
+                    else {
+                        $violations += 'Issue #948 final conformance rejected the current HEAD'
+                    }
                 }
             }
         }
