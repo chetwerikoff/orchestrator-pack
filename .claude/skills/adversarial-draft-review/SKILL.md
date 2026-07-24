@@ -98,14 +98,18 @@ before creating any plain capture:
   `trade-in` in raw JSON; missing price facts make only that proposal malformed;
 - an M5 cut candidate exists only when the raw finding contains the exact
   `simplification-cut-candidate: yes` fact; never infer it during transcription;
-- a governed clean raw result contains the review marker plus the terminal facts
-  corresponding to exact `NO_FINDINGS` and `SIMPLIFICATION_CLEAN` before
-  transcription.
+- for in-flow explicit/T3-critical passes and substitutions replacing
+  `competitive` or `architectural`, apply the pre-lens M5 raw shape before
+  transcription: no tokened cut candidate requires exact `SIMPLIFICATION_CLEAN`,
+  and a genuinely clean result also requires exact `NO_FINDINGS`;
+- a substitution replacing post-lens `architectural-final` remains M2-governed
+  but does **not** owe `SIMPLIFICATION_CLEAN` merely because it is clean or follows
+  a lens.
 
 Fail the pass if required raw facts are missing. **Do not repair raw economics by
 inventing fields in the plain capture.** The focused
 `scripts/finding-ledger-guard.test.ts` fixtures exercise one finding-bearing and
-one clean raw Codex result before normalization.
+one clean pre-lens raw Codex result before normalization.
 
 ### 4. Evaluate findings
 
@@ -129,10 +133,11 @@ Capture raw output before edits and normalize findings through
 
 ### 5. Transcribe 1:1, then iterate
 
-For an in-flow pass, preserve raw JSON first. Copy the raw M1/M2/M5 facts 1:1
-into the guard-recognized plain stage capture. Layout may normalize, but stable
-id, defect evidence, recommendation, machinery classification/prices, and exact
-cut-candidate fact may not change. Transcription never creates missing economics.
+For an in-flow pass, preserve raw JSON first. Copy the raw M1/M2 and applicable
+M5 facts 1:1 into the guard-recognized plain stage capture. Layout may normalize,
+but stable id, defect evidence, recommendation, machinery classification/prices,
+and exact cut-candidate fact may not change. Transcription never creates missing
+economics.
 
 Each retry is a fresh cold Codex thread. Retry only after at least one accepted
 or partially accepted finding changed the artifact. Carry a compact settled
