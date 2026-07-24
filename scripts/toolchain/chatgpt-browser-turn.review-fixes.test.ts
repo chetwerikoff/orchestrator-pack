@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   existsSync,
+  linkSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -13,7 +14,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { destinationIdentityForPath } from '../chatgpt-browser-turn/coordination.ts';
 import { publicationStatus, publishReply } from '../chatgpt-browser-turn/publication.ts';
-import { quarantineOpaque, statusList } from '../chatgpt-browser-turn/state.ts';
+import { adjudicateTombstone, quarantineOpaque, statusList } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import { classifyProductWall, productStatusText } from '../chatgpt-browser-turn/ui-adapter.ts';
 
@@ -189,5 +190,108 @@ describe('pack review 4773714081 product-owned wall detection', () => {
     const surface = await productStatusText(page);
     expect(classifyProductWall(surface)).toEqual({ state: 'quota', cause: 'quota_detected' });
     expect(bodyReads).toBe(0);
+  });
+});
+
+describe('pack review 4774405996 publication exclusive commit recovery', () => {
+  it('does not treat an external hard link to the prepared temp as the helper rename', () => {
+    const output = resolve(join(root, 'hardlink-race.txt'));
+    const destination = destinationIdentityForPath(output);
+    const invocation = 'hardlink-race';
+
+    expect(() => publishReply(
+      profileKey,
+      invocation,
+      output,
+      destination.identity,
+      'complete assistant reply',
+      { afterTempFsync: () => { throw new Error('test_crash:after_temp_fsync'); } },
+    )).toThrow('test_crash:after_temp_fsync');
+
+    const record = JSON.parse(
+      readFileSync(join(profileDirs(profileKey).publications, `${invocation}.json`), 'utf8'),
+    ) as Record<string, any>;
+    expect(readFileSync(record.temp_path, 'utf8')).toBe('complete assistant reply');
+    linkSync(record.temp_path, output);
+
+    const recovered = publicationStatus(profileKey, invocation);
+    expect(recovered.state).toBe('recovery_required');
+    expect(recovered.cause).toBe('publication_commit_alias_present');
+    expect(existsSync(record.temp_path)).toBe(true);
+    expect(readFileSync(output, 'utf8')).toBe('complete assistant reply');
+  });
+});
+
+describe('pack review 4774405996 adjudication crash recovery', () => {
+  function activeTombstone(bytes: Buffer, name: string): { identity: string; generation: number; evidence: string } {
+    const source = opaqueFixture(name, bytes);
+    expect(quarantineOpaque(profileKey, source.identity, source.generation).state).toBe('quarantined');
+    const listed = statusList(profileKey);
+    const tombstone = listed.items!.find((item) => item.kind === 'blocking_tombstone')!;
+    expect(tombstone).toBeDefined();
+    return { identity: tombstone.identity, generation: tombstone.generation, evidence: sha256('operator-adjudication') };
+  }
+
+  it('resumes exact adjudication after a crash immediately after the durable resolution record', () => {
+    const bytes = Buffer.from('{"future":"resolution-record"}\n');
+    const tombstone = activeTombstone(bytes, 'future-resolution-record.json');
+
+    expect(() => adjudicateTombstone(
+      profileKey,
+      tombstone.identity,
+      tombstone.generation,
+      tombstone.evidence,
+      tombstone.evidence,
+      { afterResolutionRecord: () => { throw new Error('test_crash:after_resolution_record'); } },
+    )).toThrow('test_crash:after_resolution_record');
+
+    const d = profileDirs(profileKey);
+    expect(existsSync(join(d.tombstones, `${tombstone.identity}.json`))).toBe(true);
+    expect(existsSync(join(d.quarantine, `${tombstone.identity}.opaque`))).toBe(true);
+    expect(existsSync(join(d.resolved, `${tombstone.identity}.json`))).toBe(true);
+    expect(existsSync(join(d.resolved, `${tombstone.identity}.opaque`))).toBe(false);
+
+    expect(adjudicateTombstone(
+      profileKey,
+      tombstone.identity,
+      tombstone.generation,
+      tombstone.evidence,
+      tombstone.evidence,
+    ).state).toBe('cleared');
+    expect(statusList(profileKey).state).toBe('none');
+    expect(readFileSync(join(d.resolved, `${tombstone.identity}.opaque`))).toEqual(bytes);
+  });
+
+  it('resumes exact adjudication after the opaque bytes moved but before tombstone retirement', () => {
+    const bytes = Buffer.from('{"future":"resolved-move"}\n');
+    const tombstone = activeTombstone(bytes, 'future-resolved-move.json');
+
+    expect(() => adjudicateTombstone(
+      profileKey,
+      tombstone.identity,
+      tombstone.generation,
+      tombstone.evidence,
+      tombstone.evidence,
+      { afterResolvedMove: () => { throw new Error('test_crash:after_resolved_move'); } },
+    )).toThrow('test_crash:after_resolved_move');
+
+    const d = profileDirs(profileKey);
+    expect(existsSync(join(d.tombstones, `${tombstone.identity}.json`))).toBe(true);
+    expect(existsSync(join(d.quarantine, `${tombstone.identity}.opaque`))).toBe(false);
+    expect(existsSync(join(d.resolved, `${tombstone.identity}.opaque`))).toBe(true);
+    const pending = statusList(profileKey).items!.find(
+      (item) => item.kind === 'blocking_tombstone' && item.identity === tombstone.identity,
+    );
+    expect(pending?.cause).toBe('adjudication_resolution_incomplete');
+
+    expect(adjudicateTombstone(
+      profileKey,
+      tombstone.identity,
+      tombstone.generation,
+      tombstone.evidence,
+      tombstone.evidence,
+    ).state).toBe('cleared');
+    expect(statusList(profileKey).state).toBe('none');
+    expect(readFileSync(join(d.resolved, `${tombstone.identity}.opaque`))).toEqual(bytes);
   });
 });
