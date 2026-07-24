@@ -193,7 +193,7 @@ EOF
           printf 'blocked\n' > "$ENTRY_GATE"
           sleep 300 &
           SURVIVOR_PID=$!
-          node --experimental-strip-types scripts/pr2a/rollback-drain.ts export --out "$EVID/rollback/detached" --generation "$TARGET_TREE" --pids "$SURVIVOR_PID" > "$EVID/rollback/export-raw.json"
+          node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pr2a/rollback-drain.ts -- export --out "$EVID/rollback/detached" --generation "$TARGET_TREE" --pids "$SURVIVOR_PID" > "$EVID/rollback/export-raw.json"
           DETACHED_ART="$EVID/rollback/detached/rollback-drain-artifact.json"
           DETACHED_SHA="$(hash_file "$DETACHED_ART")"
           node - "$DETACHED_SHA" "$EVID/rollback/export-raw.json" > "$EVID/rollback/export.json" <<'NODE'
@@ -218,7 +218,12 @@ NODE
           test "$(hash_file "$DETACHED_ART")" = "$DETACHED_SHA"
           test -f "$ENTRY_GATE"
 
-          node --experimental-strip-types "$EVID/rollback/detached/rollback-drain.ts" drain --artifact "$DETACHED_ART" > "$EVID/rollback/drain-raw.json"
+          npm run check:node-major --silent
+          node --experimental-strip-types --input-type=module - "$DETACHED_ART" "$EVID/rollback/detached/rollback-drain.ts" > "$EVID/rollback/drain-raw.json" <<'NODE'
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const [artifactPath,runnerPath]=process.argv.slice(2);const mod=await import(pathToFileURL(runnerPath).href);const artifact=JSON.parse(readFileSync(artifactPath,'utf8'));const result=await mod.executeRollbackDrainArtifact(artifact);process.stdout.write(JSON.stringify(result)+'\n');
+NODE
           node - "$EVID/rollback/drain-raw.json" > "$EVID/rollback/drain-result.json" <<'NODE'
 const fs=require('fs');const x=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));if(!Array.isArray(x.drained)||x.drained.length===0)throw new Error('no drained process');process.stdout.write(JSON.stringify({schemaVersion:1,result:'pass',drained:x.drained,stale:x.stale??[],zeroSurvivorsBeforeResume:true})+'\n');
 NODE
