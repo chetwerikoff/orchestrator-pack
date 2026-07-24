@@ -29,9 +29,9 @@ jobs:
         shell: bash
         run: |
           set +e
-          mkdir -p .pr2a-diagnostic
-          node --experimental-strip-types scripts/pr2a/final-conformance.ts --ref HEAD --json > .pr2a-diagnostic/final-conformance.log 2>&1
-          printf '%s\n' "$?" > .pr2a-diagnostic/final-conformance.exit
+          mkdir -p pr2a-diagnostic
+          node --experimental-strip-types scripts/pr2a/final-conformance.ts --ref HEAD --json > pr2a-diagnostic/final-conformance.log 2>&1
+          printf '%s\n' "$?" > pr2a-diagnostic/final-conformance.exit
           exit 0
 
       - name: Upload diagnostic artifact
@@ -39,5 +39,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pr2a-conformance-${{ github.sha }}
-          path: .pr2a-diagnostic
+          path: pr2a-diagnostic
           if-no-files-found: error
