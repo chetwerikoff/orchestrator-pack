@@ -5,7 +5,6 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import {
   PR2A_MUTATION_CATALOG,
@@ -17,6 +16,7 @@ interface MutationEvidence {
   ac: Pr2aAcceptanceId;
   mutationId: string;
   artifactPath: string;
+  detectorId: string;
   detectorCommand: string[];
   expectedFinding: string;
   observedFindings: string[];
@@ -31,21 +31,21 @@ interface MutationEvidence {
 interface MutationSpec {
   artifactPath: string;
   apply: (source: string) => string;
-  violated: (source: string) => boolean;
+  faultPresent: (source: string) => boolean;
 }
 interface DetectorExecution {
   exitCode: number;
   findings: string[];
+  command: string[];
 }
 type JsonRecord = Record<string, any>;
 type PackageScripts = Record<string, string> & { 'test:issue-948': string };
 
 const repoRoot = path.resolve(process.cwd());
-const runnerPath = fileURLToPath(import.meta.url);
 const specs = new Map<string, MutationSpec>();
 const digest = (value: string | Buffer): string => `sha256:${createHash('sha256').update(value).digest('hex')}`;
 const mutationKey = (ac: string, id: string): string => `${ac}:${id}`;
-const source = (file: string): string => readFileSync(path.join(repoRoot, file), 'utf8');
+const source = (root: string, file: string): string => readFileSync(path.join(root, file), 'utf8');
 
 function define(ac: Pr2aAcceptanceId, id: string, spec: MutationSpec): void {
   const key = mutationKey(ac, id);
@@ -57,19 +57,19 @@ function replaceRequired(text: string, token: string, replacement: string, id: s
   return text.replace(token, replacement);
 }
 function defineReplace(ac: Pr2aAcceptanceId, id: string, artifactPath: string, token: string, replacement: string): void {
-  const fault = `${replacement} /* mutation:${id} */`;
+  const marker = `/* mutation:${id} */`;
   define(ac, id, {
     artifactPath,
-    apply: (text) => replaceRequired(text, token, fault, id),
-    violated: (text) => text.includes(fault),
+    apply: (text) => replaceRequired(text, token, `${replacement} ${marker}`, id),
+    faultPresent: (text) => text.includes(marker),
   });
 }
 function defineAppend(ac: Pr2aAcceptanceId, id: string, artifactPath: string, appended: string): void {
-  const fault = `${appended} /* mutation:${id} */`;
+  const marker = `/* mutation:${id} */`;
   define(ac, id, {
     artifactPath,
-    apply: (text) => `${text}${text.endsWith('\n') ? '' : '\n'}${fault}\n`,
-    violated: (text) => text.includes(fault),
+    apply: (text) => `${text}${text.endsWith('\n') ? '' : '\n'}${appended} ${marker}\n`,
+    faultPresent: (text) => text.includes(marker),
   });
 }
 function defineJson(
@@ -77,7 +77,7 @@ function defineJson(
   id: string,
   artifactPath: string,
   mutate: (value: JsonRecord) => void,
-  violated: (value: JsonRecord) => boolean,
+  faultPresent: (value: JsonRecord) => boolean,
 ): void {
   define(ac, id, {
     artifactPath,
@@ -86,8 +86,8 @@ function defineJson(
       mutate(value);
       return `${JSON.stringify(value)}\n`;
     },
-    violated: (text) => {
-      try { return violated(JSON.parse(text) as JsonRecord); }
+    faultPresent: (text) => {
+      try { return faultPresent(JSON.parse(text) as JsonRecord); }
       catch { return true; }
     },
   });
@@ -109,7 +109,7 @@ function packageScripts(text: string): PackageScripts {
 }
 function packageMutation(
   mutate: (scripts: PackageScripts) => void,
-  violated: (scripts: PackageScripts) => boolean,
+  faultPresent: (scripts: PackageScripts) => boolean,
 ): MutationSpec {
   return {
     artifactPath: 'package.json',
@@ -120,8 +120,8 @@ function packageMutation(
       value.scripts = scripts;
       return `${JSON.stringify(value, null, 2)}\n`;
     },
-    violated: (text) => {
-      try { return violated(packageScripts(text)); }
+    faultPresent: (text) => {
+      try { return faultPresent(packageScripts(text)); }
       catch { return true; }
     },
   };
@@ -261,60 +261,107 @@ function bindingFromArgs(argv: string[]): readonly Pr2aMutationBinding[] {
   if (argv.includes('--all')) return PR2A_MUTATION_CATALOG;
   throw new Error('usage: mutation-runner.ts --ac AC1|...|AC8 or --all');
 }
-function detectorCommand(key: string, file: string): string[] {
-  return [process.execPath, '--experimental-strip-types', runnerPath, '--detect', key, '--file', file];
-}
-function runDetector(key: string, file: string): DetectorExecution {
-  const command = detectorCommand(key, file);
+function execute(command: string[], cwd: string): ReturnType<typeof runProcessSync> {
   const result = runProcessSync({
-    command: command[0]!, args: command.slice(1), cwd: repoRoot,
+    command: command[0]!,
+    args: command.slice(1),
+    cwd,
     inheritParentEnv: true,
   });
-  const exitCode = result.exitCode ?? (result.ok ? 0 : 1);
-  if (exitCode !== 0 && exitCode !== 1) {
-    throw new Error(`mutation_detector_transport_failed:${key}:${result.stderr || result.error || exitCode}`);
+  if (result.exitCode !== 0 && result.exitCode !== 1) {
+    throw new Error(`detector_transport_failed:${command.join(' ')}:${result.stderr || result.error || result.exitCode}`);
   }
-  let parsed: { findings?: string[] };
-  try { parsed = JSON.parse(result.stdout) as { findings?: string[] }; }
-  catch { throw new Error(`mutation_detector_output_invalid:${key}:${result.stdout}:${result.stderr}`); }
-  return {
-    exitCode,
-    findings: Array.isArray(parsed.findings) ? parsed.findings.map(String) : [],
-  };
+  return result;
+}
+function planningCommand(): string[] {
+  return [process.execPath, '--experimental-strip-types', 'scripts/pr2a/planning-validator.ts', 'scripts/pr2a/planning-manifest.json'];
+}
+function conformanceCommand(ref: string): string[] {
+  return [process.execPath, '--experimental-strip-types', 'scripts/pr2a/final-conformance.ts', '--ref', ref, '--json'];
+}
+function runPlanningDetector(root: string): DetectorExecution {
+  const command = planningCommand();
+  const result = execute(command, root);
+  const findings = `${result.stderr}\n${result.stdout}`.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  return { exitCode: result.exitCode ?? (result.ok ? 0 : 1), findings, command };
+}
+function runConformanceDetector(root: string, ref: string): DetectorExecution {
+  const command = conformanceCommand(ref);
+  const result = execute(command, root);
+  let findings: string[] = [];
+  if (result.stdout.trim()) {
+    try {
+      const report = JSON.parse(result.stdout) as { findings?: Array<{ code?: string }> };
+      findings = Array.isArray(report.findings) ? report.findings.map((row) => String(row.code ?? '')).filter(Boolean) : [];
+    } catch {
+      if (result.ok) throw new Error(`conformance_detector_output_invalid:${result.stdout}`);
+    }
+  }
+  return { exitCode: result.exitCode ?? (result.ok ? 0 : 1), findings, command };
+}
+function git(root: string, args: string[]): string {
+  const result = runProcessSync({ command: 'git', args, cwd: root, inheritParentEnv: true });
+  if (!result.ok) throw new Error(result.stderr || result.error || `git_${args.join('_')}_failed`);
+  return result.stdout.trim();
+}
+function createMutationCommit(root: string, artifactPath: string, binding: Pr2aMutationBinding): string {
+  git(root, ['add', '--', artifactPath]);
+  const tree = git(root, ['write-tree']);
+  const commit = git(root, ['commit-tree', tree, '-p', 'HEAD', '-m', `mutation ${binding.ac}:${binding.mutationId}`]);
+  git(root, ['reset', '--quiet', 'HEAD', '--', artifactPath]);
+  return commit;
+}
+function detectorForClean(binding: Pr2aMutationBinding, root: string): DetectorExecution {
+  return binding.failingTestId === 'pr2a:planning-validator'
+    ? runPlanningDetector(root)
+    : runConformanceDetector(root, 'HEAD');
+}
+function detectorForMutation(binding: Pr2aMutationBinding, root: string, artifactPath: string): DetectorExecution {
+  if (binding.failingTestId === 'pr2a:planning-validator') return runPlanningDetector(root);
+  const candidate = createMutationCommit(root, artifactPath, binding);
+  return runConformanceDetector(root, candidate);
 }
 function runMutation(binding: Pr2aMutationBinding, root: string): MutationEvidence {
   const key = mutationKey(binding.ac, binding.mutationId);
   const spec = specs.get(key);
   if (!spec) throw new Error(`mutation_spec_missing:${key}`);
-  const before = source(spec.artifactPath);
-  const file = path.join(root, `${binding.ac}-${binding.mutationId.replace(/[^a-z0-9_.-]/giu, '_')}${path.extname(spec.artifactPath) || '.txt'}`);
-  writeFileSync(file, before, 'utf8');
-  const baseline = runDetector(key, file);
-  if (baseline.exitCode !== 0 || baseline.findings.length > 0) {
-    throw new Error(`mutation_precondition_failed:${binding.failingTestId}:exit=${baseline.exitCode}:findings=${baseline.findings.join(',')}`);
+  const file = path.join(root, spec.artifactPath);
+  const before = source(root, spec.artifactPath);
+  if (spec.faultPresent(before)) throw new Error(`mutation_precondition_fault_present:${binding.mutationId}`);
+  const baseline = detectorForClean(binding, root);
+  if (baseline.exitCode !== 0) {
+    throw new Error(`mutation_precondition_detector_red:${binding.failingTestId}:exit=${baseline.exitCode}:findings=${baseline.findings.join(',')}`);
   }
+
   const mutated = spec.apply(before);
-  if (mutated === before) throw new Error(`mutation_did_not_change_artifact:${binding.failingTestId}`);
+  if (mutated === before) throw new Error(`mutation_did_not_change_artifact:${binding.mutationId}`);
+  if (!spec.faultPresent(mutated)) throw new Error(`mutation_fault_not_present:${binding.mutationId}`);
   writeFileSync(file, mutated, 'utf8');
-  const observed = runDetector(key, file);
-  if (observed.exitCode !== 1 || observed.findings.length !== 1 || observed.findings[0] !== binding.failingTestId) {
-    throw new Error(`specific_failing_test_not_observed:${binding.failingTestId}:exit=${observed.exitCode}:observed=${observed.findings.join(',')}`);
+  const negative = detectorForMutation(binding, root, spec.artifactPath);
+  if (negative.exitCode !== 1) {
+    throw new Error(`specific_detector_not_red:${binding.failingTestId}:exit=${negative.exitCode}:findings=${negative.findings.join(',')}`);
   }
+  if (binding.failingTestId !== 'pr2a:planning-validator' && !negative.findings.includes(binding.failingTestId)) {
+    throw new Error(`specific_failing_test_not_observed:${binding.failingTestId}:observed=${negative.findings.join(',')}`);
+  }
+
   writeFileSync(file, before, 'utf8');
-  const restored = runDetector(key, file);
-  if (restored.exitCode !== 0 || restored.findings.length > 0) {
-    throw new Error(`restored_verification_failed:${binding.failingTestId}:exit=${restored.exitCode}:findings=${restored.findings.join(',')}`);
-  }
   const restoredHash = digest(readFileSync(file));
   const artifactHashBefore = digest(before);
-  if (restoredHash !== artifactHashBefore) throw new Error(`restore_hash_mismatch:${binding.failingTestId}`);
+  if (restoredHash !== artifactHashBefore) throw new Error(`restore_hash_mismatch:${binding.mutationId}`);
+  const restored = detectorForClean(binding, root);
+  if (restored.exitCode !== 0) {
+    throw new Error(`restored_verification_failed:${binding.failingTestId}:exit=${restored.exitCode}:findings=${restored.findings.join(',')}`);
+  }
+
   return {
     ac: binding.ac,
     mutationId: binding.mutationId,
     artifactPath: spec.artifactPath,
-    detectorCommand: detectorCommand(key, file),
+    detectorId: binding.failingTestId,
+    detectorCommand: negative.command,
     expectedFinding: binding.failingTestId,
-    observedFindings: observed.findings,
+    observedFindings: negative.findings,
     artifactHashBefore,
     artifactHashAfter: digest(mutated),
     restoredHash,
@@ -324,41 +371,41 @@ function runMutation(binding: Pr2aMutationBinding, root: string): MutationEviden
     restoredOutcome: 'passed',
   };
 }
-function detectMode(argv: string[]): boolean {
-  const index = argv.indexOf('--detect');
-  if (index < 0) return false;
-  const key = argv[index + 1] ?? '';
-  const fileIndex = argv.indexOf('--file');
-  const file = fileIndex >= 0 ? argv[fileIndex + 1] ?? '' : '';
-  const spec = specs.get(key);
-  if (!spec || !file) throw new Error(`invalid_detector_invocation:${key}`);
-  const binding = PR2A_MUTATION_CATALOG.find((candidate) => mutationKey(candidate.ac, candidate.mutationId) === key);
-  if (!binding) throw new Error(`detector_binding_missing:${key}`);
-  const violated = spec.violated(readFileSync(file, 'utf8'));
-  const findings = violated ? [binding.failingTestId] : [];
-  process.stdout.write(`${JSON.stringify({ detectorId: binding.failingTestId, findings })}\n`);
-  if (violated) process.exitCode = 1;
-  return true;
-}
 async function main(): Promise<void> {
   assertCatalogCoverage();
-  if (detectMode(process.argv.slice(2))) return;
   const bindings = bindingFromArgs(process.argv.slice(2));
-  const root = mkdtempSync(path.join(tmpdir(), 'opk-pr2a-mutations-'));
+  const parent = mkdtempSync(path.join(tmpdir(), 'opk-pr2a-mutations-'));
+  const checkout = path.join(parent, 'checkout');
+  let added = false;
   try {
-    const evidence = bindings.map((binding) => runMutation(binding, root));
+    const add = runProcessSync({
+      command: 'git',
+      args: ['worktree', 'add', '--detach', checkout, 'HEAD'],
+      cwd: repoRoot,
+      inheritParentEnv: true,
+    });
+    if (!add.ok) throw new Error(add.stderr || add.error || 'mutation_worktree_add_failed');
+    added = true;
+    const evidence = bindings.map((binding) => runMutation(binding, checkout));
     process.stdout.write(`${JSON.stringify({
       issue: 948,
       mutationEvidence: evidence,
-      mutationRunner: { result: 'one-row-one-fault-executable-detector-red-green', bindings: evidence.length },
+      mutationRunner: { result: 'one-row-one-fault-production-detector-red-green', bindings: evidence.length },
     })}\n`);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    if (added) {
+      runProcessSync({
+        command: 'git',
+        args: ['worktree', 'remove', '--force', checkout],
+        cwd: repoRoot,
+        inheritParentEnv: true,
+      });
+    }
+    rmSync(parent, { recursive: true, force: true });
   }
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
-  main().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
-  });
-}
+
+main().catch((error) => {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 1;
+});
