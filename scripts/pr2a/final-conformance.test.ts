@@ -27,6 +27,8 @@ import {
   REQUIRED_OVERLAP_CLASSES,
   validateClosureEvidenceBundle,
   validateFinalVerificationAgainstReceipt,
+  validateFinalVerificationEnvironment,
+  validatePreReceiptVerificationEnvironment,
   type ClosureEvidenceBundle,
   type FinalVerificationEvidence,
   type VerificationCommandEvidence,
@@ -67,6 +69,40 @@ function git(args: string[]): string {
   const result = runProcessSync({ command: 'git', args, cwd: repoRoot, inheritParentEnv: true });
   if (!result.ok) throw new Error(result.stderr || result.error || `git ${args.join(' ')} failed`);
   return result.stdout.trim();
+}
+function observedVerificationEnvironment(root: string): {
+  platform: string;
+  filesystem: string;
+  nodeVersion: string;
+  pwshVersion: string;
+} {
+  if (process.platform !== 'linux') throw new Error(`unsupported_test_platform:${process.platform}`);
+  const canonical = path.resolve(root);
+  let best: { mount: string; fsType: string } | null = null;
+  for (const row of readFileSync('/proc/self/mountinfo', 'utf8').split(/\r?\n/u).filter(Boolean)) {
+    const split = row.split(' - ');
+    if (split.length !== 2) continue;
+    const left = split[0]?.split(' ') ?? [];
+    const right = split[1]?.split(' ') ?? [];
+    const mount = String(left[4] ?? '').replace(/\\040/gu, ' ');
+    const fsType = String(right[0] ?? '').toLowerCase();
+    if (!mount || !(canonical === mount || (mount === '/' ? canonical.startsWith('/') : canonical.startsWith(`${mount}/`)))) continue;
+    if (!best || mount.length > best.mount.length) best = { mount, fsType };
+  }
+  if (!best) throw new Error(`test_mountinfo_missing:${canonical}`);
+  const pwsh = runProcessSync({
+    command: 'pwsh',
+    args: ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  if (!pwsh.ok || !pwsh.stdout.trim()) throw new Error(pwsh.stderr || pwsh.error || 'test_pwsh_version_missing');
+  return {
+    platform: 'linux',
+    filesystem: best.fsType,
+    nodeVersion: process.version,
+    pwshVersion: pwsh.stdout.trim(),
+  };
 }
 function writeArtifact(root: string, relative: string, value: string | Buffer): string {
   const absolute = path.join(root, relative);
@@ -190,6 +226,7 @@ function evidenceFixture(): {
   expected: { finalTreeOid: string; finalCommitSha: string; candidateBuildDigest: string };
 } {
   const root = makeRoot('pr2a-evidence-');
+  const environment = observedVerificationEnvironment(root);
   const commit = git(['rev-parse', 'HEAD']);
   const tree = git(['rev-parse', 'HEAD^{tree}']);
   const candidateBuildDigest = digest('candidate-build');
@@ -254,8 +291,8 @@ function evidenceFixture(): {
       replayExitCode: 0,
       protocolVectorPath: vectorsPath,
       protocolVectorSha256: writeArtifact(root, vectorsPath, vectors),
-      platform: 'linux',
-      filesystem: 'overlay',
+      platform: environment.platform,
+      filesystem: environment.filesystem,
       classes: [...REQUIRED_OVERLAP_CLASSES],
       logPath: overlapLogPath,
       logSha256: writeArtifact(root, overlapLogPath, overlapLog),
@@ -284,10 +321,10 @@ function evidenceFixture(): {
       checkoutCommitSha: commit,
       checkoutTreeOid: tree,
       repository: 'chetwerikoff/orchestrator-pack',
-      platform: 'linux',
-      filesystem: 'overlay',
-      nodeVersion: process.version,
-      pwshVersion: '7.6.3',
+      platform: environment.platform,
+      filesystem: environment.filesystem,
+      nodeVersion: environment.nodeVersion,
+      pwshVersion: environment.pwshVersion,
       cleanBefore: true,
       cleanAfter: true,
       stagedBefore: 0,
@@ -370,6 +407,28 @@ describe('Issue #948 closure receipt evidence', () => {
     expect(validateClosureEvidenceBundle(fixture.evidence, fixture.expected, fixture.root)).toEqual([]);
   });
 
+  it('fails closed on unsupported pre-receipt and final verification environments', () => {
+    const unsupported = {
+      repository: 'chetwerikoff/orchestrator-pack',
+      platform: 'win32',
+      filesystem: 'cifs',
+      nodeVersion: 'v20.0.0',
+      pwshVersion: '5.1.0',
+    };
+    expect(validatePreReceiptVerificationEnvironment(unsupported)).toEqual(expect.arrayContaining([
+      'pre-receipt-platform-unsupported',
+      'pre-receipt-node-version-mismatch',
+      'pre-receipt-pwsh-version-mismatch',
+      'pre-receipt-filesystem-mismatch',
+    ]));
+    expect(validateFinalVerificationEnvironment(unsupported)).toEqual(expect.arrayContaining([
+      'final-verification-platform-unsupported',
+      'final-verification-node-version-mismatch',
+      'final-verification-pwsh-version-mismatch',
+      'final-verification-filesystem-mismatch',
+    ]));
+  });
+
   it('refuses missing, tampered, or wrong-content artifacts despite unchanged claims', () => {
     const fixture = evidenceFixture();
     writeFileSync(path.join(fixture.root, fixture.evidence.overlap.harnessPath), 'tampered\n');
@@ -384,6 +443,7 @@ describe('Issue #948 closure receipt evidence', () => {
 
   it('validates receipt-bound final verification through concrete result and log artifacts', () => {
     const fixture = evidenceFixture();
+    const environment = observedVerificationEnvironment(fixture.root);
     const receiptCore = {
       schemaVersion: 2,
       lineage: { finalCommitSha: fixture.expected.finalCommitSha, finalTreeOid: fixture.expected.finalTreeOid },
@@ -399,10 +459,10 @@ describe('Issue #948 closure receipt evidence', () => {
       checkoutCommitSha: fixture.expected.finalCommitSha,
       checkoutTreeOid: fixture.expected.finalTreeOid,
       repository: 'chetwerikoff/orchestrator-pack',
-      platform: 'linux',
-      filesystem: 'overlay',
-      nodeVersion: process.version,
-      pwshVersion: '7.6.3',
+      platform: environment.platform,
+      filesystem: environment.filesystem,
+      nodeVersion: environment.nodeVersion,
+      pwshVersion: environment.pwshVersion,
       cleanBefore: true,
       cleanAfter: true,
       stagedBefore: 0,
