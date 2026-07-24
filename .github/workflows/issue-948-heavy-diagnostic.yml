@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  TARGET_HEAD: 0e2f948c0122a0d3413be50720e60b9e8bb9f1bc
+
 jobs:
   heavy-shard-1:
     runs-on: ubuntu-latest
@@ -16,6 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.TARGET_HEAD }}
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -43,4 +47,32 @@ jobs:
         with:
           name: issue-948-heavy-diagnostic
           path: heavy-diagnostic.log
+          if-no-files-found: error
+
+  mutation-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_HEAD }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Reproduce mutation evidence
+        shell: pwsh
+        run: |
+          npm run test:contract-mutations *> mutation-diagnostic.log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath mutation-diagnostic.log
+          exit $code
+      - name: Upload mutation diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-mutation-diagnostic
+          path: mutation-diagnostic.log
           if-no-files-found: error
