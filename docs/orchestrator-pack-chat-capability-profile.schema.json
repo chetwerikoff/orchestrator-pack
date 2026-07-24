@@ -49,7 +49,7 @@
           },
           {
             "not": {
-              "pattern": "(?:receipt|ownership|takeover|claim|lease|lock)"
+              "pattern": "(?:^|-)(?:receipt|ownership|takeover|claim|lease|lock)(?:-|$)"
             }
           }
         ]
