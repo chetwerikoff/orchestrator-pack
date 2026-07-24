@@ -162,6 +162,17 @@ function safeReadFileSync(pathValue: fs.PathOrFileDescriptor, options?: unknown)
   if (reason) throw new Error(`claim_record_invalid:${reason}`);
   return bytes;
 }
+function withClaimReadValidation<T>(operation: () => T): T {
+  const previous = fs.readFileSync;
+  fs.readFileSync = safeReadFileSync as typeof fs.readFileSync;
+  syncBuiltinESMExports();
+  try {
+    return operation();
+  } finally {
+    fs.readFileSync = previous;
+    syncBuiltinESMExports();
+  }
+}
 function restoreQuarantine(lockDir: string, quarantine: string): void {
   if (!originalExistsSync(quarantine) || originalExistsSync(lockDir)) return;
   originalRenameSync(quarantine, lockDir);
@@ -228,13 +239,14 @@ function safeRmSync(pathValue: fs.PathLike, options?: fs.RmDirOptions | fs.RmOpt
 }
 
 fs.rmSync = safeRmSync as typeof fs.rmSync;
-fs.readFileSync = safeReadFileSync as typeof fs.readFileSync;
 syncBuiltinESMExports();
 const impl = await import('./review-start-claim-cli.ts');
 
 export const REVIEW_START_CLAIM_STORE_VERSION = impl.REVIEW_START_CLAIM_STORE_VERSION;
 export const REVIEW_START_CLAIM_SCHEMA_VERSION = impl.REVIEW_START_CLAIM_SCHEMA_VERSION;
-export const assertSupportedClaimPlatform = impl.assertSupportedClaimPlatform;
+export function assertSupportedClaimPlatform(namespace: string): void {
+  return withClaimReadValidation(() => impl.assertSupportedClaimPlatform(namespace));
+}
 export const normalizeHeadSha = impl.normalizeHeadSha;
 export const resolveReviewStartClaimNamespace = impl.resolveReviewStartClaimNamespace;
 export const claimKey = impl.claimKey;
@@ -242,70 +254,98 @@ export const claimPath = impl.claimPath;
 export const claimLockDir = impl.claimLockDir;
 export const terminalDir = impl.terminalDir;
 export const auditDir = impl.auditDir;
-export const initializeNamespace = impl.initializeNamespace;
+export function initializeNamespace(namespace: string): void {
+  return withClaimReadValidation(() => impl.initializeNamespace(namespace));
+}
 export const atomicWriteJson = impl.atomicWriteJson;
-export const readClaimRecord = impl.readClaimRecord;
-export const acquireReviewStartClaim = impl.acquireReviewStartClaim;
-export const testReviewStartClaimOwnership = impl.testReviewStartClaimOwnership;
-export const updateReviewStartClaimRecordFields = impl.updateReviewStartClaimRecordFields;
-export const bindReviewStartClaimToVisibleRun = impl.bindReviewStartClaimToVisibleRun;
-export const completeReviewStartClaim = impl.completeReviewStartClaim;
-export const releaseAfterRunFailure = impl.releaseAfterRunFailure;
-export const confirmReviewStartClaimLaunchGate = impl.confirmReviewStartClaimLaunchGate;
-export const getActiveRecords = impl.getActiveRecords;
-export const reaperSweep = impl.reaperSweep;
-export const startInfraPause = impl.startInfraPause;
-export const completeInfraPause = impl.completeInfraPause;
+export function readClaimRecord(path: string): ReturnType<typeof impl.readClaimRecord> {
+  return withClaimReadValidation(() => impl.readClaimRecord(path));
+}
+export function acquireReviewStartClaim(input: Parameters<typeof impl.acquireReviewStartClaim>[0]): ReturnType<typeof impl.acquireReviewStartClaim> {
+  return withClaimReadValidation(() => impl.acquireReviewStartClaim(input));
+}
+export function testReviewStartClaimOwnership(input: ClaimResult): boolean {
+  return withClaimReadValidation(() => impl.testReviewStartClaimOwnership(input));
+}
+export function updateReviewStartClaimRecordFields(input: ClaimResult, fields: UnknownRecord, clearFields: string[] = []): UnknownRecord {
+  return withClaimReadValidation(() => impl.updateReviewStartClaimRecordFields(input, fields, clearFields));
+}
+export function bindReviewStartClaimToVisibleRun(input: ClaimResult, reviewRuns: unknown[] = []): UnknownRecord {
+  return withClaimReadValidation(() => impl.bindReviewStartClaimToVisibleRun(input, reviewRuns));
+}
+export function completeReviewStartClaim(input: ClaimResult, outcome: string, reviewRuns: unknown[] = [], extra: UnknownRecord = {}): UnknownRecord {
+  return withClaimReadValidation(() => impl.completeReviewStartClaim(input, outcome, reviewRuns, extra));
+}
+export function releaseAfterRunFailure(input: ClaimResult, reviewRuns: unknown[] = [], failure = ''): UnknownRecord {
+  return withClaimReadValidation(() => impl.releaseAfterRunFailure(input, reviewRuns, failure));
+}
+export function confirmReviewStartClaimLaunchGate(input: ClaimResult, reviewRuns: unknown[] = [], decisionSource = 'hold_budget'): UnknownRecord {
+  return withClaimReadValidation(() => impl.confirmReviewStartClaimLaunchGate(input, reviewRuns, decisionSource));
+}
+export function getActiveRecords(namespace: string): ReturnType<typeof impl.getActiveRecords> {
+  return withClaimReadValidation(() => impl.getActiveRecords(namespace));
+}
+export function reaperSweep(input: Parameters<typeof impl.reaperSweep>[0]): UnknownRecord {
+  return withClaimReadValidation(() => impl.reaperSweep(input));
+}
+export function startInfraPause(input: ClaimResult, supervisedGhPid = 0): UnknownRecord {
+  return withClaimReadValidation(() => impl.startInfraPause(input, supervisedGhPid));
+}
+export function completeInfraPause(input: ClaimResult, options: Parameters<typeof impl.completeInfraPause>[1] = {}): UnknownRecord {
+  return withClaimReadValidation(() => impl.completeInfraPause(input, options));
+}
 export const evaluateLifecycle = impl.evaluateLifecycle;
 
 function completeAfterRunInvokeOnce(input: ClaimResult, reviewRuns: unknown[] = []): UnknownRecord {
-  if (!input?.acquired || !input.claim || !input.path || !input.namespace) return { ok: false, reason: 'no_claim' };
-  impl.bindReviewStartClaimToVisibleRun(input, reviewRuns);
-  let complete = asRecord(impl.completeReviewStartClaim(input, 'run_started', reviewRuns));
-  if (complete.ok === true || asString(complete.reason) !== 'run_not_visible') return complete;
+  return withClaimReadValidation(() => {
+    if (!input?.acquired || !input.claim || !input.path || !input.namespace) return { ok: false, reason: 'no_claim' };
+    impl.bindReviewStartClaimToVisibleRun(input, reviewRuns);
+    let complete = asRecord(impl.completeReviewStartClaim(input, 'run_started', reviewRuns));
+    if (complete.ok === true || asString(complete.reason) !== 'run_not_visible') return complete;
 
-  const pendingAt = asString(input.claim.visibilityPendingAtUtc) || new Date().toISOString();
-  const updated = asRecord(impl.updateReviewStartClaimRecordFields(input, {
-    invokeCompletedAtUtc: new Date().toISOString(),
-    visibilityPendingAtUtc: pendingAt,
-  }, ['launchPending']));
-  if (updated.ok !== true) return updated;
+    const pendingAt = asString(input.claim.visibilityPendingAtUtc) || new Date().toISOString();
+    const updated = asRecord(impl.updateReviewStartClaimRecordFields(input, {
+      invokeCompletedAtUtc: new Date().toISOString(),
+      visibilityPendingAtUtc: pendingAt,
+    }, ['launchPending']));
+    if (updated.ok !== true) return updated;
 
-  const read = impl.readClaimRecord(input.path);
-  if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };
-  input.claim = read.record;
-  impl.bindReviewStartClaimToVisibleRun(input, reviewRuns);
-  complete = asRecord(impl.completeReviewStartClaim(input, 'run_started', reviewRuns));
-  if (complete.ok === true || asString(complete.reason) !== 'run_not_visible') return complete;
+    const read = impl.readClaimRecord(input.path);
+    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };
+    input.claim = read.record;
+    impl.bindReviewStartClaimToVisibleRun(input, reviewRuns);
+    complete = asRecord(impl.completeReviewStartClaim(input, 'run_started', reviewRuns));
+    if (complete.ok === true || asString(complete.reason) !== 'run_not_visible') return complete;
 
-  const fence = asRecord(impl.evaluateLifecycle('visibility-fence', { claim: read.record, reviewRuns }));
-  const envelope = asRecord(impl.evaluateLifecycle('readiness-envelope', { claim: read.record }));
-  if (fence.shouldFence === true || envelope.exceeded === true) {
-    const reason = fence.shouldFence === true ? asString(fence.reason) : 'readiness_envelope_exceeded';
-    const terminal = asRecord(impl.completeReviewStartClaim(input, 'run_not_visible_fenced', [], {
-      decisionReason: reason,
-      decisionSource: 'post_run_visibility',
-      visibility: fence,
-      envelope,
-    }));
-    return terminal.ok === true
-      ? { ...terminal, reason: 'run_not_visible_fenced', fenced: true, fence, envelope }
-      : terminal;
-  }
+    const fence = asRecord(impl.evaluateLifecycle('visibility-fence', { claim: read.record, reviewRuns }));
+    const envelope = asRecord(impl.evaluateLifecycle('readiness-envelope', { claim: read.record }));
+    if (fence.shouldFence === true || envelope.exceeded === true) {
+      const reason = fence.shouldFence === true ? asString(fence.reason) : 'readiness_envelope_exceeded';
+      const terminal = asRecord(impl.completeReviewStartClaim(input, 'run_not_visible_fenced', [], {
+        decisionReason: reason,
+        decisionSource: 'post_run_visibility',
+        visibility: fence,
+        envelope,
+      }));
+      return terminal.ok === true
+        ? { ...terminal, reason: 'run_not_visible_fenced', fenced: true, fence, envelope }
+        : terminal;
+    }
 
-  const configResult = asRecord(impl.evaluateLifecycle('validate-config', {}));
-  const config = asRecord(configResult.config);
-  const visibilityBudgetMs = positiveInteger(config.visibilityBudgetMs, 15_000);
-  const pendingMs = Date.parse(asString(read.record.visibilityPendingAtUtc));
-  const visibilityAgeMs = Number.isFinite(pendingMs) ? Math.max(0, Date.now() - pendingMs) : visibilityBudgetMs;
-  const envelopeRemaining = asNumber(envelope.remainingMs, visibilityBudgetMs);
-  const remaining = Math.min(envelopeRemaining, Math.max(0, visibilityBudgetMs - visibilityAgeMs));
-  return {
-    ok: false,
-    reason: 'visibility_pending',
-    waitMs: Math.max(1, Math.min(250, remaining || 1)),
-    claimResult: input,
-  };
+    const configResult = asRecord(impl.evaluateLifecycle('validate-config', {}));
+    const config = asRecord(configResult.config);
+    const visibilityBudgetMs = positiveInteger(config.visibilityBudgetMs, 15_000);
+    const pendingMs = Date.parse(asString(read.record.visibilityPendingAtUtc));
+    const visibilityAgeMs = Number.isFinite(pendingMs) ? Math.max(0, Date.now() - pendingMs) : visibilityBudgetMs;
+    const envelopeRemaining = asNumber(envelope.remainingMs, visibilityBudgetMs);
+    const remaining = Math.min(envelopeRemaining, Math.max(0, visibilityBudgetMs - visibilityAgeMs));
+    return {
+      ok: false,
+      reason: 'visibility_pending',
+      waitMs: Math.max(1, Math.min(250, remaining || 1)),
+      claimResult: input,
+    };
+  });
 }
 
 export function completeAfterRunInvoke(input: ClaimResult, reviewRuns: unknown[] = []): UnknownRecord {
@@ -328,7 +368,7 @@ export function dispatchReviewStartClaimOperation(operation: string, payload: Un
     const reason = claimRecordValidationReason(payload.record ?? payload.Record);
     if (reason) return { reclaimed: false, blocking: true, reason: 'ambiguous_claim', detail: reason };
   }
-  return impl.dispatchReviewStartClaimOperation(operation, payload);
+  return withClaimReadValidation(() => impl.dispatchReviewStartClaimOperation(operation, payload));
 }
 
 function readPayload(): UnknownRecord {
