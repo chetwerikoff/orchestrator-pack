@@ -1,0 +1,44 @@
+name: issue-948-mutation-diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  TARGET_HEAD: 2f0084ca87ecbefcd02e7acbab92565dc6244fd2
+
+jobs:
+  mutation-group:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        ac: [AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_HEAD }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Run mutation group
+        shell: bash
+        run: |
+          set +e
+          node --experimental-strip-types scripts/pr2a/mutation-runner.ts --ac '${{ matrix.ac }}' > 'mutation-${{ matrix.ac }}.log' 2>&1
+          status=$?
+          cat 'mutation-${{ matrix.ac }}.log'
+          exit "$status"
+      - name: Upload mutation diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-mutation-${{ matrix.ac }}
+          path: mutation-${{ matrix.ac }}.log
+          if-no-files-found: error
