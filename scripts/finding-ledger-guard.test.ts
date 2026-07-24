@@ -361,6 +361,24 @@ describe('finding ledger review economics #975', () => {
       expect(pending.ok, pending.errors.join('\n')).toBe(true);
     });
 
+    it('preserves the global protected-signal floor for an ordinary typed finding', () => {
+      const result = run(
+        [
+          cap(
+            'pass-01-architectural.capture.txt',
+            1_100,
+            markedFinding('Q1', {
+              type: 'quality',
+              evidence: 'The proposed edit is out of scope under allowed_roots.',
+            }),
+          ),
+        ],
+        [row('Q1')],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('protected signal type: scope-violation present in capture but not addressed in the ledger');
+    });
+
     it('accepts valid author activation without architect authorization when current lens records no contest', () => {
       const result = finalRun(
         [
@@ -430,6 +448,24 @@ describe('finding ledger review economics #975', () => {
       );
       expect(result.ok).toBe(false);
       expect(result.errors.join('\n')).toContain('duplicate m3-protected records');
+    });
+
+    it('fails closed when newer same-id M3 evidence is malformed', () => {
+      const result = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, nonZero),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1')),
+          cap(
+            'pass-03-architectural-lens.capture.txt',
+            1_300,
+            'm3-protected: id=S1 | revision=r3 | contest=unknown | outcome=none | evidence= | why-now=',
+          ),
+          cap('pass-04-architectural-final.capture.txt', 1_400, markedClean()),
+        ],
+        [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('malformed m3-protected record for S1');
     });
 
     it('contest-withdrawn restores otherwise-valid author authority', () => {
@@ -697,6 +733,34 @@ describe('finding ledger review economics #975', () => {
           cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
         ],
         [],
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    });
+
+    it('keeps the pre-lens M5 anchor independent from a later post-lens cut candidate', () => {
+      const result = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'first lens'),
+          cap('pass-03-architectural-final.capture.txt', 1_300, markedFinding('POST1', { candidate: 'yes', clean: false })),
+          cap('pass-04-architectural-lens.capture.txt', 1_400, 'newer lens after post-lens finding'),
+          cap('pass-05-architectural-final.capture.txt', 1_500, markedClean()),
+        ],
+        [row('POST1', { 'simplification-cut-candidate': true })],
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    });
+
+    it('keeps anchor-local candidate evidence when a later marked occurrence clears the current flag', () => {
+      const result = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, markedFinding('CUT1', { candidate: 'yes', clean: false })),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'first lens'),
+          cap('pass-03-architectural-final.capture.txt', 1_300, markedFinding('CUT1')),
+          cap('pass-04-architectural-lens.capture.txt', 1_400, 'newer lens after current economics changed'),
+          cap('pass-05-architectural-final.capture.txt', 1_500, markedClean()),
+        ],
+        [row('CUT1')],
       );
       expect(result.ok, result.errors.join('\n')).toBe(true);
     });
