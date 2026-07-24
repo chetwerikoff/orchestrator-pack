@@ -48,10 +48,8 @@ function readKnownRecord(path: string, profileKey: string): CommonIncidentRecord
     || parsed.generation < 1) {
     throw new Error('incompatible_record');
   }
-  const base = { ...parsed } as CommonIncidentRecordV1 & { evidence_token?: string };
-  const token = base.evidence_token;
-  delete base.evidence_token;
-  if (!token || token !== bodyFreeToken(base as Omit<CommonIncidentRecordV1, 'evidence_token'>)) {
+  const { evidence_token: token, ...base } = parsed;
+  if (!token || token !== bodyFreeToken(base)) {
     throw new Error('incompatible_record');
   }
   return parsed;
@@ -82,12 +80,12 @@ export function updateIncident(
   patch: Partial<CommonIncidentRecordV1>,
 ): CommonIncidentRecordV1 {
   const current = readKnownRecord(recordPath(profileKey, identity), profileKey);
-  const base = { ...current, ...patch, updated_at: new Date().toISOString() } as CommonIncidentRecordV1 & { evidence_token?: string };
-  delete base.evidence_token;
-  const next = {
+  const merged: CommonIncidentRecordV1 = { ...current, ...patch, updated_at: new Date().toISOString() };
+  const { evidence_token: _previousToken, ...base } = merged;
+  const next: CommonIncidentRecordV1 = {
     ...base,
-    evidence_token: bodyFreeToken(base as Omit<CommonIncidentRecordV1, 'evidence_token'>),
-  } as CommonIncidentRecordV1;
+    evidence_token: bodyFreeToken(base),
+  };
   atomicJson(recordPath(profileKey, identity), next);
   return next;
 }
