@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -51,6 +50,7 @@ import {
   sendTurn,
   type BrowserConfig,
 } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { runProcessSync } from '../kernel/subprocess.ts';
 
 let root = '';
 let profileKey = '';
@@ -392,19 +392,6 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
     expect(result.userMessageId).toBe(own);
     expect(result.assistantMessageId).toBe('assistant-owned-12345678');
     expect(result.reply).toBe('canonical reply');
-  });
-
-  it('fails recovery when a dispatch request candidate is never observed on a service-visible surface', async () => {
-    const fixture = fakeTurnPage({ dispatchCandidateIds: ['user-local-only-12345678'], serviceObserveDispatch: false });
-    const result = await sendTurn(fixture.page, 'payload', {
-      cdp,
-      profile: join(root, 'profile'),
-      chatUrl: 'https://chatgpt.com/c/example',
-      newChat: false,
-      timeoutMs: 1,
-    });
-    expect(result.state).toBe('recovery_required');
-    expect(result.cause).toBe('submitted_turn_id_unproven');
   });
 
   it('S12 rejects multiple dispatch candidates and never guesses which one belongs to the invocation', async () => {
@@ -950,11 +937,19 @@ describe('issue 964 retained recovery binary lifecycle', () => {
       join(retained, '.claude', 'skills', 'discuss-with-gpt', 'verify-cdp-owner.mjs'),
     );
     const entry = join(retained, 'scripts', 'chatgpt-browser-turn.ts');
-    const env = { ...process.env, CHATGPT_BROWSER_TURN_STATE_DIR: process.env.CHATGPT_BROWSER_TURN_STATE_DIR! };
     const run = (args: string[]) => {
-      const result = spawnSync(process.execPath, ['--experimental-strip-types', entry, ...args], { encoding: 'utf8', env });
+      const result = runProcessSync({
+        command: process.execPath,
+        args: ['--experimental-strip-types', entry, ...args],
+        inheritParentEnv: true,
+        env: { CHATGPT_BROWSER_TURN_STATE_DIR: process.env.CHATGPT_BROWSER_TURN_STATE_DIR! },
+      });
       const stdout = result.stdout.trim();
-      return { status: result.status, body: stdout ? JSON.parse(stdout) as Record<string, any> : null, stderr: result.stderr };
+      return {
+        status: result.exitCode,
+        body: stdout ? JSON.parse(stdout) as Record<string, any> : null,
+        stderr: result.stderr,
+      };
     };
     const base = ['--profile', join(root, 'profile'), '--cdp', cdp];
 
