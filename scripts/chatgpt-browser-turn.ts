@@ -388,8 +388,9 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     const chromium = loadChromium();
     const browser = await chromium.connectOverCDP(config.cdp);
     opened = await openTurnPage(browser, config);
+    const turnPage = opened.page;
 
-    let witnessSurface = await runtimeWitnessSurfaceAvailable(opened.page);
+    let witnessSurface = await runtimeWitnessSurfaceAvailable(turnPage);
     if (capability.state === 'ok' && !witnessSurface) {
       downgradeCapability(profileKey);
       safeRelease(scheduleLock);
@@ -405,7 +406,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     if (capability.state === 'ok') {
       const rechecked = capabilityStatus(profileKey, expectedBinding);
-      witnessSurface = await runtimeWitnessSurfaceAvailable(opened.page);
+      witnessSurface = await runtimeWitnessSurfaceAvailable(turnPage);
       if (rechecked.state !== 'ok' || !witnessSurface) {
         if (!witnessSurface) downgradeCapability(profileKey);
         safeRelease(scheduleLock);
@@ -454,11 +455,20 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     });
     incidentId = created.identity;
 
-    const result = await sendTurn(opened.page, snapshot.text, config, opened.provisionalId, () => {
+    const result = await sendTurn(turnPage, snapshot.text, config, opened.provisionalId, async () => {
       if (statusList(profileKey).state === 'profile_blocked') throw new Error('pre_send_profile_blocked');
       if (findProfileWall(profileKey)) throw new Error('pre_send_profile_wall');
-      if (capability.state === 'ok' && capabilityStatus(profileKey, expectedBinding).state !== 'ok') {
-        throw new Error('pre_send_capability_changed');
+      if (capability.state === 'ok') {
+        if (!(await runtimeWitnessSurfaceAvailable(turnPage))) {
+          downgradeCapability(profileKey);
+          capability = capabilityStatus(profileKey, expectedBinding);
+          throw new Error('pre_send_witness_unavailable');
+        }
+        const currentCapability = capabilityStatus(profileKey, expectedBinding);
+        if (currentCapability.state !== 'ok') {
+          capability = currentCapability;
+          throw new Error('pre_send_capability_changed');
+        }
       }
       possibleDelivery = true;
       updateIncident(profileKey, incidentId!, { phase: 'possible_delivery' });
@@ -597,6 +607,31 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'driver_error';
+    if (!possibleDelivery && message.startsWith('pre_send_')) {
+      if (incidentId) {
+        try {
+          deleteIncident(profileKey, incidentId);
+          incidentId = undefined;
+        } catch {
+          // Existing durable state remains fail-closed.
+        }
+      }
+      if (opened?.owned) await opened.page.close().catch(() => {});
+      safeRelease(scheduleLock);
+      safeReleaseDestination(reservation);
+      if (message === 'pre_send_profile_blocked') {
+        return emitTurnAndCode(turnResult('incompatible_record', 'profile', 'configured_profile_store_blocked', invocationId, profileKey));
+      }
+      if (message === 'pre_send_profile_wall') {
+        const wall = findProfileWall(profileKey);
+        const state = wall ? wallState(wall.record.cause) : 'profile_busy';
+        return emitTurnAndCode(turnResult(state, 'profile', wall ? 'profile_wall_active' : message, invocationId, profileKey, {
+          ...(wall ? { incident_id: wall.identity, generation: wall.record.generation } : {}),
+        }));
+      }
+      return emitTurnAndCode(turnResult('profile_busy', 'profile', message, invocationId, profileKey));
+    }
+
     const isInput = message.startsWith('input_invalid:');
     const isOutput = message.startsWith('output_conflict:');
     const state: TurnState = isInput ? 'input_invalid' : isOutput ? 'output_conflict' : 'driver_error';
