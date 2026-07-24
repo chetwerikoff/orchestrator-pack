@@ -62,6 +62,10 @@ function replaceRequired(sourceText: string, token: string, replacement: string,
   if (!sourceText.includes(token)) throw new Error(`mutation_token_missing:${mutationId}:${token}`);
   return sourceText.replace(token, `${replacement} /* mutation:${mutationId} */`);
 }
+function replaceAllRequired(sourceText: string, token: string, replacement: string, mutationId: string): string {
+  if (!sourceText.includes(token)) throw new Error(`mutation_token_missing:${mutationId}:${token}`);
+  return sourceText.split(token).join(`${replacement} /* mutation:${mutationId} */`);
+}
 
 const storeTokens = [
   'sameSnapshot(observed, moved)',
@@ -146,7 +150,7 @@ function mutationPlan(binding: Pr2aMutationBinding): MutationPlan {
         profile: `receipt-verifier:${token}`,
         artifactPath: 'scripts/pr2a/closure-receipt.ts',
         detector: 'validateClosureReceiptSource',
-        mutate: (text, id) => replaceRequired(text, token, '/* removed receipt verifier */', id),
+        mutate: (text, id) => replaceAllRequired(text, token, '/* removed receipt verifier */', id),
         inspect: (text) => findingCodes(validateClosureReceiptSource(text)),
       };
     }
