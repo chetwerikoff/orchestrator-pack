@@ -23,6 +23,8 @@ interface MutationEvidence {
   artifactHashBefore: string;
   artifactHashAfter: string;
   restoredHash: string;
+  negativeExitCode: 1;
+  restoredExitCode: 0;
   negativeOutcome: 'failed';
   restoredOutcome: 'passed';
 }
@@ -30,6 +32,10 @@ interface MutationSpec {
   artifactPath: string;
   apply: (source: string) => string;
   violated: (source: string) => boolean;
+}
+interface DetectorExecution {
+  exitCode: number;
+  findings: string[];
 }
 type JsonRecord = Record<string, any>;
 type PackageScripts = Record<string, string> & { 'test:issue-948': string };
@@ -51,19 +57,19 @@ function replaceRequired(text: string, token: string, replacement: string, id: s
   return text.replace(token, replacement);
 }
 function defineReplace(ac: Pr2aAcceptanceId, id: string, artifactPath: string, token: string, replacement: string): void {
-  const marker = `/* mutation:${id} */`;
+  const fault = `${replacement} /* mutation:${id} */`;
   define(ac, id, {
     artifactPath,
-    apply: (text) => replaceRequired(text, token, `${replacement} ${marker}`, id),
-    violated: (text) => text.includes(marker),
+    apply: (text) => replaceRequired(text, token, fault, id),
+    violated: (text) => text.includes(fault),
   });
 }
 function defineAppend(ac: Pr2aAcceptanceId, id: string, artifactPath: string, appended: string): void {
-  const marker = `/* mutation:${id} */`;
+  const fault = `${appended} /* mutation:${id} */`;
   define(ac, id, {
     artifactPath,
-    apply: (text) => `${text}${text.endsWith('\n') ? '' : '\n'}${appended} ${marker}\n`,
-    violated: (text) => text.includes(marker),
+    apply: (text) => `${text}${text.endsWith('\n') ? '' : '\n'}${fault}\n`,
+    violated: (text) => text.includes(fault),
   });
 }
 function defineJson(
@@ -223,7 +229,7 @@ defineReplace('AC7','rollback-entry-resumes-before-zero-survivors','scripts/pr2a
 defineReplace('AC7','rollback-detached-drain-artifact-invalid','scripts/pr2a/rollback-drain.ts',"if (artifact.digest !== expected) throw new Error('rollback_artifact_digest_invalid');","void expected;");
 defineReplace('AC7','rollback-rehearsal-in-evidence-checkout','scripts/pr2a/closure-receipt.ts',"if (!rollback.isolatedCheckout)","if (false)");
 defineAppend('AC7','rollback-imports-928-activation-machinery','scripts/pr2a/rollback-drain.ts',"const mutationImports928ActivationMachinery = 'scripts/pr2-cutover/cordon-controller.ts';");
-defineReplace('AC7','unsupported-platform-or-filesystem-operation-succeeds','scripts/lib/review-start-claim-cli.ts',"if (/^\/mnt\/[a-z](?:\/|$)/i.test(canonical)) throw new Error('unsupported_windows_mounted_filesystem');","if (false) throw new Error('unsupported_windows_mounted_filesystem');");
+defineReplace('AC7','unsupported-platform-or-filesystem-operation-succeeds','scripts/lib/review-start-claim-cli.ts',"if (/^\\/mnt\\/[a-z](?:\\/|$)/i.test(canonical)) throw new Error('unsupported_windows_mounted_filesystem');","if (false) throw new Error('unsupported_windows_mounted_filesystem');");
 define('AC8','mandatory-command-or-lane-fails',packageMutation(s=>{s['test:issue-948']=s['test:issue-948'].replace('scripts/pr2a/final-conformance.test.ts','scripts/pr2a/missing.test.ts');},s=>s['test:issue-948'].includes('scripts/pr2a/missing.test.ts')));
 define('AC8','mandatory-test-suppressed-or-reduced',packageMutation(s=>{s['test:issue-948']=s['test:issue-948'].replace('--maxWorkers=1','--maxWorkers=4');},s=>!s['test:issue-948'].includes('--maxWorkers=1')));
 defineReplace('AC8','final-evidence-tree-or-platform-stale','scripts/pr2a/closure-receipt.ts',"function validateVerificationEnvironment","function validateVerificationEnvironmentDisabled");
@@ -258,15 +264,23 @@ function bindingFromArgs(argv: string[]): readonly Pr2aMutationBinding[] {
 function detectorCommand(key: string, file: string): string[] {
   return [process.execPath, '--experimental-strip-types', runnerPath, '--detect', key, '--file', file];
 }
-function runDetector(key: string, file: string): string[] {
+function runDetector(key: string, file: string): DetectorExecution {
   const command = detectorCommand(key, file);
   const result = runProcessSync({
     command: command[0]!, args: command.slice(1), cwd: repoRoot,
-    inheritParentEnv: true, allowEmptyStdout: false, timeoutMs: 120_000,
+    inheritParentEnv: true, timeoutMs: 120_000,
   });
-  if (!result.ok) throw new Error(`mutation_detector_failed:${key}:${result.stderr || result.error || result.exitCode}`);
-  const parsed = JSON.parse(result.stdout) as { findings?: string[] };
-  return Array.isArray(parsed.findings) ? parsed.findings.map(String) : [];
+  const exitCode = result.exitCode ?? (result.ok ? 0 : 1);
+  if (exitCode !== 0 && exitCode !== 1) {
+    throw new Error(`mutation_detector_transport_failed:${key}:${result.stderr || result.error || exitCode}`);
+  }
+  let parsed: { findings?: string[] };
+  try { parsed = JSON.parse(result.stdout) as { findings?: string[] }; }
+  catch { throw new Error(`mutation_detector_output_invalid:${key}:${result.stdout}:${result.stderr}`); }
+  return {
+    exitCode,
+    findings: Array.isArray(parsed.findings) ? parsed.findings.map(String) : [],
+  };
 }
 function runMutation(binding: Pr2aMutationBinding, root: string): MutationEvidence {
   const key = mutationKey(binding.ac, binding.mutationId);
@@ -276,17 +290,21 @@ function runMutation(binding: Pr2aMutationBinding, root: string): MutationEviden
   const file = path.join(root, `${binding.ac}-${binding.mutationId.replace(/[^a-z0-9_.-]/giu, '_')}${path.extname(spec.artifactPath) || '.txt'}`);
   writeFileSync(file, before, 'utf8');
   const baseline = runDetector(key, file);
-  if (baseline.length > 0) throw new Error(`mutation_precondition_failed:${binding.failingTestId}:${baseline.join(',')}`);
+  if (baseline.exitCode !== 0 || baseline.findings.length > 0) {
+    throw new Error(`mutation_precondition_failed:${binding.failingTestId}:exit=${baseline.exitCode}:findings=${baseline.findings.join(',')}`);
+  }
   const mutated = spec.apply(before);
   if (mutated === before) throw new Error(`mutation_did_not_change_artifact:${binding.failingTestId}`);
   writeFileSync(file, mutated, 'utf8');
   const observed = runDetector(key, file);
-  if (observed.length !== 1 || observed[0] !== binding.failingTestId) {
-    throw new Error(`specific_failing_test_not_observed:${binding.failingTestId}:observed=${observed.join(',')}`);
+  if (observed.exitCode !== 1 || observed.findings.length !== 1 || observed.findings[0] !== binding.failingTestId) {
+    throw new Error(`specific_failing_test_not_observed:${binding.failingTestId}:exit=${observed.exitCode}:observed=${observed.findings.join(',')}`);
   }
   writeFileSync(file, before, 'utf8');
   const restored = runDetector(key, file);
-  if (restored.length > 0) throw new Error(`restored_verification_failed:${binding.failingTestId}:${restored.join(',')}`);
+  if (restored.exitCode !== 0 || restored.findings.length > 0) {
+    throw new Error(`restored_verification_failed:${binding.failingTestId}:exit=${restored.exitCode}:findings=${restored.findings.join(',')}`);
+  }
   const restoredHash = digest(readFileSync(file));
   const artifactHashBefore = digest(before);
   if (restoredHash !== artifactHashBefore) throw new Error(`restore_hash_mismatch:${binding.failingTestId}`);
@@ -296,10 +314,12 @@ function runMutation(binding: Pr2aMutationBinding, root: string): MutationEviden
     artifactPath: spec.artifactPath,
     detectorCommand: detectorCommand(key, file),
     expectedFinding: binding.failingTestId,
-    observedFindings: observed,
+    observedFindings: observed.findings,
     artifactHashBefore,
     artifactHashAfter: digest(mutated),
     restoredHash,
+    negativeExitCode: 1,
+    restoredExitCode: 0,
     negativeOutcome: 'failed',
     restoredOutcome: 'passed',
   };
@@ -314,8 +334,10 @@ function detectMode(argv: string[]): boolean {
   if (!spec || !file) throw new Error(`invalid_detector_invocation:${key}`);
   const binding = PR2A_MUTATION_CATALOG.find((candidate) => mutationKey(candidate.ac, candidate.mutationId) === key);
   if (!binding) throw new Error(`detector_binding_missing:${key}`);
-  const findings = spec.violated(readFileSync(file, 'utf8')) ? [binding.failingTestId] : [];
-  process.stdout.write(`${JSON.stringify({ key, findings })}\n`);
+  const violated = spec.violated(readFileSync(file, 'utf8'));
+  const findings = violated ? [binding.failingTestId] : [];
+  process.stdout.write(`${JSON.stringify({ detectorId: binding.failingTestId, findings })}\n`);
+  if (violated) process.exitCode = 1;
   return true;
 }
 async function main(): Promise<void> {
@@ -328,7 +350,7 @@ async function main(): Promise<void> {
     process.stdout.write(`${JSON.stringify({
       issue: 948,
       mutationEvidence: evidence,
-      mutationRunner: { result: 'one-row-one-fault-subprocess-red-green', bindings: evidence.length },
+      mutationRunner: { result: 'one-row-one-fault-executable-detector-red-green', bindings: evidence.length },
     })}\n`);
   } finally {
     rmSync(root, { recursive: true, force: true });
