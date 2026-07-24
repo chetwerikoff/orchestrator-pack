@@ -96,18 +96,21 @@ or simplified. Do not emit another value, duplicate the line, or infer the flag
 from words such as “simplify”. A reviewer candidate is still only a finding; it
 is never the architect's aggregate cut decision.
 
-When the current output has **no** finding carrying that exact discriminator,
-emit exact `SIMPLIFICATION_CLEAN` on its own line. When one or more findings do
-carry it, do not emit `SIMPLIFICATION_CLEAN` for that output. If there are no
-material findings at all, emit both exact terminal lines:
+For pre-lens `competitive` / `architectural` reviewer outputs, emit exact
+`SIMPLIFICATION_CLEAN` on its own line when the current output has **no** finding
+carrying that discriminator. When one or more findings do carry it, do not emit
+`SIMPLIFICATION_CLEAN` for that output. If there are no material findings at all,
+emit both exact terminal lines:
 
 `NO_FINDINGS`
 
 `SIMPLIFICATION_CLEAN`
 
 Do not fabricate `NO_FINDINGS` for a non-clean terminal state allowed by the
-owning flow. `SIMPLIFICATION_CLEAN` only says this raw output contains no M5 cut
-candidate.
+owning flow. `SIMPLIFICATION_CLEAN` only says this raw pre-lens output contains no
+M5 cut candidate; the owning flow decides which legally terminal pre-lens output
+is the M5 anchor. Post-lens `architectural-final` remains M2-governed but does
+**not** owe `SIMPLIFICATION_CLEAN` merely because it is clean or follows a lens.
 
 ## Typed findings (mandatory)
 
