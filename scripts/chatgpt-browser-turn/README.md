@@ -71,9 +71,9 @@ Never resend after possible delivery merely because the caller missed the termin
 
 ## Parallel admission
 
-Parallel operation is fail-closed. Without current positive capability evidence bound to the exact candidate digest, build digest, configured profile/CDP digest, and Gate-B digest, the helper serializes at configured-profile scope.
+Parallel operation is fail-closed. Without current positive capability evidence bound to the exact candidate digest, build digest, configured profile/CDP digest, browser provenance, and Gate-B digest, the helper serializes at configured-profile scope.
 
-Even with positive capability evidence, every invocation rechecks the current service-issued witness surface immediately before dispatch. Missing or contradictory witness evidence downgrades capability visibly and produces a zero-send profile-scoped refusal rather than allowing a stale parallel admission. Same-conversation turns remain serialized or refused. Causal success requires an exact service-issued submitted user-message ID and exactly one assistant-message ID linked as its reply; DOM order/count/timing/text similarity never creates `ok`, and ambiguous user or assistant observations fail closed.
+Even with positive capability evidence, every invocation rechecks the current browser provenance and service-issued witness surface before parallel dispatch. Missing or contradictory witness evidence, changed browser provenance, or changed capability binding downgrades capability visibly and falls back to configured-profile serialization or a zero-send profile-scoped refusal. Same-conversation turns remain serialized or refused. Causal success requires an exact service-issued submitted user-message ID and exactly one assistant-message ID linked as its reply; DOM order/count/timing/text similarity never creates `ok`, and ambiguous user or assistant observations fail closed.
 
 ## Publication safety
 
@@ -97,13 +97,13 @@ npm run chatgpt-browser-turn -- capability \
   --cdp http://127.0.0.1:9222
 ```
 
-The `candidate_digest`, `build_digest`, `config_digest`, and `gate_digest` in `expected_binding` are the Gate-B binding for that exact runtime candidate. For the operator-controlled live characterization invocation only, export that exact gate digest before running the successful serialized existing-chat turn:
+The `candidate_digest`, `build_digest`, `config_digest`, and `gate_digest` in `expected_binding` are the Gate-B binding for that exact runtime candidate. `candidate_digest` covers the tracked TypeScript transport plus the reused `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs` verifier; `build_digest` additionally binds the exact Node version, platform, and architecture. For the operator-controlled live characterization invocation only, export the exact gate digest before running the successful serialized existing-chat turn:
 
 ```bash
 export CHATGPT_BROWSER_TURN_GATE_B_DIGEST='<expected_binding.gate_digest>'
 ```
 
-Do not reuse a value after any candidate or Gate-B test-source change. A successful turn can create positive capability evidence only when the live witness surface is present and this environment value equals the current `gate_digest`. Query `capability` again after characterization and retain its browser provenance, evidence digest, observation/expiry timestamps, and downgrade generation as Gate-C telemetry. If the result is not `state: ok`, parallel smoke is not admitted; fallback remains configured-profile serialization.
+Do not reuse a value after any candidate, verifier, runtime-build, or Gate-B test-source change. A successful turn can create positive capability evidence only when the live witness surface is present and this environment value equals the current `gate_digest`. Query `capability` again after characterization and retain its browser provenance, evidence digest, observation/expiry timestamps, and downgrade generation as Gate-C telemetry. If the result is not `state: ok`, parallel smoke is not admitted; fallback remains configured-profile serialization.
 
 Before the first real ChatGPT turn with a newly built candidate, the operator must run a live smoke against the dedicated automation profile. The live smoke must demonstrate at least:
 
@@ -113,7 +113,7 @@ Before the first real ChatGPT turn with a newly built candidate, the operator mu
 4. destination collision leaves external bytes untouched and produces the correct pre-send or post-delivery state;
 5. `status/list`, exact `clear`, opaque quarantine/tombstone, and `publication-status` remain usable after a forced interrupted run.
 
-Do not mint positive parallel capability evidence from a synthetic test alone. Parallel characterization proceeds only after the serialized live success above, and every parallel invocation must independently retain current witness availability and exact capability binding until dispatch.
+Do not mint positive parallel capability evidence from a synthetic test alone. Parallel characterization proceeds only after the serialized live success above, and every parallel invocation must independently retain current witness availability, browser provenance, and exact capability binding until dispatch.
 
 ## Retained recovery copy and rollback
 
@@ -124,13 +124,17 @@ RECOVERY_ROOT="$(realpath "$HOME")/.local/lib/orchestrator-pack/chatgpt-browser-
 printf '%s\n' "$RECOVERY_ROOT"
 ```
 
-Record the printed absolute path alongside the live characterization evidence. Populate that directory with:
+Record the printed absolute path alongside the live characterization evidence. Preserve the same relative layout under that root and include:
 
 - `scripts/chatgpt-browser-turn.ts`;
 - the complete `scripts/chatgpt-browser-turn/` directory;
 - `scripts/kernel/subprocess.ts`;
-- the Node 22 runtime used for the live candidate, or an operator-recorded reproducible Node 22 installation reference.
+- `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs`;
+- the exact Node 22 runtime used for the live candidate, or an operator-recorded reproducible installation reference;
+- the Playwright/Playwright-core package location and version used by `loadChromium`, or an operator-recorded reproducible installation reference for that exact compatible package.
 
-Record SHA-256 digests for the retained files and keep that copy until `status/list` returns no unresolved state and every relevant `publication-status` is terminal with no opaque quarantine or blocking tombstone.
+The verifier bytes are part of `candidate_digest`; changing them invalidates prior positive capability evidence. The external Playwright installation is not stored in helper state, so its resolved package location/version must be retained as operator evidence before live use. `status/list` and publication recovery remain browser-independent, but clearing a profile wall performs a live profile/UI readiness probe and therefore requires the verifier plus a compatible Playwright runtime.
+
+Record SHA-256 digests for every retained first-party file and keep the recovery copy and runtime references until `status/list` returns no unresolved state and every relevant `publication-status` is terminal with no opaque quarantine or blocking tombstone.
 
 On rollback, first quiesce new invocations and stop only exact matching browser-turn processes. Do not delete or timer-clear possible-delivery state. Use the retained digest-pinned copy for `status/list`, `publication-status`, and exact `clear`/adjudication operations until all pre-rollback incidents are resolved. Preserve unreadable records, tombstones, publication receipts, and complete temporary replies until their exact recovery path is finished.
