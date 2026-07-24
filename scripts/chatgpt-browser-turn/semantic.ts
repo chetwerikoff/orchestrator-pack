@@ -83,7 +83,10 @@ export function serializeSemanticNodes(nodes: SemanticNode[], depth = 0): string
     const blockLike = ['paragraph','heading','unordered_list','ordered_list','blockquote','code_block','group'].includes(node.type);
     if (blockLike) blocks.push(value.trimEnd());
     else if (blocks.length === 0) blocks.push(value);
-    else blocks[blocks.length - 1] += value;
+    else {
+      const index = blocks.length - 1;
+      blocks[index] = `${blocks[index] ?? ''}${value}`;
+    }
   }
   return blocks.filter((value) => value.length > 0).join('\n\n').replace(/\n+$/, '');
 }
