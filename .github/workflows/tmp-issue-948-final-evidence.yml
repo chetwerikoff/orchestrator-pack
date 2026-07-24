@@ -1,13 +1,14 @@
 name: tmp-issue-948-final-evidence
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - tmp/issue-948-verification-toolchain
 
 permissions:
   contents: read
   issues: read
+  statuses: write
 
 concurrency:
   group: tmp-issue-948-final-evidence
@@ -22,6 +23,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
+      - name: Publish run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state=pending \
+            -f context=tmp-issue-948-final-evidence \
+            -f description='Issue #948 final evidence running' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_SHA }}
@@ -301,6 +311,8 @@ NODE
           path: ${{ runner.temp }}/issue948-evidence
       - name: Run receipt-bound final verification
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
@@ -342,6 +354,11 @@ NODE
           test "$(node -e 'const fs=require("fs");const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(x.result)' "$EVID/final-validation.json")" = pass
           git status --porcelain=v1 > "$EVID/post/git-status.txt"
           test ! -s "$EVID/post/git-status.txt"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state=success \
+            -f context=tmp-issue-948-final-evidence \
+            -f description='Issue #948 final evidence passed' \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
       - name: Upload final evidence
         uses: actions/upload-artifact@v4
         with:
