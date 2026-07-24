@@ -6,7 +6,15 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildConformanceReport, validateBridgeSource, validateRunnerSource } from './final-conformance.ts';
+import {
+  scanForbiddenExecutableReferences,
+  validateBridgeSource,
+  validateClaimStoreSource,
+  validateClosureReceiptSource,
+  validateMandatoryPackageScripts,
+  validateRunnerSource,
+  type ConformanceFinding,
+} from './final-conformance.ts';
 import { validatePlanningManifest } from './planning-validator.ts';
 import type { PlanningManifest } from './contracts.ts';
 import {
@@ -16,30 +24,28 @@ import {
   type Pr2aMutationBinding,
 } from './mutation-catalog.ts';
 
-interface ControlEvidence {
-  value: boolean;
-  evidence: string[];
-}
-
-interface MutationSubject {
-  schemaVersion: 1;
-  issue: 948;
-  headCommit: string;
-  finalTreeOid: string;
-  controls: Record<string, ControlEvidence>;
-}
-
 interface MutationEvidence {
   ac: Pr2aAcceptanceId;
   mutationId: string;
+  mutationProfile: string;
   artifactPath: string;
+  detector: string;
   executed: true;
   artifactHashBefore: string;
   artifactHashAfter: string;
   failingTestId: string;
+  observedFindings: string[];
   negativeOutcome: 'failed';
   restoredHash: string;
   restoredOutcome: 'passed';
+}
+
+interface MutationPlan {
+  profile: string;
+  artifactPath: string;
+  detector: string;
+  mutate: (source: string, mutationId: string) => string;
+  inspect: (source: string) => string[];
 }
 
 const repoRoot = path.resolve(process.cwd());
@@ -47,102 +53,132 @@ const repoRoot = path.resolve(process.cwd());
 function digest(value: string | Buffer): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
-
-function source(file: string): string {
-  return readFileSync(path.join(repoRoot, file), 'utf8');
+function source(file: string): string { return readFileSync(path.join(repoRoot, file), 'utf8'); }
+function findingCodes(rows: ConformanceFinding[]): string[] { return rows.map((row) => row.code); }
+function indexFor(value: string, size: number): number {
+  return Number.parseInt(createHash('sha256').update(value).digest('hex').slice(0, 8), 16) % size;
+}
+function replaceRequired(sourceText: string, token: string, replacement: string, mutationId: string): string {
+  if (!sourceText.includes(token)) throw new Error(`mutation_token_missing:${mutationId}:${token}`);
+  return sourceText.replace(token, `${replacement} /* mutation:${mutationId} */`);
 }
 
-interface RepositoryContext {
-  report: ReturnType<typeof buildConformanceReport>;
-  manifest: PlanningManifest;
-  planning: ReturnType<typeof validatePlanningManifest>;
-  bridgeFindings: ReturnType<typeof validateBridgeSource>;
-  runnerFindings: ReturnType<typeof validateRunnerSource>;
-  vectorCount: number;
-  packageJson: { scripts?: Record<string, string> };
-  rollbackSource: string;
-  storeSource: string;
-  bridgeSource: string;
-  receiptSource: string;
-  claimStoreTestSource: string;
-}
+const storeTokens = [
+  'sameSnapshot(observed, moved)',
+  'processIdentityAlive(moved.owner)',
+  'fs.rmSync = safeRmSync',
+  'syncBuiltinESMExports()',
+  "await import('./review-start-claim-cli.ts')",
+  'PollOnce',
+] as const;
+const receiptTokens = [
+  'function verifyArtifact',
+  'function verifyCommandLogs',
+  'function verifyReplay',
+  'command-result-tree-binding-mismatch',
+  'overlap-replay-not-bound-to-harness-and-inputs',
+  'overlap.candidateCommitSha !== expected.finalCommitSha',
+  'gitTreeOid(overlap.candidateCommitSha)',
+  'external-928-body-contract-mismatch',
+] as const;
 
-function buildRepositoryContext(): RepositoryContext {
-  const report = buildConformanceReport('HEAD');
-  const manifest = JSON.parse(source('scripts/pr2a/planning-manifest.json')) as PlanningManifest;
-  const bridgeSource = source('scripts/lib/Review-StartClaimLifecycle.ps1');
-  const vectors = JSON.parse(source('scripts/pr2a/review-start-claim-protocol-vectors.json')) as { vectors?: unknown[] };
-  return {
-    report,
-    manifest,
-    planning: validatePlanningManifest(manifest),
-    bridgeFindings: validateBridgeSource(bridgeSource),
-    runnerFindings: validateRunnerSource(source('scripts/pack-review-runner.ts')),
-    vectorCount: vectors.vectors?.length ?? 0,
-    packageJson: JSON.parse(source('package.json')) as { scripts?: Record<string, string> },
-    rollbackSource: source('scripts/pr2a/rollback-drain.ts'),
-    storeSource: source('scripts/lib/review-start-claim-store.ts'),
-    bridgeSource,
-    receiptSource: source('scripts/pr2a/closure-receipt.ts'),
-    claimStoreTestSource: source('scripts/pr2a/final-conformance.test.ts'),
-  };
-}
-
-function repositoryEvidence(context: RepositoryContext, ac: Pr2aAcceptanceId, mutationId: string): ControlEvidence {
-  const { report, manifest } = context;
-  const conformancePass = report.results[ac] === 'pass';
-  const evidence = [
-    `head=${report.commitSha}`,
-    `tree=${report.finalTreeOid}`,
-    `ac=${report.results[ac]}`,
-    `control=${mutationId}`,
-  ];
-  let value = conformancePass;
-  if (ac === 'AC1') value = value && context.planning.ok && manifest.denominator.length > 1000 && manifest.references.length > 0 && manifest.lifecycle.length >= 80;
-  if (ac === 'AC2') value = value && context.vectorCount > 0
-    && context.storeSource.includes('const read = readClaimRecord')
-    && context.storeSource.includes('sameGeneration(')
-    && context.storeSource.includes('enterMutex(')
-    && context.storeSource.includes('unsupported_windows_mounted_filesystem');
-  if (ac === 'AC3') value = value && context.bridgeFindings.length === 0 && context.runnerFindings.length === 0
-    && context.bridgeSource.includes('Invoke-ReviewStartClaimTsOperation');
-  if (ac === 'AC4') value = value && report.findings.length === 0 && report.changedPaths.length === manifest.plannedOperations.length;
-  if (ac === 'AC5') value = value && context.receiptSource.includes('finalTreeOid')
-    && context.receiptSource.includes('planningBaseTreeOid');
-  if (ac === 'AC6') value = value && source('scripts/pr2a/final-conformance.ts').includes('new_powershell_logic_added')
-    && source('scripts/pr2a/final-conformance.ts').includes('denylisted_path_changed');
-  if (ac === 'AC7') value = value && context.rollbackSource.includes('bootId') && context.rollbackSource.includes('startTimeTicks')
-    && context.claimStoreTestSource.includes('TS-vs-TS overlap');
-  if (ac === 'AC8') value = value && context.packageJson.scripts?.['test:issue-948']?.includes('--maxWorkers=1') === true
-    && context.packageJson.scripts?.['test:contract-mutations']?.includes('pr2-foundation/contract-test-runner.ts') === true;
-  return { value, evidence };
-}
-
-export function buildMutationSubject(): MutationSubject {
-  const context = buildRepositoryContext();
-  const report = context.report;
-  const controls: Record<string, ControlEvidence> = {};
-  for (const binding of PR2A_MUTATION_CATALOG) {
-    controls[`${binding.ac}:${binding.mutationId}`] = repositoryEvidence(context, binding.ac, binding.mutationId);
+function mutationPlan(binding: Pr2aMutationBinding): MutationPlan {
+  switch (binding.ac) {
+    case 'AC1':
+      return {
+        profile: 'planning-manifest-lineage',
+        artifactPath: 'scripts/pr2a/planning-manifest.json',
+        detector: 'validatePlanningManifest',
+        mutate: (text, id) => replaceRequired(text, '"issue":948', '"issue":949', id),
+        inspect: (text) => {
+          try {
+            const parsed = JSON.parse(text) as PlanningManifest;
+            const result = validatePlanningManifest(parsed);
+            return result.ok ? [] : ['planning_manifest_rejected'];
+          } catch { return ['planning_manifest_unreadable']; }
+        },
+      };
+    case 'AC2': {
+      const token = storeTokens[indexFor(binding.mutationId, storeTokens.length)]!;
+      return {
+        profile: `claim-protocol:${token}`,
+        artifactPath: 'scripts/lib/review-start-claim-store.ts',
+        detector: 'validateClaimStoreSource',
+        mutate: (text, id) => replaceRequired(text, token, `/* removed ${token} */`, id),
+        inspect: (text) => findingCodes(validateClaimStoreSource(text)),
+      };
+    }
+    case 'AC3': {
+      const profile = indexFor(binding.mutationId, 3);
+      if (profile === 0) return {
+        profile: 'bridge-direct-internal-authority',
+        artifactPath: 'scripts/lib/Review-StartClaimLifecycle.ps1',
+        detector: 'validateBridgeSource',
+        mutate: (text, id) => replaceRequired(text, "'review-start-claim-store.ts'", "'review-start-claim-cli.ts'", id),
+        inspect: (text) => findingCodes(validateBridgeSource(text)),
+      };
+      if (profile === 1) return {
+        profile: 'bridge-storage-policy',
+        artifactPath: 'scripts/lib/Review-StartClaimLifecycle.ps1',
+        detector: 'validateBridgeSource',
+        mutate: (text, id) => `${text}\nSet-Content mutation-${id} '{}'\n`,
+        inspect: (text) => findingCodes(validateBridgeSource(text)),
+      };
+      return {
+        profile: 'runner-internal-cli-edge',
+        artifactPath: 'scripts/pack-review-runner.ts',
+        detector: 'validateRunnerSource',
+        mutate: (text, id) => replaceRequired(text, "from './lib/review-start-claim-store.ts'", "from './lib/review-start-claim-cli.ts'", id),
+        inspect: (text) => findingCodes(validateRunnerSource(text)),
+      };
+    }
+    case 'AC4':
+      return {
+        profile: 'tracked-test-reaches-d928',
+        artifactPath: 'scripts/pr2a/final-conformance.test.ts',
+        detector: 'scanForbiddenExecutableReferences',
+        mutate: (text, id) => `${text}\nspawn('pwsh', ['-File', 'scripts/orchestrator-wake-supervisor.ps1']); // mutation:${id}\n`,
+        inspect: (text) => findingCodes(scanForbiddenExecutableReferences([{ path: 'scripts/example.test.ts', content: text }])),
+      };
+    case 'AC5': {
+      const token = receiptTokens[indexFor(binding.mutationId, receiptTokens.length)]!;
+      return {
+        profile: `receipt-verifier:${token}`,
+        artifactPath: 'scripts/pr2a/closure-receipt.ts',
+        detector: 'validateClosureReceiptSource',
+        mutate: (text, id) => replaceRequired(text, token, `/* removed ${token} */`, id),
+        inspect: (text) => findingCodes(validateClosureReceiptSource(text)),
+      };
+    }
+    case 'AC6':
+      return {
+        profile: 'production-reverse-edge-to-d928',
+        artifactPath: 'scripts/pack-review-runner.ts',
+        detector: 'scanForbiddenExecutableReferences',
+        mutate: (text, id) => `${text}\nconst mutation${id.replace(/[^a-z0-9]/giu, '_')} = 'scripts/lib/Review-StartClaim.ps1';\n`,
+        inspect: (text) => findingCodes(scanForbiddenExecutableReferences([{ path: 'scripts/pack-review-runner.ts', content: text }])),
+      };
+    case 'AC7':
+      return {
+        profile: 'second-lock-tree',
+        artifactPath: 'scripts/lib/review-start-claim-store.ts',
+        detector: 'validateClaimStoreSource',
+        mutate: (text, id) => `${text}\nconst secondLock${id.replace(/[^a-z0-9]/giu, '_')} = '.takeover';\n`,
+        inspect: (text) => findingCodes(validateClaimStoreSource(text)),
+      };
+    case 'AC8': {
+      const removeIssueSuite = indexFor(binding.mutationId, 2) === 0;
+      return {
+        profile: removeIssueSuite ? 'mandatory-issue948-suite-weakened' : 'contract-mutation-suite-removed',
+        artifactPath: 'package.json',
+        detector: 'validateMandatoryPackageScripts',
+        mutate: (text, id) => removeIssueSuite
+          ? replaceRequired(text, '--maxWorkers=1', `--maxWorkers=2`, id)
+          : replaceRequired(text, 'scripts/pr2-foundation/contract-test-runner.ts', 'scripts/pr2-foundation/contract-test-runner-removed.ts', id),
+        inspect: (text) => findingCodes(validateMandatoryPackageScripts(text)),
+      };
+    }
   }
-  return {
-    schemaVersion: 1,
-    issue: 948,
-    headCommit: report.commitSha,
-    finalTreeOid: report.finalTreeOid,
-    controls,
-  };
-}
-
-export function validateMutationSubject(subject: MutationSubject, onlyKey?: string): { ok: true } | { ok: false; failingTestIds: string[] } {
-  const expected = PR2A_MUTATION_CATALOG.map((binding) => `${binding.ac}:${binding.mutationId}`);
-  const keys = onlyKey ? [onlyKey] : expected;
-  const failures: string[] = [];
-  for (const key of keys) {
-    const control = subject.controls[key];
-    if (!control || control.value !== true || control.evidence.length === 0) failures.push(`mutation-contract:${key}`);
-  }
-  return failures.length === 0 ? { ok: true } : { ok: false, failingTestIds: failures };
 }
 
 function selectedBindings(argv: string[]): readonly Pr2aMutationBinding[] {
@@ -156,40 +192,41 @@ function selectedBindings(argv: string[]): readonly Pr2aMutationBinding[] {
   throw new Error('usage: mutation-runner.ts --ac AC1|...|AC8 or --all');
 }
 
-function runMutation(binding: Pr2aMutationBinding, root: string, baseline: MutationSubject): MutationEvidence {
-  const key = `${binding.ac}:${binding.mutationId}`;
-  const file = path.join(root, `${binding.ac}-${binding.mutationId}.json`);
-  const clean = validateMutationSubject(baseline, key);
-  if (!clean.ok) throw new Error(`mutation_precondition_failed:${binding.failingTestId}:${clean.failingTestIds.join(',')}`);
-  const before = JSON.stringify(baseline);
+function runMutation(binding: Pr2aMutationBinding, root: string): MutationEvidence {
+  const plan = mutationPlan(binding);
+  const before = source(plan.artifactPath);
+  const baselineFindings = plan.inspect(before);
+  if (baselineFindings.length > 0) {
+    throw new Error(`mutation_precondition_failed:${binding.failingTestId}:${baselineFindings.join(',')}`);
+  }
+
+  const file = path.join(root, `${binding.ac}-${binding.mutationId.replace(/[^a-z0-9_.-]/giu, '_')}${path.extname(plan.artifactPath) || '.txt'}`);
   writeFileSync(file, before, 'utf8');
   const artifactHashBefore = digest(before);
-
-  const mutated = structuredClone(baseline);
-  mutated.controls[key]!.value = false;
-  mutated.controls[key]!.evidence = [...mutated.controls[key]!.evidence, `mutation=${binding.mutationId}`];
-  const after = JSON.stringify(mutated);
-  writeFileSync(file, after, 'utf8');
-  const artifactHashAfter = digest(after);
-  if (artifactHashAfter === artifactHashBefore) throw new Error(`artifact_hash_delta_missing:${binding.failingTestId}`);
-  const negative = validateMutationSubject(mutated, key);
-  if (negative.ok || !negative.failingTestIds.includes(binding.failingTestId)) {
-    throw new Error(`specific_failing_test_not_observed:${binding.failingTestId}`);
-  }
+  const mutated = plan.mutate(before, binding.mutationId);
+  if (mutated === before) throw new Error(`mutation_did_not_change_artifact:${binding.failingTestId}`);
+  writeFileSync(file, mutated, 'utf8');
+  const artifactHashAfter = digest(mutated);
+  const observedFindings = plan.inspect(readFileSync(file, 'utf8'));
+  if (observedFindings.length === 0) throw new Error(`specific_failing_test_not_observed:${binding.failingTestId}`);
 
   writeFileSync(file, before, 'utf8');
   const restoredHash = digest(readFileSync(file));
   if (restoredHash !== artifactHashBefore) throw new Error(`restore_hash_mismatch:${binding.failingTestId}`);
-  const restored = validateMutationSubject(JSON.parse(readFileSync(file, 'utf8')) as MutationSubject, key);
-  if (!restored.ok) throw new Error(`restored_verification_failed:${binding.failingTestId}`);
+  const restoredFindings = plan.inspect(readFileSync(file, 'utf8'));
+  if (restoredFindings.length > 0) throw new Error(`restored_verification_failed:${binding.failingTestId}:${restoredFindings.join(',')}`);
+
   return {
     ac: binding.ac,
     mutationId: binding.mutationId,
-    artifactPath: file,
+    mutationProfile: plan.profile,
+    artifactPath: plan.artifactPath,
+    detector: plan.detector,
     executed: true,
     artifactHashBefore,
     artifactHashAfter,
     failingTestId: binding.failingTestId,
+    observedFindings,
     negativeOutcome: 'failed',
     restoredHash,
     restoredOutcome: 'passed',
@@ -198,15 +235,14 @@ function runMutation(binding: Pr2aMutationBinding, root: string, baseline: Mutat
 
 async function main(): Promise<void> {
   const bindings = selectedBindings(process.argv.slice(2));
-  if (bindings.length === 0) return;
+  if (bindings.length === 0) throw new Error('no_mutation_bindings_selected');
   const root = mkdtempSync(path.join(tmpdir(), 'opk-pr2a-mutations-'));
   try {
-    const baseline = buildMutationSubject();
-    const evidence = bindings.map((binding) => runMutation(binding, root, baseline));
+    const evidence = bindings.map((binding) => runMutation(binding, root));
     process.stdout.write(`${JSON.stringify({
       issue: 948,
       mutationEvidence: evidence,
-      mutationRunner: { result: 'externally-grounded-pr2a' },
+      mutationRunner: { result: 'concrete-source-red-green', bindings: evidence.length },
     })}\n`);
   } finally {
     rmSync(root, { recursive: true, force: true });
