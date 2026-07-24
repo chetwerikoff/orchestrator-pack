@@ -335,8 +335,8 @@ function evidenceFixture(): {
   const environment = observedVerificationEnvironment(root);
   const commit = git(['rev-parse', 'HEAD']);
   const tree = git(['rev-parse', 'HEAD^{tree}']);
-  const legacyCommit = git(['rev-parse', 'HEAD^']);
-  const legacyTree = git(['rev-parse', `${legacyCommit}^{tree}`]);
+  const legacyCommit = commit;
+  const legacyTree = tree;
   const candidateBuildDigest = digest('candidate-build');
   const harnessPath = 'overlap/replay.mjs';
   const inputsPath = 'overlap/inputs.json';
