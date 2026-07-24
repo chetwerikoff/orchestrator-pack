@@ -177,6 +177,16 @@ interface TombstoneV1 {
   readonly updated_at: string;
 }
 
+interface TombstoneResolutionV1 extends TombstoneV1 {
+  readonly adjudication_evidence_sha256: string;
+  readonly resolved_at: string;
+}
+
+export interface AdjudicationTestHooks {
+  readonly afterResolutionRecord?: () => void;
+  readonly afterResolvedMove?: () => void;
+}
+
 function validTombstoneIdentity(identity: string): boolean {
   return /^tombstone-[0-9a-f-]{36}$/i.test(identity) && basename(identity) === identity;
 }
@@ -202,6 +212,33 @@ function readTombstone(path: string, profileKey: string): TombstoneV1 {
     || !Number.isFinite(Date.parse(value.created_at))
     || !Number.isFinite(Date.parse(value.updated_at))) {
     throw new Error('bad_tombstone');
+  }
+  return value;
+}
+
+function readTombstoneResolution(
+  path: string,
+  profileKey: string,
+  tombstone: TombstoneV1,
+  evidenceSha256: string,
+): TombstoneResolutionV1 {
+  const value = JSON.parse(regularBytes(path).toString('utf8')) as TombstoneResolutionV1;
+  if (value.schema !== tombstone.schema
+    || value.version !== tombstone.version
+    || value.configured_profile_key !== profileKey
+    || value.identity !== tombstone.identity
+    || value.generation !== tombstone.generation
+    || value.source_area !== tombstone.source_area
+    || value.source_name !== tombstone.source_name
+    || value.source_generation !== tombstone.source_generation
+    || value.source_digest !== tombstone.source_digest
+    || value.quarantine_name !== tombstone.quarantine_name
+    || value.state !== 'active'
+    || value.created_at !== tombstone.created_at
+    || value.updated_at !== tombstone.updated_at
+    || value.adjudication_evidence_sha256 !== evidenceSha256
+    || !Number.isFinite(Date.parse(value.resolved_at))) {
+    throw new Error('bad_tombstone_resolution');
   }
   return value;
 }
@@ -397,12 +434,18 @@ export function statusList(profileKey: string): ControlResultV1 {
     try {
       const tombstone = readTombstone(join(d.tombstones, name), profileKey);
       referencedQuarantine.add(tombstone.quarantine_name);
+      const resolutionPath = join(d.resolved, `${tombstone.identity}.json`);
+      const resolutionPending = tombstone.state === 'active' && existsSync(resolutionPath);
       items.push({
         identity: tombstone.identity,
         kind: 'blocking_tombstone',
         generation: tombstone.generation,
         evidence_token: tombstone.source_digest,
-        cause: tombstone.state === 'preparing' ? 'quarantine_preparation_incomplete' : undefined,
+        cause: tombstone.state === 'preparing'
+          ? 'quarantine_preparation_incomplete'
+          : resolutionPending
+            ? 'adjudication_resolution_incomplete'
+            : undefined,
         opaque: true,
       });
       const quarantinePath = join(d.quarantine, tombstone.quarantine_name);
@@ -419,7 +462,7 @@ export function statusList(profileKey: string): ControlResultV1 {
           kind: 'opaque_quarantine',
           generation: tombstone.generation,
           evidence_token: 'unreadable',
-          cause: 'quarantine_missing_or_unreadable',
+          cause: resolutionPending ? 'adjudication_resolution_incomplete' : 'quarantine_missing_or_unreadable',
           opaque: true,
         });
       }
@@ -715,6 +758,7 @@ export function adjudicateTombstone(
   generation: number,
   expectedEvidenceSha256: string,
   actualEvidenceSha256: string,
+  testHooks: AdjudicationTestHooks = {},
 ): ControlResultV1 {
   if (!validTombstoneIdentity(identity)) return control('clear', 'not_found', profileKey);
   if (!/^[0-9a-f]{64}$/.test(expectedEvidenceSha256)
@@ -733,25 +777,66 @@ export function adjudicateTombstone(
   }
   if (tombstone.identity !== identity || tombstone.generation !== generation) return control('clear', 'stale_generation', profileKey);
   if (tombstone.state !== 'active') return control('clear', 'profile_blocked', profileKey, 'quarantine_preparation_incomplete');
+
   const quarantinePath = join(d.quarantine, tombstone.quarantine_name);
-  let quarantineBytes: Buffer;
-  try {
-    quarantineBytes = regularBytes(quarantinePath);
-  } catch {
-    return control('clear', 'evidence_changed', profileKey, 'quarantine_bytes_changed');
-  }
-  if (sha256(quarantineBytes) !== tombstone.source_digest) {
-    return control('clear', 'evidence_changed', profileKey, 'quarantine_bytes_changed');
+  const resolutionPath = join(d.resolved, `${identity}.json`);
+  const resolvedOpaquePath = join(d.resolved, `${identity}.opaque`);
+
+  if (existsSync(resolutionPath)) {
+    try {
+      readTombstoneResolution(resolutionPath, profileKey, tombstone, expectedEvidenceSha256);
+    } catch {
+      return control('clear', 'evidence_changed', profileKey, 'adjudication_resolution_changed');
+    }
+  } else {
+    let quarantineBytes: Buffer;
+    try {
+      quarantineBytes = regularBytes(quarantinePath);
+    } catch {
+      return control('clear', 'evidence_changed', profileKey, 'quarantine_bytes_changed');
+    }
+    if (sha256(quarantineBytes) !== tombstone.source_digest) {
+      return control('clear', 'evidence_changed', profileKey, 'quarantine_bytes_changed');
+    }
+    atomicJson(resolutionPath, {
+      ...tombstone,
+      adjudication_evidence_sha256: expectedEvidenceSha256,
+      resolved_at: new Date().toISOString(),
+    } satisfies TombstoneResolutionV1);
+    testHooks.afterResolutionRecord?.();
   }
 
-  atomicJson(join(d.resolved, `${identity}.json`), {
-    ...tombstone,
-    adjudication_evidence_sha256: expectedEvidenceSha256,
-    resolved_at: new Date().toISOString(),
-  });
-  renameSync(quarantinePath, join(d.resolved, `${identity}.opaque`));
-  fsyncDirectory(d.resolved);
-  fsyncDirectory(d.quarantine);
+  const quarantineExists = existsSync(quarantinePath);
+  const resolvedExists = existsSync(resolvedOpaquePath);
+  if (quarantineExists && resolvedExists) {
+    return control('clear', 'profile_blocked', profileKey, 'adjudication_resolution_ambiguous');
+  }
+  if (!quarantineExists && !resolvedExists) {
+    return control('clear', 'profile_blocked', profileKey, 'adjudication_resolution_missing_bytes');
+  }
+
+  if (quarantineExists) {
+    try {
+      if (sha256(regularBytes(quarantinePath)) !== tombstone.source_digest) {
+        return control('clear', 'evidence_changed', profileKey, 'quarantine_bytes_changed');
+      }
+      renameSync(quarantinePath, resolvedOpaquePath);
+      fsyncDirectory(d.resolved);
+      fsyncDirectory(d.quarantine);
+    } catch {
+      return control('clear', 'profile_blocked', profileKey, 'adjudication_resolution_move_incomplete');
+    }
+    testHooks.afterResolvedMove?.();
+  } else {
+    try {
+      if (sha256(regularBytes(resolvedOpaquePath)) !== tombstone.source_digest) {
+        return control('clear', 'evidence_changed', profileKey, 'resolved_bytes_changed');
+      }
+    } catch {
+      return control('clear', 'profile_blocked', profileKey, 'resolved_bytes_unreadable');
+    }
+  }
+
   unlinkSync(tombstonePath);
   fsyncDirectory(d.tombstones);
   return control('clear', 'cleared', profileKey);
