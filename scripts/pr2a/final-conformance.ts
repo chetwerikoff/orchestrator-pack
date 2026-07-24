@@ -86,7 +86,7 @@ const declaredSourceInvariants: readonly DeclaredSourceInvariant[] = Object.free
   { ac: 'AC2', mutationId: 'crash-point-breaks-single-authority', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: "const lock = claimLockDir(required.namespace, required.claim.prNumber, required.claim.headSha);\n  return withMutex(lock, () => {\n    const read = readClaimRecord(required.path);\n    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };\n    if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };" },
   { ac: 'AC2', mutationId: 'legacy-record-class-unreadable', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: "for (const required of ['schemaVersion', 'key', 'prNumber', 'headSha', 'holder', 'acquiredAtUtc', 'state'] as const)" },
   { ac: 'AC2', mutationId: 'identity-ambiguity-reclaimed', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: "if (asString(owner.host) && asString(owner.host) !== hostname()) return true;" },
-  { ac: 'AC2', mutationId: 'policy-semantics-changed', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: 'evaluateReclaimDecision,' },
+  { ac: 'AC2', mutationId: 'policy-semantics-changed', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: '  evaluateReadinessEnvelope,\n  evaluateReclaimDecision,\n  evaluateSweep,' },
   { ac: 'AC2', mutationId: 'declared-reap-trigger-broken', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: 'const sweep = asRecord(evaluateSweep({' },
   { ac: 'AC2', mutationId: 'new-reaper-scheduler-added', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'forbidden', token: 'setInterval(() => reaperSweep({}), 1000);' },
   { ac: 'AC2', mutationId: 'unsupported-boundary-accepted', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: "if (platform() !== 'linux') throw new Error('unsupported_claim_platform');" },
@@ -114,7 +114,7 @@ const declaredSourceInvariants: readonly DeclaredSourceInvariant[] = Object.free
   { ac: 'AC4', mutationId: 'powershell-policy-unit-remains-reachable', path: 'scripts/lib/Review-StartClaimLifecycle.ps1', kind: 'forbidden', token: "function Test-MutatedActiveClaim { param($Record) return $Record.state -eq 'active' }" },
   { ac: 'AC4', mutationId: 'tracked-d928-execution-surface-remains', path: 'scripts/review-start-claim.test.ts', kind: 'forbidden', token: "const mutationD928Execution = 'scripts/review-start-claim-reaper.ps1';" },
 
-  { ac: 'AC5', mutationId: 'receipt-final-tree-or-lineage-invalid', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'command-result-tree-binding-mismatch' },
+  { ac: 'AC5', mutationId: 'receipt-final-tree-or-lineage-invalid', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'return observedCommitSha === expectedCommitSha || gitTreeOid(observedCommitSha) === expectedTreeOid;' },
   { ac: 'AC5', mutationId: 'receipt-self-asserts-unverifiable-tree', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'function verifyArtifact' },
   { ac: 'AC5', mutationId: 'receipt-final-invariant-incomplete', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'buildConformanceReport(ref)' },
   { ac: 'AC5', mutationId: 'overlap-harness-or-job-bytes-unbound', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'verifyArtifact(evidenceRoot, overlap.harnessPath' },
@@ -155,7 +155,7 @@ const declaredSourceInvariants: readonly DeclaredSourceInvariant[] = Object.free
 
   { ac: 'AC8', mutationId: 'mandatory-command-or-lane-fails', path: 'package.json', kind: 'required', token: 'scripts/pr2a/final-conformance.test.ts' },
   { ac: 'AC8', mutationId: 'mandatory-test-suppressed-or-reduced', path: 'package.json', kind: 'required', token: '--maxWorkers=1' },
-  { ac: 'AC8', mutationId: 'final-evidence-tree-or-platform-stale', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'function validateVerificationEnvironment' },
+  { ac: 'AC8', mutationId: 'final-evidence-tree-or-platform-stale', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'function validateVerificationEnvironment(' },
   { ac: 'AC8', mutationId: 'required-suite-omitted-from-mandatory-path', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: "  'vitest-heavy'," },
   { ac: 'AC8', mutationId: 'receipt-dependent-suite-evidenced-pre-receipt', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'if (!preReceiptVerification.prerequisiteSuitesPassedBeforeReceipt)' },
   { ac: 'AC8', mutationId: 'overlap-evidence-candidate-tree-mismatch', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'overlap.candidateTreeOid !== expected.finalTreeOid' },
