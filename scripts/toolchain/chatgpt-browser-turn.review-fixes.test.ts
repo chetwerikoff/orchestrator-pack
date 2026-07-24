@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { destinationIdentityForPath } from '../chatgpt-browser-turn/coordination.ts';
 import { publicationStatus, publishReply } from '../chatgpt-browser-turn/publication.ts';
 import { quarantineOpaque, statusList } from '../chatgpt-browser-turn/state.ts';
-import { atomicJson, configuredProfileKey, profileDirs } from '../chatgpt-browser-turn/storage-common.ts';
+import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import { classifyProductWall, productStatusText } from '../chatgpt-browser-turn/ui-adapter.ts';
 
 let root = '';
@@ -115,7 +115,9 @@ describe('pack review 4773714081 opaque quarantine crash recovery', () => {
     const source = opaqueFixture('future-before-move.json', bytes);
     const tombstone = preparingTombstone('future-before-move.json', source.generation, source.evidence);
 
-    expect(quarantineOpaque(profileKey, source.identity, source.generation).state).toBe('quarantined');
+    const pending = statusList(profileKey).items!.find((item) => item.kind === 'blocking_tombstone' && item.identity === tombstone.identity)!;
+    expect(pending.cause).toBe('quarantine_preparation_incomplete');
+    expect(quarantineOpaque(profileKey, pending.identity, pending.generation).state).toBe('quarantined');
     expect(existsSync(source.path)).toBe(false);
     expect(readFileSync(tombstone.quarantinePath)).toEqual(bytes);
     const record = JSON.parse(readFileSync(tombstone.path, 'utf8')) as Record<string, any>;
@@ -129,7 +131,9 @@ describe('pack review 4773714081 opaque quarantine crash recovery', () => {
     const tombstone = preparingTombstone('future-after-move.json', source.generation, source.evidence);
     renameSync(source.path, tombstone.quarantinePath);
 
-    expect(quarantineOpaque(profileKey, source.identity, source.generation).state).toBe('quarantined');
+    const pending = statusList(profileKey).items!.find((item) => item.kind === 'blocking_tombstone' && item.identity === tombstone.identity)!;
+    expect(pending.cause).toBe('quarantine_preparation_incomplete');
+    expect(quarantineOpaque(profileKey, pending.identity, pending.generation).state).toBe('quarantined');
     const record = JSON.parse(readFileSync(tombstone.path, 'utf8')) as Record<string, any>;
     expect(record.state).toBe('active');
     expect(readFileSync(tombstone.quarantinePath)).toEqual(bytes);

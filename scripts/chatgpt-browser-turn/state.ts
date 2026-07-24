@@ -636,6 +636,33 @@ function finishQuarantine(
 }
 
 export function quarantineOpaque(profileKey: string, identity: string, generation: number): ControlResultV1 {
+  if (validTombstoneIdentity(identity)) {
+    const d = profileDirs(profileKey);
+    const tombstonePath = join(d.tombstones, `${identity}.json`);
+    if (!existsSync(tombstonePath)) return control('clear', 'not_found', profileKey);
+    let tombstone: TombstoneV1;
+    try {
+      tombstone = readTombstone(tombstonePath, profileKey);
+    } catch {
+      return control('clear', 'profile_blocked', profileKey, 'tombstone_incompatible');
+    }
+    if (tombstone.generation !== generation) return control('clear', 'stale_generation', profileKey);
+    const parsedFromTombstone = {
+      area: tombstone.source_area,
+      name: tombstone.source_name,
+      digest: tombstone.source_digest,
+    };
+    const sourceIdentity = `opaque:${tombstone.source_area}:${encodeName(tombstone.source_name)}:${tombstone.source_digest}`;
+    return finishQuarantine(
+      profileKey,
+      parsedFromTombstone,
+      sourceIdentity,
+      tombstone.source_generation,
+      tombstonePath,
+      tombstone,
+    );
+  }
+
   const parsed = parseOpaqueIdentity(identity);
   if (!parsed) return control('clear', 'not_found', profileKey);
 

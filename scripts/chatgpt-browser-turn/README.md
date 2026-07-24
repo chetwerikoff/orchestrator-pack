@@ -49,7 +49,7 @@ npm run chatgpt-browser-turn -- clear \
   --identity <opaque-identity> --generation <n> --quarantine
 ```
 
-Quarantine does not unblock the profile. It creates a blocking tombstone and preserves the original bytes. If the process is interrupted while that tombstone is still `preparing`, repeating the same exact quarantine request resumes the recorded move instead of creating a second tombstone. Final adjudication requires an operator-supplied evidence file and its expected SHA-256:
+Quarantine does not unblock the profile. It creates a blocking tombstone and preserves the original bytes. If the process is interrupted while that tombstone is still `preparing`, `status/list` exposes that blocking tombstone; repeating `clear --quarantine` with its exact current tombstone identity and generation resumes the recorded move instead of creating a second tombstone. Final adjudication requires an operator-supplied evidence file and its expected SHA-256:
 
 ```bash
 npm run chatgpt-browser-turn -- clear \
