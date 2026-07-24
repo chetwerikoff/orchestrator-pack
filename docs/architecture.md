@@ -32,12 +32,11 @@ update, synchronize, or identify themselves through that corpus.
 ### Mirrorless GPT-chat task authoring (2026-07-23)
 
 The repository adopted browser GPT as the default task-spec author and review
-engine under a mixed-engine topology: one task chat owns authoring and fixes,
-each browser-GPT competitive pass uses a fresh chat, and one dedicated
-browser-GPT review chat owns all browser-GPT architectural turns including final
-verification. A recorded Codex substitution for browser unavailability runs
-outside that dedicated chat; later browser-GPT architectural review resumes the
-same chat.
+engine under a mixed-engine topology: one task chat owns authoring and fixes;
+every browser-GPT competitive, architectural, and final-verification review pass
+uses a fresh chat. Review-chat history is not reused across passes. A recorded
+Codex substitution for browser unavailability replaces only that pass and creates
+no browser-chat continuity; the next browser-GPT review pass is fresh again.
 
 Codex remains an independent mandatory addition for T3-critical tasks, an
 outage-only substitute for a browser-GPT review stage, and an explicitly
