@@ -395,8 +395,8 @@ export async function sendTurn(
   await page.keyboard.press('Delete');
   await page.keyboard.insertText(text);
   const send = page.locator('[data-testid="send-button"]');
+  const sendAvailable = (await send.count()) > 0;
   revalidateProcessDestinationReservations();
-  network.armDispatch();
   await onBeforeSend?.();
   try {
     revalidateProcessDestinationReservations();
@@ -407,8 +407,9 @@ export async function sendTurn(
       possibleDelivery: false,
     };
   }
+  network.armDispatch();
   try {
-    if (await send.count()) await send.click();
+    if (sendAvailable) await send.click();
     else await page.keyboard.press('Enter');
   } catch {
     return { state: 'recovery_required', cause: 'dispatch_exception_after_possible_delivery_boundary', possibleDelivery: true };
