@@ -387,6 +387,18 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     const chromium = loadChromium();
     const browser = await chromium.connectOverCDP(config.cdp);
+    const browserProvenance = String(browser.version?.() ?? 'chromium-cdp');
+    if (capability.state === 'ok' && capability.capability?.browser_provenance !== browserProvenance) {
+      downgradeCapability(profileKey);
+      safeRelease(scheduleLock);
+      scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
+      capability = capabilityStatus(profileKey, expectedBinding);
+      if (!scheduleLock) {
+        safeReleaseDestination(reservation);
+        reservation = null;
+        return emitTurnAndCode(turnResult('profile_busy', 'profile', 'browser_provenance_downgrade_fallback_busy', invocationId, profileKey));
+      }
+    }
     opened = await openTurnPage(browser, config);
     const turnPage = opened.page;
 
@@ -582,7 +594,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       const observedAt = new Date();
       writeCapability(profileKey, {
         ...expectedBinding,
-        browser_provenance: String(browser.version?.() ?? 'chromium-cdp'),
+        browser_provenance: browserProvenance,
         evidence_digest: sha256(`${result.userMessageId}\n${result.assistantMessageId}\n${canonicalConversation}`),
         observed_at: observedAt.toISOString(),
         expires_at: new Date(observedAt.getTime() + 4 * 60 * 60 * 1000).toISOString(),
