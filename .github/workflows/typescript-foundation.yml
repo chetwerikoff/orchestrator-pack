@@ -57,7 +57,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pr2a-typecheck-diagnostic
-          path: pr2a-typecheck-diagnostic.log
+          path: |
+            pr2a-typecheck-diagnostic.log
+            scripts/pr2a/mutation-runner.ts
           if-no-files-found: error
 
   lint:
