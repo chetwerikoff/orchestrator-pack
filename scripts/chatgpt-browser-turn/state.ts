@@ -444,9 +444,13 @@ export function clearReadable(
 function parseOpaqueIdentity(identity: string): { area: OpaqueArea; name: string; digest: string } | null {
   const match = /^opaque:(records|publications|capability):([^:]+):([0-9a-f]{64})$/.exec(identity);
   if (!match) return null;
-  const name = decodeName(match[2]);
+  const area = match[1];
+  const encodedName = match[2];
+  const digest = match[3];
+  if (!area || !encodedName || !digest) return null;
+  const name = decodeName(encodedName);
   if (!name) return null;
-  return { area: match[1] as OpaqueArea, name, digest: match[3] };
+  return { area: area as OpaqueArea, name, digest };
 }
 
 export function quarantineOpaque(profileKey: string, identity: string, generation: number): ControlResultV1 {
