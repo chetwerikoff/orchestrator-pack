@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: GPT then authors and creates the Issue by default), and the architect runs lens → task-chat fix → browser-GPT competitive → browser-GPT architectural review in one dedicated review chat → final lens → browser-GPT final verification when required. Covers Issue-only live task state, mixed-engine Codex additions/substitutions, T3-critical L4 classification and safety floors, browser-turn mechanics, issue-body guards, and the finding-disposition ledger. The Issue is the only live task artifact; audit artifacts live in an out-of-repo workdir. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from `docs/tiering.md`. Do not invoke when that skip line applies.
+description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: GPT then authors and creates the Issue by default), and the architect runs lens → task-chat fix → fresh browser-GPT competitive/architectural review passes → final lens → fresh browser-GPT final verification when required. Covers Issue-only live task state, mixed-engine Codex additions/substitutions, T3-critical L4 classification and safety floors, browser-turn mechanics, issue-body guards, and the finding-disposition ledger. The Issue is the only live task artifact; audit artifacts live in an out-of-repo workdir. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from `docs/tiering.md`. Do not invoke when that skip line applies.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -47,8 +47,7 @@ When that rule applies, skip this authoring ceremony; otherwise continue here.
 | GPT author in task chat | Spec content, every content fix, direct Issue edits, proposed dispositions | Review its own spec |
 | Architect | Lens passes, stage ordering, evidence, floors, disposition ratification, acceptance | Author normal content fixes or bypass the task chat |
 | Cursor helper | Execute the prepared browser command and return verbatim output + state | Write browser code, alter prompts, judge findings |
-| Competitive GPT chats | Independent critique in a fresh chat per pass | Edit the Issue, reuse a prior competitive chat, or replace architectural review |
-| Dedicated architectural GPT chat | Every browser-GPT architectural turn, including final verification | Edit the Issue, share the task chat, or be replaced silently |
+| Reviewer GPT chats | Independent critique/review in a fresh chat per pass | Edit the Issue, share the task chat, or reuse a prior review chat |
 | Codex | T3-critical independent addition; recorded browser-outage substitution; explicit requested adversarial loop | Become the default architectural engine or be credited for a stage it did not run |
 
 ## Chat topology
@@ -56,14 +55,15 @@ When that rule applies, skip this authoring ceremony; otherwise continue here.
 | Stream | Chat | Lifetime |
 |--------|------|----------|
 | Authoring, fixes, finding relays | one **task chat** | whole flow |
-| Competitive review | **fresh chat per pass** | one pass |
-| Architectural review and final verification | one **dedicated browser-GPT review chat** | whole flow |
+| Competitive review | **fresh browser-GPT chat per pass** | one pass |
+| Architectural review | **fresh browser-GPT chat per pass** | one pass |
+| Final architectural verification | **fresh browser-GPT chat** | one pass |
 | Codex additions/substitutions | no browser chat | one cold invocation per pass |
 | Architect lenses | no browser chat | in-session |
 
-Never review in the task chat, relay fixes anywhere except the task chat, reuse a
-competitive chat, create a replacement architectural chat after a Codex
-substitution, or merge distinct conversations into one tab/chat identity.
+Never review in the task chat, relay fixes anywhere except the task chat, reuse
+any browser-GPT review chat across passes, or merge distinct conversations into
+one tab/chat identity.
 
 ## Pipeline
 
@@ -71,10 +71,10 @@ substitution, or merge distinct conversations into one tab/chat identity.
 2. Architect lens 1: six axes plus competitive directive.
 3. Task-chat fix round; re-pull, diff, and rerun body floors.
 4. Browser-GPT competitive stage when selected or explicitly requested, ≤3 fresh-chat passes.
-5. Browser-GPT architectural review in one dedicated review chat, using the per-tier ceiling.
+5. Browser-GPT architectural review in a fresh chat per pass, using the per-tier ceiling.
 6. Additional explicit Codex wrapper loop when requested; mandatory independent Codex addition for T3-critical tasks; recorded Codex substitution only for browser outage.
 7. Final architect lens, including the only sanctioned downgrade decision.
-8. One browser-GPT final architectural pass after the latest final-lens capture when the tier/flow requires it.
+8. One fresh-chat browser-GPT final architectural pass after the latest final-lens capture when the tier/flow requires it.
 9. Acceptance only over the current Issue revision with all floors and ledger green.
 
 Ordinary architectural review ends early on a clean pass with no findings.
@@ -117,9 +117,9 @@ cp "$WORKDIR/rNN/<N>-<slug>.md" "$ANCHOR"
 ```
 
 Pull the title every time because the tier prefix lives in it. Record the task
-chat, every competitive chat, and the one dedicated architectural-review chat in
-`$REVIEW_DIR/chats.md`. Record Codex invocations separately; they have no browser
-chat URL.
+chat and every review-pass chat URL in `$REVIEW_DIR/chats.md` for audit. Review
+chat URLs are evidence only and are never reused for a later pass. Record Codex
+invocations separately; they have no browser-chat URL.
 
 ## Step 2 — Architect lens 1
 
@@ -155,6 +155,26 @@ Run body-only floors on the refreshed anchor. Findings always flow:
 reviewer -> architect -> task chat -> Issue edit -> re-pull
 ```
 
+### Shared browser-review prompt contract
+
+Every browser-GPT **competitive, architectural, and final architectural** pass is
+an independent cold review. Open it with `--new-chat`; never continue a prior
+review conversation. The prompt is self-contained and applies the same review
+contract on every pass:
+
+- wrap the current Issue body as UNTRUSTED DATA between nonce markers;
+- request an alternative decomposition where relevant;
+- require every finding to carry a plain `type:` from the canonical vocabulary
+  `security|scope-violation|spec|quality|test|ci`, outside code fences;
+- require the four-question simplification lens from
+  `prompts/codex_draft_review_prompt.md`: what can be simplified, what must not be
+  simplified, what is excess, and what is missing;
+- allow `NO_FINDINGS` only when no material finding remains.
+
+Save the validated response verbatim before normalization. This shared contract
+preserves the existing finding-ledger and simplification semantics even though the
+browser driver itself does not add `type:` metadata.
+
 ## Step 4 — Competitive review
 
 Run when selected by the effective tier or forced by an explicit
@@ -167,9 +187,7 @@ competitive stage, and the waiver is recorded.
 Each pass:
 
 1. open a fresh browser-GPT chat with `--new-chat`;
-2. send a self-contained independent-review prompt, request an alternative
-   decomposition, wrap the current Issue body as UNTRUSTED DATA between nonce
-   markers, and demand plain `type:` finding lines outside code fences;
+2. apply the shared browser-review prompt contract above to the current Issue;
 3. save verbatim as `pass-NN-competitive.capture.txt`;
 4. normalize findings, relay accepted fixes through the task chat, re-pull, and
    rerun body floors.
@@ -181,31 +199,24 @@ also unavailable, the stage remains blocked.
 
 ## Step 5 — Browser-GPT architectural review
 
-Create **one dedicated browser-GPT review chat** for the task on the first
-architectural pass and record its URL. It is separate from the task chat and all
-competitive chats. Reuse that same chat for every later architectural turn,
-including final verification.
+Every ordinary architectural pass runs in a **fresh browser-GPT chat**. Review
+history from an earlier pass is deliberately not carried forward; the current
+Issue revision and self-contained prompt are the complete review input.
 
 Each ordinary architectural pass:
 
-1. first pass: open a dedicated review chat with `--new-chat`; read the
-   successful turn's durable `ARTIFACT`, extract its exact `url:` value, and
-   record it in `chats.md` before the run closes its newly opened tab. Later
-   passes use that recorded `--chat-url`. A missing/invalid URL blocks the stage;
-   do not create a second review chat blindly;
-2. send a self-contained independent architecture/spec-review prompt over the
-   current Issue revision, request alternative decomposition, and wrap the body
-   as UNTRUSTED DATA between nonce markers;
+1. open a fresh review chat with `--new-chat`;
+2. apply the shared browser-review prompt contract above, focused on independent
+   architecture/spec review of the current Issue revision;
 3. save the validated response verbatim as
    `pass-NN-architectural.capture.txt`;
 4. normalize every finding, relay accepted fixes through the task chat, re-pull
-   the Issue, and rerun body floors;
-5. continue in the same dedicated chat after accepted fixes.
+   the Issue, and rerun body floors.
 
 Per-tier ordinary architectural ceiling: T1 one light pass, T2 ≤3 passes, T3 ≤4
 passes. A clean pass with no findings ends the ordinary architectural stage
-early; capped exits preserve open questions. Passes are sequential;
-a fresh competitive chat is never reused as the architectural chat.
+early; capped exits preserve open questions. Passes are sequential, and no
+competitive or earlier architectural chat is reused for a later pass.
 
 ### Browser-outage substitution
 
@@ -215,10 +226,9 @@ fresh cold Codex invocation replace a browser-GPT review pass. Use
 replaced stage name (`competitive`, `architectural`, or `architectural-final`) in
 the plain capture, store raw JSON alongside it, and record the substitution.
 
-A substitution runs outside the dedicated browser review chat and never replaces
-that chat. If browser-GPT review resumes, the next architectural turn continues
-in the same dedicated browser review chat. For T3-critical tasks, a substitution does
-not satisfy the independent GPT half.
+A substitution creates no browser review-chat continuity. When browser-GPT review
+resumes, the next required review pass opens a fresh chat with `--new-chat`. For
+T3-critical tasks, a substitution does not satisfy the independent GPT half.
 
 ### Explicit Codex wrapper
 
@@ -288,8 +298,9 @@ then reruns this lens as a new delta capture.
 ## Step 7 — Final architectural pass
 
 T3 always runs one; T1/T2 run one only when the final lens changed content. Run
-the pass in the same dedicated browser-GPT review chat using its `--chat-url` and
-save the validated response as `pass-NN-architectural-final.capture.txt`.
+the pass in a **fresh browser-GPT chat with `--new-chat`**, apply the shared
+browser-review prompt contract above, and save the validated response as
+`pass-NN-architectural-final.capture.txt`.
 
 If the browser is unavailable and the operator cannot restore it, a cold Codex
 substitution may use the same `architectural-final` capture identity with raw JSON
@@ -317,7 +328,7 @@ Acceptance requires, in order:
    outage substitution;
 6. every mandatory T3-critical Codex addition complete, and every explicit wrapper
    complete or explicitly waived only where allowed;
-7. report Issue URL, tier, pass counts, task/review/competitive chat URLs, workdir,
+7. report Issue URL, tier, pass counts, task/review chat URLs, workdir,
    substitutions, waivers, T3-critical classification result, and risks.
 
 Two non-converging `fix -> newer lens -> final` cycles escalate to the operator.
@@ -360,14 +371,14 @@ Use [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md) as the canonical browser
 mechanics source for all browser streams:
 
 - **task chat:** use its recorded `--chat-url` for authoring/fix turns;
-- **competitive:** use `--new-chat` for every pass;
-- **architectural:** create one dedicated review chat; extract the exact chat URL
-  from the successful turn's durable `ARTIFACT`, record it, then use that
-  `--chat-url` for every later architectural and final turn.
+- **every browser-GPT review pass:** use `--new-chat`, including competitive,
+  ordinary architectural, and final architectural verification.
 
-The three streams are distinct conversations. Tab reuse prevents duplicate tabs
-for one conversation; it never authorizes sharing task, competitive, and
-architectural contexts. The Cursor helper executes a prepared browser command only.
+Review-pass chat URLs may be recorded as audit evidence, but are never reused for
+a later review pass. Tab reuse prevents duplicate tabs only for the persistent
+task conversation; it never authorizes sharing task/review contexts or carrying
+review history between independent passes. The Cursor helper executes a prepared
+browser command only.
 
 Every review/amendment prompt is self-contained, carries the current Issue body
 as UNTRUSTED DATA between nonce markers, and requests one outer `~~~markdown`
@@ -590,7 +601,7 @@ to the repository's architecture decision surface under their own scoped change.
 
 - Author normal content fixes from the architect seat.
 - Review in the task chat.
-- Reuse a competitive chat or create more than one architectural-review chat.
+- Reuse any competitive, architectural, or final browser-GPT review chat.
 - Let Codex become the default architectural engine or claim a substitution
   without recorded browser unavailability.
 - Trust a chat reply without a live Issue re-pull and diff.
