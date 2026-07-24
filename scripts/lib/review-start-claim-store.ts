@@ -46,6 +46,9 @@ const originalCloseSync = fs.closeSync.bind(fs);
 const originalFsyncSync = fs.fsyncSync.bind(fs);
 const originalReaddirSync = fs.readdirSync.bind(fs);
 const DEFAULT_MUTEX_STALE_SECONDS = 120;
+const SUPPORTED_CLAIM_SCHEMA_VERSION = 1;
+const FULL_SHA = /^[0-9a-f]{40}$/;
+const CLAIM_FILE = /^pr-(\d+)-([0-9a-f]{40})\.json(?:\.|$)/;
 
 function asRecord(value: unknown): UnknownRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : {};
@@ -124,6 +127,41 @@ function isClaimMutexDirectory(pathValue: fs.PathLike, options?: fs.RmDirOptions
   if (typeof pathValue !== 'string' || !options || options.recursive !== true) return false;
   return basename(dirname(pathValue)) === '.locks' && /^pr-/.test(basename(pathValue));
 }
+function claimIdentityFromPath(pathValue: fs.PathOrFileDescriptor): { prNumber: number; headSha: string } | null {
+  if (typeof pathValue !== 'string') return null;
+  const match = CLAIM_FILE.exec(basename(pathValue));
+  return match ? { prNumber: Number(match[1]), headSha: match[2] ?? '' } : null;
+}
+function claimRecordValidationReason(value: unknown, pathValue?: fs.PathOrFileDescriptor): string | null {
+  const record = asRecord(value);
+  const pathIdentity = pathValue == null ? null : claimIdentityFromPath(pathValue);
+  const looksLikeClaim = Boolean(pathIdentity || (record.key != null && record.prNumber != null && record.headSha != null));
+  if (!looksLikeClaim) return null;
+  if (record.schemaVersion !== SUPPORTED_CLAIM_SCHEMA_VERSION) return 'unsupported_schema_version';
+  if (!Number.isInteger(record.prNumber) || Number(record.prNumber) <= 0) return 'bad_pr_number';
+  const headSha = asString(record.headSha);
+  if (!FULL_SHA.test(headSha)) return 'bad_head_sha';
+  const expectedKey = `pr-${record.prNumber}-${headSha}`;
+  if (asString(record.key) !== expectedKey) return 'claim_identity_mismatch';
+  if (!['active', 'terminal'].includes(asString(record.state))) return 'unsupported_claim_state';
+  const holder = asRecord(record.holder);
+  if (!asString(holder.processGuid)) return 'missing_holder_processGuid';
+  if (pathIdentity && (pathIdentity.prNumber !== record.prNumber || pathIdentity.headSha !== headSha)) {
+    return 'claim_target_identity_mismatch';
+  }
+  return null;
+}
+function safeReadFileSync(pathValue: fs.PathOrFileDescriptor, options?: unknown): unknown {
+  const bytes = originalReadFileSync(pathValue, options as never);
+  if (typeof pathValue !== 'string') return bytes;
+  const text = typeof bytes === 'string' ? bytes : Buffer.isBuffer(bytes) ? bytes.toString('utf8') : '';
+  if (!text.trim()) return bytes;
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return bytes; }
+  const reason = claimRecordValidationReason(parsed, pathValue);
+  if (reason) throw new Error(`claim_record_invalid:${reason}`);
+  return bytes;
+}
 function restoreQuarantine(lockDir: string, quarantine: string): void {
   if (!originalExistsSync(quarantine) || originalExistsSync(lockDir)) return;
   originalRenameSync(quarantine, lockDir);
@@ -190,6 +228,7 @@ function safeRmSync(pathValue: fs.PathLike, options?: fs.RmDirOptions | fs.RmOpt
 }
 
 fs.rmSync = safeRmSync as typeof fs.rmSync;
+fs.readFileSync = safeReadFileSync as typeof fs.readFileSync;
 syncBuiltinESMExports();
 const impl = await import('./review-start-claim-cli.ts');
 
@@ -284,6 +323,10 @@ export function dispatchReviewStartClaimOperation(operation: string, payload: Un
     return payload.pollOnce ?? payload.PollOnce
       ? completeAfterRunInvokeOnce(claim, runs)
       : completeAfterRunInvoke(claim, runs);
+  }
+  if (operation === 'Invoke-ReviewStartClaimReclaimOrphan') {
+    const reason = claimRecordValidationReason(payload.record ?? payload.Record);
+    if (reason) return { reclaimed: false, blocking: true, reason: 'ambiguous_claim', detail: reason };
   }
   return impl.dispatchReviewStartClaimOperation(operation, payload);
 }

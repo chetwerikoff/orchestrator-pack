@@ -17,6 +17,52 @@ export const REQUIRED_OVERLAP_CLASSES = [
   'interpretation',
   'generation-fence',
 ] as const;
+export const REQUIRED_DATA_VECTOR_CLASSES = [
+  'active',
+  'covering',
+  'terminal',
+  'audit',
+  'lock-owner',
+  'optional-unknown-identity',
+  'utf8-json-newlines',
+  'contradictory',
+  'unsupported-schema',
+  'partial',
+  'missing',
+  'stale',
+  'dead',
+  'pid-start-boot-reuse',
+  'generation-fenced-release',
+  'generation-fenced-completion',
+  'generation-fenced-mutation',
+  'generation-fenced-interpretation',
+  'generation-fenced-reap',
+] as const;
+export const REQUIRED_PROTOCOL_VECTOR_CLASSES = [
+  'lock-layout-owner-schema',
+  'directory-owner-record-atomic-ordering',
+  'reread-under-exclusion',
+  'stale-lock-recovery',
+  'generation-holder-comparison',
+  'same-generation-mutation-fencing',
+  'release-completion-lifecycle-audit-ordering',
+  'lock-loss-reacquisition-revalidation',
+  'cleanup',
+  'crash-points',
+] as const;
+export const REQUIRED_ROLLBACK_ENTRYPOINT_CLASSES = [
+  'runner',
+  'autonomous',
+  'manual',
+  'seed',
+  'trigger',
+  'reeval',
+  'supervised',
+  'snapshot',
+  'preflight',
+  'recovery',
+  'reap',
+] as const;
 export const REQUIRED_FINAL_COMMANDS = [
   'npm run typecheck:foundation',
   'npm run lint:foundation',
@@ -38,6 +84,11 @@ export const CLOSURE_SOURCE_REQUIREMENTS = Object.freeze([
   ['function verifyArtifact', 'receipt-self-asserts-unverifiable-tree'],
   ['function verifyCommandLogs', 'receipt-generated-before-prerequisite-suites'],
   ['function verifyReplay', 'overlap-replay-command-missing'],
+  ['function verifyRollbackProof', 'rollback-proof-artifact-missing'],
+  ['REQUIRED_DATA_VECTOR_CLASSES', 'protocol-data-vector-coverage-missing'],
+  ['REQUIRED_PROTOCOL_VECTOR_CLASSES', 'protocol-vector-coverage-missing'],
+  ['matrix.rows', 'overlap-operation-matrix-row-evidence-missing'],
+  ['rollback.proofPath', 'rollback-proof-artifact-unbound'],
   ['function validateVerificationEnvironment', 'final-evidence-tree-or-platform-stale'],
   ['function validatePreReceiptVerificationEnvironment', 'pre-receipt-environment-validator-missing'],
   ['function validateFinalVerificationEnvironment', 'final-verification-environment-validator-missing'],
@@ -74,6 +125,15 @@ function unique(findings: string[]): string[] { return [...new Set(findings)].so
 function major(version: string): number {
   const match = /^v?(\d+)(?:\.|$)/u.exec(String(version ?? '').trim());
   return match ? Number(match[1]) : 0;
+}
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+function rows(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.map(record).filter((row): row is Record<string, unknown> => Boolean(row)) : [];
+}
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
 export interface VerificationCommandEvidence {
@@ -133,6 +193,10 @@ export interface RollbackEvidence {
   zeroSurvivorsBeforeResume: true;
   legacyReadTsRecord: true;
   imports928ActivationMachinery: false;
+  legacyCommitSha: string;
+  legacyTreeOid: string;
+  proofPath: string;
+  proofSha256: string;
   logPath: string;
   logSha256: string;
 }
@@ -275,9 +339,9 @@ function mountInfoForPath(target: string): { mount: string; fsType: string } | n
   if (process.platform !== 'linux') return null;
   try {
     const canonical = path.resolve(target);
-    const rows = readFileSync('/proc/self/mountinfo', 'utf8').split(/\r?\n/u).filter(Boolean);
+    const mountRows = readFileSync('/proc/self/mountinfo', 'utf8').split(/\r?\n/u).filter(Boolean);
     let best: { mount: string; fsType: string } | null = null;
-    for (const row of rows) {
+    for (const row of mountRows) {
       const split = row.split(' - ');
       if (split.length !== 2) continue;
       const left = split[0]?.split(' ') ?? [];
@@ -353,12 +417,12 @@ export function validateFinalVerificationEnvironment(
 
 function verifyCommandLogs(
   root: string,
-  rows: VerificationCommandEvidence[],
+  commandRows: VerificationCommandEvidence[],
   expectedCommitSha: string,
   expectedTreeOid: string,
   findings: string[],
 ): void {
-  const commands = new Map(rows.map((row) => [row.command, row]));
+  const commands = new Map(commandRows.map((row) => [row.command, row]));
   for (const command of REQUIRED_FINAL_COMMANDS) {
     const row = commands.get(command);
     if (!row) {
@@ -409,9 +473,28 @@ function verifyReplay(overlap: OverlapEvidence, evidenceRoot: string, findings: 
     findings.push('overlap-replay-not-bound-to-harness-and-inputs');
     return;
   }
+  if (!normalizedArgs.includes(overlap.operationMatrixPath) || !normalizedArgs.includes(overlap.protocolVectorPath)) {
+    findings.push('overlap-replay-not-bound-to-matrix-and-vectors');
+    return;
+  }
   const result = runProcessSync({ command, args: normalizedArgs, cwd, inheritParentEnv: false });
   if (!result.ok || result.exitCode !== overlap.replayExitCode) findings.push('overlap-replay-failed');
   if (sha256(result.stdout) !== overlap.replayStdoutSha256) findings.push('overlap-replay-stdout-mismatch');
+  const replay = parseJsonArtifact(Buffer.from(result.stdout), 'overlap-replay-result', findings);
+  if (!replay) return;
+  if (String(replay.result ?? '') !== 'pass'
+    || String(replay.legacyCommitSha ?? '') !== overlap.legacyCommitSha
+    || String(replay.legacyTreeOid ?? '') !== overlap.legacyTreeOid
+    || String(replay.candidateCommitSha ?? '') !== overlap.candidateCommitSha
+    || String(replay.candidateTreeOid ?? '') !== overlap.candidateTreeOid) {
+    findings.push('overlap-replay-binding-mismatch');
+  }
+  const replayClasses = strings(replay.classes);
+  if (REQUIRED_OVERLAP_CLASSES.some((name) => !replayClasses.includes(name))) findings.push('overlap-replay-class-coverage-mismatch');
+  const dataClasses = strings(replay.dataVectorClasses);
+  if (REQUIRED_DATA_VECTOR_CLASSES.some((name) => !dataClasses.includes(name))) findings.push('overlap-replay-data-vector-coverage-mismatch');
+  const protocolClasses = strings(replay.protocolVectorClasses);
+  if (REQUIRED_PROTOCOL_VECTOR_CLASSES.some((name) => !protocolClasses.includes(name))) findings.push('overlap-replay-protocol-vector-coverage-mismatch');
 }
 
 function gitTreeOid(commitSha: string): string | null {
@@ -424,20 +507,107 @@ function sameTreeCommit(observedCommitSha: string, expectedCommitSha: string, ex
   return observedCommitSha === expectedCommitSha || gitTreeOid(observedCommitSha) === expectedTreeOid;
 }
 
+function verifyMatrixResult(
+  evidenceRoot: string,
+  side: 'legacy' | 'candidate',
+  row: Record<string, unknown>,
+  overlap: OverlapEvidence,
+  findings: string[],
+): void {
+  const prefix = `${side}Result`;
+  const resultBytes = verifyArtifact(
+    evidenceRoot,
+    String(row[`${prefix}Path`] ?? ''),
+    String(row[`${prefix}Sha256`] ?? ''),
+    `overlap-matrix-${side}:${String(row.id ?? '')}`,
+    findings,
+  );
+  const result = parseJsonArtifact(resultBytes, `overlap-matrix-${side}:${String(row.id ?? '')}`, findings);
+  if (!result) return;
+  const expectedCommit = side === 'legacy' ? overlap.legacyCommitSha : overlap.candidateCommitSha;
+  const expectedTree = side === 'legacy' ? overlap.legacyTreeOid : overlap.candidateTreeOid;
+  if (String(result.result ?? '') !== 'pass'
+    || String(result.side ?? '') !== side
+    || String(result.matrixRowId ?? '') !== String(row.id ?? '')
+    || String(result.class ?? '') !== String(row.class ?? '')
+    || String(result.commitSha ?? '') !== expectedCommit
+    || String(result.treeOid ?? '') !== expectedTree
+    || Number(result.exitCode) !== 0
+    || !String(result.command ?? '').trim()) {
+    findings.push(`overlap-matrix-${side}-result-binding-mismatch:${String(row.id ?? '')}`);
+  }
+  const logBytes = verifyArtifact(
+    evidenceRoot,
+    String(result.logPath ?? ''),
+    String(result.logSha256 ?? ''),
+    `overlap-matrix-${side}-log:${String(row.id ?? '')}`,
+    findings,
+  );
+  if (logBytes && logBytes.length === 0) findings.push(`overlap-matrix-${side}-log-empty:${String(row.id ?? '')}`);
+}
+
 function verifyOverlapStructuredArtifacts(overlap: OverlapEvidence, evidenceRoot: string, findings: string[]): void {
   const matrix = parseJsonArtifact(
     verifyArtifact(evidenceRoot, overlap.operationMatrixPath, overlap.operationMatrixSha256, 'overlap-operation-matrix', findings),
     'overlap-operation-matrix', findings,
   );
   if (matrix) {
-    const classes = Array.isArray(matrix.classes) ? matrix.classes.map(String) : [];
+    const classes = strings(matrix.classes);
     if (REQUIRED_OVERLAP_CLASSES.some((name) => !classes.includes(name))) findings.push('overlap-operation-matrix-content-mismatch');
+    const matrixRows = rows(matrix.rows);
+    const rowClasses = matrixRows.map((row) => String(row.class ?? ''));
+    if (REQUIRED_OVERLAP_CLASSES.some((name) => !rowClasses.includes(name))) findings.push('overlap-operation-matrix-row-coverage-mismatch');
+    const ids = new Set<string>();
+    for (const row of matrixRows) {
+      const id = String(row.id ?? '').trim();
+      const className = String(row.class ?? '').trim();
+      if (!id || ids.has(id) || !REQUIRED_OVERLAP_CLASSES.includes(className as never)
+        || !String(row.legacyOperation ?? '').trim() || !String(row.candidateOperation ?? '').trim()) {
+        findings.push('overlap-operation-matrix-row-invalid');
+        continue;
+      }
+      ids.add(id);
+      if (String(row.legacyCommitSha ?? '') !== overlap.legacyCommitSha
+        || String(row.legacyTreeOid ?? '') !== overlap.legacyTreeOid
+        || String(row.candidateCommitSha ?? '') !== overlap.candidateCommitSha
+        || String(row.candidateTreeOid ?? '') !== overlap.candidateTreeOid) {
+        findings.push(`overlap-operation-matrix-row-binding-mismatch:${id}`);
+      }
+      verifyMatrixResult(evidenceRoot, 'legacy', row, overlap, findings);
+      verifyMatrixResult(evidenceRoot, 'candidate', row, overlap, findings);
+    }
   }
   const vectors = parseJsonArtifact(
     verifyArtifact(evidenceRoot, overlap.protocolVectorPath, overlap.protocolVectorSha256, 'overlap-protocol-vector', findings),
     'overlap-protocol-vector', findings,
   );
-  if (vectors && (!Array.isArray(vectors.vectors) || vectors.vectors.length === 0)) findings.push('overlap-protocol-vector-empty');
+  if (vectors) {
+    const dataRows = rows(vectors.vectors);
+    const protocolRows = rows(vectors.protocolVectors);
+    if (dataRows.length === 0) findings.push('overlap-protocol-vector-empty');
+    const dataClasses = dataRows.map((row) => String(row.class ?? ''));
+    for (const name of REQUIRED_DATA_VECTOR_CLASSES) {
+      if (!dataClasses.includes(name)) findings.push(`overlap-protocol-data-vector-class-missing:${name}`);
+    }
+    const protocolClasses = protocolRows.map((row) => String(row.class ?? ''));
+    for (const name of REQUIRED_PROTOCOL_VECTOR_CLASSES) {
+      if (!protocolClasses.includes(name)) findings.push(`overlap-protocol-vector-class-missing:${name}`);
+    }
+    const dataIds = new Set<string>();
+    for (const row of dataRows) {
+      const id = String(row.id ?? '').trim();
+      if (!id || dataIds.has(id) || !record(row.expect)) findings.push('overlap-protocol-data-vector-row-invalid');
+      dataIds.add(id);
+    }
+    const protocolIds = new Set<string>();
+    for (const row of protocolRows) {
+      const id = String(row.id ?? '').trim();
+      if (!id || protocolIds.has(id) || strings(row.steps).length === 0 || !String(row.sourceTest ?? '').trim()) {
+        findings.push('overlap-protocol-vector-row-invalid');
+      }
+      protocolIds.add(id);
+    }
+  }
   const log = parseJsonArtifact(
     verifyArtifact(evidenceRoot, overlap.logPath, overlap.logSha256, 'overlap-log', findings),
     'overlap-log', findings,
@@ -446,10 +616,92 @@ function verifyOverlapStructuredArtifacts(overlap: OverlapEvidence, evidenceRoot
     if (String(log.result ?? '') !== 'pass'
       || String(log.candidateCommitSha ?? '') !== overlap.candidateCommitSha
       || String(log.candidateTreeOid ?? '') !== overlap.candidateTreeOid
-      || String(log.candidateBuildDigest ?? '') !== overlap.candidateBuildDigest) {
+      || String(log.candidateBuildDigest ?? '') !== overlap.candidateBuildDigest
+      || String(log.legacyCommitSha ?? '') !== overlap.legacyCommitSha
+      || String(log.legacyTreeOid ?? '') !== overlap.legacyTreeOid) {
       findings.push('overlap-log-binding-mismatch');
     }
   }
+}
+
+function verifyRollbackProof(
+  rollback: RollbackEvidence,
+  evidenceRoot: string,
+  expected: { finalTreeOid: string },
+  findings: string[],
+): void {
+  const proof = parseJsonArtifact(
+    verifyArtifact(evidenceRoot, rollback.proofPath, rollback.proofSha256, 'rollback-proof', findings),
+    'rollback-proof', findings,
+  );
+  if (!proof) return;
+  if (String(proof.result ?? '') !== 'pass'
+    || String(proof.finalTreeOid ?? '') !== expected.finalTreeOid
+    || String(proof.legacyCommitSha ?? '') !== rollback.legacyCommitSha
+    || String(proof.legacyTreeOid ?? '') !== rollback.legacyTreeOid
+    || proof.imports928ActivationMachinery === true) {
+    findings.push('rollback-proof-binding-mismatch');
+  }
+  const before = record(proof.entryBefore);
+  const after = record(proof.entryAfter);
+  const quiescence = record(proof.quiescence);
+  const fullRevert = record(proof.fullRevert);
+  for (const [phase, snapshot] of [['before', before], ['after', after]] as const) {
+    const entryRows = rows(snapshot?.entrypoints);
+    const classes = entryRows.filter((row) => row.blocked === true).map((row) => String(row.class ?? ''));
+    if (!snapshot || String(snapshot.mode ?? '') !== 'total-entrypoint-quiescence'
+      || snapshot.result !== 'pass'
+      || REQUIRED_ROLLBACK_ENTRYPOINT_CLASSES.some((name) => !classes.includes(name))) {
+      findings.push(`rollback-entry-${phase}-proof-incomplete`);
+    }
+  }
+  const quiescenceRows = rows(quiescence?.entrypoints);
+  const quiescenceClasses = quiescenceRows.filter((row) => row.zero === true).map((row) => String(row.class ?? ''));
+  if (!quiescence || quiescence.complete !== true || quiescence.zeroSurvivorsBeforeResume !== true
+    || REQUIRED_ROLLBACK_ENTRYPOINT_CLASSES.some((name) => !quiescenceClasses.includes(name))) {
+    findings.push('rollback-quiescence-proof-incomplete');
+  }
+  if (!fullRevert || fullRevert.completed !== true
+    || String(fullRevert.fromTreeOid ?? '') !== expected.finalTreeOid
+    || String(fullRevert.toCommitSha ?? '') !== rollback.legacyCommitSha
+    || String(fullRevert.toTreeOid ?? '') !== rollback.legacyTreeOid
+    || String(fullRevert.detachedDrainSha256Before ?? '') !== rollback.detachedDrainSha256
+    || String(fullRevert.detachedDrainSha256After ?? '') !== rollback.detachedDrainSha256) {
+    findings.push('rollback-full-revert-proof-incomplete');
+  }
+  const artifacts = record(proof.artifacts);
+  if (!artifacts) {
+    findings.push('rollback-proof-artifacts-missing');
+    return;
+  }
+  const parsedArtifacts = new Map<string, Record<string, unknown> | null>();
+  for (const name of ['export', 'drainResult', 'tsClaim', 'legacyRead']) {
+    const ref = record(artifacts[name]);
+    if (!ref) {
+      findings.push(`rollback-${name}-artifact-reference-missing`);
+      parsedArtifacts.set(name, null);
+      continue;
+    }
+    parsedArtifacts.set(name, parseJsonArtifact(
+      verifyArtifact(evidenceRoot, String(ref.path ?? ''), String(ref.sha256 ?? ''), `rollback-${name}`, findings),
+      `rollback-${name}`, findings,
+    ));
+  }
+  const exported = parsedArtifacts.get('export');
+  if (!exported || String(exported.result ?? '') !== 'pass'
+    || String(exported.detachedDrainSha256 ?? '') !== rollback.detachedDrainSha256) findings.push('rollback-export-proof-invalid');
+  const drain = parsedArtifacts.get('drainResult');
+  if (!drain || String(drain.result ?? '') !== 'pass' || strings(drain.drained).length === 0
+    || drain.zeroSurvivorsBeforeResume !== true) findings.push('rollback-drain-result-proof-invalid');
+  const tsClaim = parsedArtifacts.get('tsClaim');
+  if (!tsClaim || String(tsClaim.result ?? '') !== 'pass' || !String(tsClaim.recordPath ?? '').trim()
+    || Number(tsClaim.schemaVersion) !== 1) findings.push('rollback-ts-claim-proof-invalid');
+  const legacyRead = parsedArtifacts.get('legacyRead');
+  if (!legacyRead || String(legacyRead.result ?? '') !== 'pass'
+    || String(legacyRead.legacyCommitSha ?? '') !== rollback.legacyCommitSha
+    || String(legacyRead.legacyTreeOid ?? '') !== rollback.legacyTreeOid
+    || String(legacyRead.recordPath ?? '') !== String(tsClaim?.recordPath ?? '')
+    || Number(legacyRead.schemaVersion) !== 1) findings.push('rollback-legacy-read-proof-invalid');
 }
 
 export function validateClosureReceiptSourceContract(source: string): string[] {
@@ -542,6 +794,8 @@ export function validateClosureEvidenceBundle(
     verifyArtifact(evidenceRoot, overlap.replayStdoutPath, overlap.replayStdoutSha256, 'overlap-replay-stdout', findings);
     verifyOverlapStructuredArtifacts(overlap, evidenceRoot, findings);
     verifyReplay(overlap, evidenceRoot, findings);
+    const committedVectors = sha256(readAt(overlap.candidateCommitSha, 'scripts/pr2a/review-start-claim-protocol-vectors.json'));
+    if (committedVectors !== overlap.protocolVectorSha256) findings.push('overlap-protocol-vector-not-candidate-bound');
   }
 
   if (rollback.result !== 'pass' || rollback.finalTreeOid !== expected.finalTreeOid) findings.push('rollback-tree-mismatch');
@@ -552,6 +806,7 @@ export function validateClosureEvidenceBundle(
   if (!rollback.zeroSurvivorsBeforeResume) findings.push('rollback-entry-resumes-before-zero-survivors');
   if (!rollback.legacyReadTsRecord) findings.push('rollback-legacy-record-compatibility-unproven');
   if (rollback.imports928ActivationMachinery) findings.push('rollback-imports-928-activation-machinery');
+  if (rollback.legacyCommitSha !== overlap.legacyCommitSha || rollback.legacyTreeOid !== overlap.legacyTreeOid) findings.push('rollback-legacy-binding-mismatch');
   if (evidenceRoot) {
     verifyArtifact(evidenceRoot, rollback.detachedDrainPath, rollback.detachedDrainSha256, 'rollback-detached-drain', findings);
     const rollbackLog = parseJsonArtifact(
@@ -564,6 +819,7 @@ export function validateClosureEvidenceBundle(
       || String(rollbackLog.detachedDrainSha256 ?? '') !== rollback.detachedDrainSha256)) {
       findings.push('rollback-log-binding-mismatch');
     }
+    verifyRollbackProof(rollback, evidenceRoot, expected, findings);
   }
 
   if (preReceiptVerification.result !== 'pass' || preReceiptVerification.finalTreeOid !== expected.finalTreeOid || preReceiptVerification.checkoutTreeOid !== expected.finalTreeOid) findings.push('receipt-prerequisite-tree-differ');

@@ -23,8 +23,11 @@ import {
   readClaimRecord,
 } from '../lib/review-start-claim-store.ts';
 import {
+  REQUIRED_DATA_VECTOR_CLASSES,
   REQUIRED_FINAL_COMMANDS,
   REQUIRED_OVERLAP_CLASSES,
+  REQUIRED_PROTOCOL_VECTOR_CLASSES,
+  REQUIRED_ROLLBACK_ENTRYPOINT_CLASSES,
   validateClosureEvidenceBundle,
   validateFinalVerificationAgainstReceipt,
   validateFinalVerificationEnvironment,
@@ -220,6 +223,109 @@ function verificationCommands(root: string, commit: string, tree: string): Verif
   });
 }
 
+function matrixFixture(root: string, legacyCommit: string, legacyTree: string, candidateCommit: string, candidateTree: string) {
+  return REQUIRED_OVERLAP_CLASSES.map((className, index) => {
+    const id = `matrix-${index}-${className}`;
+    const legacyLogPath = `overlap/rows/${id}-legacy.log`;
+    const candidateLogPath = `overlap/rows/${id}-candidate.log`;
+    const legacyLogSha256 = writeArtifact(root, legacyLogPath, `legacy ${className} PASS\n`);
+    const candidateLogSha256 = writeArtifact(root, candidateLogPath, `candidate ${className} PASS\n`);
+    const legacyResultPath = `overlap/rows/${id}-legacy.json`;
+    const candidateResultPath = `overlap/rows/${id}-candidate.json`;
+    const legacyResult = `${JSON.stringify({
+      schemaVersion: 1,
+      result: 'pass',
+      side: 'legacy',
+      matrixRowId: id,
+      class: className,
+      command: `legacy-${className}`,
+      exitCode: 0,
+      commitSha: legacyCommit,
+      treeOid: legacyTree,
+      logPath: legacyLogPath,
+      logSha256: legacyLogSha256,
+    })}\n`;
+    const candidateResult = `${JSON.stringify({
+      schemaVersion: 1,
+      result: 'pass',
+      side: 'candidate',
+      matrixRowId: id,
+      class: className,
+      command: `candidate-${className}`,
+      exitCode: 0,
+      commitSha: candidateCommit,
+      treeOid: candidateTree,
+      logPath: candidateLogPath,
+      logSha256: candidateLogSha256,
+    })}\n`;
+    return {
+      id,
+      class: className,
+      legacyOperation: `legacy-${className}`,
+      candidateOperation: `candidate-${className}`,
+      legacyCommitSha: legacyCommit,
+      legacyTreeOid: legacyTree,
+      candidateCommitSha: candidateCommit,
+      candidateTreeOid: candidateTree,
+      legacyResultPath,
+      legacyResultSha256: writeArtifact(root, legacyResultPath, legacyResult),
+      candidateResultPath,
+      candidateResultSha256: writeArtifact(root, candidateResultPath, candidateResult),
+    };
+  });
+}
+
+function rollbackProofFixture(
+  root: string,
+  finalTree: string,
+  legacyCommit: string,
+  legacyTree: string,
+  drainDigest: string,
+) {
+  const entrypoints = REQUIRED_ROLLBACK_ENTRYPOINT_CLASSES.map((className) => ({ class: className, blocked: true, zero: true }));
+  const exportPath = 'rollback/export.json';
+  const drainResultPath = 'rollback/drain-result.json';
+  const tsClaimPath = 'rollback/ts-claim.json';
+  const legacyReadPath = 'rollback/legacy-read.json';
+  const claimRecordPath = '/tmp/pr2a-rollback/claim.json';
+  const exportBytes = `${JSON.stringify({ schemaVersion: 1, result: 'pass', detachedDrainSha256: drainDigest })}\n`;
+  const drainResultBytes = `${JSON.stringify({ schemaVersion: 1, result: 'pass', drained: ['424242'], zeroSurvivorsBeforeResume: true })}\n`;
+  const tsClaimBytes = `${JSON.stringify({ schemaVersion: 1, result: 'pass', recordPath: claimRecordPath })}\n`;
+  const legacyReadBytes = `${JSON.stringify({
+    schemaVersion: 1,
+    result: 'pass',
+    legacyCommitSha: legacyCommit,
+    legacyTreeOid: legacyTree,
+    recordPath: claimRecordPath,
+  })}\n`;
+  const artifacts = {
+    export: { path: exportPath, sha256: writeArtifact(root, exportPath, exportBytes) },
+    drainResult: { path: drainResultPath, sha256: writeArtifact(root, drainResultPath, drainResultBytes) },
+    tsClaim: { path: tsClaimPath, sha256: writeArtifact(root, tsClaimPath, tsClaimBytes) },
+    legacyRead: { path: legacyReadPath, sha256: writeArtifact(root, legacyReadPath, legacyReadBytes) },
+  };
+  return {
+    schemaVersion: 1,
+    result: 'pass',
+    finalTreeOid: finalTree,
+    legacyCommitSha: legacyCommit,
+    legacyTreeOid: legacyTree,
+    imports928ActivationMachinery: false,
+    entryBefore: { mode: 'total-entrypoint-quiescence', result: 'pass', entrypoints },
+    entryAfter: { mode: 'total-entrypoint-quiescence', result: 'pass', entrypoints },
+    quiescence: { complete: true, zeroSurvivorsBeforeResume: true, entrypoints },
+    fullRevert: {
+      completed: true,
+      fromTreeOid: finalTree,
+      toCommitSha: legacyCommit,
+      toTreeOid: legacyTree,
+      detachedDrainSha256Before: drainDigest,
+      detachedDrainSha256After: drainDigest,
+    },
+    artifacts,
+  };
+}
+
 function evidenceFixture(): {
   root: string;
   evidence: ClosureEvidenceBundle;
@@ -229,6 +335,8 @@ function evidenceFixture(): {
   const environment = observedVerificationEnvironment(root);
   const commit = git(['rev-parse', 'HEAD']);
   const tree = git(['rev-parse', 'HEAD^{tree}']);
+  const legacyCommit = git(['rev-parse', 'HEAD^']);
+  const legacyTree = git(['rev-parse', `${legacyCommit}^{tree}`]);
   const candidateBuildDigest = digest('candidate-build');
   const harnessPath = 'overlap/replay.mjs';
   const inputsPath = 'overlap/inputs.json';
@@ -238,16 +346,35 @@ function evidenceFixture(): {
   const overlapLogPath = 'overlap/result.json';
   const drainPath = 'rollback/drain.json';
   const rollbackLogPath = 'rollback/result.json';
+  const rollbackProofPath = 'rollback/proof.json';
   const bodyPath = 'external/issue-928.md';
-  const harness = "import { readFileSync } from 'node:fs'; process.stdout.write(readFileSync(process.argv[2], 'utf8'));\n";
-  const inputs = '{"ok":true}\n';
-  const matrix = `${JSON.stringify({ schemaVersion: 1, classes: REQUIRED_OVERLAP_CLASSES })}\n`;
-  const vectors = `${JSON.stringify({ schemaVersion: 1, vectors: [{ id: 'claim-protocol-v1' }] })}\n`;
+  const matrixRows = matrixFixture(root, legacyCommit, legacyTree, commit, tree);
+  const matrix = `${JSON.stringify({ schemaVersion: 2, classes: REQUIRED_OVERLAP_CLASSES, rows: matrixRows })}\n`;
+  const vectors = readFileSync(path.join(repoRoot, 'scripts/pr2a/review-start-claim-protocol-vectors.json'), 'utf8');
+  const replayResult = {
+    schemaVersion: 1,
+    result: 'pass',
+    legacyCommitSha: legacyCommit,
+    legacyTreeOid: legacyTree,
+    candidateCommitSha: commit,
+    candidateTreeOid: tree,
+    classes: [...REQUIRED_OVERLAP_CLASSES],
+    dataVectorClasses: [...REQUIRED_DATA_VECTOR_CLASSES],
+    protocolVectorClasses: [...REQUIRED_PROTOCOL_VECTOR_CLASSES],
+    executedRows: matrixRows.map((row) => row.id),
+  };
+  const harness = "import { readFileSync } from 'node:fs'; const input=JSON.parse(readFileSync(process.argv[2], 'utf8')); process.stdout.write(JSON.stringify(input.replayResult)+'\\n');\n";
+  const inputs = `${JSON.stringify({ replayResult })}\n`;
+  const stdout = `${JSON.stringify(replayResult)}\n`;
   const drain = `${JSON.stringify({ schemaVersion: 1, issue: 948, result: 'drained' })}\n`;
   const drainDigest = writeArtifact(root, drainPath, drain);
+  const rollbackProof = rollbackProofFixture(root, tree, legacyCommit, legacyTree, drainDigest);
+  const rollbackProofBytes = `${JSON.stringify(rollbackProof)}\n`;
   const overlapLog = `${JSON.stringify({
     schemaVersion: 1,
     result: 'pass',
+    legacyCommitSha: legacyCommit,
+    legacyTreeOid: legacyTree,
     candidateCommitSha: commit,
     candidateTreeOid: tree,
     candidateBuildDigest,
@@ -272,8 +399,8 @@ function evidenceFixture(): {
       candidateTreeOid: tree,
       candidateBuildDigest,
       legacyRepository: 'chetwerikoff/orchestrator-pack',
-      legacyCommitSha: commit,
-      legacyTreeOid: tree,
+      legacyCommitSha: legacyCommit,
+      legacyTreeOid: legacyTree,
       candidateRepository: 'chetwerikoff/orchestrator-pack',
       candidateCommitSha: commit,
       harnessPath,
@@ -282,12 +409,12 @@ function evidenceFixture(): {
       operationMatrixPath: matrixPath,
       operationMatrixSha256: writeArtifact(root, matrixPath, matrix),
       replayCommand: process.execPath,
-      replayArgs: [harnessPath, inputsPath],
+      replayArgs: [harnessPath, inputsPath, matrixPath, vectorsPath],
       replayCwd: '.',
       replayInputsPath: inputsPath,
       replayInputsSha256: writeArtifact(root, inputsPath, inputs),
       replayStdoutPath: stdoutPath,
-      replayStdoutSha256: writeArtifact(root, stdoutPath, inputs),
+      replayStdoutSha256: writeArtifact(root, stdoutPath, stdout),
       replayExitCode: 0,
       protocolVectorPath: vectorsPath,
       protocolVectorSha256: writeArtifact(root, vectorsPath, vectors),
@@ -311,6 +438,10 @@ function evidenceFixture(): {
       zeroSurvivorsBeforeResume: true,
       legacyReadTsRecord: true,
       imports928ActivationMachinery: false,
+      legacyCommitSha: legacyCommit,
+      legacyTreeOid: legacyTree,
+      proofPath: rollbackProofPath,
+      proofSha256: writeArtifact(root, rollbackProofPath, rollbackProofBytes),
       logPath: rollbackLogPath,
       logSha256: writeArtifact(root, rollbackLogPath, rollbackLog),
     },
@@ -441,6 +572,35 @@ describe('Issue #948 closure receipt evidence', () => {
     expect(findings).toContain('external-928-body-contract-mismatch');
   });
 
+  it('rejects incomplete matrix/vector coverage and tampered rollback proof semantics', () => {
+    const fixture = evidenceFixture();
+    const matrixPath = path.join(fixture.root, fixture.evidence.overlap.operationMatrixPath);
+    const matrix = JSON.parse(readFileSync(matrixPath, 'utf8')) as { rows: Array<{ class: string }>; classes: string[] };
+    matrix.rows = matrix.rows.filter((row) => row.class !== 'interpretation');
+    const matrixBytes = `${JSON.stringify(matrix)}\n`;
+    writeFileSync(matrixPath, matrixBytes);
+    fixture.evidence.overlap.operationMatrixSha256 = digest(matrixBytes);
+
+    const vectorsPath = path.join(fixture.root, fixture.evidence.overlap.protocolVectorPath);
+    const vectors = JSON.parse(readFileSync(vectorsPath, 'utf8')) as { protocolVectors: Array<{ class: string }> };
+    vectors.protocolVectors = vectors.protocolVectors.filter((row) => row.class !== 'crash-points');
+    const vectorBytes = `${JSON.stringify(vectors)}\n`;
+    writeFileSync(vectorsPath, vectorBytes);
+    fixture.evidence.overlap.protocolVectorSha256 = digest(vectorBytes);
+
+    const proofPath = path.join(fixture.root, fixture.evidence.rollback.proofPath);
+    const proof = JSON.parse(readFileSync(proofPath, 'utf8')) as { fullRevert: { completed: boolean } };
+    proof.fullRevert.completed = false;
+    const proofBytes = `${JSON.stringify(proof)}\n`;
+    writeFileSync(proofPath, proofBytes);
+    fixture.evidence.rollback.proofSha256 = digest(proofBytes);
+
+    const findings = validateClosureEvidenceBundle(fixture.evidence, fixture.expected, fixture.root);
+    expect(findings).toContain('overlap-operation-matrix-row-coverage-mismatch');
+    expect(findings).toContain('overlap-protocol-vector-class-missing:crash-points');
+    expect(findings).toContain('rollback-full-revert-proof-incomplete');
+  });
+
   it('validates receipt-bound final verification through concrete result and log artifacts', () => {
     const fixture = evidenceFixture();
     const environment = observedVerificationEnvironment(fixture.root);
@@ -485,6 +645,43 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
     expect(existsSync(namespace)).toBe(false);
   });
 
+  it('fails closed on unsupported schema and contradictory canonical identity without mutating the record', () => {
+    const root = makeRoot('pr2a-invalid-record-');
+    const sha = '6'.repeat(40);
+    const file = claimPath(root, 948, sha);
+    const base = {
+      schemaVersion: 1,
+      key: `pr-948-${sha}`,
+      prNumber: 948,
+      headSha: sha,
+      state: 'active',
+      holder: { surface: 'invalid-record', pid: 2_147_483_000, host: 'candidate-host', generation: 'g', processGuid: 'invalid-guid' },
+      acquiredAtUtc: new Date().toISOString(),
+      startReason: 'automatic',
+      projectNamespace: 'orchestrator-pack',
+      firstAttemptAtMonotonicMs: 1,
+      readinessStartMonotonicMs: 1,
+    };
+
+    atomicWriteJson(file, { ...base, schemaVersion: 2 });
+    const unsupportedBytes = readFileSync(file, 'utf8');
+    const unsupported = readClaimRecord(file);
+    expect(unsupported.ok).toBe(false);
+    expect(`${unsupported.reason}:${unsupported.error}`).toContain('unsupported_schema_version');
+    const unsupportedAcquire = acquireReviewStartClaim({ prNumber: 948, headSha: sha, surface: 'candidate', namespace: root, reviewRuns: [] });
+    expect(unsupportedAcquire).toMatchObject({ acquired: false, reason: 'ambiguous_claim' });
+    expect(readFileSync(file, 'utf8')).toBe(unsupportedBytes);
+
+    atomicWriteJson(file, { ...base, key: `pr-999-${sha}` });
+    const contradictoryBytes = readFileSync(file, 'utf8');
+    const contradictory = readClaimRecord(file);
+    expect(contradictory.ok).toBe(false);
+    expect(`${contradictory.reason}:${contradictory.error}`).toContain('claim_identity_mismatch');
+    const contradictoryAcquire = acquireReviewStartClaim({ prNumber: 948, headSha: sha, surface: 'candidate', namespace: root, reviewRuns: [] });
+    expect(contradictoryAcquire).toMatchObject({ acquired: false, reason: 'ambiguous_claim' });
+    expect(readFileSync(file, 'utf8')).toBe(contradictoryBytes);
+  });
+
   it('admits one winner under TS-vs-TS overlap', async () => {
     const root = makeRoot('pr2a-ts-overlap-');
     const start = path.join(root, 'start');
@@ -493,9 +690,9 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
     results.forEach((result) => spawnTsClaim(root, result, start, release));
     writeFileSync(start, 'go');
     await waitForFiles(results);
-    const rows = results.map((file) => JSON.parse(readFileSync(file, 'utf8')) as { acquired: boolean; reason: string });
-    expect(rows.filter((row) => row.acquired)).toHaveLength(1);
-    expect(rows.filter((row) => !row.acquired).every((row) => row.reason === 'claimed')).toBe(true);
+    const resultRows = results.map((fileName) => JSON.parse(readFileSync(fileName, 'utf8')) as { acquired: boolean; reason: string });
+    expect(resultRows.filter((row) => row.acquired)).toHaveLength(1);
+    expect(resultRows.filter((row) => !row.acquired).every((row) => row.reason === 'claimed')).toBe(true);
     writeFileSync(release, 'done');
   }, 60_000);
 
@@ -509,9 +706,9 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
     spawnBridgeClaim(root, psResult, start, release);
     writeFileSync(start, 'go');
     await waitForFiles([tsResult, psResult]);
-    const rows = [tsResult, psResult].map((file) => JSON.parse(readFileSync(file, 'utf8')) as { acquired: boolean; reason: string });
-    expect(rows.filter((row) => row.acquired)).toHaveLength(1);
-    expect(rows.find((row) => !row.acquired)?.reason).toBe('claimed');
+    const resultRows = [tsResult, psResult].map((fileName) => JSON.parse(readFileSync(fileName, 'utf8')) as { acquired: boolean; reason: string });
+    expect(resultRows.filter((row) => row.acquired)).toHaveLength(1);
+    expect(resultRows.find((row) => !row.acquired)?.reason).toBe('claimed');
     writeFileSync(release, 'done');
   }, 60_000);
 
@@ -543,10 +740,10 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
       && readdirSync(barrier).filter((name) => name.endsWith('.observed')).length === 2);
     writeFileSync(path.join(barrier, 'go'), 'go\n');
     await waitForFiles(results);
-    const rows = results.map((file) => JSON.parse(readFileSync(file, 'utf8')) as { acquired: boolean; reason: string });
-    expect(rows.filter((row) => row.acquired)).toHaveLength(1);
-    expect(rows.filter((row) => !row.acquired)).toHaveLength(1);
-    expect(rows.find((row) => !row.acquired)?.reason).toBe('claimed');
+    const resultRows = results.map((fileName) => JSON.parse(readFileSync(fileName, 'utf8')) as { acquired: boolean; reason: string });
+    expect(resultRows.filter((row) => row.acquired)).toHaveLength(1);
+    expect(resultRows.filter((row) => !row.acquired)).toHaveLength(1);
+    expect(resultRows.find((row) => !row.acquired)?.reason).toBe('claimed');
     writeFileSync(release, 'done');
   }, 60_000);
 
@@ -591,31 +788,38 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
     expect(readClaimRecord(file).record?.holder.processGuid).toBe(second.claim?.holder.processGuid);
   });
 
-  it('reads committed legacy protocol vectors through TS and the passive bridge', () => {
+  it('executes committed claim-record vectors through the shared store and covers every declared vector class', () => {
     const root = makeRoot('pr2a-vector-');
-    const vectors = JSON.parse(readFileSync(path.join(repoRoot, 'scripts/pr2a/review-start-claim-protocol-vectors.json'), 'utf8')) as {
-      vectors: Array<{ record: Record<string, unknown> }>;
+    const vectorDocument = JSON.parse(readFileSync(path.join(repoRoot, 'scripts/pr2a/review-start-claim-protocol-vectors.json'), 'utf8')) as {
+      vectors: Array<{ id: string; class: string; kind: string; record?: Record<string, unknown>; expect: { readable?: boolean; reason?: string } }>;
+      protocolVectors: Array<{ id: string; class: string; steps: string[]; sourceTest: string }>;
     };
-    const record = structuredClone(vectors.vectors[0]!.record);
-    const file = path.join(root, 'legacy.json');
-    atomicWriteJson(file, record);
-    expect(readClaimRecord(file).record).toMatchObject(record);
+    expect(new Set(vectorDocument.vectors.map((row) => row.class))).toEqual(expect.objectContaining({ size: expect.any(Number) }));
+    for (const className of REQUIRED_DATA_VECTOR_CLASSES) expect(vectorDocument.vectors.some((row) => row.class === className)).toBe(true);
+    for (const className of REQUIRED_PROTOCOL_VECTOR_CLASSES) expect(vectorDocument.protocolVectors.some((row) => row.class === className)).toBe(true);
+    expect(vectorDocument.protocolVectors.every((row) => row.steps.length > 0 && row.sourceTest.length > 0)).toBe(true);
+
+    for (const vector of vectorDocument.vectors.filter((row) => row.kind === 'claim-record')) {
+      const file = path.join(root, `${vector.id}.json`);
+      if (vector.record) atomicWriteJson(file, vector.record);
+      const read = readClaimRecord(file);
+      if (vector.expect.readable === true) {
+        expect(read.ok, `${vector.id}:${read.reason}:${read.error}`).toBe(true);
+        expect(read.record).toMatchObject(vector.record ?? {});
+      } else {
+        expect(read.ok, vector.id).toBe(false);
+        if (vector.expect.reason) expect(`${read.reason}:${read.error}`).toContain(vector.expect.reason);
+      }
+    }
+
+    const legacy = vectorDocument.vectors.find((row) => row.id === 'legacy-active-v1')!;
+    const file = path.join(root, 'legacy-bridge.json');
+    atomicWriteJson(file, legacy.record);
     const command = `. '${bridgePath.replaceAll("'", "''")}'; Read-ReviewStartClaimRecord -Path '${file.replaceAll("'", "''")}' | ConvertTo-Json -Compress -Depth 20`;
     const result = runProcessSync({ command: 'pwsh', args: ['-NoProfile', '-Command', command], cwd: repoRoot, inheritParentEnv: true });
     expect(result.ok, result.stderr || result.error).toBe(true);
     const bridged = JSON.parse(result.stdout).record as Record<string, unknown>;
-    expect(bridged).toMatchObject({
-      schemaVersion: record.schemaVersion,
-      key: record.key,
-      prNumber: record.prNumber,
-      headSha: record.headSha,
-      state: record.state,
-      holder: record.holder,
-      startReason: record.startReason,
-      projectNamespace: record.projectNamespace,
-      firstAttemptAtMonotonicMs: record.firstAttemptAtMonotonicMs,
-      readinessStartMonotonicMs: record.readinessStartMonotonicMs,
-    });
+    expect(bridged).toMatchObject(legacy.record ?? {});
   });
 });
 

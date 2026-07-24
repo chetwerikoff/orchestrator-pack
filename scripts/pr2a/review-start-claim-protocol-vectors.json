@@ -4,6 +4,8 @@
   "vectors": [
     {
       "id": "legacy-active-v1",
+      "class": "active",
+      "kind": "claim-record",
       "record": {
         "schemaVersion": 1,
         "key": "pr-948-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -30,7 +32,9 @@
       }
     },
     {
-      "id": "candidate-active-v1",
+      "id": "covering-run-v1",
+      "class": "covering",
+      "kind": "claim-record",
       "record": {
         "schemaVersion": 1,
         "key": "pr-949-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -39,16 +43,15 @@
         "state": "active",
         "holder": {
           "surface": "pack-review-runner",
-          "pid": 1,
+          "pid": 2147483001,
           "host": "candidate-host",
           "generation": "candidate-generation",
-          "processGuid": "candidate-guid",
-          "startTimeTicks": "123",
-          "bootIdHash": "boot-hash"
+          "processGuid": "candidate-guid"
         },
         "acquiredAtUtc": "2026-07-23T00:00:00.000Z",
         "startReason": "manual",
         "projectNamespace": "orchestrator-pack",
+        "boundRunId": "opk-rev-covering",
         "firstAttemptAtMonotonicMs": 2000,
         "readinessStartMonotonicMs": 2000,
         "launchPending": {
@@ -58,9 +61,429 @@
       },
       "expect": {
         "readable": true,
-        "unknownFieldsPreserved": true,
+        "coveringRunId": "opk-rev-covering",
         "generationFenced": true
       }
+    },
+    {
+      "id": "terminal-v1",
+      "class": "terminal",
+      "kind": "claim-record",
+      "record": {
+        "schemaVersion": 1,
+        "key": "pr-950-cccccccccccccccccccccccccccccccccccccccc",
+        "prNumber": 950,
+        "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+        "state": "terminal",
+        "holder": {
+          "surface": "pack-review-runner",
+          "pid": 2147483002,
+          "host": "candidate-host",
+          "generation": "terminal-generation",
+          "processGuid": "terminal-guid"
+        },
+        "acquiredAtUtc": "2026-07-23T00:00:00.000Z",
+        "startReason": "automatic",
+        "projectNamespace": "orchestrator-pack",
+        "firstAttemptAtMonotonicMs": 3000,
+        "readinessStartMonotonicMs": 3000,
+        "outcome": "run_started",
+        "terminalAtUtc": "2026-07-23T00:00:02.000Z"
+      },
+      "expect": {
+        "readable": true,
+        "state": "terminal",
+        "outcome": "run_started"
+      }
+    },
+    {
+      "id": "audit-v1",
+      "class": "audit",
+      "kind": "audit-record",
+      "artifact": {
+        "kind": "claim_transition",
+        "key": "pr-950-cccccccccccccccccccccccccccccccccccccccc",
+        "prNumber": 950,
+        "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+        "priorState": "active",
+        "newState": "terminal",
+        "outcome": "run_started",
+        "decisionSource": "completion",
+        "atUtc": "2026-07-23T00:00:02.000Z"
+      },
+      "expect": {
+        "kind": "claim_transition",
+        "identityStable": true
+      }
+    },
+    {
+      "id": "lock-owner-v1",
+      "class": "lock-owner",
+      "kind": "lock-owner-record",
+      "artifact": {
+        "pid": 2147483003,
+        "host": "candidate-host",
+        "generation": "lock-generation",
+        "processGuid": "lock-guid",
+        "startTimeTicks": "12345",
+        "bootIdHash": "boot-hash",
+        "acquiredAtUtc": "2026-07-23T00:00:00.000Z"
+      },
+      "expect": {
+        "ownerIdentityRequired": true,
+        "replacementMustNotBeRemoved": true
+      }
+    },
+    {
+      "id": "optional-unknown-identity-v1",
+      "class": "optional-unknown-identity",
+      "kind": "claim-record",
+      "record": {
+        "schemaVersion": 1,
+        "key": "pr-951-dddddddddddddddddddddddddddddddddddddddd",
+        "prNumber": 951,
+        "headSha": "dddddddddddddddddddddddddddddddddddddddd",
+        "state": "active",
+        "holder": {
+          "surface": "legacy-powershell",
+          "pid": 2147483004,
+          "host": "foreign-host",
+          "generation": "",
+          "processGuid": "optional-identity-guid",
+          "futureIdentityToken": "preserve-me"
+        },
+        "acquiredAtUtc": "2026-07-23T00:00:00.000Z",
+        "startReason": "automatic",
+        "projectNamespace": "orchestrator-pack",
+        "firstAttemptAtMonotonicMs": 4000,
+        "readinessStartMonotonicMs": 4000,
+        "futureRecordField": {
+          "value": "preserve-me"
+        }
+      },
+      "expect": {
+        "readable": true,
+        "unknownFieldsPreserved": true,
+        "ambiguousIdentityFailsClosed": true
+      }
+    },
+    {
+      "id": "utf8-json-newlines-v1",
+      "class": "utf8-json-newlines",
+      "kind": "claim-record",
+      "record": {
+        "schemaVersion": 1,
+        "key": "pr-952-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "prNumber": 952,
+        "headSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "state": "active",
+        "holder": {
+          "surface": "проверка-レビュー",
+          "pid": 2147483005,
+          "host": "candidate-host",
+          "generation": "utf8-generation",
+          "processGuid": "utf8-guid"
+        },
+        "acquiredAtUtc": "2026-07-23T00:00:00.000Z",
+        "startReason": "line one\nline two — ✓",
+        "projectNamespace": "orchestrator-pack",
+        "firstAttemptAtMonotonicMs": 5000,
+        "readinessStartMonotonicMs": 5000
+      },
+      "expect": {
+        "readable": true,
+        "utf8RoundTrip": true
+      }
+    },
+    {
+      "id": "contradictory-key-v1",
+      "class": "contradictory",
+      "kind": "claim-record",
+      "record": {
+        "schemaVersion": 1,
+        "key": "pr-999-ffffffffffffffffffffffffffffffffffffffff",
+        "prNumber": 953,
+        "headSha": "ffffffffffffffffffffffffffffffffffffffff",
+        "state": "active",
+        "holder": {
+          "surface": "candidate",
+          "pid": 2147483006,
+          "host": "candidate-host",
+          "generation": "contradictory-generation",
+          "processGuid": "contradictory-guid"
+        },
+        "acquiredAtUtc": "2026-07-23T00:00:00.000Z",
+        "startReason": "automatic",
+        "projectNamespace": "orchestrator-pack",
+        "firstAttemptAtMonotonicMs": 6000,
+        "readinessStartMonotonicMs": 6000
+      },
+      "expect": {
+        "readable": false,
+        "reason": "claim_identity_mismatch"
+      }
+    },
+    {
+      "id": "forward-schema-v2",
+      "class": "unsupported-schema",
+      "kind": "claim-record",
+      "record": {
+        "schemaVersion": 2,
+        "key": "pr-954-1111111111111111111111111111111111111111",
+        "prNumber": 954,
+        "headSha": "1111111111111111111111111111111111111111",
+        "state": "active",
+        "holder": {
+          "surface": "future-candidate",
+          "pid": 2147483007,
+          "host": "candidate-host",
+          "generation": "future-generation",
+          "processGuid": "future-guid"
+        },
+        "acquiredAtUtc": "2026-07-23T00:00:00.000Z",
+        "startReason": "automatic",
+        "projectNamespace": "orchestrator-pack",
+        "firstAttemptAtMonotonicMs": 7000,
+        "readinessStartMonotonicMs": 7000
+      },
+      "expect": {
+        "readable": false,
+        "reason": "unsupported_schema_version"
+      }
+    },
+    {
+      "id": "partial-holder-v1",
+      "class": "partial",
+      "kind": "claim-record",
+      "record": {
+        "schemaVersion": 1,
+        "key": "pr-955-2222222222222222222222222222222222222222",
+        "prNumber": 955,
+        "headSha": "2222222222222222222222222222222222222222",
+        "state": "active",
+        "holder": {
+          "surface": "partial",
+          "pid": 2147483008,
+          "host": "candidate-host",
+          "generation": "partial-generation"
+        },
+        "acquiredAtUtc": "2026-07-23T00:00:00.000Z",
+        "startReason": "automatic",
+        "projectNamespace": "orchestrator-pack",
+        "firstAttemptAtMonotonicMs": 8000,
+        "readinessStartMonotonicMs": 8000
+      },
+      "expect": {
+        "readable": false,
+        "reason": "missing_holder_processGuid"
+      }
+    },
+    {
+      "id": "missing-record-v1",
+      "class": "missing",
+      "kind": "claim-record",
+      "expect": {
+        "readable": false,
+        "reason": "missing"
+      }
+    },
+    {
+      "id": "stale-holder-v1",
+      "class": "stale",
+      "kind": "claim-record",
+      "record": {
+        "schemaVersion": 1,
+        "key": "pr-956-3333333333333333333333333333333333333333",
+        "prNumber": 956,
+        "headSha": "3333333333333333333333333333333333333333",
+        "state": "active",
+        "holder": {
+          "surface": "stale-holder",
+          "pid": 2147483009,
+          "host": "candidate-host",
+          "generation": "stale-generation",
+          "processGuid": "stale-guid"
+        },
+        "acquiredAtUtc": "2020-01-01T00:00:00.000Z",
+        "startReason": "automatic",
+        "projectNamespace": "orchestrator-pack",
+        "firstAttemptAtMonotonicMs": 9000,
+        "readinessStartMonotonicMs": 9000
+      },
+      "expect": {
+        "readable": true,
+        "reclaimRequiresPersistedExclusion": true
+      }
+    },
+    {
+      "id": "dead-holder-v1",
+      "class": "dead",
+      "kind": "claim-record",
+      "record": {
+        "schemaVersion": 1,
+        "key": "pr-957-4444444444444444444444444444444444444444",
+        "prNumber": 957,
+        "headSha": "4444444444444444444444444444444444444444",
+        "state": "active",
+        "holder": {
+          "surface": "dead-holder",
+          "pid": 2147483010,
+          "host": "candidate-host",
+          "generation": "dead-generation",
+          "processGuid": "dead-guid"
+        },
+        "acquiredAtUtc": "2026-07-23T00:00:00.000Z",
+        "startReason": "automatic",
+        "projectNamespace": "orchestrator-pack",
+        "firstAttemptAtMonotonicMs": 10000,
+        "readinessStartMonotonicMs": 10000
+      },
+      "expect": {
+        "readable": true,
+        "deadIdentityDoesNotAuthorizeUnfencedMutation": true
+      }
+    },
+    {
+      "id": "pid-start-boot-reuse-v1",
+      "class": "pid-start-boot-reuse",
+      "kind": "claim-record",
+      "record": {
+        "schemaVersion": 1,
+        "key": "pr-958-5555555555555555555555555555555555555555",
+        "prNumber": 958,
+        "headSha": "5555555555555555555555555555555555555555",
+        "state": "active",
+        "holder": {
+          "surface": "pid-reuse",
+          "pid": 1,
+          "host": "candidate-host",
+          "generation": "pid-reuse-generation",
+          "processGuid": "pid-reuse-guid",
+          "startTimeTicks": "definitely-not-current",
+          "bootIdHash": "definitely-not-current"
+        },
+        "acquiredAtUtc": "2026-07-23T00:00:00.000Z",
+        "startReason": "automatic",
+        "projectNamespace": "orchestrator-pack",
+        "firstAttemptAtMonotonicMs": 11000,
+        "readinessStartMonotonicMs": 11000
+      },
+      "expect": {
+        "readable": true,
+        "identityReuseFailsClosed": true
+      }
+    },
+    {
+      "id": "generation-fenced-release-v1",
+      "class": "generation-fenced-release",
+      "kind": "operation-vector",
+      "operation": "release",
+      "expect": {
+        "authoritativeReread": true,
+        "sameGenerationRequired": true
+      }
+    },
+    {
+      "id": "generation-fenced-completion-v1",
+      "class": "generation-fenced-completion",
+      "kind": "operation-vector",
+      "operation": "completion",
+      "expect": {
+        "authoritativeReread": true,
+        "sameGenerationRequired": true
+      }
+    },
+    {
+      "id": "generation-fenced-mutation-v1",
+      "class": "generation-fenced-mutation",
+      "kind": "operation-vector",
+      "operation": "mutation",
+      "expect": {
+        "authoritativeReread": true,
+        "sameGenerationRequired": true
+      }
+    },
+    {
+      "id": "generation-fenced-interpretation-v1",
+      "class": "generation-fenced-interpretation",
+      "kind": "operation-vector",
+      "operation": "interpretation",
+      "expect": {
+        "authoritativeReread": true,
+        "sameGenerationRequired": true
+      }
+    },
+    {
+      "id": "generation-fenced-reap-v1",
+      "class": "generation-fenced-reap",
+      "kind": "operation-vector",
+      "operation": "reap",
+      "expect": {
+        "authoritativeReread": true,
+        "sameGenerationRequired": true
+      }
+    }
+  ],
+  "protocolVectors": [
+    {
+      "id": "lock-layout-owner-schema-v1",
+      "class": "lock-layout-owner-schema",
+      "steps": ["create canonical per-key .locks directory", "write owner.json with process identity before claim mutation"],
+      "sourceTest": "owner-binds stale-lock takeover under two barrier-controlled recoverers"
+    },
+    {
+      "id": "directory-owner-record-atomic-ordering-v1",
+      "class": "directory-owner-record-atomic-ordering",
+      "steps": ["fsync temporary record", "rename record atomically", "fsync containing directory"],
+      "sourceTest": "generation-fences completion from a superseded holder"
+    },
+    {
+      "id": "reread-under-exclusion-v1",
+      "class": "reread-under-exclusion",
+      "steps": ["acquire persisted per-key exclusion", "reread authoritative record", "decide from reread only"],
+      "sourceTest": "generation-fences completion from a superseded holder"
+    },
+    {
+      "id": "stale-lock-recovery-v1",
+      "class": "stale-lock-recovery",
+      "steps": ["snapshot stale owner", "rename exact stale directory to quarantine", "verify moved identity before delete"],
+      "sourceTest": "owner-binds stale-lock takeover under two barrier-controlled recoverers"
+    },
+    {
+      "id": "generation-holder-comparison-v1",
+      "class": "generation-holder-comparison",
+      "steps": ["compare key", "compare processGuid", "compare generation"],
+      "sourceTest": "generation-fences completion from a superseded holder"
+    },
+    {
+      "id": "same-generation-mutation-fencing-v1",
+      "class": "same-generation-mutation-fencing",
+      "steps": ["reread under exclusion", "reject lost generation", "write only current generation"],
+      "sourceTest": "generation-fences completion from a superseded holder"
+    },
+    {
+      "id": "release-completion-lifecycle-audit-ordering-v1",
+      "class": "release-completion-lifecycle-audit-ordering",
+      "steps": ["persist terminal record", "remove active record", "persist transition audit"],
+      "sourceTest": "reads committed legacy protocol vectors through TS and the passive bridge"
+    },
+    {
+      "id": "lock-loss-reacquisition-revalidation-v1",
+      "class": "lock-loss-reacquisition-revalidation",
+      "steps": ["reacquire persisted exclusion", "reread record", "reject stale holder authority"],
+      "sourceTest": "generation-fences completion from a superseded holder"
+    },
+    {
+      "id": "cleanup-v1",
+      "class": "cleanup",
+      "steps": ["owner-bound lock removal", "directory fsync", "terminal retention pruning after durable terminal write"],
+      "sourceTest": "owner-binds stale-lock takeover under two barrier-controlled recoverers"
+    },
+    {
+      "id": "crash-points-v1",
+      "class": "crash-points",
+      "steps": ["before owner write", "after owner write", "before record rename", "after record rename", "before active removal", "after terminal persistence"],
+      "sourceTest": "Issue #948 persisted TypeScript claim authority"
     }
   ]
 }
