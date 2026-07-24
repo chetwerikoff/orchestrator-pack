@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CapabilityBinding } from './state.ts';
 import { sha256 } from './storage-common.ts';
@@ -10,7 +10,8 @@ const SCRIPTS_DIR = dirname(MODULE_DIR);
 function digestFiles(paths: readonly string[]): string {
   const parts: Buffer[] = [];
   for (const path of [...paths].sort()) {
-    parts.push(Buffer.from(`${path}\0`, 'utf8'));
+    const identity = relative(SCRIPTS_DIR, path).replaceAll('\\', '/');
+    parts.push(Buffer.from(`${identity}\0`, 'utf8'));
     parts.push(readFileSync(path));
     parts.push(Buffer.from('\0', 'utf8'));
   }
