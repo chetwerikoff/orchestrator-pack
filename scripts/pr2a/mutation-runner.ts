@@ -31,8 +31,9 @@ interface MutationSpec {
   apply: (source: string) => string;
   violated: (source: string) => boolean;
 }
-
 type JsonRecord = Record<string, any>;
+type PackageScripts = Record<string, string> & { 'test:issue-948': string };
+
 const repoRoot = path.resolve(process.cwd());
 const runnerPath = fileURLToPath(import.meta.url);
 const specs = new Map<string, MutationSpec>();
@@ -50,17 +51,19 @@ function replaceRequired(text: string, token: string, replacement: string, id: s
   return text.replace(token, replacement);
 }
 function defineReplace(ac: Pr2aAcceptanceId, id: string, artifactPath: string, token: string, replacement: string): void {
+  const marker = `/* mutation:${id} */`;
   define(ac, id, {
     artifactPath,
-    apply: (text) => replaceRequired(text, token, replacement, id),
-    violated: (text) => !text.includes(token) || text.includes(replacement),
+    apply: (text) => replaceRequired(text, token, `${replacement} ${marker}`, id),
+    violated: (text) => text.includes(marker),
   });
 }
 function defineAppend(ac: Pr2aAcceptanceId, id: string, artifactPath: string, appended: string): void {
+  const marker = `/* mutation:${id} */`;
   define(ac, id, {
     artifactPath,
-    apply: (text) => `${text}${text.endsWith('\n') ? '' : '\n'}${appended}\n`,
-    violated: (text) => text.includes(appended),
+    apply: (text) => `${text}${text.endsWith('\n') ? '' : '\n'}${appended} ${marker}\n`,
+    violated: (text) => text.includes(marker),
   });
 }
 function defineJson(
@@ -93,21 +96,31 @@ function lifecycle(value: JsonRecord, identity: string): JsonRecord {
   if (!found) throw new Error(`planning_lifecycle_missing:${identity}`);
   return found;
 }
-function packageMutation(id: string, mutate: (scripts: Record<string, string>) => void, violated: (scripts: Record<string, string>) => boolean): MutationSpec {
+function packageScripts(text: string): PackageScripts {
+  const scripts = (JSON.parse(text) as { scripts?: Record<string, string> }).scripts;
+  if (!scripts?.['test:issue-948']) throw new Error('mandatory_issue_948_script_missing');
+  return scripts as PackageScripts;
+}
+function packageMutation(
+  mutate: (scripts: PackageScripts) => void,
+  violated: (scripts: PackageScripts) => boolean,
+): MutationSpec {
   return {
     artifactPath: 'package.json',
     apply: (text) => {
       const value = JSON.parse(text) as { scripts?: Record<string, string> };
-      value.scripts ??= {};
-      mutate(value.scripts);
+      const scripts = packageScripts(text);
+      mutate(scripts);
+      value.scripts = scripts;
       return `${JSON.stringify(value, null, 2)}\n`;
     },
     violated: (text) => {
-      try { return violated((JSON.parse(text) as { scripts?: Record<string, string> }).scripts ?? {}); }
+      try { return violated(packageScripts(text)); }
       catch { return true; }
     },
   };
 }
+
 defineJson('AC1','tooling-bootstrap-scope-violated','scripts/pr2a/planning-manifest.json',v=>{v.tooling.scannerPath='scripts/lib/review-start-claim-store.ts';},v=>v.tooling.scannerPath!=='scripts/pr2a/closed-world-scanner.ts');
 defineJson('AC1','planning-base-tree-mismatch','scripts/pr2a/planning-manifest.json',v=>{v.lineage.planningBaseTreeOid='0'.repeat(40);},v=>v.lineage.planningBaseTreeOid==='0'.repeat(40));
 defineJson('AC1','planning-input-changed-without-replan','scripts/pr2a/planning-manifest.json',v=>{v.tooling.scannerSha256='sha256:'+ '0'.repeat(64);},v=>v.tooling.scannerSha256==='sha256:'+ '0'.repeat(64));
@@ -151,8 +164,8 @@ defineReplace('AC3','cli-verb-bypasses-typescript-authority','scripts/lib/Review
 defineAppend('AC3','powershell-bridge-contains-policy-or-locking','scripts/lib/Review-StartClaimLifecycle.ps1',"New-Item -ItemType Directory -Path '.locks/mutation' -Force | Out-Null");
 defineAppend('AC3','typescript-dispatches-to-powershell','scripts/lib/review-start-claim-store.ts',"const mutationPwshDispatch = ['pwsh','-File','Review-StartClaim.ps1'];");
 defineAppend('AC3','second-namespace-or-lock-tree-created','scripts/lib/review-start-claim-store.ts',"const mutationSecondNamespace = '.takeover';");
-define('AC3','operation-semantic-primitive-usage-test-missing',packageMutation('operation-semantic-primitive-usage-test-missing',s=>{s['test:issue-948']=s['test:issue-948'].replace('scripts/review-start-claim.test.ts','');},s=>!s['test:issue-948'].includes('scripts/review-start-claim.test.ts')));
-define('AC3','operation-specific-durability-test-missing',packageMutation('operation-specific-durability-test-missing',s=>{s['test:issue-948']=s['test:issue-948'].replace('scripts/pr2a/final-conformance.test.ts','');},s=>!s['test:issue-948'].includes('scripts/pr2a/final-conformance.test.ts')));
+define('AC3','operation-semantic-primitive-usage-test-missing',packageMutation(s=>{s['test:issue-948']=s['test:issue-948'].replace('scripts/review-start-claim.test.ts','');},s=>!s['test:issue-948'].includes('scripts/review-start-claim.test.ts')));
+define('AC3','operation-specific-durability-test-missing',packageMutation(s=>{s['test:issue-948']=s['test:issue-948'].replace('scripts/pr2a/final-conformance.test.ts','');},s=>!s['test:issue-948'].includes('scripts/pr2a/final-conformance.test.ts')));
 defineReplace('AC3','representative-overlap-class-missing','scripts/pr2a/closure-receipt.ts',"  'generation-fence',","  // generation-fence mutation removed");
 defineAppend('AC3','external-root-reaches-target-internal-claim-unit','scripts/pack-review-runner.ts',"const mutationTargetInternalEdge = 'scripts/lib/Review-StartClaim.ps1';");
 defineAppend('AC4','retired-guard-or-verifier-edge-remains','scripts/verify.ps1',"& (Join-Path $PSScriptRoot 'check-side-process-launch-contract.ps1')");
@@ -196,7 +209,7 @@ defineJson('AC6','retirement-outside-closed-list','scripts/pr2a/planning-manifes
 defineJson('AC6','path-or-operation-outside-reviewed-declaration','scripts/pr2a/planning-manifest.json',v=>{v.plannedOperations.push({path:'README.md',operation:'modify',reason:'mutation'});},v=>v.plannedOperations.some((r:JsonRecord)=>r.path==='README.md'));
 defineJson('AC6','allowed-roots-or-denylist-violation','scripts/pr2a/planning-manifest.json',v=>{v.plannedOperations.push({path:'vendor/mutation.ts',operation:'add',reason:'mutation'});},v=>v.plannedOperations.some((r:JsonRecord)=>r.path==='vendor/mutation.ts'));
 defineJson('AC6','rename-copy-symlink-gitlink-or-mode-evasion','scripts/pr2a/planning-manifest.json',v=>{row(v,'package.json').mode='120000';},v=>row(v,'package.json').mode==='120000');
-define('AC6','test-lane-classification-invalid',packageMutation('test-lane-classification-invalid',s=>{s['test:issue-948']=s['test:issue-948'].replace('--maxWorkers=1','--maxWorkers=2');},s=>!s['test:issue-948'].includes('--maxWorkers=1')));
+define('AC6','test-lane-classification-invalid',packageMutation(s=>{s['test:issue-948']=s['test:issue-948'].replace('--maxWorkers=1','--maxWorkers=2');},s=>!s['test:issue-948'].includes('--maxWorkers=1')));
 defineReplace('AC7','shared-protocol-interleaving-class-fails','scripts/lib/review-start-claim-cli.ts',"return withMutex(lock, execute) as UnknownRecord;","return execute();");
 defineReplace('AC7','representative-end-to-end-class-fails','scripts/pr2a/closure-receipt.ts',"  'acquisition',","  // acquisition mutation removed");
 defineReplace('AC7','process-ordering-substitutes-for-persisted-exclusion','scripts/lib/review-start-claim-cli.ts',"mkdirSync(lockDir, { recursive: false, mode: 0o700 });","Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);");
@@ -211,8 +224,8 @@ defineReplace('AC7','rollback-detached-drain-artifact-invalid','scripts/pr2a/rol
 defineReplace('AC7','rollback-rehearsal-in-evidence-checkout','scripts/pr2a/closure-receipt.ts',"if (!rollback.isolatedCheckout)","if (false)");
 defineAppend('AC7','rollback-imports-928-activation-machinery','scripts/pr2a/rollback-drain.ts',"const mutationImports928ActivationMachinery = 'scripts/pr2-cutover/cordon-controller.ts';");
 defineReplace('AC7','unsupported-platform-or-filesystem-operation-succeeds','scripts/lib/review-start-claim-cli.ts',"if (/^\/mnt\/[a-z](?:\/|$)/i.test(canonical)) throw new Error('unsupported_windows_mounted_filesystem');","if (false) throw new Error('unsupported_windows_mounted_filesystem');");
-define('AC8','mandatory-command-or-lane-fails',packageMutation('mandatory-command-or-lane-fails',s=>{s['test:issue-948']=s['test:issue-948'].replace('scripts/pr2a/final-conformance.test.ts','scripts/pr2a/missing.test.ts');},s=>s['test:issue-948'].includes('scripts/pr2a/missing.test.ts')));
-define('AC8','mandatory-test-suppressed-or-reduced',packageMutation('mandatory-test-suppressed-or-reduced',s=>{s['test:issue-948']=s['test:issue-948'].replace('--maxWorkers=1','--maxWorkers=4');},s=>!s['test:issue-948'].includes('--maxWorkers=1')));
+define('AC8','mandatory-command-or-lane-fails',packageMutation(s=>{s['test:issue-948']=s['test:issue-948'].replace('scripts/pr2a/final-conformance.test.ts','scripts/pr2a/missing.test.ts');},s=>s['test:issue-948'].includes('scripts/pr2a/missing.test.ts')));
+define('AC8','mandatory-test-suppressed-or-reduced',packageMutation(s=>{s['test:issue-948']=s['test:issue-948'].replace('--maxWorkers=1','--maxWorkers=4');},s=>!s['test:issue-948'].includes('--maxWorkers=1')));
 defineReplace('AC8','final-evidence-tree-or-platform-stale','scripts/pr2a/closure-receipt.ts',"function validateVerificationEnvironment","function validateVerificationEnvironmentDisabled");
 defineReplace('AC8','required-suite-omitted-from-mandatory-path','scripts/pr2a/closure-receipt.ts',"  'vitest-heavy',","  // vitest-heavy mutation omitted");
 defineReplace('AC8','receipt-dependent-suite-evidenced-pre-receipt','scripts/pr2a/closure-receipt.ts',"if (!preReceiptVerification.prerequisiteSuitesPassedBeforeReceipt)","if (false)");
