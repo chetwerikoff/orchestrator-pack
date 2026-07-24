@@ -288,24 +288,48 @@ export function detectTypedFindingsInCapture(capture) {
   return findings;
 }
 
+function protectedNominationRanges(text) {
+  const ranges = [];
+  const lines = text.split('\n');
+  let offset = 0;
+  let current = null;
+  const close = (end) => {
+    if (current && PROTECTED_TYPES.has(current.type)) ranges.push({ start: current.start, end });
+    current = null;
+  };
+  for (const line of lines) {
+    const start = offset;
+    const trimmed = line.trim();
+    if (/^id:\s*[A-Za-z0-9._-]+\s*$/i.test(trimmed)) {
+      close(start);
+      current = { start, type: '' };
+    } else if (current) {
+      const typeMatch = trimmed.match(/^type:\s*([a-z][a-z0-9-]*)\s*$/i);
+      if (typeMatch) current.type = typeMatch[1].toLowerCase();
+    }
+    offset += line.length + 1;
+  }
+  close(text.length);
+  return ranges;
+}
+
 export function detectProtectedSignalsInCapture(capture, options = {}) {
   const scanText = extractFindingsScanText(capture);
   if (isCleanNoFindings(scanText) || scanText.length === 0) return [];
-  const patternSpecs = options.excludeNominationMetadata
-    ? PROTECTED_SIGNAL_PATTERNS.filter(({ nominationMetadata }) => !nominationMetadata)
-    : PROTECTED_SIGNAL_PATTERNS;
-  const signals = [];
-  for (const { type, pattern } of patternSpecs) {
-    if (pattern.test(scanText)) signals.push(type);
-    pattern.lastIndex = 0;
-  }
-  const hitSignals = [...new Set(signals)];
-  const receipt = options.receipt ?? loadProtectedSignalReceipt(options);
   const matches = collectProtectedSignalMatches(
     scanText,
-    patternSpecs.map(({ type, pattern }) => ({ signal: type, pattern })),
+    PROTECTED_SIGNAL_PATTERNS.map(({ type, pattern }) => ({ signal: type, pattern })),
   );
-  return suppressProtectedSignalHits(hitSignals, matches, receipt, 'finding-ledger', options.consumedReceiptEntries).hits;
+  const nominationRanges = options.excludeNominationMetadata ? protectedNominationRanges(scanText) : [];
+  const effectiveMatches = options.excludeNominationMetadata
+    ? matches.filter((match) => {
+        if (/^type:\s*(?:security|scope-violation)$/i.test(match.raw.trim())) return false;
+        return !nominationRanges.some(({ start, end }) => match.index >= start && match.index < end);
+      })
+    : matches;
+  const hitSignals = [...new Set(effectiveMatches.map(({ signal }) => signal))];
+  const receipt = options.receipt ?? loadProtectedSignalReceipt(options);
+  return suppressProtectedSignalHits(hitSignals, effectiveMatches, receipt, 'finding-ledger', options.consumedReceiptEntries).hits;
 }
 
 function ledgerHasProtectedCoverage(ledger, protectedType) {
