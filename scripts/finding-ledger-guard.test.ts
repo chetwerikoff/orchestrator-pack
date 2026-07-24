@@ -126,30 +126,98 @@ describe('finding ledger review economics #975', () => {
       {
         rawCodexResults: [
           {
-            reviewEconomicsContract: 'v1',
-            findings: [
-              {
-                id: 'CX1',
-                type: 'quality',
-                evidence: 'A persistent registry would duplicate existing state.',
-                recommendation: 'Reuse the existing audit plane.',
-                persistentMachinery: 'yes',
-                cheapestSufficientAlternative: 'reuse the existing audit plane',
-                stakesPrice: 'Goal bounded blast radius',
-                tradeIn: 'net-add',
-                simplificationCutCandidate: 'yes',
-              },
-            ],
+            stage: 'architectural',
+            raw: {
+              reviewEconomicsContract: 'v1',
+              findings: [
+                {
+                  id: 'CX1',
+                  type: 'quality',
+                  evidence: 'A persistent registry would duplicate existing state.',
+                  recommendation: 'Reuse the existing audit plane.',
+                  persistentMachinery: 'yes',
+                  cheapestSufficientAlternative: 'reuse the existing audit plane',
+                  stakesPrice: 'Goal bounded blast radius',
+                  tradeIn: 'net-add',
+                  simplificationCutCandidate: 'yes',
+                },
+              ],
+            },
           },
           {
-            reviewEconomicsContract: 'v1',
-            findings: [],
-            terminalTokens: ['NO_FINDINGS', 'SIMPLIFICATION_CLEAN'],
+            stage: 'architectural',
+            raw: {
+              reviewEconomicsContract: 'v1',
+              findings: [],
+              terminalTokens: ['NO_FINDINGS', 'SIMPLIFICATION_CLEAN'],
+            },
           },
         ],
       },
     );
     expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('enforces stage-specific raw Codex M5 terminal shape before transcription', () => {
+    const ordinaryFinding = {
+      id: 'CX2',
+      type: 'quality',
+      evidence: 'The review found a material defect.',
+      recommendation: 'Use the smallest correction.',
+      persistentMachinery: 'no',
+    };
+
+    const missingClean = run(
+      [cap('pass-01-architectural.capture.txt', 1_100, markedClean())],
+      [],
+      {
+        rawCodexResults: [
+          {
+            stage: 'architectural',
+            raw: { reviewEconomicsContract: 'v1', findings: [ordinaryFinding] },
+          },
+        ],
+      },
+    );
+    expect(missingClean.ok).toBe(false);
+    expect(missingClean.errors.join('\n')).toContain('without cut candidate must carry SIMPLIFICATION_CLEAN');
+
+    const candidateWithClean = run(
+      [cap('pass-01-architectural.capture.txt', 1_100, markedClean())],
+      [],
+      {
+        rawCodexResults: [
+          {
+            stage: 'competitive',
+            raw: {
+              reviewEconomicsContract: 'v1',
+              findings: [{ ...ordinaryFinding, simplificationCutCandidate: 'yes' }],
+              terminalTokens: ['SIMPLIFICATION_CLEAN'],
+            },
+          },
+        ],
+      },
+    );
+    expect(candidateWithClean.ok).toBe(false);
+    expect(candidateWithClean.errors.join('\n')).toContain('cannot claim SIMPLIFICATION_CLEAN');
+
+    const finalWithoutM5 = run(
+      [cap('pass-01-architectural.capture.txt', 1_100, markedClean())],
+      [],
+      {
+        rawCodexResults: [
+          {
+            stage: 'architectural-final',
+            raw: {
+              reviewEconomicsContract: 'v1',
+              findings: [],
+              terminalTokens: ['NO_FINDINGS'],
+            },
+          },
+        ],
+      },
+    );
+    expect(finalWithoutM5.ok, finalWithoutM5.errors.join('\n')).toBe(true);
   });
 
   describe('M2 adoption cutover and marker continuity', () => {
@@ -316,8 +384,52 @@ describe('finding ledger review economics #975', () => {
           [row('S1', { type: 'scope-violation', protectedActivation: activation, architectPending: true })],
         );
         expect(result.ok).toBe(false);
-        expect(result.errors.join('\n')).toContain('architect-pending under current contest');
+        expect(result.errors.join('\n')).toContain('must clear architect-pending');
       }
+    });
+
+    it('does not let a later contest=none erase an open same-revision contest', () => {
+      const result = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, nonZero),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1', { contest: 'contested' })),
+          cap('pass-03-architectural-lens.capture.txt', 1_300, currentLens('S1', { contest: 'none' })),
+          cap('pass-04-architectural-final.capture.txt', 1_400, markedClean()),
+        ],
+        [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('under current contest');
+    });
+
+    it('allows explicit withdrawal to close an earlier same-revision contest', () => {
+      const result = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, nonZero),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1', { contest: 'contested' })),
+          cap('pass-03-architectural-lens.capture.txt', 1_300, currentLens('S1', { contest: 'contest-withdrawn' })),
+          cap('pass-04-architectural-final.capture.txt', 1_400, markedClean()),
+        ],
+        [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    });
+
+    it('fails closed on duplicate same-lens M3 records for one finding', () => {
+      const result = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, nonZero),
+          cap(
+            'pass-02-architectural-lens.capture.txt',
+            1_200,
+            `${currentLens('S1', { contest: 'contested' })}\n${currentLens('S1', { contest: 'none' })}`,
+          ),
+          cap('pass-03-architectural-final.capture.txt', 1_300, markedClean()),
+        ],
+        [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('duplicate m3-protected records');
     });
 
     it('contest-withdrawn restores otherwise-valid author authority', () => {
@@ -380,6 +492,55 @@ describe('finding ledger review economics #975', () => {
       expect(result.ok, result.errors.join('\n')).toBe(true);
     });
 
+    it('rejects stale architectPending at final acceptance under every otherwise-valid authority path', () => {
+      const authorResult = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, nonZero),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1')),
+          cap('pass-03-architectural-final.capture.txt', 1_300, markedClean()),
+        ],
+        [row('S1', { type: 'scope-violation', protectedActivation: authorActivation, architectPending: true })],
+      );
+
+      const activateResult = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, zeroSignal),
+          cap(
+            'pass-02-architectural-lens.capture.txt',
+            1_200,
+            currentLens('S1', {
+              outcome: 'activate',
+              evidence: 'The changed path is out of scope under allowed_roots.',
+              whyNow: 'This task owns that path change.',
+            }),
+          ),
+          cap('pass-03-architectural-final.capture.txt', 1_300, markedClean()),
+        ],
+        [row('S1', { type: 'scope-violation', architectPending: true })],
+      );
+
+      const nonActivateResult = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, zeroSignal),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1', { outcome: 'non-activate' })),
+          cap('pass-03-architectural-final.capture.txt', 1_300, markedClean()),
+        ],
+        [
+          row('S1', {
+            type: 'scope-violation',
+            disposition: 'rejected',
+            rejectReason: 'no real protected defect',
+            architectPending: true,
+          }),
+        ],
+      );
+
+      for (const result of [authorResult, activateResult, nonActivateResult]) {
+        expect(result.ok).toBe(false);
+        expect(result.errors.join('\n')).toContain('must clear architect-pending');
+      }
+    });
+
     it('admits architect-pending at pre-lens progression but never at final acceptance', () => {
       const pendingRow = row('S1', { type: 'scope-violation', architectPending: true });
       const pre = run([cap('pass-01-architectural.capture.txt', 1_100, zeroSignal)], [pendingRow]);
@@ -394,7 +555,7 @@ describe('finding ledger review economics #975', () => {
         [pendingRow],
       );
       expect(final.ok).toBe(false);
-      expect(final.errors.join('\n')).toContain('requires current architect adjudication');
+      expect(final.errors.join('\n')).toContain('must clear architect-pending');
     });
   });
 
