@@ -23,7 +23,12 @@ import {
 import { readStableInput } from '../chatgpt-browser-turn/input.ts';
 import { publicationStatus, publishReply, PUBLICATION_SCHEMA } from '../chatgpt-browser-turn/publication.ts';
 import { runtimeCapabilityBinding } from '../chatgpt-browser-turn/runtime-binding.ts';
-import { mergeContinuationSegments, serializeSemanticNodes, type SemanticNode } from '../chatgpt-browser-turn/semantic.ts';
+import {
+  mergeContinuationSegments,
+  serializeSemanticNodes,
+  shouldSkipSemanticElement,
+  type SemanticNode,
+} from '../chatgpt-browser-turn/semantic.ts';
 import {
   adjudicateTombstone,
   capabilityStatus,
@@ -35,7 +40,12 @@ import {
   writeIncident,
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
-import { resolveCausalAssistant, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
+import {
+  resolveCausalAssistant,
+  runtimeWitnessSurfaceAvailable,
+  sendTurn,
+  type BrowserConfig,
+} from '../chatgpt-browser-turn/ui-adapter.ts';
 
 let root = '';
 let profileKey = '';
@@ -152,6 +162,7 @@ describe('issue 964 semantic reply serialization', () => {
       ] },
       { type: 'blockquote', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'quoted' }] }] },
       { type: 'code_block', text: 'a\r\nb\n' },
+      { type: 'paragraph', children: [{ type: 'text', text: '   ' }] },
     ];
     const result = serializeSemanticNodes(nodes);
     expect(result).toContain('Title\n\nUse x() at label');
@@ -160,6 +171,21 @@ describe('issue 964 semantic reply serialization', () => {
     expect(result).toContain('> quoted');
     expect(result).toContain('a\nb');
     expect(result.endsWith('\n')).toBe(false);
+  });
+
+  it('keeps authored link text while excluding known UI chrome and hidden descriptors', () => {
+    expect(shouldSkipSemanticElement({ tag: 'button' })).toBe(true);
+    expect(shouldSkipSemanticElement({ tag: 'span', ariaHidden: 'true' })).toBe(true);
+    expect(shouldSkipSemanticElement({ tag: 'span', testid: 'copy-button' })).toBe(true);
+    expect(shouldSkipSemanticElement({ tag: 'span', testid: 'citation-hover-card' })).toBe(true);
+    expect(shouldSkipSemanticElement({ tag: 'span', className: 'sr-only' })).toBe(true);
+    expect(shouldSkipSemanticElement({ tag: 'a', testid: 'citation-link' })).toBe(false);
+    expect(serializeSemanticNodes([
+      { type: 'paragraph', children: [
+        { type: 'text', text: 'See ' },
+        { type: 'link', children: [{ type: 'text', text: 'authored source' }] },
+      ] },
+    ])).toBe('See authored source');
   });
 
   it('merges continuation snapshots without duplicate overlap', () => {
@@ -188,6 +214,39 @@ describe('issue 964 causal witness gate', () => {
       { id: 'assistant-match-one', role: 'assistant', parent: userId },
       { id: 'assistant-match-two', role: 'assistant', parent: userId },
     ])).toEqual({ state: 'ambiguous' });
+  });
+
+  it('admits parallel witness surface only when a visible assistant has an exact visible user parent', async () => {
+    const userId = 'user-12345678';
+    const messageLocator = (role: 'user' | 'assistant', id: string, parent?: string) => ({
+      getAttribute: async (name: string) => {
+        if (name === 'data-message-author-role') return role;
+        if (name === 'data-message-id') return id;
+        if (name === 'data-parent-message-id') return parent ?? null;
+        return null;
+      },
+      locator: () => ({ first: () => ({ getAttribute: async () => null }) }),
+    });
+    const pageWithRelation = {
+      locator: () => {
+        const messages = [
+          messageLocator('user', userId),
+          messageLocator('assistant', 'assistant-12345678', userId),
+        ];
+        return { count: async () => messages.length, nth: (index: number) => messages[index] };
+      },
+    };
+    const pageWithoutRelation = {
+      locator: () => {
+        const messages = [
+          messageLocator('user', userId),
+          messageLocator('assistant', 'assistant-12345678'),
+        ];
+        return { count: async () => messages.length, nth: (index: number) => messages[index] };
+      },
+    };
+    expect(await runtimeWitnessSurfaceAvailable(pageWithRelation)).toBe(true);
+    expect(await runtimeWitnessSurfaceAvailable(pageWithoutRelation)).toBe(false);
   });
 
   it('awaits the final pre-send admission guard and performs zero dispatch when it refuses', async () => {
