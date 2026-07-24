@@ -73,7 +73,7 @@ a task into **T1**. Smallness is necessary but not sufficient for T1.
 Mechanical guard: `scripts/check-tier-calibration-consistency.ps1` over the
 committed calibration sample.
 
-## Per-tier task-spec review flow
+## Per-tier draft-review flow
 
 Governs **create-issue-draft task-spec review** only. Worker **PR-code** review
 (`prompts/codex_review_prompt.md`, pack review runner) is unchanged.
