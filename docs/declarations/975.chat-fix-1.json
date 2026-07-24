@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "0386744ef47c8435df7ff619a946ba168c0fefd9",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:bd0f8fec66d62a31f0e02c3c6a9bf18a4d8202c513e587d639e7a168dc80ca8b"
+    "active_scope_hash": "sha256:42903f19f4313ccecb2e4f63740c62d3ccb6445c9e05c5154a68b6bdcbbeba23"
   },
   "declared_paths": [
     ".claude/skills/adversarial-draft-review/SKILL.md",
@@ -16,8 +16,24 @@
     "prompts/codex_draft_review_prompt.md",
     "scripts/finding-ledger-guard.mjs",
     "scripts/finding-ledger-guard.test.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:bd0f8fec66d62a31f0e02c3c6a9bf18a4d8202c513e587d639e7a168dc80ca8b",
+      "new_active_scope_hash": "sha256:42903f19f4313ccecb2e4f63740c62d3ccb6445c9e05c5154a68b6bdcbbeba23",
+      "changed": {
+        "added": [
+          "scripts/vitest-runtime-history.json"
+        ],
+        "removed": []
+      },
+      "reason": "Seed the mandatory finding-ledger regression test runtime weight after #974/main drift raised unresolved pre-topology targets to the existing hard limit",
+      "actor": "chat-review-fix-4777102421",
+      "timestamp": "2026-07-24T23:09:21.744067Z",
+      "applied": true
+    }
+  ]
 }
