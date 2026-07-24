@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { constants, closeSync, fsyncSync, mkdirSync, openSync, renameSync, writeFileSync } from 'node:fs';
+import { constants, closeSync, fsyncSync, mkdirSync, openSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
@@ -18,8 +18,22 @@ export function sha256(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function configuredProfileIdentity(profile: string): string {
+  let portable = profile.trim().replaceAll('\\', '/');
+  const drive = /^([A-Za-z]):(.*)$/.exec(portable);
+  if (drive?.[1] !== undefined) portable = `/mnt/${drive[1].toLowerCase()}${drive[2] ?? ''}`;
+  const absolute = resolve(portable);
+  let canonical = absolute;
+  try {
+    canonical = realpathSync.native(absolute);
+  } catch {
+    // A later control-plane query may need the same key while the profile is temporarily unavailable.
+  }
+  return canonical.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase();
+}
+
 export function configuredProfileKey(profile: string, cdp: string): string {
-  const normalizedProfile = process.platform === 'win32' ? resolve(profile).toLowerCase() : resolve(profile);
+  const normalizedProfile = configuredProfileIdentity(profile);
   const endpoint = new URL(cdp);
   endpoint.hash = '';
   endpoint.search = '';
