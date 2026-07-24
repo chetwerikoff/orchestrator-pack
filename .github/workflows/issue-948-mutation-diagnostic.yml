@@ -1,44 +1,79 @@
-name: issue-948-mutation-diagnostic
+name: issue-948-final-mutation-binding-fix
 
 on:
   pull_request:
 
 permissions:
-  contents: read
-
-env:
-  TARGET_HEAD: 10672b3d3a279d5f191120bc52b57500097a84c8
+  contents: write
 
 jobs:
-  mutation-group:
+  patch:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        ac: [AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8]
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TARGET_HEAD }}
+          ref: tmp/issue-948-verification-toolchain
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Run mutation group
+      - name: Apply concrete mutation bindings
         shell: bash
         run: |
-          set +e
-          node --experimental-strip-types scripts/pr2a/mutation-runner.ts --ac '${{ matrix.ac }}' > 'mutation-${{ matrix.ac }}.log' 2>&1
-          status=$?
-          cat 'mutation-${{ matrix.ac }}.log'
-          exit "$status"
-      - name: Upload mutation diagnostic
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-948-mutation-${{ matrix.ac }}
-          path: mutation-${{ matrix.ac }}.log
-          if-no-files-found: error
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}: {old}")
+              p.write_text(text.replace(old, new, 1))
+
+          fc = 'scripts/pr2a/final-conformance.ts'
+          replace_once(
+              fc,
+              "  { ac: 'AC2', mutationId: 'policy-semantics-changed', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: 'evaluateReclaimDecision,' },",
+              "  { ac: 'AC2', mutationId: 'policy-semantics-changed', path: 'scripts/lib/review-start-claim-cli.ts', kind: 'required', token: '  evaluateReadinessEnvelope,\\n  evaluateReclaimDecision,\\n  evaluateSweep,' },",
+          )
+          replace_once(
+              fc,
+              "  { ac: 'AC5', mutationId: 'receipt-final-tree-or-lineage-invalid', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'command-result-tree-binding-mismatch' },",
+              "  { ac: 'AC5', mutationId: 'receipt-final-tree-or-lineage-invalid', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'return observedCommitSha === expectedCommitSha || gitTreeOid(observedCommitSha) === expectedTreeOid;' },",
+          )
+          replace_once(
+              fc,
+              "  { ac: 'AC8', mutationId: 'final-evidence-tree-or-platform-stale', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'function validateVerificationEnvironment' },",
+              "  { ac: 'AC8', mutationId: 'final-evidence-tree-or-platform-stale', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'function validateVerificationEnvironment(' },",
+          )
+
+          mr = 'scripts/pr2a/mutation-runner.ts'
+          replace_once(
+              mr,
+              "defineReplace('AC2','policy-semantics-changed','scripts/lib/review-start-claim-cli.ts',\"evaluateReclaimDecision,\",\"evaluateSweep as evaluateReclaimDecision,\");",
+              "defineReplace('AC2','policy-semantics-changed','scripts/lib/review-start-claim-cli.ts',\"  evaluateReadinessEnvelope,\\n  evaluateReclaimDecision,\\n  evaluateSweep,\",\"  evaluateReadinessEnvelope,\\n  evaluateSweep as evaluateReclaimDecision,\\n  evaluateSweep,\");",
+          )
+          replace_once(
+              mr,
+              "defineReplace('AC5','receipt-final-tree-or-lineage-invalid','scripts/pr2a/closure-receipt.ts',\"command-result-tree-binding-mismatch\",\"command-result-binding-disabled\");",
+              "defineReplace('AC5','receipt-final-tree-or-lineage-invalid','scripts/pr2a/closure-receipt.ts',\"return observedCommitSha === expectedCommitSha || gitTreeOid(observedCommitSha) === expectedTreeOid;\",\"return true;\");",
+          )
+          replace_once(
+              mr,
+              "defineReplace('AC8','final-evidence-tree-or-platform-stale','scripts/pr2a/closure-receipt.ts',\"function validateVerificationEnvironment\",\"function validateVerificationEnvironmentDisabled\");",
+              "defineReplace('AC8','final-evidence-tree-or-platform-stale','scripts/pr2a/closure-receipt.ts',\"function validateVerificationEnvironment(\",\"function validateVerificationEnvironmentDisabled(\");",
+          )
+          PY
+          git diff --check
+          git status --short
+      - name: Commit and push production fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'orchestrator-pack-ci'
+          git config user.email 'orchestrator-pack-ci@users.noreply.github.com'
+          git add scripts/pr2a/final-conformance.ts scripts/pr2a/mutation-runner.ts
+          git commit -m 'fix(issue-948): bind remaining mutations to production checks'
+          git push origin HEAD:tmp/issue-948-verification-toolchain
