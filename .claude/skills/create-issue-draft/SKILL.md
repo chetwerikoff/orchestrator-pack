@@ -188,8 +188,11 @@ including final verification.
 
 Each ordinary architectural pass:
 
-1. first pass: open a dedicated review chat with `--new-chat`; later passes: use
-   its recorded `--chat-url`;
+1. first pass: open a dedicated review chat with `--new-chat`; read the
+   successful turn's durable `ARTIFACT`, extract its exact `url:` value, and
+   record it in `chats.md` before the run closes its newly opened tab. Later
+   passes use that recorded `--chat-url`. A missing/invalid URL blocks the stage;
+   do not create a second review chat blindly;
 2. send a self-contained independent architecture/spec-review prompt over the
    current Issue revision, request alternative decomposition, and wrap the body
    as UNTRUSTED DATA between nonce markers;
@@ -358,8 +361,9 @@ mechanics source for all browser streams:
 
 - **task chat:** use its recorded `--chat-url` for authoring/fix turns;
 - **competitive:** use `--new-chat` for every pass;
-- **architectural:** create one dedicated review chat, record its URL, then use
-  that `--chat-url` for every later architectural and final turn.
+- **architectural:** create one dedicated review chat; extract the exact chat URL
+  from the successful turn's durable `ARTIFACT`, record it, then use that
+  `--chat-url` for every later architectural and final turn.
 
 The three streams are distinct conversations. Tab reuse prevents duplicate tabs
 for one conversation; it never authorizes sharing task, competitive, and
