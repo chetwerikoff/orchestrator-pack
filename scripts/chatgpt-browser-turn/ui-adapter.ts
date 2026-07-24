@@ -324,7 +324,7 @@ async function observedDispatchUserIds(
 }
 
 export interface TurnBrowserResult {
-  state: 'ok'|'quota'|'challenge'|'login'|'stream_timeout'|'send_failed'|'no_reply'|'ui_contract_mismatch'|'foreign_activity'|'recovery_required'|'orphaned_fresh_turn';
+  state: 'ok'|'quota'|'challenge'|'login'|'stream_timeout'|'send_failed'|'no_reply'|'ui_contract_mismatch'|'foreign_activity'|'recovery_required'|'orphaned_fresh_turn'|'output_conflict';
   cause: string;
   conversationId?: string;
   userMessageId?: string;
@@ -398,6 +398,15 @@ export async function sendTurn(
   revalidateProcessDestinationReservations();
   network.armDispatch();
   await onBeforeSend?.();
+  try {
+    revalidateProcessDestinationReservations();
+  } catch (error) {
+    return {
+      state: 'output_conflict',
+      cause: error instanceof Error ? error.message : 'output_conflict:changed_before_dispatch',
+      possibleDelivery: false,
+    };
+  }
   try {
     if (await send.count()) await send.click();
     else await page.keyboard.press('Enter');
