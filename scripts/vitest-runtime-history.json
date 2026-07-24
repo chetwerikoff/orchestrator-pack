@@ -31,11 +31,14 @@
     "scripts/autonomous-orchestrator-interposer.test.ts": 45000,
     "scripts/autonomous-review-worktree-e2e-smoke.test.ts": 45000,
     "scripts/ci-green-wake-reconcile.test.ts": 45000,
+    "scripts/contract-evidence-legacy-list-guard.test.ts": 45000,
+    "scripts/finding-ledger-guard.test.ts": 45000,
     "scripts/gh-wrapper.test.ts": 45000,
     "scripts/orchestrator-escalation.test.ts": 45000,
     "scripts/orchestrator-escalation-router.test.ts": 45000,
     "scripts/orchestrator-wake-listener-evaluate.test.ts": 60000,
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": 113999,
+    "scripts/pr-session-binding-cache.test.ts": 120000,
     "scripts/review-delivery.test.ts": 45000,
     "scripts/review-finding-delivery-confirm.test.ts": 45000,
     "scripts/review-finding-delivery-submit.test.ts": 45000,
@@ -54,9 +57,7 @@
     "scripts/review-wake-trigger.test.ts": 45000,
     "scripts/session-pr-binding-resolver.test.ts": 120000,
     "scripts/session-runtime-liveness.test.ts": 45000,
-    "scripts/worker-message-submit-reconcile.test.ts": 70000,
-    "scripts/pr-session-binding-cache.test.ts": 120000,
-    "scripts/contract-evidence-legacy-list-guard.test.ts": 45000
+    "scripts/worker-message-submit-reconcile.test.ts": 70000
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -86,6 +87,8 @@
     "scripts/autonomous-orchestrator-interposer.test.ts": "measured",
     "scripts/autonomous-review-worktree-e2e-smoke.test.ts": "measured",
     "scripts/ci-green-wake-reconcile.test.ts": "measured",
+    "scripts/contract-evidence-legacy-list-guard.test.ts": "measured",
+    "scripts/finding-ledger-guard.test.ts": "seeded",
     "scripts/gh-wrapper.test.ts": "measured",
     "scripts/orchestrator-escalation.test.ts": "measured",
     "scripts/orchestrator-escalation-router.test.ts": "measured",
@@ -110,8 +113,7 @@
     "scripts/review-wake-trigger.test.ts": "measured",
     "scripts/session-pr-binding-resolver.test.ts": "measured",
     "scripts/session-runtime-liveness.test.ts": "measured",
-    "scripts/worker-message-submit-reconcile.test.ts": "measured",
-    "scripts/contract-evidence-legacy-list-guard.test.ts": "measured"
+    "scripts/worker-message-submit-reconcile.test.ts": "measured"
   },
   "recentSamples": {},
   "fileChangedAt": {}
