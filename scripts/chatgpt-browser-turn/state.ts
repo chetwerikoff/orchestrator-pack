@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -33,7 +34,12 @@ function bodyFreeToken(value: Omit<CommonIncidentRecordV1, 'evidence_token'>): s
   return sha256(JSON.stringify(value));
 }
 
+function validRecordIdentity(identity: string): boolean {
+  return /^record-[0-9a-f-]{36}$/i.test(identity) && basename(identity) === identity;
+}
+
 function recordPath(profileKey: string, identity: string): string {
+  if (!validRecordIdentity(identity)) throw new Error('record_identity_invalid');
   return join(profileDirs(profileKey).records, `${identity}.json`);
 }
 
@@ -91,6 +97,7 @@ export function updateIncident(
 }
 
 export function deleteIncident(profileKey: string, identity: string): void {
+  if (!validRecordIdentity(identity)) return;
   const path = recordPath(profileKey, identity);
   if (existsSync(path)) unlinkSync(path);
 }
@@ -100,6 +107,7 @@ export function listReadableIncidents(profileKey: string): Array<{ identity: str
   for (const name of readdirSync(profileDirs(profileKey).records).sort()) {
     if (!name.endsWith('.json')) continue;
     const identity = name.slice(0, -5);
+    if (!validRecordIdentity(identity)) throw new Error('incompatible_record');
     result.push({ identity, record: readKnownRecord(join(profileDirs(profileKey).records, name), profileKey) });
   }
   return result;
@@ -133,10 +141,16 @@ function opaquePath(profileKey: string, area: OpaqueArea, name: string): string 
   return name === 'capability.json' ? d.capability : null;
 }
 
+function regularBytes(path: string): Buffer {
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('non_regular_state_artifact');
+  return readFileSync(path);
+}
+
 function opaqueStatusItem(profileKey: string, area: OpaqueArea, name: string): StatusItemV1 {
   const path = opaquePath(profileKey, area, name);
   if (!path) throw new Error('opaque_path_invalid');
-  const bytes = readFileSync(path);
+  const bytes = regularBytes(path);
   const digest = sha256(bytes);
   return {
     identity: `opaque:${area}:${encodeName(name)}:${digest}`,
@@ -163,19 +177,46 @@ interface TombstoneV1 {
   readonly updated_at: string;
 }
 
+function validTombstoneIdentity(identity: string): boolean {
+  return /^tombstone-[0-9a-f-]{36}$/i.test(identity) && basename(identity) === identity;
+}
+
 function readTombstone(path: string, profileKey: string): TombstoneV1 {
-  const value = JSON.parse(readFileSync(path, 'utf8')) as TombstoneV1;
+  const value = JSON.parse(regularBytes(path).toString('utf8')) as TombstoneV1;
+  const sourceNameValid = basename(value.source_name ?? '') === value.source_name
+    && (value.source_area === 'capability' ? value.source_name === 'capability.json' : value.source_name.endsWith('.json'));
   if (value.schema !== 'chatgpt-browser-turn-tombstone/v1'
     || value.version !== 1
     || value.configured_profile_key !== profileKey
+    || !validTombstoneIdentity(value.identity)
     || !['records', 'publications', 'capability'].includes(value.source_area)
+    || !sourceNameValid
     || !Number.isInteger(value.generation)
     || value.generation < 1
+    || !Number.isInteger(value.source_generation)
+    || value.source_generation < 0
     || !/^[0-9a-f]{64}$/.test(value.source_digest)
-    || !['preparing', 'active'].includes(value.state)) {
+    || basename(value.quarantine_name ?? '') !== value.quarantine_name
+    || value.quarantine_name !== `${value.identity}.opaque`
+    || !['preparing', 'active'].includes(value.state)
+    || !Number.isFinite(Date.parse(value.created_at))
+    || !Number.isFinite(Date.parse(value.updated_at))) {
     throw new Error('bad_tombstone');
   }
   return value;
+}
+
+function quarantineStatusItem(path: string, identity: string, generation: number, expectedDigest?: string): StatusItemV1 {
+  const bytes = regularBytes(path);
+  const digest = sha256(bytes);
+  return {
+    identity,
+    kind: 'opaque_quarantine',
+    generation,
+    evidence_token: digest,
+    cause: expectedDigest && digest !== expectedDigest ? 'quarantine_bytes_changed' : undefined,
+    opaque: true,
+  };
 }
 
 function control(
@@ -321,15 +362,18 @@ export function downgradeCapability(profileKey: string): void {
 export function statusList(profileKey: string): ControlResultV1 {
   const d = profileDirs(profileKey);
   const items: StatusItemV1[] = [];
+  const referencedQuarantine = new Set<string>();
   let blocked = false;
 
   for (const name of readdirSync(d.records).sort()) {
     if (!name.endsWith('.json')) continue;
     const path = join(d.records, name);
     try {
+      const identity = name.slice(0, -5);
+      if (!validRecordIdentity(identity)) throw new Error('incompatible_record');
       const record = readKnownRecord(path, profileKey);
       items.push({
-        identity: name.slice(0, -5),
+        identity,
         kind: record.kind,
         generation: record.generation,
         phase: record.phase,
@@ -352,6 +396,7 @@ export function statusList(profileKey: string): ControlResultV1 {
     blocked = true;
     try {
       const tombstone = readTombstone(join(d.tombstones, name), profileKey);
+      referencedQuarantine.add(tombstone.quarantine_name);
       items.push({
         identity: tombstone.identity,
         kind: 'blocking_tombstone',
@@ -359,8 +404,45 @@ export function statusList(profileKey: string): ControlResultV1 {
         evidence_token: tombstone.source_digest,
         opaque: true,
       });
+      const quarantinePath = join(d.quarantine, tombstone.quarantine_name);
+      try {
+        items.push(quarantineStatusItem(
+          quarantinePath,
+          `quarantine:${tombstone.identity}`,
+          tombstone.generation,
+          tombstone.source_digest,
+        ));
+      } catch {
+        items.push({
+          identity: `quarantine:${tombstone.identity}:unreadable`,
+          kind: 'opaque_quarantine',
+          generation: tombstone.generation,
+          evidence_token: 'unreadable',
+          cause: 'quarantine_missing_or_unreadable',
+          opaque: true,
+        });
+      }
     } catch {
       items.push({ identity: `tombstone:${name}:unreadable`, kind: 'blocking_tombstone', generation: 0, evidence_token: 'unreadable', opaque: true });
+    }
+  }
+
+  for (const name of readdirSync(d.quarantine).sort()) {
+    if (referencedQuarantine.has(name)) continue;
+    blocked = true;
+    const path = join(d.quarantine, name);
+    try {
+      const item = quarantineStatusItem(path, `opaque-quarantine:${encodeName(name)}`, generationForOpaque(path));
+      items.push(item);
+    } catch {
+      items.push({
+        identity: `opaque-quarantine:${encodeName(name)}:unreadable`,
+        kind: 'opaque_quarantine',
+        generation: 0,
+        evidence_token: 'unreadable',
+        cause: 'orphaned_quarantine_unreadable',
+        opaque: true,
+      });
     }
   }
 
@@ -416,6 +498,7 @@ export function clearReadable(
   generation: number,
   evidenceToken: string,
 ): ControlResultV1 {
+  if (!validRecordIdentity(identity)) return control('clear', 'not_found', profileKey);
   const path = recordPath(profileKey, identity);
   if (!existsSync(path)) return control('clear', 'not_found', profileKey);
   let record: CommonIncidentRecordV1;
@@ -502,6 +585,7 @@ export function adjudicateTombstone(
   expectedEvidenceSha256: string,
   actualEvidenceSha256: string,
 ): ControlResultV1 {
+  if (!validTombstoneIdentity(identity)) return control('clear', 'not_found', profileKey);
   if (!/^[0-9a-f]{64}$/.test(expectedEvidenceSha256)
     || !/^[0-9a-f]{64}$/.test(actualEvidenceSha256)
     || expectedEvidenceSha256 !== actualEvidenceSha256) {
@@ -516,9 +600,15 @@ export function adjudicateTombstone(
   } catch {
     return control('clear', 'profile_blocked', profileKey, 'tombstone_incompatible');
   }
-  if (tombstone.generation !== generation) return control('clear', 'stale_generation', profileKey);
+  if (tombstone.identity !== identity || tombstone.generation !== generation) return control('clear', 'stale_generation', profileKey);
   const quarantinePath = join(d.quarantine, tombstone.quarantine_name);
-  if (!existsSync(quarantinePath) || sha256(readFileSync(quarantinePath)) !== tombstone.source_digest) {
+  let quarantineBytes: Buffer;
+  try {
+    quarantineBytes = regularBytes(quarantinePath);
+  } catch {
+    return control('clear', 'evidence_changed', profileKey, 'quarantine_bytes_changed');
+  }
+  if (sha256(quarantineBytes) !== tombstone.source_digest) {
     return control('clear', 'evidence_changed', profileKey, 'quarantine_bytes_changed');
   }
 

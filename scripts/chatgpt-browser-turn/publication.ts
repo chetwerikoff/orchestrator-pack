@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import {
   closeSync,
-  existsSync,
   fsyncSync,
+  lstatSync,
   openSync,
   readFileSync,
   realpathSync,
@@ -36,7 +36,15 @@ export interface PublicationRecordV1 {
   readonly updated_at: string;
 }
 
+function validInvocationId(invocationId: string): boolean {
+  return invocationId.length > 0
+    && invocationId.length <= 128
+    && basename(invocationId) === invocationId
+    && /^[A-Za-z0-9._-]+$/.test(invocationId);
+}
+
 function publicationPath(profileKey: string, invocationId: string): string {
+  if (!validInvocationId(invocationId)) throw new Error('publication_invocation_invalid');
   return join(profileDirs(profileKey).publications, `${invocationId}.json`);
 }
 
@@ -57,21 +65,57 @@ function status(
   };
 }
 
+function likelyCaseInsensitive(path: string): boolean {
+  return process.platform === 'win32' || /^\/mnt\/[a-z](?:\/|$)/i.test(path);
+}
+
+function expectedOutputIdentity(path: string): string {
+  const identityPath = likelyCaseInsensitive(dirname(path)) ? path.toLowerCase() : path;
+  return `output-${sha256(identityPath)}`;
+}
+
+function validTempPath(record: PublicationRecordV1): boolean {
+  if (resolve(record.output_path) !== record.output_path || resolve(record.temp_path) !== record.temp_path) return false;
+  if (dirname(record.temp_path) !== dirname(record.output_path)) return false;
+  const prefix = `.${basename(record.output_path)}.${record.invocation_id}.`;
+  const name = basename(record.temp_path);
+  if (!name.startsWith(prefix) || !name.endsWith('.tmp')) return false;
+  const nonce = name.slice(prefix.length, -4);
+  return /^[0-9a-f-]{16,64}$/i.test(nonce);
+}
+
 function isCompatiblePublication(value: unknown, profileKey: string, invocationId?: string): value is PublicationRecordV1 {
   if (!value || typeof value !== 'object') return false;
   const record = value as PublicationRecordV1;
-  return record.schema === PUBLICATION_SCHEMA
-    && record.version === 1
-    && record.configured_profile_key === profileKey
-    && (invocationId === undefined || record.invocation_id === invocationId)
-    && typeof record.invocation_id === 'string'
-    && typeof record.output_path === 'string'
-    && typeof record.output_identity === 'string'
-    && typeof record.temp_path === 'string'
-    && typeof record.temp_dev === 'string'
-    && typeof record.temp_ino === 'string'
-    && Number.isInteger(record.owner_pid)
-    && ['prepared', 'committed', 'collision'].includes(record.state);
+  if (record.schema !== PUBLICATION_SCHEMA
+    || record.version !== 1
+    || record.configured_profile_key !== profileKey
+    || !validInvocationId(record.invocation_id)
+    || (invocationId !== undefined && record.invocation_id !== invocationId)
+    || typeof record.output_path !== 'string'
+    || typeof record.output_identity !== 'string'
+    || typeof record.temp_path !== 'string'
+    || !/^\d+$/.test(record.temp_dev)
+    || !/^\d+$/.test(record.temp_ino)
+    || !Number.isInteger(record.owner_pid)
+    || record.owner_pid <= 0
+    || !['prepared', 'committed', 'collision'].includes(record.state)
+    || !validTempPath(record)
+    || record.output_identity !== expectedOutputIdentity(record.output_path)
+    || !Number.isFinite(Date.parse(record.created_at))
+    || !Number.isFinite(Date.parse(record.updated_at))) {
+    return false;
+  }
+  if (record.state === 'committed') {
+    return Number.isInteger(record.output_bytes)
+      && Number(record.output_bytes) >= 0
+      && typeof record.output_sha256 === 'string'
+      && /^[0-9a-f]{64}$/.test(record.output_sha256)
+      && record.failure_cause === undefined;
+  }
+  if (record.output_bytes !== undefined || record.output_sha256 !== undefined) return false;
+  if (record.state === 'collision') return typeof record.failure_cause === 'string' && record.failure_cause.length > 0;
+  return record.failure_cause === undefined || typeof record.failure_cause === 'string';
 }
 
 export function publicationRecordCompatible(path: string, profileKey: string): boolean {
@@ -88,10 +132,21 @@ function writeRecord(profileKey: string, record: PublicationRecordV1): void {
 
 function sameObject(path: string, dev: string, ino: string): boolean {
   try {
-    const current = statSync(path, { bigint: true });
-    return String(current.dev) === dev && String(current.ino) === ino;
+    const current = lstatSync(path, { bigint: true });
+    return current.isFile() && String(current.dev) === dev && String(current.ino) === ino;
   } catch {
     return false;
+  }
+}
+
+function entryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error ? String((error as NodeJS.ErrnoException).code) : '';
+    if (code === 'ENOENT') return false;
+    throw error;
   }
 }
 
@@ -144,17 +199,19 @@ function detectNoReplaceMove(): NoReplaceMvMode | null {
 
 function noReplaceMove(tempPath: string, finalPath: string): { ok: boolean; collision: boolean; cause?: string } {
   const mode = detectNoReplaceMove();
-  if (!mode) {
-    return { ok: false, collision: false, cause: 'atomic_noreplace_primitive_unavailable' };
-  }
+  if (!mode) return { ok: false, collision: false, cause: 'atomic_noreplace_primitive_unavailable' };
   const args = mode === 'none-fail'
     ? ['--update=none-fail', '--no-copy', '--no-target-directory', tempPath, finalPath]
     : ['--no-clobber', '--no-copy', '--no-target-directory', tempPath, finalPath];
   const moved = runProcessSync({ command: 'mv', args });
-  if (existsSync(finalPath) && existsSync(tempPath)) {
-    return { ok: false, collision: true, cause: 'publication_commit_collision' };
+  try {
+    if (entryExists(finalPath) && entryExists(tempPath)) {
+      return { ok: false, collision: true, cause: 'publication_commit_collision' };
+    }
+    if (moved.ok && !entryExists(tempPath)) return { ok: true, collision: false };
+  } catch {
+    return { ok: false, collision: false, cause: 'publication_identity_unreadable' };
   }
-  if (moved.ok && !existsSync(tempPath)) return { ok: true, collision: false };
   return { ok: false, collision: false, cause: `atomic_rename_failed:${moved.outcome}:${moved.exitCode ?? 'none'}` };
 }
 
@@ -165,6 +222,9 @@ export function publishReply(
   outputIdentity: string,
   reply: string,
 ): PublicationStatusV1 {
+  if (!validInvocationId(invocationId)) {
+    return status(profileKey, invocationId, 'recovery_required', undefined, 'publication_invocation_invalid');
+  }
   const finalPath = resolve(outputPath);
   let parent: string;
   try {
@@ -172,7 +232,7 @@ export function publishReply(
   } catch {
     return status(profileKey, invocationId, 'recovery_required', finalPath, 'publication_parent_unavailable');
   }
-  if (join(parent, basename(finalPath)) !== finalPath) {
+  if (join(parent, basename(finalPath)) !== finalPath || outputIdentity !== expectedOutputIdentity(finalPath)) {
     return status(profileKey, invocationId, 'recovery_required', finalPath, 'publication_destination_identity_changed');
   }
 
@@ -212,10 +272,16 @@ export function publishReply(
   };
   writeRecord(profileKey, record);
 
-  if (existsSync(finalPath)) {
-    record = { ...record, state: 'collision', failure_cause: 'publication_commit_collision', updated_at: new Date().toISOString() };
+  try {
+    if (entryExists(finalPath)) {
+      record = { ...record, state: 'collision', failure_cause: 'publication_commit_collision', updated_at: new Date().toISOString() };
+      writeRecord(profileKey, record);
+      return status(profileKey, invocationId, 'recovery_required', finalPath, 'publication_commit_collision');
+    }
+  } catch {
+    record = { ...record, failure_cause: 'publication_destination_unreadable', updated_at: new Date().toISOString() };
     writeRecord(profileKey, record);
-    return status(profileKey, invocationId, 'recovery_required', finalPath, 'publication_commit_collision');
+    return status(profileKey, invocationId, 'recovery_required', finalPath, 'publication_destination_unreadable');
   }
 
   const moved = noReplaceMove(tempPath, finalPath);
@@ -262,8 +328,15 @@ export function publishReply(
 }
 
 export function publicationStatus(profileKey: string, invocationId: string): PublicationStatusV1 {
+  if (!validInvocationId(invocationId)) {
+    return status(profileKey, invocationId, 'profile_blocked', undefined, 'publication_invocation_invalid');
+  }
   const path = publicationPath(profileKey, invocationId);
-  if (!existsSync(path)) return status(profileKey, invocationId, 'not_committed');
+  try {
+    if (!entryExists(path)) return status(profileKey, invocationId, 'not_committed');
+  } catch {
+    return status(profileKey, invocationId, 'profile_blocked', undefined, 'publication_record_unreadable');
+  }
 
   let record: PublicationRecordV1;
   try {
@@ -285,32 +358,43 @@ export function publicationStatus(profileKey: string, invocationId: string): Pub
     };
   }
 
-  const finalExists = existsSync(record.output_path);
-  const exactTempExists = sameObject(record.temp_path, record.temp_dev, record.temp_ino);
-  if (finalExists) {
-    return status(profileKey, invocationId, 'recovery_required', record.output_path, 'publication_commit_collision');
+  let finalExists: boolean;
+  let tempExists: boolean;
+  try {
+    finalExists = entryExists(record.output_path);
+    tempExists = entryExists(record.temp_path);
+  } catch {
+    return status(profileKey, invocationId, 'recovery_required', record.output_path, 'publication_identity_unreadable');
   }
-  if (record.state === 'committed') {
-    return status(profileKey, invocationId, 'conflict', record.output_path, 'committed_output_missing');
-  }
+  const exactTempExists = tempExists && sameObject(record.temp_path, record.temp_dev, record.temp_ino);
+  if (finalExists) return status(profileKey, invocationId, 'recovery_required', record.output_path, 'publication_commit_collision');
+  if (record.state === 'committed') return status(profileKey, invocationId, 'conflict', record.output_path, 'committed_output_missing');
   if (record.state === 'collision') {
     return status(profileKey, invocationId, 'recovery_required', record.output_path, record.failure_cause ?? 'publication_commit_collision');
   }
   if (exactTempExists) {
+    const alive = pidAlive(record.owner_pid);
     return status(
       profileKey,
       invocationId,
-      pidAlive(record.owner_pid) ? 'in_progress' : 'recovery_required',
+      alive ? 'in_progress' : 'recovery_required',
       record.output_path,
-      pidAlive(record.owner_pid) ? 'publication_in_progress' : 'prepared_without_live_owner',
+      alive ? 'publication_in_progress' : 'prepared_without_live_owner',
     );
   }
   return status(profileKey, invocationId, 'recovery_required', record.output_path, record.failure_cause ?? 'publication_identity_missing');
 }
 
 export function discardUncommittedPublication(profileKey: string, invocationId: string, outputIdentity: string): boolean {
+  if (!validInvocationId(invocationId)) return false;
   const path = publicationPath(profileKey, invocationId);
-  if (!existsSync(path)) return true;
+  let pathExists: boolean;
+  try {
+    pathExists = entryExists(path);
+  } catch {
+    return false;
+  }
+  if (!pathExists) return true;
   let record: PublicationRecordV1;
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
@@ -321,8 +405,14 @@ export function discardUncommittedPublication(profileKey: string, invocationId: 
   }
   if (record.output_identity !== outputIdentity) return false;
   if (sameObject(record.output_path, record.temp_dev, record.temp_ino)) return false;
-  if (existsSync(record.temp_path) && !sameObject(record.temp_path, record.temp_dev, record.temp_ino)) return false;
-  if (existsSync(record.temp_path)) unlinkSync(record.temp_path);
+  let tempExists: boolean;
+  try {
+    tempExists = entryExists(record.temp_path);
+  } catch {
+    return false;
+  }
+  if (tempExists && !sameObject(record.temp_path, record.temp_dev, record.temp_ino)) return false;
+  if (tempExists) unlinkSync(record.temp_path);
   unlinkSync(path);
   return true;
 }

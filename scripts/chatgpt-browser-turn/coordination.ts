@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -41,22 +42,25 @@ export interface DestinationReservation {
   release(): void;
 }
 
+const activeProcessDestinations = new Map<string, string>();
+
 function errnoCode(error: unknown): string | undefined {
   return error instanceof Error && 'code' in error
     ? String((error as NodeJS.ErrnoException).code)
     : undefined;
 }
 
-function processStartToken(pid: number): string {
-  if (process.platform !== 'linux') return '';
+function processStartToken(pid: number): string | null {
+  if (process.platform !== 'linux') return null;
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
     const close = stat.lastIndexOf(')');
-    if (close < 0) return '';
+    if (close < 0) return null;
     const fields = stat.slice(close + 2).trim().split(/\s+/);
-    return fields[19] ?? '';
+    const token = fields[19] ?? '';
+    return token.length > 0 ? token : null;
   } catch {
-    return '';
+    return null;
   }
 }
 
@@ -70,11 +74,11 @@ function pidProvablyDead(pid: number): boolean {
 }
 
 function ownerProvablyDead(record: LockRecordV1): boolean {
-  if (process.platform === 'linux') {
-    const current = processStartToken(record.pid);
-    return current.length === 0 || current !== record.process_start_token;
-  }
-  return pidProvablyDead(record.pid);
+  if (pidProvablyDead(record.pid)) return true;
+  if (process.platform !== 'linux') return false;
+  if (!record.process_start_token) return false;
+  const current = processStartToken(record.pid);
+  return current !== null && current !== record.process_start_token;
 }
 
 function lockDirectory(profileKey: string, key: string): string {
@@ -85,15 +89,19 @@ function ownerPath(directory: string): string {
   return join(directory, 'owner.json');
 }
 
-function readLock(directory: string, profileKey: string, key: string): LockRecordV1 | null {
+function readLockRecord(directory: string, profileKey: string): LockRecordV1 | null {
   try {
     const value = JSON.parse(readFileSync(ownerPath(directory), 'utf8')) as LockRecordV1;
     if (value.schema !== 'chatgpt-browser-turn-lock/v1'
       || value.version !== 1
       || value.configured_profile_key !== profileKey
-      || value.key !== key
+      || typeof value.key !== 'string'
+      || value.key.length === 0
       || !Number.isInteger(value.generation)
       || value.generation < 1
+      || !Number.isInteger(value.pid)
+      || value.pid <= 0
+      || typeof value.process_start_token !== 'string'
       || !value.nonce
       || !['pre_send', 'possible_delivery'].includes(value.phase)) {
       return null;
@@ -102,6 +110,11 @@ function readLock(directory: string, profileKey: string, key: string): LockRecor
   } catch {
     return null;
   }
+}
+
+function readLock(directory: string, profileKey: string, key: string): LockRecordV1 | null {
+  const value = readLockRecord(directory, profileKey);
+  return value?.key === key ? value : null;
 }
 
 function createLockRecord(profileKey: string, key: string, generation: number): LockRecordV1 {
@@ -113,7 +126,7 @@ function createLockRecord(profileKey: string, key: string, generation: number): 
     key,
     generation,
     pid: process.pid,
-    process_start_token: processStartToken(process.pid),
+    process_start_token: processStartToken(process.pid) ?? '',
     nonce: randomUUID(),
     phase: 'pre_send',
     created_at: now,
@@ -170,48 +183,84 @@ function tryReclaim(profileKey: string, key: string, directory: string, staleMs:
   }
 }
 
+function isSchedulingKey(key: string): boolean {
+  return key.startsWith('profile:') || key.startsWith('conversation:') || key.startsWith('fresh:');
+}
+
+function hasSchedulingConflict(profileKey: string, requestedKey: string): boolean {
+  const locks = profileDirs(profileKey).locks;
+  for (const entry of readdirSync(locks, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const directory = join(locks, entry.name);
+    if (!existsSync(ownerPath(directory))) continue;
+    const current = readLockRecord(directory, profileKey);
+    if (!current) return true;
+    if (!isSchedulingKey(current.key)) continue;
+    if (requestedKey.startsWith('profile:')) {
+      if (current.key.startsWith('conversation:') || current.key.startsWith('fresh:')) return true;
+    } else if (current.key.startsWith('profile:')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function acquireDomainLock(
   profileKey: string,
   key: string,
   staleMs = 120_000,
 ): DomainLock | null {
-  const directory = lockDirectory(profileKey, key);
-  let record = createLockRecord(profileKey, key, 1);
-  if (!createLockDirectory(directory, record)) {
-    const nextGeneration = tryReclaim(profileKey, key, directory, staleMs);
-    if (nextGeneration === null) return null;
-    record = createLockRecord(profileKey, key, nextGeneration);
-    if (!createLockDirectory(directory, record)) return null;
+  let admissionGate: DomainLock | null = null;
+  if (isSchedulingKey(key)) {
+    admissionGate = acquireDomainLock(profileKey, `scheduling-admission:${profileKey}`, staleMs);
+    if (!admissionGate) return null;
   }
 
-  const assertOwned = (): LockRecordV1 => {
-    const current = readLock(directory, profileKey, key);
-    if (!current
-      || current.nonce !== record.nonce
-      || current.generation !== record.generation
-      || current.pid !== record.pid
-      || current.process_start_token !== record.process_start_token) {
-      throw new Error('lock_ownership_lost');
-    }
-    return current;
-  };
+  try {
+    if (isSchedulingKey(key) && hasSchedulingConflict(profileKey, key)) return null;
 
-  return {
-    key,
-    generation: record.generation,
-    nonce: record.nonce,
-    phase: record.phase,
-    updatePhase(phase) {
-      const current = assertOwned();
-      record = { ...current, phase, updated_at: new Date().toISOString() };
-      atomicJson(ownerPath(directory), record);
-      (this as { phase: 'pre_send' | 'possible_delivery' }).phase = phase;
-    },
-    release() {
-      assertOwned();
-      rmSync(directory, { recursive: true, force: false });
-    },
-  };
+    const directory = lockDirectory(profileKey, key);
+    let record = createLockRecord(profileKey, key, 1);
+    if (!createLockDirectory(directory, record)) {
+      const nextGeneration = tryReclaim(profileKey, key, directory, staleMs);
+      if (nextGeneration === null) return null;
+      record = createLockRecord(profileKey, key, nextGeneration);
+      if (!createLockDirectory(directory, record)) return null;
+    }
+
+    const assertOwned = (): LockRecordV1 => {
+      const current = readLock(directory, profileKey, key);
+      if (!current
+        || current.nonce !== record.nonce
+        || current.generation !== record.generation
+        || current.pid !== record.pid
+        || current.process_start_token !== record.process_start_token) {
+        throw new Error('lock_ownership_lost');
+      }
+      return current;
+    };
+
+    return {
+      key,
+      generation: record.generation,
+      nonce: record.nonce,
+      phase: record.phase,
+      updatePhase(phase) {
+        const current = assertOwned();
+        record = { ...current, phase, updated_at: new Date().toISOString() };
+        atomicJson(ownerPath(directory), record);
+        (this as { phase: 'pre_send' | 'possible_delivery' }).phase = phase;
+      },
+      release() {
+        assertOwned();
+        rmSync(directory, { recursive: true, force: false });
+      },
+    };
+  } finally {
+    if (admissionGate) {
+      try { admissionGate.release(); } catch { /* fail-closed scheduling state remains on disk */ }
+    }
+  }
 }
 
 export function clearDomainLock(profileKey: string, key: string): boolean {
@@ -231,7 +280,27 @@ function likelyCaseInsensitive(path: string): boolean {
   return process.platform === 'win32' || /^\/mnt\/[a-z](?:\/|$)/i.test(path);
 }
 
-export function destinationIdentity(outputPath: string): { finalPath: string; identity: string } {
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (errnoCode(error) === 'ENOENT') return false;
+    throw new Error('output_conflict:destination_unreadable');
+  }
+}
+
+function assertDestinationVacant(finalPath: string): void {
+  if (pathEntryExists(finalPath)) throw new Error('output_conflict:exists');
+  const parent = dirname(finalPath);
+  const name = basename(finalPath);
+  if (likelyCaseInsensitive(parent)) {
+    const collision = readdirSync(parent).some((entry) => entry.toLowerCase() === name.toLowerCase());
+    if (collision) throw new Error('output_conflict:case_alias_exists');
+  }
+}
+
+export function destinationIdentityForPath(outputPath: string): { finalPath: string; identity: string } {
   const absolute = resolve(outputPath);
   let parent: string;
   try {
@@ -241,15 +310,19 @@ export function destinationIdentity(outputPath: string): { finalPath: string; id
   }
   const name = basename(absolute);
   const finalPath = join(parent, name);
-  if (existsSync(finalPath)) throw new Error('output_conflict:exists');
-
   const fold = likelyCaseInsensitive(parent);
-  if (fold) {
-    const collision = readdirSync(parent).some((entry) => entry.toLowerCase() === name.toLowerCase());
-    if (collision) throw new Error('output_conflict:case_alias_exists');
-  }
   const identityPath = fold ? finalPath.toLowerCase() : finalPath;
   return { finalPath, identity: `output-${sha256(identityPath)}` };
+}
+
+export function destinationIdentity(outputPath: string): { finalPath: string; identity: string } {
+  const result = destinationIdentityForPath(outputPath);
+  assertDestinationVacant(result.finalPath);
+  return result;
+}
+
+export function revalidateProcessDestinationReservations(): void {
+  for (const finalPath of activeProcessDestinations.values()) assertDestinationVacant(finalPath);
 }
 
 export function reserveDestination(profileKey: string, outputPath: string): DestinationReservation {
@@ -257,7 +330,8 @@ export function reserveDestination(profileKey: string, outputPath: string): Dest
   const lock = acquireDomainLock(profileKey, `destination:${identity}`);
   if (!lock) throw new Error('output_conflict:reserved');
   try {
-    if (existsSync(finalPath)) throw new Error('output_conflict:appeared_during_reservation');
+    assertDestinationVacant(finalPath);
+    activeProcessDestinations.set(identity, finalPath);
     return {
       identity,
       finalPath,
@@ -267,9 +341,11 @@ export function reserveDestination(profileKey: string, outputPath: string): Dest
       },
       release() {
         lock.release();
+        activeProcessDestinations.delete(identity);
       },
     };
   } catch (error) {
+    activeProcessDestinations.delete(identity);
     try {
       lock.release();
     } catch {
