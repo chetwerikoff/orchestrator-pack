@@ -84,6 +84,7 @@ interface NetworkMessage extends CausalMessageObservation {
 interface NetworkWitnessState {
   readonly messages: NetworkMessage[];
   readonly dispatchCandidateIds: Set<string>;
+  activeTurnUserId?: string;
   armDispatch(): void;
 }
 
@@ -143,6 +144,77 @@ function parseRequestBody(request: any): NetworkMessage[] {
   }
 }
 
+function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: string): void {
+  if (!encodedItem) return;
+  state.messages.push(...parseStreamingBody(encodedItem));
+  for (const raw of encodedItem.split(/\r?\n/)) {
+    const line = raw.startsWith('data:') ? raw.slice(5).trim() : raw.trim();
+    if (!line || line === '[DONE]') continue;
+    try {
+      const payload = JSON.parse(line) as Record<string, unknown>;
+      recursivelyCollectMessages(payload, state.messages);
+      if (payload.type === 'input_message') {
+        const input = payload.input_message as Record<string, unknown> | undefined;
+        const id = typeof input?.id === 'string' ? input.id : '';
+        if (id && state.dispatchCandidateIds.has(id)) state.activeTurnUserId = id;
+      }
+      if (payload.type === 'message_marker' && payload.marker === 'user_visible_token') {
+        const assistantId = typeof payload.message_id === 'string' ? payload.message_id : '';
+        if (assistantId && state.activeTurnUserId) {
+          state.messages.push({ id: assistantId, role: 'assistant', parent: state.activeTurnUserId });
+        }
+      }
+      const delta = payload.v as Record<string, unknown> | undefined;
+      const message = delta?.message as Record<string, unknown> | undefined;
+      const author = message?.author as Record<string, unknown> | undefined;
+      const role = author?.role;
+      if (message && typeof message.id === 'string' && (role === 'user' || role === 'assistant')) {
+        const parent = typeof message.parent === 'string' ? message.parent : undefined;
+        state.messages.push({
+          id: message.id,
+          role,
+          ...(parent ? { parent } : {}),
+        });
+      }
+    } catch { /* non-JSON stream lines remain fail-closed */ }
+  }
+}
+
+function ingestWitnessJsonTree(state: NetworkWitnessState, value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const item of value) ingestWitnessJsonTree(state, item);
+    return;
+  }
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.encoded_item === 'string') ingestEncodedItemWitness(state, obj.encoded_item);
+  const payload = obj.payload;
+  if (payload && typeof payload === 'object') {
+    const nested = (payload as Record<string, unknown>).payload;
+    ingestWitnessJsonTree(state, nested ?? payload);
+  }
+  for (const child of Object.values(obj)) ingestWitnessJsonTree(state, child);
+}
+
+function ingestWebSocketWitnessPayload(state: NetworkWitnessState, payloadData: string): void {
+  if (!payloadData) return;
+  try {
+    ingestWitnessJsonTree(state, JSON.parse(payloadData));
+  } catch {
+    ingestEncodedItemWitness(state, payloadData);
+  }
+}
+
+async function installWebSocketWitness(page: any, state: NetworkWitnessState): Promise<void> {
+  const context = page.context?.();
+  if (!context || typeof context.newCDPSession !== 'function') return;
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Network.enable');
+  cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
+    ingestWebSocketWitnessPayload(state, event.response?.payloadData ?? '');
+  });
+}
+
 function attachNetworkWitness(page: any): NetworkWitnessState {
   let dispatchArmed = false;
   const state: NetworkWitnessState = {
@@ -150,6 +222,7 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     dispatchCandidateIds: new Set<string>(),
     armDispatch() { dispatchArmed = true; },
   };
+  void installWebSocketWitness(page, state).catch(() => {});
   page.on('request', (request: any) => {
     try {
       if (!dispatchArmed) return;
@@ -166,6 +239,11 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
       if (!/conversation|messages|responses/i.test(url)) return;
       const body = await response.text();
       state.messages.push(...parseStreamingBody(body));
+      try {
+        ingestWitnessJsonTree(state, JSON.parse(body));
+      } catch {
+        ingestEncodedItemWitness(state, body);
+      }
     } catch { /* streaming/opaque responses may not expose a body; DOM witness remains available */ }
   });
   return state;
@@ -210,7 +288,18 @@ export async function runtimeWitnessSurfaceAvailable(page: any): Promise<boolean
       if (id && parent) assistantParents.push(parent);
     }
   }
-  return assistantParents.some((parent) => userIds.has(parent));
+  if (assistantParents.some((parent) => userIds.has(parent))) return true;
+  for (let index = Math.max(0, count - 8); index < count - 1; index++) {
+    const locator = messages.nth(index);
+    const next = messages.nth(index + 1);
+    const role = await locator.getAttribute('data-message-author-role').catch(() => null);
+    const nextRole = await next.getAttribute('data-message-author-role').catch(() => null);
+    if (role !== 'user' || nextRole !== 'assistant') continue;
+    const userId = await serviceId(locator);
+    const turnStart = await next.getAttribute('data-turn-start-message').catch(() => null);
+    if (userId && turnStart === 'true') return true;
+  }
+  return false;
 }
 
 export interface ProductStatusSurface {
