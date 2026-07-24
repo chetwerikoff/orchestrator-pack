@@ -1,4 +1,4 @@
-import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
+import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, type BigIntStats } from 'node:fs';
 import { resolve } from 'node:path';
 
 const UTF8_FATAL = new TextDecoder('utf-8', { fatal: true });
@@ -11,14 +11,16 @@ export interface InputSnapshot {
   readonly ino: bigint;
 }
 
+export interface InputSnapshotHooks {
+  readonly afterOpen?: () => void;
+  readonly afterRead?: () => void;
+}
+
 function invalid(cause: string): never {
   throw new Error(`input_invalid:${cause}`);
 }
 
-function sameStableFile(
-  left: ReturnType<typeof fstatSync>,
-  right: ReturnType<typeof fstatSync>,
-): boolean {
+function sameStableFile(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev
     && left.ino === right.ino
     && left.size === right.size
@@ -26,9 +28,9 @@ function sameStableFile(
     && left.ctimeNs === right.ctimeNs;
 }
 
-export function readStableInput(path: string): InputSnapshot {
+export function readStableInput(path: string, hooks: InputSnapshotHooks = {}): InputSnapshot {
   const absolute = resolve(path);
-  let pathBefore: ReturnType<typeof lstatSync>;
+  let pathBefore: BigIntStats;
   try {
     pathBefore = lstatSync(absolute, { bigint: true });
   } catch {
@@ -45,10 +47,12 @@ export function readStableInput(path: string): InputSnapshot {
     if (openedBefore.dev !== pathBefore.dev || openedBefore.ino !== pathBefore.ino) {
       return invalid('changed_during_snapshot');
     }
+    hooks.afterOpen?.();
 
     const buffer = readFileSync(fd);
+    hooks.afterRead?.();
     const openedAfter = fstatSync(fd, { bigint: true });
-    let pathAfter: ReturnType<typeof lstatSync>;
+    let pathAfter: BigIntStats;
     try {
       pathAfter = lstatSync(absolute, { bigint: true });
     } catch {
