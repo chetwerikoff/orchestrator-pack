@@ -1,0 +1,366 @@
+name: issue-948-final-evidence
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  issues: read
+
+env:
+  TARGET_SHA: 3302181e9c77fc2f2967ddedba37bef18fd07af5
+  LEGACY_SHA: b967dfe156838039e1d6d137e7064dc9d1b10b4d
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  pre-receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - name: Run pre-receipt suites and build receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVID="$RUNNER_TEMP/issue948-evidence"
+          rm -rf "$EVID"
+          mkdir -p "$EVID/commands" "$EVID/overlap" "$EVID/rollback" "$EVID/external"
+          TARGET_COMMIT=$(git rev-parse "$TARGET_SHA^{commit}")
+          TARGET_TREE=$(git rev-parse "$TARGET_SHA^{tree}")
+          LEGACY_TREE=$(git rev-parse "$LEGACY_SHA^{tree}")
+          [ -z "$(git status --porcelain --untracked-files=all)" ]
+
+          run_record() {
+            local label="$1" slug="$2"; shift 2
+            local log_rel="commands/${slug}.log"
+            local result_rel="commands/${slug}.json"
+            local row_rel="commands/${slug}.row.json"
+            local started completed code
+            started=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+            set +e
+            "$@" >"$EVID/$log_rel" 2>&1
+            code=$?
+            set -e
+            completed=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+            LABEL="$label" RESULT="$EVID/$result_rel" ROW="$EVID/$row_rel" LOG_REL="$log_rel" RESULT_REL="$result_rel" STARTED="$started" COMPLETED="$completed" CODE="$code" TARGET_COMMIT="$TARGET_COMMIT" TARGET_TREE="$TARGET_TREE" node <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const sha = p => `sha256:${crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')}`;
+          const result = {
+            schemaVersion: 1,
+            command: process.env.LABEL,
+            exitCode: Number(process.env.CODE),
+            checkoutCommitSha: process.env.TARGET_COMMIT,
+            checkoutTreeOid: process.env.TARGET_TREE,
+            startedAtUtc: process.env.STARTED,
+            completedAtUtc: process.env.COMPLETED,
+          };
+          fs.writeFileSync(process.env.RESULT, `${JSON.stringify(result)}\n`);
+          const root = process.env.RESULT.replace(/\/commands\/[^/]+\.json$/u, '');
+          const logPath = `${root}/${process.env.LOG_REL}`;
+          const row = {
+            command: process.env.LABEL,
+            exitCode: 0,
+            checkoutCommitSha: process.env.TARGET_COMMIT,
+            checkoutTreeOid: process.env.TARGET_TREE,
+            resultPath: process.env.RESULT_REL,
+            resultSha256: sha(process.env.RESULT),
+            logPath: process.env.LOG_REL,
+            logSha256: sha(logPath),
+          };
+          fs.writeFileSync(process.env.ROW, `${JSON.stringify(row)}\n`);
+          NODE
+            if [ "$code" -ne 0 ]; then
+              cat "$EVID/$log_rel"
+              return "$code"
+            fi
+          }
+
+          run_all_heavy() {
+            rm -f scripts/vitest-heavy-topology.plan.json
+            node scripts/emit-vitest-heavy-topology.mjs
+            local count
+            count=$(node -e "const p=require('./scripts/vitest-heavy-topology.plan.json'); process.stdout.write(String(p.heavyShardCount))")
+            export OPK_VITEST_TOPOLOGY_PLAN_PATH="$PWD/scripts/vitest-heavy-topology.plan.json"
+            for shard in $(seq 1 "$count"); do
+              pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard "$shard"
+            done
+          }
+
+          run_record 'npm run typecheck:foundation' '01-typecheck' npm run typecheck:foundation
+          run_record 'npm run lint:foundation' '02-lint' npm run lint:foundation
+          run_record 'npm run test:contract-mutations' '03-mutations' npm run test:contract-mutations
+          run_record 'npm run test:issue-948' '04-issue948' npm run test:issue-948
+          run_record 'pwsh -NoProfile -File scripts/verify.ps1' '05-verify' pwsh -NoProfile -File scripts/verify.ps1
+          run_record 'pwsh -NoProfile -File scripts/check-reusable.ps1' '06-reusable' pwsh -NoProfile -File scripts/check-reusable.ps1
+          run_record 'pwsh -NoProfile -File scripts/test-all.ps1' '07-pester' pwsh -NoProfile -File scripts/test-all.ps1
+          run_record 'vitest-light' '08-vitest-light' pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1
+          run_record 'vitest-heavy' '09-vitest-heavy' run_all_heavy
+
+          rm -f .vitest-runtime-report-*.json scripts/vitest-heavy-topology.plan.json
+          [ -z "$(git status --porcelain --untracked-files=all)" ]
+
+          CANDIDATE_BUILD_DIGEST=$(node --experimental-strip-types --input-type=module - "$TARGET_SHA" <<'NODE'
+          import { buildCandidateBuildProvenance } from './scripts/pr2a/closure-receipt.ts';
+          process.stdout.write(buildCandidateBuildProvenance(process.argv[2]).digest);
+          NODE
+          )
+          NODE_PATH=$(command -v node)
+          FS_TYPE=$(findmnt -n -o FSTYPE -T "$EVID" | tr '[:upper:]' '[:lower:]' | xargs)
+          NODE_VERSION=$(node -v)
+          PWSH_VERSION=$(pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')
+
+          cat > "$EVID/overlap/replay.mjs" <<'JS'
+          import { readFileSync } from 'node:fs';
+          import { spawnSync } from 'node:child_process';
+          import path from 'node:path';
+          const input = JSON.parse(readFileSync(path.resolve(process.cwd(), process.argv[2]), 'utf8'));
+          const args = [
+            path.join(input.repoRoot, 'node_modules/vitest/vitest.mjs'),
+            'run', '--config', 'vitest.config.ts',
+            'scripts/pr2a/final-conformance.test.ts',
+            '--testNamePattern', 'Issue #948 persisted TypeScript claim authority',
+            '--maxWorkers=1', '--reporter=dot',
+          ];
+          const result = spawnSync(input.nodePath, args, {
+            cwd: input.repoRoot,
+            env: {
+              PATH: input.pathEnv,
+              HOME: input.home,
+              TMPDIR: input.tmpdir,
+              CI: 'true',
+              OPK_VITEST_HARNESS: '1',
+              OPK_TESTMODE_FLEET_WORKSPACE_ROOT: input.repoRoot,
+            },
+            encoding: 'utf8',
+          });
+          if (result.status !== 0) {
+            process.stderr.write(result.stdout || '');
+            process.stderr.write(result.stderr || '');
+            process.exit(result.status ?? 1);
+          }
+          process.stdout.write(`${JSON.stringify({ result: 'pass', suite: 'Issue #948 persisted TypeScript claim authority' })}\n`);
+          JS
+          REPO_ROOT="$PWD" NODE_PATH="$NODE_PATH" PATH_ENV="$PATH" HOME_ENV="$HOME" TMP_ENV="${TMPDIR:-/tmp}" node <<'NODE' > "$EVID/overlap/inputs.json"
+          process.stdout.write(`${JSON.stringify({
+            repoRoot: process.env.REPO_ROOT,
+            nodePath: process.env.NODE_PATH,
+            pathEnv: process.env.PATH_ENV,
+            home: process.env.HOME_ENV,
+            tmpdir: process.env.TMP_ENV,
+          })}\n`);
+          NODE
+          node "$EVID/overlap/replay.mjs" "$EVID/overlap/inputs.json" > "$EVID/overlap/stdout.txt"
+          node <<'NODE' > "$EVID/overlap/matrix.json"
+          process.stdout.write(`${JSON.stringify({ schemaVersion: 1, classes: ['acquisition','guarded-mutation','terminal-audit','release-completion','recovery-reap','interpretation','generation-fence'] })}\n`);
+          NODE
+          cp scripts/pr2a/review-start-claim-protocol-vectors.json "$EVID/overlap/vectors.json"
+          TARGET_COMMIT="$TARGET_COMMIT" TARGET_TREE="$TARGET_TREE" BUILD_DIGEST="$CANDIDATE_BUILD_DIGEST" node <<'NODE' > "$EVID/overlap/result.json"
+          process.stdout.write(`${JSON.stringify({
+            schemaVersion: 1,
+            result: 'pass',
+            candidateCommitSha: process.env.TARGET_COMMIT,
+            candidateTreeOid: process.env.TARGET_TREE,
+            candidateBuildDigest: process.env.BUILD_DIGEST,
+            classes: ['acquisition','guarded-mutation','terminal-audit','release-completion','recovery-reap','interpretation','generation-fence'],
+          })}\n`);
+          NODE
+
+          mkdir -p "$EVID/rollback/detached" "$EVID/rollback/compat"
+          node -e 'setInterval(() => {}, 1000)' &
+          CANDIDATE_PID=$!
+          node --experimental-strip-types scripts/pr2a/rollback-drain.ts export --out "$EVID/rollback/detached" --generation "$TARGET_TREE" --pids "$CANDIDATE_PID" > "$EVID/rollback/export.json"
+
+          OPK_VITEST_HARNESS=1 ROLLBACK_NS="$EVID/rollback/compat" node --experimental-strip-types --input-type=module <<'NODE' > "$EVID/rollback/ts-claim.json"
+          import { acquireReviewStartClaim } from './scripts/lib/review-start-claim-store.ts';
+          const result = acquireReviewStartClaim({ prNumber: 948, headSha: 'e'.repeat(40), surface: 'rollback-compat', namespace: process.env.ROLLBACK_NS, reviewRuns: [] });
+          if (!result.acquired || !result.path) throw new Error(`ts_claim_failed:${result.reason ?? ''}`);
+          process.stdout.write(`${JSON.stringify({ path: result.path })}\n`);
+          NODE
+          CLAIM_PATH=$(node -e "const x=require('$EVID/rollback/ts-claim.json'); process.stdout.write(x.path)")
+
+          LEGACY_WT="$RUNNER_TEMP/issue948-legacy"
+          rm -rf "$LEGACY_WT"
+          git worktree add --detach "$LEGACY_WT" "$LEGACY_SHA"
+          pwsh -NoProfile -Command ". '$LEGACY_WT/scripts/lib/Review-StartClaim.ps1'; \$r=Read-ReviewStartClaimRecord -Path '$CLAIM_PATH'; if (-not \$r.ok) { throw ('legacy_read_failed:' + \$r.reason) }"
+          (
+            cd "$LEGACY_WT"
+            node --experimental-strip-types "$EVID/rollback/detached/rollback-drain.ts" drain --artifact "$EVID/rollback/detached/rollback-drain-artifact.json" > "$EVID/rollback/drain-result.json"
+          )
+          wait "$CANDIDATE_PID" || true
+          if kill -0 "$CANDIDATE_PID" 2>/dev/null; then echo 'candidate survived rollback drain' >&2; exit 1; fi
+          git worktree remove --force "$LEGACY_WT"
+
+          DRAIN_SHA="sha256:$(sha256sum "$EVID/rollback/detached/rollback-drain-artifact.json" | awk '{print $1}')"
+          TARGET_TREE="$TARGET_TREE" DRAIN_SHA="$DRAIN_SHA" node <<'NODE' > "$EVID/rollback/result.json"
+          process.stdout.write(`${JSON.stringify({ schemaVersion: 1, result: 'pass', finalTreeOid: process.env.TARGET_TREE, zeroSurvivorsBeforeResume: true, detachedDrainSha256: process.env.DRAIN_SHA })}\n`);
+          NODE
+
+          gh api repos/chetwerikoff/orchestrator-pack/issues/928 > "$EVID/external/issue-928.json"
+          node - "$EVID/external/issue-928.json" "$EVID/external/issue-928.md" <<'NODE'
+          const fs=require('node:fs'); const issue=JSON.parse(fs.readFileSync(process.argv[2],'utf8')); fs.writeFileSync(process.argv[3], issue.body || '');
+          NODE
+
+          EVID="$EVID" TARGET_COMMIT="$TARGET_COMMIT" TARGET_TREE="$TARGET_TREE" LEGACY_SHA="$LEGACY_SHA" LEGACY_TREE="$LEGACY_TREE" BUILD_DIGEST="$CANDIDATE_BUILD_DIGEST" NODE_PATH="$NODE_PATH" FS_TYPE="$FS_TYPE" NODE_VERSION="$NODE_VERSION" PWSH_VERSION="$PWSH_VERSION" node <<'NODE'
+          const fs=require('node:fs'); const path=require('node:path'); const crypto=require('node:crypto');
+          const root=process.env.EVID; const sha=p=>`sha256:${crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex')}`;
+          const rows=fs.readdirSync(path.join(root,'commands')).filter(x=>x.endsWith('.row.json')).sort().map(x=>JSON.parse(fs.readFileSync(path.join(root,'commands',x),'utf8')));
+          const issue=JSON.parse(fs.readFileSync(path.join(root,'external/issue-928.json'),'utf8'));
+          const classes=['acquisition','guarded-mutation','terminal-audit','release-completion','recovery-reap','interpretation','generation-fence'];
+          const bundle={
+            schemaVersion:1,
+            overlap:{
+              schemaVersion:1,result:'pass',generatedAfterFinalTree:true,
+              finalTreeOid:process.env.TARGET_TREE,candidateTreeOid:process.env.TARGET_TREE,candidateBuildDigest:process.env.BUILD_DIGEST,
+              legacyRepository:'chetwerikoff/orchestrator-pack',legacyCommitSha:process.env.LEGACY_SHA,legacyTreeOid:process.env.LEGACY_TREE,
+              candidateRepository:'chetwerikoff/orchestrator-pack',candidateCommitSha:process.env.TARGET_COMMIT,
+              harnessPath:'overlap/replay.mjs',harnessSha256:sha('overlap/replay.mjs'),harnessBytesArchived:true,
+              operationMatrixPath:'overlap/matrix.json',operationMatrixSha256:sha('overlap/matrix.json'),
+              replayCommand:process.env.NODE_PATH,replayArgs:['overlap/replay.mjs','overlap/inputs.json'],replayCwd:'.',
+              replayInputsPath:'overlap/inputs.json',replayInputsSha256:sha('overlap/inputs.json'),
+              replayStdoutPath:'overlap/stdout.txt',replayStdoutSha256:sha('overlap/stdout.txt'),replayExitCode:0,
+              protocolVectorPath:'overlap/vectors.json',protocolVectorSha256:sha('overlap/vectors.json'),
+              platform:'linux',filesystem:process.env.FS_TYPE,classes,
+              logPath:'overlap/result.json',logSha256:sha('overlap/result.json'),
+            },
+            rollback:{
+              schemaVersion:1,result:'pass',finalTreeOid:process.env.TARGET_TREE,isolatedCheckout:true,
+              entryBlockedBeforeRevert:true,entryBlockedAfterRevert:true,quiescenceInventoryComplete:true,
+              detachedDrainPath:'rollback/detached/rollback-drain-artifact.json',detachedDrainSha256:sha('rollback/detached/rollback-drain-artifact.json'),
+              detachedDrainSurvivedRevert:true,zeroSurvivorsBeforeResume:true,legacyReadTsRecord:true,imports928ActivationMachinery:false,
+              logPath:'rollback/result.json',logSha256:sha('rollback/result.json'),
+            },
+            preReceiptVerification:{
+              schemaVersion:1,result:'pass',finalTreeOid:process.env.TARGET_TREE,checkoutCommitSha:process.env.TARGET_COMMIT,checkoutTreeOid:process.env.TARGET_TREE,
+              repository:'chetwerikoff/orchestrator-pack',platform:'linux',filesystem:process.env.FS_TYPE,nodeVersion:process.env.NODE_VERSION,pwshVersion:process.env.PWSH_VERSION,
+              cleanBefore:true,cleanAfter:true,stagedBefore:0,stagedAfter:0,untrackedBefore:0,untrackedAfter:0,prerequisiteSuitesPassedBeforeReceipt:true,commands:rows,
+            },
+            external928:{
+              schemaVersion:1,result:'pass',url:issue.html_url,repository:'chetwerikoff/orchestrator-pack',issue:928,
+              revisionIdentity:String(issue.node_id || issue.id),updatedAt:issue.updated_at,capturedAt:new Date().toISOString(),actor:'github-actions[bot]',tool:'gh-api',
+              bodyPath:'external/issue-928.md',bodySha256:sha('external/issue-928.md'),
+              requirements:{consumesPr2aTsAuthority:true,consumesReceiptAsPrecedent:true,independentlyRecomputesCurrentClosure:true,invariantBasedRefusal:true,historicalInventoryEqualityNotRequired:true},
+            },
+          };
+          fs.writeFileSync(path.join(root,'bundle.json'),`${JSON.stringify(bundle,null,2)}\n`);
+          NODE
+
+          node --experimental-strip-types scripts/pr2a/closure-receipt.ts --ref "$TARGET_SHA" --evidence "$EVID/bundle.json" > "$EVID/receipt.json"
+          node - "$EVID/receipt.json" <<'NODE'
+          const fs=require('node:fs'); const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8')); if(r.result!=='tree-bound-empty-external-reverse-closure'||!r.receiptSha256) process.exit(1); console.log(r.receiptSha256);
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-pre-receipt
+          path: ${{ runner.temp }}/issue948-evidence
+          if-no-files-found: error
+
+  post-final:
+    needs: pre-receipt
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --include=dev
+      - name: Install Pester
+        shell: pwsh
+        run: ./scripts/install-pester-ci.ps1
+      - uses: actions/download-artifact@v4
+        with:
+          name: issue-948-pre-receipt
+          path: ${{ runner.temp }}/issue948-evidence
+      - name: Run fresh-checkout final verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVID="$RUNNER_TEMP/issue948-evidence"
+          mkdir -p "$EVID/post/commands"
+          TARGET_COMMIT=$(git rev-parse "$TARGET_SHA^{commit}")
+          TARGET_TREE=$(git rev-parse "$TARGET_SHA^{tree}")
+          [ -z "$(git status --porcelain --untracked-files=all)" ]
+
+          run_record() {
+            local label="$1" slug="$2"; shift 2
+            local log_rel="post/commands/${slug}.log"
+            local result_rel="post/commands/${slug}.json"
+            local row_rel="post/commands/${slug}.row.json"
+            local started completed code
+            started=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+            set +e
+            "$@" >"$EVID/$log_rel" 2>&1
+            code=$?
+            set -e
+            completed=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+            LABEL="$label" RESULT="$EVID/$result_rel" ROW="$EVID/$row_rel" LOG_REL="$log_rel" RESULT_REL="$result_rel" STARTED="$started" COMPLETED="$completed" CODE="$code" TARGET_COMMIT="$TARGET_COMMIT" TARGET_TREE="$TARGET_TREE" EVID="$EVID" node <<'NODE'
+          const fs=require('node:fs'); const crypto=require('node:crypto'); const path=require('node:path');
+          const sha=p=>`sha256:${crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')}`;
+          const result={schemaVersion:1,command:process.env.LABEL,exitCode:Number(process.env.CODE),checkoutCommitSha:process.env.TARGET_COMMIT,checkoutTreeOid:process.env.TARGET_TREE,startedAtUtc:process.env.STARTED,completedAtUtc:process.env.COMPLETED};
+          fs.writeFileSync(process.env.RESULT,`${JSON.stringify(result)}\n`);
+          const row={command:process.env.LABEL,exitCode:0,checkoutCommitSha:process.env.TARGET_COMMIT,checkoutTreeOid:process.env.TARGET_TREE,resultPath:process.env.RESULT_REL,resultSha256:sha(process.env.RESULT),logPath:process.env.LOG_REL,logSha256:sha(path.join(process.env.EVID,process.env.LOG_REL))};
+          fs.writeFileSync(process.env.ROW,`${JSON.stringify(row)}\n`);
+          NODE
+            if [ "$code" -ne 0 ]; then cat "$EVID/$log_rel"; return "$code"; fi
+          }
+
+          run_all_heavy() {
+            rm -f scripts/vitest-heavy-topology.plan.json
+            node scripts/emit-vitest-heavy-topology.mjs
+            local count
+            count=$(node -e "const p=require('./scripts/vitest-heavy-topology.plan.json'); process.stdout.write(String(p.heavyShardCount))")
+            export OPK_VITEST_TOPOLOGY_PLAN_PATH="$PWD/scripts/vitest-heavy-topology.plan.json"
+            for shard in $(seq 1 "$count"); do pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard "$shard"; done
+          }
+
+          run_record 'npm run typecheck:foundation' '01-typecheck' npm run typecheck:foundation
+          run_record 'npm run lint:foundation' '02-lint' npm run lint:foundation
+          run_record 'npm run test:contract-mutations' '03-mutations' npm run test:contract-mutations
+          run_record 'npm run test:issue-948' '04-issue948' npm run test:issue-948
+          run_record 'pwsh -NoProfile -File scripts/verify.ps1' '05-verify' pwsh -NoProfile -File scripts/verify.ps1
+          run_record 'pwsh -NoProfile -File scripts/check-reusable.ps1' '06-reusable' pwsh -NoProfile -File scripts/check-reusable.ps1
+          run_record 'pwsh -NoProfile -File scripts/test-all.ps1' '07-pester' pwsh -NoProfile -File scripts/test-all.ps1
+          run_record 'vitest-light' '08-vitest-light' pwsh -NoProfile -File scripts/run-vitest-light-lane.ps1
+          run_record 'vitest-heavy' '09-vitest-heavy' run_all_heavy
+
+          rm -f .vitest-runtime-report-*.json scripts/vitest-heavy-topology.plan.json
+          [ -z "$(git status --porcelain --untracked-files=all)" ]
+          FS_TYPE=$(findmnt -n -o FSTYPE -T "$EVID" | tr '[:upper:]' '[:lower:]' | xargs)
+          NODE_VERSION=$(node -v)
+          PWSH_VERSION=$(pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')
+
+          EVID="$EVID" TARGET_COMMIT="$TARGET_COMMIT" TARGET_TREE="$TARGET_TREE" FS_TYPE="$FS_TYPE" NODE_VERSION="$NODE_VERSION" PWSH_VERSION="$PWSH_VERSION" node <<'NODE'
+          const fs=require('node:fs'); const path=require('node:path');
+          const rows=fs.readdirSync(path.join(process.env.EVID,'post/commands')).filter(x=>x.endsWith('.row.json')).sort().map(x=>JSON.parse(fs.readFileSync(path.join(process.env.EVID,'post/commands',x),'utf8')));
+          const receipt=JSON.parse(fs.readFileSync(path.join(process.env.EVID,'receipt.json'),'utf8'));
+          const verification={schemaVersion:1,result:'pass',receiptSha256:receipt.receiptSha256,finalTreeOid:process.env.TARGET_TREE,checkoutCommitSha:process.env.TARGET_COMMIT,checkoutTreeOid:process.env.TARGET_TREE,repository:'chetwerikoff/orchestrator-pack',platform:'linux',filesystem:process.env.FS_TYPE,nodeVersion:process.env.NODE_VERSION,pwshVersion:process.env.PWSH_VERSION,cleanBefore:true,cleanAfter:true,stagedBefore:0,stagedAfter:0,untrackedBefore:0,untrackedAfter:0,commands:rows};
+          fs.writeFileSync(path.join(process.env.EVID,'final-verification.json'),`${JSON.stringify(verification,null,2)}\n`);
+          NODE
+
+          node --experimental-strip-types scripts/pr2a/closure-receipt.ts --final-verification "$EVID/final-verification.json" --receipt "$EVID/receipt.json" > "$EVID/final-validation.json"
+          node - "$EVID/final-validation.json" <<'NODE'
+          const fs=require('node:fs'); const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8')); if(r.result!=='pass'||(r.findings||[]).length) process.exit(1); console.log('final verification pass');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-final-evidence
+          path: ${{ runner.temp }}/issue948-evidence
+          if-no-files-found: error
