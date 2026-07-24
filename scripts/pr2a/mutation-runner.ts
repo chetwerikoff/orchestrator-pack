@@ -285,8 +285,22 @@ function runPlanningDetector(root: string): DetectorExecution {
   const findings = `${result.stderr}\n${result.stdout}`.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
   return { exitCode: result.exitCode ?? (result.ok ? 0 : 1), findings, command };
 }
-function runConformanceDetector(root: string, ref: string): DetectorExecution {
-  const command = conformanceCommand(ref);
+function git(root: string, args: string[]): string {
+  const result = runProcessSync({ command: 'git', args, cwd: root, inheritParentEnv: true });
+  if (!result.ok) throw new Error(result.stderr || result.error || `git_${args.join('_')}_failed`);
+  return result.stdout.trim();
+}
+function syntheticPrMerge(root: string, candidateRef: string): string {
+  const candidate = git(root, ['rev-parse', `${candidateRef}^{commit}`]);
+  const baseName = String(process.env.GITHUB_BASE_REF ?? '').trim() || 'main';
+  const baseRef = `origin/${baseName}`;
+  const base = git(root, ['rev-parse', `${baseRef}^{commit}`]);
+  const tree = git(root, ['rev-parse', `${candidate}^{tree}`]);
+  return git(root, ['commit-tree', tree, '-p', base, '-p', candidate, '-m', 'mutation detector synthetic PR merge']);
+}
+function runConformanceDetector(root: string, candidateRef: string): DetectorExecution {
+  const syntheticMerge = syntheticPrMerge(root, candidateRef);
+  const command = conformanceCommand(syntheticMerge);
   const result = execute(command, root);
   let findings: string[] = [];
   if (result.stdout.trim()) {
@@ -299,11 +313,6 @@ function runConformanceDetector(root: string, ref: string): DetectorExecution {
   }
   return { exitCode: result.exitCode ?? (result.ok ? 0 : 1), findings, command };
 }
-function git(root: string, args: string[]): string {
-  const result = runProcessSync({ command: 'git', args, cwd: root, inheritParentEnv: true });
-  if (!result.ok) throw new Error(result.stderr || result.error || `git_${args.join('_')}_failed`);
-  return result.stdout.trim();
-}
 function createMutationCommit(root: string, artifactPath: string, binding: Pr2aMutationBinding): string {
   git(root, ['add', '--', artifactPath]);
   const tree = git(root, ['write-tree']);
@@ -311,7 +320,7 @@ function createMutationCommit(root: string, artifactPath: string, binding: Pr2aM
   git(root, ['reset', '--quiet', 'HEAD', '--', artifactPath]);
   return commit;
 }
-function detectorForClean(binding: Pr2aMutationBinding, root: string): DetectorExecution {
+function detectorForRestored(binding: Pr2aMutationBinding, root: string): DetectorExecution {
   return binding.failingTestId === 'pr2a:planning-validator'
     ? runPlanningDetector(root)
     : runConformanceDetector(root, 'HEAD');
@@ -328,10 +337,6 @@ function runMutation(binding: Pr2aMutationBinding, root: string): MutationEviden
   const file = path.join(root, spec.artifactPath);
   const before = source(root, spec.artifactPath);
   if (spec.faultPresent(before)) throw new Error(`mutation_precondition_fault_present:${binding.mutationId}`);
-  const baseline = detectorForClean(binding, root);
-  if (baseline.exitCode !== 0) {
-    throw new Error(`mutation_precondition_detector_red:${binding.failingTestId}:exit=${baseline.exitCode}:findings=${baseline.findings.join(',')}`);
-  }
 
   const mutated = spec.apply(before);
   if (mutated === before) throw new Error(`mutation_did_not_change_artifact:${binding.mutationId}`);
@@ -349,7 +354,7 @@ function runMutation(binding: Pr2aMutationBinding, root: string): MutationEviden
   const restoredHash = digest(readFileSync(file));
   const artifactHashBefore = digest(before);
   if (restoredHash !== artifactHashBefore) throw new Error(`restore_hash_mismatch:${binding.mutationId}`);
-  const restored = detectorForClean(binding, root);
+  const restored = detectorForRestored(binding, root);
   if (restored.exitCode !== 0) {
     throw new Error(`restored_verification_failed:${binding.failingTestId}:exit=${restored.exitCode}:findings=${restored.findings.join(',')}`);
   }
@@ -386,6 +391,16 @@ async function main(): Promise<void> {
     });
     if (!add.ok) throw new Error(add.stderr || add.error || 'mutation_worktree_add_failed');
     added = true;
+
+    const planningBaseline = runPlanningDetector(checkout);
+    if (planningBaseline.exitCode !== 0) {
+      throw new Error(`planning_detector_baseline_red:${planningBaseline.findings.join(',')}`);
+    }
+    const conformanceBaseline = runConformanceDetector(checkout, 'HEAD');
+    if (conformanceBaseline.exitCode !== 0) {
+      throw new Error(`conformance_detector_baseline_red:${conformanceBaseline.findings.join(',')}`);
+    }
+
     const evidence = bindings.map((binding) => runMutation(binding, checkout));
     process.stdout.write(`${JSON.stringify({
       issue: 948,
