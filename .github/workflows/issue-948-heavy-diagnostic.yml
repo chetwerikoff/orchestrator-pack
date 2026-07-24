@@ -1,0 +1,45 @@
+name: issue-948-heavy-diagnostic
+
+on:
+  push:
+    branches:
+      - tmp/issue-948-verification-toolchain
+
+permissions:
+  contents: read
+
+jobs:
+  heavy-shard-1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Write exact failing shard plan
+        shell: pwsh
+        run: |
+          @'
+          {"heavyShardCount":2,"heavyFiles":[],"heavyShards":[{"shard":1,"files":["plugins/ao-scope-guard/tests/agent_wrap.test.ts","plugins/ao-scope-guard/tests/integration.test.ts","plugins/ao-token-chain-ledger/tests/integration.test.ts","scripts/contract-evidence-legacy-list-guard.test.ts","scripts/kernel/subprocess.test.ts","scripts/pr2-foundation/mutation-external-ci.test.ts","scripts/review-finding-delivery-submit.test.ts","scripts/review-orchestrator-loop.test.ts","scripts/review-start-claim-run-binding.test.ts","scripts/review-start-claim.test.ts","scripts/review-trigger-reeval.test.ts","scripts/session-runtime-liveness.test.ts"],"totalRuntimeMs":860000}],"lightFiles":[],"lightShards":[],"postMergeWallclockFiles":[],"parkedFiles":[],"discovered":[]}
+          '@ | Set-Content -LiteralPath scripts/vitest-heavy-topology.plan.json -NoNewline
+      - name: Reproduce heavy shard 1
+        shell: pwsh
+        env:
+          OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json
+        run: |
+          ./scripts/run-vitest-heavy-shard.ps1 -Shard 1 *> heavy-diagnostic.log
+          $code = $LASTEXITCODE
+          Get-Content -LiteralPath heavy-diagnostic.log
+          exit $code
+      - name: Upload heavy diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-948-heavy-diagnostic
+          path: heavy-diagnostic.log
+          if-no-files-found: error
