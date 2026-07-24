@@ -119,6 +119,10 @@ resumes, the next browser review pass still starts in a fresh chat. An explicit
 `adversarial-draft-review` loop never replaces the GPT competitive stage or the
 normal architectural stage.
 
+Issue #972 owns any later flow-manager/author/architect role split and browser-chat
+topology change. The M1–M5 economics below are role-neutral: when #972 is present,
+its current role/topology wording applies without weakening these economics.
+
 ### Per-tier pipeline (ceilings, not quotas)
 
 Clean `NO_FINDINGS` ends a stage early. The post-lens final-verification round is
@@ -140,98 +144,268 @@ and crash/race/stale-state test floors. A Codex outage substitution for a
 browser-GPT stage never satisfies the GPT half of this requirement. Without
 qualifying independent GPT participation, acceptance is blocked or deferred.
 
-### Finding-disposition ledger + normalization
+### Finding-disposition ledger + M1 defect/remedy split
 
-Reviewers cannot be relied on for structured output. Per pass the authoring flow:
+Every reviewer capture remains immutable verbatim audit evidence. Every material
+governed finding keeps defect facts in raw `evidence:` and non-binding remedy
+advice in raw `recommendation:`. A stable finding `id` identifies the defect, not
+one immutable remedy proposal.
 
-1. Captures **raw reviewer output verbatim** (audit anchor).
-2. **Normalizes** every emitted finding into the disposition ledger with stable
-   `id`, `summary`, `type`, and `disposition` — `addressed` or `rejected` plus
-   one-line `rejectReason`.
+The authoring flow normalizes each finding into the existing disposition ledger
+with stable `id`, `summary`, `type`, and defect-level `disposition` — `addressed`
+or `rejected`, plus one-line `rejectReason` for a rejection. Declining one remedy
+does not reject or erase the defect. The author may close a valid defect with any
+cheaper sufficient correction that satisfies the same observable contract.
 
 The ledger and verbatim `pass-NN-<stage>.capture.txt` files live in the
 out-of-repository audit workdir defined by
 `.claude/skills/create-issue-draft/SKILL.md`; they are not tracked task artifacts.
-The existing guard receives that review directory explicitly.
+A finding present in capture but absent from the ledger is a silent drop and
+invalid. `NO_FINDINGS` never erases earlier findings.
 
-**Completeness:** a finding present in capture but absent from the ledger is a
-silent drop — invalid. `NO_FINDINGS` passes owe no rows. Re-worded findings on
-later passes map to the carried-forward `id`, not a new row.
+### M2 — price persistent machinery at proposal time
 
-**Stakes-weighted proportionality (non-protected findings).** Disposition is not
-a vote on whether the reviewer's observation is factually correct. A finding
-that proposes durable-state, CAS, attestation, crash-resume, or
-threat-model-class machinery may be `rejected` as **correct but disproportionate**
-when it fails both tests: the prevented failure materially matters at the
-artifact's stated stakes, and the proposed mechanism is the cheapest sufficient
-guard for that failure. Its `rejectReason` MUST connect the verdict to the stated
-blast radius, reversibility, and failure impact and name the cheaper sufficient
-design; bare reasons such as "out of scope" or "too complex" are not sufficient.
+Every reviewer capture governed after the #975 adoption boundary contains exact
+`review-economics-contract: v1`. Every governed material finding contains raw
+`evidence:`, `recommendation:`, and `persistent-machinery: yes|no`.
 
-The following table is **illustrative, non-binding guidance — not a rigid lookup**.
-It applies only after reading the artifact's own stakes statement; the stakes
-axis is qualitative and is **not** the T1/T2/T3 ceremony tier.
+`persistent-machinery: yes` means the proposed remedy adds persistent state, a
+record kind, subsystem, guard, or standing test obligation. Every `yes` also
+contains:
+
+- `cheapest-sufficient-alternative` — a cheaper sufficient design, including
+  elimination/no-build where viable, or why elimination is insufficient;
+- `stakes-price` — the narrowest explicit failure-impact/blast-radius statement;
+- `trade-in` — existing mechanism/ceremony removed by the addition, or exact
+  `net-add`.
+
+When no explicit stakes statement exists, `stakes-price` is exact
+`stakes-undeclared`; do not invent high stakes to justify a net addition. Default
+toward elimination/no-build or the cheapest sufficient correction unless the
+defect itself proves a material failure against an existing observable contract.
+
+A `yes` missing a price field is a malformed **proposal**, not an invalid defect.
+The author may decline only that remedy with row-local exact reason
+`malformed-proposal`; defect disposition remains independently required.
+
+The latest **marked** occurrence of a stable finding id controls its current
+machinery classification, price fields, and proposal outcome. `yes -> no` and
+`no -> yes` are valid when the latest occurrence and ledger agree. Earlier raw
+occurrences remain immutable. Machinery already introduced from an earlier
+proposal stays visible in the M4 inventory until explicitly classified; no
+per-occurrence proposal ledger or registry is created.
+
+#### M2 adoption cutover
+
+The adoption boundary is independent of reviewer text. For work not already
+active when #975 lands, the #975 landing point on the implementation base is the
+boundary. For an already-active cycle, the operator or current flow-manager
+records one independently established ISO-8601 adoption timestamp on a
+`review-economics-adopted-at:` line in the existing `$REVIEW_DIR/chats.md` audit
+file. This adds no service, registry, or tracked store.
+
+The first reviewer capture chronologically after that boundary, and every later
+reviewer capture, must be marked. A later self-supplied marker cannot forgive an
+earlier unmarked post-adoption capture. Missing or ambiguous chronology fails
+closed. Reviewer stages are `competitive`, `architectural`, and
+`architectural-final`; `architectural-lens` is architect evidence and is excluded
+from marker continuity. Immutable pre-adoption captures are not rewritten and do
+not owe retroactive M2 fields. Before acceptance there must be governed reviewer
+evidence after adoption.
+
+This cutover is **M2-only**. Every still-active acceptance attempt uses current
+M3 semantics regardless of ledger age; historically completed ledgers remain
+readable without backfill.
+
+### M3 — protected nomination, author activation, architect contest
+
+Reviewer `type: security` and `type: scope-violation` are protected
+**nominations**, not self-activating authority. The vocabulary and canonical
+protected-signal meaning remain unchanged.
+
+A valid author activation records both a real corresponding canonical protected
+signal and why closure belongs in this task now. It is independently authoritative
+when the nomination is non-zero-signal, no current architect contest or other
+architect-required condition applies, and current audit evidence makes contest
+absence/withdrawal unambiguous. Activated findings are addressed-only; remedy
+choice remains cheapest-sufficient.
+
+The finding-scoped `zero-signal` check scans only the raw finding's `evidence:`.
+It excludes the nomination `type:`, `recommendation:`, machinery/price fields,
+and other remedy prose. Remedy-only terms such as `denylist` cannot manufacture
+protected evidence. A zero-signal author activation is invalid.
+
+Architect adjudication is required for zero-signal nominations, missing/invalid
+author activation, a current/unknown/stale contest, or another existing rule that
+requires the architect. An architect outcome is `activate` or `non-activate`.
+`activate` makes addressed-only apply; `non-activate` restores ordinary M1
+disposition for the underlying defect.
+
+Architect authority reuses the existing latest applicable
+`pass-NN-architectural-lens.capture.txt`; no contest registry, receipt, signing
+system, or service is introduced. The guard recognizes one line per protected id
+in this implementation:
+
+`m3-protected: id=<id> | revision=<exact-current-revision> | contest=none|contested|contest-withdrawn | outcome=none|activate|non-activate | evidence=<architect evidence when activating> | why-now=<why closure belongs now when activating>`
+
+Only architect-lens evidence may create/withdraw contest state. `contested`
+binds to the exact finding id and Issue revision. A same/newer applicable lens
+closes it with `activate`, `non-activate`, or `contest-withdrawn`. A stale,
+unknown, malformed, or ambiguously bound contest fails closed to
+`architect-pending`. Architect-issued activation needs current real canonical
+protected evidence plus why-now in the lens record; non-activation still needs
+matching current id/outcome provenance.
+
+At **pre-lens progression**, genuinely architect-required protected work may be
+recorded as `architect-pending` and proceed only to that lens. At **final
+acceptance**, `architect-pending` never passes. A valid non-zero-signal author
+activation needs no architect **authorization**; a separately required newer lens
+is freshness/audit and must not be described as retroactive authorization.
+
+The global protected-signal receipt/fingerprint/suppression behavior remains
+unchanged outside this finding-scoped M3 check.
+
+### Stakes-weighted proportionality
+
+Disposition is not a vote on whether the reviewer's defect observation is
+factually correct. A finding that proposes durable-state, CAS, attestation,
+crash-resume, or threat-model-class machinery may be `rejected` as **correct but
+disproportionate** when the failure does not materially matter at the artifact's
+stated stakes or the proposal is not the cheapest sufficient guard. Its
+`rejectReason` connects the verdict to blast radius, reversibility, failure
+impact, and a cheaper sufficient design; bare reasons such as “too complex” are
+not sufficient.
 
 | Finding category | Contained and reversible stakes | Bounded blast radius | Systemic or irreversible stakes |
 |---|---|---|---|
-| Durable-state / CAS / attestation / crash-resume machinery | Prefer rejection when a local invariant, explicit constraint, or no-build alternative is sufficient; name it in `rejectReason`. | Keep only the smallest mechanism that contains the stated failure; reject stronger machinery when a cheaper guard is sufficient. | Address when the systemic failure is credible; rejection requires an equally sufficient cheaper design, not optimism. |
-| Correctness / logic defect | Usually address with the narrowest correction; reject only when the observation does not apply or a cheaper alternative fully preserves correctness. | Address the affected contract and its bounded failure path. | Address; high-stakes correctness is not traded for authoring convenience. |
-| Missing test coverage | Prefer the focused example or existing proof that covers the contained failure. | Add coverage proportional to the affected classes and blast radius. | Require evidence broad enough to cover systemic, race, recovery, or irreversible failure modes. |
+| Durable-state / CAS / attestation / crash-resume machinery | Prefer rejection when a local invariant, explicit constraint, or no-build alternative is sufficient. | Keep only the smallest mechanism that contains the stated failure. | Address when the systemic failure is credible; rejection requires an equally sufficient cheaper design. |
+| Correctness / logic defect | Usually address with the narrowest correction. | Address the affected contract and its bounded failure path. | Address; high-stakes correctness is not traded for authoring convenience. |
+| Missing test coverage | Prefer the focused example or existing proof that covers the contained failure. | Add coverage proportional to affected classes and blast radius. | Require evidence broad enough for systemic/race/recovery/irreversible failures. |
 | Phrasing / style | Reject when wording cannot alter the contract or worker interpretation. | Address ambiguity that could misroute implementation or verification. | Address wording that obscures guarantees, rollback, ownership, or failure handling. |
 
-### Non-rejectable carve-out
+### M4 — author-maintained mechanism inventory
 
-Findings with `type: security` or `type: scope-violation` (#51 vocabulary) have
-exactly one valid disposition: `addressed`. The guard fails when a protected
-finding is `rejected` **or omitted** while present in capture. Contested protected
-findings **escalate to the architect** — never self-waivable by the authoring flow.
+After every review round, the author reply updates one running inventory of every
+new material review-added mechanism/ceremony introduced by that round. Each item
+is classified exactly once as `keep`, `simplify`, `defer`, or `cut`. Keep the
+inventory in the existing author-reply audit evidence; do not create a tracked
+store. `defer` creates no automatic follow-up Issue.
 
-The carve-out protects the **outcome** (the risk is explicitly resolved or owned),
-not one prescribed mechanism. `addressed` may be reached by eliminating the
-attack surface the finding targets or by specifying an explicit, reasoned
-defensive mechanism around it. When that defense would be disproportionate to a
-near-zero-payoff threat, eliminate the surface or record an explicit, reasoned
-risk-acceptance note with its assumptions and residual risk. This mechanism
-choice never permits `rejected` and never permits silent omission.
+The latest inventory is input to every applicable final architect lens. Re-emitting
+a finding with cheaper current economics never erases machinery that was already
+introduced; the inventory carries it until it receives one of the four outcomes.
 
-**Guard:** `scripts/check-finding-ledger-guard.ps1 -CapturesDir …` (or
-`check-draft-discipline.ps1 -Command finding-ledger`) validates **every**
-`*.capture.txt` under the supplied review directory against the ledger — not only
-the final pass — and runs pre-acceptance alongside other draft-discipline checks;
-non-zero exit blocks acceptance/publication. Omission detection is layered and
-fails closed: typed `type:` tags are checked directly; conservative
-protected-signal hits in capture with no matching ledger row also fail (false
-positives escalate to the architect; unparseable prose never passes silently).
+### M5 — truthful terminal simplification verdict
+
+M5 uses the **terminal pre-lens reviewer result selected by the existing
+stage/convergence contract**. It does not introduce another convergence state
+machine or confirmation reviewer pass.
+
+A finding is an M5 cut candidate only when its raw block contains exact
+`simplification-cut-candidate: yes`. Any other value, duplicate discriminator, or
+malformed discriminator blocks progression. The normalized ledger row for the
+same stable id must carry the corresponding candidate flag; raw/ledger mismatch
+in either direction fails closed. Ordinary simplification prose without the exact
+token is not a cut candidate.
+
+The terminal raw result has two truthful shapes:
+
+1. no raw cut candidate → exact `SIMPLIFICATION_CLEAN` is required; if the result
+   is genuinely clean it also carries existing `NO_FINDINGS`, while a legal
+   non-clean terminal result must not fabricate `NO_FINDINGS`;
+2. one or more tokened cut candidates → those findings are the non-clean M5
+   verdict, no retroactive `SIMPLIFICATION_CLEAN` is inserted, and every candidate
+   must be ledger-mapped and dispositioned or legitimately `architect-pending`.
+
+A reviewer cut candidate is still a normal finding, never a cut decision. The
+author may perform an ordinary M1 content correction. The final architect lens
+remains the sole **independent aggregate** cut authority.
+
+#### M5 episode anchor and adoption floor
+
+The terminal pre-lens reviewer result immediately before the first final lens in
+a contiguous lens/final-verification episode is that episode's M5 anchor.
+Same-episode relenses caused by lens fixes or final-verification findings reuse
+the applicable post-adoption anchor; every newer lens still audits the current
+Issue body and latest M4 inventory. `architectural-final` is M2-governed reviewer
+evidence but never becomes M5 merely because it follows a lens.
+
+A pre-adoption anchor cannot satisfy final acceptance. Immutable older captures
+stay untouched, but the cycle must re-enter one existing governed pre-lens
+reviewer stage after adoption. Once existing stage/convergence authority declares
+that post-adoption result legally terminal, it starts the new segment and becomes
+the anchor. There is no grandfather/exemption path and no synthetic clean-token
+pass.
+
+### Two-phase finding-ledger guard
+
+`scripts/finding-ledger-guard.mjs` keeps legacy behavior when invoked without a
+#975 phase. The #975 flow calls the same guard in two bounded phases:
+
+- **`pre-lens`** — only after existing stage/completion authority declares the
+  selected pre-lens sequence legally terminal; enforces post-adoption M2 marker
+  continuity/structure and M5 terminal evidence, and permits genuinely
+  architect-required M3 state only as `architect-pending` for progression to the
+  lens. It never certifies acceptance.
+- **`final-acceptance`** — rechecks applicable immutable M2/M3/M5 evidence,
+  requires a post-adoption M5 anchor, enforces current revision-bound architect
+  outcomes/contest closure where required, and preserves the normal latest-lens /
+  latest-final and other acceptance floors owned by the surrounding flow.
+
+The guard does not edit captures/Issue state, select a defect/remedy disposition,
+create a reviewer pass, or add a persistence/provenance service.
+
+### Post-lens protected nomination path
+
+A protected nomination first emitted in `architectural-final` cannot be
+adjudicated by the older lens. Preserve and normalize the raw final capture, then
+apply M3. Valid non-zero-signal author activation is authoritative immediately
+when uncontested; otherwise record `architect-pending`. In both cases the existing
+final-finding loop requires a **newer final architect lens** before another final
+verification. If no Issue content change is required, that lens may run over the
+unchanged current Issue revision. It audits a valid author activation or records
+required contest closure/adjudication; it does not retroactively authorize the
+author. After the latest lens run exactly one fresh `architectural-final` pass.
+No synthetic Issue edit or extra reviewer stage is added.
 
 ### Simplification lens
 
-The existing review contract, including the four-question lens in
-`prompts/codex_draft_review_prompt.md`, mandates: what can be simplified / must
-not be simplified / is excess / is missing. Lens findings flow through the
-normal ledger and remain subject to the carve-out. The architect applies the
-same lens on the final architect lens. Simplification and excess judgments weigh
-every major mechanism against the artifact's stated stakes, its cost and risk,
-and the cheapest sufficient alternative — not against ceremony tier alone.
+The four-question lens in `prompts/codex_draft_review_prompt.md` remains mandatory:
+what can be simplified / must not be simplified / is excess / is missing. M2 now
+prices persistent remedies when proposed; M4 keeps the running mechanism
+inventory; M5 supplies truthful terminal pre-lens simplification evidence.
 
 ### Final architect lens and tier movement
 
-After the ordinary review stages converge, the final architect lens recomputes
-the tier and checks the ledger before acceptance. It is the **only sanctioned
-tier-downgrade point**. A downgrade is invalid while the marker screen still
-requires the higher tier. Every intake, mid-flight, post-fix, and pre-acceptance
-recomputation outside this lens remains monotonic upward/fail-up; accepted
-findings that grow scope can only preserve or raise the tier.
+After ordinary review reaches its legal terminal state and the **pre-lens #975
+guard is green**, the final architect lens recomputes the tier and checks the
+ledger before acceptance. It is the **only sanctioned tier-downgrade point** and
+the sole **independent aggregate** cut authority for review-added machinery.
+Ordinary author fixes to reviewer-originated simplification findings before this
+lens remain ordinary defect dispositions, not independent aggregate cuts.
 
-For T3, the lens retains the existing stronger contract: audit the ledger's
-**reject partition** (re-judge rejects; do **not** reopen accepts), and record for
-each major mechanism an explicit **keep** or **cut** verdict using the artifact's
-stated stakes × mechanism cost/risk × cheapest sufficient alternative.
-Repackaging or splitting an over-built mechanism across sibling tasks is not, by
-itself, an **излишне** cut: the lens must record a substantive reduction or
-explicitly keep the total mechanism.
+A downgrade is invalid while the marker screen still requires the higher tier.
+Every intake, mid-flight, post-fix, and pre-acceptance recomputation outside this
+lens remains monotonic upward/fail-up; Issue #973 owns demotion records and marker
+applicability and is not redefined here.
+
+For T3, the lens audits the current Issue body, the ledger reject partition, the
+latest M4 inventory, and the applicable M5 anchor. For each major mechanism it
+records explicit `keep` or `cut` using the artifact's explicit stakes × mechanism
+cost/risk × cheapest sufficient alternative. It must actively cut excess
+machinery rather than treat prior reviewer provenance as justification. Same-
+episode relenses reuse the M5 anchor but inspect the latest body/inventory, so
+post-anchor machinery cannot hide behind earlier evidence.
+
+The final lens remains **before** its required fresh final architectural
+verification. A later final finding follows the existing
+`final finding -> task-chat fix when needed -> newer final lens -> exactly one
+fresh final verification` loop. This #975 economics contract does not add another
+architect role/stage. Issue #972 remains the owner of role/topology wording; #973
+remains the owner of tier-demotion/marker semantics.
 
 If a low/contained-stakes artifact exits adversarial review with approximately
 100% of findings `addressed`, record that as a **proportionality smell** in the
-same lens capture and run one re-examination pass. The smell is neither an
-automatic failure nor evidence of thoroughness; it prompts a fresh check for
-correct-but-disproportionate machinery.
+same lens capture and re-examine whether review-added machinery is actually the
+cheapest sufficient design. The smell is not an automatic failure or evidence of
+thoroughness.

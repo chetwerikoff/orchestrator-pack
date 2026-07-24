@@ -28,9 +28,10 @@ dilute serious findings with filler.
 **Grounding:** Every finding must be defensible from the draft or provided
 context. Do not invent files, paths, commands, or runtime behavior.
 
-**Carve-out (never drop):** Findings of `type: security` or `type: scope-violation`
-are material by definition. Always report them; the finding bar **never**
-suppresses security or scope-violation findings.
+**Protected nomination:** `type: security` and `type: scope-violation` are
+material nominations and are never suppressed. The reviewer nominates; the
+#975 author/architect contract decides whether protected addressed-only authority
+is activated. Do not treat your own type tag as self-activating authority.
 
 ## Simplification lens (mandatory)
 
@@ -45,9 +46,75 @@ findings when material:
 Lens findings use normal finding types (`quality`, `spec`, etc.) and flow through
 the disposition ledger like any other finding.
 
+## Review economics contract (mandatory)
+
+Every governed review output starts with this exact line:
+
+`review-economics-contract: v1`
+
+Keep defect facts mechanically separate from remedy advice. Every material
+finding is one plain-text block and MUST include all of:
+
+- `id: <stable-defect-id>` — the id names the defect, not one immutable remedy;
+- `type: security|scope-violation|spec|quality|test|ci`;
+- `severity: P0|P1|P2`;
+- `title: <short>`;
+- `evidence: <observable defect-side facts>`;
+- `recommendation: <non-binding remedy advice>`;
+- `persistent-machinery: yes|no`.
+
+`evidence:` contains only the facts that make the defect real. Do not hide remedy
+arguments in it. `recommendation:` is advisory; the author may close the same
+defect with any cheaper sufficient correction.
+
+Use `persistent-machinery: yes` when the proposed remedy adds persistent state,
+a record kind, subsystem, guard, or standing test obligation. Every `yes` also
+MUST include:
+
+- `cheapest-sufficient-alternative: <cheaper sufficient design, elimination/no-build, or why elimination is insufficient>`;
+- `stakes-price: <narrowest explicit failure-impact statement, or exact stakes-undeclared>`;
+- `trade-in: <existing mechanism/ceremony removed, or exact net-add>`.
+
+Do not invent stakes. When the task contains no explicit failure-impact/blast-
+radius statement, use exact `stakes-undeclared` and bias toward elimination,
+no-build, or the cheapest sufficient correction unless the defect itself proves
+a material failure against an existing observable contract.
+
+A missing price field never erases a valid defect. It makes only that remedy
+proposal malformed; the author may decline the proposal with the separate exact
+reason `malformed-proposal` while still disposing the defect itself.
+
+## Exact M5 simplification discriminator
+
+A material finding is an M5 cut candidate only when its own raw block contains
+this exact line:
+
+`simplification-cut-candidate: yes`
+
+Use it only when the finding says a mechanism/ceremony should materially be cut
+or simplified. Do not emit another value, duplicate the line, or infer the flag
+from words such as “simplify”. A reviewer candidate is still only a finding; it
+is never the architect's aggregate cut decision.
+
+For pre-lens `competitive` / `architectural` reviewer outputs, emit exact
+`SIMPLIFICATION_CLEAN` on its own line when the current output has **no** finding
+carrying that discriminator. When one or more findings do carry it, do not emit
+`SIMPLIFICATION_CLEAN` for that output. If there are no material findings at all,
+emit both exact terminal lines:
+
+`NO_FINDINGS`
+
+`SIMPLIFICATION_CLEAN`
+
+Do not fabricate `NO_FINDINGS` for a non-clean terminal state allowed by the
+owning flow. `SIMPLIFICATION_CLEAN` only says this raw pre-lens output contains no
+M5 cut candidate; the owning flow decides which legally terminal pre-lens output
+is the M5 anchor. Post-lens `architectural-final` remains M2-governed but does
+**not** owe `SIMPLIFICATION_CLEAN` merely because it is clean or follows a lens.
+
 ## Typed findings (mandatory)
 
-Every emitted finding MUST include an explicit `type:` tag using this vocabulary:
+Use only this vocabulary:
 
 | `type` | When |
 |--------|------|
@@ -57,15 +124,6 @@ Every emitted finding MUST include an explicit `type:` tag using this vocabulary
 | `quality` | Material quality, coupling, or maintainability (not pure style) |
 | `test` | Missing or inadequate test / verification coverage |
 | `ci` | CI, gating, or command accuracy |
-
-Tag each finding in the prose (e.g. `type: security` on its own line or inline).
-When you assign a stable id, prefix with `id:` so the draft author can carry it
-forward across passes.
-
-## Clean review token
-
-Tag severities P0, P1, or P2 on valid issues.
-If no concrete issues remain, respond with exactly **NO_FINDINGS** on its own line.
 
 ## Artifact
 

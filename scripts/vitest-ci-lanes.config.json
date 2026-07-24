@@ -35,6 +35,7 @@
     "scripts/contract-evidence-legacy-list-guard.test.ts": "heavy",
     "scripts/estate-cut/issue-906-vertical-slice.test.ts": "light",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "heavy",
+    "scripts/finding-ledger-guard.test.ts": "light",
     "scripts/gate-runner/bulk-declarative-gates.test.ts": "light",
     "scripts/gate-runner/census-generator.test.ts": "light",
     "scripts/gate-runner/census.test.ts": "light",
