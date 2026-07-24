@@ -39,6 +39,7 @@ export interface PublicationRecordV1 {
 
 export interface PublicationTestHooks {
   readonly afterPreparedRecord?: () => void;
+  readonly afterTempFsync?: () => void;
 }
 
 function validInvocationId(invocationId: string): boolean {
@@ -141,6 +142,16 @@ function sameObject(path: string, dev: string, ino: string): boolean {
     return current.isFile() && String(current.dev) === dev && String(current.ino) === ino;
   } catch {
     return false;
+  }
+}
+
+function matchingObjectLinkCount(path: string, dev: string, ino: string): bigint | null {
+  try {
+    const current = lstatSync(path, { bigint: true });
+    if (!current.isFile() || String(current.dev) !== dev || String(current.ino) !== ino) return null;
+    return current.nlink;
+  } catch {
+    return null;
   }
 }
 
@@ -292,6 +303,7 @@ export function publishReply(
     testHooks.afterPreparedRecord?.();
     writeFileSync(fd, reply, 'utf8');
     fsyncSync(fd);
+    testHooks.afterTempFsync?.();
   } catch (error) {
     if (fd >= 0) closeSync(fd);
     if (error instanceof Error && error.message.startsWith('test_crash:')) throw error;
@@ -388,7 +400,17 @@ export function publicationStatus(profileKey: string, invocationId: string): Pub
     return status(profileKey, invocationId, 'profile_blocked', undefined, 'publication_record_unreadable');
   }
 
-  if (sameObject(record.output_path, record.temp_dev, record.temp_ino)) {
+  const finalLinkCount = matchingObjectLinkCount(record.output_path, record.temp_dev, record.temp_ino);
+  if (finalLinkCount !== null) {
+    let tempExists: boolean;
+    try {
+      tempExists = entryExists(record.temp_path);
+    } catch {
+      return status(profileKey, invocationId, 'recovery_required', record.output_path, 'publication_identity_unreadable');
+    }
+    if (tempExists || finalLinkCount !== 1n) {
+      return status(profileKey, invocationId, 'recovery_required', record.output_path, 'publication_commit_alias_present');
+    }
     const bytes = readFileSync(record.output_path);
     return {
       ...status(profileKey, invocationId, 'committed_ok', record.output_path),
