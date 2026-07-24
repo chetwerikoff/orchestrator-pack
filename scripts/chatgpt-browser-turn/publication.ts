@@ -104,34 +104,57 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-let noReplaceMvSupported: boolean | undefined;
+type NoReplaceMvMode = 'none-fail' | 'no-clobber';
+let noReplaceMvMode: NoReplaceMvMode | null | undefined;
 
-function supportsNoReplaceMove(): boolean {
-  if (noReplaceMvSupported !== undefined) return noReplaceMvSupported;
+function coreutilsAtLeast830(): boolean {
+  const version = runProcessSync({ command: 'mv', args: ['--version'] });
+  if (!version.ok) return false;
+  const match = /\b(\d+)\.(\d+)(?:\.\d+)?\b/.exec(version.stdout.split('\n', 1)[0] ?? '');
+  if (!match?.[1] || !match[2]) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 8 || (major === 8 && minor >= 30);
+}
+
+function detectNoReplaceMove(): NoReplaceMvMode | null {
+  if (noReplaceMvMode !== undefined) return noReplaceMvMode;
   if (process.platform !== 'linux') {
-    noReplaceMvSupported = false;
-    return false;
+    noReplaceMvMode = null;
+    return null;
   }
   const probe = runProcessSync({ command: 'mv', args: ['--help'] });
-  noReplaceMvSupported = probe.ok
-    && probe.stdout.includes('none-fail')
-    && probe.stdout.includes('--no-copy')
-    && probe.stdout.includes('--no-target-directory');
-  return noReplaceMvSupported;
+  if (!probe.ok
+    || !probe.stdout.includes('--no-copy')
+    || !probe.stdout.includes('--no-target-directory')) {
+    noReplaceMvMode = null;
+    return null;
+  }
+  if (probe.stdout.includes('none-fail')) {
+    noReplaceMvMode = 'none-fail';
+    return noReplaceMvMode;
+  }
+  if (probe.stdout.includes('--no-clobber') && coreutilsAtLeast830()) {
+    noReplaceMvMode = 'no-clobber';
+    return noReplaceMvMode;
+  }
+  noReplaceMvMode = null;
+  return null;
 }
 
 function noReplaceMove(tempPath: string, finalPath: string): { ok: boolean; collision: boolean; cause?: string } {
-  if (!supportsNoReplaceMove()) {
+  const mode = detectNoReplaceMove();
+  if (!mode) {
     return { ok: false, collision: false, cause: 'atomic_noreplace_primitive_unavailable' };
   }
-  const moved = runProcessSync({
-    command: 'mv',
-    args: ['--update=none-fail', '--no-copy', '--no-target-directory', tempPath, finalPath],
-  });
-  if (moved.ok) return { ok: true, collision: false };
+  const args = mode === 'none-fail'
+    ? ['--update=none-fail', '--no-copy', '--no-target-directory', tempPath, finalPath]
+    : ['--no-clobber', '--no-copy', '--no-target-directory', tempPath, finalPath];
+  const moved = runProcessSync({ command: 'mv', args });
   if (existsSync(finalPath) && existsSync(tempPath)) {
     return { ok: false, collision: true, cause: 'publication_commit_collision' };
   }
+  if (moved.ok && !existsSync(tempPath)) return { ok: true, collision: false };
   return { ok: false, collision: false, cause: `atomic_rename_failed:${moved.outcome}:${moved.exitCode ?? 'none'}` };
 }
 
