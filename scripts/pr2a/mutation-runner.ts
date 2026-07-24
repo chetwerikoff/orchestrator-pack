@@ -56,7 +56,8 @@ const findingCodes = (rows: ConformanceFinding[]): string[] => rows.map((row) =>
 const includesAny = (value: string, terms: readonly string[]): boolean => terms.some((term) => value.includes(term));
 function replaceRequired(text: string, token: string, replacement: string, id: string): string {
   if (!text.includes(token)) throw new Error(`mutation_token_missing:${id}:${token}`);
-  return text.replace(token, `${replacement} /* mutation:${id} */`);
+  const annotated = token.startsWith('"issue":') ? replacement : `${replacement} /* mutation:${id} */`;
+  return text.replace(token, annotated);
 }
 function replaceAllRequired(text: string, token: string, replacement: string, id: string): string {
   if (!text.includes(token)) throw new Error(`mutation_token_missing:${id}:${token}`);
