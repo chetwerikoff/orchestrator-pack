@@ -501,13 +501,20 @@ function evidenceHasProtectedSignal(type, evidence) {
   return (PROTECTED_EVIDENCE_PATTERNS[type] ?? []).some((pattern) => pattern.test(evidence));
 }
 
-function parseM3LensLines(text) {
-  const records = new Map();
+function parseM3LensLines(text, errors, sourceName) {
+  const records = [];
+  const seenIds = new Set();
   for (const line of text.split(/\r?\n/)) {
     const match = line.trim().match(M3_LENS_LINE);
     if (!match) continue;
-    records.set(match[1], {
-      id: match[1],
+    const id = match[1];
+    if (seenIds.has(id)) {
+      errors.push(`review-economics: ${sourceName} has duplicate m3-protected records for ${id}`);
+      continue;
+    }
+    seenIds.add(id);
+    records.push({
+      id,
       revision: match[2].trim(),
       contest: match[3].toLowerCase(),
       outcome: match[4].toLowerCase(),
@@ -518,24 +525,69 @@ function parseM3LensLines(text) {
   return records;
 }
 
+function foldM3LensState(metadata, currentRevision, errors) {
+  const histories = new Map();
+  for (const meta of metadata) {
+    if (meta.stage !== 'architectural-lens') continue;
+    for (const record of parseM3LensLines(meta.text, errors, meta.name)) {
+      const history = histories.get(record.id) ?? [];
+      history.push({ record, meta });
+      histories.set(record.id, history);
+    }
+  }
+
+  const states = new Map();
+  for (const [id, history] of histories) {
+    const latest = history.at(-1);
+    if (!latest || !currentRevision || latest.record.revision !== currentRevision) {
+      states.set(id, { record: latest?.record ?? null, current: false, contestOpen: false });
+      continue;
+    }
+
+    let effective = null;
+    let contestOpen = false;
+    for (const { record } of history) {
+      if (record.revision !== currentRevision) continue;
+      if (record.outcome === 'activate' || record.outcome === 'non-activate') {
+        contestOpen = false;
+        effective = record;
+        continue;
+      }
+      if (record.contest === 'contest-withdrawn') {
+        contestOpen = false;
+        effective = record;
+        continue;
+      }
+      if (record.contest === 'contested') {
+        contestOpen = true;
+        effective = record;
+        continue;
+      }
+      if (record.contest === 'none' && !contestOpen) effective = record;
+    }
+    states.set(id, { record: effective, current: Boolean(effective), contestOpen });
+  }
+  return states;
+}
+
 function validateRawCodexEconomics(rawResults, errors) {
   if (!Array.isArray(rawResults)) return;
   for (let index = 0; index < rawResults.length; index += 1) {
-    const raw = rawResults[index];
-    if (!raw || typeof raw !== 'object') {
+    const entry = rawResults[index];
+    if (!entry || typeof entry !== 'object') {
       errors.push(`review-economics: raw Codex result ${index + 1} is not an object`);
       continue;
+    }
+    const stage = stringField(entry, 'stage', 'reviewStage', 'review-stage').toLowerCase();
+    const raw = entry.raw && typeof entry.raw === 'object' && !Array.isArray(entry.raw) ? entry.raw : entry;
+    if (!REVIEWER_STAGES.has(stage)) {
+      errors.push(`review-economics: raw Codex result ${index + 1} missing governed stage identity before transcription`);
     }
     const contract = stringField(raw, 'reviewEconomicsContract', 'review-economics-contract');
     if (contract !== 'v1') errors.push(`review-economics: raw Codex result ${index + 1} missing review-economics-contract v1 before transcription`);
     const findings = Array.isArray(raw.findings) ? raw.findings : [];
-    if (findings.length === 0) {
-      const tokens = Array.isArray(raw.terminalTokens) ? raw.terminalTokens : [];
-      if (!tokens.includes(NO_FINDINGS_TOKEN) || !tokens.includes(M5_CLEAN_TOKEN)) {
-        errors.push(`review-economics: clean raw Codex result ${index + 1} missing NO_FINDINGS/SIMPLIFICATION_CLEAN before transcription`);
-      }
-      continue;
-    }
+    const tokens = Array.isArray(raw.terminalTokens) ? raw.terminalTokens : [];
+    let hasCutCandidate = false;
     for (const finding of findings) {
       const id = stringField(finding, 'id') || '<missing-id>';
       const evidence = stringField(finding, 'evidence');
@@ -555,7 +607,22 @@ function validateRawCodexEconomics(rawResults, errors) {
         }
       }
       const candidate = finding.simplificationCutCandidate ?? finding['simplification-cut-candidate'];
-      if (candidate !== undefined && candidate !== 'yes' && candidate !== true) errors.push(`review-economics: raw Codex finding ${id} has invalid simplification-cut-candidate before transcription`);
+      if (candidate !== undefined && candidate !== 'yes' && candidate !== true) {
+        errors.push(`review-economics: raw Codex finding ${id} has invalid simplification-cut-candidate before transcription`);
+      }
+      if (candidate === 'yes' || candidate === true) hasCutCandidate = true;
+    }
+
+    if (findings.length === 0 && !tokens.includes(NO_FINDINGS_TOKEN)) {
+      errors.push(`review-economics: clean raw Codex result ${index + 1} missing ${NO_FINDINGS_TOKEN} before transcription`);
+    }
+    if (PRE_LENS_REVIEWER_STAGES.has(stage)) {
+      if (hasCutCandidate && tokens.includes(M5_CLEAN_TOKEN)) {
+        errors.push(`review-economics: pre-lens raw Codex result ${index + 1} cannot claim ${M5_CLEAN_TOKEN} while cut candidates are present`);
+      }
+      if (!hasCutCandidate && !tokens.includes(M5_CLEAN_TOKEN)) {
+        errors.push(`review-economics: pre-lens raw Codex result ${index + 1} without cut candidate must carry ${M5_CLEAN_TOKEN} before transcription`);
+      }
     }
   }
 }
@@ -617,17 +684,12 @@ function latestEvidenceById(metadata) {
   return result;
 }
 
-function latestApplicableLens(metadata) {
-  return [...metadata].reverse().find((meta) => meta.stage === 'architectural-lens') ?? null;
-}
-
 function validateM3(metadata, ledger, captureFindings, options, errors) {
   const protectedFindings = captureFindings.filter((finding) => PROTECTED_TYPES.has(finding.type));
   if (protectedFindings.length === 0) return;
   const evidenceById = latestEvidenceById(metadata);
-  const lens = latestApplicableLens(metadata);
-  const lensRecords = lens ? parseM3LensLines(lens.text) : new Map();
   const currentRevision = typeof options.issueRevision === 'string' ? options.issueRevision.trim() : '';
+  const lensStates = foldM3LensState(metadata, currentRevision, errors);
   for (const finding of protectedFindings) {
     const row = ledger.findings.find((candidate) => candidate.id === finding.id)
       ?? ledger.findings.find((candidate) => candidate.type === finding.type);
@@ -643,12 +705,12 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
       && evidenceHasProtectedSignal(finding.type, activation.signal)
       && !zeroSignal,
     );
-    const lensRecord = lensRecords.get(finding.id);
-    const lensCurrent = Boolean(lensRecord && currentRevision && lensRecord.revision === currentRevision);
+    const lensState = lensStates.get(finding.id);
+    const lensRecord = lensState?.record ?? null;
+    const lensCurrent = Boolean(lensState?.current && lensRecord);
     const architectOutcome = lensCurrent ? lensRecord.outcome : 'none';
-    const architectClosed = architectOutcome === 'activate' || architectOutcome === 'non-activate';
-    const contest = lensCurrent ? lensRecord.contest : 'unknown';
-    const contestOpen = contest === 'contested' && !architectClosed;
+    const contestOpen = Boolean(lensState?.contestOpen);
+    const contest = lensCurrent ? (contestOpen ? 'contested' : lensRecord.contest) : 'unknown';
     const contestUnambiguousAbsent = contest === 'none' || contest === 'contest-withdrawn';
     const architectRequired = zeroSignal || row.architectRequired || contestOpen || !validAuthorActivation;
     if (options.phase === 'pre-lens') {
@@ -657,6 +719,10 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
         continue;
       }
       if (row.disposition !== 'addressed') errors.push(`review-economics: activated protected nomination ${finding.id} must be disposition addressed`);
+      continue;
+    }
+    if (row.architectPending) {
+      errors.push(`review-economics: protected nomination ${finding.id} must clear architect-pending before final acceptance`);
       continue;
     }
     if (!currentRevision) {
