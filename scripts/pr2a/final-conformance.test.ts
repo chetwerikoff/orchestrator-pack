@@ -794,7 +794,6 @@ describe('Issue #948 persisted TypeScript claim authority', () => {
       vectors: Array<{ id: string; class: string; kind: string; record?: Record<string, unknown>; expect: { readable?: boolean; reason?: string } }>;
       protocolVectors: Array<{ id: string; class: string; steps: string[]; sourceTest: string }>;
     };
-    expect(new Set(vectorDocument.vectors.map((row) => row.class))).toEqual(expect.objectContaining({ size: expect.any(Number) }));
     for (const className of REQUIRED_DATA_VECTOR_CLASSES) expect(vectorDocument.vectors.some((row) => row.class === className)).toBe(true);
     for (const className of REQUIRED_PROTOCOL_VECTOR_CLASSES) expect(vectorDocument.protocolVectors.some((row) => row.class === className)).toBe(true);
     expect(vectorDocument.protocolVectors.every((row) => row.steps.length > 0 && row.sourceTest.length > 0)).toBe(true);
