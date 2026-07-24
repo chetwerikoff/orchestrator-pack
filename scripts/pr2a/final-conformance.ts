@@ -51,7 +51,6 @@ interface DiffRow {
 }
 
 interface RefBinding {
-  requestedRef: string;
   baseCommitSha: string;
   candidateCommitSha: string;
   candidateTreeOid: string;
@@ -103,12 +102,24 @@ function listPaths(ref: string): string[] {
   return git(['ls-tree', '-r', '--name-only', ref]).split(/\r?\n/u).filter(Boolean).map(normalizeRepoPath);
 }
 
+function treeEntry(ref: string, file: string): string {
+  return git(['ls-tree', ref, '--', file]).trim();
+}
+
 function diffRows(base: string, ref: string): DiffRow[] {
   return git(['diff', '--name-status', '--no-renames', base, ref]).split(/\r?\n/u).filter(Boolean).map((line) => {
     const [status = '', ...parts] = line.split('\t');
     const file = normalizeRepoPath(parts.join('\t'));
     const operation = status === 'A' ? 'add' : status === 'D' ? 'delete' : 'modify';
     return { status, path: file, operation };
+  });
+}
+
+function semanticRows(planningBarrierCommit: string, binding: RefBinding): DiffRow[] {
+  return diffRows(planningBarrierCommit, binding.candidateCommitSha).filter((row) => {
+    // A path inherited unchanged from the current PR base is unrelated base evolution,
+    // not an implementation operation. Keep every path whose final entry differs from base.
+    return treeEntry(binding.baseCommitSha, row.path) !== treeEntry(binding.candidateCommitSha, row.path);
   });
 }
 
@@ -119,13 +130,11 @@ function resolveRefBinding(ref: string): RefBinding {
   let baseCommitSha = '';
 
   if (parentRow.length >= 3) {
-    // GitHub pull_request merge refs use base as first parent and the reviewed PR head as second.
     baseCommitSha = parentRow[1] ?? '';
     candidateCommitSha = parentRow[2] ?? requestedCommit;
   } else {
     const baseName = String(process.env.GITHUB_BASE_REF ?? '').trim() || 'main';
-    const candidates = [`origin/${baseName}`, 'origin/main'];
-    const baseRef = candidates.find(refExists);
+    const baseRef = [`origin/${baseName}`, 'origin/main'].find(refExists);
     if (!baseRef) throw new Error('pr2a_candidate_base_unavailable');
     baseCommitSha = git(['merge-base', candidateCommitSha, baseRef]).trim();
   }
@@ -134,7 +143,6 @@ function resolveRefBinding(ref: string): RefBinding {
     throw new Error('pr2a_candidate_binding_invalid');
   }
   return {
-    requestedRef: ref,
     baseCommitSha,
     candidateCommitSha,
     candidateTreeOid: git(['rev-parse', `${candidateCommitSha}^{tree}`]).trim(),
@@ -233,9 +241,7 @@ export function validateClaimStoreSource(source: string): ConformanceFinding[] {
       findings.push({ code: 'claim_store_protocol_guard_missing', path: 'scripts/lib/review-start-claim-store.ts', detail: token });
     }
   }
-  if (source.includes('.takeover')) {
-    findings.push({ code: 'claim_store_second_lock_path', path: 'scripts/lib/review-start-claim-store.ts' });
-  }
+  if (source.includes('.takeover')) findings.push({ code: 'claim_store_second_lock_path', path: 'scripts/lib/review-start-claim-store.ts' });
   if (/rmSync\(lockDir,\s*\{\s*recursive:\s*true,\s*force:\s*true\s*\}\)/u.test(source)
     && !source.includes('originalRmSync(quarantine')) {
     findings.push({ code: 'claim_store_unfenced_stale_delete', path: 'scripts/lib/review-start-claim-store.ts' });
@@ -283,13 +289,13 @@ export function validateClosureReceiptSource(source: string): ConformanceFinding
 }
 
 export function validateMandatoryPackageScripts(source: string): ConformanceFinding[] {
-  const findings: ConformanceFinding[] = [];
   let parsed: { scripts?: Record<string, string> };
   try {
     parsed = JSON.parse(source) as { scripts?: Record<string, string> };
   } catch {
     return [{ code: 'package_scripts_unreadable', path: 'package.json' }];
   }
+  const findings: ConformanceFinding[] = [];
   const issue948 = parsed.scripts?.['test:issue-948'] ?? '';
   const mutations = parsed.scripts?.['test:contract-mutations'] ?? '';
   if (!issue948.includes('--maxWorkers=1') || !issue948.includes('scripts/pr2a/final-conformance.test.ts')) {
@@ -343,9 +349,7 @@ function validateDiffPolicy(rows: DiffRow[], ref: string): ConformanceFinding[] 
     if (row.operation === 'add' && row.path.endsWith('.ps1')) findings.push({ code: 'new_powershell_logic_added', path: row.path });
     if (row.operation !== 'delete') {
       const mode = git(['ls-tree', ref, '--', row.path]).trim().split(/\s+/u)[0] ?? '';
-      if (!['100644', '100755'].includes(mode)) {
-        findings.push({ code: 'non_regular_final_tree_mode', path: row.path, detail: mode });
-      }
+      if (!['100644', '100755'].includes(mode)) findings.push({ code: 'non_regular_final_tree_mode', path: row.path, detail: mode });
     }
   }
   return findings;
@@ -357,9 +361,7 @@ function validateLiveManifests(ref: string): ConformanceFinding[] {
   for (const file of liveReferenceManifests) {
     const source = readAt(ref, file);
     for (const basename of basenames) {
-      if (source.includes(basename)) {
-        findings.push({ code: 'actionable_manifest_retains_d928', path: file, detail: basename });
-      }
+      if (source.includes(basename)) findings.push({ code: 'actionable_manifest_retains_d928', path: file, detail: basename });
     }
   }
   return findings;
@@ -375,12 +377,10 @@ export function buildConformanceReport(ref = 'HEAD'): ConformanceReport {
   const finalTreeOid = binding.candidateTreeOid;
   const manifest = JSON.parse(readAt(commitSha, planningPath)) as PlanningManifest;
   const planningBarrierCommit = git(['log', '-1', '--format=%H', commitSha, '--', planningPath]).trim();
-  const rows = diffRows(binding.baseCommitSha, commitSha);
+  const rows = semanticRows(planningBarrierCommit, binding);
   const findings: ConformanceFinding[] = [];
 
-  if (manifest.issue !== 948 || manifest.lineage.foundationCommit !== FOUNDATION_COMMIT) {
-    findings.push({ code: 'planning_lineage_invalid' });
-  }
+  if (manifest.issue !== 948 || manifest.lineage.foundationCommit !== FOUNDATION_COMMIT) findings.push({ code: 'planning_lineage_invalid' });
   if (git(['rev-parse', `${manifest.lineage.planningCommit}^{tree}`]).trim() !== manifest.lineage.planningBaseTreeOid) {
     findings.push({ code: 'planning_tree_binding_mismatch' });
   }
@@ -393,13 +393,10 @@ export function buildConformanceReport(ref = 'HEAD'): ConformanceReport {
       continue;
     }
     const digest = sha256(readAt(commitSha, target));
-    if (digest !== manifest.d928Sha256[target]) {
-      findings.push({ code: 'd928_bytes_changed', path: target, detail: digest });
-    }
+    if (digest !== manifest.d928Sha256[target]) findings.push({ code: 'd928_bytes_changed', path: target, detail: digest });
   }
 
-  const tracked = listPaths(commitSha);
-  const executableRows = tracked
+  const executableRows = listPaths(commitSha)
     .filter((file) => executableExtensions.has(path.posix.extname(file).toLowerCase()))
     .map((file) => ({ path: file, content: readAt(commitSha, file) }));
   findings.push(...scanForbiddenExecutableReferences(executableRows));
