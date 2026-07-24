@@ -1,9 +1,7 @@
 name: PR2a diagnostic capture
 
 on:
-  push:
-    branches:
-      - tmp/issue-948-verification-toolchain
+  pull_request:
 
 permissions:
   contents: read
