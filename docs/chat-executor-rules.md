@@ -304,19 +304,18 @@ Do not put tokens, cookies, credentials, secret URLs, or private data in the key
 
 `authPrincipal` is the lowercase authenticated GitHub login returned by the current connector or repository permission probe. A display name, remembered account, email address, or operator-supplied alias is not a principal source. If the authenticated login cannot be observed exactly, no profile may match for write capability.
 
-Derive `permissionClass` from the connector-observed repository permission booleans using this fixed highest-privilege precedence:
+Derive `permissionClass` from the connector-observed repository permission booleans by evaluating this fixed highest-privilege precedence from top to bottom and selecting the first true row:
 
 ```text
-admin=true                     -> repository-admin-push
-admin=false, maintain=true     -> repository-maintain-push
-admin=false, maintain=false,
-  push=true                    -> repository-write
-only triage=true               -> repository-triage
-only pull=true                 -> repository-read
-no granted repository access   -> repository-none
+admin=true      -> repository-admin-push
+maintain=true   -> repository-maintain-push
+push=true       -> repository-write
+triage=true     -> repository-triage
+pull=true       -> repository-read
+no true row     -> repository-none
 ```
 
-Use exactly one class from this table. Do not add suffixes, synonyms, tool names, or inferred capabilities. A profile whose stored principal or class differs from the current observed derivation is not a match.
+Lower permissions may also be reported true for a higher role; the first-true rule makes the result deterministic. Use exactly one class from this table. Do not add suffixes, synonyms, tool names, or inferred capabilities. A profile whose stored principal or class differs from the current observed derivation is not a match.
 
 ### Lookup and fail-closed behavior
 
@@ -381,13 +380,13 @@ After every available authenticated path capable of returning the exact executio
 
 The exception applies only to the single current profile that exactly matches repository ID/full name, canonical environment object and digest, canonical `authPrincipal`, and canonical `permissionClass`. It may change only the existing capability entry that represents execution-receipt ownership/takeover (`standalone-ownership-fence` in the current profile):
 
-- set its status to `degraded`;
+- set its status to `degraded` (or leave it `degraded`);
 - replace its current evidence with the verified failed authenticated retrieval paths and current failure evidence;
-- update fields required to keep that one capability entry valid, such as `testedAt`, expiry, known limits, and preferred fallback;
+- update its `testedAt`; when it uses `expiresAt`, advance only that timestamp as needed to keep the downgrade evidence bounded and unexpired;
 - update only the profile metadata required for the write, currently `updatedAt` and `ownerOrLastUpdater`;
 - append exactly one bounded human-readable transition that preserves the affected capability's previous evidence verbatim.
 
-Do not add, rename, or delete a capability key. Every unrelated profile field, every other capability object, and every other capability's evidence must remain byte-for-byte unchanged.
+All other fields in the target capability, including `knownLimits`, `preferredFallback`, and the choice between `expiresAt` and `noExpiryRationale`, remain byte-for-byte unchanged. Do not add, rename, or delete a capability key. Every unrelated profile field, every other capability object, and every other capability's evidence must remain byte-for-byte unchanged.
 
 Immediately before writing:
 
@@ -796,7 +795,7 @@ Force rewrite has no mechanical compare-and-swap. Before an independently author
 7. execute one rewrite-specific receipt transition;
 8. obtain fresh CI and review.
 
-The rewrite-specific transition requires the same execution ID/epoch, the unchanged old expected head immediately before the rewrite, explicit rewrite authorization, the exact intended rewritten commit and complete remote-content evidence, and immediate receipt/branch read-back. It records the old and new heads and invalidates old CI/review. Because a rebase/rebuild intentionally changes ancestry, the ordinary parent-equals-old-head condition does not apply; no unrelated or merely latest-observed head may be adopted.
+The rewrite-specific transition requires the same execution ID/epoch, the unchanged old expected head immediately before the rewrite, explicit rewrite authorization, the exact intended rewritten commit and complete remote-content evidence, and immediate receipt/branch read-back. Because a rebase/rebuild intentionally changes ancestry, the ordinary parent-equals-old-head condition does not apply; no unrelated or merely latest-observed head may be adopted.
 
 ## 8. Checkpoints and heartbeat
 
