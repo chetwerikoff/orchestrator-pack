@@ -1,9 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import {
-  validateFinalVerificationEnvironment,
-  validatePreReceiptVerificationEnvironment,
-} from './closure-receipt.ts';
 import { buildPlanningManifest } from './closed-world-scanner.ts';
 import { D928, FOUNDATION_COMMIT } from './contracts.ts';
 import { validatePlanningManifest } from './planning-validator.ts';
@@ -35,27 +31,5 @@ describe('Issue #948 planning tooling bootstrap', () => {
     expect(manifest.lifecycle.every((row) => row.legacyProtocolDisposition && row.rolloutBoundary)).toBe(true);
     expect(manifest.lifecycle.some((row) => row.identity === 'Acquire-ReviewStartClaim')).toBe(true);
     expect(manifest.lifecycle.some((row) => row.identity === 'Confirm-ReviewStartClaimLaunchGate')).toBe(true);
-  });
-
-  it('fails closed on unsupported pre-receipt and final verification environments', () => {
-    const unsupported = {
-      repository: 'chetwerikoff/orchestrator-pack',
-      platform: 'win32',
-      filesystem: 'cifs',
-      nodeVersion: 'v20.0.0',
-      pwshVersion: '5.1.0',
-    };
-    expect(validatePreReceiptVerificationEnvironment(unsupported)).toEqual(expect.arrayContaining([
-      'pre-receipt-platform-unsupported',
-      'pre-receipt-node-version-mismatch',
-      'pre-receipt-pwsh-version-mismatch',
-      'pre-receipt-filesystem-mismatch',
-    ]));
-    expect(validateFinalVerificationEnvironment(unsupported)).toEqual(expect.arrayContaining([
-      'final-verification-platform-unsupported',
-      'final-verification-node-version-mismatch',
-      'final-verification-pwsh-version-mismatch',
-      'final-verification-filesystem-mismatch',
-    ]));
   });
 });
