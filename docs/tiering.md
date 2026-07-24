@@ -103,22 +103,21 @@ out-of-repository layout.
 - **Browser GPT competitive review.** When the existing tier or an explicit
   request selects a competitive stage, each pass runs in a fresh browser-GPT
   chat. The stage ceiling remains three passes.
-- **Browser GPT architectural review.** One dedicated browser-GPT review chat is
-  created for the task and reused for every browser-GPT architectural turn,
-  including browser-GPT final verification. It is distinct from the task chat
-  and from every competitive chat.
+- **Browser GPT architectural review.** Every ordinary architectural pass and
+  every final-verification pass runs in a fresh browser-GPT chat. Review history
+  from one pass is not reused as input to another; only the persistent task chat
+  carries authoring/fix continuity.
 - **Codex.** Codex is not the default architectural-review engine. Its sanctioned
   roles are: the mandatory independent addition for T3-critical tasks; a recorded
   substitution for a browser-GPT review stage only when the browser is unavailable
   and the operator cannot raise it; and an explicitly user-requested standalone
   `adversarial-draft-review` challenge loop added on top of the normal flow.
 
-A Codex substitution necessarily runs outside the dedicated browser-GPT review
-chat and is captured, normalized, and dispositioned like the stage it replaces.
-When browser-GPT review resumes, later architectural turns continue in the same
-dedicated browser-GPT review chat; a substitution never replaces that chat.
-An explicit `adversarial-draft-review` loop never replaces the GPT competitive
-stage or the normal architectural stage.
+A Codex substitution is captured, normalized, and dispositioned like the stage it
+replaces. It creates no browser review-chat continuity; when browser-GPT review
+resumes, the next browser review pass still starts in a fresh chat. An explicit
+`adversarial-draft-review` loop never replaces the GPT competitive stage or the
+normal architectural stage.
 
 ### Per-tier pipeline (ceilings, not quotas)
 
@@ -128,9 +127,9 @@ ceiling.
 
 | Tier | Stages |
 |------|--------|
-| **T1** | One light browser-GPT architectural pass; after the final architect lens, one additional browser-GPT final-verification round only when the lens changed content. |
-| **T2** | Browser-GPT architectural review, up to **3** passes; first `NO_FINDINGS` ends the ordinary stage. After the final architect lens, one additional browser-GPT final-verification round only when the lens changed content. No competitive stage unless separately selected by an explicit wrapper contract. |
-| **T3** | Competitive adversarial browser-GPT review up to **3** fresh-chat passes → browser-GPT architectural review in the one dedicated review chat up to **4** passes → final architect lens → mandatory browser-GPT final-verification round **1** in that same dedicated review chat. |
+| **T1** | One light browser-GPT architectural pass in a fresh chat; after the final architect lens, one additional fresh-chat browser-GPT final-verification round only when the lens changed content. |
+| **T2** | Browser-GPT architectural review, up to **3** fresh-chat passes; first `NO_FINDINGS` ends the ordinary stage. After the final architect lens, one additional fresh-chat browser-GPT final-verification round only when the lens changed content. No competitive stage unless separately selected by an explicit wrapper contract. |
+| **T3** | Competitive adversarial browser-GPT review up to **3** fresh-chat passes → browser-GPT architectural review up to **4** fresh-chat passes → final architect lens → mandatory fresh-chat browser-GPT final-verification round **1**. |
 
 **T3-critical** (within-T3 graduation): gated by the **L4-condition list recorded
 in Issue #574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md` Decisions**
