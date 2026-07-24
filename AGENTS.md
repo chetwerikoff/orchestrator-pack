@@ -3,26 +3,15 @@
 ## Project Purpose
 
 This repository is an upgrade-safe extension pack for ComposioHQ/agent-orchestrator.
+
 It ports selected safety/accounting contracts from `ai-orchestrator` into Composio AO —
 via plugins, prompt fragments, config examples, scripts, and CI checks — without modifying
-Composio core.
-
-## Task-authoring canon
-
-For every newly authored task, the GitHub Issue is the sole live task specification, source of
-truth, and queue entry. The mirrorless GPT-chat new-task flow adds no tracked or in-repository
-live draft or queue-index artifact. Its out-of-repository working anchor, immutable pulled
-revisions, reviewer captures, finding-disposition ledger, chat references, and related audit
-state are permitted and expected working/audit artifacts; they are not a second task
-specification or queue entry.
-
-Pre-existing `docs/issues_drafts/**` and `docs/issue_queue_index.md` content remains readable
-legacy history and prior art. The sanctioned `publish-issue-draft` path is legacy-only: it may
-maintain, re-synchronize, or batch-publish those pre-existing artifacts, but newly authored tasks
-do not create or identify themselves through them. The durable role and ceremony contract lives
-in this file and [`docs/tiering.md`](docs/tiering.md); the exact browser mechanics,
-out-of-repository layout, captures, ledger operations, and execution sequence live in
-[`.claude/skills/create-issue-draft/SKILL.md`](.claude/skills/create-issue-draft/SKILL.md).
+Composio core. For new tasks, the GitHub Issue is the sole live specification, source of truth, and queue entry;
+the mirrorless flow creates no tracked/in-repository draft or index. Out-of-repository anchors,
+revisions, captures, ledger, chats, and audit state are working artifacts, not a second spec/queue.
+Pre-existing `docs/issues_drafts/**` and `docs/issue_queue_index.md` are legacy prior art maintained
+only through `publish-issue-draft`; roles/tiers live in [`docs/tiering.md`](docs/tiering.md) and
+exact mechanics in [the skill](.claude/skills/create-issue-draft/SKILL.md).
 
 ## Edit boundaries
 
@@ -203,9 +192,8 @@ section below unless you are reviewing this policy itself.
 ## AO-managed worker lifecycle
 
 These rules are the **worker-LLM behavioral contract** for orchestrator-pack AO sessions. They
-reach agents via tracked worktree files — native `AGENTS.md` pickup — not via any published
-`agentRulesFile` injection (removed on AO 0.10.2). Portable across AO-supported agents; do not
-rely on local `ai-orchestrator` internals.
+reach agents via tracked worktree files — native pickup for Cursor and Codex workers. There is no `agentRulesFile` injection channel on AO 0.10.2. After merge, **recycle live worker AO sessions** so worktrees pick up the new file;
+AO restart alone is not required for worker rule delivery.
 
 ### Operator-only merge and failed runs
 
@@ -237,12 +225,9 @@ PR work. Missing session verification marks the session `stuck`. See
 
 ### Tracker and role policy
 
-- GitHub Issues are the task source of truth for this pack's AO setup.
-- For a newly authored task, the Issue is also the sole live task artifact and queue entry; do not
-  create, update, synchronize, or identify it through tracked `docs/issues_drafts/**` or
-  `docs/issue_queue_index.md` artifacts.
-- Out-of-repository working anchors, pulled revisions, captures, ledgers, and chat references are
-  audit state only and do not replace the live Issue.
+- GitHub Issues are the task source of truth. Each new-task Issue is the sole live artifact/queue;
+  never create, sync, or identify it through tracked drafts/index. External anchors, revisions,
+  captures, ledgers, and chat references remain audit state only.
 - Link every branch and PR to its source issue; PR bodies must include `Closes #N`, `Fixes #N`, or
   `Resolves #N` in the **first few lines** under `## Summary`.
 - If **PR scope guard** fails with `missing_issue_link` but GitHub shows `Closes #N`, re-check
@@ -260,9 +245,7 @@ PR work. Missing session verification marks the session `stuck`. See
 
 ### Legacy queued task specs
 
-The rules below apply only when an Issue explicitly scopes maintenance of the pre-existing legacy
-`docs/issues_drafts/**` corpus. Newly authored tasks do not create tracked draft specifications.
-
+- Applies only to pre-existing `docs/issues_drafts/**`; new tasks do not create tracked drafts.
 - Do not delete legacy queued task specs unless deletion is in scope.
 - Do not rewrite another task's declaration to make the current diff pass.
 - One amendment per iteration; keep the previous baseline auditable.
@@ -437,18 +420,18 @@ On a trigger below (substring or clear paraphrase — best-effort discovery, not
 gate) follow the named skill immediately; no skill name required. Every skill has loader wrappers
 at `.cursor/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`.
 **Routing when several could match:** «с кодексом» / «придирчиво» → `adversarial-draft-review`;
-«с gpt» / «с гпт» → `discuss-with-gpt`; plain new-task authoring → `create-issue-draft`.
-`publish-issue-draft` is reserved for maintenance/publication of pre-existing legacy tracked drafts.
+«с gpt» / «с гпт» → `discuss-with-gpt`; plain new-task authoring → `create-issue-draft`;
+`publish-issue-draft` is legacy-only.
 
 | Skill | Triggers (substring / paraphrase) | Action |
 |---|---|---|
 | `investigate-root-cause` | «разобраться с причиной», «в чём причина», «что это», «разберись», «почему упал», «что сломалось», «отладь», «что случилось», «почему не работает»; «root cause», «why did», «figure out why», «investigate the cause», «wtf» | follow [`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md); skip pure implementation / external adoption |
 | `merge-with-local-adoption` | «мерж», «мерж 385», «мерж и пул», «смерж», «смержи», «замержи»; «merge», «merge 307», «merge and pull», «merge the PR» | operator executes merge + safe pull + local adoption on the live checkout — **see Operator-only merge above** |
-| `adversarial-draft-review` | «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход»; «draft with codex», «adversarial draft», «challenge the approach» | run the explicitly requested standalone Codex challenge loop in addition to the normal GPT-authored Issue flow; never replace the GPT competitive or architectural stages |
-| `discuss-with-gpt` | «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt»; «draft with gpt», «discuss with gpt», «challenge with gpt» | run the requested browser-GPT challenge or brief-only entry through the Issue-direct flow; the GitHub Issue remains the sole live task artifact |
-| `create-issue-draft` | authoring or accepting a newly authored task specification; a browser-GPT task-chat + Issue handoff; or a brief-only new-task request | use the GPT-authored, Issue-direct flow; create no tracked draft mirror or queue-index row |
+| `adversarial-draft-review` | «с кодексом», «придирчиво»; “draft with codex” | extra standalone Codex loop; never replaces GPT stages |
+| `discuss-with-gpt` | «с gpt», «с гпт»; “with gpt” | browser-GPT challenge or brief-only Issue entry |
+| `create-issue-draft` | new task or GPT task-chat + Issue handoff | GPT-authored Issue flow; no tracked draft/index |
 | `study-external-source` | «изучи <URL>», research an external repo/URL for adoption | external-source adoption triage |
-| `publish-issue-draft` | maintain, re-synchronize, or batch-publish a pre-existing legacy artifact under `docs/issues_drafts/**`; «опубликуй legacy-драфт», «обнови старый драфт/issue»; «publish/update legacy draft» | legacy-only sync/publication path for pre-existing tracked drafts; never create a tracked artifact for a newly authored task |
+| `publish-issue-draft` | pre-existing legacy tracked-draft maintenance/publication | legacy-only sync/publication; never creates a new-task artifact |
 | `switch-pack-reviewer` | «переключи ревьюера», «поставь codex», «поставь claude», «PACK_REVIEWER», «switch reviewer», «reviewer codex/claude», «используется claude вместо codex», «глобально codex» | switch pack reviewer / fix `PACK_REVIEWER` drift |
 | `change-orchestrator-runtime` | «поменяй модель оркестратора», «смени промпт оркестратора», «другой оркестратор»; «change orchestrator model», «edit orchestrator rules», «switch orchestrator runtime» | change orchestrator model/prompt/runtime **and** apply the daemon-cache + session-restore steps |
 
@@ -456,12 +439,11 @@ at `.cursor/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`.
 
 Workers and architects share RCA invariants. Full procedure:
 [`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md) (**recurrence-diagnostic**,
-**5-Whys stop condition**). Authoring: `create-issue-draft` and the legacy-only
-`publish-issue-draft` path (**behavior-kind**, **positive-outcome**, **parked-root-cause** fences).
+**5-Whys stop condition**). Authoring: `create-issue-draft` plus legacy-only
+`publish-issue-draft` (**behavior-kind**, **positive-outcome**, **parked-root-cause** fences).
 Cursor mirror: [`.cursor/rules/rca-spec-discipline.mdc`](.cursor/rules/rca-spec-discipline.mdc).
 Architecture: §T in
 [`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
 
-**Legacy publish is cross-entrypoint:** `publish-issue-draft` lives under `.claude/` but Claude,
-Codex, Cursor, and Hermes sessions that read this `AGENTS.md` use that same canonical skill for
-pre-existing tracked drafts; do not re-derive a Codex- or Hermes-specific publish flow.
+**Legacy publish is cross-entrypoint:** all agents use the canonical `.claude/` skill for
+pre-existing tracked drafts; do not re-derive an agent-specific publish flow.
