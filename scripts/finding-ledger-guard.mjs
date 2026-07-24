@@ -576,21 +576,17 @@ function validateM2(metadata, ledger, options, errors) {
       errors.push(`review-economics: adoption chronology is ambiguous for ${meta.name}`);
       continue;
     }
+    if (meta.timestampMs < adoptionTimestampMs) continue;
+
     const parsed = parseFindingBlocks(meta.text);
-    if (parsed.marker) {
-      parsedByName.set(meta.name, parsed);
-      for (const finding of parsed.findings) latestMarkedById.set(finding.id, { finding, meta });
+    governed.push(meta);
+    if (!parsed.marker) {
+      errors.push(`review-economics: post-adoption reviewer capture ${meta.name} missing ${REVIEW_ECONOMICS_MARKER}`);
+      continue;
     }
-    if (meta.timestampMs > adoptionTimestampMs) {
-      governed.push(meta);
-      if (!parsed.marker) {
-        errors.push(`review-economics: post-adoption reviewer capture ${meta.name} missing ${REVIEW_ECONOMICS_MARKER}`);
-        continue;
-      }
-      errors.push(...parsed.errors.map((error) => `${meta.name}: ${error}`));
-    } else if (parsed.marker) {
-      errors.push(...parsed.errors.map((error) => `${meta.name}: ${error}`));
-    }
+    parsedByName.set(meta.name, parsed);
+    for (const finding of parsed.findings) latestMarkedById.set(finding.id, { finding, meta });
+    errors.push(...parsed.errors.map((error) => `${meta.name}: ${error}`));
   }
   if (options.phase === 'final-acceptance' && governed.length === 0) errors.push('review-economics: final acceptance requires governed reviewer evidence after adoption');
   for (const [id, { finding }] of latestMarkedById) {
