@@ -2,597 +2,186 @@
 
 ## 1. Scope
 
-These rules apply only to implementers working through a chat-based environment in which the conversation, shell container, local filesystem, GitHub connector, GitHub Actions, and tool calls may have different authentication, network access, persistence, and timeout behavior.
+These rules apply to standalone implementers and reviewers working through a chat environment where the conversation, shell/container, filesystem, GitHub connector, GitHub Actions, and tool calls may have different authentication, persistence, network access, or timeout behavior.
 
-A working shell `git push` changes the preferred publishing transport; it does not make the environment non-chat. Remote checkpoints, remote read-back, heartbeat, long-process handling, and the rule that local work is not completed work still apply.
+They supplement `/AGENTS.md`; they do not replace it. `/AGENTS.md` remains authoritative for repository scope, Issue/PR linking, verification, review-cycle limits, merge policy, and the AO-managed worker lifecycle.
 
-These rules supplement `/AGENTS.md`. They do not replace or weaken repository policy. `/AGENTS.md` remains authoritative for scope, Issue and PR linking, verification, review-cycle limits, merge policy, and other repository-wide behavior. If the two documents appear to conflict, stop and report the conflict rather than inventing an exception.
+These rules do **not** define or replace AO-managed worker claim, lease, recovery, coordination, or lifecycle mechanisms.
 
-## 2. Required start
+## 2. Start with live sources
 
-Before substantive analysis, editing, review, or specification work, read the live default-branch versions of:
+Before repository work:
 
-1. `/AGENTS.md`;
-2. `docs/chat-executor-rules.md`.
+1. read the live default-branch `/AGENTS.md`;
+2. read the live default-branch `docs/chat-executor-rules.md`;
+3. read the binding Issue/spec when the task has one;
+4. read additional documents only when the task actually depends on them.
 
-Do not rely on a remembered or previously uploaded copy while live GitHub reading is available. If either file cannot be read completely, say so and do not claim that its policy has been applied.
+Do not rely on remembered or previously uploaded policy while live repository reading is available.
 
-Record a policy snapshot containing:
+If a required source cannot be read completely, say which source is unavailable and do not make decisions that depend on missing content.
 
-- default-branch commit SHA;
-- `/AGENTS.md` path and connector-returned blob SHA;
-- this document's path and connector-returned blob SHA;
-- UTC read time.
+If the default branch moves during the task, inspect whether the change affects the work. Re-read or revalidate affected material when it does. If it clearly does not, continue; no separate movement ledger or semantic-overlap report is required.
 
-Confirm the start in this form:
+## 3. Task contract
 
-```text
-AGENTS.md read: <blob SHA>
-Chat executor rules read: <blob SHA>
-Default branch HEAD: <commit SHA>
-Execution ID: <unique ID>
-Execution mode: provisional-B | C
-```
+GitHub Issues/specifications remain the task contract where `/AGENTS.md` requires them.
 
-At startup, `provisional-B` means the reusable capability profile and current liveness checks support a candidate publication path, but the current session has not yet proved it. It is not confirmed Mode B and does not authorize a large local implementation or a promise to reach `ready for review`. Choose Mode C immediately when no reliable candidate publication path exists.
+For a normal readable Issue, read it and implement it. Do not create SHA-256 bookkeeping, normalization records, source-kind taxonomies, or JSON binding records merely to prove that it was read.
 
-A blob SHA identifies exact file contents. A commit SHA identifies the repository commit whose tree was read.
+If only truncated or partial task text is available and the missing content is needed to understand scope or behavior safely, stop and obtain the complete contract or another explicit authoritative source. Do not guess omitted requirements.
 
-Policy snapshots and execution receipts are operational attestations made by the executor. They are not independently verified evidence merely because they contain hashes. Where repository tooling or an operator validator exists, it may compare the reported bindings with live GitHub state. Without such validation, describe them as `self-reported`, not `verified`.
+When the task contract changes materially during work, re-read it and reconcile the implementation before continuing.
 
-The compatible validation architecture is:
+## 4. Normal publication path
+
+Use the practical repository-approved transport that is actually available, including shell Git, the GitHub Contents API, Git object APIs, or connector-backed GitHub mutations.
+
+The normal path is:
 
 ```text
-connector-side read or capability probe
-    -> capability ledger / execution receipt
-    -> optional repository-side or operator validation
+read current relevant remote state
+-> perform the ordinary operation
+-> read the result back
+-> investigate further only when a real conflict or ambiguity appears
 ```
 
-## 3. Issue binding
+For repository-file or branch writes, check the current branch/PR head before an important mutation. Publish from current state rather than knowingly overwriting unexpected advancement.
 
-For repositories where `/AGENTS.md` makes GitHub Issues the task source of truth, including this repository, every implementation task must bind to its Issue.
+Non-force publication is the normal branch-update path. A non-fast-forward failure or unexpected head is a signal to read current remote state, understand the change, and continue from the appropriate current base.
 
-Record:
+Do not blindly retry a write that timed out or may have succeeded. Read authoritative remote state first.
 
-- repository;
-- Issue number;
-- Issue state;
-- Issue `updatedAt`;
-- SHA-256 digest of the normalized Issue body.
+For ordinary Issue, PR body/metadata, comment, and similar GitHub mutations, use the normal API. A pre-read is sensible for important replacements; verify important results afterward. Do not require a custom ETag, CAS, lease, or lock protocol unless the underlying API/task actually requires one.
 
-Normalize the Issue body as UTF-8 with CRLF converted to LF; otherwise preserve the text exactly.
+### Contents API
 
-Re-read the Issue before `ready for review`. If its state, timestamp, or body digest changed, reconcile the implementation with the new task text or obtain an explicit user decision. Do not silently continue against a stale specification.
+The GitHub Contents API is allowed for ordinary file creation, replacement, and deletion when it is the practical available transport. Its lack of branch-head CAS is not by itself a reason to ban it.
 
-## 4. Capability profile
+Read the current target before replacement when needed, use the API's ordinary file-version guard when available, and read the resulting branch/file back. Handle an observed concurrent edit as an exception rather than imposing extra ceremony on every write.
 
-A capability profile is a reusable, machine-readable ledger for a class of chat environment. Its purpose is to record tested transports and known dead ends so every new chat does not repeat the same destructive preflight.
+### Force and history rewrite
 
-Each capability entry should record:
+Do not use force/history rewrite without a real need.
 
-- transport;
-- status: `proven | available-but-unproven | unavailable | degraded`;
-- evidence and test time;
-- environment/tool fingerprint;
-- non-secret auth principal or permission class;
-- known limits;
-- preferred fallback.
+When a rewrite is genuinely needed, explicitly authorized, and allowed by repository policy:
 
-The normal minimum profile covers:
+1. read the current branch/PR head immediately before the operation;
+2. perform only the intended rewrite;
+3. read the resulting head/diff back immediately;
+4. obtain fresh CI and review for the rewritten head.
+
+Do not add a separate lease, handoff environment, or ownership service for this rare path.
+
+## 5. Read-back proportional to the artifact
+
+For ordinary text/code changes, successful publication normally requires:
+
+- the expected remote head is observable after the write; and
+- the PR diff/changed files match the intended scoped change.
+
+Do not require every publication to prove a full Git object graph, manifest, per-file blob inventory, compare-base digest, or named remote-content level.
+
+Use deeper verification only when the task actually depends on semantics that a normal diff may miss, for example:
+
+- executable mode changes;
+- symlinks or gitlinks;
+- deletes or renames where path identity matters;
+- binary or Git LFS content;
+- complex Git object API publication;
+- another explicitly identified integrity-sensitive case.
+
+Choose the smallest verification that proves the property the task actually needs.
+
+## 6. Checkpoints and long-running commands
+
+Make a remote checkpoint after a meaningful recoverable slice or before a genuinely risky step when that is useful. Do not create commits, comments, or other remote writes merely because a timer expired.
+
+For long-running commands:
+
+- avoid accidentally launching a duplicate heavy command;
+- retain or observe enough output to determine the result;
+- do not interpret a tool-call timeout as automatic process failure;
+- before retrying, check whether the previous process is still running when the environment makes that practical.
+
+Do not require universal nonce, command-digest, PID/start-time/process-group, or supervisor bookkeeping for every command.
+
+If an operation fails, do not repeat the same action blindly. Inspect current state and change the approach when needed. If a required action remains impossible, report exactly which action could not be completed and what remote state was verified.
+
+## 7. Independent review role
+
+An independent reviewer may inspect the task, diff, CI, comments, and review threads and may publish a head-bound review.
+
+Review work must not mutate implementation state unless the user/task also authorizes implementation changes. This is a role boundary, not a global execution mode or ownership state machine.
+
+## 8. CI and review stay current-head bound
+
+CI and review conclusions apply to the exact PR head they evaluated.
+
+After every new commit or history rewrite:
+
+- earlier-head CI is stale;
+- earlier-head clean review is stale;
+- obtain fresh checks and review before claiming the new head is ready for review or merge.
+
+Missing, pending, cancelled, failed, or earlier-head required checks are not green for the current head.
+
+For GitHub Actions diagnostics, the available GitHub transport can fetch decoded job logs directly by job ID. A practical path is `run -> jobs -> failed job ID -> decoded job log`; the returned log includes step stdout/stderr. This is one available way to inspect the exact CI failure without first creating a separate artifact solely to capture command output.
+
+Before ready-for-review or merge, there must be no known current material blocker/major finding left unresolved. A fixed finding may be closed. A rejected finding may be explicitly adjudicated. A finding made irrelevant by a later operator-approved contract change or by removal of the affected code/text does not remain permanent administrative debt.
+
+Use GitHub review/thread state and explicit reviewer/operator decisions directly; do not maintain a separate finding-state ledger merely to restate them.
+
+## 9. Merge
+
+Follow `/AGENTS.md` merge authority. An AO-managed worker must not merge.
+
+Immediately before an authorized merge:
+
+1. read the current PR state and exact head;
+2. confirm required CI and review are acceptable for that head;
+3. use `expected_head_sha` or equivalent expected-head protection when the available merge API supports it;
+4. perform the merge;
+5. read the merge result back.
+
+Do not turn merge into a separate execution state machine.
+
+## 10. Secrets and truthful reporting
+
+Never publish secrets or private data through commits, Issues, PRs, comments, logs, or handoff artifacts, including tokens, API keys, cookies, authorization headers, private keys, raw secret configuration, authenticated URLs, or third-party private data.
+
+Scrub sensitive logs before quoting them.
+
+Do not claim that a remote action succeeded unless authoritative remote state confirms it. A possibly-successful timed-out write must be read back before retry.
+
+## 11. Definition of Done
+
+For a normal standalone implementation, completion means:
 
 ```text
-repository read
-text publication
-commit/tree creation
-branch create/update
-remote read-back
-PR create/update
-CI runs/jobs/logs read
-review observation
-long-process handling
+[ ] intended changes are published in the PR
+[ ] PR diff/changed files match the task scope
+[ ] important published results were read back
+[ ] required CI is green for the current PR head
+[ ] no known current material review finding remains unresolved
+[ ] current-head review is acceptable
+[ ] the user is told the PR/head/CI/review state and any concrete limitation
 ```
 
-Task-specific capabilities are required only when the task uses them:
-
-```text
-binary or large files
-maximum safe payload
-executable modes
-symlinks
-Git LFS
-artifact upload/download
-signed commits
-history rewrite
-```
-
-A missing unused capability does not block full chat execution.
-
-A profile remains reusable across chats. Re-run the full capability preflight only after a material change:
-
-- connector or tool inventory changed;
-- authentication principal or repository permissions changed;
-- the profile explicitly expired;
-- the actual transport contradicted the profile;
-- an unexpected integrity, authorization, or network failure occurred.
-
-Starting a new conversation alone is not an invalidation event.
-
-Destructive capability tests, including test branches and test PRs, belong in a sandbox repository. Do not create temporary PRs in the main repository merely to test PR creation.
-
-## 5. Per-task liveness check and modes
-
-A normal task does not repeat the full capability investigation. Check only current mutable facts:
-
-- repository read succeeds;
-- current permissions are sufficient;
-- current default-branch HEAD is known;
-- both policy files were read live;
-- the selected publishing transport is available;
-- a real task branch can be created or reused.
-
-Choose the initial state before the canary:
-
-- `provisional-B` when the reusable capability profile and current liveness checks support every operation required by the task, but current-session publication has not yet been proved;
-- `C` when no reliable candidate publication path is available.
-
-`provisional-B` is a transient startup state, not a confirmed execution mode. It must resolve through the first real task commit, which is the session canary:
-
-```text
-create a meaningful task checkpoint
-    -> publish it to the task branch
-    -> read the remote head and tree back
-    -> compare them with the intended commit/tree
-```
-
-On success, transition `provisional-B -> B`. If the selected transport fails, either remain `provisional-B` while switching to another already-proven candidate transport and rerun the canary, or transition to Mode C when no reliable candidate remains.
-
-Do this before a large local implementation. Do not begin one while the state is still `provisional-B`.
-
-### Mode B — full chat execution
-
-Mode B is confirmed only when the current capability profile supports the operations required by the task and the current-session canary has succeeded:
-
-```text
-edit
-publish
-remote read-back
-open and update PR
-observe CI
-observe and address review
-```
-
-Publication may use shell Git, the GitHub object API, the contents API, or another proven transport.
-
-Historically proven PR and CI capabilities do not need a fake per-task test. Confirm them through the first real PR and CI run. An unexpected failure causes an explicit downgrade, escalation, or transport change.
-
-Only confirmed Mode B permits a promise to implement the Issue and bring its PR to `ready for review`.
-
-### Mode C — implementation handoff
-
-Use Mode C when a reliable publication path is absent or fails.
-
-Permitted results include:
-
-- patch;
-- archive;
-- changed-file bundle;
-- publication manifest;
-- implementation plan;
-- application commands;
-- review of another implementation.
-
-Name the actual delivery channel and its limit. Do not promise a remote branch or PR.
-
-The terminal Mode C status is:
-
-```text
-handoff prepared
-```
-
-A Mode C session may move to `provisional-B` when a reliable candidate transport becomes available. It becomes confirmed Mode B only after a remote write transaction and read-back succeed.
-
-## 6. Remote publication
-
-The local container is temporary until work is remotely anchored.
-
-When using GitHub object APIs, publish a complete resulting Git tree while uploading only the delta:
-
-```text
-local Git index
-    -> compare with known base tree
-    -> upload new and changed blobs
-    -> apply additions, updates, and deletions
-    -> create complete resulting tree
-    -> create commit
-    -> update branch ref
-    -> read commit and tree back
-```
-
-The manifest must preserve Git semantics:
-
-```text
-repository identity
-repo-relative path
-mode and object type
-blob SHA
-addition | update | deletion
-base commit and base tree
-freshly observed branch head
-target branch
-manifest digest
-```
-
-Reject absolute paths, `..`, case collisions, unapproved symlinks, gitlinks, or mode changes. Text-only replacement is insufficient when deletions, executable bits, or symlinks matter.
-
-After blob upload, compare the returned blob SHA. A confirmed truncation or SHA mismatch blocks that transport for the affected payload. Do not keep varying chunk sizes without new evidence that the transport can be safe.
-
-### Fail-closed ref update
-
-GitHub's ref-update API does not provide an `expected SHA` parameter. Use the strongest available fail-closed sequence:
-
-```text
-read branch head immediately before publication
-    -> create commit with that head as parent
-    -> update ref with force=false
-    -> read branch head and tree back
-```
-
-Concurrent advancement should produce a non-fast-forward failure. On mismatch or conflict:
-
-```text
-read new remote head
-    -> rebase/rebuild the resulting tree
-    -> republish from the new base
-```
-
-Do not retry a possibly successful timed-out write blindly; read remote state first.
-
-### History rewrite
-
-A force rewrite has no mechanical compare-and-swap protection. `force=true` disables fast-forward protection.
-
-Before an allowed rewrite:
-
-1. verify repository policy permits it;
-2. confirm sole ownership of the task branch;
-3. read the remote head immediately before the write;
-4. require it to equal this execution's last published head;
-5. narrow the race window as much as possible;
-6. force-update;
-7. read the new head and tree back immediately.
-
-This is an organizational control plus race-window reduction, not a guarantee against concurrent writes.
-
-## 7. Remote checkpoint and heartbeat
-
-During active execution, produce a GitHub-visible signal at least every 15–20 minutes. The cadence limits unanchored work and makes loops visible; it is not a limit on total task duration.
-
-User waiting time and an explicitly paused session do not count as active execution.
-
-### Primary heartbeat: remote checkpoint
-
-When a meaningful recoverable file slice exists:
-
-```text
-commit
-    -> publish task branch
-    -> remote read-back
-    -> update execution receipt
-```
-
-A clearly labeled WIP checkpoint is acceptable. It must represent real progress and remain within task scope. A local commit without remote publication is not a checkpoint.
-
-Also checkpoint at meaningful boundaries regardless of the timer:
-
-- after a functional slice;
-- before a long test;
-- before a risky operation;
-- before changing transport;
-- before history rewrite;
-- before likely container loss.
-
-Do not create empty or meaningless commits merely to satisfy the timer.
-
-### Minimal heartbeat: evidence update
-
-When no safe meaningful file slice exists, update the execution receipt with concrete evidence. Typical cases:
-
-- specification or dependency analysis;
-- inventory construction;
-- CI diagnosis;
-- one long-running local process;
-- one running GitHub Actions job.
-
-Record what was checked, what changed in the diagnosis, what hypothesis was rejected, process or run identity, and the next specific step.
-
-If local files have changed but cannot safely be checkpointed because they contain a secret, violate scope, or form a knowingly invalid tree, record the exact reason and publish at the first safe boundary.
-
-Phrases such as `still working`, `almost done`, or `only publication remains` are not evidence.
-
-### Loop detection
-
-Rewording an old conclusion is not new evidence.
-
-A sufficient core signal that execution is stuck is two consecutive heartbeat intervals with both:
-
-- no new substantive evidence affecting diagnosis, implementation, or the next justified action; and
-- no change in process or external evidence.
-
-For a long process, changed evidence may include:
-
-- the same full process identity remains live;
-- log size or offset increased;
-- log timestamp changed;
-- new output appeared;
-- GitHub job or step progressed;
-- measurable CPU time increased;
-- an external service still reports active execution.
-
-When stuck:
-
-1. stop repeating the same hypothesis;
-2. preserve the latest safe remote checkpoint;
-3. record the evidence and blocker;
-4. change hypothesis, diagnostic layer, transport class, or escalate to the user.
-
-## 8. Long-running commands
-
-For commands longer than one tool call:
-
-- start one process;
-- write stdout and stderr to files;
-- store exit code separately;
-- poll the same process;
-- do not launch a duplicate suite;
-- verify the old process before retrying;
-- do not interpret a tool-response timeout as process failure.
-
-Track a full process identity:
-
-```text
-PID
-process start time
-command digest
-nonce
-process-group ID
-working directory
-log paths
-```
-
-PID alone is insufficient because operating systems reuse PIDs. Terminate only a process group whose full identity matches.
-
-For GitHub Actions, bind evidence to:
-
-```text
-head SHA
-run ID
-job ID
-current step
-timestamps
-conclusion
-```
-
-Never combine CI evidence from different heads.
-
-## 9. Execution receipt
-
-Use one editable comment in the source Issue as the per-task execution receipt. Find it by a stable marker:
-
-```html
-<!-- chat-execution-receipt:v1 -->
-```
-
-The comment is both a compact machine-readable record and a human-readable progress view.
-
-Recommended machine-readable fields:
-
-```json
-{
-  "schema": "chat-execution-receipt/v1",
-  "repository": "owner/repo",
-  "issue": 123,
-  "executionId": "chat-123-...",
-  "previousExecutionId": null,
-  "attestation": "self-reported",
-  "policy": {
-    "defaultBranchHead": "<sha>",
-    "agentsBlobSha": "<sha>",
-    "chatRulesBlobSha": "<sha>"
-  },
-  "issueBinding": {
-    "state": "open",
-    "updatedAt": "<UTC timestamp>",
-    "bodyDigest": "<sha256>"
-  },
-  "baseSha": "<sha>",
-  "remoteHeadSha": "<sha|null>",
-  "remoteTreeSha": "<sha|null>",
-  "mode": "B",
-  "work": "implementing",
-  "publication": "published",
-  "ci": "running",
-  "review": "not-open",
-  "updatedAt": "<UTC timestamp>"
-}
-```
-
-The `mode` field accepts `provisional-B`, `B`, or `C`. Record the canary transition that confirms B or downgrades to C in `Recent transitions`.
-
-Follow it with:
-
-```markdown
-## Chat execution progress
-
-### Completed
-- ...
-
-### Current
-- ...
-
-### Next
-- ...
-
-### Blockers
-- none
-
-### Recent transitions
-- ...
-```
-
-Use UTC as canonical time.
-
-The GitHub Issue comment body limit is 65,536 characters. Keep transition history bounded. When space is low, remove the oldest transitions first, while retaining current state, policy and Issue bindings, active and previous execution IDs, last remote head, takeover history, and current blockers.
-
-Issue comment updates are last-write-wins and are not transactional. Two writers can overwrite each other. Protection is organizational, not mechanical:
-
-- one active branch owner;
-- one active execution ID;
-- explicit takeover;
-- remote-head verification before continuing.
-
-Do not treat the JSON block as a transaction log or independent proof. Repository tooling or an operator may validate it; otherwise it remains self-reported.
-
-The receipt does not replace remote commits, Actions, GitHub reviews, or repository-owned worker-status mechanisms.
-
-## 10. Ownership and takeover
-
-One task branch has one active chat executor.
-
-A second executor must not publish into a live branch without takeover.
-
-For takeover:
-
-1. read the live policy files;
-2. read the current Issue and receipt;
-3. read the remote branch head and tree;
-4. inspect current-head CI and review;
-5. record the old and new execution IDs;
-6. state `taking over from <old ID> at <head SHA>`;
-7. continue only from the confirmed remote head.
-
-Fast-forward-only publication prevents many accidental overwrites, but receipt comments remain last-write-wins and force rewrites remain race-prone.
-
-If branch deletion is unavailable, do not use temporary branches in the main repository. Put abandoned task branches into an operator cleanup queue.
-
-## 11. Degradation and attempt discipline
-
-If authorization or write permission fails after work began:
-
-1. stop GitHub writes;
-2. read remote state if reading still works;
-3. report the exact sanitized failure;
-4. export local work as a patch, archive, or manifest;
-5. downgrade to Mode C;
-6. update the receipt if comment writing still works.
-
-A confirmed integrity mismatch immediately blocks the affected transport.
-
-There is no universal three-attempt limit. Stop repeating one failure class when two consecutive attempts:
-
-- add no diagnostic information;
-- do not change observed state;
-- repeat an already rejected hypothesis.
-
-The next attempt must change the hypothesis, evidence source, diagnostic layer, or solution class.
-
-Review-cycle limits come from `/AGENTS.md`, tier policy, or the Issue contract, not from this document.
-
-## 12. Secrets and egress
-
-Never publish through commits, connector calls, Issue comments, receipts, capability profiles, logs, or handoff archives:
-
-- tokens or API keys;
-- cookies or authorization headers;
-- raw `.env` files;
-- authenticated URLs;
-- private keys;
-- secret configuration;
-- third-party private data.
-
-Scrub CI and process logs before quoting them. Capability evidence may name a non-secret login, permission class, tool version, HTTP status, or sanitized error class; it must not contain credentials.
-
-## 13. Status vocabulary
-
-Track orthogonal state rather than one vague status:
-
-```text
-mode =
-  provisional-B | B | C
-
-work =
-  analyzing | implementing | testing | preparing-handoff
-
-publication =
-  local | publishing | published | blocked
-
-publicationCause =
-  none | retryable | auth | rate-limit | integrity | conflict | permanent
-
-ci =
-  not-started | running | red | green | missing
-
-review =
-  not-open | open | addressing | clean@<head SHA>
-```
-
-Before `publication=published`, do not claim:
-
-```text
-implementation complete
-final tree ready
-only publication remains
-almost ready
-```
-
-Accurate examples:
-
-```text
-implementing locally
-published to branch; CI running
-publication blocked: authentication failure
-clean review for head <SHA>
-```
-
-## 14. Definition of Done for "implement the Issue"
-
-A chat implementation is complete only when all applicable conditions hold:
-
-```text
-[ ] code exists in a remote task branch
-[ ] remote head and resulting tree were read back
-[ ] the Issue binding was rechecked
-[ ] the PR is linked according to /AGENTS.md
-[ ] the PR diff contains only intended changes
-[ ] no transport or temporary process files remain
-[ ] CI exists for the current head
-[ ] required or repository merge-contract checks are green
-[ ] review findings are resolved for the current head
-[ ] old-head CI and clean-review receipts were invalidated after changes
-[ ] merge conflicts are absent
-[ ] the base was updated if repository policy requires it
-[ ] PR is ready for review
-[ ] the user received PR URL, head SHA, CI summary, review state,
-    and known limitations
-```
-
-`BEHIND` alone is not a blocker unless branch protection or the repository merge contract requires an up-to-date base.
-
-Some API-authored commits may not start workflows. If no run appears for the current head, use an existing repository-owned retrigger. Do not create a diagnostic workflow and do not interpret a missing run as green. Escalate if no safe retrigger exists.
-
-Local tests, local commits, and a clean local tree do not satisfy this Definition of Done.
-
-Mode C ends with `handoff prepared`, not `completed`.
-
-## 15. Operating formula
-
-> Capabilities are investigated rarely and reused across chats.
-
-> Each task checks current liveness, starts in `provisional-B` or C, and uses the first real checkpoint to confirm B or downgrade.
-
-> Active work produces a GitHub-visible heartbeat every 15–20 minutes.
-
-> File progress is regularly anchored in a remote branch and verified by read-back.
-
-> Every CI, review, and completion claim is bound to the current head.
-
-> Work that exists only in an ephemeral container is not finished work.
+When the task actually involves special artifact semantics, destructive operations, deployment, migration, or another repository-specific risk, apply the additional checks required by that task and `/AGENTS.md`.
+
+Merge is part of completion only when the user explicitly requested it and repository policy permits this executor to perform it.
+
+## 12. Operating formula
+
+> Read live task and policy.
+>
+> Do the work with an ordinary available tool.
+>
+> Read important remote results back.
+>
+> Treat real conflicts and ambiguity as exceptions when they actually occur.
+>
+> Use current-head CI and review.
+>
+> Report truthfully, or merge only when explicitly authorized and allowed.
