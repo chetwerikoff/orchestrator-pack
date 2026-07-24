@@ -18,7 +18,26 @@ function emit(result: Awaited<ReturnType<typeof runProcess>>): void {
   if (result.stderr) process.stderr.write(result.stderr);
 }
 
+async function runCiTypecheckDiagnostic(): Promise<boolean> {
+  if (process.env.CI !== 'true') return true;
+  const result = await runProcess({
+    command: process.execPath,
+    args: [resolve('node_modules/typescript/bin/tsc'), '--noEmit', '--pretty', 'false', '-p', 'tsconfig.json'],
+    cwd: resolve('.'),
+    inheritParentEnv: true,
+    allowEmptyStdout: true,
+    timeoutMs: 300_000,
+  });
+  if (result.ok) return true;
+  process.stderr.write('PR2A_TYPECHECK_DIAGNOSTIC_BEGIN\n');
+  emit(result);
+  process.stderr.write('PR2A_TYPECHECK_DIAGNOSTIC_END\n');
+  process.exitCode = result.exitCode ?? 1;
+  return false;
+}
+
 async function main(): Promise<void> {
+  if (!await runCiTypecheckDiagnostic()) return;
   const ac = parseAc(process.argv.slice(2));
   const pr2aRunner = resolve('scripts/pr2a/mutation-runner.ts');
   const usePr2aRunner = existsSync(pr2aRunner) && (!ac || ac !== 'AC9');
