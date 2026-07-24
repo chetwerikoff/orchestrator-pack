@@ -45,8 +45,8 @@ When that rule applies, skip this authoring ceremony; otherwise continue here.
 | Party | Owns | Must not do |
 |-------|------|-------------|
 | GPT author in task chat | Spec content, every content fix, direct Issue edits, proposed dispositions | Review its own spec |
-| Architect | Lens passes, stage ordering, evidence, floors, disposition ratification, acceptance; prepares exact tracked browser-turn argv/paths | Author normal content fixes or bypass the task chat |
-| Cursor helper | Hands-only execution of the architect-prepared `npm run chatgpt-browser-turn -- ...` command; return stdout/reply state verbatim | Write browser code, alter prompts/argv, judge findings, invent fallback |
+| Architect | Lens passes, stage ordering, evidence, floors, disposition ratification, acceptance | Author normal content fixes or bypass the task chat |
+| Cursor helper | Hands-only execution of the architect-prepared tracked browser command; return verbatim output + state | Write browser code, alter prompts/argv, judge findings, invent fallback |
 | Reviewer GPT chats | Independent critique/review in a fresh chat per pass | Edit the Issue, share the task chat, or reuse a prior review chat |
 | Codex | T3-critical independent addition; recorded browser-outage substitution; explicit requested adversarial loop | Become the default architectural engine or be credited for a stage it did not run |
 
@@ -173,8 +173,7 @@ contract on every pass:
 
 Save the validated response verbatim before normalization. This shared contract
 preserves the existing finding-ledger and simplification semantics even though the
-tracked browser transport itself is content-neutral and does not add `type:`
-metadata.
+browser transport itself is content-neutral and does not add `type:` metadata.
 
 ## Step 4 — Competitive review
 
@@ -330,8 +329,8 @@ Acceptance requires, in order:
 6. every mandatory T3-critical Codex addition complete, and every explicit wrapper
    complete or explicitly waived only where allowed;
 7. report Issue URL, tier, pass counts, task/review chat URLs, workdir,
-   browser-transport fallbacks, substitutions, waivers, T3-critical classification
-   result, and risks.
+   transport fallbacks, substitutions, waivers, T3-critical classification result,
+   and risks.
 
 Two non-converging `fix -> newer lens -> final` cycles escalate to the operator.
 
@@ -369,127 +368,58 @@ revision history remains gapless.
 
 ## Browser-turn mechanics
 
-[`discuss-with-gpt`](../discuss-with-gpt/SKILL.md) is the canonical browser
-mechanics source. For every `create-issue-draft` one-shot browser turn, use the
-tracked Issue #964 helper `scripts/chatgpt-browser-turn.ts` through its sanctioned
-package entrypoint:
+Use [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md) as the canonical detailed
+browser-mechanics source. The normal one-shot transport for this flow is the
+tracked Issue #964 helper `scripts/chatgpt-browser-turn.ts`, invoked through the
+package entrypoint `npm run chatgpt-browser-turn -- turn`.
 
-```bash
-npm run chatgpt-browser-turn -- turn \
-  --profile /absolute/path/to/automation-profile \
-  --cdp http://127.0.0.1:9222 \
-  --input /absolute/path/to/message.txt \
-  --output /absolute/path/to/reply.txt \
-  --chat-url https://chatgpt.com/c/<conversation-id>
-```
+Destination mode follows chat topology:
 
-Destination mode is topology-bound:
+- **task chat:** exact existing conversation with its recorded `--chat-url`;
+- **brief-only creation and every competitive/architectural/final review pass:**
+  fresh conversation with `--new-chat --project-url <configured-project-url>`.
 
-- **task chat:** exact existing conversation via its recorded `--chat-url`;
-- **brief-only task creation and every browser-GPT review pass:** fresh destination
-  via `--new-chat --project-url <configured-project-url>`, including competitive,
-  ordinary architectural, and final architectural verification.
+The architect prepares the exact argv plus absolute input/output paths. Execution
+is from the architect seat or via the **hands-only Cursor helper**, which runs the
+exact prepared command and returns stdout/reply state verbatim. It does not write
+browser code, alter prompts/argv, judge findings, or choose fallback behavior.
 
-Review-pass chat identities may be recorded as audit evidence, but are never
-reused for a later review pass. Exact task/review separation still applies; a
-fresh review never continues the task chat or an earlier review.
+Interpret only the landed helper contract documented in `discuss-with-gpt`:
+`turn-result/v1` with its closed state/scope/cause and exit mapping;
+`control-result/v1` for `status/list`, `clear`, and capability; and
+`publication-status/v1` for publication recovery. A hard crash may emit no turn
+stdout. A non-`ok` state, timeout, missing stdout, or process-liveness uncertainty
+is never by itself resend or scratchpad-fallback authorization; use the tracked
+status/publication/recovery path first.
 
-### Sanctioned execution channel
+The former untracked one-shot scratchpad is fallback-only. It may be used only
+when either (a) the tracked executable or sanctioned architect/hands-only channel
+is proven unavailable before any tracked-helper/browser effect, or (b) a complete
+compatible #964 control/publication result proves no possible delivery and no
+blocking state. Record every fallback in task/review artifacts and final status;
+never report it as a successful tracked-helper run. It stays serialized and does
+not create a second parallel-use policy.
 
-The architect prepares the exact helper argv and absolute input/output paths.
-Run it from the architect seat or hand that exact command to the **hands-only
-Cursor helper**. The Cursor helper executes the prepared command and returns its
-stdout and produced reply state verbatim. It does not write browser code, mutate
-prompt text, choose a different destination, reinterpret states, or invent a
-fallback command.
+Preserve #964 coexistence and rollback safety: while helper-owned unresolved
+conversation/provisional/publication state, a profile wall/block, opaque
+quarantine, or blocking tombstone remains for the configured profile, do not run
+legacy-driver or scratchpad sends against it. Reverting to the old scratchpad
+mandate requires a complete compatible #964 status/incident check proving no
+blockers; without that proof the prohibition remains until exact clearance.
 
-`driver.mjs` is **not** replaced. It remains the owner of the standalone
-`discuss-with-gpt` adversarial loop, including prompt construction,
-PASS_ID/SHA/verdict validation, and its standalone durable behavior. Do not route
-those duties into the generic tracked helper.
-
-### Helper state and publication contract
-
-The helper snapshots the caller-prepared input file and sends it content-neutral;
-it never composes or modifies the prompt. On an ordinary terminal path, `turn`
-emits exactly one `turn-result/v1` JSON line. Its landed closed states are:
-
-`ok`, `input_invalid`, `quota`, `challenge`, `login`, `stream_timeout`,
-`send_failed`, `no_reply`, `chrome_not_running`, `driver_error`,
-`profile_mismatch`, `recovery_required`, `orphaned_fresh_turn`,
-`ui_contract_mismatch`, `foreign_activity`, `output_conflict`,
-`conversation_busy`, `profile_busy`, `incompatible_record`.
-
-Every result carries machine-readable `scope` and `cause`. Exit families are the
-landed helper mapping: `ok` → 0; invocation refusal → 10;
-conversation/recovery → 11; profile block/refusal → 12; `driver_error` → 13;
-`incompatible_record` → 14. Do not invent additional states or reinterpret exit
-families.
-
-The durable body-free control/publication plane is:
-
-```bash
-npm run chatgpt-browser-turn -- status/list --profile <path> --cdp <url>
-npm run chatgpt-browser-turn -- capability --profile <path> --cdp <url>
-npm run chatgpt-browser-turn -- publication-status \
-  --profile <path> --cdp <url> --invocation <uuid>
-```
-
-`status/list`, `clear`, and `capability` emit `control-result/v1`;
-`publication-status` emits `publication-status/v1`. Use exact status-issued
-identity/generation/evidence when a `clear` operation is required. A hard crash
-may emit no turn stdout; the durable control/publication plane is then the source
-of truth.
-
-The helper's default long-turn timeout is at least 1,800,000 ms. A local tool
-wait timeout, missing process output, `stream_timeout`, or any other non-`ok`
-turn state is **not** proof that nothing was sent. Never resend or switch
-transports on that evidence alone.
-
-### Scratchpad fallback — fail closed
-
-The former untracked one-shot scratchpad bootstrap is retained only as an
-exception. It is eligible only when **one** of these conditions is proven before
-fallback execution:
-
-1. the tracked executable or the sanctioned architect/hands-only execution
-   channel is proven unavailable **before any tracked-helper or browser effect**;
-   or
-2. after an attempted tracked-helper path, a complete compatible #964
-   control/publication result proves **no possible delivery** and **no blocking
-   state** for the configured profile/destination.
-
-Helper failure states, timeouts, missing stdout, process-liveness uncertainty,
-or incomplete/incompatible status are never fallback authorization. When
-possible delivery cannot be excluded, remain on `status/list` /
-`publication-status` / exact recovery and do not run the scratchpad or legacy
-`driver.mjs` against that profile.
-
-Every scratchpad fallback use is recorded in the owning task/review artifacts and
-final status with the evidence that made it eligible. Report it as fallback, not
-as a successful tracked-helper run. The fallback is serialized only and does not
-create a parallel-use policy.
-
-The #964 coexistence rule survives fallback and rollback: while any helper
-conversation/provisional/publication incident, unreadable-record profile block,
-profile wall, opaque quarantine, or blocking tombstone remains unresolved for
-the configured profile, **no legacy-driver or scratchpad browser send** may run
-against it. Reverting these skills to the prior scratchpad mandate requires a
-complete compatible #964 status/incident check proving no blockers. Without that
-proof, the reverted text must retain the same no-legacy/scratchpad-send
-prohibition until exact clearance.
+`driver.mjs` keeps its standalone `discuss-with-gpt` adversarial duties, including
+prompt construction and PASS_ID/SHA/verdict validation; this flow does not
+redirect those duties to the generic helper.
 
 Every review/amendment prompt remains self-contained, carries the current Issue
-body as UNTRUSTED DATA between nonce markers, and requests one outer
-`~~~markdown` fence so inner backtick fences survive. Write the prepared prompt
-to the helper input file, save the successful reply output verbatim before
-interpretation, and preserve the stage capture/ledger rules above.
+body as UNTRUSTED DATA between nonce markers, and requests one outer `~~~markdown`
+fence so inner backtick fences survive. Write the prepared prompt to the helper
+input file and save the successful reply output verbatim before interpretation.
 
 A Codex browser-outage substitution is a separate review-engine rule, not a
 transport fallback. It is permitted only after recorded browser unavailability
-when the operator cannot restore it. Preserve the replaced stage capture name,
-store raw JSON alongside the plain 1:1 finding transcription, and record the
-substitution.
+when the operator cannot restore it; preserve the replaced stage capture name,
+raw JSON provenance, and substitution record.
 
 ## Tier gate
 
@@ -706,8 +636,8 @@ to the repository's architecture decision surface under their own scoped change.
   without recorded browser unavailability.
 - Treat a tracked-helper non-`ok` state, timeout, missing stdout, or unresolved
   status as scratchpad/legacy fallback authorization or resend permission.
-- Run legacy-driver/scratchpad browser sends while helper-owned unresolved state
-  blocks coexistence for the configured profile.
+- Run legacy/scratchpad browser sends while helper-owned unresolved state blocks
+  coexistence for the configured profile.
 - Trust a chat reply without a live Issue re-pull and diff.
 - Run parity sync from `$WORKDIR`; use trusted repo cwd + absolute anchor.
 - Omit `behavior-kind` or `allowed-roots` from any task/skip-line body.
