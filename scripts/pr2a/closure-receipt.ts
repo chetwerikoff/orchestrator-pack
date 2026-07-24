@@ -8,7 +8,7 @@ import { D928, sha256, stableJson, type PlanningManifest } from './contracts.ts'
 import { buildConformanceReport } from './final-conformance.ts';
 
 const repoRoot = path.resolve(process.cwd());
-const REQUIRED_OVERLAP_CLASSES = [
+export const REQUIRED_OVERLAP_CLASSES = [
   'acquisition',
   'guarded-mutation',
   'terminal-audit',
@@ -17,7 +17,7 @@ const REQUIRED_OVERLAP_CLASSES = [
   'interpretation',
   'generation-fence',
 ] as const;
-const REQUIRED_FINAL_COMMANDS = [
+export const REQUIRED_FINAL_COMMANDS = [
   'npm run typecheck:foundation',
   'npm run lint:foundation',
   'npm run test:contract-mutations',
