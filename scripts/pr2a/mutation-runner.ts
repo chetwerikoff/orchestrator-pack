@@ -188,7 +188,7 @@ defineJson('AC4','external-source-misreported-target-internal','scripts/pr2a/pla
 defineJson('AC4','final-diff-does-not-equal-reviewed-operation-rows','scripts/pr2a/planning-manifest.json',v=>{v.plannedOperations.push({path:'scripts/mutation-extra.ts',operation:'add',reason:'mutation'});},v=>v.plannedOperations.some((r:JsonRecord)=>r.path==='scripts/mutation-extra.ts'));
 defineReplace('AC5','receipt-final-tree-or-lineage-invalid','scripts/pr2a/closure-receipt.ts',"return observedCommitSha === expectedCommitSha || gitTreeOid(observedCommitSha) === expectedTreeOid;","return true;");
 defineJson('AC5','planning-receipt-tooling-identity-mismatch','scripts/pr2a/planning-manifest.json',v=>{v.tooling.grammarSha256='sha256:'+ 'f'.repeat(64);},v=>v.tooling.grammarSha256==='sha256:'+ 'f'.repeat(64));
-defineReplace('AC5','receipt-self-asserts-unverifiable-tree','scripts/pr2a/closure-receipt.ts',"function verifyArtifact","function verifyArtifactDisabled");
+defineReplace('AC5','receipt-self-asserts-unverifiable-tree','scripts/pr2a/closure-receipt.ts',"function verifyArtifact(","function verifyArtifactDisabled(");
 defineReplace('AC5','receipt-final-invariant-incomplete','scripts/pr2a/closure-receipt.ts',"buildConformanceReport(ref)","{ result: 'conformant', findings: [] } as ReturnType<typeof buildConformanceReport>");
 defineReplace('AC5','overlap-harness-or-job-bytes-unbound','scripts/pr2a/closure-receipt.ts',"verifyArtifact(evidenceRoot, overlap.harnessPath","void (overlap.harnessPath); verifyArtifact(evidenceRoot, 'unbound-harness'");
 defineReplace('AC5','overlap-operation-matrix-missing','scripts/pr2a/closure-receipt.ts',"verifyOverlapStructuredArtifacts(overlap, evidenceRoot, findings);","void overlap.operationMatrixPath;");
