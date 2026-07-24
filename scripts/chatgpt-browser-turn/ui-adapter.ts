@@ -2,7 +2,12 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { mergeContinuationSegments, serializeSemanticNodes, type SemanticNode } from './semantic.ts';
+import {
+  mergeContinuationSegments,
+  SEMANTIC_UI_FILTER,
+  serializeSemanticNodes,
+  type SemanticNode,
+} from './semantic.ts';
 
 const require = createRequire(import.meta.url);
 
@@ -153,8 +158,21 @@ export async function runtimeWitnessSurfaceAvailable(page: any): Promise<boolean
   const messages = page.locator('[data-message-author-role]');
   const count = await messages.count().catch(() => 0);
   if (count === 0) return false;
-  for (let i = Math.max(0, count - 4); i < count; i++) if (await serviceId(messages.nth(i))) return true;
-  return false;
+  const userIds = new Set<string>();
+  const assistantParents: string[] = [];
+  for (let i = Math.max(0, count - 8); i < count; i++) {
+    const locator = messages.nth(i);
+    const role = await locator.getAttribute('data-message-author-role').catch(() => null);
+    if (role === 'user') {
+      const id = await serviceId(locator);
+      if (id) userIds.add(id);
+    } else if (role === 'assistant') {
+      const id = await serviceId(locator);
+      const parent = await parentServiceId(locator);
+      if (id && parent) assistantParents.push(parent);
+    }
+  }
+  return assistantParents.some((parent) => userIds.has(parent));
 }
 
 async function pageWalls(page: any): Promise<{ state?: string; cause?: string }> {
@@ -167,16 +185,20 @@ async function pageWalls(page: any): Promise<{ state?: string; cause?: string }>
 }
 
 async function semanticNodes(locator: any): Promise<SemanticNode[]> {
-  return await locator.evaluate((root: Element) => {
+  return await locator.evaluate((root: Element, filter: {
+    skippedTags: readonly string[];
+    testidPattern: string;
+    classPattern: string;
+  }) => {
     type N = SemanticNode;
+    const testidPattern = new RegExp(filter.testidPattern, 'i');
+    const classPattern = new RegExp(filter.classPattern, 'i');
     const skip = (el: Element) => {
       const tag = el.tagName.toLowerCase();
-      if (['button','svg','script','style','noscript','time'].includes(tag)) return true;
+      if (filter.skippedTags.includes(tag)) return true;
       if (el.getAttribute('aria-hidden') === 'true') return true;
-      const testid = el.getAttribute('data-testid') ?? '';
-      if (/copy|feedback|thumb|citation.*(?:chip|hover)|code.*badge|toolbar|control/i.test(testid)) return true;
-      const cls = el.getAttribute('class') ?? '';
-      if (/sr-only|visually-hidden/i.test(cls)) return true;
+      if (testidPattern.test(el.getAttribute('data-testid') ?? '')) return true;
+      if (classPattern.test(el.getAttribute('class') ?? '')) return true;
       return false;
     };
     const walkChildren = (el: Element): N[] => Array.from(el.childNodes).flatMap((child): N[] => {
@@ -207,7 +229,7 @@ async function semanticNodes(locator: any): Promise<SemanticNode[]> {
       return walkChildren(el);
     };
     return walkChildren(root);
-  });
+  }, SEMANTIC_UI_FILTER);
 }
 
 async function assistantText(locator: any): Promise<string> {
