@@ -70,15 +70,14 @@ jobs:
               "defineReplace('AC2','crash-point-breaks-single-authority','scripts/lib/review-start-claim-cli.ts',\"const lock = claimLockDir(required.namespace, required.claim.prNumber, required.claim.headSha);\\n  return withMutex(lock, () => {\\n    const read = readClaimRecord(required.path);\\n    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };\\n    if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };\",\"const lock = '';\\n  return withMutex(lock, () => {\\n    const read = readClaimRecord(required.path);\\n    if (!read.ok || !read.record) return { ok: false, reason: 'ambiguous_claim', detail: read.reason };\\n    if (!sameGeneration(read.record, required.claim)) return { ok: false, reason: 'lost_ownership', holder: read.record.holder };\\n    const record: ReviewStartClaimRecord = { ...read.record, ...fields };\");",
           )
           PY
-          git rm .github/workflows/issue-948-heavy-diagnostic.yml
           git diff --check
           git status --short
-      - name: Commit scoped detector fix and remove diagnostic workflow
+      - name: Commit scoped detector fix
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'orchestrator-pack-ci'
           git config user.email 'orchestrator-pack-ci@users.noreply.github.com'
-          git add scripts/pr2a/final-conformance.ts scripts/pr2a/mutation-runner.ts .github/workflows/issue-948-heavy-diagnostic.yml
+          git add scripts/pr2a/final-conformance.ts scripts/pr2a/mutation-runner.ts
           git commit -m 'fix(issue-948): bind mutations to concrete operations'
           git push origin HEAD:tmp/issue-948-verification-toolchain
