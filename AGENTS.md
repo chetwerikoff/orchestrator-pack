@@ -6,10 +6,9 @@ This repository is an upgrade-safe extension pack for ComposioHQ/agent-orchestra
 
 It ports selected safety/accounting contracts from `ai-orchestrator` into Composio AO —
 via plugins, prompt fragments, config examples, scripts, and CI checks — without modifying
-Composio core. A new task's Issue is its only live spec/source/queue; no tracked/in-repo
-draft/index is created. External anchors, revisions, captures, ledger, chats, and audit state are work artifacts, not
-another spec/queue. Existing drafts/index are legacy prior art; only `publish-issue-draft`
-maintains them. Contract: [tiers](docs/tiering.md); steps: [skill](.claude/skills/create-issue-draft/SKILL.md).
+Composio core. A new task's Issue is its spec/source/queue; no tracked draft/index.
+External anchors/revisions/captures/ledger/chats are audit-only. Existing drafts/index are legacy;
+`publish-issue-draft` only. Contract: [tiers](docs/tiering.md); [procedure](.claude/skills/create-issue-draft/SKILL.md).
 
 ## Edit boundaries
 
@@ -223,8 +222,7 @@ PR work. Missing session verification marks the session `stuck`. See
 
 ### Tracker and role policy
 
-- Each new task's GitHub Issue is its only live spec/source/queue. Never create, sync, or identify
-  it through tracked drafts/index; external work artifacts stay audit-only.
+- Each new task uses a live Issue only; no tracked draft/index. External work is audit-only.
 - Link every branch and PR to its source issue; PR bodies must include `Closes #N`, `Fixes #N`, or
   `Resolves #N` in the **first few lines** under `## Summary`.
 - If **PR scope guard** fails with `missing_issue_link` but GitHub shows `Closes #N`, re-check
@@ -242,8 +240,7 @@ PR work. Missing session verification marks the session `stuck`. See
 
 ### Legacy queued task specs
 
-- Applies only to pre-existing `docs/issues_drafts/**`; new tasks create none.
-- Do not delete them unless deletion is in scope.
+- Applies only to legacy `docs/issues_drafts/**`; delete only in scope. New tasks create none.
 - Do not rewrite another task's declaration to make the current diff pass.
 - One amendment per iteration; keep the previous baseline auditable.
 
@@ -416,18 +413,17 @@ Cosmetic-only `.example` edits may use: `No operator adoption required`. See
 On a trigger below (substring or clear paraphrase — best-effort discovery, not a deterministic
 gate) follow the named skill immediately; no skill name required. Every skill has loader wrappers
 at `.cursor/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`.
-**Routing:** Codex markers → `adversarial-draft-review`; GPT markers → `discuss-with-gpt`;
-otherwise new-task authoring → `create-issue-draft`; `publish-issue-draft` is legacy-only.
+**Routing:** Codex → `adversarial-draft-review`; GPT → `discuss-with-gpt`; other new tasks → `create-issue-draft`; publish is legacy-only.
 
 | Skill | Triggers (substring / paraphrase) | Action |
 |---|---|---|
 | `investigate-root-cause` | «разобраться с причиной», «в чём причина», «что это», «разберись», «почему упал», «что сломалось», «отладь», «что случилось», «почему не работает»; «root cause», «why did», «figure out why», «investigate the cause», «wtf» | follow [`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md); skip pure implementation / external adoption |
 | `merge-with-local-adoption` | «мерж», «мерж 385», «мерж и пул», «смерж», «смержи», «замержи»; «merge», «merge 307», «merge and pull», «merge the PR» | operator executes merge + safe pull + local adoption on the live checkout — **see Operator-only merge above** |
-| `adversarial-draft-review` | «с кодексом»; «обсуди/посоветуйся/выясни/драфт/создай задачу — с кодексом»; «придирчиво», «оспорь подход»; “draft with codex”, “adversarial draft”, “challenge the approach” | extra Codex loop; never replaces GPT stages |
-| `discuss-with-gpt` | «с/обсуди/посоветуйся/выясни/драфт/создай задачу — с gpt/гпт»; “draft/discuss/challenge with gpt” | browser-GPT challenge or Issue entry |
-| `create-issue-draft` | new task spec, GPT task-chat + Issue handoff, or brief-only task | GPT-authored Issue; no tracked draft/index |
+| `adversarial-draft-review` | «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход»; “draft with codex”, “adversarial draft”, “challenge the approach” | extra Codex loop; never replaces GPT stages |
+| `discuss-with-gpt` | «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt»; “draft with gpt”, “discuss with gpt”, “challenge with gpt” | browser-GPT challenge or Issue entry |
+| `create-issue-draft` | authoring or accepting a new task spec; GPT task-chat + Issue handoff; or brief-only request | GPT-authored Issue flow; no tracked draft/index |
 | `study-external-source` | «изучи <URL>», research an external repo/URL for adoption | external-source adoption triage |
-| `publish-issue-draft` | «опубликуй/закоммить/PR/смержи драфт», «обнови драфт/issue и опубликуй»; “publish draft”, “publish/update this draft”; after `create-issue-draft` | legacy-only for pre-existing drafts |
+| `publish-issue-draft` | «опубликуй драфт», «закоммить драфт», «pr для драфта», «обнови драфт/issue и опубликуй», «смержи драфт»; “publish draft”, “publish/update this draft” | legacy-only for pre-existing drafts |
 | `switch-pack-reviewer` | «переключи ревьюера», «поставь codex», «поставь claude», «PACK_REVIEWER», «switch reviewer», «reviewer codex/claude», «используется claude вместо codex», «глобально codex» | switch pack reviewer / fix `PACK_REVIEWER` drift |
 | `change-orchestrator-runtime` | «поменяй модель оркестратора», «смени промпт оркестратора», «другой оркестратор»; «change orchestrator model», «edit orchestrator rules», «switch orchestrator runtime» | change orchestrator model/prompt/runtime **and** apply the daemon-cache + session-restore steps |
 
