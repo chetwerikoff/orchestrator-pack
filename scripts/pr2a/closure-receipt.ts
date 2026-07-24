@@ -39,6 +39,8 @@ export const CLOSURE_SOURCE_REQUIREMENTS = Object.freeze([
   ['function verifyCommandLogs', 'receipt-generated-before-prerequisite-suites'],
   ['function verifyReplay', 'overlap-replay-command-missing'],
   ['function validateVerificationEnvironment', 'final-evidence-tree-or-platform-stale'],
+  ['function validatePreReceiptVerificationEnvironment', 'pre-receipt-environment-validator-missing'],
+  ['function validateFinalVerificationEnvironment', 'final-verification-environment-validator-missing'],
   ['verification.nodeVersion', 'verification-node-version-unbound'],
   ['verification.pwshVersion', 'verification-pwsh-version-unbound'],
   ['verification.filesystem', 'verification-filesystem-unbound'],
@@ -48,7 +50,7 @@ export const CLOSURE_SOURCE_REQUIREMENTS = Object.freeze([
   ['command-result-tree-binding-mismatch', 'receipt-final-tree-or-lineage-invalid'],
   ['overlap-replay-not-bound-to-harness-and-inputs', 'overlap-harness-or-job-bytes-unbound'],
   ['overlap-operation-matrix-content-mismatch', 'overlap-operation-matrix-missing'],
-  ['sameTreeCommit(overlap.candidateCommitSha, expected.finalCommitSha, expected.finalTreeOid)', 'overlap-candidate-binding-mismatch'],
+  ['overlap.candidateCommitSha !== expected.finalCommitSha', 'overlap-candidate-binding-mismatch'],
   ['gitTreeOid(overlap.candidateCommitSha)', 'candidate-build-not-derived-from-final-tree'],
   ['buildCandidateBuildProvenance', 'candidate-build-attestation-invalid'],
   ['overlap.generatedAfterFinalTree !== true', 'overlap-evidence-generated-before-final-tree'],
@@ -212,6 +214,11 @@ export interface CandidateBuildProvenance {
   digest: string;
 }
 
+type VerificationEnvironmentEvidence = Pick<
+  PreReceiptVerificationEvidence,
+  'repository' | 'platform' | 'filesystem' | 'nodeVersion' | 'pwshVersion'
+>;
+
 function resolveEvidencePath(
   root: string,
   relativePath: string,
@@ -297,7 +304,7 @@ function observedPwshVersion(): string | null {
 }
 
 function validateVerificationEnvironment(
-  verification: Pick<PreReceiptVerificationEvidence, 'repository' | 'platform' | 'filesystem' | 'nodeVersion' | 'pwshVersion'>,
+  verification: VerificationEnvironmentEvidence,
   evidenceRoot: string,
   prefix: string,
   findings: string[],
@@ -324,6 +331,24 @@ function validateVerificationEnvironment(
     || claimedFs !== mount.fsType.toLowerCase()) {
     findings.push(`${prefix}-filesystem-mismatch`);
   }
+}
+
+export function validatePreReceiptVerificationEnvironment(
+  verification: VerificationEnvironmentEvidence,
+  evidenceRoot = '',
+): string[] {
+  const findings: string[] = [];
+  validateVerificationEnvironment(verification, evidenceRoot, 'pre-receipt', findings);
+  return unique(findings);
+}
+
+export function validateFinalVerificationEnvironment(
+  verification: VerificationEnvironmentEvidence,
+  evidenceRoot = '',
+): string[] {
+  const findings: string[] = [];
+  validateVerificationEnvironment(verification, evidenceRoot, 'final-verification', findings);
+  return unique(findings);
 }
 
 function verifyCommandLogs(
@@ -452,7 +477,7 @@ export function validateFinalVerificationAgainstReceipt(
   if (verification.finalTreeOid !== finalTreeOid || verification.checkoutTreeOid !== finalTreeOid) findings.push('receipt-and-final-verification-tree-differ');
   if (!sameTreeCommit(verification.checkoutCommitSha, finalCommitSha, finalTreeOid)) findings.push('final-evidence-commit-stale');
   if (!verification.cleanBefore || !verification.cleanAfter || verification.stagedBefore !== 0 || verification.stagedAfter !== 0 || verification.untrackedBefore !== 0 || verification.untrackedAfter !== 0) findings.push('final-checks-on-dirty-worktree');
-  validateVerificationEnvironment(verification, evidenceRoot, 'final-verification', findings);
+  findings.push(...validateFinalVerificationEnvironment(verification, evidenceRoot));
   if (evidenceRoot) verifyCommandLogs(evidenceRoot, verification.commands, finalCommitSha, finalTreeOid, findings);
   return unique(findings);
 }
@@ -502,7 +527,8 @@ export function validateClosureEvidenceBundle(
     || !FULL_SHA.test(overlap.legacyTreeOid)
     || gitTreeOid(overlap.legacyCommitSha) !== overlap.legacyTreeOid) findings.push('overlap-legacy-binding-invalid');
   if (overlap.candidateRepository !== 'chetwerikoff/orchestrator-pack'
-    || !sameTreeCommit(overlap.candidateCommitSha, expected.finalCommitSha, expected.finalTreeOid)) findings.push('overlap-candidate-commit-invalid');
+    || (overlap.candidateCommitSha !== expected.finalCommitSha
+      && gitTreeOid(overlap.candidateCommitSha) !== expected.finalTreeOid)) findings.push('overlap-candidate-commit-invalid');
   validateVerificationEnvironment({
     repository: overlap.candidateRepository,
     platform: overlap.platform,
@@ -544,7 +570,7 @@ export function validateClosureEvidenceBundle(
   if (!sameTreeCommit(preReceiptVerification.checkoutCommitSha, expected.finalCommitSha, expected.finalTreeOid)) findings.push('receipt-prerequisite-commit-stale');
   if (!preReceiptVerification.cleanBefore || !preReceiptVerification.cleanAfter || preReceiptVerification.stagedBefore !== 0 || preReceiptVerification.stagedAfter !== 0 || preReceiptVerification.untrackedBefore !== 0 || preReceiptVerification.untrackedAfter !== 0) findings.push('receipt-prerequisites-on-dirty-worktree');
   if (!preReceiptVerification.prerequisiteSuitesPassedBeforeReceipt) findings.push('receipt-generated-before-prerequisite-suites');
-  validateVerificationEnvironment(preReceiptVerification, evidenceRoot, 'pre-receipt', findings);
+  findings.push(...validatePreReceiptVerificationEnvironment(preReceiptVerification, evidenceRoot));
   if (evidenceRoot) verifyCommandLogs(evidenceRoot, preReceiptVerification.commands, expected.finalCommitSha, expected.finalTreeOid, findings);
 
   if (external928.result !== 'pass' || external928.issue !== 928 || external928.repository !== 'chetwerikoff/orchestrator-pack') findings.push('external-928-sync-evidence-missing');
