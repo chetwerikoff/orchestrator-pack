@@ -64,11 +64,29 @@ export function normalizeConversationUrl(value: string): string {
   return url.toString().replace(/\/$/, '');
 }
 
-interface NetworkMessage {
+export interface CausalMessageObservation {
   id: string;
   role: 'user'|'assistant';
   parent?: string;
+}
+
+interface NetworkMessage extends CausalMessageObservation {
   conversationId?: string;
+}
+
+export function resolveCausalAssistant(
+  userMessageId: string,
+  observations: readonly CausalMessageObservation[],
+): { state: 'matched'; assistantMessageId: string } | { state: 'none' | 'ambiguous' } {
+  const exactIds = new Set(
+    observations
+      .filter((message) => message.role === 'assistant' && message.parent === userMessageId && message.id.length >= 8)
+      .map((message) => message.id),
+  );
+  if (exactIds.size === 0) return { state: 'none' };
+  if (exactIds.size !== 1) return { state: 'ambiguous' };
+  const [assistantMessageId] = exactIds;
+  return assistantMessageId ? { state: 'matched', assistantMessageId } : { state: 'none' };
 }
 
 function recursivelyCollectMessages(value: unknown, out: NetworkMessage[], inheritedConversation?: string): void {
@@ -229,7 +247,13 @@ export async function openTurnPage(browser: any, config: BrowserConfig): Promise
   return { page, owned: true, provisionalId: crypto.randomUUID() };
 }
 
-export async function sendTurn(page: any, text: string, config: BrowserConfig, provisionalId?: string, onBeforeSend?: () => void): Promise<TurnBrowserResult> {
+export async function sendTurn(
+  page: any,
+  text: string,
+  config: BrowserConfig,
+  provisionalId?: string,
+  onBeforeSend?: () => void | Promise<void>,
+): Promise<TurnBrowserResult> {
   const network = attachNetworkWitness(page);
   const composer = page.locator('#prompt-textarea');
   const readyDeadline = Date.now() + Math.min(config.timeoutMs, 30_000);
@@ -251,21 +275,24 @@ export async function sendTurn(page: any, text: string, config: BrowserConfig, p
   await page.keyboard.press('Delete');
   await page.keyboard.insertText(text);
   const send = page.locator('[data-testid="send-button"]');
-  onBeforeSend?.();
+  await onBeforeSend?.();
   try { if (await send.count()) await send.click(); else await page.keyboard.press('Enter'); }
   catch { return { state: 'recovery_required', cause: 'dispatch_exception_after_possible_delivery_boundary', possibleDelivery: true }; }
 
   let userId = '';
   const deliveredDeadline = Date.now() + 30_000;
   while (Date.now() < deliveredDeadline && !userId) {
+    const observed = new Set<string>();
     const users = page.locator('[data-message-author-role="user"]');
     for (let i = Math.max(0, (await users.count()) - 4); i < await users.count(); i++) {
-      const id = await serviceId(users.nth(i)); if (id && !baselineIds.has(id)) { userId = id; break; }
+      const id = await serviceId(users.nth(i));
+      if (id && !baselineIds.has(id)) observed.add(id);
     }
-    if (!userId) {
-      const net = network.messages.find((m) => m.role === 'user' && !baselineIds.has(m.id));
-      if (net) userId = net.id;
+    for (const message of network.messages) {
+      if (message.role === 'user' && !baselineIds.has(message.id)) observed.add(message.id);
     }
+    if (observed.size > 1) return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
+    userId = observed.values().next().value ?? '';
     if (!userId) await page.waitForTimeout(250);
   }
   if (!userId) return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
@@ -283,17 +310,31 @@ export async function sendTurn(page: any, text: string, config: BrowserConfig, p
     if (new Set(newUserIds).size > 1) return { state: 'foreign_activity', cause: 'unexpected_user_turn', possibleDelivery: true, userMessageId: userId };
 
     const assistants = page.locator('[data-message-author-role="assistant"]');
-    let matched: any = null;
+    const observations: CausalMessageObservation[] = [];
+    const assistantLocators = new Map<string, any>();
     for (let i = 0, n = await assistants.count(); i < n; i++) {
-      const loc = assistants.nth(i); const id = await serviceId(loc); if (!id || baselineIds.has(id)) continue;
+      const loc = assistants.nth(i);
+      const id = await serviceId(loc);
+      if (!id || baselineIds.has(id)) continue;
       const parent = await parentServiceId(loc);
-      if (parent === userId) { assistantId = id; matched = loc; break; }
+      observations.push({ id, role: 'assistant', ...(parent ? { parent } : {}) });
+      assistantLocators.set(id, loc);
     }
-    if (!matched) {
-      const net = network.messages.find((m) => m.role === 'assistant' && m.parent === userId && !baselineIds.has(m.id));
-      if (net) {
-        assistantId = net.id;
-        for (let i = 0, n = await assistants.count(); i < n; i++) if (await serviceId(assistants.nth(i)) === assistantId) { matched = assistants.nth(i); break; }
+    for (const message of network.messages) {
+      if (message.role === 'assistant' && !baselineIds.has(message.id)) observations.push(message);
+    }
+    const causal = resolveCausalAssistant(userId, observations);
+    if (causal.state === 'ambiguous') {
+      return { state: 'foreign_activity', cause: 'assistant_causal_ambiguity', possibleDelivery: true, userMessageId: userId };
+    }
+    let matched: any = null;
+    if (causal.state === 'matched') {
+      assistantId = causal.assistantMessageId;
+      matched = assistantLocators.get(assistantId) ?? null;
+      if (!matched) {
+        for (let i = 0, n = await assistants.count(); i < n; i++) {
+          if (await serviceId(assistants.nth(i)) === assistantId) { matched = assistants.nth(i); break; }
+        }
       }
     }
     if (matched) {
