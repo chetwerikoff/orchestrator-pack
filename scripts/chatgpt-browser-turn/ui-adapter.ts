@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mergeContinuationSegments, serializeSemanticNodes, type SemanticNode } from './semantic.ts';
 
 const require = createRequire(import.meta.url);
@@ -20,9 +21,22 @@ export interface ProfileVerification {
   evidence: string;
 }
 
+interface CdpOwnerModule {
+  verifyCdpProfile(input: { cdp: string; profile: string }): { ok?: boolean; message?: string; reason?: string } | undefined;
+  isCdpReachable(cdp: string): Promise<boolean>;
+}
+
+async function loadCdpOwnerModule(): Promise<CdpOwnerModule> {
+  const modulePath = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs',
+  );
+  return await import(pathToFileURL(modulePath).href) as CdpOwnerModule;
+}
+
 export async function verifyProfile(config: BrowserConfig): Promise<ProfileVerification> {
   try {
-    const mod = await import('../../.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs');
+    const mod = await loadCdpOwnerModule();
     const result = mod.verifyCdpProfile({ cdp: config.cdp, profile: config.profile });
     if (result?.ok) return { state: 'verified', cause: 'verified', evidence: String(result.message ?? result.reason ?? 'verified') };
     const reachable = await mod.isCdpReachable(config.cdp).catch(() => false);
