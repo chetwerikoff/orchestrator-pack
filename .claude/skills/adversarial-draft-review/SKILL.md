@@ -1,123 +1,131 @@
 ---
 name: adversarial-draft-review
-description: Use when the user asks to author a task draft/issue AND involve Codex to challenge the approach first — triggers «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход», "draft with codex", "adversarial draft", "challenge the approach". Wraps create-issue-draft: author → adversarial Codex challenge loop (≤3 iterations, evaluate-don't-obey) → normal architect review → sync. Skip plain "создай драфт" with no «с кодексом»/adversarial marker — that goes straight to create-issue-draft.
+description: Use when the user asks to adversarially challenge a draft/spec artifact with Codex — triggers «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход», "draft with codex", "adversarial draft", "challenge the approach". With only a brief and no artifact, route through create-issue-draft's brief-only entry and run the requested Codex loop in-flow before Issue acceptance. Otherwise run the standalone Codex challenge loop (≤3 cold passes, evaluate-don't-obey) over a local markdown artifact. Also the recorded-substitution engine for create-issue-draft when browser GPT is unavailable. Skip plain "создай драфт" with no «с кодексом»/adversarial marker.
 ---
 
 # adversarial-draft-review
 
-Inserts an **adversarial Codex challenge loop** between draft authoring and the
-normal architect review in
-[`create-issue-draft`](../create-issue-draft/SKILL.md). Codex CLI twin of
-[`discuss-with-gpt`](../discuss-with-gpt/SKILL.md).
+Runs an **adversarial Codex challenge loop** over a draft/spec artifact. Codex
+CLI twin of [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md).
 
-Authoring structure, 5-mode framework, decision logging, normal `codex review`,
-sync gate, and `gh issue create` stay owned by `create-issue-draft`.
+Two roles under the GPT-chat authoring flow
+([`create-issue-draft`](../create-issue-draft/SKILL.md)):
+
+- **Standalone** — challenge a local draft, proposal, or spec rewrite.
+- **In-flow explicit wrapper** — when a brief-only «создай задачу с кодексом»
+  request routed through `create-issue-draft`, run the requested Codex loop
+  before the final lens and Issue acceptance.
+- **Recorded browser-outage substitution** — when `create-issue-draft`
+  explicitly permits Codex to replace an unavailable browser-GPT review stage;
+  preserve that stage's capture name and record the substitution.
+
+Issue-body floors, tier selection, finding normalization, task-chat relays, and
+acceptance remain owned by `create-issue-draft`.
 
 ## When to invoke
 
-| Trigger | Skill |
+| Trigger | Route |
 |---------|-------|
-| «с кодексом» / «придирчиво» / «оспорь подход» / "draft with codex" | **this skill** |
+| «с кодексом» / «придирчиво» / «оспорь подход» / "draft with codex" | this skill |
 | «с gpt» / «с гпт» | [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md) |
-| plain «создай драфт» (no marker) | `create-issue-draft` directly |
+| GPT-authored Issue + task-chat link | `create-issue-draft` |
+| plain «создай драфт» | `create-issue-draft` |
 | bug/root-cause consult | `investigate-root-cause` / `codex:rescue` |
 
-Do not impose by default — adversarial pass is a paid Codex run.
+**Brief-only creation.** Route immediately through `create-issue-draft` and
+record the explicit Codex request. That flow runs this loop over the current
+workdir anchor after browser-GPT architectural review and before the final lens.
+Accepted or partially accepted findings go through the task chat, update the
+live Issue, and are re-pulled before review continues. This extra loop never
+replaces the browser-GPT competitive stage.
 
-Skip if Codex CLI / companion runtime unavailable — fall back to
-`create-issue-draft` and tell the user the pass was skipped.
+## Availability is a gate
+
+Do not silently turn an explicit Codex request into an unreviewed acceptance.
+
+- **Standalone explicit request:** report Codex unavailable and stop the Codex
+  loop. Continue without it only after a direct operator decision; record that
+  waiver in the decision log and final status.
+- **In-flow explicit wrapper, non-T3-critical:** stop before the final lens and
+  acceptance. Resume after Codex is restored, or after the operator directly
+  waives the requested extra Codex stage; record the waiver in the workdir
+  ledger notes and final report.
+- **T3-critical mandatory addition:** no waiver. Codex must be restored and the
+  independent pass completed; acceptance remains blocked while unavailable.
+- **Browser-outage substitution:** if Codex is also unavailable, the replaced
+  stage remains blocked; do not synthesize a pass or change its engine silently.
 
 ## Flow
 
-### 1. Author the draft
+### 1. Obtain the artifact
 
-After relocation (Issue #579), the **Cursor draft-author session** owns this step
-and the adversarial loop below — not the architect's live session. Delegate to
-an isolated draft-author session running `create-issue-draft` from the
-architect's brief. Explicit wrapper invocation still floors the effective tier
-at least to **T2** per #189. When relocation is inactive or the delegate returns
-incomplete, fall back to architect-as-author per `create-issue-draft`.
+The standalone loop targets an existing local markdown artifact. In-flow runs
+target the current out-of-repo workdir anchor. The companion's
+`--scope working-tree` sees only uncommitted files inside the repository, so
+copy an out-of-repo or committed artifact to an ephemeral untracked in-repo
+scratch path such as `.review-challenge/<N>-<slug>.md`, name that exact path in
+the focus text, and delete the copy after the pass. It is transport scratch,
+not a task artifact and never enters a commit.
 
-Follow `create-issue-draft`'s structure and framework triggers →
-`docs/issues_drafts/NN-<slug>.md`. **Stop before** "Codex review the draft" + sync.
+Explicit wrapper invocation floors the effective tier at **T2** through
+`create-issue-draft`'s tier gate.
 
 ### 2. Run the adversarial pass
 
-`/codex:adversarial-review` is `disable-model-invocation: true` — call the engine
-directly from repo root:
+`/codex:adversarial-review` is `disable-model-invocation: true`; call the
+companion directly from repository root:
 
 ```bash
 SCRIPT=$(ls -d ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs | sort -V | tail -1)
 node "$SCRIPT" adversarial-review --wait --json --scope working-tree \
-  "Challenge the SPEC at docs/issues_drafts/NN-<slug>.md only. Question whether this is the right approach, its hidden assumptions, missing acceptance criteria, hidden coupling, contract drift, and where the design fails under real conditions. Ignore other working-tree changes."
+  "Challenge the SPEC at <actual-scratch-path> only. Question the approach, hidden assumptions, missing acceptance criteria, coupling, contract drift, and real-condition failures. Ignore unrelated working-tree changes."
 ```
 
-- Draft as untracked working-tree change → `--scope working-tree` picks it up.
-  **Caveat:** review targets the whole tree — scope focus text to the draft path
-  and disregard findings outside it, or author when the tree is clean.
-- `--json` returns: `verdict` (`approve` | `needs-attention`), `summary`,
-  `findings[]` (`severity`, `title`, `body`, `file`, `line_start`, `line_end`,
-  `confidence`, `recommendation`), `next_steps[]`.
+The JSON result carries `verdict`, `summary`, `findings[]`, and `next_steps[]`.
+Hard cap: **3 passes total**.
 
-**Hard cap: 3 adversarial passes total** (including the first).
+### 3. Evaluate findings
 
-### 3. Read findings as proposals
+Treat every finding as a proposal, never an instruction.
 
-Codex argues to break confidence. Each finding is a challenge to weigh — never an
-instruction to apply. Capture verbatim output and normalize into the draft's
-finding-disposition ledger per `create-issue-draft` (Issue #575).
+| Disposition | Rule |
+|-------------|------|
+| **Accept** | Real correctness, contract, security, scope, coupling, or acceptance gap; revise. |
+| **Partial** | Valid core but over-prescribed remedy; fix the required outcome only. |
+| **Reject** | Speculative, stylistic, disproportionate, out of scope, or reduces planner freedom; record why. |
 
-### 4. Evaluate each finding
+Capture raw output before edits and normalize findings through
+`create-issue-draft`'s finding-disposition ledger.
 
-| Verdict | When | Action |
-|---------|------|--------|
-| **Accept** | Genuinely simpler AND more reliable, or real gap (missing AC, hidden coupling, contract drift, scope/security hole). | Revise draft. |
-| **Partial** | Valid kernel but remedy over-specifies (file names, signatures, internal layout). | Fix minimally — *what must be true*, not *how*. |
-| **Reject** | Speculative, stylistic, over-engineered, out-of-scope, narrows planner freedom. | Leave draft; record why. |
+### 4. Iterate
 
-Anchor: planner freedom is non-negotiable; cost rule = cheapest sufficient executor.
+Each retry is a fresh cold Codex thread. Retry only after at least one accepted
+or partially accepted finding changed the artifact. Carry a compact settled
+ledger and stop when the current pass has no accepted finding, or at cap 3 with
+open risks recorded. Never resume a previous Codex thread.
 
-### 5. Log decisions
+### 5. Hand back
 
-Via `create-issue-draft`'s decision-log path (+ `docs/architecture.md` for
-architectural calls). One line per finding: what Codex argued, your verdict, why.
+- **Standalone:** return the reviewed artifact to its owning flow.
+- **In-flow explicit wrapper / T3-critical:** preserve raw JSON as
+  `pass-NN-architectural.codex.json`, transcribe every finding 1:1 to plain
+  `type:` lines in `pass-NN-architectural.capture.txt`, relay accepted findings
+  through the task chat, and return to `create-issue-draft` before final lens.
+- **Browser-outage substitution:** use the guard-recognized capture stage being
+  replaced (`competitive`, `architectural`, or `architectural-final`) and keep
+  raw JSON alongside it; record the substitution separately.
 
-### 6. Iterate — capped at **3 passes**
-
-Each re-run = fresh **cold** Codex thread (no cross-pass memory). Re-run **only**
-after you accepted/partially accepted ≥1 finding and revised the draft. Append a
-settled-decisions block to the re-run focus text:
-
-```
-Already decided in earlier passes — do NOT re-raise (settled):
-- <finding>: rejected — <one-line reason>
-- <finding>: resolved — draft now <what changed>
-Attack the current draft afresh for NEW weaknesses only.
-```
-
-**Stop** when any holds:
-
-- `verdict` is `approve`, or
-- every remaining finding is rejected (nothing left to apply), or
-- **3 passes done** — record still-open findings as explicit risks/open questions.
-
-Never resume a single Codex thread across iterations — it softens into agreement.
-
-### 7. Hand back to `create-issue-draft`
-
-Resume from "Codex review the draft" onward. Adversarial loop **never replaces**
-architect review.
-
-### 8. Publish
-
-`publish-issue-draft` (default sync-only unless asked to commit/PR).
+The Codex loop never replaces the architect lens or the normal architectural
+review contract unless it is the explicitly recorded outage substitute for that
+specific browser stage.
 
 ## Don't
 
-- Auto-apply findings — step 4 is mandatory.
-- Let adversarial pass substitute for normal architect review.
-- Over-specify the draft to satisfy a finding.
-- **Exceed 3 adversarial passes**, or re-run with no accepted change.
-- Resume a single Codex thread across iterations.
-- Skip decision logging.
-- Hand-edit `.cursor/skills/` pointer (generated by `scripts/generate-skill-pointers.ps1`).
+- Auto-apply findings.
+- Claim Codex ran when unavailable.
+- Accept an in-flow task after silently skipping the requested Codex stage.
+- Waive the T3-critical Codex addition.
+- Exceed three passes or retry without an accepted change.
+- Leave `.review-challenge/**` scratch in the repository.
+- Resume one Codex thread across iterations.
+- Hand-edit `.cursor/skills/**`; regenerate only when canonical frontmatter changes.
