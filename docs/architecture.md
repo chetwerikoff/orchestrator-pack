@@ -15,10 +15,38 @@ No local code should modify upstream AO core.
 
 ## Task queue
 
-GitHub Issues are the live queue. Local specs live in `docs/issues_drafts/`.
-The draft filename prefix and the GitHub Issue number are **different schemes** —
-resolve mappings via [`issue_queue_index.md`](issue_queue_index.md) and read live
-state with `gh issue view`, never from draft-file presence alone.
+For every newly authored task, the GitHub Issue is the sole live task
+specification, source of truth, and queue entry. The mirrorless new-task flow
+adds no tracked or in-repository live draft or queue-index artifact. Its
+out-of-repository working anchor, immutable pulled revisions, reviewer captures,
+finding-disposition ledger, chat references, and related audit state are
+permitted and expected; they are working/audit artifacts, not a second task
+specification or queue entry.
+
+Pre-existing `docs/issues_drafts/**` and `docs/issue_queue_index.md` content
+remains readable legacy history and prior art. The sanctioned
+`publish-issue-draft` path is legacy-only and may maintain, re-synchronize, or
+batch-publish those pre-existing artifacts. Newly authored tasks do not create,
+update, synchronize, or identify themselves through that corpus.
+
+### Mirrorless GPT-chat task authoring (2026-07-23)
+
+The repository adopted browser GPT as the default task-spec author and review
+engine under a mixed-engine topology: one task chat owns authoring and fixes,
+each browser-GPT competitive pass uses a fresh chat, and one dedicated
+browser-GPT review chat owns all browser-GPT architectural turns including final
+verification. A recorded Codex substitution for browser unavailability runs
+outside that dedicated chat; later browser-GPT architectural review resumes the
+same chat.
+
+Codex remains an independent mandatory addition for T3-critical tasks, an
+outage-only substitute for a browser-GPT review stage, and an explicitly
+user-requested standalone adversarial loop. It is not the default architectural
+engine. The final architect lens is the sole sanctioned tier-downgrade point,
+subject to the unchanged marker floor and fail-up rules. The durable tier,
+accounting, and role contract lives in [`tiering.md`](tiering.md); exact browser
+mechanics, workdir layout, captures, ledger operations, and execution sequence
+remain owned by [the `create-issue-draft` skill](../.claude/skills/create-issue-draft/SKILL.md).
 
 Local Codex PR review **is active** and **pack-owned**: it is launched by pack
 scripts (`scripts/invoke-pack-review.ps1` under
