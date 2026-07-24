@@ -202,7 +202,7 @@ into a new immutable revision when the Issue changed, and diff it. Run body-only
 floors on the refreshed anchor. Findings still flow through the role/topology
 current on the base; #975 does not create another fixer role.
 
-## Shared browser-review contract — M1/M2/M5 raw evidence
+## Shared browser-review contract — M1/M2 + applicable M5 raw evidence
 
 Every post-adoption browser-GPT `competitive`, `architectural`, and
 `architectural-final` reviewer pass uses a self-contained prompt and saves its
@@ -220,20 +220,24 @@ validated response **verbatim before normalization**. The prompt must:
   `net-add` when nothing is traded out;
 - require the four-question simplification lens from
   `prompts/codex_draft_review_prompt.md`;
-- permit an M5 material cut candidate only with exact raw
+- permit a material cut candidate only with exact raw
   `simplification-cut-candidate: yes`; no other value or inferred flag;
-- require exact `SIMPLIFICATION_CLEAN` when that raw result has no tokened cut
-  candidate; if the result is genuinely clean, also require exact `NO_FINDINGS`.
+- for pre-lens `competitive` / `architectural` outputs, require exact
+  `SIMPLIFICATION_CLEAN` when that raw result has no tokened cut candidate; if the
+  result is genuinely clean, also require exact `NO_FINDINGS`;
+- keep post-lens `architectural-final` M2-governed, but do **not** require
+  `SIMPLIFICATION_CLEAN` merely because that result is clean or follows a lens.
 
 A malformed persistent `yes` proposal missing a price field does not erase its
 defect. Normalize the defect normally; the author may decline only that remedy
 with row-local `proposalOutcome: "declined"` and exact
 `proposalReason: "malformed-proposal"`.
 
-The latest **marked** occurrence of a stable defect id is authoritative for its
-current machinery classification/price/proposal economics. Earlier captures stay
-immutable. `yes -> no` and `no -> yes` are valid when latest raw/ledger agree; M4
-continues to account for machinery actually introduced earlier.
+The latest **governed marked** occurrence of a stable defect id is authoritative
+for its current machinery classification/price/proposal economics. Pre-adoption
+captures and earlier governed captures stay immutable. `yes -> no` and `no -> yes`
+are valid when latest governed raw/ledger agree; M4 continues to account for
+machinery actually introduced earlier.
 
 ### Normalized #975 ledger facts
 
@@ -241,7 +245,7 @@ Keep the existing stable row and add only row-local facts needed by the guard:
 
 - `persistent-machinery`, plus the three price values when applicable;
 - `proposalOutcome` / `proposalReason` only for a declined malformed proposal;
-- `simplificationCutCandidate: true|false` matching the latest marked raw
+- `simplificationCutCandidate: true|false` matching the latest governed marked raw
   occurrence and, for M5, the terminal anchor;
 - `protectedActivation: { authority: "author", signal: "...", whyNow: "..." }`
   when the author activates a protected nomination;
@@ -281,7 +285,7 @@ self-contained #975 prompt are the review input.
 Each pass:
 
 1. run the architectural reviewer turn;
-2. apply the shared M1/M2/M5 contract;
+2. apply the shared M1/M2 + pre-lens M5 contract;
 3. save verbatim as `pass-NN-architectural.capture.txt`;
 4. normalize the defect + economics facts, relay author fixes, update M4, re-pull
    changed Issue content, and rerun body floors.
@@ -657,7 +661,7 @@ above.
 - A malformed/disproportionate remedy never erases a valid defect.
 - Protected types are nominations; current M3 decides author/architect authority.
 - Current raw `evidence:` is the only input to finding-scoped zero-signal.
-- Latest marked stable-id occurrence controls M2 proposal economics.
+- Latest governed marked stable-id occurrence controls M2 proposal economics.
 - M4 inventories machinery actually introduced even if later proposals become
   cheaper.
 - Exact raw cut-candidate token and ledger flag must agree for M5.
