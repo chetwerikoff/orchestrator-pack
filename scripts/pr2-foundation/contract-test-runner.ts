@@ -38,7 +38,7 @@ function runMutation(runner: string, ac: AcceptanceId | null): Promise<ProcessRe
 async function runPr2aMutationMatrix(runner: string): Promise<boolean> {
   const acceptanceIds = (Object.keys(AC_MUTATION_CONTROLS) as AcceptanceId[])
     .filter((value) => value !== 'AC9');
-  const concurrency = process.env.OPK_CONTRACT_MUTATION_CI_NESTED === '1' ? 4 : 2;
+  const concurrency = process.env.OPK_CONTRACT_MUTATION_CI_NESTED === '1' ? 8 : 2;
 
   for (let index = 0; index < acceptanceIds.length; index += concurrency) {
     const batch = acceptanceIds.slice(index, index + concurrency);
