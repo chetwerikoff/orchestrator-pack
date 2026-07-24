@@ -29,7 +29,7 @@ export function candidateDigest(): string {
 }
 
 export function buildDigest(): string {
-  return sha256(`${candidateDigest()}\nnode:${process.versions.node.split('.')[0]}\nstrip-types`);
+  return sha256(`${candidateDigest()}\nnode:${process.versions.node}\nplatform:${process.platform}\narch:${process.arch}\nstrip-types`);
 }
 
 export function gateDigest(): string {
