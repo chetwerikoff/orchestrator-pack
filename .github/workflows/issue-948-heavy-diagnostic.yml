@@ -1,9 +1,7 @@
 name: issue-948-heavy-diagnostic
 
 on:
-  push:
-    branches:
-      - tmp/issue-948-verification-toolchain
+  pull_request:
 
 permissions:
   contents: read
@@ -34,7 +32,6 @@ jobs:
           TEST_EXIT=$?
           END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           printf '{"target":"f8e5661ae41258e80498171e19f9c6f0896742c8","startedAt":"%s","completedAt":"%s","testExit":%s}\n' "$START" "$END" "$TEST_EXIT" > diagnostic-meta.json
-          set +e
           node scripts/enforce-vitest-runtime-budget.mjs mutation-external.json > mutation-budget.log 2>&1
           BUDGET_EXIT=$?
           printf '{"testExit":%s,"budgetExit":%s}\n' "$TEST_EXIT" "$BUDGET_EXIT" > diagnostic-result.json
