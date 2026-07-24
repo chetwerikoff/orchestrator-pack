@@ -98,10 +98,10 @@ function sameObject(path: string, dev: string, ino: string): boolean {
 function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  return true;
 }
 
 type NoReplaceMvMode = 'none-fail' | 'no-clobber';
