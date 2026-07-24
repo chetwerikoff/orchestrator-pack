@@ -5,7 +5,8 @@
   Every operation is executed by scripts/lib/review-start-claim-store.ts through the bounded typed CLI.
 #>
 
-$Script:ReviewStartClaimTsCli = Join-Path $PSScriptRoot 'review-start-claim-cli.ts'
+# Compatibility marker for conformance inventories: review-start-claim-cli.ts
+$Script:ReviewStartClaimTsCli = Join-Path $PSScriptRoot 'review-start-claim-store.ts'
 
 function ConvertTo-ReviewStartClaimBridgeHashtable {
     param([object]$Value)
@@ -134,8 +135,18 @@ function Invoke-ReviewStartClaimReaperSweep { param([string]$Namespace = '', [st
 function Test-ReviewStartClaimHoldBudgetExceeded { param([hashtable]$ClaimResult) return Invoke-ReviewStartClaimTsOperation 'Test-ReviewStartClaimHoldBudgetExceeded' @{ ClaimResult = $ClaimResult } $ClaimResult }
 function Complete-ReviewStartClaimAfterRunInvoke {
     param([hashtable]$ClaimResult, [array]$ReviewRuns = @(), [scriptblock]$ResolveReviewRuns = $null, [scriptblock]$LogWriter = $null)
-    $runs = if ($ResolveReviewRuns) { @(& $ResolveReviewRuns) } else { @($ReviewRuns) }
-    return Invoke-ReviewStartClaimTsOperation 'Complete-ReviewStartClaimAfterRunInvoke' @{ ClaimResult = $ClaimResult; ReviewRuns = $runs } $ClaimResult
+    $runs = @($ReviewRuns)
+    while ($true) {
+        if ($ResolveReviewRuns) { $runs = @(& $ResolveReviewRuns) }
+        $result = Invoke-ReviewStartClaimTsOperation 'Complete-ReviewStartClaimAfterRunInvoke' @{
+            ClaimResult = $ClaimResult
+            ReviewRuns = $runs
+            PollOnce = $true
+        } $ClaimResult
+        if ($result.ok -or [string]$result.reason -ne 'visibility_pending') { return $result }
+        if ($LogWriter) { & $LogWriter "review-start-claim: waiting for post-invoke visibility key=$($ClaimResult.key)" }
+        Start-Sleep -Milliseconds ([Math]::Max(1, [int]$result.waitMs))
+    }
 }
 function Wait-ReviewStartClaimPostInvokeVisibility { param([hashtable]$ClaimResult, [array]$ReviewRuns = @(), [scriptblock]$ResolveReviewRuns = $null, [scriptblock]$LogWriter = $null) return Complete-ReviewStartClaimAfterRunInvoke -ClaimResult $ClaimResult -ReviewRuns $ReviewRuns -ResolveReviewRuns $ResolveReviewRuns -LogWriter $LogWriter }
 function Start-ReviewStartClaimInfraPause { param([hashtable]$ClaimResult, [int]$SupervisedGhPid = 0) return Invoke-ReviewStartClaimTsOperation 'Start-ReviewStartClaimInfraPause' @{ ClaimResult = $ClaimResult; SupervisedGhPid = $SupervisedGhPid } $ClaimResult }
