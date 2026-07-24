@@ -104,7 +104,7 @@ function mutationPlan(binding: Pr2aMutationBinding): MutationPlan {
         profile: `claim-protocol:${token}`,
         artifactPath: 'scripts/lib/review-start-claim-store.ts',
         detector: 'validateClaimStoreSource',
-        mutate: (text, id) => replaceRequired(text, token, `/* removed ${token} */`, id),
+        mutate: (text, id) => replaceRequired(text, token, '/* removed protocol guard */', id),
         inspect: (text) => findingCodes(validateClaimStoreSource(text)),
       };
     }
@@ -146,7 +146,7 @@ function mutationPlan(binding: Pr2aMutationBinding): MutationPlan {
         profile: `receipt-verifier:${token}`,
         artifactPath: 'scripts/pr2a/closure-receipt.ts',
         detector: 'validateClosureReceiptSource',
-        mutate: (text, id) => replaceRequired(text, token, `/* removed ${token} */`, id),
+        mutate: (text, id) => replaceRequired(text, token, '/* removed receipt verifier */', id),
         inspect: (text) => findingCodes(validateClosureReceiptSource(text)),
       };
     }
