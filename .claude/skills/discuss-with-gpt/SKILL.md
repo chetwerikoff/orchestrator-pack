@@ -15,12 +15,13 @@ Two roles under the GPT-chat authoring flow
 - **Standalone** — challenge a local artifact (a draft not yet a GPT-authored
   Issue, a proposal, a `study-external-source` adoption) on user request.
 - **Mechanics home** — all `create-issue-draft` browser turns use this skill's
-  machinery: task-chat authoring/fixes (`--chat-url`), fresh competitive passes
-  (`--new-chat`), and the one dedicated architectural-review chat including final
-  verification (first turn creates the chat; later turns reuse its `--chat-url`).
-  The driver, `launch-chrome.sh`, pass states, tab rules, and polling discipline
-  below are the canonical reference; the one-shot `gpt-authoring-turn.mjs`
-  scratchpad tool is rebuilt from this driver's mechanics.
+  machinery: task-chat authoring/fixes use the persistent task `--chat-url`, while
+  every competitive, architectural, and final-verification review pass uses a
+  fresh `--new-chat`. Review chat URLs may be recorded as audit evidence but are
+  never reused for a later review pass. The driver, `launch-chrome.sh`, pass
+  states, tab rules, and polling discipline below are the canonical reference;
+  the one-shot `gpt-authoring-turn.mjs` scratchpad tool is rebuilt from this
+  driver's mechanics.
 
 **Trust model differs from Codex.** Codex returns process-level JSON. This path
 drives a mutable browser UI + ChatGPT product + custom GPT + prose output. A
@@ -37,7 +38,7 @@ separation, and acceptance stay owned by `create-issue-draft`.
 |---------|-------|
 | «с gpt» / «с гпт» / «обсуди с gpt» / «драфт с gpt» / "draft with gpt" | **this skill** |
 | «с кодексом» / "with codex" | [`adversarial-draft-review`](../adversarial-draft-review/SKILL.md) |
-| GPT-authored Issue task (Issue + task-chat links) | `create-issue-draft` — this skill supplies task, competitive, and dedicated architectural browser mechanics |
+| GPT-authored Issue task (Issue + task-chat links) | `create-issue-draft` — this skill supplies persistent task-chat mechanics plus fresh competitive/architectural/final review turns |
 | plain «создай драфт» (no marker) | `create-issue-draft` directly |
 | bug/root-cause consult («почему упал…») | `investigate-root-cause` / `codex:rescue` |
 
@@ -161,10 +162,11 @@ With `--new-chat`, it opens a new page on the project URL.
 
 - task chat: its own stable `--chat-url`;
 - competitive: a fresh `--new-chat` per pass, never reused;
-- architectural: one dedicated review chat created once; read the successful
-  turn's durable `ARTIFACT`, record its exact `url:` value, then use that stable
-  `--chat-url` for all architectural and final turns. A missing/invalid URL blocks
-  continuation; never create a replacement chat blindly.
+- architectural: a fresh `--new-chat` per pass, never reused;
+- final architectural verification: a fresh `--new-chat`, never a prior review URL.
+
+A successful review turn's durable `ARTIFACT` may provide its exact chat URL for
+audit recording, but that URL is not an input to a later review pass.
 
 Accumulated duplicate tabs are an active failure source: different tabs of one
 conversation can render different message counts, causing false liveness or
@@ -172,11 +174,13 @@ conversation can render different message counts, causing false liveness or
 
 Rules:
 
-- pass `--chat-url` whenever a conversation is already known;
-- close stale ChatGPT tabs when a turn ends, keeping one tab per live conversation;
-- never use one chat URL for two streams;
-- a fresh chat remains required for each standalone/competitive adversarial pass;
-  tab reuse prevents duplicates of the *same* conversation, not context isolation.
+- pass `--chat-url` for the persistent task conversation when its URL is known;
+- use `--new-chat` for every standalone, competitive, architectural, and final
+  review pass;
+- close stale ChatGPT tabs when a turn ends;
+- never use one chat URL for two streams or two review passes;
+- tab reuse prevents duplicates of the *same persistent conversation*; it never
+  relaxes review-context isolation.
 
 ## Standalone flow
 
@@ -290,9 +294,9 @@ Standalone runs: the artifact continues on its normal path (architect review,
 then publish when asked). Brief-only creation and competitive-stage runs stay
 inside `create-issue-draft` **before acceptance** — captures land as
 `pass-NN-competitive.capture.txt` in the task's review workdir, and accepted
-findings are relayed to the task chat so the Issue is updated. Task-chat and
-dedicated architectural turns are normal `create-issue-draft` stages, not the
-standalone adversarial loop. No GPT pass replaces the architect lens.
+findings are relayed to the task chat so the Issue is updated. Task-chat turns
+and architectural/final review turns are normal `create-issue-draft` stages, not
+the standalone adversarial loop. No GPT pass replaces the architect lens.
 
 ### 8. Publish
 
@@ -305,13 +309,13 @@ GPT pass state in the owning artifact/Issue flow.
 - Reimplement passes with full page snapshots.
 - Proceed silently on `skipped` / `invalid` / `fallback_codex`.
 - Let a browser review replace the architect lens or task-chat content-fix path.
-- Merge task, competitive, and architectural streams into one chat.
-- Create a replacement architectural chat after a Codex substitution.
+- Merge task and review streams into one chat.
+- Reuse any competitive, architectural, or final review chat for a later pass.
 - Trust `VALIDATION≠ok` replies without manual checks.
 - Type credentials or attempt login.
 - Report liveness without polling the page.
 - Wait on a turn whose delivery was not confirmed.
-- Open a new tab for a known chat URL.
+- Open a new tab for the known persistent task-chat URL.
 - Exceed three standalone/competitive passes or rerun without an accepted change.
 - Stop after accepting findings without another pass.
 - Skip decision logging, pass-state record, or the audit line.
