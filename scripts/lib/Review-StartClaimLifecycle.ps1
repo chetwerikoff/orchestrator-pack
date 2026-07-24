@@ -5,7 +5,6 @@
   Every operation is executed by scripts/lib/review-start-claim-store.ts through the bounded typed CLI.
 #>
 
-# Compatibility marker for conformance inventories: review-start-claim-cli.ts
 $Script:ReviewStartClaimTsCli = Join-Path $PSScriptRoot 'review-start-claim-store.ts'
 
 function ConvertTo-ReviewStartClaimBridgeHashtable {
