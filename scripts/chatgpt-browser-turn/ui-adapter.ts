@@ -263,7 +263,9 @@ export async function sendTurn(
     if (await composer.count().catch(() => 0)) break;
     await page.waitForTimeout(500);
   }
-  if (!(await composer.count().catch(() => 0))) return { state: 'login', cause: 'composer_unavailable', possibleDelivery: false };
+  if (!(await composer.count().catch(() => 0))) {
+    return { state: 'ui_contract_mismatch', cause: 'composer_unavailable', possibleDelivery: false };
+  }
 
   const role = '[data-message-author-role]';
   const baseline = page.locator(role);
