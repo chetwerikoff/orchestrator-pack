@@ -1,40 +1,53 @@
-name: issue-948-ac5-diagnostic
+name: issue-948-ac5-binding-fix
 
 on:
   pull_request:
 
 permissions:
-  contents: read
-
-env:
-  TARGET_HEAD: 27e02fd494f6fc5a9086c7d04754bcb12fec50b8
+  contents: write
 
 jobs:
-  ac5:
+  patch:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TARGET_HEAD }}
+          ref: tmp/issue-948-verification-toolchain
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-      - run: npm ci --include=dev
-      - name: Run AC5 mutation group
+      - name: Bind receipt final invariant to concrete block
         shell: bash
         run: |
-          set +e
-          node --experimental-strip-types scripts/pr2a/mutation-runner.ts --ac AC5 > mutation-AC5.log 2>&1
-          status=$?
-          cat mutation-AC5.log
-          exit "$status"
-      - name: Upload AC5 diagnostic
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-948-ac5-diagnostic
-          path: mutation-AC5.log
-          if-no-files-found: error
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          fc_old = "  { ac: 'AC5', mutationId: 'receipt-final-invariant-incomplete', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: 'buildConformanceReport(ref)' },"
+          fc_new = "  { ac: 'AC5', mutationId: 'receipt-final-invariant-incomplete', path: 'scripts/pr2a/closure-receipt.ts', kind: 'required', token: \"const conformance = buildConformanceReport(ref);\\n  if (conformance.result !== 'conformant') throw new Error(`final_conformance_failed:${conformance.findings.map((row) => row.code).join(',')}`);\" },"
+          replace_once('scripts/pr2a/final-conformance.ts', fc_old, fc_new)
+
+          mr_old = "defineReplace('AC5','receipt-final-invariant-incomplete','scripts/pr2a/closure-receipt.ts',\"buildConformanceReport(ref)\",\"{ result: 'conformant', findings: [] } as ReturnType<typeof buildConformanceReport>\");"
+          mr_new = "defineReplace('AC5','receipt-final-invariant-incomplete','scripts/pr2a/closure-receipt.ts',\"const conformance = buildConformanceReport(ref);\\n  if (conformance.result !== 'conformant') throw new Error(`final_conformance_failed:${conformance.findings.map((row) => row.code).join(',')}`);\",\"const conformance = { result: 'conformant', findings: [] } as ReturnType<typeof buildConformanceReport>;\\n  if (conformance.result !== 'conformant') throw new Error(`final_conformance_failed:${conformance.findings.map((row) => row.code).join(',')}`);\");"
+          replace_once('scripts/pr2a/mutation-runner.ts', mr_old, mr_new)
+          PY
+          git diff --check
+          git status --short
+      - name: Commit and push AC5 fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'orchestrator-pack-ci'
+          git config user.email 'orchestrator-pack-ci@users.noreply.github.com'
+          git add scripts/pr2a/final-conformance.ts scripts/pr2a/mutation-runner.ts
+          git commit -m 'fix(issue-948): bind receipt final invariant mutation exactly'
+          git push origin HEAD:tmp/issue-948-verification-toolchain
