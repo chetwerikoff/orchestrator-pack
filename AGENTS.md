@@ -6,9 +6,9 @@ This repository is an upgrade-safe extension pack for ComposioHQ/agent-orchestra
 
 It ports selected safety/accounting contracts from `ai-orchestrator` into Composio AO —
 via plugins, prompt fragments, config examples, scripts, and CI checks — without modifying
-Composio core. Draft specs map to GitHub Issues via
-[`docs/issue_queue_index.md`](docs/issue_queue_index.md) (draft path ↔ `#N`; live state from
-`gh issue view`).
+Composio core. For new tasks, the Issue is the sole live spec/source/queue; no tracked draft/index is created.
+Artifacts are audit-only Legacy drafts/index use `publish-issue-draft`.
+Contract: [tiers](docs/tiering.md); [procedure](.claude/skills/create-issue-draft/SKILL.md).
 
 ## Edit boundaries
 
@@ -174,7 +174,6 @@ When adding behavior, prefer in order: (1) prompt/rules, (2) config, (3) plugin/
 (4) CI guard, (5) documentation. Never choose a core patch unless the user explicitly asks for
 an upstream contribution plan. **TS-first:** New `scripts/**` files MUST use TypeScript/Node. PowerShell is frozen during migration; new `.ps1` needs explicit task-spec justification that TS/Node is unsuitable. Existing `.ps1` and wrappers/shims stay with #830/#831.
 
-
 **Node 22-only TypeScript runtime:** New/changed TS, npm scripts, tests/workflows MUST match `scripts/toolchain/node-version.json` + `package.json.engines.node`; ban Node 20, `tsx`/`ts-node`, loader/fallback/emitted JS. Preflight before effects; `actions/setup-node` = 22/22.x; run `npm run check:node-major` first.
 
 **Rule delivery (AO 0.10.2):** Worker policy lives in this file. After merge, **recycle live
@@ -223,7 +222,7 @@ PR work. Missing session verification marks the session `stuck`. See
 
 ### Tracker and role policy
 
-- GitHub Issues are the task source of truth for this pack's AO setup.
+- Each new task's Issue is its sole live spec/source/queue; no tracked draft/index. External work artifacts are audit-only.
 - Link every branch and PR to its source issue; PR bodies must include `Closes #N`, `Fixes #N`, or
   `Resolves #N` in the **first few lines** under `## Summary`.
 - If **PR scope guard** fails with `missing_issue_link` but GitHub shows `Closes #N`, re-check
@@ -239,9 +238,9 @@ PR work. Missing session verification marks the session `stuck`. See
 - **Before commit:** inspect git status/diff; verify every modified path is allowed and not denied;
   stop and record a scoped amendment if outside scope. Do not rely on PR CI as the first scope check.
 
-### Queued task specs
+### Legacy queued task specs
 
-- Do not delete queued task specs unless deletion is in scope.
+- Applies only to pre-existing `docs/issues_drafts/**`; do not delete them unless in scope. New tasks create none.
 - Do not rewrite another task's declaration to make the current diff pass.
 - One amendment per iteration; keep the previous baseline auditable.
 
@@ -414,18 +413,17 @@ Cosmetic-only `.example` edits may use: `No operator adoption required`. See
 On a trigger below (substring or clear paraphrase — best-effort discovery, not a deterministic
 gate) follow the named skill immediately; no skill name required. Every skill has loader wrappers
 at `.cursor/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`.
-**Routing when several could match:** «с кодексом» / «придирчиво» → `adversarial-draft-review`;
-«с gpt» / «с гпт» → `discuss-with-gpt`; plain «создай драфт» → `create-issue-draft`.
+**Routing:** Codex → `adversarial-draft-review`; GPT → `discuss-with-gpt`; other new tasks → `create-issue-draft`; publish is legacy-only
 
 | Skill | Triggers (substring / paraphrase) | Action |
 |---|---|---|
 | `investigate-root-cause` | «разобраться с причиной», «в чём причина», «что это», «разберись», «почему упал», «что сломалось», «отладь», «что случилось», «почему не работает»; «root cause», «why did», «figure out why», «investigate the cause», «wtf» | follow [`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md); skip pure implementation / external adoption |
 | `merge-with-local-adoption` | «мерж», «мерж 385», «мерж и пул», «смерж», «смержи», «замержи»; «merge», «merge 307», «merge and pull», «merge the PR» | operator executes merge + safe pull + local adoption on the live checkout — **see Operator-only merge above** |
-| `adversarial-draft-review` | «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход»; «draft with codex», «adversarial draft», «challenge the approach» | author draft → Codex challenge loop |
-| `discuss-with-gpt` | «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt»; «draft with gpt», «discuss with gpt», «challenge with gpt» | author draft → GPT challenge loop |
-| `create-issue-draft` | authoring or rewriting `docs/issues_drafts/NN-*.md`, or syncing a new Issue spec | full create-issue-draft procedure |
+| `adversarial-draft-review` | «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход»; “draft with codex”, “adversarial draft”, “challenge the approach” | extra Codex loop; never replaces GPT stages |
+| `discuss-with-gpt` | «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt»; “draft with gpt”, “discuss with gpt”, “challenge with gpt” | browser-GPT challenge or Issue entry |
+| `create-issue-draft` | authoring or accepting a new task spec; GPT task-chat + Issue handoff; or brief-only request | GPT-authored Issue flow; no tracked draft/index |
 | `study-external-source` | «изучи <URL>», research an external repo/URL for adoption | external-source adoption triage |
-| `publish-issue-draft` | «опубликуй драфт», «закоммить драфт», «pr для драфта», «обнови драфт/issue и опубликуй», «смержи драфт»; «publish draft», «publish/update this draft»; after `create-issue-draft` | default **sync-only**; commit / PR / merge to `main` only on explicit ask |
+| `publish-issue-draft` | «опубликуй драфт», «закоммить драфт», «pr для драфта», «обнови драфт/issue и опубликуй», «смержи драфт»; “publish draft”, “publish/update this draft” | legacy-only for pre-existing drafts |
 | `switch-pack-reviewer` | «переключи ревьюера», «поставь codex», «поставь claude», «PACK_REVIEWER», «switch reviewer», «reviewer codex/claude», «используется claude вместо codex», «глобально codex» | switch pack reviewer / fix `PACK_REVIEWER` drift |
 | `change-orchestrator-runtime` | «поменяй модель оркестратора», «смени промпт оркестратора», «другой оркестратор»; «change orchestrator model», «edit orchestrator rules», «switch orchestrator runtime» | change orchestrator model/prompt/runtime **and** apply the daemon-cache + session-restore steps |
 
@@ -433,11 +431,13 @@ at `.cursor/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`.
 
 Workers and architects share RCA invariants. Full procedure:
 [`prompts/investigate_root_cause.md`](prompts/investigate_root_cause.md) (**recurrence-diagnostic**,
-**5-Whys stop condition**). Authoring: `create-issue-draft` / `publish-issue-draft`
-(**behavior-kind**, **positive-outcome**, **parked-root-cause** fences). Cursor mirror:
-[`.cursor/rules/rca-spec-discipline.mdc`](.cursor/rules/rca-spec-discipline.mdc). Architecture: §T
-in [`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
+**5-Whys stop condition**). Authoring: `create-issue-draft` plus legacy-only
+`publish-issue-draft` (**behavior-kind**, **positive-outcome**, **parked-root-cause** fences).
+Cursor mirror: [`.cursor/rules/rca-spec-discipline.mdc`](.cursor/rules/rca-spec-discipline.mdc).
+Architecture: §T in
+[`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
 
-**Publish is cross-entrypoint:** `publish-issue-draft` lives under `.claude/` but Claude, Codex,
-Cursor, and Hermes sessions that read this `AGENTS.md` use that same canonical skill; do not
-re-derive a Codex- or Hermes-specific publish flow.
+**Legacy publish is cross-entrypoint:** all agents use the canonical `.claude/` skill; never re-derive it.
+
+
+

@@ -14,11 +14,13 @@ Two roles under the GPT-chat authoring flow
 
 - **Standalone** — challenge a local artifact (a draft not yet a GPT-authored
   Issue, a proposal, a `study-external-source` adoption) on user request.
-- **Mechanics home** — `create-issue-draft`'s competitive stage (fresh chat
-  per pass) and its same-chat browser turns run on this skill's machinery:
-  the driver (`--new-chat` / `--chat-url`), `launch-chrome.sh`, pass states,
-  tab rules, and polling discipline below are the canonical reference; the
-  one-shot `gpt-authoring-turn.mjs` scratchpad tool is rebuilt from this
+- **Mechanics home** — all `create-issue-draft` browser turns use this skill's
+  machinery: task-chat authoring/fixes use the persistent task `--chat-url`, while
+  every competitive, architectural, and final-verification review pass uses a
+  fresh `--new-chat`. Review chat URLs may be recorded as audit evidence but are
+  never reused for a later review pass. The driver, `launch-chrome.sh`, pass
+  states, tab rules, and polling discipline below are the canonical reference;
+  the one-shot `gpt-authoring-turn.mjs` scratchpad tool is rebuilt from this
   driver's mechanics.
 
 **Trust model differs from Codex.** Codex returns process-level JSON. This path
@@ -27,8 +29,8 @@ weak/stale/wrong-tab pass can masquerade as "review passed." The driver hardens
 with **per-pass `PASS_ID` + draft `SHA256` echo**, but treat the result as a
 *validated best-effort* artifact, not a guaranteed one.
 
-Issue-body floors, ledger normalization, tier gate, decision logging, and
-acceptance stay owned by `create-issue-draft`.
+Issue-body floors, ledger normalization, tier gate, decision logging, chat-role
+separation, and acceptance stay owned by `create-issue-draft`.
 
 ## When to invoke
 
@@ -36,7 +38,7 @@ acceptance stay owned by `create-issue-draft`.
 |---------|-------|
 | «с gpt» / «с гпт» / «обсуди с gpt» / «драфт с gpt» / "draft with gpt" | **this skill** |
 | «с кодексом» / "with codex" | [`adversarial-draft-review`](../adversarial-draft-review/SKILL.md) |
-| GPT-authored Issue task (Issue link + chat link) | `create-issue-draft` — competitive stage built in (fresh chat per pass on this driver's mechanics) |
+| GPT-authored Issue task (Issue + task-chat links) | `create-issue-draft` — this skill supplies persistent task-chat mechanics plus fresh competitive/architectural/final review turns |
 | plain «создай драфт» (no marker) | `create-issue-draft` directly |
 | bug/root-cause consult («почему упал…») | `investigate-root-cause` / `codex:rescue` |
 
@@ -47,7 +49,9 @@ that this wrapper was explicitly requested. That flow creates the Issue and
 forces its browser-GPT competitive stage before acceptance; accepted findings
 are relayed through the task chat and therefore change the Issue itself.
 
-Do not impose this loop by default — it spends ChatGPT quota and browser time.
+Do not impose the standalone loop by default — it spends ChatGPT quota and
+browser time. Normal `create-issue-draft` browser stages are selected by that
+skill's tier/topology contract, not by this standalone trigger table.
 
 ## Browser preconditions — check BEFORE the first pass
 
@@ -107,7 +111,8 @@ Every invocation resolves to exactly one state. The driver writes a record under
 | `fallback_codex` | Ran `adversarial-draft-review` instead |
 
 **Fail loud.** If `skipped` / `invalid` / `fallback_codex`, say so plainly — do
-**not** let `create-issue-draft` proceed as if GPT ran.
+**not** let `create-issue-draft` proceed as if GPT ran. That skill decides whether
+a recorded Codex substitution is permitted for the affected stage.
 
 Exit-code hints: `chrome_not_running`(3) / `login_required`(4) /
 `stream_timeout`(5) / `no_reply`(6) / `invalid`(7) / `quota_limit`(8) /
@@ -147,42 +152,46 @@ prompt appeared as a user message and exits `send_failed`(14) if it did not.
 A silent non-delivery is otherwise indistinguishable from a slow answer, and
 waiting on it can only ever end in a misleading `stream_timeout`.
 
-## Tabs: reuse, never accumulate
+## Tabs and chat identities: reuse one, never merge streams
 
-When the operator supplies a **chat URL**, pass it as `--chat-url <url>`: the
-driver then converses inside that conversation and reuses the tab already showing
-it, foregrounding rather than duplicating it. Without the flag (and with
-`--new-chat`) behaviour is unchanged — a new page on the project URL, i.e. a cold
-fresh chat, which is what every adversarial pass requires.
+When a **chat URL** is supplied, pass `--chat-url <url>`: the driver converses
+inside that conversation, reuses the tab already showing it, and foregrounds it.
+With `--new-chat`, it opens a new page on the project URL.
 
-Accumulated tabs are an active failure source, not clutter: several tabs of one
-conversation render at **different message counts**, so a message-count snapshot
-taken in one tab misreads another, completion detection never settles, and a
-freshly created tab's composer may not be ready when the send fires. Both a
-false "still generating" and a real `send_failed` in this repository traced back
-to piled-up tabs.
+`create-issue-draft` uses those mechanics as follows:
+
+- task chat: its own stable `--chat-url`;
+- competitive: a fresh `--new-chat` per pass, never reused;
+- architectural: a fresh `--new-chat` per pass, never reused;
+- final architectural verification: a fresh `--new-chat`, never a prior review URL.
+
+A successful review turn's durable `ARTIFACT` may provide its exact chat URL for
+audit recording, but that URL is not an input to a later review pass.
+
+Accumulated duplicate tabs are an active failure source: different tabs of one
+conversation can render different message counts, causing false liveness or
+`send_failed` states.
 
 Rules:
 
-- pass `--chat-url` whenever the operator named a conversation; the driver matches
-  the tab by chat id and foregrounds it;
-- close stale ChatGPT tabs when a turn ends, keeping one per live conversation;
-- a **fresh chat is still required** for each adversarial re-run (step 6) — tab
-  reuse is about not duplicating the *same* conversation, not about reusing
-  context across passes.
+- pass `--chat-url` for the persistent task conversation when its URL is known;
+- use `--new-chat` for every standalone, competitive, architectural, and final
+  review pass;
+- close stale ChatGPT tabs when a turn ends;
+- never use one chat URL for two streams or two review passes;
+- tab reuse prevents duplicates of the *same persistent conversation*; it never
+  relaxes review-context isolation.
 
-## Flow
+## Standalone flow
 
 ### 1. Obtain the artifact
 
 The standalone loop challenges an existing **local** artifact — a draft file,
 proposal, or `study-external-source` adoption (any markdown path). This skill
-authors nothing. For a brief-only creation trigger, use the route above:
-`create-issue-draft` owns authoring and invokes this browser machinery as its
-forced competitive stage before acceptance. GPT-authored Issues are otherwise
-challenged inside `create-issue-draft`, not by invoking this skill standalone.
-Explicit wrapper invocation floors the effective tier at ≥ **T2**
-(`create-issue-draft` tier gate, wrapper inheritance).
+authors nothing. For a brief-only creation trigger, route to
+`create-issue-draft`. GPT-authored Issues use this skill's mechanics inside that
+flow rather than invoking the standalone loop for task/architectural turns.
+Explicit wrapper invocation floors the effective tier at ≥ **T2**.
 
 ### 2. Run the GPT adversarial pass
 
@@ -276,7 +285,7 @@ GPT loop: <N> passes; stopped because <no-accepted-finding-in-last-pass | cap-3>
 ```
 
 Clean stop requires final pass `STATE=completed_valid` with `last-pass accepted=0`.
-If a later step (e.g. normal codex review) materially changes the draft, log
+If a later review materially changes the artifact, log
 `post-GPT change not re-reviewed` or re-run GPT.
 
 ### 7. Hand back
@@ -284,28 +293,30 @@ If a later step (e.g. normal codex review) materially changes the draft, log
 Standalone runs: the artifact continues on its normal path (architect review,
 then publish when asked). Brief-only creation and competitive-stage runs stay
 inside `create-issue-draft` **before acceptance** — captures land as
-`pass-NN-competitive.capture.txt` in the task's review workdir (`$REVIEW_DIR`,
-see that skill's Intake), and accepted findings are relayed to the task chat so
-the Issue is updated. The GPT loop **never replaces** the architectural review
-stage.
+`pass-NN-competitive.capture.txt` in the task's review workdir, and accepted
+findings are relayed to the task chat so the Issue is updated. Task-chat turns
+and architectural/final review turns are normal `create-issue-draft` stages, not
+the standalone adversarial loop. No GPT pass replaces the architect lens.
 
 ### 8. Publish
 
-`publish-issue-draft` (default sync-only). Record GPT pass **state** in issue/draft.
+`publish-issue-draft` remains legacy-only for pre-existing tracked drafts. Record
+GPT pass state in the owning artifact/Issue flow.
 
 ## Don't
 
-- Auto-apply findings — step 4 is mandatory.
-- Reimplement the pass with full page snapshots.
+- Auto-apply findings.
+- Reimplement passes with full page snapshots.
 - Proceed silently on `skipped` / `invalid` / `fallback_codex`.
-- Let GPT substitute for normal architect review.
-- Over-specify the draft to satisfy a finding.
+- Let a browser review replace the architect lens or task-chat content-fix path.
+- Merge task and review streams into one chat.
+- Reuse any competitive, architectural, or final review chat for a later pass.
 - Trust `VALIDATION≠ok` replies without manual checks.
-- Type credentials / attempt login.
-- Report "GPT is still thinking" from process liveness instead of polling the page.
-- Wait on a turn whose delivery you never confirmed.
-- Open a new tab for a chat the operator already gave you a URL for.
-- **Exceed 3 passes**, or re-run with no accepted change.
+- Type credentials or attempt login.
+- Report liveness without polling the page.
+- Wait on a turn whose delivery was not confirmed.
+- Open a new tab for the known persistent task-chat URL.
+- Exceed three standalone/competitive passes or rerun without an accepted change.
 - Stop after accepting findings without another pass.
-- Skip decision logging, pass-state record, or the **audit line**.
-- Hand-edit `.cursor/skills/` pointer (generated by `scripts/generate-skill-pointers.ps1`).
+- Skip decision logging, pass-state record, or the audit line.
+- Hand-edit `.cursor/skills/` pointers; use `scripts/generate-skill-pointers.ps1`.
