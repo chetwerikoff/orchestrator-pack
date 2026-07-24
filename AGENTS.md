@@ -6,9 +6,9 @@ This repository is an upgrade-safe extension pack for ComposioHQ/agent-orchestra
 
 It ports selected safety/accounting contracts from `ai-orchestrator` into Composio AO —
 via plugins, prompt fragments, config examples, scripts, and CI checks — without modifying
-Composio core. A new task's Issue is its spec/source/queue; no tracked draft/index.
-External anchors/revisions/captures/ledger/chats are audit-only. Existing drafts/index are legacy;
-`publish-issue-draft` only. Contract: [tiers](docs/tiering.md); [procedure](.claude/skills/create-issue-draft/SKILL.md).
+Composio core. For new tasks, the Issue is the sole live spec/source/queue; no tracked draft/index is created.
+Artifacts are audit-only Legacy drafts/index use `publish-issue-draft`.
+Contract: [tiers](docs/tiering.md); [procedure](.claude/skills/create-issue-draft/SKILL.md).
 
 ## Edit boundaries
 
@@ -222,7 +222,7 @@ PR work. Missing session verification marks the session `stuck`. See
 
 ### Tracker and role policy
 
-- Each new task uses a live Issue only; no tracked draft/index. External work is audit-only.
+- Each new task's Issue is its sole live spec/source/queue; no tracked draft/index. External work artifacts are audit-only.
 - Link every branch and PR to its source issue; PR bodies must include `Closes #N`, `Fixes #N`, or
   `Resolves #N` in the **first few lines** under `## Summary`.
 - If **PR scope guard** fails with `missing_issue_link` but GitHub shows `Closes #N`, re-check
@@ -240,7 +240,7 @@ PR work. Missing session verification marks the session `stuck`. See
 
 ### Legacy queued task specs
 
-- Applies only to legacy `docs/issues_drafts/**`; delete only in scope. New tasks create none.
+- Applies only to pre-existing `docs/issues_drafts/**`; do not delete them unless in scope. New tasks create none.
 - Do not rewrite another task's declaration to make the current diff pass.
 - One amendment per iteration; keep the previous baseline auditable.
 
@@ -413,7 +413,7 @@ Cosmetic-only `.example` edits may use: `No operator adoption required`. See
 On a trigger below (substring or clear paraphrase — best-effort discovery, not a deterministic
 gate) follow the named skill immediately; no skill name required. Every skill has loader wrappers
 at `.cursor/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`.
-**Routing:** Codex → `adversarial-draft-review`; GPT → `discuss-with-gpt`; other new tasks → `create-issue-draft`; publish is legacy-only.
+**Routing:** Codex → `adversarial-draft-review`; GPT → `discuss-with-gpt`; other new tasks → `create-issue-draft`; publish is legacy-only
 
 | Skill | Triggers (substring / paraphrase) | Action |
 |---|---|---|
@@ -437,9 +437,7 @@ Cursor mirror: [`.cursor/rules/rca-spec-discipline.mdc`](.cursor/rules/rca-spec-
 Architecture: §T in
 [`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
 
-**Legacy publish is cross-entrypoint:** all agents use the canonical `.claude/` skill; do not
-re-derive an agent-specific flow.
-
+**Legacy publish is cross-entrypoint:** all agents use the canonical `.claude/` skill; never re-derive it.
 
 
 
