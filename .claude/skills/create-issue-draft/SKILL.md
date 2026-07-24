@@ -1,1022 +1,574 @@
 ---
 name: create-issue-draft
-description: Use when authoring a new task draft for `orchestrator-pack` — adding `docs/issues_drafts/NN-<slug>.md` and syncing it as a GitHub Issue. Covers the mandatory prior-art reconnaissance gate (survey shipped + queued work before authoring), the task-decomposition gate (split large work into single-PR-sized drafts up front), the draft structure, the 5-mode framework triggers, decision logging, and the sync-to-GitHub procedure. Invoke before opening any new issue or rewriting an existing draft. Do not invoke for tiny docs typos or rename-only refactors.
+description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT authoring-chat link (or only a brief: GPT then authors and creates the Issue by default), and the architect runs the lens → fix → browser-GPT competitive → Codex architectural-review → final-lens pipeline, with GPT applying every content fix directly to the Issue. Covers one task chat, fresh browser-GPT competitive chats, mandatory Codex architectural review at every tier and Codex final verification whenever the tier flow requires it under the current `docs/tiering.md` canon, T3-critical L4 classification and rollback/migration plus crash/race/stale-state floors, browser-turn mechanics, issue-body guards, and the finding-disposition ledger. The Issue is the only live task artifact — no tracked draft mirror or queue-index row; audit artifacts live in an out-of-repo workdir. Invoke on every new GPT-authored task. Do not invoke for tiny docs typos or rename-only refactors.
 ---
 
-# create-issue-draft
+# create-issue-draft — GPT-chat authoring flow
 
-Task specs are picked up by Cursor (planner+worker) under AO orchestration and
-reviewed by Codex. Output goes through GitHub Issues. The planner picks file
-names, function shapes, library choices — the spec sets boundaries and
-acceptance criteria. **Over-specification is a bug.**
+Tasks are authored by the operator's **browser GPT** in the custom ChatGPT
+project «orchestrator-pack». GPT creates the GitHub Issue and edits it directly
+throughout the flow. The architect writes only the initial brief, runs review
+and lens stages, ratifies finding dispositions, and enforces mechanical floors.
 
-**Authoring party (Issue #579).** When relocation is active, the **architect**
-authors the task **brief** and reviews the finished draft before sync; the
-**draft-author session** (Cursor by default) authors the spec from that brief.
-Until relocation is active, or when the draft-author session is unavailable or
-returns an incomplete run, the architect runs this skill directly as
-**architect-as-author** fallback. See **Draft-author relocation** below.
+The **GitHub Issue is the only live task artifact and queue entry**. Pulled
+revisions, captures, chat URLs, and the finding ledger live in an out-of-repo
+workdir and are never committed. `docs/issues_drafts/**` and
+`docs/issue_queue_index.md` are read-only prior art for this flow.
 
-## When to invoke
+## Inputs and routing
 
-- Adding a new issue to the queue.
-- Rewriting an existing draft after a Codex finding or 5 Whys analysis.
-- Splitting / merging issues during pre-implementation alignment.
+Normal intake provides:
 
-Skip on: typo fixes, rename-only refactors, one-file mechanical CI tweaks.
+1. the GitHub Issue URL or number;
+2. the browser-GPT task-chat URL.
 
-## Draft-author relocation (Issue #579)
+**Brief-only entry.** With no Issue/chat yet, compose a self-contained brief
+(problem/goal, advisory tier prior, constraints, out-of-scope, verified grounding
+pointers) and open one new browser-GPT chat. That chat becomes the task chat;
+GPT authors the spec against the floors below and creates the Issue. The first
+body line becomes `GitHub Issue: #N` once known. The architect does not author
+the spec unless the browser is unavailable and the operator cannot restore it;
+record that fallback explicitly.
 
-**Role split when relocation is active.** The **architect** authors the task
-**brief** (not the full spec), assigns an advisory tier prior, runs the T3
-architect lens pass, handles tier-gate escalations and contested protected
-findings, and **reviews the authored draft before any sync**. The
-**draft-author session** — **Cursor by default**; **Codex or Sonnet 5 only on
-explicit user request** — works from that brief in an **isolated workspace**,
-executes this skill's full procedure, and returns the draft plus **completion
-proof**.
+Explicit wrapper routing is preserved:
 
-### Brief handoff contract
+- brief-only `discuss-with-gpt` floors the effective tier at T2 and requires the
+  requested browser-GPT competitive stage before acceptance;
+- brief-only `adversarial-draft-review` floors the effective tier at T2 and
+  requires the requested Codex loop before the final lens and acceptance.
 
-The architect's brief is the input artifact and role boundary. It binds required
-content, not a file path, directory, or UI workflow. Minimum required contents:
+Skip only typo, rename-only, or one-file mechanical CI changes that genuinely
+qualify for the below-ladder skip line.
 
-- Problem / goal
-- Advisory tier prior (intake suggestion per #574; recomputed by draft author
-  per #189)
-- Constraints and out-of-scope
-- Grounding pointers the architect has already verified
+## Roles
 
-### Draft-author session contract
+| Party | Owns | Must not do |
+|-------|------|-------------|
+| GPT author in task chat | Spec content, every content fix, direct Issue edits | Review its own spec |
+| Architect | Lens passes, stage ordering, evidence, floors, disposition ratification, acceptance | Author content fixes or bypass the task chat |
+| Cursor helper | Execute the prepared browser command and return verbatim output + state | Write browser code, alter prompts, judge findings |
+| Reviewer GPT chats | Competitive critique in fresh chats | Edit the Issue or replace canonical Codex architectural review |
+| Codex | Mandatory architectural review and final verification at every tier; explicit wrapper loop when requested; recorded competitive-stage browser-outage substitution | Be skipped, silently waived, or replaced by browser GPT while current `docs/tiering.md` remains authoritative |
 
-From the brief, the draft-author session runs the full `create-issue-draft`
-procedure:
+## Chat topology
 
-- Prior-art reconnaissance (below)
-- Task decomposition gate
-- Tier gate per #189
-- Pre-draft design analysis when tier requires
-- Per-tier review loop per #188
-- Finding disposition ledger and carve-out handling
-- Discipline checks (`check-draft-discipline.ps1`)
-- Codex draft review
+| Stream | Chat | Lifetime |
+|--------|------|----------|
+| Authoring, fixes, finding relays | one **task chat** | whole flow |
+| Competitive review | **fresh chat per pass** | one pass |
+| Architectural review and final verification | **Codex review process; no browser chat** | one cold invocation per pass |
+| Architect lenses | no browser chat | in-session |
 
-Output: draft file at `docs/issues_drafts/NN-<slug>.md` plus a **completion
-record** (below).
+Never review in the task chat, relay fixes anywhere except the task chat, reuse a
+competitive chat, or substitute a browser-GPT review chat for the canonical Codex
+architectural stages.
 
-### Engine selection (default + explicit-request override)
+## Pipeline
 
-- Default authoring engine: **Cursor** — never auto-switched.
-- **Codex or Sonnet 5** may author only when the user explicitly requests that
-  engine for the run.
-- The completion record must name **authoring engine** and **selection basis**
-  (`default` | `explicit-request`). A non-Cursor engine recorded with basis
-  `default` (or with no recorded explicit request) is an **invalid run**.
-- Engine choice does not relax isolation, completion proof, disposition
-  ownership, fallback, or pre-sync architect review.
-- When the adversarial-wrapper reviewer engine would coincide with the chosen
-  authoring engine (e.g. Codex author + Codex adversarial), the adversarial
-  pass must run as an **independent instance/thread** so the author is never
-  its own adversary.
+1. Intake: pull title/body, create workdir, recompute tier, run body floors.
+2. Architect lens 1: six axes plus competitive directive.
+3. Task-chat fix round; re-pull, diff, and rerun body floors.
+4. Browser-GPT competitive stage when selected or explicitly requested, ≤3 fresh-chat passes.
+5. Mandatory Codex architectural review at every tier, using the current per-tier ceiling.
+6. Additional explicit Codex wrapper loop when requested; T3-critical classification and safety floors when triggered.
+7. Final architect lens, including the only sanctioned downgrade decision.
+8. Exactly one Codex final architectural pass after the latest final-lens capture when the tier flow requires it.
+9. Acceptance only over the current Issue revision with all floors and ledger green.
 
-### Isolation from the architect's live tree
+A review stage ends early on `NO_FINDINGS`. A capped exit is allowed only when
+the cap applies and unresolved questions are recorded in the ledger/final report.
 
-The draft-author session — Cursor, Codex, or Sonnet 5 alike — **must not** run
-git operations in the architect's live working tree. It works in an isolated
-checkout, scratch tree, or equivalently isolated workspace, receiving only the
-brief and intentionally included context.
+## Step 1 — Intake and workdir
 
-**Forbidden in draft authoring:** shared-index authoring, dirty-tree delegation,
-force checkout/reset recovery, and force-push semantics. After the session
-returns, the caller verifies the authored artifact and local worktree state —
-**do not trust exit code alone**.
+Task identity is `<N>-<slug>`. Create:
 
-### Completion proof (not exit-code trust)
-
-Exit status alone is insufficient. A run is **complete** only when all hold:
-
-- Authored draft exists at the expected path
-- Required discipline checks pass
-- Required review-loop outcome is recorded (`NO_FINDINGS` or capped outcome with
-  open questions recorded)
-- Completion record links: brief identity, draft path, **authoring engine**,
-  **selection basis**, selected/recomputed tier, review passes, disposition
-  outcome where applicable, discipline-check results, final status
-
-Missing draft, missing checks, missing ledger/review state, or half-written
-output = **failed/incomplete** even if the delegate exits 0.
-
-Illustrative completion-record fields (implementing planner chooses concrete
-storage — not prescribed here):
-
-```json
-{
-  "briefIdentity": "<stable brief reference>",
-  "draftPath": "docs/issues_drafts/NN-<slug>.md",
-  "authoringEngine": "cursor | codex | sonnet-5",
-  "selectionBasis": "default | explicit-request",
-  "tierResult": "T1 | T2 | T3 | below-ladder",
-  "reviewLoopOutcome": "NO_FINDINGS | capped-with-open-questions",
-  "dispositionStatus": "...",
-  "disciplineChecks": "pass",
-  "finalStatus": "complete | incomplete"
-}
+```text
+~/.local/state/create-issue-draft/<N>-<slug>/       # $WORKDIR
+  docs/issues_drafts/<N>-<slug>.md                  # $ANCHOR
+  docs/issues_drafts/.review/<N>-<slug>/            # $REVIEW_DIR
+  r01/ r02/ …                                       # immutable pulled revisions
 ```
 
-Mechanical guard: `scripts/check-draft-author-relocation-contract.ps1`.
+No repository support files are copied into `$WORKDIR`. Repository-owned guards
+and the sync helper run from a trusted checkout root and receive the **absolute**
+anchor path. This is load-bearing: the sync helper's tier validation uses
+`process.cwd()` as its repository root and needs the tracked marker,
+contract-evidence, manifest, and corpus files available there.
 
-### Pre-sync architect review (unchanged boundary)
+The anchor is draft-shaped, not a raw body:
 
-No issue sync or publish occurs before the architect reviews the authored local
-draft and existing discipline/review gates pass. The draft-author session does
-not sync or publish unless the existing `create-issue-draft` / publish gates
-allow it — architect still owns pre-sync review.
+1. line 1: `# <live Issue title>`;
+2. line 2: blank;
+3. remaining lines: live Issue body verbatim.
 
-### Fallback and activation boundary
-
-Until relocation is active on the authoring surface, or when the draft-author
-session is unavailable, refuses the handoff, or returns a failed/incomplete run:
-use the **architect-as-author** path (this skill run directly in the architect
-session), **record the fallback reason**, and do not create an authoring
-outage.
-
-## Prior-art reconnaissance gate (run FIRST — before any design analysis)
-
-Before you analyse the problem or write a single draft line — for anything beyond
-a typo/rename — you MUST survey what the project has **already shipped** and
-**already queued** on this topic, and let the findings decide whether, and as
-*what*, the draft should exist at all. Skipping this is how draft #95 shipped a
-~1100-line "new runtime egress" design that was ~80% redundant with already-merged
-`#205/#232/#281/#283/#267`; the scope correction then happened as an expensive full
-rewrite instead of *before* authoring. The reconnaissance is the cheap insurance
-against re-implementing merged machinery.
-
-**Applies** to every new build or rewrite. **Skips** only for typo/rename/one-line
-mechanical fixes (same skip line as the design-analysis gate below).
-
-### Two surveys — delegate the bulk read, keep the verdict
-
-The combined corpus — 90+ drafts plus the architecture decision log, the queue
-index, and declaration snapshots — is far over the read-delegation triggers, so
-the bulk read is **mandatory** coworker work (`coworker ask --profile code`); the
-*conclusion* stays on the reasoning model. The corpus is markdown, so it sends
-**without** `--allow-code`; add `--allow-code` only for the narrow hop that
-confirms a claim against shipped *script* code.
-
-**1. Shipped work — what is already built, and which architectural decisions were
-made and why.** Sources:
-- Closed issues + merged PRs on the topic —
-  `gh issue list --repo chetwerikoff/orchestrator-pack --state closed --search "<topic terms>"`
-  and `gh pr list --repo chetwerikoff/orchestrator-pack --state merged --search "<topic terms>"`.
-- `docs/architecture.md` and `docs/issues_drafts/00-architecture-decisions.md` —
-  the decision log (the *why*, not only the *what*).
-- `docs/declarations/**` — which files each shipped issue actually authored (the
-  concrete surface already occupied).
-- The drafts whose issues are **merged** (resolve numbers via
-  [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md)).
-
-**2. Open queue — what is already planned or in-flight on the topic.** Sources:
-- Open issues —
-  `gh issue list --repo chetwerikoff/orchestrator-pack --state open --search "<topic terms>"`.
-- [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) — the draft→issue
-  discovery map.
-- `docs/issues_drafts/**` — local drafts, **including ones not yet synced** to GitHub.
-
-**Delegation command (one call covers both surveys' markdown corpus):**
+Pull every revision through the pack wrapper and preserve an immutable copy:
 
 ```bash
-coworker ask --profile code \
-  --paths docs/issues_drafts/ docs/architecture.md docs/issue_queue_index.md docs/declarations/ \
-  --question "For the topic '<one-line topic>': (1) which shipped/merged issues or drafts already build any part of this, and what architectural decision did each settle and why — quote the rationale where stated; (2) which OPEN issues or un-synced local drafts already cover any part of this. Return issue/draft ids with a one-line 'what it already does'."
+WORKDIR="$HOME/.local/state/create-issue-draft/<N>-<slug>"
+ANCHOR="$WORKDIR/docs/issues_drafts/<N>-<slug>.md"
+mkdir -p "$(dirname "$ANCHOR")" "$WORKDIR/rNN" "$WORKDIR/docs/issues_drafts/.review/<N>-<slug>"
+scripts/gh api repos/chetwerikoff/orchestrator-pack/issues/<N> \
+  --jq '"# " + .title + "\n\n" + .body' > "$WORKDIR/rNN/<N>-<slug>.md"
+cp "$WORKDIR/rNN/<N>-<slug>.md" "$ANCHOR"
 ```
 
-Run the `gh` queries yourself (live open/closed/merged state is not in the
-markdown corpus). If `coworker` is unavailable or rate-limited, read in-session and
-say so in your final status (coworker-policy accountability clause).
+Pull the title every time because the tier prefix lives in it. Record the task-chat
+URL and each competitive-chat URL in `$REVIEW_DIR/chats.md`; Codex stages have no
+browser-chat URL.
 
-### Scope verdict (judgment — never delegated)
+## Step 2 — Architect lens 1
 
-From the survey, decide exactly one verdict and act on it:
+Survey shipped and queued prior art before judging the approach. Delegate bulk
+markdown reading when the `AGENTS.md` threshold applies; keep conclusions on the
+reasoning model. Live Issue/PR state is read through the pack `scripts/gh`
+wrapper.
 
-- **Already shipped** → do **not** author a fresh build draft. The durable move is
-  a reference / cleanup / catalog draft over the existing work, or no draft at all.
-  (This is the #95 case.)
-- **Already queued** → fold the idea into the existing open draft/issue; do not open
-  a parallel one.
-- **Extends / references existing** → author, but **Prerequisite** must cite every
-  merged issue it builds on (draft path + GitHub #), and **Goal** / **Binding
-  surface** must state explicitly what it **re-uses vs. adds**, so it cannot silently
-  re-implement shipped machinery.
-- **Genuinely new** → no material overlap found; author normally.
+Answer all six axes with evidence:
 
-### Record the recon in the draft
+1. **Фактическая исполнимость** — prove every upstream contract/file/flag.
+2. **Подход к цели** — compare alternatives, cost, prior art, and one-PR sizing.
+3. **Причинно-следственные связи** — prove cause→effect and fix the class, not case.
+4. **Оверинженерия — что упростить** — identify disproportionate machinery.
+5. **Что НЕ упрощать** — preserve requirements, safety floors, and accepted findings.
+6. **Что пропустили** — missing ACs, evidence, adoption, rollback, or verification.
 
-The verdict and its evidence are not throwaway — capture them so the next reader
-(and Codex) can check the scope was earned:
-- **Prerequisite** lists the merged issues the draft builds on / references, each
-  with the one-line "already does" from the survey.
-- **Decisions (design analysis)** carries a short **Prior art** note: what already
-  exists, what each shipped decision settled and why, and why the chosen scope does
-  not duplicate it. (Draft #95's post-hoc "Scope correction" note is exactly this —
-  the gate just requires it **up front**, before authoring, not after a rewrite.)
+Write `$REVIEW_DIR/lens-01-architect.md` with numbered `fix-required`,
+`recommend`, or `question` items and `competitive: yes|no` plus tier basis.
+Architect-lens findings are relayed for fixing but are not reviewer-ledger rows.
 
-This gate **feeds** the design-analysis gate below: whenever the survey finds
-overlap, the ≥3-option analysis (element 4) MUST include "reference / extend the
-shipped work instead of rebuilding it" as one judged option.
+## Step 3 — Task-chat fix round
 
-## Task decomposition gate (run before authoring — split large work into shippable units)
+Send the verdict to the one task chat with instructions to address each finding
+or reject it with a concrete reason, edit the GitHub Issue directly, and return a
+change summary plus dispositions. Security/scope findings follow the protected
+rules below.
 
-Once the reconnaissance gate has told you what genuinely needs building, decide its
-**size** before you write the body. A draft is **one independently shippable,
-single-PR-sized build**: one coherent contract, landable and reviewable on its own,
-behind at most a short prerequisite chain. If the work is bigger than that,
-**decompose it into several drafts up front** — never author one mega-draft and hope
-the planner splits it.
+Save the reply verbatim as `round-NN-author-reply.md`, re-pull title/body into a
+new immutable revision, and diff it. A reply without an Issue edit is unfinished.
+Run body-only floors on the refreshed anchor. Findings always flow:
 
-**Why this is a hard gate, not a style note.** The original draft #95 was ~1100
-lines. That overflows the **GitHub Issue body cap (≈65,536 characters)** — `gh issue
-create` rejects or truncates it, so the spec literally "не прошла лимиты." Even under
-the cap it is far more surface than **one worker can land in one PR** or **one Codex
-pass can review** — so the spec ships untested edges. An over-large draft is a
-**decomposition smell**, not a formatting problem.
-
-**Decompose when ANY holds:**
-- The work touches **multiple independently-shippable contracts** (e.g. a data
-  format **and** a generator **and** an audit **and** a runtime change) — each is a
-  draft.
-- The acceptance criteria fall into **clusters that could each merge and add value on
-  their own**.
-- The body is heading toward **hundreds of lines / the issue-body char cap**.
-- Sub-parts have **different prerequisites** or could be built by **different workers
-  in parallel**.
-
-**How to decompose:**
-1. Identify the **minimal first shippable slice** — the contract everything else
-   depends on. That is draft N.
-2. Peel each further independently-landable capability into its own draft (N+1,
-   N+2, …), each citing its predecessor in **Prerequisite** so the queue shows the
-   ordering.
-3. **Each child draft passes the full gate on its own** — prior-art recon, design
-   analysis, planner-freedom, behavior-kind, acceptance criteria.
-4. Record the split: the parent scope and which slice each child owns, so siblings
-   cross-reference rather than silently overlap.
-
-Keep each draft to the **smallest contract that is independently true and testable**.
-A spec that needs ~1000 lines to state its acceptance criteria is almost always
-several specs wearing one issue number — split it before authoring, not after a Codex
-finding or a sync failure.
-
-**Decompose reactively, too.** When a review finding can only be satisfied by an
-enforcement sub-mechanism that itself spawns an *unresolvable regress* — a bootstrap
-chicken-and-egg, a "who protects the protector" mutable-anchor chain, or a lifecycle
-reaching past this PR's surface — scope that sub-mechanism out to a follow-up (name it
-in **Files out of scope** with its owner) instead of piling machinery into the draft
-under review. **Guard against misuse:** this applies only to that *specific* regress
-signal — it is **not** licence to defer a finding because it is merely hard or unwelcome.
-
-## Pre-draft design-analysis gate (run before authoring)
-
-Before you propose a solution or write a single line of the draft, when the
-task is a **non-trivial build** — a new component, contract, or service that
-becomes its own worker build — you MUST first answer the design questions
-below and let the answers shape the draft. This is the authoring-side twin of
-the RCA design block (`docs/issues_drafts/79-rca-design-recommendation-block.md`,
-GitHub #237): #237 enriches what an RCA *recommends*; this gate enriches what
-you *author*. Keep both surfaces saying the same thing.
-
-**Applies when** the proposal is a non-trivial build (new component / contract /
-service / would-be worker draft). **Skips** for operator/runtime steps, config
-or YAML changes, one-line spec or rule edits, typo/rename fixes — forcing a
-three-option analysis onto those is noise.
-
-When it applies, answer all of, and reflect the conclusions in **Goal** /
-**Binding surface** before finalising:
-
-1. **Critical mechanics for *this* problem** — the patterns, data structures,
-   integrations, and boundary / edge conditions that decide whether the design
-   holds. Name them, not generic ones.
-2. **World / industry best practices** — how this *class* of problem is solved
-   in the field; what the established approach is and why. (Delegate the bulk
-   read/research to `coworker ask --profile code --paths <files...> --question "..."`,
-   or `WebSearch`, per the coworker policy; keep the judgment here. Source-code
-   corpus still requires `--allow-code`.)
-3. **Services / components architecture sketch** — how the pieces fit together
-   (responsibilities, data flow, boundaries). Diagrams as ASCII.
-4. **≥ 3 implementation options, each with an explicit trade-off** — not three
-   restatements of one approach.
-   **State the artifact's stakes once, up front: its blast radius, reversibility,
-   and what breaks on failure.**
-   Judge each on **cost, risk, and sufficiency**
-   (tests + Codex review as the safety net), then land on the **cheapest
-   sufficient executor with acceptable risk** per the repo cost rule — never
-   "which is best." Record the chosen option and why the two rejected ones lost
-   in the draft's decision trail (see **Decision logging**). **When the prior-art
-   reconnaissance gate found overlap, one option MUST be "reference / extend the
-   shipped work instead of rebuilding it"** — judged on the same axes. "Build it
-   fresh" is the cheapest sufficient executor only when the survey proved the
-   surface is genuinely empty; re-implementing merged machinery is high-risk
-   redundancy (the #95 failure), not a neutral default.
-5. **Full-class enumeration for decision / state-machine / event-ordering /
-   retry / concurrency causes** — enumerate the decision's input dimensions ×
-   values, name the sibling cells that share the root cause, and the expected
-   outcome per equivalence class, so the build targets the **class, not the one
-   reproduced case** ([[fix-the-class-not-the-case]]). Mandatory on recurrence;
-   hand the matrix to **Acceptance criteria** as exhaustive fixtures.
-
-**Planner-freedom guard.** The sketch and the chosen option inform *what must be
-true* — they do not become prescriptive spec. Do not let element 3/4 leak
-function signatures, import paths, folder layout, or library pins into the draft
-(see the **Planner-freedom checklist**). The analysis bounds the contract; the
-planner still picks the internals.
-
-Long comparison tables / option matrices go to an OS temp file and are linked,
-not pasted into the draft body (same convention as #237) so the spec stays lean.
-
-## Draft file structure (fixed order)
-
-Path: `docs/issues_drafts/NN-<slug>.md`. Top-level H1 is the **GitHub Issue title**
-and must carry the **recomputed tier** as a bracketed prefix: `[T1]`, `[T2]`, or
-`[T3]`, then a space, then the task name — e.g. `# [T3] Worker rules delivery
-restoration`. The prefix must match the `tier:` value in the `complexity-tier`
-fence. **Skip-line** inputs (`skip-line: true`) omit the tier prefix. Update the
-H1 whenever tier is raised on recompute (mid-flight or post-review drift) before
-sync.
-
-1. **Prerequisite** — issues that must merge first, **plus the already-merged
-   issues this draft builds on or references** (from the prior-art reconnaissance
-   gate), each with the one-line "already does" so the planner sees what is reused
-   vs. added. Reference the **draft file path** (stable) plus the GitHub number from
-   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) when known, e.g.
-   `docs/issues_drafts/11-orchestrator-autonomous-review-loop.md` (GitHub #28).
-   Never cite a bare draft prefix as if it were a GitHub Issue number.
-2. **Goal** — one paragraph. Outcome, not method.
-   - **`complexity-tier` fence** — machine-readable recomputed tier (Issue #576) or
-     `skip-line: true` for #237 below-ladder inputs after marker screen passes.
-3. **Binding surface** — what this issue commits the repository to. Concrete
-   about contracts, deliberately vague about implementation.
-   - **Operator adoption** (required when **Files in scope** include
-     operator-facing surfaces: `agent-orchestrator.yaml.example`, runbooks or
-     go-live docs that introduce new operator processes, documented operator env
-     vars, machine-local config outside the repo, or `orchestratorRules` /
-     `reactions` requiring `ao stop` / `ao start`): add a bullet listing
-     post-PR steps the operator must run (yaml merge, processes, env, restart,
-     verification). Omit when the task does not touch those surfaces.
-4. **Files in scope** — coarse-grained directories or specific new files.
-   Mark new files `(new)`. Avoid prescribing function names / signatures.
-5. **Files out of scope** — explicit list.
-6. **Denylist** — mandatory fenced block, opened with three backticks then
-   `denylist`, one path per line, closed with three backticks:
-
-   ````markdown
-   ```denylist
-   vendor/**
-   packages/core/**
-   .ao/**
-   ```
-   ````
-
-   `_shared/issue_parser` matches this fence with the regex
-   `` ```(denylist|allowed-roots) `` — only literal triple-backtick fences
-   parse. Always include `vendor/**` and `packages/core/**`. Add an
-   ` ```allowed-roots ` fence when the task should stay inside a subtree.
-7. **Acceptance criteria** — observable, testable bullets. Each one provable
-   without reading Claude's mind. Avoid "review by Claude" or "looks good."
-8. **Upgrade-safety check** — explicit invariants (no AO core / vendor edits,
-   no unsupported YAML, no new repo secrets unless declared here).
-9. **Verification** — exactly how the planner proves done: commands, fixtures,
-   test outcomes. Match acceptance criteria 1:1 where possible.
-
-## Behavior kind and positive-outcome acceptance (Issue #221)
-
-Every draft whose spec covers an **action-producing** path (on success it
-*does* something observable — starts a run, sends a message, wakes a worker,
-enacts a transition) MUST declare its behavior kind and include at least one
-**positive-outcome** acceptance criterion on realistic input — not only
-no-op/defer/failure-branch shape checks.
-
-### Required `behavior-kind` fence
-
-Immediately after **Goal** (or inside **Binding surface** when the whole issue
-is record-only observability), declare exactly one fenced block:
-
-````markdown
-```behavior-kind
-action-producing
+```text
+reviewer chat -> architect -> task chat -> Issue edit -> re-pull
 ```
-````
 
-or
+## Step 4 — Competitive review
 
-````markdown
+Run when selected by tier/markers or forced by an explicit `discuss-with-gpt`
+wrapper. T3 always runs it; T2 runs it when red-flagged or explicitly requested.
+Only a direct operator decision may waive an otherwise selected non-critical
+competitive stage, and the waiver is recorded.
+
+Each pass:
+
+1. open a fresh browser-GPT chat;
+2. send a self-contained independent-review prompt, request an alternative
+   decomposition, wrap the current Issue body as UNTRUSTED DATA between nonce
+   markers, and demand plain `type:` finding lines outside code fences;
+3. save verbatim as `pass-NN-competitive.capture.txt`;
+4. normalize findings, relay accepted fixes through the task chat, re-pull, and
+   rerun body floors.
+
+Stop on a valid no-accepted-finding pass or at cap 3 with open questions recorded.
+A browser outage may use a recorded stage-specific Codex substitution only when
+the operator cannot restore the browser.
+
+## Step 5 — Codex architectural review
+
+The live default-branch [`docs/tiering.md`](../../docs/tiering.md) is the
+architectural-engine authority until its separately scoped canon-alignment task
+lands. Therefore **every tier uses Codex for architectural review**; browser GPT
+remains the author and competitive reviewer, not the canonical architectural
+reviewer.
+
+Run a fresh cold Codex invocation over the current absolute anchor on every pass.
+Because the companion uses `--scope working-tree`, first copy the current anchor to
+a uniquely named untracked `.review-challenge/<N>-<slug>-pass-NN.md` path in the
+trusted checkout, focus the review on that exact path, and delete the copy after
+the pass. Never reuse a stale scratch copy.
+
+1. use the Codex companion mechanics from
+   [`adversarial-draft-review`](../adversarial-draft-review/SKILL.md), focused on
+   the current spec only;
+2. preserve raw JSON as `pass-NN-architectural.codex.json`;
+3. mechanically transcribe all findings 1:1 into plain `type:` lines in
+   `pass-NN-architectural.capture.txt` so the ledger guard can see them;
+4. normalize findings, relay accepted fixes through the task chat, re-pull the
+   Issue, and rerun body floors;
+5. start the next pass as a new cold Codex thread.
+
+Per-tier ceiling: T1 one light Codex pass, T2 ≤3 Codex passes, T3 ≤4 Codex
+passes. Early stop and capped-exit rules remain unchanged.
+
+### Explicit Codex wrapper
+
+When brief-only `adversarial-draft-review` was explicitly requested, run its
+additional cold challenge loop after browser-GPT competitive review and **before**
+the canonical Codex architectural stage. The explicit wrapper never replaces the
+mandatory architectural review, even though both use Codex; they are independent
+cold review roles. Relay accepted findings through the task chat and rerun body
+floors. Cap: three passes under that skill's convergence rule.
+
+### T3-critical classification and mandatory floors
+
+Classify a task as **T3-critical** whenever it matches any L4 condition in Issue
+#574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md`. The author or
+operator's declared tier is only a prior: the architect must perform this
+classification at intake, after material scope change, and before acceptance.
+While an L4 condition remains, the task cannot be downgraded below T3.
+
+T3-critical means **GPT and Codex together**: the normal T3 browser-GPT
+competitive stage and the mandatory Codex architectural/final stages must all
+run. It also adds two non-waivable Issue-body floors:
+
+- an explicit rollback or migration note appropriate to the change, including
+  the safe reversal/transition boundary and operator action when applicable;
+- at least one realistic acceptance criterion and matching verification for the
+  relevant crash, race, or stale-state failure mode. If more than one of those
+  classes is material, cover each material class rather than choosing the easiest
+  single test.
+
+The final architect lens must re-check the L4 classification and both floors.
+Missing classification evidence, rollback/migration coverage, or realistic
+crash/race/stale-state verification blocks acceptance.
+
+### Codex unavailability
+
+Availability is fail-closed:
+
+- the canonical Codex architectural review and Codex final verification are
+  mandatory at every tier and cannot be waived or replaced by browser GPT;
+- an additional explicit non-T3-critical wrapper blocks until Codex is restored
+  or the operator directly waives only that **extra** wrapper stage; record the
+  waiver in ledger notes and final report;
+- if Codex was selected to replace an unavailable browser-GPT competitive stage
+  and is also unavailable, that competitive stage remains blocked.
+
+Never call an unavailable or skipped Codex stage complete.
+
+## Step 6 — Final architect lens
+
+Run at every tier. T1/T2 use a light delta checklist; T3 records a full
+per-mechanism keep/cut decision. Review overengineering and missed items first,
+then verify no accepted finding or brief requirement was watered down.
+
+The final lens is the **only** sanctioned tier-downgrade point. Recompute against
+the final body; downgrade only when the higher-tier drivers are gone and the
+marker screen is clear. Update title/fence through the task chat and rerun the
+tier gate. Prior captures and ledger rows remain valid and are never waived.
+
+Save the guard-recognized capture as
+`pass-NN-architectural-lens.capture.txt`, with detailed analysis in
+`presync-architect-lens.md`. A fix-required result returns to the task chat and
+then reruns this lens as a new delta capture.
+
+## Step 7 — Final architectural pass
+
+T3 always runs one; T1/T2 run one only when the final lens changed content. Run
+a fresh cold **Codex** review over the current Issue revision and save the plain
+transcription as `pass-NN-architectural-final.capture.txt` with raw JSON
+provenance alongside. Browser GPT cannot substitute for this canonical final
+architectural stage.
+
+If it finds issues:
+
+```text
+final finding -> task-chat fix -> re-pull -> newer final lens -> one new final pass
+```
+
+Preserve the failed final capture and ledger evidence. Never place two final
+captures after the same latest lens. After the newer lens, exactly one newer
+final may exist; this matches `stage-completeness-core.ts`.
+
+## Step 8 — Acceptance
+
+Acceptance requires, in order:
+
+1. a clean final pass over the exact revision being accepted when the tier/flow
+   requires a final pass;
+2. body floors, stage completeness, and finding ledger green;
+3. every typed finding normalized, protected findings addressed, capped risks
+   recorded;
+4. live Issue title prefix matching the final tier;
+5. no canonical Codex architectural/final stage, requested wrapper, or
+   T3-critical classification/safety floor skipped;
+6. report Issue URL, tier, pass counts, competitive chat URLs, workdir, waivers,
+   T3-critical classification result, and risks.
+
+Two non-converging `fix -> newer lens -> final` cycles escalate to the operator.
+
+## Mechanical parity edits
+
+Only mechanical format defects such as fence syntax or header shape may be fixed
+by the architect in the workdir anchor. Content fixes belong to the GPT author.
+
+Run the sync helper from the **trusted repository root**, never from `$WORKDIR`,
+and pass an **absolute** anchor path:
+
+```bash
+REPO_ROOT=/abs/path/to/trusted/orchestrator-pack
+ANCHOR="$WORKDIR/docs/issues_drafts/<N>-<slug>.md"
+cd "$REPO_ROOT"
+node scripts/publish-issue-body-sync.ts edit \
+  --draft-path "$ANCHOR" \
+  --issue-number <N> \
+  --repo chetwerikoff/orchestrator-pack
+node scripts/publish-issue-body-sync.ts verify \
+  --draft-path "$ANCHOR" \
+  --issue-number <N> \
+  --repo chetwerikoff/orchestrator-pack
+```
+
+Why this works:
+
+- tier validation uses `process.cwd()` and therefore sees all trusted tracked
+  contract-evidence and marker support files under `$REPO_ROOT`;
+- stage completeness derives `$WORKDIR` from the absolute draft path;
+- finding-ledger validation resolves `.review/<stem>` beside the absolute anchor.
+
+The helper strips H1 + blank before syncing. Re-pull after every parity edit so
+revision history remains gapless.
+
+## Browser-turn mechanics
+
+Use [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md) as the canonical browser
+mechanics source for **task-chat authoring/fixes and competitive review only**:
+logged-in dedicated automation Chrome, tracked driver semantics, `--new-chat`
+for competitive passes, and `--chat-url` for task-chat turns. Architectural and
+final verification use Codex and do not create or reuse a browser review chat.
+The Cursor helper executes a prepared browser command only.
+
+Every review/amendment prompt is self-contained, carries the current Issue body
+as UNTRUSTED DATA between nonce markers, and requests one outer `~~~markdown`
+fence so inner backtick fences survive. Save each response verbatim before
+interpretation. Use the documented long timeout/polling discipline. Non-success
+states are reported, not improvised around.
+
+A Codex browser-outage substitution is relevant only to an unavailable
+**competitive** browser-GPT stage. Preserve the `competitive` capture name, store
+raw JSON beside the plain 1:1 finding transcription, and record the substitution.
+The `architectural` and `architectural-final` stages are already canonical Codex
+stages, not browser stages with a substitution path.
+
+## Tier gate
+
+Run at intake and on the final revision from the trusted repository root with an
+absolute anchor path:
+
+```bash
+node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
+```
+
+The marker screen is fail-closed. A red marker with a below-T3 assignment or a
+skipped mandatory stage blocks acceptance; unparseable input becomes T3.
+
+Tier stages:
+
+- T1: no competitive stage; one light **Codex** architectural pass; light final
+  lens; one Codex final verification only after lens-driven content change.
+- T2: browser-GPT competitive only when red-flagged or explicitly requested;
+  **Codex** architectural ≤3; light final lens; one Codex final verification only
+  after lens-driven content change.
+- T3: browser-GPT competitive ≤3; **Codex** architectural ≤4; full final lens;
+  exactly one Codex final pass after the latest lens.
+- T3-critical: classify from the Issue #574 L4-condition list; run the full T3
+  GPT+Codex pipeline and require the rollback/migration plus realistic
+  crash/race/stale-state floors below.
+
+Explicit adversarial wrappers floor the effective tier at T2 and preserve their
+requested stage. Upward recompute runs skipped stages. Downward movement occurs
+only at final lens and never erases evidence.
+
+### T3-critical floor details
+
+The L4 classification is independent of the literal `complexity-tier` fence. At
+intake and final recompute, cite the matched L4 condition(s) in the architect
+record. An L4 task is not acceptance-ready unless the live Issue contains:
+
+1. a rollback/migration note describing the safe rollback or migration boundary,
+   data/state compatibility, and required operator action; and
+2. numbered acceptance criteria plus matching verification that exercise every
+   material crash, race, and stale-state class with realistic inputs.
+
+These are additive to all never-skipped worker-safety, behavior-kind,
+contract-evidence, stage-completeness, and finding-ledger floors. They are not
+satisfied by a generic risk paragraph, a happy-path unit test, or a waiver.
+
+## Mandatory Issue-body floors
+
+The Issue body must use this order:
+
+1. **Prerequisite** — blocking and already-landed prior art, cited by Issue number.
+2. **Goal** — observable outcome, not implementation method.
+3. mandatory `behavior-kind` fence: `action-producing` or `record-only`.
+4. mandatory `complexity-tier` fence.
+5. **Binding surface** — observable contracts and operator adoption; preserve
+   planner freedom over names, signatures, layout, and library choice.
+6. **Files in scope**.
+7. **Files out of scope**.
+8. mandatory `denylist` fence.
+9. mandatory `allowed-roots` fence, listing every allowed root even for
+   multi-root or skip-line tasks.
+10. **Acceptance criteria** — numbered, observable, testable.
+11. **Upgrade-safety check**.
+12. **Verification** mapped to acceptance criteria.
+13. `contract-evidence` fence or explicit `contract-evidence: none` form accepted
+    by the repository validator.
+
+### Required fence examples
+
+Every task declares one behavior kind:
+
 ```behavior-kind
 record-only
 ```
-````
 
-Use `record-only` only when every success path is pure observability/logging
-with no side effect. The mechanical backstop flags drafts that read
-action-producing (listener/supervisor/wake/retry/submit/route/enqueue/reconcile
-and synonyms in `scripts/draft-discipline-action-taxonomy.json`) but declare
-`record-only` — resolve before sync.
+or:
 
-### Required `positive-outcome` block (action-producing only)
+```behavior-kind
+action-producing
+```
 
-For `action-producing` drafts, add at least one fenced block under **Acceptance
-criteria**:
+Action-producing tasks also include a realistic positive outcome:
 
-````markdown
 ```positive-outcome
 asserts: <observable action on realistic input>
 input: realistic
 ```
-````
 
-When the criterion's input is **external-tool output** (CLI JSON, webhook
-payload, `gh`/`ao` capture), require production-representative input:
+Worker-safety fences are always present:
 
-````markdown
-```positive-outcome
-asserts: <observable action when external tool emits the real shape>
-input: external-tool-output
-provenance: capture-backed
-```
-````
-
-`provenance` MUST be `capture-backed` or `sample-backed` (defer to the golden-sample
-field-shape guard in draft #76 when in force). A plausible-but-impossible fixture
-must not satisfy the criterion.
-
-### Parked root causes (parked root — no silent deferral)
-
-If you defer a suspected **root cause** to a future task, you MUST add a fenced
-`parked-root-cause` block (not euphemistic prose alone). Required fields:
-
-````markdown
-```parked-root-cause
-cause: <specific root-cause statement>
-evidence: <what supports deferring instead of fixing now>
-reason-deferred: <why this issue does not fix it>
-follow-up-issue: #N
-resolution-policy: <when the parked cause is considered resolved>
-```
-````
-
-The follow-up issue MUST exist, be open or intentionally resolved, and its body
-MUST carry the declared `cause` statement. Placeholder/vague causes and generic
-follow-up issues fail `scripts/check-draft-discipline.ps1`.
-
-
-## Contract evidence grounding (Issue #366)
-
-Contract grounding (contract grounding) applies to every upstream binding before sync.
-
-Before sync, every upstream datum the draft binds to in **Binding surface**,
-**Acceptance criteria**, or **Verification** must be grounded in the draft's
-`contract-evidence` block. The block is **mandatory** for every draft not on the
-committed legacy-path list (`scripts/contract-evidence-legacy-drafts.json`). A
-draft with no upstream binding must declare `contract-evidence: none` explicitly.
-
-### Block format
-
-Each row asserts exactly one binding and exactly one evidence form:
-
-```contract-evidence
-binding-id: ao:reportState:fixing_ci
-binding-type: structured
-binding: ao worker report fixing_ci state
-producer: ao
-evidence: capture@ao-worker-report/fixing_ci
-selector: $.reportState
-expected: fixing_ci
+```denylist
+vendor/**
+packages/core/**
 ```
 
-- **Capture evidence:** every `capture@` row requires machine-readable `binding-id`
-  and `binding-type` (`structured`, `unstructured`, or `cli-behavior`). Use
-  `binding-type: cli-behavior` when `binding-id` names a `flag`, `command`, or
-  `option` datum; CLI rows require manifest exit status `0` plus behavior-specific
-  output — bare flag text in help output is not sufficient.
-- **Capture evidence (fields):** `evidence: capture@<manifest-entry-id>` plus
-  `selector` + `expected` for structured captures, or `token` for unstructured
-  text captures.
-- **NEW evidence (repo-owned producers only):** `evidence: NEW(produced-by AC#N)`
-  where AC#N carries a machine-readable `producer-emission` fence naming
-  `producer`, `datum`/`selector`, `expected`, and executable proof via
-  `proof-command` or `proof-capture`. External producers (`ao`,
-  `gh`, `codex`, including alias spellings) cannot use `NEW`; they require
-  capture evidence. `NEW` rows are authoring-time obligations recorded in the
-  synced issue body, not existence proofs.
-- **No third option:** belief markers, self-attested coworker verdicts, or
-  consumer-only assertions are not admissible.
-
-### Contract-grounding collection (coworker ask)
-
-Delegate bulk corpus lookup to coworker using a structured ask that:
-
-1. Enumerates candidate bindings appearing in the draft surfaces.
-2. Maps each binding to a producer-corpus location.
-3. Returns `found` / `not_found` plus cited evidence location per binding.
-4. Flags bindings that appear in the draft but have no proposed row.
-
-Coworker output is **non-authoritative**. Independently re-validate every row
-against the cited capture or acceptance criterion before committing it into the
-draft. When coworker is unavailable, read the producer corpus directly.
-
-### Architect re-validation rule
-
-The mechanical check re-derives every capture claim from the committed manifest
-and capture bytes. A row copied from a coworker `found` verdict without a real
-capture still fails sync.
-
-
-### Pre-sync mechanical checks
-
-Before `scripts/publish-issue-body-sync` create/edit:
-
-```powershell
-pwsh -NoProfile -File scripts/check-tier-gate-guard.ps1 -DraftPath docs/issues_drafts/NN-<slug>.md
-pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command positive-outcome -DraftPath docs/issues_drafts/NN-<slug>.md
-pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command parked-root -DraftPath docs/issues_drafts/NN-<slug>.md
-pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
-pwsh -NoProfile -File scripts/check-stage-completeness-guard.ps1 -DraftPath docs/issues_drafts/NN-<slug>.md
-pwsh -NoProfile -File scripts/check-finding-ledger-guard.ps1 `
-  -CapturesDir docs/issues_drafts/.review/NN-<slug> `
-  -LedgerPath docs/issues_drafts/.review/NN-<slug>/finding-disposition-ledger.json
+```allowed-roots
+<first allowed root>
+<second allowed root when applicable>
 ```
 
-**Guard order (independent — either failing blocks sync):** tier-gate guard →
-stage-completeness guard (T3 only) → contract-evidence / positive-outcome /
-parked-root → finding-ledger guard (when captures exist).
-`scripts/publish-issue-body-sync` also refuses create/edit without passing
-tier-gate and stage-completeness guard receipts (mechanical sync coupling,
-Issues #576 / #620).
+`allowed-roots` is not optional merely because scope spans multiple roots; list
+the finite union. Broad `.`/`**/*` roots require explicit justification and
+remain subject to scope discipline.
 
-Fix failures before sync. Drafts without a `behavior-kind` fence are not
-checked for positive-outcome (additive guard only). The finding-ledger guard validates **every** `*.capture.txt` under the review
-directory against the ledger — not only the final pass — so protected findings
-from early competitive/architectural passes cannot be omitted when a later pass is
-`NO_FINDINGS`. Skip the guard only when the review directory has no capture files.
+The complexity fence is exactly one of:
 
-
-## Tier gate (recompute authority and stage selection — Issue #576)
-
-Runs **before** per-tier review stages and **before** sync. The gate **recomputes**
-tier from the Issue #574 rubric over the brief text; the architect brief tier is an
-**advisory prior only** — the gate may override upward, never downward (#574
-monotonic rule). Write the recomputed tier to the draft and synced issue body as a
-machine-readable fence, and set the draft H1 / GitHub Issue title to `[T<n>]
-<task name>` (see **Draft file structure** — skip-line inputs omit the prefix).
-
-### `complexity-tier` fence (mandatory unless on #237 skip line)
-
-Immediately after **Goal** (or after `behavior-kind` when present), declare exactly
-one fenced block:
-
-````markdown
 ```complexity-tier
-tier: T1
-advisory-prior: T1
+tier: T2
+advisory-prior: T2
 ```
-````
 
-For below-ladder skip-line inputs (#237: operator/config/one-line/typo), after the
-marker screen passes emit:
+or, for a genuine below-ladder input:
 
-````markdown
 ```complexity-tier
 skip-line: true
 ```
-````
 
-Skip-line inputs carry **no tier** and no design/adversarial ceremony. The marker
-screen still runs first — a danger-marked one-liner cannot use the skip line.
+The title/H1 carries `[T1]`, `[T2]`, or `[T3]`; skip-line inputs omit a prefix.
 
-### Recompute authority and blocking escalation
+### Discipline details
 
-1. **Intake:** recompute tier from brief text vs #574; brief tier is advisory only.
-2. **Marker screen (brief):** fail-closed red-flag screen using #574 marker vocabulary
-   via `scripts/lib/tier-marker-screen.ts` (shared logic — same vocabulary future
-   consumers may call).
-3. **Stage selection** by recomputed tier:
-   - **T1:** skip #237 design-analysis gate and adversarial stage; one light
-     architectural (Codex) review per #575.
-   - **T2:** light design pass; architectural review only (no competitive stage).
-   - **T3:** full #237 design-analysis gate + #575 T3 pipeline (counts authoritative
-     in `AGENTS.md` — do not restate here).
-4. **Never-skipped floor (every tier):** worker-safety contract (Goal,
-   denylist/allowed-roots, Acceptance criteria, Verification), #366 contract-evidence,
-   #221 behavior-kind, #575 finding-ledger/carve-out guard — invoked, not rebuilt.
-   Only design-analysis and adversarial stages are tier-gated.
-5. **Fail-closed marker screen:** marker hit + below-T3 assignment, or marker hit +
-   skipped design/adversarial stages → **blocking escalation** to the architect.
-   Unparseable text → T3. Never pass by failing to parse.
-6. **Wrapper inheritance:** `adversarial-draft-review` and `discuss-with-gpt` route
-   through this gate. Explicit user invocation of an adversarial wrapper **floors
-   effective tier at ≥ T2** and preserves the requested adversarial stage even when
-   recompute yields T1.
-7. **Mid-flight upward recompute:** stop, raise fence, **update the H1 tier prefix**
-   to match, run skipped stages, resume. Never sync below recomputed tier. If
-   escalation happens after first sync, re-sync the issue body **and title** with
-   the raised fence before proceeding.
-8. **Post-review drift recompute:** on **final draft text** (not the brief), recompute
-   tier; upward drift escalates to the architect before publish (#188 drift hook).
+- External-tool positive outcomes use `input: external-tool-output` plus
+  capture-backed provenance (or allowed golden-sample provenance).
+- Deferred causes require a complete `parked-root-cause` fence with an existing
+  follow-up Issue.
+- Every upstream datum in Binding surface, ACs, or Verification is grounded in
+  `contract-evidence`; belief/self-attestation is inadmissible.
+- Capture-backed evidence rows use stable binding id/type, producer,
+  selector/token, expected behavior, and repository manifest provenance.
 
-**T1 calibration assumption:** T1 fast path assumes #574 calibration sample merged
-consistent (#574 merge-blocking AC). No runtime calibration-state plumbing here.
+## Mechanical floor commands
 
-### Tier-gate guard (mechanical)
-
-```powershell
-pwsh -NoProfile -File scripts/check-tier-gate-guard.ps1 -DraftPath docs/issues_drafts/NN-<slug>.md
-```
-
-Fails closed (non-zero, blocks sync) when red-flag markers coincide with below-T3
-assignment or skipped design/adversarial stages. Emits a passing **tier-fence** or
-**no-tier (skip-line)** receipt on stdout when clean.
-
-
-## Per-tier draft review (before sync)
-
-**Tier is gate authority, not brief say-so.** The tier gate (above) already
-recomputed tier and selected stages. This section governs **spec review only** —
-worker PR-code review is unchanged. Pipeline counts remain authoritative in
-`AGENTS.md` (**Per-tier draft-review flow**, Issue #575).
-
-**Roles (per #579 relocation):** the **draft-author session** (Cursor default;
-Codex or Sonnet 5 on explicit user request only) authors the spec from the
-architect's brief, runs review stages, captures verbatim reviewer output per
-pass, normalizes findings into the disposition ledger, and owns accept/reject.
-The **architect** does not re-decide accepted findings; on T3 they run one lens
-pass over the reject partition only, then review the draft before sync.
-
-Full contract: `AGENTS.md` (**Per-tier draft-review flow**, Issue
-#575).
-
-### Review artifact layout
-
-Per draft `docs/issues_drafts/NN-<slug>.md`:
-
-```
-docs/issues_drafts/.review/NN-<slug>/
-  pass-01-competitive.capture.txt      # verbatim reviewer output
-  pass-02-architectural.capture.txt
-  finding-disposition-ledger.json      # normalized ledger (all passes)
-```
-
-**Ledger JSON** (`finding-disposition-ledger.json`):
-
-```json
-{
-  "version": 1,
-  "draft": "docs/issues_drafts/NN-<slug>.md",
-  "findings": [
-    {
-      "id": "stable-id",
-      "summary": "one-line summary",
-      "type": "security | scope-violation | spec | quality | test | ci",
-      "disposition": "addressed",
-      "rejectReason": "required when disposition is rejected"
-    }
-  ]
-}
-```
-
-Normalization rules:
-
-- Capture **every** reviewer pass verbatim before editing the draft.
-- Every emitted finding (typed `type:` in capture) must appear in the ledger.
-- `type: security` and `type: scope-violation` (#51) → `disposition: addressed` only.
-- Re-worded findings keep the same `id` across passes.
-- `NO_FINDINGS` passes add no ledger rows.
-
-### Per-tier stages (ceilings — clean pass ends early)
-
-| Tier | Pipeline |
-|------|----------|
-| **T1** | One light architectural (Codex) pass. |
-| **T2** | Architectural (Codex) only, up to **3** passes; first `NO_FINDINGS` publishes. No competitive stage. |
-| **T3** | Competitive adversarial (**GPT** default; **Codex** when GPT unavailable — record substitution) ≤**3** → architectural (Codex) ≤**4** → **architect lens (4-axis)** ×**1** → final architectural (Codex) over architect edits ×**1**. |
-
-**T3-critical** (within-T3): when the task matches the **L4-condition list in
-Issue #574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md` Decisions**
-(cite by reference), competitive **+Codex is mandatory** and the draft must carry
-rollback/migration note plus crash/race/stale-state test.
-
-**Command discipline (non-negotiable):**
-
-| Use | Do not use |
-|-----|------------|
-| `codex review` / `scripts/review-architect-artifact.ps1` | `codex exec` / `codex exec review` (worker **PR** path) |
-| `discuss-with-gpt` / `adversarial-draft-review` for competitive stage | Skipping disposition logging |
-
-Do **not** pipe stdout through `tail`, `head`, or `grep` — wait for the full answer.
-
-**Architectural reviewer prompt:** `prompts/codex_draft_review_prompt.md` (finding
-bar, simplification lens, typed findings, #51 carve-out). Loaded by
-`scripts/review-architect-artifact.ps1` for issue drafts.
-
-```powershell
-pwsh -NoProfile -File scripts/review-architect-artifact.ps1 `
-  -ArtifactPath docs/issues_drafts/NN-<slug>.md `
-  -Kind issue-draft
-```
-
-Add `-FailOnFindings` to exit non-zero when the response is not `NO_FINDINGS`.
-
-### Finding disposition loop
-
-On competitive and architectural stages:
-
-1. Run the stage reviewer; save verbatim output to `pass-NN-<stage>.capture.txt`.
-2. For each finding: **address** (revise draft) or **reject** with one-line reason.
-3. Update `finding-disposition-ledger.json` — completeness required.
-4. Re-run the stage until `NO_FINDINGS` or the tier cap.
-
-For non-protected findings, `reject` may record **correct but disproportionate**:
-a factually correct observation still fails disposition when the prevented
-failure does not materially matter at the artifact's stated stakes **and** the
-proposed machinery is not the cheapest sufficient guard. `rejectReason` must tie
-the verdict to blast radius, reversibility, and failure impact and name the
-cheaper sufficient alternative; "out of scope" or "too complex" alone is invalid.
-
-Protected `security` / `scope-violation` findings cannot be rejected or omitted;
-escalate contested protected findings to the architect. Their sole disposition
-remains `addressed`, but that outcome may be reached by eliminating the attack
-surface or specifying an explicit, reasoned defense. When a defense would be
-disproportionate to a near-zero-payoff threat, eliminate the surface or record an
-explicit, reasoned risk-acceptance note with assumptions and residual risk — never
-convert the finding to `rejected` and never omit it.
-
-### Architect T3 lens pass
-
-After T3 architectural review converges:
-
-1. Architect reads the ledger **reject partition** only (does not re-open accepts).
-2. Apply the full four-axis lens; may edit the draft:
-   - **упростить** — what to cut or simplify;
-   - **не упрощать** — substance the draft must keep (brief requirements or
-     accepted findings watered down or dropped);
-   - **излишне** — excess beyond the brief: scope creep, over-specification
-     that eats planner freedom;
-   - **пропустили** — what was missed: gaps, unverified or synthesized
-     evidence, unsettled conditionals (settle them with live probes, not
-     assumptions).
-3. For each major mechanism in the resulting draft, record an explicit **keep**
-   or **cut** verdict using stated stakes × mechanism cost/risk × cheapest
-   sufficient alternative. Repackaging or splitting an over-built mechanism
-   across sibling drafts is not, by itself, an **излишне** cut.
-4. When a low/contained-stakes artifact exits adversarial review with
-   approximately 100% of findings `addressed`, record a **proportionality smell**
-   and run one re-examination pass. This is neither an automatic failure nor
-   evidence of thoroughness.
-5. Record the per-axis and per-mechanism verdicts in the draft's
-   `.review/NN-<slug>/` directory (e.g. `presync-architect-lens.md`) before
-   accepting the draft.
-6. Run one final architectural (Codex) verification pass over architect edits; save
-   verbatim output to `pass-NN-final.capture.txt` like every other pass.
-
-### Drift escalation
-
-After review completes, recompute tier (Issue #189 / draft C). **Upward** drift —
-including scope growth from accepted findings — escalates to the architect before
-publish; when tier rises, update the H1 / issue title prefix to match before sync.
-Downward drift is impossible (#574 monotonic rule).
-
-**Sync gate:** do not run `scripts/publish-issue-body-sync` create/edit until
-the tier-gate guard passes, T3 stage-completeness guard passes when tier is T3,
-review stages for the recomputed tier complete (`NO_FINDINGS` or documented cap
-exit), the finding-ledger guard passes when captures exist, and other pre-sync
-checks pass.
-
-Contract references: `docs/issues_drafts/06-codex-reviewer-scope-context.md`,
-`docs/issues_drafts/19-codex-review-finding-bar.md` (#51 carve-out),
-`prompts/codex_draft_review_prompt.md`.
-
-## Update the issue queue index
-
-Whenever you add a new draft or first sync a draft to GitHub:
-
-1. Set the draft's `GitHub Issue: #NN` line (or `GitHub Issue: TBD` before sync).
-2. Ensure a registry row **exists for this draft** mapping draft path → GitHub Issue
-   number (or explicit none yet). **Do not edit the tracked
-   [`docs/issue_queue_index.md`](../../docs/issue_queue_index.md) by hand** — the
-   publish/sync step (delegated to deepseek via opencode per
-   [`publish-issue-draft`](../publish-issue-draft/SKILL.md)) adds or updates **only this
-   draft's row** in the working tree and stages it selectively at publish. Supply the row
-   text in the opencode delegation prompt when needed.
-
-Do not add open/closed/shipped columns to the registry — live state stays in
-GitHub (`gh issue view`).
-
-## Publish (default: delegate to deepseek via OpenCode; direct as fallback)
-
-**Pre-sync gate (Issue #579).** Whether the spec was authored by the
-draft-author session or architect-as-author fallback, the **architect reviews
-the local authored draft** and discipline/review gates must pass before any sync
-or publish step below runs.
-
-> **Self-delegation guard — am I already inside OpenCode?** The `opencode run`
-> delegation in this section is **only** for an architect surface (Claude Code,
-> Cursor CLI) handing the GitHub work to a fresh deepseek session. **If you are
-> yourself running inside an OpenCode session** (e.g. the `opk-orchestrator`
-> worktree or any AO-managed session — check `echo $AO_SESSION_ID`), do NOT call
-> `opencode run` — that spawns a nested OpenCode. Instead run the issue create /
-> PR / merge mechanics yourself, directly, using the manual `gh`/git commands in
-> the fallback below as your **primary** path.
->
-> Direct `gh issue create` / `gh pr create` / `gh pr merge` is blocked by the RTK
-> hook. Run it with the **`AO_PUBLISH_FALLBACK=1`** prefix — you are already the
-> executing agent, so the fallback is the correct path. If a PR head is behind
-> base, run `gh pr update-branch <N>` first.
-
-**Publish-path contract-evidence gate (Issue #366).** Any path that syncs or
-publishes a draft — including the `opencode run` delegate and the manual publish fallback
-below — must run the same mechanical guard as pre-sync:
-
-```powershell
-pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
-```
-
-Refuse `scripts/publish-issue-body-sync` / publish commit while this exits non-zero.
-When delegating to [`publish-issue-draft`](../publish-issue-draft/SKILL.md), include this
-command in the delegate prompt and verify it ran before issue sync or spec PR commit.
-
-Once the Codex sync gate passes (`NO_FINDINGS`, or the 5-iteration cap with open
-questions recorded), **delegate publish to deepseek via `opencode run`** using
-the temp-file mechanism below. This is the default: deepseek handles the fixed
-the fixed `scripts/publish-issue-body-sync` + `gh pr create` / `gh pr merge` sequence autonomously, freeing
-the architect from token-expensive mechanical steps. The direct
-`AO_PUBLISH_FALLBACK=1` path (manual `gh`/git commands in the fallback section)
-is the **fallback** — use it only when `opencode run` is unavailable or leaves
-the publish half-done.
-
-**Mechanism — `opencode run`, not `ao spawn`.** `ao spawn` revives a worker
-against an issue that *already exists*, in a fresh checkout; it can neither
-create the issue nor see your uncommitted local draft. Run `opencode run` through
-`.claude/skills/publish-issue-draft/opencode-publish.sh`: the helper creates a
-per-invocation scratch checkout, copies only the named draft and
-`docs/issue_queue_index.md` from the architect working tree, rewrites `--dir` to
-that checkout, and tears it down. The delegate reads the draft exactly as it sits
-on disk without sharing the architect's live working tree.
-
-**Deliver the prompt via a temp file — never inline.** The publish hook
-string-matches `gh issue create` / `gh pr create` / `gh pr merge` **anywhere in
-the Bash command**, including inside a delegation prompt — an inline heredoc
-carrying those literals self-triggers the guard and the call is blocked. Write
-the prompt to a temp file first, then pass it via `cat`, so the executed Bash
-command contains none of those literals:
+Run from trusted repository root with absolute `$ANCHOR`:
 
 ```bash
-PROMPT_FILE="$(mktemp)"
-cat > "$PROMPT_FILE" <<'EOF'
-You are publishing an already-reviewed architect task spec for orchestrator-pack
-from an isolated scratch checkout. Do NOT run git commands in any other checkout.
-The draft is docs/issues_drafts/NN-<slug>.md (substitute the real NN-<slug>). It
-passed Codex review — do NOT edit its task content. Steps:
-
-0. Run contract-evidence (and positive-outcome / parked-root when applicable):
-   pwsh -NoProfile -File scripts/check-draft-discipline.ps1 -Command contract-evidence -DraftPath docs/issues_drafts/NN-<slug>.md
-   Exit non-zero => stop; do not sync or publish.
-1. Create or re-sync the GitHub Issue through the mechanical helper (never raw
-   `gh issue create` / `gh issue edit`):
-
-   ```bash
-   node --import tsx scripts/publish-issue-body-sync.ts create --draft-path docs/issues_drafts/NN-<slug>.md --repo chetwerikoff/orchestrator-pack
-   ```
-
-   For an existing issue number, use `edit --issue-number <N>` instead. The helper
-   uses `--body-file` transport, reads live REST body via `scripts/gh api`, and
-   fails closed on mismatch before reporting success.
-2. Write the returned number into the draft's `GitHub Issue: #N` line (it is
-   `TBD` now). Add this draft's registry row to docs/issue_queue_index.md (draft
-   path -> #N; no open/closed/shipped columns) — stage only this row's hunk at
-   publish (see publish-issue-draft Index ownership).
-3. PUBLISH-TO-MAIN — run only when the prompt below sets PUBLISH=yes. Otherwise
-   STOP after step 2 (sync-only: the Issue is the queue, the draft stays local).
-   When PUBLISH=yes, follow .claude/skills/publish-issue-draft/SKILL.md Mode C
-   exactly: branch from main, commit the draft + this draft's index row only
-   (selective staging — spec-only), open the spec-only PR (use that skill's body
-   template — NO issue refs of any kind in the PR body: the no-ceremony scope
-   guard fails on `Refs #N`, bare `#N`, or issue URLs), wait for CI green, merge
-   with the gh CLI (pr-merge subcommand: --merge --delete-branch). If you refresh
-   after merge, do it only in this isolated checkout (git checkout main && git pull
-   origin main); never touch the architect's live checkout.
-
-Report the Issue URL/number and, when PUBLISH=yes, the PR URL and merge commit.
-PUBLISH=<no|yes>
-EOF
-# Fast isolated runtime: a dedicated opencode data dir avoids SQLite write-lock
-# contention with the orchestrator's shared DB (a raw `opencode run` otherwise
-# stalls intermittently at "creating instance"); deepseek-chat (non-reasoning) +
-# 180s timeout + startup-hang retry. See opencode-publish.sh.
-OPENCODE_PUBLISH_INCLUDE="docs/issues_drafts/NN-<slug>.md docs/issue_queue_index.md" \
-bash .claude/skills/publish-issue-draft/opencode-publish.sh --dangerously-skip-permissions --dir . "$(cat "$PROMPT_FILE")"
+node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
+node scripts/draft-discipline.mjs positive-outcome --draft "$ANCHOR"
+node scripts/draft-discipline.mjs parked-root --draft "$ANCHOR"
+node scripts/draft-discipline.mjs contract-evidence --draft "$ANCHOR"
+node scripts/stage-completeness-guard.ts \
+  --text-file "$ANCHOR" --draft-path "$ANCHOR" --repo-root "$WORKDIR"
+node scripts/finding-ledger-guard.mjs \
+  --ledger "$REVIEW_DIR/finding-disposition-ledger.json" \
+  --captures-dir "$REVIEW_DIR" \
+  --draft-path "$ANCHOR"
 ```
 
-**Verify state after the run — `opencode run` can exit 0 mid-failure.** A
-connection drop or context exhaustion can leave `opencode run` reporting exit 0
-while the publish is half-done (e.g. issue created, PR not opened, or index row
-left uncommitted). Do **not** trust the exit code alone: confirm with
-`gh issue view <N>`, `gh pr list --search <slug>`, and `git status` before
-reporting success, and complete any missing step via the fallback below.
+Run body-only guards after every Issue revision. Stage completeness and the
+finding-ledger guard run at acceptance. Contract evidence uses tracked manifests
+from the trusted repository root; stage completeness alone receives the workdir
+as repo root to locate out-of-repo captures.
 
-**Default is merge.** Set `PUBLISH=yes` so deepseek runs the full cycle
-(PR → CI → `gh pr merge` → `git pull`) — this is the default for the create-task
-flow. Switch to `PUBLISH=no` (sync-only: deepseek stops after step 2, the draft
-stays local) **only when the user opts out of the merge** («не мержи», «только
-драфт», «без PR», "don't merge", "sync only"). This selects
-[`publish-issue-draft`](../publish-issue-draft/SKILL.md) Mode C; that skill's own
-sync-only default applies only when it is invoked standalone, outside this flow.
+## Finding ledger
 
-**Fallback — architect publishes directly.** If `opencode run` is unavailable,
-errors, or leaves the issue/PR half-done, complete the publish yourself with the
-manual commands below and tell the user the OpenCode path was unavailable.
+Every reviewer capture is immutable evidence. The ledger records a stable id,
+summary, type (`security`, `scope-violation`, `spec`, `quality`, `test`, `ci`),
+disposition, and reject reason when applicable.
 
-### Sync to GitHub Issue (fallback / manual)
+- Accepted/partial findings are fixed through the task chat.
+- Rejected non-protected findings need a proportionality reason tied to blast
+  radius, reversibility, failure impact, and a cheaper sufficient alternative.
+- Security and scope-violation findings cannot be rejected; address them with
+  real defense/evidence or obtain explicit operator risk acceptance.
+- `NO_FINDINGS` never erases prior findings.
+- Capped exits preserve unresolved questions in the ledger and final report.
 
-The draft body **minus the H1 heading** is the issue body. Use:
+## Review artifacts
 
-```powershell
-pwsh -NoProfile -File scripts/publish-issue-body-sync.ps1 -Mode edit -DraftPath docs/issues_drafts/NN-<slug>.md -IssueNumber <N>
+All durable audit artifacts remain outside the repository:
+
+```text
+chats.md
+lens-01-architect.md
+round-NN-author-reply.md
+pass-NN-competitive.capture.txt
+pass-NN-architectural.capture.txt
+pass-NN-architectural.codex.json
+pass-NN-architectural-lens.capture.txt
+pass-NN-architectural-final.capture.txt
+presync-architect-lens.md
+finding-disposition-ledger.json
 ```
 
-Bash equivalent:
+Pass numbers form one chronological sequence. Guard-recognized stages are
+`competitive`, `architectural`, `architectural-lens`, and
+`architectural-final`. Capture every reviewer response before editing.
 
-```bash
-node --import tsx scripts/publish-issue-body-sync.ts edit --draft-path docs/issues_drafts/NN-<slug>.md --issue-number <N> --repo chetwerikoff/orchestrator-pack
-```
+Every typed finding receives a stable id, summary, type, disposition, and reason
+when rejected. Reworded findings retain identity. `NO_FINDINGS` never erases
+older findings. Security and scope-violation findings close only as addressed by
+real defense/evidence or explicit operator risk acceptance; never silently omit
+or reject them.
 
-For new issues:
+Codex raw JSON is provenance only; transcribe findings 1:1 into plain `type:`
+lines because the ledger guard ignores fenced/raw JSON structure.
 
-```bash
-node --import tsx scripts/publish-issue-body-sync.ts create --draft-path docs/issues_drafts/NN-<slug>.md --repo chetwerikoff/orchestrator-pack
-```
+## Repository-write boundary
 
-### Publish to main (fallback / manual)
+This flow creates no tracked draft mirror, queue-index row, capture, ledger, or
+workdir file. The only permitted temporary in-repo write is the untracked
+`.review-challenge/**` transport copy required by Codex `--scope working-tree`;
+delete it immediately after the pass and never commit it.
 
-The draft must not stay uncommitted on disk. Unless the user opts out
-(«только драфт», «без PR», «не мержи»), invoke
-[`publish-issue-draft`](../publish-issue-draft/SKILL.md):
+Cross-Issue contract changes update every affected live Issue before acceptance
+and land the corresponding architecture decision together. Durable decisions go
+to the repository's architecture decision surface under its own scoped change.
 
-1. Run `check-draft-discipline.ps1 -Command contract-evidence` on the draft (plus positive-outcome / parked-root when applicable); refuse publish on non-zero exit.
-2. Declaration snapshot + commit draft, index, and `docs/declarations/<N>.architect-draft-NN.json`.
-3. Open PR (`docs: draft NN — … (#N spec)`).
-4. Merge when CI is green (and manual Codex review if the user expects it).
-5. `git pull` on `main`; **reopen** issue **#N** if GitHub auto-closed it on merge.
+## Don't
 
-## Cross-issue contract changes
-
-When a change affects ≥ 2 drafts (example: NO_FINDINGS contract touching #9
-and pulling lessons from #11), land **one** docs PR that:
-
-- Updates every affected draft.
-- Re-syncs every corresponding GitHub Issue body in the same PR.
-- Bumps the relevant section in `docs/issues_drafts/00-architecture-decisions.md`
-  (or `docs/architecture.md`) if a DD-level decision changed.
-
-Never let drafts drift from the architecture decision they descend from. If
-the planner sees a stale draft and an updated architecture section, it will
-pick the wrong contract.
-
-## Decision logging
-
-Architectural decisions the planner needs across iterations:
-
-1. Add a new sub-section (next letter: `00.G`, `00.H`) to
-   `docs/issues_drafts/00-architecture-decisions.md`, or a new DD-NNN entry
-   in `docs/architecture.md` once that file owns the DD log style.
-2. Sync to Issue #3 (or the live architecture issue) in the same PR.
-3. Update every affected draft in the same PR.
-4. If the decision invalidates an open Codex finding or an in-flight planner
-   action, say so in the PR body so the planner can re-baseline.
-
-## Fold reviewer lessons back
-
-A Codex finding on a merged PR is signal your spec missed something. Default
-response: update the upstream draft (the one whose contract was violated),
-not the implementation. The next iteration of that draft becomes the durable
-fix; the merged PR's manual patch was the one-off.
-
-Example: PR #21's op-rev-3 produced "no concrete bugs" prose wrapped as a
-warning — the durable fix landed in Issue #9 (`NO_FINDINGS` contract), not
-in the test-harness code.
-
-## Don't (draft Codex review)
-
-- Run draft authoring in the architect's live working tree, on a dirty shared
-  checkout, or via shared-index delegation — draft-author sessions must be
-  isolated (#579).
-- Trust a delegate's exit code without verifying draft path, completion record,
-  discipline checks, and review-loop outcome (#579).
-- Record a non-Cursor authoring engine with selection basis `default` (#579).
-- Use `codex exec` or `codex exec review` for draft review — those are worker/PR paths.
-- Pipe `codex review` through `tail`, `head`, or `grep` (hides in-progress output).
-- Kill a running draft review to rush issue-body sync — wait for `NO_FINDINGS` or cap.
-- Sync to GitHub before Codex review completes (unless 5-iteration cap with open questions recorded).
-- Use `ao spawn` to publish a brand-new draft — it needs an existing issue and a
-  fresh checkout, so it cannot create the issue or see the local draft. Use
-  `opencode-publish.sh --dangerously-skip-permissions --dir .` with
-  `OPENCODE_PUBLISH_INCLUDE` and a temp-file prompt (default path), or publish
-  manually in a separate checkout (fallback).
-- Pass `PUBLISH=no` to deepseek unless the user explicitly opted out of merge/PR —
-  default is `PUBLISH=yes`; the full PR→CI→merge cycle runs by default for the
-  create-task flow.
+- Author content fixes from the architect seat.
+- Review in the task chat, create a browser architectural-review chat, or let
+  browser GPT replace the canonical Codex architectural/final stages.
+- Trust a chat reply without a live Issue re-pull and diff.
+- Run parity sync from `$WORKDIR`; use trusted repo cwd + absolute anchor.
+- Omit `behavior-kind` or `allowed-roots` from any task/skip-line body.
+- Skip a requested GPT/Codex stage or any canonical Codex architectural/final
+  stage silently.
+- Miss the Issue #574 L4 classification or waive/dilute the T3-critical
+  rollback/migration and crash/race/stale-state floors.
+- Retry a final pass without a newer final-lens capture.
+- Accept with stale captures/title, red floors, or incomplete ledger.
+- Use raw `gh issue edit`; use the sanctioned body-sync helper for parity only.
+- Commit workdir or `.review-challenge/**` artifacts.
+- Hand-edit `.cursor/skills/**`; regenerate only when canonical frontmatter changes.
+- Over-specify implementation details that belong to the planner.

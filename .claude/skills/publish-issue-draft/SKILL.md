@@ -1,15 +1,24 @@
 ---
 name: publish-issue-draft
 description: >-
-  After create-issue-draft finishes (Codex draft review done, GitHub issue
-  synced), decide how the local draft is persisted. DEFAULT is sync-only: the
-  GitHub Issue is the queue; the draft file stays local and is NOT committed or
-  PR'd. Only open a PR to main on explicit request (batch a series, or full
-  publish of one draft). Use when the user asks to publish, commit, batch, or
-  ship a draft. Chains from create-issue-draft.
+  LEGACY DRAFTS ONLY (operator decision 2026-07-23): persistence workflow for
+  the pre-existing draft files in docs/issues_drafts/** — edits, batches,
+  re-syncs of historical specs. New GPT-authored tasks are mirrorless
+  (create-issue-draft produces no local draft file and never chains here —
+  there is nothing to persist). DEFAULT is sync-only: the GitHub Issue is the
+  queue; a legacy draft file stays local and is NOT committed or PR'd. Only
+  open a PR to main on explicit request (batch a series, or full publish of
+  one legacy draft). Use when the user asks to publish, commit, batch, or
+  ship a legacy draft.
 ---
 
 # Publish issue draft
+
+> **Legacy-drafts only (operator decision 2026-07-23).** New GPT-authored
+> tasks are **mirrorless**: `create-issue-draft` produces no local draft file
+> and no queue-index row — there is nothing for this skill to persist. Invoke
+> this skill only for the pre-existing legacy drafts in
+> `docs/issues_drafts/**` (edits, batches, re-syncs of historical specs).
 
 The GitHub **Issue** is the live queue and the source of truth a worker reads
 (`ao spawn`, scope guard, planner all read the issue body). Landing the local

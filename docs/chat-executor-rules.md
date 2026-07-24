@@ -257,7 +257,7 @@ Validate the payload against:
 docs/orchestrator-pack-chat-capability-profile.schema.json
 ```
 
-The schema is normative for structure, required fields, enums/patterns, timestamp formats, expiry representation, and forbidden properties. It does not prove marker uniqueness, current permissions, live truth, Issue selection, sorted arrays, or digest correctness.
+The schema is normative for structure, required fields, enums/patterns, expiry representation, and forbidden properties. Timestamp validation must use a draft-2020-12 validator with the format-assertion vocabulary enabled, or an equivalent explicit RFC 3339 validation step, for `createdAt`, `updatedAt`, every capability `testedAt`, and every `expiresAt`. A validator that treats `format: date-time` as annotation only does not satisfy profile validation. The schema does not prove marker uniqueness, current permissions, live truth, Issue selection, sorted arrays, or digest correctness.
 
 ### Deterministic profile key
 
@@ -299,6 +299,24 @@ The stored environment object and `environmentDigest` must agree. A mismatch is 
 Equivalent environments with differently ordered input arrays must derive the same digest.
 
 Do not put tokens, cookies, credentials, secret URLs, or private data in the key or profile.
+
+### Canonical principal and permission class
+
+`authPrincipal` is the lowercase authenticated GitHub login returned by the current connector or repository permission probe. A display name, remembered account, email address, or operator-supplied alias is not a principal source. If the authenticated login cannot be observed exactly, no profile may match for write capability.
+
+Derive `permissionClass` from the connector-observed repository permission booleans using this fixed highest-privilege precedence:
+
+```text
+admin=true                     -> repository-admin-push
+admin=false, maintain=true     -> repository-maintain-push
+admin=false, maintain=false,
+  push=true                    -> repository-write
+only triage=true               -> repository-triage
+only pull=true                 -> repository-read
+no granted repository access   -> repository-none
+```
+
+Use exactly one class from this table. Do not add suffixes, synonyms, tool names, or inferred capabilities. A profile whose stored principal or class differs from the current observed derivation is not a match.
 
 ### Lookup and fail-closed behavior
 
@@ -356,6 +374,31 @@ long-process-handling
 Additional task-specific keys use bounded kebab-case names.
 
 Only an authenticated repository collaborator acting as the current standalone executor, or the explicit operator, may update the profile. Updates remain schema-valid, replace only affected entries, preserve bounded human-readable history, and contain no secrets.
+
+### Narrow receipt-retrieval downgrade
+
+After every available authenticated path capable of returning the exact execution-receipt comment body has been exhausted and the receipt remains unavailable, one fail-closed capability-profile write may proceed without the blocked task receipt. This is not task ownership and grants no general write authority.
+
+The exception applies only to the single current profile that exactly matches repository ID/full name, canonical environment object and digest, canonical `authPrincipal`, and canonical `permissionClass`. It may change only the existing capability entry that represents execution-receipt ownership/takeover (`standalone-ownership-fence` in the current profile):
+
+- set its status to `degraded`;
+- replace its current evidence with the verified failed authenticated retrieval paths and current failure evidence;
+- update fields required to keep that one capability entry valid, such as `testedAt`, expiry, known limits, and preferred fallback;
+- update only the profile metadata required for the write, currently `updatedAt` and `ownerOrLastUpdater`;
+- append exactly one bounded human-readable transition that preserves the affected capability's previous evidence verbatim.
+
+Do not add, rename, or delete a capability key. Every unrelated profile field, every other capability object, and every other capability's evidence must remain byte-for-byte unchanged.
+
+Immediately before writing:
+
+1. retrieve the complete current profile body;
+2. require exactly one profile marker and one JSON payload;
+3. validate the profile, RFC 3339 timestamps, environment digest, principal, permission class, and target capability;
+4. retain the exact pre-write body and construct one expected narrow replacement.
+
+Write once, then immediately retrieve the complete profile body and compare it with that expected replacement. If the profile changed concurrently, the write outcome is ambiguous, or read-back differs, stop. Do not blind-retry, restore an older body, or widen the changed fields. Report the downgrade as pending when it cannot be completed safely.
+
+This exception cannot write the blocked task Issue, execution receipt, branch, PR, review, thread state, workflow, CI state, database state, repository file, or any other capability-profile change.
 
 Starting a new conversation alone does not invalidate a profile. Relevant entries become stale after expiry, permission/connector/runtime changes, or contradictory behavior.
 
@@ -442,6 +485,28 @@ chat-execution-receipt/v2
 
 One task has at most one active v2 receipt comment. Duplicate, malformed, missing-required-field, or ambiguous v2 receipts block implementer writes.
 
+### Retrieval under clipped connector output
+
+A clipped, truncated, or size-limited tool display is not by itself an ownership failure while an underlying authenticated comment resource may still return exact data. Before declaring a receipt unavailable, the executor must:
+
+1. request all Issue comments through every available paginated comments operation;
+2. locate every v1 and v2 receipt marker through resource search or an equivalent authenticated comment lookup;
+3. retrieve the complete body of every marker-bearing comment through all available authenticated paths capable of returning exact comment bodies;
+4. require exactly one valid current receipt under the applicable v1/v2 migration state;
+5. parse the complete machine-readable JSON before comparing `executionId`, `ownershipEpoch`, contract binding, and expected branch state/head.
+
+Search may prove that a marker exists. It does not prove marker uniqueness, receipt validity, or the complete body and cannot substitute for full-body retrieval. Unrelated comment bodies need not be expanded once all marker-bearing comments are identified.
+
+If the exact complete receipt remains unavailable after those paths are genuinely exhausted:
+
+- do not create a second receipt;
+- do not overwrite or terminalize an existing receipt;
+- do not use remembered, cached, or local values for receipt/comment ID, `executionId`, `ownershipEpoch`, contract binding, or branch head;
+- report `publication=blocked`, `publicationCause=ownership`, and `mode=C`;
+- perform no remote write belonging to the blocked task.
+
+Only the narrow capability-profile downgrade in section 4 may still be attempted under its independent pre-read/read-back fence. If that downgrade cannot be performed safely, report it as pending; do not widen the exception.
+
 ### Legacy v1 coexistence and migration
 
 Legacy marker/schema:
@@ -477,9 +542,10 @@ Before implementer ownership, writes are limited to:
 - initial v2 claim;
 - takeover v2 claim;
 - explicit v1-to-v2 migration claim;
-- independent review-only submission under the previous section.
+- independent review-only submission under the previous section;
+- the section 4 narrow capability-profile downgrade after proven receipt-retrieval exhaustion.
 
-All other writes require implementer ownership.
+All other writes require implementer ownership. The capability-profile downgrade is not a claim and cannot establish or recover task ownership.
 
 ### Required v2 fields
 
@@ -575,15 +641,18 @@ Rules:
 
 ### Initial claim
 
-Before initial claim:
+Initial claim is allowed only for a branch proven absent and unowned. Before initial claim:
 
 1. establish exact contract binding;
-2. read all v2 markers and require none active;
-3. read the planned branch;
-4. record intended branch, claimed base, and either absent state or exact existing head;
-5. create execution ID and epoch 1.
+2. retrieve and parse every v1/v2 marker comment using the clipped-output procedure above;
+3. require no v1 receipt requiring migration, no active v2 receipt, and no conflicting repository-owned AO/session/pack-store claim authority;
+4. read the planned branch and prove that it is absent;
+5. record intended branch, claimed base, and explicit absent state;
+6. create execution ID and epoch 1.
 
-Write the v2 receipt and reread marker comments and branch state. Initial claim succeeds only when exactly one valid v2 receipt matches the identity, binding, branch, and expected state.
+An existing branch never uses initial claim. It must use the applicable explicit v1 migration, v2 takeover, narrow existing-PR adoption, or AO-managed ownership path; otherwise reject the claim. Unknown branch state or unknown AO ownership state is not unowned.
+
+Write the v2 receipt and reread every marker, branch state, and applicable AO authority. Initial claim succeeds only when exactly one valid v2 receipt matches the identity, binding, absent branch state, and no competing authority exists.
 
 ### Takeover
 
@@ -595,13 +664,15 @@ A failed or ambiguous takeover grants no ownership.
 
 ### Ordinary implementer fence
 
-Before every implementer write:
+Before every implementer write, retrieve the complete receipt through the clipped-output procedure above, then:
 
 - require exactly one valid current v2 receipt;
 - require matching execution ID and epoch;
 - require valid exact contract binding;
 - require the remote branch to match the receipt's expected state/head;
 - stop on mismatch, duplicate, corruption, missing data, or ambiguity.
+
+A true receipt-retrieval failure blocks all task writes and may invoke only the section 4 narrow profile downgrade. A visible truncation banner alone does not establish that failure.
 
 A stale executor observing another ID or higher epoch stops. It must not restore its old receipt or force the branch backward.
 
@@ -645,7 +716,12 @@ Require remote head commit SHA and root tree SHA, both read back and compared wi
 
 #### `commit-and-manifest`
 
-Require remote head and a complete resulting-tree manifest, or exact retained manifest plus digest, covering paths, modes, object types, blob SHAs, additions, updates, deletions, and an exact durable evidence reference.
+Require a fetched remote head commit and a complete manifest cryptographically bound to that commit's resulting tree. Satisfy this by either:
+
+- deriving the manifest from a remote tree/inventory read and verifying every path, mode, object type, and blob SHA; or
+- binding the exact create-tree input manifest and digest to a fetched commit whose root tree SHA equals the returned created-tree SHA, then independently fetching and verifying every added/modified blob SHA plus explicit deletion, rename, mode, and object-type entries.
+
+A retained local manifest, intended create-tree payload, or durable evidence reference without that remote commit/tree and blob binding is insufficient.
 
 #### `commit-diff-and-file-blobs`
 
@@ -717,8 +793,10 @@ Force rewrite has no mechanical compare-and-swap. Before an independently author
 4. require matching identity/epoch/head;
 5. force-update only the intended commit;
 6. perform complete read-back;
-7. execute the bounded receipt transition;
+7. execute one rewrite-specific receipt transition;
 8. obtain fresh CI and review.
+
+The rewrite-specific transition requires the same execution ID/epoch, the unchanged old expected head immediately before the rewrite, explicit rewrite authorization, the exact intended rewritten commit and complete remote-content evidence, and immediate receipt/branch read-back. It records the old and new heads and invalidates old CI/review. Because a rebase/rebuild intentionally changes ancestry, the ordinary parent-equals-old-head condition does not apply; no unrelated or merely latest-observed head may be adopted.
 
 ## 8. Checkpoints and heartbeat
 
@@ -859,10 +937,19 @@ Before publication is proved, do not claim implementation complete, final remote
 | Reviewer tries to mutate PR/branch/receipt/thread state | Ownership required; write blocked. |
 | Equivalent environment arrays in different order | Canonical digest is identical. |
 | Fingerprint object and digest disagree | Profile corrupt and ignored. |
+| Equivalent observed repository permissions use different labels | Reject noncanonical labels; derive the fixed highest permission class. |
+| Schema validator treats `date-time` as annotation only | Run format assertion or an explicit RFC 3339 validation step before profile use. |
+| Connector display is clipped but marker resource is readable | Continue paginated/search/direct authenticated retrieval; do not declare ownership failure. |
+| Receipt remains unavailable after all authenticated paths | No task write; report blocked/ownership/Mode C and do not create or overwrite a receipt. |
+| Narrow profile downgrade is safe | Change only the existing ownership/takeover capability plus required metadata and one bounded transition; full read-back must match. |
+| Narrow profile downgrade is ambiguous or races | Stop without retry/rollback and report the downgrade pending. |
+| Existing branch is presented for initial claim | Reject initial claim; require migration, takeover, adoption, or AO authority. |
+| Manifest read-back uses only a local retained manifest | Invalid until bound to the fetched remote commit/tree and verified blobs. |
+| AO-managed worker completes implementation | Use AO/pack-store/claim/report authority, not a competing standalone receipt. |
 
 ## 15. Definition of Done for implementation
 
-A chat implementation is complete only when all applicable conditions hold:
+For a standalone chat implementer, completion requires all applicable conditions below:
 
 ```text
 [ ] code or documentation exists in a remote task branch
@@ -892,6 +979,8 @@ A chat implementation is complete only when all applicable conditions hold:
 
 If API-authored commits do not start workflows, use an existing repository-owned retrigger. Missing runs are not green. Do not create diagnostic workflows.
 
+AO-managed workers do not mint standalone receipts and do not use the standalone v2-receipt/ownership checklist items. They satisfy the corresponding ownership and lifecycle conditions through the live AO session, repository pack-store/claim authority, and `pack-worker-report` contract in `/AGENTS.md`. All common contract, scope, remote-content read-back, current-head CI/review, finding-disposition, conflict, and PR-linkage requirements still apply.
+
 Local tests, local commits, and a clean local tree do not satisfy Definition of Done. Mode C ends with `handoff prepared`.
 
 ## 16. Operating formula
@@ -900,17 +989,17 @@ Local tests, local commits, and a clean local tree do not satisfy Definition of 
 >
 > Capability structure lives in `docs/orchestrator-pack-chat-capability-profile.schema.json`; mutable observations live in one canonical operational Issue.
 >
-> Profile lookup uses a versioned closed environment object and deterministic digest, not a free-form name.
+> Profile lookup uses a versioned closed environment object, connector-observed principal, and canonical permission class, not free-form names.
 >
 > The Issue is the task-control record; exact contract identity may come from a complete Issue body, repository blob, operator export, or narrow adopted PR head.
 >
 > Truncated or summarized Issue text is never hashed as a complete contract.
 >
-> Receipt v2 separates contract, ownership, remote content, CI, and review identities; legacy v1 requires explicit migration.
+> Receipt v2 separates contract, ownership, remote content, CI, and review identities; legacy v1 requires explicit migration. Clipped display triggers exhaustive authenticated retrieval, not a guessed ownership failure.
 >
 > Independent reviewers can publish head/spec-bound verdicts without taking branch ownership, but cannot mutate implementation state.
 >
-> Implementer ownership is claimed before branch mutation and remains an organizational, fail-closed protocol because Issue comments are last-write-wins.
+> Implementer ownership is claimed before branch mutation and remains an organizational, fail-closed protocol because Issue comments are last-write-wins. True receipt unavailability blocks task writes; only the single-capability conservative profile downgrade has a separate fence.
 >
 > Every publication proves remote content and advances the expected head only through a bounded same-execution transition.
 >
