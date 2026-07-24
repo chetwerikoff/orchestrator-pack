@@ -77,9 +77,10 @@ substitution, or merge distinct conversations into one tab/chat identity.
 8. One browser-GPT final architectural pass after the latest final-lens capture when the tier/flow requires it.
 9. Acceptance only over the current Issue revision with all floors and ledger green.
 
-A review stage ends early on a valid no-accepted-finding pass. A capped exit is
-allowed only when the cap applies and unresolved questions are recorded in the
-ledger/final report.
+Ordinary architectural review ends early on a clean pass with no findings.
+Competitive and explicit adversarial loops use their own documented
+no-accepted-finding convergence rules. A capped exit is allowed only when the
+cap applies and unresolved questions are recorded in the ledger/final report.
 
 ## Step 1 — Intake and workdir
 
@@ -156,8 +157,10 @@ reviewer -> architect -> task chat -> Issue edit -> re-pull
 
 ## Step 4 — Competitive review
 
-Run when selected by tier/markers or forced by an explicit `discuss-with-gpt`
-wrapper. T3 always runs it; T2 runs it when red-flagged or explicitly requested.
+Run when selected by the effective tier or forced by an explicit
+`discuss-with-gpt` wrapper. T3 always runs it; T2 runs it only when an explicit
+wrapper/contract selects it. A red-flag marker recomputes the task to T3 rather
+than creating a red-flagged T2 path.
 Only a direct operator decision may waive an otherwise selected non-critical
 competitive stage, and the waiver is recorded.
 
@@ -197,7 +200,8 @@ Each ordinary architectural pass:
 5. continue in the same dedicated chat after accepted fixes.
 
 Per-tier ordinary architectural ceiling: T1 one light pass, T2 ≤3 passes, T3 ≤4
-passes. Early-stop and capped-exit rules remain unchanged. Passes are sequential;
+passes. A clean pass with no findings ends the ordinary architectural stage
+early; capped exits preserve open questions. Passes are sequential;
 a fresh competitive chat is never reused as the architectural chat.
 
 ### Browser-outage substitution
@@ -388,7 +392,7 @@ Tier stages:
 
 - T1: no competitive stage; one light browser-GPT architectural pass; light final
   lens; one browser-GPT final verification only after lens-driven content change.
-- T2: browser-GPT competitive only when red-flagged or explicitly requested;
+- T2: no competitive stage unless an explicit wrapper/contract selects it;
   browser-GPT architectural ≤3; light final lens; one browser-GPT final
   verification only after lens-driven content change.
 - T3: browser-GPT competitive ≤3; browser-GPT architectural ≤4; full final lens;
