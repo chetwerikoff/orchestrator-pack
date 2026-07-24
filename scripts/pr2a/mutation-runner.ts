@@ -135,7 +135,7 @@ function mutationPlan(binding: Pr2aMutationBinding): MutationPlan {
     case 'AC4':
       return {
         profile: 'tracked-test-reaches-d928',
-        artifactPath: 'scripts/pr2a/final-conformance.test.ts',
+        artifactPath: 'scripts/pack-review-runner.ts',
         detector: 'scanForbiddenExecutableReferences',
         mutate: (text, id) => `${text}\nspawn('pwsh', ['-File', 'scripts/orchestrator-wake-supervisor.ps1']); // mutation:${id}\n`,
         inspect: (text) => findingCodes(scanForbiddenExecutableReferences([{ path: 'scripts/example.test.ts', content: text }])),
@@ -173,7 +173,7 @@ function mutationPlan(binding: Pr2aMutationBinding): MutationPlan {
         artifactPath: 'package.json',
         detector: 'validateMandatoryPackageScripts',
         mutate: (text, id) => removeIssueSuite
-          ? replaceRequired(text, '--maxWorkers=1', `--maxWorkers=2`, id)
+          ? replaceRequired(text, '--maxWorkers=1', '--maxWorkers=2', id)
           : replaceRequired(text, 'scripts/pr2-foundation/contract-test-runner.ts', 'scripts/pr2-foundation/contract-test-runner-removed.ts', id),
         inspect: (text) => findingCodes(validateMandatoryPackageScripts(text)),
       };
