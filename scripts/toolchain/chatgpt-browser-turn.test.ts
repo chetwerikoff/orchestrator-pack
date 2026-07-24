@@ -35,6 +35,7 @@ import {
   writeIncident,
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
+import { resolveCausalAssistant, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
 
 let root = '';
 let profileKey = '';
@@ -165,6 +166,70 @@ describe('issue 964 semantic reply serialization', () => {
     expect(mergeContinuationSegments(['alpha\nbeta', 'alpha\nbeta\ngamma'])).toBe('alpha\nbeta\ngamma');
     const prefix = 'x'.repeat(40);
     expect(mergeContinuationSegments([`a${prefix}`, `${prefix}b`])).toBe(`a${prefix}b`);
+  });
+});
+
+describe('issue 964 causal witness gate', () => {
+  it('requires one exact service-issued parent relation and rejects heuristic or ambiguous candidates', () => {
+    const userId = 'user-12345678';
+    const assistantId = 'assistant-12345678';
+    expect(resolveCausalAssistant(userId, [
+      { id: assistantId, role: 'assistant', parent: userId },
+      { id: assistantId, role: 'assistant', parent: userId },
+      { id: 'assistant-foreign-1', role: 'assistant', parent: 'user-other-123' },
+    ])).toEqual({ state: 'matched', assistantMessageId: assistantId });
+
+    expect(resolveCausalAssistant(userId, [
+      { id: 'assistant-neighbor', role: 'assistant' },
+      { id: 'assistant-wrong-parent', role: 'assistant', parent: 'user-other-123' },
+    ])).toEqual({ state: 'none' });
+
+    expect(resolveCausalAssistant(userId, [
+      { id: 'assistant-match-one', role: 'assistant', parent: userId },
+      { id: 'assistant-match-two', role: 'assistant', parent: userId },
+    ])).toEqual({ state: 'ambiguous' });
+  });
+
+  it('awaits the final pre-send admission guard and performs zero dispatch when it refuses', async () => {
+    let sendClicks = 0;
+    const emptyLocator = () => ({
+      count: async () => 0,
+      nth: () => emptyLocator(),
+      getAttribute: async () => null,
+      locator: () => emptyLocator(),
+      first: () => emptyLocator(),
+      innerText: async () => '',
+      click: async () => {},
+    });
+    const composer = { ...emptyLocator(), count: async () => 1, click: async () => {} };
+    const send = { ...emptyLocator(), count: async () => 1, click: async () => { sendClicks++; } };
+    const body = { ...emptyLocator(), innerText: async () => '' };
+    const page = {
+      on: () => {},
+      url: () => 'https://chatgpt.com/c/example',
+      locator: (selector: string) => {
+        if (selector === '#prompt-textarea') return composer;
+        if (selector === '[data-testid="send-button"]') return send;
+        if (selector === 'body') return body;
+        return emptyLocator();
+      },
+      keyboard: { press: async () => {}, insertText: async () => {} },
+      waitForTimeout: async () => {},
+      getByText: () => emptyLocator(),
+    };
+    const config: BrowserConfig = {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/example',
+      newChat: false,
+      timeoutMs: 1_000,
+    };
+
+    await expect(sendTurn(page, 'immutable payload', config, undefined, async () => {
+      await Promise.resolve();
+      throw new Error('pre_send_test_refusal');
+    })).rejects.toThrow('pre_send_test_refusal');
+    expect(sendClicks).toBe(0);
   });
 });
 
