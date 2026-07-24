@@ -31,11 +31,11 @@ const FIELD_LINE = /^(id|type|severity|title|evidence|recommendation|persistent-
 const M3_LENS_LINE = /^m3-protected:\s*id=([A-Za-z0-9._-]+)\s*\|\s*revision=([^|]+?)\s*\|\s*contest=(none|contested|contest-withdrawn)\s*\|\s*outcome=(none|activate|non-activate)(?:\s*\|\s*evidence=([^|]*?))?(?:\s*\|\s*why-now=(.*))?\s*$/i;
 
 const PROTECTED_SIGNAL_PATTERNS = [
-  { type: 'security', pattern: /\btype:\s*security\b/i },
+  { type: 'security', pattern: /\btype:\s*security\b/i, nominationMetadata: true },
   { type: 'security', pattern: /\[(?:P[0-3]\s+)?security\]/i },
   { type: 'security', pattern: /\bsecurity\s+issue\b/i },
   { type: 'security', pattern: /\bvulnerabilit(?:y|ies)\b/i },
-  { type: 'scope-violation', pattern: /\btype:\s*scope-violation\b/i },
+  { type: 'scope-violation', pattern: /\btype:\s*scope-violation\b/i, nominationMetadata: true },
   { type: 'scope-violation', pattern: /\[(?:P[0-3]\s+)?scope-violation\]/i },
   { type: 'scope-violation', pattern: /\bscope[- ]violation\b/i },
   { type: 'scope-violation', pattern: /\bout of scope\b/i },
@@ -291,8 +291,11 @@ export function detectTypedFindingsInCapture(capture) {
 export function detectProtectedSignalsInCapture(capture, options = {}) {
   const scanText = extractFindingsScanText(capture);
   if (isCleanNoFindings(scanText) || scanText.length === 0) return [];
+  const patternSpecs = options.excludeNominationMetadata
+    ? PROTECTED_SIGNAL_PATTERNS.filter(({ nominationMetadata }) => !nominationMetadata)
+    : PROTECTED_SIGNAL_PATTERNS;
   const signals = [];
-  for (const { type, pattern } of PROTECTED_SIGNAL_PATTERNS) {
+  for (const { type, pattern } of patternSpecs) {
     if (pattern.test(scanText)) signals.push(type);
     pattern.lastIndex = 0;
   }
@@ -300,7 +303,7 @@ export function detectProtectedSignalsInCapture(capture, options = {}) {
   const receipt = options.receipt ?? loadProtectedSignalReceipt(options);
   const matches = collectProtectedSignalMatches(
     scanText,
-    PROTECTED_SIGNAL_PATTERNS.map(({ type, pattern }) => ({ signal: type, pattern })),
+    patternSpecs.map(({ type, pattern }) => ({ signal: type, pattern })),
   );
   return suppressProtectedSignalHits(hitSignals, matches, receipt, 'finding-ledger', options.consumedReceiptEntries).hits;
 }
@@ -505,8 +508,14 @@ function parseM3LensLines(text, errors, sourceName) {
   const records = [];
   const seenIds = new Set();
   for (const line of text.split(/\r?\n/)) {
-    const match = line.trim().match(M3_LENS_LINE);
-    if (!match) continue;
+    const trimmed = line.trim();
+    if (!/^m3-protected:/i.test(trimmed)) continue;
+    const match = trimmed.match(M3_LENS_LINE);
+    if (!match) {
+      const idMatch = trimmed.match(/^m3-protected:\s*id=([A-Za-z0-9._-]+)/i);
+      errors.push(`review-economics: ${sourceName} has malformed m3-protected record${idMatch ? ` for ${idMatch[1]}` : ''}`);
+      continue;
+    }
     const id = match[1];
     if (seenIds.has(id)) {
       errors.push(`review-economics: ${sourceName} has duplicate m3-protected records for ${id}`);
@@ -796,14 +805,16 @@ function validateM5(metadata, ledger, parsedByName, options, errors) {
     for (const candidate of candidates) {
       const row = ledger.findings.find((item) => item.id === candidate.id);
       if (!row) continue;
-      if (!row.simplificationCutCandidate) errors.push(`review-economics: M5 cut candidate ${candidate.id} missing matching ledger flag`);
+      if (options.phase === 'pre-lens' && !row.simplificationCutCandidate) errors.push(`review-economics: M5 cut candidate ${candidate.id} missing matching ledger flag`);
       if (PROTECTED_TYPES.has(row.type) && row.architectPending) continue;
       if (row.disposition !== 'addressed' && row.disposition !== 'rejected') errors.push(`review-economics: M5 cut candidate ${candidate.id} is not dispositioned or architect-pending`);
     }
   }
-  const candidateIds = new Set(candidates.map((candidate) => candidate.id));
-  for (const row of ledger.findings) {
-    if (row.simplificationCutCandidate && !candidateIds.has(row.id)) errors.push(`review-economics: ledger candidate ${row.id} has no raw yes discriminator in current M5 anchor`);
+  if (options.phase === 'pre-lens') {
+    const candidateIds = new Set(candidates.map((candidate) => candidate.id));
+    for (const row of ledger.findings) {
+      if (row.simplificationCutCandidate && !candidateIds.has(row.id)) errors.push(`review-economics: ledger candidate ${row.id} has no raw yes discriminator in current M5 anchor`);
+    }
   }
 }
 
@@ -835,20 +846,25 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
   for (const captureFinding of captureFindings) validateCaptureFindingInLedger(captureFinding, ledger, errors, consumedLedgerIds, { reviewEconomics });
   const protectedSignals = new Set();
   for (const capture of captures) {
-    for (const signal of detectProtectedSignalsInCapture(capture, { ...options, receipt, consumedReceiptEntries })) protectedSignals.add(signal);
+    for (const signal of detectProtectedSignalsInCapture(capture, {
+      ...options,
+      receipt,
+      consumedReceiptEntries,
+      excludeNominationMetadata: reviewEconomics,
+    })) protectedSignals.add(signal);
+  }
+  const protectedConsumedLedgerIds = new Set();
+  for (const protectedType of protectedSignals) {
+    const typedInCapture = captureFindings.some((row) => row.type === protectedType);
+    const covered = typedInCapture
+      ? captureFindings.filter((row) => row.type === protectedType).every((row) => {
+          const ledgerRow = ledgerRowForCaptureFinding(row, ledger, protectedConsumedLedgerIds);
+          return ledgerRow && ledgerRow.type === row.type && ledgerRow.disposition === 'addressed';
+        })
+      : ledgerHasProtectedCoverage(ledger, protectedType);
+    if (!covered) errors.push(`protected signal type: ${protectedType} present in capture but not addressed in the ledger`);
   }
   if (!reviewEconomics) {
-    const protectedConsumedLedgerIds = new Set();
-    for (const protectedType of protectedSignals) {
-      const typedInCapture = captureFindings.some((row) => row.type === protectedType);
-      const covered = typedInCapture
-        ? captureFindings.filter((row) => row.type === protectedType).every((row) => {
-            const ledgerRow = ledgerRowForCaptureFinding(row, ledger, protectedConsumedLedgerIds);
-            return ledgerRow && ledgerRow.type === row.type && ledgerRow.disposition === 'addressed';
-          })
-        : ledgerHasProtectedCoverage(ledger, protectedType);
-      if (!covered) errors.push(`protected signal type: ${protectedType} present in capture but not addressed in the ledger`);
-    }
     for (const row of ledger.findings) {
       if (PROTECTED_TYPES.has(row.type) && row.disposition !== 'addressed' && !errors.some((message) => message.includes(row.id))) {
         errors.push(`protected finding ${row.id} (type: ${row.type}) must be disposition addressed`);
