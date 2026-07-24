@@ -192,8 +192,9 @@ section below unless you are reviewing this policy itself.
 ## AO-managed worker lifecycle
 
 These rules are the **worker-LLM behavioral contract** for orchestrator-pack AO sessions. They
-reach agents via tracked worktree files — native pickup for Cursor and Codex workers. There is no `agentRulesFile` injection channel on AO 0.10.2. After merge, **recycle live worker AO sessions** so worktrees pick up the new file;
-AO restart alone is not required for worker rule delivery.
+reach agents via tracked worktree files — native `AGENTS.md` pickup — not via any published
+`agentRulesFile` injection (removed on AO 0.10.2). Portable across AO-supported agents; do not
+rely on local `ai-orchestrator` internals.
 
 ### Operator-only merge and failed runs
 
