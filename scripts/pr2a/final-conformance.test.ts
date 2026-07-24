@@ -23,6 +23,8 @@ import {
   readClaimRecord,
 } from '../lib/review-start-claim-store.ts';
 import {
+  REQUIRED_FINAL_COMMANDS,
+  REQUIRED_OVERLAP_CLASSES,
   validateClosureEvidenceBundle,
   validateFinalVerificationAgainstReceipt,
   type ClosureEvidenceBundle,
@@ -52,27 +54,6 @@ const claimRoots: string[] = [];
 const claimChildren: Array<{ controller: AbortController; result: Promise<ProcessResult> }> = [];
 const rollbackChildren: Array<{ pid: number; controller: AbortController; result: Promise<ProcessResult> }> = [];
 const rollbackRoots: string[] = [];
-
-const REQUIRED_FINAL_COMMANDS = [
-  'npm run typecheck:foundation',
-  'npm run lint:foundation',
-  'npm run test:contract-mutations',
-  'npm run test:issue-948',
-  'pwsh -NoProfile -File scripts/verify.ps1',
-  'pwsh -NoProfile -File scripts/check-reusable.ps1',
-  'pwsh -NoProfile -File scripts/test-all.ps1',
-  'vitest-light',
-  'vitest-heavy',
-] as const;
-const OVERLAP_CLASSES = [
-  'acquisition',
-  'guarded-mutation',
-  'terminal-audit',
-  'release-completion',
-  'recovery-reap',
-  'interpretation',
-  'generation-fence',
-] as const;
 
 function makeRoot(prefix: string): string {
   const value = mkdtempSync(path.join(tmpdir(), prefix));
@@ -223,7 +204,7 @@ function evidenceFixture(): {
   const bodyPath = 'external/issue-928.md';
   const harness = "import { readFileSync } from 'node:fs'; process.stdout.write(readFileSync(process.argv[2], 'utf8'));\n";
   const inputs = '{"ok":true}\n';
-  const matrix = `${JSON.stringify({ schemaVersion: 1, classes: OVERLAP_CLASSES })}\n`;
+  const matrix = `${JSON.stringify({ schemaVersion: 1, classes: REQUIRED_OVERLAP_CLASSES })}\n`;
   const vectors = `${JSON.stringify({ schemaVersion: 1, vectors: [{ id: 'claim-protocol-v1' }] })}\n`;
   const drain = `${JSON.stringify({ schemaVersion: 1, issue: 948, result: 'drained' })}\n`;
   const drainDigest = writeArtifact(root, drainPath, drain);
@@ -233,7 +214,7 @@ function evidenceFixture(): {
     candidateCommitSha: commit,
     candidateTreeOid: tree,
     candidateBuildDigest,
-    classes: OVERLAP_CLASSES,
+    classes: REQUIRED_OVERLAP_CLASSES,
   })}\n`;
   const rollbackLog = `${JSON.stringify({
     schemaVersion: 1,
@@ -275,7 +256,7 @@ function evidenceFixture(): {
       protocolVectorSha256: writeArtifact(root, vectorsPath, vectors),
       platform: 'linux',
       filesystem: 'overlay',
-      classes: [...OVERLAP_CLASSES],
+      classes: [...REQUIRED_OVERLAP_CLASSES],
       logPath: overlapLogPath,
       logSha256: writeArtifact(root, overlapLogPath, overlapLog),
     },
