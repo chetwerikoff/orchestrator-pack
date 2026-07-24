@@ -142,10 +142,33 @@ export interface Pr2aMutationBinding {
   failingTestId: string;
 }
 
+const PLANNING_VALIDATOR_MUTATIONS = new Set<string>([
+  ...PR2A_MUTATION_CONTROLS.AC1.map((id) => `AC1:${id}`),
+  'AC4:fleet-hygiene-surface-removed',
+  'AC4:final-tracked-file-classification-invalid',
+  'AC4:command-bearing-primitive-hidden-by-non-executable-row',
+  'AC4:final-unresolved-set-nonempty',
+  'AC4:external-source-misreported-target-internal',
+  'AC4:final-diff-does-not-equal-reviewed-operation-rows',
+  'AC5:planning-receipt-tooling-identity-mismatch',
+  'AC6:bootstrap-contains-semantic-migration',
+  'AC6:d928-change-detected',
+  'AC6:powershell-file-added',
+  'AC6:retirement-outside-closed-list',
+  'AC6:path-or-operation-outside-reviewed-declaration',
+  'AC6:allowed-roots-or-denylist-violation',
+  'AC6:rename-copy-symlink-gitlink-or-mode-evasion',
+]);
+
 export const PR2A_MUTATION_CATALOG: readonly Pr2aMutationBinding[] = Object.freeze(
-  Object.entries(PR2A_MUTATION_CONTROLS).flatMap(([ac, ids]) => ids.map((mutationId) => ({
-    ac: ac as Pr2aAcceptanceId,
-    mutationId,
-    failingTestId: `mutation-contract:${ac}:${mutationId}`,
-  }))),
+  Object.entries(PR2A_MUTATION_CONTROLS).flatMap(([ac, ids]) => ids.map((mutationId) => {
+    const key = `${ac}:${mutationId}`;
+    return {
+      ac: ac as Pr2aAcceptanceId,
+      mutationId,
+      failingTestId: PLANNING_VALIDATOR_MUTATIONS.has(key)
+        ? 'pr2a:planning-validator'
+        : `mutation-contract:${key}`,
+    };
+  })),
 );
