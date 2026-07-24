@@ -90,13 +90,16 @@ out-of-repository layout.
 ### Roles and mixed-engine topology
 
 - **Browser GPT author.** Browser GPT is the default task-spec author. One task
-  chat owns authoring, every content fix, and direct edits to the live GitHub
-  Issue. When the browser is unavailable and the operator cannot raise it, the
-  architect may use the separately recorded **architect-as-author** fallback.
+  chat owns authoring, every content fix, direct edits to the live GitHub Issue,
+  and proposed finding dispositions.
+- **Authoring fallback.** When the browser is unavailable and the operator cannot
+  raise it, the architect may use the separately recorded **architect-as-author**
+  fallback.
 - **Architect.** The architect writes the brief, applies the architect lenses,
   controls stage ordering and tier recomputation, and ratifies finding
-  dispositions. The architect does not replace the task chat for normal content
-  fixes.
+  dispositions. It does not reopen addressed findings; on T3 the final lens
+  re-judges only the reject partition. The architect does not replace the task
+  chat for normal content fixes.
 - **Browser GPT competitive review.** When the existing tier or an explicit
   request selects a competitive stage, each pass runs in a fresh browser-GPT
   chat. The stage ceiling remains three passes.
@@ -125,8 +128,8 @@ ceiling.
 
 | Tier | Stages |
 |------|--------|
-| **T1** | One light browser-GPT architectural pass; after the final architect lens, one additional browser-GPT final-verification round only when the lens made material edits or requires re-verification. |
-| **T2** | Browser-GPT architectural review, up to **3** passes; first `NO_FINDINGS` ends the ordinary stage. After the final architect lens, one additional browser-GPT final-verification round only when the lens made material edits or requires re-verification. No competitive stage unless separately selected by an explicit wrapper contract. |
+| **T1** | One light browser-GPT architectural pass; after the final architect lens, one additional browser-GPT final-verification round only when the lens changed content. |
+| **T2** | Browser-GPT architectural review, up to **3** passes; first `NO_FINDINGS` ends the ordinary stage. After the final architect lens, one additional browser-GPT final-verification round only when the lens changed content. No competitive stage unless separately selected by an explicit wrapper contract. |
 | **T3** | Competitive adversarial browser-GPT review up to **3** fresh-chat passes → browser-GPT architectural review in the one dedicated review chat up to **4** passes → final architect lens → mandatory browser-GPT final-verification round **1** in that same dedicated review chat. |
 
 **T3-critical** (within-T3 graduation): gated by the **L4-condition list recorded
@@ -203,14 +206,13 @@ positives escalate to the architect; unparseable prose never passes silently).
 
 ### Simplification lens
 
-On competitive and architectural stages the reviewer prompt
-(`prompts/codex_draft_review_prompt.md`) mandates the four-question lens: what can
-be simplified / must not be simplified / is excess / is missing. Lens findings
-flow through the normal ledger and remain subject to the carve-out. The architect
-applies the same lens on the final architect lens. Simplification and excess
-judgments weigh every major mechanism against the artifact's stated stakes, its
-cost and risk, and the cheapest sufficient alternative — not against ceremony
-tier alone.
+The existing review contract, including the four-question lens in
+`prompts/codex_draft_review_prompt.md`, mandates: what can be simplified / must
+not be simplified / is excess / is missing. Lens findings flow through the
+normal ledger and remain subject to the carve-out. The architect applies the
+same lens on the final architect lens. Simplification and excess judgments weigh
+every major mechanism against the artifact's stated stakes, its cost and risk,
+and the cheapest sufficient alternative — not against ceremony tier alone.
 
 ### Final architect lens and tier movement
 
