@@ -4,7 +4,7 @@
 #>
 
 function Get-ReviewDeliveryLifecycleStorePath {
-    . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessSupervisor.ps1')
+    . (Join-Path $PSScriptRoot 'Orchestrator-WakeSupervisorStateRoot.ps1')
     $stateRoot = Get-OrchestratorWakeSupervisorStateRoot
     return Join-Path $stateRoot 'review-delivery-lifecycle.json'
 }

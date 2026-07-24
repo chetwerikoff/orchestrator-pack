@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -39,7 +38,7 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
     );
   });
 
-  it('limits the justified lint suppressions to the exact sixteen dormant mirror pairs', () => {
+  it('limits duplicate-literal suppressions to sixteen Issue #923 pairs and one Issue #948 pair', () => {
     const config = JSON.parse(readFileSync(
       path.resolve(FOUNDATION_LINT_SUPPRESSION_CONFIG_PATH),
       'utf8',
@@ -48,23 +47,35 @@ describe('[AC7] terminalized executable docs TypeScript ports', () => {
       suppressions: Array<{ rule: string; files: string[]; reason: string }>;
       [key: string]: unknown;
     };
-    const { suppressions, ...nonSuppressionConfig } = config;
-    const nonSuppressionDigest = createHash('sha256')
-      .update(JSON.stringify(nonSuppressionConfig))
-      .digest('hex');
-    const expectedPairs = FOUNDATION_DOC_ROWS
-    .map((source) => [source, targetFor(source)].join('|'))
-    .sort();
-  const actualPairs = suppressions
-    .map((suppression) => suppression.files.join('|'))
-    .sort();
-  expect(actualPairs).toEqual(expectedPairs);
-  expect(suppressions).toHaveLength(FOUNDATION_DOC_ROWS.length);
-  expect(suppressions.every((suppression) => suppression.rule === 'duplicate-literal')).toBe(true);
-  expect(new Set(suppressions.map((suppression) => suppression.reason))).toEqual(new Set([
-    'Issue #923 migration parity until draft 315; remove at cutover',
-  ]));
-    for (const suppression of suppressions) {
+    const issue923Reason = 'Issue #923 migration parity until draft 315; remove at cutover';
+    const issue948Reason = 'Issue #948 owner-mechanism manifest intentionally mirrors canonical catalog coverage for mechanical cross-checking';
+    const duplicateSuppressions = config.suppressions
+      .filter((suppression) => suppression.rule === 'duplicate-literal');
+    const issue923Suppressions = duplicateSuppressions
+      .filter((suppression) => suppression.reason === issue923Reason);
+    const issue948Suppressions = duplicateSuppressions
+      .filter((suppression) => suppression.reason === issue948Reason);
+    const unexpectedSuppressions = duplicateSuppressions
+      .filter((suppression) => suppression.reason !== issue923Reason && suppression.reason !== issue948Reason);
+    const expected923Pairs = FOUNDATION_DOC_ROWS
+      .map((source) => [source, targetFor(source)].join('|'))
+      .sort();
+    const actual923Pairs = issue923Suppressions
+      .map((suppression) => suppression.files.join('|'))
+      .sort();
+
+    expect(FOUNDATION_DOC_ROWS).toHaveLength(16);
+    expect(config.suppressions).toHaveLength(duplicateSuppressions.length);
+    expect(duplicateSuppressions).toHaveLength(17);
+    expect(issue923Suppressions).toHaveLength(16);
+    expect(actual923Pairs).toEqual(expected923Pairs);
+    expect(issue948Suppressions).toHaveLength(1);
+    expect([...issue948Suppressions[0].files].sort()).toEqual([
+      'scripts/orchestrator-message-catalog.json',
+      'scripts/orchestrator-message-owner-mechanisms.manifest.json',
+    ].sort());
+    expect(unexpectedSuppressions).toEqual([]);
+    for (const suppression of duplicateSuppressions) {
       expect(suppression.files).toHaveLength(2);
       const hasWildcard = suppression.files.some((file) =>
         file.includes('*') || file.includes('?') || file.includes('['));

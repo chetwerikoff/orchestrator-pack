@@ -6,10 +6,10 @@
       "reason": "JS-owned dedup state is outside the PowerShell hashtable reflection class"
     },
     {
-      "childId": "review-start-claim-reaper",
+      "childId": "review-start-claim-inline-reap",
       "path": "{project}/review-start-claims",
-      "owner": "scripts/lib/Review-StartClaim.ps1",
-      "reason": "Stateless periodic sweeper; claim lifecycle state lives in the canonical claim namespace (active/terminal/audit dirs), not mechanical JSON reconcile state"
+      "owner": "scripts/lib/review-start-claim-store.ts",
+      "reason": "Inline TypeScript claim operations own active/terminal/audit lifecycle state; no standalone reaper process remains on a supported root."
     },
     {
       "childId": "ci-failure-notification-reconcile",

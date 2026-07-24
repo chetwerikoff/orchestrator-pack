@@ -39,7 +39,7 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/MechanicalReconcileNode.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ReviewStuckRunReaper.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ScriptedReviewDeliveryEscalation.ps1')
-. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessSupervisor.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-OpenPrList.ps1')
 . (Join-Path $PSScriptRoot 'lib/Resolve-ScriptedReviewInitialObservedRunId.ps1')
 . (Join-Path $PSScriptRoot 'lib/Harness-PnRetriggerState.ps1')

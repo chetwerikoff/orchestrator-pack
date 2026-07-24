@@ -40,7 +40,7 @@ if (-not $RepoRoot) { $RepoRoot = $PackRoot }
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeClaim.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-AutonomousNudgeGate.ps1')
 . (Join-Path $PSScriptRoot 'lib/Worker-NudgeAudit.ps1')
-. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessSupervisor.ps1')
+. (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessProgress.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-OrchestratorEscalationEmit.ps1')
 . (Join-Path $PSScriptRoot 'lib/Invoke-ScriptedReviewDeliveryEscalation.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-OpenPrList.ps1')
