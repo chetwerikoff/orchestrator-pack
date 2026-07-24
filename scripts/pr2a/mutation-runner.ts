@@ -268,7 +268,7 @@ function runDetector(key: string, file: string): DetectorExecution {
   const command = detectorCommand(key, file);
   const result = runProcessSync({
     command: command[0]!, args: command.slice(1), cwd: repoRoot,
-    inheritParentEnv: true, timeoutMs: 120_000,
+    inheritParentEnv: true,
   });
   const exitCode = result.exitCode ?? (result.ok ? 0 : 1);
   if (exitCode !== 0 && exitCode !== 1) {
