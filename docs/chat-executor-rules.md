@@ -2,13 +2,13 @@
 
 ## 1. Scope
 
-These rules apply only to implementers working through a chat-based environment in which the conversation, shell container, local filesystem, GitHub connector, GitHub Actions, and tool calls may have different authentication, network access, persistence, and timeout behavior.
+These rules apply to implementers and reviewers working through a chat-based environment where the conversation, shell/container, filesystem, GitHub connector, GitHub Actions, and tool calls may have different authentication, persistence, network access, and timeout behavior.
 
-A working shell `git push` changes the preferred publishing transport; it does not make the environment non-chat. Remote checkpoints, remote read-back, heartbeat, long-process handling, and the rule that local work is not completed work still apply.
+A working shell `git push` changes the preferred publication transport; it does not make the environment non-chat. Remote checkpoints, read-back, current-head CI/review binding, and the rule that local work is not completed work still apply.
 
-These rules supplement `/AGENTS.md`. They do not replace or weaken repository policy. `/AGENTS.md` remains authoritative for scope, Issue and PR linking, verification, review-cycle limits, merge policy, AO-managed worker lifecycle, and other repository-wide behavior.
+These rules supplement `/AGENTS.md`. They do not replace or weaken it. `/AGENTS.md` remains authoritative for repository scope, Issue and PR linking, verification, review-cycle limits, merge policy, AO-managed worker lifecycle, and other repository-wide behavior.
 
-If the two documents appear to conflict, stop and report the conflict rather than inventing an exception.
+If these documents conflict, stop and report the conflict. Do not invent an exception.
 
 ## 2. Required start
 
@@ -21,11 +21,11 @@ Do not rely on a remembered, previously uploaded, or earlier-chat copy while liv
 
 If either file cannot be read completely:
 
-- say which file is unavailable;
+- identify the unavailable file;
 - do not claim its policy was applied;
 - do not begin repository work whose safety depends on it.
 
-Record a policy snapshot containing:
+Record:
 
 - default-branch commit SHA;
 - merge-base SHA when a task branch already exists;
@@ -33,76 +33,64 @@ Record a policy snapshot containing:
 - this document's path and connector-returned blob SHA;
 - UTC read time.
 
-Confirm the start in this form:
+Confirm startup in this form:
 
 ```text
 AGENTS.md read: <blob SHA>
 Chat executor rules read: <blob SHA>
 Default branch HEAD: <commit SHA>
 Execution ID: <unique ID>
-Ownership epoch: <positive integer>
-Execution mode: provisional-B | C
+Ownership epoch: <positive integer or not-applicable-for-independent-review>
+Execution mode: provisional-B | C | review-only
 ```
 
-Before the first receipt exists, reserve ownership epoch `1` for the initial execution. A takeover increments the last valid epoch by exactly one. This epoch remains an organizational continuity field until the repository-owned helper in Issue #966 is implemented; it does not turn an Issue comment into a transactional lock.
+`provisional-B` means a reusable capability profile and current liveness checks support a candidate publication path, but current-session publication has not yet been proved. It is not confirmed Mode B and does not authorize a large local implementation or a promise to reach `ready for review`.
 
-At startup, `provisional-B` means the reusable capability profile and current liveness checks support a candidate publication path, but the current session has not yet proved it. It is not confirmed Mode B and does not authorize a large local implementation or a promise to reach `ready for review`.
+Choose Mode C when no reliable publication path exists. Use `review-only` for an independent reviewer that will not mutate the implementation branch, receipt, PR metadata, or existing review threads.
 
-Choose Mode C immediately when no reliable candidate publication path exists.
+A blob SHA identifies exact file bytes. A commit SHA identifies a commit. Neither proves branch ownership, resulting content, contract identity, CI, review, or another guarantee.
 
-A blob SHA identifies exact file contents. A commit SHA identifies a commit. Neither identifier, by itself, proves branch ownership, resulting remote content, CI state, review state, or another contract source.
+Policy snapshots, capability profiles, and receipts are executor attestations. Unless repository tooling or an operator independently validates them, label them `self-reported`, not `verified`.
 
-Policy snapshots, capability profiles, and execution receipts are operational attestations made by an executor. They are not independently verified evidence merely because they contain hashes. Where repository tooling or an operator validator exists, it may compare reported bindings with live GitHub state. Without such validation, describe them as `self-reported`, not `verified`.
+### Default-branch movement
 
-The compatible validation architecture is:
+If default-branch HEAD changes before implementation, review, or ready-for-review reporting:
 
-```text
-connector-side read or capability probe
-    -> durable capability profile / execution receipt
-    -> optional repository-side or operator validation
-```
+1. recheck both policy blob SHAs;
+2. reread each changed policy file;
+3. compare the recorded default head or merge base to the new default head;
+4. inspect changed commits and paths for semantic overlap;
+5. record the comparison range and decision.
 
-### Default-branch movement and semantic revalidation
+Semantic overlap includes:
 
-If the default-branch HEAD changes before implementation, review, or ready-for-review reporting:
-
-1. recheck the blob SHAs of `/AGENTS.md` and this document;
-2. reread either policy document whose blob SHA changed;
-3. compare the recorded default-branch head or merge base to the new default-branch head;
-4. inspect changed commits and paths for overlap with the task's implementation contracts;
-5. record the comparison range, changed-path summary, and overlap decision in the execution receipt.
-
-Contract overlap is broader than a direct edit to the same file. Treat at least the following as overlap when they can affect the task:
-
-- files or components declared by the task;
+- task-declared paths and components;
 - imported APIs, shared libraries, registries, schemas, generated contracts, and their producers;
-- task declarations, scope tooling, policy files, Issue text, and architecture/specification files;
-- tests, fixtures, CI workflows, and commands used as acceptance evidence;
-- shared artifacts whose producer changed even when the task's consumer path did not.
+- task declarations, scope tooling, policy, Issue, architecture, and specification files;
+- tests, fixtures, workflows, and commands used as acceptance evidence;
+- a shared artifact whose producer changed even when its consumer path did not.
 
-When overlap exists, or when the comparison cannot be classified confidently:
+When overlap exists or cannot be classified confidently:
 
-- rebase, merge, or otherwise rebuild the work on an appropriate current base;
+- rebase, merge, or rebuild on an appropriate current base;
 - re-review affected implementation, scope, and evidence assumptions;
-- rerun checks whose assumptions changed;
-- obtain fresh current-head CI and review before ready-for-review reporting.
+- rerun affected checks;
+- obtain fresh current-head CI and review.
 
-When no overlap exists, record the evidence supporting that conclusion.
+`BEHIND`, no textual conflict, or no same-path edit does not prove semantic safety.
 
-`BEHIND` status alone does not prove safety. The absence of a textual merge conflict or same-path edit does not waive semantic contract revalidation.
+## 3. Task-control and exact contract identity
 
-## 3. Task-control record and exact contract binding
-
-For repositories where `/AGENTS.md` makes GitHub Issues the task source of truth, including this repository, every implementation task binds to a GitHub Issue as its task-control record.
+When `/AGENTS.md` makes GitHub Issues the task source of truth, every implementation task binds to an Issue as the task-control record.
 
 The Issue remains authoritative for:
 
 - repository and Issue number;
 - state and discussion;
 - declared scope and PR linkage;
-- operator decisions recorded in the Issue conversation.
+- operator decisions recorded in its conversation.
 
-The Issue task-control record is not necessarily the exact byte source of the implementation contract. Exact contract identity must use exactly one binding kind:
+The Issue is not necessarily the exact byte source of the implementation contract. Exact contract identity uses exactly one kind:
 
 ```text
 issue-body
@@ -111,7 +99,7 @@ operator-export
 existing-pr-adoption
 ```
 
-The receipt must record:
+The receipt records:
 
 ```json
 {
@@ -127,52 +115,42 @@ The receipt must record:
 }
 ```
 
-`bindingDigest` is always required.
-
-`bodyDigest` is required only for `bindingKind: issue-body` with `issueBodyAccess: full`. All other binding kinds use `bodyDigest: null`.
-
-Issue `updatedAt` is an advisory signal that the task-control record may have changed. It is not exact contract identity and must not substitute for `bindingDigest`. Receipt comments and unrelated discussion may also move Issue timestamps.
+`bindingDigest` is always required. `bodyDigest` is non-null only for complete `issue-body` binding. Issue `updatedAt` is only a change signal; it is not contract identity.
 
 ### Full and truncated Issue access
 
-Classify Issue-body access explicitly:
-
-```text
-full | truncated
-```
+Classify Issue-body access explicitly as `full` or `truncated`.
 
 Any response described or observed as truncated, summarized, clipped, partial, limited, or incomplete:
 
 - is not a complete Issue body;
-- must not be hashed as the full Issue body;
-- must not be used to start a new implementation;
-- may provide task-control metadata, but not exact Issue-body contract identity.
+- must not be hashed as the full body;
+- must not start a new implementation;
+- may provide task-control metadata only.
 
 A summary is never a contract. Do not infer omitted requirements.
 
 For `issue-body`:
 
-- first establish that the complete body was received;
-- normalize as UTF-8 with CRLF converted to LF and otherwise preserve text exactly;
-- calculate SHA-256 over the normalized complete body;
-- use the same digest as `bindingDigest` and `bodyDigest`.
+- confirm the complete body was received;
+- normalize UTF-8 by converting CRLF to LF and otherwise preserving text exactly;
+- calculate SHA-256;
+- use it as both `bindingDigest` and `bodyDigest`.
 
 `issueBodyAccess: truncated` with `bindingKind: issue-body` is invalid.
 
 ### Repository contract
 
-Use `repository-contract` when the Issue or explicit operator direction identifies a repository Markdown specification as the binding implementation contract.
+Use `repository-contract` only when a complete authoritative source or explicit operator direction identifies a repository Markdown specification.
 
 Record:
 
 - repository-relative path;
-- commit or ref used to locate it;
+- ref or commit used to locate it;
 - immutable Git blob SHA;
-- `bindingRef` in a form that identifies the path and blob;
-- `bindingDigest` equal to the blob SHA;
-- `bodyDigest: null` unless a complete Issue body was separately read for task-control comparison.
-
-Do not accept a repository contract inferred only from an incomplete summary. The binding path must be stated by a complete authoritative source or explicitly confirmed by the operator.
+- `bindingRef` identifying path and blob;
+- `bindingDigest` equal to that blob SHA;
+- `bodyDigest: null` unless a complete Issue body was separately read.
 
 For large specifications, prefer:
 
@@ -184,43 +162,43 @@ GitHub Issue
 
 ### Operator export
 
-Use `operator-export` when the operator supplies an exact UTF-8 export of the contract.
+Use `operator-export` when the operator supplies an exact UTF-8 contract export.
 
 Record:
 
-- source description or supplied filename;
-- declared normalization, normally exact bytes with no silent rewriting;
-- SHA-256 of the exact bound export;
-- `bindingRef` identifying that export;
+- source description or filename;
+- declared normalization, normally exact bytes;
+- SHA-256 of the bound export;
+- `bindingRef` identifying it;
 - `bindingDigest` equal to that SHA-256;
 - `bodyDigest: null`.
 
-Do not silently normalize, summarize, repair, or reformat an operator export before hashing it.
+Do not silently normalize, summarize, repair, or reformat the export before hashing.
 
 ### New implementation gate
 
-A new implementation may begin only from one exact source:
+A new implementation may begin only from:
 
 - a confirmed complete Issue body;
 - an explicitly bound repository contract;
 - an exact operator export.
 
-A truncated Issue, clipped response, search snippet, summary, PR title, or review summary is insufficient for new implementation.
+A truncated Issue, search snippet, summary, PR title, or review summary is insufficient.
 
 ### Narrow existing-PR adoption
 
-Use `existing-pr-adoption` only when the PR and task branch existed before the new executor and the exact original Issue body cannot be obtained in full.
+Use `existing-pr-adoption` only when a PR and branch predate the current executor and the exact original Issue body cannot be obtained in full.
 
 All conditions are mandatory:
 
 1. the operator explicitly authorizes adoption;
-2. the executor reads the current PR, branch, adopted head, and one complete allowed remote-content read-back level;
-3. the receipt contains a closed exact finding list, using stable review IDs, signatures, paths, and summaries where available;
+2. the executor reads current PR metadata, branch, adopted head, and one complete remote-content level;
+3. the receipt contains a closed exact finding list using stable review IDs/signatures where available;
 4. changes are limited to those findings and directly necessary verification adjustments;
 5. new functionality, scope expansion, unrelated cleanup, and speculative refactoring are prohibited;
-6. ownership, current-head CI, review binding, finding dispositions, and remote read-back remain fully required.
+6. ownership, current-head CI, review binding, dispositions, and remote read-back remain mandatory.
 
-Record additionally:
+Record:
 
 ```json
 {
@@ -231,645 +209,285 @@ Record additionally:
     "operatorAuthorization": "<exact reference or text>",
     "closedFindings": [
       {
-        "id": "<review id or signature>",
+        "id": "<review/thread id or signature>",
         "path": "<path|null>",
-        "summary": "<exact bounded summary>"
+        "summary": "<bounded exact summary>"
       }
     ]
   }
 }
 ```
 
-For this binding kind:
+For this kind, `bindingDigest` is the adopted head and `bodyDigest` is null.
 
-- `bindingRef` identifies the PR, branch, adopted head, and authorization;
-- `bindingDigest` is the adopted head SHA;
-- `bodyDigest` is `null`;
-- `issueBodyAccess` may be `truncated`.
-
-Existing-PR adoption is not a way to start new work from a partial Issue. Any need to add behavior, broaden scope, change architecture beyond a named finding, or perform unrelated cleanup invalidates adoption and requires a complete exact contract.
+Any need to broaden scope or add unrelated behavior invalidates adoption and requires another exact contract source.
 
 ### Contract revalidation
 
-Re-read task-control state before the first publication and again before `ready for review`.
+Re-read task-control state before first publication and before `ready for review`.
 
-If Issue state or `updatedAt` changed, investigate the reason, but do not use the timestamp alone as proof that the contract changed or remained stable.
+If Issue state or `updatedAt` changed, investigate why. Revalidate through the selected binding mechanism:
 
-Revalidate the exact binding through its own mechanism:
+- `issue-body`: complete-body digest;
+- `repository-contract`: path and immutable blob;
+- `operator-export`: exact export digest;
+- `existing-pr-adoption`: adopted head, authorization, and closed findings.
 
-- `issue-body`: obtain the complete body and compare normalized SHA-256;
-- `repository-contract`: confirm the binding path and immutable blob SHA;
-- `operator-export`: compare the exact export digest or obtain an explicit replacement export;
-- `existing-pr-adoption`: confirm adopted head, authorization, and closed finding list remain the permitted boundary.
-
-When exact revalidation cannot be completed:
-
-- block new implementation and scope expansion;
-- preserve already published work;
-- for existing-PR adoption, continue only inside the original closed finding list when authorization remains explicit;
-- otherwise obtain an exact source or operator decision.
+When exact revalidation fails, block new implementation and scope expansion. Preserve already published work and obtain an exact source or operator decision.
 
 ## 4. Durable capability profile
 
-A capability profile is a reusable, machine-readable ledger for one class of chat environment. Its purpose is to record tested transports, permissions, limits, and known dead ends so each new chat does not repeat the same destructive preflight.
+A capability profile is a reusable machine-readable ledger for one class of chat environment. It records tested transports, permissions, limits, and known dead ends so new chats do not repeat destructive preflight.
 
-### Canonical durable home
+### Canonical home and extraction
 
-The canonical durable home is one dedicated open GitHub Issue in this repository. Its body must contain the exact marker:
+The canonical home is one dedicated open non-PR GitHub Issue in this repository. Its body contains:
 
 ```html
 <!-- orchestrator-pack-chat-capability-profile:v1 -->
 ```
 
-The profile Issue is operational metadata. It is not:
+The profile Issue is operational metadata, not an implementation task, branch lock, AO authority, review verdict, or merge approval.
 
-- an implementation task;
-- a task-branch lock;
-- an AO worker/session authority;
-- a review verdict;
-- a merge approval.
+The JSON payload is the single fenced `json` block after the marker and before the next level-two heading. Zero blocks, multiple blocks, malformed JSON, or unrelated payloads make the profile corrupt.
 
-A new chat locates the profile by searching the current repository for the exact marker and selecting the single open, non-pull-request Issue whose profile key matches the current environment.
-
-The JSON payload inside the profile Issue must validate against the tracked strict schema:
+Validate the payload against:
 
 ```text
-.github/orchestrator-pack-chat-capability-profile.schema.json
+docs/orchestrator-pack-chat-capability-profile.schema.json
 ```
 
-The tracked schema is normative for JSON structure, required fields, enums, timestamp formats, expiry representation, and forbidden extra properties. Marker uniqueness, open-Issue selection, authorization, expiry evaluation, and live capability truth still require repository/helper or operator checks; JSON Schema alone does not make the Issue transactional or current.
+The schema is normative for structure, required fields, enums/patterns, timestamp formats, expiry representation, and forbidden properties. It does not prove marker uniqueness, current permissions, live truth, Issue selection, sorted arrays, or digest correctness.
 
-A profile that fails schema validation is corrupt and must not be used.
+### Deterministic profile key
 
-The profile key is:
+The lookup key is:
 
 ```text
-repository database ID
-+ repository full name
-+ environment/tool fingerprint
-+ non-secret auth principal or permission class
+repository ID and full name
++ fingerprintVersion
++ closed environment object
++ environmentDigest
++ non-secret authPrincipal
++ permissionClass
 ```
 
-The environment/tool fingerprint must identify the material execution class, for example:
+The environment object has exactly these keys:
 
-- available connectors;
-- shell/runtime class;
-- publication transports;
-- CI/review-read capabilities.
+```json
+{
+  "chatSurface": "<canonical token>",
+  "runtimeClass": "<canonical token>",
+  "connectors": ["<canonical token>"],
+  "publicationTransports": ["<canonical token>"],
+  "ciObservation": "<canonical token>",
+  "reviewObservation": "<canonical token>"
+}
+```
 
-It must not contain tokens, cookies, credentials, secret URLs, or private data.
+Canonicalization version 1:
 
-If no matching profile exists, create one only when the current executor has authority and real non-destructive evidence to record. If it cannot be created, treat the profile as unavailable and perform only the bounded capability checks required by the current task.
+1. normalize declared tokens to lowercase canonical `[a-z0-9._-]` values;
+2. reject empty values;
+3. sort and deduplicate both arrays lexicographically by Unicode code point;
+4. construct keys in this exact order: `chatSurface`, `runtimeClass`, `connectors`, `publicationTransports`, `ciObservation`, `reviewObservation`;
+5. serialize as UTF-8 JSON with no insignificant whitespace;
+6. compute lowercase SHA-256 and prefix `sha256:`.
 
-If more than one matching open profile exists, the marker or JSON is corrupt, repository identity differs, the fingerprint is ambiguous, or schema validation fails:
+The stored environment object and `environmentDigest` must agree. A mismatch is corrupt.
+
+Equivalent environments with differently ordered input arrays must derive the same digest.
+
+Do not put tokens, cookies, credentials, secret URLs, or private data in the key or profile.
+
+### Lookup and fail-closed behavior
+
+At task start:
+
+1. search the repository for the exact marker;
+2. keep open non-PR Issues only;
+3. extract and schema-validate the single payload;
+4. recompute the environment digest;
+5. match repository identity, fingerprint version/object/digest, principal, and permission class;
+6. require exactly one match;
+7. ignore expired capability entries;
+8. run short mutable liveness checks.
+
+On no match, multiple matches, extraction failure, schema failure, digest mismatch, expiry, inaccessible Issue, or contradiction with live behavior:
 
 - do not choose by guess;
-- mark the profile unavailable;
-- report the ambiguity or validation errors;
-- use bounded current-task checks until an operator repairs or explicitly selects the canonical profile.
+- do not trust chat memory;
+- treat the profile or affected entry as unavailable;
+- run only the smallest non-destructive task-local checks.
+
+Do not create test PRs, empty commits, destructive probes, or main-repository transport artifacts merely to prove capability.
 
 ### Required profile contents
 
-The profile must record:
+The profile records:
 
-```text
-profile schema/version
-repository ID and full name
-environment/tool fingerprint
-non-secret auth principal or permission class
-createdAt and updatedAt
-profile owner or last updater
-capability entries
-```
+- schema version;
+- repository ID/full name;
+- deterministic profile key;
+- created/updated times;
+- owner or last updater;
+- keyed capability entries.
 
-Each capability entry must record:
+Each capability entry records:
 
-- status: `proven | available-but-unproven | unavailable | degraded`;
+- `proven | available-but-unproven | unavailable | degraded`;
 - concrete evidence and test time;
 - exactly one of `expiresAt` or `noExpiryRationale`;
 - known limits;
 - preferred fallback.
 
-The normal minimum profile covers:
+The normal minimum keys are:
 
 ```text
-repository read
-text publication
-commit/tree/ref publication and remote read-back
-Issue/PR create and update
-CI runs/jobs/logs read
-review observation
-long-process handling
+repository-read
+text-publication
+commit-tree-ref-publication
+issue-pr-create-update
+ci-runs-jobs-logs-read
+review-observation
+long-process-handling
 ```
 
-Task-specific capabilities are required only when the task uses them:
+Additional task-specific keys use bounded kebab-case names.
+
+Only an authenticated repository collaborator acting as the current standalone executor, or the explicit operator, may update the profile. Updates remain schema-valid, replace only affected entries, preserve bounded human-readable history, and contain no secrets.
+
+Starting a new conversation alone does not invalidate a profile. Relevant entries become stale after expiry, permission/connector/runtime changes, or contradictory behavior.
+
+## 5. Roles, liveness, and modes
+
+### Implementer liveness
+
+A normal task checks:
+
+- repository read and current permissions;
+- current default-branch HEAD;
+- live policy files;
+- task-control state and exact contract binding;
+- selected publication transport;
+- planned or existing branch state;
+- current v2 receipt state when applicable.
+
+Choose:
+
+- `provisional-B` when required operations appear available but current-session publication is unproved;
+- `C` when reliable publication is unavailable.
+
+`provisional-B` resolves through the first meaningful task checkpoint:
 
 ```text
-binary or large files
-maximum safe payload
-executable modes
-symlinks
-Git LFS
-artifact upload/download
-signed commits
-history rewrite
+publish exact commit
+    -> read back head
+    -> prove one complete remote-content level
+    -> perform bounded receipt head transition
 ```
 
-A missing unused capability does not block full chat execution.
+On success, `provisional-B -> B`. On failure, switch only to another already-proven transport or downgrade to C. Do not begin a large local implementation while provisional.
 
-### Lookup, update, expiry, and fallback
+Mode B may edit, publish, read back, update the PR, observe CI/review, address findings, and prepare a ready-for-review handoff.
 
-At task start:
+Mode C may produce a patch, archive, changed-file bundle, manifest, plan, commands, or review. Its terminal status is `handoff prepared`, not completed.
 
-1. locate the canonical profile by marker and profile key;
-2. validate the JSON payload against `.github/orchestrator-pack-chat-capability-profile.schema.json`;
-3. verify repository identity and environment fingerprint;
-4. ignore expired entries;
-5. use only entries whose evidence applies to the current task and permission class;
-6. run short liveness checks for mutable facts.
+### Independent reviewer authority
 
-Only an authenticated repository collaborator acting as the current standalone executor or the explicit operator may update the profile.
+An independent reviewer does not take branch ownership merely to review another implementation.
 
-Every profile update must:
+A `review-only` executor may publish only:
 
-- remain valid against the tracked schema;
-- preserve a bounded human-readable transition history;
-- state what changed and why;
-- replace only affected entries;
-- keep secrets out of the Issue.
+- a GitHub review submission; or
+- a new top-level review comment.
 
-A capability entry expires at its stated `expiresAt`. Mutable authorization, network, connector, and service-availability evidence should have bounded expiry. Stable format or transport semantics may use `noExpiryRationale` only when the rationale is recorded.
+The review write must bind:
 
-The whole profile is stale when:
+- repository and PR;
+- exact reviewed head SHA;
+- exact Issue/spec binding;
+- reviewer execution identity;
+- findings or clean verdict.
 
-- its fingerprint no longer matches;
-- required entries expired;
-- repository identity differs;
-- actual behavior contradicts it.
+Review-only authority must not:
 
-Re-run the full capability preflight only after a material change:
+- update branch refs or repository files;
+- update an execution receipt;
+- change PR title, body, base, draft state, labels, merge state, or reviewers;
+- reply as the implementer;
+- resolve or unresolve existing threads;
+- dispatch workflows;
+- make any write that changes implementation state.
 
-- connector or tool inventory changed;
-- authentication principal or repository permissions changed;
-- runtime class changed;
-- the relevant profile entry expired;
-- actual behavior contradicted the profile;
-- an unexpected integrity, authorization, or network failure occurred.
+Review-addressing replies, thread resolution, PR metadata changes, receipts, and branch writes require implementer ownership.
 
-Starting a new conversation alone is not an invalidation event.
+A reviewer may read CI, comments, threads, Issue/spec state, and the diff without branch ownership.
 
-When the canonical profile is absent, corrupt, ambiguous, stale, or inaccessible:
+## 6. Receipt v2 and ownership
 
-- do not trust chat memory;
-- fall back to the smallest non-destructive checks required by the current task;
-- do not create test PRs, empty commits, destructive probes, or transport artifacts in the main repository merely to prove capability.
+### Version and marker
 
-## 5. Per-task liveness, ownership bootstrap, and modes
+The normative receipt is:
 
-A normal task does not repeat the full capability investigation. Check current mutable facts:
+```html
+<!-- chat-execution-receipt:v2 -->
+```
 
-- repository read succeeds;
-- current permissions are sufficient;
-- current default-branch HEAD is known;
-- both policy files were read live;
-- task-control state was read;
-- an exact contract binding was established;
-- the selected publishing transport is available;
-- the planned or existing task branch state is known.
-
-Choose the initial state before the canary:
-
-- `provisional-B` when the reusable capability profile and current liveness checks support every operation required by the task, but current-session publication has not yet been proved;
-- `C` when no reliable candidate publication path is available.
-
-### Non-circular ownership bootstrap
-
-Before ordinary ownership exists, reads are allowed. Writes are limited to this closed list:
-
-- create the task-control record when none exists and the operator explicitly authorized creation;
-- initial-claim receipt write;
-- takeover-claim receipt write.
-
-All other GitHub writes require established ownership, including:
-
-- task-branch creation;
-- task-branch update;
-- PR creation or mutation;
-- review replies;
-- workflow dispatch;
-- progress receipt updates;
-- history rewrite.
-
-The bootstrap order is:
+with:
 
 ```text
-read task-control state and remote branch state
-    -> establish exact contract binding
-    -> write initial-claim or takeover-claim receipt
-    -> read the receipt back and confirm ownership
-    -> create or mutate the task branch
-    -> perform remote content read-back
+chat-execution-receipt/v2
 ```
 
-For an absent planned branch, the initial claim records the intended branch name, exact starting base, and expected branch state `absent`. After claim success, create the branch at that exact base and read it back.
+One task has at most one active v2 receipt comment. Duplicate, malformed, missing-required-field, or ambiguous v2 receipts block implementer writes.
 
-For an existing branch, the claim binds the exact observed head.
+### Legacy v1 coexistence and migration
 
-Ordinary ownership checks cannot be prerequisites for the initial or takeover write that creates ownership. Issue #966 owns the repository helper that will make these transitions executable. Until it lands, this sequence remains an organizational fail-closed protocol with immediate read-back.
-
-### Publication canary
-
-`provisional-B` is transient. It resolves through the first meaningful task checkpoint:
-
-```text
-create or update the claimed task branch
-    -> publish a meaningful task commit
-    -> read the remote head back
-    -> prove resulting remote content through one allowed read-back level
-```
-
-On success:
-
-```text
-provisional-B -> B
-```
-
-If the selected transport fails:
-
-- remain `provisional-B` only while switching to another already-proven candidate transport and rerunning the canary;
-- transition to Mode C when no reliable candidate remains.
-
-Do this before a large local implementation. Do not begin one while the state remains `provisional-B`.
-
-### Mode B — full chat execution
-
-Mode B is confirmed only when the capability profile supports the task, ownership was established, exact contract binding is valid, and the current-session canary succeeded.
-
-Mode B may include:
-
-```text
-edit
-publish
-remote read-back
-open and update PR
-observe CI
-observe and address review
-prepare a ready-for-review handoff
-```
-
-Publication may use shell Git, the GitHub object API, the contents API, or another proven transport.
-
-Historically proven PR and CI capabilities do not need fake per-task tests. Confirm them through the first real PR and CI run. An unexpected failure causes explicit downgrade, escalation, or transport change.
-
-Only confirmed Mode B permits a promise to implement the task and bring its PR to `ready for review`.
-
-### Mode C — implementation handoff
-
-Use Mode C when reliable publication is unavailable or fails.
-
-Permitted results include:
-
-- patch;
-- archive;
-- changed-file bundle;
-- publication manifest;
-- implementation plan;
-- application commands;
-- review of another implementation.
-
-Name the actual delivery channel and its limit. Do not promise a remote branch or PR.
-
-The terminal Mode C status is:
-
-```text
-handoff prepared
-```
-
-A Mode C session may move to `provisional-B` when a reliable candidate transport becomes available. It becomes confirmed Mode B only after ownership, a remote write transaction, and complete allowed read-back succeed.
-
-## 6. Remote publication and content read-back
-
-The local container is temporary until work is remotely anchored.
-
-After ownership is established, normal Git publication is:
-
-```text
-inspect local status and diff
-    -> confirm every path is inside task scope
-    -> verify active execution ID, epoch, and expected branch state
-    -> commit a meaningful checkpoint
-    -> push/update the task branch
-    -> read the remote head back
-    -> prove resulting remote content
-```
-
-When using GitHub object APIs, publish a complete resulting Git tree while uploading only the delta:
-
-```text
-local Git index
-    -> compare with known base tree
-    -> upload new and changed blobs
-    -> apply additions, updates, and deletions
-    -> create complete resulting tree
-    -> create commit
-    -> update branch ref
-    -> read remote evidence back
-```
-
-The publication manifest preserves Git semantics:
-
-```text
-repository identity
-repo-relative path
-mode and object type
-blob SHA
-addition | update | deletion
-base commit and base tree
-freshly observed branch head
-target branch
-manifest digest
-```
-
-Reject absolute paths, `..`, case collisions, unapproved symlinks, gitlinks, or unexplained mode changes. Text-only replacement is insufficient when deletions, executable bits, symlinks, or object types matter.
-
-After blob upload, compare the returned blob SHA. A confirmed truncation or SHA mismatch blocks that transport for the affected payload. Do not vary chunk sizes without new evidence that the transport can be safe.
-
-### Allowed remote-content levels
-
-Do not require a field that every permitted transport cannot return. Every successful publication must satisfy one complete level:
-
-```text
-commit-and-tree
-commit-and-manifest
-commit-diff-and-file-blobs
-```
-
-#### `commit-and-tree`
-
-Require:
-
-- remote head commit SHA;
-- root tree SHA;
-- both read back from the remote repository;
-- comparison with the intended commit and resulting tree.
-
-#### `commit-and-manifest`
-
-Require:
-
-- remote head commit SHA;
-- complete resulting-tree manifest, or a retained exact manifest plus digest;
-- paths, modes, object types, blob SHAs, additions, updates, and deletions;
-- evidence reference that permits later reread;
-- comparison with the intended resulting content.
-
-#### `commit-diff-and-file-blobs`
-
-Require:
-
-- remote head commit SHA;
-- exact changed-path and status evidence;
-- remote diff or deterministic diff digest;
-- remote blob SHA for every added or modified file;
-- explicit deletion evidence for every removed file;
-- explicit old/new path evidence for renames;
-- explicit mode/object evidence where relevant;
-- comparison with the intended delta.
-
-A connector that does not expose root tree SHA may use a complete equivalent level. It must not invent `remoteTreeSha`.
-
-Partial evidence does not satisfy any level.
-
-Record read-back in a dedicated object:
-
-```json
-{
-  "remoteContent": {
-    "level": "commit-and-tree | commit-and-manifest | commit-diff-and-file-blobs",
-    "headSha": "<sha>",
-    "treeSha": "<sha|null>",
-    "manifestDigest": "<digest|null>",
-    "diffDigest": "<digest|null>",
-    "evidenceRef": "<exact source>",
-    "observedAt": "<UTC timestamp>"
-  }
-}
-```
-
-Level-specific evidence may be stored outside the receipt when the exact durable reference and digest are recorded.
-
-### Fail-closed ref update
-
-GitHub's ref-update API does not provide an `expected SHA` parameter. Use the strongest available sequence:
-
-```text
-read active execution ID and ownership epoch
-    -> read branch head immediately before publication
-    -> require receipt and head to match expected state
-    -> create commit with that head as parent
-    -> update ref with force=false
-    -> read branch head and remote-content evidence back
-```
-
-Concurrent advancement should produce a non-fast-forward failure.
-
-On ownership mismatch, conflict, or unexpected advancement:
-
-```text
-stop the write
-    -> read the current receipt and remote head
-    -> determine whether takeover or concurrent publication occurred
-    -> rebuild/rebase only when this execution still owns the task
-    -> revalidate scope, contract, and semantic overlap
-    -> republish from the new base
-```
-
-Do not retry a possibly successful timed-out write blindly; read remote state first.
-
-### History rewrite
-
-A force rewrite has no mechanical compare-and-swap protection. `force=true` disables fast-forward protection.
-
-Before an allowed rewrite:
-
-1. verify repository policy permits it;
-2. confirm sole ownership of the task branch;
-3. read the active execution receipt;
-4. read the remote head immediately before the write;
-5. require receipt identity/epoch and head to equal this execution's expected state;
-6. narrow the race window;
-7. force-update;
-8. perform complete allowed read-back immediately;
-9. obtain fresh CI and review for the new head.
-
-This is organizational control plus race-window reduction, not a guarantee against concurrent writes.
-
-### Planned ownership helper
-
-Issue #966 owns a Node 22 helper for standalone chat-executor initial claims, takeover claims, and execution-ID/ownership-epoch/head fencing. It must implement the claim-before-branch distinction and the revised contract-binding fields.
-
-Until #966 is implemented:
-
-- do not claim the repository has a transactional receipt mutex;
-- keep one active standalone executor;
-- use explicit initial claim or takeover;
-- reread the receipt and branch head immediately before and after high-risk writes;
-- fail closed on duplicate, corrupt, missing, or ambiguous receipt state.
-
-AO-managed workers continue to use their existing AO session, pack-store, claim, and `pack-worker-report` authority. They must not mint a competing standalone receipt ownership authority.
-
-## 7. Remote checkpoint and heartbeat
-
-During active execution, produce a GitHub-visible signal at least every 15–20 minutes. The cadence limits unanchored work and makes loops visible; it is not a limit on total task duration.
-
-User waiting time and an explicitly paused session do not count as active execution.
-
-### Primary heartbeat: remote checkpoint
-
-When a meaningful recoverable file slice exists:
-
-```text
-verify ownership
-    -> commit
-    -> publish task branch
-    -> complete remote-content read-back
-    -> update execution receipt
-    -> reread receipt and branch head
-```
-
-A clearly labeled WIP checkpoint is acceptable when it represents real, scoped progress. A local commit without remote publication is not a checkpoint.
-
-Also checkpoint at meaningful boundaries:
-
-- after a functional slice;
-- before a long test;
-- before a risky operation;
-- before changing transport;
-- before history rewrite;
-- before likely container loss.
-
-Do not create empty or meaningless commits merely to satisfy the timer.
-
-### Minimal heartbeat: evidence update
-
-When no safe meaningful file slice exists, update the execution receipt with concrete evidence after verifying ownership. Typical cases:
-
-- specification or dependency analysis;
-- inventory construction;
-- CI diagnosis;
-- one long-running local process;
-- one running GitHub Actions job.
-
-Record:
-
-- what was checked;
-- what changed in the diagnosis;
-- what hypothesis was rejected;
-- process or run identity;
-- the next specific step.
-
-If local files changed but cannot safely be checkpointed because they contain a secret, violate scope, or form a knowingly invalid tree, record the exact reason and publish at the first safe boundary.
-
-Phrases such as `still working`, `almost done`, or `only publication remains` are not evidence.
-
-### Loop detection
-
-Rewording an old conclusion is not new evidence.
-
-A sufficient core signal that execution is stuck is two consecutive heartbeat intervals with both:
-
-- no new substantive evidence affecting diagnosis, implementation, or the next justified action;
-- no change in process or external evidence.
-
-For a long process, changed evidence may include:
-
-- the same full process identity remains live;
-- log size or offset increased;
-- log timestamp changed;
-- new output appeared;
-- GitHub job or step progressed;
-- measurable CPU time increased;
-- an external service still reports active execution.
-
-When stuck:
-
-1. stop repeating the same hypothesis;
-2. preserve the latest safe remote checkpoint;
-3. record the evidence and blocker;
-4. change hypothesis, diagnostic layer, transport class, or escalate to the user.
-
-## 8. Long-running commands
-
-For commands longer than one tool call:
-
-- start one process;
-- write stdout and stderr to files;
-- store exit code separately;
-- poll the same process;
-- do not launch a duplicate suite;
-- verify the old process before retrying;
-- do not interpret a tool-response timeout as process failure.
-
-Track a full process identity:
-
-```text
-wrapper PID and operating-system start time
-child PID and operating-system start time
-process-group ID or equivalent job identity
-command digest
-nonce
-working directory
-stdout and stderr paths
-exit-code path
-metadata path
-```
-
-PID alone is insufficient because operating systems reuse PIDs.
-
-A reconnecting executor may poll or terminate only when identity is positively observable and matches. Do not attach, poll as authoritative, or terminate based only on PID, broad command-name matching, repository-path substring, or process grep.
-
-Treat partial, missing, schema-invalid, dead-PID, reused-PID, or mismatched metadata as stale.
-
-Issue #967 owns the repository-provided Node 22 launcher and atomic metadata implementation.
-
-Until #967 is implemented:
-
-- do not claim nonce/digest continuity unless the current runtime exposes it directly;
-- do not improvise a reusable repository wrapper outside task scope;
-- do not kill or attach when identity is ambiguous;
-- use the current tool/session's directly observable process handle when available;
-- record the limitation in the receipt.
-
-For GitHub Actions, bind evidence to:
-
-```text
-head SHA
-run ID
-job ID
-current step
-timestamps
-conclusion
-```
-
-Never combine CI evidence from different heads.
-
-## 9. Execution receipt
-
-Use one editable comment in the source Issue as the per-task execution receipt. Find it by a stable marker:
+Legacy marker/schema:
 
 ```html
 <!-- chat-execution-receipt:v1 -->
 ```
 
-The comment is both a compact machine-readable record and a human-readable progress view.
+```text
+chat-execution-receipt/v1
+```
 
-### Required minimum fields
+A v1 receipt remains historical evidence only. It does not satisfy v2 ownership or Definition of Done and is never silently interpreted as v2.
 
-The following fields are mandatory. An executor that cannot populate them must mark the receipt invalid or unavailable and must not claim completion:
+When a v1 receipt exists, ordinary v2 work begins only through explicit operator-authorized migration/takeover:
+
+1. read every v1/v2 marker comment;
+2. require no active valid v2 receipt;
+3. read the current branch/head and old v1 execution identity;
+4. record operator authorization and migration reason;
+5. create one v2 receipt with a new execution ID, a positive epoch greater than the recorded legacy generation when known, and `previousExecutionId` equal to the old ID;
+6. preserve a `legacyReceipt` reference with old marker/comment ID and state;
+7. reread every marker and branch state;
+8. succeed only when exactly one valid v2 receipt matches the new identity and current head.
+
+The old v1 comment may remain as historical/terminal evidence. It must not be updated to masquerade as v2. Ambiguity grants no ownership.
+
+### Closed pre-ownership writes
+
+Before implementer ownership, writes are limited to:
+
+- explicitly authorized task-control record creation or scope amendment required to establish a valid contract;
+- initial v2 claim;
+- takeover v2 claim;
+- explicit v1-to-v2 migration claim;
+- independent review-only submission under the previous section.
+
+All other writes require implementer ownership.
+
+### Required v2 fields
+
+The normative minimum is:
 
 ```json
 {
-  "schema": "chat-execution-receipt/v1",
+  "schema": "chat-execution-receipt/v2",
   "repository": "owner/repo",
   "issue": 123,
   "executionId": "chat-123-...",
@@ -885,28 +503,58 @@ The following fields are mandatory. An executor that cannot populate them must m
   "issueBinding": {
     "state": "open",
     "updatedAt": "<UTC timestamp>",
-    "issueBodyAccess": "full",
-    "bindingKind": "issue-body",
-    "bindingRef": "Issue #123 complete body",
-    "bindingDigest": "<sha256>",
+    "issueBodyAccess": "full | truncated",
+    "bindingKind": "issue-body | repository-contract | operator-export | existing-pr-adoption",
+    "bindingRef": "<exact source>",
+    "bindingDigest": "<digest>",
     "bodyDigest": "<sha256|null>"
   },
   "branch": "<task branch>",
+  "claimedBaseSha": "<sha>",
   "expectedBranchHead": "<sha|null>",
+  "expectedBranchState": "absent | present",
   "remoteContent": {
-    "level": "commit-and-tree",
+    "level": "commit-and-tree | commit-and-manifest | commit-diff-and-file-blobs | null",
     "headSha": "<sha|null>",
+    "publicationParentSha": "<sha|null>",
+    "compareBaseSha": "<sha|null>",
     "treeSha": "<sha|null>",
-    "manifestDigest": null,
-    "diffDigest": null,
-    "evidenceRef": "<source|null>",
+    "manifestDigest": "<digest|null>",
+    "diffDigest": "<digest|null>",
+    "evidenceRef": "<exact source|null>",
     "observedAt": "<UTC timestamp|null>"
   },
-  "mode": "provisional-B",
-  "work": "implementing",
-  "publication": "local",
-  "ci": "not-started",
-  "review": "not-open",
+  "ciIdentity": {
+    "headSha": "<sha|null>",
+    "runsOrChecks": [
+      {
+        "id": "<id>",
+        "name": "<name>",
+        "state": "pending | success | failure | cancelled | skipped | missing",
+        "conclusion": "<exact conclusion|null>"
+      }
+    ],
+    "state": "not-started | running | red | green | missing",
+    "observedAt": "<UTC timestamp>"
+  },
+  "reviewIdentity": {
+    "headSha": "<sha|null>",
+    "reviews": ["<review id>"],
+    "findings": [
+      {
+        "id": "<thread/signature>",
+        "state": "open | disposed",
+        "disposition": "fixed-and-verified | removed-or-inapplicable | rejected-and-accepted | null",
+        "verificationHeadSha": "<sha|null>",
+        "evidenceRef": "<source|null>"
+      }
+    ],
+    "state": "not-open | open | addressing | clean",
+    "observedAt": "<UTC timestamp>"
+  },
+  "mode": "provisional-B | B | C",
+  "work": "analyzing | implementing | testing | preparing-handoff",
+  "publication": "local | publishing | published | blocked",
   "updatedAt": "<UTC timestamp>"
 }
 ```
@@ -915,208 +563,221 @@ Rules:
 
 - `bindingDigest` is always non-null;
 - `bodyDigest` is non-null only for complete `issue-body`;
-- `issueBodyAccess: truncated` with `bindingKind: issue-body` is invalid;
-- `expectedBranchHead` may be `null` only when the claimed planned branch is expected to be absent;
-- `remoteContent.headSha` and level evidence may be `null` only before first successful publication or in Mode C;
-- `remoteContent.treeSha` is required only for `commit-and-tree`;
-- a different allowed level supplies its own complete evidence instead of a fabricated tree SHA;
-- `mode` accepts `provisional-B`, `B`, or `C`;
-- record the canary transition that confirms B or downgrades to C.
-
-For `existing-pr-adoption`, the `existingPrAdoption` object and closed finding list are mandatory.
-
-`ownershipEpoch` is mandatory for takeover continuity. Until #966 is implemented it remains a self-reported organizational fence, not a transactional lock.
-
-### Independent guarantee identities
-
-Keep these distinct in the receipt:
-
-```text
-contract identity
-branch ownership
-remote content identity
-CI identity
-review identity
-```
-
-Recommended explicit extensions are:
-
-```json
-{
-  "ciIdentity": {
-    "headSha": "<sha>",
-    "runsOrChecks": ["<id>"],
-    "state": "running | red | green | missing",
-    "observedAt": "<UTC timestamp>"
-  },
-  "reviewIdentity": {
-    "headSha": "<sha>",
-    "reviews": ["<review id>"],
-    "openFindings": ["<signature>"],
-    "state": "not-open | open | addressing | clean",
-    "observedAt": "<UTC timestamp>"
-  }
-}
-```
-
-No one hash or timestamp proves another guarantee.
-
-Optional extension fields may record:
-
-- process identities;
-- changed-path and semantic-overlap comparisons;
-- transport diagnostics;
-- finding dispositions;
-- bounded transition history.
-
-Optional fields do not replace the required minimum.
-
-Follow the JSON with:
-
-```markdown
-## Chat execution progress
-
-### Completed
-- ...
-
-### Current
-- ...
-
-### Next
-- ...
-
-### Blockers
-- none
-
-### Recent transitions
-- ...
-```
-
-Use UTC as canonical time.
-
-The GitHub Issue comment body limit is 65,536 characters. Keep transition history bounded. When space is low, remove oldest transitions first while retaining:
-
-- current state;
-- policy and exact contract bindings;
-- active and previous execution IDs;
-- ownership epoch;
-- expected and last remote head;
-- remote-content level and digest/reference;
-- takeover history;
-- existing-PR adoption boundary when applicable;
-- current blockers;
-- unresolved finding dispositions.
-
-Issue comment updates are last-write-wins and are not transactional. Two writers can overwrite each other.
-
-Protection is organizational until #966 lands:
-
-- one active standalone branch owner;
-- one active execution ID;
-- monotonically increasing ownership epoch;
-- explicit initial claim or takeover;
-- immediate receipt and remote-head read-back;
-- fail-closed behavior on ambiguity.
-
-Do not treat the JSON block as a transaction log or independent proof.
-
-The receipt does not replace:
-
-- remote commits and content read-back;
-- GitHub Actions;
-- GitHub reviews;
-- repository-owned AO worker status;
-- review-start claim or pack-store authorities.
-
-## 10. Ownership and takeover
-
-One task branch has one active standalone chat executor.
-
-A second standalone executor must not publish into a live branch without takeover.
+- `expectedBranchHead` is null only for a claimed absent branch;
+- before first publication, remote-content level/head evidence may be null while claimed base and expected branch state are explicit;
+- before CI, `ciIdentity` has the intended/current head, an empty check list, and `not-started` or `missing`;
+- once CI exists, run/check IDs, names, states, and conclusions are mandatory;
+- before review, `reviewIdentity` has the intended/current head, empty arrays, and `not-open`;
+- once review exists, review/finding identities are mandatory;
+- a finding is terminal only with one allowed disposition;
+- `clean` is invalid while any prior finding remains open or lacks disposition;
+- coarse status words outside these identity objects are summaries only and cannot satisfy completion.
 
 ### Initial claim
 
-The initial claim is the only ownership write for a task that has no current receipt.
-
-Before it:
+Before initial claim:
 
 1. establish exact contract binding;
-2. read all comments carrying the receipt marker;
-3. require no valid current receipt;
-4. read the planned branch and require it to be absent or at an explicitly selected starting head;
-5. prepare a new execution ID and epoch `1`.
+2. read all v2 markers and require none active;
+3. read the planned branch;
+4. record intended branch, claimed base, and either absent state or exact existing head;
+5. create execution ID and epoch 1.
 
-Write the receipt, then immediately reread all matching comments and branch state.
+Write the v2 receipt and reread marker comments and branch state. Initial claim succeeds only when exactly one valid v2 receipt matches the identity, binding, branch, and expected state.
 
-Initial claim succeeds only when exactly one valid current receipt contains the new execution ID, epoch `1`, contract binding, intended branch, and expected branch state.
+### Takeover
 
-On ambiguity, duplicate receipt, overwritten comment, or unexpected branch movement, the claim fails and grants no authority.
+Takeover requires explicit operator authorization unless repository policy already marks the previous execution terminal/abandoned.
 
-### Takeover claim
+Read live policies, task-control/binding, every v2 marker, current branch/head, current CI/review, and the previous execution. Create a new execution ID, increment epoch exactly once, preserve the previous ID, write the receipt, and reread everything.
 
-For takeover:
+A failed or ambiguous takeover grants no ownership.
 
-1. require explicit operator authorization unless the current receipt is already terminal/abandoned under repository policy;
-2. read live policy files;
-3. read task-control state and exact contract binding;
-4. read all comments carrying the receipt marker and require exactly one valid current receipt;
-5. read the remote branch head and allowed remote-content evidence;
-6. inspect current-head CI and review;
-7. create a new execution ID;
-8. increment ownership epoch by exactly one;
-9. preserve the previous execution ID;
-10. state `taking over from <old ID> at <head SHA>`;
-11. update the receipt and reread it immediately;
-12. continue only when new ID/epoch, contract binding, and expected head are read back unambiguously.
+### Ordinary implementer fence
 
-Because Issue comments lack compare-and-swap, claim remains organizational rather than transactional until #966 provides the repository helper. A failed or ambiguous claim grants no ownership.
+Before every implementer write:
 
-### Ordinary ownership fence
+- require exactly one valid current v2 receipt;
+- require matching execution ID and epoch;
+- require valid exact contract binding;
+- require the remote branch to match the receipt's expected state/head;
+- stop on mismatch, duplicate, corruption, missing data, or ambiguity.
 
-After claim success and immediately before every later write:
+A stale executor observing another ID or higher epoch stops. It must not restore its old receipt or force the branch backward.
 
-- require exactly one valid current receipt;
-- require the receipt execution ID and epoch to equal this executor;
-- require exact contract binding to remain valid;
-- require the remote branch state to match the expected head or admitted absent state;
-- stop without writing on mismatch, duplicate, corrupt, missing, or ambiguous state.
+This is organizational control. GitHub Issue comments are last-write-wins and provide no compare-and-swap or transactional mutex.
 
-After branch or receipt writes, reread receipt and branch state.
+AO-managed workers continue to use AO session, pack-store, claim, and `pack-worker-report` authorities. They do not mint a competing standalone receipt authority.
 
-A stale executor that observes another execution ID or a higher epoch must stop. It must not lower the epoch, restore its old receipt, create a replacement branch, or force the branch back to local state.
+## 7. Remote publication and read-back
 
-Fast-forward-only publication prevents many accidental overwrites, but receipt comments remain last-write-wins and force rewrites remain race-prone.
+The local filesystem is temporary until work is remotely anchored.
 
-AO-managed workers do not use this standalone ownership protocol. They continue to use the AO-managed lifecycle and authorities defined by `/AGENTS.md`.
+Normal publication:
 
-If branch deletion is unavailable, do not create temporary transport branches in the main repository. Put abandoned task branches into an operator cleanup queue.
+```text
+inspect status/diff and scope
+    -> verify active v2 ownership and old expected head
+    -> create a meaningful commit
+    -> publish fast-forward-only
+    -> read back exact remote head
+    -> prove one complete content level
+    -> perform bounded post-publication receipt transition
+```
 
-## 11. Degradation and attempt discipline
+Reject absolute paths, `..`, case collisions, unapproved symlinks, gitlinks, and unexplained mode/object changes.
 
-If authorization or write permission fails after work began:
+After blob upload, compare returned blob SHA. A confirmed truncation or mismatch blocks that transport.
 
-1. stop GitHub writes;
-2. read remote state if reading still works;
-3. report the exact sanitized failure;
-4. export local work as a patch, archive, or manifest;
+### Complete remote-content levels
+
+Every successful publication satisfies exactly one complete level:
+
+```text
+commit-and-tree
+commit-and-manifest
+commit-diff-and-file-blobs
+```
+
+#### `commit-and-tree`
+
+Require remote head commit SHA and root tree SHA, both read back and compared with the intended commit/tree.
+
+#### `commit-and-manifest`
+
+Require remote head and a complete resulting-tree manifest, or exact retained manifest plus digest, covering paths, modes, object types, blob SHAs, additions, updates, deletions, and an exact durable evidence reference.
+
+#### `commit-diff-and-file-blobs`
+
+Require:
+
+- remote `headSha`;
+- `publicationParentSha` proving the immediate publication parent;
+- machine-readable `compareBaseSha`;
+- exact `compareBaseSha...headSha` compare range;
+- changed paths and statuses across that range;
+- remote diff or deterministic range digest;
+- blob SHA for every added/modified file;
+- explicit deletion evidence;
+- old/new path evidence for renames;
+- mode/object evidence where relevant;
+- comparison with the intended admitted delta.
+
+For the first publication/adoption, `compareBaseSha` is the claimed starting base. Later checkpoints may use the prior expected head only when that prior head already has complete verified receipt evidence; otherwise retain the stable claimed base. Before Definition of Done, evidence must cover claimed base through current head.
+
+A last-parent-only comparison cannot prove a branch containing earlier unverified commits.
+
+A connector without root tree SHA may use a complete equivalent level. It must not invent a tree SHA. Partial evidence satisfies no level.
+
+### Fail-closed ref update
+
+Use the strongest available sequence:
+
+```text
+read receipt identity/epoch and old expected head
+    -> reread branch and require exact old state
+    -> create commit with old head as parent
+       or claimed base as parent for admitted absent branch
+    -> update ref with force=false
+    -> read back head and content evidence
+```
+
+Concurrent advancement should fail non-fast-forward. Do not retry a possibly successful timed-out write blindly; read state first.
+
+### Bounded post-publication receipt transition
+
+Publication changes the branch before the receipt can record the new expected head. This is the only ordinary receipt update admitted while remote head differs from the old `expectedBranchHead`.
+
+Before transition:
+
+1. read the v2 receipt and require the same execution ID/epoch and unchanged old expected state;
+2. read the remote branch and require it equals the exact just-published commit;
+3. prove that commit's parent is the old expected head, or the claimed base for an absent-branch first publication;
+4. complete one remote-content level, including the required compare base/range;
+5. require no other branch advancement and no takeover.
+
+Then update the receipt in one bounded write:
+
+- set `previousExpectedBranchHead` to the old head or explicit absent state;
+- set `expectedBranchHead` to the exact published head;
+- set expected state to present;
+- replace `remoteContent` with the complete new-head evidence;
+- invalidate old-head CI and review identities (`not-started`/`not-open` for the new head);
+- record the transition time.
+
+Immediately reread receipt and branch. Any mismatch blocks. Never advance the receipt to an unproved or merely latest-observed head.
+
+### History rewrite
+
+Force rewrite has no mechanical compare-and-swap. Before an independently authorized rewrite:
+
+1. verify repository policy allows it;
+2. confirm sole ownership;
+3. read receipt and remote head immediately before write;
+4. require matching identity/epoch/head;
+5. force-update only the intended commit;
+6. perform complete read-back;
+7. execute the bounded receipt transition;
+8. obtain fresh CI and review.
+
+## 8. Checkpoints and heartbeat
+
+During active execution, produce a GitHub-visible signal at least every 15–20 minutes. User waiting time and explicitly paused sessions do not count as active execution.
+
+When a meaningful recoverable slice exists:
+
+```text
+verify ownership
+    -> publish meaningful checkpoint
+    -> complete read-back
+    -> bounded receipt transition
+    -> reread receipt and branch
+```
+
+A WIP checkpoint is acceptable when it is real, scoped progress. A local commit is not a checkpoint. Do not create empty commits to satisfy the timer.
+
+Checkpoint after functional slices and before long tests, risky operations, transport changes, history rewrite, or likely container loss.
+
+When no safe file slice exists, update the receipt with concrete evidence only after ownership verification. Record what was checked, what changed, rejected hypotheses, process/run identity, and next action. `Still working` and similar phrases are not evidence.
+
+Two consecutive heartbeat intervals with no substantive or external evidence change indicate a loop. Preserve the latest checkpoint, record the blocker, and change hypothesis, diagnostic layer, transport, or escalate.
+
+## 9. Long-running commands
+
+For a command exceeding one tool call:
+
+- start one process;
+- capture stdout/stderr and exit status when the environment supports it;
+- poll the same directly observable process/session;
+- do not launch a duplicate suite merely because a tool response timed out;
+- verify available process identity before retry or termination.
+
+PID alone is insufficient. Use every identity field directly exposed by the runtime: PID/start time, process group/job identity, command/session identity, working directory, and log handle.
+
+Do not claim nonce/digest continuity when the environment cannot expose it. Do not attach to or terminate an ambiguous process. Do not improvise a repository-wide wrapper outside task scope.
+
+A missing runtime filesystem after container replacement means local process continuity is unavailable; report that limitation rather than inventing recovery.
+
+For GitHub Actions, bind evidence to head SHA, run ID, job ID, step, timestamps, and conclusion. Never combine evidence from different heads.
+
+## 10. Degradation and attempt discipline
+
+If authorization or publication fails after work began:
+
+1. stop writes;
+2. read remote state when possible;
+3. report the sanitized failure;
+4. export work as a patch/archive/manifest;
 5. downgrade to Mode C;
-6. update the receipt only if comment writing still works and ownership is unambiguous.
+6. update the receipt only when ownership remains unambiguous.
 
 A confirmed integrity mismatch immediately blocks the affected transport.
 
-There is no universal three-attempt limit. Stop repeating one failure class when two consecutive attempts:
+Stop repeating one failure class when two consecutive attempts add no evidence, do not change observed state, and repeat a rejected hypothesis. The next attempt must change hypothesis, evidence source, diagnostic layer, or solution class.
 
-- add no diagnostic information;
-- do not change observed state;
-- repeat an already rejected hypothesis.
+## 11. Secrets and egress
 
-The next attempt must change hypothesis, evidence source, diagnostic layer, or solution class.
-
-Review-cycle limits come from `/AGENTS.md`, tier policy, or the task contract, not from this document.
-
-## 12. Secrets and egress
-
-Never publish through commits, connector calls, Issue comments, receipts, capability profiles, logs, or handoff archives:
+Never publish through commits, connector calls, Issues, receipts, profiles, logs, or handoff archives:
 
 - tokens or API keys;
 - cookies or authorization headers;
@@ -1126,169 +787,137 @@ Never publish through commits, connector calls, Issue comments, receipts, capabi
 - secret configuration;
 - third-party private data.
 
-Scrub CI and process logs before quoting them.
+Scrub CI and process logs before quoting them. Capability evidence may name a non-secret principal, permission class, tool version, HTTP status, or sanitized error class.
 
-Capability evidence may name a non-secret login, permission class, tool version, HTTP status, or sanitized error class; it must not contain credentials.
+## 12. CI and review lifecycle
 
-## 13. CI and review finding lifecycle
+All CI and review claims bind to the current PR head and exact contract binding.
 
-All CI and review claims bind to the current PR head SHA and the current exact contract binding.
-
-After every new commit or history rewrite:
+After each new commit or history rewrite:
 
 - invalidate old-head CI conclusions;
 - invalidate old-head clean-review conclusions;
-- obtain fresh checks and review for the new head.
+- set new-head identities to not-started/not-open until observed;
+- obtain fresh checks and review.
 
-Do not call missing CI green. Do not treat cancelled, stale, or earlier-head runs as completion.
+Do not call missing CI green. Cancelled, stale, earlier-head, or unidentified runs do not satisfy completion.
 
 ### Finding dispositions
 
-Every previously reported finding remains open until exactly one allowed disposition is recorded:
+Every prior finding remains open until exactly one disposition is recorded:
 
-1. `fixed-and-verified` — the finding was fixed and verification is bound to the current head;
-2. `removed-or-inapplicable` — relevant code or document text was removed, making the finding inapplicable;
-3. `rejected-and-accepted` — the finding was rejected with evidence and that rejection was accepted by the responsible reviewer or user.
+1. `fixed-and-verified` — fixed and verified on the current head;
+2. `removed-or-inapplicable` — relevant text/code was removed;
+3. `rejected-and-accepted` — rejected with evidence and accepted by the responsible reviewer or user.
 
-A later clean review may support a disposition, but it does not automatically close, supersede, or launder an earlier finding.
+A later clean review can support a disposition but does not automatically close, supersede, or launder an earlier finding. Silence is not acceptance.
 
-Silence from another reviewer is not acceptance.
+When GitHub threads exist, thread resolution must agree with receipt disposition. Reuse pack finding signatures, review-cycle identities, and merge-triage markers rather than inventing a competing store.
 
-When GitHub review threads exist, their resolution state must agree with the reported disposition. When findings are represented by pack finding signatures, review-cycle state, or merge-triage markers, reuse those identities rather than inventing a competing finding store.
+A clean current-head review is not sufficient while a prior finding lacks disposition.
 
-A clean current-head review is necessary when repository policy requires it, but it is not sufficient while a prior finding lacks an allowed disposition.
+For existing-PR adoption, the closed finding list is the maximum mutation boundary. Another defect requires exact rebinding or explicit operator amendment.
 
-For `existing-pr-adoption`, the closed finding list is the maximum mutation boundary. Discovering another defect does not authorize fixing it unless the operator supplies a complete exact contract or explicitly rebinds the task through another allowed kind.
+## 13. Status vocabulary
 
-## 14. Status vocabulary
-
-Track orthogonal state rather than one vague status:
+Track orthogonal state:
 
 ```text
-mode =
-  provisional-B | B | C
-
-work =
-  analyzing | implementing | testing | preparing-handoff
-
-publication =
-  local | publishing | published | blocked
-
-publicationCause =
-  none | retryable | auth | rate-limit | integrity | conflict | ownership | contract | permanent
-
-contract =
-  bound | revalidation-required | unavailable | invalid
-
-remoteContent =
-  unavailable | partial | commit-and-tree | commit-and-manifest | commit-diff-and-file-blobs
-
-ci =
-  not-started | running | red | green | missing
-
-review =
-  not-open | open | addressing | clean@<head SHA>
+mode = provisional-B | B | C | review-only
+work = analyzing | implementing | testing | preparing-handoff | reviewing
+publication = local | publishing | published | blocked | not-applicable
+publicationCause = none | retryable | auth | rate-limit | integrity | conflict | ownership | contract | permanent
+contract = bound | revalidation-required | unavailable | invalid
+remoteContent = unavailable | partial | commit-and-tree | commit-and-manifest | commit-diff-and-file-blobs
+ci = not-started | running | red | green | missing
+review = not-open | open | addressing | clean@<head SHA>
 ```
 
-Before `publication=published`, do not claim:
+Before publication is proved, do not claim implementation complete, final remote content ready, only publication remains, or almost ready.
 
-```text
-implementation complete
-final remote content ready
-only publication remains
-almost ready
-```
-
-Accurate examples:
-
-```text
-contract unavailable: Issue body truncated; exact source required
-existing PR adopted at head <SHA>; fixes limited to findings <IDs>
-published to branch; remote content verified by commit-diff-and-file-blobs
-publication blocked: ownership ambiguity
-clean review for head <SHA>; prior finding dispositions verified
-```
-
-## 15. Mandatory acceptance scenarios
-
-The policy behavior is:
+## 14. Mandatory scenarios
 
 | Scenario | Required result |
 |---|---|
-| Short Issue read in full | Normalize the complete body and use SHA-256 as both binding and body digest. |
-| Large Issue is truncated | Do not start new implementation without a complete alternate contract. |
-| Large Issue binds a repository specification | Bind repository path and immutable Git blob SHA. |
-| Existing PR with truncated Issue | Continue only after explicit operator authorization, complete adopted-head read-back, and a closed exact finding list. |
-| Second executor writes to occupied branch | Reject on execution ID, epoch, or expected-head mismatch. |
-| Issue or exact contract changes after claim | Require exact contract revalidation before more implementation or ready-for-review reporting. |
-| Connector lacks root tree SHA | Use a complete allowed `commit-and-manifest` or `commit-diff-and-file-blobs` level. |
-| Executor sees only an Issue summary | Do not treat the summary as contract identity. |
-| New commit is published | Invalidate old-head CI and clean-review conclusions. |
-| Existing-PR adoption attempts new functionality | Block and require a complete exact contract or explicit rebinding. |
+| Short Issue read in full | Normalize complete body and use SHA-256 as binding/body digest. |
+| Large Issue truncated | Do not start new implementation without exact alternate contract. |
+| Issue binds repository specification | Bind path and immutable blob SHA. |
+| Existing PR with truncated Issue | Require authorization, adopted-head read-back, and closed findings. |
+| Second implementer writes | Reject on execution ID, epoch, or expected-head mismatch. |
+| Contract changes after claim | Require exact revalidation. |
+| Connector lacks tree SHA | Use a complete manifest or diff/blob level. |
+| Issue summary only | Do not treat it as contract identity. |
+| New commit published | Invalidate old-head CI/review. |
+| Adoption adds functionality | Block and require rebinding. |
+| Successful publication | Bounded transition advances expected head to exact published commit. |
+| Unexpected advancement before transition | Block transition. |
+| Legacy v1 exists | Require explicit v1-to-v2 migration/takeover. |
+| `ci: green` without run/check IDs | Receipt incomplete. |
+| Clean review with undisposed prior finding | Not clean/complete. |
+| Diff/blob evidence lacks compare base/full range | Invalid. |
+| Independent reviewer posts head-bound review | Allowed without branch takeover. |
+| Reviewer tries to mutate PR/branch/receipt/thread state | Ownership required; write blocked. |
+| Equivalent environment arrays in different order | Canonical digest is identical. |
+| Fingerprint object and digest disagree | Profile corrupt and ignored. |
 
-## 16. Definition of Done for "implement the Issue"
+## 15. Definition of Done for implementation
 
 A chat implementation is complete only when all applicable conditions hold:
 
 ```text
 [ ] code or documentation exists in a remote task branch
 [ ] exact contract binding is valid
-[ ] required execution-receipt fields are complete
+[ ] one valid active v2 receipt contains all mandatory identities
 [ ] branch ownership is current and unambiguous
-[ ] one complete allowed remote-content read-back level succeeded
+[ ] each publication used a bounded receipt transition
+[ ] cumulative remote-content evidence covers claimed base through current head
 [ ] task-control state was rechecked
-[ ] the PR is linked according to /AGENTS.md
-[ ] the PR diff contains only intended changes
-[ ] existing-PR adoption, when used, stayed inside its closed finding list
-[ ] no transport, secret, or temporary process files remain
-[ ] default-branch movement was compared and semantic overlap resolved
-[ ] CI exists for the current head
-[ ] required or repository merge-contract checks are green
-[ ] every review finding has one allowed explicit disposition
-[ ] review evidence is bound to the current head and exact contract
-[ ] old-head CI and review conclusions were invalidated after changes
+[ ] PR is linked according to /AGENTS.md
+[ ] PR diff contains only intended scoped changes
+[ ] existing-PR adoption stayed inside its closed finding list
+[ ] no secret, transport, or temporary process files remain
+[ ] default-branch movement was classified and overlap resolved
+[ ] current-head CI identities exist and required checks are green
+[ ] current-head review identities exist
+[ ] every prior finding has an allowed disposition
+[ ] old-head CI/review evidence was invalidated after changes
 [ ] merge conflicts are absent
-[ ] the base was updated when semantic overlap or repository policy requires it
+[ ] base was updated when overlap or repository policy requires it
 [ ] PR is ready for review
-[ ] the user received PR URL, head SHA, contract binding kind/digest,
-    remote-content level, CI summary, review state, finding dispositions,
-    and known limitations
+[ ] user received PR URL, head SHA, contract binding, compare base/read-back level,
+    CI identities, review state, dispositions, and limitations
 ```
 
-`BEHIND` alone is not a blocker unless branch protection or the repository merge contract requires an up-to-date base. However, semantic overlap, an unclassified default-branch change, invalid contract binding, adoption-scope violation, or stale acceptance evidence remains blocking even when Git reports no conflict.
+`BEHIND` alone is not a blocker unless branch protection or merge policy requires an up-to-date base. Unclassified default movement, invalid contract, adoption-scope violation, or stale evidence remains blocking without textual conflict.
 
-Some API-authored commits may not start workflows. If no run appears for the current head, use an existing repository-owned retrigger. Do not create a diagnostic workflow and do not interpret a missing run as green. Escalate if no safe retrigger exists.
+If API-authored commits do not start workflows, use an existing repository-owned retrigger. Missing runs are not green. Do not create diagnostic workflows.
 
-Local tests, local commits, and a clean local tree do not satisfy this Definition of Done.
+Local tests, local commits, and a clean local tree do not satisfy Definition of Done. Mode C ends with `handoff prepared`.
 
-Mode C ends with `handoff prepared`, not `completed`.
+## 16. Operating formula
 
-## 17. Operating formula
-
-> Capabilities live in a canonical repository Issue, are keyed to repository and environment identity, and are reused only while current and unambiguous.
+> Live policy is read before work.
 >
-> Capability JSON must validate against the strict tracked schema in `.github/orchestrator-pack-chat-capability-profile.schema.json`; the Issue remains the mutable instance.
+> Capability structure lives in `docs/orchestrator-pack-chat-capability-profile.schema.json`; mutable observations live in one canonical operational Issue.
 >
-> The GitHub Issue is the task-control record; exact contract identity may come from a complete Issue body, repository blob, operator export, or narrow adopted PR head.
+> Profile lookup uses a versioned closed environment object and deterministic digest, not a free-form name.
 >
-> Never hash truncated or summarized Issue text as a complete contract.
+> The Issue is the task-control record; exact contract identity may come from a complete Issue body, repository blob, operator export, or narrow adopted PR head.
 >
-> Establish exact contract binding and claim ownership before creating or mutating the task branch.
+> Truncated or summarized Issue text is never hashed as a complete contract.
 >
-> Active work produces a GitHub-visible heartbeat every 15–20 minutes.
+> Receipt v2 separates contract, ownership, remote content, CI, and review identities; legacy v1 requires explicit migration.
 >
-> File progress is anchored in a remote branch and verified through one complete transport-appropriate read-back level.
+> Independent reviewers can publish head/spec-bound verdicts without taking branch ownership, but cannot mutate implementation state.
 >
-> Root tree SHA is not globally mandatory when an equivalent allowed read-back level proves resulting content.
+> Implementer ownership is claimed before branch mutation and remains an organizational, fail-closed protocol because Issue comments are last-write-wins.
 >
-> Contract identity, branch ownership, remote content, CI identity, and review identity remain separate guarantees.
+> Every publication proves remote content and advances the expected head only through a bounded same-execution transition.
 >
-> Default-branch movement is classified for semantic contract overlap, not only policy-file drift.
+> Diff/blob evidence names an exact compare base and full compare range.
 >
-> Every prior review finding requires an explicit allowed disposition.
+> Active work is remotely checkpointed and current-head CI/review is reacquired after every change.
 >
-> Standalone ownership fencing remains organizational until Issue #966 provides the repository-owned helper.
->
-> Full long-process identity remains capability-limited until Issue #967 provides the repository-owned Node 22 wrapper.
+> Every prior finding requires explicit disposition.
 >
 > Work that exists only in an ephemeral container is not finished work.
