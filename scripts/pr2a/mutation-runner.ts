@@ -290,13 +290,21 @@ function git(root: string, args: string[]): string {
   if (!result.ok) throw new Error(result.stderr || result.error || `git_${args.join('_')}_failed`);
   return result.stdout.trim();
 }
+function commitTree(root: string, args: string[]): string {
+  return git(root, [
+    '-c', 'user.name=orchestrator-pack-mutation-evidence',
+    '-c', 'user.email=mutation-evidence@invalid.local',
+    'commit-tree',
+    ...args,
+  ]);
+}
 function syntheticPrMerge(root: string, candidateRef: string): string {
   const candidate = git(root, ['rev-parse', `${candidateRef}^{commit}`]);
   const baseName = String(process.env.GITHUB_BASE_REF ?? '').trim() || 'main';
   const baseRef = `origin/${baseName}`;
   const base = git(root, ['rev-parse', `${baseRef}^{commit}`]);
   const tree = git(root, ['rev-parse', `${candidate}^{tree}`]);
-  return git(root, ['commit-tree', tree, '-p', base, '-p', candidate, '-m', 'mutation detector synthetic PR merge']);
+  return commitTree(root, [tree, '-p', base, '-p', candidate, '-m', 'mutation detector synthetic PR merge']);
 }
 function runConformanceDetector(root: string, candidateRef: string): DetectorExecution {
   const syntheticMerge = syntheticPrMerge(root, candidateRef);
@@ -316,7 +324,7 @@ function runConformanceDetector(root: string, candidateRef: string): DetectorExe
 function createMutationCommit(root: string, artifactPath: string, binding: Pr2aMutationBinding): string {
   git(root, ['add', '--', artifactPath]);
   const tree = git(root, ['write-tree']);
-  const commit = git(root, ['commit-tree', tree, '-p', 'HEAD', '-m', `mutation ${binding.ac}:${binding.mutationId}`]);
+  const commit = commitTree(root, [tree, '-p', 'HEAD', '-m', `mutation ${binding.ac}:${binding.mutationId}`]);
   git(root, ['reset', '--quiet', 'HEAD', '--', artifactPath]);
   return commit;
 }
