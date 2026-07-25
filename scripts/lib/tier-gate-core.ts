@@ -856,7 +856,7 @@ function validateTierTransition(
     errors.push('tier demotion: later up-escalation closes reuse of the consumed demotion event');
   }
 
-  if (event.kind === 'new' && historicalDemotions.has(evidence.taskIdentity) {
+  if (event.kind === 'new' && historicalDemotions.has(evidence.taskIdentity)) {
     errors.push('tier demotion: cutover historical demotion already consumed lifecycle allowance');
   }
 
@@ -912,7 +912,7 @@ export function checkTierGateGuard(
     }
     if (skipLine) {
       errors.push(
-        `red-flag marker hit (${screen.hits.join(', ')}) on skip-line input — tier dominance`,
+        `red-flag marker hit (${screen.hits.join(', ')}) on skip-line input — marker dominance`,
       );
     }
   }
