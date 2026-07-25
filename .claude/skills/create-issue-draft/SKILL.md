@@ -847,11 +847,13 @@ status/publication/recovery path first.
 
 | Helper signal | Required flow-manager action |
 |---|---|
-| `possible_delivery` / active owner in flight | Continue poll cadence; do not resend |
+| `possible_delivery` / active owner in flight | Not by itself evidence that generation is ongoing. Keep waiting only while an independent check of the conversation itself shows the reply still in progress. If the conversation shows a completed reply, stop waiting and take the documented recovery path. Never resend. |
 | `fresh_orphan` / `orphaned_fresh_turn` / `recovery_required` | Stop passive wait; run documented recovery/clear path before any resend |
 | `committed_ok` (publication-status) | Verify output capture on disk; if missing, recovery before resend |
 | Terminal `ok` + capture saved | Stage may progress |
-| `stream_timeout` / `no_reply` after full helper timeout | Record failure; retry only per existing substitution/outage rules |
+| `stream_timeout` / `no_reply` after full helper timeout | Before recording failure, check the conversation for a completed reply and recover it through the documented recovery path. Record failure only when no completed reply exists; then retry only per existing substitution/outage rules. |
+
+Helper phase alone cannot distinguish a healthy in-flight turn from a stalled one: both report `possible_delivery`. Every row above that involves waiting or declaring failure therefore requires a second, independent observation of the conversation itself, not the helper control plane alone.
 
 5. **Session completion gate.** The flow-manager MUST NOT report "waiting for GPT"
    as a final handoff. User-visible status updates may note in-progress work, but
