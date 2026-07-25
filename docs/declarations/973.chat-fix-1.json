@@ -7,14 +7,30 @@
   "baseline": {
     "commit_sha": "00babc8cb8fca164b4b809470fa39964c8d7c632",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:0bbe9b3a529d1a9f5b35235432429cf28e578950900d6ae062ca13d33aa63124"
+    "active_scope_hash": "sha256:d084a02b42bab7b6c46eef056f473c549fe83fd15d270c16116989c8fed9f70d"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
     "docs/tiering.md",
     "scripts/lib/tier-gate-core.ts",
-    "scripts/tier-gate-guard.test.ts"
+    "scripts/tier-gate-guard.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:0bbe9b3a529d1a9f5b35235432429cf28e578950900d6ae062ca13d33aa63124",
+      "new_active_scope_hash": "sha256:d084a02b42bab7b6c46eef056f473c549fe83fd15d270c16116989c8fed9f70d",
+      "changed": {
+        "added": [
+          "scripts/vitest-ci-lanes.config.json"
+        ],
+        "removed": []
+      },
+      "reason": "Issue #973 binding scope amendment 5076930494 permits only the required Vitest light-lane registration for scripts/tier-gate-guard.test.ts.",
+      "actor": "operator",
+      "timestamp": "2026-07-25T04:32:09Z",
+      "applied": true
+    }
+  ]
 }
