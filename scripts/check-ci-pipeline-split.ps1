@@ -8,6 +8,9 @@
   supervisor fixture contracts were retired with their owners by Issue #906.
   The protected scope-guard workflow still invokes this stable entrypoint, so it
   now validates the surviving topology through the TypeScript planner itself.
+  It also protects the #695 dynamic-matrix contract on the #691 runtime-history
+  refresh path so that producer fan-out cannot drift back to a hand-maintained
+  shard list.
 #>
 [CmdletBinding()]
 param(
@@ -22,11 +25,37 @@ if (-not $RepoRoot) {
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 $planner = Join-Path $RepoRoot 'scripts/emit-vitest-heavy-topology.mjs'
 $config = Join-Path $RepoRoot 'scripts/vitest-ci-lanes.config.json'
+$refreshWorkflow = Join-Path $RepoRoot '.github/workflows/vitest-runtime-history-refresh.yml'
 
-foreach ($required in @($planner, $config)) {
+foreach ($required in @($planner, $config, $refreshWorkflow)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "missing surviving CI topology prerequisite: $required"
     }
+}
+
+$refreshText = Get-Content -LiteralPath $refreshWorkflow -Raw
+$requiredRefreshFragments = @(
+    'plan-vitest-ci-topology:',
+    'heavy_shard_count: ${{ steps.plan.outputs.heavy_shard_count }}',
+    'heavy_shard_matrix: ${{ steps.plan.outputs.heavy_shard_matrix }}',
+    'node scripts/emit-vitest-heavy-topology.mjs --gha-output --skip-oversized-guard',
+    'name: Vitest heavy shard ${{ matrix.shard }}/${{ needs.plan-vitest-ci-topology.outputs.heavy_shard_count }}',
+    'shard: ${{ fromJson(needs.plan-vitest-ci-topology.outputs.heavy_shard_matrix) }}',
+    'OPK_VITEST_TOPOLOGY_PLAN_PATH: ${{ github.workspace }}/scripts/vitest-heavy-topology.plan.json',
+    'needs: [plan-vitest-ci-topology, test-vitest-heavy]',
+    'for ($shard = 1; $shard -le $shardCount; $shard++)'
+)
+foreach ($fragment in $requiredRefreshFragments) {
+    if (-not $refreshText.Contains($fragment)) {
+        throw "runtime-history refresh lost #695 dynamic topology binding: missing '$fragment'"
+    }
+}
+
+if ($refreshText -match 'shard:\s*\[\s*1\s*,\s*2\s*,\s*3\s*,\s*4\s*,\s*5\s*,\s*6\s*,\s*7\s*\]') {
+    throw 'runtime-history refresh must not restore a fixed 1..7 heavy shard matrix; consume the plan-derived matrix'
+}
+if ($refreshText.Contains('for ($shard = 1; $shard -le 7; $shard++)')) {
+    throw 'runtime-history refresh must stage the plan-derived heavy shard count, not a fixed 7-report set'
 }
 
 $previousOutput = $env:GITHUB_OUTPUT
@@ -54,5 +83,5 @@ finally {
     Remove-Item -LiteralPath $outputFile.FullName -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host 'CI pipeline split compatibility guard passed (Issue #906 surviving topology).'
+Write-Host 'CI pipeline split compatibility guard passed (Issue #906 surviving topology; #695/#982 runtime-history matrix parity).'
 exit 0
