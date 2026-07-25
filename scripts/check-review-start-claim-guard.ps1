@@ -106,12 +106,13 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
             }
 
             $postLanding = $false
-            if ($violations.Count -eq 0 -and $env:GITHUB_BASE_REF -and (Test-Path -LiteralPath $planningPath -PathType Leaf)) {
+            if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $planningPath -PathType Leaf)) {
                 $planningBarrier = (& $git.Source -C $RepoRoot log -1 --format=%H HEAD -- 'scripts/pr2a/planning-manifest.json' 2>$null | Out-String).Trim()
                 $parentRow = @((& $git.Source -C $RepoRoot rev-list --parents -n 1 HEAD 2>$null | Out-String).Trim().Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries))
                 $baseCommit = if ($parentRow.Count -ge 3) { $parentRow[1] } else { '' }
                 if (-not $baseCommit) {
-                    $baseRef = "origin/$($env:GITHUB_BASE_REF)"
+                    $baseName = if ($env:GITHUB_BASE_REF) { $env:GITHUB_BASE_REF } else { 'main' }
+                    $baseRef = "origin/$baseName"
                     & $git.Source -C $RepoRoot cat-file -e "$baseRef^{commit}" 2>$null
                     if ($LASTEXITCODE -eq 0) { $baseCommit = $baseRef }
                 }
