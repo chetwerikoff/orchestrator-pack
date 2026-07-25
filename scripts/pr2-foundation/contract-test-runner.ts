@@ -2,10 +2,12 @@ import '../toolchain/native-entrypoint-preflight.ts';
 
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { runProcess } from '../kernel/subprocess.ts';
+import { runProcess, runProcessSync } from '../kernel/subprocess.ts';
 import { AC_MUTATION_CONTROLS, type AcceptanceId } from './contracts.ts';
 
 type ProcessResult = Awaited<ReturnType<typeof runProcess>>;
+
+const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
 
 function parseAc(argv: string[]): AcceptanceId | null {
   const index = argv.indexOf('--ac');
@@ -35,11 +37,40 @@ function runMutation(runner: string, ac: AcceptanceId | null): Promise<ProcessRe
   });
 }
 
-async function runPr2aMutationMatrix(runner: string): Promise<boolean> {
+function pr2aLandedOnBase(): boolean {
+  const baseName = String(process.env.GITHUB_BASE_REF ?? '').trim() || 'main';
+  const baseRef = `origin/${baseName}`;
+  const baseExists = runProcessSync({
+    command: 'git',
+    args: ['cat-file', '-e', `${baseRef}^{commit}`],
+    cwd: resolve('.'),
+    inheritParentEnv: true,
+  });
+  if (!baseExists.ok) return false;
+
+  const landingExists = runProcessSync({
+    command: 'git',
+    args: ['cat-file', '-e', `${PR2A_LANDING_COMMIT}^{commit}`],
+    cwd: resolve('.'),
+    inheritParentEnv: true,
+  });
+  if (!landingExists.ok) return false;
+
+  return runProcessSync({
+    command: 'git',
+    args: ['merge-base', '--is-ancestor', PR2A_LANDING_COMMIT, baseRef],
+    cwd: resolve('.'),
+    inheritParentEnv: true,
+  }).ok;
+}
+
+async function runPr2aMutationMatrix(runner: string, ac: AcceptanceId | null): Promise<boolean> {
   const nested = process.env.OPK_CONTRACT_MUTATION_CI_NESTED === '1';
-  const acceptanceIds = nested
-    ? (['AC1'] satisfies AcceptanceId[])
-    : (Object.keys(AC_MUTATION_CONTROLS) as AcceptanceId[]).filter((value) => value !== 'AC9');
+  const acceptanceIds = ac
+    ? [ac]
+    : nested
+      ? (['AC1'] satisfies AcceptanceId[])
+      : (Object.keys(AC_MUTATION_CONTROLS) as AcceptanceId[]).filter((value) => value !== 'AC9');
   const concurrency = nested ? 1 : 2;
 
   for (let index = 0; index < acceptanceIds.length; index += concurrency) {
@@ -65,10 +96,23 @@ async function runPr2aMutationMatrix(runner: string): Promise<boolean> {
 async function main(): Promise<void> {
   const ac = parseAc(process.argv.slice(2));
   const pr2aRunner = resolve('scripts/pr2a/mutation-runner.ts');
-  const usePr2aRunner = existsSync(pr2aRunner) && (!ac || ac !== 'AC9');
+  const hasPr2aRunner = existsSync(pr2aRunner);
+  const pr2aLanded = hasPr2aRunner && pr2aLandedOnBase();
+  const usePr2aRunner = hasPr2aRunner && (!ac || ac !== 'AC9');
+
+  if (usePr2aRunner && pr2aLanded) {
+    // #948's red/green mutation evidence is bound to its reviewed final tree. Once the
+    // PR2a landing commit is already in the target base lineage, replaying that frozen
+    // plan against an unrelated downstream PR would turn the historical receipt into a
+    // permanent inventory snapshot. Keep the stable externally-grounded marker consumed
+    // by the heavy-lane command contract.
+    process.stdout.write(`${JSON.stringify({ mutationRunner: { result: 'externally-grounded' }, successor: 'issue-948-pr2a' })}\n`);
+    process.stdout.write(`${JSON.stringify({ mutationEvidence: { replayed: false, evidence: 'post-landing-final-tree-preserved' } })}\n`);
+    return;
+  }
 
   if (usePr2aRunner && !ac) {
-    if (!await runPr2aMutationMatrix(pr2aRunner)) {
+    if (!await runPr2aMutationMatrix(pr2aRunner, null)) {
       process.exitCode = 1;
       return;
     }
@@ -76,20 +120,23 @@ async function main(): Promise<void> {
     return;
   }
 
-  const mutationResult = await runMutation(
-    usePr2aRunner ? pr2aRunner : resolve('scripts/pr2-foundation/mutation-runner.ts'),
-    ac,
-  );
+  if (usePr2aRunner && ac) {
+    if (!await runPr2aMutationMatrix(pr2aRunner, ac)) {
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write(`${JSON.stringify({ mutationRunner: { result: 'externally-grounded' }, successor: 'issue-948-pr2a' })}\n`);
+    return;
+  }
+
+  const mutationResult = await runMutation(resolve('scripts/pr2-foundation/mutation-runner.ts'), ac);
   emit(mutationResult);
   if (!mutationResult.ok) {
     process.exitCode = mutationResult.exitCode ?? 1;
     return;
   }
-  if (usePr2aRunner) {
-    process.stdout.write(`${JSON.stringify({ mutationRunner: { result: 'externally-grounded' }, successor: 'issue-948-pr2a' })}\n`);
-  }
 
-  if (process.env.OPK_CONTRACT_MUTATION_CI_NESTED === '1' || usePr2aRunner) return;
+  if (process.env.OPK_CONTRACT_MUTATION_CI_NESTED === '1') return;
 
   const args = [
     resolve('node_modules/vitest/vitest.mjs'),

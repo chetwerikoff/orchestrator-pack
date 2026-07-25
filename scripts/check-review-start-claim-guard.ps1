@@ -76,6 +76,7 @@ foreach ($rel in ($textByRel.Keys | Sort-Object)) {
 
 $conformancePath = Join-Path $RepoRoot 'scripts/pr2a/final-conformance.ts'
 $gitDir = Join-Path $RepoRoot '.git'
+$pr2aLandingCommit = '17ac39d725ba9ae7c881816405d5225e541177c7'
 if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathType Leaf) -and (Test-Path -LiteralPath $gitDir)) {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) {
@@ -103,9 +104,57 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
                     }
                 }
             }
+
+            $postLanding = $false
             if ($violations.Count -eq 0) {
-                $conformanceOutput = @(& $node.Source --experimental-strip-types $conformancePath --ref HEAD 2>&1 | ForEach-Object { [string]$_ })
+                & $git.Source -C $RepoRoot cat-file -e "$pr2aLandingCommit^{commit}" 2>$null
                 if ($LASTEXITCODE -ne 0) {
+                    & $git.Source -C $RepoRoot fetch --no-tags origin $pr2aLandingCommit *> $null
+                }
+                & $git.Source -C $RepoRoot merge-base --is-ancestor $pr2aLandingCommit HEAD 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    $postLanding = $true
+                }
+                elseif ($LASTEXITCODE -ne 1) {
+                    $violations += 'Issue #948 final conformance could not classify the PR2a landing boundary against HEAD'
+                }
+            }
+
+            if ($violations.Count -eq 0) {
+                $conformanceExitCode = 1
+                Push-Location -LiteralPath $RepoRoot
+                try {
+                    if ($postLanding) {
+                        $filterScript = @'
+import { buildConformanceReport } from './scripts/pr2a/final-conformance.ts';
+const oneTimeCodes = new Set([
+  'planned_operation_missing_or_changed',
+  'unreviewed_final_tree_operation',
+  'path_outside_allowed_roots',
+  'denylisted_path_changed',
+  'new_powershell_logic_added',
+  'non_regular_final_tree_mode',
+]);
+const report = buildConformanceReport('HEAD');
+const remaining = report.findings.filter((finding) => !oneTimeCodes.has(finding.code));
+if (remaining.length > 0) {
+  process.stderr.write(`${JSON.stringify(remaining)}\n`);
+  process.exitCode = 1;
+} else {
+  process.stdout.write('[PASS] Issue #948 post-landing conformance: frozen PR2a operation-set findings ignored; enduring invariants remain green\n');
+}
+'@
+                        $conformanceOutput = @(& $node.Source --no-warnings --experimental-strip-types --input-type=module -e $filterScript 2>&1 | ForEach-Object { [string]$_ })
+                    }
+                    else {
+                        $conformanceOutput = @(& $node.Source --no-warnings --experimental-strip-types $conformancePath --ref HEAD --json 2>&1 | ForEach-Object { [string]$_ })
+                    }
+                    $conformanceExitCode = $LASTEXITCODE
+                }
+                finally {
+                    Pop-Location
+                }
+                if ($conformanceExitCode -ne 0) {
                     $detail = ($conformanceOutput -join ' ').Trim()
                     if ($detail.Length -gt 1800) { $detail = $detail.Substring(0, 1800) + '...[truncated]' }
                     if ($detail) {
@@ -114,6 +163,9 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
                     else {
                         $violations += 'Issue #948 final conformance rejected the current HEAD'
                     }
+                }
+                elseif ($conformanceOutput.Count -gt 0) {
+                    $conformanceOutput | ForEach-Object { Write-Host $_ }
                 }
             }
         }
