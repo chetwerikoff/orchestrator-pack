@@ -188,7 +188,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           export OPK_CHANGED_VITEST_FILES="$(cd "$GITHUB_WORKSPACE/target" && node scripts/emit-pr-changed-paths-manifest.mjs --base "$BASE_SHA" --head "$TARGET_SHA")"
-          bash "$GITHUB_WORKSPACE/carrier/.github/issue-948-final-evidence.sh" pre "$GITHUB_WORKSPACE/target" "$RUNNER_TEMP/issue948-evidence"
+          set +e
+          bash "$GITHUB_WORKSPACE/carrier/.github/issue-948-final-evidence.sh" pre "$GITHUB_WORKSPACE/target" "$RUNNER_TEMP/issue948-evidence" 2>"$RUNNER_TEMP/issue948-producer-stderr.log"
+          code=$?
+          set -e
+          mkdir -p "$RUNNER_TEMP/issue948-evidence"
+          cp "$RUNNER_TEMP/issue948-producer-stderr.log" "$RUNNER_TEMP/issue948-evidence/producer-stderr.log"
+          exit "$code"
       - name: Upload pre-receipt evidence
         if: always()
         uses: actions/upload-artifact@v4
