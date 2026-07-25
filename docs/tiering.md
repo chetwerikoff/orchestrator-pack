@@ -165,12 +165,12 @@ intake prior, and the first immutable `rNN` revision. The Issue
 mismatched intake evidence fails closed. No architect attribution is required at
 intake, for direct Issue/task-chat entry, or for brief-only entry.
 
-The implementation contains one static frozen set of pre-#973 active workdir
-identities. Runtime code never discovers, appends, or extends that set. Only a
-listed identity may use `kind: compatibility`, where the flow-manager records a
-one-time intake anchor bound to that workdir's first valid immutable revision and
-uses that revision's tier as the prior. An unlisted legacy-shaped workdir follows
-fresh rules. Compatibility never rewrites historical revisions.
+The implementation contains one static frozen production compatibility set. At
+#973 cutover that set is deliberately empty: every production identity follows
+fresh rules. Runtime code never discovers, infers, appends, or extends membership.
+Compatibility semantics remain fixture-testable only through explicitly injected
+membership; they never rewrite historical revisions or infer legacy status from
+local workdir shape.
 
 After every immutable pull, the flow-manager records the applied tier decision in
 that `rNN` directory as `tier-gate-decision/v1`: producer, revision, tier, fired
@@ -215,8 +215,8 @@ For a frozen-list compatibility demotion, the architect may import only a
 pre-#973 downstep already proven by immutable before/after revisions plus existing
 architect final-lens evidence and a mechanically reconstructable source driver set.
 It consumes the same sole lifecycle demotion and cannot authorize a new downstep.
-The #973 cutover fact records zero qualifying historical demotions; this path is
-dormant unless that fact is disproved by concrete evidence.
+The production compatibility set and qualifying historical-demotion population are
+both empty at #973 cutover, so this path is dormant outside explicit test fixtures.
 
 ### Per-tier pipeline (ceilings, not quotas)
 
