@@ -29,23 +29,37 @@ remains readable legacy history and prior art. The sanctioned
 batch-publish those pre-existing artifacts. Newly authored tasks do not create,
 update, synchronize, or identify themselves through that corpus.
 
-### Mirrorless GPT-chat task authoring (2026-07-23)
+### Mirrorless GPT-chat task authoring (2026-07-23; topology revised by Issue #972)
 
-The repository adopted browser GPT as the default task-spec author and review
-engine under a mixed-engine topology: one task chat owns authoring and fixes;
-every browser-GPT competitive, architectural, and final-verification review pass
-uses a fresh chat. Review-chat history is not reused across passes. A recorded
-Codex substitution for browser unavailability replaces only that pass and creates
-no browser-chat continuity; the next browser-GPT review pass is fresh again.
+Browser GPT remains the default task-spec author and normal review engine. One
+persistent task chat owns spec content, every content fix, direct Issue edits,
+and finding dispositions. One current Cursor flow-manager owns the operational
+cycle — Issue pulls, tier/stage mechanics, captures, ledger bookkeeping, pass
+accounting, chat topology, and browser-turn execution — but does not author or
+judge the spec. Flow-manager authority transfers only by an explicit recorded
+predecessor/operator handoff; no lease or new ownership service is introduced.
 
-Codex remains an independent mandatory addition for T3-critical tasks, an
-outage-only substitute for a browser-GPT review stage, and an explicitly
-user-requested standalone adversarial loop. It is not the default architectural
-engine. The final architect lens is the sole sanctioned tier-downgrade point,
-subject to the unchanged marker floor and fail-up rules. The durable tier,
-accounting, and role contract lives in [`tiering.md`](tiering.md); exact browser
-mechanics, workdir layout, captures, ledger operations, and execution sequence
-remain owned by [the `create-issue-draft` skill](../.claude/skills/create-issue-draft/SKILL.md).
+Competitive browser-GPT review still uses a fresh chat per pass. Ordinary
+architectural review instead uses one dedicated browser-GPT review chat reused
+across that task's ordinary architectural rounds. Post-lens final verification
+remains fresh. Review chats never edit the Issue. The architect is outside the
+per-round cycle and appears only for optional pre-task consultation plus the
+mandatory final architect lens. That final lens remains the only sanctioned
+tier-downgrade point and is the sole independent aggregate cut authority for
+review-added machinery; it checks contradictions, feasibility, overengineering
+as the primary goal (including a forced-cut answer), and missed gaps on the exact
+candidate accepted.
+
+Codex remains limited to the mandatory independent addition for T3-critical
+tasks, a recorded browser-outage substitution for one browser-GPT review stage,
+and an explicitly user-requested standalone adversarial loop. A substitution is
+credited only to the replaced browser stage and never double-counts as the
+mandatory T3-critical addition. The caller-side shared cross-task browser critical
+section is role/topology policy only and does not change #964/#971 helper runtime,
+state, recovery, or fallback behavior. The durable tier, accounting, and role
+contract lives in [`tiering.md`](tiering.md); exact browser mechanics, workdir
+layout, captures, ledger operations, and execution sequence remain owned by
+[the `create-issue-draft` skill](../.claude/skills/create-issue-draft/SKILL.md).
 
 Local Codex PR review **is active** and **pack-owned**: it is launched by pack
 scripts (`scripts/invoke-pack-review.ps1` under
@@ -192,7 +206,7 @@ context, and structured finding format as the local path; it must not define an
 independent review schema.
 
 The common finding format and signature rules are defined in
-`docs/issues_drafts/00-architecture-decisions.md` section F.
+docs/issues_drafts/00-architecture-decisions.md section F.
 
 Operators may temporarily point **REVIEW_COMMAND** at a local Claude Sonnet
 bridge (gitignored `.ao/` scripts) instead of Codex; see
