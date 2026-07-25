@@ -10,7 +10,7 @@ $Script:ReviewWakeTriggerFilterCli = Join-Path (Split-Path -Parent (Split-Path -
 . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $PSScriptRoot 'Record-ReviewTriggerReevalWatch.ps1')
 . (Join-Path $PSScriptRoot 'Record-ReviewHandoffWakeAdmission.ps1')
-. (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
+. (Join-Path $PSScriptRoot 'Review-StartClaimLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'Invoke-AoReviewApi.ps1')
 . (Join-Path $PSScriptRoot 'Review-CycleCap.ps1')
 . (Join-Path $PSScriptRoot 'Review-PostRunRetry.ps1')

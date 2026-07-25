@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 
-const helperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
+const helperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaimLifecycle.ps1');
 const reevalInvokePath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewTriggerReeval.ps1');
 const wakeInvokePath = path.join(repoRoot, 'scripts/lib/Invoke-ReviewWakeTrigger.ps1');
 const guardPath = path.join(repoRoot, 'scripts/check-review-start-claim-guard.ps1');

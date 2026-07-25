@@ -4,32 +4,46 @@
   "validators": [
     {
       "id": "side-process-launch-contract",
-      "script": "scripts/check-side-process-launch-contract.ps1",
-      "ownerIssues": [659],
-      "description": "Registry child launch argv binds to script param blocks and mandatory params are satisfiable from supervised launch shape."
+      "script": "scripts/pr2a/final-conformance.ts",
+      "ownerIssues": [
+        948
+      ],
+      "description": "Issue #948 final-tree validator preserves surviving launch assertions and refuses executable D928 reverse closure."
     },
     {
       "id": "ao-spawn-shape",
       "script": "docs/ao-spawn-shape.mjs",
-      "ownerIssues": [638, 652, 589],
+      "ownerIssues": [
+        638,
+        652,
+        589
+      ],
       "description": "Runnable ao spawn argv shape guard."
     },
     {
       "id": "ao-cli-argv-shape",
       "script": "scripts/check-ao-cli-argv-shape.ps1",
-      "ownerIssues": [619],
+      "ownerIssues": [
+        619
+      ],
       "description": "AO 0.10 session/status argv capture-backed probes."
     },
     {
       "id": "ao-dead-argv-bypass",
       "script": "scripts/check-ao-dead-argv-bypass.ps1",
-      "ownerIssues": [619, 640],
+      "ownerIssues": [
+        619,
+        640
+      ],
       "description": "Dead-argv bypass scan for session/status and journaled send transport."
     },
     {
       "id": "gh-inventory-static",
       "script": "scripts/check-gh-inventory-static.ps1",
-      "ownerIssues": [431, 501],
+      "ownerIssues": [
+        431,
+        501
+      ],
       "description": "Pack gh wrapper argv inventory static guard."
     }
   ]

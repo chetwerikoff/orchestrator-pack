@@ -20,16 +20,16 @@
     "scripts/ci-green-wake-reconcile.ps1",
     "scripts/review-send-reconcile.ps1",
     "scripts/worker-message-submit-reconcile.ps1",
-    "scripts/orchestrator-wake-supervisor.ps1"
+    "scripts/lib/Orchestrator-WakeSupervisor.ps1"
   ],
   "ownerImplementationBindings": [
     "scripts/lib/Record-WorkerMessageDispatch.ps1",
     "docs/ci-failure-notification.mjs",
-    "scripts/lib/Review-StartClaim.ps1"
+    "scripts/lib/review-start-claim-store.ts"
   ],
   "prerequisiteDeclaredPaths": [
     "scripts/orchestrator-wake-common.ps1",
-    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/Orchestrator-WakeSupervisor.ps1",
     "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
     "scripts/orchestrator-wake-supervisor-test-child.ps1",
     "scripts/orchestrator-wake-supervisor.test.ts",
@@ -43,7 +43,7 @@
     "scripts/journaled-worker-send.ps1",
     "docs/ci-failure-notification.mjs",
     "scripts/ci-failure-notification.ps1",
-    "scripts/lib/Review-StartClaim.ps1",
+    "scripts/lib/review-start-claim-store.ts",
     "scripts/review-trigger-reconcile.ps1",
     "scripts/review-trigger-reeval.ps1",
     "agent-orchestrator.yaml.example"

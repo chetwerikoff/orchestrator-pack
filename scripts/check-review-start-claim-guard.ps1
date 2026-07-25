@@ -48,7 +48,7 @@ foreach ($file in @($files)) {
 }
 
 $reviewRunLiteral = [regex]'(?is)(\bao\s+review\s+run\b|@\(\s*[''"]review[''"]\s*,\s*[''"]run[''"]|@runArgs)'
-$claimGate = [regex]'(?is)(Acquire-ReviewStartClaim|Review-StartClaim\.ps1|Invoke-ReviewWakeTriggerOnCompletionWake|Invoke-ReviewTriggerReevalPlannedRun|Invoke-PlannedReviewRun|Invoke-OrchestratorClaimedReviewRun|invoke-orchestrator-claimed-review-run\.ps1)'
+$claimGate = [regex]'(?is)(Acquire-ReviewStartClaim|acquireReviewStartClaim|review-start-claim-store\.ts|Review-StartClaimLifecycle\.ps1|Invoke-ReviewWakeTriggerOnCompletionWake|Invoke-ReviewTriggerReevalPlannedRun|Invoke-PlannedReviewRun|Invoke-OrchestratorClaimedReviewRun|invoke-orchestrator-claimed-review-run\.ps1)'
 $violations = @($allowlistViolations)
 foreach ($rel in ($textByRel.Keys | Sort-Object)) {
     $text = $textByRel[$rel]
@@ -74,10 +74,56 @@ foreach ($rel in ($textByRel.Keys | Sort-Object)) {
     }
 }
 
+$conformancePath = Join-Path $RepoRoot 'scripts/pr2a/final-conformance.ts'
+$gitDir = Join-Path $RepoRoot '.git'
+if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathType Leaf) -and (Test-Path -LiteralPath $gitDir)) {
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $node) {
+        $violations += 'Node 22 is required for Issue #948 final conformance'
+    }
+    else {
+        $major = (& $node.Source -p 'process.versions.node.split(".")[0]').Trim()
+        if ($major -ne '22') {
+            $violations += "Issue #948 final conformance requires Node 22 (found $major)"
+        }
+        else {
+            $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $git) {
+                $violations += 'Git is required for Issue #948 tree-bound final conformance'
+            }
+            else {
+                $shallow = (& $git.Source -C $RepoRoot rev-parse --is-shallow-repository 2>$null | Out-String).Trim()
+                if ($LASTEXITCODE -ne 0) {
+                    $violations += 'Issue #948 final conformance could not inspect repository history depth'
+                }
+                elseif ($shallow -eq 'true') {
+                    & $git.Source -C $RepoRoot fetch --no-tags --unshallow origin *> $null
+                    if ($LASTEXITCODE -ne 0) {
+                        $violations += 'Issue #948 final conformance could not recover the reviewed planning history from origin'
+                    }
+                }
+            }
+            if ($violations.Count -eq 0) {
+                $conformanceOutput = @(& $node.Source --experimental-strip-types $conformancePath --ref HEAD 2>&1 | ForEach-Object { [string]$_ })
+                if ($LASTEXITCODE -ne 0) {
+                    $detail = ($conformanceOutput -join ' ').Trim()
+                    if ($detail.Length -gt 1800) { $detail = $detail.Substring(0, 1800) + '...[truncated]' }
+                    if ($detail) {
+                        $violations += "Issue #948 final conformance rejected the current HEAD: $detail"
+                    }
+                    else {
+                        $violations += 'Issue #948 final conformance rejected the current HEAD'
+                    }
+                }
+            }
+        }
+    }
+}
+
 if ($violations.Count -gt 0) {
     Write-Host "review-start-claim guard failed:"
     $violations | ForEach-Object { Write-Host " - $_" }
     exit 1
 }
 
-Write-Host '[PASS] review-start-claim guard: automated review-run starters are claim-gated'
+Write-Host '[PASS] review-start-claim guard: TypeScript claim authority and empty D928 executable closure verified'

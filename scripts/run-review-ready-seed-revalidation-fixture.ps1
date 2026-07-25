@@ -12,7 +12,7 @@ $ErrorActionPreference = 'Stop'
 $LibDir = Join-Path $PSScriptRoot 'lib'
 
 . (Join-Path $LibDir 'Invoke-ReviewReadyReportStateSeed.ps1')
-. (Join-Path $LibDir 'Review-StartClaim.ps1')
+. (Join-Path $LibDir 'Review-StartClaimLifecycle.ps1')
 . (Join-Path $LibDir 'Review-ReadySeedFixturePayload.ps1')
 
 $fixture = Resolve-ReviewReadySeedFixture -FixturePath $FixturePath

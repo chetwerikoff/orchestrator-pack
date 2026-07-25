@@ -6,7 +6,7 @@ import { functionBody, psString, repoRoot, runPwsh } from './_test-pwsh-helpers.
 const shieldHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartPreflightShield.ps1');
 const ghPrChecksPath = path.join(repoRoot, 'scripts/lib/Gh-PrChecks.ps1');
 const snapshotPath = path.join(repoRoot, 'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1');
-const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
+const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaimLifecycle.ps1');
 const fakeGhPath = path.join(
   repoRoot,
   'scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1',

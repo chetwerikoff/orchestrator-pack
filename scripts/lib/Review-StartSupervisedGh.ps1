@@ -3,7 +3,7 @@
   Supervised mandatory pre-launch gh transport for review-start (Issue #515).
 #>
 
-. (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')
+. (Join-Path $PSScriptRoot 'Review-StartClaimLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'Review-StartClaimLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'OpkVitestChildProcessEnv.ps1')
