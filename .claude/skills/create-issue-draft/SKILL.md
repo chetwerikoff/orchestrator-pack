@@ -334,9 +334,16 @@ four mandatory goals, in this exact order:
    against stakes, cost/risk, and the cheapest sufficient alternative. Explicitly
    answer **“which mechanism would be cut if one had to be?”** and resolve the
    answer as either a real cut through the normal task-chat fix path or a recorded
-   keep-justification explaining why the mechanism is necessary. “Traces to a
-   finding” alone is not a keep-justification. A lens verdict without this
-   forced-cut answer and its resolution is invalid.
+   keep-justification explaining why the mechanism is necessary. As part of this
+   same anti-overengineering goal, explicitly reconsider whether the task still
+   needs its current complexity tier: ask whether simplification or removal of
+   higher-tier drivers makes a lower tier valid under the existing rubric. Apply
+   the existing final-lens downgrade path when it does; otherwise record why the
+   current tier remains required. Marker/L4 floors and the active demotion
+   contract still bind, so tier reconsideration never forces a downgrade.
+   “Traces to a finding” alone is not a keep-justification. A lens verdict without
+   both the forced-cut answer and an explicit tier-reconsideration result is
+   invalid.
 4. **Find what was missed.** Identify gaps, unverified evidence, and unsettled
    conditionals and route required corrections through the normal task-chat fix
    path.
