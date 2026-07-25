@@ -1,6 +1,6 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { JsonEpochAuthority } from './cutover/activation-epoch-authority.ts';
 import { processStartTime } from './cutover/activation-platform-preflight.ts';
 import { verifyRegistryHash, validateSchedulerRegistry } from './cutover/activation-registry-projection.ts';
@@ -24,6 +24,14 @@ export interface SupervisorStatus {
   supervisorPid: number | null;
   childPid: number | null;
   running: boolean;
+}
+
+interface ManagedScheduler {
+  pid: number;
+  controller: AbortController;
+  completion: Promise<ProcessResult>;
+  settled: boolean;
+  result: ProcessResult | null;
 }
 
 const SUPERVISOR_LOCK = 'typescript-supervisor.lock';
@@ -67,23 +75,47 @@ export function schedulerArgv(options: SupervisorOptions, child: RegistryChild):
   ];
 }
 
-export function spawnScheduler(options: SupervisorOptions, child: RegistryChild): ChildProcess {
-  const proc = spawn(process.execPath, schedulerArgv(options, child), {
+export function startScheduler(options: SupervisorOptions, child: RegistryChild): ManagedScheduler {
+  const controller = new AbortController();
+  let pid = 0;
+  const managed: ManagedScheduler = {
+    pid: 0,
+    controller,
+    completion: Promise.resolve({
+      outcome: 'spawn-failure', ok: false, exitCode: null, signal: null,
+      stdout: '', stderr: '', timedOut: false, cancelled: false,
+    }),
+    settled: false,
+    result: null,
+  };
+  managed.completion = runProcess({
+    command: process.execPath,
+    args: schedulerArgv(options, child),
     cwd: options.repoRoot,
+    inheritParentEnv: true,
     env: {
-      ...process.env,
       ...options.childEnv,
       OPK_ACTIVATION_EPOCH_ID: options.epochId,
       OPK_ACTIVATION_NONCE: options.nonce,
       ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR: options.stateDir,
     },
-    stdio: 'inherit',
-    detached: false,
+    signal: controller.signal,
+    allowEmptyStdout: true,
+    onSpawn: (spawnedPid) => { pid = spawnedPid; managed.pid = spawnedPid; },
+    onStdoutChunk: (chunk) => { process.stdout.write(chunk); },
+    onStderrChunk: (chunk) => { process.stderr.write(chunk); },
+  }).then((result) => {
+    managed.settled = true;
+    managed.result = result;
+    return result;
   });
-  if (!proc.pid) throw new Error('scheduler_spawn_failed');
+  if (!pid) {
+    controller.abort();
+    throw new Error('scheduler_spawn_failed');
+  }
   mkdirSync(options.stateDir, { recursive: true });
-  writeFileSync(childPidPath(options.stateDir), `${proc.pid}\n`, 'utf8');
-  return proc;
+  writeFileSync(childPidPath(options.stateDir), `${pid}\n`, 'utf8');
+  return managed;
 }
 
 function readSupervisorOwner(stateDir: string): ProcessIdentity | null {
@@ -161,15 +193,23 @@ export function stop(options: SupervisorOptions): void {
 export async function supervise(options: SupervisorOptions, signal?: AbortSignal): Promise<void> {
   const pollMs = Math.max(100, options.pollMs ?? 1000);
   const { child } = loadCommittedRegistry(options);
-  let active: ChildProcess | null = null;
+  let active: ManagedScheduler | null = null;
   while (!signal?.aborted) {
     new JsonEpochAuthority(options.epochAuthorityFile).require(options.epochId, options.nonce);
     const latest = loadCommittedRegistry(options);
     if (latest.child.id !== child.id || latest.child.script !== child.script) throw new Error('scheduler_registry_identity_changed');
-    if (!active || active.exitCode !== null || active.killed) active = spawnScheduler(options, child);
+    if (!active || active.settled) {
+      if (active?.result && active.result.ok === false && active.result.cancelled === false) {
+        process.stderr.write(`scheduler_exit:${active.result.outcome}:${active.result.exitCode ?? 'none'}\n`);
+      }
+      active = startScheduler(options, child);
+    }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, pollMs));
   }
-  if (active?.pid && active.exitCode === null) active.kill('SIGTERM');
+  if (active && !active.settled) {
+    active.controller.abort();
+    await active.completion;
+  }
   rmSync(childPidPath(options.stateDir), { force: true });
 }
 

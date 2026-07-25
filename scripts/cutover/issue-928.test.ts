@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -14,10 +14,11 @@ import { assertSchedulerEpoch, runSchedulerTick } from '../pr2-foundation/schedu
 import type { ActivationContext, ActivationCore, StoreId } from '../lib/cutover/types.ts';
 
 const roots: string[] = [];
-const children: ChildProcess[] = [];
+const sleepers: Array<{ pid: number; controller: AbortController; completion: Promise<ProcessResult> }> = [];
 afterEach(() => {
-  for (const child of children.splice(0)) {
-    if (child.pid && child.exitCode === null) { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
+  for (const sleeper of sleepers.splice(0)) {
+    sleeper.controller.abort();
+    try { process.kill(sleeper.pid, 'SIGKILL'); } catch { /* already gone */ }
   }
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -39,11 +40,23 @@ function core(epochId = 'epoch-1', nonce = 'nonce-1'): ActivationCore {
 
 function writeJson(path: string, value: unknown): void { writeFileSync(path, `${JSON.stringify(value)}\n`, 'utf8'); }
 
-function spawnSleeper(role: string): { child: ChildProcess; identity: { pid: number; startTime: string; role: string } } {
-  const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
-  children.push(child);
-  if (!child.pid) throw new Error(`spawn_failed:${role}`);
-  return { child, identity: { pid: child.pid, startTime: processStartTime(child.pid), role } };
+function spawnSleeper(role: string): { identity: { pid: number; startTime: string; role: string } } {
+  const controller = new AbortController();
+  let pid = 0;
+  const completion = runProcess({
+    command: process.execPath,
+    args: ['-e', 'setInterval(()=>{},1000)'],
+    inheritParentEnv: true,
+    signal: controller.signal,
+    allowEmptyStdout: true,
+    onSpawn: (spawnedPid) => { pid = spawnedPid; },
+  });
+  if (!pid) {
+    controller.abort();
+    throw new Error(`spawn_failed:${role}`);
+  }
+  sleepers.push({ pid, controller, completion });
+  return { identity: { pid, startTime: processStartTime(pid), role } };
 }
 
 describe('Issue #928 cutover', () => {
