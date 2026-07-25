@@ -128,7 +128,7 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
             }
 
             if ($violations.Count -eq 0) {
-                $conformanceOutput = @(& $node.Source --experimental-strip-types $conformancePath --ref HEAD --json 2>&1 | ForEach-Object { [string]$_ })
+                $conformanceOutput = @(& $node.Source --no-warnings --experimental-strip-types $conformancePath --ref HEAD --json 2>&1 | ForEach-Object { [string]$_ })
                 $conformanceExit = $LASTEXITCODE
                 if ($conformanceExit -ne 0) {
                     $remainingFindings = $null
