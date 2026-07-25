@@ -823,6 +823,48 @@ stdout. A non-`ok` state, timeout, missing stdout, or process-liveness uncertain
 is never by itself resend or scratchpad-fallback authorization; use the tracked
 status/publication/recovery path first.
 
+### Tracked helper long-turn monitoring
+
+1. **Open shift.** A browser-turn is an open flow-manager shift until terminal
+   `turn-result/v1` (`ok` or explicit non-recoverable failure handled per recovery
+   rules) AND the stage capture is saved or recovery is recorded. Backgrounding the
+   shell does not transfer ownership; ending the manager session while the turn is
+   non-terminal is non-compliant.
+
+2. **No process-liveness inference.** A running Node PID, background job, or elapsed
+   time does not prove GPT is still generating. Only helper control plane
+   (`status/list`, `publication-status`) and terminal `turn-result` count.
+
+3. **Poll cadence.** While a tracked `turn` is outstanding, the flow-manager MUST
+   query `status/list` at least every **10–15 minutes** (sooner after 30 minutes or
+   on user ping). When an `invocation_id` is available from a supported surface
+   (for example terminal `turn-result/v1`, or task/review artifacts where the
+   flow-manager recorded it before backgrounding), also query `publication-status`
+   for that invocation. Do not treat `provisional_id` as an invocation ID —
+   `status/list` items expose `provisional_id` but not `invocation_id`.
+
+4. **Phase → action table** (minimum rows):
+
+| Helper signal | Required flow-manager action |
+|---|---|
+| `possible_delivery` / active owner in flight | Not by itself evidence that generation is ongoing. Keep waiting only while an independent check of the conversation itself shows the reply still in progress. If the conversation shows a completed reply, stop waiting and take the documented recovery path. Never resend. |
+| `fresh_orphan` / `orphaned_fresh_turn` / `recovery_required` | Stop passive wait; run documented recovery/clear path before any resend |
+| `committed_ok` (publication-status) | Verify output capture on disk; if missing, recovery before resend |
+| Terminal `ok` + capture saved | Stage may progress |
+| `stream_timeout` / `no_reply` after full helper timeout | Before recording failure, check the conversation for a completed reply and recover it through the documented recovery path. Record failure only when no completed reply exists; then retry only per existing substitution/outage rules. |
+
+Helper phase alone cannot distinguish a healthy in-flight turn from a stalled one: both report `possible_delivery`. Every row above that involves waiting or declaring failure therefore requires a second, independent observation of the conversation itself, not the helper control plane alone.
+
+5. **Session completion gate.** The flow-manager MUST NOT report "waiting for GPT"
+   as a final handoff. User-visible status updates may note in-progress work, but
+   the manager remains responsible until terminal state or explicit blocked/recovery
+   outcome is recorded in `$REVIEW_DIR/chats.md` or the task audit surface.
+
+6. **Explicit contrast with standalone driver.** Standalone `driver.mjs` long turns
+   poll the **page** every 5–10 minutes; tracked `chatgpt-browser-turn` long turns
+   poll **`status/list`** and, when invocation identity is available,
+   **`publication-status`** — do not apply the page-poll rule to tracked helper turns.
+
 The former untracked one-shot scratchpad is fallback-only. It may be used only
 when either (a) the tracked executable or sanctioned flow-manager execution
 channel is proven unavailable before any tracked-helper/browser effect, or (b) a
