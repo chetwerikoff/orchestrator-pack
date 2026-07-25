@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: GPT then authors and creates the Issue by default), and the architect runs lens → task-chat fix → fresh browser-GPT competitive/architectural review passes → final lens → fresh browser-GPT final verification when required. Covers Issue-only live task state, mixed-engine Codex additions/substitutions, T3-critical L4 classification and safety floors, browser-turn mechanics, issue-body guards, and the finding-disposition ledger. The Issue is the only live task artifact; audit artifacts live in an out-of-repo workdir. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from `docs/tiering.md`. Do not invoke when that skip line applies.
+description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: GPT then authors and creates the Issue by default), and the architect runs lens → task-chat fix → fresh browser-GPT competitive/architectural review passes → final lens → fresh browser-GPT final verification when required. Covers Issue-only live task state, mixed-engine Codex additions/substitutions, T3-critical L4 classification and safety floors, tracked `chatgpt-browser-turn` mechanics, issue-body guards, and the finding-disposition ledger. The Issue is the only live task artifact; audit artifacts live in an out-of-repo workdir. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from `docs/tiering.md`. Do not invoke when that skip line applies.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -52,7 +52,7 @@ When that rule applies, skip this authoring ceremony; otherwise continue here.
 |-------|------|-------------|
 | GPT author in task chat | Spec content, every content fix, direct Issue edits, proposed defect/remedy dispositions, M3 author activation, M4 inventory | Review its own spec |
 | Architect | Lens passes, current role-owned stage/floor decisions, M3 contest/adjudication when required, final aggregate cut/tier downgrade authority | Author normal content fixes or bypass the task chat |
-| Cursor helper | Execute the prepared browser command and return verbatim output + state | Write browser code, alter prompts, judge findings |
+| Cursor helper | Hands-only execution of the architect-prepared tracked browser command; return verbatim output + state | Write browser code, alter prompts/argv, judge findings, invent fallback |
 | Reviewer GPT chats | Independent critique/review | Edit the Issue or self-activate protected authority |
 | Codex | T3-critical independent addition; recorded browser-outage substitution; explicit requested adversarial loop | Become the default architectural engine or be credited for a stage it did not run |
 
@@ -492,7 +492,8 @@ Final acceptance requires:
 8. live Issue title prefix matching final tier and all existing T3-critical floors;
 9. all selected GPT/Codex stages complete under existing substitution/waiver rules;
 10. final report includes Issue URL, tier/pass counts, chat references, workdir,
-    substitutions/waivers, T3-critical result, M4 summary, and residual risks.
+    transport fallbacks, substitutions/waivers, T3-critical result, M4 summary,
+    and residual risks.
 
 Two non-converging `fix -> newer lens -> final` cycles still escalate to the
 operator.
@@ -523,19 +524,71 @@ Re-pull after every parity edit so revision history remains gapless.
 
 ## Browser-turn mechanics
 
-Use [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md) as the canonical browser
-mechanics source. #975 changes the **review prompt/evidence contract**, not helper
-transport, fallback eligibility, selectors, or the topology owned by #972.
+Use [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md) as the canonical detailed
+browser-mechanics source. The normal one-shot transport for this flow is the
+tracked Issue #964 helper `scripts/chatgpt-browser-turn.ts`, invoked through the
+package entrypoint `npm run chatgpt-browser-turn -- turn`.
 
-Every review/amendment prompt is self-contained, carries the current Issue body
-as UNTRUSTED DATA between nonce markers, and requests one outer `~~~markdown`
-fence when needed so inner backtick fences survive. Save each reviewer response
-verbatim before interpretation. Non-success helper states are reported, not
-improvised around.
+Destination mode follows chat topology:
 
-A Codex browser-outage substitution is permitted only under the existing recorded
-browser-unavailability rule. Preserve the replaced stage capture identity, raw
-JSON, and 1:1 economics transcription.
+- **task chat:** exact existing conversation with its recorded `--chat-url`;
+- **brief-only creation and every competitive/architectural/final review pass:**
+  fresh conversation with `--new-chat --project-url <configured-project-url>`.
+
+The architect prepares the exact argv plus absolute input/output paths. Execution
+is from the architect seat or via the **hands-only Cursor helper**, which runs the
+exact prepared command and returns stdout/reply state verbatim. It does not write
+browser code, alter prompts/argv, judge findings, or choose fallback behavior.
+
+Before the first **production** tracked-helper turn on a newly built or
+uncharacterized #964 candidate, complete the Gate-B gate in `discuss-with-gpt`:
+`npm run test:issue-964` green, operator live characterization (`capability` →
+command-scoped `CHATGPT_BROWSER_TURN_GATE_B_DIGEST` on characterization turns →
+serialized live smoke → post-smoke `capability` telemetry, then `unset`), and a
+retained digest-pinned recovery root under
+`~/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`.
+The Gate-B characterization turns themselves are exempt from this production gate.
+Record characterization evidence in task/review artifacts.
+
+Interpret only the landed helper contract documented in `discuss-with-gpt`:
+`turn-result/v1` with its closed state/scope/cause and exit mapping;
+`control-result/v1` for `status/list`, `clear`, and capability; and
+`publication-status/v1` for publication recovery. A hard crash may emit no turn
+stdout. A non-`ok` state, timeout, missing stdout, or process-liveness uncertainty
+is never by itself resend or scratchpad-fallback authorization; use the tracked
+status/publication/recovery path first.
+
+The former untracked one-shot scratchpad is fallback-only. It may be used only
+when either (a) the tracked executable or sanctioned architect/hands-only channel
+is proven unavailable before any tracked-helper/browser effect, or (b) a complete
+compatible #964 control/publication result proves no possible delivery and no
+blocking state. Record every fallback in task/review artifacts and final status;
+never report it as a successful tracked-helper run. It stays serialized and does
+not create a second parallel-use policy.
+
+Preserve #964 coexistence and rollback safety: while helper-owned unresolved
+conversation/provisional/publication state, a profile wall/block, opaque
+quarantine, or blocking tombstone remains for the configured profile, do not run
+legacy-driver or scratchpad sends against it. Reverting to the old scratchpad
+mandate requires a complete compatible #964 status/incident check proving no
+blockers; without that proof the prohibition remains until exact clearance.
+
+`driver.mjs` keeps its standalone `discuss-with-gpt` adversarial duties, including
+prompt construction and PASS_ID/SHA/verdict validation; this flow does not
+redirect those duties to the generic helper.
+
+Every review/amendment prompt remains self-contained, carries the current Issue
+body as UNTRUSTED DATA between nonce markers, and requests one outer `~~~markdown`
+fence so inner backtick fences survive. Write the prepared prompt to the helper
+input file and save the successful reply output verbatim before interpretation.
+For #975-governed reviewer turns, the saved raw reply must satisfy the M1/M2 and
+applicable M5 contract above before normalization; transport never invents or
+repairs missing review-economics fields.
+
+A Codex browser-outage substitution is a separate review-engine rule, not a
+transport fallback. It is permitted only after recorded browser unavailability
+when the operator cannot restore it; preserve the replaced stage capture name,
+raw JSON provenance, and 1:1 economics transcription.
 
 ## Tier gate
 
@@ -720,6 +773,10 @@ not edit sibling Issues or add workflow/plugin/core machinery.
   system, or other new persistence plane for #975.
 - Let Codex become the default architectural engine or claim a substitution
   without recorded browser unavailability.
+- Treat a tracked-helper non-`ok` state, timeout, missing stdout, or unresolved
+  status as scratchpad/legacy fallback authorization or resend permission.
+- Run legacy/scratchpad browser sends while helper-owned unresolved state blocks
+  coexistence for the configured profile.
 - Skip a requested GPT/Codex stage, selected browser stage, or mandatory
   T3-critical Codex addition silently.
 - Let a T3-critical Codex substitution satisfy the GPT half.
