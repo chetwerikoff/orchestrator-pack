@@ -297,7 +297,7 @@ export async function runDeliveryMonitor(config, io) {
       if (!projection.ok) return { outcome: projection.outcome, reason: projection.reason, failed: true };
       if (projection.state === 'veto') return { outcome: 'operator-veto-observed', reason: 'out-of-band pack-review veto observed after machine publication', failed: true };
       if (projection.state === 'pending') { await io.sleep(config.pollSeconds * 1000); continue; }
-      if (!projection.machineSuccess) return { outcome: 'machine-admission-unconfirmed', reason: 'authoritative exact-head status history did not confirm machine admission', failed: true };
+      if (!projection.machineSuccess) { await io.sleep(config.pollSeconds * 1000); continue; }
     }
     state = await inspect(config, io);
     if (state.terminal) {
