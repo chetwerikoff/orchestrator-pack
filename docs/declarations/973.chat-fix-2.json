@@ -28,7 +28,7 @@
         ],
         "removed": []
       },
-      "reason": "Issue #973 binding scope amendment 5077776462 permits only the downstream #948 final-conformance compatibility correction required after current main advanced through PR #955.",
+      "reason": "Issue #973 binding scope amendment 5077776462 authorized the downstream #948 final-conformance compatibility correction; PR #994 subsequently landed that support fix on main, so PR #991 does not modify scripts/pr2a/final-conformance.ts.",
       "actor": "operator",
       "timestamp": "2026-07-25T08:50:00Z",
       "applied": true
