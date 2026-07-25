@@ -18,9 +18,9 @@ export const FLOOR_CHECKS = [
 ] as const;
 
 /**
- * Frozen #973 cutover inventory. Runtime code must never discover, append, or otherwise
- * extend compatibility eligibility. Populate this list only from the one-time operator
- * cutover census; an empty list is valid only when that census confirms no active identities.
+ * Frozen #973 production compatibility eligibility. The cutover deliberately chooses
+ * the fail-closed empty set: every production identity follows fresh rules. Runtime code
+ * must never discover, infer, append, or otherwise extend compatibility eligibility.
  */
 export const PRE_973_CUTOVER_WORKDIR_IDENTITIES = Object.freeze([] as string[]);
 
