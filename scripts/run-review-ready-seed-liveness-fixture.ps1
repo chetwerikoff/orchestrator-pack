@@ -13,7 +13,7 @@ $PackRoot = Split-Path -Parent $PSScriptRoot
 $LibDir = Join-Path $PSScriptRoot 'lib'
 
 . (Join-Path $LibDir 'Orchestrator-SideProcessHealth.ps1')
-. (Join-Path $LibDir 'Orchestrator-SideProcessSupervisor.ps1')
+. (Join-Path $LibDir 'Orchestrator-WakeSupervisor.ps1')
 . (Join-Path $LibDir 'Orchestrator-SideEffectFence.ps1')
 . (Join-Path $LibDir 'Review-ReadyReportStateSeedProgress.ps1')
 . (Join-Path $LibDir 'Invoke-ReviewReadyReportStateSeed.ps1')

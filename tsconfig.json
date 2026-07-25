@@ -6,7 +6,14 @@
     "scripts/json-producers/**/*.ts",
     "scripts/toolchain/**/*.ts",
     "scripts/gate-runner/**/*.ts",
-    "scripts/lib/Invoke-TypeScriptCli.ts"
+    "scripts/lib/Invoke-TypeScriptCli.ts",
+    "scripts/lib/review-start-claim-store.ts",
+    "scripts/lib/review-start-claim-cli.ts",
+    "scripts/pack-review-runner.ts",
+    "scripts/lib/orchestrator-side-process-observer.ts",
+    "scripts/lib/orchestrator-side-process-observer-cli.ts",
+    "scripts/pr2a/**/*.ts",
+    "scripts/orchestrator-wake-supervisor-orphan-integration.shared.ts"
   ],
   "compilerOptions": {
     "allowImportingTsExtensions": true,

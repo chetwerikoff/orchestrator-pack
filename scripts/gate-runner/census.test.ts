@@ -32,7 +32,8 @@ describe('terminal gate population census after Issue #906', () => {
     expect(validateCensusSchema(census).join('\n')).toBe('');
     expect(census.entries.some((entry) => entry.classification === 'deferred-to-named-wave')).toBe(false);
     expect(census.entries.filter((entry) => entry.classification === 'retired-in-bulk')).toHaveLength(184);
-    expect(census.entries.filter((entry) => entry.classification === 'kept-in-pr1')).toHaveLength(48);
+    expect(census.entries.filter((entry) => entry.classification === 'kept-in-pr1')).toHaveLength(46);
+    expect(census.entries.filter((entry) => entry.classification === 'retired-with-reason')).toHaveLength(4);
   });
 
   it('requires every kept-in-pr1 row to cite C, D, or G', () => {

@@ -126,7 +126,7 @@ function Invoke-ScriptedReviewStdoutDeliverySend {
 
     . (Join-Path $PSScriptRoot 'Worker-NudgeClaim.ps1')
     . (Join-Path $PSScriptRoot 'Worker-AutonomousNudgeGate.ps1')
-    . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessSupervisor.ps1')
+    . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
     . (Join-Path $PSScriptRoot 'Orchestrator-SideEffectFence.ps1')
     . (Join-Path $PSScriptRoot 'Record-WorkerMessageDispatch.ps1')
 

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "issue": 948,
+  "roots": [
+    { "id": "verify", "patterns": ["scripts/verify.ps1", "scripts/check-*.ps1", "scripts/test-all.ps1"] },
+    { "id": "workflow", "patterns": [".github/workflows/**"] },
+    { "id": "package", "patterns": ["package.json"] },
+    { "id": "operator-worker", "patterns": ["scripts/*.ps1", "scripts/*.ts", "scripts/*.mjs", "scripts/*.sh"] },
+    { "id": "tests", "patterns": ["scripts/**/*.test.ts", "scripts/**/*.spec.ts", "scripts/**/*Tests.ps1", "tests/**"] },
+    { "id": "command-config", "patterns": ["agent-orchestrator.yaml.example", "scripts/**/*.json", "docs/**/*.md"] }
+  ],
+  "explicitlyUnsupported": [
+    "docs/archive/**",
+    "docs/issues_drafts/**",
+    "docs/declarations/**",
+    "tests/external-output-references/**",
+    "vendor/**"
+  ],
+  "protectedTargets": [
+    "scripts/orchestrator-wake-supervisor.ps1",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/Review-StartClaim.ps1",
+    "scripts/review-start-claim-reaper.ps1"
+  ]
+}

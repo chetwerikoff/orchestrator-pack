@@ -185,19 +185,13 @@ function Resolve-FleetHygieneCanonicalSupervisorPid {
         }
     }
 
-    $resolution = Resolve-OrchestratorWakeSupervisorSupervisorPid -Paths $Config.Paths `
-        -ProjectId $Config.ProjectId -LogPath $Config.Paths.SupervisorLog
-    if ($resolution.ResolvedAlive -and -not $resolution.Ambiguous) {
+    $candidates = @(Find-FleetHygieneManagedSupervisorCandidates `
+        -ProjectId $Config.ProjectId -StateRoot $Config.StateRoot | Sort-Object -Unique)
+    if ($candidates.Count -eq 1) {
         return @{
-            Pid    = [int]$resolution.ResolvedPid
+            Pid    = [int]$candidates[0]
             Source = 'process-scan'
         }
-    }
-
-    $candidates = @($resolution.CandidatePids | Sort-Object)
-    if ($candidates.Count -eq 0) {
-        $candidates = Find-FleetHygieneManagedSupervisorCandidates `
-            -ProjectId $Config.ProjectId -StateRoot $Config.StateRoot
     }
     if ($candidates.Count -gt 0) {
         $recordedPid = Read-OrchestratorWakeSupervisorPidFile -Path $Config.Paths.SupervisorPid
@@ -597,17 +591,15 @@ function Invoke-FleetHygieneAssertionH5 {
             -Reason "wake-supervisor Status exit $exitCode (fixture)"
     }
 
-    $statusScript = Join-Path $Config.PackRoot 'scripts/orchestrator-wake-supervisor.ps1'
-    & pwsh -NoProfile -ExecutionPolicy Bypass -File $statusScript `
-        -Action Status -ProjectId $Config.ProjectId -StateDir $Config.StateRoot *> $null
-    $exitCode = $LASTEXITCODE
-
-    if ($exitCode -eq 0) {
+    $supervisorPid = Resolve-FleetHygieneCanonicalSupervisorPid -Config $Config
+    if ($supervisorPid -gt 0 -and (Test-FleetHygieneProcessAlive -ProcessId $supervisorPid) `
+            -and (Test-FleetHygieneSupervisorIdentity -ProcessId $supervisorPid `
+                -ProjectId $Config.ProjectId -StateRoot $Config.StateRoot)) {
         return New-FleetHygieneAssertionResult -Id 'H5' -Code 'H5_OK' -Pass $true `
-            -Reason 'wake-supervisor Status exit 0'
+            -Reason "observer verified supervisor identity (pid=$supervisorPid)"
     }
     return New-FleetHygieneAssertionResult -Id 'H5' -Code 'H5_STATUS_UNHEALTHY' -Pass $false `
-        -Reason "wake-supervisor Status exit $exitCode"
+        -Reason 'observer could not verify a live canonical supervisor identity'
 }
 
 function Test-FleetHygieneH6RssEligibleProcess {
@@ -875,33 +867,26 @@ function Invoke-FleetHygieneProcessKill {
         return
     }
 
-    if ($ManagedRole -eq 'supervisor') {
-        Stop-OrchestratorWakeSupervisorProcess -ProcessId $ProcessId -ManagedRole 'supervisor' `
-            -ProjectId $ProjectId -StateRoot $StateRoot -LogPath $Config.SentinelLogPath
-        return
-    }
-
     if ($ManagedRole) {
-        Stop-OrchestratorWakeSupervisorProcess -ProcessId $ProcessId -ManagedRole $ManagedRole `
-            -LogPath $Config.SentinelLogPath
-        return
+        $managed = if ($ManagedRole -eq 'supervisor') {
+            Test-FleetHygieneSupervisorIdentity -ProcessId $ProcessId -ProjectId $ProjectId -StateRoot $StateRoot
+        }
+        else {
+            Test-FleetHygieneManagedProcess -ProcessId $ProcessId -Role $ManagedRole -ProjectId $ProjectId -StateRoot $StateRoot
+        }
+        if (-not $managed) { return }
     }
 
     if (Test-ProcessAlive -ProcessId $ProcessId) {
-        & kill $ProcessId 2>$null
+        Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
     }
 }
 
 function Find-FleetHygieneAdoptableProcesses {
     param([hashtable]$Paths)
 
-    $found = Find-OrchestratorWakeSupervisorAdoptableProcesses -Paths $Paths
-    if (-not $env:AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE -and -not $env:AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE) {
-        return $found
-    }
-
+    $found = @{}
     foreach ($child in Get-OrchestratorWakeSupervisorChildRegistry) {
-        if ($found.ContainsKey($child.Id)) { continue }
         foreach ($procId in Get-FleetHygienePwshProcessIds) {
             if (Test-FleetHygieneManagedChildForState -ProcessId $procId -Role $child.Id -StateRoot $Paths.Root) {
                 $found[$child.Id] = $procId

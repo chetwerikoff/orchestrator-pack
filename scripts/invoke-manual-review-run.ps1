@@ -21,7 +21,7 @@ $PackRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
 . (Join-Path $PSScriptRoot 'lib/Gh-PrChecks.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-PostRunRetry.ps1')
-. (Join-Path $PSScriptRoot 'lib/Review-StartClaim.ps1')
+. (Join-Path $PSScriptRoot 'lib/Review-StartClaimLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-AutonomousReviewStartGate.ps1')
 . (Join-Path $PSScriptRoot 'lib/Orchestrator-ReviewStartAudit.ps1')
 

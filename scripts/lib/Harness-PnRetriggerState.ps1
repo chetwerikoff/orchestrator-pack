@@ -7,7 +7,7 @@ function Get-HarnessPnRetriggerStateRoot {
     if ($env:PACK_HARNESS_PN_RETRIGGER_STATE_ROOT) {
         return [string]$env:PACK_HARNESS_PN_RETRIGGER_STATE_ROOT
     }
-    . (Join-Path $PSScriptRoot 'Orchestrator-SideProcessSupervisor.ps1')
+    . (Join-Path $PSScriptRoot 'Orchestrator-WakeSupervisorStateRoot.ps1')
     return Get-OrchestratorWakeSupervisorStateRoot
 }
 
