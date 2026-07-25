@@ -23,7 +23,7 @@ function Invoke-SanctionedWorkerKillRecordCli {
     param([string[]]$Arguments)
 
     $cli = Get-SanctionedWorkerKillRecordCliPath
-    $nodeArgs = @('--experimental-strip-types', $Script:OpkTypeScriptLauncher, '--script', $cli, '--')
+    $nodeArgs = @('--no-warnings', '--experimental-strip-types', $Script:OpkTypeScriptLauncher, '--script', $cli, '--')
     $output = & $Script:OpkTsNode.Source @nodeArgs @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "sanctioned-worker-kill-record.ts exited $LASTEXITCODE`: $($output | Out-String)"

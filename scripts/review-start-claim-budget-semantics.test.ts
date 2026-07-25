@@ -12,7 +12,7 @@ import {
 import { psString, repoRoot, runPwsh } from './_test-pwsh-helpers.js';
 
 const fullSha = '943b6cefbc6071f785d99b0eaf745bd579644d85';
-const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaim.ps1');
+const claimHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaimLifecycle.ps1');
 const lifecycleHelperPath = path.join(repoRoot, 'scripts/lib/Review-StartClaimLifecycle.ps1');
 
 function fakeHolder(overrides: Record<string, unknown> = {}) {
