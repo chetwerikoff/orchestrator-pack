@@ -90,8 +90,8 @@ rounds is intentional and is the only review-chat continuity in this flow.
 ## Pipeline
 
 1. Intake: current flow-manager pulls title/body, creates/reconstructs workdir,
-   records any manager handoff, recomputes tier/T3-critical stage selection, and
-   runs body floors.
+   records any manager handoff and the #973 intake prior before the first tier-gate
+   decision, recomputes tier/T3-critical stage selection, and runs body floors.
 2. When the task began with optional architect consultation, preserve its brief
    evidence; otherwise no architect stage runs here.
 3. Browser-GPT competitive stage when selected or explicitly requested, ≤3
@@ -106,8 +106,8 @@ rounds is intentional and is the only review-chat continuity in this flow.
    sole independent aggregate cut decision.
 7. One fresh-chat browser-GPT final architectural pass after the latest final-lens
    capture when the tier/flow requires it.
-8. Acceptance only over the current Issue revision with all floors and ledger
-   green and a final lens covering that exact accepted revision.
+8. Acceptance only over the current Issue revision with the full tier gate, all
+   floors, and ledger green and a final lens covering that exact accepted revision.
 
 Ordinary architectural review ends early on a clean pass with no findings.
 Competitive and explicit adversarial loops use their own documented
@@ -159,6 +159,65 @@ screen, stage-selection rules, and T3-critical/L4 classification. Ambiguous or
 unparseable classification follows existing fail-up behavior. If the pre-final
 recompute makes the task T3-critical, the mandatory independent Codex addition
 must complete before the final lens.
+
+### #973 tier provenance records
+
+These records live only in the existing out-of-repository workdir. They are
+same-user audit evidence for mechanical consistency, **not** an unforgeable role
+authorization channel; deliberate same-user fabrication is the explicit CX973-1
+residual trust risk. Do not add a signer, database, protected store, remote
+attestation, registry, lease, journal, or pending-state machine.
+
+Before the first tier-gate decision for a fresh workdir, the **flow-manager**
+records `$REVIEW_DIR/tier-intake.json` as `tier-intake/v1` with:
+
+- `producer: cursor-flow-manager`;
+- exact task identity;
+- `kind: fresh`;
+- the intake prior produced by the existing rubric/guard application;
+- `firstRevision`, bound to the first valid immutable `rNN`.
+
+The Issue `advisory-prior` mirrors this record and must match it. Browser GPT does
+not write the intake record, and no architect attribution is required for existing
+Issue + task-chat entry or direct brief-only entry. Missing, malformed, partial,
+or mismatched intake evidence fails closed.
+
+The implementation owns exactly one **static frozen** set of workdir identities
+that were already active at #973 cutover. Runtime code never discovers or extends
+it. Only a listed identity may use `kind: compatibility`; the flow-manager then
+records one compatibility intake anchor whose prior equals that workdir's first
+valid immutable revision tier. An unlisted legacy-looking workdir follows fresh
+rules. Never rewrite a historical revision to manufacture compatibility.
+
+After each immutable pull and tier/L4 recomputation, the flow-manager records
+`$WORKDIR/rNN/tier-gate-receipt.json` as `tier-gate-decision/v1` with the exact
+revision, resulting tier, every fired canonical marker row, the applicable rubric
+classes, and current L4 status (`clear|active|ambiguous|missing|stale`). Use only
+these stable rubric labels, which map the existing canon rather than defining a
+new rubric:
+
+- `failure-type:text-cosmetics`;
+- `failure-type:local-behavior`;
+- `failure-type:subsystem-or-system-guarantee`;
+- `size:small-obvious-self-contained`;
+- `size:single-component-design-judgment`;
+- `fail-up:doubt`.
+
+The fired marker rows plus those applicable rubric labels are the exact
+guard-enumerable driver set for that immutable decision. After the first valid
+revision, transition direction comes from the highest tier in preceding immutable
+`rNN` revisions, not from the author-editable `advisory-prior`; a hidden downstep
+therefore remains visible.
+
+Marker applicability is bound to the canonical row predicate: a marker is
+substantively present when the **change itself** satisfies that row's `Present when
+the task…` predicate. Merely naming the subject, quoting/citing prior art,
+describing a rejected alternative, or reusing an already-shipped primitive
+unchanged is not enough by itself. Do not weaken structural predicates such as
+`shared-contract-dependency`, `multi-surface`, or `ambiguity`, and do not change
+marker heuristics. Context-only lexical hits that remain in text continue through
+the existing #781 fingerprint-bound receipt path. Intake/demotion evidence is
+never a marker receipt.
 
 ## Step 2 — Task-chat disposition/fix round
 
@@ -354,16 +413,83 @@ itself, a cut: record a substantive reduction or explicitly keep the total
 mechanism. The lens also performs whatever protected adjudication the active
 protected-finding contract requires.
 
-Recompute against the final body only inside this lens for any downgrade; downgrade
-only when higher-tier drivers are gone and the marker screen is clear. Update
-title/fence through the task chat and let the flow-manager rerun the tier gate.
-Prior captures and ledger rows remain valid and are never waived.
+Recompute against the final body only inside this lens for any downgrade. A new
+demotion may move only one adjacent step (`T3→T2` or `T2→T1`) and the task
+lifecycle may consume this authority only once. Marker and L4 floors still bind.
+The source is the immutable preceding high-watermark decision and its recorded
+driver set.
 
-Save the guard-recognized capture as
-`pass-NN-architectural-lens.capture.txt`, with detailed analysis in
-`presync-architect-lens.md`. A fix-required result returns to the task chat; the
-flow-manager re-pulls the changed Issue and this lens then reruns as a new capture.
-Any Issue content change after a lens invalidates that lens for acceptance.
+When a downstep is justified, the original guard-recognized architect-lens capture
+contains exactly one fenced JSON event of this shape (field order is irrelevant):
+
+```tier-demotion-event
+{
+  "schema": "tier-demotion-event/v1",
+  "eventId": "<stable-id>",
+  "kind": "new",
+  "role": "architect",
+  "stage": "final-architect-lens",
+  "sourceRevision": "rNN",
+  "beforeTier": "T3",
+  "afterTier": "T2",
+  "drivers": [
+    { "kind": "marker|rubric", "id": "<exact-source-driver>", "rationale": "<why it no longer applies>" }
+  ]
+}
+```
+
+`drivers` must disposition **exactly** the source receipt's marker rows plus rubric
+classes: no omission, extra row, or substitute. Rationales remain human-audited
+architect prose; the guard checks set equality and exact source binding. Author
+Issue prose, signer strings, intake records, or fence metadata cannot substitute
+for this event.
+
+The task chat then applies exactly the authorized tier/title/fence-reference
+change. The complexity-tier fence retains the intake `advisory-prior` mirror and
+adds both `demotion-from: <before-tier>` and `demotion-event: <stable-id>`. The
+flow-manager re-pulls that Issue edit as the next immutable revision and records
+its tier-gate decision receipt. At this point the **full tier gate must be red**:
+current-candidate revalidation does not exist yet. A crash here stays red on retry.
+
+Run a newer final-lens delta over that exact post-edit immutable revision. Its
+architect-lens capture includes:
+
+```tier-demotion-revalidation
+{
+  "schema": "tier-demotion-revalidation/v1",
+  "eventId": "<same-stable-id>",
+  "role": "architect",
+  "stage": "final-architect-lens",
+  "candidateRevision": "rNN",
+  "beforeTier": "T3",
+  "afterTier": "T2",
+  "l4Status": "clear"
+}
+```
+
+Only then rerun the full tier gate. Exactly one matching current-candidate
+revalidation may authorize the lower tier. Same-event revalidation may repeat
+after later same-tier content fixes and does not consume another demotion. Any
+later upward recomputation remains mandatory and allowed but closes event reuse;
+a later downstep is a forbidden second lifecycle demotion. Keep the stable event
+reference in the Issue fence even after later up-escalation; removing it cannot
+reset history.
+
+For a frozen-list legacy identity, `kind: compatibility` is allowed only when
+immutable before/after revisions plus existing architect final-lens evidence prove
+the already-sanitized historical downstep and its source drivers can be
+mechanically reconstructed. The compatibility event additionally names
+`historicalAfterRevision` and `historicalLensCapture`. It imports that one old
+demotion into the same audit shape and consumes the same lifecycle allowance; it
+cannot authorize a new downstep. The #973 cutover historical-demotion population
+is empty, so this path is dormant unless concrete evidence disproves that fact.
+
+Save every architect result as `pass-NN-architectural-lens.capture.txt`, with
+detailed analysis in `presync-architect-lens.md`. A fix-required result returns to
+the task chat; the flow-manager re-pulls the changed Issue and this lens then
+reruns as a new capture. Any Issue content change after a lens invalidates that
+lens for acceptance. Prior captures and ledger rows remain valid and are never
+waived.
 
 ## Step 6 — Final architectural pass
 
@@ -392,19 +518,21 @@ final may exist; this matches `stage-completeness-core.ts`.
 Acceptance requires, in order:
 
 1. the latest final architect lens covers the exact Issue revision being accepted;
-2. a clean final pass over that exact revision when required;
-3. body floors, stage completeness, and finding ledger green;
-4. every typed finding normalized and dispositioned by the GPT author; unresolved
+2. the full `checkTierGateGuard` is green on that exact current anchor, including
+   intake/history/demotion/current-revalidation and marker/L4 floors when applicable;
+3. a clean final pass over that exact revision when required;
+4. body floors, stage completeness, and finding ledger green;
+5. every typed finding normalized and dispositioned by the GPT author; unresolved
    protected work resolved/adjudicated under the active protected contract; capped
    risks recorded;
-5. live Issue title prefix matching the final tier;
-6. no selected browser-GPT stage skipped except through a permitted recorded
+6. live Issue title prefix matching the final tier;
+7. no selected browser-GPT stage skipped except through a permitted recorded
    outage substitution;
-7. every mandatory T3-critical Codex addition complete, and every explicit wrapper
+8. every mandatory T3-critical Codex addition complete, and every explicit wrapper
    complete or explicitly waived only where allowed;
-8. report Issue URL, tier, pass counts, task/review chat URLs, current manager
+9. report Issue URL, tier, pass counts, task/review chat URLs, current manager
    handoff, workdir, transport fallbacks, substitutions, waivers, T3-critical
-   classification result, and risks.
+   classification result, #973 cutover/provenance state when applicable, and risks.
 
 Two non-converging `fix -> newer lens -> final` cycles escalate to the operator.
 
@@ -520,266 +648,3 @@ Every review/amendment prompt remains self-contained, carries the current Issue
 body as UNTRUSTED DATA between nonce markers, and requests one outer `~~~markdown`
 fence so inner backtick fences survive. Write the prepared prompt to the helper
 input file and save the successful reply output verbatim before interpretation.
-
-A Codex browser-outage substitution is a separate review-engine rule, not a
-transport fallback. It is permitted only after recorded browser unavailability
-when the operator cannot restore it; preserve the replaced stage capture name,
-raw JSON provenance, and substitution record.
-
-## Tier gate
-
-Run at intake, after material Issue/scope changes as required by the rubric, before
-the final lens, and on the final revision from the trusted repository root with
-an absolute anchor path:
-
-```bash
-node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
-```
-
-The marker screen is fail-closed. A red marker with a below-T3 assignment or a
-skipped mandatory stage blocks acceptance; unparseable input becomes T3.
-
-Tier stages:
-
-- T1: no competitive stage; one light browser-GPT architectural pass in the
-  dedicated ordinary-architectural chat; light final lens; one fresh browser-GPT
-  final verification only after lens-driven content change.
-- T2: no competitive stage unless an explicit wrapper/contract selects it;
-  browser-GPT architectural ≤3 in the dedicated ordinary-architectural chat;
-  light final lens; one fresh browser-GPT final verification only after
-  lens-driven content change.
-- T3: browser-GPT competitive ≤3 fresh chats; browser-GPT architectural ≤4 in the
-  dedicated ordinary-architectural chat; full final lens; exactly one fresh
-  browser-GPT final pass after the latest lens.
-- T3-critical: run the full T3 GPT flow plus the independent Codex addition and
-  require rollback/migration plus realistic crash/race/stale-state floors.
-
-Explicit adversarial wrappers floor the effective tier at T2 and preserve their
-requested stage. Upward recompute runs skipped stages. Downward movement occurs
-only at final lens and never erases evidence.
-
-### T3-critical floor details
-
-The L4 classification is independent of the literal `complexity-tier` fence. At
-intake and every required pre-final recompute, cite the matched L4 condition(s) in
-the flow-manager record. An L4 task is not acceptance-ready unless the live Issue
-contains:
-
-1. a rollback/migration note describing the safe rollback or migration boundary,
-   data/state compatibility, and required operator action; and
-2. numbered acceptance criteria plus matching verification that exercise every
-   material crash, race, and stale-state class with realistic inputs.
-
-These are additive to all never-skipped worker-safety, behavior-kind,
-contract-evidence, stage-completeness, finding-ledger, qualifying GPT, and
-independent Codex floors. They are not satisfied by a generic risk paragraph, a
-happy-path unit test, or a waiver.
-
-## Mandatory Issue-body floors
-
-The Issue body must use this order:
-
-1. **Prerequisite** — blocking and already-landed prior art, cited by Issue number.
-2. **Goal** — observable outcome, not implementation method.
-3. mandatory `behavior-kind` fence: `action-producing` or `record-only`.
-4. mandatory `complexity-tier` fence.
-5. **Binding surface** — observable contracts and operator adoption; preserve
-   planner freedom over names, signatures, layout, and library choice.
-6. **Files in scope**.
-7. **Files out of scope**.
-8. mandatory `denylist` fence.
-9. mandatory `allowed-roots` fence, listing every allowed root.
-10. **Acceptance criteria** — numbered, observable, testable.
-11. **Upgrade-safety check**.
-12. **Verification** mapped to acceptance criteria.
-13. `contract-evidence` fence or explicit `contract-evidence: none` form accepted
-    by the repository validator.
-
-### Required fence examples
-
-Every task declares one behavior kind:
-
-```behavior-kind
-record-only
-```
-
-or:
-
-```behavior-kind
-action-producing
-```
-
-Action-producing tasks also include a realistic positive outcome:
-
-```positive-outcome
-asserts: <observable action on realistic input>
-input: realistic
-```
-
-Worker-safety fences are always present:
-
-```denylist
-vendor/**
-packages/core/**
-```
-
-```allowed-roots
-<first allowed root>
-<second allowed root when applicable>
-```
-
-`allowed-roots` is not optional merely because scope spans multiple roots; list
-the finite union. Broad `.`/`**/*` roots require explicit justification and
-remain subject to scope discipline.
-
-The complexity fence is exactly one of:
-
-```complexity-tier
-tier: T2
-advisory-prior: T2
-```
-
-or, for a genuine below-ladder input:
-
-```complexity-tier
-skip-line: true
-```
-
-The title/H1 carries `[T1]`, `[T2]`, or `[T3]`; skip-line inputs omit a prefix.
-
-### Discipline details
-
-- External-tool positive outcomes use `input: external-tool-output` plus
-  capture-backed provenance (or allowed golden-sample provenance).
-- Deferred causes require a complete `parked-root-cause` fence with an existing
-  follow-up Issue.
-- Every upstream datum in Binding surface, ACs, or Verification is grounded in
-  `contract-evidence`; belief/self-attestation is inadmissible.
-- Capture-backed evidence rows use stable binding id/type, producer,
-  selector/token, expected behavior, and repository manifest provenance.
-
-## Mechanical floor commands
-
-Run from trusted repository root with absolute `$ANCHOR`:
-
-```bash
-node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
-node scripts/draft-discipline.mjs positive-outcome --draft "$ANCHOR"
-node scripts/draft-discipline.mjs parked-root --draft "$ANCHOR"
-node scripts/draft-discipline.mjs contract-evidence --draft "$ANCHOR"
-node scripts/stage-completeness-guard.ts \
-  --text-file "$ANCHOR" --draft-path "$ANCHOR" --repo-root "$WORKDIR"
-node scripts/finding-ledger-guard.mjs \
-  --ledger "$REVIEW_DIR/finding-disposition-ledger.json" \
-  --captures-dir "$REVIEW_DIR" \
-  --draft-path "$ANCHOR"
-```
-
-Run body-only guards after every Issue revision. Stage completeness and the
-finding-ledger guard run at acceptance. Contract evidence uses tracked manifests
-from the trusted repository root; stage completeness alone receives the workdir
-as repo root to locate out-of-repo captures.
-
-## Finding ledger
-
-Every reviewer capture is immutable evidence. The flow-manager records each
-finding with stable id, summary, type (`security`, `scope-violation`, `spec`,
-`quality`, `test`, `ci`), the GPT author's disposition, and reject reason when
-applicable.
-
-- Accepted/partial findings are fixed by the GPT author through the task chat.
-- Rejected non-protected findings need a proportionality reason tied to blast
-  radius, reversibility, failure impact, and a cheaper sufficient alternative.
-- Before #975 is present on the implementation base, the current legacy protected
-  handling remains unchanged: security and scope-violation findings cannot be
-  rejected; address them with real defense/evidence or explicit operator risk
-  acceptance, and contested protected work remains unresolved for architect
-  adjudication at the final lens.
-- Once #975 is present on the implementation base, every still-active acceptance
-  attempt follows its current M3 nomination/author-decision/architect-adjudication
-  semantics regardless of when the ledger began; already-completed historical
-  ledgers remain legacy-readable. A non-binding architect adjudication returns the
-  underlying defect to ordinary M1 author disposition semantics.
-- `NO_FINDINGS` never erases prior findings.
-- Capped exits preserve unresolved questions in the ledger and final report.
-
-This role/topology flow adds no protected guard, schema, capture-format, pricing,
-or reviewer-economics behavior.
-
-## Review artifacts
-
-All durable audit artifacts remain outside the repository:
-
-```text
-chats.md
-round-NN-author-reply.md
-pass-NN-competitive.capture.txt
-pass-NN-architectural.capture.txt
-pass-NN-architectural.codex.json        # only when a Codex role runs
-pass-NN-architectural-lens.capture.txt
-pass-NN-architectural-final.capture.txt
-pass-NN-architectural-final.codex.json  # only when Codex substitutes
-presync-architect-lens.md
-finding-disposition-ledger.json
-```
-
-Optional pre-task architect consultation may be referenced in `chats.md` or the
-existing handoff/audit record; it does not add a mandatory new artifact class.
-Pass numbers form one chronological sequence. Guard-recognized stages are
-`competitive`, `architectural`, `architectural-lens`, and
-`architectural-final`. Capture every reviewer response before editing.
-
-Every typed finding receives a stable id, summary, type, author disposition, and
-reason when rejected where the active contract permits rejection. Reworded
-findings retain identity. `NO_FINDINGS` never erases older findings. Protected
-findings follow the active contract and may never be silently omitted.
-
-Codex raw JSON is provenance only; whenever Codex runs, transcribe findings 1:1
-into the plain capture for the stage because the ledger guard ignores fenced/raw
-JSON structure.
-
-## Repository-write boundary
-
-This flow creates no tracked draft mirror, queue-index row, capture, ledger, or
-workdir file. The only permitted temporary in-repo write is an untracked
-`.review-challenge/**` transport copy when a Codex role requires
-`--scope working-tree`; delete it immediately after the pass and never commit it.
-
-Cross-Issue contract changes update every affected live Issue before acceptance
-and land the corresponding architecture decision together. Durable decisions go
-to the repository's architecture decision surface under their own scoped change.
-
-## Don't
-
-- Let the flow-manager author spec content or decide reviewer findings.
-- Let the architect operate routine browser turns, ledger bookkeeping, ordinary
-  stage ordering, per-round disposition ratification, or intake/mid-cycle tier
-  selection.
-- Review in the task chat.
-- Reuse any competitive or final browser-GPT review chat; conversely, do not open
-  a new ordinary architectural browser chat for each round after the dedicated
-  chat exists.
-- Let Codex become the default architectural engine, claim a substitution without
-  recorded browser unavailability, or double-count a substitution as the separate
-  T3-critical Codex addition.
-- Start a browser turn without exclusive ownership of the common cross-task
-  browser critical-section identity; do not extend that lock over Issue/ledger
-  work or implement a new runtime lock here.
-- Treat a tracked-helper non-`ok` state, timeout, missing stdout, or unresolved
-  status as scratchpad/legacy fallback authorization or resend permission.
-- Run legacy/scratchpad browser sends while helper-owned unresolved state blocks
-  coexistence for the configured profile.
-- Trust a chat reply without a live Issue re-pull and diff.
-- Run parity sync from `$WORKDIR`; use trusted repo cwd + absolute anchor.
-- Omit `behavior-kind` or `allowed-roots` from any task/skip-line body.
-- Skip a requested GPT/Codex stage, a selected browser-GPT stage, or the mandatory
-  T3-critical Codex addition silently.
-- Miss the Issue #574 L4 classification or waive/dilute rollback/migration and
-  crash/race/stale-state floors.
-- Accept after an Issue content edit without a newer final-lens capture and any
-  final verification required by the tier flow.
-- Accept with stale captures/title, red floors, or incomplete ledger.
-- Use raw `gh issue edit`; use the sanctioned body-sync helper for parity only.
-- Commit workdir or `.review-challenge/**` artifacts.
-- Hand-edit `.cursor/skills/**`; regenerate only when canonical frontmatter changes.
-- Over-specify implementation details that belong to the planner.
