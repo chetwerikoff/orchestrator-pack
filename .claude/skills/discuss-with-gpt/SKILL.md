@@ -341,6 +341,12 @@ confirms the prompt appeared as a user message and exits `send_failed`(14) if it
 did not. This does not override the tracked helper's stricter possible-delivery
 and recovery rules above.
 
+**Tracked `create-issue-draft` turns** use the monitoring contract in
+[`create-issue-draft`](../create-issue-draft/SKILL.md) § **Tracked helper long-turn
+monitoring** — poll `status/list` and, when invocation identity is available,
+`publication-status`, not the page. Do not apply the standalone page-poll rule to
+tracked helper turns.
+
 ## Tabs and chat identities: reuse one, never merge streams
 
 For tracked `create-issue-draft` turns, `--chat-url <url>` targets an exact
