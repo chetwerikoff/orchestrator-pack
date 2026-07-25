@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "requiredChildIds": [
+    "pack-review-scheduler"
+  ],
+  "children": [
+    {
+      "id": "pack-review-scheduler",
+      "script": "pr2-foundation/scheduler.ts",
+      "sideEffecting": true,
+      "sideEffectLockFile": "pack-review-scheduler.lock",
+      "requiresOrchestratorSession": false,
+      "passProjectId": false,
+      "cadenceSeconds": 5,
+      "stallGraceMultiplier": 4
+    }
+  ]
+}

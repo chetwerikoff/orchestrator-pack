@@ -8,6 +8,7 @@ import { AC_MUTATION_CONTROLS, type AcceptanceId } from './contracts.ts';
 type ProcessResult = Awaited<ReturnType<typeof runProcess>>;
 
 const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
+const CUTOVER_RUNNER_PATH = 'scripts/cutover/mutation-runner.ts';
 
 function parseAc(argv: string[]): AcceptanceId | null {
   const index = argv.indexOf('--ac');
@@ -37,12 +38,16 @@ function runMutation(runner: string, ac: AcceptanceId | null): Promise<ProcessRe
   });
 }
 
-function pr2aLandedOnBase(): boolean {
+function baseRef(): string {
   const baseName = String(process.env.GITHUB_BASE_REF ?? '').trim() || 'main';
-  const baseRef = `origin/${baseName}`;
+  return `origin/${baseName}`;
+}
+
+function pr2aLandedOnBase(): boolean {
+  const base = baseRef();
   const baseExists = runProcessSync({
     command: 'git',
-    args: ['cat-file', '-e', `${baseRef}^{commit}`],
+    args: ['cat-file', '-e', `${base}^{commit}`],
     cwd: resolve('.'),
     inheritParentEnv: true,
   });
@@ -58,10 +63,22 @@ function pr2aLandedOnBase(): boolean {
 
   return runProcessSync({
     command: 'git',
-    args: ['merge-base', '--is-ancestor', PR2A_LANDING_COMMIT, baseRef],
+    args: ['merge-base', '--is-ancestor', PR2A_LANDING_COMMIT, base],
     cwd: resolve('.'),
     inheritParentEnv: true,
   }).ok;
+}
+
+function cutoverRunnerChangedAgainstBase(): boolean {
+  const base = baseRef();
+  const baseExists = runProcessSync({
+    command: 'git', args: ['cat-file', '-e', `${base}^{commit}`], cwd: resolve('.'), inheritParentEnv: true,
+  });
+  if (!baseExists.ok) return false;
+  const diff = runProcessSync({
+    command: 'git', args: ['diff', '--quiet', `${base}...HEAD`, '--', CUTOVER_RUNNER_PATH], cwd: resolve('.'), inheritParentEnv: true,
+  });
+  return !diff.ok && diff.exitCode === 1;
 }
 
 async function runPr2aMutationMatrix(runner: string, ac: AcceptanceId | null): Promise<boolean> {
@@ -95,9 +112,20 @@ async function runPr2aMutationMatrix(runner: string, ac: AcceptanceId | null): P
 
 async function main(): Promise<void> {
   const ac = parseAc(process.argv.slice(2));
+  const cutoverRunner = resolve(CUTOVER_RUNNER_PATH);
+  const hasCutoverRunner = existsSync(cutoverRunner);
+  const pr2aLanded = pr2aLandedOnBase();
+  const cutoverCurrentChange = hasCutoverRunner && pr2aLanded && cutoverRunnerChangedAgainstBase();
+
+  if (cutoverCurrentChange && (!ac || ac !== 'AC9')) {
+    const result = await runMutation(cutoverRunner, ac);
+    emit(result);
+    if (!result.ok) process.exitCode = result.exitCode ?? 1;
+    return;
+  }
+
   const pr2aRunner = resolve('scripts/pr2a/mutation-runner.ts');
   const hasPr2aRunner = existsSync(pr2aRunner);
-  const pr2aLanded = hasPr2aRunner && pr2aLandedOnBase();
   const usePr2aRunner = hasPr2aRunner && (!ac || ac !== 'AC9');
 
   if (usePr2aRunner && pr2aLanded) {
@@ -153,7 +181,7 @@ async function main(): Promise<void> {
     'scripts/pr2-foundation/terminalized-port.test.ts',
     'scripts/pr2-foundation/worker-notification-compat.test.ts',
   ];
-  if (ac) args.push('--testNamePattern', `^\[${ac}\]`);
+  if (ac) args.push('--testNamePattern', `^\\[${ac}\\]`);
   const result = await runProcess({
     command: process.execPath,
     args,

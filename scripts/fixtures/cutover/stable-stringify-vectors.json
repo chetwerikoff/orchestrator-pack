@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "vectors": [
+    {
+      "id": "nested-key-order",
+      "value": { "z": 1, "a": { "b": 2, "a": 1 } },
+      "canonical": "{\"a\":{\"a\":1,\"b\":2},\"z\":1}"
+    },
+    {
+      "id": "unicode-and-escapes",
+      "value": { "text": "λ\\\"\\n\u0001" },
+      "canonical": "{\"text\":\"λ\\\\\\\"\\\\n\\u0001\"}"
+    },
+    {
+      "id": "negative-zero",
+      "value": { "n": -0 },
+      "canonical": "{\"n\":0}"
+    },
+    {
+      "id": "exponents",
+      "value": { "big": 1e+21, "small": 1e-7 },
+      "canonical": "{\"big\":1e+21,\"small\":1e-7}"
+    }
+  ]
+}
