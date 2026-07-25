@@ -1,0 +1,40 @@
+{
+  "issue_number": 928,
+  "iteration_id": "chatgpt-issue-928",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-25T22:51:03.000Z",
+  "baseline": {
+    "commit_sha": "0e5e4f2105d48a61d74e3b9b43879d2f8e1d66b2",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f1103043af21abce2ffb62a40a176cb20de3e454ef3baa25d33cf2b3b7d0ba4c"
+  },
+  "declared_paths": [
+    "docs/migration_notes.md",
+    "scripts/estate-cut/issue-906.manifest.json",
+    "scripts/fixtures/cutover/stable-stringify-vectors.json",
+    "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
+    "scripts/lib/Review-StartClaim.ps1",
+    "scripts/lib/cutover/activation-cordon.ts",
+    "scripts/lib/cutover/activation-epoch-authority.ts",
+    "scripts/lib/cutover/activation-evidence.ts",
+    "scripts/lib/cutover/activation-import.ts",
+    "scripts/lib/cutover/activation-platform-preflight.ts",
+    "scripts/lib/cutover/activation-recovery.ts",
+    "scripts/lib/cutover/activation-registry-projection.ts",
+    "scripts/lib/cutover/activation-transaction.ts",
+    "scripts/lib/cutover/stable-stringify.ts",
+    "scripts/lib/cutover/types.ts",
+    "scripts/lib/orchestrator-side-process-supervisor.ts",
+    "scripts/orchestrator-cutover-activate.ts",
+    "scripts/orchestrator-side-process-registry.cutover-target.json",
+    "scripts/orchestrator-wake-supervisor.ps1",
+    "scripts/orchestrator-wake-supervisor.ts",
+    "scripts/pr2-foundation/contract-test-runner.ts",
+    "scripts/pr2-foundation/migration-journal.ts",
+    "scripts/pr2-foundation/scheduler.ts",
+    "scripts/review-start-claim-reaper.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
