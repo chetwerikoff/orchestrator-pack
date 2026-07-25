@@ -764,6 +764,7 @@ function validateTierTransition(
     errors.push('tier demotion: source high-watermark decision receipt is unavailable');
     return;
   }
+  validateDecisionReceipt(source, opts.repoRoot, opts.draftPath, errors, true);
 
   if (!fence.demotionFrom || !fence.demotionEvent) {
     errors.push('tier demotion: observed downstep requires demotion-from and demotion-event fence fields');
