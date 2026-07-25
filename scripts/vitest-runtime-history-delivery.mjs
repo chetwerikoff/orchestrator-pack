@@ -167,13 +167,17 @@ export function evaluateRequiredChecks({ checks, policy, packReviewProjection, m
   if (packReviewProjection.state === 'veto') return { action: 'fail', outcome: 'operator-veto-observed', reason: 'latest out-of-band pack-review state is failure/error' };
   if (packReviewProjection.state === 'pending') return { action: 'wait', outcome: 'operator-status-pending', reason: 'latest out-of-band pack-review state is pending' };
   if (packReviewProjection.state === 'success') return { action: 'ready', reason: 'pack-review is satisfied by latest out-of-band success' };
-  if (!packReviewProjection.machineSuccess) return { action: 'machine-admit', reason: 'pack-review is required and no out-of-band status exists' };
+  if (!packReviewProjection.machineSuccess) {
+    if (machineAdmissionAttempted) {
+      return { action: 'fail', outcome: 'required-context-unreported', reason: 'machine admission was attempted but exact-head status history does not report it' };
+    }
+    return { action: 'machine-admit', reason: 'pack-review is required and no out-of-band status exists' };
+  }
   const current = byName.get(PACK_REVIEW_CONTEXT);
   if (current === 'pass') return { action: 'ready', reason: 'pack-review is satisfied by machine admission' };
   if (current === 'fail') return { action: 'fail', outcome: 'required-check-failed', reason: 'current pack-review context is failing' };
   if (current === 'pending') return { action: 'wait', outcome: 'required-check-pending', reason: 'current pack-review context is pending' };
-  if (machineAdmissionAttempted || packReviewProjection.machineSuccess) return { action: 'fail', outcome: 'required-context-unreported', reason: 'machine admission exists but current required pack-review context is unreported' };
-  return { action: 'machine-admit', reason: 'pack-review machine admission is eligible' };
+  return { action: 'fail', outcome: 'required-context-unreported', reason: 'machine admission exists but current required pack-review context is unreported' };
 }
 
 function ghCommand(repoRoot) { return join(repoRoot, 'scripts', 'gh'); }
@@ -284,11 +288,7 @@ export async function runDeliveryMonitor(config, io) {
     if (decision.action === 'fail') return { outcome: decision.outcome, reason: decision.reason, failed: true };
     if (decision.action === 'wait') { await io.sleep(config.pollSeconds * 1000); continue; }
     if (decision.action === 'machine-admit') {
-      let writeConfirmed = false;
-      try {
-        const row = await io.publishMachineAdmission(config.expectedHeadSha);
-        writeConfirmed = row?.context === PACK_REVIEW_CONTEXT && row?.state === 'success' && row?.description === MACHINE_ADMISSION_MARKER;
-      } catch {}
+      try { await io.publishMachineAdmission(config.expectedHeadSha); } catch {}
       attempted = true;
       let history;
       try { history = await io.getStatusHistory(config.expectedHeadSha); }
@@ -297,7 +297,7 @@ export async function runDeliveryMonitor(config, io) {
       if (!projection.ok) return { outcome: projection.outcome, reason: projection.reason, failed: true };
       if (projection.state === 'veto') return { outcome: 'operator-veto-observed', reason: 'out-of-band pack-review veto observed after machine publication', failed: true };
       if (projection.state === 'pending') { await io.sleep(config.pollSeconds * 1000); continue; }
-      if (!projection.machineSuccess && !writeConfirmed) return { outcome: 'machine-admission-unconfirmed', reason: 'machine admission write was not confirmed by exact-head status history', failed: true };
+      if (!projection.machineSuccess) return { outcome: 'machine-admission-unconfirmed', reason: 'authoritative exact-head status history did not confirm machine admission', failed: true };
     }
     state = await inspect(config, io);
     if (state.terminal) {
