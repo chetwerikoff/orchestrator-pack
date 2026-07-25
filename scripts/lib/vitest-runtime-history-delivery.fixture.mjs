@@ -427,6 +427,24 @@ async function testPendingPublicationRaceNeverRepublishes() {
   equal(fixture.state().mergeCalls, 0, 'pending race must not merge');
 }
 
+async function testAmbiguousMachineWriteNeverRepublishes() {
+  const fixture = createIo({
+    publishMachineAdmission() {
+      return status({
+        id: 999,
+        context: PACK_REVIEW_CONTEXT,
+        state: 'success',
+        creator: 'github-actions[bot]',
+        description: MACHINE_ADMISSION_MARKER,
+      });
+    },
+  });
+  const result = await runDeliveryMonitor(config, fixture.io);
+  equal(result.outcome, 'machine-admission-unconfirmed', 'write response alone must not authorize machine admission');
+  equal(fixture.state().machineWrites, 1, 'ambiguous machine write must never be blindly repeated');
+  equal(fixture.state().mergeCalls, 0, 'unconfirmed machine admission must block merge');
+}
+
 async function testStatusHistoryReadFailureFailsClosed() {
   const fixture = createIo({ getStatusHistory() { throw new Error('pagination completeness unprovable'); } });
   const result = await runDeliveryMonitor(config, fixture.io);
@@ -545,6 +563,7 @@ async function main() {
     testFailurePublicationRaceBlocksMerge,
     testErrorPublicationRaceBlocksMerge,
     testPendingPublicationRaceNeverRepublishes,
+    testAmbiguousMachineWriteNeverRepublishes,
     testStatusHistoryReadFailureFailsClosed,
     testMissingProvenanceFailsClosedAfterBoundedGrace,
     test995NonGeneratedHead,
