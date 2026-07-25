@@ -91,22 +91,29 @@ out-of-repository layout.
 
 - **Browser GPT author.** Browser GPT is the default task-spec author. One task
   chat owns authoring, every content fix, direct edits to the live GitHub Issue,
-  and proposed finding dispositions.
-- **Authoring fallback.** When the browser is unavailable and the operator cannot
-  raise it, the architect may use the separately recorded **architect-as-author**
-  fallback.
-- **Architect.** The architect writes the brief, applies the architect lenses,
-  controls stage ordering and tier recomputation, and ratifies finding
-  dispositions. It does not reopen addressed findings; on T3 the final lens
-  re-judges only the reject partition. The architect does not replace the task
-  chat for normal content fixes.
+  and every finding disposition. Reviewer findings are proposals to this author.
+- **Cursor flow-manager.** One current Cursor flow-manager per task owns the
+  operational cycle: live Issue pulls, rubric/guard application, tier and stage
+  selection, mechanical/body floors, immutable captures, finding-ledger
+  bookkeeping, pass accounting, chat references/topology, and browser-turn
+  execution. It records author dispositions but does not author spec content,
+  judge findings, or perform the final architect lens. A successor may act only
+  after the latest explicit predecessor/operator handoff recorded in an existing
+  audit/chat surface; that handoff immediately ends the predecessor's manager
+  authority. No lease, heartbeat, or new ownership store is implied.
+- **Architect.** The architect has exactly two possible touchpoints: optional
+  pre-task consultation when selected by the operator/task origin, and the
+  mandatory final architect lens. It does not operate routine browser turns,
+  maintain the ledger, ratify ordinary per-round dispositions, control ordinary
+  stage ordering, or own intake/mid-cycle tier selection.
 - **Browser GPT competitive review.** When the existing tier or an explicit
   request selects a competitive stage, each pass runs in a fresh browser-GPT
   chat. The stage ceiling remains three passes.
-- **Browser GPT architectural review.** Every ordinary architectural pass and
-  every final-verification pass runs in a fresh browser-GPT chat. Review history
-  from one pass is not reused as input to another; only the persistent task chat
-  carries authoring/fix continuity.
+- **Browser GPT architectural review.** Ordinary architectural review uses one
+  dedicated browser-GPT review chat for the task and reuses that same chat across
+  its ordinary rounds. The post-lens final-verification pass remains a fresh
+  browser-GPT chat. Review chats never edit the Issue; dispositions return to the
+  task chat.
 - **Codex.** Codex is not the default architectural-review engine. Its sanctioned
   roles are: the mandatory independent addition for T3-critical tasks; a recorded
   substitution for a browser-GPT review stage only when the browser is unavailable
@@ -114,10 +121,20 @@ out-of-repository layout.
   `adversarial-draft-review` challenge loop added on top of the normal flow.
 
 A Codex substitution is captured, normalized, and dispositioned like the stage it
-replaces. It creates no browser review-chat continuity; when browser-GPT review
-resumes, the next browser review pass still starts in a fresh chat. An explicit
+replaces and is credited only to that replaced browser stage. It never satisfies
+the separate mandatory T3-critical Codex addition. Competitive and final browser
+passes remain fresh after a substitution. Ordinary architectural review retains
+its single dedicated browser-chat identity when one already exists; a substitution
+does not create a second browser architectural stream. An explicit
 `adversarial-draft-review` loop never replaces the GPT competitive stage or the
 normal architectural stage.
+
+The flow-manager applies the existing rubric, marker screen, stage-selection
+rules, and T3-critical/L4 classification at intake, after every material
+Issue/scope change, and immediately before the final architect lens. Ambiguous or
+unparseable classification follows the existing fail-up behavior. If that
+pre-final recomputation makes the task T3-critical, the independent Codex addition
+must complete before the final lens.
 
 ### Per-tier pipeline (ceilings, not quotas)
 
@@ -127,9 +144,9 @@ ceiling.
 
 | Tier | Stages |
 |------|--------|
-| **T1** | One light browser-GPT architectural pass in a fresh chat; after the final architect lens, one additional fresh-chat browser-GPT final-verification round only when the lens changed content. |
-| **T2** | Browser-GPT architectural review, up to **3** fresh-chat passes; first `NO_FINDINGS` ends the ordinary stage. After the final architect lens, one additional fresh-chat browser-GPT final-verification round only when the lens changed content. No competitive stage unless separately selected by an explicit wrapper contract. |
-| **T3** | Competitive adversarial browser-GPT review up to **3** fresh-chat passes → browser-GPT architectural review up to **4** fresh-chat passes → final architect lens → mandatory fresh-chat browser-GPT final-verification round **1**. |
+| **T1** | One light browser-GPT architectural pass in the task's dedicated ordinary-architectural chat; after the final architect lens, one additional fresh-chat browser-GPT final-verification round only when the lens changed content. |
+| **T2** | Browser-GPT architectural review, up to **3** passes in one dedicated ordinary-architectural chat; first `NO_FINDINGS` ends the ordinary stage. After the final architect lens, one additional fresh-chat browser-GPT final-verification round only when the lens changed content. No competitive stage unless separately selected by an explicit wrapper contract. |
+| **T3** | Competitive adversarial browser-GPT review up to **3** fresh-chat passes → browser-GPT architectural review up to **4** passes in one dedicated ordinary-architectural chat → final architect lens → mandatory fresh-chat browser-GPT final-verification round **1**. |
 
 **T3-critical** (within-T3 graduation): gated by the **L4-condition list recorded
 in Issue #574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md` Decisions**
@@ -142,12 +159,13 @@ qualifying independent GPT participation, acceptance is blocked or deferred.
 
 ### Finding-disposition ledger + normalization
 
-Reviewers cannot be relied on for structured output. Per pass the authoring flow:
+Reviewers cannot be relied on for structured output. Per pass the flow-manager:
 
 1. Captures **raw reviewer output verbatim** (audit anchor).
 2. **Normalizes** every emitted finding into the disposition ledger with stable
-   `id`, `summary`, `type`, and `disposition` — `addressed` or `rejected` plus
-   one-line `rejectReason`.
+   `id`, `summary`, `type`, and the browser-GPT author's `disposition` —
+   `addressed` or `rejected` plus one-line `rejectReason` under the active
+   protected-finding contract.
 
 The ledger and verbatim `pass-NN-<stage>.capture.txt` files live in the
 out-of-repository audit workdir defined by
@@ -181,10 +199,13 @@ axis is qualitative and is **not** the T1/T2/T3 ceremony tier.
 
 ### Non-rejectable carve-out
 
-Findings with `type: security` or `type: scope-violation` (#51 vocabulary) have
-exactly one valid disposition: `addressed`. The guard fails when a protected
-finding is `rejected` **or omitted** while present in capture. Contested protected
-findings **escalate to the architect** — never self-waivable by the authoring flow.
+Before #975 is present on the implementation base, the existing legacy protected
+contract remains unchanged: findings with `type: security` or
+`type: scope-violation` (#51 vocabulary) have exactly one valid disposition:
+`addressed`. The guard fails when a protected finding is `rejected` **or omitted**
+while present in capture. A contested protected finding stays unresolved until
+the mandatory final architect lens adjudicates it; it is never self-waivable by
+the author or flow-manager.
 
 The carve-out protects the **outcome** (the risk is explicitly resolved or owned),
 not one prescribed mechanism. `addressed` may be reached by eliminating the
@@ -194,6 +215,13 @@ near-zero-payoff threat, eliminate the surface or record an explicit, reasoned
 risk-acceptance note with its assumptions and residual risk. This mechanism
 choice never permits `rejected` and never permits silent omission.
 
+Once #975 is present on the implementation base, every still-active acceptance
+attempt follows its current M3 nomination/author-decision/architect-adjudication
+semantics regardless of when that ledger began; only already-completed historical
+ledgers remain legacy-readable. Architect non-binding adjudication returns the
+underlying defect to ordinary M1 author disposition semantics. This role/topology
+contract adds no protected guard, schema, capture-format, or economics behavior.
+
 **Guard:** `scripts/check-finding-ledger-guard.ps1 -CapturesDir …` (or
 `check-draft-discipline.ps1 -Command finding-ledger`) validates **every**
 `*.capture.txt` under the supplied review directory against the ledger — not only
@@ -201,34 +229,71 @@ the final pass — and runs pre-acceptance alongside other draft-discipline chec
 non-zero exit blocks acceptance/publication. Omission detection is layered and
 fails closed: typed `type:` tags are checked directly; conservative
 protected-signal hits in capture with no matching ledger row also fail (false
-positives escalate to the architect; unparseable prose never passes silently).
+positives remain unresolved for final-lens adjudication; unparseable prose never
+passes silently).
 
 ### Simplification lens
 
 The existing review contract, including the four-question lens in
 `prompts/codex_draft_review_prompt.md`, mandates: what can be simplified / must
-not be simplified / is excess / is missing. Lens findings flow through the
-normal ledger and remain subject to the carve-out. The architect applies the
-same lens on the final architect lens. Simplification and excess judgments weigh
-every major mechanism against the artifact's stated stakes, its cost and risk,
-and the cheapest sufficient alternative — not against ceremony tier alone.
+not be simplified / is excess / is missing. Reviewer-originated simplification
+findings flow through the normal ledger and author disposition path under the
+active protected contract. An ordinary author fix before the final lens is not an
+independent aggregate lens decision. Simplification and excess judgments still
+weigh every major mechanism against the artifact's stated stakes, its cost and
+risk, and the cheapest sufficient alternative — not against ceremony tier alone.
 
 ### Final architect lens and tier movement
 
-After the ordinary review stages converge, the final architect lens recomputes
-the tier and checks the ledger before acceptance. It is the **only sanctioned
-tier-downgrade point**. A downgrade is invalid while the marker screen still
-requires the higher tier. Every intake, mid-flight, post-fix, and pre-acceptance
-recomputation outside this lens remains monotonic upward/fail-up; accepted
-findings that grow scope can only preserve or raise the tier.
+After the ordinary review stages and every required pre-final Codex addition
+complete, the final architect lens runs on the current Issue revision. It is the
+sole **independent aggregate** cut authority for review-added machinery and the
+**only sanctioned tier-downgrade point**. A downgrade is invalid while the marker
+screen still requires the higher tier. Every intake, mid-flight, and post-fix
+recomputation outside this lens belongs to the flow-manager and remains monotonic
+upward/fail-up; accepted findings that grow scope can only preserve or raise the
+tier.
 
-For T3, the lens retains the existing stronger contract: audit the ledger's
-**reject partition** (re-judge rejects; do **not** reopen accepts), and record for
-each major mechanism an explicit **keep** or **cut** verdict using the artifact's
-stated stakes × mechanism cost/risk × cheapest sufficient alternative.
+For T3, preserve the existing ledger invariant before mechanism verdicts: audit
+the ledger's **reject partition** (re-judge rejects; do **not** reopen accepts).
+That audit is separate from ordinary author disposition and remains subject to the
+active protected-finding contract.
+
+The final lens has four mandatory goals, in this exact order:
+
+1. **Contradiction check.** Verify the task's conditions do not contradict each
+   other. Any contradiction found is **fixed through the normal task-chat fix
+   path**, not merely recorded.
+2. **Feasibility check.** Verify the task is actually buildable as written, using
+   live probes over assumptions wherever the claim can be probed.
+3. **Cut ALL overengineering — PRIMARY goal.** Re-evaluate every major mechanism
+   against the artifact's stated stakes × mechanism cost/risk × cheapest
+   sufficient alternative. Explicitly answer **“which mechanism would be cut if
+   one had to be?”** and resolve that answer as either a real cut through the
+   normal task-chat fix path or a recorded keep-justification explaining why the
+   mechanism is necessary. As part of this same anti-overengineering goal,
+   explicitly reconsider whether the task still needs its current complexity tier:
+   ask whether simplification or removal of higher-tier drivers makes a lower tier
+   valid under the existing rubric. Apply the existing final-lens downgrade path
+   when it does; otherwise record why the current tier remains required. Marker/L4
+   floors and the active demotion contract still bind, so tier reconsideration
+   never forces a downgrade. “Traces to a finding” alone is not a
+   keep-justification. A lens verdict without both the forced-cut answer and an
+   explicit tier-reconsideration result is invalid.
+4. **Find what was missed.** Identify gaps, unverified evidence, and unsettled
+   conditionals, and route any required content correction through the normal
+   task-chat fix path.
+
+For T3, record an explicit **keep** or **cut** verdict for each major mechanism.
 Repackaging or splitting an over-built mechanism across sibling tasks is not, by
 itself, an **излишне** cut: the lens must record a substantive reduction or
-explicitly keep the total mechanism.
+explicitly keep the total mechanism. The lens also performs whatever protected
+adjudication the active protected-finding contract requires.
+
+Any Issue content change after a final lens invalidates that lens for acceptance.
+After a lens-directed fix or a later final-verification finding changes the Issue,
+the flow-manager re-pulls the author revision and the final architect lens runs
+again on that candidate before the tier flow's required fresh final verification.
 
 If a low/contained-stakes artifact exits adversarial review with approximately
 100% of findings `addressed`, record that as a **proportionality smell** in the
