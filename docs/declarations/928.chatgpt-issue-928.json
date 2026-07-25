@@ -7,10 +7,10 @@
   "baseline": {
     "commit_sha": "0e5e4f2105d48a61d74e3b9b43879d2f8e1d66b2",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:f1103043af21abce2ffb62a40a176cb20de3e454ef3baa25d33cf2b3b7d0ba4c"
+    "active_scope_hash": "sha256:abd8841e7e11ae9655af6b98319502ebf197e8de59ee089c5ae50e4f91acff74"
   },
   "declared_paths": [
-    "docs/migration_notes.md",
+    "docs/wake-supervisor-fleet-operator-reference.md",
     "scripts/estate-cut/issue-906.manifest.json",
     "scripts/fixtures/cutover/stable-stringify-vectors.json",
     "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
@@ -36,5 +36,18 @@
     "scripts/review-start-claim-reaper.ps1"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:f1103043af21abce2ffb62a40a176cb20de3e454ef3baa25d33cf2b3b7d0ba4c",
+      "new_active_scope_hash": "sha256:abd8841e7e11ae9655af6b98319502ebf197e8de59ee089c5ae50e4f91acff74",
+      "changed": {
+        "added": ["docs/wake-supervisor-fleet-operator-reference.md"],
+        "removed": ["docs/migration_notes.md"]
+      },
+      "reason": "Use the smaller explicitly authorized wake-supervisor operator reference for the required #928 adoption procedure without broadening runtime scope.",
+      "actor": "chatgpt",
+      "timestamp": "2026-07-25T22:54:00.000Z",
+      "applied": true
+    }
+  ]
 }
