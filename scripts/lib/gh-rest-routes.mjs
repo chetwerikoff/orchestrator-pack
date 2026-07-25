@@ -11,14 +11,8 @@ import {
 } from './gh-repo-resolve.mjs';
 import { aggregateChecks, extractActionsRunId, mergeCheckContexts } from './gh-pr-checks.mjs';
 
-/**
- * @param {string} realGh
- * @param {{ slug: string, host: string }} repo
- * @param {string} state
- * @param {number} limit
- * @param {string[]} fields
- * @param {string} cwd
- */
+const RUNTIME_HISTORY_REPO = 'chetwerikoff/orchestrator-pack';
+
 /**
  * @param {string} realGh
  * @param {{ slug: string, host: string }} repo
@@ -96,10 +90,6 @@ function fetchPull(realGh, repo, prNumber, cwd) {
 
 /**
  * @param {string} ref
- * @returns {number | null}
- */
-/**
- * @param {string} ref
  * @returns {{ prNumber: number, slug?: string, host?: string | null } | null}
  */
 export function parsePullReference(ref) {
@@ -120,8 +110,6 @@ export function parsePullReference(ref) {
       return {
         prNumber,
         slug,
-        // Preserve explicit URL host so ghApiJson passes --hostname and does not
-        // inherit GH_HOST (GHE) when the ref is a public github.com PR URL.
         host,
       };
     }
@@ -391,6 +379,71 @@ export function routeIssueViewBody(realGh, repo, issueNumber, cwd) {
   return routeIssueView(realGh, repo, issueNumber, ['body'], null, cwd);
 }
 
+function assertRuntimeHistoryRepo(route, repo) {
+  if (route.repoSlug !== RUNTIME_HISTORY_REPO || repo.slug !== RUNTIME_HISTORY_REPO) {
+    throw new Error(`${REST_ERROR_MARKER}: runtime-history route repository mismatch`);
+  }
+}
+
+export function routeRuntimeHistoryMainRequiredStatusChecks(realGh, repo, cwd) {
+  return ghApiJson(
+    realGh,
+    `repos/${repo.slug}/branches/main/protection/required_status_checks`,
+    { hostname: repo.host, cwd },
+  );
+}
+
+export function routeRuntimeHistoryActionsRun(realGh, repo, runId, cwd) {
+  if (!Number.isSafeInteger(runId) || runId <= 0) {
+    throw new Error(`${REST_ERROR_MARKER}: invalid runtime-history actions run id`);
+  }
+  return ghApiJson(realGh, `repos/${repo.slug}/actions/runs/${runId}`, {
+    hostname: repo.host,
+    cwd,
+  });
+}
+
+export function routeRuntimeHistoryStatusHistory(realGh, repo, headSha, cwd) {
+  if (!/^[0-9a-f]{40}$/i.test(headSha)) {
+    throw new Error(`${REST_ERROR_MARKER}: invalid runtime-history status-history head sha`);
+  }
+
+  const rows = [];
+  const seenIds = new Set();
+  const perPage = 100;
+  let page = 1;
+  while (true) {
+    if (page > 20) {
+      throw new Error(`${REST_ERROR_MARKER}: runtime-history status pagination completeness unprovable`);
+    }
+    const batch = ghApiJson(
+      realGh,
+      `repos/${repo.slug}/commits/${headSha}/statuses?per_page=${perPage}&page=${page}`,
+      { hostname: repo.host, cwd },
+    );
+    if (!Array.isArray(batch)) {
+      throw new Error(`${REST_ERROR_MARKER}: runtime-history status history payload is not an array`);
+    }
+    for (const row of batch) {
+      const id = Number(row?.id);
+      if (!Number.isSafeInteger(id) || id <= 0 || seenIds.has(id)) {
+        throw new Error(`${REST_ERROR_MARKER}: runtime-history status history identity is malformed`);
+      }
+      if (row.sha && String(row.sha).toLowerCase() !== headSha.toLowerCase()) {
+        throw new Error(`${REST_ERROR_MARKER}: runtime-history status history escaped exact head`);
+      }
+      seenIds.add(id);
+      rows.push(row);
+    }
+    if (batch.length < perPage) {
+      break;
+    }
+    page += 1;
+  }
+
+  return rows;
+}
+
 /**
  * @param {import('./gh-inventory-match.mjs').InventoryRouteId} routeId
  * @param {object} ctx
@@ -441,8 +494,7 @@ export function executeRestRoute(routeId, ctx) {
       case 'pr-checks':
         return routePrChecks(realGh, repo, route.prNumber, cwd);
       case 'pr-diff-name-only': {
-        const files = routePrDiffNameOnly(realGh, repo, route.prNumber, cwd);
-        return files;
+        return routePrDiffNameOnly(realGh, repo, route.prNumber, cwd);
       }
       case 'issue-view-body':
       case 'issue-view-json': {
@@ -466,6 +518,15 @@ export function executeRestRoute(routeId, ctx) {
         };
         return applyListedJq(repoView, parsed.jq);
       }
+      case 'runtime-history-main-required-status-checks':
+        assertRuntimeHistoryRepo(route, repo);
+        return routeRuntimeHistoryMainRequiredStatusChecks(realGh, repo, cwd);
+      case 'runtime-history-actions-run':
+        assertRuntimeHistoryRepo(route, repo);
+        return routeRuntimeHistoryActionsRun(realGh, repo, route.runId, cwd);
+      case 'runtime-history-status-history':
+        assertRuntimeHistoryRepo(route, repo);
+        return routeRuntimeHistoryStatusHistory(realGh, repo, route.headSha, cwd);
       default:
         throw new Error(`${REST_ERROR_MARKER}: unknown route ${routeId}`);
     }
