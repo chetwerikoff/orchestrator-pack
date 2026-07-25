@@ -47,8 +47,9 @@ per-round cycle and appears only for optional pre-task consultation plus the
 mandatory final architect lens. That final lens remains the only sanctioned
 tier-downgrade point and is the sole independent aggregate cut authority for
 review-added machinery; it checks contradictions, feasibility, overengineering
-as the primary goal (including a forced-cut answer), and missed gaps on the exact
-candidate accepted.
+as the primary goal (including a forced-cut answer and explicit reconsideration
+of whether simplification makes a lower complexity tier valid under the existing
+rubric and marker/L4 floors), and missed gaps on the exact candidate accepted.
 
 Codex remains limited to the mandatory independent addition for T3-critical
 tasks, a recorded browser-outage substitution for one browser-GPT review stage,
@@ -88,7 +89,6 @@ vendor/agent-orchestrator/
 ```
 
 Rules for `vendor/agent-orchestrator`:
-
 - disposable reference only;
 - no local modifications;
 - never used as `packages/core`;
@@ -148,14 +148,12 @@ to add reviewer routing.
 [`AGENTS.md`](../AGENTS.md) is the single worker/agent rulebook — native pickup in AO
 0.10.2+ worktrees (Cursor and Codex workers). Script-owned orchestrator review
 documentation lives in [`script-owned-review-pipeline.md`](script-owned-review-pipeline.md).
-
 `prompts/self_architect_check.md` is a small reusable review block to reduce
 unnecessary subsystems, duplicate prompt literals, and broad scope declarations.
 
 ### Plugin-contract layer
 
 The plugin directories are contracts, not implementations:
-
 - `ao-task-declaration` declares active scope and baseline state.
 - `ao-scope-guard` enforces active scope at runtime and defines the PR CI backup.
 - `ao-token-chain-ledger` aggregates cost/tokens by chain across sessions.
@@ -206,7 +204,7 @@ context, and structured finding format as the local path; it must not define an
 independent review schema.
 
 The common finding format and signature rules are defined in
-docs/issues_drafts/00-architecture-decisions.md section F.
+`docs/issues_drafts/00-architecture-decisions.md` section F.
 
 Operators may temporarily point **REVIEW_COMMAND** at a local Claude Sonnet
 bridge (gitignored `.ao/` scripts) instead of Codex; see
