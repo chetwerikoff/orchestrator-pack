@@ -35,7 +35,6 @@
     "scripts/contract-evidence-legacy-list-guard.test.ts": "heavy",
     "scripts/estate-cut/issue-906-vertical-slice.test.ts": "light",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "heavy",
-    "scripts/finding-ledger-guard.test.ts": "light",
     "scripts/gate-runner/bulk-declarative-gates.test.ts": "light",
     "scripts/gate-runner/census-generator.test.ts": "light",
     "scripts/gate-runner/census.test.ts": "light",
@@ -85,6 +84,8 @@
     "scripts/review-wake-trigger.test.ts": "heavy",
     "scripts/session-pr-binding-resolver.test.ts": "light",
     "scripts/session-runtime-liveness.test.ts": "heavy",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts": "light",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts": "light",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy"
   },
   "heavyTopology": {
