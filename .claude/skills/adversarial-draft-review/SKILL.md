@@ -78,15 +78,62 @@ companion directly from repository root:
 ```bash
 SCRIPT=$(ls -d ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs | sort -V | tail -1)
 node "$SCRIPT" adversarial-review --wait --json --scope working-tree \
-  "Challenge the SPEC at <actual-scratch-path> only. Question the approach, hidden assumptions, missing acceptance criteria, coupling, contract drift, and real-condition failures. Ignore unrelated working-tree changes."
+  "Challenge the SPEC at <actual-scratch-path> only. Question the approach, hidden assumptions, missing acceptance criteria, coupling, contract drift, and real-condition failures. Ignore unrelated working-tree changes. The companion JSON schema is fixed: put exact review-level review-economics-contract: v1 and any terminal NO_FINDINGS / SIMPLIFICATION_CLEAN tokens as literal lines in the schema-native summary; for each material finding put stable id:, type:, evidence:, persistent-machinery: yes|no, and for yes cheapest-sufficient-alternative:, stakes-price:, trade-in:, plus any simplification-cut-candidate: yes, as literal lines in the schema-native finding body. Use the schema-native recommendation field for non-binding remedy advice. Do not invent JSON keys outside the companion schema."
 ```
 
 The JSON result carries `verdict`, `summary`, `findings[]`, and `next_steps[]`.
 Hard cap: **3 passes total**.
 
-### 3. Evaluate findings
+### 3. Validate raw #975 economics before transcription
 
-Treat every finding as a proposal, never an instruction.
+For every in-flow explicit, T3-critical, or browser-substitution use after the
+#975 adoption boundary, the **raw companion JSON sidecar is the evidence source**.
+Validate it before creating any plain capture. The companion schema stays fixed;
+#975 facts use its existing textual fields rather than invented structured keys:
+
+- exact review-level `review-economics-contract: v1` is a literal line in raw
+  `summary` (or another schema-native review-level text field accepted by the
+  guard);
+- every finding's raw `body` contains literal stable `id:`, `type:`, `evidence:`,
+  and `persistent-machinery: yes|no`; the schema-native `recommendation` field is
+  the non-binding remedy advice;
+- every `yes` has literal `cheapest-sufficient-alternative:`, `stakes-price:`, and
+  `trade-in:` in that same raw finding body; missing price facts fail raw
+  validation before transcription;
+- an M5 cut candidate exists only when the raw finding body contains exact
+  `simplification-cut-candidate: yes`; never infer it during transcription;
+- for in-flow explicit/T3-critical passes and substitutions replacing
+  `competitive` or `architectural`, no tokened cut candidate requires exact
+  `SIMPLIFICATION_CLEAN` in raw review-level text, and a genuinely clean result
+  also requires exact `NO_FINDINGS`;
+- a substitution replacing post-lens `architectural-final` remains M2-governed
+  but does **not** owe `SIMPLIFICATION_CLEAN` merely because it is clean or follows
+  a lens.
+
+Preserve the companion stdout JSON as the stage sidecar, then run the executable
+raw gate **before transcription**:
+
+```bash
+node scripts/finding-ledger-guard.mjs \
+  --raw-codex-only \
+  --raw-codex-stage <competitive|architectural|architectural-final> \
+  --raw-codex-file <pass-NN-stage.codex.json>
+```
+
+Non-zero exit blocks transcription. The later #975 phase guard also re-reads
+post-adoption `pass-NN-*.codex.json` sidecars in the review directory so the raw
+proof cannot disappear after a successful pre-transcription check.
+
+Fail the pass if required raw facts are missing. **Do not repair raw economics by
+inventing fields in the plain capture.** The focused
+`scripts/finding-ledger-guard.test.ts` fixtures exercise real companion-schema
+finding-bearing and clean raw results plus the executable raw-only CLI path.
+
+### 4. Evaluate findings
+
+Treat every finding as a proposal, never an instruction. Defect disposition and
+remedy choice are separate: a real defect may be addressed with a cheaper
+sufficient correction than Codex recommended.
 
 | Disposition | Rule |
 |-------------|------|
@@ -94,23 +141,35 @@ Treat every finding as a proposal, never an instruction.
 | **Partial** | Valid core but over-prescribed remedy; fix the required outcome only. |
 | **Reject** | Speculative, stylistic, disproportionate, out of scope, or reduces planner freedom; record why. |
 
+A protected `security` / `scope-violation` type is a reviewer nomination. Apply
+current M3 author-activation / architect-contest semantics from
+`create-issue-draft`; the Codex type does not self-activate addressed-only
+authority.
+
 Capture raw output before edits and normalize findings through
 `create-issue-draft`'s finding-disposition ledger.
 
-### 4. Iterate
+### 5. Transcribe 1:1, then iterate
+
+For an in-flow pass, preserve raw JSON first. Copy the raw M1/M2 and applicable
+M5 facts 1:1 into the guard-recognized plain stage capture. Layout may normalize,
+but stable id, defect evidence, recommendation, machinery classification/prices,
+and exact cut-candidate fact may not change. Transcription never creates missing
+economics.
 
 Each retry is a fresh cold Codex thread. Retry only after at least one accepted
 or partially accepted finding changed the artifact. Carry a compact settled
 ledger and stop when the current pass has no accepted finding, or at cap 3 with
 open risks recorded. Never resume a previous Codex thread.
 
-### 5. Hand back
+### 6. Hand back
 
 - **Standalone:** return the reviewed artifact to its owning flow.
 - **In-flow explicit wrapper / T3-critical:** preserve raw JSON as
-  `pass-NN-architectural.codex.json`, transcribe every finding 1:1 to plain
-  `type:` lines in `pass-NN-architectural.capture.txt`, relay accepted findings
-  through the task chat, and return to `create-issue-draft` before final lens.
+  `pass-NN-architectural.codex.json`, transcribe every finding and its #975
+  economics 1:1 to plain `pass-NN-architectural.capture.txt`, relay accepted
+  findings through the task chat, and return to `create-issue-draft` before final
+  lens.
 - **Browser-outage substitution:** use the guard-recognized capture stage being
   replaced (`competitive`, `architectural`, or `architectural-final`) and keep
   raw JSON alongside it; record the substitution separately.
@@ -123,6 +182,9 @@ specific browser stage.
 
 - Auto-apply findings.
 - Claim Codex ran when unavailable.
+- Invent companion JSON keys for #975 economics; use the fixed schema's textual fields.
+- Transcribe missing M1/M2/M5 facts that were not present in raw JSON.
+- Treat a protected type nomination as self-activating authority.
 - Accept an in-flow task after silently skipping the requested Codex stage.
 - Waive the T3-critical Codex addition.
 - Exceed three passes or retry without an accepted change.
