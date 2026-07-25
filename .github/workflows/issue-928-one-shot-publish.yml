@@ -1,0 +1,42 @@
+name: Issue 928 one-shot publish
+
+on:
+  push:
+    branches:
+      - agent/issue-928-cutover-v2
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-928-cutover-v2
+          fetch-depth: 0
+
+      - name: Materialize reviewed Issue 928 tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .issue-928-publish/part-* | base64 --decode > /tmp/issue928.tgz
+          tar -xzf /tmp/issue928.tgz
+
+          rm -f \
+            scripts/orchestrator-wake-supervisor.ps1 \
+            scripts/lib/Orchestrator-SideProcessSupervisor.ps1 \
+            scripts/lib/Review-StartClaim.ps1 \
+            scripts/review-start-claim-reaper.ps1 \
+            docs/declarations/928.chatgpt-issue-928.json
+          rm -rf .issue-928-publish
+          rm -f .github/workflows/issue-928-one-shot-publish.yml
+
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: implement Issue 928 staged scheduler cutover'
+          git push origin HEAD:agent/issue-928-cutover-v2
