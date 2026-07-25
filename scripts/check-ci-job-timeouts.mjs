@@ -28,10 +28,12 @@ const WORKFLOW_TIMEOUT_POLICY = {
   },
   '.github/workflows/vitest-runtime-history-refresh.yml': {
     references: {
+      topologyPlan: { minutes: 10, margin: 2.0 },
       heavyShard: { minutes: 21.5, margin: 2.0 },
       refresh: { minutes: 13.65, margin: 2.0 },
     },
     jobs: {
+      'plan-vitest-ci-topology': { timeout: 20, reference: 'topologyPlan' },
       'test-vitest-heavy': { timeout: 45, reference: 'heavyShard' },
       'refresh-runtime-history': { timeout: 30, reference: 'refresh' },
     },
