@@ -648,3 +648,265 @@ Every review/amendment prompt remains self-contained, carries the current Issue
 body as UNTRUSTED DATA between nonce markers, and requests one outer `~~~markdown`
 fence so inner backtick fences survive. Write the prepared prompt to the helper
 input file and save the successful reply output verbatim before interpretation.
+
+A Codex browser-outage substitution is a separate review-engine rule, not a
+transport fallback. It is permitted only after recorded browser unavailability
+when the operator cannot restore it; preserve the replaced stage capture name,
+raw JSON provenance, and substitution record.
+
+## Tier gate
+
+Run at intake, after material Issue/scope changes as required by the rubric, before
+the final lens, and on the final revision from the trusted repository root with
+an absolute anchor path:
+
+```bash
+node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
+```
+
+The marker screen is fail-closed. A red marker with a below-T3 assignment or a
+skipped mandatory stage blocks acceptance; unparseable input becomes T3.
+
+Tier stages:
+
+- T1: no competitive stage; one light browser-GPT architectural pass in the
+  dedicated ordinary-architectural chat; light final lens; one fresh browser-GPT
+  final verification only after lens-driven content change.
+- T2: no competitive stage unless an explicit wrapper/contract selects it;
+  browser-GPT architectural ≤3 in the dedicated ordinary-architectural chat;
+  light final lens; one fresh browser-GPT final verification only after
+  lens-driven content change.
+- T3: browser-GPT competitive ≤3 fresh chats; browser-GPT architectural ≤4 in the
+  dedicated ordinary-architectural chat; full final lens; exactly one fresh
+  browser-GPT final pass after the latest lens.
+- T3-critical: run the full T3 GPT flow plus the independent Codex addition and
+  require rollback/migration plus realistic crash/race/stale-state floors.
+
+Explicit adversarial wrappers floor the effective tier at T2 and preserve their
+requested stage. Upward recompute runs skipped stages. Downward movement occurs
+only at final lens and never erases evidence.
+
+### T3-critical floor details
+
+The L4 classification is independent of the literal `complexity-tier` fence. At
+intake and every required pre-final recompute, cite the matched L4 condition(s) in
+the flow-manager record. An L4 task is not acceptance-ready unless the live Issue
+contains:
+
+1. a rollback/migration note describing the safe rollback or migration boundary,
+   data/state compatibility, and required operator action; and
+2. numbered acceptance criteria plus matching verification that exercise every
+   material crash, race, and stale-state class with realistic inputs.
+
+These are additive to all never-skipped worker-safety, behavior-kind,
+contract-evidence, stage-completeness, finding-ledger, qualifying GPT, and
+independent Codex floors. They are not satisfied by a generic risk paragraph, a
+happy-path unit test, or a waiver.
+
+## Mandatory Issue-body floors
+
+The Issue body must use this order:
+
+1. **Prerequisite** — blocking and already-landed prior art, cited by Issue number.
+2. **Goal** — observable outcome, not implementation method.
+3. mandatory `behavior-kind` fence: `action-producing` or `record-only`.
+4. mandatory `complexity-tier` fence.
+5. **Binding surface** — observable contracts and operator adoption; preserve
+   planner freedom over names, signatures, layout, and library choice.
+6. **Files in scope**.
+7. **Files out of scope**.
+8. mandatory `denylist` fence.
+9. mandatory `allowed-roots` fence, listing every allowed root.
+10. **Acceptance criteria** — numbered, observable, testable.
+11. **Upgrade-safety check**.
+12. **Verification** mapped to acceptance criteria.
+13. `contract-evidence` fence or explicit `contract-evidence: none` form accepted
+    by the repository validator.
+
+### Required fence examples
+
+Every task declares one behavior kind:
+
+```behavior-kind
+record-only
+```
+
+or:
+
+```behavior-kind
+action-producing
+```
+
+Action-producing tasks also include a realistic positive outcome:
+
+```positive-outcome
+asserts: <observable action on realistic input>
+input: realistic
+```
+
+Worker-safety fences are always present:
+
+```denylist
+vendor/**
+packages/core/**
+```
+
+```allowed-roots
+<first allowed root>
+<second allowed root when applicable>
+```
+
+`allowed-roots` is not optional merely because scope spans multiple roots; list
+the finite union. Broad `.`/`**/*` roots require explicit justification and
+remain subject to scope discipline.
+
+The complexity fence is exactly one of:
+
+```complexity-tier
+tier: T2
+advisory-prior: T2
+```
+
+or, for a genuine below-ladder input:
+
+```complexity-tier
+skip-line: true
+```
+
+The title/H1 carries `[T1]`, `[T2]`, or `[T3]`; skip-line inputs omit a prefix.
+
+### Discipline details
+
+- External-tool positive outcomes use `input: external-tool-output` plus
+  capture-backed provenance (or allowed golden-sample provenance).
+- Deferred causes require a complete `parked-root-cause` fence with an existing
+  follow-up Issue.
+- Every upstream datum in Binding surface, ACs, or Verification is grounded in
+  `contract-evidence`; belief/self-attestation is inadmissible.
+- Capture-backed evidence rows use stable binding id/type, producer,
+  selector/token, expected behavior, and repository manifest provenance.
+
+## Mechanical floor commands
+
+Run from trusted repository root with absolute `$ANCHOR`:
+```bash
+node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
+node scripts/draft-discipline.mjs positive-outcome --draft "$ANCHOR"
+node scripts/draft-discipline.mjs parked-root --draft "$ANCHOR"
+node scripts/draft-discipline.mjs contract-evidence --draft "$ANCHOR"
+node scripts/stage-completeness-guard.ts \
+  --text-file "$ANCHOR" --draft-path "$ANCHOR" --repo-root "$WORKDIR"
+node scripts/finding-ledger-guard.mjs \
+  --ledger "$REVIEW_DIR/finding-disposition-ledger.json" \
+  --captures-dir "$REVIEW_DIR" \
+  --draft-path "$ANCHOR"
+```
+
+Run body-only guards after every Issue revision. Stage completeness and the
+finding-ledger guard run at acceptance. Contract evidence uses tracked manifests
+from the trusted repository root; stage completeness alone receives the workdir
+as repo root to locate out-of-repo captures.
+
+## Finding ledger
+
+Every reviewer capture is immutable evidence. The flow-manager records each
+finding with stable id, summary, type (`security`, `scope-violation`, `spec`,
+`quality`, `test`, `ci`), the GPT author's disposition, and reject reason when
+applicable.
+
+- Accepted/partial findings are fixed by the GPT author through the task chat.
+- Rejected non-protected findings need a proportionality reason tied to blast
+  radius, reversibility, failure impact, and a cheaper sufficient alternative.
+- Before #975 is present on the implementation base, the current legacy protected
+  handling remains unchanged: security and scope-violation findings cannot be
+  rejected; address them with real defense/evidence or explicit operator risk
+  acceptance, and contested protected work remains unresolved for architect
+  adjudication at the final lens.
+- Once #975 is present on the implementation base, every still-active acceptance
+  attempt follows its current M3 nomination/author-decision/architect-adjudication
+  semantics regardless of when the ledger began; already-completed historical
+  ledgers remain legacy-readable. A non-binding architect adjudication returns the
+  underlying defect to ordinary M1 author disposition semantics.
+- `NO_FINDINGS` never erases prior findings.
+- Capped exits preserve unresolved questions in the ledger and final report.
+
+This role/topology flow adds no protected guard, schema, capture-format, pricing,
+or reviewer-economics behavior.
+
+## Review artifacts
+
+All durable audit artifacts remain outside the repository:
+
+```text
+chats.md
+round-NN-author-reply.md
+pass-NN-competitive.capture.txt
+pass-NN-architectural.capture.txt
+pass-NN-architectural.codex.json        # only when a Codex role runs
+pass-NN-architectural-lens.capture.txt
+pass-NN-architectural-final.capture.txt
+pass-NN-architectural-final.codex.json  # only when Codex substitutes
+presync-architect-lens.md
+finding-disposition-ledger.json
+```
+
+Optional pre-task architect consultation may be referenced in `chats.md` or the
+existing handoff/audit record; it does not add a mandatory new artifact class.
+Pass numbers form one chronological sequence. Guard-recognized stages are
+`competitive`, `architectural`, `architectural-lens`, and
+`architectural-final`. Capture every reviewer response before editing.
+
+Every typed finding receives a stable id, summary, type, author disposition, and
+reason when rejected where the active contract permits rejection. Reworded
+findings retain identity. `NO_FINDINGS` never erases older findings. Protected
+findings follow the active contract and may never be silently omitted.
+
+Codex raw JSON is provenance only; whenever Codex runs, transcribe findings 1:1
+into the plain capture for the stage because the ledger guard ignores fenced/raw
+JSON structure.
+
+## Repository-write boundary
+
+This flow creates no tracked draft mirror, queue-index row, capture, ledger, or
+workdir file. The only permitted temporary in-repo write is an untracked
+`.review-challenge/**` transport copy when a Codex role requires
+`--scope working-tree`; delete it immediately after the pass and never commit it.
+
+Cross-Issue contract changes update every affected live Issue before acceptance
+and land the corresponding architecture decision together. Durable decisions go
+to the repository's architecture decision surface under their own scoped change.
+
+## Don't
+
+- Let the flow-manager author spec content or decide reviewer findings.
+- Let the architect operate routine browser turns, ledger bookkeeping, ordinary
+  stage ordering, per-round disposition ratification, or intake/mid-cycle tier
+  selection.
+- Review in the task chat.
+- Reuse any competitive or final browser-GPT review chat; conversely, do not open
+  a new ordinary architectural browser chat for each round after the dedicated
+  chat exists.
+- Let Codex become the default architectural engine, claim a substitution without
+  recorded browser unavailability, or double-count a substitution as the separate
+  T3-critical Codex addition.
+- Start a browser turn without exclusive ownership of the common cross-task
+  browser critical-section identity; do not extend that lock over Issue/ledger
+  work or implement a new runtime lock here.
+- Treat a tracked-helper non-`ok` state, timeout, missing stdout, or unresolved
+  status as scratchpad/legacy fallback authorization or resend permission.
+- Run legacy/scratchpad browser sends while helper-owned unresolved state blocks
+  coexistence for the configured profile.
+- Trust a chat reply without a live Issue re-pull and diff.
+- Run parity sync from `$WORKDIR`; use trusted repo cwd + absolute anchor.
+- Omit `behavior-kind` or `allowed-roots` from any task/skip-line body.
+- Skip a requested GPT/Codex stage, a selected browser-GPT stage, or the mandatory
+  T3-critical Codex addition silently.
+- Miss the Issue #574 L4 classification or waive/dilute rollback/migration and
+  crash/race/stale-state floors.
+- Accept after an Issue content edit without a newer final-lens capture and any
+  final verification required by the tier flow.
+- Accept with stale captures/title, red floors, or incomplete ledger.
+- Use raw `gh issue edit`; use the sanctioned body-sync helper for parity only.
+- Commit workdir or `.review-challenge/**` artifacts.
+- Hand-edit `.cursor/skills/**`; regenerate only when canonical frontmatter changes.
+- Over-specify implementation details that belong to the planner.
