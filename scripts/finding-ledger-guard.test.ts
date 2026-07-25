@@ -201,6 +201,24 @@ describe('finding ledger review economics #975', () => {
     expect(candidateWithClean.ok).toBe(false);
     expect(candidateWithClean.errors.join('\n')).toContain('cannot claim SIMPLIFICATION_CLEAN');
 
+    const booleanCandidate = run(
+      [cap('pass-01-architectural.capture.txt', 1_100, markedClean())],
+      [],
+      {
+        rawCodexResults: [
+          {
+            stage: 'architectural',
+            raw: {
+              reviewEconomicsContract: 'v1',
+              findings: [{ ...ordinaryFinding, simplificationCutCandidate: true }],
+            },
+          },
+        ],
+      },
+    );
+    expect(booleanCandidate.ok).toBe(false);
+    expect(booleanCandidate.errors.join('\n')).toContain('invalid simplification-cut-candidate');
+
     const finalWithoutM5 = run(
       [cap('pass-01-architectural.capture.txt', 1_100, markedClean())],
       [],
