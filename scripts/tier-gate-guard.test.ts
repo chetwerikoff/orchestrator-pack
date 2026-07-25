@@ -417,8 +417,9 @@ describe('Issue #973 tier provenance', () => {
     expect(run(current, transitionEvidence, [identity], [identity]).errors.join('\n')).toContain('historical final-lens capture is missing');
   });
 
-  it('keeps production cutover data frozen and records zero historical demotions', () => {
+  it('freezes production compatibility eligibility empty at cutover', () => {
     expect(Object.isFrozen(PRE_973_CUTOVER_WORKDIR_IDENTITIES)).toBe(true);
+    expect(PRE_973_CUTOVER_WORKDIR_IDENTITIES).toEqual([]);
     expect(Object.isFrozen(PRE_973_HISTORICAL_DEMOTIONS)).toBe(true);
     expect(PRE_973_HISTORICAL_DEMOTIONS).toEqual([]);
   });
