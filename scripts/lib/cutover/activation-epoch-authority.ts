@@ -44,7 +44,11 @@ function withLock<T>(path: string, fn: () => T): T {
 }
 
 export class JsonEpochAuthority {
-  constructor(readonly path: string) {}
+  readonly path: string;
+
+  constructor(path: string) {
+    this.path = path;
+  }
 
   get(epochId: string): ActivationCore | null {
     return read(this.path).coreByEpoch[epochId] ?? null;
