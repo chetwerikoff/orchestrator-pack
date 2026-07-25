@@ -7,6 +7,8 @@ import { AC_MUTATION_CONTROLS, type AcceptanceId } from './contracts.ts';
 
 type ProcessResult = Awaited<ReturnType<typeof runProcess>>;
 
+const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
+
 function parseAc(argv: string[]): AcceptanceId | null {
   const index = argv.indexOf('--ac');
   if (index < 0) return null;
@@ -46,9 +48,17 @@ function pr2aLandedOnBase(): boolean {
   });
   if (!baseExists.ok) return false;
 
+  const landingExists = runProcessSync({
+    command: 'git',
+    args: ['cat-file', '-e', `${PR2A_LANDING_COMMIT}^{commit}`],
+    cwd: resolve('.'),
+    inheritParentEnv: true,
+  });
+  if (!landingExists.ok) return false;
+
   return runProcessSync({
     command: 'git',
-    args: ['cat-file', '-e', `${baseRef}:scripts/pr2a/final-conformance.ts`],
+    args: ['merge-base', '--is-ancestor', PR2A_LANDING_COMMIT, baseRef],
     cwd: resolve('.'),
     inheritParentEnv: true,
   }).ok;
@@ -92,10 +102,10 @@ async function main(): Promise<void> {
 
   if (usePr2aRunner && pr2aLanded) {
     // #948's red/green mutation evidence is bound to its reviewed final tree. Once the
-    // PR2a conformance authority is already present on the target base, replaying that
-    // frozen plan against an unrelated downstream PR would turn the historical receipt
-    // into a permanent inventory snapshot. Keep the stable externally-grounded marker
-    // consumed by the heavy-lane command contract.
+    // PR2a landing commit is already in the target base lineage, replaying that frozen
+    // plan against an unrelated downstream PR would turn the historical receipt into a
+    // permanent inventory snapshot. Keep the stable externally-grounded marker consumed
+    // by the heavy-lane command contract.
     process.stdout.write(`${JSON.stringify({ mutationRunner: { result: 'externally-grounded' }, successor: 'issue-948-pr2a' })}\n`);
     process.stdout.write(`${JSON.stringify({ mutationEvidence: { replayed: false, evidence: 'post-landing-final-tree-preserved' } })}\n`);
     return;
