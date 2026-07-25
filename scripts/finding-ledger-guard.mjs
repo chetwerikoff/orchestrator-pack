@@ -27,6 +27,7 @@ const UNTYPED_FINDING_LINE = /^(?:\s*)(?:\[(P[0-3])\]|(P[0-3]))\s*[-–—:]\s*(
 const ECHOED_ARTIFACT_MARKER = /^--- ARTIFACT\s/m;
 const ECHOED_DRAFT_REVIEW_PROMPT = /^#\s+Codex draft\/spec review prompt/m;
 const REVIEW_CAPTURE_NAME = /^pass-(\d+)-(competitive|architectural|architectural-lens|architectural-final)\.capture\.txt$/;
+const RAW_CODEX_NAME = /^pass-(\d+)-(competitive|architectural|architectural-final)\.codex\.json$/;
 const FIELD_LINE = /^(id|type|severity|title|evidence|recommendation|persistent-machinery|cheapest-sufficient-alternative|stakes-price|trade-in|simplification-cut-candidate):\s*(.*)$/i;
 const M3_LENS_LINE = /^m3-protected:\s*id=([A-Za-z0-9._-]+)\s*\|\s*revision=([^|]+?)\s*\|\s*contest=(none|contested|contest-withdrawn)\s*\|\s*outcome=(none|activate|non-activate)(?:\s*\|\s*evidence=([^|]*?))?(?:\s*\|\s*why-now=(.*))?\s*$/i;
 
@@ -603,58 +604,86 @@ function foldM3LensState(metadata, currentRevision, errors) {
   return states;
 }
 
+function unwrapRawCodexPayload(entry) {
+  const candidate = entry?.raw && typeof entry.raw === 'object' && !Array.isArray(entry.raw) ? entry.raw : entry;
+  if (candidate?.result && typeof candidate.result === 'object' && !Array.isArray(candidate.result)) return candidate.result;
+  return candidate;
+}
+
+function rawCodexReviewText(raw) {
+  const nextSteps = Array.isArray(raw?.next_steps)
+    ? raw.next_steps.filter((item) => typeof item === 'string')
+    : [];
+  return [stringField(raw, 'summary'), ...nextSteps].filter(Boolean).join('\n');
+}
+
 function validateRawCodexEconomics(rawResults, errors) {
   if (!Array.isArray(rawResults)) return;
   for (let index = 0; index < rawResults.length; index += 1) {
     const entry = rawResults[index];
-    if (!entry || typeof entry !== 'object') {
-      errors.push(`review-economics: raw Codex result ${index + 1} is not an object`);
+    const source = typeof entry?.sourceName === 'string' && entry.sourceName.trim()
+      ? entry.sourceName.trim()
+      : `raw Codex result ${index + 1}`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(`review-economics: ${source} is not an object`);
       continue;
     }
     const stage = stringField(entry, 'stage', 'reviewStage', 'review-stage').toLowerCase();
-    const raw = entry.raw && typeof entry.raw === 'object' && !Array.isArray(entry.raw) ? entry.raw : entry;
+    const raw = unwrapRawCodexPayload(entry);
     if (!REVIEWER_STAGES.has(stage)) {
-      errors.push(`review-economics: raw Codex result ${index + 1} missing governed stage identity before transcription`);
+      errors.push(`review-economics: ${source} missing governed stage identity before transcription`);
     }
-    const contract = stringField(raw, 'reviewEconomicsContract', 'review-economics-contract');
-    if (contract !== 'v1') errors.push(`review-economics: raw Codex result ${index + 1} missing review-economics-contract v1 before transcription`);
-    const findings = Array.isArray(raw.findings) ? raw.findings : [];
-    const tokens = Array.isArray(raw.terminalTokens) ? raw.terminalTokens : [];
-    let hasCutCandidate = false;
-    for (const finding of findings) {
-      const id = stringField(finding, 'id') || '<missing-id>';
-      const evidence = stringField(finding, 'evidence');
-      const recommendation = stringField(finding, 'recommendation');
-      const persistent = stringField(finding, 'persistentMachinery', 'persistent-machinery').toLowerCase();
-      if (!stringField(finding, 'id')) errors.push(`review-economics: raw Codex finding ${id} missing id`);
-      if (!evidence) errors.push(`review-economics: raw Codex finding ${id} missing evidence before transcription`);
-      if (!recommendation) errors.push(`review-economics: raw Codex finding ${id} missing recommendation before transcription`);
-      if (persistent !== 'yes' && persistent !== 'no') errors.push(`review-economics: raw Codex finding ${id} missing persistent-machinery before transcription`);
-      if (persistent === 'yes') {
-        for (const [label, keys] of [
-          ['cheapest-sufficient-alternative', ['cheapestSufficientAlternative', 'cheapest-sufficient-alternative']],
-          ['stakes-price', ['stakesPrice', 'stakes-price']],
-          ['trade-in', ['tradeIn', 'trade-in']],
-        ]) {
-          if (!stringField(finding, ...keys)) errors.push(`review-economics: raw Codex finding ${id} missing ${label} before transcription`);
-        }
-      }
-      const candidate = finding.simplificationCutCandidate ?? finding['simplification-cut-candidate'];
-      if (candidate !== undefined && candidate !== 'yes') {
-        errors.push(`review-economics: raw Codex finding ${id} has invalid simplification-cut-candidate before transcription`);
-      }
-      if (candidate === 'yes') hasCutCandidate = true;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      errors.push(`review-economics: ${source} missing companion review JSON object`);
+      continue;
     }
 
-    if (findings.length === 0 && !tokens.includes(NO_FINDINGS_TOKEN)) {
-      errors.push(`review-economics: clean raw Codex result ${index + 1} missing ${NO_FINDINGS_TOKEN} before transcription`);
+    const reviewText = rawCodexReviewText(raw);
+    if (!lineHasExactToken(reviewText, REVIEW_ECONOMICS_MARKER)) {
+      errors.push(`review-economics: ${source} missing ${REVIEW_ECONOMICS_MARKER} in companion summary/next_steps before transcription`);
+    }
+    const findings = Array.isArray(raw.findings) ? raw.findings : [];
+    let hasCutCandidate = false;
+    for (let findingIndex = 0; findingIndex < findings.length; findingIndex += 1) {
+      const rawFinding = findings[findingIndex];
+      if (!rawFinding || typeof rawFinding !== 'object' || Array.isArray(rawFinding)) {
+        errors.push(`review-economics: ${source} finding ${findingIndex + 1} is not an object`);
+        continue;
+      }
+      const body = stringField(rawFinding, 'body');
+      const recommendation = stringField(rawFinding, 'recommendation');
+      if (!body) {
+        errors.push(`review-economics: ${source} finding ${findingIndex + 1} missing companion body before transcription`);
+        continue;
+      }
+      if (!recommendation) {
+        errors.push(`review-economics: ${source} finding ${findingIndex + 1} missing recommendation before transcription`);
+      }
+
+      const parsed = parseFindingBlocks(`${body}\nrecommendation: ${recommendation}`);
+      errors.push(...parsed.errors.map((error) => `${source}: ${error}`));
+      if (parsed.findings.length !== 1) {
+        errors.push(`review-economics: ${source} finding ${findingIndex + 1} must contain exactly one literal id/type/evidence/persistent-machinery block in body`);
+        continue;
+      }
+      const finding = parsed.findings[0];
+      if (finding.persistentMachinery === 'yes' && finding.missingPrice.length > 0) {
+        errors.push(`review-economics: raw Codex finding ${finding.id} missing ${finding.missingPrice.join(', ')} before transcription`);
+      }
+      if (finding.cutCandidate) hasCutCandidate = true;
+    }
+
+    const hasNoFindings = lineHasExactToken(reviewText, NO_FINDINGS_TOKEN);
+    const hasSimplificationClean = lineHasExactToken(reviewText, M5_CLEAN_TOKEN);
+    if (findings.length === 0 && !hasNoFindings) {
+      errors.push(`review-economics: clean ${source} missing ${NO_FINDINGS_TOKEN} before transcription`);
     }
     if (PRE_LENS_REVIEWER_STAGES.has(stage)) {
-      if (hasCutCandidate && tokens.includes(M5_CLEAN_TOKEN)) {
-        errors.push(`review-economics: pre-lens raw Codex result ${index + 1} cannot claim ${M5_CLEAN_TOKEN} while cut candidates are present`);
+      if (hasCutCandidate && hasSimplificationClean) {
+        errors.push(`review-economics: pre-lens ${source} cannot claim ${M5_CLEAN_TOKEN} while cut candidates are present`);
       }
-      if (!hasCutCandidate && !tokens.includes(M5_CLEAN_TOKEN)) {
-        errors.push(`review-economics: pre-lens raw Codex result ${index + 1} without cut candidate must carry ${M5_CLEAN_TOKEN} before transcription`);
+      if (!hasCutCandidate && !hasSimplificationClean) {
+        errors.push(`review-economics: pre-lens ${source} without cut candidate must carry ${M5_CLEAN_TOKEN} before transcription`);
       }
     }
   }
@@ -745,8 +774,18 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
     const contestOpen = Boolean(lensState?.contestOpen);
     const contest = lensCurrent ? (contestOpen ? 'contested' : lensRecord.contest) : 'unknown';
     const contestUnambiguousAbsent = contest === 'none' || contest === 'contest-withdrawn';
-    const architectRequired = zeroSignal || row.architectRequired || contestOpen || !validAuthorActivation;
     if (options.phase === 'pre-lens') {
+      if (architectOutcome === 'activate') {
+        if (row.disposition !== 'addressed') errors.push(`review-economics: architect-activated protected nomination ${finding.id} must be disposition addressed`);
+        continue;
+      }
+      if (architectOutcome === 'non-activate') continue;
+      const architectRequired = zeroSignal
+        || row.architectRequired
+        || contestOpen
+        || !lensCurrent
+        || !contestUnambiguousAbsent
+        || !validAuthorActivation;
       if (architectRequired) {
         if (!row.architectPending) errors.push(`review-economics: protected nomination ${finding.id} requires architect-pending before lens progression`);
         continue;
@@ -902,13 +941,59 @@ function listCaptureFilesInDir(capturesDir) {
   return readdirSync(capturesDir).filter((name) => name.endsWith('.capture.txt')).sort().map((name) => path.join(capturesDir, name));
 }
 
+function listRawCodexFilesInDir(capturesDir) {
+  return readdirSync(capturesDir).filter((name) => RAW_CODEX_NAME.test(name)).sort().map((name) => path.join(capturesDir, name));
+}
+
 function parseCliTimestamp(value) {
   if (!value) return null;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function readRawCodexJson(rawPath) {
+  try {
+    return JSON.parse(readFileSync(rawPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`raw Codex sidecar ${path.basename(rawPath)} is not valid JSON (${error.message})`);
+  }
+}
+
+function rawCodexEntry(rawPath, stage = '') {
+  const name = path.basename(rawPath);
+  const match = name.match(RAW_CODEX_NAME);
+  return {
+    stage: stage || (match ? match[2] : ''),
+    sourceName: name,
+    raw: readRawCodexJson(rawPath),
+  };
+}
+
+function runRawCodexOnly(argv) {
+  const rawFileFlag = argv.indexOf('--raw-codex-file');
+  const rawStageFlag = argv.indexOf('--raw-codex-stage');
+  if (rawFileFlag < 0 || !argv[rawFileFlag + 1] || rawStageFlag < 0 || !argv[rawStageFlag + 1]) {
+    process.stderr.write('finding-ledger guard: --raw-codex-only requires --raw-codex-stage <stage> --raw-codex-file <path>\n');
+    return 2;
+  }
+  const errors = [];
+  try {
+    validateRawCodexEconomics([rawCodexEntry(argv[rawFileFlag + 1], argv[rawStageFlag + 1])], errors);
+  } catch (error) {
+    process.stderr.write(`finding-ledger guard: ${error.message}\n`);
+    return 1;
+  }
+  if (errors.length > 0) {
+    for (const error of errors) process.stderr.write(`finding-ledger guard: ${error}\n`);
+    return 1;
+  }
+  process.stdout.write('finding-ledger guard: RAW CODEX PASS\n');
+  return 0;
+}
+
 export function runCli(argv) {
+  if (argv.includes('--raw-codex-only')) return runRawCodexOnly(argv);
+
   const ledgerFlag = argv.indexOf('--ledger');
   const capturesDirFlag = argv.indexOf('--captures-dir');
   const capturePaths = [];
@@ -945,6 +1030,17 @@ export function runCli(argv) {
     if (adoptionFlag < 0 || adoptionTimestampMs === null) {
       process.stderr.write('finding-ledger guard: --phase requires a valid --adoption-timestamp <ISO-8601>\n');
       return 2;
+    }
+    if (capturesDirFlag >= 0) {
+      const captureTimestamps = new Map(options.captureMetadata.map((item) => [item.name, item.timestampMs]));
+      options.rawCodexResults = listRawCodexFilesInDir(argv[capturesDirFlag + 1])
+        .map((rawPath) => {
+          const match = path.basename(rawPath).match(RAW_CODEX_NAME);
+          const captureName = match ? `pass-${match[1]}-${match[2]}.capture.txt` : '';
+          return { rawPath, captureTimestampMs: captureTimestamps.get(captureName) ?? null };
+        })
+        .filter(({ captureTimestampMs }) => Number.isFinite(captureTimestampMs) && captureTimestampMs > adoptionTimestampMs)
+        .map(({ rawPath }) => rawCodexEntry(rawPath));
     }
     if (options.phase === 'final-acceptance' && !options.issueRevision) {
       process.stderr.write('finding-ledger guard: final-acceptance phase requires --issue-revision <identity>\n');
