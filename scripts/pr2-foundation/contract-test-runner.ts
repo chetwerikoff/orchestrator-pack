@@ -108,10 +108,14 @@ async function main(): Promise<void> {
     // #948's red/green mutation evidence is bound to its reviewed final tree. Once the
     // planning barrier is already in the target base, replaying that frozen plan against
     // an unrelated downstream PR would turn the historical receipt into a permanent
-    // inventory snapshot. Current-tree regressions remain covered by normal mandatory
-    // TypeScript/Pester/Vitest lanes and the live review-start claim drift scan.
+    // inventory snapshot. Preserve the established externally-grounded result marker:
+    // heavy-lane callers consume it as the stable command contract.
     process.stdout.write(`${JSON.stringify({
-      mutationRunner: { result: 'post-landing-final-tree-evidence-preserved', replayed: false },
+      mutationRunner: {
+        result: 'externally-grounded',
+        replayed: false,
+        evidence: 'post-landing-final-tree-preserved',
+      },
       successor: 'issue-948-pr2a',
     })}\n`);
     return;
