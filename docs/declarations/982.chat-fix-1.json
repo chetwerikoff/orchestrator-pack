@@ -11,8 +11,24 @@
   },
   "declared_paths": [
     ".github/workflows/vitest-runtime-history-refresh.yml",
+    "scripts/check-ci-job-timeouts.mjs",
     "scripts/check-ci-pipeline-split.ps1"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:2ba195d7f2bc13777b12b41a06c02bafaa6f1a58c4ac8281acedc60dba1c09f6",
+      "new_active_scope_hash": "sha256:eeb1662e808f9c8f489a83ee55467a8c8172afcff8bee3bf6712adb57c7b7394",
+      "changed": {
+        "added": [
+          "scripts/check-ci-job-timeouts.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "Register the new runtime-history topology planning job in the repository's exact workflow timeout policy without changing any timeout or runtime reference.",
+      "actor": "chat-executor",
+      "timestamp": "2026-07-25T02:12:59Z",
+      "applied": true
+    }
+  ]
 }
