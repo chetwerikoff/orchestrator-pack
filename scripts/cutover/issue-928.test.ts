@@ -136,26 +136,43 @@ describe('Issue #928 cutover', () => {
 
     const head = 'a'.repeat(40);
     const readySession = {
-      id: 'worker-928', name: 'worker-928', sessionId: 'worker-928', role: 'worker', status: 'idle',
+      id: 'worker-928', name: 'worker-928', sessionId: 'worker-928', role: 'worker', status: 'idle', activity: 'idle',
       prNumber: 928, ownedHeadSha: head,
       reports: [{ reportState: 'ready_for_review', accepted: true, headSha: head, reportedAt: '2026-07-26T00:00:00.000Z' }],
     };
     const snapshot = {
-      openPrs: [{ number: 928, headRefOid: head, isDraft: false }],
+      openPrs: [{ number: 928, headRefOid: head, headCommittedAt: '2026-07-25T23:30:00.000Z', isDraft: false }],
       reviewRuns: [], sessions: [readySession], sessionDetailsById: {},
-      ciChecksByPr: { '928': [{ name: 'Verify orchestrator-pack structure', state: 'SUCCESS' }] },
+      ciChecksByPr: { '928': [
+        { name: 'Verify orchestrator-pack structure', state: 'SUCCESS' },
+        { name: 'PR scope guard', state: 'SUCCESS' },
+        { name: 'Run pack contract tests', state: 'SUCCESS' },
+        { name: 'Self-architect lint', state: 'SUCCESS' },
+      ] },
       requiredCheckNamesByPr: { '928': [] }, requiredCheckLookupFailedByPr: { '928': false },
-      tracking: {}, cycleState: {}, capCycleState: {}, repoRoot: resolve('.'), nowMs: Date.now(),
+      tracking: {}, cycleState: {}, capCycleState: {}, repoRoot: resolve('.'),
+      nowMs: Date.parse('2026-07-26T00:05:00.000Z'),
     };
     let starts = 0;
-    const schedulerResult = await runSchedulerTick({
+    const schedulerOptions = {
       repoRoot: resolve('.'), stateDir, epochId: context.epochId, nonce: committed.nonce,
       epochAuthorityFile: context.epochAuthorityFile, registryPath: context.liveRegistryProjectionPath,
-    }, {
+    };
+    const deps = {
       collectSnapshot: async () => snapshot as never,
-      startReview: async (_options, action) => { starts += 1; expect(action.prNumber).toBe(928); expect(action.sessionId).toBe('worker-928'); },
-    });
-    expect(schedulerResult.attempted).toBe(1);
+      startReview: async (_options: unknown, action: { prNumber: number; sessionId: string }) => {
+        starts += 1;
+        expect(action.prNumber).toBe(928);
+        expect(action.sessionId).toBe('worker-928');
+      },
+    };
+    const firstTick = await runSchedulerTick(schedulerOptions, deps as never);
+    expect(firstTick.attempted).toBe(0);
+    const persisted = JSON.parse(readFileSync(join(stateDir, 'orchestrator-review-reconcile-state.json'), 'utf8')) as { cycleState?: Record<string, unknown> };
+    snapshot.cycleState = persisted.cycleState ?? {};
+    snapshot.nowMs += 16 * 60 * 1000;
+    const settledTick = await runSchedulerTick(schedulerOptions, deps as never);
+    expect(settledTick.attempted).toBe(1);
     expect(starts).toBe(1);
   });
 
