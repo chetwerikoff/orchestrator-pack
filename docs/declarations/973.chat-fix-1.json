@@ -7,12 +7,13 @@
   "baseline": {
     "commit_sha": "00babc8cb8fca164b4b809470fa39964c8d7c632",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:d084a02b42bab7b6c46eef056f473c549fe83fd15d270c16116989c8fed9f70d"
+    "active_scope_hash": "sha256:dfbb311bc8e7514831b574099759d60400fde6a8c2c696cdf17c99d07f4a1624"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
     "docs/tiering.md",
     "scripts/lib/tier-gate-core.ts",
+    "scripts/pr2a/final-conformance.ts",
     "scripts/tier-gate-guard.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
@@ -30,6 +31,20 @@
       "reason": "Issue #973 binding scope amendment 5076930494 permits only the required Vitest light-lane registration for scripts/tier-gate-guard.test.ts.",
       "actor": "operator",
       "timestamp": "2026-07-25T04:32:09Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:d084a02b42bab7b6c46eef056f473c549fe83fd15d270c16116989c8fed9f70d",
+      "new_active_scope_hash": "sha256:dfbb311bc8e7514831b574099759d60400fde6a8c2c696cdf17c99d07f4a1624",
+      "changed": {
+        "added": [
+          "scripts/pr2a/final-conformance.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Issue #973 binding scope amendment 5077776462 permits only the downstream #948 final-conformance compatibility correction required after current main advanced through PR #955.",
+      "actor": "operator",
+      "timestamp": "2026-07-25T15:30:00+07:00",
       "applied": true
     }
   ]
