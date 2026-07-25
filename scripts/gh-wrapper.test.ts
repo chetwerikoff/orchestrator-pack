@@ -1089,7 +1089,7 @@ if [[ "$joined" == *graphql* ]]; then
   if [[ "\${SCENARIO:-}" == "validation" ]]; then
     echo "Field 'bogus' doesn't exist on type 'Query'" >&2; exit 1
   fi
-  node -e "const fs=require('fs'); const p=process.argv[1]; const s=JSON.parse(fs.readFileSync(p,'utf8')); s.graphqlCalls+=1; fs.writeFileSync(p, JSON.stringify(s)); if (s.forceGraphqlQuotaError || s.remaining<=0) { console.error('gh: HTTP 403: API rate limit exceeded for user (graphql_rate_limit)'); process.exit(1); } console.log('{"data":{"viewer":{"login":"fixture"}}}');" "$state"
+  node -e "const fs=require('fs'); const p=process.argv[1]; const s=JSON.parse(fs.readFileSync(p,'utf8')); s.graphqlCalls+=1; fs.writeFileSync(p, JSON.stringify(s)); if (s.forceGraphqlQuotaError || s.remaining<=0) { console.error('gh: HTTP 403: API rate limit exceeded for user (graphql_rate_limit)'); process.exit(1); } console.log('{\"data\":{\"viewer\":{\"login\":\"fixture\"}}}');" "$state"
   exit 0
 fi
 echo "fake-gh: unhandled argv: $joined" >&2
@@ -1620,5 +1620,193 @@ tryGraphqlDegradedPassthrough(${JSON.stringify(['api', 'graphql', '-f', 'query={
     expect(isPrimaryGraphqlQuotaExhaustion({ stderr: 'graphql_rate_limit', stdout: '', exitCode: 1 })).toBe(true);
     expect(isPrimaryGraphqlQuotaExhaustion({ stderr: 'secondary_rate_limit', stdout: '', exitCode: 1 })).toBe(false);
     expect(isPrimaryGraphqlQuotaExhaustion({ stderr: 'HTTP 401 Bad credentials', stdout: '', exitCode: 1 })).toBe(false);
+  });
+});
+
+const RUNTIME_HISTORY_REPO = 'chetwerikoff/orchestrator-pack';
+const RUNTIME_HISTORY_HEAD = '1111111111111111111111111111111111111111';
+
+function withRuntimeHistoryRepoEnv<T>(callback: () => T): T {
+  const previousRepo = process.env.GH_REPO;
+  const previousHost = process.env.GH_HOST;
+  process.env.GH_REPO = RUNTIME_HISTORY_REPO;
+  process.env.GH_HOST = 'github.com';
+  try {
+    return callback();
+  } finally {
+    if (previousRepo === undefined) delete process.env.GH_REPO;
+    else process.env.GH_REPO = previousRepo;
+    if (previousHost === undefined) delete process.env.GH_HOST;
+    else process.env.GH_HOST = previousHost;
+  }
+}
+
+describe('runtime-history exact REST inventory (Issue #990)', () => {
+  it('classifies only the three sanctioned read shapes', () => {
+    expect(classifyArgv([
+      'api', `repos/${RUNTIME_HISTORY_REPO}/branches/main/protection/required_status_checks`,
+    ]).route?.id).toBe('runtime-history-main-required-status-checks');
+    expect(classifyArgv([
+      'api', `repos/${RUNTIME_HISTORY_REPO}/actions/runs/30142129797`,
+    ]).route).toMatchObject({ id: 'runtime-history-actions-run', runId: 30142129797 });
+    expect(classifyArgv([
+      'api', `repos/${RUNTIME_HISTORY_REPO}/commits/${RUNTIME_HISTORY_HEAD}/statuses`,
+    ]).route).toMatchObject({ id: 'runtime-history-status-history', headSha: RUNTIME_HISTORY_HEAD });
+
+    expect(classifyArgv(['api', `repos/${RUNTIME_HISTORY_REPO}/actions/runs`]).route).toBeNull();
+    expect(classifyArgv(['api', `repos/${RUNTIME_HISTORY_REPO}/commits/not-a-sha/statuses`]).route).toBeNull();
+    expect(classifyArgv(['api', 'repos/other/repo/branches/main/protection/required_status_checks']).route).toBeNull();
+    expect(classifyArgv([
+      'api', '-X', 'POST', `repos/${RUNTIME_HISTORY_REPO}/statuses/${RUNTIME_HISTORY_HEAD}`, '-f', 'state=success',
+    ]).route).toBeNull();
+  });
+
+  it('executes exact current-policy and Actions-run reads', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gh-runtime-history-read-'));
+    const fakeGh = join(root, 'fake-gh');
+    try {
+      writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+joined="$*"
+case "$joined" in
+  *"repos/${RUNTIME_HISTORY_REPO}/branches/main/protection/required_status_checks"*)
+    printf '%s\\n' '{"strict":true,"checks":[{"context":"ci/a","app_id":null}]}'
+    ;;
+  *"repos/${RUNTIME_HISTORY_REPO}/actions/runs/30142129797"*)
+    printf '%s\\n' '{"id":30142129797,"run_attempt":2,"status":"completed","conclusion":"success"}'
+    ;;
+  *)
+    echo "fake-gh: unhandled argv: $joined" >&2
+    exit 1
+    ;;
+esac
+`);
+
+      withRuntimeHistoryRepoEnv(() => {
+        const policyArgv = ['api', `repos/${RUNTIME_HISTORY_REPO}/branches/main/protection/required_status_checks`];
+        const policyClass = classifyArgv(policyArgv);
+        expect(policyClass.route).not.toBeNull();
+        expect(executeRestRoute(policyClass.route!.id, {
+          realGh: fakeGh,
+          parsed: policyClass.parsed,
+          route: policyClass.route!,
+          cwd: root,
+        })).toEqual({ strict: true, checks: [{ context: 'ci/a', app_id: null }] });
+
+        const runArgv = ['api', `repos/${RUNTIME_HISTORY_REPO}/actions/runs/30142129797`];
+        const runClass = classifyArgv(runArgv);
+        expect(runClass.route).not.toBeNull();
+        expect(executeRestRoute(runClass.route!.id, {
+          realGh: fakeGh,
+          parsed: runClass.parsed,
+          route: runClass.route!,
+          cwd: root,
+        })).toMatchObject({ id: 30142129797, run_attempt: 2, conclusion: 'success' });
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('paginates exact-head status history to proven completion', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gh-runtime-history-pages-'));
+    const fakeGh = join(root, 'fake-gh');
+    const audit = join(root, 'audit.log');
+    const pageOne = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      sha: RUNTIME_HISTORY_HEAD,
+      context: `ci/${index + 1}`,
+      state: 'success',
+    }));
+    const pageTwo = [{ id: 101, sha: RUNTIME_HISTORY_HEAD, context: 'ci/101', state: 'success' }];
+    try {
+      writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+audit="${audit}"
+joined="$*"
+printf '%s\\n' "$joined" >>"$audit"
+if [[ "$joined" == *"statuses?per_page=100&page=1"* ]]; then
+  cat <<'JSON'
+${JSON.stringify(pageOne)}
+JSON
+  exit 0
+fi
+if [[ "$joined" == *"statuses?per_page=100&page=2"* ]]; then
+  cat <<'JSON'
+${JSON.stringify(pageTwo)}
+JSON
+  exit 0
+fi
+echo "fake-gh: unhandled argv: $joined" >&2
+exit 1
+`);
+
+      withRuntimeHistoryRepoEnv(() => {
+        const argv = ['api', `repos/${RUNTIME_HISTORY_REPO}/commits/${RUNTIME_HISTORY_HEAD}/statuses`];
+        const classified = classifyArgv(argv);
+        expect(classified.route).not.toBeNull();
+        const rows = executeRestRoute(classified.route!.id, {
+          realGh: fakeGh,
+          parsed: classified.parsed,
+          route: classified.route!,
+          cwd: root,
+        }) as Array<{ id: number }>;
+        expect(rows).toHaveLength(101);
+        expect(rows.at(-1)?.id).toBe(101);
+      });
+
+      const auditLog = readFileSync(audit, 'utf8');
+      expect(auditLog).toContain('page=1');
+      expect(auditLog).toContain('page=2');
+      expect(auditLog).not.toContain('page=3');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when paginated status identity is ambiguous', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gh-runtime-history-duplicate-'));
+    const fakeGh = join(root, 'fake-gh');
+    const pageOne = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      sha: RUNTIME_HISTORY_HEAD,
+      context: `ci/${index + 1}`,
+      state: 'success',
+    }));
+    const pageTwo = [{ id: 100, sha: RUNTIME_HISTORY_HEAD, context: 'ci/duplicate', state: 'success' }];
+    try {
+      writeExecutable(fakeGh, `#!/usr/bin/env bash
+set -euo pipefail
+joined="$*"
+if [[ "$joined" == *"statuses?per_page=100&page=1"* ]]; then
+  cat <<'JSON'
+${JSON.stringify(pageOne)}
+JSON
+  exit 0
+fi
+if [[ "$joined" == *"statuses?per_page=100&page=2"* ]]; then
+  cat <<'JSON'
+${JSON.stringify(pageTwo)}
+JSON
+  exit 0
+fi
+echo "fake-gh: unhandled argv: $joined" >&2
+exit 1
+`);
+
+      withRuntimeHistoryRepoEnv(() => {
+        const argv = ['api', `repos/${RUNTIME_HISTORY_REPO}/commits/${RUNTIME_HISTORY_HEAD}/statuses`];
+        const classified = classifyArgv(argv);
+        expect(classified.route).not.toBeNull();
+        expect(() => executeRestRoute(classified.route!.id, {
+          realGh: fakeGh,
+          parsed: classified.parsed,
+          route: classified.route!,
+          cwd: root,
+        })).toThrow(/status history identity is malformed/);
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
