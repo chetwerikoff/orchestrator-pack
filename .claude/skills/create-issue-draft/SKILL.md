@@ -466,15 +466,18 @@ fallback authority to a hands-only executor.
 ### Cross-task browser critical section
 
 All task flow-managers in the same operator environment use **one shared local
-lock identity** for browser-turn execution. The canonical identity is common to
-all tasks and MUST NOT be derived from Issue number, task identity, chat URL, or
-manager identity. Establish exclusive ownership before the one browser-turn
+lock identity** for browser-turn execution. The logical mutex key is exactly
+`orchestrator-pack:create-issue-draft:browser-turn`; every flow-manager MUST
+resolve that literal key to the same local mutual-exclusion object in the operator
+environment. The key MUST NOT be derived from Issue number, task identity, chat
+URL, or manager identity. Establish exclusive ownership before the one browser-turn
 operation and release it immediately after that operation. Contention or inability
 to establish exclusivity leaves that browser-turn work pending. Do not put Issue
 pull/edit, ledger work, capture normalization, or other task mechanics under this
-lock. Exact filesystem path, representation, and lock primitive are planner
-freedom. This is caller policy only: do not add a second browser runtime lock,
-helper state machine, daemon, lease, or ownership store.
+lock. Exact filesystem path, representation, and lock primitive used to realize
+the literal key are planner freedom, but a mapping that can yield different mutexes
+for that same key is non-compliant. This is caller policy only: do not add a second
+browser runtime lock, helper state machine, daemon, lease, or ownership store.
 
 Before the first **production** tracked-helper turn on a newly built or
 uncharacterized #964 candidate, complete the Gate-B gate in `discuss-with-gpt`:
