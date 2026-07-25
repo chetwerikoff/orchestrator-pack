@@ -58,7 +58,7 @@ export function projectPackReviewStatusHistory(history) {
     }
     ids.add(key.id);
     const machine = String(row?.description ?? '') === MACHINE_ADMISSION_MARKER;
-    if (machine && row?.creator?.login !== 'github-actions[bot]') {
+    if (machine && row?.creator?.login && row.creator.login !== 'github-actions[bot]') {
       return fail('status-history-unprovable', 'machine-admission marker was emitted by a non-repository-owned writer');
     }
     rows.push({ ...key, state, machine, row });
