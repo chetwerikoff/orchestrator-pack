@@ -123,6 +123,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+      statuses: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -134,6 +135,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      - name: Verify Node.js major
+        run: npm run check:node-major
 
       - name: Install npm dependencies
         run: npm ci --include=dev
@@ -236,6 +240,7 @@ jobs:
 
       - name: Push delivery branch
         if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
+        id: push_delivery
         shell: bash
         env:
           DELIVERY_BRANCH: ci/vitest-runtime-history-refresh
@@ -249,6 +254,21 @@ jobs:
           else
             git push --force-with-lease origin "HEAD:refs/heads/${DELIVERY_BRANCH}"
           fi
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish pending delivery provenance
+        if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DELIVERY_HEAD: ${{ steps.push_delivery.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          ./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${DELIVERY_HEAD}" \
+            -f state=pending \
+            -f context=orchestrator-pack/runtime-history-provenance \
+            -f "description=runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}" \
+            -f "target_url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
 
       - name: Write delivery PR body
         if: steps.delivery.outputs.ahead != '0'
@@ -277,3 +297,17 @@ jobs:
           node scripts/vitest-runtime-history-delivery.mjs upsert-pr \
             --repo "${GITHUB_REPOSITORY}" \
             --body-file vitest-runtime-history-delivery-pr-body.md
+
+      - name: Complete delivery provenance
+        if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DELIVERY_HEAD: ${{ steps.push_delivery.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          ./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${DELIVERY_HEAD}" \
+            -f state=success \
+            -f context=orchestrator-pack/runtime-history-provenance \
+            -f "description=runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}" \
+            -f "target_url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
