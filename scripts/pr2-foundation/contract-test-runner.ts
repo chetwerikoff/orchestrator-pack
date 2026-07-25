@@ -96,14 +96,8 @@ async function main(): Promise<void> {
     // frozen plan against an unrelated downstream PR would turn the historical receipt
     // into a permanent inventory snapshot. Keep the stable externally-grounded marker
     // consumed by the heavy-lane command contract.
-    process.stdout.write(`${JSON.stringify({
-      mutationRunner: {
-        result: 'externally-grounded',
-        replayed: false,
-        evidence: 'post-landing-final-tree-preserved',
-      },
-      successor: 'issue-948-pr2a',
-    })}\n`);
+    process.stdout.write(`${JSON.stringify({ mutationRunner: { result: 'externally-grounded' }, successor: 'issue-948-pr2a' })}\n`);
+    process.stdout.write(`${JSON.stringify({ mutationEvidence: { replayed: false, evidence: 'post-landing-final-tree-preserved' } })}\n`);
     return;
   }
 
