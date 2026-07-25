@@ -182,6 +182,13 @@ describe('Issue #973 tier provenance', () => {
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('advisory-prior does not match flow-manager intake prior');
     expect(result.errors.join('\n')).toContain('first authoritative candidate cannot be below intake prior');
+
+    const later = run(text, evidence([
+      { revision: 'r01', text, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text, tier: 'T2', receipt: receipt('r02', 'T2') },
+    ], { currentRevision: 'r02', priorTier: 'T3' }));
+    expect(later.ok).toBe(false);
+    expect(later.errors.join('\n')).toContain('first authoritative candidate cannot be below intake prior');
   });
 
   it('fails closed on missing intake evidence', () => {
