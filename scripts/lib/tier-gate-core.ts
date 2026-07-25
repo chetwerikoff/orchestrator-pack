@@ -737,7 +737,7 @@ function validateTierTransition(
     if (intake.priorTier !== first.tier) {
       errors.push('tier provenance: compatibility intake prior must equal first valid revision tier');
     }
-  } else if (currentIndex === evidence.revisions.indexOf(first) && tierRank(currentTier) < tierRank(intake.priorTier)) {
+  } else if (tierRank(first.tier) < tierRank(intake.priorTier)) {
     errors.push('tier provenance: first authoritative candidate cannot be below intake prior');
   }
 
