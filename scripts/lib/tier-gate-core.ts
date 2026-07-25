@@ -605,8 +605,15 @@ function driverKey(kind: 'marker' | 'rubric', id: string): string {
   return `${kind}:${id}`;
 }
 
+function architectLensPassIndex(name: string): number | null {
+  const match = name.match(/^pass-(\d+)-architectural-lens\.capture\.txt$/i);
+  if (!match?.[1]) return null;
+  const value = Number.parseInt(match[1], 10);
+  return Number.isInteger(value) ? value : null;
+}
+
 function isArchitectLensCaptureName(name: string): boolean {
-  return /^pass-\d+-architectural-lens\.capture\.txt$/i.test(name);
+  return architectLensPassIndex(name) !== null;
 }
 
 function validateDecisionReceipt(
@@ -779,7 +786,8 @@ function validateTierTransition(
     return;
   }
   const eventEntry = matchingEvents[0];
-  if (!isArchitectLensCaptureName(eventEntry.captureName)) {
+  const eventPass = architectLensPassIndex(eventEntry.captureName);
+  if (eventPass === null) {
     errors.push('tier demotion: event must come from a canonical architect-lens capture');
   }
   const event = eventEntry.record;
@@ -823,8 +831,11 @@ function validateTierTransition(
     return;
   }
   const revalidationEntry = matchingRevalidations[0];
-  if (!isArchitectLensCaptureName(revalidationEntry.captureName)) {
+  const revalidationPass = architectLensPassIndex(revalidationEntry.captureName);
+  if (revalidationPass === null) {
     errors.push('tier demotion: revalidation must come from a canonical architect-lens capture');
+  } else if (eventPass !== null && revalidationPass <= eventPass) {
+    errors.push('tier demotion: current-candidate revalidation must be newer than demotion event');
   }
   const revalidation = revalidationEntry.record;
   if (
@@ -845,7 +856,7 @@ function validateTierTransition(
     errors.push('tier demotion: later up-escalation closes reuse of the consumed demotion event');
   }
 
-  if (event.kind === 'new' && historicalDemotions.has(evidence.taskIdentity)) {
+  if (event.kind === 'new' && historicalDemotions.has(evidence.taskIdentity) {
     errors.push('tier demotion: cutover historical demotion already consumed lifecycle allowance');
   }
 
@@ -901,7 +912,7 @@ export function checkTierGateGuard(
     }
     if (skipLine) {
       errors.push(
-        `red-flag marker hit (${screen.hits.join(', ')}) on skip-line input — marker dominance`,
+        `red-flag marker hit (${screen.hits.join(', ')}) on skip-line input — tier dominance`,
       );
     }
   }
