@@ -1,4 +1,4 @@
-name: Issue 948 final evidence v11
+name: Issue 948 final evidence v12
 
 on:
   pull_request:
@@ -9,12 +9,12 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: issue-948-final-evidence-v11-${{ github.event.pull_request.number }}
+  group: issue-948-final-evidence-v12-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   pre:
-    name: Issue 948 final evidence v11 pre-receipt
+    name: Issue 948 final evidence v12 pre-receipt
     if: github.event.pull_request.number == 955
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -50,6 +50,25 @@ jobs:
         working-directory: target
         shell: pwsh
         run: ./scripts/install-pester-ci.ps1
+      - name: Prepare topology-aware evidence controller v12
+        shell: bash
+        run: |
+          set -euo pipefail
+          controller="$RUNNER_TEMP/issue-948-final-evidence-v12.sh"
+          cp "$GITHUB_WORKSPACE/carrier/.github/issue-948-final-evidence.sh" "$controller"
+          python3 - "$controller" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          s = p.read_text()
+          old = 'pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 1; pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 2;'
+          new = 'shard_count=$(jq -r .heavyShardCount /tmp/issue948-topology.json); test "$shard_count" -ge 1; for shard in $(seq 1 "$shard_count"); do pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard "$shard"; done;'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected exactly one legacy two-shard command, found {s.count(old)}')
+          p.write_text(s.replace(old, new))
+          PY
+          chmod +x "$controller"
+          sha256sum "$controller" | tee "$RUNNER_TEMP/controller-v12.sha256"
       - name: Produce frozen candidate evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -57,18 +76,25 @@ jobs:
         run: |
           set -euo pipefail
           export OPK_CHANGED_VITEST_FILES="$(cd "$GITHUB_WORKSPACE/target" && node scripts/emit-pr-changed-paths-manifest.mjs --base "$BASE_SHA" --head "$TARGET_SHA")"
-          bash "$GITHUB_WORKSPACE/carrier/.github/issue-948-final-evidence.sh" pre "$GITHUB_WORKSPACE/target" "$RUNNER_TEMP/issue948-evidence"
+          set +e
+          bash "$RUNNER_TEMP/issue-948-final-evidence-v12.sh" pre "$GITHUB_WORKSPACE/target" "$RUNNER_TEMP/issue948-evidence"
+          code=$?
+          set -e
+          mkdir -p "$RUNNER_TEMP/issue948-evidence/controller"
+          cp "$RUNNER_TEMP/issue-948-final-evidence-v12.sh" "$RUNNER_TEMP/issue948-evidence/controller/controller-v12.sh"
+          cp "$RUNNER_TEMP/controller-v12.sha256" "$RUNNER_TEMP/issue948-evidence/controller/controller-v12.sha256"
+          exit "$code"
       - name: Upload pre-receipt evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: issue-948-pre-receipt-v11
+          name: issue-948-pre-receipt-v12
           path: ${{ runner.temp }}/issue948-evidence
           if-no-files-found: warn
           retention-days: 30
 
   post:
-    name: Issue 948 final evidence v11 post-final
+    name: Issue 948 final evidence v12 post-final
     needs: pre
     if: github.event.pull_request.number == 955 && needs.pre.result == 'success'
     runs-on: ubuntu-24.04
@@ -108,19 +134,39 @@ jobs:
       - name: Download pre-receipt evidence
         uses: actions/download-artifact@v4
         with:
-          name: issue-948-pre-receipt-v11
+          name: issue-948-pre-receipt-v12
           path: ${{ runner.temp }}/issue948-evidence
+      - name: Prepare and verify evidence controller v12
+        shell: bash
+        run: |
+          set -euo pipefail
+          controller="$RUNNER_TEMP/issue-948-final-evidence-v12.sh"
+          cp "$GITHUB_WORKSPACE/carrier/.github/issue-948-final-evidence.sh" "$controller"
+          python3 - "$controller" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          s = p.read_text()
+          old = 'pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 1; pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard 2;'
+          new = 'shard_count=$(jq -r .heavyShardCount /tmp/issue948-topology.json); test "$shard_count" -ge 1; for shard in $(seq 1 "$shard_count"); do pwsh -NoProfile -File scripts/run-vitest-heavy-shard.ps1 -Shard "$shard"; done;'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected exactly one legacy two-shard command, found {s.count(old)}')
+          p.write_text(s.replace(old, new))
+          PY
+          chmod +x "$controller"
+          sha256sum "$controller" > "$RUNNER_TEMP/controller-v12.sha256"
+          cmp "$RUNNER_TEMP/controller-v12.sha256" "$RUNNER_TEMP/issue948-evidence/controller/controller-v12.sha256"
       - name: Verify receipt in fresh frozen checkout
         shell: bash
         run: |
           set -euo pipefail
           export OPK_CHANGED_VITEST_FILES="$(cd "$GITHUB_WORKSPACE/target" && node scripts/emit-pr-changed-paths-manifest.mjs --base "$BASE_SHA" --head "$TARGET_SHA")"
-          bash "$GITHUB_WORKSPACE/carrier/.github/issue-948-final-evidence.sh" post "$GITHUB_WORKSPACE/target" "$RUNNER_TEMP/issue948-evidence"
+          bash "$RUNNER_TEMP/issue-948-final-evidence-v12.sh" post "$GITHUB_WORKSPACE/target" "$RUNNER_TEMP/issue948-evidence"
       - name: Upload final evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: issue-948-final-evidence-v11
+          name: issue-948-final-evidence-v12
           path: ${{ runner.temp }}/issue948-evidence
           if-no-files-found: error
           retention-days: 30
