@@ -440,8 +440,9 @@ async function testAmbiguousMachineWriteNeverRepublishes() {
     },
   });
   const result = await runDeliveryMonitor(config, fixture.io);
-  equal(result.outcome, 'machine-admission-unconfirmed', 'write response alone must not authorize machine admission');
+  equal(result.outcome, 'required-context-unreported', 'unconfirmed machine admission must use the contract outcome');
   equal(fixture.state().machineWrites, 1, 'ambiguous machine write must never be blindly repeated');
+  equal(fixture.state().sleeps, 1, 'ambiguous machine write gets one bounded confirmation poll');
   equal(fixture.state().mergeCalls, 0, 'unconfirmed machine admission must block merge');
 }
 
