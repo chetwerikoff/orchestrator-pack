@@ -1,0 +1,18 @@
+{
+  "issue_number": 982,
+  "iteration_id": "chat-fix-1",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-25T02:09:59Z",
+  "baseline": {
+    "commit_sha": "a67b5dfc785ff4f501743faba55efe0879a465d1",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:2ba195d7f2bc13777b12b41a06c02bafaa6f1a58c4ac8281acedc60dba1c09f6"
+  },
+  "declared_paths": [
+    ".github/workflows/vitest-runtime-history-refresh.yml",
+    "scripts/check-ci-pipeline-split.ps1"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
