@@ -75,7 +75,6 @@ foreach ($rel in ($textByRel.Keys | Sort-Object)) {
 }
 
 $conformancePath = Join-Path $RepoRoot 'scripts/pr2a/final-conformance.ts'
-$planningPath = Join-Path $RepoRoot 'scripts/pr2a/planning-manifest.json'
 $gitDir = Join-Path $RepoRoot '.git'
 if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathType Leaf) -and (Test-Path -LiteralPath $gitDir)) {
     $node = Get-Command node -ErrorAction SilentlyContinue
@@ -106,8 +105,7 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
             }
 
             $postLanding = $false
-            if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $planningPath -PathType Leaf)) {
-                $planningBarrier = (& $git.Source -C $RepoRoot log -1 --format=%H HEAD -- 'scripts/pr2a/planning-manifest.json' 2>$null | Out-String).Trim()
+            if ($violations.Count -eq 0) {
                 $parentRow = @((& $git.Source -C $RepoRoot rev-list --parents -n 1 HEAD 2>$null | Out-String).Trim().Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries))
                 $baseCommit = if ($parentRow.Count -ge 3) { $parentRow[1] } else { '' }
                 if (-not $baseCommit) {
@@ -116,14 +114,9 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
                     & $git.Source -C $RepoRoot cat-file -e "$baseRef^{commit}" 2>$null
                     if ($LASTEXITCODE -eq 0) { $baseCommit = $baseRef }
                 }
-                if ($baseCommit -and $planningBarrier) {
-                    & $git.Source -C $RepoRoot merge-base --is-ancestor $planningBarrier $baseCommit 2>$null
-                    if ($LASTEXITCODE -eq 0) {
-                        $postLanding = $true
-                    }
-                    elseif ($LASTEXITCODE -ne 1) {
-                        $violations += 'Issue #948 final conformance could not classify the planning barrier against the PR base'
-                    }
+                if ($baseCommit) {
+                    & $git.Source -C $RepoRoot cat-file -e "${baseCommit}:scripts/pr2a/final-conformance.ts" 2>$null
+                    if ($LASTEXITCODE -eq 0) { $postLanding = $true }
                 }
             }
 
