@@ -12,6 +12,7 @@ import {
   type TierDemotionRevalidationRecord,
   type TierTransitionEvidence,
 } from './lib/tier-gate-core.ts';
+import { fingerprintProtectedSignalSpan } from './lib/protected-signal-receipt.mjs';
 
 type Tier = 'T1' | 'T2' | 'T3';
 const identity = '973-fixture';
@@ -265,6 +266,14 @@ describe('Issue #973 tier provenance', () => {
     const drivers = validDemotion();
     drivers.evidence.events[0].record.drivers = [{ kind: 'rubric', id: 'failure-type:local-behavior', rationale: 'Wrong substitute.' }];
     expect(run(drivers.current, drivers.evidence).errors.join('\n')).toContain('exactly match source trigger set');
+
+    const incompleteSource = validDemotion();
+    incompleteSource.evidence.revisions[0].text = draft('T3', 'T3', {
+      body: 'This change modifies required CI behavior.',
+    });
+    expect(run(incompleteSource.current, incompleteSource.evidence).errors.join('\n'))
+      .toContain('marker driver set mismatch for r01');
+
     const l4 = validDemotion();
     l4.evidence.revisions[1].receipt!.l4Status = 'active';
     l4.evidence.revalidations[0].record.l4Status = 'active';
@@ -283,9 +292,54 @@ describe('Issue #973 tier provenance', () => {
     expect(result.errors.join('\n')).toContain('red-flag marker hit (ci-review-gating) with tier T2 below T3');
   });
 
-  it('keeps context-only vocabulary distinct from canonical structural predicates', () => {
-    const quoted = draft('T2', 'T2', { body: 'Quoted example: "required CI".' });
-    expect(run(quoted, evidence([{ revision: 'r01', text: quoted, tier: 'T2', receipt: receipt('r01', 'T2') }], { priorTier: 'T2' })).screen.hits).toEqual([]);
+  it('routes unquoted context-only marker vocabulary through #781 receipts and preserves structural predicates', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-973-marker-receipt-'));
+    try {
+      const stem = '973-marker-receipt-fixture';
+      const anchorDir = join(root, 'docs', 'issues_drafts');
+      const reviewDir = join(anchorDir, '.review', stem);
+      mkdirSync(reviewDir, { recursive: true });
+      const anchor = join(anchorDir, `${stem}.md`);
+      const contextOnly = draft('T2', 'T2', {
+        body: 'Background mentions required CI from prior art; this task does not change it.',
+      });
+      writeFileSync(anchor, contextOnly);
+
+      const unsuppressed = checkTierGateGuard(contextOnly, {
+        repoRoot: process.cwd(),
+        draftPath: anchor,
+      });
+      expect(unsuppressed.screen.hits).toContain('ci-review-gating');
+
+      writeFileSync(
+        join(reviewDir, 'decision-log.md'),
+        'Architect adjudicated the context-only prior-art mention.\n',
+      );
+      writeFileSync(
+        join(reviewDir, 'protected-signal-receipt.json'),
+        JSON.stringify({
+          'recorded-at': '2026-07-25T00:00:00Z',
+          'decision-log': 'decision-log.md',
+          entries: [{
+            guard: 'tier-marker',
+            signal: 'ci-review-gating',
+            fingerprint: fingerprintProtectedSignalSpan('required CI'),
+            reason: 'architect-false-positive',
+            rationale: 'The phrase only describes unchanged prior art; this task does not change CI/review gating.',
+          }],
+        }),
+      );
+      const suppressed = checkTierGateGuard(contextOnly, {
+        repoRoot: process.cwd(),
+        draftPath: anchor,
+      });
+      expect(suppressed.screen.hits).toEqual([]);
+      expect(suppressed.screen.suppressed?.map((entry) => entry.signal))
+        .toContain('ci-review-gating');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+
     const structural = draft('T3', 'T3', { body: 'This task introduces a new contract >= 2 future issues will depend on.' });
     expect(checkTierGateGuard(structural, { repoRoot: process.cwd() }).screen.hits).toContain('shared-contract-dependency');
   });
