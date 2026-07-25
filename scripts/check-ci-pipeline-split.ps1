@@ -51,6 +51,15 @@ foreach ($fragment in $requiredRefreshFragments) {
     }
 }
 
+$heavyJobMatch = [regex]::Match(
+    $refreshText,
+    '(?ms)^  test-vitest-heavy:\r?\n(?<body>.*?)(?=^  refresh-runtime-history:)'
+)
+$heavyCheckoutPattern = '(?ms)^      - name: Checkout\r?\n        uses: actions/checkout@v4\r?\n        with:\r?\n          fetch-depth: 0(?:\r?\n|$)'
+if (-not $heavyJobMatch.Success -or $heavyJobMatch.Groups['body'].Value -notmatch $heavyCheckoutPattern) {
+    throw 'runtime-history heavy shards must use fetch-depth: 0 because the heavy lane contains history-sensitive Git proofs'
+}
+
 if ($refreshText -match 'shard:\s*\[\s*1\s*,\s*2\s*,\s*3\s*,\s*4\s*,\s*5\s*,\s*6\s*,\s*7\s*\]') {
     throw 'runtime-history refresh must not restore a fixed 1..7 heavy shard matrix; consume the plan-derived matrix'
 }
@@ -83,5 +92,5 @@ finally {
     Remove-Item -LiteralPath $outputFile.FullName -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host 'CI pipeline split compatibility guard passed (Issue #906 surviving topology; #695/#982 runtime-history matrix parity).'
+Write-Host 'CI pipeline split compatibility guard passed (Issue #906 surviving topology; #695/#982 dynamic matrix; #984 full-depth runtime-history heavy checkout).'
 exit 0
