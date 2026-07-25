@@ -100,11 +100,14 @@ fresh-chat `--project-url` values.
 
 ### Gate B and first live use (mandatory before any real `turn`)
 
-Do **not** run the first live `turn` for a newly built or otherwise
-uncharacterized #964 candidate until **all** prerequisites below are complete and
-recorded in task/review artifacts. Full operator detail lives in
-`scripts/chatgpt-browser-turn/README.md` (§ Gate B and first live use, §
-Retained recovery copy and rollback); this section is the skill gate.
+Do **not** use the tracked helper for production `create-issue-draft`
+turns on a newly built or otherwise uncharacterized #964 candidate until **all**
+prerequisites below are complete and recorded in task/review artifacts. The
+serialized **Gate-B live characterization turns in step 3 are exempt** from this
+production gate — they exist to complete characterization, not to satisfy it.
+Full operator detail lives in `scripts/chatgpt-browser-turn/README.md` (§ Gate B
+and first live use, § Retained recovery copy and rollback); this section is the
+skill gate.
 
 **1. Deterministic Gate-B tests green for the current candidate**
 
@@ -142,15 +145,17 @@ npm run chatgpt-browser-turn -- capability   --profile /absolute/path/to/automat
 ```
 
 Record `expected_binding.candidate_digest`, `build_digest`, `config_digest`, and
-`gate_digest`. For the operator-controlled live characterization invocation only,
-export the exact gate digest before the successful serialized existing-chat turn:
+`gate_digest`. For the operator-controlled live characterization invocations only,
+bind the exact gate digest **on the characterization command itself** — never a
+shell-wide `export` that would leak to later production turns:
 
 ```bash
-export CHATGPT_BROWSER_TURN_GATE_B_DIGEST='<expected_binding.gate_digest>'
+CHATGPT_BROWSER_TURN_GATE_B_DIGEST='<expected_binding.gate_digest>'   npm run chatgpt-browser-turn -- turn ...characterization argv...
 ```
 
-Do not reuse a digest after any candidate, verifier, runtime-build, or Gate-B
-test-source change.
+Unset any characterization-only assignment immediately after the characterization
+sequence completes (`unset CHATGPT_BROWSER_TURN_GATE_B_DIGEST`). Do not reuse a
+digest after any candidate, verifier, runtime-build, or Gate-B test-source change.
 
 The live smoke minimum (serialized, on the dedicated automation profile) must
 demonstrate:
@@ -170,8 +175,9 @@ timestamps, downgrade generation). Positive parallel capability is admitted only
 when the post-smoke result is `state: ok`; otherwise remain on configured-profile
 serialization. Do not mint positive capability from synthetic tests alone.
 
-Only after steps 1–3 are complete may `create-issue-draft` one-shot turns use
-the tracked helper on that candidate/profile/CDP binding.
+Only after steps 1–3 are complete may **production** `create-issue-draft`
+one-shot turns use the tracked helper on that candidate/profile/CDP binding (the
+step-3 characterization turns themselves are not blocked by this sentence).
 
 Use the repository package entrypoint so the Node-major guard runs first.
 Existing-chat mode:
@@ -493,11 +499,13 @@ GPT pass state in the owning artifact/Issue flow.
 - Auto-apply findings.
 - Reimplement `create-issue-draft` one-shot turns with full page snapshots or a
   routine scratchpad rebuild; use the tracked helper.
-- Run the first live `turn` for a new/uncharacterized #964 candidate before
-  `npm run test:issue-964` is green, Gate-B live characterization is recorded,
-  and the digest-pinned recovery root under
+- Run **production** tracked-helper turns for a new/uncharacterized #964 candidate
+  before `npm run test:issue-964` is green, Gate-B live characterization is
+  recorded, and the digest-pinned recovery root under
   `~/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`
-  is retained.
+  is retained (Gate-B characterization turns themselves are exempt).
+- Leave `CHATGPT_BROWSER_TURN_GATE_B_DIGEST` exported in the shell after
+  characterization; bind it per characterization command only.
 - Treat a tracked-helper non-`ok` state, timeout, or missing stdout as fallback
   authorization or resend permission.
 - Run legacy/scratchpad sends while helper-owned unresolved state blocks
