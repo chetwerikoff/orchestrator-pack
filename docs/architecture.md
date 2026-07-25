@@ -89,6 +89,7 @@ vendor/agent-orchestrator/
 ```
 
 Rules for `vendor/agent-orchestrator`:
+
 - disposable reference only;
 - no local modifications;
 - never used as `packages/core`;
@@ -148,12 +149,14 @@ to add reviewer routing.
 [`AGENTS.md`](../AGENTS.md) is the single worker/agent rulebook — native pickup in AO
 0.10.2+ worktrees (Cursor and Codex workers). Script-owned orchestrator review
 documentation lives in [`script-owned-review-pipeline.md`](script-owned-review-pipeline.md).
+
 `prompts/self_architect_check.md` is a small reusable review block to reduce
 unnecessary subsystems, duplicate prompt literals, and broad scope declarations.
 
 ### Plugin-contract layer
 
 The plugin directories are contracts, not implementations:
+
 - `ao-task-declaration` declares active scope and baseline state.
 - `ao-scope-guard` enforces active scope at runtime and defines the PR CI backup.
 - `ao-token-chain-ledger` aggregates cost/tokens by chain across sessions.
