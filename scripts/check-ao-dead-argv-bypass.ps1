@@ -8,8 +8,6 @@ $Root = Split-Path -Parent $PSScriptRoot
 
 $SessionStatusInScopeRelativePaths = @(
     'scripts/lib/Invoke-AoCliJson.ps1',
-    'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
-    'scripts/orchestrator-wake-supervisor.ps1',
     'scripts/wait-orchestrator-launch.ps1',
     'scripts/lib/Autonomous-ClaimPrResumeGate.ps1',
     'scripts/lib/Worker-Recovery.ps1',

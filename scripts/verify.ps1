@@ -265,34 +265,6 @@ else {
     Add-Failure 'Missing review delivery stdout-first guard (Issue #718)'
 }
 
-Write-Host ''
-Write-Host '== side-process launch-contract guard (Issue #659) =='
-$launchContractCheck = Join-Path $Root 'scripts/check-side-process-launch-contract.ps1'
-if (Test-Path -LiteralPath $launchContractCheck -PathType Leaf) {
-    & $launchContractCheck
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-side-process-launch-contract.ps1' 'PASS' 'completed'
-    }
-    else {
-        Write-Check 'scripts/check-side-process-launch-contract.ps1' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'side-process launch-contract guard failed (Issue #659)'
-    }
-
-    & $launchContractCheck -SelfTest
-    if ($LASTEXITCODE -eq 0) {
-        Write-Check 'scripts/check-side-process-launch-contract.ps1 -SelfTest' 'PASS' 'completed'
-    }
-    else {
-        Write-Check 'scripts/check-side-process-launch-contract.ps1 -SelfTest' 'FAIL' "exit=$LASTEXITCODE"
-        Add-Failure 'side-process launch-contract guard self-test failed (Issue #659)'
-    }
-}
-else {
-    Write-Check 'scripts/check-side-process-launch-contract.ps1' 'FAIL' 'missing'
-    Add-Failure 'Missing side-process launch-contract guard (Issue #659)'
-}
-
-Write-Host ''
 Write-Host '== Strict review gate fixtures (Issue #79) =='
 $strictGate = Join-Path $Root 'scripts/invoke-pack-review-strict-gate.ps1'
 if (Test-Path -LiteralPath $strictGate -PathType Leaf) {

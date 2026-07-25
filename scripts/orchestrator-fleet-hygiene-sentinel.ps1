@@ -7,7 +7,7 @@
   Evaluates H1–H7 process-hygiene assertions for the configured live pack checkout
   and AO side-process state root. Default mode is alert-first (dry-run); process
   termination requires explicit kill enable. This entry point is NOT a supervised
-  registry child and must not be launched by orchestrator-wake-supervisor.ps1.
+  registry child and must not be launched by the legacy wake entrypoint.
 
   See docs/fleet-hygiene-sentinel-runbook.md
 #>

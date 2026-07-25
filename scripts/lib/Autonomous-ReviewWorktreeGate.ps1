@@ -5,7 +5,7 @@
 
 $Script:AutonomousReviewWorktreeGateRoot = $PSScriptRoot
 . (Join-Path $Script:AutonomousReviewWorktreeGateRoot 'Invoke-AoCliJson.ps1')
-. (Join-Path $Script:AutonomousReviewWorktreeGateRoot 'Review-StartClaim.ps1')
+. (Join-Path $Script:AutonomousReviewWorktreeGateRoot 'Review-StartClaimLifecycle.ps1')
 . (Join-Path $Script:AutonomousReviewWorktreeGateRoot 'Review-StartClaimLifecycle.ps1')
 
 $Script:AutonomousReviewWorktreeClaimSchemaVersion = 1
@@ -46,7 +46,7 @@ function Get-AutonomousReviewWorktreeProjectIdFromNamespace {
 }
 
 function Import-AutonomousReviewWorktreeClaimReader {
-    # Review-StartClaim.ps1 is loaded at module import; keep for call-site compatibility.
+    # Review-StartClaimLifecycle.ps1 is loaded at module import; keep for call-site compatibility.
 }
 
 function Get-GitArgvPermittedReviewWorktreeAddDetach {

@@ -5,7 +5,9 @@
   "heavyDefaultRuntimeMs": 120000,
   "heavyForkPoolMinRuntimeMs": 120000,
   "heavyPerTestIsolate": [],
-  "heavyFileBatchIsolate": [],
+  "heavyFileBatchIsolate": [
+    "scripts/pr2-foundation/mutation-external-ci.test.ts"
+  ],
   "classification": {
     "plugins/_shared/tests/declaration_schema.test.ts": "light",
     "plugins/_shared/tests/git_fixture.test.ts": "light",
@@ -69,6 +71,8 @@
     "scripts/pr2-foundation/review-head-ready.test.ts": "light",
     "scripts/pr2-foundation/terminalized-port.test.ts": "light",
     "scripts/pr2-foundation/worker-notification-compat.test.ts": "light",
+    "scripts/pr2a/final-conformance.test.ts": "light",
+    "scripts/pr2a/planning.test.ts": "light",
     "scripts/review-delivery.test.ts": "light",
     "scripts/review-finding-delivery-submit.test.ts": "heavy",
     "scripts/review-head-ready.test.ts": "heavy",
