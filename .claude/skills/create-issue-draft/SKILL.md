@@ -384,6 +384,14 @@ is from the architect seat or via the **hands-only Cursor helper**, which runs t
 exact prepared command and returns stdout/reply state verbatim. It does not write
 browser code, alter prompts/argv, judge findings, or choose fallback behavior.
 
+Before the first live `turn` on a newly built or uncharacterized #964 candidate,
+complete the Gate-B gate in `discuss-with-gpt`: `npm run test:issue-964` green,
+operator live characterization (`capability` → export
+`CHATGPT_BROWSER_TURN_GATE_B_DIGEST` → serialized live smoke → post-smoke
+`capability` `state: ok`), and a retained digest-pinned recovery root under
+`~/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`.
+Record characterization evidence in task/review artifacts.
+
 Interpret only the landed helper contract documented in `discuss-with-gpt`:
 `turn-result/v1` with its closed state/scope/cause and exit mapping;
 `control-result/v1` for `status/list`, `clear`, and capability; and

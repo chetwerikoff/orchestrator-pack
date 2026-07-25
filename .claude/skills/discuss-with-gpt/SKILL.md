@@ -98,6 +98,81 @@ fresh-chat `--project-url` values.
 
 ## Tracked one-shot helper for `create-issue-draft`
 
+### Gate B and first live use (mandatory before any real `turn`)
+
+Do **not** run the first live `turn` for a newly built or otherwise
+uncharacterized #964 candidate until **all** prerequisites below are complete and
+recorded in task/review artifacts. Full operator detail lives in
+`scripts/chatgpt-browser-turn/README.md` (§ Gate B and first live use, §
+Retained recovery copy and rollback); this section is the skill gate.
+
+**1. Deterministic Gate-B tests green for the current candidate**
+
+```bash
+npm run test:issue-964
+```
+
+Re-run after any candidate, verifier, runtime-build, or Gate-B test-source change.
+
+**2. Retained recovery root pinned to `candidate_digest`**
+
+Before the first browser effect, choose an absolute recovery root **outside** the
+working tree. Canonical layout:
+
+```bash
+RECOVERY_ROOT="$(realpath "$HOME")/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>"
+```
+
+Populate it with digest-pinned copies per the README retained-recovery list
+(`scripts/chatgpt-browser-turn.ts`, the complete `scripts/chatgpt-browser-turn/`
+directory, `scripts/kernel/subprocess.ts`,
+`.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs`, exact Node 22 runtime
+reference, and Playwright package location/version reference). Record SHA-256
+digests for every retained first-party file and the printed absolute
+`RECOVERY_ROOT` path alongside live-characterization evidence. Keep the copy
+until `status/list` is clear and every relevant `publication-status` is terminal
+with no opaque quarantine or blocking tombstone.
+
+**3. Operator Gate-B live characterization on the exact profile/CDP**
+
+For the exact automation `--profile` and `--cdp` that will be used in production:
+
+```bash
+npm run chatgpt-browser-turn -- capability   --profile /absolute/path/to/automation-profile   --cdp http://127.0.0.1:9222
+```
+
+Record `expected_binding.candidate_digest`, `build_digest`, `config_digest`, and
+`gate_digest`. For the operator-controlled live characterization invocation only,
+export the exact gate digest before the successful serialized existing-chat turn:
+
+```bash
+export CHATGPT_BROWSER_TURN_GATE_B_DIGEST='<expected_binding.gate_digest>'
+```
+
+Do not reuse a digest after any candidate, verifier, runtime-build, or Gate-B
+test-source change.
+
+The live smoke minimum (serialized, on the dedicated automation profile) must
+demonstrate:
+
+1. one existing-chat success with service-issued user-to-assistant causal witness
+   and byte-verified publication;
+2. one fresh-chat success with canonical conversation identity;
+3. same-chat overlap serialized/refused without duplicate send;
+4. destination collision leaves external bytes untouched and yields the correct
+   pre-send or post-delivery state;
+5. `status/list`, exact `clear`, opaque quarantine/tombstone, and
+   `publication-status` remain usable after a forced interrupted run.
+
+Query `capability` again after characterization. Record capability
+before/after (`state`, browser provenance, evidence digest, observation/expiry
+timestamps, downgrade generation). Positive parallel capability is admitted only
+when the post-smoke result is `state: ok`; otherwise remain on configured-profile
+serialization. Do not mint positive capability from synthetic tests alone.
+
+Only after steps 1–3 are complete may `create-issue-draft` one-shot turns use
+the tracked helper on that candidate/profile/CDP binding.
+
 Use the repository package entrypoint so the Node-major guard runs first.
 Existing-chat mode:
 
@@ -418,6 +493,11 @@ GPT pass state in the owning artifact/Issue flow.
 - Auto-apply findings.
 - Reimplement `create-issue-draft` one-shot turns with full page snapshots or a
   routine scratchpad rebuild; use the tracked helper.
+- Run the first live `turn` for a new/uncharacterized #964 candidate before
+  `npm run test:issue-964` is green, Gate-B live characterization is recorded,
+  and the digest-pinned recovery root under
+  `~/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`
+  is retained.
 - Treat a tracked-helper non-`ok` state, timeout, or missing stdout as fallback
   authorization or resend permission.
 - Run legacy/scratchpad sends while helper-owned unresolved state blocks
