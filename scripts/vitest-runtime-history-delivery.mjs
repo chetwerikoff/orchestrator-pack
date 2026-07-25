@@ -284,11 +284,7 @@ export function selectReusableDeliveryPr(existingPulls) {
     return null;
   }
 
-  return (
-    existingPulls.find((pullRequest) => pullRequest?.state === 'open') ??
-    existingPulls.find((pullRequest) => pullRequest?.state === 'closed' && !pullRequest?.merged_at) ??
-    null
-  );
+  return existingPulls.find((pullRequest) => pullRequest?.state === 'open') ?? null;
 }
 
 function sleep(ms) {
@@ -321,14 +317,6 @@ async function upsertPr(options) {
   let pr;
   if (reusablePr) {
     const number = reusablePr.number;
-    if (reusablePr.state === 'closed') {
-      runGh(
-        options.repoRoot,
-        ['pr', 'reopen', String(number), '--repo', options.repo],
-        { allowedExitCodes: [0] },
-      );
-      console.log(`[INFO] runtime-history delivery PR reopened: #${number}`);
-    }
     pr = runGhJson(options.repoRoot, [
       'api',
       '-X',
