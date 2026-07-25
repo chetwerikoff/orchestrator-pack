@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types
 import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
@@ -33,15 +33,24 @@ function selected(): Ac[] {
 }
 
 function runTest(root: string, testName: string): { ok: boolean; exitCode: number; output: string } {
-  const result = runProcessSync({
-    command: process.execPath,
-    args: [resolve('node_modules/vitest/vitest.mjs'), 'run', '--config', resolve(root, 'vitest.config.ts'), resolve(root, 'scripts/cutover/issue-928.test.ts'), '--testNamePattern', testName],
-    cwd: root,
-    inheritParentEnv: true,
-    env: { OPK_VITEST_HARNESS: '1', OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1' },
-    timeoutMs: 180_000,
-  });
-  return { ok: result.ok, exitCode: result.exitCode ?? (result.ok ? 0 : 1), output: `${result.stdout}\n${result.stderr}` };
+  const previousHarness = process.env.OPK_VITEST_HARNESS;
+  const previousNested = process.env.OPK_CONTRACT_MUTATIONS_ALREADY_RUN;
+  process.env.OPK_VITEST_HARNESS = '1';
+  process.env.OPK_CONTRACT_MUTATIONS_ALREADY_RUN = '1';
+  try {
+    const result = runProcessSync({
+      command: process.execPath,
+      args: [resolve('node_modules/vitest/vitest.mjs'), 'run', '--config', resolve(root, 'vitest.config.ts'), resolve(root, 'scripts/cutover/issue-928.test.ts'), '--testNamePattern', testName],
+      cwd: root,
+      inheritParentEnv: true,
+    });
+    return { ok: result.ok, exitCode: result.exitCode ?? (result.ok ? 0 : 1), output: `${result.stdout}\n${result.stderr}` };
+  } finally {
+    if (previousHarness === undefined) delete process.env.OPK_VITEST_HARNESS;
+    else process.env.OPK_VITEST_HARNESS = previousHarness;
+    if (previousNested === undefined) delete process.env.OPK_CONTRACT_MUTATIONS_ALREADY_RUN;
+    else process.env.OPK_CONTRACT_MUTATIONS_ALREADY_RUN = previousNested;
+  }
 }
 
 function main(): void {
@@ -53,6 +62,9 @@ function main(): void {
     const add = runProcessSync({ command: 'git', args: ['worktree', 'add', '--detach', checkout, 'HEAD'], cwd: repoRoot, inheritParentEnv: true });
     if (!add.ok) throw new Error(add.stderr || add.error || 'mutation_worktree_add_failed');
     added = true;
+    const installedModules = resolve(repoRoot, 'node_modules');
+    if (!existsSync(installedModules)) throw new Error('mutation_node_modules_missing');
+    symlinkSync(installedModules, join(checkout, 'node_modules'), 'dir');
     const evidence = [];
     for (const ac of selected()) {
       const spec = SPECS[ac];
