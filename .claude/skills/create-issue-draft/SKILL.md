@@ -182,12 +182,12 @@ not write the intake record, and no architect attribution is required for existi
 Issue + task-chat entry or direct brief-only entry. Missing, malformed, partial,
 or mismatched intake evidence fails closed.
 
-The implementation owns exactly one **static frozen** set of workdir identities
-that were already active at #973 cutover. Runtime code never discovers or extends
-it. Only a listed identity may use `kind: compatibility`; the flow-manager then
-records one compatibility intake anchor whose prior equals that workdir's first
-valid immutable revision tier. An unlisted legacy-looking workdir follows fresh
-rules. Never rewrite a historical revision to manufacture compatibility.
+The implementation owns exactly one **static frozen** production compatibility
+set, deliberately empty at #973 cutover. Every production identity therefore
+follows fresh rules. Runtime code never discovers, infers, appends, or extends
+membership. Compatibility semantics may be exercised only with explicitly injected
+test membership; never rewrite historical revisions or infer legacy eligibility
+from workdir shape.
 
 After each immutable pull and tier/L4 recomputation, the flow-manager records
 `$WORKDIR/rNN/tier-gate-receipt.json` as `tier-gate-decision/v1` with the exact
@@ -481,8 +481,9 @@ the already-sanitized historical downstep and its source drivers can be
 mechanically reconstructed. The compatibility event additionally names
 `historicalAfterRevision` and `historicalLensCapture`. It imports that one old
 demotion into the same audit shape and consumes the same lifecycle allowance; it
-cannot authorize a new downstep. The #973 cutover historical-demotion population
-is empty, so this path is dormant unless concrete evidence disproves that fact.
+cannot authorize a new downstep. The production compatibility set and historical-
+demotion population are both empty at #973 cutover, so this path is dormant outside
+explicit test fixtures.
 
 Save every architect result as `pass-NN-architectural-lens.capture.txt`, with
 detailed analysis in `presync-architect-lens.md`. A fix-required result returns to
