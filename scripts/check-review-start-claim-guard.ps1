@@ -106,13 +106,31 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
 
             $postLanding = $false
             if ($violations.Count -eq 0) {
-                $parentRow = @((& $git.Source -C $RepoRoot rev-list --parents -n 1 HEAD 2>$null | Out-String).Trim().Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries))
-                $baseCommit = if ($parentRow.Count -ge 3) { $parentRow[1] } else { '' }
+                $baseCommit = ''
+                if ($env:GITHUB_EVENT_PATH -and (Test-Path -LiteralPath $env:GITHUB_EVENT_PATH -PathType Leaf)) {
+                    try {
+                        $eventPayload = Get-Content -LiteralPath $env:GITHUB_EVENT_PATH -Raw | ConvertFrom-Json
+                        $baseCommit = [string]$eventPayload.pull_request.base.sha
+                    }
+                    catch {
+                        $baseCommit = ''
+                    }
+                }
                 if (-not $baseCommit) {
                     $baseName = if ($env:GITHUB_BASE_REF) { $env:GITHUB_BASE_REF } else { 'main' }
                     $baseRef = "origin/$baseName"
                     & $git.Source -C $RepoRoot cat-file -e "$baseRef^{commit}" 2>$null
                     if ($LASTEXITCODE -eq 0) { $baseCommit = $baseRef }
+                }
+                if (-not $baseCommit) {
+                    $parentRow = @((& $git.Source -C $RepoRoot rev-list --parents -n 1 HEAD 2>$null | Out-String).Trim().Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries))
+                    if ($parentRow.Count -ge 3) { $baseCommit = $parentRow[1] }
+                }
+                if ($baseCommit -and $baseCommit -match '^[0-9a-f]{40}$') {
+                    & $git.Source -C $RepoRoot cat-file -e "$baseCommit^{commit}" 2>$null
+                    if ($LASTEXITCODE -ne 0) {
+                        & $git.Source -C $RepoRoot fetch --no-tags origin $baseCommit *> $null
+                    }
                 }
                 if ($baseCommit) {
                     & $git.Source -C $RepoRoot cat-file -e "${baseCommit}:scripts/pr2a/final-conformance.ts" 2>$null
