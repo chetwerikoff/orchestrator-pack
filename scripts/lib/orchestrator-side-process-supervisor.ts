@@ -101,10 +101,10 @@ export function startScheduler(options: SupervisorOptions, child: RegistryChild)
     },
     signal: controller.signal,
     allowEmptyStdout: true,
-    onSpawn: (spawnedPid) => { pid = spawnedPid; managed.pid = spawnedPid; },
-    onStdoutChunk: (chunk) => { process.stdout.write(chunk); },
-    onStderrChunk: (chunk) => { process.stderr.write(chunk); },
-  }).then((result) => {
+    onSpawn: (spawnedPid: number) => { pid = spawnedPid; managed.pid = spawnedPid; },
+    onStdoutChunk: (chunk: string) => { process.stdout.write(chunk); },
+    onStderrChunk: (chunk: string) => { process.stderr.write(chunk); },
+  }).then((result: ProcessResult) => {
     managed.settled = true;
     managed.result = result;
     return result;
