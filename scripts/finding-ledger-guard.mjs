@@ -640,10 +640,10 @@ function validateRawCodexEconomics(rawResults, errors) {
         }
       }
       const candidate = finding.simplificationCutCandidate ?? finding['simplification-cut-candidate'];
-      if (candidate !== undefined && candidate !== 'yes' && candidate !== true) {
+      if (candidate !== undefined && candidate !== 'yes') {
         errors.push(`review-economics: raw Codex finding ${id} has invalid simplification-cut-candidate before transcription`);
       }
-      if (candidate === 'yes' || candidate === true) hasCutCandidate = true;
+      if (candidate === 'yes') hasCutCandidate = true;
     }
 
     if (findings.length === 0 && !tokens.includes(NO_FINDINGS_TOKEN)) {
