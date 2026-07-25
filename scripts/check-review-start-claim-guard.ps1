@@ -121,8 +121,11 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
             }
 
             if ($violations.Count -eq 0) {
-                if ($postLanding) {
-                    $filterScript = @'
+                $conformanceExitCode = 1
+                Push-Location -LiteralPath $RepoRoot
+                try {
+                    if ($postLanding) {
+                        $filterScript = @'
 import { buildConformanceReport } from './scripts/pr2a/final-conformance.ts';
 const oneTimeCodes = new Set([
   'planned_operation_missing_or_changed',
@@ -141,12 +144,17 @@ if (remaining.length > 0) {
   process.stdout.write('[PASS] Issue #948 post-landing conformance: frozen PR2a operation-set findings ignored; enduring invariants remain green\n');
 }
 '@
-                    $conformanceOutput = @(& $node.Source --no-warnings --experimental-strip-types --input-type=module -e $filterScript 2>&1 | ForEach-Object { [string]$_ })
+                        $conformanceOutput = @(& $node.Source --no-warnings --experimental-strip-types --input-type=module -e $filterScript 2>&1 | ForEach-Object { [string]$_ })
+                    }
+                    else {
+                        $conformanceOutput = @(& $node.Source --no-warnings --experimental-strip-types $conformancePath --ref HEAD --json 2>&1 | ForEach-Object { [string]$_ })
+                    }
+                    $conformanceExitCode = $LASTEXITCODE
                 }
-                else {
-                    $conformanceOutput = @(& $node.Source --no-warnings --experimental-strip-types $conformancePath --ref HEAD --json 2>&1 | ForEach-Object { [string]$_ })
+                finally {
+                    Pop-Location
                 }
-                if ($LASTEXITCODE -ne 0) {
+                if ($conformanceExitCode -ne 0) {
                     $detail = ($conformanceOutput -join ' ').Trim()
                     if ($detail.Length -gt 1800) { $detail = $detail.Substring(0, 1800) + '...[truncated]' }
                     if ($detail) {
