@@ -35,18 +35,7 @@ function runMutation(runner: string, ac: AcceptanceId | null): Promise<ProcessRe
   });
 }
 
-function pr2aPlanningBarrierOnBase(): boolean {
-  const planningPath = resolve('scripts/pr2a/planning-manifest.json');
-  if (!existsSync(planningPath)) return false;
-
-  const barrier = runProcessSync({
-    command: 'git',
-    args: ['log', '-1', '--format=%H', 'HEAD', '--', 'scripts/pr2a/planning-manifest.json'],
-    cwd: resolve('.'),
-    inheritParentEnv: true,
-  });
-  if (!barrier.ok || !barrier.stdout.trim()) return false;
-
+function pr2aLandedOnBase(): boolean {
   const baseName = String(process.env.GITHUB_BASE_REF ?? '').trim() || 'main';
   const baseRef = `origin/${baseName}`;
   const baseExists = runProcessSync({
@@ -57,15 +46,12 @@ function pr2aPlanningBarrierOnBase(): boolean {
   });
   if (!baseExists.ok) return false;
 
-  const ancestry = runProcessSync({
+  return runProcessSync({
     command: 'git',
-    args: ['merge-base', '--is-ancestor', barrier.stdout.trim(), baseRef],
+    args: ['cat-file', '-e', `${baseRef}:scripts/pr2a/final-conformance.ts`],
     cwd: resolve('.'),
     inheritParentEnv: true,
-  });
-  if (ancestry.ok) return true;
-  if (ancestry.exitCode === 1) return false;
-  throw new Error(ancestry.stderr || ancestry.error || 'pr2a_planning_barrier_ancestry_failed');
+  }).ok;
 }
 
 async function runPr2aMutationMatrix(runner: string, ac: AcceptanceId | null): Promise<boolean> {
@@ -101,15 +87,15 @@ async function main(): Promise<void> {
   const ac = parseAc(process.argv.slice(2));
   const pr2aRunner = resolve('scripts/pr2a/mutation-runner.ts');
   const hasPr2aRunner = existsSync(pr2aRunner);
-  const pr2aLanded = hasPr2aRunner && pr2aPlanningBarrierOnBase();
+  const pr2aLanded = hasPr2aRunner && pr2aLandedOnBase();
   const usePr2aRunner = hasPr2aRunner && (!ac || ac !== 'AC9');
 
   if (usePr2aRunner && pr2aLanded) {
     // #948's red/green mutation evidence is bound to its reviewed final tree. Once the
-    // planning barrier is already in the target base, replaying that frozen plan against
-    // an unrelated downstream PR would turn the historical receipt into a permanent
-    // inventory snapshot. Preserve the established externally-grounded result marker:
-    // heavy-lane callers consume it as the stable command contract.
+    // PR2a conformance authority is already present on the target base, replaying that
+    // frozen plan against an unrelated downstream PR would turn the historical receipt
+    // into a permanent inventory snapshot. Keep the stable externally-grounded marker
+    // consumed by the heavy-lane command contract.
     process.stdout.write(`${JSON.stringify({
       mutationRunner: {
         result: 'externally-grounded',
