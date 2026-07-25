@@ -96,8 +96,9 @@ rounds is intentional and is the only review-chat continuity in this flow.
 ## Pipeline
 
 1. Intake: current flow-manager pulls title/body, creates/reconstructs workdir,
-   records any manager handoff, establishes the independent #975 adoption
-   boundary, recomputes tier/T3-critical stage selection, and runs body floors.
+   records any manager handoff, the #973 intake prior before the first tier-gate
+   decision, the independent #975 adoption boundary, recomputes tier/T3-critical
+   stage selection, and runs body floors.
 2. When the task began with optional architect consultation, preserve its brief
    evidence; otherwise no architect stage runs here.
 3. Browser-GPT competitive stage when selected or explicitly requested, ≤3
@@ -119,8 +120,8 @@ rounds is intentional and is the only review-chat continuity in this flow.
 8. One fresh-chat browser-GPT final architectural pass after the latest final-lens
    capture when the tier/flow requires it.
 9. Acceptance only over the current Issue revision after the #975
-   `final-acceptance` guard phase and all existing floors are green, with a final
-   lens covering that exact accepted revision.
+   `final-acceptance` guard phase, the full tier gate, all existing floors are
+   green, and a final lens covers that exact accepted revision.
 
 Ordinary architectural review ends early on a valid raw result containing exact
 `NO_FINDINGS`. `SIMPLIFICATION_CLEAN` is an additional M5 terminal token, not a
@@ -175,6 +176,66 @@ unparseable classification follows existing fail-up behavior. If the pre-final
 recompute makes the task T3-critical, the mandatory independent Codex addition
 must complete before the final lens.
 
+### #973 tier provenance records
+
+These records live only in the existing out-of-repository workdir. They are
+same-user audit evidence for mechanical consistency, **not** an unforgeable role
+authorization channel; deliberate same-user fabrication is the explicit CX973-1
+residual trust risk. Do not add a signer, database, protected store, remote
+attestation, registry, lease, journal, or pending-state machine.
+
+Before the first tier-gate decision for a fresh workdir, the **flow-manager**
+records `$REVIEW_DIR/tier-intake.json` as `tier-intake/v1` with:
+
+- `producer: cursor-flow-manager`;
+- exact task identity;
+- `kind: fresh`;
+- the intake prior produced by the existing rubric/guard application;
+- `firstRevision`, bound to the first valid immutable `rNN`.
+
+The Issue `advisory-prior` mirrors this record and must match it. Browser GPT does
+not write the intake record, and no architect attribution is required for existing
+Issue + task-chat entry or direct brief-only entry. Missing, malformed, partial,
+or mismatched intake evidence fails closed.
+
+The implementation owns exactly one **static frozen** production compatibility
+set, deliberately empty at #973 cutover. Every production identity therefore
+follows fresh rules. Runtime code never discovers, infers, appends, or extends
+membership. Compatibility semantics may be exercised only with explicitly injected
+test membership; never rewrite historical revisions or infer legacy eligibility
+from workdir shape.
+
+After each immutable pull and tier/L4 recomputation, the flow-manager records
+`$WORKDIR/rNN/tier-gate-receipt.json` as `tier-gate-decision/v1` with the exact
+revision, resulting tier, every fired canonical marker row, the applicable rubric
+classes, and current L4 status (`clear|active|ambiguous|missing|stale`). Use only
+these stable rubric labels, which map the existing canon rather than defining a
+new rubric:
+
+- `failure-type:text-cosmetics`;
+- `failure-type:local-behavior`;
+- `failure-type:subsystem-or-system-guarantee`;
+- `size:small-obvious-self-contained`;
+- `size:single-component-design-judgment`;
+- `fail-up:doubt`.
+
+The fired marker rows plus those applicable rubric labels are the exact
+guard-enumerable driver set for that immutable decision. After the first valid
+revision, transition direction comes from the highest tier in preceding immutable
+`rNN` revisions, not from the author-editable `advisory-prior`; a hidden downstep
+therefore remains visible.
+
+Marker applicability is bound to the canonical row predicate: a marker is
+substantively present when the **change itself** satisfies that row's `Present when
+the task…` predicate. Merely naming the subject, quoting/citing prior art,
+describing a rejected alternative, or reusing an already-shipped primitive
+unchanged is not enough by itself. Do not weaken structural predicates such as
+`shared-contract-dependency`, `multi-surface`, or `ambiguity`, and do not change
+marker heuristics. Context-only lexical hits that remain in text continue through
+the existing #781 fingerprint-bound receipt path. Intake/demotion evidence is
+never a marker receipt.
+
+## Step 2 — Task-chat disposition/fix round
 ### Independent review-economics adoption boundary
 
 Reviewer output never chooses its own #975 cutover.
@@ -197,6 +258,7 @@ after the boundary. Current M3 applies to every still-active acceptance attempt
 regardless of ledger age.
 
 ## Step 2 — Task-chat disposition/fix round + M4
+
 
 For every reviewer finding, the flow-manager relays the finding to the one task
 chat as a proposal. GPT author decides the defect disposition, chooses the remedy,
@@ -499,17 +561,91 @@ It has four mandatory goals, in this exact order:
    conditionals and route required corrections through the normal task-chat fix
    path.
 
-For T3, record explicit **keep** or **cut** for every major mechanism. Repackaging
-or splitting an over-built mechanism across sibling tasks is not itself a cut.
-Same-episode relenses reuse the post-adoption M5 anchor but audit latest body and
-M4 inventory. The lens also records any required current-revision `m3-protected:`
-contest/adjudication line. Issue #973 owns demotion record/marker mechanics.
+For T3, record an explicit **keep** or **cut** verdict for each major mechanism.
+Repackaging or splitting an over-built mechanism across sibling tasks is not, by
+itself, a cut: record a substantive reduction or explicitly keep the total
+mechanism. The lens also performs whatever protected adjudication the active
+protected-finding contract requires.
 
-Save the guard-recognized capture as
-`pass-NN-architectural-lens.capture.txt`, with detailed analysis in
-`presync-architect-lens.md`. A fix-required result returns to task chat; the
-flow-manager re-pulls the changed Issue and this lens reruns as a newer capture.
-Any Issue content change after a lens invalidates that lens for acceptance.
+Recompute against the final body only inside this lens for any downgrade. A new
+demotion may move only one adjacent step (`T3→T2` or `T2→T1`) and the task
+lifecycle may consume this authority only once. Marker and L4 floors still bind.
+The source is the immutable preceding high-watermark decision and its recorded
+driver set.
+
+When a downstep is justified, the original guard-recognized architect-lens capture
+contains exactly one fenced JSON event of this shape (field order is irrelevant):
+
+```tier-demotion-event
+{
+  "schema": "tier-demotion-event/v1",
+  "eventId": "<stable-id>",
+  "kind": "new",
+  "role": "architect",
+  "stage": "final-architect-lens",
+  "sourceRevision": "rNN",
+  "beforeTier": "T3",
+  "afterTier": "T2",
+  "drivers": [
+    { "kind": "marker|rubric", "id": "<exact-source-driver>", "rationale": "<why it no longer applies>" }
+  ]
+}
+```
+
+`drivers` must disposition **exactly** the source receipt's marker rows plus rubric
+classes: no omission, extra row, or substitute. Rationales remain human-audited
+architect prose; the guard checks set equality and exact source binding. Author
+Issue prose, signer strings, intake records, or fence metadata cannot substitute
+for this event.
+
+The task chat then applies exactly the authorized tier/title/fence-reference
+change. The complexity-tier fence retains the intake `advisory-prior` mirror and
+adds both `demotion-from: <before-tier>` and `demotion-event: <stable-id>`. The
+flow-manager re-pulls that Issue edit as the next immutable revision and records
+its tier-gate decision receipt. At this point the **full tier gate must be red**:
+current-candidate revalidation does not exist yet. A crash here stays red on retry.
+
+Run a newer final-lens delta over that exact post-edit immutable revision. Its
+architect-lens capture includes:
+
+```tier-demotion-revalidation
+{
+  "schema": "tier-demotion-revalidation/v1",
+  "eventId": "<same-stable-id>",
+  "role": "architect",
+  "stage": "final-architect-lens",
+  "candidateRevision": "rNN",
+  "beforeTier": "T3",
+  "afterTier": "T2",
+  "l4Status": "clear"
+}
+```
+
+Only then rerun the full tier gate. Exactly one matching current-candidate
+revalidation may authorize the lower tier. Same-event revalidation may repeat
+after later same-tier content fixes and does not consume another demotion. Any
+later upward recomputation remains mandatory and allowed but closes event reuse;
+a later downstep is a forbidden second lifecycle demotion. Keep the stable event
+reference in the Issue fence even after later up-escalation; removing it cannot
+reset history.
+
+For a frozen-list legacy identity, `kind: compatibility` is allowed only when
+immutable before/after revisions plus existing architect final-lens evidence prove
+the already-sanitized historical downstep and its source drivers can be
+mechanically reconstructed. The compatibility event additionally names
+`historicalAfterRevision` and `historicalLensCapture`. It imports that one old
+demotion into the same audit shape and consumes the same lifecycle allowance; it
+cannot authorize a new downstep. The production compatibility set and historical-
+demotion population are both empty at #973 cutover, so this path is dormant outside
+explicit test fixtures.
+
+Save every architect result as `pass-NN-architectural-lens.capture.txt`, with
+detailed analysis in `presync-architect-lens.md`. A fix-required result returns to
+the task chat; the flow-manager re-pulls the changed Issue and this lens then
+reruns as a new capture. Any Issue content change after a lens invalidates that
+lens for acceptance. Prior captures and ledger rows remain valid and are never
+waived.
+
 
 ## Step 6 — Final architectural verification
 
@@ -555,6 +691,12 @@ Acceptance requires all pre-existing floors plus current M2/M3/M5 evidence. Run
 stage completeness/body floors as usual, then the full economics phase over exact
 current immutable revision identity (`rNN`):
 
+## Step 7 — Acceptance
+
+Acceptance requires all pre-existing floors plus current M2/M3/M5 evidence. Run
+stage completeness/body floors as usual, then the full economics phase over exact
+current immutable revision identity (`rNN`):
+
 ```bash
 node scripts/finding-ledger-guard.mjs \
   --ledger "$REVIEW_DIR/finding-disposition-ledger.json" \
@@ -569,23 +711,27 @@ Final acceptance requires:
 
 1. latest final architect lens covers exact Issue revision being accepted and the
    normal latest-lens/latest-final relationship holds;
-2. clean final pass over that exact revision when required;
-3. body floors, stage completeness, and full finding-ledger guard green;
-4. every typed finding normalized and remedy outcome separate from defect
-   disposition;
-5. governed reviewer evidence after independent adoption boundary;
-6. a legally terminal **post-adoption** M5 anchor; no grandfather exemption;
-7. valid author M3 authority only with real-signal + why-now and current contest
+2. the full `checkTierGateGuard` is green on that exact current anchor, including
+   intake/history/demotion/current-revalidation and marker/L4 floors when applicable;
+3. clean final pass over that exact revision when required;
+4. body floors, stage completeness, and full finding-ledger guard green;
+5. every typed finding normalized and remedy outcome separate from defect
+   disposition; unresolved protected work resolved/adjudicated under the active
+   protected contract; capped risks recorded;
+6. governed reviewer evidence after independent adoption boundary;
+7. a legally terminal **post-adoption** M5 anchor; no grandfather exemption;
+8. valid author M3 authority only with real-signal + why-now and current contest
    unambiguously absent/withdrawn, or current architect adjudication when required;
-8. no architect-pending protected state;
-9. live Issue title prefix matches final tier and all existing T3-critical floors
-   are satisfied;
-10. no selected browser-GPT stage skipped except through permitted recorded outage
+9. no architect-pending protected state;
+10. live Issue title prefix matches final tier and all existing T3-critical floors
+    are satisfied;
+11. no selected browser-GPT stage skipped except through permitted recorded outage
     substitution; every mandatory T3-critical Codex addition complete and every
     explicit wrapper complete or explicitly waived only where allowed;
-11. final report includes Issue URL, tier/pass counts, task/review chat URLs,
+12. final report includes Issue URL, tier/pass counts, task/review chat URLs,
     current manager handoff, workdir, transport fallbacks, substitutions/waivers,
-    T3-critical result, M4 summary, and residual risks.
+    T3-critical result, #973 cutover/provenance state when applicable, M4 summary,
+    and residual risks.
 
 Two non-converging `fix -> newer lens -> final` cycles escalate to the operator.
 
@@ -824,7 +970,6 @@ the canonical below-ladder skip-line form from `docs/tiering.md`.
 ## Mechanical floor commands
 
 Run from trusted repository root with absolute `$ANCHOR`:
-
 ```bash
 node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
 node scripts/draft-discipline.mjs positive-outcome --draft "$ANCHOR"

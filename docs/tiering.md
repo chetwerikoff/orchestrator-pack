@@ -70,6 +70,24 @@ a task into **T1**. Smallness is necessary but not sufficient for T1.
 | **multi-surface** | spans multiple otherwise-independent surfaces |
 | **ambiguity** | leaves genuine ambiguity in what is being asked |
 
+**Blast-radius binding (#973).** A marker is substantively present when the
+**change itself satisfies that marker row's canonical `Present when the task…`
+predicate**. Merely naming the subject, quoting/citing prior art, describing a
+rejected alternative, or reusing an already-shipped primitive unchanged is not
+by itself enough. This rule narrows applicability to the existing row predicates;
+it does not weaken or replace any predicate, including `shared-contract-dependency`,
+`multi-surface`, or `ambiguity`. Context-only lexical hits that remain in text
+continue to use the existing #781 fingerprint-bound receipt path; #973 adds no
+marker heuristic or suppression mechanism.
+
+For #973 audit records, the flow-manager serializes the existing rubric decision
+with stable machine labels that map to the rubric above rather than creating a new
+rubric: `failure-type:text-cosmetics`, `failure-type:local-behavior`,
+`failure-type:subsystem-or-system-guarantee`, `size:small-obvious-self-contained`,
+`size:single-component-design-judgment`, and `fail-up:doubt`. The applicable
+labels plus every fired canonical marker row form the guard-enumerable driver set
+for that immutable tier decision.
+
 Mechanical guard: `scripts/check-tier-calibration-consistency.ps1` over the
 committed calibration sample.
 
@@ -139,6 +157,70 @@ Issue/scope change, and immediately before the final architect lens. Ambiguous o
 unparseable classification follows the existing fail-up behavior. If that
 pre-final recomputation makes the task T3-critical, the independent Codex addition
 must complete before the final lens.
+
+### Tier provenance and final-lens demotion audit (#973)
+
+The first authoritative tier floor is not author-controlled Issue metadata. For
+a fresh Issue-only workdir, before the first tier-gate decision the current Cursor
+flow-manager records one `tier-intake/v1` record in the existing review directory
+with `producer: cursor-flow-manager`, task identity, `kind: fresh`, the rubric/guard
+intake prior, and the first immutable `rNN` revision. The Issue
+`advisory-prior` is a mirror and must match this record. Missing, malformed, or
+mismatched intake evidence fails closed. No architect attribution is required at
+intake, for direct Issue/task-chat entry, or for brief-only entry.
+
+The implementation contains one static frozen production compatibility set. At
+#973 cutover that set is deliberately empty: every production identity follows
+fresh rules. Runtime code never discovers, infers, appends, or extends membership.
+Compatibility semantics remain fixture-testable only through explicitly injected
+membership; they never rewrite historical revisions or infer legacy status from
+local workdir shape.
+
+After every immutable pull, the flow-manager records the applied tier decision in
+that `rNN` directory as `tier-gate-decision/v1`: producer, revision, tier, fired
+canonical marker rows, applicable rubric labels from the mapping above, and the
+current L4 result (`clear|active|ambiguous|missing|stale`). This is same-user
+audit evidence, not cryptographic authorization. Once a first valid revision
+exists, the highest tier in preceding immutable revisions is the transition
+high-watermark; changing `advisory-prior` cannot hide a downstep.
+
+A valid downstep is exactly one adjacent tier step and may occur only at the final
+architect lens, at most once in the task lifecycle. The original lens capture
+contains one fenced `tier-demotion-event/v1` JSON record with an event id,
+`role: architect`, `stage: final-architect-lens`, exact source revision, before and
+after tiers, and one non-empty prose rationale for every source driver. The driver
+set must equal the source decision's marker rows plus rubric labels exactly; no
+missing, extra, or substituted driver is accepted. The Issue complexity-tier
+fence then carries the stable original event id and immediately pre-demotion tier
+(`demotion-event` + `demotion-from`). Author text, intake evidence, or those fence
+fields alone never authorize the lower tier.
+
+After the task chat applies the authorized title/fence change and the flow-manager
+re-pulls it as a new immutable revision, the full tier gate remains red until a
+newer architect final-lens capture emits `tier-demotion-revalidation/v1` for that
+exact candidate and same event, with the original before/after tiers and current
+L4 result. Acceptance and final verification always run the full tier gate on the
+current anchor. A crash between re-pull and revalidation therefore leaves the
+current candidate rejected; no pending-state record, journal, lease, or state
+machine is added. Same-event revalidation may repeat after same-tier fixes without
+consuming another demotion. Any later up-escalation is allowed and required, but
+closes event reuse; a later downstep is a forbidden second demotion.
+
+A below-T3 candidate also requires current `clear` L4 evidence. Any live
+unsuppressed marker remains dominant and cannot be suppressed by intake, demotion,
+or revalidation evidence; #781 receipts remain the only existing marker
+suppression mechanism. Missing, stale, ambiguous, conflicting, partial, or
+wrong-stage/role evidence fails closed. Same-user fabrication remains the explicit
+CX973-1 residual trust risk: these records provide mechanical auditability and
+consistency, not unforgeable identity authentication, and #973 adds no signer,
+remote attestation, protected store, database, or dynamic registry.
+
+For a frozen-list compatibility demotion, the architect may import only a
+pre-#973 downstep already proven by immutable before/after revisions plus existing
+architect final-lens evidence and a mechanically reconstructable source driver set.
+It consumes the same sole lifecycle demotion and cannot authorize a new downstep.
+The production compatibility set and qualifying historical-demotion population are
+both empty at #973 cutover, so this path is dormant outside explicit test fixtures.
 
 ### Per-tier pipeline (ceilings, not quotas)
 
@@ -439,6 +521,12 @@ episode relenses reuse the post-adoption M5 anchor but inspect the latest body a
 M4 inventory. Issue #973 remains the owner of demotion records and marker
 applicability.
 
+When that lens authorizes a #973 downgrade, ordering is strict: source-revision
+demotion event → task-chat Issue edit → immutable re-pull → expected full-gate
+rejection → architect current-candidate revalidation → full-gate success → the
+required fresh final architectural pass. Revalidation references the stable
+original event and is not a second demotion.
+
 Any Issue content change after a final lens invalidates that lens for acceptance.
 After a lens-directed fix or a later final-verification finding changes the Issue,
 the flow-manager re-pulls the author revision and the final architect lens runs
@@ -449,5 +537,5 @@ requires the newer final lens before another final verification.
 If a low/contained-stakes artifact exits adversarial review with approximately
 100% of findings `addressed`, record that as a **proportionality smell** in the
 same lens capture and re-examine whether review-added machinery is actually the
-cheapest sufficient design. The smell is not an automatic failure or evidence of
-thoroughness; it prompts a fresh check for correct-but-disproportionate machinery.
+cheapest sufficient design. The smell is neither an automatic failure nor evidence
+of thoroughness; it prompts a fresh check for correct-but-disproportionate machinery.
