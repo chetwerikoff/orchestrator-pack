@@ -7,6 +7,8 @@ import { AC_MUTATION_CONTROLS, type AcceptanceId } from './contracts.ts';
 
 type ProcessResult = Awaited<ReturnType<typeof runProcess>>;
 
+const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
+
 function parseAc(argv: string[]): AcceptanceId | null {
   const index = argv.indexOf('--ac');
   if (index < 0) return null;
@@ -35,20 +37,18 @@ function runMutation(runner: string, ac: AcceptanceId | null): Promise<ProcessRe
   });
 }
 
-function pr2aLandedOnBase(): boolean {
-  const baseName = String(process.env.GITHUB_BASE_REF ?? '').trim() || 'main';
-  const baseRef = `origin/${baseName}`;
-  const baseExists = runProcessSync({
+function pr2aLandedOnHead(): boolean {
+  const landingExists = runProcessSync({
     command: 'git',
-    args: ['cat-file', '-e', `${baseRef}^{commit}`],
+    args: ['cat-file', '-e', `${PR2A_LANDING_COMMIT}^{commit}`],
     cwd: resolve('.'),
     inheritParentEnv: true,
   });
-  if (!baseExists.ok) return false;
+  if (!landingExists.ok) return false;
 
   return runProcessSync({
     command: 'git',
-    args: ['cat-file', '-e', `${baseRef}:scripts/pr2a/final-conformance.ts`],
+    args: ['merge-base', '--is-ancestor', PR2A_LANDING_COMMIT, 'HEAD'],
     cwd: resolve('.'),
     inheritParentEnv: true,
   }).ok;
@@ -87,14 +87,14 @@ async function main(): Promise<void> {
   const ac = parseAc(process.argv.slice(2));
   const pr2aRunner = resolve('scripts/pr2a/mutation-runner.ts');
   const hasPr2aRunner = existsSync(pr2aRunner);
-  const pr2aLanded = hasPr2aRunner && pr2aLandedOnBase();
+  const pr2aLanded = hasPr2aRunner && pr2aLandedOnHead();
   const usePr2aRunner = hasPr2aRunner && (!ac || ac !== 'AC9');
 
   if (usePr2aRunner && pr2aLanded) {
     // #948's red/green mutation evidence is bound to its reviewed final tree. Once the
-    // PR2a conformance authority is already present on the target base, replaying that
-    // frozen plan against an unrelated downstream PR would turn the historical receipt
-    // into a permanent inventory snapshot. Keep the stable externally-grounded marker
+    // landed PR2a boundary is an ancestor of the checked HEAD, replaying that frozen
+    // plan against an unrelated downstream PR would turn the historical receipt into
+    // a permanent inventory snapshot. Keep the stable externally-grounded marker
     // consumed by the heavy-lane command contract.
     process.stdout.write(`${JSON.stringify({
       mutationRunner: {
