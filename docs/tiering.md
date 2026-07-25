@@ -239,7 +239,9 @@ The existing review contract, including the four-question lens in
 not be simplified / is excess / is missing. Reviewer-originated simplification
 findings flow through the normal ledger and author disposition path under the
 active protected contract. An ordinary author fix before the final lens is not an
-independent aggregate lens decision.
+independent aggregate lens decision. Simplification and excess judgments still
+weigh every major mechanism against the artifact's stated stakes, its cost and
+risk, and the cheapest sufficient alternative — not against ceremony tier alone.
 
 ### Final architect lens and tier movement
 
@@ -251,6 +253,11 @@ screen still requires the higher tier. Every intake, mid-flight, and post-fix
 recomputation outside this lens belongs to the flow-manager and remains monotonic
 upward/fail-up; accepted findings that grow scope can only preserve or raise the
 tier.
+
+For T3, preserve the existing ledger invariant before mechanism verdicts: audit
+the ledger's **reject partition** (re-judge rejects; do **not** reopen accepts).
+That audit is separate from ordinary author disposition and remains subject to the
+active protected-finding contract.
 
 The final lens has four mandatory goals, in this exact order:
 
