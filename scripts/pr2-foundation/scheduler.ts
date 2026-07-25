@@ -150,7 +150,7 @@ function normalizeAoRows(payload: unknown, projectId: string): Session[] {
   const rows = Array.isArray(object.data) ? object.data : Array.isArray(object.sessions) ? object.sessions : [];
   return rows
     .filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value)))
-    .map((row) => {
+    .map((row): Session => {
       const id = sessionId(row);
       const project = text(row.projectId ?? row.project);
       return { ...row, id, name: text(row.name) || id, sessionId: text(row.sessionId) || id, projectId: project || projectId };
