@@ -1,65 +1,168 @@
 # Vitest Runtime-History Protected-Branch Delivery
 
-Issue `#731` keeps the existing Issue `#691` producer unchanged up to the local
-commit point, then replaces the blocked `git push origin HEAD:main` hop with a
-dedicated branch PR path.
+Issue `#990` extends the protected delivery path introduced by `#731` without
+changing the measured runtime-history producer from `#691`. The generated
+delivery class is intentionally narrow:
 
-## Delivery model
+- repository: `chetwerikoff/orchestrator-pack`;
+- base: `main`;
+- head: `ci/vitest-runtime-history-refresh` in the same repository;
+- changed path: `scripts/vitest-runtime-history.json` only;
+- privileged actor: the login behind `VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN`;
+- merge owner: `.github/workflows/vitest-runtime-history-delivery.yml` on
+  `pull_request_target`.
 
-- Producer workflow: `.github/workflows/vitest-runtime-history-refresh.yml`
-- Delivery branch: `ci/vitest-runtime-history-refresh`
-- Allowed delivery diff: `scripts/vitest-runtime-history.json` only
-- Trusted delivery owner: `.github/workflows/vitest-runtime-history-delivery.yml`
-  on `pull_request_target`
+Ordinary contributor and worker PRs do not enter this path and retain the normal
+PACK_REVIEWER contract.
 
-The refresh workflow writes the measured history update, validates that only the
-history file is staged, pushes the fixed delivery branch with a non-`GITHUB_TOKEN`
-credential, and opens or updates one PR. The trusted delivery workflow runs from
-the base-branch definition, validates the PR file list through GitHub API, waits
-for the required checks named in the committed snapshot, and merges only when
-they pass. Because the merge owner runs on `pull_request_target`, it also requires
-`github.event.pull_request.head.repo.full_name == github.repository` before it
-exposes the delivery credential or attempts a merge, so a fork cannot reuse the
-fixed branch name to enter the privileged path. It then resolves the login behind
-`VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN` and requires
-`github.event.sender.login` to match that trusted actor before the privileged
-merge path continues, so same-repo writers cannot reuse the fixed branch name as
-a broader bypass.
+## Exact refresh provenance
 
-When the fixed delivery branch already exists, the refresh workflow fetches that
-branch first, reconciles its pending `vitest-runtime-history.json` into the newly
-measured artifact, amends the prepared delivery commit if the merged history
-changes, and only then pushes with an explicit `--force-with-lease` bound to the
-fetched branch tip. That preserves pending measurements from an earlier still-open
-delivery PR instead of overwriting them with a stale-base recomputation from
-`main` alone. If reconciliation yields the same runtime-history payload already
-present on the pending delivery branch, the workflow skips the push so
-overlapping refreshes converge on one stable head instead of restarting required
-checks with a no-op commit reset. It still rewrites the delivery PR body and
-runs the `upsert-pr` helper on retries, so a prior crash after the branch push
-cannot leave an unadopted fixed branch behind.
+A data-changing refresh publishes repository-owned commit statuses on the exact
+pushed delivery head under context:
 
-## Why this path
+`orchestrator-pack/runtime-history-provenance`
 
-- `main` rejects direct pushes with required status checks (`GH006`), so the old
-  retry loop could only heal stale-base races, not protected-branch policy.
-- Native GitHub auto-merge is disabled in this repo (`allowAutoMerge: false` in
-  the committed snapshot), so the trusted PR workflow owns the merge/fail outcome.
-- The trust boundary stays at the actor credential, not a branch-protection bypass.
-  Ordinary contributor PR policy remains unchanged.
+The fixed description binds the GitHub Actions run, run attempt, and source
+`main` SHA:
 
-## Operator adoption
+```text
+runtime-history-provenance run=<run-id> attempt=<attempt> source=<40-hex-main-sha>
+```
 
-After merge:
+The refresh posts `pending` immediately after the lease-protected branch push,
+then posts `success` after the generated PR has been opened or updated. The
+delivery monitor verifies the matching Actions run through the canonical refresh
+workflow path, repository, run id/attempt, source `main` SHA, and successful
+terminal conclusion. The source `main` SHA is provenance/audit data only; it is
+not an ancestor/equality merge gate.
 
-1. Create or rotate `VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN` as a repo or org
-   secret for `chetwerikoff/orchestrator-pack`.
-2. Scope the credential to this repository with permission to push the dedicated
-   delivery branch and open/update/merge pull requests.
-3. Do not add a branch-protection bypass entry for this flow. The intended path is
-   the ordinary PR gate plus the trusted `pull_request_target` delivery workflow.
-4. Verify the two required checks named in
-   `docs/vitest-runtime-history-delivery-branch-protection.snapshot.json` still
-   match live `main` protection; refresh the snapshot in a follow-up PR if they drift.
-5. Confirm one end-to-end run creates or updates the fixed delivery PR and that
-   the trusted delivery workflow merges it after the required checks pass.
+Missing, malformed, ambiguous, mismatched, or unsuccessful provenance fails
+closed as `provenance-invalid`. The monitor gives the branch-push/status-publication
+self-race one bounded poll before treating still-missing provenance as invalid. If
+the PR head no longer equals the exact generated head (for example the empty-commit
+recurrence from PR `#995`), the current head exits the unattended class immediately
+as `non-generated-head`. The monitor neither blesses nor repairs that head. A later
+successful refresh may re-enter the class with a newly bound generated head.
+
+## Live `main` policy, not the historical snapshot
+
+`docs/vitest-runtime-history-delivery-branch-protection.snapshot.json` remains a
+historical audit artifact. It is no longer merge-readiness authority and is not
+refreshed by this path.
+
+At each decision boundary the monitor reads the current required-status-check
+policy GitHub enforces for `main`, then evaluates current checks for the exact PR
+head. A required context that appeared after the snapshot therefore blocks
+merge until it is genuinely satisfied. Unavailable, malformed, ambiguous, or
+unsupported policy fails closed.
+
+The GitHub wrapper expansion is deliberately limited to three read shapes used
+by this delivery contract:
+
+1. current `main` required-status policy;
+2. one exact refresh Actions run;
+3. complete commit-status history for the exact delivery head.
+
+The existing `pr checks` route remains the current-state source. The exact-head
+status-history route exists only for same-context precedence and paginates until
+completion; there is no generic Actions, reviewer-history, ruleset, or arbitrary
+API subsystem.
+
+## Repository-owned pack-review machine admission
+
+If current `main` protection requires `orchestrator-pack/pack-review`, the
+generated delivery path may satisfy it with one repository-owned machine status
+only after identity, exact successful provenance, one-file scope, clean current
+PR state, and every other current required CI context are proven.
+
+The machine status is:
+
+```text
+context: orchestrator-pack/pack-review
+state: success
+description: runtime-history-machine-admission
+```
+
+This does **not** mean PACK_REVIEWER ran and it does not fabricate a review.
+PACK_REVIEWER remains operator/out-of-band for this generated path. The
+delivery workflow does not invoke it. Machine admission is emitted with the
+workflow's repository-scoped `GITHUB_TOKEN`; the existing delivery credential
+continues to own PR and merge operations.
+
+## Race-safe operator precedence
+
+GitHub's combined/current status view can hide an older record when another
+writer posts the same context. Therefore the monitor independently projects the
+complete exact-head history for `orchestrator-pack/pack-review`.
+
+Records carrying `runtime-history-machine-admission` are machine records. Every
+other record in the context is out-of-band/operator state. The latest
+out-of-band record wins:
+
+- `success`: the operator already satisfied pack-review; no machine write;
+- `pending`: wait and do not publish or merge;
+- `failure` / `error`: `operator-veto-observed`; do not publish or merge;
+- no out-of-band record: machine admission may publish one success after all
+  other gates pass.
+
+When machine admission is needed, the monitor reads precedence, publishes one
+machine success, immediately re-reads the complete history, and re-derives the
+out-of-band projection. Thus a concurrent operator failure/error/pending cannot
+be erased logically by the machine's later same-context success. An ambiguous
+or incomplete history fails closed as `status-history-unprovable`.
+
+Immediately before merge, the monitor again reads the PR/head, file list,
+provenance/run, current policy, current `pr checks`, and complete exact-head
+status history. There is no machine status write after this final history read.
+
+## Expected-head merge and read-back
+
+The existing squash merge remains expected-head protected:
+
+```text
+PUT pulls/<pr>/merge
+merge_method=squash
+sha=<exact-generated-head>
+```
+
+No second merge actuator or bypass exists. If GitHub rejects the merge, the
+monitor re-reads the mutable proofs rather than blindly retrying stale evidence.
+
+After a successful merge mutation, the monitor reads the PR again and confirms
+that the expected PR is merged into `main`. Squash semantics do not require the
+resulting `main` SHA to equal the delivery-head SHA.
+
+Conflicted/unmergeable generated PRs retain the `#757` close-as-obsolete
+behavior.
+
+## Permissions and credentials
+
+- The refresh job adds only `statuses: write` to its existing `contents: write`
+  permission so `GITHUB_TOKEN` can emit the provenance statuses.
+- The trusted delivery workflow adds `statuses: write` for the generated
+  machine-admission status and keeps `VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN` for
+  the existing privileged PR/merge path.
+- There is no new standing credential or branch-protection bypass.
+- The runtime-history artifact and the historical branch-protection snapshot are
+  never hand-edited by this change.
+
+## Rollout verification
+
+After the implementation lands, observe the first fresh **data-changing**
+runtime-history refresh. Record:
+
+- refresh run id and attempt;
+- source `main` SHA;
+- generated delivery head and PR;
+- provenance pending/success binding;
+- current required contexts;
+- machine-admission result when pack-review is required;
+- exact-head out-of-band status projection;
+- expected-head merge result;
+- authoritative merged-PR read-back.
+
+From generated PR creation through merge/read-back, no operator PACK_REVIEWER
+invocation, empty retrigger commit, merge command, snapshot refresh, or manual
+retry is part of the successful unattended episode. A no-diff refresh is valid
+producer behavior but does not satisfy this rollout observation because it
+creates no delivery PR.
