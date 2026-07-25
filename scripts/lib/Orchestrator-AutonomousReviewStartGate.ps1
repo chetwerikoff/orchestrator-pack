@@ -40,10 +40,10 @@ function Invoke-OrchestratorClaimedReviewRunFilterCli {
 }
 
 function Test-AtomicReviewStartClaimCapabilityPresent {
-    $helper = Join-Path $PSScriptRoot 'Review-StartClaim.ps1'
+    $helper = Join-Path $PSScriptRoot 'review-start-claim-store.ts'
     if (-not (Test-Path -LiteralPath $helper)) { return $false }
     $text = Get-Content -LiteralPath $helper -Raw
-    return $text -match 'Write-ReviewStartClaimAtomic' -and $text -match 'Enter-ReviewStartClaimMutex'
+    return $text -match 'atomicWriteJson' -and $text -match 'enterMutex' -and $text -match 'sameGeneration'
 }
 
 function Test-AutonomousRawReviewRunDenied {

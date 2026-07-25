@@ -29,7 +29,7 @@ else {
     . (Join-Path $PSScriptRoot 'lib/TestMode-FleetLease.ps1')
     . (Join-Path $PSScriptRoot 'lib/Orchestrator-ProcessAlive.ps1')
     . (Join-Path $PSScriptRoot 'lib/Get-ProcessCommandLine.ps1')
-    . (Join-Path $PSScriptRoot 'lib/Orchestrator-SideProcessSupervisor.ps1')
+    . (Join-Path $PSScriptRoot 'lib/Orchestrator-WakeSupervisor.ps1')
     . (Join-Path $PSScriptRoot 'lib/Invoke-TestModeFleetReaper.ps1')
 }
 
