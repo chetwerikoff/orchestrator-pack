@@ -121,46 +121,43 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
             }
 
             if ($violations.Count -eq 0) {
-                $conformanceOutput = @(& $node.Source --no-warnings --experimental-strip-types $conformancePath --ref HEAD --json 2>&1 | ForEach-Object { [string]$_ })
-                $conformanceExit = $LASTEXITCODE
-                if ($conformanceExit -ne 0) {
-                    $remainingFindings = $null
-                    if ($postLanding) {
-                        try {
-                            $report = ($conformanceOutput -join [Environment]::NewLine) | ConvertFrom-Json
-                            $oneTimeCodes = @(
-                                'planned_operation_missing_or_changed',
-                                'unreviewed_final_tree_operation',
-                                'path_outside_allowed_roots',
-                                'denylisted_path_changed',
-                                'new_powershell_logic_added',
-                                'non_regular_final_tree_mode'
-                            )
-                            $remainingFindings = @($report.findings | Where-Object { $oneTimeCodes -notcontains [string]$_.code })
-                        }
-                        catch {
-                            $remainingFindings = $null
-                        }
-                    }
-
-                    if ($postLanding -and $null -ne $remainingFindings -and $remainingFindings.Count -eq 0) {
-                        Write-Host '[PASS] Issue #948 post-landing conformance: frozen PR2a operation-set findings ignored; enduring invariants remain green'
+                if ($postLanding) {
+                    $filterScript = @'
+import { buildConformanceReport } from './scripts/pr2a/final-conformance.ts';
+const oneTimeCodes = new Set([
+  'planned_operation_missing_or_changed',
+  'unreviewed_final_tree_operation',
+  'path_outside_allowed_roots',
+  'denylisted_path_changed',
+  'new_powershell_logic_added',
+  'non_regular_final_tree_mode',
+]);
+const report = buildConformanceReport('HEAD');
+const remaining = report.findings.filter((finding) => !oneTimeCodes.has(finding.code));
+if (remaining.length > 0) {
+  process.stderr.write(`${JSON.stringify(remaining)}\n`);
+  process.exitCode = 1;
+} else {
+  process.stdout.write('[PASS] Issue #948 post-landing conformance: frozen PR2a operation-set findings ignored; enduring invariants remain green\n');
+}
+'@
+                    $conformanceOutput = @(& $node.Source --no-warnings --experimental-strip-types --input-type=module -e $filterScript 2>&1 | ForEach-Object { [string]$_ })
+                }
+                else {
+                    $conformanceOutput = @(& $node.Source --no-warnings --experimental-strip-types $conformancePath --ref HEAD --json 2>&1 | ForEach-Object { [string]$_ })
+                }
+                if ($LASTEXITCODE -ne 0) {
+                    $detail = ($conformanceOutput -join ' ').Trim()
+                    if ($detail.Length -gt 1800) { $detail = $detail.Substring(0, 1800) + '...[truncated]' }
+                    if ($detail) {
+                        $violations += "Issue #948 final conformance rejected the current HEAD: $detail"
                     }
                     else {
-                        $detail = if ($postLanding -and $null -ne $remainingFindings) {
-                            ($remainingFindings | ConvertTo-Json -Depth 6 -Compress)
-                        }
-                        else {
-                            ($conformanceOutput -join ' ').Trim()
-                        }
-                        if ($detail.Length -gt 1800) { $detail = $detail.Substring(0, 1800) + '...[truncated]' }
-                        if ($detail) {
-                            $violations += "Issue #948 final conformance rejected the current HEAD: $detail"
-                        }
-                        else {
-                            $violations += 'Issue #948 final conformance rejected the current HEAD'
-                        }
+                        $violations += 'Issue #948 final conformance rejected the current HEAD'
                     }
+                }
+                elseif ($conformanceOutput.Count -gt 0) {
+                    $conformanceOutput | ForEach-Object { Write-Host $_ }
                 }
             }
         }
