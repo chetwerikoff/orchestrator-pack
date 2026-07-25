@@ -75,6 +75,7 @@ foreach ($rel in ($textByRel.Keys | Sort-Object)) {
 }
 
 $conformancePath = Join-Path $RepoRoot 'scripts/pr2a/final-conformance.ts'
+$planningPath = Join-Path $RepoRoot 'scripts/pr2a/planning-manifest.json'
 $gitDir = Join-Path $RepoRoot '.git'
 if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathType Leaf) -and (Test-Path -LiteralPath $gitDir)) {
     $node = Get-Command node -ErrorAction SilentlyContinue
@@ -103,7 +104,25 @@ if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathT
                     }
                 }
             }
-            if ($violations.Count -eq 0) {
+            $runFinalConformance = $violations.Count -eq 0
+            if ($runFinalConformance -and $env:GITHUB_BASE_REF -and (Test-Path -LiteralPath $planningPath -PathType Leaf)) {
+                $planningBarrier = (& $git.Source -C $RepoRoot log -1 --format=%H HEAD -- 'scripts/pr2a/planning-manifest.json' 2>$null | Out-String).Trim()
+                $baseRef = "origin/$($env:GITHUB_BASE_REF)"
+                & $git.Source -C $RepoRoot cat-file -e "$baseRef^{commit}" 2>$null
+                if ($LASTEXITCODE -eq 0 -and $planningBarrier) {
+                    & $git.Source -C $RepoRoot merge-base --is-ancestor $planningBarrier $baseRef 2>$null
+                    if ($LASTEXITCODE -eq 0) {
+                        # PR 2a's frozen final-tree operation set is already on the base. Its receipt is
+                        # a tree-bound precedent, not a permanent snapshot for unrelated downstream PRs.
+                        $runFinalConformance = $false
+                    }
+                    elseif ($LASTEXITCODE -ne 1) {
+                        $violations += 'Issue #948 final conformance could not classify the planning barrier against the PR base'
+                        $runFinalConformance = $false
+                    }
+                }
+            }
+            if ($runFinalConformance -and $violations.Count -eq 0) {
                 $conformanceOutput = @(& $node.Source --experimental-strip-types $conformancePath --ref HEAD 2>&1 | ForEach-Object { [string]$_ })
                 if ($LASTEXITCODE -ne 0) {
                     $detail = ($conformanceOutput -join ' ').Trim()
