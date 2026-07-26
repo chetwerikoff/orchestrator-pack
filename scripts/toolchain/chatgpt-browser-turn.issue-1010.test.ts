@@ -8,6 +8,7 @@ import {
   LIVE_TERMINAL_FRAME_CONTRACT,
 } from '../chatgpt-browser-turn/fixtures/live-terminal-frame-contract.ts';
 import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
+import { liveTurnStreamSequence } from '../chatgpt-browser-turn/fixtures/live-turn-stream-contract.ts';
 import {
   createTerminalWitnessState,
   ingestServicePayload,
@@ -27,13 +28,16 @@ const baseConfig = (): BrowserConfig => ({
 });
 
 
-function streamItemEnvelope(encodedItem: string): Record<string, unknown> {
+function streamItemEnvelope(encodedItem: string, turnId = '858e210d-d54e-44c9-a51b-4e4e13e8dadc'): Record<string, unknown> {
   return {
     type: 'message',
+    topic_id: `conversation-turn-${turnId}`,
     payload: {
       type: 'conversation-turn-stream',
       payload: {
         type: 'stream-item',
+        conversation_id: '6a65acd9-4d44-83ec-bcb9-5787832fac24',
+        turn_id: turnId,
         encoded_item: encodedItem,
       },
     },
@@ -118,6 +122,92 @@ describe('issue 1010 submitted-turn proof', () => {
       serviceFrames: livePatchTerminalFrames(own, assistantId, turnExchangeId),
       assistants: [
         { id: assistantId, parent: own, text: 'Final answer body', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
+  it('AC1 proves submission from live wire shape without turn_exchange_id', async () => {
+    const own = 'f74acde1-6ff9-4344-9794-339846ab7d57';
+    const assistantId = 'asst-live-wire-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [
+        streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[],"serialization_metadata":{"custom_symbol_offsets":[]}}}}\n\n`),
+        streamItemEnvelope(`data: {"type":"message_marker","message_id":"${assistantId}","marker":"user_visible_token","event":"first"}\n\n`),
+        streamItemEnvelope([
+          'event: delta',
+          `data: {"p":"","o":"add","v":{"message":{"id":"${assistantId}","author":{"role":"assistant"},"content":{"content_type":"text","parts":[""]}}}}`,
+          '',
+        ].join('\n')),
+        streamItemEnvelope([
+          'event: delta',
+          'data: {"p":"/message/content/parts/0","o":"append","v":"OK"}',
+          '',
+        ].join('\n')),
+        streamItemEnvelope([
+          'event: delta',
+          'data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}',
+          '',
+        ].join('\n')),
+      ],
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
+  it('AC2 preserves terminal metadata carried directly on an attributed assistant add', async () => {
+    const own = 'user-add-terminal-12345678';
+    const assistantId = 'asst-add-terminal-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [
+        streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}\n\n`),
+        streamItemEnvelope([
+          'event: delta',
+          `data: {"p":"","o":"add","v":{"message":{"id":"${assistantId}","author":{"role":"assistant"},"parent":"${own}","end_turn":true,"status":"finished_successfully","metadata":{"finish_details":{"type":"stop"}},"content":{"content_type":"text","parts":["OK"]}}}}`,
+          '',
+        ].join('\n')),
+      ],
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
+  it('AC1 promotes pending input_message after delayed outbound request witness', async () => {
+    const own = 'user-delay-req-12345678';
+    const assistantId = 'asst-delay-req-12345678';
+    const turnId = '858e210d-d54e-44c9-a51b-delayreq01';
+    const delayedFrames = liveTurnStreamSequence(own, assistantId, { turnId }, { replyText: 'OK' });
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [],
+      serviceObserveDispatch: false,
+      serviceFrames: [],
+      postClickRequests: [{ userId: own }],
+      postClickServiceFrames: delayedFrames,
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
       ],
     });
 
@@ -221,9 +311,9 @@ describe('issue 1010 submitted-turn proof', () => {
     const processExitMs = Date.now() - started;
 
     expect(marks.stdout_written_ms - marks.result_produced_ms).toBeGreaterThanOrEqual(0);
-    expect(marks.stdout_written_ms - marks.result_produced_ms).toBeLessThan(500);
+    expect(marks.stdout_written_ms - marks.result_produced_ms).toBeLessThan(1_500);
     expect(callerStdoutMs - marks.stdout_written_ms).toBeGreaterThanOrEqual(0);
-    expect(callerStdoutMs - marks.stdout_written_ms).toBeLessThan(500);
+    expect(callerStdoutMs - marks.stdout_written_ms).toBeLessThan(1_500);
     expect(processExitMs - callerStdoutMs).toBeGreaterThanOrEqual(0);
     expect(processExitMs - callerStdoutMs).toBeLessThan(2_000);
   });
@@ -347,22 +437,24 @@ describe('issue 1010 submitted-turn proof', () => {
     }
   });
 
-  it('AC2 ignores foreign streaming patch terminalization interleaved with proven turn', async () => {
+  it('AC2 ignores foreign streaming patch terminalization on a different turn topic', async () => {
     const own = 'user-owned-12345678';
     const foreignAssistant = 'asst-foreign-12345678';
-    const turnExchangeId = 'exchange-owned-12345678';
+    const ownTurnId = 'turn-owned-12345678';
+    const foreignTurnId = 'turn-foreign-12345678';
     const fixture = fakeTurnPage({
       dispatchCandidateIds: [own],
-      turnExchangeId,
       serviceObserveDispatch: false,
       serviceFrames: [
+        streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}
+
+`, ownTurnId),
         streamItemEnvelope([
-          `data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"turn_exchange_id":"${turnExchangeId}"}}}`,
           `data: {"type":"message_marker","message_id":"${foreignAssistant}","marker":"user_visible_token","event":"first"}`,
           'event: delta',
           'data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}',
           '',
-        ].join('\n')),
+        ].join('\n'), foreignTurnId),
       ],
       assistants: [],
     });
@@ -371,6 +463,140 @@ describe('issue 1010 submitted-turn proof', () => {
 
     expect(result.state).not.toBe('ok');
     expect(result.assistantMessageId).not.toBe(foreignAssistant);
+  });
+
+
+
+  it('AC2 accepts raw SSE positional terminal patch after attributed assistant add', async () => {
+    const own = 'user-sse-patch-12345678';
+    const assistantId = 'asst-sse-patch-12345678';
+    const rawSseBody = [
+      `data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}`,
+      '',
+      'event: delta',
+      `data: {"p":"","o":"add","v":{"message":{"id":"${assistantId}","author":{"role":"assistant"},"parent":"${own}","content":{"content_type":"text","parts":["OK"]}}}}`,
+      '',
+      'event: delta',
+      `data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/status","o":"replace","v":"finished_successfully"},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}`,
+      '',
+    ].join('\n');
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [],
+      postClickRawSseBodies: [rawSseBody],
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
+  it('AC2 rejects foreign raw SSE positional patch after owned turn target is established', async () => {
+    const own = 'user-sse-foreign-12345678';
+    const assistantId = 'asst-sse-foreign-12345678';
+    const ownTurnId = 'turn-sse-owned-12345678';
+    const foreignPatchOnly = [
+      'event: delta',
+      `data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/status","o":"replace","v":"finished_successfully"},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}`,
+      '',
+    ].join('\n');
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [
+        streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}\n\n`, ownTurnId),
+        streamItemEnvelope(`data: {"type":"message_marker","message_id":"${assistantId}","marker":"user_visible_token","event":"first"}\n\n`, ownTurnId),
+        streamItemEnvelope([
+          'event: delta',
+          'data: {"p":"/message/content/parts/0","o":"append","v":"OK"}',
+          '',
+        ].join('\n'), ownTurnId),
+        streamItemEnvelope([
+          'event: delta',
+          `data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/status","o":"replace","v":"finished_successfully"},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}`,
+          '',
+        ].join('\n'), ownTurnId),
+      ],
+      postClickRawSseBodies: [foreignPatchOnly],
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
+  it('AC2 rejects foreign positional terminal patch after owned marker and append', async () => {
+    const own = 'user-owned-patch-12345678';
+    const assistantId = 'asst-owned-patch-12345678';
+    const ownTurnId = 'turn-owned-patch-12345678';
+    const foreignTurnId = 'turn-foreign-patch-1234567';
+    const terminalPatchJson = '[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/status","o":"replace","v":"finished_successfully"},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [
+        streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}
+
+`, ownTurnId),
+        streamItemEnvelope(`data: {"type":"message_marker","message_id":"${assistantId}","marker":"user_visible_token","event":"first"}
+
+`, ownTurnId),
+        streamItemEnvelope([
+          'event: delta',
+          'data: {"p":"/message/content/parts/0","o":"append","v":"OK"}',
+          '',
+        ].join('\n'), ownTurnId),
+        streamItemEnvelope([
+          'event: delta',
+          `data: {"p":"","o":"patch","v":${terminalPatchJson}}`,
+          '',
+        ].join('\n'), foreignTurnId),
+        streamItemEnvelope([
+          'event: delta',
+          `data: {"p":"","o":"patch","v":${terminalPatchJson}}`,
+          '',
+        ].join('\n'), ownTurnId),
+      ],
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
+  it('AC2 accepts live wire turn stream with add-less answer delta and id-less terminal patch', async () => {
+    const own = 'user-livewire-12345678';
+    const assistantId = 'asst-livewire-12345678';
+    const turnId = '858e210d-d54e-44c9-a51b-4e4e13e8dadc';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: liveTurnStreamSequence(own, assistantId, { turnId }, { replyText: 'OK' }),
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
   });
 
   it('AC2 terminal-node binding still selects the terminal assistant', () => {

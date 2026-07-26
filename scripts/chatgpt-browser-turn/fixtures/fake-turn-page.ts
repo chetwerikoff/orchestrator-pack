@@ -31,9 +31,10 @@ export interface FakeTurnPageOptions {
   readonly composer?: boolean;
   readonly serviceObserveDispatch?: boolean;
   readonly preDispatchServiceFrames?: readonly Record<string, unknown>[];
-  readonly preClickRequests?: readonly { readonly turnExchangeId: string; readonly userId?: string }[];
-  readonly postClickRequests?: readonly { readonly turnExchangeId: string; readonly userId?: string }[];
+  readonly preClickRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
+  readonly postClickRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
   readonly postClickServiceFrames?: readonly Record<string, unknown>[];
+  readonly postClickRawSseBodies?: readonly string[];
   readonly turnExchangeId?: string;
 }
 
@@ -157,9 +158,9 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
       sent = true;
       for (const req of options.preClickRequests ?? []) {
         await emit('request', {
-          url: () => 'https://chatgpt.com/backend-api/conversation',
+          url: () => 'https://chatgpt.com/backend-api/f/conversation',
           postData: () => JSON.stringify({
-            metadata: { turn_exchange_id: req.turnExchangeId },
+            ...(req.turnExchangeId ? { metadata: { turn_exchange_id: req.turnExchangeId } } : {}),
             messages: [{
               ...(req.userId ? { id: req.userId } : {}),
               author: { role: 'user' },
@@ -176,7 +177,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
       }
       for (const id of dispatchIds) {
         await emit('request', {
-          url: () => 'https://chatgpt.com/backend-api/conversation',
+          url: () => 'https://chatgpt.com/backend-api/f/conversation',
           postData: () => JSON.stringify({
             messages: [{
               id,
@@ -210,6 +211,12 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
           : []);
       if (options.preDispatchServiceFrames?.length) await emitServiceFrames(options.preDispatchServiceFrames);
       if (frames.length > 0) await emitServiceFrames(frames);
+      for (const body of options.postClickRawSseBodies ?? []) {
+        await emit('response', {
+          url: () => 'https://chatgpt.com/backend-api/conversation',
+          text: async () => body,
+        });
+      }
     },
   };
 
@@ -229,9 +236,9 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     postClickServiceEmitted = true;
     for (const req of options.postClickRequests ?? []) {
       await emit('request', {
-        url: () => 'https://chatgpt.com/backend-api/conversation',
+        url: () => 'https://chatgpt.com/backend-api/f/conversation',
         postData: () => JSON.stringify({
-          metadata: { turn_exchange_id: req.turnExchangeId },
+          ...(req.turnExchangeId ? { metadata: { turn_exchange_id: req.turnExchangeId } } : {}),
           messages: [{
             ...(req.userId ? { id: req.userId } : {}),
             author: { role: 'user' },
@@ -242,6 +249,12 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     }
     if (options.postClickServiceFrames?.length) {
       await emitServiceFrames(options.postClickServiceFrames);
+    }
+    for (const body of options.postClickRawSseBodies ?? []) {
+      await emit('response', {
+        url: () => 'https://chatgpt.com/backend-api/conversation',
+        text: async () => body,
+      });
     }
   };
   const applyContinueGrowth = () => {
