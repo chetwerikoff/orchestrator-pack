@@ -38,21 +38,31 @@ function appendIfMissing(pathName: string, epochId: string, step: string, detail
   appendFollowup(pathName, epochId, step, detail);
 }
 
+function readySupervisorStatus(request: ActivationRequest, nonce: string): { supervisorPid: number; childGeneration: number } | null {
+  const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
+  if (
+    status
+    && status.epochId === request.epochId
+    && status.nonce === nonce
+    && status.restartState === 'running'
+    && processAlive(status.supervisorPid)
+    && status.registryHash
+    && status.childPid !== null
+    && processAlive(status.childPid)
+    && status.childGeneration >= 1
+  ) {
+    return { supervisorPid: status.supervisorPid, childGeneration: status.childGeneration };
+  }
+  return null;
+}
+
 async function waitForSupervisor(request: ActivationRequest, nonce: string): Promise<{ supervisorPid: number; childGeneration: number }> {
   const deadline = Date.now() + 10_000;
   do {
     const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
-    if (
-      status
-      && status.epochId === request.epochId
-      && status.nonce === nonce
-      && processAlive(status.supervisorPid)
-      && status.registryHash
-      && status.childGeneration >= 1
-      && status.restartState !== 'refused'
-    ) {
-      return { supervisorPid: status.supervisorPid, childGeneration: status.childGeneration };
-    }
+    if (status?.restartState === 'refused') throw new Error(`recovery_supervisor_refused:${status.refusalReason ?? 'unknown'}`);
+    const ready = readySupervisorStatus(request, nonce);
+    if (ready) return ready;
     await new Promise((resolve) => setTimeout(resolve, 50));
   } while (Date.now() < deadline);
   throw new Error('recovery_supervisor_not_ready');
@@ -60,18 +70,8 @@ async function waitForSupervisor(request: ActivationRequest, nonce: string): Pro
 
 export const productionRecoveryBoundary: RecoveryBoundary = {
   ensureTypeScriptSupervisor: async (request, nonce) => {
-    const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
-    if (
-      status
-      && status.epochId === request.epochId
-      && status.nonce === nonce
-      && processAlive(status.supervisorPid)
-      && status.registryHash
-      && status.childGeneration >= 1
-      && status.restartState !== 'refused'
-    ) {
-      return { supervisorPid: status.supervisorPid, childGeneration: status.childGeneration };
-    }
+    const ready = readySupervisorStatus(request, nonce);
+    if (ready) return ready;
     const entry = path.join(request.repoRoot, 'scripts', 'orchestrator-wake-supervisor.ts');
     const result = await runProcess({
       command: process.execPath,
