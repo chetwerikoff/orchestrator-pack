@@ -1,0 +1,20 @@
+{
+  "issue_number": 1005,
+  "iteration_id": "orchestrator-pack-148",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-26T03:27:14.142Z",
+  "baseline": {
+    "commit_sha": "a140a57e78cca4ccf73e5254b77b0b2416e2d767",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:24010a246fddd0158aeef86310d706bfb22e460ada921e49d3aca6531757a066"
+  },
+  "declared_paths": [
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/toolchain/chatgpt-browser-turn.diagnostics.test.ts"
+  ],
+  "declared_globs": [
+    "scripts/chatgpt-browser-turn/**"
+  ],
+  "amendments": []
+}
