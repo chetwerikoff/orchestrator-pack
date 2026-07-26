@@ -10,6 +10,7 @@ export interface ProfileDirs {
   readonly tombstones: string;
   readonly resolved: string;
   readonly publications: string;
+  readonly diagnostics: string;
   readonly capability: string;
   readonly locks: string;
 }
@@ -56,6 +57,7 @@ export function profileDirs(profileKey: string): ProfileDirs {
     tombstones: join(root, 'tombstones'),
     resolved: join(root, 'resolved'),
     publications: join(root, 'publications'),
+    diagnostics: join(root, 'diagnostics'),
     capability: join(root, 'capability.json'),
     locks: join(root, 'locks'),
   };
@@ -66,6 +68,7 @@ export function profileDirs(profileKey: string): ProfileDirs {
     result.tombstones,
     result.resolved,
     result.publications,
+    result.diagnostics,
     result.locks,
   ]) {
     mkdirSync(path, { recursive: true, mode: 0o700 });
