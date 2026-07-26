@@ -1,13 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runProcess } from '../../kernel/subprocess.ts';
-import { FileEpochAuthority } from './activation-epoch-authority.ts';
+import { buildEpochCommitCore, FileEpochAuthority, mapCutoverStoreDigests } from './activation-epoch-authority.ts';
 import { fileDigestOrAbsent, processAlive, readCordon } from './activation-cordon.ts';
 import { appendFollowup, appendPhaseOne, finalizePhaseOne, verifyPhaseOneDigest } from './activation-evidence.ts';
 import { importSnapshot } from './activation-import.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
-import type { FollowupRecord, ActivationRequest, CutoverStoreId, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
+import type { FollowupRecord, ActivationRequest, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 
 export interface RecoveryBoundary {
@@ -168,15 +168,6 @@ function recoverySnapshots(request: ActivationRequest): SnapshotRecord[] {
   });
 }
 
-function mapDigests<T extends { storeId: CutoverStoreId }>(rows: T[], select: (row: T) => string): Record<CutoverStoreId, string> {
-  const output = {} as Record<CutoverStoreId, string>;
-  for (const row of rows) output[row.storeId] = select(row);
-  for (const id of ['reconcile', 'reevaluation', 'reportStateSeed'] as const) {
-    if (!output[id]) throw new Error(`store_digest_missing:${id}`);
-  }
-  return output;
-}
-
 function completePreCasRecovery(request: ActivationRequest, nonce: string, authority: FileEpochAuthority): EpochCommitCore {
   assertForwardRecoveryPrefix(request.paths.phaseOnePath, request.epochId, nonce);
   const snapshots = recoverySnapshots(request);
@@ -190,18 +181,17 @@ function completePreCasRecovery(request: ActivationRequest, nonce: string, autho
   const projection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
   ensurePhaseOneStep(request.paths.phaseOnePath, request.epochId, nonce, 'registry-projected', projection);
   const phaseOne = finalizePhaseOne(request.paths.phaseOnePath, request.epochId, nonce);
-  const core: EpochCommitCore = {
+  const core = buildEpochCommitCore({
     epochId: request.epochId,
     nonce,
     hostId: request.hostId,
     repoRoot: readCordon(request.paths.cordonPath).repoRoot,
     installedCommitSha: request.installedCommitSha,
-    snapshotDigests: mapDigests(snapshots, (row) => row.snapshotDigest),
-    importDigests: mapDigests(imports, (row) => row.importTargetDigest),
+    snapshotDigests: mapCutoverStoreDigests(snapshots, (row) => row.snapshotDigest),
+    importDigests: mapCutoverStoreDigests(imports, (row) => row.importTargetDigest),
     registryHash: projection.registryHash,
     preCommitLogDigest: phaseOne.digest,
-    commitAt: new Date().toISOString(),
-  };
+  });
   authority.commit(request.expectedOldEpochId, core);
   return authority.verify(request.epochId, nonce);
 }
