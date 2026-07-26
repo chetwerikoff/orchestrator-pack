@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { aggregateChecks, checkRunToContext } from '../lib/gh-pr-checks.mjs';
 import { classifyArgv } from '../lib/gh-inventory-match.mjs';
@@ -176,5 +177,17 @@ describe('Issue #1012 required GitHub App proof', () => {
     expect(canonical?.includeAppId).toBe(false);
     expect(appAware?.id).toBe('pr-checks');
     expect(appAware?.includeAppId).toBe(true);
+  });
+
+  it('does not persist GITHUB_TOKEN into delivery git authentication', () => {
+    const workflow = readFileSync(
+      new URL('../../.github/workflows/vitest-runtime-history-refresh.yml', import.meta.url),
+      'utf8',
+    );
+    const refreshJob = workflow.slice(workflow.indexOf('  refresh-runtime-history:'));
+    expect(refreshJob).toMatch(/uses: actions\/checkout@v4\n\s+with:\n\s+token: \$\{\{ secrets\.GITHUB_TOKEN \}\}\n\s+persist-credentials: false/);
+    expect(refreshJob).toContain('DELIVERY_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}');
+    expect(refreshJob).toContain('git remote set-url origin "https://x-access-token:${DELIVERY_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"');
+    expect(refreshJob).not.toContain('persist-credentials: true');
   });
 });
