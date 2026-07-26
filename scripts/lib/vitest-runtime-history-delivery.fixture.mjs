@@ -573,6 +573,11 @@ function testSourceContracts() {
 
   const refreshWorkflow = readFileSync(new URL('../../.github/workflows/vitest-runtime-history-refresh.yml', import.meta.url), 'utf8');
   assert(refreshWorkflow.includes(PROVENANCE_CONTEXT), 'refresh workflow must emit provenance');
+  assert(refreshWorkflow.includes('actions: read'), 'same-payload provenance recovery must be able to verify the bound Actions run');
+  assert(refreshWorkflow.includes('parseRefreshProvenance'), 'same-payload recovery must reuse the canonical provenance parser');
+  assert(refreshWorkflow.includes('verifyRefreshRun'), 'same-payload recovery must verify the prior refresh episode before reusing its head');
+  assert(refreshWorkflow.includes('matching remote payload lacks successful exact-head provenance; regenerating delivery head'), 'failed provenance must regenerate the generated head instead of deadlocking the PR');
+  assert(refreshWorkflow.includes('commit --amend --no-edit'), 'invalid-provenance recovery must be able to regenerate a distinct delivery head without an extra empty commit');
   assert(!refreshWorkflow.includes('PACK_REVIEWER'), 'refresh workflow must not invoke PACK_REVIEWER');
 
   const deliveryWorkflow = readFileSync(new URL('../../.github/workflows/vitest-runtime-history-delivery.yml', import.meta.url), 'utf8');
