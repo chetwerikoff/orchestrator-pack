@@ -9,6 +9,15 @@ import {
   serializeSemanticNodes,
   type SemanticNode,
 } from './semantic.ts';
+import {
+  createTerminalWitnessState,
+  ingestServicePayload,
+  ingestServicePayloadTree,
+  isMessageAttributedToUserTurn,
+  registerLegacyObservation,
+  resolveWholeTurnTerminal,
+  type TerminalWitnessState,
+} from './terminal-witness.ts';
 
 const require = createRequire(import.meta.url);
 
@@ -84,6 +93,7 @@ interface NetworkMessage extends CausalMessageObservation {
 interface NetworkWitnessState {
   readonly messages: NetworkMessage[];
   readonly dispatchCandidateIds: Set<string>;
+  readonly terminal: TerminalWitnessState;
   activeTurnUserId?: string;
   armDispatch(): void;
 }
@@ -152,6 +162,7 @@ function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: strin
     if (!line || line === '[DONE]') continue;
     try {
       const payload = JSON.parse(line) as Record<string, unknown>;
+      ingestServicePayload(state.terminal, payload);
       recursivelyCollectMessages(payload, state.messages);
       if (payload.type === 'input_message') {
         const input = payload.input_message as Record<string, unknown> | undefined;
@@ -181,6 +192,7 @@ function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: strin
 }
 
 function ingestWitnessJsonTree(state: NetworkWitnessState, value: unknown): void {
+  ingestServicePayloadTree(state.terminal, value);
   if (!value || typeof value !== 'object') return;
   if (Array.isArray(value)) {
     for (const item of value) ingestWitnessJsonTree(state, item);
@@ -220,6 +232,7 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
   const state: NetworkWitnessState = {
     messages: [],
     dispatchCandidateIds: new Set<string>(),
+    terminal: createTerminalWitnessState(),
     armDispatch() { dispatchArmed = true; },
   };
   void installWebSocketWitness(page, state).catch(() => {});
@@ -525,9 +538,11 @@ export async function sendTurn(
   if (!userId) return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
 
   const segments: string[] = [];
-  let assistantId = '';
-  let stable = 0;
-  let last = '';
+  let boundAssistantId = '';
+  let terminalSuccessSeen = false;
+  let contentStablePolls = 0;
+  let lastTerminalContent = '';
+  let continuationActive = false;
   const deadline = Date.now() + config.timeoutMs;
   while (Date.now() < deadline) {
     const wall = await pageWalls(page);
@@ -561,54 +576,83 @@ export async function sendTurn(
       assistantLocators.set(id, locator);
     }
     for (const message of network.messages) {
-      if (message.role === 'assistant' && !baselineIds.has(message.id)) observations.push(message);
+      if (!baselineIds.has(message.id)) {
+        registerLegacyObservation(network.terminal, message);
+        if (message.role === 'assistant') observations.push(message);
+      }
     }
-    const causal = resolveCausalAssistant(userId, observations);
-    if (causal.state === 'ambiguous') {
-      return { state: 'foreign_activity', cause: 'assistant_causal_ambiguity', possibleDelivery: true, userMessageId: userId };
+    for (const observation of observations) registerLegacyObservation(network.terminal, observation);
+
+    for (const [assistantMessageId, message] of network.terminal.messages) {
+      if (message.role !== 'assistant' || baselineIds.has(assistantMessageId)) continue;
+      if (isMessageAttributedToUserTurn(assistantMessageId, userId, network.terminal.messages)) continue;
+      for (const foreignUserId of newUserIds) {
+        if (foreignUserId === userId) continue;
+        if (isMessageAttributedToUserTurn(assistantMessageId, foreignUserId, network.terminal.messages)) {
+          return {
+            state: 'foreign_activity',
+            cause: 'foreign_assistant_turn',
+            possibleDelivery: true,
+            userMessageId: userId,
+          };
+        }
+      }
     }
 
-    let matched: any = null;
-    if (causal.state === 'matched') {
-      assistantId = causal.assistantMessageId;
-      matched = assistantLocators.get(assistantId) ?? null;
+    const terminal = resolveWholeTurnTerminal(userId, network.terminal);
+    if (terminal.state === 'failure') {
+      return {
+        state: 'no_reply',
+        cause: terminal.cause,
+        possibleDelivery: true,
+        userMessageId: userId,
+        assistantMessageId: terminal.assistantMessageId,
+      };
+    }
+
+    if (terminal.state === 'success') {
+      terminalSuccessSeen = true;
+      boundAssistantId = terminal.assistantMessageId;
+      let matched = assistantLocators.get(boundAssistantId) ?? null;
       if (!matched) {
         for (let index = 0, count = await assistants.count(); index < count; index++) {
-          if (await serviceId(assistants.nth(index)) === assistantId) {
+          if (await serviceId(assistants.nth(index)) === boundAssistantId) {
             matched = assistants.nth(index);
             break;
           }
         }
       }
-    }
-
-    if (matched) {
-      const current = await assistantText(matched).catch(() => '');
-      if (current) {
-        if (!segments.length || segments[segments.length - 1] !== current) segments.push(current);
-        const busy = (await page.locator('[data-testid="stop-button"]').count().catch(() => 0)) > 0;
-        const cont = page.getByText(/continue generating/i);
-        if (await cont.count().catch(() => 0)) {
-          await cont.first().click().catch(() => {});
-          stable = 0;
-        } else if (!busy && current === last) {
-          stable++;
-          if (stable >= 2) {
-            const conversationId = normalizeConversationUrl(page.url());
-            return {
-              state: 'ok',
-              cause: 'completed',
-              possibleDelivery: true,
-              userMessageId: userId,
-              assistantMessageId: assistantId,
-              conversationId,
-              reply: mergeContinuationSegments(segments),
-            };
+      if (matched) {
+        const current = await assistantText(matched).catch(() => '');
+        const expectedContent = network.terminal.terminalByMessageId.get(boundAssistantId)?.contentText;
+        if (current) {
+          if (!segments.length || segments[segments.length - 1] !== current) segments.push(current);
+          const cont = page.getByText(/continue generating/i);
+          if (await cont.count().catch(() => 0)) {
+            await cont.first().click().catch(() => {});
+            continuationActive = true;
+            contentStablePolls = 0;
+          } else if (expectedContent && current !== expectedContent) {
+            contentStablePolls = 0;
+          } else if (current === lastTerminalContent) {
+            contentStablePolls++;
+            if (contentStablePolls >= 1) {
+              const conversationId = normalizeConversationUrl(page.url());
+              return {
+                state: 'ok',
+                cause: 'completed',
+                possibleDelivery: true,
+                userMessageId: userId,
+                assistantMessageId: boundAssistantId,
+                conversationId,
+                reply: continuationActive ? mergeContinuationSegments(segments) : current,
+              };
+            }
+          } else {
+            contentStablePolls = 0;
           }
-        } else {
-          stable = 0;
+          lastTerminalContent = current;
         }
-        last = current;
       }
     }
 
@@ -618,19 +662,19 @@ export async function sendTurn(
         cause: `profile_wall:${wall.state}`,
         possibleDelivery: true,
         userMessageId: userId,
-        ...(assistantId ? { assistantMessageId: assistantId } : {}),
+        ...(boundAssistantId ? { assistantMessageId: boundAssistantId } : {}),
       };
     }
     await page.waitForTimeout(750);
   }
 
-  if (assistantId || last) {
+  if (terminalSuccessSeen) {
     return {
       state: 'stream_timeout',
-      cause: 'deadline_before_terminal_stability',
+      cause: 'terminal_content_incomplete',
       possibleDelivery: true,
       userMessageId: userId,
-      ...(assistantId ? { assistantMessageId: assistantId } : {}),
+      ...(boundAssistantId ? { assistantMessageId: boundAssistantId } : {}),
     };
   }
   const statusText = (await productStatusText(page)).text;
