@@ -93,10 +93,8 @@ async function main(): Promise<void> {
     if (ac === 'AC9') throw new Error('issue_928_has_only_ac1_ac8');
     const nested = process.env.OPK_CONTRACT_MUTATION_CI_NESTED === '1';
     const selectedAc = ac ?? (nested ? 'AC1' : null);
-    const result = await runMutation(cutoverRunner, selectedAc);
-    emit(result);
-    if (!result.ok) {
-      process.exitCode = result.exitCode ?? 1;
+    if (!await runPr2aMutationMatrix(cutoverRunner, selectedAc)) {
+      process.exitCode = 1;
       return;
     }
     process.stdout.write(`${JSON.stringify({ mutationRunner: { result: 'externally-grounded' }, successor: 'issue-928-cutover' })}\n`);
