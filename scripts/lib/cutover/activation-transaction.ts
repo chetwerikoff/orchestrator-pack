@@ -21,18 +21,11 @@ import { runActivationPlatformPreflight, type PlatformPreflightResult } from './
 import { projectRegistry } from './activation-registry-projection.ts';
 import type { ActivationRequest, CutoverStoreId, EpochCommitCore } from './types.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
+import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '../../pr2a/contracts.ts';
 
 const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
-const D928 = new Set([
-  'scripts/orchestrator-wake-supervisor.ps1',
-  'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
-  'scripts/lib/Review-StartClaim.ps1',
-  'scripts/review-start-claim-reaper.ps1',
-]);
-const TARGET_LIBRARIES = new Set([
-  'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
-  'scripts/lib/Review-StartClaim.ps1',
-]);
+const D928 = new Set<string>(D928_PATHS);
+const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);
 
 function git(repoRoot: string, args: string[]): string {
   const result = runProcessSync({ command: 'git', args: ['-C', repoRoot, ...args], cwd: repoRoot, inheritParentEnv: true });
