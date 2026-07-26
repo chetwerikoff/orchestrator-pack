@@ -4,6 +4,8 @@ export function eliminateDuplicates(
 export function bucketForState(state: string): string;
 export function aggregateChecks(
   checkContexts: Array<Record<string, unknown>>,
+  options?: { includeAppId?: boolean },
 ): Array<Record<string, unknown>>;
 export function exitCodeForPrChecks(checks: Array<{ bucket?: string }>): number;
 export function extractActionsRunId(url: string): string | null;
+export function checkRunToContext(run: Record<string, unknown>): Record<string, unknown>;
