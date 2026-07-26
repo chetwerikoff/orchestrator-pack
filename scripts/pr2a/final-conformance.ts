@@ -84,6 +84,15 @@ const M = {
   planning: 'scripts/pr2a/planning.test.ts', targetRegistry: 'scripts/orchestrator-side-process-registry.cutover-target.json',
   lane: 'scripts/vitest-ci-lanes.config.json', vectors: 'scripts/fixtures/cutover/stable-stringify-vectors.json',
 } as const;
+const EXPECTED_FOLLOWUP_STEPS = [
+  'committed-registry-reprojected',
+  'typescript-supervisor-started',
+  'scheduler-owned',
+  'machine-local-completion-fsync-confirmed',
+  'final-step-timestamp-recorded',
+  'final-health-delivery-observed',
+  'activation-complete',
+] as const;
 function read(file: string): string { return readFileSync(path.resolve(repoRoot, file), 'utf8'); }
 function exists(file: string): boolean { return existsSync(path.resolve(repoRoot, file)); }
 function has(file: string, token: string): boolean { return exists(file) && read(file).includes(token); }
@@ -95,6 +104,23 @@ function all(file: string, tokens: readonly string[]): boolean { return tokens.e
 function registryOk(): boolean { try { const value=JSON.parse(read(M.targetRegistry)) as any; return value?.schemaVersion===2&&value.requiredChildIds?.length===1&&value.requiredChildIds[0]==='pr2-scheduler'&&value.children?.length===1&&value.children[0]?.id==='pr2-scheduler'&&value.children[0]?.runtime==='node'&&value.children[0]?.script==='pr2-foundation/scheduler.ts'&&value.children[0]?.sideEffecting===true; } catch { return false; } }
 function vectorsOk(): boolean { try { const value=JSON.parse(read(M.vectors)) as any; return Array.isArray(value?.vectors)&&value.vectors.length>0&&value.vectors.every((row:any)=>stableStringify(row.input)===row.canonical); } catch { return false; } }
 function laneOk(): boolean { try { const value=JSON.parse(read(M.lane)) as any; return value?.lightMaxWorkers===2&&value?.classification?.['scripts/pr2a/planning.test.ts']==='light'&&Array.isArray(value?.heavyFileBatchIsolate)&&!value.heavyFileBatchIsolate.includes('scripts/pr2a/planning.test.ts'); } catch { return false; } }
+function followupStepsOk(): boolean {
+  const source = read(M.evidence);
+  const marker = 'export const REQUIRED_FOLLOWUP_STEPS = [';
+  const start = source.indexOf(marker);
+  const end = start < 0 ? -1 : source.indexOf('] as const;', start + marker.length);
+  if (start < 0 || end < 0) return false;
+  const steps = [...source.slice(start + marker.length, end).matchAll(/'([^']+)'/g)].map((match) => match[1]);
+  return JSON.stringify(steps) === JSON.stringify(EXPECTED_FOLLOWUP_STEPS);
+}
+function inertProofOk(): boolean {
+  return all(M.cordon, [
+    'const typescriptSupervisorInert = proveTypeScriptSupervisorInert(input.legacyStateRoot);',
+    "if (supervisorAlive || childAlive) throw new Error('typescript_supervisor_not_inert');",
+    '    typescriptSupervisorInert,',
+    "record.typescriptSupervisorInert?.result !== 'typescript-supervisor-inert'",
+  ]);
+}
 function modeOk(): boolean { const file='scripts/orchestrator-wake-supervisor.ts'; if(!exists(file))return false; const row=gitText(['ls-files','-s','--',file]).split(/\s+/,1)[0]??''; return /^100(644|755)$/.test(row)&&(row==='100755')===((statSync(path.resolve(repoRoot,file)).mode&0o111)!==0); }
 function guardOk(key:string, artifact:string):boolean {
   if(!key.startsWith('AC8:guard-')&&!key.includes('guard-record-missing'))return true;
@@ -140,7 +166,7 @@ function mutationFailures(key:string, artifact:string):string[]{
     [M.preflight,["if (platform !== 'linux') throw new Error('unsupported_platform');","if (major !== 22) throw new Error('node22_required');","if (actualHead.toLowerCase() !== input.installedCommitSha.toLowerCase()) throw new Error('installed_commit_unbound');","if (!existsSync(input.repoRoot) || !existsSync(input.oldInstalledRevisionRoot)) throw new Error('installed_revision_missing');",'if (value !== lexical || lexical !== canonical) throw new Error(`${label}_not_canonical`);',"if (statSync(targetParent).dev !== statSync(projectionParent).dev) throw new Error('registry_cross_device_projection');"]],
     [M.cordon,["if (existsSync(input.path)) throw new Error('competing_transaction_admitted');",'    writersClosed: true,','    noRespawn: true,','    noTypeScriptStart: true,',"nonce: randomBytes(32).toString('hex'),",'assertSameProcess(identity);','if (survivors.length) throw new Error(`legacy_process_survivor:${survivors.join(\',\')}`);','    oldInstalledRevisionRoot: input.oldInstalledRevisionRoot,']],
     [M.imports,["if (!writerWatermark.trim()) throw new Error('writer_watermark_missing');",'snapshotDigest: sha256Bytes(bytes)','if (!Number.isInteger(sourceVersion) || sourceVersion <= 0)','if (!required || JSON.stringify([...spec.coveredFields]) !== JSON.stringify(required)) throw new Error(`store_covered_fields_invalid:${spec.id}`);',"if (unknown.length) throw new Error(`store_unknown_field:${spec.id}:${unknown.join(',')}`);",'    nonce: input.nonce,','    storeId: input.spec.id,','  writeDurableJson(markerPath, record);','  writeDurableFile(input.spec.targetPath, `${JSON.stringify(normalized, null, 2)}\n`);','if (sha256Stable(existing) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);','if (sha256Stable(readBack) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);']],
-    [M.evidence,['fsyncSync(fd);','renameSync(temporary, target);','syncDirectory(directory);','    epochId,\n    sequence: existing.length + 1,','completedAt: new Date().toISOString(),',"'committed-registry-reprojected'","'typescript-supervisor-started'","'scheduler-owned'","'machine-local-completion-fsync-confirmed'","'final-step-timestamp-recorded'","'final-health-delivery-observed'","'activation-complete'"]],
+    [M.evidence,['fsyncSync(fd);','renameSync(temporary, target);','syncDirectory(directory);','    epochId,\n    sequence: existing.length + 1,','completedAt: new Date().toISOString(),']],
     [M.epoch,["if (document.currentEpochId !== expectedOldEpochId) throw new Error('epoch_cas_conflict');","if (document.records.some((row) => row.epochId === core.epochId)) throw new Error('epoch_duplicate_commit');","if (!record || record.nonce !== nonce) throw new Error('epoch_nonce_mismatch');",'    mkdirSync(lock);',"  'epochId', 'nonce', 'hostId',","  'importDigests', 'registryHash', 'preCommitLogDigest', 'commitAt',"]],
     [M.projection,['writeDurableFile(projectionPath, source);',"if (!readBack.equals(source)) throw new Error('registry_projection_readback_mismatch');"]],
     [M.supervisor,['projectRegistry(options.targetRegistryPath, options.projectedRegistryPath)','new FileEpochAuthority(options.epochAuthorityPath).verify(options.epochId, options.nonce)','const projected = projectRegistry(options.targetRegistryPath, options.projectedRegistryPath);']],
@@ -148,6 +174,8 @@ function mutationFailures(key:string, artifact:string):string[]{
     [M.stable,['Object.keys(object).sort()','return canonical(value, new Set());']],
   ];
   for(const [file,tokens] of required) need(all(file,tokens),`required:${file}`);
+  need(followupStepsOk(),'evidence:required-followups');
+  need(inertProofOk(),'cordon:typescript-supervisor-inert');
   need(has(M.tx,'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);')&&has(M.tx,'assertLegacySupervisor(identity, request.oldInstalledRevisionRoot);'),'identity:legacy-supervisor-boundaries');
   const activate=body(M.tx,'export async function activateCutover'); const recover=body(M.recovery,'export async function recoverCommittedCutover');
   need(ordered(activate,['const preflight = boundary.preflight(request);','projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath)']),'order:admission');
