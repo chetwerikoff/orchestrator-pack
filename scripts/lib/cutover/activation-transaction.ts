@@ -15,11 +15,11 @@ import {
   waitForLegacyWriterDrain,
   type LegacyWriterRecord,
 } from './activation-cordon.ts';
-import { FileEpochAuthority } from './activation-epoch-authority.ts';
+import { buildEpochCommitCore, FileEpochAuthority, mapCutoverStoreDigests } from './activation-epoch-authority.ts';
 import { importSnapshot, snapshotStores } from './activation-import.ts';
 import { localHostId, runActivationPlatformPreflight, type PlatformPreflightResult } from './activation-platform-preflight.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
-import type { ActivationRequest, CutoverStoreId, EpochCommitCore, FoundationAdmissionEvidence } from './types.ts';
+import type { ActivationRequest, CutoverStoreId, FoundationAdmissionEvidence } from './types.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '../../pr2a/contracts.ts';
 import { validateAoPreflight } from '../../pr2-foundation/binding.ts';
@@ -192,15 +192,6 @@ function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissio
   };
 }
 
-function mapDigests<T extends { storeId: CutoverStoreId }>(rows: T[], select: (row: T) => string): Record<CutoverStoreId, string> {
-  const output = {} as Record<CutoverStoreId, string>;
-  for (const row of rows) output[row.storeId] = select(row);
-  for (const id of ['reconcile', 'reevaluation', 'reportStateSeed'] as const) {
-    if (!output[id]) throw new Error(`store_digest_missing:${id}`);
-  }
-  return output;
-}
-
 async function waitForStartedSupervisor(request: ActivationRequest, nonce: string, expectedPid: number): Promise<{ supervisorPid: number; childGeneration: number }> {
   const deadline = Date.now() + 10_000;
   do {
@@ -352,18 +343,17 @@ export async function activateCutover(
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'registry-projected', projection);
 
   const phaseOne = finalizePhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce);
-  const core: EpochCommitCore = {
+  const core = buildEpochCommitCore({
     epochId: request.epochId,
     nonce: cordon.nonce,
     hostId: request.hostId,
     repoRoot: preflight.repoRoot,
     installedCommitSha: request.installedCommitSha,
-    snapshotDigests: mapDigests(snapshots, (row) => row.snapshotDigest),
-    importDigests: mapDigests(imports, (row) => row.importTargetDigest),
+    snapshotDigests: mapCutoverStoreDigests(snapshots, (row) => row.snapshotDigest),
+    importDigests: mapCutoverStoreDigests(imports, (row) => row.importTargetDigest),
     registryHash: projection.registryHash,
     preCommitLogDigest: phaseOne.digest,
-    commitAt: new Date().toISOString(),
-  };
+  });
   const authority = new FileEpochAuthority(request.paths.epochAuthorityPath);
   authority.commit(request.expectedOldEpochId, core);
   const committed = authority.verify(request.epochId, cordon.nonce);
