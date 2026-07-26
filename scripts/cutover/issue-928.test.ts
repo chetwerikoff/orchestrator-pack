@@ -12,6 +12,7 @@ import { runActivationPlatformPreflight } from '../lib/cutover/activation-platfo
 import { validateSchedulerRegistry } from '../lib/cutover/activation-registry-projection.ts';
 import type { ActivationRequest, EpochCommitCore, ProcessIdentity } from '../lib/cutover/types.ts';
 import { runSchedulerTick, type SchedulerBoundary } from '../pr2-foundation/scheduler.ts';
+import { buildPlanningManifest } from '../pr2a/closed-world-scanner.ts';
 
 const repoRoot = path.resolve(process.cwd());
 const roots: string[] = [];
@@ -44,7 +45,7 @@ afterEach(() => {
 });
 
 function command(executable: string, args: string[], cwd = repoRoot): string {
-  const result = runProcessSync({ command: executable, args, cwd, inheritParentEnv: true, allowEmptyStdout: false });
+  const result = runProcessSync({ command: executable, args, cwd, inheritParentEnv: true });
   if (!result.ok) throw new Error(`command_failed:${executable}:${result.stderr || result.error || result.exitCode}`);
   return result.stdout.trim();
 }
@@ -135,8 +136,7 @@ function committedEpoch(file: string, epochId = 'epoch-scheduler', nonce = 'nonc
 describe('[AC1] admission and closure', () => {
   it('recomputes #948 reverse closure against the merge base and has no external target-library reference', () => {
     const base = git(['merge-base', 'origin/main', 'HEAD']);
-    const output = command(process.execPath, ['--experimental-strip-types', path.join(repoRoot, 'scripts/pr2a/closed-world-scanner.ts'), '--ref', base]);
-    const manifest = JSON.parse(output) as { schemaVersion: number; references: Array<{ source: string; target: string }>; unknown: unknown[]; dynamicUnsupported: unknown[] };
+    const manifest = buildPlanningManifest(base);
     expect(manifest.schemaVersion).toBe(1);
     expect(manifest.unknown).toEqual([]);
     expect(manifest.dynamicUnsupported).toEqual([]);
