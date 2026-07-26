@@ -3,8 +3,9 @@ import '../toolchain/native-entrypoint-preflight.ts';
 
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { runProcess } from '../kernel/subprocess.ts';
+import { runProcess, runProcessSync } from '../kernel/subprocess.ts';
 import { D928 } from '../pr2a/contracts.ts';
 
 const CONTROLS = {
@@ -38,10 +39,20 @@ type DetectorPattern =
   | 'canonical-root'
   | 'primitives'
   | 'registry'
-  | 'scheduler';
+  | 'scheduler'
+  | 'guard-record'
+  | 'new-powershell'
+  | 'retired-guard'
+  | 'pester-load';
 
 interface ArtifactSnapshot { existed: boolean; bytes: Buffer; mode: number }
-interface MutationSpec { artifactPath: string; detector: DetectorPattern; apply(snapshot: ArtifactSnapshot): { bytes: Buffer; mode: number } }
+interface MutationSpec {
+  artifactPath: string;
+  detector: DetectorPattern;
+  apply(snapshot: ArtifactSnapshot): { bytes: Buffer; mode: number };
+  prepare?: () => void;
+  cleanup?: () => void;
+}
 interface MutationEvidence {
   ac: AcceptanceId;
   mutationId: string;
@@ -79,30 +90,38 @@ const DETECTORS: Record<DetectorPattern, string> = {
   primitives: 'retains durability, exclusion, process identity and central nonce primitives',
   registry: 'accepts only the scheduler-only target registry',
   scheduler: 'starts exactly one exact-head review only after central epoch/nonce verification and fresh checks',
+  'guard-record': 'guard-record-invalid',
+  'new-powershell': 'new-powershell-logic-forbidden',
+  'retired-guard': 'retired-launch-contract-guard-restored',
+  'pester-load': 'supervisor-dependent-pester-load-restored',
 };
+
+function absoluteArtifact(pathName: string): string {
+  return path.isAbsolute(pathName) ? pathName : path.join(repoRoot, pathName);
+}
 
 function digest(snapshot: ArtifactSnapshot): string {
   if (!snapshot.existed) return 'sha256:absent';
   return `sha256:${createHash('sha256').update(`${snapshot.mode.toString(8)}\0`).update(snapshot.bytes).digest('hex')}`;
 }
 
-function snapshotArtifact(relativePath: string): ArtifactSnapshot {
-  const file = path.join(repoRoot, relativePath);
+function snapshotArtifact(pathName: string): ArtifactSnapshot {
+  const file = absoluteArtifact(pathName);
   if (!existsSync(file)) return { existed: false, bytes: Buffer.alloc(0), mode: 0o600 };
   return { existed: true, bytes: readFileSync(file), mode: statSync(file).mode & 0o777 };
 }
 
-function writeArtifact(relativePath: string, value: { bytes: Buffer; mode: number }): void {
-  const file = path.join(repoRoot, relativePath);
+function writeArtifact(pathName: string, value: { bytes: Buffer; mode: number }): void {
+  const file = absoluteArtifact(pathName);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, value.bytes, { mode: value.mode });
   chmodSync(file, value.mode);
 }
 
-function restoreArtifact(relativePath: string, snapshot: ArtifactSnapshot): void {
-  const file = path.join(repoRoot, relativePath);
+function restoreArtifact(pathName: string, snapshot: ArtifactSnapshot): void {
+  const file = absoluteArtifact(pathName);
   if (!snapshot.existed) { rmSync(file, { force: true }); return; }
-  writeArtifact(relativePath, { bytes: snapshot.bytes, mode: snapshot.mode });
+  writeArtifact(pathName, { bytes: snapshot.bytes, mode: snapshot.mode });
 }
 
 function replaceSpec(artifactPath: string, detector: DetectorPattern, token: string, replacement: string, all = false): MutationSpec {
@@ -151,6 +170,49 @@ function scopeProtectedSpec(): MutationSpec {
 
 function scopeDeletedSpec(): MutationSpec {
   return createSpec(D928[2]!, 'scope', '# issue-928 mutation: forbidden restored PowerShell claim shim');
+}
+
+function currentHead(): string {
+  const result = runProcessSync({ command: 'git', args: ['rev-parse', 'HEAD'], cwd: repoRoot, inheritParentEnv: true });
+  if (!result.ok) throw new Error(result.stderr || result.error || 'head_lookup_failed');
+  return result.stdout.trim();
+}
+
+function guardRecordSpec(id: string): MutationSpec {
+  const artifactPath = path.join(os.tmpdir(), 'opk-928-guard-records.json');
+  const prepare = () => {
+    const head = currentHead();
+    const record = (command: string) => ({
+      command,
+      pwshVersion: '7.5.2',
+      platform: 'linux',
+      prHeadSha: head,
+      exitCode: 0,
+      stdoutDigest: `sha256:${'a'.repeat(64)}`,
+      completedAt: '2026-07-26T00:00:00.000Z',
+    });
+    writeArtifact(artifactPath, {
+      bytes: Buffer.from(`${JSON.stringify({ verify: record('pwsh -NoProfile -File scripts/verify.ps1'), reusable: record('pwsh -NoProfile -File scripts/check-reusable.ps1') }, null, 2)}\n`, 'utf8'),
+      mode: 0o600,
+    });
+  };
+  return {
+    artifactPath,
+    detector: 'guard-record',
+    prepare,
+    cleanup: () => rmSync(artifactPath, { force: true }),
+    apply: (snapshot) => {
+      const bundle = JSON.parse(snapshot.bytes.toString('utf8')) as Record<string, any>;
+      if (id === 'verify-guard-record-missing') delete bundle.verify;
+      else if (id === 'reusable-guard-record-missing') delete bundle.reusable;
+      else if (id === 'guard-not-pwsh7') bundle.verify.pwshVersion = '5.1.0';
+      else if (id === 'guard-stale-head') bundle.verify.prHeadSha = '0'.repeat(40);
+      else if (id === 'guard-nonzero-accepted') bundle.verify.exitCode = 1;
+      else if (id === 'guard-stdout-digest-missing') delete bundle.verify.stdoutDigest;
+      else throw new Error(`unknown_guard_record_mutation:${id}`);
+      return { bytes: Buffer.from(`${JSON.stringify(bundle, null, 2)}\n`, 'utf8'), mode: snapshot.mode };
+    },
+  };
 }
 
 function mutationSpec(ac: AcceptanceId, id: string): MutationSpec {
@@ -241,7 +303,7 @@ function mutationSpec(ac: AcceptanceId, id: string): MutationSpec {
     if (/precommit-digest|precommit-log-digest/.test(id)) return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'activation', '    preCommitLogDigest: phaseOne.digest,', "    preCommitLogDigest: 'sha256:mutation',");
     if (id === 'legacy-supervisor-termination-evidence-missing') return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'activation', "'legacy-supervisor-and-writers-terminated'", "'mutation-termination-evidence'");
     if (/pr2a-closure-admission-evidence-missing|ts-supervisor-inert-evidence-missing/.test(id)) return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'admission-guards', 'const foundation = boundary.proveFoundationAdoption(request);', "const foundation = { result: 'foundation-evidence-verified' } as FoundationAdmissionProof;");
-    if (/precommit-timestamp-outside-core|postcommit-timestamp-in-core|cas-core-field-extra-or-missing/.test(id)) return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'activation', "  'preCommitLogDigest', 'commitAt',", "  'preCommitLogDigest',");
+    if (/precommit-timestamp-outside-core|postcommit-timestamp-in-core|cas-core-field-extra-or-missing/.test(id)) return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'activation', "  'importDigests', 'registryHash', 'preCommitLogDigest', 'commitAt',", "  'importDigests', 'registryHash', 'commitAt',");
     return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'primitives', 'if (document.currentEpochId !== expectedOldEpochId)', 'if (false)');
   }
 
@@ -255,14 +317,35 @@ function mutationSpec(ac: AcceptanceId, id: string): MutationSpec {
   if (id === 'atomic-rename-omitted') return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', '  renameSync(temporary, target);', '  writeFileSync(target, bytes);');
   if (id === 'file-fsync-omitted') return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', 'fsyncSync(fd);', 'void fd;', true);
   if (id === 'parent-fsync-omitted') return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', '  syncDirectory(directory);', '  void directory;');
-  return scopeDeletedSpec();
+  if (id === 'new-powershell-logic-added') return createSpec('scripts/cutover/issue-928-mutation.ps1', 'new-powershell', 'Write-Output mutation');
+  if (['verify-guard-record-missing','reusable-guard-record-missing','guard-not-pwsh7','guard-stale-head','guard-nonzero-accepted','guard-stdout-digest-missing'].includes(id)) return guardRecordSpec(id);
+  if (id === 'retired-launch-contract-guard-restored') return createSpec('scripts/check-side-process-launch-contract.ps1', 'retired-guard', '# mutation: retired guard restored');
+  if (id === 'supervisor-dependent-pester-load-restored') return createSpec('scripts/cutover/issue-928-supervisor-dependent.Tests.ps1', 'pester-load', ". 'scripts/lib/Orchestrator-SideProcessSupervisor.ps1'");
+  throw new Error(`unmapped_mutation:${ac}:${id}`);
 }
 
-async function runDetector(detector: DetectorPattern): Promise<Awaited<ReturnType<typeof runProcess>>> {
-  const pattern = DETECTORS[detector];
-  return runProcess({
+function detectorInvocation(detector: DetectorPattern, artifactPath: string): { command: string; args: string[]; marker: string } {
+  const marker = DETECTORS[detector];
+  if (detector === 'guard-record') {
+    const script = `const fs=require('node:fs');const cp=require('node:child_process');const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const head=cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();const commands=['pwsh -NoProfile -File scripts/verify.ps1','pwsh -NoProfile -File scripts/check-reusable.ps1'];const rows=[b.verify,b.reusable];const ok=rows.length===2&&rows.every((r,i)=>r&&r.command===commands[i]&&/^7\\./.test(String(r.pwshVersion))&&r.platform==='linux'&&r.prHeadSha===head&&r.exitCode===0&&/^sha256:[0-9a-f]{64}$/i.test(String(r.stdoutDigest))&&Number.isFinite(Date.parse(String(r.completedAt))));if(!ok){console.error(${JSON.stringify(marker)});process.exit(1);}`;
+    return { command: process.execPath, args: ['-e', script, absoluteArtifact(artifactPath)], marker };
+  }
+  if (detector === 'new-powershell' || detector === 'retired-guard' || detector === 'pester-load') {
+    const script = `const fs=require('node:fs');if(fs.existsSync(process.argv[1])){console.error(${JSON.stringify(marker)});process.exit(1);}`;
+    return { command: process.execPath, args: ['-e', script, absoluteArtifact(artifactPath)], marker };
+  }
+  return {
     command: process.execPath,
-    args: [path.join(repoRoot, 'scripts/run-vitest-with-harness.mjs'), 'run', '--maxWorkers=1', TEST_FILE, '-t', pattern],
+    args: [path.join(repoRoot, 'scripts/run-vitest-with-harness.mjs'), 'run', '--maxWorkers=1', TEST_FILE, '-t', marker],
+    marker,
+  };
+}
+
+async function runDetector(detector: DetectorPattern, artifactPath: string): Promise<Awaited<ReturnType<typeof runProcess>>> {
+  const invocation = detectorInvocation(detector, artifactPath);
+  return runProcess({
+    command: invocation.command,
+    args: invocation.args,
     cwd: repoRoot,
     inheritParentEnv: true,
     env: { OPK_CONTRACT_MUTATIONS_ALREADY_RUN: '1', OPK_VITEST_HARNESS: '1' },
@@ -273,30 +356,44 @@ async function runDetector(detector: DetectorPattern): Promise<Awaited<ReturnTyp
 
 async function executeMutation(ac: AcceptanceId, mutationId: string): Promise<MutationEvidence> {
   const spec = mutationSpec(ac, mutationId);
+  spec.prepare?.();
   const before = snapshotArtifact(spec.artifactPath);
-  const applied = spec.apply(before);
-  writeArtifact(spec.artifactPath, applied);
-  const artifactHashBefore = digest(before);
-  const artifactHashAfter = digest(snapshotArtifact(spec.artifactPath));
-  if (artifactHashAfter === artifactHashBefore) { restoreArtifact(spec.artifactPath, before); throw new Error(`mutation_hash_delta_missing:${ac}:${mutationId}`); }
-  let negative;
   try {
-    negative = await runDetector(spec.detector);
+    const applied = spec.apply(before);
+    writeArtifact(spec.artifactPath, applied);
+    const artifactHashBefore = digest(before);
+    const artifactHashAfter = digest(snapshotArtifact(spec.artifactPath));
+    if (artifactHashAfter === artifactHashBefore) throw new Error(`mutation_hash_delta_missing:${ac}:${mutationId}`);
+    const negative = await runDetector(spec.detector, spec.artifactPath);
     if (negative.ok) throw new Error(`specific_detector_not_red:${ac}:${mutationId}:${DETECTORS[spec.detector]}`);
+    const negativeText = `${negative.stdout}\n${negative.stderr}`;
+    if (!negativeText.includes(DETECTORS[spec.detector])) {
+      throw new Error(`expected_detector_marker_missing:${ac}:${mutationId}:${DETECTORS[spec.detector]}`);
+    }
+    restoreArtifact(spec.artifactPath, before);
+    const restoredHash = digest(snapshotArtifact(spec.artifactPath));
+    if (restoredHash !== artifactHashBefore) throw new Error(`mutation_restore_hash_mismatch:${ac}:${mutationId}`);
+    const green = await runDetector(spec.detector, spec.artifactPath);
+    if (!green.ok) throw new Error(`mutation_restore_not_green:${ac}:${mutationId}:${green.stderr || green.stdout}`);
+    const invocation = detectorInvocation(spec.detector, spec.artifactPath);
+    return {
+      ac,
+      mutationId,
+      artifactPath: spec.artifactPath,
+      detectorId: `issue-928:${mutationId}:${DETECTORS[spec.detector]}`,
+      detectorCommand: [invocation.command, ...invocation.args],
+      artifactHashBefore,
+      artifactHashAfter,
+      restoredHash,
+      negativeOutcome: 'failed',
+      restoredOutcome: 'passed',
+      negativeExitCode: negative.exitCode ?? 1,
+      restoredExitCode: 0,
+    };
   } finally {
     restoreArtifact(spec.artifactPath, before);
+    spec.cleanup?.();
   }
-  const restoredHash = digest(snapshotArtifact(spec.artifactPath));
-  if (restoredHash !== artifactHashBefore) throw new Error(`mutation_restore_hash_mismatch:${ac}:${mutationId}`);
-  const green = await runDetector(spec.detector);
-  if (!green.ok) throw new Error(`mutation_restore_not_green:${ac}:${mutationId}:${green.stderr || green.stdout}`);
-  return {
-    ac, mutationId, artifactPath: spec.artifactPath,
-    detectorId: `issue-928:${mutationId}:${DETECTORS[spec.detector]}`,
-    detectorCommand: [process.execPath, 'scripts/run-vitest-with-harness.mjs', 'run', '--maxWorkers=1', TEST_FILE, '-t', DETECTORS[spec.detector]],
-    artifactHashBefore, artifactHashAfter, restoredHash,
-    negativeOutcome: 'failed', restoredOutcome: 'passed', negativeExitCode: negative.exitCode ?? 1, restoredExitCode: 0,
-  };
 }
 
 function producerOutcome(ac: AcceptanceId): Record<string, unknown> {
@@ -321,13 +418,10 @@ function selected(argv: string[]): AcceptanceId[] {
 
 async function main(): Promise<void> {
   const selectedAcs = selected(process.argv.slice(2));
-  const planned = selectedAcs.flatMap((ac) => CONTROLS[ac].map((mutationId) => ({ ac, mutationId, spec: mutationSpec(ac, mutationId) })));
-  for (const detector of [...new Set(planned.map((row) => row.spec.detector))]) {
-    const baseline = await runDetector(detector);
-    if (!baseline.ok) throw new Error(`detector_baseline_red:${detector}:${baseline.stderr || baseline.stdout}`);
-  }
   const evidence: MutationEvidence[] = [];
-  for (const row of planned) evidence.push(await executeMutation(row.ac, row.mutationId));
+  for (const ac of selectedAcs) {
+    for (const mutationId of CONTROLS[ac]) evidence.push(await executeMutation(ac, mutationId));
+  }
   const cutover: Record<string, unknown> = {};
   for (const ac of selectedAcs) Object.assign(cutover, producerOutcome(ac));
   process.stdout.write(`${JSON.stringify({ issue: 928, cutover, mutationEvidence: evidence, mutationRunner: { result: 'one-row-one-real-fault-external-detector-red-green', bindings: evidence.length } })}\n`);
