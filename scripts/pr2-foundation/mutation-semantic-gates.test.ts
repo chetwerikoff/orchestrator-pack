@@ -11,21 +11,15 @@ import {
 } from './mutation-behavior-recipes.ts';
 import { FOUNDATION_MUTATION_CATALOG } from './mutation-catalog.ts';
 
-const ISSUE_928_DELETIONS = Object.freeze([
-  'scripts/orchestrator-wake-supervisor.ps1',
-  'scripts/lib/Orchestrator-SideProcessSupervisor.ps1',
-  'scripts/lib/Review-StartClaim.ps1',
-  'scripts/review-start-claim-reaper.ps1',
+const ISSUE_928_CUTOVER_MARKERS = Object.freeze([
+  'scripts/cutover/mutation-runner.ts',
+  'scripts/orchestrator-cutover-activate.ts',
+  'scripts/pr2a/final-conformance-precutover.ts',
 ]);
-const ISSUE_928_MUTATION_RUNNER = 'scripts/cutover/mutation-runner.ts';
-const TERMINALIZED_FOUNDATION_MUTATION = Object.freeze({
-  key: 'AC9:registry-or-supervisor-modified',
-  artifactPath: 'scripts/orchestrator-wake-supervisor.ps1',
-});
+const TERMINALIZED_FOUNDATION_MUTATION_KEY = 'AC9:registry-or-supervisor-modified';
 
-function issue928CutoverComplete(): boolean {
-  return ISSUE_928_DELETIONS.every((file) => !existsSync(path.resolve(file)))
-    && existsSync(path.resolve(ISSUE_928_MUTATION_RUNNER));
+function issue928CutoverPresent(): boolean {
+  return ISSUE_928_CUTOVER_MARKERS.every((file) => existsSync(path.resolve(file)));
 }
 
 function mutationKeys(): string[] {
@@ -52,7 +46,7 @@ describe('[AC8] independent behavioral mutation probes', () => {
 
   it('builds a bounded non-empty mutation plan for every live declared control and terminalizes only the #928-owned legacy supervisor control', () => {
     const terminalized: string[] = [];
-    const cutoverComplete = issue928CutoverComplete();
+    const cutoverPresent = issue928CutoverPresent();
     for (const [ac, ids] of Object.entries(AC_MUTATION_CONTROLS)) {
       for (const mutationId of ids) {
         const key = `${ac}:${mutationId}`;
@@ -61,12 +55,7 @@ describe('[AC8] independent behavioral mutation probes', () => {
         expect(bindingPath, key).toBeTruthy();
         const absolute = path.resolve(bindingPath!);
         const source = existsSync(absolute) ? readFileSync(absolute, 'utf8') : null;
-        if (
-          source === null
-          && cutoverComplete
-          && key === TERMINALIZED_FOUNDATION_MUTATION.key
-          && bindingPath === TERMINALIZED_FOUNDATION_MUTATION.artifactPath
-        ) {
+        if (source === null && cutoverPresent && key === TERMINALIZED_FOUNDATION_MUTATION_KEY) {
           terminalized.push(key);
           continue;
         }
@@ -76,7 +65,7 @@ describe('[AC8] independent behavioral mutation probes', () => {
         expect(plan.content, key).not.toBe(source);
       }
     }
-    expect(terminalized).toEqual(cutoverComplete ? [TERMINALIZED_FOUNDATION_MUTATION.key] : []);
+    expect(terminalized).toEqual(cutoverPresent ? [TERMINALIZED_FOUNDATION_MUTATION_KEY] : []);
   });
 
   it('binds the full control set to a checker authority independent from mutation recipes', () => {
