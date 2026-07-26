@@ -83,6 +83,33 @@ export interface CordonRecord {
   preImportTargetDigests: Partial<Record<CutoverStoreId, string>>;
 }
 
+export interface FoundationHeartbeatEvidence {
+  hostId: string;
+  installedCommitSha: string;
+  observedAt: string;
+  active: boolean;
+  quarantined?: boolean;
+}
+
+export interface FoundationAdmissionEvidence {
+  schemaVersion: 1;
+  issue: 923;
+  foundationMergeCommitSha: string;
+  preflight: {
+    command: string;
+    appStateVersion: string;
+    sessions: unknown[];
+    sanitizerId: string;
+  };
+  typedConfig: unknown;
+  migrationJournalPaths: string[];
+  runtimeCatalog: unknown[];
+  inertProof: {
+    result: string;
+  };
+  heartbeats: FoundationHeartbeatEvidence[];
+}
+
 export interface ActivationPaths {
   stateDir: string;
   cordonPath: string;
@@ -93,6 +120,7 @@ export interface ActivationPaths {
   projectedRegistryPath: string;
   snapshotDir: string;
   supervisorStateDir: string;
+  foundationEvidencePath: string;
 }
 
 export interface ActivationRequest {
@@ -105,9 +133,6 @@ export interface ActivationRequest {
   legacySupervisorPid: number;
   knownMemberRoster: Array<{
     hostId: string;
-    installedCommitSha: string;
-    fresh: boolean;
-    adopted: boolean;
     quarantined?: boolean;
   }>;
   stores: CutoverStoreSpec[];
