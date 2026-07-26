@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { runProcessSync, runProcess } from '../../kernel/subprocess.ts';
 import { appendFollowup, appendPhaseOne, finalizePhaseOne, verifyPhaseOneDigest } from './activation-evidence.ts';
@@ -17,13 +17,19 @@ import {
 } from './activation-cordon.ts';
 import { FileEpochAuthority } from './activation-epoch-authority.ts';
 import { importSnapshot, snapshotStores } from './activation-import.ts';
-import { runActivationPlatformPreflight, type PlatformPreflightResult } from './activation-platform-preflight.ts';
+import { localHostId, runActivationPlatformPreflight, type PlatformPreflightResult } from './activation-platform-preflight.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
-import type { ActivationRequest, CutoverStoreId, EpochCommitCore } from './types.ts';
+import type { ActivationRequest, CutoverStoreId, EpochCommitCore, FoundationAdmissionEvidence } from './types.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '../../pr2a/contracts.ts';
+import { validateAoPreflight } from '../../pr2-foundation/binding.ts';
+import { parseFoundationConfig } from '../../pr2-foundation/config.ts';
+import { readMigrationJournal } from '../../pr2-foundation/migration-journal.ts';
+import { FOUNDATION_RUNTIME_CATALOG, validateRuntimeCatalog, type RuntimeSurface } from '../../pr2-foundation/runtime-catalog.ts';
 
+const FOUNDATION_LANDING_COMMIT = 'b967dfe156838039e1d6d137e7064dc9d1b10b4d';
 const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
+const FOUNDATION_HEARTBEAT_MAX_AGE_MS = 5 * 60_000;
 const D928 = new Set<string>(D928_PATHS);
 const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);
 const GOVERNANCE_REFERENCE_PREFIXES = ['scripts/pr2a/', 'scripts/estate-cut/'] as const;
@@ -44,15 +50,18 @@ function git(repoRoot: string, args: string[]): string {
   return result.stdout.trim();
 }
 
-function assertFoundationAndPr2a(repoRoot: string, installedCommitSha: string): string {
-  const baseRef = git(repoRoot, ['rev-parse', `${installedCommitSha}^`]);
-  const ancestor = runProcessSync({
+function isAncestor(repoRoot: string, ancestor: string, descendant: string): boolean {
+  return runProcessSync({
     command: 'git',
-    args: ['-C', repoRoot, 'merge-base', '--is-ancestor', PR2A_LANDING_COMMIT, baseRef],
+    args: ['-C', repoRoot, 'merge-base', '--is-ancestor', ancestor, descendant],
     cwd: repoRoot,
     inheritParentEnv: true,
-  });
-  if (!ancestor.ok) throw new Error('pr2a_merge_missing');
+  }).ok;
+}
+
+function assertFoundationAndPr2a(repoRoot: string, installedCommitSha: string): string {
+  const baseRef = git(repoRoot, ['rev-parse', `${installedCommitSha}^`]);
+  if (!isAncestor(repoRoot, PR2A_LANDING_COMMIT, baseRef)) throw new Error('pr2a_merge_missing');
   return baseRef;
 }
 
@@ -91,17 +100,96 @@ function recomputeClosure(repoRoot: string, baseRef: string): { inputTree: strin
   return { inputTree: manifest.lineage.planningBaseTreeOid, referenceCount: references.length };
 }
 
-function assertRoster(request: ActivationRequest): void {
-  const matchingHost = request.knownMemberRoster.filter((row) => row.hostId === request.hostId);
-  if (matchingHost.length !== 1 || request.knownMemberRoster.some((row) => row.hostId !== request.hostId && !row.quarantined)) {
-    throw new Error('second_control_plane_host');
+export interface FoundationAdmissionProof {
+  result: 'foundation-evidence-verified';
+  evidencePath: string;
+  localHostId: string;
+  oldInstalledCommitSha: string;
+  heartbeatObservedAt: string;
+  migrationJournalCount: number;
+  preflightSanitizerId: string;
+}
+
+function readFoundationEvidence(request: ActivationRequest): { evidence: FoundationAdmissionEvidence; evidencePath: string } {
+  const stateRoot = realpathSync(request.paths.stateDir);
+  const evidencePath = realpathSync(request.paths.foundationEvidencePath);
+  const relative = path.relative(stateRoot, evidencePath);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('foundation_evidence_outside_state_root');
+  }
+  const evidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as FoundationAdmissionEvidence;
+  if (!evidence || evidence.schemaVersion !== 1 || evidence.issue !== 923) throw new Error('foundation_evidence_schema_invalid');
+  if (evidence.foundationMergeCommitSha !== FOUNDATION_LANDING_COMMIT) throw new Error('foundation_evidence_merge_binding_invalid');
+  return { evidence, evidencePath };
+}
+
+function proveFoundationAdoption(request: ActivationRequest): FoundationAdmissionProof {
+  const { evidence, evidencePath } = readFoundationEvidence(request);
+  const preflight = validateAoPreflight(evidence.preflight);
+  if (!preflight.ok) throw new Error(`foundation_preflight_invalid:${preflight.reason}`);
+  const config = parseFoundationConfig(evidence.typedConfig);
+  if (!config.ok) throw new Error(`foundation_typed_config_invalid:${config.reason}:${config.path}`);
+  const catalog = validateRuntimeCatalog(FOUNDATION_RUNTIME_CATALOG, evidence.runtimeCatalog as RuntimeSurface[]);
+  if (!catalog.ok) throw new Error(`foundation_runtime_catalog_invalid:${catalog.reason}:${catalog.surface ?? ''}`);
+  if (evidence.inertProof?.result !== 'live-acquirers-unchanged') throw new Error('foundation_inert_proof_missing');
+  if (!Array.isArray(evidence.migrationJournalPaths) || evidence.migrationJournalPaths.length === 0) {
+    throw new Error('foundation_migration_journal_missing');
+  }
+  for (const journalPath of evidence.migrationJournalPaths) {
+    const journal = readMigrationJournal(journalPath);
+    if (!journal.ok || journal.record?.state !== 'committed') throw new Error(`foundation_migration_journal_invalid:${journalPath}`);
+  }
+
+  const observedLocalHost = localHostId();
+  if (!request.hostId || request.hostId !== observedLocalHost) throw new Error('foundation_host_unbound');
+  const oldInstalledCommitSha = git(request.oldInstalledRevisionRoot, ['rev-parse', 'HEAD']);
+  if (!isAncestor(request.oldInstalledRevisionRoot, FOUNDATION_LANDING_COMMIT, oldInstalledCommitSha)) {
+    throw new Error('foundation_merge_missing_from_old_install');
+  }
+  const configuredHosts = new Map(request.knownMemberRoster.map((row) => [row.hostId, row]));
+  if (configuredHosts.size !== request.knownMemberRoster.length || !configuredHosts.has(request.hostId)) {
+    throw new Error('foundation_roster_invalid');
   }
   for (const member of request.knownMemberRoster) {
-    if (member.hostId === request.hostId && (!member.fresh || !member.adopted || member.installedCommitSha !== request.installedCommitSha)) {
-      throw new Error('fleet_member_not_adopted');
-    }
-    if (member.hostId !== request.hostId && !member.quarantined) throw new Error('fleet_member_unquarantined');
+    if (member.hostId !== request.hostId && member.quarantined !== true) throw new Error('second_control_plane_host');
   }
+  if (!Array.isArray(evidence.heartbeats) || evidence.heartbeats.length === 0) throw new Error('foundation_heartbeat_missing');
+  const heartbeatHosts = new Set<string>();
+  for (const heartbeat of evidence.heartbeats) {
+    if (!heartbeat?.hostId || heartbeatHosts.has(heartbeat.hostId)) throw new Error('foundation_heartbeat_roster_invalid');
+    heartbeatHosts.add(heartbeat.hostId);
+    const configured = configuredHosts.get(heartbeat.hostId);
+    if (!configured) throw new Error(`foundation_unknown_member:${heartbeat.hostId}`);
+    if (heartbeat.hostId !== request.hostId) {
+      if (configured.quarantined !== true) throw new Error(`foundation_member_not_quarantined:${heartbeat.hostId}`);
+      continue;
+    }
+    const observedMs = Date.parse(heartbeat.observedAt);
+    const nowMs = Date.now();
+    if (!Number.isFinite(observedMs) || observedMs > nowMs + 30_000 || nowMs - observedMs > FOUNDATION_HEARTBEAT_MAX_AGE_MS) {
+      throw new Error('foundation_heartbeat_stale');
+    }
+    if (heartbeat.active !== true || heartbeat.installedCommitSha !== oldInstalledCommitSha) {
+      throw new Error('foundation_member_not_adopted');
+    }
+  }
+  for (const member of request.knownMemberRoster) {
+    if (member.quarantined !== true && !heartbeatHosts.has(member.hostId)) throw new Error(`foundation_member_omitted:${member.hostId}`);
+  }
+  const localHeartbeat = evidence.heartbeats.find((row) => row.hostId === request.hostId);
+  if (!localHeartbeat) throw new Error('foundation_local_heartbeat_missing');
+  const legacyIdentity = readProcessIdentity(request.legacySupervisorPid);
+  assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);
+  if (!processAlive(legacyIdentity.pid)) throw new Error('foundation_legacy_supervisor_not_active');
+  return {
+    result: 'foundation-evidence-verified',
+    evidencePath,
+    localHostId: observedLocalHost,
+    oldInstalledCommitSha,
+    heartbeatObservedAt: localHeartbeat.observedAt,
+    migrationJournalCount: evidence.migrationJournalPaths.length,
+    preflightSanitizerId: preflight.sanitizerId,
+  };
 }
 
 function mapDigests<T extends { storeId: CutoverStoreId }>(rows: T[], select: (row: T) => string): Record<CutoverStoreId, string> {
@@ -165,6 +253,7 @@ async function startSupervisor(request: ActivationRequest, nonce: string): Promi
 
 export interface ActivationBoundary {
   preflight(request: ActivationRequest): PlatformPreflightResult;
+  proveFoundationAdoption(request: ActivationRequest): FoundationAdmissionProof;
   resolveBaseAndClosure(request: ActivationRequest): { baseRef: string; closure: { inputTree: string; referenceCount: number } };
   readLegacySupervisor(request: ActivationRequest): ReturnType<typeof readProcessIdentity>;
   captureLegacyWriters(request: ActivationRequest): LegacyWriterRecord[];
@@ -182,6 +271,7 @@ export const productionActivationBoundary: ActivationBoundary = {
     targetRegistryPath: request.paths.targetRegistryPath,
     projectedRegistryPath: request.paths.projectedRegistryPath,
   }),
+  proveFoundationAdoption,
   resolveBaseAndClosure: (request) => {
     const baseRef = assertFoundationAndPr2a(request.repoRoot, request.installedCommitSha);
     return { baseRef, closure: recomputeClosure(request.repoRoot, baseRef) };
@@ -210,7 +300,7 @@ export async function activateCutover(
   boundary: ActivationBoundary = productionActivationBoundary,
 ): Promise<Record<string, unknown>> {
   const preflight = boundary.preflight(request);
-  assertRoster(request);
+  const foundation = boundary.proveFoundationAdoption(request);
   if (request.stores.length !== 3 || new Set(request.stores.map((row) => row.id)).size !== 3) throw new Error('store_roster_invalid');
   const { baseRef, closure } = boundary.resolveBaseAndClosure(request);
   const legacySupervisor = boundary.readLegacySupervisor(request);
@@ -220,14 +310,14 @@ export async function activateCutover(
     path: request.paths.cordonPath,
     epochId: request.epochId,
     hostId: request.hostId,
-    repoRoot: request.repoRoot,
+    repoRoot: preflight.repoRoot,
     installedCommitSha: request.installedCommitSha,
-    oldInstalledRevisionRoot: request.oldInstalledRevisionRoot,
+    oldInstalledRevisionRoot: preflight.oldInstalledRevisionRoot,
     legacyStateRoot: request.paths.supervisorStateDir,
     legacySupervisor,
     stores: request.stores,
   });
-  appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { preflight, closure, baseRef });
+  appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { preflight, foundation, closure, baseRef });
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'cordon', { writersClosed: true, noRespawn: true, noTypeScriptStart: true });
 
   const drain = await boundary.drainLegacyWriters(request, legacyWriters);
