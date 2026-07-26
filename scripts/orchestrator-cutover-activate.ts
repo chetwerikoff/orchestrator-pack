@@ -20,7 +20,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'recover') {
-    process.stdout.write(`${JSON.stringify(recoverCommittedCutover(request))}\n`);
+    process.stdout.write(`${JSON.stringify(await recoverCommittedCutover(request))}\n`);
     return;
   }
   if (command === 'prove-rollback') {
@@ -30,7 +30,14 @@ async function main(): Promise<void> {
   if (command === 'rollback-preimport') {
     const proof = provePreImportRollbackSafe(request);
     abandonPreImportCordon(request);
-    process.stdout.write(`${JSON.stringify({ result: 'pre-import-rollback-released', proof, oldInstalledRevisionRoot: request.oldInstalledRevisionRoot })}\n`);
+    process.stdout.write(`${JSON.stringify({
+      result: 'pre-import-rollback-released',
+      proof,
+      oldInstalledRevisionRoot: request.oldInstalledRevisionRoot,
+      legacySupervisorPid: request.legacySupervisorPid,
+      operatorRestartRequired: true,
+      note: 'The cutover implementation never dispatches PowerShell. Restart, if required, must use the captured immutable old installed revision outside the new cutover path.',
+    })}\n`);
     return;
   }
   throw new Error(`unknown_command:${command}`);
