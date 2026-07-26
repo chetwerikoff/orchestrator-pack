@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
+import { D928 } from '../pr2a/contracts.ts';
 
 const CONTROLS = {
   AC1: ['operator-ack-only','pr2a-merge-missing','pr2a-receipt-trusted-without-recompute','closure-schema-incompatible','external-supervisor-library-reference','external-claim-library-reference','closure-unresolved-set-nonempty','closure-input-tree-unbound','fleet-member-omitted','stale-member-accepted','rejoining-member-unquarantined','diverged-revision-accepted','second-control-plane-host','host-or-repo-unbound','installed-commit-unbound','old-installed-revision-missing','legacy-supervisor-identity-ambiguous','node22-not-enforced','competing-transaction-admitted','successor-926-used-as-prerequisite','mutation-before-admission'],
@@ -23,6 +24,7 @@ type DetectorPattern =
   | 'closure'
   | 'activation'
   | 'survivor'
+  | 'rollback'
   | 'recovery'
   | 'scope'
   | 'vectors'
@@ -66,6 +68,7 @@ const DETECTORS: Record<DetectorPattern, string> = {
   closure: 'recomputes #948 reverse closure against the merge base',
   activation: 'runs the real transaction through synthetic process/store/CAS boundaries',
   survivor: 'refuses snapshot/import when legacy processes survive re-enumeration',
+  rollback: 'allows old-revision rollback only before import mutation and refuses target drift',
   recovery: 'resumes forward from the import boundary when CAS has not happened yet',
   scope: 'contains exactly the four PowerShell deletions and preserves #948 claim authority/tracked registry',
   vectors: 'reproduces committed canonicalization vectors',
@@ -123,7 +126,8 @@ function appendSpec(artifactPath: string, detector: DetectorPattern, text: strin
     detector,
     apply: (snapshot) => {
       if (!snapshot.existed) throw new Error(`mutation_artifact_missing:${artifactPath}`);
-      return { bytes: Buffer.concat([snapshot.bytes, Buffer.from(`${snapshot.bytes.toString('utf8').endsWith('\n') ? '' : '\n'}${text}\n`, 'utf8')]), mode: snapshot.mode };
+      const newline = snapshot.bytes.toString('utf8').endsWith('\n') ? '' : '\n';
+      return { bytes: Buffer.concat([snapshot.bytes, Buffer.from(`${newline}${text}\n`, 'utf8')]), mode: snapshot.mode };
     },
   };
 }
@@ -164,7 +168,7 @@ function scopeProtectedSpec(): MutationSpec {
 }
 
 function scopeDeletedSpec(): MutationSpec {
-  return createSpec('scripts/lib/Review-StartClaim.ps1', 'scope', '# issue-928 mutation: forbidden restored PowerShell claim shim');
+  return createSpec(D928[2]!, 'scope', '# issue-928 mutation: forbidden restored PowerShell claim shim');
 }
 
 function mutationSpec(ac: AcceptanceId, id: string): MutationSpec {
@@ -211,7 +215,7 @@ function mutationSpec(ac: AcceptanceId, id: string): MutationSpec {
 
   if (ac === 'AC5') {
     if (/preimport-target-change|rollback-old-revision/.test(id)) {
-      return replaceSpec('scripts/lib/cutover/activation-recovery.ts', 'activation', '    if (fileDigestOrAbsent(store.targetPath) !== cordon.preImportTargetDigests[store.id]) {', '    if (false) {');
+      return replaceSpec('scripts/lib/cutover/activation-recovery.ts', 'rollback', '    if (fileDigestOrAbsent(store.targetPath) !== cordon.preImportTargetDigests[store.id]) {', '    if (false) {');
     }
     return replaceSpec('scripts/lib/cutover/activation-recovery.ts', 'recovery', '    core = completePreCasRecovery(request, cordon.nonce, authority);', '    core = authority.verify(request.epochId, cordon.nonce);');
   }
@@ -228,8 +232,11 @@ function mutationSpec(ac: AcceptanceId, id: string): MutationSpec {
     if (/nonce|replay|consumer-skips/.test(id)) {
       return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'scheduler', 'if (!record || record.nonce !== nonce)', 'if (!record || false)');
     }
-    if (/followup|sequence|fsync|precommit|timestamp|evidence/.test(id)) {
-      return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', '    try { fsyncSync(fd); } finally { closeSync(fd); }', '    try { void fd; } finally { closeSync(fd); }');
+    if (/followup|sequence/.test(id)) {
+      return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'activation', '    sequence: existing.length + 1,', '    sequence: existing.length + 2,');
+    }
+    if (/fsync|precommit|evidence|timestamp/.test(id)) {
+      return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', 'fsyncSync(fd);', 'void fd;', true);
     }
     return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'primitives', 'if (document.currentEpochId !== expectedOldEpochId)', 'if (false)');
   }
@@ -244,7 +251,7 @@ function mutationSpec(ac: AcceptanceId, id: string): MutationSpec {
     return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', '  renameSync(temporary, target);', '  writeFileSync(target, bytes);');
   }
   if (/file-fsync/.test(id)) {
-    return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', '    fsyncSync(fd);', '    void fd;');
+    return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', 'fsyncSync(fd);', 'void fd;', true);
   }
   if (/parent-fsync/.test(id)) {
     return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', '  syncDirectory(directory);', '  void directory;');
@@ -308,21 +315,12 @@ async function executeMutation(ac: AcceptanceId, mutationId: string): Promise<Mu
   const green = await runDetector(spec.detector);
   if (!green.ok) throw new Error(`mutation_restore_not_green:${ac}:${mutationId}:${green.stderr || green.stdout}`);
 
-  const detectorCommand = [
-    process.execPath,
-    'scripts/run-vitest-with-harness.mjs',
-    'run',
-    '--maxWorkers=1',
-    TEST_FILE,
-    '-t',
-    DETECTORS[spec.detector],
-  ];
   return {
     ac,
     mutationId,
     artifactPath: spec.artifactPath,
     detectorId: `issue-928:${spec.detector}:${DETECTORS[spec.detector]}`,
-    detectorCommand,
+    detectorCommand: [process.execPath, 'scripts/run-vitest-with-harness.mjs', 'run', '--maxWorkers=1', TEST_FILE, '-t', DETECTORS[spec.detector]],
     artifactHashBefore,
     artifactHashAfter,
     restoredHash,
