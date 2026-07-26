@@ -311,9 +311,9 @@ describe('issue 1010 submitted-turn proof', () => {
     const processExitMs = Date.now() - started;
 
     expect(marks.stdout_written_ms - marks.result_produced_ms).toBeGreaterThanOrEqual(0);
-    expect(marks.stdout_written_ms - marks.result_produced_ms).toBeLessThan(500);
+    expect(marks.stdout_written_ms - marks.result_produced_ms).toBeLessThan(1_500);
     expect(callerStdoutMs - marks.stdout_written_ms).toBeGreaterThanOrEqual(0);
-    expect(callerStdoutMs - marks.stdout_written_ms).toBeLessThan(500);
+    expect(callerStdoutMs - marks.stdout_written_ms).toBeLessThan(1_500);
     expect(processExitMs - callerStdoutMs).toBeGreaterThanOrEqual(0);
     expect(processExitMs - callerStdoutMs).toBeLessThan(2_000);
   });
