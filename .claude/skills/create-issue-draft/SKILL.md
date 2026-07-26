@@ -996,8 +996,9 @@ orphan recovery, and `stream_timeout` / `no_reply` conversation-inspection rules
 For each qualifying browser-turn/recovery incident, the flow-manager appends one
 JSON object line to one shared append-only JSONL journal under the existing
 out-of-repository create-issue-draft state root, outside individual `<N>-<slug>`
-task workdirs so recurrence can be inspected across tasks. Exact shared filename
-and subdirectory are planner freedom. The journal stays out of the repository.
+task workdirs so recurrence can be inspected across tasks. Every task flow-manager
+uses the exact shared path `~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl`.
+The journal stays out of the repository and remains append-only.
 
 The journal deliberately has no deterministic incident/episode identity contract:
 no required `episode_id`, restart/handoff identity reconstruction, trigger
