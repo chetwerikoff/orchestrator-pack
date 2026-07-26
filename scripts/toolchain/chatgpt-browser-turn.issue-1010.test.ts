@@ -165,6 +165,32 @@ describe('issue 1010 submitted-turn proof', () => {
     expect(result.assistantMessageId).toBe(assistantId);
   });
 
+  it('AC2 preserves terminal metadata carried directly on an attributed assistant add', async () => {
+    const own = 'user-add-terminal-12345678';
+    const assistantId = 'asst-add-terminal-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [
+        streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}\n\n`),
+        streamItemEnvelope([
+          'event: delta',
+          `data: {"p":"","o":"add","v":{"message":{"id":"${assistantId}","author":{"role":"assistant"},"parent":"${own}","end_turn":true,"status":"finished_successfully","metadata":{"finish_details":{"type":"stop"}},"content":{"content_type":"text","parts":["OK"]}}}}`,
+          '',
+        ].join('\n')),
+      ],
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
   it('AC1 promotes pending input_message after delayed outbound request witness', async () => {
     const own = 'user-delay-req-12345678';
     const assistantId = 'asst-delay-req-12345678';
