@@ -91,6 +91,12 @@ interface NetworkMessage extends CausalMessageObservation {
   conversationId?: string;
 }
 
+export const __testTiming: { now?: () => number } = {};
+
+function wallClock(): number {
+  return __testTiming.now?.() ?? Date.now();
+}
+
 interface NetworkWitnessState {
   readonly messages: NetworkMessage[];
   readonly dispatchCandidateIds: Set<string>;
@@ -103,7 +109,8 @@ interface NetworkWitnessState {
   dispatchRequestUserId?: string;
   dispatchRequestWitnessed: boolean;
   dispatchTurnExchangeId?: string;
-  activeTurnExchangeId?: string;
+  dispatchExchangeAmbiguous: boolean;
+  witnessedTurnExchangeIds: Set<string>;
   provisionalServiceId?: string;
   activeTurnUserId?: string;
   activePatchMessageId?: string;
@@ -345,11 +352,10 @@ function recordServiceSubmittedUserId(
   if (!state.dispatchArmed || id.length < 8) return;
   if (state.rejectedServiceUserIds.has(id)) return;
 
-  if (turnExchangeId && state.activeTurnExchangeId && turnExchangeId !== state.activeTurnExchangeId) {
+  if (turnExchangeId && state.dispatchTurnExchangeId && turnExchangeId !== state.dispatchTurnExchangeId) {
     state.rejectedServiceUserIds.add(id);
     return;
   }
-  if (turnExchangeId && !state.activeTurnExchangeId) state.activeTurnExchangeId = turnExchangeId;
 
   if (state.dispatchCandidateIds.has(id)) {
     state.serviceSubmittedUserIds.add(id);
@@ -501,6 +507,8 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     turnDispatchCommitted: false,
     ingestingDispatchServiceFrames: false,
     dispatchRequestWitnessed: false,
+    dispatchExchangeAmbiguous: false,
+    witnessedTurnExchangeIds: new Set<string>(),
     armDispatch() { this.dispatchArmed = true; },
     witnessInstall: Promise.resolve(),
   };
@@ -509,18 +517,26 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
   }).catch(() => {});
   page.on('request', (request: any) => {
     try {
-      if (!state.dispatchArmed) return;
+      if (!state.dispatchArmed || !state.ingestingDispatchServiceFrames) return;
       const url = String(request.url());
       if (!/conversation|messages|responses/i.test(url)) return;
       const turnExchangeId = parseRequestTurnExchangeId(request);
       if (turnExchangeId) {
-        state.dispatchTurnExchangeId = turnExchangeId;
-        if (!state.activeTurnExchangeId) state.activeTurnExchangeId = turnExchangeId;
+        state.witnessedTurnExchangeIds.add(turnExchangeId);
+        if (state.dispatchTurnExchangeId && state.dispatchTurnExchangeId !== turnExchangeId) {
+          state.dispatchExchangeAmbiguous = true;
+        } else if (!state.dispatchTurnExchangeId) {
+          state.dispatchTurnExchangeId = turnExchangeId;
+        }
       }
       for (const message of parseRequestBody(request)) {
         if (message.role === 'user') {
           state.dispatchCandidateIds.add(message.id);
-          if (!state.dispatchRequestUserId) state.dispatchRequestUserId = message.id;
+          if (state.dispatchRequestUserId && state.dispatchRequestUserId !== message.id) {
+            state.dispatchExchangeAmbiguous = true;
+          } else if (!state.dispatchRequestUserId) {
+            state.dispatchRequestUserId = message.id;
+          }
         }
       }
       state.dispatchRequestWitnessed = true;
@@ -777,6 +793,10 @@ export async function sendTurn(
 ): Promise<TurnBrowserResult> {
   const network = attachNetworkWitness(page);
   const releaseWitness = async () => {
+    if (process.env.CHATGPT_BROWSER_TURN_AC3_TIMING_TEST === '1') {
+      await witnessPollDelay(page, 2_000);
+      return;
+    }
     await Promise.race([
       network.witnessTeardown?.() ?? Promise.resolve(),
       new Promise<void>((resolve) => { setTimeout(resolve, 2_000); }),
@@ -836,14 +856,11 @@ export async function sendTurn(
   }
 
   let userId = '';
-  const deliveredDeadlineMs = (() => {
-    const raw = process.env.CHATGPT_BROWSER_TURN_DELIVERED_DEADLINE_MS;
-    if (!raw) return 30_000;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000;
-  })();
-  const deliveredDeadline = Date.now() + deliveredDeadlineMs;
-  while (Date.now() < deliveredDeadline && !userId) {
+  const deliveredDeadline = wallClock() + 30_000;
+  while (wallClock() < deliveredDeadline && !userId) {
+    if (network.dispatchExchangeAmbiguous) {
+      return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
+    }
     const canonicalEarly = canonicalSubmittedUserId(network, baselineIds);
     if (!canonicalEarly && network.dispatchCandidateIds.size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };

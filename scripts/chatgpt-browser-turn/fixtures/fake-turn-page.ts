@@ -31,6 +31,7 @@ export interface FakeTurnPageOptions {
   readonly composer?: boolean;
   readonly serviceObserveDispatch?: boolean;
   readonly preDispatchServiceFrames?: readonly Record<string, unknown>[];
+  readonly preClickRequests?: readonly { readonly turnExchangeId: string; readonly userId?: string }[];
   readonly turnExchangeId?: string;
 }
 
@@ -152,6 +153,19 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     click: async () => {
       sendClicks++;
       sent = true;
+      for (const req of options.preClickRequests ?? []) {
+        await emit('request', {
+          url: () => 'https://chatgpt.com/backend-api/conversation',
+          postData: () => JSON.stringify({
+            metadata: { turn_exchange_id: req.turnExchangeId },
+            messages: [{
+              ...(req.userId ? { id: req.userId } : {}),
+              author: { role: 'user' },
+              content: { content_type: 'text', parts: [''] },
+            }],
+          }),
+        });
+      }
       for (const id of options.historicalResponseUserIds ?? []) {
         await emit('response', {
           url: () => 'https://chatgpt.com/backend-api/conversation/history',
