@@ -21,6 +21,14 @@ export interface PlatformPreflightResult {
   nodeMajor: 22;
 }
 
+function requireCanonicalExistingDirectory(value: string, label: 'repo_root' | 'old_installed_revision_root'): string {
+  if (!value || !path.isAbsolute(value)) throw new Error(`${label}_not_canonical`);
+  const lexical = path.normalize(value);
+  const canonical = realpathSync(value);
+  if (value !== lexical || lexical !== canonical) throw new Error(`${label}_not_canonical`);
+  return canonical;
+}
+
 export function runActivationPlatformPreflight(input: PlatformPreflightInput): PlatformPreflightResult {
   const platform = input.platform ?? process.platform;
   if (platform !== 'linux') throw new Error('unsupported_platform');
@@ -28,8 +36,8 @@ export function runActivationPlatformPreflight(input: PlatformPreflightInput): P
   const major = Number(version.split('.')[0]);
   if (major !== 22) throw new Error('node22_required');
   if (!existsSync(input.repoRoot) || !existsSync(input.oldInstalledRevisionRoot)) throw new Error('installed_revision_missing');
-  const repoRoot = realpathSync(input.repoRoot);
-  const oldInstalledRevisionRoot = realpathSync(input.oldInstalledRevisionRoot);
+  const repoRoot = requireCanonicalExistingDirectory(input.repoRoot, 'repo_root');
+  const oldInstalledRevisionRoot = requireCanonicalExistingDirectory(input.oldInstalledRevisionRoot, 'old_installed_revision_root');
   const headResult = runProcessSync({
     command: 'git',
     args: ['-C', repoRoot, 'rev-parse', 'HEAD'],
