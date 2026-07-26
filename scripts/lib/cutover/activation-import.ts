@@ -23,6 +23,7 @@ function normalizedPayload(spec: CutoverStoreSpec, raw: Buffer): Record<string, 
 }
 
 export function snapshotStores(stores: CutoverStoreSpec[], snapshotDir: string, writerWatermark: string): SnapshotRecord[] {
+  if (!writerWatermark.trim()) throw new Error('writer_watermark_missing');
   mkdirSync(snapshotDir, { recursive: true });
   return stores.map((store) => {
     const bytes = readFileSync(store.sourcePath);
