@@ -94,7 +94,6 @@
     "scripts/toolchain/chatgpt-browser-turn.issue-1010.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.test.ts": "light",
-    "scripts/toolchain/vitest-runtime-history-delivery.issue-1012.test.ts": "light",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy"
   },
   "heavyTopology": {
