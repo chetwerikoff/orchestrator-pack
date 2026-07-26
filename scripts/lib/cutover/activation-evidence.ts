@@ -1,7 +1,7 @@
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { sha256Stable } from './stable-stringify.ts';
+import { sha256Stable, stableStringify } from './stable-stringify.ts';
 import type { FollowupRecord, PhaseOneEnvelope, PhaseRecord } from './types.ts';
 
 export const REQUIRED_FOLLOWUP_STEPS = [
@@ -50,6 +50,31 @@ function readEnvelope(pathName: string, epochId: string, nonce: string): PhaseOn
   return parsed;
 }
 
+function phaseDetailPath(pathName: string, sequence: number): string {
+  return path.join(`${pathName}.details`, `${String(sequence).padStart(4, '0')}.json`);
+}
+
+function readDetail(pathName: string, record: PhaseRecord): unknown {
+  const detailPath = phaseDetailPath(pathName, record.sequence);
+  if (!existsSync(detailPath)) throw new Error(`phase_one_detail_missing:${record.step}`);
+  const detail = JSON.parse(readFileSync(detailPath, 'utf8')) as unknown;
+  if (sha256Stable(detail) !== record.detailDigest) throw new Error(`phase_one_detail_digest_mismatch:${record.step}`);
+  return detail;
+}
+
+export function readPhaseOneDetail(pathName: string, epochId: string, nonce: string, step: string): unknown {
+  const envelope = readEnvelope(pathName, epochId, nonce);
+  const matches = envelope.records.filter((record) => record.step === step);
+  if (matches.length !== 1) throw new Error(`phase_one_detail_record_invalid:${step}`);
+  return readDetail(pathName, matches[0]!);
+}
+
+export function verifyPhaseOneDetails(pathName: string, epochId: string, nonce: string): PhaseOneEnvelope {
+  const envelope = readEnvelope(pathName, epochId, nonce);
+  for (const record of envelope.records) readDetail(pathName, record);
+  return envelope;
+}
+
 export function appendPhaseOne(pathName: string, epochId: string, nonce: string, step: string, detail: unknown): PhaseRecord {
   const envelope = readEnvelope(pathName, epochId, nonce);
   const record: PhaseRecord = {
@@ -58,13 +83,15 @@ export function appendPhaseOne(pathName: string, epochId: string, nonce: string,
     completedAt: new Date().toISOString(),
     detailDigest: sha256Stable(detail),
   };
+  writeDurableFile(phaseDetailPath(pathName, record.sequence), `${stableStringify(detail)}\n`);
+  readDetail(pathName, record);
   envelope.records.push(record);
   writeDurableJson(pathName, envelope);
   return record;
 }
 
 export function finalizePhaseOne(pathName: string, epochId: string, nonce: string): { envelope: PhaseOneEnvelope; digest: string } {
-  const envelope = readEnvelope(pathName, epochId, nonce);
+  const envelope = verifyPhaseOneDetails(pathName, epochId, nonce);
   if (envelope.records.length === 0) throw new Error('phase_one_empty');
   return { envelope, digest: sha256Stable(envelope) };
 }
