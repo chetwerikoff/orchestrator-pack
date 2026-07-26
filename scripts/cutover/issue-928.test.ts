@@ -65,11 +65,13 @@ function writeJson(file: string, value: unknown): void {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+function source(relative: string): string {
+  return readFileSync(path.join(repoRoot, relative), 'utf8');
+}
+
 function activationFixture(): { request: ActivationRequest; boundary: ActivationBoundary; root: string } {
   const root = tempRoot();
   const state = path.join(root, 'state');
-  const storesRoot = root;
-  const snapshots = path.join(root, 'snapshots');
   const targetRegistry = path.join(root, 'target-registry.json');
   writeJson(targetRegistry, {
     schemaVersion: 2,
@@ -82,8 +84,8 @@ function activationFixture(): { request: ActivationRequest; boundary: Activation
     ['reportStateSeed', { bindingByKey: {}, seededKeys: [], deferredScanKeys: [], githubSnapshot: {}, lastUpdatedMs: 3 }, ['bindingByKey', 'seededKeys', 'deferredScanKeys', 'githubSnapshot', 'lastUpdatedMs']],
   ] as const;
   const stores = definitions.map(([id, payload, coveredFields]) => {
-    const sourcePath = path.join(storesRoot, `${id}.source.json`);
-    const targetPath = path.join(storesRoot, `${id}.target.json`);
+    const sourcePath = path.join(root, `${id}.source.json`);
+    const targetPath = path.join(root, `${id}.target.json`);
     writeJson(sourcePath, payload);
     return { id, sourcePath, targetPath, coveredFields };
   });
@@ -106,7 +108,7 @@ function activationFixture(): { request: ActivationRequest; boundary: Activation
       epochAuthorityPath: path.join(state, 'epoch-authority.json'),
       targetRegistryPath: targetRegistry,
       projectedRegistryPath: path.join(state, 'projected-registry.json'),
-      snapshotDir: snapshots,
+      snapshotDir: path.join(root, 'snapshots'),
       supervisorStateDir: path.join(state, 'supervisor'),
       foundationEvidencePath: path.join(state, 'foundation-923-adoption.json'),
     },
@@ -118,10 +120,20 @@ function activationFixture(): { request: ActivationRequest; boundary: Activation
     resolveBaseAndClosure: () => ({ baseRef: 'post-948-base', closure: { inputTree: 'tree-948', referenceCount: 2 } }),
     readLegacySupervisor: () => identity,
     captureLegacyWriters: () => [],
-    drainLegacyWriters: async () => ({ writerWatermark: 'drained-test-watermark', drainedAt: new Date().toISOString() }),
-    terminateLegacyProcesses: async () => [identity.pid],
+    drainLegacyWriters: async () => {
+      if (!existsSync(request.paths.cordonPath)) throw new Error('cordon_not_first');
+      return { writerWatermark: 'drained-test-watermark', drainedAt: new Date().toISOString() };
+    },
+    terminateLegacyProcesses: async () => {
+      if (!existsSync(request.paths.cordonPath)) throw new Error('termination_before_cordon');
+      return [identity.pid];
+    },
     verifyLegacyProcessesGone: () => ({ supervisorAlive: false, writers: [] }),
-    startTypeScriptSupervisor: async () => ({ supervisorPid: 43210, childGeneration: 1 }),
+    startTypeScriptSupervisor: async () => {
+      const authority = new FileEpochAuthority(request.paths.epochAuthorityPath).read();
+      if (authority.currentEpochId !== request.epochId) throw new Error('typescript_supervisor_before_cas');
+      return { supervisorPid: 43210, childGeneration: 1 };
+    },
   };
   return { request, boundary, root };
 }
@@ -161,6 +173,33 @@ describe('[AC1] admission and closure', () => {
     await expect(activateCutover(request, boundary)).rejects.toThrow(/foundation_evidence_missing/);
     expect(existsSync(request.paths.cordonPath)).toBe(false);
   });
+
+  it('retains the fail-closed admission guards required before cordon', () => {
+    const activation = source('scripts/lib/cutover/activation-transaction.ts');
+    const preflight = source('scripts/lib/cutover/activation-platform-preflight.ts');
+    const cordon = source('scripts/lib/cutover/activation-cordon.ts');
+    for (const token of [
+      "const FOUNDATION_LANDING_COMMIT = 'b967dfe156838039e1d6d137e7064dc9d1b10b4d';",
+      "const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';",
+      "if (!isAncestor(repoRoot, PR2A_LANDING_COMMIT, baseRef)) throw new Error('pr2a_merge_missing');",
+      "if (manifest.schemaVersion !== 1) throw new Error('closure_schema_incompatible');",
+      "throw new Error('closure_unresolved_set_nonempty');",
+      'if (external.length !== 0) throw new Error(`external_legacy_reference:',
+      'const foundation = boundary.proveFoundationAdoption(request);',
+      "if (!request.hostId || request.hostId !== observedLocalHost) throw new Error('foundation_host_unbound');",
+      "throw new Error('foundation_heartbeat_stale');",
+      "throw new Error('foundation_member_not_adopted');",
+      "throw new Error('second_control_plane_host');",
+      'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);',
+    ]) expect(activation).toContain(token);
+    for (const token of [
+      "if (platform !== 'linux') throw new Error('unsupported_platform');",
+      "if (major !== 22) throw new Error('node22_required');",
+      "if (actualHead.toLowerCase() !== input.installedCommitSha.toLowerCase()) throw new Error('installed_commit_unbound');",
+      "throw new Error(`${label}_not_canonical`);",
+    ]) expect(preflight).toContain(token);
+    expect(cordon).toContain("if (existsSync(input.path)) throw new Error('competing_transaction_admitted');");
+  });
 });
 
 describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
@@ -174,11 +213,14 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(result.cutover.activation_evidence.result).toBe('bound-central-cas-record');
     expect(result.supervisorPid).toBe(43210);
     expect(result.childGeneration).toBe(1);
+    const cordon = JSON.parse(readFileSync(request.paths.cordonPath, 'utf8'));
+    expect(cordon).toMatchObject({ writersClosed: true, noRespawn: true, noTypeScriptStart: true });
     expect(existsSync(path.join(request.paths.supervisorStateDir, 'stopping'))).toBe(true);
     expect(existsSync(path.join(request.paths.supervisorStateDir, 'maintenance.epoch'))).toBe(true);
     const phaseOne = JSON.parse(readFileSync(request.paths.phaseOnePath, 'utf8'));
-    expect(phaseOne.records.map((row: any) => row.step)).toContain('writer-drain');
-    expect(phaseOne.records.map((row: any) => row.step)).toContain('legacy-supervisor-and-writers-terminated');
+    expect(phaseOne.records.map((row: any) => row.step)).toEqual([
+      'admission','cordon','writer-drain','legacy-supervisor-and-writers-terminated','snapshots','import-begun','imports','registry-projected',
+    ]);
     const authority = JSON.parse(readFileSync(request.paths.epochAuthorityPath, 'utf8'));
     expect(authority.records).toHaveLength(1);
     expect(Object.keys(authority.records[0]).sort()).toEqual([
@@ -193,6 +235,39 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(() => provePreImportRollbackSafe(request)).toThrow(/forward_only/);
   });
 
+  it('retains cordon-first, import, projection, CAS and supervisor ordering', () => {
+    const activation = source('scripts/lib/cutover/activation-transaction.ts');
+    const body = activation.slice(activation.indexOf('export async function activateCutover'));
+    const ordered = [
+      'const cordon = createCordon(',
+      'boundary.drainLegacyWriters(request, legacyWriters)',
+      'boundary.terminateLegacyProcesses(',
+      'snapshotStores(request.stores',
+      'markImportBegun(request.paths.cordonPath)',
+      'importSnapshot({',
+      'projectRegistry(request.paths.targetRegistryPath',
+      'authority.commit(request.expectedOldEpochId, core)',
+      'boundary.startTypeScriptSupervisor(request, cordon.nonce)',
+    ].map((token) => body.indexOf(token));
+    expect(ordered.every((index) => index >= 0)).toBe(true);
+    expect(ordered).toEqual([...ordered].sort((a, b) => a - b));
+  });
+
+  it('rejects a missing writer watermark before snapshots', async () => {
+    const { request, boundary } = activationFixture();
+    boundary.drainLegacyWriters = async () => ({ writerWatermark: '', drainedAt: new Date().toISOString() });
+    await expect(activateCutover(request, boundary)).rejects.toThrow(/writer_watermark_missing/);
+    expect(existsSync(request.paths.snapshotDir)).toBe(false);
+  });
+
+  it('rejects a surviving legacy writer after drain and termination', async () => {
+    const { request, boundary } = activationFixture();
+    const writer: ProcessIdentity = { pid: 23456, startTicks: '77', cmdline: ['legacy-writer'] };
+    boundary.verifyLegacyProcessesGone = () => ({ supervisorAlive: false, writers: [{ childId: 'mutation-writer', identity: writer, sideEffectLockPath: null }] });
+    await expect(activateCutover(request, boundary)).rejects.toThrow(/legacy_process_survivor/);
+    expect(existsSync(request.paths.snapshotDir)).toBe(false);
+  });
+
   it('resumes forward from the import boundary when CAS has not happened yet', async () => {
     const { request, boundary } = activationFixture();
     const identity = boundary.readLegacySupervisor(request);
@@ -205,7 +280,6 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'snapshots', snapshots);
     const marked = markImportBegun(request.paths.cordonPath);
     appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'import-begun', { importBegunAt: marked.importBegunAt });
-
     expect(existsSync(request.paths.epochAuthorityPath)).toBe(false);
     await expect(recoverCommittedCutover(request, {
       ensureTypeScriptSupervisor: async () => ({ supervisorPid: 43210, childGeneration: 1 }),
@@ -233,6 +307,25 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(provePreImportRollbackSafe(request).safe).toBe(true);
     writeJson(request.stores[0].targetPath, { changed: true });
     expect(() => provePreImportRollbackSafe(request)).toThrow(/preimport_target_changed/);
+  });
+
+  it('retains snapshot/import identity, validation and convergence guards', () => {
+    const imports = source('scripts/lib/cutover/activation-import.ts');
+    for (const token of [
+      "if (!writerWatermark.trim()) throw new Error('writer_watermark_missing');",
+      'snapshotDigest: sha256Bytes(bytes)',
+      'if (!Number.isInteger(sourceVersion) || sourceVersion <= 0)',
+      "throw new Error(`store_unknown_field:${spec.id}:${unknown.join(',')}`)",
+      "throw new Error(`store_missing_field:${spec.id}:${key}`)",
+      'epochId: input.epochId,',
+      'nonce: input.nonce,',
+      'storeId: input.spec.id,',
+      'snapshotDigest: input.snapshot.snapshotDigest,',
+      'if (marker.importIdentity !== importIdentity || marker.importTargetDigest !== importTargetDigest)',
+      'if (sha256Stable(existing) !== importTargetDigest)',
+      'if (sha256Stable(readBack) !== importTargetDigest)',
+      'writeDurableJson(markerPath, record);',
+    ]) expect(imports).toContain(token);
   });
 });
 
@@ -274,6 +367,19 @@ describe('[AC8] platform and canonical bytes', () => {
     })).toThrow(/node22_required/);
   });
 
+  it('fails unsupported native Windows before any cordon path can be created', () => {
+    const { request } = activationFixture();
+    expect(() => runActivationPlatformPreflight({
+      repoRoot,
+      installedCommitSha: git(['rev-parse', 'HEAD']),
+      oldInstalledRevisionRoot: repoRoot,
+      targetRegistryPath: request.paths.targetRegistryPath,
+      projectedRegistryPath: request.paths.projectedRegistryPath,
+      nodeVersion: '22.0.0',
+      platform: 'win32',
+    })).toThrow(/unsupported_platform/);
+  });
+
   it('rejects a non-canonical repository root instead of normalizing it', () => {
     const { request } = activationFixture();
     const nonCanonical = `${repoRoot}${path.sep}..${path.sep}${path.basename(repoRoot)}`;
@@ -290,17 +396,19 @@ describe('[AC8] platform and canonical bytes', () => {
     })).toThrow(/repo_root_not_canonical/);
   });
 
-  it('retains durability, exclusion and central nonce primitives', () => {
-    const evidence = readFileSync(path.join(repoRoot, 'scripts/lib/cutover/activation-evidence.ts'), 'utf8');
-    const epoch = readFileSync(path.join(repoRoot, 'scripts/lib/cutover/activation-epoch-authority.ts'), 'utf8');
-    const cordon = readFileSync(path.join(repoRoot, 'scripts/lib/cutover/activation-cordon.ts'), 'utf8');
-    const recovery = readFileSync(path.join(repoRoot, 'scripts/lib/cutover/activation-recovery.ts'), 'utf8');
-    const supervisor = readFileSync(path.join(repoRoot, 'scripts/lib/orchestrator-side-process-supervisor.ts'), 'utf8');
+  it('retains durability, exclusion, process identity and central nonce primitives', () => {
+    const evidence = source('scripts/lib/cutover/activation-evidence.ts');
+    const epoch = source('scripts/lib/cutover/activation-epoch-authority.ts');
+    const cordon = source('scripts/lib/cutover/activation-cordon.ts');
+    const recovery = source('scripts/lib/cutover/activation-recovery.ts');
+    const supervisor = source('scripts/lib/orchestrator-side-process-supervisor.ts');
+    const preflight = source('scripts/lib/cutover/activation-platform-preflight.ts');
     for (const token of ['fsyncSync(fd);', 'renameSync(temporary, target);', 'syncDirectory(directory);']) expect(evidence).toContain(token);
     for (const token of ['mkdirSync(lock);', 'document.currentEpochId !== expectedOldEpochId', 'record.nonce !== nonce']) expect(epoch).toContain(token);
-    for (const token of ["randomBytes(32).toString('hex')", 'writeDurableFile(barrier.stopping']) expect(cordon).toContain(token);
+    for (const token of ["randomBytes(32).toString('hex')", 'writeDurableFile(barrier.stopping', 'current.startTicks !== identity.startTicks', 'if (survivors.length) throw new Error']) expect(cordon).toContain(token);
     for (const token of ['completePreCasRecovery', 'authority.commit(request.expectedOldEpochId, core);']) expect(recovery).toContain(token);
-    expect(supervisor).toContain('verifyEpochAndProjection(options)');
+    for (const token of ['verifyEpochAndProjection(options)', 'projectRegistry(options.targetRegistryPath, options.projectedRegistryPath)']) expect(supervisor).toContain(token);
+    for (const token of ["if (platform !== 'linux') throw new Error('unsupported_platform');", 'statSync(targetParent).dev !== statSync(projectionParent).dev']) expect(preflight).toContain(token);
   });
 
   it('accepts only the scheduler-only target registry', () => {
@@ -315,12 +423,7 @@ describe('[AC4] scheduler-driven #918 successor slice', () => {
     const root = tempRoot();
     const authorityPath = path.join(root, 'authority.json');
     committedEpoch(authorityPath);
-    const env = {
-      ...process.env,
-      ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
-      ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-scheduler',
-      ORCHESTRATOR_CUTOVER_NONCE: 'nonce-scheduler',
-    };
+    const env = { ...process.env, ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath, ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-scheduler', ORCHESTRATOR_CUTOVER_NONCE: 'nonce-scheduler' };
     const starts: Array<{ pr: number; head: string }> = [];
     const candidate = { sessionId: 'worker-1', repoSlug: 'chetwerikoff/orchestrator-pack', prNumber: 928, boundHeadSha: 'c'.repeat(40) };
     const boundary: SchedulerBoundary = {
@@ -332,8 +435,7 @@ describe('[AC4] scheduler-driven #918 successor slice', () => {
     };
     expect(await runSchedulerTick(boundary, env)).toEqual({ attempted: 1, started: 1, skipped: 0 });
     expect(starts).toEqual([{ pr: 928, head: candidate.boundHeadSha }]);
-    const staleEnv = { ...env, ORCHESTRATOR_CUTOVER_NONCE: 'copied-stale-nonce' };
-    await expect(runSchedulerTick(boundary, staleEnv)).rejects.toThrow(/epoch_nonce_mismatch/);
+    await expect(runSchedulerTick(boundary, { ...env, ORCHESTRATOR_CUTOVER_NONCE: 'copied-stale-nonce' })).rejects.toThrow(/epoch_nonce_mismatch/);
   });
 
   it('refuses a fresh-head drift before review start', async () => {
