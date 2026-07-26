@@ -114,6 +114,16 @@ An independent reviewer may inspect the task, diff, CI, comments, and review thr
 
 Review work must not mutate implementation state unless the user/task also authorizes implementation changes. This is a role boundary, not a global execution mode or ownership state machine.
 
+### Evidence-feasibility gate
+
+Before introducing or strengthening a blocking review requirement that depends on correlation, causality, identity, provenance, parentage, turn/session context, or another witness, first establish that the required evidence is actually observable on the exact production execution or transport path being constrained.
+
+Identify the evidence producer and the exact observation surface that supplies it. Ground the evidence's existence in an authoritative contract or an observed live production shape. A mock, fixture, inferred schema, or evidence available only on a different path does not prove that the constrained path provides it.
+
+If the required evidence is absent, do not demand it as though it exists. Use weaker available evidence that still proves the needed property, add scoped instrumentation when the task permits it, or state that the desired invariant cannot be proven at that boundary and adjust the design or specification accordingly.
+
+A blocking finding that depends on an impossible or unproven witness must be withdrawn or explicitly adjudicated; it must not generate another implementation round whose only purpose is to manufacture evidence the production path does not supply.
+
 ## 8. CI and review stay current-head bound
 
 CI and review conclusions apply to the exact PR head they evaluated.
