@@ -3,7 +3,7 @@ import path from 'node:path';
 import { runProcess } from '../../kernel/subprocess.ts';
 import { buildEpochCommitCore, FileEpochAuthority, mapCutoverStoreDigests } from './activation-epoch-authority.ts';
 import { fileDigestOrAbsent, processAlive, readCordon } from './activation-cordon.ts';
-import { appendFollowup, appendPhaseOne, finalizePhaseOne, verifyPhaseOneDigest } from './activation-evidence.ts';
+import { appendFollowup, appendPhaseOne, finalizePhaseOne, readPhaseOneDetail, verifyPhaseOneDetails, verifyPhaseOneDigest } from './activation-evidence.ts';
 import { importSnapshot } from './activation-import.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
@@ -145,32 +145,54 @@ function ensurePhaseOneStep(pathName: string, epochId: string, nonce: string, st
   const expectedDigest = sha256Stable(detail);
   if (existing) {
     if (existing.detailDigest !== expectedDigest) throw new Error(`precas_recovery_detail_mismatch:${step}`);
+    readPhaseOneDetail(pathName, epochId, nonce, step);
     return;
   }
   appendPhaseOne(pathName, epochId, nonce, step, detail);
 }
 
-function recoverySnapshots(request: ActivationRequest): SnapshotRecord[] {
+function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotRecord[] {
+  const persisted = readPhaseOneDetail(request.paths.phaseOnePath, request.epochId, nonce, 'snapshots');
+  if (!Array.isArray(persisted) || persisted.length !== request.stores.length) throw new Error('precas_snapshot_evidence_invalid');
+  const rows = persisted as Array<Partial<SnapshotRecord>>;
   return request.stores.map((spec) => {
+    const matches = rows.filter((row) => row.storeId === spec.id);
+    if (matches.length !== 1) throw new Error(`precas_snapshot_evidence_invalid:${spec.id}`);
+    const row = matches[0]!;
     const snapshotPath = path.join(request.paths.snapshotDir, `${spec.id}.snapshot.json`);
+    if (
+      row.snapshotPath !== snapshotPath
+      || typeof row.snapshotDigest !== 'string'
+      || !row.snapshotDigest.startsWith('sha256:')
+      || !Number.isInteger(row.sourceVersion)
+      || Number(row.sourceVersion) <= 0
+      || typeof row.writerWatermark !== 'string'
+      || !row.writerWatermark.trim()
+    ) {
+      throw new Error(`precas_snapshot_evidence_invalid:${spec.id}`);
+    }
     if (!existsSync(snapshotPath)) throw new Error(`precas_snapshot_missing:${spec.id}`);
     const bytes = readFileSync(snapshotPath);
+    if (sha256Bytes(bytes) !== row.snapshotDigest) throw new Error(`precas_snapshot_digest_mismatch:${spec.id}`);
     const parsed = JSON.parse(bytes.toString('utf8')) as { schemaVersion?: unknown };
     const sourceVersion = Number(parsed.schemaVersion ?? 1);
-    if (!Number.isInteger(sourceVersion) || sourceVersion <= 0) throw new Error(`snapshot_version_missing:${spec.id}`);
+    if (!Number.isInteger(sourceVersion) || sourceVersion <= 0 || sourceVersion !== row.sourceVersion) {
+      throw new Error(`precas_snapshot_version_mismatch:${spec.id}`);
+    }
     return {
       storeId: spec.id,
       snapshotPath,
-      snapshotDigest: sha256Bytes(bytes),
+      snapshotDigest: row.snapshotDigest,
       sourceVersion,
-      writerWatermark: 'durable-preimport-evidence',
+      writerWatermark: row.writerWatermark,
     };
   });
 }
 
 function completePreCasRecovery(request: ActivationRequest, nonce: string, authority: FileEpochAuthority): EpochCommitCore {
   assertForwardRecoveryPrefix(request.paths.phaseOnePath, request.epochId, nonce);
-  const snapshots = recoverySnapshots(request);
+  verifyPhaseOneDetails(request.paths.phaseOnePath, request.epochId, nonce);
+  const snapshots = recoverySnapshots(request, nonce);
   const imports: ImportRecord[] = request.stores.map((spec) => importSnapshot({
     epochId: request.epochId,
     nonce,
