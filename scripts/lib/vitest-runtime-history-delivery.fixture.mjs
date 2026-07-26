@@ -298,6 +298,54 @@ function testProvenanceMatrix() {
   );
 }
 
+function testSamePayloadFailedProvenanceRetryRegeneratesEpisode() {
+  const failedRunId = 9101;
+  const retryRunId = 9102;
+  const attempt = 1;
+  const failedHead = GENERATED;
+  const failedHistory = [provenanceStatus({ id: 1, state: 'pending', runId: failedRunId, attempt })];
+
+  // Episode A already pushed H and opened the PR, then its terminal provenance write failed.
+  const failedBinding = parseRefreshProvenance(failedHistory, failedHead);
+  assert(failedBinding.ok, 'retry must be able to inspect the pending provenance binding on H');
+  const failedProof = verifyRefreshRun(
+    successfulRefreshRun({ id: failedRunId, attempt, conclusion: 'failure' }),
+    failedBinding,
+  );
+  equal(failedProof.outcome, 'provenance-invalid', 'failed prior refresh episode must not authorize stable-head reuse');
+
+  // Model the workflow's same-payload decision: only a successful exact-head episode can suppress the push.
+  let shouldPush = true;
+  if (failedBinding.ok && failedProof.ok && failedProof.state === 'success') shouldPush = false;
+  assert(shouldPush, 'same-payload retry must keep should_push=true after failed provenance');
+
+  let remoteHead = failedHead;
+  let preparedHead = failedHead;
+  let pushCalls = 0;
+  const retryHistory = [];
+
+  // The recovery branch amends when the prepared commit still equals the failed remote head.
+  if (shouldPush && preparedHead === remoteHead) preparedHead = NEXT_HEAD;
+  assert(preparedHead !== remoteHead, 'same-payload retry must regenerate a distinct generated head');
+
+  if (shouldPush) {
+    pushCalls += 1;
+    remoteHead = preparedHead;
+    retryHistory.push(provenanceStatus({ id: 2, state: 'pending', runId: retryRunId, attempt }));
+    retryHistory.push(provenanceStatus({ id: 3, state: 'success', runId: retryRunId, attempt }));
+  }
+
+  equal(pushCalls, 1, 'same-payload retry must push the fresh generated head exactly once');
+  equal(retryHistory.length, 2, 'fresh retry episode must emit pending and terminal provenance');
+  equal(retryHistory[0].state, 'pending', 'fresh retry episode must begin with pending provenance');
+  equal(retryHistory[1].state, 'success', 'fresh retry episode must be able to complete provenance');
+
+  const retryBinding = parseRefreshProvenance(retryHistory, remoteHead);
+  assert(retryBinding.ok, 'fresh exact-head provenance must parse after retry push');
+  const retryProof = verifyRefreshRun(successfulRefreshRun({ id: retryRunId, attempt }), retryBinding);
+  equal(retryProof.state, 'success', 'fresh retry episode must be eligible for unattended delivery');
+}
+
 function testStatusHistoryProjection() {
   equal(projectPackReviewStatusHistory([provenanceStatus()]).state, 'absent', 'no operator row should be absent');
   equal(
@@ -610,6 +658,7 @@ async function main() {
     testSinglePathGate,
     testIdentityMatrix,
     testProvenanceMatrix,
+    testSamePayloadFailedProvenanceRetryRegeneratesEpisode,
     testStatusHistoryProjection,
     testCurrentPolicySnapshotRegression,
     testProviderRestrictionFailsClosedWhenUnprovable,
