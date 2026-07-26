@@ -75,8 +75,19 @@ function isGroundedWholeTurnFailureTerminal(
   return false;
 }
 
-function isGroundedWholeTurnSuccessTerminal(endTurn: boolean | undefined): boolean {
-  return endTurn === true;
+const GROUNDED_WHOLE_TURN_SUCCESS_FINISH_DETAILS = new Set(['stop']);
+
+function hasUnknownTerminalStatus(status: string | undefined): boolean {
+  if (!status) return false;
+  return !GROUNDED_WHOLE_TURN_FAILURE_STATUSES.has(status);
+}
+
+function isGroundedWholeTurnSuccessTerminal(metadata: AssistantTerminalMetadata): boolean {
+  if (metadata.endTurn !== true) return false;
+  if (hasUnknownTerminalStatus(metadata.status)) return false;
+  if (metadata.contentType && GROUNDED_WHOLE_TURN_FAILURE_CONTENT_TYPES.has(metadata.contentType)) return false;
+  if (metadata.contentType && metadata.contentType !== 'text') return false;
+  return metadata.finishDetailsType === 'stop';
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -150,7 +161,7 @@ function recordGroundedDeltaMessage(
     || incoming.contentText !== undefined;
   if (touched) state.terminalByMessageId.set(id, next);
   if (frameCarriesExplicitEndTurn(message) && (
-    isGroundedWholeTurnSuccessTerminal(next.endTurn)
+    isGroundedWholeTurnSuccessTerminal(next)
     || isGroundedWholeTurnFailureTerminal(next.endTurn, next)
   )) {
     state.terminalAuthorityFrameByMessageId.set(id, state.frames.length - 1);
@@ -231,12 +242,8 @@ export function ingestServicePayloadTree(state: TerminalWitnessState, value: unk
       try { ingestServicePayload(state, JSON.parse(line) as Record<string, unknown>); } catch { /* ignore */ }
     }
   }
-  const payload = obj.payload;
-  if (payload && typeof payload === 'object') {
-    const nested = asRecord(payload)?.payload;
-    ingestServicePayloadTree(state, nested ?? payload);
-  }
 }
+
 
 export function isMessageAttributedToUserTurn(
   messageId: string,
@@ -261,7 +268,8 @@ export function wholeTurnTerminalOutcome(
   if (metadata.contentType && GROUNDED_WHOLE_TURN_FAILURE_CONTENT_TYPES.has(metadata.contentType)) {
     return 'failure';
   }
-  return 'success';
+  if (isGroundedWholeTurnSuccessTerminal(metadata)) return 'success';
+  return 'none';
 }
 
 export function nodeLocalStopWithoutWholeTurn(metadata: AssistantTerminalMetadata | undefined): boolean {

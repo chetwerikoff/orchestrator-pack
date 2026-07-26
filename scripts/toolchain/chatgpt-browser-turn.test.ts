@@ -912,6 +912,18 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
     timeoutMs: 2_000,
   });
 
+  it('does not treat unknown terminal metadata as whole-turn success', () => {
+    expect(wholeTurnTerminalOutcome({
+      endTurn: true,
+      finishDetailsType: 'stop',
+      status: 'in_progress',
+    })).toBe('none');
+    expect(wholeTurnTerminalOutcome({
+      endTurn: true,
+      finishDetailsType: 'stop',
+    })).toBe('success');
+  });
+
   it('preserves sanitized live terminal failure frame contract before AC5/AC6 fixtures', () => {
     expect(LIVE_TERMINAL_FAILURE_FRAME_CONTRACT.map((frame) => frame.type)).toEqual(['delta', 'delta']);
     const generationError = LIVE_TERMINAL_FAILURE_FRAME_CONTRACT[0]?.v as { message?: { status?: string; content?: { content_type?: string } } };
@@ -1038,6 +1050,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
               author: { role: 'assistant' },
               parent: 'tool-handoff-12345678',
               end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
             },
           },
         },
@@ -1123,6 +1136,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
               author: { role: 'assistant' },
               parent: own,
               end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
             },
           },
         },
@@ -1144,6 +1158,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
             author: { role: 'assistant' },
             parent: 'user-foreign-12345678',
             end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
           },
         },
       }],
@@ -1171,6 +1186,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
             author: { role: 'assistant' },
             parent: own,
             end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
           },
         },
       }],
@@ -1210,6 +1226,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
               author: { role: 'assistant' },
               parent: own,
               end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
             },
           },
         },
@@ -1239,6 +1256,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
             author: { role: 'assistant' },
             parent: own,
             end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
             content: { content_type: 'text', parts: ['# Title'] },
           },
         },
@@ -1259,6 +1277,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
           author: { role: 'assistant' },
           parent: own,
           end_turn: true,
+          metadata: { finish_details: { type: 'stop' } },
         },
       },
     };
@@ -1287,6 +1306,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
           author: { role: 'assistant' },
           parent: own,
           end_turn: true,
+          metadata: { finish_details: { type: 'stop' } },
         },
       },
     };
@@ -1325,6 +1345,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
           author: { role: 'assistant' },
           parent: own,
           end_turn: true,
+          metadata: { finish_details: { type: 'stop' } },
         },
       },
     };
@@ -1364,6 +1385,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
             author: { role: 'assistant' },
             parent: own,
             end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
           },
         },
       }],
@@ -1375,6 +1397,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
             author: { role: 'assistant' },
             parent: own,
             end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
           },
         },
       }],
@@ -1388,6 +1411,56 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
       expect(result.state).toBe('stream_timeout');
       expect(result.cause).toBe('no_terminal_evidence');
     }
+  });
+
+  it('does not attribute terminal nodes from DOM parent links alone', async () => {
+    const own = 'user-owned-12345678';
+    const assistantId = 'assistant-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: assistantId, parent: own, text: 'dom-only attribution', appearOnSend: true }],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: assistantId,
+            author: { role: 'assistant' },
+            parent: 'foreign-parent-12345678',
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+    expect(result.state).toBe('stream_timeout');
+    expect(result.cause).toBe('no_terminal_evidence');
+  });
+
+  it('fail-closes arbitrary payload wrappers carrying nested terminal deltas', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'rogue answer', appearOnSend: true }],
+      serviceFrames: [{
+        type: 'rogue_wrapper',
+        payload: {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'assistant-owned-12345678',
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
+            },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+    expect(result.state).toBe('stream_timeout');
+    expect(result.cause).toBe('no_terminal_evidence');
   });
 
   it('fail-closes nested terminal-looking deltas under unsupported wrapper paths', async () => {
@@ -1405,6 +1478,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
               author: { role: 'assistant' },
               parent: own,
               end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
             },
           },
         },
@@ -1427,6 +1501,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
             author: { role: 'assistant' },
             parent: own,
             end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
           },
         },
       }],
@@ -1457,6 +1532,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
             author: { role: 'assistant' },
             parent: own,
             end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
           },
         },
       }],

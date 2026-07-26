@@ -201,12 +201,8 @@ function ingestWitnessJsonTree(state: NetworkWitnessState, value: unknown): void
   }
   const obj = value as Record<string, unknown>;
   if (typeof obj.encoded_item === 'string') ingestEncodedItemWitness(state, obj.encoded_item);
-  const payload = obj.payload;
-  if (payload && typeof payload === 'object') {
-    const nested = (payload as Record<string, unknown>).payload;
-    ingestWitnessJsonTree(state, nested ?? payload);
-  }
 }
+
 
 function ingestWebSocketWitnessPayload(state: NetworkWitnessState, payloadData: string): void {
   if (!payloadData) return;
@@ -567,23 +563,18 @@ export async function sendTurn(
     }
 
     const assistants = page.locator('[data-message-author-role="assistant"]');
-    const observations: CausalMessageObservation[] = [];
     const assistantLocators = new Map<string, any>();
     for (let index = 0, count = await assistants.count(); index < count; index++) {
       const locator = assistants.nth(index);
       const id = await serviceId(locator);
       if (!id || baselineIds.has(id)) continue;
-      const parent = await parentServiceId(locator);
-      observations.push({ id, role: 'assistant', ...(parent ? { parent } : {}) });
       assistantLocators.set(id, locator);
     }
     for (const message of network.messages) {
       if (!baselineIds.has(message.id)) {
         registerLegacyObservation(network.terminal, message);
-        if (message.role === 'assistant') observations.push(message);
       }
     }
-    for (const observation of observations) registerLegacyObservation(network.terminal, observation);
 
     for (const [assistantMessageId, message] of network.terminal.messages) {
       if (message.role !== 'assistant' || baselineIds.has(assistantMessageId)) continue;
