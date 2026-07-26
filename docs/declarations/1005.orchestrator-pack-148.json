@@ -7,14 +7,30 @@
   "baseline": {
     "commit_sha": "a140a57e78cca4ccf73e5254b77b0b2416e2d767",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:24010a246fddd0158aeef86310d706bfb22e460ada921e49d3aca6531757a066"
+    "active_scope_hash": "sha256:bd94df089d9d38be7cd540d0d2dfd484237a1400da3291fee81b2957b7ae3ea3"
   },
   "declared_paths": [
     "scripts/chatgpt-browser-turn.ts",
-    "scripts/toolchain/chatgpt-browser-turn.diagnostics.test.ts"
+    "scripts/toolchain/chatgpt-browser-turn.diagnostics.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [
     "scripts/chatgpt-browser-turn/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:24010a246fddd0158aeef86310d706bfb22e460ada921e49d3aca6531757a066",
+      "new_active_scope_hash": "sha256:bd94df089d9d38be7cd540d0d2dfd484237a1400da3291fee81b2957b7ae3ea3",
+      "changed": {
+        "added": [
+          "scripts/vitest-ci-lanes.config.json"
+        ],
+        "removed": []
+      },
+      "reason": "CI lane classification for diagnostics test",
+      "actor": "orchestrator-pack-148",
+      "timestamp": "2026-07-26T03:28:29.485Z",
+      "applied": true
+    }
+  ]
 }
