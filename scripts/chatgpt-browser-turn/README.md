@@ -65,6 +65,19 @@ A stale generation, changed evidence, live owner, unreadable lock, or publicatio
 
 `turn` writes exactly one JSON `turn-result/v1` line. `ok` exits 0. Invocation-local validation/send failures use exit family 10, exact recovery/conversation ambiguity 11, profile walls/busy/orphan state 12, machine/driver failure 13, and incompatible durable state 14.
 
+## Page lifetime and process exit
+
+Each `turn` invocation connects to the operator's already-running Chrome over CDP, may create or reuse a ChatGPT tab, and must release what it acquired on every terminal path:
+
+- a page the helper **created** (`owned: true`) is closed before durable incident deletion and lock release on success and on failures that are not possible-delivery;
+- a page the helper **reused** (`owned: false`) is never closed;
+- a failure after **possible delivery** keeps its page open as operator recovery evidence;
+- the CDP client connection is always released in a `finally` block so the one-shot process can exit once the terminal result is emitted.
+
+Releasing the CDP client disconnects Playwright from the operator's Chrome; it does not terminate the browser process. Possible-delivery recovery therefore depends on adopted-context tabs surviving client disconnect — see `fixtures/cdp-page-survival-precondition.md` for the live observation record.
+
+`status/list` and `clear` profile-wall probes also release their short-lived CDP connections before returning.
+
 `status/list`, `clear`, and `capability` write `control-result/v1`. `publication-status` writes `publication-status/v1`. These envelopes are body-free: they may contain identifiers, paths, generations, hashes, byte lengths, timestamps, and causes, but never prompt or reply bodies.
 
 Never resend after possible delivery merely because the caller missed the terminal result. Query `publication-status` and `status/list` first. Possible-delivery incidents are not timer-cleared or stale-lock reclaimed.
