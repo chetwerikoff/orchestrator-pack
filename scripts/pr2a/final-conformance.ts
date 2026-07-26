@@ -96,16 +96,18 @@ export function buildConformanceReport(ref = 'HEAD'): ConformanceReport {
   };
 }
 
-function arg(name: string): string | null {
-  const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1] ?? null : null;
+function runCli(argv: string[]): void {
+  const refIndex = argv.indexOf('--ref');
+  const requestedRef = refIndex >= 0 ? argv[refIndex + 1] ?? 'HEAD' : 'HEAD';
+  const report = buildConformanceReport(requestedRef);
+  const indentation = argv.includes('--json') ? 2 : 0;
+  process.stdout.write(`${JSON.stringify(report, null, indentation)}\n`);
+  process.exitCode = report.result === 'conformant' ? 0 : 1;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
   try {
-    const report = buildConformanceReport(arg('--ref') ?? 'HEAD');
-    process.stdout.write(`${JSON.stringify(report, null, process.argv.includes('--json') ? 2 : 0)}\n`);
-    if (report.result !== 'conformant') process.exitCode = 1;
+    runCli(process.argv.slice(2));
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
