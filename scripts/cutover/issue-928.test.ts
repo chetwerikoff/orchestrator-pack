@@ -250,6 +250,8 @@ describe('[AC6] scope', () => {
     expect(rows.some((row) => row.path === 'scripts/check-side-process-launch-contract.ps1')).toBe(false);
     const newTests = rows.filter((row) => row.status === 'A' && /^scripts\/.*\.test\.ts$/.test(row.path)).map((row) => row.path);
     expect(newTests).toEqual(['scripts/cutover/issue-928.test.ts']);
+    const protectedWorktree = [...D928, ...CLAIM_AUTHORITY, 'scripts/orchestrator-side-process-registry.json', 'scripts/vitest-ci-lanes.config.json'];
+    expect(git(['status', '--porcelain=v1', '--untracked-files=all', '--', ...protectedWorktree])).toBe('');
   });
 });
 
@@ -285,6 +287,19 @@ describe('[AC8] platform and canonical bytes', () => {
       nodeVersion: '22.0.0',
       platform: 'linux',
     })).toThrow(/repo_root_not_canonical/);
+  });
+
+  it('retains durability, exclusion and central nonce primitives', () => {
+    const evidence = readFileSync(path.join(repoRoot, 'scripts/lib/cutover/activation-evidence.ts'), 'utf8');
+    const epoch = readFileSync(path.join(repoRoot, 'scripts/lib/cutover/activation-epoch-authority.ts'), 'utf8');
+    const cordon = readFileSync(path.join(repoRoot, 'scripts/lib/cutover/activation-cordon.ts'), 'utf8');
+    const recovery = readFileSync(path.join(repoRoot, 'scripts/lib/cutover/activation-recovery.ts'), 'utf8');
+    const supervisor = readFileSync(path.join(repoRoot, 'scripts/lib/orchestrator-side-process-supervisor.ts'), 'utf8');
+    for (const token of ['fsyncSync(fd);', 'renameSync(temporary, target);', 'syncDirectory(directory);']) expect(evidence).toContain(token);
+    for (const token of ['mkdirSync(lock);', 'document.currentEpochId !== expectedOldEpochId', 'record.nonce !== nonce']) expect(epoch).toContain(token);
+    for (const token of ["randomBytes(32).toString('hex')", 'writeDurableFile(barrier.stopping']) expect(cordon).toContain(token);
+    for (const token of ['completePreCasRecovery', 'authority.commit(request.expectedOldEpochId, core);']) expect(recovery).toContain(token);
+    expect(supervisor).toContain('verifyEpochAndProjection(options)');
   });
 
   it('accepts only the scheduler-only target registry', () => {
