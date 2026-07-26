@@ -4,10 +4,17 @@ import { buildPlanningManifest } from './closed-world-scanner.ts';
 import { D928, FOUNDATION_COMMIT } from './contracts.ts';
 import { validatePlanningManifest } from './planning-validator.ts';
 
+const reviewed = JSON.parse(readFileSync('scripts/pr2a/planning-manifest.json', 'utf8')) as {
+  lineage: { planningCommit: string };
+};
+
+function reviewedPlanningManifest() {
+  return buildPlanningManifest(reviewed.lineage.planningCommit);
+}
+
 describe('Issue #948 planning tooling bootstrap', () => {
   it('classifies every tracked file and closes the known target reverse references', () => {
-    const reviewed = JSON.parse(readFileSync('scripts/pr2a/planning-manifest.json', 'utf8'));
-    const manifest = buildPlanningManifest(reviewed.lineage.planningCommit);
+    const manifest = reviewedPlanningManifest();
     expect(manifest.issue).toBe(948);
     expect(manifest.lineage.foundationCommit).toBe(FOUNDATION_COMMIT);
     expect(manifest.denominator.length).toBeGreaterThan(1000);
@@ -20,13 +27,13 @@ describe('Issue #948 planning tooling bootstrap', () => {
   });
 
   it('binds all four D928 members without authorizing their mutation', () => {
-    const manifest = buildPlanningManifest('HEAD');
+    const manifest = reviewedPlanningManifest();
     expect(Object.keys(manifest.d928Sha256).sort()).toEqual([...D928].sort());
     for (const target of D928) expect(manifest.plannedOperations.some((row) => row.path === target)).toBe(false);
   });
 
   it('censuses every top-level claim and lifecycle function with an overlap disposition', () => {
-    const manifest = buildPlanningManifest('HEAD');
+    const manifest = reviewedPlanningManifest();
     expect(manifest.lifecycle.length).toBeGreaterThanOrEqual(80);
     expect(manifest.lifecycle.every((row) => row.legacyProtocolDisposition && row.rolloutBoundary)).toBe(true);
     expect(manifest.lifecycle.some((row) => row.identity === 'Acquire-ReviewStartClaim')).toBe(true);
