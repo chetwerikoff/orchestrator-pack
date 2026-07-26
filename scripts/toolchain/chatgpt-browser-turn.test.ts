@@ -1241,12 +1241,74 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
 
   it('waits for continuation growth after continue-generating disappears before publish', async () => {
     const own = 'user-owned-12345678';
+    const freshTerminal = {
+      type: 'delta',
+      v: {
+        message: {
+          id: 'assistant-owned-12345678',
+          author: { role: 'assistant' },
+          parent: own,
+          end_turn: true,
+        },
+      },
+    };
     const fixture = fakeTurnPage({
       dispatchCandidateIds: [own],
       assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'alpha', appearOnSend: true }],
-      continueGenerating: { hideAfterClick: true, growthSequence: ['alpha', 'alpha\nbeta'] },
+      continueGenerating: {
+        hideAfterClick: true,
+        growthSequence: ['alpha', 'alpha\nbeta'],
+        terminalFramesAfterClick: [freshTerminal],
+      },
+      serviceFrames: [freshTerminal],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('alpha\nbeta');
+  });
+
+  it('clicks continue on a non-terminal node and waits for fresh whole-turn service evidence', async () => {
+    const own = 'user-owned-12345678';
+    const freshTerminal = {
+      type: 'delta',
+      v: {
+        message: {
+          id: 'assistant-owned-12345678',
+          author: { role: 'assistant' },
+          parent: own,
+          end_turn: true,
+        },
+      },
+    };
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'segment one', appearOnSend: true }],
+      continueGenerating: {
+        growthSequence: ['segment one', 'segment one\nsegment two'],
+        terminalFramesAfterClick: [freshTerminal],
+      },
       serviceFrames: [{
         type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: false,
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('segment one\nsegment two');
+  });
+
+  it('fail-closes unsupported unknown and patch envelopes carrying end_turn metadata', async () => {
+    const own = 'user-owned-12345678';
+    for (const serviceFrames of [
+      [{
+        type: 'rogue_terminal_frame',
         v: {
           message: {
             id: 'assistant-owned-12345678',
@@ -1256,10 +1318,27 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
           },
         },
       }],
-    });
-    const result = await sendTurn(fixture.page, 'payload', baseConfig());
-    expect(result.state).toBe('ok');
-    expect(result.reply).toBe('alpha\nbeta');
+      [{
+        type: 'patch',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+          },
+        },
+      }],
+    ]) {
+      const fixture = fakeTurnPage({
+        dispatchCandidateIds: [own],
+        assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'rogue answer', appearOnSend: true }],
+        serviceFrames,
+      });
+      const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+      expect(result.state).toBe('stream_timeout');
+      expect(result.cause).toBe('no_terminal_evidence');
+    }
   });
 
   it('AC9 terminal with unreadable content uses stream_timeout with terminal_content_incomplete', async () => {

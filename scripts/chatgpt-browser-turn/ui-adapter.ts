@@ -13,6 +13,7 @@ import {
   createTerminalWitnessState,
   ingestServicePayload,
   ingestServicePayloadTree,
+  invalidateTerminalEvidenceForContinuation,
   isMessageAttributedToUserTurn,
   registerLegacyObservation,
   resolveWholeTurnTerminal,
@@ -543,8 +544,7 @@ export async function sendTurn(
   let contentStablePolls = 0;
   let lastTerminalContent = '';
   let continuationActive = false;
-  let continuationAwaitingGrowth = false;
-  let continuationBaseline = '';
+  let awaitingFreshTerminalAfterContinuation = false;
   let terminalPublishEligible = true;
   const deadline = Date.now() + config.timeoutMs;
   while (Date.now() < deadline) {
@@ -602,6 +602,37 @@ export async function sendTurn(
       }
     }
 
+    const cont = page.getByText(/continue generating/i);
+    if (await cont.count().catch(() => 0)) {
+      let continuationLocator: any = null;
+      if (boundAssistantId) {
+        continuationLocator = assistantLocators.get(boundAssistantId) ?? null;
+      }
+      if (!continuationLocator) {
+        for (let index = 0, count = await assistants.count(); index < count; index++) {
+          const locator = assistants.nth(index);
+          const id = await serviceId(locator);
+          if (id && isMessageAttributedToUserTurn(id, userId, network.terminal.messages)) {
+            continuationLocator = locator;
+            break;
+          }
+        }
+      }
+      if (continuationLocator) {
+        const current = await assistantText(continuationLocator).catch(() => '');
+        if (current && (!segments.length || segments[segments.length - 1] !== current)) segments.push(current);
+        await cont.first().click().catch(() => {});
+        continuationActive = true;
+        awaitingFreshTerminalAfterContinuation = true;
+        terminalPublishEligible = false;
+        terminalSuccessSeen = false;
+        boundAssistantId = '';
+        invalidateTerminalEvidenceForContinuation(network.terminal);
+        contentStablePolls = 0;
+        lastTerminalContent = '';
+      }
+    }
+
     const terminal = resolveWholeTurnTerminal(userId, network.terminal);
     if (terminal.state === 'failure') {
       return {
@@ -614,6 +645,12 @@ export async function sendTurn(
     }
 
     if (terminal.state === 'success') {
+      if (awaitingFreshTerminalAfterContinuation) {
+        awaitingFreshTerminalAfterContinuation = false;
+        terminalPublishEligible = true;
+        contentStablePolls = 0;
+        lastTerminalContent = '';
+      }
       terminalSuccessSeen = true;
       boundAssistantId = terminal.assistantMessageId;
       let matched = assistantLocators.get(boundAssistantId) ?? null;
@@ -625,47 +662,29 @@ export async function sendTurn(
           }
         }
       }
-      if (matched) {
+      if (matched && terminalPublishEligible) {
         const current = await assistantText(matched).catch(() => '');
         if (current) {
           if (!segments.length || segments[segments.length - 1] !== current) segments.push(current);
-          const cont = page.getByText(/continue generating/i);
-          if (await cont.count().catch(() => 0)) {
-            await cont.first().click().catch(() => {});
-            continuationActive = true;
-            continuationAwaitingGrowth = true;
-            continuationBaseline = mergeContinuationSegments(segments);
-            terminalPublishEligible = false;
-            contentStablePolls = 0;
-            lastTerminalContent = '';
+          const replyCandidate = continuationActive ? mergeContinuationSegments(segments) : current;
+          if (current === lastTerminalContent) {
+            contentStablePolls++;
+            if (contentStablePolls >= 1) {
+              const conversationId = normalizeConversationUrl(page.url());
+              return {
+                state: 'ok',
+                cause: 'completed',
+                possibleDelivery: true,
+                userMessageId: userId,
+                assistantMessageId: boundAssistantId,
+                conversationId,
+                reply: replyCandidate,
+              };
+            }
           } else {
-            const replyCandidate = continuationActive ? mergeContinuationSegments(segments) : current;
-            if (continuationAwaitingGrowth) {
-              if (replyCandidate !== continuationBaseline) {
-                continuationAwaitingGrowth = false;
-                terminalPublishEligible = true;
-                contentStablePolls = 0;
-              }
-            }
-            if (terminalPublishEligible && current === lastTerminalContent) {
-              contentStablePolls++;
-              if (contentStablePolls >= 1) {
-                const conversationId = normalizeConversationUrl(page.url());
-                return {
-                  state: 'ok',
-                  cause: 'completed',
-                  possibleDelivery: true,
-                  userMessageId: userId,
-                  assistantMessageId: boundAssistantId,
-                  conversationId,
-                  reply: replyCandidate,
-                };
-              }
-            } else if (current !== lastTerminalContent) {
-              contentStablePolls = 0;
-            }
-            lastTerminalContent = current;
+            contentStablePolls = 0;
           }
+          lastTerminalContent = current;
         }
       }
     }

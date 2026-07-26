@@ -12,6 +12,7 @@ export interface FakeAssistantSpec {
 export interface ContinueGeneratingSpec {
   readonly hideAfterClick?: boolean;
   readonly growthSequence?: readonly string[];
+  readonly terminalFramesAfterClick?: readonly Record<string, unknown>[];
 }
 
 export interface FakeTurnPageOptions {
@@ -179,6 +180,8 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
 
   let continueVisible = Boolean(options.continueGenerating);
   let continueGrowthIndex = 0;
+  let continueClicked = false;
+  let pendingTerminalFrames: readonly Record<string, unknown>[] | undefined;
   const applyContinueGrowth = () => {
     const growth = options.continueGenerating?.growthSequence ?? [];
     if (!growth.length) return;
@@ -187,6 +190,13 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     const next = growth[Math.min(continueGrowthIndex, growth.length - 1)] ?? '';
     assistant.__applyText?.(next);
     if (continueGrowthIndex < growth.length - 1) continueGrowthIndex++;
+  };
+  const maybeEmitContinuationTerminal = async () => {
+    if (!continueClicked || !pendingTerminalFrames?.length) return;
+    const growth = options.continueGenerating?.growthSequence ?? [];
+    if (growth.length > 0 && continueGrowthIndex < growth.length - 1) return;
+    await emitServiceFrames(pendingTerminalFrames);
+    pendingTerminalFrames = undefined;
   };
 
   const page = {
@@ -223,6 +233,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     waitForTimeout: async () => {
       for (const message of messages) message.advanceText?.();
       if (options.continueGenerating?.growthSequence?.length) applyContinueGrowth();
+      await maybeEmitContinuationTerminal();
     },
     getByText: (pattern: string | RegExp) => {
       const label = typeof pattern === 'string' ? pattern : pattern.source;
@@ -231,7 +242,9 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
         count: async () => 1,
         first: () => ({
           click: async () => {
+            continueClicked = true;
             if (options.continueGenerating?.hideAfterClick !== false) continueVisible = false;
+            pendingTerminalFrames = options.continueGenerating?.terminalFramesAfterClick;
           },
         }),
       };

@@ -36,17 +36,25 @@ export type WholeTurnTerminalOutcome =
 export interface TerminalWitnessState {
   readonly messages: Map<string, WitnessMessage>;
   readonly terminalByMessageId: Map<string, AssistantTerminalMetadata>;
+  readonly terminalAuthorityFrameByMessageId: Map<string, number>;
   readonly frames: ServiceFrameRecord[];
   streamCompleteSeen: boolean;
+  terminalAuthorityAfterFrame: number;
 }
 
 export function createTerminalWitnessState(): TerminalWitnessState {
   return {
     messages: new Map(),
     terminalByMessageId: new Map(),
+    terminalAuthorityFrameByMessageId: new Map(),
     frames: [],
     streamCompleteSeen: false,
+    terminalAuthorityAfterFrame: 0,
   };
+}
+
+export function invalidateTerminalEvidenceForContinuation(state: TerminalWitnessState): void {
+  state.terminalAuthorityAfterFrame = state.frames.length;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -94,7 +102,7 @@ function terminalMetadataFromMessage(message: Record<string, unknown>): Assistan
   return { endTurn, finishDetailsType, status, contentType, contentText };
 }
 
-function recordMessage(
+function recordGroundedDeltaMessage(
   state: TerminalWitnessState,
   message: Record<string, unknown>,
   role: WitnessMessageRole,
@@ -111,8 +119,20 @@ function recordMessage(
     || terminal.contentType !== undefined
   ) {
     state.terminalByMessageId.set(id, mergeTerminalMetadata(state.terminalByMessageId.get(id), terminal));
+    state.terminalAuthorityFrameByMessageId.set(id, state.frames.length - 1);
   }
   return id;
+}
+
+function terminalAuthorityFrame(
+  state: TerminalWitnessState,
+  messageId: string,
+): number {
+  return state.terminalAuthorityFrameByMessageId.get(messageId) ?? Number.NEGATIVE_INFINITY;
+}
+
+function hasCurrentTerminalAuthority(state: TerminalWitnessState, messageId: string): boolean {
+  return terminalAuthorityFrame(state, messageId) >= state.terminalAuthorityAfterFrame;
 }
 
 function classifyFrameType(rawType: string): ServiceFrameKind {
@@ -147,35 +167,18 @@ export function ingestServicePayload(state: TerminalWitnessState, payload: Recor
     return;
   }
 
-  const delta = asRecord(payload.v);
-  const message = asRecord(delta?.message) ?? delta;
-  const role = witnessRole(asRecord(message?.author));
-  if (message && role) {
-    const messageId = recordMessage(state, message, role);
-    if (messageId) state.frames[state.frames.length - 1] = { kind, rawType, messageId };
+  if (rawType === 'delta') {
+    const message = asRecord(asRecord(payload.v)?.message);
+    const role = witnessRole(asRecord(message?.author));
+    if (message && role) {
+      const messageId = recordGroundedDeltaMessage(state, message, role);
+      if (messageId) state.frames[state.frames.length - 1] = { kind, rawType, messageId };
+    }
     return;
   }
 
   if (kind === 'patch') {
-    const patch = payload.v ?? payload.patch;
-    if (Array.isArray(patch)) {
-      for (const entry of patch) {
-        const record = asRecord(entry);
-        const patchMessage = asRecord(asRecord(record?.v)?.message) ?? asRecord(record?.message);
-        const patchRole = witnessRole(asRecord(patchMessage?.author));
-        if (patchMessage && patchRole) {
-          const messageId = recordMessage(state, patchMessage, patchRole);
-          if (messageId) state.frames[state.frames.length - 1] = { kind, rawType, messageId };
-        }
-      }
-      return;
-    }
-    const patchMessage = asRecord(asRecord(patch)?.message) ?? asRecord(asRecord(asRecord(patch)?.v)?.message);
-    const patchRole = witnessRole(asRecord(patchMessage?.author));
-    if (patchMessage && patchRole) {
-      const messageId = recordMessage(state, patchMessage, patchRole);
-      if (messageId) state.frames[state.frames.length - 1] = { kind, rawType, messageId };
-    }
+    return;
   }
 }
 
@@ -246,6 +249,7 @@ export function resolveWholeTurnTerminal(
   for (const [messageId, message] of state.messages) {
     if (message.role !== 'assistant') continue;
     if (!isMessageAttributedToUserTurn(messageId, userMessageId, state.messages)) continue;
+    if (!hasCurrentTerminalAuthority(state, messageId)) continue;
     const metadata = state.terminalByMessageId.get(messageId);
     const outcome = wholeTurnTerminalOutcome(metadata);
     if (outcome === 'failure') {
@@ -256,11 +260,13 @@ export function resolveWholeTurnTerminal(
       return { state: 'failure', assistantMessageId: messageId, cause };
     }
     if (outcome === 'success') {
-      const index = state.frames.findIndex((frame) => frame.messageId === messageId && frame.kind !== 'patch');
-      latestSuccess = {
-        assistantMessageId: messageId,
-        index: index >= 0 ? index : state.frames.length,
-      };
+      const index = terminalAuthorityFrame(state, messageId);
+      if (!latestSuccess || index >= latestSuccess.index) {
+        latestSuccess = {
+          assistantMessageId: messageId,
+          index,
+        };
+      }
     }
   }
   if (latestSuccess) {
