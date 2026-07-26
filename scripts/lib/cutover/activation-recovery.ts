@@ -3,9 +3,11 @@ import path from 'node:path';
 import { runProcess } from '../../kernel/subprocess.ts';
 import { FileEpochAuthority } from './activation-epoch-authority.ts';
 import { fileDigestOrAbsent, processAlive, readCordon } from './activation-cordon.ts';
-import { appendFollowup, verifyPhaseOneDigest } from './activation-evidence.ts';
+import { appendFollowup, appendPhaseOne, finalizePhaseOne, verifyPhaseOneDigest } from './activation-evidence.ts';
+import { importSnapshot } from './activation-import.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
-import type { FollowupRecord, ActivationRequest } from './types.ts';
+import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
+import type { FollowupRecord, ActivationRequest, CutoverStoreId, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 
 export interface RecoveryBoundary {
@@ -98,6 +100,112 @@ export const productionRecoveryBoundary: RecoveryBoundary = {
   },
 };
 
+const REQUIRED_PREIMPORT_STEPS = [
+  'admission',
+  'cordon',
+  'writer-drain',
+  'legacy-supervisor-and-writers-terminated',
+  'snapshots',
+  'import-begun',
+] as const;
+
+function readPhaseOne(pathName: string, epochId: string, nonce: string): PhaseOneEnvelope {
+  if (!existsSync(pathName)) throw new Error('phase_one_missing');
+  const envelope = JSON.parse(readFileSync(pathName, 'utf8')) as PhaseOneEnvelope;
+  if (envelope.schemaVersion !== 1 || envelope.epochId !== epochId || envelope.nonce !== nonce || !Array.isArray(envelope.records)) {
+    throw new Error('phase_one_envelope_mismatch');
+  }
+  envelope.records.forEach((record, index) => {
+    if (record.sequence !== index + 1) throw new Error('phase_one_sequence_invalid');
+  });
+  return envelope;
+}
+
+function assertForwardRecoveryPrefix(pathName: string, epochId: string, nonce: string): void {
+  const envelope = readPhaseOne(pathName, epochId, nonce);
+  const steps = envelope.records.map((row) => row.step);
+  for (let index = 0; index < REQUIRED_PREIMPORT_STEPS.length; index += 1) {
+    if (steps[index] !== REQUIRED_PREIMPORT_STEPS[index]) {
+      throw new Error(`precas_recovery_evidence_incomplete:${REQUIRED_PREIMPORT_STEPS[index]}`);
+    }
+  }
+  const allowed = new Set([...REQUIRED_PREIMPORT_STEPS, 'imports', 'registry-projected']);
+  if (steps.some((step) => !allowed.has(step))) throw new Error('precas_recovery_phase_unknown');
+  if (steps.filter((step) => step === 'imports').length > 1 || steps.filter((step) => step === 'registry-projected').length > 1) {
+    throw new Error('precas_recovery_phase_duplicate');
+  }
+  const importsIndex = steps.indexOf('imports');
+  const projectionIndex = steps.indexOf('registry-projected');
+  if (projectionIndex >= 0 && (importsIndex < 0 || projectionIndex < importsIndex)) throw new Error('precas_recovery_phase_order_invalid');
+}
+
+function ensurePhaseOneStep(pathName: string, epochId: string, nonce: string, step: string, detail: unknown): void {
+  const envelope = readPhaseOne(pathName, epochId, nonce);
+  const existing = envelope.records.find((row) => row.step === step);
+  const expectedDigest = sha256Stable(detail);
+  if (existing) {
+    if (existing.detailDigest !== expectedDigest) throw new Error(`precas_recovery_detail_mismatch:${step}`);
+    return;
+  }
+  appendPhaseOne(pathName, epochId, nonce, step, detail);
+}
+
+function recoverySnapshots(request: ActivationRequest): SnapshotRecord[] {
+  return request.stores.map((spec) => {
+    const snapshotPath = path.join(request.paths.snapshotDir, `${spec.id}.snapshot.json`);
+    if (!existsSync(snapshotPath)) throw new Error(`precas_snapshot_missing:${spec.id}`);
+    const bytes = readFileSync(snapshotPath);
+    const parsed = JSON.parse(bytes.toString('utf8')) as { schemaVersion?: unknown };
+    const sourceVersion = Number(parsed.schemaVersion ?? 1);
+    if (!Number.isInteger(sourceVersion) || sourceVersion <= 0) throw new Error(`snapshot_version_missing:${spec.id}`);
+    return {
+      storeId: spec.id,
+      snapshotPath,
+      snapshotDigest: sha256Bytes(bytes),
+      sourceVersion,
+      writerWatermark: 'durable-preimport-evidence',
+    };
+  });
+}
+
+function mapDigests<T extends { storeId: CutoverStoreId }>(rows: T[], select: (row: T) => string): Record<CutoverStoreId, string> {
+  const output = {} as Record<CutoverStoreId, string>;
+  for (const row of rows) output[row.storeId] = select(row);
+  for (const id of ['reconcile', 'reevaluation', 'reportStateSeed'] as const) {
+    if (!output[id]) throw new Error(`store_digest_missing:${id}`);
+  }
+  return output;
+}
+
+function completePreCasRecovery(request: ActivationRequest, nonce: string, authority: FileEpochAuthority): EpochCommitCore {
+  assertForwardRecoveryPrefix(request.paths.phaseOnePath, request.epochId, nonce);
+  const snapshots = recoverySnapshots(request);
+  const imports: ImportRecord[] = request.stores.map((spec) => importSnapshot({
+    epochId: request.epochId,
+    nonce,
+    spec,
+    snapshot: snapshots.find((row) => row.storeId === spec.id)!,
+  }));
+  ensurePhaseOneStep(request.paths.phaseOnePath, request.epochId, nonce, 'imports', imports);
+  const projection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
+  ensurePhaseOneStep(request.paths.phaseOnePath, request.epochId, nonce, 'registry-projected', projection);
+  const phaseOne = finalizePhaseOne(request.paths.phaseOnePath, request.epochId, nonce);
+  const core: EpochCommitCore = {
+    epochId: request.epochId,
+    nonce,
+    hostId: request.hostId,
+    repoRoot: readCordon(request.paths.cordonPath).repoRoot,
+    installedCommitSha: request.installedCommitSha,
+    snapshotDigests: mapDigests(snapshots, (row) => row.snapshotDigest),
+    importDigests: mapDigests(imports, (row) => row.importTargetDigest),
+    registryHash: projection.registryHash,
+    preCommitLogDigest: phaseOne.digest,
+    commitAt: new Date().toISOString(),
+  };
+  authority.commit(request.expectedOldEpochId, core);
+  return authority.verify(request.epochId, nonce);
+}
+
 export async function recoverCommittedCutover(
   request: ActivationRequest,
   boundary: RecoveryBoundary = productionRecoveryBoundary,
@@ -106,7 +214,16 @@ export async function recoverCommittedCutover(
   const cordon = readCordon(request.paths.cordonPath);
   if (!cordon.importBegunAt) throw new Error('commit_recovery_before_import_boundary');
   const authority = new FileEpochAuthority(request.paths.epochAuthorityPath);
-  const core = authority.verify(request.epochId, cordon.nonce);
+  const document = authority.read();
+  let core: EpochCommitCore;
+  if (document.currentEpochId === request.epochId) {
+    core = authority.verify(request.epochId, cordon.nonce);
+  } else {
+    if (document.currentEpochId !== request.expectedOldEpochId || document.records.some((row) => row.epochId === request.epochId)) {
+      throw new Error('epoch_cas_conflict');
+    }
+    core = completePreCasRecovery(request, cordon.nonce, authority);
+  }
   verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, core.preCommitLogDigest);
   const projection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
   if (projection.registryHash !== core.registryHash) throw new Error('recovery_registry_hash_mismatch');
