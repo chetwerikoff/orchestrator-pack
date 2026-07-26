@@ -158,6 +158,14 @@ jobs:
           if old not in s:
               raise SystemExit('diagnostic patch target missing')
           p.write_text(s.replace(old, new, 1))
+
+          p = Path('scripts/cutover/mutation-runner.ts')
+          s = p.read_text()
+          old = "    case'tx-drain-before-snapshot':return before(P.tx,'const drain = await boundary.drainLegacyWriters(request, legacyWriters);',\"snapshotStores(request.stores, request.paths.snapshotDir, 'mutation-before-drain');\\n  \");"
+          new = "    case'tx-drain-before-snapshot':return replaceMany(P.tx,[['  const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, drain.writerWatermark);\\n',''],['  const drain = await boundary.drainLegacyWriters(request, legacyWriters);',\"  const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, 'mutation-before-drain');\\n  const drain = await boundary.drainLegacyWriters(request, legacyWriters);\"]]);"
+          if old not in s:
+              raise SystemExit('snapshot mutation patch target missing')
+          p.write_text(s.replace(old, new, 1))
           PY
           npm run test:contract-mutations 2>&1 | tee mutation-failure.txt
       - name: Upload mutation diagnostic
