@@ -24,7 +24,7 @@ Against the dedicated automation profile on `http://127.0.0.1:9222`:
 
 ```
 date: 2026-07-26T16:00:00Z
-verified_head: 2d3f9b1c6a2c9156dfc5e880b47182506e811621
+verified_head: 96a985d54a247c433a1975c1cc965a1d74fb0516
 live_turn_head: 76fbb589bc62a86d12a25ec46093963291256981
 profile: automation profile (clean, no incidents before or after)
 cdp: http://127.0.0.1:9222
