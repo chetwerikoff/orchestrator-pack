@@ -148,6 +148,7 @@ function mutationFailures(key:string, artifact:string):string[]{
     [M.stable,['Object.keys(object).sort()','return canonical(value, new Set());']],
   ];
   for(const [file,tokens] of required) need(all(file,tokens),`required:${file}`);
+  need(count(M.tx,'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);')===2,'identity:legacy-supervisor-boundaries');
   const activate=body(M.tx,'export async function activateCutover'); const recover=body(M.recovery,'export async function recoverCommittedCutover');
   need(ordered(activate,['const preflight = boundary.preflight(request);','projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath)']),'order:admission');
   need(ordered(activate,['const cordon = createCordon({','boundary.drainLegacyWriters(request, legacyWriters)','boundary.terminateLegacyProcesses(']),'order:cordon');
