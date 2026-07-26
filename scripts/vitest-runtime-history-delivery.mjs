@@ -331,7 +331,13 @@ export async function runDeliveryMonitor(config, io) {
       ? `expected-head merge request errored: ${mergeError.message}`
       : merged?.message || 'GitHub rejected expected-head merge request';
     const rebound = await inspect(config, io);
-    if (rebound.terminal) return { outcome: rebound.outcome, reason: `merge rejected and fresh state changed: ${rebound.reason}`, failed: rebound.outcome !== 'non-generated-head' };
+    if (rebound.terminal) {
+      if (rebound.outcome === 'close-as-obsolete') {
+        await io.closeObsolete(rebound.reason);
+        return { outcome: rebound.outcome, reason: `merge rejected and fresh state changed: ${rebound.reason}` };
+      }
+      return { outcome: rebound.outcome, reason: `merge rejected and fresh state changed: ${rebound.reason}`, failed: rebound.outcome !== 'non-generated-head' };
+    }
     if (rebound.wait) { await io.sleep(config.pollSeconds * 1000); continue; }
     const reboundDecision = evaluateRequiredChecks({ checks: rebound.checks, policy: rebound.policy, packReviewProjection: rebound.projection, machineAdmissionAttempted: attempted });
     if (reboundDecision.action === 'fail') return { outcome: reboundDecision.outcome, reason: `merge rejected (${rejectionReason}) and fresh decision failed: ${reboundDecision.reason}`, failed: true };
