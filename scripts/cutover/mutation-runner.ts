@@ -35,7 +35,7 @@ function digest(value: string): string { return `sha256:${createHash('sha256').u
 function writeJson(file: string, value: unknown): void { writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`); }
 
 function fixture(root: string): { request: ActivationRequest; boundary: ActivationBoundary } {
-  const storesRoot = path.join(root, 'stores');
+  const storesRoot = root;
   const state = path.join(root, 'state');
   const targetRegistry = path.join(root, 'target-registry.json');
   writeJson(targetRegistry, { schemaVersion: 2, requiredChildIds: ['pr2-scheduler'], children: [{ id: 'pr2-scheduler', runtime: 'node', script: 'pr2-foundation/scheduler.ts', sideEffecting: true, cadenceSeconds: 5 }] });
