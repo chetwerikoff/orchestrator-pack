@@ -1,6 +1,8 @@
 import { jsonFieldsEqual, parseGhArgv } from './gh-parse-argv.mjs';
 
-/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner'} InventoryRouteId */
+/** @typedef {'pr-list-open' | 'pr-list-head' | 'pr-list-merged-closes' | 'pr-view' | 'pr-checks' | 'pr-diff-name-only' | 'issue-view-body' | 'issue-view-json' | 'repo-view-name-with-owner' | 'runtime-history-main-required-status-checks' | 'runtime-history-actions-run' | 'runtime-history-status-history'} InventoryRouteId */
+
+const RUNTIME_HISTORY_REPO = 'chetwerikoff/orchestrator-pack';
 
 /** scm-github prInfoFromView consumer fields (resolvePR + detectPR; Issue #530). */
 export const PR_INFO_FROM_VIEW_FIELDS = Object.freeze([
@@ -37,9 +39,59 @@ export function hasOnlyAllowedFlags(parsed, allowed) {
   return Object.keys(parsed.flags).every((key) => allowedSet.has(key));
 }
 
+function matchRuntimeHistoryApiRoute(parsed) {
+  const endpoint = parsed.subcommand[1] ?? '';
+  if (
+    !endpoint
+    || parsed.positionals.length > 0
+    || parsed.jq
+    || parsed.jsonFields
+    || parsed.repo
+    || parsed.hostname
+    || !hasOnlyAllowedFlags(parsed, [])
+  ) {
+    return null;
+  }
+
+  const escapedRepo = RUNTIME_HISTORY_REPO.replace('/', '\\/');
+  if (new RegExp(`^repos\\/${escapedRepo}\\/branches\\/main\\/protection\\/required_status_checks$`).test(endpoint)) {
+    return {
+      id: 'runtime-history-main-required-status-checks',
+      repoSlug: RUNTIME_HISTORY_REPO,
+    };
+  }
+
+  const actionsRun = endpoint.match(
+    new RegExp(`^repos\\/${escapedRepo}\\/actions\\/runs\\/(\\d+)$`),
+  );
+  if (actionsRun) {
+    const runId = Number(actionsRun[1]);
+    if (Number.isSafeInteger(runId) && runId > 0) {
+      return {
+        id: 'runtime-history-actions-run',
+        repoSlug: RUNTIME_HISTORY_REPO,
+        runId,
+      };
+    }
+  }
+
+  const statusHistory = endpoint.match(
+    new RegExp(`^repos\\/${escapedRepo}\\/commits\\/([0-9a-fA-F]{40})\\/statuses$`),
+  );
+  if (statusHistory) {
+    return {
+      id: 'runtime-history-status-history',
+      repoSlug: RUNTIME_HISTORY_REPO,
+      headSha: statusHistory[1].toLowerCase(),
+    };
+  }
+
+  return null;
+}
+
 /**
  * @param {ReturnType<typeof parseGhArgv>} parsed
- * @returns {{ id: InventoryRouteId, prNumber?: number, branch?: string } | null}
+ * @returns {{ id: InventoryRouteId, prNumber?: number, prRef?: string, branch?: string, repoSlug?: string, runId?: number, headSha?: string } | null}
  */
 export function matchInventoryRoute(parsed) {
   const [root, sub] = parsed.subcommand;
@@ -48,7 +100,7 @@ export function matchInventoryRoute(parsed) {
   }
 
   if (root === 'api') {
-    return null;
+    return matchRuntimeHistoryApiRoute(parsed);
   }
 
   if (root === 'repo' && sub === 'view') {

@@ -11,12 +11,14 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  statuses: write
 
 jobs:
   merge-runtime-history-delivery:
     name: Merge runtime-history delivery PR
     if: >-
-      github.event.pull_request.base.ref == 'main'
+      github.repository == 'chetwerikoff/orchestrator-pack'
+      && github.event.pull_request.base.ref == 'main'
       && github.event.pull_request.head.ref == 'ci/vitest-runtime-history-refresh'
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -25,6 +27,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify Node.js major
+        run: npm run check:node-major
 
       - name: Require delivery credential and trusted actor
         id: delivery_actor
@@ -53,9 +63,12 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN }}
+          MACHINE_STATUS_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           node scripts/vitest-runtime-history-delivery.mjs monitor-pr \
             --repo "${GITHUB_REPOSITORY}" \
             --pr "${{ github.event.pull_request.number }}" \
-            --expected-head-sha "${{ github.event.pull_request.head.sha }}"
+            --expected-head-sha "${{ github.event.pull_request.head.sha }}" \
+            --trusted-actor "${{ steps.delivery_actor.outputs.trusted_actor }}" \
+            --event-sender "${{ github.event.sender.login }}"

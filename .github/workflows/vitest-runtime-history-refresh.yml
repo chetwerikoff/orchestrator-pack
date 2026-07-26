@@ -122,7 +122,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
+      actions: read
       contents: write
+      statuses: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -134,6 +136,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+
+      - name: Verify Node.js major
+        run: npm run check:node-major
 
       - name: Install npm dependencies
         run: npm ci --include=dev
@@ -205,6 +210,7 @@ jobs:
         shell: bash
         env:
           DELIVERY_BRANCH: ci/vitest-runtime-history-refresh
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           remote_sha=""
@@ -213,7 +219,9 @@ jobs:
             git fetch origin main "refs/heads/${DELIVERY_BRANCH}:refs/remotes/origin/${DELIVERY_BRANCH}"
             remote_sha="$(git rev-parse "origin/${DELIVERY_BRANCH}")"
             pending_history="$(mktemp)"
-            trap 'rm -f "${pending_history}"' EXIT
+            status_history="$(mktemp)"
+            actions_run="$(mktemp)"
+            trap 'rm -f "${pending_history}" "${status_history}" "${actions_run}"' EXIT
             git show "origin/${DELIVERY_BRANCH}:scripts/vitest-runtime-history.json" > "${pending_history}"
             node scripts/refresh-vitest-runtime-history.mjs reconcile \
               --remote "${pending_history}" \
@@ -225,8 +233,44 @@ jobs:
                 commit --amend --no-edit
             fi
             if git diff --quiet "origin/${DELIVERY_BRANCH}" -- scripts/vitest-runtime-history.json; then
-              should_push="false"
-              echo "runtime-history delivery skipped: pending PR already matches reconciled history payload"
+              ./scripts/gh api "repos/${GITHUB_REPOSITORY}/commits/${remote_sha}/statuses" > "${status_history}"
+              provenance_binding=""
+              if provenance_binding="$(
+                STATUS_HISTORY_FILE="${status_history}" REMOTE_SHA="${remote_sha}" \
+                  node --input-type=module -e '
+                    import { readFileSync } from "node:fs";
+                    import { parseRefreshProvenance } from "./scripts/vitest-runtime-history-delivery.mjs";
+                    const parsed = parseRefreshProvenance(JSON.parse(readFileSync(process.env.STATUS_HISTORY_FILE, "utf8")), process.env.REMOTE_SHA);
+                    if (!parsed.ok) process.exit(2);
+                    process.stdout.write(JSON.stringify(parsed));
+                  '
+              )"; then
+                run_id="$(PROVENANCE_BINDING="${provenance_binding}" node -e 'process.stdout.write(String(JSON.parse(process.env.PROVENANCE_BINDING).runId))')"
+                ./scripts/gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" > "${actions_run}"
+                if PROVENANCE_BINDING="${provenance_binding}" ACTIONS_RUN_FILE="${actions_run}" \
+                  node --input-type=module -e '
+                    import { readFileSync } from "node:fs";
+                    import { verifyRefreshRun } from "./scripts/vitest-runtime-history-delivery.mjs";
+                    const proof = verifyRefreshRun(JSON.parse(readFileSync(process.env.ACTIONS_RUN_FILE, "utf8")), JSON.parse(process.env.PROVENANCE_BINDING));
+                    if (!proof.ok || proof.state !== "success") process.exit(2);
+                  '; then
+                  should_push="false"
+                  echo "runtime-history delivery skipped: pending PR already matches reconciled history payload with successful exact-head provenance"
+                else
+                  echo "runtime-history delivery recovery: matching remote payload lacks successful exact-head provenance; regenerating delivery head"
+                fi
+              else
+                echo "runtime-history delivery recovery: matching remote payload has missing or invalid exact-head provenance; regenerating delivery head"
+              fi
+              if [ "${should_push}" = "true" ] && [ "$(git rev-parse HEAD)" = "${remote_sha}" ]; then
+                sleep 1
+                git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+                  commit --amend --no-edit
+                if [ "$(git rev-parse HEAD)" = "${remote_sha}" ]; then
+                  echo "unable to regenerate a distinct runtime-history delivery head after invalid provenance" >&2
+                  exit 1
+                fi
+              fi
             fi
           else
             git fetch origin main
@@ -236,6 +280,7 @@ jobs:
 
       - name: Push delivery branch
         if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
+        id: push_delivery
         shell: bash
         env:
           DELIVERY_BRANCH: ci/vitest-runtime-history-refresh
@@ -249,6 +294,21 @@ jobs:
           else
             git push --force-with-lease origin "HEAD:refs/heads/${DELIVERY_BRANCH}"
           fi
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish pending delivery provenance
+        if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DELIVERY_HEAD: ${{ steps.push_delivery.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          ./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${DELIVERY_HEAD}" \
+            -f state=pending \
+            -f context=orchestrator-pack/runtime-history-provenance \
+            -f "description=runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}" \
+            -f "target_url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
 
       - name: Write delivery PR body
         if: steps.delivery.outputs.ahead != '0'
@@ -277,3 +337,17 @@ jobs:
           node scripts/vitest-runtime-history-delivery.mjs upsert-pr \
             --repo "${GITHUB_REPOSITORY}" \
             --body-file vitest-runtime-history-delivery-pr-body.md
+
+      - name: Complete delivery provenance
+        if: steps.delivery.outputs.ahead != '0' && steps.delivery_branch.outputs.should_push == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DELIVERY_HEAD: ${{ steps.push_delivery.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          ./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${DELIVERY_HEAD}" \
+            -f state=success \
+            -f context=orchestrator-pack/runtime-history-provenance \
+            -f "description=runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}" \
+            -f "target_url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
