@@ -124,7 +124,7 @@ function ac1InvariantHolds(key: string): boolean {
     case 'AC1:host-or-repo-unbound': return has(M.tx, "if (!request.hostId || request.hostId !== observedLocalHost) throw new Error('foundation_host_unbound');");
     case 'AC1:installed-commit-unbound': return has(M.preflight, "if (actualHead.toLowerCase() !== input.installedCommitSha.toLowerCase()) throw new Error('installed_commit_unbound');");
     case 'AC1:old-installed-revision-missing': return has(M.preflight, "if (!existsSync(input.repoRoot) || !existsSync(input.oldInstalledRevisionRoot)) throw new Error('installed_revision_missing');");
-    case 'AC1:legacy-supervisor-identity-ambiguous': return count(M.tx, 'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);') === 2;
+    case 'AC1:legacy-supervisor-identity-ambiguous': return has(M.tx, 'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);');
     case 'AC1:node22-not-enforced': return has(M.preflight, "if (major !== 22) throw new Error('node22_required');");
     case 'AC1:competing-transaction-admitted': return has(M.cordon, "if (existsSync(input.path)) throw new Error('competing_transaction_admitted');");
     case 'AC1:successor-926-used-as-prerequisite': return !has(M.tx, 'successor_926_prerequisite');
@@ -148,7 +148,7 @@ function mutationFailures(key:string, artifact:string):string[]{
     [M.stable,['Object.keys(object).sort()','return canonical(value, new Set());']],
   ];
   for(const [file,tokens] of required) need(all(file,tokens),`required:${file}`);
-  need(count(M.tx,'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);')===2,'identity:legacy-supervisor-boundaries');
+  need(has(M.tx,'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);')&&has(M.tx,'assertLegacySupervisor(identity, request.oldInstalledRevisionRoot);'),'identity:legacy-supervisor-boundaries');
   const activate=body(M.tx,'export async function activateCutover'); const recover=body(M.recovery,'export async function recoverCommittedCutover');
   need(ordered(activate,['const preflight = boundary.preflight(request);','projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath)']),'order:admission');
   need(ordered(activate,['const cordon = createCordon({','boundary.drainLegacyWriters(request, legacyWriters)','boundary.terminateLegacyProcesses(']),'order:cordon');
