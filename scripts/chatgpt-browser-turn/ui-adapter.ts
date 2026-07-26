@@ -94,8 +94,11 @@ interface NetworkMessage extends CausalMessageObservation {
 interface NetworkWitnessState {
   readonly messages: NetworkMessage[];
   readonly dispatchCandidateIds: Set<string>;
+  readonly serviceSubmittedUserIds: Set<string>;
   readonly terminal: TerminalWitnessState;
+  dispatchArmed: boolean;
   activeTurnUserId?: string;
+  witnessTeardown?: () => Promise<void>;
   armDispatch(): void;
 }
 
@@ -168,7 +171,7 @@ function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: strin
       if (payload.type === 'input_message') {
         const input = payload.input_message as Record<string, unknown> | undefined;
         const id = typeof input?.id === 'string' ? input.id : '';
-        if (id && state.dispatchCandidateIds.has(id)) state.activeTurnUserId = id;
+        if (id) recordServiceSubmittedUserId(state, id);
       }
       if (payload.type === 'message_marker' && payload.marker === 'user_visible_token') {
         const assistantId = typeof payload.message_id === 'string' ? payload.message_id : '';
@@ -192,8 +195,40 @@ function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: strin
   }
 }
 
+// PR #1003 stopped correlating service input_message ids with dispatch proof: observedDispatchUserIds
+// required dispatchCandidateIds before consulting network witness, and input_message ids were not recorded
+// in network.messages. Live sends often prove only through WebSocket input_message, not DOM mirrors.
+
+function recordServiceSubmittedUserId(state: NetworkWitnessState, id: string): void {
+  if (!state.dispatchArmed || id.length < 8) return;
+  state.serviceSubmittedUserIds.add(id);
+  state.messages.push({ id, role: 'user' });
+  if (state.dispatchCandidateIds.has(id)) state.activeTurnUserId = id;
+}
+
+function collectInputMessageWitness(state: NetworkWitnessState, value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectInputMessageWitness(state, item);
+    return;
+  }
+  const obj = value as Record<string, unknown>;
+  if (obj.type === 'input_message') {
+    const input = obj.input_message as Record<string, unknown> | undefined;
+    const id = typeof input?.id === 'string' ? input.id : '';
+    if (id) recordServiceSubmittedUserId(state, id);
+  }
+  const payload = obj.payload;
+  if (payload && typeof payload === 'object') {
+    const nested = (payload as Record<string, unknown>).payload;
+    collectInputMessageWitness(state, nested ?? payload);
+  }
+  for (const child of Object.values(obj)) collectInputMessageWitness(state, child);
+}
+
 function ingestWitnessJsonTree(state: NetworkWitnessState, value: unknown): void {
   ingestServicePayloadTree(state.terminal, value);
+  collectInputMessageWitness(state, value);
   if (!value || typeof value !== 'object') return;
   if (Array.isArray(value)) {
     for (const item of value) ingestWitnessJsonTree(state, item);
@@ -213,28 +248,38 @@ function ingestWebSocketWitnessPayload(state: NetworkWitnessState, payloadData: 
   }
 }
 
-async function installWebSocketWitness(page: any, state: NetworkWitnessState): Promise<void> {
+async function installWebSocketWitness(page: any, state: NetworkWitnessState): Promise<() => Promise<void>> {
   const context = page.context?.();
-  if (!context || typeof context.newCDPSession !== 'function') return;
+  if (!context || typeof context.newCDPSession !== 'function') return async () => {};
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable');
-  cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
+  const onFrame = (event: { response?: { payloadData?: string } }) => {
     ingestWebSocketWitnessPayload(state, event.response?.payloadData ?? '');
-  });
+  };
+  cdp.on('Network.webSocketFrameReceived', onFrame);
+  return async () => {
+    try {
+      if (typeof cdp.off === 'function') cdp.off('Network.webSocketFrameReceived', onFrame);
+      if (typeof cdp.detach === 'function') await cdp.detach();
+    } catch { /* teardown best-effort; full page teardown is #1007 */ }
+  };
 }
 
 function attachNetworkWitness(page: any): NetworkWitnessState {
-  let dispatchArmed = false;
   const state: NetworkWitnessState = {
     messages: [],
     dispatchCandidateIds: new Set<string>(),
+    serviceSubmittedUserIds: new Set<string>(),
     terminal: createTerminalWitnessState(),
-    armDispatch() { dispatchArmed = true; },
+    dispatchArmed: false,
+    armDispatch() { this.dispatchArmed = true; },
   };
-  void installWebSocketWitness(page, state).catch(() => {});
+  void installWebSocketWitness(page, state).then((teardown) => {
+    state.witnessTeardown = teardown;
+  }).catch(() => {});
   page.on('request', (request: any) => {
     try {
-      if (!dispatchArmed) return;
+      if (!state.dispatchArmed) return;
       const url = String(request.url());
       if (!/conversation|messages|responses/i.test(url)) return;
       for (const message of parseRequestBody(request)) {
@@ -415,6 +460,9 @@ async function observedDispatchUserIds(
   baselineIds: ReadonlySet<string>,
 ): Promise<Set<string>> {
   const observed = new Set<string>();
+  for (const id of network.serviceSubmittedUserIds) {
+    if (!baselineIds.has(id)) observed.add(id);
+  }
   if (network.dispatchCandidateIds.size === 0) return observed;
   const users = page.locator('[data-message-author-role="user"]');
   const count = await users.count().catch(() => 0);
@@ -423,7 +471,9 @@ async function observedDispatchUserIds(
     if (id && !baselineIds.has(id) && network.dispatchCandidateIds.has(id)) observed.add(id);
   }
   for (const message of network.messages) {
-    if (message.role === 'user' && network.dispatchCandidateIds.has(message.id)) observed.add(message.id);
+    if (message.role === 'user' && !baselineIds.has(message.id) && network.dispatchCandidateIds.has(message.id)) {
+      observed.add(message.id);
+    }
   }
   return observed;
 }
@@ -475,6 +525,10 @@ export async function sendTurn(
   onBeforeSend?: () => void | Promise<void>,
 ): Promise<TurnBrowserResult> {
   const network = attachNetworkWitness(page);
+  const releaseWitness = async () => {
+    await network.witnessTeardown?.().catch(() => {});
+  };
+  try {
   const composer = page.locator('#prompt-textarea');
   const readyDeadline = Date.now() + Math.min(config.timeoutMs, 30_000);
   while (Date.now() < readyDeadline) {
@@ -705,4 +759,7 @@ export async function sendTurn(
     return { state: 'no_reply', cause: 'terminal_no_reply_evidence', possibleDelivery: true, userMessageId: userId };
   }
   return { state: 'stream_timeout', cause: 'no_terminal_evidence', possibleDelivery: true, userMessageId: userId };
+  } finally {
+    await releaseWitness();
+  }
 }
