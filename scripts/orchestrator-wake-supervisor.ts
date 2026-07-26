@@ -1,7 +1,7 @@
 import './toolchain/native-entrypoint-preflight.ts';
-import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { runProcess } from './kernel/subprocess.ts';
 import { readSupervisorStatus, runSupervisor, type SupervisorOptions } from './lib/orchestrator-side-process-supervisor.ts';
 
 function parse(argv: string[]): Record<string, string | boolean> {
@@ -35,6 +35,32 @@ function options(args: Record<string, string | boolean>): SupervisorOptions {
   };
 }
 
+async function detachSelf(args: Record<string, string | boolean>): Promise<number> {
+  const self = fileURLToPath(import.meta.url);
+  const childArgs = process.argv.slice(2).filter((arg) => arg !== '--detach');
+  const result = await runProcess({
+    command: '/bin/sh',
+    args: [
+      '-c',
+      'node_bin="$1"; shift; trap "" HUP; "$node_bin" "$@" </dev/null >/dev/null 2>&1 & printf "%s\\n" "$!"',
+      'opk-cutover-detach',
+      process.execPath,
+      '--experimental-strip-types',
+      self,
+      ...childArgs,
+    ],
+    cwd: path.resolve(required(args, 'repo-root')),
+    inheritParentEnv: true,
+    env: { OPK_CUTOVER_SUPERVISOR_DAEMON: '1' },
+    allowEmptyStdout: false,
+    timeoutMs: 10_000,
+  });
+  if (!result.ok) throw new Error(`supervisor_detach_failed:${result.stderr || result.error || result.exitCode}`);
+  const pid = Number(result.stdout.trim());
+  if (!Number.isInteger(pid) || pid <= 1) throw new Error('supervisor_detach_pid_invalid');
+  return pid;
+}
+
 async function main(): Promise<void> {
   const [command = 'help', ...argv] = process.argv.slice(2);
   const args = parse(argv);
@@ -46,16 +72,8 @@ async function main(): Promise<void> {
   }
   if (command !== 'run') throw new Error('usage: orchestrator-wake-supervisor.ts run|status ...');
   if (args.detach === true && process.env.OPK_CUTOVER_SUPERVISOR_DAEMON !== '1') {
-    const self = fileURLToPath(import.meta.url);
-    const childArgs = process.argv.slice(2).filter((arg) => arg !== '--detach');
-    const child = spawn(process.execPath, ['--experimental-strip-types', self, ...childArgs], {
-      cwd: path.resolve(required(args, 'repo-root')),
-      detached: true,
-      stdio: 'ignore',
-      env: { ...process.env, OPK_CUTOVER_SUPERVISOR_DAEMON: '1' },
-    });
-    child.unref();
-    process.stdout.write(`${JSON.stringify({ pid: child.pid, detached: true })}\n`);
+    const pid = await detachSelf(args);
+    process.stdout.write(`${JSON.stringify({ pid, detached: true })}\n`);
     return;
   }
   await runSupervisor(options(args));
