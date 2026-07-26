@@ -105,6 +105,7 @@ function defaultTerminalFrames(userId: string, assistantId: string, parent: stri
 export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; getSendClicks: () => number } {
   const handlers = new Map<string, Array<(event: any) => unknown>>();
   const wsHandlers: Array<(event: { response?: { payloadData?: string } }) => unknown> = [];
+  const frameListeners: Array<(frame: { payload: string }) => unknown> = [];
   const messages: any[] = [];
   let sendClicks = 0;
   let sent = false;
@@ -122,8 +123,12 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
       text: async () => body,
     });
     for (const frame of frames) {
+      const payload = JSON.stringify(frame);
       for (const handler of wsHandlers) {
-        await handler({ response: { payloadData: JSON.stringify(frame) } });
+        await handler({ response: { payloadData: payload } });
+      }
+      for (const handler of frameListeners) {
+        await handler({ payload });
       }
     }
   };
@@ -218,6 +223,14 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
       }),
     }),
     on: (event: string, handler: (value: any) => unknown) => {
+      if (event === 'websocket') {
+        handler({
+          on: (frameEvent: string, frameHandler: (frame: { payload: string }) => unknown) => {
+            if (frameEvent === 'framereceived') frameListeners.push(frameHandler);
+          },
+        });
+        return;
+      }
       const list = handlers.get(event) ?? [];
       list.push(handler);
       handlers.set(event, list);
@@ -264,6 +277,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     emitServiceFrames,
   };
 
+  (page as { __fakeTurnPage?: boolean }).__fakeTurnPage = true;
   return { page, getSendClicks: () => sendClicks };
 }
 
