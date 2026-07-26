@@ -141,4 +141,14 @@ jobs:
           NODE
       - name: Run external red-green mutation evidence
         if: steps.detect.outputs.run_evidence == 'true'
-        run: npm run test:contract-mutations
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:contract-mutations 2>&1 | tee mutation-failure.txt
+      - name: Upload mutation diagnostic
+        if: failure() && steps.detect.outputs.run_evidence == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-failure
+          path: mutation-failure.txt
+          if-no-files-found: error
