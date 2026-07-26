@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { writeDurableJson } from './activation-evidence.ts';
-import type { EpochAuthorityDocument, EpochCommitCore } from './types.ts';
+import type { CutoverStoreId, EpochAuthorityDocument, EpochCommitCore } from './types.ts';
 
 const CORE_KEYS = [
   'epochId', 'nonce', 'hostId', 'repoRoot', 'installedCommitSha', 'snapshotDigests',
@@ -14,6 +14,26 @@ function assertExactCore(core: EpochCommitCore): void {
   if (!core.epochId || !core.nonce || !core.hostId || !core.repoRoot || !/^[0-9a-f]{40}$/i.test(core.installedCommitSha)) {
     throw new Error('epoch_core_binding_invalid');
   }
+}
+
+export function mapCutoverStoreDigests<T extends { storeId: CutoverStoreId }>(
+  rows: T[],
+  select: (row: T) => string,
+): Record<CutoverStoreId, string> {
+  const output = {} as Record<CutoverStoreId, string>;
+  for (const row of rows) output[row.storeId] = select(row);
+  for (const id of ['reconcile', 'reevaluation', 'reportStateSeed'] as const) {
+    if (!output[id]) throw new Error(`store_digest_missing:${id}`);
+  }
+  return output;
+}
+
+export function buildEpochCommitCore(
+  input: Omit<EpochCommitCore, 'commitAt'> & { commitAt?: string },
+): EpochCommitCore {
+  const core: EpochCommitCore = { ...input, commitAt: input.commitAt ?? new Date().toISOString() };
+  assertExactCore(core);
+  return core;
 }
 
 function readAuthority(pathName: string): EpochAuthorityDocument {
