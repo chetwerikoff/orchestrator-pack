@@ -309,25 +309,33 @@ export async function runDeliveryMonitor(config, io) {
     decision = evaluateRequiredChecks({ checks: state.checks, policy: state.policy, packReviewProjection: state.projection, machineAdmissionAttempted: attempted });
     if (decision.action === 'machine-admit' || decision.action === 'wait') { await io.sleep(config.pollSeconds * 1000); continue; }
     if (decision.action === 'fail') return { outcome: decision.outcome, reason: decision.reason, failed: true };
-    let merged;
+
+    let merged = null;
+    let mergeError = null;
     try { merged = await io.merge(config.expectedHeadSha); }
+    catch (e) { mergeError = e; }
+
+    let readback;
+    try { readback = await io.getPr(); }
     catch (e) {
-      const rebound = await inspect(config, io);
-      if (rebound.terminal) return { outcome: rebound.outcome, reason: `merge rejected and fresh state changed: ${rebound.reason}`, failed: rebound.outcome !== 'non-generated-head' };
-      if (rebound.wait) { await io.sleep(config.pollSeconds * 1000); continue; }
-      return { outcome: 'merge-rejected', reason: `expected-head merge request rejected: ${e.message}`, failed: true };
+      return { outcome: 'merge-readback-failed', reason: `authoritative PR read-back failed after merge attempt: ${e.message}`, failed: true };
     }
-    if (merged?.merged === false) {
-      const rebound = await inspect(config, io);
-      if (rebound.terminal) return { outcome: rebound.outcome, reason: `merge rejected and fresh state changed: ${rebound.reason}`, failed: rebound.outcome !== 'non-generated-head' };
-      if (rebound.wait) { await io.sleep(config.pollSeconds * 1000); continue; }
-      return { outcome: 'merge-rejected', reason: merged.message || 'GitHub rejected expected-head merge request', failed: true };
+    if (readback?.number === Number(config.prNumber) && readback?.base?.ref === DELIVERY_BASE && readback?.merged === true && readback?.merged_at) {
+      return { outcome: 'merged', merged: true, prNumber: Number(config.prNumber), expectedHeadSha: config.expectedHeadSha, mergedAt: readback.merged_at };
     }
-    const readback = await io.getPr();
-    if (readback?.number !== Number(config.prNumber) || readback?.base?.ref !== DELIVERY_BASE || readback?.merged !== true || !readback?.merged_at) {
+    if (!mergeError && merged?.merged === true) {
       return { outcome: 'merge-readback-failed', reason: 'authoritative PR read-back did not confirm the expected merge into main', failed: true };
     }
-    return { outcome: 'merged', merged: true, prNumber: Number(config.prNumber), expectedHeadSha: config.expectedHeadSha, mergedAt: readback.merged_at };
+
+    const rejectionReason = mergeError
+      ? `expected-head merge request errored: ${mergeError.message}`
+      : merged?.message || 'GitHub rejected expected-head merge request';
+    const rebound = await inspect(config, io);
+    if (rebound.terminal) return { outcome: rebound.outcome, reason: `merge rejected and fresh state changed: ${rebound.reason}`, failed: rebound.outcome !== 'non-generated-head' };
+    if (rebound.wait) { await io.sleep(config.pollSeconds * 1000); continue; }
+    const reboundDecision = evaluateRequiredChecks({ checks: rebound.checks, policy: rebound.policy, packReviewProjection: rebound.projection, machineAdmissionAttempted: attempted });
+    if (reboundDecision.action === 'fail') return { outcome: reboundDecision.outcome, reason: `merge rejected (${rejectionReason}) and fresh decision failed: ${reboundDecision.reason}`, failed: true };
+    await io.sleep(config.pollSeconds * 1000);
   }
   return { outcome: 'timeout', reason: `runtime-history delivery timed out after ${config.waitSeconds}s waiting for PR #${config.prNumber}`, failed: true };
 }
