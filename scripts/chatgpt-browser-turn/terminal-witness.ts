@@ -76,10 +76,13 @@ function isGroundedWholeTurnFailureTerminal(
 }
 
 const GROUNDED_WHOLE_TURN_SUCCESS_FINISH_DETAILS = new Set(['stop']);
+const GROUNDED_WHOLE_TURN_SUCCESS_STATUSES = new Set(['finished_successfully']);
 
 function hasUnknownTerminalStatus(status: string | undefined): boolean {
   if (!status) return false;
-  return !GROUNDED_WHOLE_TURN_FAILURE_STATUSES.has(status);
+  if (GROUNDED_WHOLE_TURN_SUCCESS_STATUSES.has(status)) return false;
+  if (GROUNDED_WHOLE_TURN_FAILURE_STATUSES.has(status)) return false;
+  return true;
 }
 
 function isGroundedWholeTurnSuccessTerminal(metadata: AssistantTerminalMetadata): boolean {
