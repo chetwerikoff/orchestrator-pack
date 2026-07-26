@@ -95,8 +95,16 @@ interface NetworkWitnessState {
   readonly messages: NetworkMessage[];
   readonly dispatchCandidateIds: Set<string>;
   readonly serviceSubmittedUserIds: Set<string>;
+  readonly rejectedServiceUserIds: Set<string>;
   readonly terminal: TerminalWitnessState;
   dispatchArmed: boolean;
+  turnDispatchCommitted: boolean;
+  ingestingDispatchServiceFrames: boolean;
+  dispatchRequestUserId?: string;
+  dispatchRequestWitnessed: boolean;
+  dispatchTurnExchangeId?: string;
+  activeTurnExchangeId?: string;
+  provisionalServiceId?: string;
   activeTurnUserId?: string;
   activePatchMessageId?: string;
   witnessTeardown?: () => Promise<void>;
@@ -158,6 +166,38 @@ function parseRequestBody(request: any): NetworkMessage[] {
   } catch {
     return [];
   }
+}
+
+function parseRequestTurnExchangeId(request: any): string | undefined {
+  try {
+    const body = typeof request.postData === 'function' ? request.postData() : null;
+    if (!body) return undefined;
+    return findTurnExchangeId(JSON.parse(String(body)));
+  } catch {
+    return undefined;
+  }
+}
+
+function findTurnExchangeId(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findTurnExchangeId(item);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  const obj = value as Record<string, unknown>;
+  const metadata = obj.metadata;
+  if (metadata && typeof metadata === 'object') {
+    const turnExchangeId = (metadata as Record<string, unknown>).turn_exchange_id;
+    if (typeof turnExchangeId === 'string' && turnExchangeId.length >= 8) return turnExchangeId;
+  }
+  for (const child of Object.values(obj)) {
+    const found = findTurnExchangeId(child);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 function applyStreamingPatchOperation(
@@ -244,7 +284,9 @@ function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: strin
         if (payload.type === 'input_message') {
           const input = payload.input_message as Record<string, unknown> | undefined;
           const id = typeof input?.id === 'string' ? input.id : '';
-          if (id) recordServiceSubmittedUserId(state, id);
+          const metadata = input?.metadata as Record<string, unknown> | undefined;
+          const turnExchangeId = typeof metadata?.turn_exchange_id === 'string' ? metadata.turn_exchange_id : undefined;
+          if (id) recordServiceSubmittedUserId(state, id, turnExchangeId);
         }
         if (payload.type === 'message_marker' && payload.marker === 'user_visible_token') {
           const assistantId = typeof payload.message_id === 'string' ? payload.message_id : '';
@@ -295,16 +337,60 @@ function canonicalSubmittedUserId(state: NetworkWitnessState, baselineIds: Reado
   return '';
 }
 
-function recordServiceSubmittedUserId(state: NetworkWitnessState, id: string): void {
+function recordServiceSubmittedUserId(
+  state: NetworkWitnessState,
+  id: string,
+  turnExchangeId?: string,
+): void {
   if (!state.dispatchArmed || id.length < 8) return;
-  state.serviceSubmittedUserIds.add(id);
-  state.messages.push({ id, role: 'user' });
-  if (state.dispatchCandidateIds.size === 1) {
-    const candidate = [...state.dispatchCandidateIds][0];
-    if (candidate && candidate !== id) state.dispatchCandidateIds.delete(candidate);
+  if (state.rejectedServiceUserIds.has(id)) return;
+
+  if (turnExchangeId && state.activeTurnExchangeId && turnExchangeId !== state.activeTurnExchangeId) {
+    state.rejectedServiceUserIds.add(id);
+    return;
   }
-  state.dispatchCandidateIds.add(id);
-  state.activeTurnUserId = id;
+  if (turnExchangeId && !state.activeTurnExchangeId) state.activeTurnExchangeId = turnExchangeId;
+
+  if (state.dispatchCandidateIds.has(id)) {
+    state.serviceSubmittedUserIds.add(id);
+    state.messages.push({ id, role: 'user' });
+    state.activeTurnUserId = id;
+    state.provisionalServiceId = id;
+    return;
+  }
+
+  const requestUserId = state.dispatchRequestUserId;
+  const canCorrelateProvisional = Boolean(
+    requestUserId
+    && state.ingestingDispatchServiceFrames
+    && state.dispatchCandidateIds.has(requestUserId)
+    && !state.provisionalServiceId
+    && id !== requestUserId
+    && turnExchangeId
+    && state.dispatchTurnExchangeId
+    && turnExchangeId === state.dispatchTurnExchangeId,
+  );
+  if (canCorrelateProvisional) {
+    state.provisionalServiceId = id;
+    state.serviceSubmittedUserIds.add(id);
+    state.messages.push({ id, role: 'user' });
+    state.activeTurnUserId = id;
+    return;
+  }
+
+  if (
+    state.ingestingDispatchServiceFrames
+    && state.dispatchCandidateIds.size === 0
+    && state.serviceSubmittedUserIds.size === 0
+  ) {
+    state.serviceSubmittedUserIds.add(id);
+    state.messages.push({ id, role: 'user' });
+    state.activeTurnUserId = id;
+    state.provisionalServiceId = id;
+    return;
+  }
+
+  state.rejectedServiceUserIds.add(id);
 }
 
 function collectInputMessageWitness(state: NetworkWitnessState, value: unknown): void {
@@ -317,7 +403,9 @@ function collectInputMessageWitness(state: NetworkWitnessState, value: unknown):
   if (obj.type === 'input_message') {
     const input = obj.input_message as Record<string, unknown> | undefined;
     const id = typeof input?.id === 'string' ? input.id : '';
-    if (id) recordServiceSubmittedUserId(state, id);
+    const metadata = input?.metadata as Record<string, unknown> | undefined;
+    const turnExchangeId = typeof metadata?.turn_exchange_id === 'string' ? metadata.turn_exchange_id : undefined;
+    if (id) recordServiceSubmittedUserId(state, id, turnExchangeId);
   }
   const payload = obj.payload;
   if (payload && typeof payload === 'object') {
@@ -404,8 +492,12 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     messages: [],
     dispatchCandidateIds: new Set<string>(),
     serviceSubmittedUserIds: new Set<string>(),
+    rejectedServiceUserIds: new Set<string>(),
     terminal: createTerminalWitnessState(),
     dispatchArmed: false,
+    turnDispatchCommitted: false,
+    ingestingDispatchServiceFrames: false,
+    dispatchRequestWitnessed: false,
     armDispatch() { this.dispatchArmed = true; },
     witnessInstall: Promise.resolve(),
   };
@@ -417,9 +509,18 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
       if (!state.dispatchArmed) return;
       const url = String(request.url());
       if (!/conversation|messages|responses/i.test(url)) return;
-      for (const message of parseRequestBody(request)) {
-        if (message.role === 'user') state.dispatchCandidateIds.add(message.id);
+      const turnExchangeId = parseRequestTurnExchangeId(request);
+      if (turnExchangeId) {
+        state.dispatchTurnExchangeId = turnExchangeId;
+        if (!state.activeTurnExchangeId) state.activeTurnExchangeId = turnExchangeId;
       }
+      for (const message of parseRequestBody(request)) {
+        if (message.role === 'user') {
+          state.dispatchCandidateIds.add(message.id);
+          if (!state.dispatchRequestUserId) state.dispatchRequestUserId = message.id;
+        }
+      }
+      state.dispatchRequestWitnessed = true;
     } catch { /* missing request witness remains fail-closed */ }
   });
   page.on('response', async (response: any) => {
@@ -722,16 +823,20 @@ export async function sendTurn(
   ]);
   network.armDispatch();
   try {
+    network.ingestingDispatchServiceFrames = true;
     if (sendAvailable) await send.click();
     else await page.keyboard.press('Enter');
+    network.turnDispatchCommitted = true;
   } catch {
+    network.ingestingDispatchServiceFrames = false;
     return { state: 'recovery_required', cause: 'dispatch_exception_after_possible_delivery_boundary', possibleDelivery: true };
   }
 
   let userId = '';
   const deliveredDeadline = Date.now() + 30_000;
   while (Date.now() < deliveredDeadline && !userId) {
-    if (network.dispatchCandidateIds.size > 1) {
+    const canonicalEarly = canonicalSubmittedUserId(network, baselineIds);
+    if (!canonicalEarly && network.dispatchCandidateIds.size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
     }
     const observed = await observedDispatchUserIds(page, network, baselineIds);
@@ -739,6 +844,7 @@ export async function sendTurn(
     userId = observed.values().next().value ?? '';
     if (!userId) await witnessPollDelay(page, 250);
   }
+  network.ingestingDispatchServiceFrames = false;
   if (!userId) return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
   userId = canonicalSubmittedUserId(network, baselineIds) || userId;
 

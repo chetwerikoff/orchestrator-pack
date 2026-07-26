@@ -117,11 +117,13 @@ describe('issue 1010 submitted-turn proof', () => {
   it('AC1 correlates provisional request id with service input_message id', async () => {
     const provisional = 'user-provis-12345678';
     const service = 'user-service-12345678';
+    const turnExchangeId = 'exchange-correl-12345678';
     const fixture = fakeTurnPage({
       dispatchCandidateIds: [provisional],
+      turnExchangeId,
       serviceObserveDispatch: false,
       serviceFrames: [
-        { type: 'input_message', input_message: { id: service } },
+        { type: 'input_message', input_message: { id: service, metadata: { turn_exchange_id: turnExchangeId } } },
         ...terminalFramesForUser(service).slice(1),
       ],
       assistants: [
@@ -160,9 +162,10 @@ describe('issue 1010 submitted-turn proof', () => {
     }
   });
 
-  it('AC3/AC5 separates time-to-result from process-exit dependency (#1007)', async () => {
+  it('AC3/AC5 separates result production, caller visibility, and process exit (#1007)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    let detached = false;
+    let detachStarted = false;
+    let detachResolved = false;
     try {
       const fixture = fakeTurnPage({
         dispatchCandidateIds: [],
@@ -179,17 +182,56 @@ describe('issue 1010 submitted-turn proof', () => {
           send: async () => {},
           on: () => {},
           off: () => {},
-          detach: async () => { detached = true; },
+          detach: async () => {
+            detachStarted = true;
+            await new Promise<void>((resolve) => { setTimeout(resolve, 60_000); });
+            detachResolved = true;
+          },
         }),
       });
 
-      const turn = sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 60_000 });
+      const resultPromise = sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 60_000 });
       await vi.advanceTimersByTimeAsync(31_000);
-      const result = await turn;
+      const result = await resultPromise;
       fixture.page.context = originalContext;
 
       expect(result.cause).toBe('submitted_turn_id_unproven');
-      expect(detached).toBe(true);
+      expect(detachStarted).toBe(true);
+      expect(detachResolved).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(detachResolved).toBe(false);
+      expect(detachStarted).toBe(true);
+      expect(detachResolved).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(detachResolved).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+
+  it('AC5 rejects foreign service input_message while submitted turn stays unproven', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const provisional = 'user-provis-12345678';
+      const foreign = 'user-foreign-12345678';
+      const fixture = fakeTurnPage({
+        dispatchCandidateIds: [provisional],
+        serviceObserveDispatch: false,
+        preDispatchServiceFrames: [{ type: 'input_message', input_message: { id: foreign } }],
+        serviceFrames: [],
+        assistants: [],
+      });
+      fixture.page.waitForTimeout = async (ms: number) => {
+        await vi.advanceTimersByTimeAsync(ms);
+      };
+      const turn = sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 60_000 });
+      await vi.advanceTimersByTimeAsync(31_000);
+      const result = await turn;
+
+      expect(result.state).toBe('recovery_required');
+      expect(result.cause).toBe('submitted_turn_id_unproven');
+      expect(result.userMessageId).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }

@@ -30,6 +30,8 @@ export interface FakeTurnPageOptions {
   readonly alertAfterSend?: string;
   readonly composer?: boolean;
   readonly serviceObserveDispatch?: boolean;
+  readonly preDispatchServiceFrames?: readonly Record<string, unknown>[];
+  readonly turnExchangeId?: string;
 }
 
 function emptyLocator(): any {
@@ -159,7 +161,13 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
       for (const id of dispatchIds) {
         await emit('request', {
           url: () => 'https://chatgpt.com/backend-api/conversation',
-          postData: () => JSON.stringify({ messages: [{ id, author: { role: 'user' } }] }),
+          postData: () => JSON.stringify({
+          messages: [{
+            id,
+            author: { role: 'user' },
+            ...(options.turnExchangeId ? { metadata: { turn_exchange_id: options.turnExchangeId } } : {}),
+          }],
+        }),
         });
       }
       if (options.serviceObserveDispatch !== false) {
@@ -175,6 +183,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
         ?? (options.assistantParent
           ? defaultTerminalFrames(dispatchIds[0] ?? 'user-owned-12345678', 'assistant-owned-12345678', options.assistantParent)
           : []);
+      if (options.preDispatchServiceFrames?.length) await emitServiceFrames(options.preDispatchServiceFrames);
       if (frames.length > 0) await emitServiceFrames(frames);
     },
   };
