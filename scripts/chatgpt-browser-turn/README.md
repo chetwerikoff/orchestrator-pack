@@ -105,6 +105,14 @@ export CHATGPT_BROWSER_TURN_GATE_B_DIGEST='<expected_binding.gate_digest>'
 
 Do not reuse a value after any candidate, verifier, runtime-build, or Gate-B test-source change. A successful turn can create positive capability evidence only when the live witness surface is present and this environment value equals the current `gate_digest`. Query `capability` again after characterization and retain its browser provenance, evidence digest, observation/expiry timestamps, and downgrade generation as Gate-C telemetry. If the result is not `state: ok`, parallel smoke is not admitted; fallback remains configured-profile serialization.
 
+## Driver diagnostics
+
+When a `turn` fails with `cause: driver_exception_before_send` or `cause: driver_exception_after_possible_delivery`, or a control command fails with `cause: command_failed`, the helper records a durable `driver-diagnostic/v1` JSON file under the configured-profile state area at `<state-root>/<configured_profile_key>/diagnostics/<identity>.json`. Turn failures key the file by `invocation_id`; control failures without a resolved profile key do not create state (stderr mirroring only when enabled). Each record contains the exception name, message, and stack plus `configured_profile_key`, `cause`, and `created_at`. Records may contain exception text and stay local to the operator machine; they are not emitted on stdout.
+
+The emitted `turn-result/v1` or `control-result/v1` may include `driver_diagnostic_id`, an identifier only, pointing at that record. Envelopes remain body-free: no prompt text, reply text, or exception text on stdout.
+
+Set `CHATGPT_BROWSER_TURN_DEBUG=1` to mirror the same diagnostic JSON line to stderr. With the variable unset, stdout and stderr match prior behavior byte-for-byte aside from the optional new result identifier field on stdout.
+
 Before the first real ChatGPT turn with a newly built candidate, the operator must run a live smoke against the dedicated automation profile. The live smoke must demonstrate at least:
 
 1. one existing-chat success with a service-issued user-to-assistant causal witness and byte-verified publication;

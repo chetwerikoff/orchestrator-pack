@@ -1,4 +1,5 @@
 export * from './coordination.ts';
+export * from './diagnostics.ts';
 export * from './input.ts';
 export * from './publication.ts';
 export * from './state.ts';
