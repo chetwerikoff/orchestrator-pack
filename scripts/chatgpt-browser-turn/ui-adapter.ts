@@ -120,7 +120,12 @@ interface NetworkWitnessState {
   pendingServiceInputMessageIds: Set<string>;
   encodedItemWitnessTurnUserId?: string;
   pendingPatchAssistantId?: string;
-  deferredStreamingPatches: Array<{ readonly targetId: string; readonly items: Record<string, unknown>[] }>;
+  provenTurnStreamId?: string;
+  pendingStreamTurnIdByUserId: Map<string, string>;
+  turnStreamTerminalTargetId?: string;
+  pendingStreamMarkersByTurnId: Map<string, string>;
+  pendingStreamAppendOpsByTurnId: Map<string, { content: string }[]>;
+  pendingStreamPatchOpsByTurnId: Map<string, Record<string, unknown>[][]>;
   activeTurnUserId?: string;
   activePatchMessageId?: string;
   witnessInstall: Promise<void>;
@@ -283,18 +288,203 @@ function findTurnExchangeId(value: unknown): string | undefined {
   return undefined;
 }
 
-function queueDeferredStreamingPatch(
+
+interface StreamTurnContext {
+  readonly turnId?: string;
+  readonly topicId?: string;
+}
+
+function streamTurnIdFromTopic(topicId: string | undefined): string | undefined {
+  if (!topicId) return undefined;
+  const prefix = 'conversation-turn-';
+  return topicId.startsWith(prefix) ? topicId.slice(prefix.length) : undefined;
+}
+
+function mergeStreamTurnContext(
+  obj: Record<string, unknown>,
+  inherited?: StreamTurnContext,
+): StreamTurnContext | undefined {
+  const topicId = typeof obj.topic_id === 'string' ? obj.topic_id : inherited?.topicId;
+  let turnId = inherited?.turnId;
+  const payload = obj.payload;
+  if (payload && typeof payload === 'object') {
+    const nested = (payload as Record<string, unknown>).payload;
+    if (nested && typeof nested === 'object') {
+      const streamItem = nested as Record<string, unknown>;
+      if (typeof streamItem.turn_id === 'string') turnId = streamItem.turn_id;
+    }
+  }
+  const resolvedTurnId = turnId ?? streamTurnIdFromTopic(topicId);
+  if (!resolvedTurnId && !topicId) return inherited;
+  return {
+    turnId: resolvedTurnId,
+    topicId: topicId ?? (resolvedTurnId ? `conversation-turn-${resolvedTurnId}` : undefined),
+  };
+}
+
+function turnMatchesProvenStream(state: NetworkWitnessState, turnContext?: StreamTurnContext): boolean {
+  const proven = state.provenTurnStreamId;
+  if (!proven || !turnContext?.turnId) return false;
+  return proven === turnContext.turnId;
+}
+
+
+function isOwnedStreamTurn(state: NetworkWitnessState, turnContext?: StreamTurnContext): boolean {
+  const turnId = turnContext?.turnId;
+  if (!turnId) return false;
+  if (state.provenTurnStreamId === turnId) return true;
+  for (const tid of state.pendingStreamTurnIdByUserId.values()) {
+    if (tid === turnId) return true;
+  }
+  return false;
+}
+
+function rememberPendingStreamMarker(
   state: NetworkWitnessState,
-  targetId: string,
+  assistantId: string,
+  turnContext?: StreamTurnContext,
+): void {
+  const turnId = turnContext?.turnId;
+  if (!turnId || !assistantId || !isOwnedStreamTurn(state, turnContext)) return;
+  state.pendingStreamMarkersByTurnId.set(turnId, assistantId);
+}
+
+function bufferPendingStreamAppend(
+  state: NetworkWitnessState,
+  turnContext: StreamTurnContext | undefined,
+  content: string,
+): void {
+  const turnId = turnContext?.turnId;
+  if (!turnId || !content || !isOwnedStreamTurn(state, turnContext)) return;
+  const queue = state.pendingStreamAppendOpsByTurnId.get(turnId) ?? [];
+  queue.push({ content });
+  state.pendingStreamAppendOpsByTurnId.set(turnId, queue);
+}
+
+function bufferPendingStreamPatch(
+  state: NetworkWitnessState,
+  turnContext: StreamTurnContext | undefined,
   items: Record<string, unknown>[],
 ): void {
-  const existing = state.deferredStreamingPatches.find((entry) => entry.targetId === targetId);
-  if (existing) {
-    (existing as { items: Record<string, unknown>[] }).items.push(...items);
+  const turnId = turnContext?.turnId;
+  if (!turnId || !items.length || !isOwnedStreamTurn(state, turnContext)) return;
+  const queue = state.pendingStreamPatchOpsByTurnId.get(turnId) ?? [];
+  queue.push(items);
+  state.pendingStreamPatchOpsByTurnId.set(turnId, queue);
+}
+
+function flushPendingStreamTurnEvidence(state: NetworkWitnessState, turnId: string): void {
+  const turnContext: StreamTurnContext = {
+    turnId,
+    topicId: `conversation-turn-${turnId}`,
+  };
+  const marker = state.pendingStreamMarkersByTurnId.get(turnId);
+  if (marker) bindTurnScopedTerminalTarget(state, marker, turnContext);
+  const userId = provenActiveTurnUserId(state);
+  const targetId = state.turnStreamTerminalTargetId ?? marker;
+  if (!userId || !targetId) return;
+  for (const { content } of state.pendingStreamAppendOpsByTurnId.get(turnId) ?? []) {
+    ingestServicePayload(state.terminal, {
+      type: 'delta',
+      v: {
+        message: {
+          id: targetId,
+          author: { role: 'assistant' },
+          parent: userId,
+          content: { content_type: 'text', parts: [content] },
+        },
+      },
+    });
+  }
+  for (const items of state.pendingStreamPatchOpsByTurnId.get(turnId) ?? []) {
+    applyStreamingPatchItems(state, targetId, items);
+  }
+  state.pendingStreamMarkersByTurnId.delete(turnId);
+  state.pendingStreamAppendOpsByTurnId.delete(turnId);
+  state.pendingStreamPatchOpsByTurnId.delete(turnId);
+}
+
+function rememberInputMessageTurnStream(
+  state: NetworkWitnessState,
+  userId: string,
+  turnContext?: StreamTurnContext,
+): void {
+  if (!userId || !turnContext?.turnId) return;
+  state.pendingStreamTurnIdByUserId.set(userId, turnContext.turnId);
+  promoteStreamTurnProof(state, userId);
+}
+
+function promoteStreamTurnProof(state: NetworkWitnessState, userId: string): void {
+  if (!state.serviceSubmittedUserIds.has(userId)) return;
+  const turnId = state.pendingStreamTurnIdByUserId.get(userId);
+  if (!turnId) return;
+  state.provenTurnStreamId = turnId;
+  flushPendingStreamTurnEvidence(state, turnId);
+}
+
+function bindTurnScopedTerminalTarget(
+  state: NetworkWitnessState,
+  assistantId: string,
+  turnContext?: StreamTurnContext,
+): void {
+  if (!assistantId || assistantId.length < 8) return;
+  if (!turnMatchesProvenStream(state, turnContext)) return;
+  const userId = provenActiveTurnUserId(state);
+  if (!userId) return;
+  state.turnStreamTerminalTargetId = assistantId;
+  state.activePatchMessageId = assistantId;
+  state.pendingPatchAssistantId = undefined;
+  if (!state.terminal.messages.has(assistantId)) {
+    ingestServicePayload(state.terminal, {
+      type: 'delta',
+      v: { message: { id: assistantId, author: { role: 'assistant' }, parent: userId } },
+    });
+    state.messages.push({ id: assistantId, role: 'assistant', parent: userId });
+  }
+}
+
+function ensurePositionalPatchTarget(
+  state: NetworkWitnessState,
+  turnContext?: StreamTurnContext,
+): string | undefined {
+  const targetId = state.activePatchMessageId
+    ?? (turnMatchesProvenStream(state, turnContext) ? state.turnStreamTerminalTargetId : undefined);
+  if (!targetId || targetId.length < 8) return undefined;
+  const userId = provenActiveTurnUserId(state);
+  if (!userId) return undefined;
+  if (!isMessageAttributedToUserTurn(targetId, userId, state.terminal.messages)) {
+    if (!turnMatchesProvenStream(state, turnContext) || targetId !== state.turnStreamTerminalTargetId) return undefined;
+    bindTurnScopedTerminalTarget(state, targetId, turnContext);
+    if (!isMessageAttributedToUserTurn(targetId, userId, state.terminal.messages)) return undefined;
+  }
+  state.activePatchMessageId = targetId;
+  return targetId;
+}
+
+function ingestTurnScopedAssistantDelta(
+  state: NetworkWitnessState,
+  message: Record<string, unknown>,
+  turnContext?: StreamTurnContext,
+): void {
+  const author = message.author as Record<string, unknown> | undefined;
+  if (author?.role !== 'assistant' || typeof message.id !== 'string') return;
+  const userId = provenActiveTurnUserId(state);
+  if (!userId || !turnMatchesProvenStream(state, turnContext)) return;
+  if (message.id === state.turnStreamTerminalTargetId) {
+    bindTurnScopedTerminalTarget(state, message.id, turnContext);
+    ingestServicePayload(state.terminal, {
+      type: 'delta',
+      v: { message: { ...message, parent: userId } },
+    });
     return;
   }
-  state.deferredStreamingPatches.push({ targetId, items: [...items] });
+  const content = message.content as Record<string, unknown> | undefined;
+  const contentType = typeof content?.content_type === 'string' ? content.content_type : undefined;
+  if (contentType === 'model_editable_context' || contentType === 'reasoning_recap') {
+    ingestServicePayload(state.terminal, { type: 'delta', v: { message } });
+  }
 }
+
 
 function applyStreamingPatchItems(
   state: NetworkWitnessState,
@@ -343,41 +533,43 @@ function registerPatchTargetAssistant(
   }
 }
 
-function releaseDeferredStreamingPatchesForTarget(
-  state: NetworkWitnessState,
-  targetId: string,
-  patchOwnerUserId: string,
-): void {
-  const pending = state.deferredStreamingPatches.filter((entry) => entry.targetId === targetId);
-  if (!pending.length) return;
-  registerPatchTargetAssistant(state, targetId, patchOwnerUserId);
-  for (const entry of pending) applyStreamingPatchItems(state, targetId, entry.items);
-  state.deferredStreamingPatches = state.deferredStreamingPatches.filter((entry) => entry.targetId !== targetId);
-}
-
-async function flushDeferredStreamingPatches(
-  page: any,
-  state: NetworkWitnessState,
-  userMessageId: string,
-): Promise<void> {
-  if (!state.deferredStreamingPatches.length) return;
-  const assistants = page.locator('[data-message-author-role="assistant"]');
-  const count = await assistants.count().catch(() => 0);
-  for (let index = Math.max(0, count - 8); index < count; index++) {
-    const locator = assistants.nth(index);
-    const assistantId = await serviceId(locator);
-    if (!assistantId) continue;
-    const parentId = await parentServiceId(locator);
-    if (parentId !== userMessageId) continue;
-    releaseDeferredStreamingPatchesForTarget(state, assistantId, userMessageId);
-  }
-}
-
 function applyStreamingPatchOperation(
   state: NetworkWitnessState,
   payload: Record<string, unknown>,
+  turnContext?: StreamTurnContext,
 ): void {
   const op = payload.o;
+  if (op === undefined || op === null) {
+    const value = payload.v as Record<string, unknown> | undefined;
+    const message = value?.message as Record<string, unknown> | undefined;
+    if (message) ingestTurnScopedAssistantDelta(state, message, turnContext);
+    return;
+  }
+  if (op === 'append') {
+    const partPath = typeof payload.p === 'string' ? payload.p : '';
+    if (!partPath.includes('/content/parts/')) return;
+    const content = typeof payload.v === 'string' ? payload.v : '';
+    if (!content) return;
+    const targetId = ensurePositionalPatchTarget(state, turnContext);
+    if (!targetId) {
+      bufferPendingStreamAppend(state, turnContext, content);
+      return;
+    }
+    const userId = provenActiveTurnUserId(state);
+    if (!userId) return;
+    ingestServicePayload(state.terminal, {
+      type: 'delta',
+      v: {
+        message: {
+          id: targetId,
+          author: { role: 'assistant' },
+          parent: userId,
+          content: { content_type: 'text', parts: [content] },
+        },
+      },
+    });
+    return;
+  }
   if (op === 'add') {
     const value = payload.v as Record<string, unknown> | undefined;
     const message = value?.message as Record<string, unknown> | undefined;
@@ -385,16 +577,22 @@ function applyStreamingPatchOperation(
     const author = message.author as Record<string, unknown> | undefined;
     const role = author?.role;
     if (role !== 'user' && role !== 'assistant') return;
+    const content = message.content as Record<string, unknown> | undefined;
+    const contentType = typeof content?.content_type === 'string' ? content.content_type : undefined;
+    if (role === 'assistant' && (contentType === 'model_editable_context' || contentType === 'reasoning_recap')) {
+      ingestServicePayload(state.terminal, { type: 'delta', v: { message } });
+      return;
+    }
     const parent = typeof message.parent === 'string' ? message.parent : undefined;
     const userId = provenActiveTurnUserId(state);
     const effectiveParent = role === 'assistant'
-      ? (parent ?? (message.id === state.pendingPatchAssistantId ? userId : undefined))
+      ? (parent ?? (message.id === state.turnStreamTerminalTargetId ? userId : undefined)
+        ?? (message.id === state.pendingPatchAssistantId ? userId : undefined))
       : parent;
     if (role === 'assistant') {
       if (!userId || effectiveParent !== userId) return;
       registerPatchTargetAssistant(state, message.id, userId);
       ingestServicePayload(state.terminal, { type: 'delta', v: { message: { ...message, parent: userId } } });
-      releaseDeferredStreamingPatchesForTarget(state, message.id, userId);
       return;
     }
     ingestServicePayload(state.terminal, { type: 'delta', v: { message: { ...message, ...(effectiveParent ? { parent: effectiveParent } : {}) } } });
@@ -406,23 +604,15 @@ function applyStreamingPatchOperation(
     return;
   }
   if (op !== 'patch' || !Array.isArray(payload.v)) return;
-  const patchOwnerUserId = provenActiveTurnUserId(state);
-  if (!patchOwnerUserId) return;
-  const patchItems = payload.v as Record<string, unknown>[];
-  let targetId = state.activePatchMessageId;
-  if (!targetId && state.pendingPatchAssistantId) targetId = state.pendingPatchAssistantId;
-  if (!targetId || targetId.length < 8) return;
-  if (!isMessageAttributedToUserTurn(targetId, patchOwnerUserId, state.terminal.messages)) {
-    if (!state.activePatchMessageId && targetId === state.pendingPatchAssistantId) {
-      queueDeferredStreamingPatch(state, targetId, patchItems);
-    }
+  const targetId = ensurePositionalPatchTarget(state, turnContext);
+  if (!targetId) {
+    bufferPendingStreamPatch(state, turnContext, payload.v as Record<string, unknown>[]);
     return;
   }
-  state.activePatchMessageId = targetId;
-  applyStreamingPatchItems(state, targetId, patchItems);
+  applyStreamingPatchItems(state, targetId, payload.v as Record<string, unknown>[]);
 }
 
-function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: string): void {
+function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: string, turnContext?: StreamTurnContext): void {
   if (!encodedItem) return;
   state.encodedItemWitnessTurnUserId = undefined;
   state.messages.push(...parseStreamingBody(encodedItem));
@@ -448,7 +638,7 @@ function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: strin
       }
       const payload = parsed as Record<string, unknown>;
       if (streamEvent === 'delta') {
-        applyStreamingPatchOperation(state, payload);
+        applyStreamingPatchOperation(state, payload, turnContext);
       } else {
         ingestServicePayload(state.terminal, payload);
         recursivelyCollectMessages(payload, state.messages);
@@ -458,6 +648,7 @@ function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: strin
           const metadata = input?.metadata as Record<string, unknown> | undefined;
           const turnExchangeId = typeof metadata?.turn_exchange_id === 'string' ? metadata.turn_exchange_id : undefined;
           if (id) {
+            rememberInputMessageTurnStream(state, id, turnContext);
             recordServiceSubmittedUserId(state, id, turnExchangeId);
             if (state.serviceSubmittedUserIds.has(id)) state.encodedItemWitnessTurnUserId = id;
           }
@@ -465,8 +656,11 @@ function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: strin
         if (payload.type === 'message_marker' && payload.marker === 'user_visible_token') {
           const assistantId = typeof payload.message_id === 'string' ? payload.message_id : '';
           const userId = state.encodedItemWitnessTurnUserId ?? provenActiveTurnUserId(state);
-          if (assistantId && userId && state.serviceSubmittedUserIds.has(userId)) {
-            state.pendingPatchAssistantId = assistantId;
+          if (assistantId && isOwnedStreamTurn(state, turnContext)) {
+            rememberPendingStreamMarker(state, assistantId, turnContext);
+            if (userId && state.serviceSubmittedUserIds.has(userId)) {
+              bindTurnScopedTerminalTarget(state, assistantId, turnContext);
+            }
           }
         }
         const delta = payload.v as Record<string, unknown> | undefined;
@@ -487,15 +681,23 @@ function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: strin
   }
 }
 
-function walkEncodedItemEnvelopes(state: NetworkWitnessState, value: unknown): void {
+function walkEncodedItemEnvelopes(
+  state: NetworkWitnessState,
+  value: unknown,
+  inherited?: StreamTurnContext,
+): void {
   if (!value || typeof value !== 'object') return;
   if (Array.isArray(value)) {
-    for (const item of value) walkEncodedItemEnvelopes(state, item);
+    for (const item of value) walkEncodedItemEnvelopes(state, item, inherited);
     return;
   }
   const obj = value as Record<string, unknown>;
-  if (typeof obj.encoded_item === 'string') ingestEncodedItemWitness(state, obj.encoded_item);
-  for (const child of Object.values(obj)) walkEncodedItemEnvelopes(state, child);
+  const context = mergeStreamTurnContext(obj, inherited);
+  if (typeof obj.encoded_item === 'string') {
+    ingestEncodedItemWitness(state, obj.encoded_item, context);
+    return;
+  }
+  for (const child of Object.values(obj)) walkEncodedItemEnvelopes(state, child, context ?? inherited);
 }
 
 // PR #1003 stopped correlating service input_message ids with dispatch proof: observedDispatchUserIds
@@ -534,6 +736,7 @@ function recordServiceSubmittedUserId(
     state.activeTurnUserId = id;
     state.provisionalServiceId = id;
     state.pendingServiceInputMessageIds.delete(id);
+    promoteStreamTurnProof(state, id);
     return;
   }
 
@@ -544,6 +747,7 @@ function recordServiceSubmittedUserId(
     state.activeTurnUserId = id;
     state.provisionalServiceId = id;
     state.pendingServiceInputMessageIds.delete(id);
+    promoteStreamTurnProof(state, id);
     return;
   }
 
@@ -563,6 +767,7 @@ function recordServiceSubmittedUserId(
     state.messages.push({ id, role: 'user' });
     state.activeTurnUserId = id;
     state.pendingServiceInputMessageIds.delete(id);
+    promoteStreamTurnProof(state, id);
     return;
   }
 
@@ -579,6 +784,7 @@ function recordServiceSubmittedUserId(
     state.activeTurnUserId = id;
     state.provisionalServiceId = id;
     state.pendingServiceInputMessageIds.delete(id);
+    promoteStreamTurnProof(state, id);
     return;
   }
 
@@ -595,26 +801,44 @@ function recordServiceSubmittedUserId(
   state.rejectedServiceUserIds.add(id);
 }
 
-function collectInputMessageWitness(state: NetworkWitnessState, value: unknown): void {
+function collectInputMessageWitness(
+  state: NetworkWitnessState,
+  value: unknown,
+  inherited?: StreamTurnContext,
+): void {
   if (!value || typeof value !== 'object') return;
   if (Array.isArray(value)) {
-    for (const item of value) collectInputMessageWitness(state, item);
+    for (const item of value) collectInputMessageWitness(state, item, inherited);
     return;
   }
   const obj = value as Record<string, unknown>;
+  const context = mergeStreamTurnContext(obj, inherited);
   if (obj.type === 'input_message') {
     const input = obj.input_message as Record<string, unknown> | undefined;
     const id = typeof input?.id === 'string' ? input.id : '';
     const metadata = input?.metadata as Record<string, unknown> | undefined;
     const turnExchangeId = typeof metadata?.turn_exchange_id === 'string' ? metadata.turn_exchange_id : undefined;
-    if (id) recordServiceSubmittedUserId(state, id, turnExchangeId);
+    if (id) {
+      rememberInputMessageTurnStream(state, id, context);
+      recordServiceSubmittedUserId(state, id, turnExchangeId);
+    }
+  }
+  if (obj.type === 'message_marker' && obj.marker === 'user_visible_token') {
+    const assistantId = typeof obj.message_id === 'string' ? obj.message_id : '';
+    const userId = provenActiveTurnUserId(state);
+    if (assistantId && isOwnedStreamTurn(state, context)) {
+      rememberPendingStreamMarker(state, assistantId, context);
+      if (userId && state.serviceSubmittedUserIds.has(userId)) {
+        bindTurnScopedTerminalTarget(state, assistantId, context);
+      }
+    }
   }
   const payload = obj.payload;
   if (payload && typeof payload === 'object') {
     const nested = (payload as Record<string, unknown>).payload;
-    collectInputMessageWitness(state, nested ?? payload);
+    collectInputMessageWitness(state, nested ?? payload, context ?? inherited);
   }
-  for (const child of Object.values(obj)) collectInputMessageWitness(state, child);
+  for (const child of Object.values(obj)) collectInputMessageWitness(state, child, context ?? inherited);
 }
 
 function ingestWitnessJsonTree(state: NetworkWitnessState, value: unknown): void {
@@ -682,7 +906,10 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     frozenDispatchExchangeAmbiguous: false,
     frozenDispatchCandidateIds: new Set<string>(),
     pendingServiceInputMessageIds: new Set<string>(),
-    deferredStreamingPatches: [],
+    pendingStreamTurnIdByUserId: new Map<string, string>(),
+    pendingStreamMarkersByTurnId: new Map<string, string>(),
+    pendingStreamAppendOpsByTurnId: new Map<string, { content: string }[]>(),
+    pendingStreamPatchOpsByTurnId: new Map<string, Record<string, unknown>[][]>(),
     armDispatch() { this.dispatchArmed = true; },
     witnessInstall: Promise.resolve(),
   };
@@ -1113,7 +1340,6 @@ export async function sendTurn(
       }
     }
 
-    await flushDeferredStreamingPatches(page, network, userId);
     const terminal = resolveWholeTurnTerminal(userId, network.terminal);
     if (terminal.state === 'failure') {
       return {

@@ -8,6 +8,7 @@ import {
   LIVE_TERMINAL_FRAME_CONTRACT,
 } from '../chatgpt-browser-turn/fixtures/live-terminal-frame-contract.ts';
 import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
+import { liveTurnStreamSequence } from '../chatgpt-browser-turn/fixtures/live-turn-stream-contract.ts';
 import {
   createTerminalWitnessState,
   ingestServicePayload,
@@ -27,13 +28,16 @@ const baseConfig = (): BrowserConfig => ({
 });
 
 
-function streamItemEnvelope(encodedItem: string): Record<string, unknown> {
+function streamItemEnvelope(encodedItem: string, turnId = '858e210d-d54e-44c9-a51b-4e4e13e8dadc'): Record<string, unknown> {
   return {
     type: 'message',
+    topic_id: `conversation-turn-${turnId}`,
     payload: {
       type: 'conversation-turn-stream',
       payload: {
         type: 'stream-item',
+        conversation_id: '6a65acd9-4d44-83ec-bcb9-5787832fac24',
+        turn_id: turnId,
         encoded_item: encodedItem,
       },
     },
@@ -194,29 +198,8 @@ describe('issue 1010 submitted-turn proof', () => {
   it('AC1 promotes pending input_message after delayed outbound request witness', async () => {
     const own = 'user-delay-req-12345678';
     const assistantId = 'asst-delay-req-12345678';
-    const delayedFrames = [
-      streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}
-
-`),
-      streamItemEnvelope(`data: {"type":"message_marker","message_id":"${assistantId}","marker":"user_visible_token","event":"first"}
-
-`),
-      streamItemEnvelope([
-        'event: delta',
-        `data: {"p":"","o":"add","v":{"message":{"id":"${assistantId}","author":{"role":"assistant"},"content":{"content_type":"text","parts":[""]}}}}`,
-        '',
-      ].join('\n')),
-      streamItemEnvelope([
-        'event: delta',
-        'data: {"p":"/message/content/parts/0","o":"append","v":"OK"}',
-        '',
-      ].join('\n')),
-      streamItemEnvelope([
-        'event: delta',
-        'data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}',
-        '',
-      ].join('\n')),
-    ];
+    const turnId = '858e210d-d54e-44c9-a51b-delayreq01';
+    const delayedFrames = liveTurnStreamSequence(own, assistantId, { turnId }, { replyText: 'OK' });
     const fixture = fakeTurnPage({
       dispatchCandidateIds: [],
       serviceObserveDispatch: false,
@@ -454,22 +437,24 @@ describe('issue 1010 submitted-turn proof', () => {
     }
   });
 
-  it('AC2 ignores foreign streaming patch terminalization interleaved with proven turn', async () => {
+  it('AC2 ignores foreign streaming patch terminalization on a different turn topic', async () => {
     const own = 'user-owned-12345678';
     const foreignAssistant = 'asst-foreign-12345678';
-    const turnExchangeId = 'exchange-owned-12345678';
+    const ownTurnId = 'turn-owned-12345678';
+    const foreignTurnId = 'turn-foreign-12345678';
     const fixture = fakeTurnPage({
       dispatchCandidateIds: [own],
-      turnExchangeId,
       serviceObserveDispatch: false,
       serviceFrames: [
+        streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}
+
+`, ownTurnId),
         streamItemEnvelope([
-          `data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"turn_exchange_id":"${turnExchangeId}"}}}`,
           `data: {"type":"message_marker","message_id":"${foreignAssistant}","marker":"user_visible_token","event":"first"}`,
           'event: delta',
           'data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}',
           '',
-        ].join('\n')),
+        ].join('\n'), foreignTurnId),
       ],
       assistants: [],
     });
@@ -480,39 +465,14 @@ describe('issue 1010 submitted-turn proof', () => {
     expect(result.assistantMessageId).not.toBe(foreignAssistant);
   });
 
-  it('AC2 accepts patch-only terminal after DOM confirms assistant parentage', async () => {
-    const own = 'user-patchonly-12345678';
-    const assistantId = 'asst-patchonly-12345678';
+  it('AC2 accepts live wire turn stream with add-less answer delta and id-less terminal patch', async () => {
+    const own = 'user-livewire-12345678';
+    const assistantId = 'asst-livewire-12345678';
     const turnId = '858e210d-d54e-44c9-a51b-4e4e13e8dadc';
-    const turnEnvelope = (encodedItem: string) => ({
-      type: 'message',
-      topic_id: `conversation-turn-${turnId}`,
-      payload: {
-        type: 'conversation-turn-stream',
-        payload: {
-          type: 'stream-item',
-          conversation_id: '6a65acd9-4d44-83ec-bcb9-5787832fac24',
-          turn_id: turnId,
-          encoded_item: encodedItem,
-        },
-      },
-    });
     const fixture = fakeTurnPage({
       dispatchCandidateIds: [own],
       serviceObserveDispatch: false,
-      serviceFrames: [
-        turnEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}
-
-`),
-        turnEnvelope(`data: {"type":"message_marker","message_id":"${assistantId}","marker":"user_visible_token","event":"first"}
-
-`),
-        turnEnvelope([
-          'event: delta',
-          'data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}},{"p":"/message/status","o":"replace","v":"finished_successfully"}]}',
-          '',
-        ].join('\n')),
-      ],
+      serviceFrames: liveTurnStreamSequence(own, assistantId, { turnId }, { replyText: 'OK' }),
       assistants: [
         { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
       ],
