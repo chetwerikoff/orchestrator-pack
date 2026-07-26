@@ -195,7 +195,7 @@ export function matchInventoryRoute(parsed) {
       'state',
       'workflow',
     ];
-    const expectedWithAppId = [...expected, 'appId'];
+    const expectedWithAppId = ['appId', ...expected];
     const includeAppId = jsonFieldsEqual(parsed.jsonFields, expectedWithAppId);
     if (!includeAppId && !jsonFieldsEqual(parsed.jsonFields, expected)) {
       return null;
