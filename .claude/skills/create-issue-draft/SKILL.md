@@ -646,6 +646,36 @@ reruns as a new capture. Any Issue content change after a lens invalidates that
 lens for acceptance. Prior captures and ledger rows remain valid and are never
 waived.
 
+#### Producing-run evidence
+
+A final architect-lens capture is acceptance-valid only when evidence from the
+independent **Claude Code CLI** invocation that produced that lens is retained
+beside the capture in the same review-artifact area. Before the architect
+invocation begins, the flow-manager establishes the destination for that evidence.
+The evidence may be written by the producing architect run itself, or it may be
+that same invocation's raw output, log, or receipt captured verbatim by the
+flow-manager while the invocation executes. A later manager-authored summary,
+reconstruction, or assertion that the run happened is not producing-run evidence.
+
+The producing-run evidence must be sufficient to associate the invocation with
+the architect-lens role, the exact Issue revision it evaluated, the corresponding
+lens capture, and the run's terminal lens outcome. Exact filename, encoding, and
+additional fields remain planner freedom. Absence, mismatch, ambiguity, or
+evidence that the flow-manager itself performed the lens fails closed: the capture
+cannot satisfy the final architect-lens acceptance floor.
+
+If producer/provenance evidence invalidates a lens, the audit trail must stop
+crediting that capture as an acceptance-bearing architect result. Historical raw
+artifacts may remain explicitly invalid. Producer/provenance validity is distinct
+from Issue-content staleness: invalid provenance removes acceptance credit but
+does not waive findings, dispositions, or ledger rows already produced or
+recorded; separately, a later Issue content change still stales an otherwise
+producer-valid lens under the existing rule.
+
+This evidence is same-user provenance, not cryptographic attestation. It does not
+prevent a deliberately violating agent from fabricating plausible evidence; it
+makes missing or false producer attribution an explicit audit failure instead of
+silently crediting a lens with no producing-run evidence.
 
 ## Step 6 — Final architectural verification
 
@@ -709,8 +739,9 @@ node scripts/finding-ledger-guard.mjs \
 
 Final acceptance requires:
 
-1. latest final architect lens covers exact Issue revision being accepted and the
-   normal latest-lens/latest-final relationship holds;
+1. latest final architect lens covers exact Issue revision being accepted, has
+   valid co-located producing-run evidence from its independent Claude Code CLI
+   invocation, and the normal latest-lens/latest-final relationship holds;
 2. the full `checkTierGateGuard` is green on that exact current anchor, including
    intake/history/demotion/current-revalidation and marker/L4 floors when applicable;
 3. clean final pass over that exact revision when required;
@@ -827,9 +858,10 @@ status/publication/recovery path first.
 
 1. **Open shift.** A browser-turn is an open flow-manager shift until terminal
    `turn-result/v1` (`ok` or explicit non-recoverable failure handled per recovery
-   rules) AND the stage capture is saved or recovery is recorded. Backgrounding the
-   shell does not transfer ownership; ending the manager session while the turn is
-   non-terminal is non-compliant.
+   rules), the stage capture is saved or recovery is recorded, **and the owned-turn
+   cleanup obligations below are complete**. Backgrounding the shell does not
+   transfer ownership; ending the manager session while the turn is non-terminal
+   or still owns blocking helper state is non-compliant.
 
 2. **No process-liveness inference.** A running Node PID, background job, or elapsed
    time does not prove GPT is still generating. Only helper control plane
@@ -850,7 +882,7 @@ status/publication/recovery path first.
 | `possible_delivery` / active owner in flight | Not by itself evidence that generation is ongoing. Keep waiting only while an independent check of the conversation itself shows the reply still in progress. If the conversation shows a completed reply, stop waiting and take the documented recovery path. Never resend. |
 | `fresh_orphan` / `orphaned_fresh_turn` / `recovery_required` | Stop passive wait; run documented recovery/clear path before any resend |
 | `committed_ok` (publication-status) | Verify output capture on disk; if missing, recovery before resend |
-| Terminal `ok` + capture saved | Stage may progress |
+| Terminal `ok` + capture saved | Publication is complete; stage may progress only after the owned-turn cleanup obligations below are also satisfied |
 | `stream_timeout` / `no_reply` after full helper timeout | Before recording failure, check the conversation for a completed reply and recover it through the documented recovery path. Record failure only when no completed reply exists; then retry only per existing substitution/outage rules. |
 
 Helper phase alone cannot distinguish a healthy in-flight turn from a stalled one: both report `possible_delivery`. Every row above that involves waiting or declaring failure therefore requires a second, independent observation of the conversation itself, not the helper control plane alone.
@@ -864,6 +896,156 @@ Helper phase alone cannot distinguish a healthy in-flight turn from a stalled on
    poll the **page** every 5–10 minutes; tracked `chatgpt-browser-turn` long turns
    poll **`status/list`** and, when invocation identity is available,
    **`publication-status`** — do not apply the page-poll rule to tracked helper turns.
+
+### Owned-turn completion and cleanup
+
+Taking or recovering the assistant reply is necessary but not sufficient to close
+a tracked browser turn. Before the flow-manager treats a turn it owns as finished
+or frees its stage to proceed, the helper process for that owned turn must no
+longer hold the helper's configured-profile serialization state and the helper
+control state for that owned turn must no longer be active or blocking. This is
+the helper-owned profile state observed through `status/list`, not the caller-side
+cross-task mutex `orchestrator-pack:create-issue-draft:browser-turn`; that caller
+mutex still releases immediately after the browser-turn operation, and releasing
+it does not satisfy owned-turn cleanup.
+
+Cleanup authority is ownership-scoped. The flow-manager may `clear` or kill only
+the tracked turn it owns. A record or helper process belonging to another task or
+current manager must never be cleared or killed merely to make the configured
+profile available. If ownership cannot be established from the current task's own
+invocation/control/audit evidence, treat the state as non-owned for mutation
+purposes and leave the browser-turn work pending under the existing cross-task
+contention rule.
+
+Where owned cleanup requires `clear`, the clear/resend rules below apply first.
+Cleanup may use only existing supported helper/control operations plus ordinary
+process handling; this contract adds no helper command, probe, daemon, lease, or
+state machine. Before killing an owned helper process, query `publication-status`
+when a supported `invocation_id` is available. While publication is `in_progress`,
+wait/recover rather than kill. Without a supported invocation identity, process
+kill is permitted only when existing supported evidence already proves publication
+cannot be in progress, such as an owned incident still at `pre_send`; otherwise do
+not kill merely to free the slot.
+
+If supported operations and evidence cannot resolve the owned blocking state, the
+turn remains incomplete. Record the truthful durable blocked outcome through the
+existing session-completion gate, hand off as needed, and keep the stage blocked.
+
+### Capture destinations are never hand-written
+
+The flow-manager must not create, replace, prefix, annotate, or otherwise
+hand-write the destination capture file for a tracked helper turn, even when the
+browser visibly contains a complete reply. The capture is a verbatim audit
+artifact; pre-creating or modifying the destination can turn the helper's later
+successful no-replace publication into a destination collision.
+
+If the tracked helper did not publish successfully, use the existing documented
+recovery path or a legitimate rerun only after the existing recovery/coexistence
+rules prove a resend safe. Put manual incident notes in audit/journal state, never
+inside the capture bytes. This rule changes no helper publication behavior.
+
+### Inspect resolvable conversations before clear; clear never authorizes resend
+
+Before `clear` against a possible-delivery or otherwise ambiguous tracked-turn
+record owned by the current flow-manager, inspect the actual target conversation
+when it is resolvable through existing supported evidence such as an exact
+recorded/returned chat URL or another already-supported stable conversation
+identity. Never invent a conversation mapping from `provisional_id`, process
+identity, tab position, elapsed time, or other evidence the landed helper contract
+does not define as conversation identity.
+
+When the target conversation is resolvable:
+
+- if the original prompt is present and the reply is still being produced, retain
+  the existing turn and wait/recover it;
+- if the original prompt is present and a reply is complete, recover that existing
+  reply through the documented path;
+- if the prompt is present but helper/control state disagrees with the conversation,
+  treat it as recovery state and do not resend;
+- permit a later resend only when an existing documented observable state proves a
+  new send is safe.
+
+Resend safety comes from supported evidence, not flow-manager judgment. Existing
+safe shapes include an owned `status/list` incident at phase `pre_send`, followed
+by supported cleanup with no blocking state, or the existing complete compatible
+control/publication result proving no possible delivery and no blocking state.
+These are bindings to existing helper state and recovery contracts, not new states
+or commands.
+
+An interrupted fresh-chat record may expose only helper/provisional state and no
+supported identity that resolves the actual target conversation. In that unresolved
+`fresh_orphan` / `orphaned_fresh_turn` / `recovery_required` case, do not require
+an impossible conversation inspection; preserve the existing fail-closed
+recovery/clear path. Inability to resolve the conversation is not evidence that
+the prompt was never delivered. `clear` may be used only as the existing recovery
+contract permits, but it never proves non-delivery and never authorizes resend by
+itself. No resend is permitted until an existing supported control/publication/
+recovery state proves a new send safe and no blocking state remains.
+
+A fresh-chat stage, including final architectural verification, is invalidated as
+a clean fresh turn if an identical prompt is dispatched into the same conversation
+while the first copy is already present or being answered. The polluted reply is
+not usable as that stage's capture; rerun that stage in a new fresh conversation
+under its existing pass/stage rules.
+
+These rules extend without weakening the existing `possible_delivery`, fresh-
+orphan recovery, and `stream_timeout` / `no_reply` conversation-inspection rules.
+
+### Shared human-authored recurrence journal
+
+For each qualifying browser-turn/recovery incident, the flow-manager appends one
+JSON object line to one shared append-only JSONL journal under the existing
+out-of-repository create-issue-draft state root, outside individual `<N>-<slug>`
+task workdirs so recurrence can be inspected across tasks. Every task flow-manager
+uses the exact shared path `~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl`.
+The journal stays out of the repository and remains append-only.
+
+The journal deliberately has no deterministic incident/episode identity contract:
+no required `episode_id`, restart/handoff identity reconstruction, trigger
+coalescing, pre-append journal scan, or exactly-once/deduplicated append semantics.
+Normally append one line once a qualifying incident reaches an observable terminal,
+recovery, or durable blocked outcome. If a later recovery action, restart, or
+handoff writes another line about the same incident, reuse the same artifact
+reference when available. Duplicate lines are acceptable and are reconciled by a
+human reader through that artifact reference; the journal is not an authoritative
+exact event counter.
+
+A journal entry is required when any of these occurs:
+
+1. a tracked browser turn finishes in any state other than `ok`;
+2. a manual recovery action occurs, including `clear`, salvage/recovery
+   intervention, resend, or process kill;
+3. the flow-manager takes an action outside the documented instruction because the
+   documented path was insufficient; or
+4. helper/tool state and the actual conversation disagree materially.
+
+Trigger 3 is human/operator judgment: having to improvise is itself evidence that
+the instruction surface is incomplete.
+
+A clean preflight blocker that stops before delivery, leaves no residual helper or
+control state, needs no recovery action, and involves no improvisation may use a
+minimal record containing only timestamp, stable recurrence-class slug, cost in
+minutes/lost replies/burned runs as applicable, artifact reference, and author.
+States such as `login`, `quota`, or `challenge` may use that minimal form when they
+meet those conditions.
+
+Use the fuller record whenever residual state remains, a recovery/process action
+occurs, helper and conversation disagree, instruction had to be improvised, or the
+truthful terminal outcome is a durable blocked handoff. The fuller record carries
+timestamp; surface (`helper|skill|ao|ci|gpt|operator`); stable recurrence-class
+slug; observed symptom; what was actually happening; cost in minutes, lost
+replies, burned runs, or the applicable combination; workaround/recovery applied
+(including explicit blocked/no-recovery-yet); proposed durable change; artifact
+reference; and author.
+
+Before the owning stage/session is treated as complete, every qualifying incident
+that reached an observable terminal/recovery/blocked outcome must have a journal
+line. A later line may supplement the record by reusing the same artifact
+reference rather than mutating the earlier append-only line. This is a best-effort
+human-authored recurrence journal, not a transactional event store: do not add a
+machine writer, journal lock/service, identity registry, deduplication history,
+rollup, central upload, recurrence threshold, review cadence, notification, or
+automatic follow-up as part of this flow.
 
 The former untracked one-shot scratchpad is fallback-only. It may be used only
 when either (a) the tracked executable or sanctioned flow-manager execution
@@ -1055,6 +1237,7 @@ pass-NN-competitive.capture.txt
 pass-NN-architectural.capture.txt
 pass-NN-architectural.codex.json          # only when a Codex role runs
 pass-NN-architectural-lens.capture.txt    # M3 contest/outcome evidence lives here
+<co-located lens producing-run evidence> # independent Claude Code invocation evidence; exact representation is planner freedom
 pass-NN-architectural-final.capture.txt
 pass-NN-architectural-final.codex.json    # only when Codex substitutes
 presync-architect-lens.md
@@ -1106,10 +1289,18 @@ not edit sibling Issues or add workflow/plugin/core machinery.
 - Start browser turn without exclusive ownership of common cross-task browser
   critical-section identity; do not extend lock over Issue/ledger work or add new
   runtime lock here.
+- Clear or kill a tracked helper turn that is foreign or not provably owned by the
+  current flow-manager merely to free the configured profile.
+- Hand-write, pre-create, replace, annotate, or otherwise modify a tracked-helper
+  destination capture outside the helper/documented recovery path.
+- Treat `clear`, unresolved conversation identity, or process liveness as proof of
+  non-delivery or resend authorization.
 - Treat tracked-helper non-`ok`, timeout, missing stdout, or unresolved status as
   scratchpad/legacy fallback authorization or resend permission.
 - Run legacy/scratchpad browser sends while helper-owned unresolved state blocks
   coexistence for configured profile.
+- Accept or credit a final architect-lens capture without matching producing-run
+  evidence from its independent Claude Code CLI invocation.
 - Trust chat reply without live Issue re-pull and diff.
 - Skip requested GPT/Codex stage, selected browser stage, or mandatory T3-critical
   Codex addition silently.

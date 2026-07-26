@@ -50,6 +50,24 @@ import {
   sendTurn,
   type BrowserConfig,
 } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { emptyLocator, fakeTurnPage, messageLocator } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
+import {
+  DELTA_ONLY_FRAME,
+  framesToSseBody,
+  LIVE_TERMINAL_FAILURE_FRAME_CONTRACT,
+  LIVE_TERMINAL_FRAME_CONTRACT,
+  PATCH_ONLY_FRAME,
+  STREAM_COMPLETE_ONLY_FRAME,
+} from '../chatgpt-browser-turn/fixtures/live-terminal-frame-contract.ts';
+import {
+  createTerminalWitnessState,
+  deltaPatchOrStreamCompleteWithoutTerminal,
+  ingestServicePayload,
+  isMessageAttributedToUserTurn,
+  nodeLocalStopWithoutWholeTurn,
+  resolveWholeTurnTerminal,
+  wholeTurnTerminalOutcome,
+} from '../chatgpt-browser-turn/terminal-witness.ts';
 import { runProcessSync } from '../kernel/subprocess.ts';
 
 let root = '';
@@ -95,126 +113,6 @@ function deadOwnerRecord(
   });
 }
 
-function emptyLocator(): any {
-  return {
-    count: async () => 0,
-    nth: () => emptyLocator(),
-    getAttribute: async () => null,
-    locator: () => emptyLocator(),
-    first: () => emptyLocator(),
-    innerText: async () => '',
-    click: async () => {},
-    evaluate: async () => [],
-  };
-}
-
-function messageLocator(role: 'user' | 'assistant', id: string, parent?: string, text = ''): any {
-  return {
-    __role: role,
-    getAttribute: async (name: string) => {
-      if (name === 'data-message-author-role') return role;
-      if (name === 'data-message-id') return id;
-      if (name === 'data-parent-message-id') return parent ?? null;
-      return null;
-    },
-    locator: () => ({ first: () => ({ getAttribute: async () => null }) }),
-    first: () => emptyLocator(),
-    count: async () => 1,
-    innerText: async () => text,
-    click: async () => {},
-    evaluate: async () => text
-      ? [{ type: 'paragraph', children: [{ type: 'text', text }] } satisfies SemanticNode]
-      : [],
-  };
-}
-
-interface FakeTurnPageOptions {
-  dispatchCandidateIds?: string[];
-  historicalResponseUserIds?: string[];
-  foreignDomUserIds?: string[];
-  assistantParent?: string;
-  assistantText?: string;
-  bodyText?: string;
-  alertText?: string;
-  alertAfterSend?: string;
-  composer?: boolean;
-  serviceObserveDispatch?: boolean;
-}
-
-function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; getSendClicks: () => number } {
-  const handlers = new Map<string, Array<(event: any) => unknown>>();
-  const messages: any[] = [];
-  let sendClicks = 0;
-  let sent = false;
-  const dispatchIds = options.dispatchCandidateIds ?? ['user-owned-12345678'];
-  const composerPresent = options.composer !== false;
-
-  const emit = async (event: string, payload: any): Promise<void> => {
-    for (const handler of handlers.get(event) ?? []) await handler(payload);
-  };
-
-  const send = {
-    ...emptyLocator(),
-    count: async () => 1,
-    click: async () => {
-      sendClicks++;
-      sent = true;
-      for (const id of options.historicalResponseUserIds ?? []) {
-        await emit('response', {
-          url: () => 'https://chatgpt.com/backend-api/conversation/history',
-          text: async () => JSON.stringify({ message: { id, author: { role: 'user' } } }),
-        });
-      }
-      for (const id of dispatchIds) {
-        await emit('request', {
-          url: () => 'https://chatgpt.com/backend-api/conversation',
-          postData: () => JSON.stringify({ messages: [{ id, author: { role: 'user' } }] }),
-        });
-      }
-      if (options.serviceObserveDispatch !== false) {
-        for (const id of dispatchIds) messages.push(messageLocator('user', id));
-      }
-      for (const id of options.foreignDomUserIds ?? []) messages.push(messageLocator('user', id));
-      if (options.assistantParent) {
-        messages.push(messageLocator('assistant', 'assistant-owned-12345678', options.assistantParent, options.assistantText ?? 'assistant reply'));
-      }
-    },
-  };
-
-  const selectMessages = (role: 'user' | 'assistant') => {
-    const selected = messages.filter((message) => message.__role === role);
-    return { count: async () => selected.length, nth: (index: number) => selected[index] ?? emptyLocator() };
-  };
-
-  const page = {
-    on: (event: string, handler: (value: any) => unknown) => {
-      const list = handlers.get(event) ?? [];
-      list.push(handler);
-      handlers.set(event, list);
-    },
-    url: () => 'https://chatgpt.com/c/example',
-    locator: (selector: string) => {
-      if (selector === '#prompt-textarea') return { ...emptyLocator(), count: async () => composerPresent ? 1 : 0, click: async () => {} };
-      if (selector === '[data-testid="send-button"]') return send;
-      if (selector === '[data-testid="stop-button"]') return emptyLocator();
-      if (selector === '[data-message-author-role]') return { count: async () => messages.length, nth: (index: number) => messages[index] ?? emptyLocator() };
-      if (selector === '[data-message-author-role="user"]') return selectMessages('user');
-      if (selector === '[data-message-author-role="assistant"]') return selectMessages('assistant');
-      if (selector === '[role="alert"]') {
-        const text = sent && options.alertAfterSend ? options.alertAfterSend : options.alertText;
-        if (!text) return emptyLocator();
-        return { count: async () => 1, nth: () => ({ ...emptyLocator(), innerText: async () => text }) };
-      }
-      if (selector === 'body') return { ...emptyLocator(), innerText: async () => options.bodyText ?? '' };
-      return emptyLocator();
-    },
-    keyboard: { press: async () => {}, insertText: async () => {} },
-    waitForTimeout: async () => {},
-    getByText: () => emptyLocator(),
-  };
-
-  return { page, getSendClicks: () => sendClicks };
-}
 
 function makePublicationFixture(
   invocationId: string,
@@ -1004,3 +902,651 @@ describe('issue 964 retained recovery binary lifecycle', () => {
     expect(observed.body?.state).toBe('recovery_required');
   });
 });
+
+describe('issue 996 whole-turn terminal assistant completion', () => {
+  const baseConfig = (): BrowserConfig => ({
+    cdp,
+    profile: join(root, 'profile'),
+    chatUrl: 'https://chatgpt.com/c/example',
+    newChat: false,
+    timeoutMs: 2_000,
+  });
+
+  it('does not treat unknown terminal metadata as whole-turn success', () => {
+    expect(wholeTurnTerminalOutcome({
+      endTurn: true,
+      finishDetailsType: 'stop',
+      status: 'in_progress',
+    })).toBe('none');
+    expect(wholeTurnTerminalOutcome({
+      endTurn: true,
+      finishDetailsType: 'stop',
+    })).toBe('success');
+  });
+
+  it('preserves sanitized live terminal failure frame contract before AC5/AC6 fixtures', () => {
+    expect(LIVE_TERMINAL_FAILURE_FRAME_CONTRACT.map((frame) => frame.type)).toEqual(['delta', 'delta']);
+    const generationError = LIVE_TERMINAL_FAILURE_FRAME_CONTRACT[0]?.v as { message?: { status?: string; content?: { content_type?: string } } };
+    expect(generationError?.message?.status).toBe('finished_failed');
+    expect(generationError?.message?.content?.content_type).toBe('execution_error');
+    const interrupted = LIVE_TERMINAL_FAILURE_FRAME_CONTRACT[1]?.v as { message?: { status?: string } };
+    expect(interrupted?.message?.status).toBe('interrupted');
+  });
+
+  it('AC13 preserves sanitized live terminal-frame contract before fixture derivation', () => {
+    const witness = createTerminalWitnessState();
+    for (const frame of LIVE_TERMINAL_FRAME_CONTRACT) ingestServicePayload(witness, frame as Record<string, unknown>);
+    expect(witness.frames.map((frame) => frame.kind)).toEqual([
+      'input_message', 'delta', 'patch', 'delta', 'delta', 'stream_complete',
+    ]);
+    const terminal = resolveWholeTurnTerminal('user-sanitized-12345678', witness);
+    expect(terminal).toEqual({ state: 'success', assistantMessageId: 'asst-terminal-12345678' });
+    expect(nodeLocalStopWithoutWholeTurn(witness.terminalByMessageId.get('asst-preamble-12345678'))).toBe(true);
+    expect(wholeTurnTerminalOutcome(witness.terminalByMessageId.get('asst-terminal-12345678'))).toBe('success');
+    expect(wholeTurnTerminalOutcome({
+      endTurn: false,
+      status: 'finished_failed',
+      contentType: 'execution_error',
+    })).toBe('none');
+  });
+
+  it('AC13 fail-closes delta-only, patch-only, and stream-complete-only observations', () => {
+    for (const frame of [DELTA_ONLY_FRAME, PATCH_ONLY_FRAME, STREAM_COMPLETE_ONLY_FRAME]) {
+      const witness = createTerminalWitnessState();
+      ingestServicePayload(witness, frame as Record<string, unknown>);
+      const terminal = resolveWholeTurnTerminal('user-sanitized-12345678', witness);
+      expect(terminal.state).toBe('none');
+      expect(deltaPatchOrStreamCompleteWithoutTerminal(witness, terminal)).toBe(true);
+    }
+  });
+
+  it('AC1 single-node direct-child success preserves existing behavior', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistantParent: own,
+      assistantText: 'canonical reply',
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.assistantMessageId).toBe('assistant-owned-12345678');
+    expect(result.reply).toBe('canonical reply');
+  });
+
+  it('AC2 interleaved multi-node success publishes terminal assistant only', async () => {
+    const own = 'user-owned-12345678';
+    const frames = LIVE_TERMINAL_FRAME_CONTRACT.map((frame) => {
+      if (frame.type === 'input_message') {
+        return { ...frame, input_message: { id: own } };
+      }
+      if (frame.type === 'delta' && (frame.v as any).message?.id === 'asst-preamble-12345678') {
+        return {
+          ...frame,
+          v: {
+            message: {
+              ...(frame.v as any).message,
+              parent: own,
+            },
+          },
+        };
+      }
+      return frame;
+    });
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceFrames: frames as Record<string, unknown>[],
+      assistants: [
+        { id: 'asst-preamble-12345678', parent: own, text: 'Thinking...', appearOnSend: true },
+        { id: 'asst-terminal-12345678', parent: 'tool-handoff-12345678', text: 'Final answer body', appearOnSend: true },
+      ],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.assistantMessageId).toBe('asst-terminal-12345678');
+    expect(result.reply).toBe('Final answer body');
+    expect(result.reply).not.toContain('Thinking');
+  });
+
+  it('AC3 attributes terminal assistant across intermediate system/tool nodes', () => {
+    const witness = createTerminalWitnessState();
+    for (const frame of LIVE_TERMINAL_FRAME_CONTRACT) ingestServicePayload(witness, frame as Record<string, unknown>);
+    expect(isMessageAttributedToUserTurn('asst-terminal-12345678', 'user-sanitized-12345678', witness.messages)).toBe(true);
+    expect(isMessageAttributedToUserTurn('tool-handoff-12345678', 'user-sanitized-12345678', witness.messages)).toBe(true);
+  });
+
+  it('AC4 node-local stop before tool handoff is not terminal', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'asst-preamble-12345678', parent: own, text: 'partial', appearOnSend: true }],
+      serviceFrames: [
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'asst-preamble-12345678',
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: false,
+              metadata: { finish_details: { type: 'stop' } },
+            },
+          },
+        },
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'tool-handoff-12345678',
+              author: { role: 'tool' },
+              parent: 'asst-preamble-12345678',
+            },
+          },
+        },
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'asst-terminal-12345678',
+              author: { role: 'assistant' },
+              parent: 'tool-handoff-12345678',
+              end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
+            },
+          },
+        },
+      ],
+    });
+  await fixture.page.addAssistant({ id: 'asst-terminal-12345678', parent: 'tool-handoff-12345678', text: 'final answer' });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.assistantMessageId).toBe('asst-terminal-12345678');
+    expect(result.reply).toBe('final answer');
+  });
+
+  it('AC5 generation-error terminal failure returns no_reply promptly', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            status: 'finished_failed',
+            content: { content_type: 'execution_error', text: 'generation failed' },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+    expect(result.state).toBe('no_reply');
+    expect(result.cause).toBe('terminal_generation_error');
+  });
+
+  it('AC6 interrupted terminal failure returns no_reply promptly', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            status: 'interrupted',
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+    expect(result.state).toBe('no_reply');
+    expect(result.cause).toBe('terminal_interrupted');
+  });
+
+  it('AC7 same-turn assistant plurality is not foreign; foreign turn remains foreign', async () => {
+    const own = 'user-owned-12345678';
+    const pluralFixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [
+        { id: 'assistant-sibling-12345678', parent: own, text: 'draft', appearOnSend: true },
+        { id: 'assistant-owned-12345678', parent: own, text: 'final', appearOnSend: true },
+      ],
+      serviceFrames: [
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'assistant-sibling-12345678',
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: false,
+            },
+          },
+        },
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'assistant-owned-12345678',
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
+            },
+          },
+        },
+      ],
+    });
+    const pluralResult = await sendTurn(pluralFixture.page, 'payload', baseConfig());
+    expect(pluralResult.state).toBe('ok');
+    expect(pluralResult.assistantMessageId).toBe('assistant-owned-12345678');
+
+    const foreignFixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      foreignDomUserIds: ['user-foreign-12345678'],
+      assistants: [{ id: 'assistant-foreign-12345678', parent: 'user-foreign-12345678', text: 'foreign', appearOnSend: true }],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-foreign-12345678',
+            author: { role: 'assistant' },
+            parent: 'user-foreign-12345678',
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+    });
+    const foreignResult = await sendTurn(foreignFixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+    expect(foreignResult.state).toBe('foreign_activity');
+    expect(foreignResult.cause).toBe('unexpected_user_turn');
+  });
+
+  it('AC8 waits for complete terminal serialization instead of first partial snapshot', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{
+        id: 'assistant-owned-12345678',
+        parent: own,
+        textSequence: ['partial', 'complete answer'],
+        appearOnSend: true,
+      }],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('complete answer');
+  });
+
+  it('does not treat node-local failed/interrupted metadata as whole-turn terminal failure', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [
+        { id: 'assistant-preamble-12345678', parent: own, text: 'failed draft', appearOnSend: true },
+        { id: 'assistant-owned-12345678', parent: own, text: 'final answer', appearOnSend: true },
+      ],
+      serviceFrames: [
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'assistant-preamble-12345678',
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: false,
+              status: 'finished_failed',
+              content: { content_type: 'execution_error', text: 'node-local failure' },
+            },
+          },
+        },
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'assistant-owned-12345678',
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
+            },
+          },
+        },
+      ],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.assistantMessageId).toBe('assistant-owned-12345678');
+    expect(result.reply).toBe('final answer');
+  });
+
+  it('returns ok for formatted DOM serialization without matching raw service content parts', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{
+        id: 'assistant-owned-12345678',
+        parent: own,
+        semanticNodes: [{ type: 'heading', children: [{ type: 'text', text: 'Title' }] }],
+        appearOnSend: true,
+      }],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+            content: { content_type: 'text', parts: ['# Title'] },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('Title');
+  });
+
+  it('waits for continuation growth after continue-generating disappears before publish', async () => {
+    const own = 'user-owned-12345678';
+    const freshTerminal = {
+      type: 'delta',
+      v: {
+        message: {
+          id: 'assistant-owned-12345678',
+          author: { role: 'assistant' },
+          parent: own,
+          end_turn: true,
+          metadata: { finish_details: { type: 'stop' } },
+        },
+      },
+    };
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'alpha', appearOnSend: true }],
+      continueGenerating: {
+        hideAfterClick: true,
+        growthSequence: ['alpha', 'alpha\nbeta'],
+        terminalFramesAfterClick: [freshTerminal],
+      },
+      serviceFrames: [freshTerminal],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('alpha\nbeta');
+  });
+
+  it('clicks continue on a non-terminal node and waits for fresh whole-turn service evidence', async () => {
+    const own = 'user-owned-12345678';
+    const freshTerminal = {
+      type: 'delta',
+      v: {
+        message: {
+          id: 'assistant-owned-12345678',
+          author: { role: 'assistant' },
+          parent: own,
+          end_turn: true,
+          metadata: { finish_details: { type: 'stop' } },
+        },
+      },
+    };
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'segment one', appearOnSend: true }],
+      continueGenerating: {
+        growthSequence: ['segment one', 'segment one\nsegment two'],
+        terminalFramesAfterClick: [freshTerminal],
+      },
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: false,
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('segment one\nsegment two');
+  });
+
+  it('does not resurrect pre-continuation terminal authority from a non-terminal continuation delta', async () => {
+    const own = 'user-owned-12345678';
+    const assistantId = 'assistant-owned-12345678';
+    const freshTerminal = {
+      type: 'delta',
+      v: {
+        message: {
+          id: assistantId,
+          author: { role: 'assistant' },
+          parent: own,
+          end_turn: true,
+          metadata: { finish_details: { type: 'stop' } },
+        },
+      },
+    };
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: assistantId, parent: own, text: 'alpha', appearOnSend: true }],
+      continueGenerating: {
+        hideAfterClick: true,
+        growthSequence: ['alpha', 'alpha\nbeta'],
+        postClickFrames: [[{
+          type: 'delta',
+          v: {
+            message: {
+              id: assistantId,
+              author: { role: 'assistant' },
+              parent: own,
+              content: { content_type: 'text', parts: ['alpha\nbeta'] },
+            },
+          },
+        }], [freshTerminal]],
+      },
+      serviceFrames: [freshTerminal],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('alpha\nbeta');
+  });
+
+  it('fail-closes unsupported unknown and patch envelopes carrying end_turn metadata', async () => {
+    const own = 'user-owned-12345678';
+    for (const serviceFrames of [
+      [{
+        type: 'rogue_terminal_frame',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+      [{
+        type: 'patch',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+    ]) {
+      const fixture = fakeTurnPage({
+        dispatchCandidateIds: [own],
+        assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'rogue answer', appearOnSend: true }],
+        serviceFrames,
+      });
+      const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+      expect(result.state).toBe('stream_timeout');
+      expect(result.cause).toBe('no_terminal_evidence');
+    }
+  });
+
+  it('does not attribute terminal nodes from DOM parent links alone', async () => {
+    const own = 'user-owned-12345678';
+    const assistantId = 'assistant-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: assistantId, parent: own, text: 'dom-only attribution', appearOnSend: true }],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: assistantId,
+            author: { role: 'assistant' },
+            parent: 'foreign-parent-12345678',
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+    expect(result.state).toBe('stream_timeout');
+    expect(result.cause).toBe('no_terminal_evidence');
+  });
+
+  it('fail-closes arbitrary payload wrappers carrying nested terminal deltas', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'rogue answer', appearOnSend: true }],
+      serviceFrames: [{
+        type: 'rogue_wrapper',
+        payload: {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'assistant-owned-12345678',
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
+            },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+    expect(result.state).toBe('stream_timeout');
+    expect(result.cause).toBe('no_terminal_evidence');
+  });
+
+  it('fail-closes nested terminal-looking deltas under unsupported wrapper paths', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'rogue answer', appearOnSend: true }],
+      serviceFrames: [{
+        type: 'rogue_wrapper',
+        nested: {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'assistant-owned-12345678',
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
+            },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+    expect(result.state).toBe('stream_timeout');
+    expect(result.cause).toBe('no_terminal_evidence');
+  });
+
+  it('AC9 terminal with unreadable content uses stream_timeout with terminal_content_incomplete', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+    expect(result.state).toBe('stream_timeout');
+    expect(result.cause).toBe('terminal_content_incomplete');
+  });
+
+  it('AC10 no-terminal retains deadline failure and continuation merge stays covered', async () => {
+    const fixture = fakeTurnPage({ dispatchCandidateIds: ['user-owned-12345678'] });
+    const timeoutResult = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 50 });
+    expect(timeoutResult.state).toBe('stream_timeout');
+    expect(timeoutResult.cause).toBe('no_terminal_evidence');
+    expect(mergeContinuationSegments(['alpha\nbeta', 'alpha\nbeta\ngamma'])).toBe('alpha\nbeta\ngamma');
+  });
+
+  it('AC11 terminal-present fixtures resolve through terminal branch', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'done', appearOnSend: true }],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+    expect(result.state).toBe('ok');
+    expect(result.cause).toBe('completed');
+  });
+
+  it('embeds captured live service-frame body for producer-emission evidence', () => {
+    const body = framesToSseBody(LIVE_TERMINAL_FRAME_CONTRACT as unknown as Record<string, unknown>[]);
+    expect(body).toContain('"end_turn":true');
+    expect(body).toContain('"finish_details"');
+    expect(body).toContain('message_stream_complete');
+  });
+});
+
