@@ -15,7 +15,7 @@ export * from './final-conformance-precutover.ts';
 const repoRoot = path.resolve(process.cwd());
 const PRE_CUTOVER_BLOB_SHA = '8840d070078f9fa61813a04ea66279d351013cfd';
 const PRE_CUTOVER_HELPER = 'scripts/pr2a/final-conformance-precutover.ts';
-const ISSUE_928_TEST = 'scripts/cutover/issue-928.test.ts';
+const ISSUE_928_TEST = 'scripts/pr2a/planning.test.ts';
 const ISSUE_928_MUTATION_RUNNER = 'scripts/cutover/mutation-runner.ts';
 const CUTOVER_MARKERS = [
   'scripts/orchestrator-cutover-activate.ts',
