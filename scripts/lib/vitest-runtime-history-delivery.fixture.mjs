@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { runProcess } from '#opk-kernel/subprocess';
 import {
   DELIVERY_BRANCH,
   DELIVERY_BASE,
@@ -334,7 +335,7 @@ function testProvenanceMatrix() {
   );
 }
 
-function testSamePayloadFailedProvenanceRetryExecutesWorkflowRecovery() {
+async function testSamePayloadFailedProvenanceRetryExecutesWorkflowRecovery() {
   const root = mkdtempSync(join(tmpdir(), 'runtime-history-retry-'));
   const scriptsDir = join(root, 'scripts');
   const binDir = join(root, 'bin');
@@ -435,28 +436,32 @@ exit 2
       GITHUB_OUTPUT: reconcileOutput,
     };
 
-    const reconcile = spawnSync('bash', ['-c', workflowRunBlock(workflow, 'Reconcile pending delivery branch state')], {
+    const reconcile = await runProcess({
+      command: 'bash',
+      args: ['-c', workflowRunBlock(workflow, 'Reconcile pending delivery branch state')],
       cwd: root,
-      encoding: 'utf8',
       env,
+      allowEmptyStdout: true,
     });
-    equal(reconcile.status, 0, `same-payload reconcile block must succeed: ${reconcile.stderr}`);
+    equal(reconcile.exitCode, 0, `same-payload reconcile block must succeed: ${reconcile.stderr}`);
     const reconcileResult = readFileSync(reconcileOutput, 'utf8');
     assert(reconcileResult.includes(`remote_sha=${GENERATED}`), 'reconcile must retain the failed remote head as lease authority');
     assert(reconcileResult.includes('should_push=true'), 'failed prior episode must keep should_push=true');
     equal(readFileSync(stateFile, 'utf8').trim(), NEXT_HEAD, 'reconcile must amend to a distinct generated head');
 
-    const push = spawnSync('bash', ['-c', workflowRunBlock(workflow, 'Push delivery branch')], {
+    const push = await runProcess({
+      command: 'bash',
+      args: ['-c', workflowRunBlock(workflow, 'Push delivery branch')],
       cwd: root,
-      encoding: 'utf8',
       env: {
         ...env,
         DELIVERY_TOKEN: 'fixture-delivery-token',
         REMOTE_SHA: GENERATED,
         GITHUB_OUTPUT: pushOutput,
       },
+      allowEmptyStdout: true,
     });
-    equal(push.status, 0, `fresh generated head push block must succeed: ${push.stderr}`);
+    equal(push.exitCode, 0, `fresh generated head push block must succeed: ${push.stderr}`);
     const pushLines = readFileSync(pushAudit, 'utf8').trim().split(/\r?\n/).filter(Boolean);
     equal(pushLines.length, 1, 'same-payload retry must push exactly one fresh generated head');
     assert(pushLines[0].includes(`refs/heads/${DELIVERY_BRANCH}:${GENERATED}`), 'retry push must retain the fetched old head as force-with-lease authority');
@@ -470,18 +475,22 @@ exit 2
       GITHUB_SHA: SOURCE_MAIN,
       GITHUB_SERVER_URL: 'https://github.com',
     };
-    const pending = spawnSync('bash', ['-c', workflowRunBlock(workflow, 'Publish pending delivery provenance')], {
+    const pending = await runProcess({
+      command: 'bash',
+      args: ['-c', workflowRunBlock(workflow, 'Publish pending delivery provenance')],
       cwd: root,
-      encoding: 'utf8',
       env: provenanceEnv,
+      allowEmptyStdout: true,
     });
-    equal(pending.status, 0, `fresh retry pending provenance must publish: ${pending.stderr}`);
-    const complete = spawnSync('bash', ['-c', workflowRunBlock(workflow, 'Complete delivery provenance')], {
+    equal(pending.exitCode, 0, `fresh retry pending provenance must publish: ${pending.stderr}`);
+    const complete = await runProcess({
+      command: 'bash',
+      args: ['-c', workflowRunBlock(workflow, 'Complete delivery provenance')],
       cwd: root,
-      encoding: 'utf8',
       env: provenanceEnv,
+      allowEmptyStdout: true,
     });
-    equal(complete.status, 0, `fresh retry terminal provenance must publish: ${complete.stderr}`);
+    equal(complete.exitCode, 0, `fresh retry terminal provenance must publish: ${complete.stderr}`);
 
     const statusLines = readFileSync(statusAudit, 'utf8').trim().split(/\r?\n/).filter(Boolean);
     equal(statusLines.length, 2, 'fresh retry episode must emit exactly pending and success provenance writes');
