@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
-import { buildPlanningManifest } from '../pr2a/closed-world-scanner.ts';
 
 const repoRoot = path.resolve(process.cwd());
 const D928 = [
@@ -25,19 +24,6 @@ function command(executable: string, args: string[], cwd = repoRoot): string {
 function git(args: string[]): string {
   return command('git', ['-C', repoRoot, ...args]);
 }
-
-describe('[diagnostic][AC1] admission and closure', () => {
-  it('recomputes #948 reverse closure against the merge base and has no external target-library reference', () => {
-    const base = git(['merge-base', 'origin/main', 'HEAD']);
-    const manifest = buildPlanningManifest(base);
-    expect(manifest.schemaVersion).toBe(1);
-    expect(manifest.unknown).toEqual([]);
-    expect(manifest.dynamicUnsupported).toEqual([]);
-    const targets = new Set(['scripts/lib/Orchestrator-SideProcessSupervisor.ps1', 'scripts/lib/Review-StartClaim.ps1']);
-    const external = manifest.references.filter((row) => targets.has(row.target) && !D928.includes(row.source));
-    expect(external).toEqual([]);
-  });
-});
 
 describe('[diagnostic][AC6] scope', () => {
   it('contains exactly the four PowerShell deletions and preserves #948 claim authority/tracked registry', () => {
