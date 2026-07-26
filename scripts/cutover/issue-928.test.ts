@@ -168,7 +168,9 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(JSON.parse(readFileSync(request.paths.followupPath, 'utf8')).map((row: any) => row.step)).toEqual([
       'committed-registry-reprojected','typescript-supervisor-started','scheduler-owned','activation-complete',
     ]);
-    expect(() => recoverCommittedCutover(request)).not.toThrow();
+    await expect(recoverCommittedCutover(request, {
+      ensureTypeScriptSupervisor: async () => ({ supervisorPid: 43210, childGeneration: 1 }),
+    })).resolves.toMatchObject({ result: 'forward-repair-ready', supervisorPid: 43210, childGeneration: 1 });
     expect(() => provePreImportRollbackSafe(request)).toThrow(/forward_only/);
   });
 
