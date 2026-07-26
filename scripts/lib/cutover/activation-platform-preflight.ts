@@ -1,7 +1,7 @@
 import { closeSync, existsSync, fsyncSync, mkdtempSync, openSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { runProcessSync } from '../../kernel/subprocess.ts';
 
 export interface PlatformPreflightInput {
   repoRoot: string;
@@ -30,7 +30,14 @@ export function runActivationPlatformPreflight(input: PlatformPreflightInput): P
   if (!existsSync(input.repoRoot) || !existsSync(input.oldInstalledRevisionRoot)) throw new Error('installed_revision_missing');
   const repoRoot = realpathSync(input.repoRoot);
   const oldInstalledRevisionRoot = realpathSync(input.oldInstalledRevisionRoot);
-  const actualHead = execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const headResult = runProcessSync({
+    command: 'git',
+    args: ['-C', repoRoot, 'rev-parse', 'HEAD'],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  if (!headResult.ok) throw new Error(`installed_commit_lookup_failed:${headResult.stderr || headResult.error || headResult.exitCode}`);
+  const actualHead = headResult.stdout.trim();
   if (actualHead.toLowerCase() !== input.installedCommitSha.toLowerCase()) throw new Error('installed_commit_unbound');
 
   const targetParent = realpathSync(path.dirname(input.targetRegistryPath));
