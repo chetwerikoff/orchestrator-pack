@@ -19,6 +19,7 @@ import {
   type DestinationReservation,
   type DomainLock,
 } from './chatgpt-browser-turn/coordination.ts';
+import { closeOwnedTurnPage, releaseCdpBrowser } from './chatgpt-browser-turn/browser-session.ts';
 import { probeProfileReady } from './chatgpt-browser-turn/profile-probe.ts';
 import { publicationStatus, publishReply } from './chatgpt-browser-turn/publication.ts';
 import { runtimeCapabilityBinding } from './chatgpt-browser-turn/runtime-binding.ts';
@@ -314,6 +315,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
   let incidentId: string | undefined;
   let possibleDelivery = false;
   let opened: { page: any; owned: boolean; provisionalId?: string } | undefined;
+  let browser: any = null;
 
   try {
     const config = browserConfig(args);
@@ -387,7 +389,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     const chromium = loadChromium();
-    const browser = await chromium.connectOverCDP(config.cdp);
+    browser = await chromium.connectOverCDP(config.cdp);
     const browserProvenance = String(browser.version?.() ?? 'chromium-cdp');
     if (capability.state === 'ok' && capability.capability?.browser_provenance !== browserProvenance) {
       downgradeCapability(profileKey);
@@ -436,7 +438,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     const finalBlocker = blockerBeforeSend(profileKey, reservation.identity, conversationId);
     if (finalBlocker) {
-      if (opened.owned) await opened.page.close().catch(() => {});
+      await closeOwnedTurnPage(opened, { retainPage: false });
       safeRelease(scheduleLock);
       scheduleLock = null;
       safeReleaseDestination(reservation);
@@ -490,13 +492,13 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     });
 
     if (!result.possibleDelivery) {
+      await closeOwnedTurnPage(opened, { retainPage: false });
       deleteIncident(profileKey, incidentId);
       incidentId = undefined;
       safeRelease(scheduleLock);
       scheduleLock = null;
       safeReleaseDestination(reservation);
       reservation = null;
-      if (opened.owned) await opened.page.close().catch(() => {});
 
       if (result.state === 'quota' || result.state === 'challenge' || result.state === 'login') {
         const wall = ensureProfileWall(profileKey, result.state);
@@ -582,6 +584,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     updateIncident(profileKey, incidentId, { phase: 'committed', cause: 'committed' });
+    await closeOwnedTurnPage(opened, { retainPage: false });
     deleteIncident(profileKey, incidentId);
     incidentId = undefined;
     safeRelease(scheduleLock);
@@ -621,6 +624,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'driver_error';
     if (!possibleDelivery && message.startsWith('pre_send_')) {
+      await closeOwnedTurnPage(opened, { retainPage: false });
       if (incidentId) {
         try {
           deleteIncident(profileKey, incidentId);
@@ -629,7 +633,6 @@ async function runTurn(args: ParsedArgs): Promise<number> {
           // Existing durable state remains fail-closed.
         }
       }
-      if (opened?.owned) await opened.page.close().catch(() => {});
       safeRelease(scheduleLock);
       safeReleaseDestination(reservation);
       if (message === 'pre_send_profile_blocked') {
@@ -666,6 +669,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         ? 'driver_exception_after_possible_delivery'
         : 'driver_exception_before_send';
 
+    await closeOwnedTurnPage(opened, { retainPage: possibleDelivery });
     if (incidentId) {
       if (possibleDelivery) {
         try {
@@ -687,7 +691,6 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         }
       }
     }
-    if (!possibleDelivery && opened?.owned) await opened.page.close().catch(() => {});
     safeRelease(scheduleLock);
     safeReleaseDestination(reservation);
     const driverDiagnosticId = (cause === 'driver_exception_before_send' || cause === 'driver_exception_after_possible_delivery')
@@ -703,6 +706,8 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       ...(incidentId ? { incident_id: incidentId } : {}),
       ...(driverDiagnosticId ? { driver_diagnostic_id: driverDiagnosticId } : {}),
     }));
+  } finally {
+    await releaseCdpBrowser(browser);
   }
 }
 

@@ -1,3 +1,4 @@
+import { releaseCdpBrowser } from './browser-session.ts';
 import {
   classifyProductWall,
   loadChromium,
@@ -28,12 +29,13 @@ export async function probeProfileReady(config: BrowserConfig): Promise<ProfileR
     return { ready: false, state: 'profile_mismatch', cause: verification.cause };
   }
 
+  let browser: unknown;
   try {
     const chromium = loadChromium();
-    const browser = await chromium.connectOverCDP(config.cdp);
-    const contexts = browser.contexts();
+    browser = await chromium.connectOverCDP(config.cdp);
+    const contexts = (browser as { contexts: () => unknown[] }).contexts();
     if (contexts.length !== 1) return { ready: false, state: 'ui_contract_mismatch', cause: 'context_count' };
-    const pages = contexts[0].pages();
+    const pages = (contexts[0] as { pages: () => unknown[] }).pages();
     if (pages.length === 0) return { ready: false, state: 'ui_contract_mismatch', cause: 'no_existing_page' };
 
     let ready = false;
@@ -47,5 +49,7 @@ export async function probeProfileReady(config: BrowserConfig): Promise<ProfileR
       : { ready: false, state: 'ui_contract_mismatch', cause: 'composer_unavailable' };
   } catch {
     return { ready: false, state: 'driver_error', cause: 'profile_probe_failed' };
+  } finally {
+    await releaseCdpBrowser(browser);
   }
 }
