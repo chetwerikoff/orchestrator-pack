@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { stableStringify } from '../lib/cutover/stable-stringify.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
 import { activateCutover, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';
@@ -43,8 +43,14 @@ afterEach(() => {
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
+function command(executable: string, args: string[], cwd = repoRoot): string {
+  const result = runProcessSync({ command: executable, args, cwd, inheritParentEnv: true, allowEmptyStdout: false });
+  if (!result.ok) throw new Error(`command_failed:${executable}:${result.stderr || result.error || result.exitCode}`);
+  return result.stdout.trim();
+}
+
 function git(args: string[]): string {
-  return execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8' }).trim();
+  return command('git', ['-C', repoRoot, ...args]);
 }
 
 function writeJson(file: string, value: unknown): void {
@@ -54,7 +60,7 @@ function writeJson(file: string, value: unknown): void {
 function activationFixture(): { request: ActivationRequest; boundary: ActivationBoundary; root: string } {
   const root = tempRoot();
   const state = path.join(root, 'state');
-  const storesRoot = path.join(root, 'stores');
+  const storesRoot = root;
   const snapshots = path.join(root, 'snapshots');
   const targetRegistry = path.join(root, 'target-registry.json');
   writeJson(targetRegistry, {
@@ -128,7 +134,7 @@ function committedEpoch(file: string, epochId = 'epoch-scheduler', nonce = 'nonc
 describe('[AC1] admission and closure', () => {
   it('recomputes #948 reverse closure against the merge base and has no external target-library reference', () => {
     const base = git(['merge-base', 'origin/main', 'HEAD']);
-    const output = execFileSync(process.execPath, ['--experimental-strip-types', path.join(repoRoot, 'scripts/pr2a/closed-world-scanner.ts'), '--ref', base], { cwd: repoRoot, encoding: 'utf8' });
+    const output = command(process.execPath, ['--experimental-strip-types', path.join(repoRoot, 'scripts/pr2a/closed-world-scanner.ts'), '--ref', base]);
     const manifest = JSON.parse(output) as { schemaVersion: number; references: Array<{ source: string; target: string }>; unknown: unknown[]; dynamicUnsupported: unknown[] };
     expect(manifest.schemaVersion).toBe(1);
     expect(manifest.unknown).toEqual([]);
