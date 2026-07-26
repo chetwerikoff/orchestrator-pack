@@ -466,6 +466,75 @@ describe('issue 1010 submitted-turn proof', () => {
   });
 
 
+
+  it('AC2 accepts raw SSE positional terminal patch after attributed assistant add', async () => {
+    const own = 'user-sse-patch-12345678';
+    const assistantId = 'asst-sse-patch-12345678';
+    const rawSseBody = [
+      `data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}`,
+      '',
+      'event: delta',
+      `data: {"p":"","o":"add","v":{"message":{"id":"${assistantId}","author":{"role":"assistant"},"parent":"${own}","content":{"content_type":"text","parts":["OK"]}}}}`,
+      '',
+      'event: delta',
+      `data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/status","o":"replace","v":"finished_successfully"},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}`,
+      '',
+    ].join('\n');
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [],
+      postClickRawSseBodies: [rawSseBody],
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
+  it('AC2 rejects foreign raw SSE positional patch after owned turn target is established', async () => {
+    const own = 'user-sse-foreign-12345678';
+    const assistantId = 'asst-sse-foreign-12345678';
+    const ownTurnId = 'turn-sse-owned-12345678';
+    const foreignPatchOnly = [
+      'event: delta',
+      `data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/status","o":"replace","v":"finished_successfully"},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}`,
+      '',
+    ].join('\n');
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [
+        streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}\n\n`, ownTurnId),
+        streamItemEnvelope(`data: {"type":"message_marker","message_id":"${assistantId}","marker":"user_visible_token","event":"first"}\n\n`, ownTurnId),
+        streamItemEnvelope([
+          'event: delta',
+          'data: {"p":"/message/content/parts/0","o":"append","v":"OK"}',
+          '',
+        ].join('\n'), ownTurnId),
+        streamItemEnvelope([
+          'event: delta',
+          `data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/status","o":"replace","v":"finished_successfully"},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}`,
+          '',
+        ].join('\n'), ownTurnId),
+      ],
+      postClickRawSseBodies: [foreignPatchOnly],
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
   it('AC2 rejects foreign positional terminal patch after owned marker and append', async () => {
     const own = 'user-owned-patch-12345678';
     const assistantId = 'asst-owned-patch-12345678';

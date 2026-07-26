@@ -34,6 +34,7 @@ export interface FakeTurnPageOptions {
   readonly preClickRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
   readonly postClickRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
   readonly postClickServiceFrames?: readonly Record<string, unknown>[];
+  readonly postClickRawSseBodies?: readonly string[];
   readonly turnExchangeId?: string;
 }
 
@@ -210,6 +211,12 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
           : []);
       if (options.preDispatchServiceFrames?.length) await emitServiceFrames(options.preDispatchServiceFrames);
       if (frames.length > 0) await emitServiceFrames(frames);
+      for (const body of options.postClickRawSseBodies ?? []) {
+        await emit('response', {
+          url: () => 'https://chatgpt.com/backend-api/conversation',
+          text: async () => body,
+        });
+      }
     },
   };
 
@@ -242,6 +249,12 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     }
     if (options.postClickServiceFrames?.length) {
       await emitServiceFrames(options.postClickServiceFrames);
+    }
+    for (const body of options.postClickRawSseBodies ?? []) {
+      await emit('response', {
+        url: () => 'https://chatgpt.com/backend-api/conversation',
+        text: async () => body,
+      });
     }
   };
   const applyContinueGrowth = () => {

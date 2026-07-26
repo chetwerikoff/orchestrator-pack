@@ -127,7 +127,7 @@ interface NetworkWitnessState {
   pendingStreamAppendOpsByTurnId: Map<string, { content: string }[]>;
   pendingStreamPatchOpsByTurnId: Map<string, Record<string, unknown>[][]>;
   activeTurnUserId?: string;
-  activePatchMessageId?: string;
+  rawSseDecodingPatchTargetId?: string;
   witnessInstall: Promise<void>;
   armDispatch(): void;
 }
@@ -459,16 +459,27 @@ function ensurePositionalPatchTarget(
   state: NetworkWitnessState,
   turnContext?: StreamTurnContext,
 ): string | undefined {
-  if (!turnMatchesProvenStream(state, turnContext)) return undefined;
-  const targetId = provenTurnStreamTerminalTarget(state, turnContext);
-  if (!targetId || targetId.length < 8) return undefined;
   const userId = provenActiveTurnUserId(state);
   if (!userId) return undefined;
-  if (!isMessageAttributedToUserTurn(targetId, userId, state.terminal.messages)) {
-    bindTurnScopedTerminalTarget(state, targetId, turnContext);
-    if (!isMessageAttributedToUserTurn(targetId, userId, state.terminal.messages)) return undefined;
+
+  if (turnMatchesProvenStream(state, turnContext)) {
+    const targetId = provenTurnStreamTerminalTarget(state, turnContext);
+    if (!targetId || targetId.length < 8) return undefined;
+    if (!isMessageAttributedToUserTurn(targetId, userId, state.terminal.messages)) {
+      bindTurnScopedTerminalTarget(state, targetId, turnContext);
+      if (!isMessageAttributedToUserTurn(targetId, userId, state.terminal.messages)) return undefined;
+    }
+    return targetId;
   }
-  return targetId;
+
+  if (!turnContext?.turnId) {
+    const targetId = state.rawSseDecodingPatchTargetId;
+    if (!targetId || targetId.length < 8) return undefined;
+    if (!isMessageAttributedToUserTurn(targetId, userId, state.terminal.messages)) return undefined;
+    return targetId;
+  }
+
+  return undefined;
 }
 
 function ingestTurnScopedAssistantDelta(
@@ -531,8 +542,15 @@ function registerPatchTargetAssistant(
   state: NetworkWitnessState,
   targetId: string,
   patchOwnerUserId: string,
+  turnContext?: StreamTurnContext,
 ): void {
-  state.activePatchMessageId = targetId;
+  if (turnMatchesProvenStream(state, turnContext)) {
+    const turnId = turnContext?.turnId;
+    if (turnId) state.turnStreamTerminalTargetByTurnId.set(turnId, targetId);
+  } else if (!turnContext?.turnId) {
+    const userId = provenActiveTurnUserId(state);
+    if (userId && patchOwnerUserId === userId) state.rawSseDecodingPatchTargetId = targetId;
+  }
   state.pendingPatchAssistantId = undefined;
   if (!state.terminal.messages.has(targetId)) {
     ingestServicePayload(state.terminal, {
@@ -601,7 +619,7 @@ function applyStreamingPatchOperation(
       : parent;
     if (role === 'assistant') {
       if (!userId || effectiveParent !== userId) return;
-      registerPatchTargetAssistant(state, message.id, userId);
+      registerPatchTargetAssistant(state, message.id, userId, turnContext);
       ingestServicePayload(state.terminal, { type: 'delta', v: { message: { ...message, parent: userId } } });
       return;
     }
@@ -624,9 +642,12 @@ function applyStreamingPatchOperation(
 
 function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: string, turnContext?: StreamTurnContext): void {
   if (!encodedItem) return;
+  const rawSseDecode = !turnContext?.turnId;
+  if (rawSseDecode) state.rawSseDecodingPatchTargetId = undefined;
   state.encodedItemWitnessTurnUserId = undefined;
   state.messages.push(...parseStreamingBody(encodedItem));
   let streamEvent = '';
+  try {
   for (const raw of encodedItem.split(/\r?\n/)) {
     const trimmed = raw.trim();
     if (!trimmed) continue;
@@ -688,6 +709,9 @@ function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: strin
       }
     } catch { /* non-JSON stream lines remain fail-closed */ }
     streamEvent = '';
+  }
+  } finally {
+    if (rawSseDecode) state.rawSseDecodingPatchTargetId = undefined;
   }
 }
 
