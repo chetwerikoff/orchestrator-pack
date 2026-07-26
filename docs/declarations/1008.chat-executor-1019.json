@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "f665c9ab7c1a9f2ec4c5256718c8a67e1f4947f6",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:aa700711e93521f1744a33ffb27b9289e829b1181bb20af24b30d4c7d4413c5b"
+    "active_scope_hash": "sha256:7a9a83a73f833018f209b2e9eb347baf312cc2ab194433b3821714b541404282"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -15,7 +15,6 @@
     "docs/migration_notes.md",
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/README.md",
-    "scripts/chatgpt-browser-turn/state-core.ts",
     "scripts/chatgpt-browser-turn/state.ts",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
