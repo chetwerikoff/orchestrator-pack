@@ -256,8 +256,9 @@ function enrichCheckRunsWithWorkflow(realGh, repo, checkRuns, cwd) {
  * @param {{ slug: string, host: string }} repo
  * @param {number} prNumber
  * @param {string} cwd
+ * @param {boolean} [includeAppId]
  */
-export function routePrChecks(realGh, repo, prNumber, cwd) {
+export function routePrChecks(realGh, repo, prNumber, cwd, includeAppId = false) {
   const pull = fetchPull(realGh, repo, prNumber, cwd);
   const headSha = pull.head?.sha;
   if (!headSha) {
@@ -304,7 +305,7 @@ export function routePrChecks(realGh, repo, prNumber, cwd) {
   });
 
   const contexts = mergeCheckContexts(checkRuns, combined);
-  return aggregateChecks(contexts);
+  return aggregateChecks(contexts, { includeAppId });
 }
 
 /**
@@ -492,7 +493,7 @@ export function executeRestRoute(routeId, ctx) {
           cwd,
         );
       case 'pr-checks':
-        return routePrChecks(realGh, repo, route.prNumber, cwd);
+        return routePrChecks(realGh, repo, route.prNumber, cwd, route.includeAppId === true);
       case 'pr-diff-name-only': {
         return routePrDiffNameOnly(realGh, repo, route.prNumber, cwd);
       }

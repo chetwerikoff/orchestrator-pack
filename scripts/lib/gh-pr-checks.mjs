@@ -14,13 +14,15 @@
  * @property {string} [description]
  * @property {string} [startedAt]
  * @property {string} [completedAt]
+ * @property {number | null} [appId]
  * @property {{ workflowRun?: { workflow?: { name?: string }, event?: string } }} [checkSuite]
  */
 
 /**
  * @param {CheckContext[]} checkContexts
+ * @param {boolean} includeAppId
  */
-export function eliminateDuplicates(checkContexts) {
+function eliminateDuplicatesForShape(checkContexts, includeAppId) {
   const sorted = [...checkContexts].sort((a, b) => {
     const aTime = Date.parse(a.startedAt ?? '') || 0;
     const bTime = Date.parse(b.startedAt ?? '') || 0;
@@ -40,7 +42,8 @@ export function eliminateDuplicates(checkContexts) {
     } else {
       const workflow = ctx.checkSuite?.workflowRun?.workflow?.name ?? '';
       const event = ctx.checkSuite?.workflowRun?.event ?? '';
-      const key = `${ctx.name ?? ''}/${workflow}/${event}`;
+      const provider = includeAppId ? `/${ctx.appId ?? ''}` : '';
+      const key = `${ctx.name ?? ''}/${workflow}/${event}${provider}`;
       if (mapChecks.has(key)) {
         continue;
       }
@@ -50,6 +53,13 @@ export function eliminateDuplicates(checkContexts) {
   }
 
   return unique;
+}
+
+/**
+ * @param {CheckContext[]} checkContexts
+ */
+export function eliminateDuplicates(checkContexts) {
+  return eliminateDuplicatesForShape(checkContexts, false);
 }
 
 /**
@@ -110,10 +120,11 @@ export function exitCodeForPrChecks(checks) {
 
 /**
  * @param {CheckContext[]} checkContexts
+ * @param {{ includeAppId?: boolean }} [options]
  */
-export function aggregateChecks(checkContexts) {
+export function aggregateChecks(checkContexts, options = {}) {
   const checks = [];
-  for (const c of eliminateDuplicates(checkContexts)) {
+  for (const c of eliminateDuplicatesForShape(checkContexts, options.includeAppId === true)) {
     const state = resolveState(c);
     const link = c.detailsUrl || c.targetUrl || '';
     const name = c.name || c.context || '';
@@ -127,6 +138,10 @@ export function aggregateChecks(checkContexts) {
       workflow: c.checkSuite?.workflowRun?.workflow?.name ?? '',
       description: c.description ?? '',
     };
+    if (options.includeAppId) {
+      const appId = Number(c.appId);
+      item.appId = Number.isSafeInteger(appId) && appId > 0 ? appId : null;
+    }
     checks.push(item);
   }
   return checks;
@@ -143,6 +158,7 @@ export function statusRunToContext(statusRun) {
     description: statusRun.description ?? '',
     startedAt: statusRun.created_at,
     completedAt: statusRun.updated_at,
+    appId: null,
   };
 }
 
@@ -163,6 +179,8 @@ export function extractActionsRunId(url) {
 export function checkRunToContext(run) {
   const detailsUrl = run.details_url ?? run.html_url ?? '';
   const runId = extractActionsRunId(String(detailsUrl));
+  const rawAppId = run.app && typeof run.app === 'object' ? run.app.id : null;
+  const appId = Number(rawAppId);
   return {
     name: run.name,
     status: String(run.status ?? '').toUpperCase(),
@@ -171,6 +189,7 @@ export function checkRunToContext(run) {
     completedAt: run.completed_at,
     detailsUrl,
     description: run.output?.summary ?? run.output?.title ?? '',
+    appId: Number.isSafeInteger(appId) && appId > 0 ? appId : null,
     checkSuite: {
       workflowRun: {
         workflow: { name: run.__workflowName ?? '' },
