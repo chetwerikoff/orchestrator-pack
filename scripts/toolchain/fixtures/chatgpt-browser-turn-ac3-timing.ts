@@ -1,11 +1,14 @@
 import { writeFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { destinationIdentity, reserveDestination } from '../../chatgpt-browser-turn/coordination.ts';
 import { turnExitCode, type TurnResultV1 } from '../../chatgpt-browser-turn/contracts.ts';
 import { fakeTurnPage } from '../../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import { readStableInput } from '../../chatgpt-browser-turn/input.ts';
 import { configuredProfileKey } from '../../chatgpt-browser-turn/storage-common.ts';
 import { __testTiming, sendTurn, type BrowserConfig } from '../../chatgpt-browser-turn/ui-adapter.ts';
+import { runProcessSync } from '../../kernel/subprocess.ts';
 
 export interface Ac3TimingMarks {
   readonly result_produced_ms: number;
@@ -16,7 +19,37 @@ interface TimingTurnArgs {
   readonly options: ReadonlyMap<string, string | true>;
 }
 
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 let clockMs = 0;
+
+function assertStructuredTurnCliRejection(): void {
+  const entry = join(repoRoot, 'scripts', 'chatgpt-browser-turn.ts');
+  const observed = runProcessSync({
+    command: process.execPath,
+    args: ['--experimental-strip-types', entry, 'turn', '--unsupported-option', 'value'],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  const lines = observed.stdout.trim().split('\n').filter(Boolean);
+  if (observed.exitCode !== 22 || lines.length !== 1) {
+    throw new Error(`cli_rejection_protocol_mismatch:exit=${observed.exitCode}:lines=${lines.length}`);
+  }
+  let body: Record<string, unknown>;
+  try {
+    body = JSON.parse(lines[0] ?? '') as Record<string, unknown>;
+  } catch {
+    throw new Error('cli_rejection_protocol_mismatch:invalid_json');
+  }
+  if (
+    body.schema !== 'control-result/v1'
+    || body.operation !== 'status/list'
+    || body.state !== 'driver_error'
+    || body.configured_profile_key !== 'profile-unresolved'
+    || body.cause !== 'command_failed'
+  ) {
+    throw new Error('cli_rejection_protocol_mismatch:unexpected_result');
+  }
+}
 
 function installAc3TimingClock(): void {
   clockMs = 0;
@@ -60,6 +93,7 @@ function emitTurnResult(result: TurnResultV1, started: number, resultProducedMs:
 }
 
 async function runAc3TimingTurn(args: TimingTurnArgs): Promise<number> {
+  assertStructuredTurnCliRejection();
   const started = performance.now();
   installAc3TimingClock();
 
