@@ -33,21 +33,10 @@ const REQUIRED_CHECKS = [
   'run pack contract tests',
   'self-architect lint',
 ];
-const GOVERNANCE_REFERENCE_PREFIXES = ['scripts/pr2a/', 'scripts/estate-cut/'] as const;
-const GOVERNANCE_REFERENCE_PATHS = new Set([
-  'scripts/pr2-foundation/contracts.ts',
-  'scripts/pr2-foundation/mutation-catalog.ts',
-  'scripts/pr2-foundation/mutation-behavior-probes.ts',
-  'scripts/pr2-foundation/mutation-semantic-gates.ts',
-  'scripts/lib/orchestrator-side-process-observer.ts',
-  'docs/launch-argv-registry.mjs',
-  'docs/orchestrator-message-registry.mjs',
-  'docs/review-start-preflight-shield.mjs',
-]);
 
 function governanceOnlyReference(source: string): boolean {
-  return GOVERNANCE_REFERENCE_PREFIXES.some((prefix) => source.startsWith(prefix))
-    || GOVERNANCE_REFERENCE_PATHS.has(source);
+  const exact = ['scripts/pr2-foundation/contracts.ts', 'scripts/pr2-foundation/mutation-catalog.ts', 'scripts/pr2-foundation/mutation-behavior-probes.ts', 'scripts/pr2-foundation/mutation-semantic-gates.ts', 'scripts/lib/orchestrator-side-process-observer.ts', 'docs/launch-argv-registry.mjs', 'docs/orchestrator-message-registry.mjs', 'docs/review-start-preflight-shield.mjs'];
+  return source.startsWith('scripts/pr2a/') || source.startsWith('scripts/estate-cut/') || exact.includes(source);
 }
 
 function tempRoot(): string {
