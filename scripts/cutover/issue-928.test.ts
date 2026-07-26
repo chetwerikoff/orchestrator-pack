@@ -110,7 +110,8 @@ function activationFixture(): { request: ActivationRequest; boundary: Activation
     captureLegacyWriters: () => [],
     drainLegacyWriters: async () => ({ writerWatermark: 'drained-test-watermark', drainedAt: new Date().toISOString() }),
     terminateLegacyProcesses: async () => [identity.pid],
-    startTypeScriptSupervisor: async () => 43210,
+    verifyLegacyProcessesGone: () => ({ supervisorAlive: false, writers: [] }),
+    startTypeScriptSupervisor: async () => ({ supervisorPid: 43210, childGeneration: 1 }),
   };
   return { request, boundary, root };
 }
@@ -155,6 +156,7 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(result.cutover.recovery.result).toBe('import-boundary-forward-only');
     expect(result.cutover.activation_evidence.result).toBe('bound-central-cas-record');
     expect(result.supervisorPid).toBe(43210);
+    expect(result.childGeneration).toBe(1);
     expect(existsSync(path.join(request.paths.supervisorStateDir, 'stopping'))).toBe(true);
     expect(existsSync(path.join(request.paths.supervisorStateDir, 'maintenance.epoch'))).toBe(true);
     const phaseOne = JSON.parse(readFileSync(request.paths.phaseOnePath, 'utf8'));
@@ -172,6 +174,13 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
       ensureTypeScriptSupervisor: async () => ({ supervisorPid: 43210, childGeneration: 1 }),
     })).resolves.toMatchObject({ result: 'forward-repair-ready', supervisorPid: 43210, childGeneration: 1 });
     expect(() => provePreImportRollbackSafe(request)).toThrow(/forward_only/);
+  });
+
+  it('refuses snapshot/import when legacy processes survive re-enumeration', async () => {
+    const { request, boundary } = activationFixture();
+    boundary.verifyLegacyProcessesGone = () => ({ supervisorAlive: true, writers: [] });
+    await expect(activateCutover(request, boundary)).rejects.toThrow(/legacy_process_survivor/);
+    expect(existsSync(request.paths.snapshotDir)).toBe(false);
   });
 
   it('allows old-revision rollback only before import mutation and refuses target drift', () => {
