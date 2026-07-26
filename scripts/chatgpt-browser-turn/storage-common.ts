@@ -10,6 +10,7 @@ export interface ProfileDirs {
   readonly tombstones: string;
   readonly resolved: string;
   readonly publications: string;
+  readonly diagnostics: string;
   readonly capability: string;
   readonly locks: string;
 }
@@ -47,6 +48,16 @@ function storeRoot(): string {
     : join(homedir(), '.local', 'state', 'orchestrator-pack', 'chatgpt-browser-turn');
 }
 
+export function profileDiagnosticsDir(profileKey: string): string {
+  const dir = join(storeRoot(), profileKey, 'diagnostics');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
+export function profileDiagnosticsFilePath(profileKey: string, identity: string): string {
+  return join(join(storeRoot(), profileKey, 'diagnostics'), `${identity}.json`);
+}
+
 export function profileDirs(profileKey: string): ProfileDirs {
   const root = join(storeRoot(), profileKey);
   const result: ProfileDirs = {
@@ -56,6 +67,7 @@ export function profileDirs(profileKey: string): ProfileDirs {
     tombstones: join(root, 'tombstones'),
     resolved: join(root, 'resolved'),
     publications: join(root, 'publications'),
+    diagnostics: join(root, 'diagnostics'),
     capability: join(root, 'capability.json'),
     locks: join(root, 'locks'),
   };
@@ -66,6 +78,7 @@ export function profileDirs(profileKey: string): ProfileDirs {
     result.tombstones,
     result.resolved,
     result.publications,
+    result.diagnostics,
     result.locks,
   ]) {
     mkdirSync(path, { recursive: true, mode: 0o700 });

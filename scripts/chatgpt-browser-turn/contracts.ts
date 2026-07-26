@@ -104,6 +104,7 @@ export interface TurnResultV1 {
   provisional_id?: string;
   incident_id?: string;
   generation?: number;
+  driver_diagnostic_id?: string;
   output?: { byte_length: number; sha256: string };
   witness?: CausalWitnessV1;
 }
@@ -128,6 +129,7 @@ export interface ControlResultV1 {
   complete?: boolean;
   items?: StatusItemV1[];
   cause?: string;
+  driver_diagnostic_id?: string;
 }
 
 export interface PublicationStatusV1 {

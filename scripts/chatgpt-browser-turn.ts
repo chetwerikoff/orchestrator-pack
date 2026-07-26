@@ -36,6 +36,7 @@ import {
   writeIncident,
 } from './chatgpt-browser-turn/state.ts';
 import { configuredProfileKey, sha256 } from './chatgpt-browser-turn/storage-common.ts';
+import { recordSwallowedDriverException } from './chatgpt-browser-turn/diagnostics.ts';
 import { readStableInput } from './chatgpt-browser-turn/input.ts';
 import {
   loadChromium,
@@ -689,8 +690,18 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     if (!possibleDelivery && opened?.owned) await opened.page.close().catch(() => {});
     safeRelease(scheduleLock);
     safeReleaseDestination(reservation);
+    const driverDiagnosticId = (cause === 'driver_exception_before_send' || cause === 'driver_exception_after_possible_delivery')
+      ? recordSwallowedDriverException(
+        profileKey !== 'profile-unresolved' ? profileKey : undefined,
+        profileKey !== 'profile-unresolved' ? invocationId : undefined,
+        cause,
+        error,
+        { invocation_id: invocationId },
+      )
+      : undefined;
     return emitTurnAndCode(turnResult(state, scope, cause, invocationId, profileKey, {
       ...(incidentId ? { incident_id: incidentId } : {}),
+      ...(driverDiagnosticId ? { driver_diagnostic_id: driverDiagnosticId } : {}),
     }));
   }
 }
@@ -791,6 +802,20 @@ async function runClear(args: ParsedArgs): Promise<number> {
   return emitControlAndCode(clearReadable(profileKey, identity, generation, evidenceToken));
 }
 
+function controlOperation(args: ParsedArgs): ControlResultV1['operation'] {
+  if (args.command === 'clear') return 'clear';
+  if (args.command === 'capability') return 'capability';
+  return 'status/list';
+}
+
+function resolvedControlProfileKey(args: ParsedArgs): string {
+  try {
+    return profileArgs(args).profileKey;
+  } catch {
+    return 'profile-unresolved';
+  }
+}
+
 export async function runCli(argv: readonly string[]): Promise<number> {
   let args: ParsedArgs;
   try {
@@ -807,8 +832,25 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     if (args.command === 'publication-status') return await runPublicationStatus(args);
     emit({ schema: 'control-result/v1', operation: 'status/list', state: 'driver_error', configured_profile_key: 'profile-unresolved', cause: 'command_invalid' });
     return 22;
-  } catch {
-    emit({ schema: 'control-result/v1', operation: args.command === 'clear' ? 'clear' : args.command === 'capability' ? 'capability' : 'status/list', state: 'driver_error', configured_profile_key: 'profile-unresolved', cause: 'command_failed' });
+  } catch (error) {
+    const operation = controlOperation(args);
+    const resolvedProfileKey = resolvedControlProfileKey(args);
+    const diagnosticIdentity = resolvedProfileKey !== 'profile-unresolved' ? randomUUID() : undefined;
+    const driverDiagnosticId = recordSwallowedDriverException(
+      resolvedProfileKey !== 'profile-unresolved' ? resolvedProfileKey : undefined,
+      diagnosticIdentity,
+      'command_failed',
+      error,
+      { operation },
+    );
+    emit({
+      schema: 'control-result/v1',
+      operation,
+      state: 'driver_error',
+      configured_profile_key: 'profile-unresolved',
+      cause: 'command_failed',
+      ...(driverDiagnosticId ? { driver_diagnostic_id: driverDiagnosticId } : {}),
+    });
     return 22;
   }
 }
