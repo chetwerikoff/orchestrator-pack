@@ -100,7 +100,34 @@ export function buildConformanceReport(ref = 'HEAD'): ConformanceReport {
   };
 }
 
+function runMutationCheck(argv: string[]): void {
+  const mutationIndex = argv.indexOf('--mutation-check');
+  const key = mutationIndex >= 0 ? String(argv[mutationIndex + 1] ?? '').trim() : '';
+  if (!key) throw new Error('mutation_check_key_missing');
+  const artifactIndex = argv.indexOf('--artifact');
+  const artifactPath = artifactIndex >= 0 ? String(argv[artifactIndex + 1] ?? '').trim() : '';
+  const oracle = path.join(repoRoot, 'scripts', 'pr2-foundation', 'mutation-semantic-gates.test.ts');
+  const result = runProcessSync({
+    command: process.execPath,
+    args: ['--experimental-strip-types', oracle],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    env: {
+      OPK_928_MUTATION_DIRECT: '1',
+      OPK_928_MUTATION_KEY: key,
+      OPK_928_MUTATION_ARTIFACT: artifactPath,
+    },
+  });
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  if (!result.ok) process.exitCode = 1;
+}
+
 function runCli(argv: string[]): void {
+  if (argv.includes('--mutation-check')) {
+    runMutationCheck(argv);
+    return;
+  }
   const refIndex = argv.indexOf('--ref');
   const requestedRef = refIndex >= 0 ? argv[refIndex + 1] ?? 'HEAD' : 'HEAD';
   const report = buildConformanceReport(requestedRef);
