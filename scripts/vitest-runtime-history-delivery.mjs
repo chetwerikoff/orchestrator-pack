@@ -132,9 +132,12 @@ export function normalizeCurrentRequiredPolicy(policy, options = {}) {
     if (!context || typeof context !== 'string' || seen.has(context)) return fail('current-policy-unsupported', 'current policy contains malformed or duplicate required checks');
     let appId = null;
     if (rawAppId !== null) {
-      appId = Number(rawAppId);
-      if (!Number.isSafeInteger(appId) || appId <= 0) return fail('current-policy-unsupported', `invalid app restriction for ${context}`);
-      if (!options.providerProofAvailable) return fail('current-policy-unsupported', `provider/app restriction for ${context} cannot be proven by the current pr-checks transport`);
+      const parsedAppId = Number(rawAppId);
+      if (!Number.isSafeInteger(parsedAppId) || parsedAppId === 0 || parsedAppId < -1) return fail('current-policy-unsupported', `invalid app restriction for ${context}`);
+      if (parsedAppId > 0) {
+        if (!options.providerProofAvailable) return fail('current-policy-unsupported', `provider/app restriction for ${context} cannot be proven by the current pr-checks transport`);
+        appId = parsedAppId;
+      }
     }
     seen.add(context);
     checks.push({ context, appId });
