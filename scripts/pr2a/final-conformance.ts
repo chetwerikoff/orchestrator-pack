@@ -67,7 +67,7 @@ function keepFinding(row: ConformanceFinding, ref: string, completeCutover: bool
   }
   if (
     helperBlobPreserved(ref)
-    && row.code === 'claim_internal_executable_reference'
+    && row.code === 'claim_internal_implementation_externally_reachable'
     && row.path === PRE_CUTOVER_HELPER
   ) {
     return false;
