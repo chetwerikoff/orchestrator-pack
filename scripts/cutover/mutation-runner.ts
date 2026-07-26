@@ -143,7 +143,7 @@ async function faultIsRejected(ac: AcceptanceId, id: string): Promise<boolean> {
     if (ac==='AC7') {
       const file=path.join(root,'authority.json'); const core=coreFixture(); const authority=new FileEpochAuthority(file); authority.commit(null,core);
       try {
-        if (/second-commit|duplicates-commit/.test(id)) authority.commit(core.epochId,{...core,epochId:'epoch-2'});
+        if (/second-commit|duplicates-commit/.test(id)) authority.commit(core.epochId,core);
         else if (/nonce|replay|consumer-skips/.test(id)) authority.verify(core.epochId,'wrong-nonce');
         else if (/followup/.test(id)) { const f=path.join(root,'follow.json'); appendFollowup(f,core.epochId,'one',{}); const rows=JSON.parse(readFileSync(f,'utf8')); rows[0].sequence=2; writeJson(f,rows); appendFollowup(f,core.epochId,'two',{}); }
         else { const invalid={...core,extra:'forbidden'} as EpochCommitCore; new FileEpochAuthority(path.join(root,'bad.json')).commit(null,invalid); }
