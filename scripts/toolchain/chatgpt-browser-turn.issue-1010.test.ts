@@ -128,6 +128,87 @@ describe('issue 1010 submitted-turn proof', () => {
     expect(result.assistantMessageId).toBe(assistantId);
   });
 
+  it('AC1 proves submission from live wire shape without turn_exchange_id', async () => {
+    const own = 'f74acde1-6ff9-4344-9794-339846ab7d57';
+    const assistantId = 'asst-live-wire-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [
+        streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[],"serialization_metadata":{"custom_symbol_offsets":[]}}}}\n\n`),
+        streamItemEnvelope(`data: {"type":"message_marker","message_id":"${assistantId}","marker":"user_visible_token","event":"first"}\n\n`),
+        streamItemEnvelope([
+          'event: delta',
+          `data: {"p":"","o":"add","v":{"message":{"id":"${assistantId}","author":{"role":"assistant"},"content":{"content_type":"text","parts":[""]}}}}`,
+          '',
+        ].join('\n')),
+        streamItemEnvelope([
+          'event: delta',
+          'data: {"p":"/message/content/parts/0","o":"append","v":"OK"}',
+          '',
+        ].join('\n')),
+        streamItemEnvelope([
+          'event: delta',
+          'data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}',
+          '',
+        ].join('\n')),
+      ],
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
+  it('AC1 promotes pending input_message after delayed outbound request witness', async () => {
+    const own = 'user-delay-req-12345678';
+    const assistantId = 'asst-delay-req-12345678';
+    const delayedFrames = [
+      streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}
+
+`),
+      streamItemEnvelope(`data: {"type":"message_marker","message_id":"${assistantId}","marker":"user_visible_token","event":"first"}
+
+`),
+      streamItemEnvelope([
+        'event: delta',
+        `data: {"p":"","o":"add","v":{"message":{"id":"${assistantId}","author":{"role":"assistant"},"content":{"content_type":"text","parts":[""]}}}}`,
+        '',
+      ].join('\n')),
+      streamItemEnvelope([
+        'event: delta',
+        'data: {"p":"/message/content/parts/0","o":"append","v":"OK"}',
+        '',
+      ].join('\n')),
+      streamItemEnvelope([
+        'event: delta',
+        'data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]}',
+        '',
+      ].join('\n')),
+    ];
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [],
+      serviceObserveDispatch: false,
+      serviceFrames: [],
+      postClickRequests: [{ userId: own }],
+      postClickServiceFrames: delayedFrames,
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
   it('AC1 correlates provisional request id with service input_message id', async () => {
     const provisional = 'user-provis-12345678';
     const service = 'user-service-12345678';

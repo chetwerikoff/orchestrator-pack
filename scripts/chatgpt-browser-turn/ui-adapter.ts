@@ -117,6 +117,7 @@ interface NetworkWitnessState {
   frozenDispatchTurnExchangeId?: string;
   frozenDispatchRequestUserId?: string;
   frozenDispatchCandidateIds: Set<string>;
+  pendingServiceInputMessageIds: Set<string>;
   encodedItemWitnessTurnUserId?: string;
   pendingPatchAssistantId?: string;
   activeTurnUserId?: string;
@@ -143,10 +144,48 @@ function dispatchExchangeIsAmbiguous(state: NetworkWitnessState): boolean {
 
 function freezeDispatchWitness(state: NetworkWitnessState): void {
   state.dispatchWitnessFrozen = true;
+  syncFrozenDispatchWitness(state);
+}
+
+function syncFrozenDispatchWitness(state: NetworkWitnessState): void {
+  if (!state.dispatchWitnessFrozen) return;
   state.frozenDispatchExchangeAmbiguous = state.dispatchExchangeAmbiguous;
   state.frozenDispatchTurnExchangeId = state.dispatchTurnExchangeId;
   state.frozenDispatchRequestUserId = state.dispatchRequestUserId;
   state.frozenDispatchCandidateIds = new Set(state.dispatchCandidateIds);
+}
+
+function promotePendingServiceUserIds(state: NetworkWitnessState): void {
+  for (const pendingId of [...state.pendingServiceInputMessageIds]) {
+    recordServiceSubmittedUserId(state, pendingId);
+  }
+}
+
+function witnessDispatchRequest(state: NetworkWitnessState, request: any): void {
+  const url = String(request.url());
+  if (!/conversation|messages|responses/i.test(url)) return;
+  const turnExchangeId = parseRequestTurnExchangeId(request);
+  if (turnExchangeId) {
+    state.witnessedTurnExchangeIds.add(turnExchangeId);
+    if (state.dispatchTurnExchangeId && state.dispatchTurnExchangeId !== turnExchangeId) {
+      state.dispatchExchangeAmbiguous = true;
+    } else if (!state.dispatchTurnExchangeId) {
+      state.dispatchTurnExchangeId = turnExchangeId;
+    }
+  }
+  for (const message of parseRequestBody(request)) {
+    if (message.role === 'user') {
+      state.dispatchCandidateIds.add(message.id);
+      if (state.dispatchRequestUserId && state.dispatchRequestUserId !== message.id) {
+        state.dispatchExchangeAmbiguous = true;
+      } else if (!state.dispatchRequestUserId) {
+        state.dispatchRequestUserId = message.id;
+      }
+    }
+  }
+  state.dispatchRequestWitnessed = true;
+  syncFrozenDispatchWitness(state);
+  promotePendingServiceUserIds(state);
 }
 
 function provenActiveTurnUserId(state: NetworkWitnessState): string | undefined {
@@ -406,19 +445,33 @@ function recordServiceSubmittedUserId(
     return;
   }
 
+  const requestUserId = boundDispatchRequestUserId(state);
+  const dispatchBound = state.turnDispatchCommitted || state.ingestingDispatchServiceFrames || state.dispatchWitnessFrozen;
+
+  // Live wire proof: the client-generated user-message id in the outbound request matches
+  // the service-issued id echoed in input_message. No turn_exchange_id is required.
+  if (requestUserId && id === requestUserId && dispatchBound) {
+    state.serviceSubmittedUserIds.add(id);
+    state.messages.push({ id, role: 'user' });
+    state.activeTurnUserId = id;
+    state.provisionalServiceId = id;
+    state.pendingServiceInputMessageIds.delete(id);
+    return;
+  }
+
   const boundCandidates = boundDispatchCandidateIds(state);
   if (boundCandidates.has(id)) {
     state.serviceSubmittedUserIds.add(id);
     state.messages.push({ id, role: 'user' });
     state.activeTurnUserId = id;
     state.provisionalServiceId = id;
+    state.pendingServiceInputMessageIds.delete(id);
     return;
   }
 
-  const requestUserId = boundDispatchRequestUserId(state);
   const canCorrelateProvisional = Boolean(
     requestUserId
-    && (state.turnDispatchCommitted || state.ingestingDispatchServiceFrames)
+    && dispatchBound
     && boundCandidates.has(requestUserId)
     && !state.provisionalServiceId
     && id !== requestUserId
@@ -431,11 +484,12 @@ function recordServiceSubmittedUserId(
     state.serviceSubmittedUserIds.add(id);
     state.messages.push({ id, role: 'user' });
     state.activeTurnUserId = id;
+    state.pendingServiceInputMessageIds.delete(id);
     return;
   }
 
   if (
-    (state.turnDispatchCommitted || state.ingestingDispatchServiceFrames)
+    dispatchBound
     && boundCandidates.size === 0
     && state.serviceSubmittedUserIds.size === 0
     && turnExchangeId
@@ -446,6 +500,17 @@ function recordServiceSubmittedUserId(
     state.messages.push({ id, role: 'user' });
     state.activeTurnUserId = id;
     state.provisionalServiceId = id;
+    state.pendingServiceInputMessageIds.delete(id);
+    return;
+  }
+
+  if (
+    dispatchBound
+    && !requestUserId
+    && boundCandidates.size === 0
+    && !boundExchangeId
+  ) {
+    state.pendingServiceInputMessageIds.add(id);
     return;
   }
 
@@ -539,35 +604,16 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     dispatchWitnessFrozen: false,
     frozenDispatchExchangeAmbiguous: false,
     frozenDispatchCandidateIds: new Set<string>(),
+    pendingServiceInputMessageIds: new Set<string>(),
     armDispatch() { this.dispatchArmed = true; },
     witnessInstall: Promise.resolve(),
   };
   state.witnessInstall = installWebSocketWitness(page, state).catch(() => {});
   page.on('request', (request: any) => {
     try {
-      if (!state.dispatchArmed || !state.ingestingDispatchServiceFrames) return;
-      const url = String(request.url());
-      if (!/conversation|messages|responses/i.test(url)) return;
-      const turnExchangeId = parseRequestTurnExchangeId(request);
-      if (turnExchangeId) {
-        state.witnessedTurnExchangeIds.add(turnExchangeId);
-        if (state.dispatchTurnExchangeId && state.dispatchTurnExchangeId !== turnExchangeId) {
-          state.dispatchExchangeAmbiguous = true;
-        } else if (!state.dispatchTurnExchangeId) {
-          state.dispatchTurnExchangeId = turnExchangeId;
-        }
-      }
-      for (const message of parseRequestBody(request)) {
-        if (message.role === 'user') {
-          state.dispatchCandidateIds.add(message.id);
-          if (state.dispatchRequestUserId && state.dispatchRequestUserId !== message.id) {
-            state.dispatchExchangeAmbiguous = true;
-          } else if (!state.dispatchRequestUserId) {
-            state.dispatchRequestUserId = message.id;
-          }
-        }
-      }
-      state.dispatchRequestWitnessed = true;
+      if (!state.dispatchArmed) return;
+      if (!state.ingestingDispatchServiceFrames && !(state.turnDispatchCommitted && !state.dispatchRequestWitnessed)) return;
+      witnessDispatchRequest(state, request);
     } catch { /* missing request witness remains fail-closed */ }
   });
   page.on('response', async (response: any) => {
