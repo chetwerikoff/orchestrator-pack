@@ -516,6 +516,37 @@ async function testMergeReadbackFailure() {
   equal(result.outcome, 'merge-readback-failed', 'mutation without authoritative merged read-back must fail');
 }
 
+async function testMergeRejectionReturnsToBoundedDecision() {
+  const fixture = createIo({
+    merge({ pr, mergeCalls }) {
+      if (mergeCalls === 1) return { merged: false, message: 'branch protection changed' };
+      pr.state = 'closed';
+      pr.merged = true;
+      pr.merged_at = '2026-07-25T01:00:01Z';
+      return { merged: true, sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' };
+    },
+  });
+  const result = await runDeliveryMonitor(config, fixture.io);
+  equal(result.outcome, 'merged', 'a rejected merge must return to the bounded decision and retry only from fresh proofs');
+  equal(fixture.state().mergeCalls, 2, 'fresh bounded decision may make one later merge attempt');
+  assert(fixture.state().policyReads >= 4, 'merge rejection must trigger fresh policy reads before a later attempt');
+  assert(fixture.state().statusReads >= 5, 'merge rejection must trigger fresh exact-head history reads before a later attempt');
+}
+
+async function testAmbiguousMergeTransportReadbackRecognizesSuccess() {
+  const fixture = createIo({
+    merge({ pr }) {
+      pr.state = 'closed';
+      pr.merged = true;
+      pr.merged_at = '2026-07-25T01:00:02Z';
+      throw new Error('transport reset after mutation');
+    },
+  });
+  const result = await runDeliveryMonitor(config, fixture.io);
+  equal(result.outcome, 'merged', 'authoritative read-back must recognize a merge that completed despite transport failure');
+  equal(fixture.state().mergeCalls, 1, 'ambiguous transport success must not trigger a duplicate merge mutation');
+}
+
 function testSourceContracts() {
   const source = readFileSync(new URL('../vitest-runtime-history-delivery.mjs', import.meta.url), 'utf8');
   assert(source.includes('`sha=${headSha}`'), 'existing expected-head merge protection must remain');
@@ -574,6 +605,8 @@ async function main() {
     testPolicyUnavailableFailsClosed,
     testOrdinaryPrIsolation,
     testMergeReadbackFailure,
+    testMergeRejectionReturnsToBoundedDecision,
+    testAmbiguousMergeTransportReadbackRecognizesSuccess,
     testSourceContracts,
     testNarrowGithubReadInventory,
   ];
