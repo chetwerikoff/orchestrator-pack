@@ -36,6 +36,20 @@ workflow path, repository, run id/attempt, source `main` SHA, and successful
 terminal conclusion. The source `main` SHA is provenance/audit data only; it is
 not an ancestor/equality merge gate.
 
+A same-payload retry preserves the existing stable delivery head only when that
+remote head already has exact provenance whose bound refresh run/attempt is
+terminally successful. The refresh checks the existing exact-head status history
+and that one bound Actions run before deciding to skip the push. If the existing
+provenance is missing, malformed, bound to a failed/non-successful run, or
+otherwise cannot establish a successful episode, the retry does **not** reuse that
+head as an unattended authority. It keeps the reconciled payload, regenerates a
+distinct generated commit identity when necessary, and lease-pushes a fresh exact
+head so the new refresh episode can emit its own provenance and retrigger the
+existing delivery PR. This closes the crash window where a prior episode pushed
+and opened the PR but failed before its terminal provenance write: an identical
+later measurement can recover without an empty operator retrigger commit or
+manual intervention.
+
 Missing, malformed, ambiguous, mismatched, or unsuccessful provenance fails
 closed as `provenance-invalid`. The monitor gives the branch-push/status-publication
 self-race one bounded poll before treating still-missing provenance as invalid. If
@@ -66,7 +80,9 @@ by this delivery contract:
 The existing `pr checks` route remains the current-state source. The exact-head
 status-history route exists only for same-context precedence and paginates until
 completion; there is no generic Actions, reviewer-history, ruleset, or arbitrary
-API subsystem.
+API subsystem. The refresh retry recovery reuses the same already-classified
+exact-head status-history and single Actions-run reads; it does not add another
+GitHub read shape.
 
 ## Repository-owned pack-review machine admission
 
@@ -144,8 +160,9 @@ behavior.
 
 ## Permissions and credentials
 
-- The refresh job adds only `statuses: write` to its existing `contents: write`
-  permission so `GITHUB_TOKEN` can emit the provenance statuses.
+- The refresh job adds `statuses: write` for provenance emission and `actions: read`
+  for the bounded same-payload provenance recovery check, alongside its existing
+  `contents: write` permission.
 - The trusted delivery workflow adds `statuses: write` for the generated
   machine-admission status and keeps `VITEST_RUNTIME_HISTORY_DELIVERY_TOKEN` for
   the existing privileged PR/merge path.
