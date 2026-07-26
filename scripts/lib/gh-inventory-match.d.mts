@@ -7,6 +7,7 @@ export type InventoryRoute = {
   prNumber?: number;
   prRef?: string;
   branch?: string;
+  includeAppId?: boolean;
 };
 
 export function classifyArgv(argv: string[]): {
