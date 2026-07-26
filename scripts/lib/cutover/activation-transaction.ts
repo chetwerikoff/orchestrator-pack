@@ -26,6 +26,17 @@ import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '..
 const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
 const D928 = new Set<string>(D928_PATHS);
 const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);
+const GOVERNANCE_REFERENCE_PREFIXES = ['scripts/pr2a/', 'scripts/estate-cut/'] as const;
+const GOVERNANCE_REFERENCE_PATHS = new Set([
+  'scripts/pr2-foundation/contracts.ts',
+  'scripts/pr2-foundation/mutation-catalog.ts',
+  'scripts/pr2-foundation/mutation-behavior-probes.ts',
+  'scripts/pr2-foundation/mutation-semantic-gates.ts',
+  'scripts/lib/orchestrator-side-process-observer.ts',
+  'docs/launch-argv-registry.mjs',
+  'docs/orchestrator-message-registry.mjs',
+  'docs/review-start-preflight-shield.mjs',
+]);
 
 function git(repoRoot: string, args: string[]): string {
   const result = runProcessSync({ command: 'git', args: ['-C', repoRoot, ...args], cwd: repoRoot, inheritParentEnv: true });
@@ -43,6 +54,11 @@ function assertFoundationAndPr2a(repoRoot: string, installedCommitSha: string): 
   });
   if (!ancestor.ok) throw new Error('pr2a_merge_missing');
   return baseRef;
+}
+
+function governanceOnlyReference(source: string): boolean {
+  return GOVERNANCE_REFERENCE_PREFIXES.some((prefix) => source.startsWith(prefix))
+    || GOVERNANCE_REFERENCE_PATHS.has(source);
 }
 
 function recomputeClosure(repoRoot: string, baseRef: string): { inputTree: string; referenceCount: number } {
@@ -67,7 +83,10 @@ function recomputeClosure(repoRoot: string, baseRef: string): { inputTree: strin
     throw new Error('closure_unresolved_set_nonempty');
   }
   const references = (manifest.references ?? []).filter((row) => TARGET_LIBRARIES.has(String(row.target ?? '').replace(/\\/g, '/')));
-  const external = references.filter((row) => !D928.has(String(row.source ?? '').replace(/\\/g, '/')));
+  const external = references.filter((row) => {
+    const source = String(row.source ?? '').replace(/\\/g, '/');
+    return !D928.has(source) && !governanceOnlyReference(source);
+  });
   if (external.length !== 0) throw new Error(`external_legacy_reference:${external.map((row) => row.source).join(',')}`);
   return { inputTree: manifest.lineage.planningBaseTreeOid, referenceCount: references.length };
 }
