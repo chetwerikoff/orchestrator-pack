@@ -14,6 +14,7 @@
  * @property {string} [description]
  * @property {string} [startedAt]
  * @property {string} [completedAt]
+ * @property {number | null} [appId]
  * @property {{ workflowRun?: { workflow?: { name?: string }, event?: string } }} [checkSuite]
  */
 
@@ -110,8 +111,9 @@ export function exitCodeForPrChecks(checks) {
 
 /**
  * @param {CheckContext[]} checkContexts
+ * @param {{ includeAppId?: boolean }} [options]
  */
-export function aggregateChecks(checkContexts) {
+export function aggregateChecks(checkContexts, options = {}) {
   const checks = [];
   for (const c of eliminateDuplicates(checkContexts)) {
     const state = resolveState(c);
@@ -127,6 +129,10 @@ export function aggregateChecks(checkContexts) {
       workflow: c.checkSuite?.workflowRun?.workflow?.name ?? '',
       description: c.description ?? '',
     };
+    if (options.includeAppId) {
+      const appId = Number(c.appId);
+      item.appId = Number.isSafeInteger(appId) && appId > 0 ? appId : null;
+    }
     checks.push(item);
   }
   return checks;
@@ -143,6 +149,7 @@ export function statusRunToContext(statusRun) {
     description: statusRun.description ?? '',
     startedAt: statusRun.created_at,
     completedAt: statusRun.updated_at,
+    appId: null,
   };
 }
 
@@ -163,6 +170,8 @@ export function extractActionsRunId(url) {
 export function checkRunToContext(run) {
   const detailsUrl = run.details_url ?? run.html_url ?? '';
   const runId = extractActionsRunId(String(detailsUrl));
+  const rawAppId = run.app && typeof run.app === 'object' ? run.app.id : null;
+  const appId = Number(rawAppId);
   return {
     name: run.name,
     status: String(run.status ?? '').toUpperCase(),
@@ -171,6 +180,7 @@ export function checkRunToContext(run) {
     completedAt: run.completed_at,
     detailsUrl,
     description: run.output?.summary ?? run.output?.title ?? '',
+    appId: Number.isSafeInteger(appId) && appId > 0 ? appId : null,
     checkSuite: {
       workflowRun: {
         workflow: { name: run.__workflowName ?? '' },
