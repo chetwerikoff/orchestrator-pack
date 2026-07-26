@@ -1,0 +1,76 @@
+name: issue-928 manifest rewrite helper
+
+on:
+  push:
+    branches:
+      - tooling/issue-928-manifest-rewrite
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tooling/issue-928-manifest-rewrite
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Rewrite exactly the six Issue 928 denominator rows
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = 'scripts/estate-cut/issue-906.manifest.json';
+          const targets = new Set([
+            'scripts/lib/Get-ReactionMessagesFromYaml.ps1',
+            'scripts/reaction-config-messages.d.mts',
+            'scripts/reaction-config-messages.mjs',
+            'scripts/review-ready-report-state-seed.ps1',
+            'scripts/review-trigger-reconcile.ps1',
+            'scripts/review-trigger-reeval.ps1',
+          ]);
+          const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+          let rowCount = 0;
+          for (const row of data.rows ?? []) {
+            if (!targets.has(row.path)) continue;
+            if (row.terminalState !== 'owned-by-PR-2-cutover' || row.replacementOwner !== 'draft 315') {
+              throw new Error(`unexpected cutover row baseline: ${row.path}:${row.terminalState}:${row.replacementOwner}`);
+            }
+            row.terminalState = 'owned-by-PR-2-cutover';
+            row.replacementOwner = 'scripts/orchestrator-cutover-activate.ts';
+            row.reason = 'Issue #928 terminalizes the PR 2 cutover ownership row as replaced by the staged activation transaction; the compatibility file remains tracked, loadable, and byte-identical to the post-#948 base.';
+            rowCount += 1;
+          }
+          if (rowCount !== targets.size) throw new Error(`expected 6 top-level cutover rows, found ${rowCount}`);
+
+          let dispositionCount = 0;
+          const visit = (value) => {
+            if (Array.isArray(value)) { for (const item of value) visit(item); return; }
+            if (!value || typeof value !== 'object') return;
+            if (targets.has(value.path) && value.disposition === 'owned-by-PR-2-cutover' && value.owner === 'draft-315') {
+              value.owner = 'scripts/orchestrator-cutover-activate.ts';
+              dispositionCount += 1;
+            }
+            for (const child of Object.values(value)) visit(child);
+          };
+          visit(data);
+          if (dispositionCount < targets.size) throw new Error(`expected at least 6 nested cutover ownership rows, found ${dispositionCount}`);
+
+          fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+          NODE
+          git diff --check
+          git diff -- scripts/estate-cut/issue-906.manifest.json
+      - name: Commit generated manifest blob
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/estate-cut/issue-906.manifest.json
+          git diff --cached --quiet && { echo 'manifest rewrite produced no diff' >&2; exit 1; }
+          git commit -m 'Tooling: terminalize issue 928 denominator ownership'
+          git push origin HEAD:tooling/issue-928-manifest-rewrite
