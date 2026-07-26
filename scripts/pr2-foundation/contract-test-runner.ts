@@ -72,7 +72,11 @@ async function runPr2aMutationMatrix(runner: string, ac: AcceptanceId | null): P
     : nested
       ? (['AC1'] satisfies AcceptanceId[])
       : (Object.keys(AC_MUTATION_CONTROLS) as AcceptanceId[]).filter((value) => value !== 'AC9');
-  const concurrency = nested ? 1 : 2;
+  // The #928 cutover runner mutates tracked files in-place and restores them after
+  // every probe. Running two acceptance groups concurrently in one checkout would
+  // make those mutations race. The older #948 runner keeps its bounded two-way
+  // parallelism because its execution model is isolated from this live-file path.
+  const concurrency = nested || runner.endsWith(CUTOVER_RUNNER_RELATIVE) ? 1 : 2;
   for (let index = 0; index < acceptanceIds.length; index += concurrency) {
     const batch = acceptanceIds.slice(index, index + concurrency);
     const results = await Promise.all(batch.map(async (acceptanceId) => ({ acceptanceId, result: await runMutation(runner, acceptanceId) })));
