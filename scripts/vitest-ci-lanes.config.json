@@ -79,7 +79,7 @@
     "scripts/review-head-ready.test.ts": "heavy",
     "scripts/review-orchestrator-loop.test.ts": "heavy",
     "scripts/review-ready-stuck-guard.test.ts": "light",
-    "scripts/review-send-reconcile.test.ts": "light",
+    "scripts/review-send-reconcile.test.ts": "heavy",
     "scripts/review-start-claim-budget-semantics.test.ts": "heavy",
     "scripts/review-start-claim-lifecycle.test.ts": "light",
     "scripts/review-start-claim-run-binding.test.ts": "heavy",
@@ -94,6 +94,7 @@
     "scripts/toolchain/chatgpt-browser-turn.issue-1010.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.test.ts": "light",
+    "scripts/toolchain/vitest-runtime-history-delivery.issue-1012.test.ts": "light",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy"
   },
   "heavyTopology": {
