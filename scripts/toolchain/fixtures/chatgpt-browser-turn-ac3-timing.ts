@@ -1,16 +1,15 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
-import { destinationIdentity, reserveDestination } from './coordination.ts';
-import { turnExitCode, type TurnResultV1 } from './contracts.ts';
-import { fakeTurnPage } from './fixtures/fake-turn-page.ts';
-import { readStableInput } from './input.ts';
-import { configuredProfileKey } from './storage-common.ts';
-import { __testTiming, sendTurn, type BrowserConfig } from './ui-adapter.ts';
+import { destinationIdentity, reserveDestination } from '../../chatgpt-browser-turn/coordination.ts';
+import { turnExitCode, type TurnResultV1 } from '../../chatgpt-browser-turn/contracts.ts';
+import { fakeTurnPage } from '../../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
+import { readStableInput } from '../../chatgpt-browser-turn/input.ts';
+import { configuredProfileKey } from '../../chatgpt-browser-turn/storage-common.ts';
+import { __testTiming, sendTurn, type BrowserConfig } from '../../chatgpt-browser-turn/ui-adapter.ts';
 
 export interface Ac3TimingMarks {
   readonly result_produced_ms: number;
   readonly stdout_written_ms: number;
-  readonly process_exit_ms: number;
 }
 
 interface TimingTurnArgs {
@@ -19,12 +18,12 @@ interface TimingTurnArgs {
 
 let clockMs = 0;
 
-export function installAc3TimingClock(): void {
+function installAc3TimingClock(): void {
   clockMs = 0;
   __testTiming.now = () => clockMs;
 }
 
-export function advanceAc3TimingClock(ms: number): void {
+function advanceAc3TimingClock(ms: number): void {
   clockMs += ms;
 }
 
@@ -56,14 +55,12 @@ function emitTurnResult(result: TurnResultV1, started: number, resultProducedMs:
   writeMarks({
     result_produced_ms: resultProducedMs,
     stdout_written_ms: performance.now() - started,
-    process_exit_ms: performance.now() - started,
   });
   return turnExitCode(result.state);
 }
 
-export async function runAc3TimingTurn(args: TimingTurnArgs): Promise<number> {
+async function runAc3TimingTurn(args: TimingTurnArgs): Promise<number> {
   const started = performance.now();
-  process.env.CHATGPT_BROWSER_TURN_AC3_STARTED_MS = String(started);
   installAc3TimingClock();
 
   const config = browserConfigFromArgs(args);
@@ -81,23 +78,8 @@ export async function runAc3TimingTurn(args: TimingTurnArgs): Promise<number> {
   fixture.page.waitForTimeout = async (ms: number) => {
     advanceAc3TimingClock(ms);
   };
-  const originalContext = fixture.page.context;
-  fixture.page.context = () => ({
-    newCDPSession: async () => ({
-      send: async () => {},
-      on: () => {},
-      off: () => {},
-      detach: async () => {
-        await new Promise<void>(() => {
-          const timer = setTimeout(() => {}, 60_000);
-          timer.unref();
-        });
-      },
-    }),
-  });
 
   const result = await sendTurn(fixture.page, snapshot.text, config);
-  fixture.page.context = originalContext;
   const resultProducedMs = performance.now() - started;
 
   reservation.release();
@@ -112,18 +94,29 @@ export async function runAc3TimingTurn(args: TimingTurnArgs): Promise<number> {
   }, started, resultProducedMs);
 }
 
-export function finalizeAc3TimingMarks(): void {
-  const marksFile = process.env.CHATGPT_BROWSER_TURN_AC3_MARKS_FILE;
-  const startedRaw = process.env.CHATGPT_BROWSER_TURN_AC3_STARTED_MS;
-  if (!marksFile || !startedRaw) return;
-  try {
-    const started = Number(startedRaw);
-    const marks = JSON.parse(readFileSync(marksFile, 'utf8').trim()) as Ac3TimingMarks;
-    writeMarks({
-      ...marks,
-      process_exit_ms: performance.now() - started,
-    });
-  } catch {
-    // best-effort timing artifact for subprocess tests
+function parseArgs(argv: readonly string[]): TimingTurnArgs {
+  const options = new Map<string, string | true>();
+  for (let index = 2; index < argv.length; index++) {
+    const token = argv[index] ?? '';
+    if (!token.startsWith('--')) continue;
+    const key = token.slice(2);
+    const next = argv[index + 1];
+    if (next && !next.startsWith('--')) {
+      options.set(key, next);
+      index++;
+    } else {
+      options.set(key, true);
+    }
   }
+  return { options };
 }
+
+async function main(): Promise<void> {
+  const code = await runAc3TimingTurn(parseArgs(process.argv));
+  process.exit(code);
+}
+
+void main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(22);
+});

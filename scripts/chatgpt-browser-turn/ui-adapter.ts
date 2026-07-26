@@ -112,11 +112,47 @@ interface NetworkWitnessState {
   dispatchExchangeAmbiguous: boolean;
   witnessedTurnExchangeIds: Set<string>;
   provisionalServiceId?: string;
+  dispatchWitnessFrozen: boolean;
+  frozenDispatchExchangeAmbiguous: boolean;
+  frozenDispatchTurnExchangeId?: string;
+  frozenDispatchRequestUserId?: string;
+  frozenDispatchCandidateIds: Set<string>;
+  encodedItemWitnessTurnUserId?: string;
+  pendingPatchAssistantId?: string;
   activeTurnUserId?: string;
   activePatchMessageId?: string;
-  witnessTeardown?: () => Promise<void>;
   witnessInstall: Promise<void>;
   armDispatch(): void;
+}
+
+function boundDispatchTurnExchangeId(state: NetworkWitnessState): string | undefined {
+  return state.dispatchWitnessFrozen ? state.frozenDispatchTurnExchangeId : state.dispatchTurnExchangeId;
+}
+
+function boundDispatchRequestUserId(state: NetworkWitnessState): string | undefined {
+  return state.dispatchWitnessFrozen ? state.frozenDispatchRequestUserId : state.dispatchRequestUserId;
+}
+
+function boundDispatchCandidateIds(state: NetworkWitnessState): Set<string> {
+  return state.dispatchWitnessFrozen ? state.frozenDispatchCandidateIds : state.dispatchCandidateIds;
+}
+
+function dispatchExchangeIsAmbiguous(state: NetworkWitnessState): boolean {
+  return state.dispatchWitnessFrozen ? state.frozenDispatchExchangeAmbiguous : state.dispatchExchangeAmbiguous;
+}
+
+function freezeDispatchWitness(state: NetworkWitnessState): void {
+  state.dispatchWitnessFrozen = true;
+  state.frozenDispatchExchangeAmbiguous = state.dispatchExchangeAmbiguous;
+  state.frozenDispatchTurnExchangeId = state.dispatchTurnExchangeId;
+  state.frozenDispatchRequestUserId = state.dispatchRequestUserId;
+  state.frozenDispatchCandidateIds = new Set(state.dispatchCandidateIds);
+}
+
+function provenActiveTurnUserId(state: NetworkWitnessState): string | undefined {
+  const id = state.activeTurnUserId;
+  if (!id || !state.serviceSubmittedUserIds.has(id)) return undefined;
+  return id;
 }
 
 export function resolveCausalAssistant(
@@ -219,19 +255,29 @@ function applyStreamingPatchOperation(
     const author = message.author as Record<string, unknown> | undefined;
     const role = author?.role;
     if (role !== 'user' && role !== 'assistant') return;
-    ingestServicePayload(state.terminal, { type: 'delta', v: { message } });
     const parent = typeof message.parent === 'string' ? message.parent : undefined;
+    const userId = provenActiveTurnUserId(state);
+    const effectiveParent = role === 'assistant'
+      ? (parent ?? (message.id === state.pendingPatchAssistantId ? userId : undefined))
+      : parent;
+    if (role === 'assistant') {
+      if (!userId || effectiveParent !== userId) return;
+      state.activePatchMessageId = message.id;
+      state.pendingPatchAssistantId = undefined;
+    }
+    ingestServicePayload(state.terminal, { type: 'delta', v: { message: { ...message, ...(effectiveParent ? { parent: effectiveParent } : {}) } } });
     state.messages.push({
       id: message.id,
       role,
-      ...(parent ? { parent } : {}),
+      ...(effectiveParent ? { parent: effectiveParent } : {}),
     });
-    if (role === 'assistant') state.activePatchMessageId = message.id;
     return;
   }
   if (op !== 'patch' || !Array.isArray(payload.v)) return;
   const targetId = state.activePatchMessageId;
-  if (!targetId || targetId.length < 8) return;
+  const patchOwnerUserId = provenActiveTurnUserId(state);
+  if (!targetId || targetId.length < 8 || !patchOwnerUserId) return;
+  if (!isMessageAttributedToUserTurn(targetId, patchOwnerUserId, state.terminal.messages)) return;
   const patchMessage: Record<string, unknown> = {
     id: targetId,
     author: { role: 'assistant' },
@@ -261,6 +307,7 @@ function applyStreamingPatchOperation(
 
 function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: string): void {
   if (!encodedItem) return;
+  state.encodedItemWitnessTurnUserId = undefined;
   state.messages.push(...parseStreamingBody(encodedItem));
   let streamEvent = '';
   for (const raw of encodedItem.split(/\r?\n/)) {
@@ -293,15 +340,16 @@ function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: strin
           const id = typeof input?.id === 'string' ? input.id : '';
           const metadata = input?.metadata as Record<string, unknown> | undefined;
           const turnExchangeId = typeof metadata?.turn_exchange_id === 'string' ? metadata.turn_exchange_id : undefined;
-          if (id) recordServiceSubmittedUserId(state, id, turnExchangeId);
+          if (id) {
+            recordServiceSubmittedUserId(state, id, turnExchangeId);
+            if (state.serviceSubmittedUserIds.has(id)) state.encodedItemWitnessTurnUserId = id;
+          }
         }
         if (payload.type === 'message_marker' && payload.marker === 'user_visible_token') {
           const assistantId = typeof payload.message_id === 'string' ? payload.message_id : '';
-          if (assistantId && state.activeTurnUserId) {
-            const observation = { id: assistantId, role: 'assistant' as const, parent: state.activeTurnUserId };
-            state.messages.push(observation);
-            registerLegacyObservation(state.terminal, observation);
-            state.activePatchMessageId = assistantId;
+          const userId = state.encodedItemWitnessTurnUserId ?? provenActiveTurnUserId(state);
+          if (assistantId && userId && state.serviceSubmittedUserIds.has(userId)) {
+            state.pendingPatchAssistantId = assistantId;
           }
         }
         const delta = payload.v as Record<string, unknown> | undefined;
@@ -352,12 +400,14 @@ function recordServiceSubmittedUserId(
   if (!state.dispatchArmed || id.length < 8) return;
   if (state.rejectedServiceUserIds.has(id)) return;
 
-  if (turnExchangeId && state.dispatchTurnExchangeId && turnExchangeId !== state.dispatchTurnExchangeId) {
+  const boundExchangeId = boundDispatchTurnExchangeId(state);
+  if (turnExchangeId && boundExchangeId && turnExchangeId !== boundExchangeId) {
     state.rejectedServiceUserIds.add(id);
     return;
   }
 
-  if (state.dispatchCandidateIds.has(id)) {
+  const boundCandidates = boundDispatchCandidateIds(state);
+  if (boundCandidates.has(id)) {
     state.serviceSubmittedUserIds.add(id);
     state.messages.push({ id, role: 'user' });
     state.activeTurnUserId = id;
@@ -365,16 +415,16 @@ function recordServiceSubmittedUserId(
     return;
   }
 
-  const requestUserId = state.dispatchRequestUserId;
+  const requestUserId = boundDispatchRequestUserId(state);
   const canCorrelateProvisional = Boolean(
     requestUserId
-    && state.ingestingDispatchServiceFrames
-    && state.dispatchCandidateIds.has(requestUserId)
+    && (state.turnDispatchCommitted || state.ingestingDispatchServiceFrames)
+    && boundCandidates.has(requestUserId)
     && !state.provisionalServiceId
     && id !== requestUserId
     && turnExchangeId
-    && state.dispatchTurnExchangeId
-    && turnExchangeId === state.dispatchTurnExchangeId,
+    && boundExchangeId
+    && turnExchangeId === boundExchangeId,
   );
   if (canCorrelateProvisional) {
     state.provisionalServiceId = id;
@@ -385,12 +435,12 @@ function recordServiceSubmittedUserId(
   }
 
   if (
-    state.ingestingDispatchServiceFrames
-    && state.dispatchCandidateIds.size === 0
+    (state.turnDispatchCommitted || state.ingestingDispatchServiceFrames)
+    && boundCandidates.size === 0
     && state.serviceSubmittedUserIds.size === 0
     && turnExchangeId
-    && state.dispatchTurnExchangeId
-    && turnExchangeId === state.dispatchTurnExchangeId
+    && boundExchangeId
+    && turnExchangeId === boundExchangeId
   ) {
     state.serviceSubmittedUserIds.add(id);
     state.messages.push({ id, role: 'user' });
@@ -445,55 +495,32 @@ function ingestWebSocketWitnessPayload(state: NetworkWitnessState, payloadData: 
   }
 }
 
-async function installWebSocketWitness(page: any, state: NetworkWitnessState): Promise<() => Promise<void>> {
-  const teardowns: Array<() => Promise<void>> = [];
+async function installWebSocketWitness(page: any, state: NetworkWitnessState): Promise<void> {
   const onPayload = (payloadData: string) => {
     ingestWebSocketWitnessPayload(state, payloadData);
   };
 
   if (typeof page.on === 'function') {
-    const onWebSocket = (ws: { on: (event: string, handler: (frame: { payload?: string }) => void) => void }) => {
+    page.on('websocket', (ws: { on: (event: string, handler: (frame: { payload?: string }) => void) => void }) => {
       ws.on('framereceived', (frame) => {
         onPayload(frame.payload ?? '');
       });
-    };
-    page.on('websocket', onWebSocket);
-    teardowns.push(async () => {
-      try {
-        if (typeof page.off === 'function') page.off('websocket', onWebSocket);
-      } catch { /* teardown best-effort; full page teardown is #1007 */ }
     });
   }
 
   const context = page.context?.();
-  if (context && typeof context.newCDPSession === 'function') {
-    try {
-      const cdp = await Promise.race([
-        context.newCDPSession(page),
-        new Promise<null>((resolve) => { setTimeout(() => resolve(null), 5_000); }),
-      ]);
-      if (cdp) {
-        await cdp.send('Network.enable');
-        const onFrame = (event: { response?: { payloadData?: string } }) => {
-          onPayload(event.response?.payloadData ?? '');
-        };
-        cdp.on('Network.webSocketFrameReceived', onFrame);
-        teardowns.push(async () => {
-          try {
-            if (typeof cdp.off === 'function') cdp.off('Network.webSocketFrameReceived', onFrame);
-            if (typeof cdp.detach === 'function') await cdp.detach();
-          } catch { /* teardown best-effort; full page teardown is #1007 */ }
-        });
-      }
-    } catch { /* CDP witness remains optional when Playwright websocket is available */ }
-  }
-
-  return async () => {
-    await Promise.race([
-      Promise.all(teardowns.map((teardown) => teardown())),
-      new Promise<void>((resolve) => { setTimeout(resolve, 2_000); }),
-    ]).catch(() => {});
-  };
+  if (!context || typeof context.newCDPSession !== 'function') return;
+  try {
+    const cdp = await Promise.race([
+      context.newCDPSession(page),
+      new Promise<null>((resolve) => { setTimeout(() => resolve(null), 5_000); }),
+    ]);
+    if (!cdp) return;
+    await cdp.send('Network.enable');
+    cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
+      onPayload(event.response?.payloadData ?? '');
+    });
+  } catch { /* CDP witness remains optional when Playwright websocket is available */ }
 }
 
 function attachNetworkWitness(page: any): NetworkWitnessState {
@@ -509,12 +536,13 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     dispatchRequestWitnessed: false,
     dispatchExchangeAmbiguous: false,
     witnessedTurnExchangeIds: new Set<string>(),
+    dispatchWitnessFrozen: false,
+    frozenDispatchExchangeAmbiguous: false,
+    frozenDispatchCandidateIds: new Set<string>(),
     armDispatch() { this.dispatchArmed = true; },
     witnessInstall: Promise.resolve(),
   };
-  state.witnessInstall = installWebSocketWitness(page, state).then((teardown) => {
-    state.witnessTeardown = teardown;
-  }).catch(() => {});
+  state.witnessInstall = installWebSocketWitness(page, state).catch(() => {});
   page.on('request', (request: any) => {
     try {
       if (!state.dispatchArmed || !state.ingestingDispatchServiceFrames) return;
@@ -718,15 +746,16 @@ async function observedDispatchUserIds(
   if (serviceIds.length === 1) return new Set(serviceIds);
   if (serviceIds.length > 1) return new Set(serviceIds);
   const observed = new Set<string>();
-  if (network.dispatchCandidateIds.size === 0) return observed;
+  const candidates = boundDispatchCandidateIds(network);
+  if (candidates.size === 0) return observed;
   const users = page.locator('[data-message-author-role="user"]');
   const count = await users.count().catch(() => 0);
   for (let index = Math.max(0, count - 8); index < count; index++) {
     const id = await serviceId(users.nth(index));
-    if (id && !baselineIds.has(id) && network.dispatchCandidateIds.has(id)) observed.add(id);
+    if (id && !baselineIds.has(id) && candidates.has(id)) observed.add(id);
   }
   for (const message of network.messages) {
-    if (message.role === 'user' && !baselineIds.has(message.id) && network.dispatchCandidateIds.has(message.id)) {
+    if (message.role === 'user' && !baselineIds.has(message.id) && candidates.has(message.id)) {
       observed.add(message.id);
     }
   }
@@ -792,17 +821,6 @@ export async function sendTurn(
   onBeforeSend?: () => void | Promise<void>,
 ): Promise<TurnBrowserResult> {
   const network = attachNetworkWitness(page);
-  const releaseWitness = async () => {
-    if (process.env.CHATGPT_BROWSER_TURN_AC3_TIMING_TEST === '1') {
-      await witnessPollDelay(page, 2_000);
-      return;
-    }
-    await Promise.race([
-      network.witnessTeardown?.() ?? Promise.resolve(),
-      new Promise<void>((resolve) => { setTimeout(resolve, 2_000); }),
-    ]).catch(() => {});
-  };
-  try {
   const composer = page.locator('#prompt-textarea');
   const readyDeadline = Date.now() + Math.min(config.timeoutMs, 30_000);
   while (Date.now() < readyDeadline) {
@@ -854,15 +872,17 @@ export async function sendTurn(
     network.ingestingDispatchServiceFrames = false;
     return { state: 'recovery_required', cause: 'dispatch_exception_after_possible_delivery_boundary', possibleDelivery: true };
   }
+  freezeDispatchWitness(network);
+  network.ingestingDispatchServiceFrames = false;
 
   let userId = '';
   const deliveredDeadline = wallClock() + 30_000;
   while (wallClock() < deliveredDeadline && !userId) {
-    if (network.dispatchExchangeAmbiguous) {
+    if (dispatchExchangeIsAmbiguous(network)) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
     }
     const canonicalEarly = canonicalSubmittedUserId(network, baselineIds);
-    if (!canonicalEarly && network.dispatchCandidateIds.size > 1) {
+    if (!canonicalEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
     }
     const observed = await observedDispatchUserIds(page, network, baselineIds);
@@ -870,7 +890,6 @@ export async function sendTurn(
     userId = observed.values().next().value ?? '';
     if (!userId) await witnessPollDelay(page, 250);
   }
-  network.ingestingDispatchServiceFrames = false;
   if (!userId) return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
   userId = canonicalSubmittedUserId(network, baselineIds) || userId;
 
@@ -886,7 +905,7 @@ export async function sendTurn(
   while (Date.now() < deadline) {
     const wall = await pageWalls(page);
     const canonicalUserIdEarly = canonicalSubmittedUserId(network, baselineIds);
-    if (!canonicalUserIdEarly && network.dispatchCandidateIds.size > 1) {
+    if (!canonicalUserIdEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true, userMessageId: userId };
     }
     const observedDispatch = await observedDispatchUserIds(page, network, baselineIds);
@@ -1061,7 +1080,4 @@ export async function sendTurn(
     }));
   }
   return { state: 'stream_timeout', cause: 'no_terminal_evidence', possibleDelivery: true, userMessageId: userId };
-  } finally {
-    await releaseWitness();
-  }
 }

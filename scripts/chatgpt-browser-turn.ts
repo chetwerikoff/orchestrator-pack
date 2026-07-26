@@ -307,10 +307,6 @@ function emitTurnAndCode(result: TurnResultV1): number {
 
 async function runTurn(args: ParsedArgs): Promise<number> {
   assertAllowedOptions(args, ['profile', 'cdp', 'input', 'output', 'chat-url', 'new-chat', 'project-url', 'timeout-ms']);
-  if (process.env.CHATGPT_BROWSER_TURN_AC3_TIMING_TEST === '1') {
-    const { runAc3TimingTurn } = await import('./chatgpt-browser-turn/timing-test-shim.ts');
-    return runAc3TimingTurn(args);
-  }
   const invocationId = randomUUID();
   let profileKey = 'profile-unresolved';
   let reservation: DestinationReservation | null = null;
@@ -830,12 +826,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
   }
   try {
     if (args.command === 'turn') {
-      const code = await runTurn(args);
-      if (process.env.CHATGPT_BROWSER_TURN_AC3_TIMING_TEST === '1') {
-        const { finalizeAc3TimingMarks } = await import('./chatgpt-browser-turn/timing-test-shim.ts');
-        finalizeAc3TimingMarks();
-      }
-      return code;
+      return runTurn(args);
     }
     if (args.command === 'status/list') return await runStatus(args);
     if (args.command === 'clear') return await runClear(args);

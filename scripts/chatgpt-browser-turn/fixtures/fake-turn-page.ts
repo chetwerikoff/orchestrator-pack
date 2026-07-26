@@ -32,6 +32,8 @@ export interface FakeTurnPageOptions {
   readonly serviceObserveDispatch?: boolean;
   readonly preDispatchServiceFrames?: readonly Record<string, unknown>[];
   readonly preClickRequests?: readonly { readonly turnExchangeId: string; readonly userId?: string }[];
+  readonly postClickRequests?: readonly { readonly turnExchangeId: string; readonly userId?: string }[];
+  readonly postClickServiceFrames?: readonly Record<string, unknown>[];
   readonly turnExchangeId?: string;
 }
 
@@ -220,7 +222,28 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   let continueGrowthIndex = 0;
   let continueClicked = false;
   let pendingTerminalFrames: readonly Record<string, unknown>[] | undefined;
+  let postClickServiceEmitted = false;
   let postClickFrameIndex = 0;
+  const emitPostClickForeign = async (): Promise<void> => {
+    if (postClickServiceEmitted) return;
+    postClickServiceEmitted = true;
+    for (const req of options.postClickRequests ?? []) {
+      await emit('request', {
+        url: () => 'https://chatgpt.com/backend-api/conversation',
+        postData: () => JSON.stringify({
+          metadata: { turn_exchange_id: req.turnExchangeId },
+          messages: [{
+            ...(req.userId ? { id: req.userId } : {}),
+            author: { role: 'user' },
+            content: { content_type: 'text', parts: [''] },
+          }],
+        }),
+      });
+    }
+    if (options.postClickServiceFrames?.length) {
+      await emitServiceFrames(options.postClickServiceFrames);
+    }
+  };
   const applyContinueGrowth = () => {
     const growth = options.continueGenerating?.growthSequence ?? [];
     if (!growth.length) return;
@@ -288,6 +311,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
       for (const message of messages) message.advanceText?.();
       if (options.continueGenerating?.growthSequence?.length) applyContinueGrowth();
       await maybeEmitContinuationTerminal();
+      await emitPostClickForeign();
     },
     getByText: (pattern: string | RegExp) => {
       const label = typeof pattern === 'string' ? pattern : pattern.source;
