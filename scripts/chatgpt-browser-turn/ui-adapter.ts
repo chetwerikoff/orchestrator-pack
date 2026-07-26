@@ -1174,17 +1174,28 @@ export async function openTurnPage(browser: any, config: BrowserConfig): Promise
       return { page: matches[0], owned: false };
     }
     const page = await ctx.newPage();
-    await page.goto(target, { waitUntil: 'domcontentloaded' });
-    if (normalizeConversationUrl(page.url()) !== target) {
+    try {
+      await page.goto(target, { waitUntil: 'domcontentloaded' });
+      if (normalizeConversationUrl(page.url()) !== target) {
+        await page.close().catch(() => {});
+        throw new Error('ui_contract_mismatch:conversation_redirect');
+      }
+      return { page, owned: true };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'ui_contract_mismatch:conversation_redirect') throw error;
       await page.close().catch(() => {});
-      throw new Error('ui_contract_mismatch:conversation_redirect');
+      throw error;
     }
-    return { page, owned: true };
   }
   if (!config.projectUrl) throw new Error('ui_contract_mismatch:project_url_required');
   const page = await ctx.newPage();
-  await page.goto(config.projectUrl, { waitUntil: 'domcontentloaded' });
-  return { page, owned: true, provisionalId: crypto.randomUUID() };
+  try {
+    await page.goto(config.projectUrl, { waitUntil: 'domcontentloaded' });
+    return { page, owned: true, provisionalId: crypto.randomUUID() };
+  } catch (error) {
+    await page.close().catch(() => {});
+    throw error;
+  }
 }
 
 function witnessDelay(ms: number): Promise<void> {
