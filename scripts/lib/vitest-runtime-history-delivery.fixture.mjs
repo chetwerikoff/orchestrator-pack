@@ -2,7 +2,9 @@
 /**
  * Focused Issue #990 runtime-history delivery acceptance fixtures.
  */
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   DELIVERY_BRANCH,
@@ -47,6 +49,40 @@ function runGit(cwd, args, options = {}) {
     ...options,
   });
   return result;
+}
+
+function writeExecutable(path, content) {
+  writeFileSync(path, content, { encoding: 'utf8', mode: 0o755 });
+}
+
+function workflowRunBlock(workflow, stepName) {
+  const lines = workflow.split(/\r?\n/);
+  const stepLine = `      - name: ${stepName}`;
+  const stepIndex = lines.indexOf(stepLine);
+  if (stepIndex < 0) throw new Error(`workflow step not found: ${stepName}`);
+  let runIndex = -1;
+  for (let i = stepIndex + 1; i < lines.length; i += 1) {
+    if (lines[i].startsWith('      - name: ')) break;
+    if (lines[i] === '        run: |') {
+      runIndex = i;
+      break;
+    }
+  }
+  if (runIndex < 0) throw new Error(`workflow run block not found: ${stepName}`);
+  const script = [];
+  for (let i = runIndex + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.startsWith('          ')) {
+      script.push(line.slice(10));
+      continue;
+    }
+    if (line === '') {
+      script.push('');
+      continue;
+    }
+    break;
+  }
+  return script.join('\n');
 }
 
 function status({
@@ -298,52 +334,164 @@ function testProvenanceMatrix() {
   );
 }
 
-function testSamePayloadFailedProvenanceRetryRegeneratesEpisode() {
+function testSamePayloadFailedProvenanceRetryExecutesWorkflowRecovery() {
+  const root = mkdtempSync(join(tmpdir(), 'runtime-history-retry-'));
+  const scriptsDir = join(root, 'scripts');
+  const binDir = join(root, 'bin');
+  const stateFile = join(root, 'head.txt');
+  const pushAudit = join(root, 'push-audit.txt');
+  const statusAudit = join(root, 'status-audit.txt');
+  const reconcileOutput = join(root, 'reconcile-output.txt');
+  const pushOutput = join(root, 'push-output.txt');
   const failedRunId = 9101;
   const retryRunId = 9102;
   const attempt = 1;
-  const failedHead = GENERATED;
-  const failedHistory = [provenanceStatus({ id: 1, state: 'pending', runId: failedRunId, attempt })];
+  try {
+    mkdirSync(scriptsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(stateFile, `${GENERATED}\n`, 'utf8');
+    writeFileSync(pushAudit, '', 'utf8');
+    writeFileSync(statusAudit, '', 'utf8');
+    writeFileSync(reconcileOutput, '', 'utf8');
+    writeFileSync(pushOutput, '', 'utf8');
 
-  // Episode A already pushed H and opened the PR, then its terminal provenance write failed.
-  const failedBinding = parseRefreshProvenance(failedHistory, failedHead);
-  assert(failedBinding.ok, 'retry must be able to inspect the pending provenance binding on H');
-  const failedProof = verifyRefreshRun(
-    successfulRefreshRun({ id: failedRunId, attempt, conclusion: 'failure' }),
-    failedBinding,
-  );
-  equal(failedProof.outcome, 'provenance-invalid', 'failed prior refresh episode must not authorize stable-head reuse');
+    const helperSource = readFileSync(new URL('../vitest-runtime-history-delivery.mjs', import.meta.url), 'utf8');
+    writeFileSync(join(scriptsDir, 'vitest-runtime-history-delivery.mjs'), helperSource, 'utf8');
+    writeFileSync(join(scriptsDir, 'vitest-runtime-history.json'), '{}\n', 'utf8');
 
-  // Model the workflow's same-payload decision: only a successful exact-head episode can suppress the push.
-  let shouldPush = true;
-  if (failedBinding.ok && failedProof.ok && failedProof.state === 'success') shouldPush = false;
-  assert(shouldPush, 'same-payload retry must keep should_push=true after failed provenance');
+    writeExecutable(join(binDir, 'git'), `#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-}" in
+  ls-remote|fetch|add|remote) exit 0 ;;
+  show) printf '%s\\n' '{}' ; exit 0 ;;
+  diff) exit 0 ;;
+  rev-parse)
+    if [ "\${2:-}" = "HEAD" ]; then cat "\${FIXTURE_STATE}"; else printf '%s\\n' "\${FAILED_HEAD}"; fi
+    exit 0
+    ;;
+  -c)
+    printf '%s\\n' "\${NEXT_HEAD}" > "\${FIXTURE_STATE}"
+    exit 0
+    ;;
+  push)
+    printf '%s\\n' "$*" >> "\${FIXTURE_PUSH_AUDIT}"
+    exit 0
+    ;;
+  *) echo "fake git: unhandled $*" >&2; exit 2 ;;
+esac
+`);
+    writeExecutable(join(binDir, 'sleep'), '#!/usr/bin/env bash\nexit 0\n');
+    writeExecutable(join(binDir, 'node'), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "scripts/refresh-vitest-runtime-history.mjs" ]; then
+  out=''
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = '--output' ]; then shift; out="$1"; break; fi
+    shift
+  done
+  [ -n "$out" ] || { echo 'missing fake refresh output' >&2; exit 2; }
+  printf '%s\\n' '{}' > "$out"
+  exit 0
+fi
+exec "\${REAL_NODE}" "$@"
+`);
+    writeExecutable(join(scriptsDir, 'gh'), `#!/usr/bin/env bash
+set -euo pipefail
+joined="$*"
+if [[ "$joined" == *"/commits/\${FAILED_HEAD}/statuses"* ]]; then
+  cat <<JSON
+[{"id":1,"context":"${PROVENANCE_CONTEXT}","state":"pending","description":"runtime-history-provenance run=${failedRunId} attempt=${attempt} source=${SOURCE_MAIN}","created_at":"2026-07-25T00:00:01Z","target_url":"https://github.com/${TARGET_REPOSITORY}/actions/runs/${failedRunId}/attempts/${attempt}","creator":{"login":"github-actions[bot]"}}]
+JSON
+  exit 0
+fi
+if [[ "$joined" == *"/actions/runs/${failedRunId}"* ]]; then
+  cat <<JSON
+{"id":${failedRunId},"run_attempt":${attempt},"status":"completed","conclusion":"failure","path":"${REFRESH_WORKFLOW_PATH}","head_sha":"${SOURCE_MAIN}","repository":{"full_name":"${TARGET_REPOSITORY}"}}
+JSON
+  exit 0
+fi
+if [[ "$joined" == *"-X POST"*"/statuses/\${NEXT_HEAD}"* ]]; then
+  printf '%s\\n' "$joined" >> "\${FIXTURE_STATUS_AUDIT}"
+  printf '%s\\n' '{}'
+  exit 0
+fi
+echo "fake gh: unhandled $joined" >&2
+exit 2
+`);
 
-  let remoteHead = failedHead;
-  let preparedHead = failedHead;
-  let pushCalls = 0;
-  const retryHistory = [];
+    const workflow = readFileSync(new URL('../../.github/workflows/vitest-runtime-history-refresh.yml', import.meta.url), 'utf8');
+    const env = {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH ?? ''}`,
+      REAL_NODE: process.execPath,
+      FIXTURE_STATE: stateFile,
+      FIXTURE_PUSH_AUDIT: pushAudit,
+      FIXTURE_STATUS_AUDIT: statusAudit,
+      FAILED_HEAD: GENERATED,
+      NEXT_HEAD,
+      GITHUB_REPOSITORY: TARGET_REPOSITORY,
+      DELIVERY_BRANCH,
+      GH_TOKEN: 'fixture-token',
+      GITHUB_OUTPUT: reconcileOutput,
+    };
 
-  // The recovery branch amends when the prepared commit still equals the failed remote head.
-  if (shouldPush && preparedHead === remoteHead) preparedHead = NEXT_HEAD;
-  assert(preparedHead !== remoteHead, 'same-payload retry must regenerate a distinct generated head');
+    const reconcile = spawnSync('bash', ['-c', workflowRunBlock(workflow, 'Reconcile pending delivery branch state')], {
+      cwd: root,
+      encoding: 'utf8',
+      env,
+    });
+    equal(reconcile.status, 0, `same-payload reconcile block must succeed: ${reconcile.stderr}`);
+    const reconcileResult = readFileSync(reconcileOutput, 'utf8');
+    assert(reconcileResult.includes(`remote_sha=${GENERATED}`), 'reconcile must retain the failed remote head as lease authority');
+    assert(reconcileResult.includes('should_push=true'), 'failed prior episode must keep should_push=true');
+    equal(readFileSync(stateFile, 'utf8').trim(), NEXT_HEAD, 'reconcile must amend to a distinct generated head');
 
-  if (shouldPush) {
-    pushCalls += 1;
-    remoteHead = preparedHead;
-    retryHistory.push(provenanceStatus({ id: 2, state: 'pending', runId: retryRunId, attempt }));
-    retryHistory.push(provenanceStatus({ id: 3, state: 'success', runId: retryRunId, attempt }));
+    const push = spawnSync('bash', ['-c', workflowRunBlock(workflow, 'Push delivery branch')], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...env,
+        DELIVERY_TOKEN: 'fixture-delivery-token',
+        REMOTE_SHA: GENERATED,
+        GITHUB_OUTPUT: pushOutput,
+      },
+    });
+    equal(push.status, 0, `fresh generated head push block must succeed: ${push.stderr}`);
+    const pushLines = readFileSync(pushAudit, 'utf8').trim().split(/\r?\n/).filter(Boolean);
+    equal(pushLines.length, 1, 'same-payload retry must push exactly one fresh generated head');
+    assert(pushLines[0].includes(`refs/heads/${DELIVERY_BRANCH}:${GENERATED}`), 'retry push must retain the fetched old head as force-with-lease authority');
+    assert(readFileSync(pushOutput, 'utf8').includes(`head_sha=${NEXT_HEAD}`), 'push output must bind the distinct generated head');
+
+    const provenanceEnv = {
+      ...env,
+      DELIVERY_HEAD: NEXT_HEAD,
+      GITHUB_RUN_ID: String(retryRunId),
+      GITHUB_RUN_ATTEMPT: String(attempt),
+      GITHUB_SHA: SOURCE_MAIN,
+      GITHUB_SERVER_URL: 'https://github.com',
+    };
+    const pending = spawnSync('bash', ['-c', workflowRunBlock(workflow, 'Publish pending delivery provenance')], {
+      cwd: root,
+      encoding: 'utf8',
+      env: provenanceEnv,
+    });
+    equal(pending.status, 0, `fresh retry pending provenance must publish: ${pending.stderr}`);
+    const complete = spawnSync('bash', ['-c', workflowRunBlock(workflow, 'Complete delivery provenance')], {
+      cwd: root,
+      encoding: 'utf8',
+      env: provenanceEnv,
+    });
+    equal(complete.status, 0, `fresh retry terminal provenance must publish: ${complete.stderr}`);
+
+    const statusLines = readFileSync(statusAudit, 'utf8').trim().split(/\r?\n/).filter(Boolean);
+    equal(statusLines.length, 2, 'fresh retry episode must emit exactly pending and success provenance writes');
+    assert(statusLines[0].includes('state=pending'), 'fresh retry episode must publish pending provenance first');
+    assert(statusLines[1].includes('state=success'), 'fresh retry episode must publish success provenance second');
+    assert(statusLines.every((line) => line.includes(`/statuses/${NEXT_HEAD}`)), 'fresh provenance writes must bind the distinct retry head');
+    assert(statusLines.every((line) => line.includes(`run=${retryRunId} attempt=${attempt} source=${SOURCE_MAIN}`)), 'fresh provenance writes must bind the retry run and source main');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
-
-  equal(pushCalls, 1, 'same-payload retry must push the fresh generated head exactly once');
-  equal(retryHistory.length, 2, 'fresh retry episode must emit pending and terminal provenance');
-  equal(retryHistory[0].state, 'pending', 'fresh retry episode must begin with pending provenance');
-  equal(retryHistory[1].state, 'success', 'fresh retry episode must be able to complete provenance');
-
-  const retryBinding = parseRefreshProvenance(retryHistory, remoteHead);
-  assert(retryBinding.ok, 'fresh exact-head provenance must parse after retry push');
-  const retryProof = verifyRefreshRun(successfulRefreshRun({ id: retryRunId, attempt }), retryBinding);
-  equal(retryProof.state, 'success', 'fresh retry episode must be eligible for unattended delivery');
 }
 
 function testStatusHistoryProjection() {
@@ -658,7 +806,7 @@ async function main() {
     testSinglePathGate,
     testIdentityMatrix,
     testProvenanceMatrix,
-    testSamePayloadFailedProvenanceRetryRegeneratesEpisode,
+    testSamePayloadFailedProvenanceRetryExecutesWorkflowRecovery,
     testStatusHistoryProjection,
     testCurrentPolicySnapshotRegression,
     testProviderRestrictionFailsClosedWhenUnprovable,
