@@ -300,8 +300,8 @@ function recordServiceSubmittedUserId(state: NetworkWitnessState, id: string): v
   state.serviceSubmittedUserIds.add(id);
   state.messages.push({ id, role: 'user' });
   if (state.dispatchCandidateIds.size === 1) {
-    const [candidate] = state.dispatchCandidateIds;
-    if (candidate !== id) state.dispatchCandidateIds.delete(candidate);
+    const candidate = [...state.dispatchCandidateIds][0];
+    if (candidate && candidate !== id) state.dispatchCandidateIds.delete(candidate);
   }
   state.dispatchCandidateIds.add(id);
   state.activeTurnUserId = id;
