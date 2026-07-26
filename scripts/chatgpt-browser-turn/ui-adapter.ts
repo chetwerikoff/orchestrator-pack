@@ -382,6 +382,9 @@ function recordServiceSubmittedUserId(
     state.ingestingDispatchServiceFrames
     && state.dispatchCandidateIds.size === 0
     && state.serviceSubmittedUserIds.size === 0
+    && turnExchangeId
+    && state.dispatchTurnExchangeId
+    && turnExchangeId === state.dispatchTurnExchangeId
   ) {
     state.serviceSubmittedUserIds.add(id);
     state.messages.push({ id, role: 'user' });
@@ -833,7 +836,13 @@ export async function sendTurn(
   }
 
   let userId = '';
-  const deliveredDeadline = Date.now() + 30_000;
+  const deliveredDeadlineMs = (() => {
+    const raw = process.env.CHATGPT_BROWSER_TURN_DELIVERED_DEADLINE_MS;
+    if (!raw) return 30_000;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000;
+  })();
+  const deliveredDeadline = Date.now() + deliveredDeadlineMs;
   while (Date.now() < deliveredDeadline && !userId) {
     const canonicalEarly = canonicalSubmittedUserId(network, baselineIds);
     if (!canonicalEarly && network.dispatchCandidateIds.size > 1) {

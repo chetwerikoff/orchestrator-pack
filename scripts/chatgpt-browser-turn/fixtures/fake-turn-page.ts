@@ -162,12 +162,21 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
         await emit('request', {
           url: () => 'https://chatgpt.com/backend-api/conversation',
           postData: () => JSON.stringify({
-          messages: [{
-            id,
-            author: { role: 'user' },
-            ...(options.turnExchangeId ? { metadata: { turn_exchange_id: options.turnExchangeId } } : {}),
-          }],
-        }),
+            messages: [{
+              id,
+              author: { role: 'user' },
+              ...(options.turnExchangeId ? { metadata: { turn_exchange_id: options.turnExchangeId } } : {}),
+            }],
+          }),
+        });
+      }
+      if (!dispatchIds.length && options.turnExchangeId) {
+        await emit('request', {
+          url: () => 'https://chatgpt.com/backend-api/conversation',
+          postData: () => JSON.stringify({
+            metadata: { turn_exchange_id: options.turnExchangeId },
+            messages: [{ author: { role: 'user' }, content: { content_type: 'text', parts: [''] } }],
+          }),
         });
       }
       if (options.serviceObserveDispatch !== false) {

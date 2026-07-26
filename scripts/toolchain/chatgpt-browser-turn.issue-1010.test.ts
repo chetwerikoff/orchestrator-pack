@@ -1,3 +1,5 @@
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import {
   LIVE_TERMINAL_FRAME_CONTRACT,
@@ -8,7 +10,15 @@ import {
   ingestServicePayload,
   resolveWholeTurnTerminal,
 } from '../chatgpt-browser-turn/terminal-witness.ts';
+import { runProcess } from '../kernel/subprocess.ts';
 import { sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ac3TimingHarness = join(
+  dirname(fileURLToPath(import.meta.url)),
+  'fixtures',
+  'chatgpt-browser-turn-ac3-timing-harness.ts',
+);
 
 const baseConfig = (): BrowserConfig => ({
   cdp: 'http://127.0.0.1:9222',
@@ -32,9 +42,13 @@ function streamItemEnvelope(encodedItem: string): Record<string, unknown> {
   };
 }
 
-function livePatchTerminalFrames(own: string, assistantId: string): Record<string, unknown>[] {
+function livePatchTerminalFrames(
+  own: string,
+  assistantId: string,
+  turnExchangeId: string,
+): Record<string, unknown>[] {
   return [
-    streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}"}}\n\n`),
+    streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"turn_exchange_id":"${turnExchangeId}"}}}\n\n`),
     streamItemEnvelope(`data: {"type":"message_marker","message_id":"${assistantId}","marker":"user_visible_token","event":"first"}\n\n`),
     streamItemEnvelope([
       'event: delta',
@@ -98,10 +112,12 @@ describe('issue 1010 submitted-turn proof', () => {
   it('AC1 proves submission from nested stream-item envelopes without DOM user mirror', async () => {
     const own = 'user-stream-12345678';
     const assistantId = 'asst-stream-12345678';
+    const turnExchangeId = 'exchange-stream-12345678';
     const fixture = fakeTurnPage({
       dispatchCandidateIds: [],
+      turnExchangeId,
       serviceObserveDispatch: false,
-      serviceFrames: livePatchTerminalFrames(own, assistantId),
+      serviceFrames: livePatchTerminalFrames(own, assistantId, turnExchangeId),
       assistants: [
         { id: assistantId, parent: own, text: 'Final answer body', appearOnSend: true },
       ],
@@ -162,53 +178,71 @@ describe('issue 1010 submitted-turn proof', () => {
     }
   });
 
-  it('AC3/AC5 separates result production, caller visibility, and process exit (#1007)', async () => {
+  it('AC3/AC5 separates result production, caller stdout visibility, and process exit (#1007)', async () => {
+    const started = Date.now();
+    let stdoutVisibleAt = 0;
+
+    const child = await runProcess({
+      command: process.execPath,
+      args: ['--experimental-strip-types', ac3TimingHarness],
+      cwd: repoRoot,
+      inheritParentEnv: true,
+      timeoutMs: 15_000,
+      onStdoutChunk: () => {
+        if (!stdoutVisibleAt) stdoutVisibleAt = Date.now();
+      },
+    });
+
+    expect(child.ok).toBe(true);
+    const body = JSON.parse(child.stdout.trim()) as { cause: string };
+    expect(body.cause).toBe('submitted_turn_id_unproven');
+
+    const report = JSON.parse(child.stderr.trim().split('\n').pop() ?? '{}') as {
+      timing_marks?: Record<string, number>;
+    };
+    const marks = report.timing_marks ?? {};
+    const resultProducedMs = marks.result_produced_ms ?? Number.POSITIVE_INFINITY;
+    const stdoutWrittenMs = marks.stdout_written_ms ?? Number.POSITIVE_INFINITY;
+    const postStdoutCleanupMs = marks.post_stdout_cleanup_ms ?? Number.POSITIVE_INFINITY;
+    const callerStdoutMs = stdoutVisibleAt - started;
+    const processExitMs = Date.now() - started;
+
+    expect(resultProducedMs).toBeLessThan(5_000);
+    expect(callerStdoutMs).toBeLessThan(5_000);
+    expect(resultProducedMs).toBeLessThanOrEqual(stdoutWrittenMs);
+    expect(stdoutWrittenMs).toBeLessThanOrEqual(callerStdoutMs + 100);
+    expect(postStdoutCleanupMs).toBeGreaterThan(stdoutWrittenMs + 1_000);
+    expect(processExitMs).toBeGreaterThan(callerStdoutMs + 1_000);
+  });
+
+
+  it('AC5 rejects foreign service input_message on candidate-free dispatch path', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    let detachStarted = false;
-    let detachResolved = false;
     try {
+      const turnExchangeId = 'exchange-owned-12345678';
+      const foreign = 'user-foreign-12345678';
       const fixture = fakeTurnPage({
         dispatchCandidateIds: [],
+        turnExchangeId,
         serviceObserveDispatch: false,
+        preDispatchServiceFrames: [{ type: 'input_message', input_message: { id: foreign } }],
         serviceFrames: [],
         assistants: [],
       });
       fixture.page.waitForTimeout = async (ms: number) => {
         await vi.advanceTimersByTimeAsync(ms);
       };
-      const originalContext = fixture.page.context;
-      fixture.page.context = () => ({
-        newCDPSession: async () => ({
-          send: async () => {},
-          on: () => {},
-          off: () => {},
-          detach: async () => {
-            detachStarted = true;
-            await new Promise<void>((resolve) => { setTimeout(resolve, 60_000); });
-            detachResolved = true;
-          },
-        }),
-      });
-
-      const resultPromise = sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 60_000 });
+      const turn = sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 60_000 });
       await vi.advanceTimersByTimeAsync(31_000);
-      const result = await resultPromise;
-      fixture.page.context = originalContext;
+      const result = await turn;
 
+      expect(result.state).toBe('recovery_required');
       expect(result.cause).toBe('submitted_turn_id_unproven');
-      expect(detachStarted).toBe(true);
-      expect(detachResolved).toBe(false);
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(detachResolved).toBe(false);
-      expect(detachStarted).toBe(true);
-      expect(detachResolved).toBe(false);
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(detachResolved).toBe(false);
+      expect(result.userMessageId).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
   });
-
 
   it('AC5 rejects foreign service input_message while submitted turn stays unproven', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
