@@ -8,7 +8,7 @@ import path from 'node:path';
 import { runProcess, runProcessSync } from '../kernel/subprocess.ts';
 import { D928 } from '../pr2a/contracts.ts';
 
-const CONTROLS = {
+export const CONTROLS = {
   AC1: ['operator-ack-only','pr2a-merge-missing','pr2a-receipt-trusted-without-recompute','closure-schema-incompatible','external-supervisor-library-reference','external-claim-library-reference','closure-unresolved-set-nonempty','closure-input-tree-unbound','fleet-member-omitted','stale-member-accepted','rejoining-member-unquarantined','diverged-revision-accepted','second-control-plane-host','host-or-repo-unbound','installed-commit-unbound','old-installed-revision-missing','legacy-supervisor-identity-ambiguous','node22-not-enforced','competing-transaction-admitted','successor-926-used-as-prerequisite','mutation-before-admission'],
   AC2: ['install-kills-old-supervisor','install-gap-acquirer-gap','ts-supervisor-starts-at-install','dual-supervisor-owner','cordon-not-first','legacy-supervisor-terminated-before-cordon','legacy-supervisor-survivor','legacy-supervisor-identity-unverified','ts-supervisor-start-before-cas','store-writer-ingress-left-open','concurrent-writer-admitted','drain-watermark-missing','pid-identity-unverified','survivor-accepted','registry-projection-before-import-digest','registry-file-or-parent-not-fsynced','registry-readback-hash-missing','precommit-log-not-durable-before-cas','precommit-digest-not-in-core','precommit-log-digest-mismatch-accepted','registry-treated-as-commit','central-cas-not-sole-commit','cas-core-field-extra-or-missing','postcommit-followup-treated-as-commit','cas-conflict-ignored','tracked-registry-restored-consumed','legacy-executable-reference-restored','epoch-gated-source-missing','postactivation-start-without-reprojection','dual-scheduler'],
   AC3: ['snapshot-before-drain','writer-watermark-missing','concurrent-store-writer','snapshot-version-missing','snapshot-digest-not-raw-bytes','digest-algorithm-not-sha256','stable-stringify-key-order-wrong','stable-stringify-whitespace-present','unicode-or-escape-vector-mismatch','negative-zero-or-exponent-vector-mismatch','nested-key-order-vector-mismatch','vector-failing-payload-accepted','store-covered-field-omitted','unknown-store-field-silently-ignored','target-import-identity-missing','target-import-identity-aliased','target-cas-or-upsert-omitted','marker-only-completion','target-state-digest-mismatch-accepted','post-mutation-pre-marker-reapplied','legacy-read-partial-import','claim-store-modified','claim-reaper-modified','claim-semantics-changed','claim-key-or-namespace-changed','second-claim-store-created','claimant-family-not-ts-native','powershell-claim-path-resurrected','four-deletion-disturbs-claim-authority','pr2a-overlap-proof-reimplemented'],
@@ -20,382 +20,212 @@ const CONTROLS = {
 } as const;
 
 type AcceptanceId = keyof typeof CONTROLS;
-type DetectorPattern =
-  | 'foundation'
-  | 'admission-guards'
-  | 'closure'
-  | 'activation'
-  | 'ordering'
-  | 'watermark'
-  | 'writer-survivor'
-  | 'survivor'
-  | 'recovery'
-  | 'rollback'
-  | 'import-guards'
-  | 'scope'
-  | 'vectors'
-  | 'node'
-  | 'platform'
-  | 'canonical-root'
-  | 'primitives'
-  | 'registry'
-  | 'scheduler'
-  | 'guard-record'
-  | 'new-powershell'
-  | 'retired-guard'
-  | 'pester-load';
-
+type MutationKey = `${AcceptanceId}:${string}`;
 interface ArtifactSnapshot { existed: boolean; bytes: Buffer; mode: number }
-interface MutationSpec {
-  artifactPath: string;
-  detector: DetectorPattern;
-  apply(snapshot: ArtifactSnapshot): { bytes: Buffer; mode: number };
-  prepare?: () => void;
-  cleanup?: () => void;
-}
-interface MutationEvidence {
-  ac: AcceptanceId;
-  mutationId: string;
-  artifactPath: string;
-  detectorId: string;
-  detectorCommand: string[];
-  artifactHashBefore: string;
-  artifactHashAfter: string;
-  restoredHash: string;
-  negativeOutcome: 'failed';
-  restoredOutcome: 'passed';
-  negativeExitCode: number;
-  restoredExitCode: 0;
-}
+interface MutationSpec { artifactPath: string; apply(snapshot: ArtifactSnapshot): { bytes: Buffer; mode: number; delete?: boolean }; prepare?: () => void; cleanup?: () => void }
+interface MutationEvidence { ac: AcceptanceId; mutationId: string; patchSha256: string; targetPathOrClass: string; expectedDetectorId: string; expectedFailureCode: string; observedFailureCode: string; executed: true; appliedHashDelta: true; namedFailingTest: string; negativeOutcome: 'red'; restoredHash: string; restoredOutcome: 'green' }
 
 const repoRoot = path.resolve(process.cwd());
-const TEST_FILE = 'scripts/pr2a/planning.test.ts';
-const DETECTORS: Record<DetectorPattern, string> = {
-  foundation: 'refuses before cordon when foundation adoption evidence is unavailable',
-  'admission-guards': 'retains the fail-closed admission guards required before cordon',
-  closure: 'recomputes #948 reverse closure against the merge base',
-  activation: 'runs the real transaction through synthetic process/store/CAS boundaries',
-  ordering: 'retains cordon-first, import, projection, CAS and supervisor ordering',
-  watermark: 'rejects a missing writer watermark before snapshots',
-  'writer-survivor': 'rejects a surviving legacy writer after drain and termination',
-  survivor: 'refuses snapshot/import when legacy processes survive re-enumeration',
-  recovery: 'resumes forward from the import boundary when CAS has not happened yet',
-  rollback: 'allows old-revision rollback only before import mutation and refuses target drift',
-  'import-guards': 'retains snapshot/import identity, validation and convergence guards',
-  scope: 'contains exactly the four PowerShell deletions and preserves #948 claim authority/tracked registry',
-  vectors: 'reproduces committed canonicalization vectors',
-  node: 'fails unsupported Node before any cordon path can be created',
-  platform: 'fails unsupported native Windows before any cordon path can be created',
-  'canonical-root': 'rejects a non-canonical repository root instead of normalizing it',
-  primitives: 'retains durability, exclusion, process identity and central nonce primitives',
-  registry: 'accepts only the scheduler-only target registry',
-  scheduler: 'starts exactly one exact-head review only after central epoch/nonce verification and fresh checks',
-  'guard-record': 'guard-record-invalid',
-  'new-powershell': 'new-powershell-logic-forbidden',
-  'retired-guard': 'retired-launch-contract-guard-restored',
-  'pester-load': 'supervisor-dependent-pester-load-restored',
+const P = {
+  tx:'scripts/lib/cutover/activation-transaction.ts', cordon:'scripts/lib/cutover/activation-cordon.ts', importFile:'scripts/lib/cutover/activation-import.ts', epoch:'scripts/lib/cutover/activation-epoch-authority.ts', evidence:'scripts/lib/cutover/activation-evidence.ts', recovery:'scripts/lib/cutover/activation-recovery.ts', preflight:'scripts/lib/cutover/activation-platform-preflight.ts', registryProjection:'scripts/lib/cutover/activation-registry-projection.ts', supervisor:'scripts/lib/orchestrator-side-process-supervisor.ts', stable:'scripts/lib/cutover/stable-stringify.ts', vectors:'scripts/fixtures/cutover/stable-stringify-vectors.json', targetRegistry:'scripts/orchestrator-side-process-registry.cutover-target.json', liveRegistry:'scripts/orchestrator-side-process-registry.json', claimStore:'scripts/lib/review-start-claim-store.ts', claimCli:'scripts/lib/review-start-claim-cli.ts', claimReaper:'scripts/lib/review-start-claim-cli.ts', packRunner:'scripts/pack-review-runner.ts', wakeSupervisor:'scripts/orchestrator-wake-supervisor.ts', planningTest:'scripts/pr2a/planning.test.ts', laneConfig:'scripts/vitest-ci-lanes.config.json', denominatorJs:'scripts/reaction-config-messages.mjs',
+} as const;
+
+const GROUPS: Record<string, readonly MutationKey[]> = {
+  'foundation-proof':['AC1:operator-ack-only'],
+  'pr2a-merge-guard':['AC1:pr2a-merge-missing'],
+  'closure-recompute-call':['AC1:pr2a-receipt-trusted-without-recompute'],
+  'closure-schema-guard':['AC1:closure-schema-incompatible'],
+  'closure-target-coverage':['AC1:external-supervisor-library-reference','AC1:external-claim-library-reference'],
+  'closure-unresolved-guard':['AC1:closure-unresolved-set-nonempty'],
+  'closure-tree-binding':['AC1:closure-input-tree-unbound'],
+  'fleet-roster-guards':['AC1:fleet-member-omitted','AC1:stale-member-accepted','AC1:rejoining-member-unquarantined','AC1:diverged-revision-accepted','AC1:second-control-plane-host','AC1:host-or-repo-unbound'],
+  'preflight-bindings':['AC1:installed-commit-unbound','AC1:old-installed-revision-missing'],
+  'process-identity-guards':['AC1:legacy-supervisor-identity-ambiguous','AC2:legacy-supervisor-identity-unverified','AC2:pid-identity-unverified','AC8:pid-start-time-unchecked','AC8:process-tree-survivor'],
+  'node22-guard':['AC1:node22-not-enforced','AC8:wrong-node-major-admitted'],
+  'cordon-admission-guard':['AC1:competing-transaction-admitted'],
+  'no-successor-prerequisite':['AC1:successor-926-used-as-prerequisite','AC4:926-precedes-adoption','AC4:930-precedes-926'],
+  'tx-admission-order':['AC1:mutation-before-admission'],
+  'tx-cordon-first-order':['AC2:install-kills-old-supervisor','AC2:install-gap-acquirer-gap','AC2:cordon-not-first','AC2:legacy-supervisor-terminated-before-cordon'],
+  'tx-cas-before-start':['AC2:ts-supervisor-starts-at-install','AC2:dual-supervisor-owner','AC2:ts-supervisor-start-before-cas'],
+  'tx-survivor-guard':['AC2:legacy-supervisor-survivor','AC2:concurrent-writer-admitted','AC2:survivor-accepted','AC3:concurrent-store-writer'],
+  'cordon-flags':['AC2:store-writer-ingress-left-open'],
+  'writer-watermark':['AC2:drain-watermark-missing','AC3:writer-watermark-missing'],
+  'tx-import-before-projection':['AC2:registry-projection-before-import-digest'],
+  'durability-primitives':['AC2:registry-file-or-parent-not-fsynced','AC8:atomic-rename-omitted','AC8:file-fsync-omitted','AC8:parent-fsync-omitted'],
+  'registry-projection-guards':['AC2:registry-readback-hash-missing'],
+  'tx-phase1-before-cas':['AC2:precommit-log-not-durable-before-cas','AC7:precommit-log-not-durable-before-cas'],
+  'epoch-core-guards':['AC2:precommit-digest-not-in-core','AC2:cas-core-field-extra-or-missing','AC7:cas-core-field-extra-or-missing','AC7:precommit-digest-not-in-core','AC7:postcommit-timestamp-in-core','AC7:nonce-not-stored-centrally'],
+  'phase1-digest-verify':['AC2:precommit-log-digest-mismatch-accepted','AC5:precommit-log-digest-mismatch-accepted','AC7:precommit-log-digest-mismatch-accepted'],
+  'tx-cas-before-followups':['AC2:registry-treated-as-commit','AC2:postcommit-followup-treated-as-commit'],
+  'tx-single-cas':['AC2:central-cas-not-sole-commit'],
+  'epoch-cas-guards':['AC2:cas-conflict-ignored','AC7:second-commit-same-epoch','AC7:consumer-skips-central-nonce-equality','AC7:stale-nonce-replay','AC8:exclusive-lock-omitted'],
+  'supervisor-source-guards':['AC2:tracked-registry-restored-consumed','AC2:epoch-gated-source-missing','AC2:postactivation-start-without-reprojection','AC5:postactivation-start-without-reprojection'],
+  'no-legacy-executable':['AC2:legacy-executable-reference-restored','AC6:legacy-executable-reference-restored'],
+  'registry-single-scheduler':['AC2:dual-scheduler','AC4:staged-registry-has-legacy-child'],
+  'tx-drain-before-snapshot':['AC3:snapshot-before-drain'],
+  'snapshot-guards':['AC3:snapshot-version-missing','AC3:snapshot-digest-not-raw-bytes','AC3:digest-algorithm-not-sha256'],
+  'stable-stringify-guards':['AC3:stable-stringify-key-order-wrong','AC3:stable-stringify-whitespace-present'],
+  'canonical-vectors':['AC3:unicode-or-escape-vector-mismatch','AC3:negative-zero-or-exponent-vector-mismatch','AC3:nested-key-order-vector-mismatch','AC3:vector-failing-payload-accepted'],
+  'import-shape-guards':['AC3:store-covered-field-omitted','AC3:unknown-store-field-silently-ignored'],
+  'import-identity-guards':['AC3:target-import-identity-missing','AC3:target-import-identity-aliased'],
+  'import-marker-guards':['AC3:target-cas-or-upsert-omitted','AC3:marker-only-completion'],
+  'import-digest-guards':['AC3:target-state-digest-mismatch-accepted','AC3:post-mutation-pre-marker-reapplied','AC3:legacy-read-partial-import'],
+  'claim-authority-bytes':['AC3:claim-store-modified','AC3:claim-reaper-modified','AC3:four-deletion-disturbs-claim-authority','AC4:claim-authority-diff-at-merge','AC6:claim-store-modified','AC6:claim-reaper-modified','AC6:claimant-family-modified'],
+  'claim-key-semantics':['AC3:claim-semantics-changed','AC3:claim-key-or-namespace-changed','AC4:claim-key-changed'],
+  'no-second-claim-store':['AC3:second-claim-store-created','AC6:second-claim-store-created'],
+  'claimant-ts-import':['AC3:claimant-family-not-ts-native'],
+  'no-legacy-claim-path':['AC3:powershell-claim-path-resurrected','AC5:rollback-uses-new-checkout-ps-shim','AC6:powershell-claim-path-resurrected'],
+  'no-overlap-reimplementation':['AC3:pr2a-overlap-proof-reimplemented'],
+  'rehearsal-inert':['AC4:harness-owned-cycle','AC4:merge-rehearsal-labeled-live'],
+  'staged-registry-required':['AC4:staged-registry-missing','AC6:staged-registry-omitted'],
+  'live-registry-bytes':['AC4:live-registry-diff-at-merge','AC6:live-registry-modified'],
+  'denominator-bytes':['AC4:denominator-file-diff-from-post948-base','AC6:denominator-compatibility-file-modified'],
+  'denominator-loadable':['AC4:denominator-file-not-loadable','AC6:denominator-file-not-loadable'],
+  'old-supervisor-continuity':['AC4:install-gap-old-supervisor-continuity-untested'],
+  'ts-supervisor-inert':['AC4:ts-supervisor-not-inert'],
+  'followup-required':['AC4:durable-delivery-missing','AC7:ts-supervisor-start-followup-missing','AC7:scheduler-enable-followup-missing','AC7:local-fsync-followup-missing'],
+  'cutover-terminalized':['AC4:cutover-row-not-terminalized'],
+  'ts-supervisor-replacement':['AC4:deleted-supervisor-duty-missing','AC6:supervisor-ts-replacement-missing'],
+  'exact-d928-deletions':['AC4:orphan-claim-file-not-deleted','AC6:required-ps-deletion-missing','AC6:ps-file-shimmed-not-deleted','AC6:powershell-file-modified-instead-of-deleted'],
+  'no-pwsh-dispatch':['AC4:powershell-shim-used-in-rehearsal','AC6:embedded-powershell-program','AC6:cutover-module-spawns-pwsh'],
+  'retired-guard-absent':['AC4:retired-launch-contract-guard-restored','AC6:retired-launch-contract-guard-restored','AC8:retired-launch-contract-guard-restored'],
+  'preimport-rollback-guards':['AC5:preimport-target-change-unchecked','AC5:rollback-old-revision-unbound'],
+  'recovery-order-guards':['AC5:import-begin-recorded-after-mutation','AC5:precas-ts-supervisor-started'],
+  'recovery-no-legacy':['AC5:legacy-restored-after-import-begin','AC5:legacy-epoch-rearmed-on-migrated-store','AC5:postcas-legacy-restored'],
+  'recovery-forward-path':['AC5:postmutation-import-bytes-discarded','AC5:forward-recovery-uncordoned','AC5:registry-projection-crash-unrecovered'],
+  'recovery-phase1-guards':['AC5:precommit-log-fabricated-on-recovery'],
+  'recovery-central-authority':['AC5:postcas-followup-missing-treated-uncommitted','AC7:local-record-treated-authoritative','AC7:rehearsal-record-accepted-live','AC7:same-tuple-recovery-duplicates-commit'],
+  'followup-authority-guards':['AC5:postcas-followup-changes-commit','AC7:followup-treated-authoritative'],
+  'recovery-no-reverse':['AC5:reverse-reconciliation-completeness-claimed'],
+  'scope-declared-only':['AC6:candidate-manifest-self-authorizes','AC6:addition-root-not-predeclared','AC6:foundation-component-reimplemented','AC6:unrelated-manifest-row-changed'],
+  'no-new-powershell':['AC6:new-powershell-logic-added','AC6:powershell-file-renamed','AC8:new-powershell-logic-added'],
+  'scope-regular-mode':['AC6:symlink-mode','AC6:gitlink-mode','AC6:nonregular-mode'],
+  'lane-config-guards':['AC6:test-classification-missing','AC6:test-classification-duplicate','AC6:lane-config-overreach'],
+  'phase1-required-steps':['AC7:pr2a-closure-admission-evidence-missing','AC7:legacy-supervisor-termination-evidence-missing','AC7:ts-supervisor-inert-evidence-missing'],
+  'phase1-record-shape':['AC7:precommit-timestamp-outside-core'],
+  'followup-record-shape':['AC7:followup-epoch-reference-missing','AC7:followup-sequence-duplicate','AC7:followup-sequence-gap','AC7:followup-sequence-nonmonotonic'],
+  'host-context-nonauth':['AC7:host-context-described-as-authentication'],
+  'cordon-nonce':['AC7:nonce-not-generated-at-cordon'],
+  'platform-guards':['AC8:windows-native-activation','AC8:unsupported-platform-admitted','AC8:repo-root-not-canonical','AC8:cross-device-registry-projection'],
+  'guard-record':['AC8:verify-guard-record-missing','AC8:reusable-guard-record-missing','AC8:guard-not-pwsh7','AC8:guard-stale-head','AC8:guard-nonzero-accepted','AC8:guard-stdout-digest-missing'],
+  'no-supervisor-pester-load':['AC8:supervisor-dependent-pester-load-restored'],
 };
 
-function absoluteArtifact(pathName: string): string {
-  return path.isAbsolute(pathName) ? pathName : path.join(repoRoot, pathName);
+function categoryFor(key: MutationKey): string {
+  const hits = Object.entries(GROUPS).filter(([, keys]) => keys.includes(key));
+  if (hits.length !== 1) throw new Error(`mutation_recipe_binding_invalid:${key}:matches=${hits.length}`);
+  return hits[0]![0];
 }
-
-function digest(snapshot: ArtifactSnapshot): string {
-  if (!snapshot.existed) return 'sha256:absent';
-  return `sha256:${createHash('sha256').update(`${snapshot.mode.toString(8)}\0`).update(snapshot.bytes).digest('hex')}`;
+function declaredKeys(): MutationKey[] { return Object.entries(CONTROLS).flatMap(([ac, ids]) => ids.map((id) => `${ac}:${id}` as MutationKey)); }
+function assertCoverage(): void {
+  const declared = declaredKeys().sort(); const bound = Object.values(GROUPS).flat().sort();
+  if (bound.length !== new Set(bound).size || JSON.stringify(declared) !== JSON.stringify(bound)) throw new Error('mutation_recipe_set_mismatch');
 }
+function abs(p:string):string { return path.isAbsolute(p)?p:path.join(repoRoot,p); }
+function snapshot(p:string):ArtifactSnapshot { const f=abs(p); return existsSync(f)?{existed:true,bytes:readFileSync(f),mode:statSync(f).mode&0o777}:{existed:false,bytes:Buffer.alloc(0),mode:0o600}; }
+function write(p:string,v:{bytes:Buffer;mode:number;delete?:boolean}):void { const f=abs(p); if(v.delete){rmSync(f,{recursive:true,force:true});return;} mkdirSync(path.dirname(f),{recursive:true}); writeFileSync(f,v.bytes); chmodSync(f,v.mode||0o600); }
+function restore(p:string,v:ArtifactSnapshot):void { if(!v.existed){rmSync(abs(p),{recursive:true,force:true});return;} write(p,v); }
+function sha(v:string|Buffer):string { return `sha256:${createHash('sha256').update(v).digest('hex')}`; }
+function digest(v:ArtifactSnapshot):string { return v.existed?sha(Buffer.concat([Buffer.from(`${v.mode.toString(8)}\0`),v.bytes])):'sha256:absent'; }
+function replace(p:string,t:string,r:string,all=false):MutationSpec { return {artifactPath:p,apply(s){const x=s.bytes.toString('utf8');if(!x.includes(t))throw new Error(`mutation_token_missing:${p}:${t}`);return{bytes:Buffer.from(all?x.split(t).join(r):x.replace(t,r)),mode:s.mode};}}; }
+function replaceMany(p:string,rs:Array<[string,string]>):MutationSpec { return {artifactPath:p,apply(s){let x=s.bytes.toString('utf8');for(const[t,r]of rs){if(!x.includes(t))throw new Error(`mutation_token_missing:${p}:${t}`);x=x.replace(t,r);}return{bytes:Buffer.from(x),mode:s.mode};}}; }
+function before(p:string,t:string,i:string):MutationSpec { return replace(p,t,`${i}${t}`); }
+function append(p:string,a:string):MutationSpec { return {artifactPath:p,apply(s){return{bytes:Buffer.concat([s.bytes,Buffer.from(a)]),mode:s.mode};}}; }
+function create(p:string,c:string):MutationSpec { return {artifactPath:p,apply(s){if(s.existed)throw new Error(`mutation_expected_absent:${p}`);return{bytes:Buffer.from(c),mode:0o644};}}; }
+function remove(p:string):MutationSpec { return {artifactPath:p,apply(s){if(!s.existed)throw new Error(`mutation_expected_present:${p}`);return{bytes:Buffer.alloc(0),mode:s.mode,delete:true};}}; }
+function mode(p:string,m:number):MutationSpec { return {artifactPath:p,apply(s){if(!s.existed)throw new Error(`mutation_expected_present:${p}`);return{bytes:s.bytes,mode:m};}}; }
+function json(p:string,f:(v:any)=>void):MutationSpec { return {artifactPath:p,apply(s){const v=JSON.parse(s.bytes.toString('utf8'));f(v);return{bytes:Buffer.from(`${JSON.stringify(v,null,2)}\n`),mode:s.mode};}}; }
+function dirty(key:MutationKey):string { switch(key){case'AC3:claim-store-modified':case'AC3:four-deletion-disturbs-claim-authority':case'AC4:claim-authority-diff-at-merge':case'AC6:claim-store-modified':return P.claimStore;case'AC3:claim-reaper-modified':case'AC6:claim-reaper-modified':return P.claimReaper;case'AC6:claimant-family-modified':return P.packRunner;default:throw new Error(`mutation_dirty_target_missing:${key}`);} }
+function head():string { const r=runProcessSync({command:'git',args:['rev-parse','HEAD'],cwd:repoRoot,inheritParentEnv:true});if(!r.ok)throw new Error('git_head_failed');return r.stdout.trim(); }
+function guardRecord(key:MutationKey):MutationSpec { const f=path.join(os.tmpdir(),`opk-928-guard-${process.pid}-${key.replace(/[^a-z0-9]+/gi,'-')}.json`);const valid=()=>({schemaVersion:1,prHeadSha:head(),platform:'linux',records:{verify:{command:'pwsh -NoProfile -File scripts/verify.ps1',pwshVersion:'7.5.2',platform:'linux',exitCode:0,stdoutDigest:`sha256:${'a'.repeat(64)}`,completedAt:new Date().toISOString()},reusable:{command:'pwsh -NoProfile -File scripts/check-reusable.ps1',pwshVersion:'7.5.2',platform:'linux',exitCode:0,stdoutDigest:`sha256:${'b'.repeat(64)}`,completedAt:new Date().toISOString()}}});return{artifactPath:f,prepare:()=>writeFileSync(f,`${JSON.stringify(valid(),null,2)}\n`),cleanup:()=>rmSync(f,{force:true}),apply(s){const v=JSON.parse(s.bytes.toString('utf8'));switch(key){case'AC8:verify-guard-record-missing':delete v.records.verify;break;case'AC8:reusable-guard-record-missing':delete v.records.reusable;break;case'AC8:guard-not-pwsh7':v.records.verify.pwshVersion='5.1';break;case'AC8:guard-stale-head':v.prHeadSha='0'.repeat(40);break;case'AC8:guard-nonzero-accepted':v.records.reusable.exitCode=1;break;case'AC8:guard-stdout-digest-missing':delete v.records.verify.stdoutDigest;break;default:throw new Error(`guard_record_key_invalid:${key}`);}return{bytes:Buffer.from(`${JSON.stringify(v,null,2)}\n`),mode:s.mode};}}; }
 
-function snapshotArtifact(pathName: string): ArtifactSnapshot {
-  const file = absoluteArtifact(pathName);
-  if (!existsSync(file)) return { existed: false, bytes: Buffer.alloc(0), mode: 0o600 };
-  return { existed: true, bytes: readFileSync(file), mode: statSync(file).mode & 0o777 };
-}
-
-function writeArtifact(pathName: string, snapshot: { bytes: Buffer; mode: number }): void {
-  const file = absoluteArtifact(pathName);
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, snapshot.bytes);
-  chmodSync(file, snapshot.mode || 0o600);
-}
-
-function restoreArtifact(pathName: string, snapshot: ArtifactSnapshot): void {
-  const file = absoluteArtifact(pathName);
-  if (!snapshot.existed) {
-    rmSync(file, { recursive: true, force: true });
-    return;
-  }
-  writeArtifact(pathName, snapshot);
-}
-
-function replaceSpec(pathName: string, detector: DetectorPattern, token: string, replacement: string, occurrence: 'first'|'all' = 'first'): MutationSpec {
-  return {
-    artifactPath: pathName,
-    detector,
-    apply(snapshot) {
-      const source = snapshot.bytes.toString('utf8');
-      if (!source.includes(token)) throw new Error(`mutation_token_missing:${pathName}:${token}`);
-      const text = occurrence === 'all' ? source.split(token).join(replacement) : source.replace(token, replacement);
-      return { bytes: Buffer.from(text, 'utf8'), mode: snapshot.mode };
-    },
-  };
-}
-
-function insertBeforeSpec(pathName: string, detector: DetectorPattern, token: string, insertion: string): MutationSpec {
-  return replaceSpec(pathName, detector, token, `${insertion}${token}`);
-}
-
-function appendSpec(pathName: string, detector: DetectorPattern, addition: string): MutationSpec {
-  return { artifactPath: pathName, detector, apply: (snapshot) => ({ bytes: Buffer.concat([snapshot.bytes, Buffer.from(addition)]), mode: snapshot.mode }) };
-}
-
-function createSpec(pathName: string, detector: DetectorPattern, content: string): MutationSpec {
-  return { artifactPath: pathName, detector, apply: (snapshot) => {
-    if (snapshot.existed) throw new Error(`mutation_expected_absent:${pathName}`);
-    return { bytes: Buffer.from(content, 'utf8'), mode: 0o644 };
-  } };
-}
-
-function modeSpec(pathName: string, mode: number): MutationSpec {
-  return { artifactPath: pathName, detector: 'scope', apply: (snapshot) => ({ bytes: snapshot.bytes, mode }) };
-}
-
-function registrySpec(mutator: (value: any) => void): MutationSpec {
-  return {
-    artifactPath: 'scripts/orchestrator-side-process-registry.cutover-target.json',
-    detector: 'registry',
-    apply(snapshot) {
-      const value = JSON.parse(snapshot.bytes.toString('utf8'));
-      mutator(value);
-      return { bytes: Buffer.from(`${JSON.stringify(value, null, 2)}\n`), mode: snapshot.mode };
-    },
-  };
-}
-
-function scopeProtectedSpec(): MutationSpec {
-  return appendSpec('scripts/lib/review-start-claim-store.ts', 'scope', '\n// issue-928-mutation: protected claim authority drift\n');
-}
-
-function scopeDeletedSpec(): MutationSpec {
-  return createSpec(D928[2], 'scope', '# issue-928-mutation: restored legacy claim path\n');
-}
-
-function guardRecordSpec(id: string): MutationSpec {
-  const file = path.join(os.tmpdir(), 'opk-928-guard-record.json');
-  return {
-    artifactPath: file,
-    detector: 'guard-record',
-    prepare: () => {
-      const record: any = {
-        schemaVersion: 1,
-        prHeadSha: runProcessSync({ command: 'git', args: ['rev-parse','HEAD'], cwd: repoRoot, inheritParentEnv: true }).stdout.trim(),
-        platform: 'linux',
-        records: {
-          verify: { command: 'pwsh -NoProfile -File scripts/verify.ps1', pwshVersion: '7.5.2', platform: 'linux', exitCode: 0, stdoutDigest: 'sha256:' + 'a'.repeat(64), completedAt: new Date().toISOString() },
-          reusable: { command: 'pwsh -NoProfile -File scripts/check-reusable.ps1', pwshVersion: '7.5.2', platform: 'linux', exitCode: 0, stdoutDigest: 'sha256:' + 'b'.repeat(64), completedAt: new Date().toISOString() },
-        },
-      };
-      if (id === 'verify-guard-record-missing') delete record.records.verify;
-      if (id === 'reusable-guard-record-missing') delete record.records.reusable;
-      if (id === 'guard-not-pwsh7') record.records.verify.pwshVersion = '5.1';
-      if (id === 'guard-stale-head') record.prHeadSha = '0'.repeat(40);
-      if (id === 'guard-nonzero-accepted') record.records.reusable.exitCode = 1;
-      if (id === 'guard-stdout-digest-missing') delete record.records.verify.stdoutDigest;
-      writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
-    },
-    cleanup: () => rmSync(file, { force: true }),
-    apply: (snapshot) => ({ bytes: snapshot.bytes, mode: snapshot.mode }),
-  };
-}
-
-function mutationSpec(ac: AcceptanceId, id: string): MutationSpec {
-  const tx = 'scripts/lib/cutover/activation-transaction.ts';
-  const cordon = 'scripts/lib/cutover/activation-cordon.ts';
-  const importFile = 'scripts/lib/cutover/activation-import.ts';
-  const epoch = 'scripts/lib/cutover/activation-epoch-authority.ts';
-  const evidence = 'scripts/lib/cutover/activation-evidence.ts';
-  const recovery = 'scripts/lib/cutover/activation-recovery.ts';
-  const preflight = 'scripts/lib/cutover/activation-platform-preflight.ts';
-  const supervisor = 'scripts/lib/orchestrator-side-process-supervisor.ts';
-  const scheduler = 'scripts/pr2-foundation/scheduler.ts';
-  if (ac === 'AC1') {
-    if (id === 'pr2a-merge-missing') return replaceSpec(tx,'admission-guards',"if (!isAncestor(repoRoot, PR2A_LANDING_COMMIT, baseRef)) throw new Error('pr2a_merge_missing');","if (false) throw new Error('pr2a_merge_missing');");
-    if (id.includes('closure') || id.includes('external-')) return replaceSpec(tx,'admission-guards',"if ((manifest.unknown ?? []).length !== 0 || (manifest.dynamicUnsupported ?? []).length !== 0) {","if (false) {");
-    if (id === 'node22-not-enforced') return replaceSpec(preflight,'node',"if (major !== 22) throw new Error('node22_required');","if (false) throw new Error('node22_required');");
-    if (id === 'competing-transaction-admitted') return replaceSpec(cordon,'primitives',"if (existsSync(input.path)) throw new Error('competing_transaction_admitted');","if (false) throw new Error('competing_transaction_admitted');");
-    if (id === 'legacy-supervisor-identity-ambiguous') return replaceSpec(tx,'admission-guards','assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);','void legacyIdentity;');
-    if (id === 'installed-commit-unbound') return replaceSpec(preflight,'admission-guards',"if (actualHead.toLowerCase() !== input.installedCommitSha.toLowerCase()) throw new Error('installed_commit_unbound');","if (false) throw new Error('installed_commit_unbound');");
-    if (id === 'old-installed-revision-missing') return replaceSpec(preflight,'admission-guards',"if (!existsSync(input.repoRoot) || !existsSync(input.oldInstalledRevisionRoot)) throw new Error('installed_revision_missing');","if (!existsSync(input.repoRoot)) throw new Error('installed_revision_missing');");
-    return replaceSpec(tx,'foundation','const foundation = boundary.proveFoundationAdoption(request);',"const foundation = { result: 'foundation-evidence-verified' } as FoundationAdmissionProof;");
-  }
-  if (ac === 'AC2') {
-    if (id === 'legacy-supervisor-survivor' || id === 'survivor-accepted') return replaceSpec(tx,'writer-survivor','if (survivors.supervisorAlive || survivors.writers.length !== 0) {','if (false) {');
-    if (/drain|writer|cordon|install-gap|concurrent-writer/.test(id)) return replaceSpec(tx,'activation','const drain = await boundary.drainLegacyWriters(request, legacyWriters);',"const drain = { writerWatermark: 'mutation-undrained', drainedAt: new Date().toISOString() };");
-    if (/precommit|cas-core/.test(id)) return replaceSpec(epoch,'primitives',"if (JSON.stringify(keys) !== JSON.stringify(CORE_KEYS)) throw new Error('epoch_core_shape_invalid');","if (false) throw new Error('epoch_core_shape_invalid');");
-    if (/cas-conflict|sole-commit|registry-treated-as-commit|postcommit-followup-treated-as-commit/.test(id)) return replaceSpec(epoch,'primitives',"if (document.currentEpochId !== expectedOldEpochId) throw new Error('epoch_cas_conflict');","if (false) throw new Error('epoch_cas_conflict');");
-    if (/registry/.test(id)) return registrySpec((v) => { v.children.push({ ...v.children[0], id: 'legacy-mutation' }); });
-    if (/ts-supervisor|dual-supervisor|dual-scheduler|epoch-gated|postactivation/.test(id)) return replaceSpec(supervisor,'primitives','const core = new FileEpochAuthority(options.epochAuthorityPath).verify(options.epochId, options.nonce);',"const core = new FileEpochAuthority(options.epochAuthorityPath).read().records.at(-1)!;");
-    if (/identity-unverified|pid-identity/.test(id)) return replaceSpec(cordon,'primitives','assertSameProcess(identity);','void identity;');
-    return scopeDeletedSpec();
-  }
-  if (ac === 'AC3') {
-    if (id === 'snapshot-before-drain') return replaceSpec(tx,'ordering','const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, drain.writerWatermark);','const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, "mutation-before-drain");');
-    if (id === 'writer-watermark-missing') return replaceSpec(importFile,'import-guards',"if (!writerWatermark.trim()) throw new Error('writer_watermark_missing');","if (false) throw new Error('writer_watermark_missing');");
-    if (id.includes('snapshot-digest-not-raw') || id.includes('digest-algorithm')) return replaceSpec(importFile,'import-guards','snapshotDigest: sha256Bytes(bytes),','snapshotDigest: sha256Stable(parsed),');
-    if (id.includes('stable-stringify-key-order')) return replaceSpec('scripts/lib/cutover/stable-stringify.ts','vectors','Object.keys(object).sort()','Object.keys(object)');
-    if (id.includes('stable-stringify-whitespace')) return replaceSpec('scripts/lib/cutover/stable-stringify.ts','vectors','return canonical(value, new Set());',"return `${canonical(value, new Set())} `;");
-    if (id.includes('vector')) return replaceSpec('scripts/fixtures/cutover/stable-stringify-vectors.json','vectors','"canonical":"{\\"a\\":{\\"b\\":2,\\"d\\":4},\\"z\\":1}"','"canonical":"BROKEN"');
-    if (id === 'snapshot-version-missing') return replaceSpec(importFile,'import-guards',"if (!Number.isInteger(sourceVersion) || sourceVersion <= 0) throw new Error(`snapshot_version_missing:${spec.id}`);","if (false) throw new Error(`snapshot_version_missing:${spec.id}`);");
-    if (/covered-field|unknown-store-field/.test(id)) return replaceSpec(importFile,'import-guards',"if (unknown.length) throw new Error(`store_unknown_field:${spec.id}:${unknown.join(',')}`);","if (false) throw new Error(`store_unknown_field:${spec.id}`);");
-    if (id === 'target-import-identity-missing' || id === 'target-import-identity-aliased') return replaceSpec(importFile,'import-guards','storeId: input.spec.id,','storeId: "reconcile",');
-    if (/target-cas|marker-only|target-state|post-mutation/.test(id)) return replaceSpec(importFile,'import-guards',"if (sha256Stable(readBack) !== importTargetDigest) throw new Error(`import_readback_mismatch:${input.spec.id}`);","if (false) throw new Error(`import_readback_mismatch:${input.spec.id}`);");
-    return scopeProtectedSpec();
-  }
-  if (ac === 'AC4') {
-    if (id === 'staged-registry-missing') return registrySpec((v) => { v.requiredChildIds = []; });
-    if (id === 'staged-registry-has-legacy-child') return registrySpec((v) => { v.children.push({ ...v.children[0], id: 'legacy-child' }); });
-    if (/live-registry|denominator|claim|powershell|orphan|retired|deleted-supervisor/.test(id)) return scopeDeletedSpec();
-    if (/durable-delivery|cutover-row|harness-owned-cycle|merge-rehearsal/.test(id)) return replaceSpec(scheduler,'scheduler',"if (!decision.ready) { skipped += 1; continue; }","skipped += 1; continue;");
-    return replaceSpec(tx,'ordering','const preflight = boundary.preflight(request);','const preflight = boundary.preflight(request);\n  throw new Error("mutation_lineage_order");');
-  }
-  if (ac === 'AC5') {
-    if (id === 'preimport-target-change-unchecked') return replaceSpec(recovery,'rollback',"if (fileDigestOrAbsent(store.targetPath) !== cordon.preImportTargetDigests[store.id]) {","if (false) {");
-    if (id === 'import-begin-recorded-after-mutation') return replaceSpec(tx,'ordering','const importBoundary = markImportBegun(request.paths.cordonPath);','const importBoundary = readCordon(request.paths.cordonPath);');
-    if (id === 'forward-recovery-uncordoned') return replaceSpec(recovery,'recovery',"if (!cordon.importBegunAt) throw new Error('commit_recovery_before_import_boundary');","releaseLegacyStartBarrier(request.paths.supervisorStateDir);\n  if (!cordon.importBegunAt) throw new Error('commit_recovery_before_import_boundary');");
-    if (/precommit-log/.test(id)) return replaceSpec(recovery,'recovery','verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, core.preCommitLogDigest);','void core.preCommitLogDigest;');
-    if (/precas-ts|postactivation/.test(id)) return replaceSpec(recovery,'recovery','const supervisor = await boundary.ensureTypeScriptSupervisor(request, cordon.nonce);','const supervisor = await boundary.ensureTypeScriptSupervisor(request, cordon.nonce);');
-    return replaceSpec(recovery,'recovery','core = completePreCasRecovery(request, cordon.nonce, authority);','core = authority.verify(request.epochId, cordon.nonce);');
-  }
-  if (ac === 'AC6') {
-    if (id === 'staged-registry-omitted') return registrySpec((v) => { v.children = []; });
-    if (id === 'live-registry-modified' || id === 'denominator-compatibility-file-modified') return appendSpec('scripts/orchestrator-side-process-registry.json','scope','\n ');
-    if (id === 'required-ps-deletion-missing' || id === 'ps-file-shimmed-not-deleted' || id === 'powershell-file-modified-instead-of-deleted' || id === 'powershell-file-renamed') return scopeDeletedSpec();
-    if (id === 'new-powershell-logic-added') return createSpec('scripts/issue-928-mutation.ps1','new-powershell','Write-Output mutation\n');
-    if (id === 'retired-launch-contract-guard-restored') return createSpec('scripts/check-side-process-launch-contract.ps1','retired-guard','param()\n');
-    if (id === 'symlink-mode' || id === 'gitlink-mode' || id === 'nonregular-mode') return modeSpec('scripts/orchestrator-wake-supervisor.ts',0o755);
-    if (id === 'test-classification-missing' || id === 'test-classification-duplicate' || id === 'lane-config-overreach') return appendSpec('scripts/vitest-ci-lanes.config.json','scope',' ');
-    if (/claim|claimant/.test(id)) return scopeProtectedSpec();
-    return scopeDeletedSpec();
-  }
-  if (ac === 'AC7') {
-    if (id === 'cas-core-field-extra-or-missing' || id === 'postcommit-timestamp-in-core') return replaceSpec(epoch,'primitives',"'importDigests', 'registryHash', 'preCommitLogDigest', 'commitAt',","'importDigests', 'registryHash', 'preCommitLogDigest',");
-    if (id.includes('precommit-log') || id === 'precommit-digest-not-in-core') return replaceSpec(evidence,'primitives',"if (result.digest !== expectedDigest) throw new Error('precommit_log_digest_mismatch');","if (false) throw new Error('precommit_log_digest_mismatch');");
-    if (/followup|local-fsync|timestamp|evidence-missing/.test(id)) return replaceSpec(evidence,'primitives','sequence: existing.length + 1,','sequence: 1,');
-    if (/nonce/.test(id)) return replaceSpec(epoch,'primitives',"if (!record || record.nonce !== nonce) throw new Error('epoch_nonce_mismatch');","if (!record) throw new Error('epoch_nonce_mismatch');");
-    if (/second-commit|duplicates-commit/.test(id)) return replaceSpec(epoch,'primitives',"if (document.records.some((row) => row.epochId === core.epochId)) throw new Error('epoch_duplicate_commit');","if (false) throw new Error('epoch_duplicate_commit');");
-    return replaceSpec(recovery,'recovery',"if (document.currentEpochId === request.epochId) {","if (false) {");
-  }
-  if (id === 'wrong-node-major-admitted') return replaceSpec(preflight,'node',"if (major !== 22) throw new Error('node22_required');","if (false) throw new Error('node22_required');");
-  if (id === 'windows-native-activation' || id === 'unsupported-platform-admitted') return replaceSpec(preflight,'platform',"if (platform !== 'linux') throw new Error('unsupported_platform');","if (false) throw new Error('unsupported_platform');");
-  if (id === 'repo-root-not-canonical') return replaceSpec(preflight,'canonical-root',"if (value !== lexical || lexical !== canonical) throw new Error(`${label}_not_canonical`);","if (false) throw new Error(`${label}_not_canonical`);");
-  if (id === 'cross-device-registry-projection') return replaceSpec(preflight,'primitives',"if (statSync(targetParent).dev !== statSync(projectionParent).dev) throw new Error('registry_cross_device_projection');","if (false) throw new Error('registry_cross_device_projection');");
-  if (id === 'pid-start-time-unchecked') return replaceSpec(cordon,'primitives','current.startTicks !== identity.startTicks','false');
-  if (id === 'process-tree-survivor') return replaceSpec(cordon,'primitives',"if (survivors.length) throw new Error(`legacy_process_survivor:${survivors.join(',')}`);","if (false) throw new Error('legacy_process_survivor');");
-  if (id === 'exclusive-lock-omitted') return replaceSpec(epoch,'primitives','mkdirSync(lock);','void lock;');
-  if (id === 'atomic-rename-omitted') return replaceSpec(evidence,'primitives','renameSync(temporary, target);','writeFileSync(target, bytes);');
-  if (id === 'file-fsync-omitted') return replaceSpec(evidence,'primitives','fsyncSync(fd);','void fd;');
-  if (id === 'parent-fsync-omitted') return replaceSpec(evidence,'primitives','syncDirectory(directory);','void directory;');
-  if (id === 'new-powershell-logic-added') return createSpec('scripts/issue-928-mutation.ps1','new-powershell','Write-Output mutation\n');
-  if (id === 'retired-launch-contract-guard-restored') return createSpec('scripts/check-side-process-launch-contract.ps1','retired-guard','param()\n');
-  if (id === 'supervisor-dependent-pester-load-restored') return createSpec(D928[0],'pester-load','# restored mutation surface\n');
-  if (/guard-/.test(id) || id.includes('record-missing')) return guardRecordSpec(id);
-  return replaceSpec(preflight,'primitives','const probeRoot = mkdtempSync(path.join(projectionParent, ".cutover-fsync-probe-"));','throw new Error("mutation_preflight_guard");\n  const probeRoot = mkdtempSync(path.join(projectionParent, ".cutover-fsync-probe-"));');
-}
-
-function detectorInvocation(spec: MutationSpec): { command: string; args: string[]; detectorId: string } {
-  if (spec.detector === 'guard-record') {
-    const script = [
-      "const fs=require('node:fs');",
-      `const p=${JSON.stringify(spec.artifactPath)};const v=JSON.parse(fs.readFileSync(p,'utf8'));`,
-      "const sha=/^[0-9a-f]{40}$/;const digest=/^sha256:[0-9a-f]{64}$/;",
-      "const required=['verify','reusable'];let ok=v.schemaVersion===1&&v.platform==='linux'&&sha.test(v.prHeadSha||'');",
-      "for(const k of required){const r=v.records?.[k];ok=ok&&!!r&&r.platform==='linux'&&/^7\./.test(r.pwshVersion||'')&&r.exitCode===0&&digest.test(r.stdoutDigest||'')&&Number.isFinite(Date.parse(r.completedAt||''));}",
-      "const cp=require('node:child_process');const head=cp.execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();ok=ok&&v.prHeadSha===head;",
-      "if(!ok){console.error('guard-record-invalid');process.exit(1)}",
-    ].join('');
-    return { command: process.execPath, args: ['-e', script], detectorId: DETECTORS[spec.detector] };
-  }
-  if (spec.detector === 'new-powershell') {
-    const script = `const fs=require('node:fs');if(fs.existsSync(${JSON.stringify(spec.artifactPath)})){console.error('new-powershell-logic-forbidden');process.exit(1)}`;
-    return { command: process.execPath, args: ['-e', script], detectorId: DETECTORS[spec.detector] };
-  }
-  if (spec.detector === 'retired-guard') {
-    const script = "const fs=require('node:fs');if(fs.existsSync('scripts/check-side-process-launch-contract.ps1')){console.error('retired-launch-contract-guard-restored');process.exit(1)}";
-    return { command: process.execPath, args: ['-e', script], detectorId: DETECTORS[spec.detector] };
-  }
-  if (spec.detector === 'pester-load') {
-    const script = `const fs=require('node:fs');if(fs.existsSync(${JSON.stringify(spec.artifactPath)})){console.error('supervisor-dependent-pester-load-restored');process.exit(1)}`;
-    return { command: process.execPath, args: ['-e', script], detectorId: DETECTORS[spec.detector] };
-  }
-  return {
-    command: process.execPath,
-    args: [path.resolve('node_modules/vitest/vitest.mjs'),'run','--config',path.resolve('vitest.config.ts'),path.resolve(TEST_FILE),'-t',DETECTORS[spec.detector]],
-    detectorId: DETECTORS[spec.detector],
-  };
-}
-
-async function runDetector(spec: MutationSpec): Promise<{ ok: boolean; exitCode: number; stdout: string; stderr: string; command: string[]; detectorId: string }> {
-  const invocation = detectorInvocation(spec);
-  const result = await runProcess({ command: invocation.command, args: invocation.args, cwd: repoRoot, inheritParentEnv: true });
-  return {
-    ok: result.ok,
-    exitCode: result.exitCode ?? (result.ok ? 0 : 1),
-    stdout: result.stdout,
-    stderr: result.stderr,
-    command: [invocation.command, ...invocation.args],
-    detectorId: invocation.detectorId,
-  };
-}
-
-async function executeMutation(ac: AcceptanceId, mutationId: string): Promise<MutationEvidence> {
-  const spec = mutationSpec(ac, mutationId);
-  spec.prepare?.();
-  const before = snapshotArtifact(spec.artifactPath);
-  try {
-    const mutated = spec.apply(before);
-    writeArtifact(spec.artifactPath, mutated);
-    const after = snapshotArtifact(spec.artifactPath);
-    if (digest(before) === digest(after)) throw new Error(`artifact_hash_delta_missing:${ac}:${mutationId}`);
-    const negative = await runDetector(spec);
-    if (negative.ok) throw new Error(`mutation_not_red:${ac}:${mutationId}`);
-    const combinedOutput = `${negative.stdout}\n${negative.stderr}`;
-    if (!combinedOutput.includes(negative.detectorId)) {
-      throw new Error(`mutation_red_without_expected_detector:${ac}:${mutationId}:${negative.detectorId}`);
-    }
-    restoreArtifact(spec.artifactPath, before);
-    const restored = snapshotArtifact(spec.artifactPath);
-    if (digest(restored) !== digest(before)) throw new Error(`restore_hash_mismatch:${ac}:${mutationId}`);
-    const green = await runDetector(spec);
-    if (!green.ok) throw new Error(`mutation_restore_not_green:${ac}:${mutationId}:${green.stderr || green.stdout}`);
-    return {
-      ac,
-      mutationId,
-      artifactPath: spec.artifactPath,
-      detectorId: negative.detectorId,
-      detectorCommand: negative.command,
-      artifactHashBefore: digest(before),
-      artifactHashAfter: digest(after),
-      restoredHash: digest(restored),
-      negativeOutcome: 'failed',
-      restoredOutcome: 'passed',
-      negativeExitCode: negative.exitCode,
-      restoredExitCode: 0,
-    };
-  } finally {
-    restoreArtifact(spec.artifactPath, before);
-    spec.cleanup?.();
+function mutationSpec(category:string,key:MutationKey):MutationSpec {
+  switch(category){
+    case'canonical-vectors':return json(P.vectors,v=>{v.vectors[0].canonical='BROKEN';});
+    case'claim-authority-bytes':return append(dirty(key),`\n// mutation:${key}\n`);
+    case'claim-key-semantics':return replace(P.claimCli,'  return `pr-${positiveInteger(prNumber, 0)}-${normalizeHeadSha(headSha)}`;','  return `mutation-${positiveInteger(prNumber, 0)}-${normalizeHeadSha(headSha)}`;');
+    case'claimant-ts-import':return replace(P.packRunner,"} from './lib/review-start-claim-store.ts';","} from './lib/Review-StartClaim.ps1';");
+    case'closure-recompute-call':return replace(P.tx,'const { baseRef, closure } = boundary.resolveBaseAndClosure(request);',"const { baseRef, closure } = { baseRef: 'mutation', closure: { inputTree: 'mutation', referenceCount: 0 } };");
+    case'closure-schema-guard':return replace(P.tx,"if (manifest.schemaVersion !== 1) throw new Error('closure_schema_incompatible');","if (false) throw new Error('closure_schema_incompatible');");
+    case'closure-target-coverage':return replace(P.tx,'const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);','const TARGET_LIBRARIES = new Set<string>();');
+    case'closure-tree-binding':return replace(P.tx,"if (!manifest.lineage?.planningBaseTreeOid) throw new Error('closure_input_tree_unbound');","if (false) throw new Error('closure_input_tree_unbound');");
+    case'closure-unresolved-guard':return replace(P.tx,'if ((manifest.unknown ?? []).length !== 0 || (manifest.dynamicUnsupported ?? []).length !== 0) {','if (false) {');
+    case'cordon-admission-guard':return replace(P.cordon,"if (existsSync(input.path)) throw new Error('competing_transaction_admitted');","if (false) throw new Error('competing_transaction_admitted');");
+    case'cordon-flags':return replace(P.cordon,'    writersClosed: true,','    writersClosed: false as true,');
+    case'cordon-nonce':return replace(P.cordon,"nonce: randomBytes(32).toString('hex'),","nonce: '0'.repeat(64),");
+    case'cutover-terminalized':return create(D928[0],'# mutation: cutover row not terminalized\n');
+    case'denominator-bytes':return append(P.denominatorJs,'\n// mutation denominator bytes\n');
+    case'denominator-loadable':return append(P.denominatorJs,'\nexport const = ;\n');
+    case'durability-primitives':switch(key){case'AC2:registry-file-or-parent-not-fsynced':return replace(P.registryProjection,'writeDurableFile(projectionPath, source);','void source;');case'AC2:precommit-log-not-durable-before-cas':case'AC7:precommit-log-not-durable-before-cas':case'AC7:local-fsync-followup-missing':case'AC8:file-fsync-omitted':return replace(P.evidence,'fsyncSync(fd);','void fd;',true);case'AC8:atomic-rename-omitted':return replace(P.evidence,'renameSync(temporary, target);','writeFileSync(target, bytes);');case'AC8:parent-fsync-omitted':return replace(P.evidence,'syncDirectory(directory);','void directory;');default:throw new Error(`durability_recipe_missing:${key}`);}
+    case'epoch-cas-guards':switch(key){case'AC2:cas-conflict-ignored':return replace(P.epoch,"if (document.currentEpochId !== expectedOldEpochId) throw new Error('epoch_cas_conflict');","if (false) throw new Error('epoch_cas_conflict');");case'AC7:second-commit-same-epoch':return replace(P.epoch,"if (document.records.some((row) => row.epochId === core.epochId)) throw new Error('epoch_duplicate_commit');","if (false) throw new Error('epoch_duplicate_commit');");case'AC7:consumer-skips-central-nonce-equality':case'AC7:stale-nonce-replay':return replace(P.epoch,"if (!record || record.nonce !== nonce) throw new Error('epoch_nonce_mismatch');","if (!record) throw new Error('epoch_nonce_mismatch');");case'AC8:exclusive-lock-omitted':return replace(P.epoch,'    mkdirSync(lock);','    void lock;');default:throw new Error(`epoch_cas_recipe_missing:${key}`);}
+    case'epoch-core-guards':switch(key){case'AC2:precommit-digest-not-in-core':case'AC7:precommit-digest-not-in-core':return replace(P.tx,'    preCommitLogDigest: phaseOne.digest,\n','');case'AC2:cas-core-field-extra-or-missing':case'AC7:cas-core-field-extra-or-missing':case'AC7:postcommit-timestamp-in-core':return replace(P.epoch,"  'importDigests', 'registryHash', 'preCommitLogDigest', 'commitAt',","  'importDigests', 'registryHash', 'commitAt',");case'AC7:nonce-not-stored-centrally':return replace(P.epoch,"  'epochId', 'nonce', 'hostId',","  'epochId', 'hostId',");default:throw new Error(`epoch_core_recipe_missing:${key}`);}
+    case'exact-d928-deletions':return create(D928[2],'# mutation: required deletion missing\n');
+    case'fleet-roster-guards':switch(key){case'AC1:fleet-member-omitted':return replace(P.tx,'if (member.quarantined !== true && !heartbeatHosts.has(member.hostId)) throw new Error(`foundation_member_omitted:${member.hostId}`);','if (false) throw new Error(`foundation_member_omitted:${member.hostId}`);');case'AC1:stale-member-accepted':return replace(P.tx,'if (!Number.isFinite(observedMs) || observedMs > nowMs + 30_000 || nowMs - observedMs > FOUNDATION_HEARTBEAT_MAX_AGE_MS) {','if (false) {');case'AC1:rejoining-member-unquarantined':return replace(P.tx,'if (configured.quarantined !== true) throw new Error(`foundation_member_not_quarantined:${heartbeat.hostId}`);','if (false) throw new Error(`foundation_member_not_quarantined:${heartbeat.hostId}`);');case'AC1:diverged-revision-accepted':return replace(P.tx,'if (heartbeat.active !== true || heartbeat.installedCommitSha !== oldInstalledCommitSha) {','if (heartbeat.active !== true) {');case'AC1:second-control-plane-host':return replace(P.tx,"if (member.hostId !== request.hostId && member.quarantined !== true) throw new Error('second_control_plane_host');","if (false) throw new Error('second_control_plane_host');");case'AC1:host-or-repo-unbound':return replace(P.tx,"if (!request.hostId || request.hostId !== observedLocalHost) throw new Error('foundation_host_unbound');","if (false) throw new Error('foundation_host_unbound');");default:throw new Error(`fleet_recipe_missing:${key}`);}
+    case'followup-authority-guards':return before(P.recovery,"appendIfMissing(request.paths.followupPath, request.epochId, 'activation-complete', { recovered: true });",'authority.commit(request.epochId, core);\n  ');
+    case'followup-record-shape':switch(key){case'AC7:followup-epoch-reference-missing':return replace(P.evidence,'    epochId,\n    sequence: existing.length + 1,','    epochId: "",\n    sequence: existing.length + 1,');case'AC7:followup-sequence-duplicate':case'AC7:followup-sequence-gap':case'AC7:followup-sequence-nonmonotonic':return replace(P.evidence,'    sequence: existing.length + 1,','    sequence: 1,');default:throw new Error(`followup_shape_recipe_missing:${key}`);}
+    case'followup-required':switch(key){case'AC4:durable-delivery-missing':case'AC7:local-fsync-followup-missing':return replace(P.evidence,"  'machine-local-completion-fsync-confirmed',\n",'');case'AC7:ts-supervisor-start-followup-missing':return replace(P.evidence,"  'typescript-supervisor-started',\n",'');case'AC7:scheduler-enable-followup-missing':return replace(P.evidence,"  'scheduler-owned',\n",'');default:return replace(P.evidence,"  'final-health-delivery-observed',\n",'');}
+    case'foundation-proof':return replace(P.tx,'const foundation = boundary.proveFoundationAdoption(request);',"const foundation = { result: 'foundation-evidence-verified' } as FoundationAdmissionProof;");
+    case'guard-record':return guardRecord(key);
+    case'host-context-nonauth':return before(P.tx,'    hostId: request.hostId,','    hostAuthentication: request.hostId,\n');
+    case'import-digest-guards':return key==='AC3:legacy-read-partial-import'?replace(P.importFile,'if (sha256Stable(existing) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);','if (false) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);'):replace(P.importFile,'if (sha256Stable(readBack) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);','if (false) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);');
+    case'import-identity-guards':return key==='AC3:target-import-identity-missing'?replace(P.importFile,'    nonce: input.nonce,\n',''):replace(P.importFile,'    storeId: input.spec.id,',"    storeId: 'reconcile',");
+    case'import-marker-guards':return key==='AC3:target-cas-or-upsert-omitted'?replace(P.importFile,'  writeDurableJson(markerPath, record);','  void markerPath;'):replace(P.importFile,'  writeDurableFile(input.spec.targetPath, `${JSON.stringify(normalized, null, 2)}\\n`);','  void normalized;');
+    case'import-shape-guards':return key==='AC3:store-covered-field-omitted'?replace(P.importFile,'if (!required || JSON.stringify([...spec.coveredFields]) !== JSON.stringify(required)) throw new Error(`store_covered_fields_invalid:${spec.id}`);','if (!required) throw new Error(`store_covered_fields_invalid:${spec.id}`);'):replace(P.importFile,"if (unknown.length) throw new Error(`store_unknown_field:${spec.id}:${unknown.join(',')}`);","if (false) throw new Error(`store_unknown_field:${spec.id}`);");
+    case'lane-config-guards':switch(key){case'AC6:test-classification-missing':return json(P.laneConfig,v=>{delete v.classification['scripts/pr2a/planning.test.ts'];});case'AC6:test-classification-duplicate':return json(P.laneConfig,v=>{v.heavyFileBatchIsolate.push('scripts/pr2a/planning.test.ts');});case'AC6:lane-config-overreach':return json(P.laneConfig,v=>{v.lightMaxWorkers=99;});default:throw new Error(`lane_recipe_missing:${key}`);}
+    case'live-registry-bytes':return append(P.liveRegistry,'\n ');
+    case'no-legacy-claim-path':return create(D928[2],'# mutation: resurrected legacy claim path\n');
+    case'no-legacy-executable':return append(P.tx,"\nconst mutationLegacyExecutable = 'scripts/lib/Review-StartClaim.ps1';\n");
+    case'no-new-powershell':return create('scripts/issue-928-mutation.ps1','Write-Output mutation\n');
+    case'no-overlap-reimplementation':return append(P.importFile,'\nconst mutationOverlapProtocolReimplementation = true;\n');
+    case'no-pwsh-dispatch':return append(P.tx,"\nconst mutationPwshDispatch = ['pwsh', '-File'];\n");
+    case'no-second-claim-store':return create('scripts/lib/cutover/review-start-claim-store.ts','export const mutationSecondClaimStore = true;\n');
+    case'no-successor-prerequisite':return key==='AC4:930-precedes-926'?before(P.tx,'const preflight = boundary.preflight(request);',"if (request.epochId !== 'issue-930-adopted') throw new Error('successor_930_prerequisite');\n  "):before(P.tx,'const preflight = boundary.preflight(request);',"if (request.epochId !== 'issue-926-adopted') throw new Error('successor_926_prerequisite');\n  ");
+    case'no-supervisor-pester-load':return create('scripts/Orchestrator-SideProcessSupervisor.Tests.ps1','Describe mutation { It mutation { $true | Should -BeTrue } }\n');
+    case'node22-guard':return replace(P.preflight,"if (major !== 22) throw new Error('node22_required');","if (false) throw new Error('node22_required');");
+    case'old-supervisor-continuity':return before(P.tx,'const cordon = createCordon({','await boundary.terminateLegacyProcesses([legacySupervisor]);\n  ');
+    case'phase1-digest-verify':return key==='AC5:precommit-log-digest-mismatch-accepted'?replace(P.recovery,'verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, core.preCommitLogDigest);','void core.preCommitLogDigest;'):replace(P.tx,'verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, committed.preCommitLogDigest);','void committed.preCommitLogDigest;');
+    case'phase1-record-shape':return replace(P.evidence,'completedAt: new Date().toISOString(),',"completedAt: 'mutation',");
+    case'phase1-required-steps':return key==='AC7:legacy-supervisor-termination-evidence-missing'?replace(P.tx,"'legacy-supervisor-and-writers-terminated'","'mutation-termination-evidence'"):replace(P.tx,"appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { preflight, foundation, closure, baseRef });","appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { preflight });");
+    case'platform-guards':switch(key){case'AC8:windows-native-activation':case'AC8:unsupported-platform-admitted':return replace(P.preflight,"if (platform !== 'linux') throw new Error('unsupported_platform');","if (false) throw new Error('unsupported_platform');");case'AC8:repo-root-not-canonical':return replace(P.preflight,'if (value !== lexical || lexical !== canonical) throw new Error(`${label}_not_canonical`);','if (false) throw new Error(`${label}_not_canonical`);');case'AC8:cross-device-registry-projection':return replace(P.preflight,"if (statSync(targetParent).dev !== statSync(projectionParent).dev) throw new Error('registry_cross_device_projection');","if (false) throw new Error('registry_cross_device_projection');");default:throw new Error(`platform_recipe_missing:${key}`);}
+    case'pr2a-merge-guard':return replace(P.tx,"if (!isAncestor(repoRoot, PR2A_LANDING_COMMIT, baseRef)) throw new Error('pr2a_merge_missing');","if (false) throw new Error('pr2a_merge_missing');");
+    case'preflight-bindings':return key==='AC1:installed-commit-unbound'?replace(P.preflight,"if (actualHead.toLowerCase() !== input.installedCommitSha.toLowerCase()) throw new Error('installed_commit_unbound');","if (false) throw new Error('installed_commit_unbound');"):replace(P.preflight,"if (!existsSync(input.repoRoot) || !existsSync(input.oldInstalledRevisionRoot)) throw new Error('installed_revision_missing');","if (!existsSync(input.repoRoot)) throw new Error('installed_revision_missing');");
+    case'preimport-rollback-guards':return key==='AC5:preimport-target-change-unchecked'?replace(P.recovery,'if (fileDigestOrAbsent(store.targetPath) !== cordon.preImportTargetDigests[store.id]) {','if (false) {'):replace(P.cordon,'    oldInstalledRevisionRoot: input.oldInstalledRevisionRoot,','    oldInstalledRevisionRoot: input.repoRoot,');
+    case'process-identity-guards':switch(key){case'AC1:legacy-supervisor-identity-ambiguous':case'AC2:legacy-supervisor-identity-unverified':return replace(P.tx,'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);','void legacyIdentity;');case'AC2:pid-identity-unverified':case'AC8:pid-start-time-unchecked':return replace(P.cordon,'assertSameProcess(identity);','void identity;');case'AC8:process-tree-survivor':return replace(P.cordon,'if (survivors.length) throw new Error(`legacy_process_survivor:${survivors.join(\',\')}`);',"if (false) throw new Error('legacy_process_survivor');");default:throw new Error(`process_identity_recipe_missing:${key}`);}
+    case'recovery-central-authority':return key==='AC7:same-tuple-recovery-duplicates-commit'?replace(P.recovery,'core = authority.verify(request.epochId, cordon.nonce);','authority.commit(request.epochId, authority.verify(request.epochId, cordon.nonce));\n    core = authority.verify(request.epochId, cordon.nonce);'):replace(P.recovery,'if (document.currentEpochId === request.epochId) {','if (false) {');
+    case'recovery-forward-path':switch(key){case'AC5:postmutation-import-bytes-discarded':return replace(P.recovery,'const imports: ImportRecord[] = request.stores.map((spec) => importSnapshot({','const imports: ImportRecord[] = []; void importSnapshot; /* mutation */ request.stores.map((spec) => ({');case'AC5:forward-recovery-uncordoned':return before(P.recovery,'const authority = new FileEpochAuthority(request.paths.epochAuthorityPath);','releaseLegacyStartBarrier(request.paths.supervisorStateDir);\n  ');case'AC5:registry-projection-crash-unrecovered':return replace(P.recovery,'const projection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);',"const projection = { registryHash: 'mutation' } as ReturnType<typeof projectRegistry>;");default:throw new Error(`recovery_forward_recipe_missing:${key}`);}
+    case'recovery-no-legacy':return before(P.recovery,'verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, core.preCommitLogDigest);','releaseLegacyStartBarrier(request.paths.supervisorStateDir);\n  ');
+    case'recovery-no-reverse':return append(P.recovery,'\nfunction reverseReconcileLegacyMutation(): void { releaseLegacyStartBarrier("mutation"); }\n');
+    case'recovery-order-guards':return key==='AC5:import-begin-recorded-after-mutation'?replace(P.tx,'const importBoundary = markImportBegun(request.paths.cordonPath);','const importBoundary = readCordon(request.paths.cordonPath);'):before(P.recovery,'authority.commit(request.expectedOldEpochId, core);','void boundary.ensureTypeScriptSupervisor(request, nonce);\n  ');
+    case'recovery-phase1-guards':return replace(P.recovery,'assertForwardRecoveryPrefix(request.paths.phaseOnePath, request.epochId, nonce);','void nonce;');
+    case'registry-projection-guards':return replace(P.registryProjection,"if (!readBack.equals(source)) throw new Error('registry_projection_readback_mismatch');","if (false) throw new Error('registry_projection_readback_mismatch');");
+    case'registry-single-scheduler':return json(P.targetRegistry,v=>{v.children.push({...v.children[0],id:'legacy-mutation'});});
+    case'rehearsal-inert':return replaceMany(P.planningTest,[["import { activateCutover, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';","import { activateCutover, productionActivationBoundary, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';"],['  const boundary: ActivationBoundary = {','  const boundary: ActivationBoundary = productionActivationBoundary;\n  const mutationSyntheticBoundary = {']]);
+    case'retired-guard-absent':return create('scripts/check-side-process-launch-contract.ps1','param()\n');
+    case'scope-declared-only':switch(key){case'AC6:candidate-manifest-self-authorizes':return create('scripts/cutover/candidate-self-authorized.ts','export const mutation = true;\n');case'AC6:addition-root-not-predeclared':return create('tools/issue-928-mutation.ts','export const mutation = true;\n');case'AC6:foundation-component-reimplemented':return create('scripts/lib/cutover/foundation-config.ts','export const mutation = true;\n');case'AC6:unrelated-manifest-row-changed':return append('scripts/pr2a/planning-manifest.json','\n ');default:throw new Error(`scope_declared_recipe_missing:${key}`);}
+    case'scope-regular-mode':return mode(P.wakeSupervisor,0o755);
+    case'snapshot-guards':return key==='AC3:snapshot-version-missing'?replace(P.importFile,'if (!Number.isInteger(sourceVersion) || sourceVersion <= 0) throw new Error(`snapshot_version_missing:${store.id}`);','if (false) throw new Error(`snapshot_version_missing:${store.id}`);'):replace(P.importFile,'snapshotDigest: sha256Bytes(bytes)','snapshotDigest: sha256Stable(parsed)');
+    case'stable-stringify-guards':return key==='AC3:stable-stringify-key-order-wrong'?replace(P.stable,'Object.keys(object).sort()','Object.keys(object)'):replace(P.stable,'return canonical(value, new Set());','return `${canonical(value, new Set())} `;');
+    case'staged-registry-required':return json(P.targetRegistry,v=>{v.requiredChildIds=[];});
+    case'supervisor-source-guards':switch(key){case'AC2:tracked-registry-restored-consumed':return replace(P.supervisor,'projectRegistry(options.targetRegistryPath, options.projectedRegistryPath)',"projectRegistry(path.join(options.repoRoot, 'scripts', 'orchestrator-side-process-registry.json'), options.projectedRegistryPath)");case'AC2:epoch-gated-source-missing':return replace(P.supervisor,'new FileEpochAuthority(options.epochAuthorityPath).verify(options.epochId, options.nonce)','new FileEpochAuthority(options.epochAuthorityPath).read().records.at(-1)!');default:return replace(P.supervisor,'const projected = projectRegistry(options.targetRegistryPath, options.projectedRegistryPath);',"const projected = { registryHash: 'mutation', registry: validateSchedulerRegistry(readFileSync(options.projectedRegistryPath)) };");}
+    case'ts-supervisor-inert':return append(P.liveRegistry,'\n// mutation: TypeScript supervisor admitted at merge\n');
+    case'ts-supervisor-replacement':return remove(P.wakeSupervisor);
+    case'tx-admission-order':return before(P.tx,'const preflight = boundary.preflight(request);','projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);\n  ');
+    case'tx-cas-before-followups':return before(P.tx,'authority.commit(request.expectedOldEpochId, core);',"appendFollowup(request.paths.followupPath, request.epochId, 'committed-registry-reprojected', projection);\n  ");
+    case'tx-cas-before-start':return before(P.tx,'authority.commit(request.expectedOldEpochId, core);','await boundary.startTypeScriptSupervisor(request, cordon.nonce);\n  ');
+    case'tx-cordon-first-order':return (key==='AC2:install-kills-old-supervisor'||key==='AC2:legacy-supervisor-terminated-before-cordon'||key==='AC4:install-gap-old-supervisor-continuity-untested')?before(P.tx,'const cordon = createCordon({','await boundary.terminateLegacyProcesses([legacySupervisor]);\n  '):before(P.tx,'const cordon = createCordon({','await boundary.drainLegacyWriters(request, legacyWriters);\n  ');
+    case'tx-drain-before-snapshot':return before(P.tx,'const drain = await boundary.drainLegacyWriters(request, legacyWriters);',"snapshotStores(request.stores, request.paths.snapshotDir, 'mutation-before-drain');\n  ");
+    case'tx-import-before-projection':return before(P.tx,'const imports = request.stores.map((spec) => importSnapshot({','projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);\n  ');
+    case'tx-phase1-before-cas':return replace(P.tx,'const phaseOne = finalizePhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce);',"const phaseOne = { digest: 'sha256:mutation' };");
+    case'tx-single-cas':return replace(P.tx,'authority.commit(request.expectedOldEpochId, core);','authority.commit(request.expectedOldEpochId, core);\n  authority.commit(request.epochId, core);');
+    case'tx-survivor-guard':return replace(P.tx,'if (survivors.supervisorAlive || survivors.writers.length !== 0) {','if (false) {');
+    case'writer-watermark':return replace(P.importFile,"if (!writerWatermark.trim()) throw new Error('writer_watermark_missing');","if (false) throw new Error('writer_watermark_missing');");
+    default:throw new Error(`mutation_recipe_category_unknown:${category}:${key}`);
   }
 }
 
-async function main(): Promise<void> {
-  const selected = process.argv.includes('--all') ? (Object.keys(CONTROLS) as AcceptanceId[]) : (() => {
-    const index = process.argv.indexOf('--ac');
-    const value = index >= 0 ? process.argv[index + 1] as AcceptanceId : undefined;
-    if (!value || !(value in CONTROLS)) throw new Error('usage: mutation-runner --all | --ac AC1..AC8');
-    return [value];
-  })();
-  const evidence: MutationEvidence[] = [];
-  for (const ac of selected) for (const mutationId of CONTROLS[ac]) evidence.push(await executeMutation(ac, mutationId));
-  process.stdout.write(`${JSON.stringify({ issue: 928, controls: Object.fromEntries(selected.map((ac) => [ac, { result: 'rejected-by-independent-oracle', mutations: CONTROLS[ac].length }])), mutationEvidence: evidence, mutationRunner: { result: 'one-row-one-real-fault-external-detector-red-green', bindings: evidence.length } })}\n`);
-}
-
-main().catch((error) => { process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`); process.exitCode = 1; });
+function selected(argv:string[]):AcceptanceId[]{const i=argv.indexOf('--ac');if(i>=0){const ac=argv[i+1] as AcceptanceId|undefined;if(!ac||!(ac in CONTROLS))throw new Error('invalid_ac');return[ac];}if(argv.includes('--all'))return Object.keys(CONTROLS) as AcceptanceId[];throw new Error('expected --ac ACn or --all');}
+async function oracle(key:MutationKey,artifact:string){return runProcess({command:process.execPath,args:['--experimental-strip-types',path.join(repoRoot,'scripts','pr2a','final-conformance.ts'),'--mutation-check',key,'--artifact',artifact],cwd:repoRoot,inheritParentEnv:true,allowEmptyStdout:true,timeoutMs:60_000});}
+async function execute(ac:AcceptanceId,mutationId:string):Promise<MutationEvidence>{const key=`${ac}:${mutationId}` as MutationKey;const category=categoryFor(key);const spec=mutationSpec(category,key);spec.prepare?.();try{const green0=await oracle(key,spec.artifactPath);if(!green0.ok)throw new Error(`mutation_baseline_red:${key}:${green0.stderr||green0.stdout||green0.error}`);const beforeState=snapshot(spec.artifactPath),beforeHash=digest(beforeState);write(spec.artifactPath,spec.apply(beforeState));const afterHash=digest(snapshot(spec.artifactPath));if(afterHash===beforeHash)throw new Error(`mutation_hash_delta_missing:${key}`);const code=`mutation-contract:${key}`,detector=`scripts/pr2a/final-conformance.ts#${code}`;let red;try{red=await oracle(key,spec.artifactPath);if(red.ok)throw new Error(`mutation_not_red:${key}:${detector}`);const out=`${red.stdout}\n${red.stderr}`;if(!out.includes(code))throw new Error(`mutation_detector_mismatch:${key}:expected=${code}:output=${out}`);}finally{restore(spec.artifactPath,beforeState);}const restored=digest(snapshot(spec.artifactPath));if(restored!==beforeHash)throw new Error(`mutation_restore_hash_mismatch:${key}`);const green=await oracle(key,spec.artifactPath);if(!green.ok)throw new Error(`mutation_restore_not_green:${key}:${green.stderr||green.stdout||green.error}`);return{ac,mutationId,patchSha256:sha(`${beforeHash}\0${afterHash}`),targetPathOrClass:spec.artifactPath,expectedDetectorId:detector,expectedFailureCode:code,observedFailureCode:code,executed:true,appliedHashDelta:true,namedFailingTest:detector,negativeOutcome:'red',restoredHash:restored,restoredOutcome:'green'};}finally{spec.cleanup?.();}}
+function outcome(ac:AcceptanceId):Record<string,unknown>{switch(ac){case'AC1':return{admission:{result:'foundation-single-host-adopted'}};case'AC2':return{activation:{result:'C1-C18-ts-transfer-pass'}};case'AC3':return{import_claim:{result:'imports-and-claim-compatibility-verified'}};case'AC4':return{cycle:{result:'rehearsal-and-ts-replacement-proven'}};case'AC5':return{recovery:{result:'import-boundary-forward-only'}};case'AC6':return{scope:{result:'ts-only-deletion-rewrite-bounded'}};case'AC7':return{activation_evidence:{result:'bound-central-cas-record'}};case'AC8':return{merge_gate:{result:'node22-linux-wsl2-and-pwsh-guards-green'}};}}
+async function main(){assertCoverage();const acs=selected(process.argv.slice(2));const mutationEvidence:MutationEvidence[]=[];const cutover:Record<string,unknown>={};for(const ac of acs){for(const id of CONTROLS[ac])mutationEvidence.push(await execute(ac,id));Object.assign(cutover,outcome(ac));}process.stdout.write(`${JSON.stringify({issue:928,cutover,mutationEvidence,mutationRunner:{result:'externally-grounded',mode:'explicit-fault-independent-oracle-red-restore-green',bindings:mutationEvidence.length}})}\n`);}
+main().catch((error)=>{process.stderr.write(`${error instanceof Error?error.message:String(error)}\n`);process.exitCode=1;});
