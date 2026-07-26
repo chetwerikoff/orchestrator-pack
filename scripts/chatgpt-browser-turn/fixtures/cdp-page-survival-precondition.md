@@ -16,7 +16,7 @@ Against the dedicated automation profile on `http://127.0.0.1:9222`:
 
 1. Note CDP target count.
 2. Run a successful `--new-chat` turn via `npm run chatgpt-browser-turn`.
-3. Confirm the turn process exits within seconds of the result line in `--output`.
+3. Confirm the turn process exits unaided (foreground exit code 0 without SIGTERM) after the result line is written to `--output`; wall time between the result line and process exit was not instrumented.
 4. Confirm CDP target count returns to the starting value (owned helper tab closed).
 5. For possible-delivery retention, confirm a retained recovery tab remains reachable in the operator browser after the process exits.
 

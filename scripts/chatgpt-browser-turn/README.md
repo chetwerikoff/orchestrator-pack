@@ -76,7 +76,7 @@ Each `turn` invocation connects to the operator's already-running Chrome over CD
 
 Releasing the CDP client disconnects Playwright from the operator's Chrome; it does not terminate the browser process. Possible-delivery recovery therefore depends on adopted-context tabs surviving client disconnect — see `fixtures/cdp-page-survival-precondition.md` for the live observation record.
 
-`status/list` and `clear` profile-wall probes also release their short-lived CDP connections before returning.
+`clear` performs a live profile-wall readiness probe when the target incident is a profile wall; that probe connects over CDP and releases its short-lived connection before returning. `status/list` does not connect to Chrome.
 
 `status/list`, `clear`, and `capability` write `control-result/v1`. `publication-status` writes `publication-status/v1`. These envelopes are body-free: they may contain identifiers, paths, generations, hashes, byte lengths, timestamps, and causes, but never prompt or reply bodies.
 
