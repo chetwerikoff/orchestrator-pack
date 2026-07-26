@@ -14,7 +14,16 @@ import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { destinationIdentityForPath } from '../chatgpt-browser-turn/coordination.ts';
 import { publicationStatus, publishReply } from '../chatgpt-browser-turn/publication.ts';
-import { adjudicateTombstone, quarantineOpaque, statusList } from '../chatgpt-browser-turn/state.ts';
+import { runtimeCapabilityBinding } from '../chatgpt-browser-turn/runtime-binding.ts';
+import {
+  adjudicateTombstone,
+  applyCapabilityAfterSuccessfulTurn,
+  capabilityStatus,
+  downgradeCapability,
+  quarantineOpaque,
+  statusList,
+  writeCapability,
+} from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import { classifyProductWall, productStatusText } from '../chatgpt-browser-turn/ui-adapter.ts';
 
@@ -293,5 +302,94 @@ describe('pack review 4774405996 adjudication crash recovery', () => {
     ).state).toBe('cleared');
     expect(statusList(profileKey).state).toBe('none');
     expect(readFileSync(join(d.resolved, `${tombstone.identity}.opaque`))).toEqual(bytes);
+  });
+});
+
+describe('issue 1008 capability self-arm race safety', () => {
+  function completion(binding: ReturnType<typeof runtimeCapabilityBinding>, evidence: string, browser = 'Chromium test') {
+    return {
+      expectedBinding: binding,
+      browserProvenance: browser,
+      evidenceDigest: sha256(evidence),
+      witnessed: true,
+    };
+  }
+
+  it('ignores a stale operator gate export while a serialized no-evidence turn self-arms', () => {
+    const staleGateEnv = ['CHATGPT', 'BROWSER', 'TURN', 'GATE', 'B', 'DIGEST'].join('_');
+    process.env[staleGateEnv] = 'definitely-wrong';
+    try {
+      const binding = runtimeCapabilityBinding(profileKey, cdp);
+      expect(capabilityStatus(profileKey, binding).state).toBe('no_evidence');
+      const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'wrong-export-ignored'));
+      expect(outcome.applied).toBe(true);
+      expect(capabilityStatus(profileKey, binding).state).toBe('ok');
+    } finally {
+      delete process.env[staleGateEnv];
+    }
+  });
+
+  it('does not let a parallel completion resurrect a newer downgrade', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    const now = Date.now();
+    writeCapability(profileKey, {
+      ...binding,
+      browser_provenance: 'Chromium test',
+      evidence_digest: sha256('parallel-admission'),
+      observed_at: new Date(now - 1_000).toISOString(),
+      expires_at: new Date(now + 60_000).toISOString(),
+      downgrade_generation: 0,
+      parallel_eligible: true,
+    });
+    const admitted = capabilityStatus(profileKey, binding);
+    expect(admitted.state).toBe('ok');
+
+    writeCapability(profileKey, {
+      ...binding,
+      browser_provenance: 'Chromium test',
+      evidence_digest: sha256('newer-downgrade'),
+      observed_at: admitted.capability!.observed_at,
+      expires_at: admitted.capability!.expires_at,
+      downgrade_generation: 1,
+      parallel_eligible: false,
+    });
+
+    const outcome = applyCapabilityAfterSuccessfulTurn(
+      profileKey,
+      completion(binding, 'stale-parallel-completion'),
+    );
+    expect(outcome.applied).toBe(false);
+    expect(outcome.reason).toBe('not_eligible');
+    const current = capabilityStatus(profileKey, binding);
+    expect(current.state).toBe('downgraded');
+    expect(current.capability?.downgrade_generation).toBe(1);
+  });
+
+  it('arms exactly once after this invocation downgrades and switches to serialized scope', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    const now = Date.now();
+    writeCapability(profileKey, {
+      ...binding,
+      browser_provenance: 'old-browser',
+      evidence_digest: sha256('old-browser-evidence'),
+      observed_at: new Date(now - 1_000).toISOString(),
+      expires_at: new Date(now + 60_000).toISOString(),
+      downgrade_generation: 0,
+      parallel_eligible: true,
+    });
+    expect(capabilityStatus(profileKey, binding).state).toBe('ok');
+    downgradeCapability(profileKey);
+    expect(capabilityStatus(profileKey, binding).state).toBe('downgraded');
+
+    const outcome = applyCapabilityAfterSuccessfulTurn(
+      profileKey,
+      completion(binding, 'serialized-new-browser', 'new-browser'),
+    );
+    expect(outcome.applied).toBe(true);
+    const armed = capabilityStatus(profileKey, binding);
+    expect(armed.state).toBe('ok');
+    expect(armed.capability?.browser_provenance).toBe('new-browser');
+    expect(armed.capability?.downgrade_generation).toBe(2);
+    expect(armed.capability?.parallel_eligible).toBe(true);
   });
 });
