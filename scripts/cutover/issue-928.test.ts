@@ -276,7 +276,8 @@ describe('[AC8] platform and canonical bytes', () => {
 
   it('rejects a non-canonical repository root instead of normalizing it', () => {
     const { request } = activationFixture();
-    const nonCanonical = path.join(repoRoot, '..', path.basename(repoRoot));
+    const nonCanonical = `${repoRoot}${path.sep}..${path.sep}${path.basename(repoRoot)}`;
+    expect(path.normalize(nonCanonical)).toBe(repoRoot);
     expect(nonCanonical).not.toBe(repoRoot);
     expect(() => runActivationPlatformPreflight({
       repoRoot: nonCanonical,
