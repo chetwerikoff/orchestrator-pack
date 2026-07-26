@@ -42,6 +42,7 @@ export function importSnapshot(input: {
   spec: CutoverStoreSpec;
   snapshot: SnapshotRecord;
 }): ImportRecord {
+  if (input.snapshot.storeId !== input.spec.id) throw new Error(`snapshot_store_mismatch:${input.spec.id}`);
   const raw = readFileSync(input.snapshot.snapshotPath);
   if (sha256Bytes(raw) !== input.snapshot.snapshotDigest) throw new Error(`snapshot_digest_mismatch:${input.spec.id}`);
   const normalized = normalizedPayload(input.spec, raw);
@@ -66,7 +67,7 @@ export function importSnapshot(input: {
   const readBack = normalizedPayload(input.spec, readFileSync(input.spec.targetPath));
   if (sha256Stable(readBack) !== importTargetDigest) throw new Error(`import_target_digest_mismatch:${input.spec.id}`);
   const record: ImportRecord = {
-    storeId: input.spec.id,
+    storeId: input.snapshot.storeId,
     importIdentity,
     snapshotDigest: input.snapshot.snapshotDigest,
     importTargetDigest,
