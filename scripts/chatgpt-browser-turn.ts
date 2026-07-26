@@ -28,12 +28,12 @@ import {
   capabilityStatus,
   clearReadable,
   deleteIncident,
+  applyCapabilityAfterSuccessfulTurn,
   downgradeCapability,
   listReadableIncidents,
   quarantineOpaque,
   statusList,
   updateIncident,
-  writeCapability,
   writeIncident,
 } from './chatgpt-browser-turn/state.ts';
 import { configuredProfileKey, sha256 } from './chatgpt-browser-turn/storage-common.ts';
@@ -592,19 +592,20 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     safeReleaseDestination(reservation);
     reservation = null;
 
-    const gateEvidence = process.env.CHATGPT_BROWSER_TURN_GATE_B_DIGEST;
-    if (capability.state !== 'ok' && witnessSurface && gateEvidence === expectedBinding.gate_digest) {
-      const priorGeneration = capability.capability?.downgrade_generation ?? 0;
-      const observedAt = new Date();
-      writeCapability(profileKey, {
-        ...expectedBinding,
-        browser_provenance: browserProvenance,
-        evidence_digest: sha256(`${result.userMessageId}\n${result.assistantMessageId}\n${canonicalConversation}`),
-        observed_at: observedAt.toISOString(),
-        expires_at: new Date(observedAt.getTime() + 4 * 60 * 60 * 1000).toISOString(),
-        downgrade_generation: priorGeneration + 1,
-        parallel_eligible: true,
-      });
+    const capabilityOutcome = applyCapabilityAfterSuccessfulTurn(profileKey, {
+      expectedBinding,
+      browserProvenance,
+      evidenceDigest: sha256(`${result.userMessageId}\n${result.assistantMessageId}\n${canonicalConversation}`),
+      witnessed: witnessSurface,
+    });
+    if (!capabilityOutcome.applied && capabilityOutcome.reason === 'write_failed') {
+      recordSwallowedDriverException(
+        profileKey,
+        invocationId,
+        'capability_mutation_failed',
+        capabilityOutcome.error,
+        { invocation_id: invocationId },
+      );
     }
 
     return emitTurnAndCode(turnResult('ok', 'none', 'completed', invocationId, profileKey, {

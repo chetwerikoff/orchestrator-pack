@@ -1,3 +1,11 @@
+
+
+## 2026-07-26 — ChatGPT browser-turn capability self-arm (Issue #1008)
+
+- Removed the operator-facing gate-digest environment variable for browser-turn capability arming. A stale export in the shell has no effect.
+- After a successful witnessed turn on the current binding, the helper arms or extends parallel capability evidence automatically. Query `npm run chatgpt-browser-turn -- capability` for telemetry; no manual digest export is required before characterization or production turns.
+- `gate_digest` in `expected_binding` remains a Gate-B staleness binding to the gate-bound test sources; it is not an operator attestation input.
+
 # Migration notes
 
 

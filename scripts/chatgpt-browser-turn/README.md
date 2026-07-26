@@ -110,13 +110,11 @@ npm run chatgpt-browser-turn -- capability \
   --cdp http://127.0.0.1:9222
 ```
 
-The `candidate_digest`, `build_digest`, `config_digest`, and `gate_digest` in `expected_binding` are the Gate-B binding for that exact runtime candidate. `candidate_digest` covers the tracked TypeScript transport plus the reused `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs` verifier; `build_digest` additionally binds the exact Node version, platform, and architecture. For the operator-controlled live characterization invocation only, export the exact gate digest before running the successful serialized existing-chat turn:
+The `candidate_digest`, `build_digest`, `config_digest`, and `gate_digest` in `expected_binding` are the Gate-B binding for that exact runtime candidate. `candidate_digest` covers the tracked TypeScript transport plus the reused `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs` verifier; `build_digest` additionally binds the exact Node version, platform, and architecture. `gate_digest` hashes the gate-bound test sources; it is a staleness binding only and is not an operator attestation input.
 
-```bash
-export CHATGPT_BROWSER_TURN_GATE_B_DIGEST='<expected_binding.gate_digest>'
-```
+Run one successful serialized existing-chat characterization turn on the exact profile/CDP. The helper arms parallel eligibility by itself when the turn reaches `ok` with a live witness surface on this binding — no environment variable is required. Each later successful witnessed turn extends the lease in place; continuous successful operation does not expire until idleness exceeds the TTL.
 
-Do not reuse a value after any candidate, verifier, runtime-build, or Gate-B test-source change. A successful turn can create positive capability evidence only when the live witness surface is present and this environment value equals the current `gate_digest`. Query `capability` again after characterization and retain its browser provenance, evidence digest, observation/expiry timestamps, and downgrade generation as Gate-C telemetry. If the result is not `state: ok`, parallel smoke is not admitted; fallback remains configured-profile serialization.
+Query `capability` again after characterization and retain its browser provenance, evidence digest, observation/expiry timestamps, and downgrade generation as Gate-C telemetry. If the result is not `state: ok`, parallel smoke is not admitted; fallback remains configured-profile serialization.
 
 ## Driver diagnostics
 

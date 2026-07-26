@@ -17,7 +17,7 @@ import {
   type ControlResultV1,
   type StatusItemV1,
 } from './contracts.ts';
-import { clearDomainLock } from './coordination.ts';
+import { acquireDomainLock, clearDomainLock } from './coordination.ts';
 import { discardUncommittedPublication, publicationRecordCompatible } from './publication.ts';
 import { atomicJson, fsyncDirectory, profileDirs, sha256 } from './storage-common.ts';
 
@@ -302,6 +302,101 @@ function compatibleCapability(value: unknown, profileKey: string): value is Capa
     && typeof record.parallel_eligible === 'boolean';
 }
 
+const CAPABILITY_LEASE_TTL_MS = 4 * 60 * 60 * 1000;
+
+function capabilityMutationLockKey(profileKey: string): string {
+  return `capability-mutation:${profileKey}`;
+}
+
+export interface CapabilityTurnCompletion {
+  readonly expectedBinding: CapabilityBinding;
+  readonly browserProvenance: string;
+  readonly evidenceDigest: string;
+  readonly witnessed: boolean;
+}
+
+export type CapabilityMutationOutcome =
+  | { applied: true }
+  | { applied: false; reason: 'not_witnessed' | 'lock_busy' | 'not_eligible' | 'write_failed'; error?: unknown };
+
+export function planCapabilityAfterSuccessfulTurn(
+  current: ControlResultV1 & { capability?: CapabilityRecordV1 },
+  completion: CapabilityTurnCompletion,
+): Omit<CapabilityRecordV1, 'schema' | 'version' | 'configured_profile_key'> | null {
+  if (!completion.witnessed) return null;
+  if (current.state === 'profile_blocked') return null;
+
+  const observedAt = new Date();
+  const observedIso = observedAt.toISOString();
+  const proposedExpires = new Date(observedAt.getTime() + CAPABILITY_LEASE_TTL_MS).toISOString();
+
+  if (current.state === 'ok' && current.capability?.parallel_eligible) {
+    const existing = current.capability;
+    const existingExpires = Date.parse(existing.expires_at);
+    const proposedExpiresMs = Date.parse(proposedExpires);
+    const expiresAt = Number.isFinite(existingExpires) && existingExpires > proposedExpiresMs
+      ? existing.expires_at
+      : proposedExpires;
+    return {
+      candidate_digest: existing.candidate_digest,
+      build_digest: existing.build_digest,
+      browser_provenance: existing.browser_provenance,
+      config_digest: existing.config_digest,
+      gate_digest: existing.gate_digest,
+      evidence_digest: completion.evidenceDigest,
+      observed_at: observedIso,
+      expires_at: expiresAt,
+      downgrade_generation: existing.downgrade_generation,
+      parallel_eligible: true,
+    };
+  }
+
+  if (current.state === 'ok') return null;
+
+  const priorGeneration = current.capability?.downgrade_generation ?? 0;
+  return {
+    ...completion.expectedBinding,
+    browser_provenance: completion.browserProvenance,
+    evidence_digest: completion.evidenceDigest,
+    observed_at: observedIso,
+    expires_at: proposedExpires,
+    downgrade_generation: priorGeneration + 1,
+    parallel_eligible: true,
+  };
+}
+
+export function writeCapabilityAfterSuccessfulTurn(
+  profileKey: string,
+  currentAtWrite: ControlResultV1 & { capability?: CapabilityRecordV1 },
+  completion: CapabilityTurnCompletion,
+): CapabilityMutationOutcome {
+  try {
+    const planned = planCapabilityAfterSuccessfulTurn(currentAtWrite, completion);
+    if (!planned) return { applied: false, reason: 'not_eligible' };
+    writeCapability(profileKey, planned);
+    return { applied: true };
+  } catch (error) {
+    return { applied: false, reason: 'write_failed', error };
+  }
+}
+
+export function applyCapabilityAfterSuccessfulTurn(
+  profileKey: string,
+  completion: CapabilityTurnCompletion,
+): CapabilityMutationOutcome {
+  if (!completion.witnessed) return { applied: false, reason: 'not_witnessed' };
+
+  const lock = acquireDomainLock(profileKey, capabilityMutationLockKey(profileKey));
+  if (!lock) return { applied: false, reason: 'lock_busy' };
+
+  try {
+    const current = capabilityStatus(profileKey, completion.expectedBinding);
+    return writeCapabilityAfterSuccessfulTurn(profileKey, current, completion);
+  } finally {
+    lock.release();
+  }
+}
+
 export function writeCapability(
   profileKey: string,
   record: Omit<CapabilityRecordV1, 'schema' | 'version' | 'configured_profile_key'>,
@@ -374,25 +469,32 @@ export function capabilityStatus(
 }
 
 export function downgradeCapability(profileKey: string): void {
-  const path = profileDirs(profileKey).capability;
-  if (!existsSync(path)) return;
+  const lock = acquireDomainLock(profileKey, capabilityMutationLockKey(profileKey));
+  if (!lock) return;
+
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    if (!compatibleCapability(parsed, profileKey)) return;
-    writeCapability(profileKey, {
-      candidate_digest: parsed.candidate_digest,
-      build_digest: parsed.build_digest,
-      browser_provenance: parsed.browser_provenance,
-      config_digest: parsed.config_digest,
-      gate_digest: parsed.gate_digest,
-      evidence_digest: parsed.evidence_digest,
-      observed_at: parsed.observed_at,
-      expires_at: parsed.expires_at,
-      downgrade_generation: parsed.downgrade_generation + 1,
-      parallel_eligible: false,
-    });
-  } catch {
-    // An unreadable capability is already a profile block via status/list.
+    const path = profileDirs(profileKey).capability;
+    if (!existsSync(path)) return;
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      if (!compatibleCapability(parsed, profileKey)) return;
+      writeCapability(profileKey, {
+        candidate_digest: parsed.candidate_digest,
+        build_digest: parsed.build_digest,
+        browser_provenance: parsed.browser_provenance,
+        config_digest: parsed.config_digest,
+        gate_digest: parsed.gate_digest,
+        evidence_digest: parsed.evidence_digest,
+        observed_at: parsed.observed_at,
+        expires_at: parsed.expires_at,
+        downgrade_generation: parsed.downgrade_generation + 1,
+        parallel_eligible: false,
+      });
+    } catch {
+      // An unreadable capability is already a profile block via status/list.
+    }
+  } finally {
+    lock.release();
   }
 }
 
