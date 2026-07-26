@@ -90,6 +90,7 @@
     "scripts/session-pr-binding-resolver.test.ts": "light",
     "scripts/session-runtime-liveness.test.ts": "heavy",
     "scripts/tier-gate-guard.test.ts": "light",
+    "scripts/toolchain/chatgpt-browser-turn.diagnostics.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.test.ts": "light",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy"
