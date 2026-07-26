@@ -256,11 +256,17 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     ]);
     const authority = JSON.parse(readFileSync(request.paths.epochAuthorityPath, 'utf8'));
     expect(authority.records).toHaveLength(1);
-    expect(Object.keys(authority.records[0]).sort()).toEqual([
+    expect(Object.keys(authority.records[0]!).sort()).toEqual([
       'commitAt','epochId','hostId','importDigests','installedCommitSha','nonce','preCommitLogDigest','registryHash','repoRoot','snapshotDigests',
     ].sort());
     expect(JSON.parse(readFileSync(request.paths.followupPath, 'utf8')).map((row: any) => row.step)).toEqual([
-      'committed-registry-reprojected','typescript-supervisor-started','scheduler-owned','activation-complete',
+      'committed-registry-reprojected',
+      'typescript-supervisor-started',
+      'scheduler-owned',
+      'machine-local-completion-fsync-confirmed',
+      'final-step-timestamp-recorded',
+      'final-health-delivery-observed',
+      'activation-complete',
     ]);
     await expect(recoverCommittedCutover(request, {
       ensureTypeScriptSupervisor: async () => ({ supervisorPid: 43210, childGeneration: 1 }),
@@ -338,7 +344,7 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     const identity = boundary.readLegacySupervisor(request);
     createCordon({ path: request.paths.cordonPath, epochId: request.epochId, hostId: request.hostId, repoRoot: request.repoRoot, installedCommitSha: request.installedCommitSha, oldInstalledRevisionRoot: request.oldInstalledRevisionRoot, legacyStateRoot: request.paths.supervisorStateDir, legacySupervisor: identity, stores: request.stores });
     expect(provePreImportRollbackSafe(request).safe).toBe(true);
-    writeJson(request.stores[0].targetPath, { changed: true });
+    writeJson(request.stores[0]!.targetPath, { changed: true });
     expect(() => provePreImportRollbackSafe(request)).toThrow(/preimport_target_changed/);
   });
 
@@ -446,7 +452,7 @@ describe('[AC8] platform and canonical bytes', () => {
 
   it('accepts only the scheduler-only target registry', () => {
     const valid = readFileSync(path.join(repoRoot, 'scripts/orchestrator-side-process-registry.cutover-target.json'));
-    expect(validateSchedulerRegistry(valid).children[0].id).toBe('pr2-scheduler');
+    expect(validateSchedulerRegistry(valid).children[0]!.id).toBe('pr2-scheduler');
     expect(() => validateSchedulerRegistry(JSON.stringify({ schemaVersion: 2, requiredChildIds: ['legacy'], children: [] }))).toThrow();
   });
 });
