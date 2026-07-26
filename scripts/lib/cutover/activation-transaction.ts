@@ -111,8 +111,11 @@ async function waitForStartedSupervisor(request: ActivationRequest, nonce: strin
       && status.epochId === request.epochId
       && status.nonce === nonce
       && status.supervisorPid === expectedPid
+      && status.restartState === 'running'
       && processAlive(expectedPid)
       && status.registryHash
+      && status.childPid !== null
+      && processAlive(status.childPid)
       && status.childGeneration >= 1
     ) {
       return { supervisorPid: expectedPid, childGeneration: status.childGeneration };
