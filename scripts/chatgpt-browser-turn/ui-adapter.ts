@@ -543,6 +543,9 @@ export async function sendTurn(
   let contentStablePolls = 0;
   let lastTerminalContent = '';
   let continuationActive = false;
+  let continuationAwaitingGrowth = false;
+  let continuationBaseline = '';
+  let terminalPublishEligible = true;
   const deadline = Date.now() + config.timeoutMs;
   while (Date.now() < deadline) {
     const wall = await pageWalls(page);
@@ -624,34 +627,45 @@ export async function sendTurn(
       }
       if (matched) {
         const current = await assistantText(matched).catch(() => '');
-        const expectedContent = network.terminal.terminalByMessageId.get(boundAssistantId)?.contentText;
         if (current) {
           if (!segments.length || segments[segments.length - 1] !== current) segments.push(current);
           const cont = page.getByText(/continue generating/i);
           if (await cont.count().catch(() => 0)) {
             await cont.first().click().catch(() => {});
             continuationActive = true;
+            continuationAwaitingGrowth = true;
+            continuationBaseline = mergeContinuationSegments(segments);
+            terminalPublishEligible = false;
             contentStablePolls = 0;
-          } else if (expectedContent && current !== expectedContent) {
-            contentStablePolls = 0;
-          } else if (current === lastTerminalContent) {
-            contentStablePolls++;
-            if (contentStablePolls >= 1) {
-              const conversationId = normalizeConversationUrl(page.url());
-              return {
-                state: 'ok',
-                cause: 'completed',
-                possibleDelivery: true,
-                userMessageId: userId,
-                assistantMessageId: boundAssistantId,
-                conversationId,
-                reply: continuationActive ? mergeContinuationSegments(segments) : current,
-              };
-            }
+            lastTerminalContent = '';
           } else {
-            contentStablePolls = 0;
+            const replyCandidate = continuationActive ? mergeContinuationSegments(segments) : current;
+            if (continuationAwaitingGrowth) {
+              if (replyCandidate !== continuationBaseline) {
+                continuationAwaitingGrowth = false;
+                terminalPublishEligible = true;
+                contentStablePolls = 0;
+              }
+            }
+            if (terminalPublishEligible && current === lastTerminalContent) {
+              contentStablePolls++;
+              if (contentStablePolls >= 1) {
+                const conversationId = normalizeConversationUrl(page.url());
+                return {
+                  state: 'ok',
+                  cause: 'completed',
+                  possibleDelivery: true,
+                  userMessageId: userId,
+                  assistantMessageId: boundAssistantId,
+                  conversationId,
+                  reply: replyCandidate,
+                };
+              }
+            } else if (current !== lastTerminalContent) {
+              contentStablePolls = 0;
+            }
+            lastTerminalContent = current;
           }
-          lastTerminalContent = current;
         }
       }
     }

@@ -220,7 +220,7 @@ export function isMessageAttributedToUserTurn(
 export function wholeTurnTerminalOutcome(
   metadata: AssistantTerminalMetadata | undefined,
 ): 'success' | 'failure' | 'none' {
-  if (!metadata) return 'none';
+  if (!metadata || metadata.endTurn !== true) return 'none';
   const status = metadata.status?.toLowerCase() ?? '';
   if (status.includes('interrupt')) return 'failure';
   if (
@@ -230,8 +230,7 @@ export function wholeTurnTerminalOutcome(
   ) {
     return 'failure';
   }
-  if (metadata.endTurn === true) return 'success';
-  return 'none';
+  return 'success';
 }
 
 export function nodeLocalStopWithoutWholeTurn(metadata: AssistantTerminalMetadata | undefined): boolean {

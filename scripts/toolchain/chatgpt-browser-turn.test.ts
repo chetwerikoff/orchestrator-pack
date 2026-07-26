@@ -921,6 +921,11 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
     expect(terminal).toEqual({ state: 'success', assistantMessageId: 'asst-terminal-12345678' });
     expect(nodeLocalStopWithoutWholeTurn(witness.terminalByMessageId.get('asst-preamble-12345678'))).toBe(true);
     expect(wholeTurnTerminalOutcome(witness.terminalByMessageId.get('asst-terminal-12345678'))).toBe('success');
+    expect(wholeTurnTerminalOutcome({
+      endTurn: false,
+      status: 'finished_failed',
+      contentType: 'execution_error',
+    })).toBe('none');
   });
 
   it('AC13 fail-closes delta-only, patch-only, and stream-complete-only observations', () => {
@@ -1145,7 +1150,7 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
       assistants: [{
         id: 'assistant-owned-12345678',
         parent: own,
-        textSequence: ['partial', 'partial', 'complete answer'],
+        textSequence: ['partial', 'complete answer'],
         appearOnSend: true,
       }],
       serviceFrames: [{
@@ -1156,7 +1161,6 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
             author: { role: 'assistant' },
             parent: own,
             end_turn: true,
-            content: { content_type: 'text', parts: ['complete answer'] },
           },
         },
       }],
@@ -1164,6 +1168,98 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
     const result = await sendTurn(fixture.page, 'payload', baseConfig());
     expect(result.state).toBe('ok');
     expect(result.reply).toBe('complete answer');
+  });
+
+  it('does not treat node-local failed/interrupted metadata as whole-turn terminal failure', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [
+        { id: 'assistant-preamble-12345678', parent: own, text: 'failed draft', appearOnSend: true },
+        { id: 'assistant-owned-12345678', parent: own, text: 'final answer', appearOnSend: true },
+      ],
+      serviceFrames: [
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'assistant-preamble-12345678',
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: false,
+              status: 'finished_failed',
+              content: { content_type: 'execution_error', text: 'node-local failure' },
+            },
+          },
+        },
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'assistant-owned-12345678',
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: true,
+            },
+          },
+        },
+      ],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.assistantMessageId).toBe('assistant-owned-12345678');
+    expect(result.reply).toBe('final answer');
+  });
+
+  it('returns ok for formatted DOM serialization without matching raw service content parts', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{
+        id: 'assistant-owned-12345678',
+        parent: own,
+        semanticNodes: [{ type: 'heading', children: [{ type: 'text', text: 'Title' }] }],
+        appearOnSend: true,
+      }],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            content: { content_type: 'text', parts: ['# Title'] },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('Title');
+  });
+
+  it('waits for continuation growth after continue-generating disappears before publish', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'alpha', appearOnSend: true }],
+      continueGenerating: { hideAfterClick: true, growthSequence: ['alpha', 'alpha\nbeta'] },
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('alpha\nbeta');
   });
 
   it('AC9 terminal with unreadable content uses stream_timeout with terminal_content_incomplete', async () => {

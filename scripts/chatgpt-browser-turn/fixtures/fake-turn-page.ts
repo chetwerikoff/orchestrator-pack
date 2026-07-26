@@ -5,7 +5,13 @@ export interface FakeAssistantSpec {
   readonly parent?: string;
   readonly text?: string;
   readonly textSequence?: readonly string[];
+  readonly semanticNodes?: readonly SemanticNode[];
   readonly appearOnSend?: boolean;
+}
+
+export interface ContinueGeneratingSpec {
+  readonly hideAfterClick?: boolean;
+  readonly growthSequence?: readonly string[];
 }
 
 export interface FakeTurnPageOptions {
@@ -16,6 +22,7 @@ export interface FakeTurnPageOptions {
   readonly assistantText?: string;
   readonly assistants?: readonly FakeAssistantSpec[];
   readonly serviceFrames?: readonly Record<string, unknown>[];
+  readonly continueGenerating?: ContinueGeneratingSpec;
   readonly bodyText?: string;
   readonly alertText?: string;
   readonly alertAfterSend?: string;
@@ -48,15 +55,18 @@ function messageLocator(
   parent?: string,
   text = '',
   textSequence?: readonly string[],
+  semanticNodes?: readonly SemanticNode[],
 ): any {
   let sequenceIndex = 0;
   const currentText = () => {
     if (textSequence?.length) return textSequence[Math.min(sequenceIndex, textSequence.length - 1)] ?? '';
-    return text;
+    return renderedText;
   };
+  let renderedText = text;
   return {
     __role: role,
     __id: id,
+    __applyText: (value: string) => { renderedText = value; },
     advanceText: () => {
       if (textSequence && sequenceIndex < textSequence.length - 1) sequenceIndex++;
     },
@@ -71,7 +81,7 @@ function messageLocator(
     count: async () => 1,
     innerText: async () => currentText(),
     click: async () => {},
-    evaluate: async () => semanticNodesForText(currentText()),
+    evaluate: async () => semanticNodes?.length ? [...semanticNodes] : semanticNodesForText(currentText()),
   };
 }
 
@@ -151,7 +161,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
       for (const id of options.foreignDomUserIds ?? []) messages.push(messageLocator('user', id));
       for (const spec of assistantSpecs) {
         if (spec.appearOnSend !== false) {
-          messages.push(messageLocator('assistant', spec.id, spec.parent, spec.text ?? '', spec.textSequence));
+          messages.push(messageLocator('assistant', spec.id, spec.parent, spec.text ?? '', spec.textSequence, spec.semanticNodes));
         }
       }
       const frames = options.serviceFrames
@@ -165,6 +175,18 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   const selectMessages = (role: 'user' | 'assistant') => {
     const selected = messages.filter((message) => message.__role === role);
     return { count: async () => selected.length, nth: (index: number) => selected[index] ?? emptyLocator() };
+  };
+
+  let continueVisible = Boolean(options.continueGenerating);
+  let continueGrowthIndex = 0;
+  const applyContinueGrowth = () => {
+    const growth = options.continueGenerating?.growthSequence ?? [];
+    if (!growth.length) return;
+    const assistant = messages.find((message) => message.__role === 'assistant');
+    if (!assistant) return;
+    const next = growth[Math.min(continueGrowthIndex, growth.length - 1)] ?? '';
+    assistant.__applyText?.(next);
+    if (continueGrowthIndex < growth.length - 1) continueGrowthIndex++;
   };
 
   const page = {
@@ -200,10 +222,22 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     keyboard: { press: async () => {}, insertText: async () => {} },
     waitForTimeout: async () => {
       for (const message of messages) message.advanceText?.();
+      if (options.continueGenerating?.growthSequence?.length) applyContinueGrowth();
     },
-    getByText: () => emptyLocator(),
+    getByText: (pattern: string | RegExp) => {
+      const label = typeof pattern === 'string' ? pattern : pattern.source;
+      if (!/continue generating/i.test(label) || !continueVisible) return emptyLocator();
+      return {
+        count: async () => 1,
+        first: () => ({
+          click: async () => {
+            if (options.continueGenerating?.hideAfterClick !== false) continueVisible = false;
+          },
+        }),
+      };
+    },
     addAssistant: (spec: FakeAssistantSpec) => {
-      messages.push(messageLocator('assistant', spec.id, spec.parent, spec.text ?? '', spec.textSequence));
+      messages.push(messageLocator('assistant', spec.id, spec.parent, spec.text ?? '', spec.textSequence, spec.semanticNodes));
     },
     emitServiceFrames,
   };
