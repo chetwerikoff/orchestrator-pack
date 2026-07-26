@@ -454,6 +454,51 @@ describe('issue 1010 submitted-turn proof', () => {
     expect(result.assistantMessageId).not.toBe(foreignAssistant);
   });
 
+  it('AC2 accepts patch-only terminal after DOM confirms assistant parentage', async () => {
+    const own = 'user-patchonly-12345678';
+    const assistantId = 'asst-patchonly-12345678';
+    const turnId = '858e210d-d54e-44c9-a51b-4e4e13e8dadc';
+    const turnEnvelope = (encodedItem: string) => ({
+      type: 'message',
+      topic_id: `conversation-turn-${turnId}`,
+      payload: {
+        type: 'conversation-turn-stream',
+        payload: {
+          type: 'stream-item',
+          conversation_id: '6a65acd9-4d44-83ec-bcb9-5787832fac24',
+          turn_id: turnId,
+          encoded_item: encodedItem,
+        },
+      },
+    });
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [
+        turnEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}
+
+`),
+        turnEnvelope(`data: {"type":"message_marker","message_id":"${assistantId}","marker":"user_visible_token","event":"first"}
+
+`),
+        turnEnvelope([
+          'event: delta',
+          'data: {"p":"","o":"patch","v":[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}},{"p":"/message/status","o":"replace","v":"finished_successfully"}]}',
+          '',
+        ].join('\n')),
+      ],
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
   it('AC2 terminal-node binding still selects the terminal assistant', () => {
     const own = 'user-owned-12345678';
     const witness = createTerminalWitnessState();

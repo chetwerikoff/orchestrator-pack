@@ -120,6 +120,7 @@ interface NetworkWitnessState {
   pendingServiceInputMessageIds: Set<string>;
   encodedItemWitnessTurnUserId?: string;
   pendingPatchAssistantId?: string;
+  deferredStreamingPatches: Array<{ readonly targetId: string; readonly items: Record<string, unknown>[] }>;
   activeTurnUserId?: string;
   activePatchMessageId?: string;
   witnessInstall: Promise<void>;
@@ -282,6 +283,96 @@ function findTurnExchangeId(value: unknown): string | undefined {
   return undefined;
 }
 
+function queueDeferredStreamingPatch(
+  state: NetworkWitnessState,
+  targetId: string,
+  items: Record<string, unknown>[],
+): void {
+  const existing = state.deferredStreamingPatches.find((entry) => entry.targetId === targetId);
+  if (existing) {
+    (existing as { items: Record<string, unknown>[] }).items.push(...items);
+    return;
+  }
+  state.deferredStreamingPatches.push({ targetId, items: [...items] });
+}
+
+function applyStreamingPatchItems(
+  state: NetworkWitnessState,
+  targetId: string,
+  items: Record<string, unknown>[],
+): void {
+  const patchMessage: Record<string, unknown> = {
+    id: targetId,
+    author: { role: 'assistant' },
+  };
+  let touched = false;
+  for (const patch of items) {
+    if (patch.p === '/message/end_turn' && patch.o === 'replace') {
+      patchMessage.end_turn = patch.v === true;
+      touched = true;
+    }
+    if (patch.p === '/message/status' && patch.o === 'replace' && typeof patch.v === 'string') {
+      patchMessage.status = patch.v;
+      touched = true;
+    }
+    if (patch.p === '/message/metadata' && patch.o === 'append') {
+      const metadata = patch.v as Record<string, unknown> | undefined;
+      if (metadata?.finish_details) {
+        patchMessage.metadata = metadata;
+        touched = true;
+      }
+    }
+  }
+  if (!touched) return;
+  ingestServicePayload(state.terminal, { type: 'delta', v: { message: patchMessage } });
+}
+
+function registerPatchTargetAssistant(
+  state: NetworkWitnessState,
+  targetId: string,
+  patchOwnerUserId: string,
+): void {
+  state.activePatchMessageId = targetId;
+  state.pendingPatchAssistantId = undefined;
+  if (!state.terminal.messages.has(targetId)) {
+    ingestServicePayload(state.terminal, {
+      type: 'delta',
+      v: { message: { id: targetId, author: { role: 'assistant' }, parent: patchOwnerUserId } },
+    });
+    state.messages.push({ id: targetId, role: 'assistant', parent: patchOwnerUserId });
+  }
+}
+
+function releaseDeferredStreamingPatchesForTarget(
+  state: NetworkWitnessState,
+  targetId: string,
+  patchOwnerUserId: string,
+): void {
+  const pending = state.deferredStreamingPatches.filter((entry) => entry.targetId === targetId);
+  if (!pending.length) return;
+  registerPatchTargetAssistant(state, targetId, patchOwnerUserId);
+  for (const entry of pending) applyStreamingPatchItems(state, targetId, entry.items);
+  state.deferredStreamingPatches = state.deferredStreamingPatches.filter((entry) => entry.targetId !== targetId);
+}
+
+async function flushDeferredStreamingPatches(
+  page: any,
+  state: NetworkWitnessState,
+  userMessageId: string,
+): Promise<void> {
+  if (!state.deferredStreamingPatches.length) return;
+  const assistants = page.locator('[data-message-author-role="assistant"]');
+  const count = await assistants.count().catch(() => 0);
+  for (let index = Math.max(0, count - 8); index < count; index++) {
+    const locator = assistants.nth(index);
+    const assistantId = await serviceId(locator);
+    if (!assistantId) continue;
+    const parentId = await parentServiceId(locator);
+    if (parentId !== userMessageId) continue;
+    releaseDeferredStreamingPatchesForTarget(state, assistantId, userMessageId);
+  }
+}
+
 function applyStreamingPatchOperation(
   state: NetworkWitnessState,
   payload: Record<string, unknown>,
@@ -301,8 +392,9 @@ function applyStreamingPatchOperation(
       : parent;
     if (role === 'assistant') {
       if (!userId || effectiveParent !== userId) return;
-      state.activePatchMessageId = message.id;
-      state.pendingPatchAssistantId = undefined;
+      registerPatchTargetAssistant(state, message.id, userId);
+      releaseDeferredStreamingPatchesForTarget(state, message.id, userId);
+      return;
     }
     ingestServicePayload(state.terminal, { type: 'delta', v: { message: { ...message, ...(effectiveParent ? { parent: effectiveParent } : {}) } } });
     state.messages.push({
@@ -313,35 +405,20 @@ function applyStreamingPatchOperation(
     return;
   }
   if (op !== 'patch' || !Array.isArray(payload.v)) return;
-  const targetId = state.activePatchMessageId;
   const patchOwnerUserId = provenActiveTurnUserId(state);
-  if (!targetId || targetId.length < 8 || !patchOwnerUserId) return;
-  if (!isMessageAttributedToUserTurn(targetId, patchOwnerUserId, state.terminal.messages)) return;
-  const patchMessage: Record<string, unknown> = {
-    id: targetId,
-    author: { role: 'assistant' },
-  };
-  let touched = false;
-  for (const item of payload.v) {
-    const patch = item as Record<string, unknown>;
-    if (patch.p === '/message/end_turn' && patch.o === 'replace') {
-      patchMessage.end_turn = patch.v === true;
-      touched = true;
+  if (!patchOwnerUserId) return;
+  const patchItems = payload.v as Record<string, unknown>[];
+  let targetId = state.activePatchMessageId;
+  if (!targetId && state.pendingPatchAssistantId) targetId = state.pendingPatchAssistantId;
+  if (!targetId || targetId.length < 8) return;
+  if (!isMessageAttributedToUserTurn(targetId, patchOwnerUserId, state.terminal.messages)) {
+    if (!state.activePatchMessageId && targetId === state.pendingPatchAssistantId) {
+      queueDeferredStreamingPatch(state, targetId, patchItems);
     }
-    if (patch.p === '/message/status' && patch.o === 'replace' && typeof patch.v === 'string') {
-      patchMessage.status = patch.v;
-      touched = true;
-    }
-    if (patch.p === '/message/metadata' && patch.o === 'append') {
-      const metadata = patch.v as Record<string, unknown> | undefined;
-      if (metadata?.finish_details) {
-        patchMessage.metadata = metadata;
-        touched = true;
-      }
-    }
+    return;
   }
-  if (!touched) return;
-  ingestServicePayload(state.terminal, { type: 'delta', v: { message: patchMessage } });
+  state.activePatchMessageId = targetId;
+  applyStreamingPatchItems(state, targetId, patchItems);
 }
 
 function ingestEncodedItemWitness(state: NetworkWitnessState, encodedItem: string): void {
@@ -605,6 +682,7 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     frozenDispatchExchangeAmbiguous: false,
     frozenDispatchCandidateIds: new Set<string>(),
     pendingServiceInputMessageIds: new Set<string>(),
+    deferredStreamingPatches: [],
     armDispatch() { this.dispatchArmed = true; },
     witnessInstall: Promise.resolve(),
   };
@@ -1035,6 +1113,7 @@ export async function sendTurn(
       }
     }
 
+    await flushDeferredStreamingPatches(page, network, userId);
     const terminal = resolveWholeTurnTerminal(userId, network.terminal);
     if (terminal.state === 'failure') {
       return {
