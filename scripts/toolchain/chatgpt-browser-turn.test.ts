@@ -50,7 +50,7 @@ import {
   sendTurn,
   type BrowserConfig,
 } from '../chatgpt-browser-turn/ui-adapter.ts';
-import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
+import { emptyLocator, fakeTurnPage, messageLocator } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import {
   DELTA_ONLY_FRAME,
   framesToSseBody,
@@ -112,38 +112,6 @@ function deadOwnerRecord(
   });
 }
 
-function emptyLocator(): any {
-  return {
-    count: async () => 0,
-    nth: () => emptyLocator(),
-    getAttribute: async () => null,
-    locator: () => emptyLocator(),
-    first: () => emptyLocator(),
-    innerText: async () => '',
-    click: async () => {},
-    evaluate: async () => [],
-  };
-}
-
-function messageLocator(role: 'user' | 'assistant', id: string, parent?: string, text = ''): any {
-  return {
-    __role: role,
-    getAttribute: async (name: string) => {
-      if (name === 'data-message-author-role') return role;
-      if (name === 'data-message-id') return id;
-      if (name === 'data-parent-message-id') return parent ?? null;
-      return null;
-    },
-    locator: () => ({ first: () => ({ getAttribute: async () => null }) }),
-    first: () => emptyLocator(),
-    count: async () => 1,
-    innerText: async () => text,
-    click: async () => {},
-    evaluate: async () => text
-      ? [{ type: 'paragraph', children: [{ type: 'text', text }] } satisfies SemanticNode]
-      : [],
-  };
-}
 
 function makePublicationFixture(
   invocationId: string,
