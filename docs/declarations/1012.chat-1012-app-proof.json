@@ -12,6 +12,7 @@
   "declared_paths": [
     "scripts/lib/gh-inventory-match.d.mts",
     "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-pr-checks.d.mts",
     "scripts/lib/gh-pr-checks.mjs",
     "scripts/lib/gh-rest-routes.d.mts",
     "scripts/lib/gh-rest-routes.mjs",
@@ -20,5 +21,20 @@
     "scripts/vitest-runtime-history-delivery.mjs"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:180fc1d3d0b8ca6d14d21db99f3dddf743b8180345b635defbc3292f1be8e2c7",
+      "new_active_scope_hash": "sha256:62021ed3fd87c4388afe0540f416d7bae1b12a8f21e20af1a758d2de94edd757",
+      "changed": {
+        "added": [
+          "scripts/lib/gh-pr-checks.d.mts"
+        ],
+        "removed": []
+      },
+      "reason": "Keep the gh-pr-checks TypeScript declaration synchronized with the app-aware runtime shape required by the proven #1009 root cause.",
+      "actor": "chat-1012-app-proof",
+      "timestamp": "2026-07-26T10:56:00Z",
+      "applied": true
+    }
+  ]
 }
