@@ -148,6 +148,11 @@ jobs:
           from pathlib import Path
           p = Path('scripts/pr2a/final-conformance.ts')
           s = p.read_text()
+          bad_token = "'  writeDurableFile(input.spec.targetPath, `${JSON.stringify(normalized, null, 2)}\\n`);'"
+          fixed_token = "'  writeDurableFile(input.spec.targetPath, `${JSON.stringify(normalized, null, 2)}\\\\n`);'"
+          if bad_token not in s:
+              raise SystemExit('import detector patch target missing')
+          s = s.replace(bad_token, fixed_token, 1)
           old = "  const red = key.startsWith('AC1:') ? !ac1InvariantHolds(key) : mutationFailures(key,artifact).length > 0;\n  if(red){process.stderr.write(`mutation-contract:${key}\\n`);process.exitCode=1;return;}"
           new = "  const failures = key.startsWith('AC1:') ? (!ac1InvariantHolds(key) ? ['ac1-invariant'] : []) : mutationFailures(key,artifact);\n  const red = failures.length > 0;\n  if(red){process.stderr.write(`mutation-contract:${key}:${failures.join(',')}\\n`);process.exitCode=1;return;}"
           if old not in s:
