@@ -6,7 +6,9 @@ import { runProcessSync } from '../kernel/subprocess.ts';
 import { stableStringify } from '../lib/cutover/stable-stringify.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
 import { activateCutover, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';
-import { createCordon } from '../lib/cutover/activation-cordon.ts';
+import { createCordon, markImportBegun } from '../lib/cutover/activation-cordon.ts';
+import { appendPhaseOne } from '../lib/cutover/activation-evidence.ts';
+import { snapshotStores } from '../lib/cutover/activation-import.ts';
 import { provePreImportRollbackSafe, recoverCommittedCutover } from '../lib/cutover/activation-recovery.ts';
 import { runActivationPlatformPreflight } from '../lib/cutover/activation-platform-preflight.ts';
 import { validateSchedulerRegistry } from '../lib/cutover/activation-registry-projection.ts';
@@ -94,7 +96,7 @@ function activationFixture(): { request: ActivationRequest; boundary: Activation
     installedCommitSha,
     oldInstalledRevisionRoot: root,
     legacySupervisorPid: 12345,
-    knownMemberRoster: [{ hostId: 'test-host', installedCommitSha, fresh: true, adopted: true }],
+    knownMemberRoster: [{ hostId: 'test-host' }],
     stores,
     paths: {
       stateDir: state,
@@ -106,11 +108,13 @@ function activationFixture(): { request: ActivationRequest; boundary: Activation
       projectedRegistryPath: path.join(state, 'projected-registry.json'),
       snapshotDir: snapshots,
       supervisorStateDir: path.join(state, 'supervisor'),
+      foundationEvidencePath: path.join(state, 'foundation-923-adoption.json'),
     },
   };
   const identity: ProcessIdentity = { pid: 12345, startTicks: '99', cmdline: [path.join(root, 'scripts', 'orchestrator-wake-supervisor.ps1')] };
   const boundary: ActivationBoundary = {
     preflight: () => ({ result: 'node22-linux-wsl2-preflight-pass', repoRoot, oldInstalledRevisionRoot: root, platform: 'linux', nodeMajor: 22 }),
+    proveFoundationAdoption: () => ({ result: 'foundation-evidence-verified', evidencePath: request.paths.foundationEvidencePath, localHostId: request.hostId, oldInstalledCommitSha: '9'.repeat(40), heartbeatObservedAt: new Date().toISOString(), migrationJournalCount: 1, preflightSanitizerId: 'sha256:test' }),
     resolveBaseAndClosure: () => ({ baseRef: 'post-948-base', closure: { inputTree: 'tree-948', referenceCount: 2 } }),
     readLegacySupervisor: () => identity,
     captureLegacyWriters: () => [],
@@ -150,6 +154,13 @@ describe('[AC1] admission and closure', () => {
     expect(external).toEqual([]);
     expect(manifest.references.some((row) => targets.has(row.target) && governanceOnlyReference(row.source))).toBe(true);
   });
+
+  it('refuses before cordon when foundation adoption evidence is unavailable', async () => {
+    const { request, boundary } = activationFixture();
+    boundary.proveFoundationAdoption = () => { throw new Error('foundation_evidence_missing'); };
+    await expect(activateCutover(request, boundary)).rejects.toThrow(/foundation_evidence_missing/);
+    expect(existsSync(request.paths.cordonPath)).toBe(false);
+  });
 });
 
 describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
@@ -180,6 +191,32 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
       ensureTypeScriptSupervisor: async () => ({ supervisorPid: 43210, childGeneration: 1 }),
     })).resolves.toMatchObject({ result: 'forward-repair-ready', supervisorPid: 43210, childGeneration: 1 });
     expect(() => provePreImportRollbackSafe(request)).toThrow(/forward_only/);
+  });
+
+  it('resumes forward from the import boundary when CAS has not happened yet', async () => {
+    const { request, boundary } = activationFixture();
+    const identity = boundary.readLegacySupervisor(request);
+    const cordon = createCordon({ path: request.paths.cordonPath, epochId: request.epochId, hostId: request.hostId, repoRoot: request.repoRoot, installedCommitSha: request.installedCommitSha, oldInstalledRevisionRoot: request.oldInstalledRevisionRoot, legacyStateRoot: request.paths.supervisorStateDir, legacySupervisor: identity, stores: request.stores });
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { recoveredFixture: true });
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'cordon', { writersClosed: true, noRespawn: true, noTypeScriptStart: true });
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain', { writerWatermark: 'drained-test-watermark' });
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'legacy-supervisor-and-writers-terminated', { reenumeratedEmpty: true });
+    const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, 'drained-test-watermark');
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'snapshots', snapshots);
+    const marked = markImportBegun(request.paths.cordonPath);
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'import-begun', { importBegunAt: marked.importBegunAt });
+
+    expect(existsSync(request.paths.epochAuthorityPath)).toBe(false);
+    await expect(recoverCommittedCutover(request, {
+      ensureTypeScriptSupervisor: async () => ({ supervisorPid: 43210, childGeneration: 1 }),
+    })).resolves.toMatchObject({ result: 'forward-repair-ready', supervisorPid: 43210 });
+    const authority = new FileEpochAuthority(request.paths.epochAuthorityPath).read();
+    expect(authority.currentEpochId).toBe(request.epochId);
+    expect(authority.records).toHaveLength(1);
+    expect(JSON.parse(readFileSync(request.paths.phaseOnePath, 'utf8')).records.map((row: any) => row.step)).toEqual([
+      'admission','cordon','writer-drain','legacy-supervisor-and-writers-terminated','snapshots','import-begun','imports','registry-projected',
+    ]);
+    expect(existsSync(path.join(request.paths.supervisorStateDir, 'stopping'))).toBe(true);
   });
 
   it('refuses snapshot/import when legacy processes survive re-enumeration', async () => {
@@ -233,6 +270,21 @@ describe('[AC8] platform and canonical bytes', () => {
       nodeVersion: '20.19.0',
       platform: 'linux',
     })).toThrow(/node22_required/);
+  });
+
+  it('rejects a non-canonical repository root instead of normalizing it', () => {
+    const { request } = activationFixture();
+    const nonCanonical = path.join(repoRoot, '..', path.basename(repoRoot));
+    expect(nonCanonical).not.toBe(repoRoot);
+    expect(() => runActivationPlatformPreflight({
+      repoRoot: nonCanonical,
+      installedCommitSha: git(['rev-parse', 'HEAD']),
+      oldInstalledRevisionRoot: repoRoot,
+      targetRegistryPath: request.paths.targetRegistryPath,
+      projectedRegistryPath: request.paths.projectedRegistryPath,
+      nodeVersion: '22.0.0',
+      platform: 'linux',
+    })).toThrow(/repo_root_not_canonical/);
   });
 
   it('accepts only the scheduler-only target registry', () => {
