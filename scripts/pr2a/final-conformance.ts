@@ -16,6 +16,7 @@ const repoRoot = path.resolve(process.cwd());
 const PRE_CUTOVER_BLOB_SHA = '8840d070078f9fa61813a04ea66279d351013cfd';
 const PRE_CUTOVER_HELPER = 'scripts/pr2a/final-conformance-precutover.ts';
 const ISSUE_928_TEST = 'scripts/cutover/issue-928.test.ts';
+const ISSUE_928_MUTATION_RUNNER = 'scripts/cutover/mutation-runner.ts';
 const CUTOVER_MARKERS = [
   'scripts/orchestrator-cutover-activate.ts',
   'scripts/orchestrator-side-process-registry.cutover-target.json',
@@ -63,6 +64,9 @@ function keepFinding(row: ConformanceFinding, ref: string, completeCutover: bool
     return false;
   }
   if (completeCutover && row.code === 'd928_test_or_harness_reference' && row.path === ISSUE_928_TEST) {
+    return false;
+  }
+  if (completeCutover && row.code === 'd928_external_executable_reference' && row.path === ISSUE_928_MUTATION_RUNNER) {
     return false;
   }
   if (
