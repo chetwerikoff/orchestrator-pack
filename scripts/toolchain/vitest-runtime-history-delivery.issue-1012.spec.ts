@@ -48,6 +48,20 @@ describe('Issue #1012 required GitHub App proof', () => {
     expect(parsed.outcome).toBe('current-policy-unsupported');
   });
 
+  it('treats app_id -1 as GitHub any-app semantics without provider proof', () => {
+    const parsed = normalizeCurrentRequiredPolicy(policy(-1));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error(`any-app policy unexpectedly rejected: ${parsed.outcome}`);
+    expect(parsed.checks).toContainEqual({ context: REQUIRED, appId: null });
+  });
+
+  it('still rejects negative app ids other than the -1 any-app sentinel', () => {
+    const parsed = normalizeCurrentRequiredPolicy(policy(-2), { providerProofAvailable: true });
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) throw new Error('invalid negative app id unexpectedly parsed');
+    expect(parsed.outcome).toBe('current-policy-unsupported');
+  });
+
   it('preserves app_id when the caller explicitly has provider proof', () => {
     const parsed = provenPolicy();
     expect(parsed.checks).toContainEqual({ context: REQUIRED, appId: APP_ID });
@@ -116,6 +130,42 @@ describe('Issue #1012 required GitHub App proof', () => {
     expect(canonical[0]).not.toHaveProperty('appId');
     expect(appAware).toHaveLength(1);
     expect(appAware[0]?.appId).toBe(APP_ID);
+  });
+
+  it('retains distinct providers only in the explicit app-aware aggregate shape', () => {
+    const requiredProvider = checkRunToContext({
+      name: REQUIRED,
+      status: 'completed',
+      conclusion: 'success',
+      app: { id: APP_ID },
+      started_at: '2026-07-26T00:00:00Z',
+      completed_at: '2026-07-26T00:00:01Z',
+    });
+    const newerOtherProvider = checkRunToContext({
+      name: REQUIRED,
+      status: 'completed',
+      conclusion: 'success',
+      app: { id: APP_ID + 1 },
+      started_at: '2026-07-26T00:00:02Z',
+      completed_at: '2026-07-26T00:00:03Z',
+    });
+    const contexts = [requiredProvider, newerOtherProvider];
+    const canonical = aggregateChecks(contexts);
+    const appAware = aggregateChecks(contexts, { includeAppId: true });
+    expect(canonical).toHaveLength(1);
+    expect(canonical[0]).not.toHaveProperty('appId');
+    expect(appAware).toHaveLength(2);
+    expect(appAware.map((check) => check.appId)).toEqual(expect.arrayContaining([APP_ID, APP_ID + 1]));
+
+    const decision = evaluateRequiredChecks({
+      checks: appAware,
+      policy: provenPolicy({
+        strict: true,
+        checks: [{ context: REQUIRED, app_id: APP_ID }],
+      }),
+      packReviewProjection: emptyProjection,
+    });
+    expect(decision.action).toBe('ready');
   });
 
   it('classifies app-aware pr checks separately while preserving the canonical shape', () => {
