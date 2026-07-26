@@ -21,19 +21,24 @@ const CONTROLS = {
 type AcceptanceId = keyof typeof CONTROLS;
 type DetectorPattern =
   | 'foundation'
+  | 'admission-guards'
   | 'closure'
   | 'activation'
+  | 'ordering'
+  | 'watermark'
+  | 'writer-survivor'
   | 'survivor'
-  | 'rollback'
   | 'recovery'
+  | 'rollback'
+  | 'import-guards'
   | 'scope'
   | 'vectors'
   | 'node'
+  | 'platform'
   | 'canonical-root'
   | 'primitives'
   | 'registry'
-  | 'scheduler'
-  | 'ordering';
+  | 'scheduler';
 
 interface ArtifactSnapshot { existed: boolean; bytes: Buffer; mode: number }
 interface MutationSpec { artifactPath: string; detector: DetectorPattern; apply(snapshot: ArtifactSnapshot): { bytes: Buffer; mode: number } }
@@ -56,19 +61,24 @@ const repoRoot = path.resolve(process.cwd());
 const TEST_FILE = 'scripts/cutover/issue-928.test.ts';
 const DETECTORS: Record<DetectorPattern, string> = {
   foundation: 'refuses before cordon when foundation adoption evidence is unavailable',
+  'admission-guards': 'retains the fail-closed admission guards required before cordon',
   closure: 'recomputes #948 reverse closure against the merge base',
   activation: 'runs the real transaction through synthetic process/store/CAS boundaries',
+  ordering: 'retains cordon-first, import, projection, CAS and supervisor ordering',
+  watermark: 'rejects a missing writer watermark before snapshots',
+  'writer-survivor': 'rejects a surviving legacy writer after drain and termination',
   survivor: 'refuses snapshot/import when legacy processes survive re-enumeration',
-  rollback: 'allows old-revision rollback only before import mutation and refuses target drift',
   recovery: 'resumes forward from the import boundary when CAS has not happened yet',
+  rollback: 'allows old-revision rollback only before import mutation and refuses target drift',
+  'import-guards': 'retains snapshot/import identity, validation and convergence guards',
   scope: 'contains exactly the four PowerShell deletions and preserves #948 claim authority/tracked registry',
   vectors: 'reproduces committed canonicalization vectors',
   node: 'fails unsupported Node before any cordon path can be created',
+  platform: 'fails unsupported native Windows before any cordon path can be created',
   'canonical-root': 'rejects a non-canonical repository root instead of normalizing it',
-  primitives: 'retains durability, exclusion and central nonce primitives',
+  primitives: 'retains durability, exclusion, process identity and central nonce primitives',
   registry: 'accepts only the scheduler-only target registry',
   scheduler: 'starts exactly one exact-head review only after central epoch/nonce verification and fresh checks',
-  ordering: 'retains cordon-first, import, projection, CAS and supervisor ordering',
 };
 
 function digest(snapshot: ArtifactSnapshot): string {
@@ -91,25 +101,18 @@ function writeArtifact(relativePath: string, value: { bytes: Buffer; mode: numbe
 
 function restoreArtifact(relativePath: string, snapshot: ArtifactSnapshot): void {
   const file = path.join(repoRoot, relativePath);
-  if (!snapshot.existed) {
-    rmSync(file, { force: true });
-    return;
-  }
+  if (!snapshot.existed) { rmSync(file, { force: true }); return; }
   writeArtifact(relativePath, { bytes: snapshot.bytes, mode: snapshot.mode });
 }
 
 function replaceSpec(artifactPath: string, detector: DetectorPattern, token: string, replacement: string, all = false): MutationSpec {
-  return {
-    artifactPath,
-    detector,
-    apply: (snapshot) => {
-      if (!snapshot.existed) throw new Error(`mutation_artifact_missing:${artifactPath}`);
-      const source = snapshot.bytes.toString('utf8');
-      if (!source.includes(token)) throw new Error(`mutation_token_missing:${artifactPath}:${token}`);
-      const mutated = all ? source.split(token).join(replacement) : source.replace(token, replacement);
-      return { bytes: Buffer.from(mutated, 'utf8'), mode: snapshot.mode };
-    },
-  };
+  return { artifactPath, detector, apply: (snapshot) => {
+    if (!snapshot.existed) throw new Error(`mutation_artifact_missing:${artifactPath}`);
+    const source = snapshot.bytes.toString('utf8');
+    if (!source.includes(token)) throw new Error(`mutation_token_missing:${artifactPath}:${token}`);
+    const mutated = all ? source.split(token).join(replacement) : source.replace(token, replacement);
+    return { bytes: Buffer.from(mutated, 'utf8'), mode: snapshot.mode };
+  } };
 }
 
 function insertBeforeSpec(artifactPath: string, detector: DetectorPattern, token: string, insertion: string): MutationSpec {
@@ -117,46 +120,29 @@ function insertBeforeSpec(artifactPath: string, detector: DetectorPattern, token
 }
 
 function appendSpec(artifactPath: string, detector: DetectorPattern, text: string): MutationSpec {
-  return {
-    artifactPath,
-    detector,
-    apply: (snapshot) => {
-      if (!snapshot.existed) throw new Error(`mutation_artifact_missing:${artifactPath}`);
-      const newline = snapshot.bytes.toString('utf8').endsWith('\n') ? '' : '\n';
-      return { bytes: Buffer.concat([snapshot.bytes, Buffer.from(`${newline}${text}\n`, 'utf8')]), mode: snapshot.mode };
-    },
-  };
+  return { artifactPath, detector, apply: (snapshot) => {
+    if (!snapshot.existed) throw new Error(`mutation_artifact_missing:${artifactPath}`);
+    const newline = snapshot.bytes.toString('utf8').endsWith('\n') ? '' : '\n';
+    return { bytes: Buffer.concat([snapshot.bytes, Buffer.from(`${newline}${text}\n`, 'utf8')]), mode: snapshot.mode };
+  } };
 }
 
 function createSpec(artifactPath: string, detector: DetectorPattern, text: string): MutationSpec {
-  return {
-    artifactPath,
-    detector,
-    apply: (snapshot) => {
-      if (snapshot.existed) throw new Error(`mutation_create_target_exists:${artifactPath}`);
-      return { bytes: Buffer.from(`${text}\n`, 'utf8'), mode: 0o600 };
-    },
-  };
+  return { artifactPath, detector, apply: (snapshot) => {
+    if (snapshot.existed) throw new Error(`mutation_create_target_exists:${artifactPath}`);
+    return { bytes: Buffer.from(`${text}\n`, 'utf8'), mode: 0o600 };
+  } };
 }
 
 function modeSpec(artifactPath: string, detector: DetectorPattern, mode: number): MutationSpec {
-  return {
-    artifactPath,
-    detector,
-    apply: (snapshot) => {
-      if (!snapshot.existed) throw new Error(`mutation_artifact_missing:${artifactPath}`);
-      return { bytes: snapshot.bytes, mode };
-    },
-  };
+  return { artifactPath, detector, apply: (snapshot) => {
+    if (!snapshot.existed) throw new Error(`mutation_artifact_missing:${artifactPath}`);
+    return { bytes: snapshot.bytes, mode };
+  } };
 }
 
 function registrySpec(childId = 'legacy-mutation'): MutationSpec {
-  return replaceSpec(
-    'scripts/orchestrator-side-process-registry.cutover-target.json',
-    'registry',
-    '"id": "pr2-scheduler"',
-    `"id": "${childId}"`,
-  );
+  return replaceSpec('scripts/orchestrator-side-process-registry.cutover-target.json', 'registry', '"id": "pr2-scheduler"', `"id": "${childId}"`);
 }
 
 function scopeProtectedSpec(): MutationSpec {
@@ -169,19 +155,18 @@ function scopeDeletedSpec(): MutationSpec {
 
 function mutationSpec(ac: AcceptanceId, id: string): MutationSpec {
   if (ac === 'AC1') {
-    if (/pr2a|closure|external-(supervisor|claim)|unresolved|input-tree/.test(id)) {
-      return replaceSpec('scripts/pr2a/closed-world-scanner.ts', 'closure', "const registryPath = 'scripts/pr2a/execution-root-registry.json';", "const registryPath = 'scripts/pr2a/__mutation_missing_root_registry.json';");
-    }
-    if (/node22/.test(id)) {
-      return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'node', "if (major !== 22) throw new Error('node22_required');", "if (false) throw new Error('node22_required');");
-    }
-    if (/host-or-repo|installed-commit|old-installed/.test(id)) {
-      return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'canonical-root', 'if (value !== lexical || lexical !== canonical)', 'if (false)');
-    }
+    if (id === 'pr2a-merge-missing') return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'admission-guards', "if (!isAncestor(repoRoot, PR2A_LANDING_COMMIT, baseRef)) throw new Error('pr2a_merge_missing');", "if (false) throw new Error('pr2a_merge_missing');");
+    if (id === 'closure-schema-incompatible') return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'admission-guards', "if (manifest.schemaVersion !== 1) throw new Error('closure_schema_incompatible');", "if (false) throw new Error('closure_schema_incompatible');");
+    if (/external-(supervisor|claim)-library-reference/.test(id)) return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'admission-guards', 'if (external.length !== 0) throw new Error(`external_legacy_reference:', 'if (false) throw new Error(`external_legacy_reference:');
+    if (id === 'closure-unresolved-set-nonempty') return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'admission-guards', "throw new Error('closure_unresolved_set_nonempty');", 'void manifest.unknown;');
+    if (/pr2a-receipt|closure-input-tree/.test(id)) return replaceSpec('scripts/pr2a/closed-world-scanner.ts', 'closure', "const registryPath = 'scripts/pr2a/execution-root-registry.json';", "const registryPath = 'scripts/pr2a/__mutation_missing_root_registry.json';");
+    if (id === 'node22-not-enforced') return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'node', "if (major !== 22) throw new Error('node22_required');", "if (false) throw new Error('node22_required');");
+    if (id === 'installed-commit-unbound') return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'admission-guards', "if (actualHead.toLowerCase() !== input.installedCommitSha.toLowerCase()) throw new Error('installed_commit_unbound');", "if (false) throw new Error('installed_commit_unbound');");
+    if (/host-or-repo|old-installed/.test(id)) return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'canonical-root', 'if (value !== lexical || lexical !== canonical)', 'if (false)');
+    if (id === 'legacy-supervisor-identity-ambiguous') return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'admission-guards', 'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);', 'void legacyIdentity;');
+    if (id === 'competing-transaction-admitted') return replaceSpec('scripts/lib/cutover/activation-cordon.ts', 'admission-guards', "if (existsSync(input.path)) throw new Error('competing_transaction_admitted');", "if (false) throw new Error('competing_transaction_admitted');");
     if (id === 'successor-926-used-as-prerequisite') return registrySpec('pr2-merge-actuator');
-    if (id === 'mutation-before-admission') {
-      return insertBeforeSpec('scripts/lib/cutover/activation-transaction.ts', 'ordering', 'const preflight = boundary.preflight(request);', 'projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);');
-    }
+    if (id === 'mutation-before-admission') return insertBeforeSpec('scripts/lib/cutover/activation-transaction.ts', 'ordering', 'const preflight = boundary.preflight(request);', 'projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);');
     return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'foundation', 'const foundation = boundary.proveFoundationAdoption(request);', "const foundation = { result: 'foundation-evidence-verified' } as FoundationAdmissionProof;");
   }
 
@@ -190,36 +175,37 @@ function mutationSpec(ac: AcceptanceId, id: string): MutationSpec {
     if (/install-kills-old-supervisor|install-gap-acquirer-gap|legacy-supervisor-terminated-before-cordon/.test(id)) return insertBeforeSpec('scripts/lib/cutover/activation-transaction.ts', 'ordering', 'const cordon = createCordon({', 'await boundary.terminateLegacyProcesses([legacySupervisor]);');
     if (/ts-supervisor-starts-at-install|dual-supervisor-owner|ts-supervisor-start-before-cas/.test(id)) return insertBeforeSpec('scripts/lib/cutover/activation-transaction.ts', 'ordering', 'const authority = new FileEpochAuthority(request.paths.epochAuthorityPath);', "await boundary.startTypeScriptSupervisor(request, 'mutation-pre-cas');");
     if (/legacy-supervisor-survivor|survivor-accepted/.test(id)) return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'survivor', 'if (survivors.supervisorAlive || survivors.writers.length !== 0) {', 'if (survivors.writers.length !== 0) {');
-    if (id === 'concurrent-writer-admitted') return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'survivor', 'if (survivors.supervisorAlive || survivors.writers.length !== 0) {', 'if (survivors.supervisorAlive) {');
+    if (id === 'concurrent-writer-admitted') return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'writer-survivor', 'if (survivors.supervisorAlive || survivors.writers.length !== 0) {', 'if (survivors.supervisorAlive) {');
     if (id === 'store-writer-ingress-left-open') return replaceSpec('scripts/lib/cutover/activation-cordon.ts', 'activation', '    writersClosed: true,', '    writersClosed: false as true,');
-    if (id === 'drain-watermark-missing') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'activation', "if (!writerWatermark.trim()) throw new Error('writer_watermark_missing');", "if (false) throw new Error('writer_watermark_missing');");
+    if (id === 'drain-watermark-missing') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'watermark', "if (!writerWatermark.trim()) throw new Error('writer_watermark_missing');", "if (false) throw new Error('writer_watermark_missing');");
     if (/legacy-supervisor-identity-unverified|pid-identity-unverified/.test(id)) return replaceSpec('scripts/lib/cutover/activation-cordon.ts', 'primitives', 'current.startTicks !== identity.startTicks', 'false');
     if (id === 'registry-projection-before-import-digest') return insertBeforeSpec('scripts/lib/cutover/activation-transaction.ts', 'ordering', 'const imports = request.stores.map((spec) => importSnapshot({', 'projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);');
     if (id === 'registry-file-or-parent-not-fsynced' || id === 'precommit-log-not-durable-before-cas') return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', 'fsyncSync(fd);', 'void fd;', true);
     if (id === 'registry-readback-hash-missing') return replaceSpec('scripts/lib/cutover/activation-registry-projection.ts', 'activation', '  writeDurableFile(projectionPath, source);', '  writeDurableFile(projectionPath, Buffer.from("{}"));');
     if (/precommit-digest-not-in-core|precommit-log-digest-mismatch-accepted/.test(id)) return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'activation', '    preCommitLogDigest: phaseOne.digest,', "    preCommitLogDigest: 'sha256:mutation',");
-    if (/registry-treated-as-commit|central-cas-not-sole-commit|postcommit-followup-treated-as-commit/.test(id)) return insertBeforeSpec('scripts/lib/cutover/activation-transaction.ts', 'ordering', 'authority.commit(request.expectedOldEpochId, core);', "await boundary.startTypeScriptSupervisor(request, 'mutation-pre-cas');");
+    if (/registry-treated-as-commit|postcommit-followup-treated-as-commit/.test(id)) return insertBeforeSpec('scripts/lib/cutover/activation-transaction.ts', 'ordering', 'authority.commit(request.expectedOldEpochId, core);', "await boundary.startTypeScriptSupervisor(request, 'mutation-pre-cas');");
+    if (id === 'central-cas-not-sole-commit') return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'activation', 'authority.commit(request.expectedOldEpochId, core);', 'authority.commit(request.expectedOldEpochId, core); authority.commit(request.epochId, core);');
     if (id === 'cas-core-field-extra-or-missing') return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'activation', "  'importDigests', 'registryHash', 'preCommitLogDigest', 'commitAt',", "  'importDigests', 'registryHash', 'commitAt',");
     if (id === 'cas-conflict-ignored') return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'primitives', 'if (document.currentEpochId !== expectedOldEpochId)', 'if (false)');
     if (/tracked-registry-restored-consumed|epoch-gated-source-missing|postactivation-start-without-reprojection/.test(id)) return replaceSpec('scripts/lib/orchestrator-side-process-supervisor.ts', 'primitives', '      const verified = verifyEpochAndProjection(options);', "      const verified = { registryHash: 'mutation', cadenceSeconds: 1 };");
     if (id === 'legacy-executable-reference-restored') return scopeDeletedSpec();
-    if (id === 'dual-scheduler') return registrySpec();
+    if (id === 'dual-scheduler') return registrySpec('pr2-scheduler-duplicate');
   }
 
   if (ac === 'AC3') {
     if (id === 'snapshot-before-drain') return insertBeforeSpec('scripts/lib/cutover/activation-transaction.ts', 'ordering', 'const drain = await boundary.drainLegacyWriters(request, legacyWriters);', "snapshotStores(request.stores, request.paths.snapshotDir, 'mutation-before-drain');");
-    if (id === 'writer-watermark-missing') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'activation', "if (!writerWatermark.trim()) throw new Error('writer_watermark_missing');", "if (false) throw new Error('writer_watermark_missing');");
-    if (id === 'concurrent-store-writer') return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'survivor', 'if (survivors.supervisorAlive || survivors.writers.length !== 0) {', 'if (survivors.supervisorAlive) {');
-    if (id === 'snapshot-version-missing') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'activation', 'if (!Number.isInteger(sourceVersion) || sourceVersion <= 0)', 'if (false)');
-    if (id === 'snapshot-digest-not-raw-bytes') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'activation', 'snapshotDigest: sha256Bytes(bytes)', "snapshotDigest: 'sha256:mutation'");
-    if (/digest-algorithm-not-sha256|stable-stringify|unicode-or-escape|negative-zero|nested-key|vector-failing/.test(id)) return replaceSpec('scripts/lib/cutover/stable-stringify.ts', 'vectors', 'Object.keys(object).sort()', 'Object.keys(object)');
-    if (id === 'store-covered-field-omitted') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'activation', "throw new Error(`store_missing_field:${spec.id}:${key}`)", "throw new Error('mutation_missing_field_guard')");
-    if (id === 'unknown-store-field-silently-ignored') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'activation', "throw new Error(`store_unknown_field:${spec.id}:${unknown.join(',')}`)", "throw new Error('mutation_unknown_field_guard')");
-    if (id === 'target-import-identity-missing') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'activation', '      nonce: input.nonce,', '');
-    if (id === 'target-import-identity-aliased') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'activation', '      storeId: input.spec.id,', "      storeId: 'mutation' as typeof input.spec.id,");
-    if (/target-cas-or-upsert-omitted|marker-only-completion/.test(id)) return replaceSpec('scripts/lib/cutover/activation-import.ts', 'activation', '  writeDurableJson(markerPath, record);', '  void markerPath;');
-    if (/target-state-digest-mismatch-accepted|legacy-read-partial-import/.test(id)) return replaceSpec('scripts/lib/cutover/activation-import.ts', 'activation', 'if (sha256Stable(existing) !== importTargetDigest)', 'if (false)');
-    if (id === 'post-mutation-pre-marker-reapplied') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'activation', 'if (sha256Stable(readBack) !== importTargetDigest)', 'if (false)');
+    if (id === 'writer-watermark-missing') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'watermark', "if (!writerWatermark.trim()) throw new Error('writer_watermark_missing');", "if (false) throw new Error('writer_watermark_missing');");
+    if (id === 'concurrent-store-writer') return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'writer-survivor', 'if (survivors.supervisorAlive || survivors.writers.length !== 0) {', 'if (survivors.supervisorAlive) {');
+    if (id === 'snapshot-version-missing') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'import-guards', 'if (!Number.isInteger(sourceVersion) || sourceVersion <= 0)', 'if (false)');
+    if (/snapshot-digest-not-raw-bytes|digest-algorithm-not-sha256/.test(id)) return replaceSpec('scripts/lib/cutover/activation-import.ts', 'import-guards', 'snapshotDigest: sha256Bytes(bytes)', "snapshotDigest: 'sha256:mutation'");
+    if (/stable-stringify|unicode-or-escape|negative-zero|nested-key|vector-failing/.test(id)) return replaceSpec('scripts/lib/cutover/stable-stringify.ts', 'vectors', 'Object.keys(object).sort()', 'Object.keys(object)');
+    if (id === 'store-covered-field-omitted') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'import-guards', "throw new Error(`store_missing_field:${spec.id}:${key}`)", 'void key;');
+    if (id === 'unknown-store-field-silently-ignored') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'import-guards', "throw new Error(`store_unknown_field:${spec.id}:${unknown.join(',')}`)", 'void unknown;');
+    if (id === 'target-import-identity-missing') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'import-guards', '    nonce: input.nonce,', '');
+    if (id === 'target-import-identity-aliased') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'import-guards', '    storeId: input.spec.id,', "    storeId: 'mutation' as typeof input.spec.id,");
+    if (/target-cas-or-upsert-omitted|marker-only-completion/.test(id)) return replaceSpec('scripts/lib/cutover/activation-import.ts', 'import-guards', '  writeDurableJson(markerPath, record);', '  void markerPath;');
+    if (/target-state-digest-mismatch-accepted|legacy-read-partial-import/.test(id)) return replaceSpec('scripts/lib/cutover/activation-import.ts', 'import-guards', 'if (sha256Stable(existing) !== importTargetDigest)', 'if (false)');
+    if (id === 'post-mutation-pre-marker-reapplied') return replaceSpec('scripts/lib/cutover/activation-import.ts', 'import-guards', 'if (sha256Stable(readBack) !== importTargetDigest)', 'if (false)');
     return scopeProtectedSpec();
   }
 
@@ -251,18 +237,25 @@ function mutationSpec(ac: AcceptanceId, id: string): MutationSpec {
   if (ac === 'AC7') {
     if (/nonce|replay|consumer-skips/.test(id)) return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'primitives', 'if (!record || record.nonce !== nonce)', 'if (!record || false)');
     if (/followup/.test(id)) return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'activation', '    sequence: existing.length + 1,', '    sequence: existing.length + 2,');
-    if (/fsync|precommit/.test(id)) return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', 'fsyncSync(fd);', 'void fd;', true);
+    if (/fsync|precommit-log-not-durable/.test(id)) return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', 'fsyncSync(fd);', 'void fd;', true);
+    if (/precommit-digest|precommit-log-digest/.test(id)) return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'activation', '    preCommitLogDigest: phaseOne.digest,', "    preCommitLogDigest: 'sha256:mutation',");
+    if (id === 'legacy-supervisor-termination-evidence-missing') return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'activation', "'legacy-supervisor-and-writers-terminated'", "'mutation-termination-evidence'");
+    if (/pr2a-closure-admission-evidence-missing|ts-supervisor-inert-evidence-missing/.test(id)) return replaceSpec('scripts/lib/cutover/activation-transaction.ts', 'admission-guards', 'const foundation = boundary.proveFoundationAdoption(request);', "const foundation = { result: 'foundation-evidence-verified' } as FoundationAdmissionProof;");
+    if (/precommit-timestamp-outside-core|postcommit-timestamp-in-core|cas-core-field-extra-or-missing/.test(id)) return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'activation', "  'preCommitLogDigest', 'commitAt',", "  'preCommitLogDigest',");
     return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'primitives', 'if (document.currentEpochId !== expectedOldEpochId)', 'if (false)');
   }
 
-  if (/repo-root/.test(id)) return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'canonical-root', 'if (value !== lexical || lexical !== canonical)', 'if (false)');
-  if (/exclusive-lock/.test(id)) return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'primitives', '    mkdirSync(lock);', '    void lock;');
-  if (/atomic-rename/.test(id)) return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', '  renameSync(temporary, target);', '  writeFileSync(target, bytes);');
-  if (/file-fsync/.test(id)) return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', 'fsyncSync(fd);', 'void fd;', true);
-  if (/parent-fsync/.test(id)) return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', '  syncDirectory(directory);', '  void directory;');
-  if (/new-powershell|guard|pester/.test(id)) return scopeDeletedSpec();
-  if (/node|windows|unsupported-platform|cross-device|pid-start|process-tree/.test(id)) return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'node', "if (major !== 22) throw new Error('node22_required');", "if (false) throw new Error('node22_required');");
-  return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'primitives', 'if (statSync(targetParent).dev !== statSync(projectionParent).dev)', 'if (false)');
+  if (id === 'wrong-node-major-admitted') return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'node', "if (major !== 22) throw new Error('node22_required');", "if (false) throw new Error('node22_required');");
+  if (/windows-native-activation|unsupported-platform-admitted/.test(id)) return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'platform', "if (platform !== 'linux') throw new Error('unsupported_platform');", "if (false) throw new Error('unsupported_platform');");
+  if (id === 'repo-root-not-canonical') return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'canonical-root', 'if (value !== lexical || lexical !== canonical)', 'if (false)');
+  if (id === 'cross-device-registry-projection') return replaceSpec('scripts/lib/cutover/activation-platform-preflight.ts', 'primitives', 'if (statSync(targetParent).dev !== statSync(projectionParent).dev)', 'if (false)');
+  if (id === 'pid-start-time-unchecked') return replaceSpec('scripts/lib/cutover/activation-cordon.ts', 'primitives', 'current.startTicks !== identity.startTicks', 'false');
+  if (id === 'process-tree-survivor') return replaceSpec('scripts/lib/cutover/activation-cordon.ts', 'primitives', 'if (survivors.length) throw new Error', 'if (false) throw new Error');
+  if (id === 'exclusive-lock-omitted') return replaceSpec('scripts/lib/cutover/activation-epoch-authority.ts', 'primitives', '    mkdirSync(lock);', '    void lock;');
+  if (id === 'atomic-rename-omitted') return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', '  renameSync(temporary, target);', '  writeFileSync(target, bytes);');
+  if (id === 'file-fsync-omitted') return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', 'fsyncSync(fd);', 'void fd;', true);
+  if (id === 'parent-fsync-omitted') return replaceSpec('scripts/lib/cutover/activation-evidence.ts', 'primitives', '  syncDirectory(directory);', '  void directory;');
+  return scopeDeletedSpec();
 }
 
 async function runDetector(detector: DetectorPattern): Promise<Awaited<ReturnType<typeof runProcess>>> {
@@ -281,18 +274,11 @@ async function runDetector(detector: DetectorPattern): Promise<Awaited<ReturnTyp
 async function executeMutation(ac: AcceptanceId, mutationId: string): Promise<MutationEvidence> {
   const spec = mutationSpec(ac, mutationId);
   const before = snapshotArtifact(spec.artifactPath);
-  const baseline = await runDetector(spec.detector);
-  if (!baseline.ok) throw new Error(`mutation_precondition_failed:${ac}:${mutationId}:${baseline.stderr || baseline.stdout}`);
   const applied = spec.apply(before);
   writeArtifact(spec.artifactPath, applied);
-  const after = snapshotArtifact(spec.artifactPath);
   const artifactHashBefore = digest(before);
-  const artifactHashAfter = digest(after);
-  if (artifactHashAfter === artifactHashBefore) {
-    restoreArtifact(spec.artifactPath, before);
-    throw new Error(`mutation_hash_delta_missing:${ac}:${mutationId}`);
-  }
-
+  const artifactHashAfter = digest(snapshotArtifact(spec.artifactPath));
+  if (artifactHashAfter === artifactHashBefore) { restoreArtifact(spec.artifactPath, before); throw new Error(`mutation_hash_delta_missing:${ac}:${mutationId}`); }
   let negative;
   try {
     negative = await runDetector(spec.detector);
@@ -300,25 +286,16 @@ async function executeMutation(ac: AcceptanceId, mutationId: string): Promise<Mu
   } finally {
     restoreArtifact(spec.artifactPath, before);
   }
-
   const restoredHash = digest(snapshotArtifact(spec.artifactPath));
   if (restoredHash !== artifactHashBefore) throw new Error(`mutation_restore_hash_mismatch:${ac}:${mutationId}`);
   const green = await runDetector(spec.detector);
   if (!green.ok) throw new Error(`mutation_restore_not_green:${ac}:${mutationId}:${green.stderr || green.stdout}`);
-
   return {
-    ac,
-    mutationId,
-    artifactPath: spec.artifactPath,
+    ac, mutationId, artifactPath: spec.artifactPath,
     detectorId: `issue-928:${mutationId}:${DETECTORS[spec.detector]}`,
     detectorCommand: [process.execPath, 'scripts/run-vitest-with-harness.mjs', 'run', '--maxWorkers=1', TEST_FILE, '-t', DETECTORS[spec.detector]],
-    artifactHashBefore,
-    artifactHashAfter,
-    restoredHash,
-    negativeOutcome: 'failed',
-    restoredOutcome: 'passed',
-    negativeExitCode: negative?.exitCode ?? 1,
-    restoredExitCode: 0,
+    artifactHashBefore, artifactHashAfter, restoredHash,
+    negativeOutcome: 'failed', restoredOutcome: 'passed', negativeExitCode: negative.exitCode ?? 1, restoredExitCode: 0,
   };
 }
 
@@ -337,32 +314,23 @@ function producerOutcome(ac: AcceptanceId): Record<string, unknown> {
 
 function selected(argv: string[]): AcceptanceId[] {
   const index = argv.indexOf('--ac');
-  if (index >= 0) {
-    const ac = argv[index + 1] as AcceptanceId;
-    if (!ac || !(ac in CONTROLS)) throw new Error('invalid_ac');
-    return [ac];
-  }
+  if (index >= 0) { const ac = argv[index + 1] as AcceptanceId; if (!ac || !(ac in CONTROLS)) throw new Error('invalid_ac'); return [ac]; }
   if (argv.includes('--all')) return Object.keys(CONTROLS) as AcceptanceId[];
   throw new Error('expected --ac ACn or --all');
 }
 
 async function main(): Promise<void> {
-  const evidence: MutationEvidence[] = [];
   const selectedAcs = selected(process.argv.slice(2));
-  for (const ac of selectedAcs) {
-    for (const mutationId of CONTROLS[ac]) evidence.push(await executeMutation(ac, mutationId));
+  const planned = selectedAcs.flatMap((ac) => CONTROLS[ac].map((mutationId) => ({ ac, mutationId, spec: mutationSpec(ac, mutationId) })));
+  for (const detector of [...new Set(planned.map((row) => row.spec.detector))]) {
+    const baseline = await runDetector(detector);
+    if (!baseline.ok) throw new Error(`detector_baseline_red:${detector}:${baseline.stderr || baseline.stdout}`);
   }
+  const evidence: MutationEvidence[] = [];
+  for (const row of planned) evidence.push(await executeMutation(row.ac, row.mutationId));
   const cutover: Record<string, unknown> = {};
   for (const ac of selectedAcs) Object.assign(cutover, producerOutcome(ac));
-  process.stdout.write(`${JSON.stringify({
-    issue: 928,
-    cutover,
-    mutationEvidence: evidence,
-    mutationRunner: { result: 'one-row-one-real-fault-external-detector-red-green', bindings: evidence.length },
-  })}\n`);
+  process.stdout.write(`${JSON.stringify({ issue: 928, cutover, mutationEvidence: evidence, mutationRunner: { result: 'one-row-one-real-fault-external-detector-red-green', bindings: evidence.length } })}\n`);
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+main().catch((error) => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
