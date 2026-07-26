@@ -63,7 +63,8 @@ function fixture(root: string): { request: ActivationRequest; boundary: Activati
     captureLegacyWriters:()=>[],
     drainLegacyWriters:async()=>({writerWatermark:'drained-test-watermark',drainedAt:new Date().toISOString()}),
     terminateLegacyProcesses:async()=>[2222],
-    startTypeScriptSupervisor:async()=>3333,
+    verifyLegacyProcessesGone:()=>({supervisorAlive:false,writers:[]}),
+    startTypeScriptSupervisor:async()=>({supervisorPid:3333,childGeneration:1}),
   };
   return {request,boundary};
 }
@@ -112,7 +113,8 @@ async function faultIsRejected(ac: AcceptanceId, id: string): Promise<boolean> {
     }
     if (ac==='AC2') {
       const {request,boundary}=fixture(root);
-      if (/drain|writer|cordon/.test(id)) boundary.drainLegacyWriters=async()=>{throw new Error(id)};
+      if (/legacy-supervisor-survivor|survivor-accepted/.test(id)) boundary.verifyLegacyProcessesGone=()=>({supervisorAlive:true,writers:[]});
+      else if (/drain|writer|cordon/.test(id)) boundary.drainLegacyWriters=async()=>{throw new Error(id)};
       else if (/survivor|terminate|pid-identity/.test(id)) boundary.terminateLegacyProcesses=async()=>{throw new Error(id)};
       else if (/ts-supervisor|dual-supervisor|postactivation/.test(id)) boundary.startTypeScriptSupervisor=async()=>{throw new Error(id)};
       else if (/cas-conflict|central-cas|registry-treated-as-commit|postcommit-followup-treated-as-commit/.test(id)) { const core=coreFixture(); new FileEpochAuthority(request.paths.epochAuthorityPath).commit(null,core); }
@@ -175,7 +177,8 @@ function selected(argv:string[]): AcceptanceId[] { const i=argv.indexOf('--ac');
 
 async function main(): Promise<void> {
   const evidence:Evidence[]=[];
-  for(const ac of selected(process.argv.slice(2))){
+  const selectedAcs = selected(process.argv.slice(2));
+  for(const ac of selectedAcs){
     await baseline(ac);
     for(const id of CONTROLS[ac]){
       const before=JSON.stringify({ac,mutationId:null}); const after=JSON.stringify({ac,mutationId:id});
@@ -184,7 +187,6 @@ async function main(): Promise<void> {
       evidence.push({ac,mutationId:id,artifactPath:'synthetic-cutover-boundary',detectorId:`issue-928:${ac}`,artifactHashBefore:digest(before),artifactHashAfter:digest(after),restoredHash:digest(before),negativeOutcome:'failed',restoredOutcome:'passed',negativeExitCode:1,restoredExitCode:0});
     }
   }
-  const selectedAcs = selected(process.argv.slice(2));
   const cutover: Record<string, unknown> = {};
   for (const ac of selectedAcs) Object.assign(cutover, producerOutcome(ac));
   process.stdout.write(`${JSON.stringify({issue:928,cutover,mutationEvidence:evidence,mutationRunner:{result:'externally-grounded',bindings:evidence.length}})}\n`);
