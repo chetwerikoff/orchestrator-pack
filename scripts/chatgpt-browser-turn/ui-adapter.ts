@@ -122,7 +122,7 @@ interface NetworkWitnessState {
   pendingPatchAssistantId?: string;
   provenTurnStreamId?: string;
   pendingStreamTurnIdByUserId: Map<string, string>;
-  turnStreamTerminalTargetId?: string;
+  turnStreamTerminalTargetByTurnId: Map<string, string>;
   pendingStreamMarkersByTurnId: Map<string, string>;
   pendingStreamAppendOpsByTurnId: Map<string, { content: string }[]>;
   pendingStreamPatchOpsByTurnId: Map<string, Record<string, unknown>[][]>;
@@ -329,6 +329,17 @@ function turnMatchesProvenStream(state: NetworkWitnessState, turnContext?: Strea
 }
 
 
+
+function provenTurnStreamTerminalTarget(
+  state: NetworkWitnessState,
+  turnContext?: StreamTurnContext,
+): string | undefined {
+  if (!turnMatchesProvenStream(state, turnContext)) return undefined;
+  const turnId = turnContext?.turnId;
+  if (!turnId) return undefined;
+  return state.turnStreamTerminalTargetByTurnId.get(turnId);
+}
+
 function isOwnedStreamTurn(state: NetworkWitnessState, turnContext?: StreamTurnContext): boolean {
   const turnId = turnContext?.turnId;
   if (!turnId) return false;
@@ -381,7 +392,7 @@ function flushPendingStreamTurnEvidence(state: NetworkWitnessState, turnId: stri
   const marker = state.pendingStreamMarkersByTurnId.get(turnId);
   if (marker) bindTurnScopedTerminalTarget(state, marker, turnContext);
   const userId = provenActiveTurnUserId(state);
-  const targetId = state.turnStreamTerminalTargetId ?? marker;
+  const targetId = state.turnStreamTerminalTargetByTurnId.get(turnId) ?? marker;
   if (!userId || !targetId) return;
   for (const { content } of state.pendingStreamAppendOpsByTurnId.get(turnId) ?? []) {
     ingestServicePayload(state.terminal, {
@@ -431,8 +442,9 @@ function bindTurnScopedTerminalTarget(
   if (!turnMatchesProvenStream(state, turnContext)) return;
   const userId = provenActiveTurnUserId(state);
   if (!userId) return;
-  state.turnStreamTerminalTargetId = assistantId;
-  state.activePatchMessageId = assistantId;
+  const turnId = turnContext?.turnId;
+  if (!turnId) return;
+  state.turnStreamTerminalTargetByTurnId.set(turnId, assistantId);
   state.pendingPatchAssistantId = undefined;
   if (!state.terminal.messages.has(assistantId)) {
     ingestServicePayload(state.terminal, {
@@ -447,17 +459,15 @@ function ensurePositionalPatchTarget(
   state: NetworkWitnessState,
   turnContext?: StreamTurnContext,
 ): string | undefined {
-  const targetId = state.activePatchMessageId
-    ?? (turnMatchesProvenStream(state, turnContext) ? state.turnStreamTerminalTargetId : undefined);
+  if (!turnMatchesProvenStream(state, turnContext)) return undefined;
+  const targetId = provenTurnStreamTerminalTarget(state, turnContext);
   if (!targetId || targetId.length < 8) return undefined;
   const userId = provenActiveTurnUserId(state);
   if (!userId) return undefined;
   if (!isMessageAttributedToUserTurn(targetId, userId, state.terminal.messages)) {
-    if (!turnMatchesProvenStream(state, turnContext) || targetId !== state.turnStreamTerminalTargetId) return undefined;
     bindTurnScopedTerminalTarget(state, targetId, turnContext);
     if (!isMessageAttributedToUserTurn(targetId, userId, state.terminal.messages)) return undefined;
   }
-  state.activePatchMessageId = targetId;
   return targetId;
 }
 
@@ -470,7 +480,7 @@ function ingestTurnScopedAssistantDelta(
   if (author?.role !== 'assistant' || typeof message.id !== 'string') return;
   const userId = provenActiveTurnUserId(state);
   if (!userId || !turnMatchesProvenStream(state, turnContext)) return;
-  if (message.id === state.turnStreamTerminalTargetId) {
+  if (message.id === provenTurnStreamTerminalTarget(state, turnContext)) {
     bindTurnScopedTerminalTarget(state, message.id, turnContext);
     ingestServicePayload(state.terminal, {
       type: 'delta',
@@ -586,7 +596,7 @@ function applyStreamingPatchOperation(
     const parent = typeof message.parent === 'string' ? message.parent : undefined;
     const userId = provenActiveTurnUserId(state);
     const effectiveParent = role === 'assistant'
-      ? (parent ?? (message.id === state.turnStreamTerminalTargetId ? userId : undefined)
+      ? (parent ?? (message.id === provenTurnStreamTerminalTarget(state, turnContext) ? userId : undefined)
         ?? (message.id === state.pendingPatchAssistantId ? userId : undefined))
       : parent;
     if (role === 'assistant') {
@@ -907,6 +917,7 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     frozenDispatchCandidateIds: new Set<string>(),
     pendingServiceInputMessageIds: new Set<string>(),
     pendingStreamTurnIdByUserId: new Map<string, string>(),
+    turnStreamTerminalTargetByTurnId: new Map<string, string>(),
     pendingStreamMarkersByTurnId: new Map<string, string>(),
     pendingStreamAppendOpsByTurnId: new Map<string, { content: string }[]>(),
     pendingStreamPatchOpsByTurnId: new Map<string, Record<string, unknown>[][]>(),

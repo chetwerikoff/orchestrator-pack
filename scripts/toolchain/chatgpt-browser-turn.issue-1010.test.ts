@@ -465,6 +465,51 @@ describe('issue 1010 submitted-turn proof', () => {
     expect(result.assistantMessageId).not.toBe(foreignAssistant);
   });
 
+
+  it('AC2 rejects foreign positional terminal patch after owned marker and append', async () => {
+    const own = 'user-owned-patch-12345678';
+    const assistantId = 'asst-owned-patch-12345678';
+    const ownTurnId = 'turn-owned-patch-12345678';
+    const foreignTurnId = 'turn-foreign-patch-1234567';
+    const terminalPatchJson = '[{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/status","o":"replace","v":"finished_successfully"},{"p":"/message/metadata","o":"append","v":{"finish_details":{"type":"stop"}}}]';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [
+        streamItemEnvelope(`data: {"type":"input_message","input_message":{"id":"${own}","metadata":{"selected_sources":[]}}}
+
+`, ownTurnId),
+        streamItemEnvelope(`data: {"type":"message_marker","message_id":"${assistantId}","marker":"user_visible_token","event":"first"}
+
+`, ownTurnId),
+        streamItemEnvelope([
+          'event: delta',
+          'data: {"p":"/message/content/parts/0","o":"append","v":"OK"}',
+          '',
+        ].join('\n'), ownTurnId),
+        streamItemEnvelope([
+          'event: delta',
+          `data: {"p":"","o":"patch","v":${terminalPatchJson}}`,
+          '',
+        ].join('\n'), foreignTurnId),
+        streamItemEnvelope([
+          'event: delta',
+          `data: {"p":"","o":"patch","v":${terminalPatchJson}}`,
+          '',
+        ].join('\n'), ownTurnId),
+      ],
+      assistants: [
+        { id: assistantId, parent: own, text: 'OK', appearOnSend: true },
+      ],
+    });
+
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+
+    expect(result.state).toBe('ok');
+    expect(result.userMessageId).toBe(own);
+    expect(result.assistantMessageId).toBe(assistantId);
+  });
+
   it('AC2 accepts live wire turn stream with add-less answer delta and id-less terminal patch', async () => {
     const own = 'user-livewire-12345678';
     const assistantId = 'asst-livewire-12345678';
