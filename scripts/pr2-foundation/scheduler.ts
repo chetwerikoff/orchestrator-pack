@@ -161,16 +161,22 @@ export function productionSchedulerBoundary(input: {
       '--json', 'name,state,conclusion,status',
     ]) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
     listReviewRuns: () => listPackReviewRuns({ projectId }),
-    start: async (candidate, freshHeadSha) => startPackReview({
-      projectId,
-      linkedSessionId: candidate.sessionId,
-      prNumber: candidate.prNumber,
-      headSha: freshHeadSha,
-      sourceRepoRoot: input.repoRoot,
-      startReason: 'scheduler',
-      surface: 'pr2-scheduler',
-      claimMode: 'acquire',
-    }),
+    start: async (candidate, freshHeadSha) => {
+      const result = await startPackReview({
+        projectId,
+        linkedSessionId: candidate.sessionId,
+        prNumber: candidate.prNumber,
+        headSha: freshHeadSha,
+        sourceRepoRoot: input.repoRoot,
+        startReason: 'scheduler',
+        surface: 'pr2-scheduler',
+        claimMode: 'acquire',
+      });
+      return {
+        ok: result.ok === true,
+        ...(typeof result.reason === 'string' ? { reason: result.reason } : {}),
+      };
+    },
   };
 }
 
@@ -209,12 +215,24 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
   return { attempted, started, skipped };
 }
 
-async function runLoop(): Promise<void> {
+function loadProductionBoundary(): { boundary: SchedulerBoundary; cadence: number } {
   const parsed = parseFoundationConfig({});
   if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
   const repoRoot = process.cwd();
-  const boundary = productionSchedulerBoundary({ repoRoot });
-  const cadence = parsed.config.scheduler.pollIntervalMs;
+  return {
+    boundary: productionSchedulerBoundary({ repoRoot }),
+    cadence: parsed.config.scheduler.pollIntervalMs,
+  };
+}
+
+async function runSingleTick(): Promise<void> {
+  const { boundary } = loadProductionBoundary();
+  const result = await runSchedulerTick(boundary);
+  process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
+}
+
+async function runLoop(): Promise<void> {
+  const { boundary, cadence } = loadProductionBoundary();
   for (;;) {
     try {
       const result = await runSchedulerTick(boundary);
@@ -226,9 +244,16 @@ async function runLoop(): Promise<void> {
   }
 }
 
-if (process.argv[1]?.endsWith('scheduler.ts') && process.argv[2] === 'run') {
-  runLoop().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
-  });
+if (process.argv[1]?.endsWith('scheduler.ts')) {
+  if (process.argv[2] === 'run') {
+    runLoop().catch((error) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    });
+  } else if (process.argv[2] === 'tick') {
+    runSingleTick().catch((error) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    });
+  }
 }
