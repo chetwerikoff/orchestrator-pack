@@ -1,0 +1,129 @@
+export type CutoverStoreId = 'reconcile' | 'reevaluation' | 'reportStateSeed';
+
+export interface ProcessIdentity {
+  pid: number;
+  startTicks: string;
+  cmdline: string[];
+}
+
+export interface CutoverStoreSpec {
+  id: CutoverStoreId;
+  sourcePath: string;
+  targetPath: string;
+  coveredFields: readonly string[];
+}
+
+export interface SnapshotRecord {
+  storeId: CutoverStoreId;
+  snapshotPath: string;
+  snapshotDigest: string;
+  sourceVersion: number;
+  writerWatermark: string;
+}
+
+export interface ImportRecord {
+  storeId: CutoverStoreId;
+  importIdentity: string;
+  snapshotDigest: string;
+  importTargetDigest: string;
+  markerPath: string;
+}
+
+export interface PhaseRecord {
+  sequence: number;
+  step: string;
+  completedAt: string;
+  detailDigest: string;
+}
+
+export interface PhaseOneEnvelope {
+  schemaVersion: 1;
+  epochId: string;
+  nonce: string;
+  records: PhaseRecord[];
+}
+
+export interface EpochCommitCore {
+  epochId: string;
+  nonce: string;
+  hostId: string;
+  repoRoot: string;
+  installedCommitSha: string;
+  snapshotDigests: Record<CutoverStoreId, string>;
+  importDigests: Record<CutoverStoreId, string>;
+  registryHash: string;
+  preCommitLogDigest: string;
+  commitAt: string;
+}
+
+export interface EpochAuthorityDocument {
+  schemaVersion: 1;
+  currentEpochId: string | null;
+  records: EpochCommitCore[];
+}
+
+export interface FollowupRecord extends PhaseRecord {
+  epochId: string;
+}
+
+export interface CordonRecord {
+  schemaVersion: 1;
+  epochId: string;
+  nonce: string;
+  hostId: string;
+  repoRoot: string;
+  installedCommitSha: string;
+  oldInstalledRevisionRoot: string;
+  legacySupervisor: ProcessIdentity;
+  startedAt: string;
+  writersClosed: true;
+  noRespawn: true;
+  noTypeScriptStart: true;
+  importBegunAt: string | null;
+  preImportTargetDigests: Partial<Record<CutoverStoreId, string>>;
+}
+
+export interface ActivationPaths {
+  stateDir: string;
+  cordonPath: string;
+  phaseOnePath: string;
+  followupPath: string;
+  epochAuthorityPath: string;
+  targetRegistryPath: string;
+  projectedRegistryPath: string;
+  snapshotDir: string;
+  supervisorStateDir: string;
+}
+
+export interface ActivationRequest {
+  epochId: string;
+  expectedOldEpochId: string | null;
+  hostId: string;
+  repoRoot: string;
+  installedCommitSha: string;
+  oldInstalledRevisionRoot: string;
+  legacySupervisorPid: number;
+  knownMemberRoster: Array<{
+    hostId: string;
+    installedCommitSha: string;
+    fresh: boolean;
+    adopted: boolean;
+    quarantined?: boolean;
+  }>;
+  stores: CutoverStoreSpec[];
+  paths: ActivationPaths;
+}
+
+export interface SchedulerRegistryChild {
+  id: 'pr2-scheduler';
+  runtime: 'node';
+  script: 'pr2-foundation/scheduler.ts';
+  sideEffecting: true;
+  cadenceSeconds: number;
+}
+
+export interface SchedulerRegistry {
+  schemaVersion: 2;
+  requiredChildIds: ['pr2-scheduler'];
+  children: [SchedulerRegistryChild];
+}

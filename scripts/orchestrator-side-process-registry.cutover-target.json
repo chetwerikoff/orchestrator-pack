@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 2,
+  "requiredChildIds": ["pr2-scheduler"],
+  "children": [
+    {
+      "id": "pr2-scheduler",
+      "runtime": "node",
+      "script": "pr2-foundation/scheduler.ts",
+      "sideEffecting": true,
+      "cadenceSeconds": 5
+    }
+  ]
+}
