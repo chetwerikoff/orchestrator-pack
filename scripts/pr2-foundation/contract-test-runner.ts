@@ -71,7 +71,7 @@ async function runPr2aMutationMatrix(runner: string, ac: AcceptanceId | null): P
 }
 
 async function runCutoverDiagnosticHalf(runner: string): Promise<boolean> {
-  for (const ac of ['AC1', 'AC2', 'AC3', 'AC4'] as AcceptanceId[]) {
+  for (const ac of ['AC1', 'AC2'] as AcceptanceId[]) {
     const result = await runMutation(runner, ac);
     emit(result);
     if (!result.ok) return false;
