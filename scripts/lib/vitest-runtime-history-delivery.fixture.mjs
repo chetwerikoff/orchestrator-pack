@@ -160,6 +160,7 @@ function createIo(overrides = {}) {
   let merged = false;
   let machineWrites = 0;
   let mergeCalls = 0;
+  let closeCalls = 0;
   let policyReads = 0;
   let prReads = 0;
   let statusReads = 0;
@@ -221,6 +222,7 @@ function createIo(overrides = {}) {
       return { merged: true, sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' };
     },
     async closeObsolete(reason) {
+      closeCalls += 1;
       if (overrides.closeObsolete) await overrides.closeObsolete({ reason });
     },
     async sleep() {
@@ -232,7 +234,7 @@ function createIo(overrides = {}) {
 
   return {
     io,
-    state: () => ({ pr, history, policy, checks, merged, machineWrites, mergeCalls, policyReads, prReads, statusReads, sleeps }),
+    state: () => ({ pr, history, policy, checks, merged, machineWrites, mergeCalls, closeCalls, policyReads, prReads, statusReads, sleeps }),
   };
 }
 
@@ -533,6 +535,22 @@ async function testMergeRejectionReturnsToBoundedDecision() {
   assert(fixture.state().statusReads >= 5, 'merge rejection must trigger fresh exact-head history reads before a later attempt');
 }
 
+async function testMergeRejectionThenFreshDirtyClosesObsolete() {
+  const fixture = createIo({
+    getPr({ prReads }) {
+      if (prReads < 4) return validPr();
+      return { ...validPr(), mergeable: false, mergeable_state: 'dirty' };
+    },
+    merge() {
+      return { merged: false, message: 'branch protection changed' };
+    },
+  });
+  const result = await runDeliveryMonitor(config, fixture.io);
+  equal(result.outcome, 'close-as-obsolete', 'fresh dirty state after a rejected merge must close the obsolete PR');
+  equal(fixture.state().mergeCalls, 1, 'obsolete recovery must not attempt a second merge');
+  equal(fixture.state().closeCalls, 1, 'obsolete recovery must perform the close side effect exactly once');
+}
+
 async function testAmbiguousMergeTransportReadbackRecognizesSuccess() {
   const fixture = createIo({
     merge({ pr }) {
@@ -606,6 +624,7 @@ async function main() {
     testOrdinaryPrIsolation,
     testMergeReadbackFailure,
     testMergeRejectionReturnsToBoundedDecision,
+    testMergeRejectionThenFreshDirtyClosesObsolete,
     testAmbiguousMergeTransportReadbackRecognizesSuccess,
     testSourceContracts,
     testNarrowGithubReadInventory,
