@@ -8,6 +8,7 @@ import {
   createCordon,
   fileDigestOrAbsent,
   markImportBegun,
+  processAlive,
   readProcessIdentity,
   releaseLegacyStartBarrier,
   terminateProcessTree,
@@ -19,6 +20,7 @@ import { importSnapshot, snapshotStores } from './activation-import.ts';
 import { runActivationPlatformPreflight, type PlatformPreflightResult } from './activation-platform-preflight.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import type { ActivationRequest, CutoverStoreId, EpochCommitCore } from './types.ts';
+import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 
 const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
 const D928 = new Set([
@@ -99,7 +101,28 @@ function mapDigests<T extends { storeId: CutoverStoreId }>(rows: T[], select: (r
   return output;
 }
 
-async function startSupervisor(request: ActivationRequest, nonce: string): Promise<number> {
+async function waitForStartedSupervisor(request: ActivationRequest, nonce: string, expectedPid: number): Promise<{ supervisorPid: number; childGeneration: number }> {
+  const deadline = Date.now() + 10_000;
+  do {
+    const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
+    if (status?.restartState === 'refused') throw new Error(`typescript_supervisor_refused:${status.refusalReason ?? 'unknown'}`);
+    if (
+      status
+      && status.epochId === request.epochId
+      && status.nonce === nonce
+      && status.supervisorPid === expectedPid
+      && processAlive(expectedPid)
+      && status.registryHash
+      && status.childGeneration >= 1
+    ) {
+      return { supervisorPid: expectedPid, childGeneration: status.childGeneration };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } while (Date.now() < deadline);
+  throw new Error('typescript_supervisor_scheduler_not_ready');
+}
+
+async function startSupervisor(request: ActivationRequest, nonce: string): Promise<{ supervisorPid: number; childGeneration: number }> {
   const entry = path.join(request.repoRoot, 'scripts', 'orchestrator-wake-supervisor.ts');
   const result = await runProcess({
     command: process.execPath,
@@ -122,7 +145,7 @@ async function startSupervisor(request: ActivationRequest, nonce: string): Promi
   if (!result.ok) throw new Error(`typescript_supervisor_start_failed:${result.stderr || result.error || result.exitCode}`);
   const parsed = JSON.parse(result.stdout.trim()) as { pid?: number };
   if (!Number.isInteger(parsed.pid) || Number(parsed.pid) <= 1) throw new Error('typescript_supervisor_pid_missing');
-  return Number(parsed.pid);
+  return waitForStartedSupervisor(request, nonce, Number(parsed.pid));
 }
 
 export interface ActivationBoundary {
@@ -132,7 +155,8 @@ export interface ActivationBoundary {
   captureLegacyWriters(request: ActivationRequest): LegacyWriterRecord[];
   drainLegacyWriters(request: ActivationRequest, writers: LegacyWriterRecord[]): Promise<{ writerWatermark: string; drainedAt: string }>;
   terminateLegacyProcesses(identities: ReturnType<typeof readProcessIdentity>[]): Promise<number[]>;
-  startTypeScriptSupervisor(request: ActivationRequest, nonce: string): Promise<number>;
+  verifyLegacyProcessesGone(request: ActivationRequest, legacySupervisor: ReturnType<typeof readProcessIdentity>): { supervisorAlive: boolean; writers: LegacyWriterRecord[] };
+  startTypeScriptSupervisor(request: ActivationRequest, nonce: string): Promise<{ supervisorPid: number; childGeneration: number }>;
 }
 
 export const productionActivationBoundary: ActivationBoundary = {
@@ -159,6 +183,10 @@ export const productionActivationBoundary: ActivationBoundary = {
     for (const identity of identities) terminated.push(...await terminateProcessTree(identity));
     return [...new Set(terminated)];
   },
+  verifyLegacyProcessesGone: (request, legacySupervisor) => ({
+    supervisorAlive: processAlive(legacySupervisor.pid),
+    writers: captureLegacyWriters(request.oldInstalledRevisionRoot, request.paths.supervisorStateDir),
+  }),
   startTypeScriptSupervisor: (request, nonce) => startSupervisor(request, nonce),
 };
 
@@ -191,13 +219,22 @@ export async function activateCutover(
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain', { writers: legacyWriters, ...drain });
 
   const terminated = await boundary.terminateLegacyProcesses([...legacyWriters.map((row) => row.identity), legacySupervisor]);
-  appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'legacy-supervisor-and-writers-terminated', { supervisor: legacySupervisor, writers: legacyWriters, terminated });
+  const survivors = boundary.verifyLegacyProcessesGone(request, legacySupervisor);
+  if (survivors.supervisorAlive || survivors.writers.length !== 0) {
+    throw new Error(`legacy_process_survivor:supervisor=${survivors.supervisorAlive};writers=${survivors.writers.map((row) => row.childId).join(',')}`);
+  }
+  appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'legacy-supervisor-and-writers-terminated', {
+    supervisor: legacySupervisor,
+    writers: legacyWriters,
+    terminated,
+    reenumeratedEmpty: true,
+  });
 
   const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, drain.writerWatermark);
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'snapshots', snapshots);
 
-  markImportBegun(request.paths.cordonPath);
-  appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'import-begun', { importBegunAt: new Date().toISOString() });
+  const importBoundary = markImportBegun(request.paths.cordonPath);
+  appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'import-begun', { importBegunAt: importBoundary.importBegunAt });
   const imports = request.stores.map((spec) => importSnapshot({
     epochId: request.epochId,
     nonce: cordon.nonce,
@@ -230,9 +267,13 @@ export async function activateCutover(
   const committedProjection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
   if (committedProjection.registryHash !== committed.registryHash) throw new Error('committed_registry_hash_mismatch');
   appendFollowup(request.paths.followupPath, request.epochId, 'committed-registry-reprojected', committedProjection);
-  const supervisorPid = await boundary.startTypeScriptSupervisor(request, cordon.nonce);
-  appendFollowup(request.paths.followupPath, request.epochId, 'typescript-supervisor-started', { pid: supervisorPid });
-  appendFollowup(request.paths.followupPath, request.epochId, 'scheduler-owned', { childId: 'pr2-scheduler', supervisorPid });
+  const supervisor = await boundary.startTypeScriptSupervisor(request, cordon.nonce);
+  appendFollowup(request.paths.followupPath, request.epochId, 'typescript-supervisor-started', { pid: supervisor.supervisorPid });
+  appendFollowup(request.paths.followupPath, request.epochId, 'scheduler-owned', {
+    childId: 'pr2-scheduler',
+    supervisorPid: supervisor.supervisorPid,
+    childGeneration: supervisor.childGeneration,
+  });
   appendFollowup(request.paths.followupPath, request.epochId, 'activation-complete', { at: new Date().toISOString() });
 
   return {
@@ -245,7 +286,8 @@ export async function activateCutover(
       merge_gate: { result: 'node22-linux-wsl2-and-pwsh-guards-green' },
     },
     epoch: committed,
-    supervisorPid,
+    supervisorPid: supervisor.supervisorPid,
+    childGeneration: supervisor.childGeneration,
   };
 }
 
