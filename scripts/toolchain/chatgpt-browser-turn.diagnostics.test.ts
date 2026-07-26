@@ -52,6 +52,7 @@ afterEach(() => {
   vi.doUnmock('../chatgpt-browser-turn/ui-adapter.ts');
   vi.doUnmock('../chatgpt-browser-turn/state.ts');
   vi.doUnmock('../chatgpt-browser-turn/publication.ts');
+  vi.doUnmock('../chatgpt-browser-turn/coordination.ts');
   if (root) rmSync(root, { recursive: true, force: true });
 });
 
@@ -433,11 +434,13 @@ async function importRunCliWithMocks(options: {
   readonly pageCloseThrows?: boolean;
   readonly browserCloseThrows?: boolean;
   readonly deleteIncidentSpy?: ReturnType<typeof vi.fn>;
+  readonly releaseOrder?: string[];
 }): Promise<{
   readonly runCli: typeof import('../chatgpt-browser-turn.ts').runCli;
   readonly pageCalls: string[];
   readonly browserCalls: string[];
   readonly deleteIncident: ReturnType<typeof vi.fn>;
+  readonly releaseOrder: string[];
 }> {
   const pageTracker = trackablePage(options.owned ?? true);
   const browserTracker = trackableBrowser();
@@ -496,12 +499,47 @@ async function importRunCliWithMocks(options: {
     };
   });
 
+  const releaseOrder = options.releaseOrder ?? [];
+  const recordRelease = (label: string) => {
+    releaseOrder.push(label);
+  };
+  vi.doMock('../chatgpt-browser-turn/coordination.ts', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../chatgpt-browser-turn/coordination.ts')>();
+    return {
+      ...actual,
+      acquireDomainLock: vi.fn((profileKey: string, key: string, staleMs?: number) => {
+        const lock = actual.acquireDomainLock(profileKey, key, staleMs);
+        if (!lock) return null;
+        const originalRelease = lock.release.bind(lock);
+        return {
+          ...lock,
+          release: vi.fn(() => {
+            recordRelease('scheduleLock.release');
+            originalRelease();
+          }),
+        };
+      }),
+      reserveDestination: vi.fn((profileKey: string, outputPath: string) => {
+        const reservation = actual.reserveDestination(profileKey, outputPath);
+        const originalRelease = reservation.release.bind(reservation);
+        return {
+          ...reservation,
+          release: vi.fn(() => {
+            recordRelease('destination.release');
+            originalRelease();
+          }),
+        };
+      }),
+    };
+  });
+
   const mod = await import('../chatgpt-browser-turn.ts');
   return {
     runCli: mod.runCli,
     pageCalls: pageTracker.calls,
     browserCalls: browserTracker.calls,
     deleteIncident,
+    releaseOrder,
   };
 }
 
@@ -660,18 +698,19 @@ describe('issue 1007 runTurn teardown integration', () => {
   });
 
   it('closes a created page before lock release on non-possible-delivery send failure', async () => {
-    const order: string[] = [];
-    const deleteIncident = vi.fn(() => { order.push('deleteIncident'); });
+    const timeline: string[] = [];
+    const deleteIncident = vi.fn(() => { timeline.push('deleteIncident'); });
     const { runCli } = await importRunCliWithMocks({
       owned: true,
       deleteIncidentSpy: deleteIncident,
+      releaseOrder: timeline,
       sendResult: {
         state: 'ui_contract_mismatch',
         cause: 'composer_unavailable',
         possibleDelivery: false,
       },
     });
-    const pageClose = vi.fn(async () => { order.push('page.close'); });
+    const pageClose = vi.fn(async () => { timeline.push('page.close'); });
     const ui = await import('../chatgpt-browser-turn/ui-adapter.ts');
     (ui.openTurnPage as ReturnType<typeof vi.fn>).mockResolvedValue({
       page: { close: pageClose },
@@ -680,7 +719,12 @@ describe('issue 1007 runTurn teardown integration', () => {
 
     const exitCode = await runCli(turnArgv(join(root, 'reply-failure.txt')));
     expect(exitCode).toBe(10);
-    expect(order).toEqual(['page.close', 'deleteIncident']);
+    expect(timeline).toEqual([
+      'page.close',
+      'deleteIncident',
+      'scheduleLock.release',
+      'destination.release',
+    ]);
   });
 
   it('retains the page after possible-delivery failure but still releases the browser', async () => {
@@ -786,6 +830,32 @@ describe('issue 1007 probeProfileReady connection release', () => {
     });
     expect(ready.state).toBe('driver_error');
     expect(browserTracker.calls).toEqual([]);
+  });
+
+  it('releases the browser when a post-connect probe operation throws', async () => {
+    const browserTracker = trackableBrowser();
+    browserTracker.browser.contexts = vi.fn(() => { throw new Error('contexts failed'); });
+    vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
+      return {
+        ...actual,
+        verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'ok' })),
+        loadChromium: vi.fn(() => ({
+          connectOverCDP: vi.fn(async () => browserTracker.browser),
+        })),
+      };
+    });
+
+    const mod = await import('../chatgpt-browser-turn/profile-probe.ts');
+    const ready = await mod.probeProfileReady({
+      cdp: 'http://127.0.0.1:9222',
+      profile: profilePath,
+      newChat: false,
+      timeoutMs: 100,
+    });
+    expect(ready.state).toBe('driver_error');
+    expect(ready.cause).toBe('profile_probe_failed');
+    expect(browserTracker.browser.close).toHaveBeenCalledTimes(1);
   });
 });
 

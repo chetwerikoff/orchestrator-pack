@@ -20,18 +20,21 @@ Against the dedicated automation profile on `http://127.0.0.1:9222`:
 4. Confirm CDP target count returns to the starting value (owned helper tab closed).
 5. For possible-delivery retention, confirm a retained recovery tab remains reachable in the operator browser after the process exits.
 
-## Result template
+## Recorded results
 
 ```
-date: 2026-07-26T15:43:00Z
-profile: (live automation Chrome on loopback)
+date: 2026-07-26T16:00:00Z
+verified_head: 2d3f9b1c6a2c9156dfc5e880b47182506e811621
+live_turn_head: 76fbb589bc62a86d12a25ec46093963291256981
+profile: automation profile (clean, no incidents before or after)
 cdp: http://127.0.0.1:9222
-targets_before: 15
-targets_after_success_turn: (not run — full turn requires operator profile path and ChatGPT credentials)
-targets_after_disconnect_probe: 16
-process_exit_seconds_after_result: (not run)
+targets_before: 6
+targets_after_success_turn: 6
+process_exit_seconds_after_result: unaided (foreground exit 0 without SIGTERM; wall time not instrumented)
 adopted_context_page_survives_disconnect: yes
-notes: Playwright connectOverCDP client created about:blank in adopted context; after browser.close() the target remained in /json/list. Probe tab was closed manually after observation.
+turn_result: state ok, output byte_length 5, sha256 68faf648728e1563dce0162523dad670123775c56ca6fa6813b9220f5c383217
+witness: user e9f1234a-3f45-4844-b4bb-c8bfeca82bf4 -> assistant daf9264e-b829-4bda-a227-65fef0cd1a7a
+notes: Operator live verification on PR #1018. Successful new-chat turn completed, process returned exit 0 on its own (first unaided exit today; prior turns required SIGTERM). CDP page count returned to baseline. Disconnect-probe observation (about:blank in adopted context survives browser.close()) recorded separately on 2026-07-26T15:43:00Z.
 ```
 
 If `adopted_context_page_survives_disconnect` is **no**, stop implementation and revise the specification rather than carving out connection release on possible-delivery paths.
