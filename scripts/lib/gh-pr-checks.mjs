@@ -20,8 +20,9 @@
 
 /**
  * @param {CheckContext[]} checkContexts
+ * @param {boolean} includeAppId
  */
-export function eliminateDuplicates(checkContexts) {
+function eliminateDuplicatesForShape(checkContexts, includeAppId) {
   const sorted = [...checkContexts].sort((a, b) => {
     const aTime = Date.parse(a.startedAt ?? '') || 0;
     const bTime = Date.parse(b.startedAt ?? '') || 0;
@@ -41,7 +42,8 @@ export function eliminateDuplicates(checkContexts) {
     } else {
       const workflow = ctx.checkSuite?.workflowRun?.workflow?.name ?? '';
       const event = ctx.checkSuite?.workflowRun?.event ?? '';
-      const key = `${ctx.name ?? ''}/${workflow}/${event}`;
+      const provider = includeAppId ? `/${ctx.appId ?? ''}` : '';
+      const key = `${ctx.name ?? ''}/${workflow}/${event}${provider}`;
       if (mapChecks.has(key)) {
         continue;
       }
@@ -51,6 +53,13 @@ export function eliminateDuplicates(checkContexts) {
   }
 
   return unique;
+}
+
+/**
+ * @param {CheckContext[]} checkContexts
+ */
+export function eliminateDuplicates(checkContexts) {
+  return eliminateDuplicatesForShape(checkContexts, false);
 }
 
 /**
@@ -115,7 +124,7 @@ export function exitCodeForPrChecks(checks) {
  */
 export function aggregateChecks(checkContexts, options = {}) {
   const checks = [];
-  for (const c of eliminateDuplicates(checkContexts)) {
+  for (const c of eliminateDuplicatesForShape(checkContexts, options.includeAppId === true)) {
     const state = resolveState(c);
     const link = c.detailsUrl || c.targetUrl || '';
     const name = c.name || c.context || '';
