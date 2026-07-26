@@ -393,6 +393,7 @@ function applyStreamingPatchOperation(
     if (role === 'assistant') {
       if (!userId || effectiveParent !== userId) return;
       registerPatchTargetAssistant(state, message.id, userId);
+      ingestServicePayload(state.terminal, { type: 'delta', v: { message: { ...message, parent: userId } } });
       releaseDeferredStreamingPatchesForTarget(state, message.id, userId);
       return;
     }
@@ -626,7 +627,6 @@ function ingestWitnessJsonTree(state: NetworkWitnessState, value: unknown): void
     return;
   }
 }
-
 
 function ingestWebSocketWitnessPayload(state: NetworkWitnessState, payloadData: string): void {
   if (!payloadData) return;
