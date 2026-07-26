@@ -691,7 +691,13 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     safeRelease(scheduleLock);
     safeReleaseDestination(reservation);
     const driverDiagnosticId = (cause === 'driver_exception_before_send' || cause === 'driver_exception_after_possible_delivery')
-      ? recordSwallowedDriverException(profileKey, invocationId, cause, error, { invocation_id: invocationId })
+      ? recordSwallowedDriverException(
+        profileKey !== 'profile-unresolved' ? profileKey : undefined,
+        profileKey !== 'profile-unresolved' ? invocationId : undefined,
+        cause,
+        error,
+        { invocation_id: invocationId },
+      )
       : undefined;
     return emitTurnAndCode(turnResult(state, scope, cause, invocationId, profileKey, {
       ...(incidentId ? { incident_id: incidentId } : {}),
@@ -828,10 +834,10 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     return 22;
   } catch (error) {
     const operation = controlOperation(args);
-    const profileKey = resolvedControlProfileKey(args);
-    const diagnosticIdentity = profileKey !== 'profile-unresolved' ? randomUUID() : undefined;
+    const resolvedProfileKey = resolvedControlProfileKey(args);
+    const diagnosticIdentity = resolvedProfileKey !== 'profile-unresolved' ? randomUUID() : undefined;
     const driverDiagnosticId = recordSwallowedDriverException(
-      profileKey !== 'profile-unresolved' ? profileKey : undefined,
+      resolvedProfileKey !== 'profile-unresolved' ? resolvedProfileKey : undefined,
       diagnosticIdentity,
       'command_failed',
       error,
@@ -841,7 +847,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       schema: 'control-result/v1',
       operation,
       state: 'driver_error',
-      configured_profile_key: profileKey,
+      configured_profile_key: 'profile-unresolved',
       cause: 'command_failed',
       ...(driverDiagnosticId ? { driver_diagnostic_id: driverDiagnosticId } : {}),
     });

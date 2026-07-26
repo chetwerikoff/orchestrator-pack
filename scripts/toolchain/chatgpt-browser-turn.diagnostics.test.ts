@@ -3,7 +3,6 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
-  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -12,9 +11,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { configuredProfileKey, profileDirs } from '../chatgpt-browser-turn/storage-common.ts';
+import { configuredProfileKey, profileDiagnosticsDir } from '../chatgpt-browser-turn/storage-common.ts';
 import {
+  DRIVER_DIAGNOSTIC_DETAIL_UNAVAILABLE,
   DRIVER_DIAGNOSTIC_SCHEMA,
+  exceptionDetail,
   isDriverDiagnosticDebugEnabled,
   mirrorDriverDiagnosticToStderr,
   readDriverDiagnostic,
@@ -22,8 +23,10 @@ import {
   writeDriverDiagnostic,
   type DriverDiagnosticV1,
 } from '../chatgpt-browser-turn/diagnostics.ts';
+import { runProcessSync } from '../kernel/subprocess.ts';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const entry = join(repoRoot, 'scripts', 'chatgpt-browser-turn.ts');
 
 let root = '';
 let profileKey = '';
@@ -103,13 +106,38 @@ describe('issue 1005 driver diagnostics storage', () => {
   it('writes a durable 0600 diagnostic file inside a 0700 directory keyed by invocation_id', () => {
     const invocationId = randomUUID();
     writeDriverDiagnostic(profileKey, invocationId, sampleRecord(invocationId));
-    const path = join(profileDirs(profileKey).diagnostics, `${invocationId}.json`);
+    const path = join(profileDiagnosticsDir(profileKey), `${invocationId}.json`);
     expect(existsSync(path)).toBe(true);
     expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(statSync(profileDirs(profileKey).diagnostics).mode & 0o777).toBe(0o700);
+    expect(statSync(profileDiagnosticsDir(profileKey)).mode & 0o777).toBe(0o700);
     const stored = readDriverDiagnostic(profileKey, invocationId);
     expect(stored?.exception_message).toBe('fixture driver boom');
     expect(stored?.invocation_id).toBe(invocationId);
+  });
+
+  it('returns a constant fallback when exception detail extraction throws', () => {
+    const hostile = new Error('seed');
+    Object.defineProperty(hostile, 'message', {
+      configurable: true,
+      get() {
+        throw new Error('hostile message');
+      },
+    });
+    expect(exceptionDetail(hostile)).toEqual({
+      name: 'Error',
+      message: DRIVER_DIAGNOSTIC_DETAIL_UNAVAILABLE,
+      stack: '',
+    });
+    const hostileToString = {
+      toString() {
+        throw new Error('hostile toString');
+      },
+    };
+    expect(exceptionDetail(hostileToString).message).toBe(DRIVER_DIAGNOSTIC_DETAIL_UNAVAILABLE);
+    const id = recordSwallowedDriverException(profileKey, randomUUID(), 'driver_exception_before_send', hostile, {
+      invocation_id: randomUUID(),
+    });
+    expect(id).toBeDefined();
   });
 
   it('records swallowed driver exceptions and returns the diagnostic identity', () => {
@@ -127,8 +155,8 @@ describe('issue 1005 driver diagnostics storage', () => {
 
   it('leaves the emitted reference unset when diagnostic recording fails', () => {
     const invocationId = randomUUID();
-    profileDirs(profileKey);
-    chmodSync(profileDirs(profileKey).diagnostics, 0o500);
+    profileDiagnosticsDir(profileKey);
+    chmodSync(profileDiagnosticsDir(profileKey), 0o500);
     const id = recordSwallowedDriverException(profileKey, invocationId, 'driver_exception_before_send', new Error('blocked write'), {
       invocation_id: invocationId,
     });
@@ -157,11 +185,20 @@ describe('issue 1005 driver diagnostics storage', () => {
       expect(id).toBeUndefined();
     });
     expect(stderr).toContain('control only');
-    const unresolvedKey = configuredProfileKey(join(root, 'other-profile'), 'http://127.0.0.1:9223');
-    const files = existsSync(profileDirs(unresolvedKey).diagnostics)
-      ? readdirSync(profileDirs(unresolvedKey).diagnostics)
-      : [];
-    expect(files.length).toBe(0);
+    expect(existsSync(join(root, 'state'))).toBe(false);
+  });
+
+  it('creates only the diagnostics directory when writing a record', () => {
+    const invocationId = randomUUID();
+    writeDriverDiagnostic(profileKey, invocationId, sampleRecord(invocationId));
+    const profileRoot = join(process.env.CHATGPT_BROWSER_TURN_STATE_DIR!, profileKey);
+    expect(existsSync(profileDiagnosticsDir(profileKey))).toBe(true);
+    expect(existsSync(join(profileRoot, 'records'))).toBe(false);
+    expect(existsSync(join(profileRoot, 'locks'))).toBe(false);
+    expect(existsSync(join(profileRoot, 'publications'))).toBe(false);
+    expect(existsSync(join(profileRoot, 'quarantine'))).toBe(false);
+    expect(existsSync(join(profileRoot, 'tombstones'))).toBe(false);
+    expect(existsSync(join(profileRoot, 'resolved'))).toBe(false);
   });
 });
 
@@ -256,11 +293,109 @@ describe('issue 1005 driver diagnostics CLI integration', () => {
     expect(exitCode).toBe(22);
     expect(body.state).toBe('driver_error');
     expect(body.cause).toBe('command_failed');
+    expect(body.configured_profile_key).toBe('profile-unresolved');
     expect(stdout).not.toContain('fixture control command_failed');
     const diagnosticId = String(body.driver_diagnostic_id ?? '');
     expect(diagnosticId.length).toBeGreaterThan(0);
     const stored = readDriverDiagnostic(profileKey, diagnosticId);
     expect(stored?.exception_message).toBe('fixture control command_failed');
     expect(stored?.operation).toBe('status/list');
+  });
+
+  it('AC6: command_failed keeps the legacy envelope when diagnostic recording fails', async () => {
+    profileDiagnosticsDir(profileKey);
+    chmodSync(profileDiagnosticsDir(profileKey), 0o500);
+    const { runCli } = await importRunCliWithStatusListThrow();
+
+    let stdout = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+
+    const exitCode = await runCli(['status/list', '--profile', profilePath, '--cdp', 'http://127.0.0.1:9222']);
+    process.stdout.write = originalStdout;
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+
+    expect(exitCode).toBe(22);
+    expect(body).toEqual({
+      schema: 'control-result/v1',
+      operation: 'status/list',
+      state: 'driver_error',
+      configured_profile_key: 'profile-unresolved',
+      cause: 'command_failed',
+    });
+    expect(stdout).not.toContain('fixture control command_failed');
+  });
+
+  it('AC6: turn failure before profile key resolution emits the usual result with no record or identifier', async () => {
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    const input = join(root, 'message-pre-profile.txt');
+    const output = join(root, 'reply-pre-profile.txt');
+    writeFileSync(input, 'payload\n');
+
+    let stdout = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+
+    const exitCode = await runCli([
+      'turn',
+      '--profile', profilePath,
+      '--cdp', 'not-a-valid-cdp-url',
+      '--input', input,
+      '--output', output,
+      '--chat-url', 'https://chatgpt.com/c/conv-pre-profile',
+    ]);
+
+    process.stdout.write = originalStdout;
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+
+    expect(exitCode).toBe(13);
+    expect(body.state).toBe('driver_error');
+    expect(body.cause).toBe('driver_exception_before_send');
+    expect(body.configured_profile_key).toBe('profile-unresolved');
+    expect(body.driver_diagnostic_id).toBeUndefined();
+    expect(existsSync(join(root, 'state'))).toBe(false);
+  });
+
+  it('AC6: pre-resolution turn failure mirrors to stderr only when CHATGPT_BROWSER_TURN_DEBUG=1', async () => {
+    process.env.CHATGPT_BROWSER_TURN_DEBUG = '1';
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    const input = join(root, 'message-pre-profile-debug.txt');
+    const output = join(root, 'reply-pre-profile-debug.txt');
+    writeFileSync(input, 'pre-profile debug payload\n');
+
+    let stdout = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    let stderr = '';
+    const originalStderr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr += String(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+
+    await runCli([
+      'turn',
+      '--profile', profilePath,
+      '--cdp', 'not-a-valid-cdp-url',
+      '--input', input,
+      '--output', output,
+      '--chat-url', 'https://chatgpt.com/c/conv-pre-profile-debug',
+    ]);
+
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(body.driver_diagnostic_id).toBeUndefined();
+    expect(stderr.trim().startsWith('{')).toBe(true);
+    expect(existsSync(join(root, 'state'))).toBe(false);
   });
 });

@@ -48,6 +48,16 @@ function storeRoot(): string {
     : join(homedir(), '.local', 'state', 'orchestrator-pack', 'chatgpt-browser-turn');
 }
 
+export function profileDiagnosticsDir(profileKey: string): string {
+  const dir = join(storeRoot(), profileKey, 'diagnostics');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
+export function profileDiagnosticsFilePath(profileKey: string, identity: string): string {
+  return join(join(storeRoot(), profileKey, 'diagnostics'), `${identity}.json`);
+}
+
 export function profileDirs(profileKey: string): ProfileDirs {
   const root = join(storeRoot(), profileKey);
   const result: ProfileDirs = {
