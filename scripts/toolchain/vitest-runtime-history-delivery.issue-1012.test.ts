@@ -30,36 +30,42 @@ function checks(appId: number | null = APP_ID) {
   ];
 }
 
+function provenPolicy(input = policy()) {
+  const parsed = normalizeCurrentRequiredPolicy(input, { providerProofAvailable: true });
+  if (!parsed.ok) {
+    throw new Error(`expected policy proof to succeed: ${parsed.outcome}: ${parsed.reason}`);
+  }
+  return parsed;
+}
+
 const emptyProjection = projectPackReviewStatusHistory([]);
 
 describe('Issue #1012 required GitHub App proof', () => {
   it('keeps the legacy fail-closed policy parser default when provider proof is unavailable', () => {
     const parsed = normalizeCurrentRequiredPolicy(policy());
     expect(parsed.ok).toBe(false);
+    if (parsed.ok) throw new Error('provider-restricted policy unexpectedly parsed without proof');
     expect(parsed.outcome).toBe('current-policy-unsupported');
   });
 
   it('preserves app_id when the caller explicitly has provider proof', () => {
-    const parsed = normalizeCurrentRequiredPolicy(policy(), { providerProofAvailable: true });
-    expect(parsed.ok).toBe(true);
+    const parsed = provenPolicy();
     expect(parsed.checks).toContainEqual({ context: REQUIRED, appId: APP_ID });
   });
 
   it('allows machine admission only when the exact required check proves the matching app id', () => {
-    const parsed = normalizeCurrentRequiredPolicy(policy(), { providerProofAvailable: true });
     const decision = evaluateRequiredChecks({
       checks: checks(),
-      policy: parsed,
+      policy: provenPolicy(),
       packReviewProjection: emptyProjection,
     });
     expect(decision.action).toBe('machine-admit');
   });
 
   it('fails closed when a green same-name check comes from another app', () => {
-    const parsed = normalizeCurrentRequiredPolicy(policy(), { providerProofAvailable: true });
     const decision = evaluateRequiredChecks({
       checks: checks(APP_ID + 1),
-      policy: parsed,
+      policy: provenPolicy(),
       packReviewProjection: emptyProjection,
     });
     expect(decision.action).toBe('fail');
@@ -68,10 +74,9 @@ describe('Issue #1012 required GitHub App proof', () => {
   });
 
   it('fails closed when app identity is missing from a terminal green check', () => {
-    const parsed = normalizeCurrentRequiredPolicy(policy(), { providerProofAvailable: true });
     const decision = evaluateRequiredChecks({
       checks: checks(null),
-      policy: parsed,
+      policy: provenPolicy(),
       packReviewProjection: emptyProjection,
     });
     expect(decision.action).toBe('fail');
@@ -79,14 +84,14 @@ describe('Issue #1012 required GitHub App proof', () => {
   });
 
   it('keeps app-restricted pack-review unsupported instead of publishing an unprovable status', () => {
-    const parsed = normalizeCurrentRequiredPolicy({
+    const parsed = provenPolicy({
       strict: true,
       checks: [
         { context: REQUIRED, app_id: APP_ID },
         { context: LEGACY, app_id: null },
         { context: PACK_REVIEW_CONTEXT, app_id: APP_ID },
       ],
-    }, { providerProofAvailable: true });
+    });
     const decision = evaluateRequiredChecks({
       checks: checks(),
       policy: parsed,
@@ -105,8 +110,12 @@ describe('Issue #1012 required GitHub App proof', () => {
       started_at: '2026-07-26T00:00:00Z',
       completed_at: '2026-07-26T00:00:01Z',
     });
-    expect(aggregateChecks([context])[0]).not.toHaveProperty('appId');
-    expect(aggregateChecks([context], { includeAppId: true })[0].appId).toBe(APP_ID);
+    const canonical = aggregateChecks([context]);
+    const appAware = aggregateChecks([context], { includeAppId: true });
+    expect(canonical).toHaveLength(1);
+    expect(canonical[0]).not.toHaveProperty('appId');
+    expect(appAware).toHaveLength(1);
+    expect(appAware[0]?.appId).toBe(APP_ID);
   });
 
   it('classifies app-aware pr checks separately while preserving the canonical shape', () => {
