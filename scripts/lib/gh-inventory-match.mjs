@@ -91,7 +91,7 @@ function matchRuntimeHistoryApiRoute(parsed) {
 
 /**
  * @param {ReturnType<typeof parseGhArgv>} parsed
- * @returns {{ id: InventoryRouteId, prNumber?: number, prRef?: string, branch?: string, repoSlug?: string, runId?: number, headSha?: string } | null}
+ * @returns {{ id: InventoryRouteId, prNumber?: number, prRef?: string, branch?: string, repoSlug?: string, runId?: number, headSha?: string, includeAppId?: boolean } | null}
  */
 export function matchInventoryRoute(parsed) {
   const [root, sub] = parsed.subcommand;
@@ -195,13 +195,15 @@ export function matchInventoryRoute(parsed) {
       'state',
       'workflow',
     ];
-    if (!jsonFieldsEqual(parsed.jsonFields, expected)) {
+    const expectedWithAppId = [...expected, 'appId'];
+    const includeAppId = jsonFieldsEqual(parsed.jsonFields, expectedWithAppId);
+    if (!includeAppId && !jsonFieldsEqual(parsed.jsonFields, expected)) {
       return null;
     }
     if (parsed.jq) {
       return null;
     }
-    return { id: 'pr-checks', prNumber: num };
+    return { id: 'pr-checks', prNumber: num, includeAppId };
   }
 
   if (sub === 'list') {
