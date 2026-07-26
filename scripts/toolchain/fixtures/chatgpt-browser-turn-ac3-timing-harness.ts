@@ -51,7 +51,7 @@ async function main(): Promise<void> {
   process.stderr.write(`${JSON.stringify({ timing_marks: marks })}\n`);
 }
 
-main().catch((error: unknown) => {
+void main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`${JSON.stringify({ harness_error: message })}\n`);
   process.exitCode = 1;
