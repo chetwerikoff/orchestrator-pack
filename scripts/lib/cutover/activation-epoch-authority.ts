@@ -36,7 +36,11 @@ function withLock<T>(pathName: string, operation: () => T): T {
 }
 
 export class FileEpochAuthority {
-  constructor(readonly path: string) {}
+  readonly path: string;
+
+  constructor(pathName: string) {
+    this.path = pathName;
+  }
 
   read(): EpochAuthorityDocument {
     return readAuthority(this.path);
