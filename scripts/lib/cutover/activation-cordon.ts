@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
 import { writeDurableFile, writeDurableJson } from './activation-evidence.ts';
 import type { CordonRecord, CutoverStoreSpec, ProcessIdentity } from './types.ts';
+import { D928 } from '../../pr2a/contracts.ts';
 
 interface LegacyRegistryChild {
   id: string;
@@ -45,7 +46,7 @@ export function assertSameProcess(identity: ProcessIdentity): void {
 }
 
 export function assertLegacySupervisor(identity: ProcessIdentity, oldInstalledRevisionRoot: string): void {
-  const required = path.join(oldInstalledRevisionRoot, 'scripts', 'orchestrator-wake-supervisor.ps1');
+  const required = path.join(oldInstalledRevisionRoot, D928[0]);
   const joined = identity.cmdline.join(' ');
   if (!joined.includes(required)) throw new Error('legacy_supervisor_identity_ambiguous');
 }
