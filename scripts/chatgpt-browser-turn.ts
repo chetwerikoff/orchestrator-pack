@@ -825,9 +825,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     return 22;
   }
   try {
-    if (args.command === 'turn') {
-      return runTurn(args);
-    }
+    if (args.command === 'turn') return await runTurn(args);
     if (args.command === 'status/list') return await runStatus(args);
     if (args.command === 'clear') return await runClear(args);
     if (args.command === 'capability') return await runCapability(args);
