@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
 import { writeDurableFile, writeDurableJson } from './activation-evidence.ts';
-import type { CordonRecord, CutoverStoreSpec, ProcessIdentity } from './types.ts';
+import type { CordonRecord, CutoverStoreSpec, ProcessIdentity, TypeScriptSupervisorInertProof } from './types.ts';
 import { D928 } from '../../pr2a/contracts.ts';
 
 interface LegacyRegistryChild {
@@ -199,6 +199,30 @@ export function fileDigestOrAbsent(pathName: string): string {
   return existsSync(pathName) ? sha256Bytes(readFileSync(pathName)) : 'absent';
 }
 
+interface TypeScriptSupervisorStatusSnapshot {
+  supervisorPid?: unknown;
+  supervisorStartTicks?: unknown;
+  childPid?: unknown;
+}
+
+function proveTypeScriptSupervisorInert(stateRoot: string): TypeScriptSupervisorInertProof {
+  const statusPath = path.join(stateRoot, 'typescript-supervisor-status.json');
+  if (!existsSync(statusPath)) {
+    return { result: 'typescript-supervisor-inert', statusObserved: false, supervisorAlive: false, childAlive: false };
+  }
+  const status = JSON.parse(readFileSync(statusPath, 'utf8')) as TypeScriptSupervisorStatusSnapshot;
+  const supervisorPid = Number(status.supervisorPid ?? 0);
+  const childPid = Number(status.childPid ?? 0);
+  let supervisorAlive = false;
+  if (Number.isInteger(supervisorPid) && supervisorPid > 1 && processAlive(supervisorPid)) {
+    const identity = readProcessIdentity(supervisorPid);
+    supervisorAlive = identity.startTicks === String(status.supervisorStartTicks ?? '');
+  }
+  const childAlive = Number.isInteger(childPid) && childPid > 1 && processAlive(childPid);
+  if (supervisorAlive || childAlive) throw new Error('typescript_supervisor_not_inert');
+  return { result: 'typescript-supervisor-inert', statusObserved: true, supervisorAlive: false, childAlive: false };
+}
+
 export function createCordon(input: {
   path: string;
   epochId: string;
@@ -211,6 +235,7 @@ export function createCordon(input: {
   stores: CutoverStoreSpec[];
 }): CordonRecord {
   if (existsSync(input.path)) throw new Error('competing_transaction_admitted');
+  const typescriptSupervisorInert = proveTypeScriptSupervisorInert(input.legacyStateRoot);
   const preImportTargetDigests: CordonRecord['preImportTargetDigests'] = {};
   for (const store of input.stores) preImportTargetDigests[store.id] = fileDigestOrAbsent(store.targetPath);
   const record: CordonRecord = {
@@ -226,6 +251,7 @@ export function createCordon(input: {
     writersClosed: true,
     noRespawn: true,
     noTypeScriptStart: true,
+    typescriptSupervisorInert,
     importBegunAt: null,
     preImportTargetDigests,
   };
@@ -236,7 +262,15 @@ export function createCordon(input: {
 
 export function readCordon(pathName: string): CordonRecord {
   const record = JSON.parse(readFileSync(pathName, 'utf8')) as CordonRecord;
-  if (record.schemaVersion !== 1 || !record.writersClosed || !record.noRespawn || !record.noTypeScriptStart) {
+  if (
+    record.schemaVersion !== 1
+    || !record.writersClosed
+    || !record.noRespawn
+    || !record.noTypeScriptStart
+    || record.typescriptSupervisorInert?.result !== 'typescript-supervisor-inert'
+    || record.typescriptSupervisorInert.supervisorAlive !== false
+    || record.typescriptSupervisorInert.childAlive !== false
+  ) {
     throw new Error('cordon_invalid');
   }
   return record;
