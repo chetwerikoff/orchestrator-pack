@@ -91,6 +91,7 @@
     "scripts/session-runtime-liveness.test.ts": "heavy",
     "scripts/tier-gate-guard.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.diagnostics.test.ts": "light",
+    "scripts/toolchain/chatgpt-browser-turn.issue-1010-cli.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.issue-1010.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.test.ts": "light",
