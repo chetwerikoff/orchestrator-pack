@@ -66,6 +66,13 @@ export interface FollowupRecord extends PhaseRecord {
   epochId: string;
 }
 
+export interface TypeScriptSupervisorInertProof {
+  result: 'typescript-supervisor-inert';
+  statusObserved: boolean;
+  supervisorAlive: false;
+  childAlive: false;
+}
+
 export interface CordonRecord {
   schemaVersion: 1;
   epochId: string;
@@ -79,6 +86,7 @@ export interface CordonRecord {
   writersClosed: true;
   noRespawn: true;
   noTypeScriptStart: true;
+  typescriptSupervisorInert: TypeScriptSupervisorInertProof;
   importBegunAt: string | null;
   preImportTargetDigests: Partial<Record<CutoverStoreId, string>>;
 }
