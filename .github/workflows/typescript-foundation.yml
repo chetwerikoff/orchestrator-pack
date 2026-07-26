@@ -144,6 +144,16 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('scripts/pr2a/final-conformance.ts')
+          s = p.read_text()
+          old = "  const red = key.startsWith('AC1:') ? !ac1InvariantHolds(key) : mutationFailures(key,artifact).length > 0;\n  if(red){process.stderr.write(`mutation-contract:${key}\\n`);process.exitCode=1;return;}"
+          new = "  const failures = key.startsWith('AC1:') ? (!ac1InvariantHolds(key) ? ['ac1-invariant'] : []) : mutationFailures(key,artifact);\n  const red = failures.length > 0;\n  if(red){process.stderr.write(`mutation-contract:${key}:${failures.join(',')}\\n`);process.exitCode=1;return;}"
+          if old not in s:
+              raise SystemExit('diagnostic patch target missing')
+          p.write_text(s.replace(old, new, 1))
+          PY
           npm run test:contract-mutations 2>&1 | tee mutation-failure.txt
       - name: Upload mutation diagnostic
         if: failure() && steps.detect.outputs.run_evidence == 'true'
