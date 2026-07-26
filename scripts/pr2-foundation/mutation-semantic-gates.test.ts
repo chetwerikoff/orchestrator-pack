@@ -1,6 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { appendPhaseOne, readPhaseOneDetail, verifyPhaseOneDetails } from '../lib/cutover/activation-evidence.ts';
 import { AC_MUTATION_CONTROLS } from './contracts.ts';
 import {
   MUTATION_BEHAVIOR_PROBE_KEYS,
@@ -123,5 +125,30 @@ describe('[AC8] independent behavioral mutation probes', () => {
       scopeProof,
     );
     expect(outsideUnionMutant.content).toContain("'README.md'");
+  });
+});
+
+describe('[Issue #928] durable phase-one detail evidence', () => {
+  it('persists canonical detail preimages and refuses a tampered sidecar', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'opk-928-phase-detail-'));
+    try {
+      const phaseOnePath = path.join(root, 'phase-one.json');
+      const detail = { writerWatermark: 'drained-watermark', writers: [{ childId: 'legacy-writer', pid: 42 }] };
+      appendPhaseOne(phaseOnePath, 'epoch-test', 'nonce-test', 'writer-drain', detail);
+      expect(readPhaseOneDetail(phaseOnePath, 'epoch-test', 'nonce-test', 'writer-drain')).toEqual(detail);
+      const sidecar = path.join(`${phaseOnePath}.details`, '0001.json');
+      expect(existsSync(sidecar)).toBe(true);
+      writeFileSync(sidecar, '{"writerWatermark":"tampered","writers":[]}\n', 'utf8');
+      expect(() => verifyPhaseOneDetails(phaseOnePath, 'epoch-test', 'nonce-test')).toThrow(/phase_one_detail_digest_mismatch:writer-drain/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('binds pre-CAS recovery to persisted snapshot evidence and raw snapshot digests', () => {
+    const recovery = readFileSync(path.resolve('scripts/lib/cutover/activation-recovery.ts'), 'utf8');
+    expect(recovery).toContain("readPhaseOneDetail(request.paths.phaseOnePath, request.epochId, nonce, 'snapshots')");
+    expect(recovery).toContain("throw new Error(`precas_snapshot_digest_mismatch:${spec.id}`)");
+    expect(recovery).toContain('verifyPhaseOneDetails(request.paths.phaseOnePath, request.epochId, nonce);');
   });
 });
