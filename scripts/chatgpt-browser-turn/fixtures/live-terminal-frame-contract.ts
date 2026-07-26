@@ -59,6 +59,49 @@ export const LIVE_TERMINAL_FRAME_CONTRACT = [
   },
 ] as const;
 
+
+export const LIVE_TERMINAL_FAILURE_FRAME_CONTRACT = [
+  {
+    type: 'delta',
+    v: {
+      message: {
+        id: 'asst-error-12345678',
+        author: { role: 'assistant' },
+        parent: 'user-sanitized-12345678',
+        end_turn: true,
+        status: 'finished_failed',
+        content: { content_type: 'execution_error', text: '[sanitized generation error]' },
+      },
+    },
+  },
+  {
+    type: 'delta',
+    v: {
+      message: {
+        id: 'asst-interrupted-12345678',
+        author: { role: 'assistant' },
+        parent: 'user-sanitized-12345678',
+        end_turn: true,
+        status: 'interrupted',
+      },
+    },
+  },
+] as const;
+
+export const GROUNDED_WHOLE_TURN_FAILURE_STATUSES = new Set(
+  LIVE_TERMINAL_FAILURE_FRAME_CONTRACT.map((frame) => {
+    const message = (frame.v as { message?: { status?: string } }).message;
+    return message?.status ?? '';
+  }).filter(Boolean),
+);
+
+export const GROUNDED_WHOLE_TURN_FAILURE_CONTENT_TYPES = new Set(
+  LIVE_TERMINAL_FAILURE_FRAME_CONTRACT.flatMap((frame) => {
+    const contentType = ((frame.v as { message?: { content?: { content_type?: string } } }).message?.content?.content_type);
+    return contentType ? [contentType] : [];
+  }),
+);
+
 export const DELTA_ONLY_FRAME = {
   type: 'delta',
   v: {

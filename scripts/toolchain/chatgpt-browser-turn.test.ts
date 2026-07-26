@@ -54,6 +54,7 @@ import { emptyLocator, fakeTurnPage, messageLocator } from '../chatgpt-browser-t
 import {
   DELTA_ONLY_FRAME,
   framesToSseBody,
+  LIVE_TERMINAL_FAILURE_FRAME_CONTRACT,
   LIVE_TERMINAL_FRAME_CONTRACT,
   PATCH_ONLY_FRAME,
   STREAM_COMPLETE_ONLY_FRAME,
@@ -911,6 +912,15 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
     timeoutMs: 2_000,
   });
 
+  it('preserves sanitized live terminal failure frame contract before AC5/AC6 fixtures', () => {
+    expect(LIVE_TERMINAL_FAILURE_FRAME_CONTRACT.map((frame) => frame.type)).toEqual(['delta', 'delta']);
+    const generationError = LIVE_TERMINAL_FAILURE_FRAME_CONTRACT[0]?.v as { message?: { status?: string; content?: { content_type?: string } } };
+    expect(generationError?.message?.status).toBe('finished_failed');
+    expect(generationError?.message?.content?.content_type).toBe('execution_error');
+    const interrupted = LIVE_TERMINAL_FAILURE_FRAME_CONTRACT[1]?.v as { message?: { status?: string } };
+    expect(interrupted?.message?.status).toBe('interrupted');
+  });
+
   it('AC13 preserves sanitized live terminal-frame contract before fixture derivation', () => {
     const witness = createTerminalWitnessState();
     for (const frame of LIVE_TERMINAL_FRAME_CONTRACT) ingestServicePayload(witness, frame as Record<string, unknown>);
@@ -1304,6 +1314,45 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
     expect(result.reply).toBe('segment one\nsegment two');
   });
 
+  it('does not resurrect pre-continuation terminal authority from a non-terminal continuation delta', async () => {
+    const own = 'user-owned-12345678';
+    const assistantId = 'assistant-owned-12345678';
+    const freshTerminal = {
+      type: 'delta',
+      v: {
+        message: {
+          id: assistantId,
+          author: { role: 'assistant' },
+          parent: own,
+          end_turn: true,
+        },
+      },
+    };
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: assistantId, parent: own, text: 'alpha', appearOnSend: true }],
+      continueGenerating: {
+        hideAfterClick: true,
+        growthSequence: ['alpha', 'alpha\nbeta'],
+        postClickFrames: [[{
+          type: 'delta',
+          v: {
+            message: {
+              id: assistantId,
+              author: { role: 'assistant' },
+              parent: own,
+              content: { content_type: 'text', parts: ['alpha\nbeta'] },
+            },
+          },
+        }], [freshTerminal]],
+      },
+      serviceFrames: [freshTerminal],
+    });
+    const result = await sendTurn(fixture.page, 'payload', baseConfig());
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('alpha\nbeta');
+  });
+
   it('fail-closes unsupported unknown and patch envelopes carrying end_turn metadata', async () => {
     const own = 'user-owned-12345678';
     for (const serviceFrames of [
@@ -1339,6 +1388,31 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
       expect(result.state).toBe('stream_timeout');
       expect(result.cause).toBe('no_terminal_evidence');
     }
+  });
+
+  it('fail-closes nested terminal-looking deltas under unsupported wrapper paths', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'rogue answer', appearOnSend: true }],
+      serviceFrames: [{
+        type: 'rogue_wrapper',
+        nested: {
+          type: 'delta',
+          v: {
+            message: {
+              id: 'assistant-owned-12345678',
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: true,
+            },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 200 });
+    expect(result.state).toBe('stream_timeout');
+    expect(result.cause).toBe('no_terminal_evidence');
   });
 
   it('AC9 terminal with unreadable content uses stream_timeout with terminal_content_incomplete', async () => {

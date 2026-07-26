@@ -57,6 +57,28 @@ export function invalidateTerminalEvidenceForContinuation(state: TerminalWitness
   state.terminalAuthorityAfterFrame = state.frames.length;
 }
 
+
+const GROUNDED_WHOLE_TURN_FAILURE_STATUSES = new Set(['finished_failed', 'interrupted']);
+const GROUNDED_WHOLE_TURN_FAILURE_CONTENT_TYPES = new Set(['execution_error']);
+
+function frameCarriesExplicitEndTurn(message: Record<string, unknown>): boolean {
+  return message.end_turn === true || message.end_turn === false;
+}
+
+function isGroundedWholeTurnFailureTerminal(
+  endTurn: boolean | undefined,
+  terminal: AssistantTerminalMetadata,
+): boolean {
+  if (endTurn !== true) return false;
+  if (terminal.status && GROUNDED_WHOLE_TURN_FAILURE_STATUSES.has(terminal.status)) return true;
+  if (terminal.contentType && GROUNDED_WHOLE_TURN_FAILURE_CONTENT_TYPES.has(terminal.contentType)) return true;
+  return false;
+}
+
+function isGroundedWholeTurnSuccessTerminal(endTurn: boolean | undefined): boolean {
+  return endTurn === true;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -111,14 +133,26 @@ function recordGroundedDeltaMessage(
   if (!id || id.length < 8) return undefined;
   const parent = typeof message.parent === 'string' ? message.parent : undefined;
   state.messages.set(id, { id, role, ...(parent ? { parent } : {}) });
-  const terminal = terminalMetadataFromMessage(message);
-  if (
-    terminal.endTurn !== undefined
-    || terminal.finishDetailsType !== undefined
-    || terminal.status !== undefined
-    || terminal.contentType !== undefined
-  ) {
-    state.terminalByMessageId.set(id, mergeTerminalMetadata(state.terminalByMessageId.get(id), terminal));
+  const incoming = terminalMetadataFromMessage(message);
+  const existing = state.terminalByMessageId.get(id);
+  const next: AssistantTerminalMetadata = { ...existing };
+  if (frameCarriesExplicitEndTurn(message)) {
+    next.endTurn = message.end_turn === true;
+  }
+  if (incoming.finishDetailsType !== undefined) next.finishDetailsType = incoming.finishDetailsType;
+  if (incoming.status !== undefined) next.status = incoming.status;
+  if (incoming.contentType !== undefined) next.contentType = incoming.contentType;
+  if (incoming.contentText !== undefined) next.contentText = incoming.contentText;
+  const touched = frameCarriesExplicitEndTurn(message)
+    || incoming.finishDetailsType !== undefined
+    || incoming.status !== undefined
+    || incoming.contentType !== undefined
+    || incoming.contentText !== undefined;
+  if (touched) state.terminalByMessageId.set(id, next);
+  if (frameCarriesExplicitEndTurn(message) && (
+    isGroundedWholeTurnSuccessTerminal(next.endTurn)
+    || isGroundedWholeTurnFailureTerminal(next.endTurn, next)
+  )) {
     state.terminalAuthorityFrameByMessageId.set(id, state.frames.length - 1);
   }
   return id;
@@ -202,7 +236,6 @@ export function ingestServicePayloadTree(state: TerminalWitnessState, value: unk
     const nested = asRecord(payload)?.payload;
     ingestServicePayloadTree(state, nested ?? payload);
   }
-  for (const child of Object.values(obj)) ingestServicePayloadTree(state, child);
 }
 
 export function isMessageAttributedToUserTurn(
@@ -224,13 +257,8 @@ export function wholeTurnTerminalOutcome(
   metadata: AssistantTerminalMetadata | undefined,
 ): 'success' | 'failure' | 'none' {
   if (!metadata || metadata.endTurn !== true) return 'none';
-  const status = metadata.status?.toLowerCase() ?? '';
-  if (status.includes('interrupt')) return 'failure';
-  if (
-    status.includes('error')
-    || status.includes('failed')
-    || metadata.contentType === 'execution_error'
-  ) {
+  if (metadata.status && GROUNDED_WHOLE_TURN_FAILURE_STATUSES.has(metadata.status)) return 'failure';
+  if (metadata.contentType && GROUNDED_WHOLE_TURN_FAILURE_CONTENT_TYPES.has(metadata.contentType)) {
     return 'failure';
   }
   return 'success';
@@ -253,8 +281,7 @@ export function resolveWholeTurnTerminal(
     const metadata = state.terminalByMessageId.get(messageId);
     const outcome = wholeTurnTerminalOutcome(metadata);
     if (outcome === 'failure') {
-      const status = metadata?.status?.toLowerCase() ?? '';
-      const cause = status.includes('interrupt')
+      const cause = metadata?.status === 'interrupted'
         ? 'terminal_interrupted'
         : 'terminal_generation_error';
       return { state: 'failure', assistantMessageId: messageId, cause };

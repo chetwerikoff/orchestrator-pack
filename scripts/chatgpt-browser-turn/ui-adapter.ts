@@ -206,7 +206,6 @@ function ingestWitnessJsonTree(state: NetworkWitnessState, value: unknown): void
     const nested = (payload as Record<string, unknown>).payload;
     ingestWitnessJsonTree(state, nested ?? payload);
   }
-  for (const child of Object.values(obj)) ingestWitnessJsonTree(state, child);
 }
 
 function ingestWebSocketWitnessPayload(state: NetworkWitnessState, payloadData: string): void {

@@ -13,6 +13,7 @@ export interface ContinueGeneratingSpec {
   readonly hideAfterClick?: boolean;
   readonly growthSequence?: readonly string[];
   readonly terminalFramesAfterClick?: readonly Record<string, unknown>[];
+  readonly postClickFrames?: readonly (readonly Record<string, unknown>[])[];
 }
 
 export interface FakeTurnPageOptions {
@@ -182,6 +183,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   let continueGrowthIndex = 0;
   let continueClicked = false;
   let pendingTerminalFrames: readonly Record<string, unknown>[] | undefined;
+  let postClickFrameIndex = 0;
   const applyContinueGrowth = () => {
     const growth = options.continueGenerating?.growthSequence ?? [];
     if (!growth.length) return;
@@ -192,7 +194,14 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     if (continueGrowthIndex < growth.length - 1) continueGrowthIndex++;
   };
   const maybeEmitContinuationTerminal = async () => {
-    if (!continueClicked || !pendingTerminalFrames?.length) return;
+    if (!continueClicked) return;
+    const postClick = options.continueGenerating?.postClickFrames ?? [];
+    if (postClickFrameIndex < postClick.length) {
+      await emitServiceFrames(postClick[postClickFrameIndex] ?? []);
+      postClickFrameIndex++;
+      return;
+    }
+    if (!pendingTerminalFrames?.length) return;
     const growth = options.continueGenerating?.growthSequence ?? [];
     if (growth.length > 0 && continueGrowthIndex < growth.length - 1) return;
     await emitServiceFrames(pendingTerminalFrames);
