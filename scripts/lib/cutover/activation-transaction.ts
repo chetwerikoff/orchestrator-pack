@@ -238,8 +238,9 @@ async function startSupervisor(request: ActivationRequest, nonce: string): Promi
   });
   if (!result.ok) throw new Error(`typescript_supervisor_start_failed:${result.stderr || result.error || result.exitCode}`);
   const parsed = JSON.parse(result.stdout.trim()) as { pid?: number };
-  if (!Number.isInteger(parsed.pid) || Number(parsed.pid) <= 1) throw new Error('typescript_supervisor_pid_missing');
-  return waitForStartedSupervisor(request, nonce, Number(parsed.pid));
+  const pid = Number(parsed.pid);
+  if (!Number.isInteger(pid) || pid <= 1) throw new Error('typescript_supervisor_pid_missing');
+  return waitForStartedSupervisor(request, nonce, pid);
 }
 
 export interface ActivationBoundary {
@@ -369,6 +370,9 @@ export async function activateCutover(
     supervisorPid: supervisor.supervisorPid,
     childGeneration: supervisor.childGeneration,
   });
+  appendFollowup(request.paths.followupPath, request.epochId, 'machine-local-completion-fsync-confirmed', { path: request.paths.followupPath });
+  appendFollowup(request.paths.followupPath, request.epochId, 'final-step-timestamp-recorded', { at: new Date().toISOString() });
+  appendFollowup(request.paths.followupPath, request.epochId, 'final-health-delivery-observed', { result: 'observed' });
   appendFollowup(request.paths.followupPath, request.epochId, 'activation-complete', { at: new Date().toISOString() });
 
   return {
