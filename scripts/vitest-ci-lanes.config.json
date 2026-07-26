@@ -79,7 +79,7 @@
     "scripts/review-head-ready.test.ts": "heavy",
     "scripts/review-orchestrator-loop.test.ts": "heavy",
     "scripts/review-ready-stuck-guard.test.ts": "light",
-    "scripts/review-send-reconcile.test.ts": "heavy",
+    "scripts/review-send-reconcile.test.ts": "light",
     "scripts/review-start-claim-budget-semantics.test.ts": "heavy",
     "scripts/review-start-claim-lifecycle.test.ts": "light",
     "scripts/review-start-claim-run-binding.test.ts": "heavy",
