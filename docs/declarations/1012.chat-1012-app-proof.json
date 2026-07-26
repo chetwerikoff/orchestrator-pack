@@ -1,0 +1,24 @@
+{
+  "issue_number": 1012,
+  "iteration_id": "chat-1012-app-proof",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-26T10:50:15.915604Z",
+  "baseline": {
+    "commit_sha": "755d9cccf7d3e83b17a7cd1261f9ea803feac322",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:180fc1d3d0b8ca6d14d21db99f3dddf743b8180345b635defbc3292f1be8e2c7"
+  },
+  "declared_paths": [
+    "scripts/lib/gh-inventory-match.d.mts",
+    "scripts/lib/gh-inventory-match.mjs",
+    "scripts/lib/gh-pr-checks.mjs",
+    "scripts/lib/gh-rest-routes.d.mts",
+    "scripts/lib/gh-rest-routes.mjs",
+    "scripts/toolchain/vitest-runtime-history-delivery.issue-1012.test.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history-delivery.mjs"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
