@@ -125,14 +125,21 @@ merge_method=squash
 sha=<exact-generated-head>
 ```
 
-No second merge actuator or bypass exists. If GitHub rejects the merge, the
-monitor re-reads the mutable proofs rather than blindly retrying stale evidence.
+No second merge actuator or bypass exists. After every merge attempt, including
+an attempt whose transport fails, the monitor first reads authoritative PR state.
+If that read-back already proves the expected PR merged into `main`, the episode
+is complete and no duplicate mutation is attempted. If GitHub reported a
+successful merge but authoritative read-back does not confirm it, the monitor
+fails observably as `merge-readback-failed`.
 
-After a successful merge mutation, the monitor reads the PR again and confirms
-that the expected PR is merged into `main`. Squash semantics do not require the
-resulting `main` SHA to equal the delivery-head SHA.
+When a merge is rejected or its transport fails and authoritative read-back
+shows the PR is still unmerged, the monitor re-reads the mutable proofs and
+returns to the bounded decision. Any later merge attempt therefore follows fresh
+head, provenance, current-policy, current-check, and out-of-band-history proof
+rather than blindly retrying stale evidence.
 
-Conflicted/unmergeable generated PRs retain the `#757` close-as-obsolete
+Squash semantics do not require the resulting `main` SHA to equal the delivery-head
+SHA. Conflicted/unmergeable generated PRs retain the `#757` close-as-obsolete
 behavior.
 
 ## Permissions and credentials
