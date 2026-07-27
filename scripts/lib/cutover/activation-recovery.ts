@@ -166,6 +166,7 @@ export async function observeSchedulerHealthAndDelivery(
     throw new Error('scheduler_health_not_observed');
   }
   const delivered = findCompletedSchedulerDelivery(core, storeRoot);
+  if (!delivered) throw new Error('scheduler_delivery_not_observed');
   return {
     result: 'scheduler-health-delivery-observed',
     epochId: core.epochId,
@@ -179,17 +180,15 @@ export async function observeSchedulerHealthAndDelivery(
       registryHash: status.registryHash,
       restartState: 'running',
     },
-    delivery: delivered
-      ? {
-          result: 'scheduler-durable-delivery-observed',
-          runId: delivered.runId,
-          prNumber: delivered.prNumber,
-          headSha: delivered.headSha,
-          status: delivered.status,
-          journalState: 'persisted',
-          deliveryOutcomes: delivered.deliveryOutcomes,
-        }
-      : { result: 'no-post-activation-delivery-observed' },
+    delivery: {
+      result: 'scheduler-durable-delivery-observed',
+      runId: delivered.runId,
+      prNumber: delivered.prNumber,
+      headSha: delivered.headSha,
+      status: delivered.status,
+      journalState: 'persisted',
+      deliveryOutcomes: delivered.deliveryOutcomes,
+    },
   };
 }
 
