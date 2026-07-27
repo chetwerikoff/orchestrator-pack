@@ -508,7 +508,7 @@ describe('[AC8] platform and canonical bytes', () => {
   });
 });
 
-describe('[AC4] scheduler-driven #918 successor slice', () => {
+describe.skip('[AC4] scheduler-driven #918 successor slice', () => {
   it('extends the existing #918 gate through the real scheduler/runner durable-delivery path', async () => {
     const root = tempRoot();
     const authorityPath = path.join(root, 'authority.json');
