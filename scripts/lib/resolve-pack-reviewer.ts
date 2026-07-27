@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 
 export const PACK_REVIEWER_ENV = 'PACK_REVIEWER';
 
@@ -46,18 +46,27 @@ function readWindowsRegistryLayers(): PackReviewerLayerOverrides {
     return cachedWindowsLayers;
   }
   try {
-    const stdout = execFileSync('pwsh', [
-      '-NoProfile',
-      '-Command',
-      [
-        '$layers = @{',
-        "  Process = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','Process');",
-        "  User = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','User');",
-        "  Machine = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','Machine')",
-        '}',
-        '$layers | ConvertTo-Json -Compress',
-      ].join(' '),
-    ], { encoding: 'utf8' }).trim();
+    const result = runProcessSync({
+      command: 'pwsh',
+      args: [
+        '-NoProfile',
+        '-Command',
+        [
+          '$layers = @{',
+          "  Process = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','Process');",
+          "  User = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','User');",
+          "  Machine = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','Machine')",
+          '}',
+          '$layers | ConvertTo-Json -Compress',
+        ].join(' '),
+      ],
+      inheritParentEnv: true,
+    });
+    if (!result.ok) {
+      cachedWindowsLayers = {};
+      return cachedWindowsLayers;
+    }
+    const stdout = result.stdout.trim();
     const parsed = JSON.parse(stdout) as PackReviewerLayerOverrides;
     cachedWindowsLayers = {
       Process: trim(parsed.Process) || null,
