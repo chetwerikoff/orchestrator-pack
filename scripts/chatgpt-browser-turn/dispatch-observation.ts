@@ -156,18 +156,22 @@ async function sendChildCdpCommand(
   await cdp.send('Target.sendMessageToTarget', { sessionId, message });
 }
 
-export function dispatchObservationCoverageComplete(boundary: DispatchObservationBoundary): boolean {
+export function dispatchObservationEstablished(boundary: DispatchObservationBoundary): boolean {
   return boundary.coverageIntact
-    && boundary.gateBCharacterizationComplete
     && boundary.httpContextArmed
     && boundary.httpContextCoverage === 'complete'
     && boundary.websocketTargetsArmed
     && boundary.websocketTargetsCoverage === 'complete';
 }
 
+export function dispatchObservationCoverageComplete(boundary: DispatchObservationBoundary): boolean {
+  return dispatchObservationEstablished(boundary)
+    && boundary.gateBCharacterizationComplete;
+}
+
 export function assertDispatchObservationReadyForDispatch(boundary: DispatchObservationBoundary): void {
   if (!boundary.dispatchObservationEngaged) return;
-  if (!dispatchObservationCoverageComplete(boundary)) {
+  if (!dispatchObservationEstablished(boundary)) {
     throw new DispatchObservationEstablishmentError('dispatch_observation_establishment_failed');
   }
 }
@@ -448,18 +452,13 @@ export async function establishDispatchObservationBoundary(
       : 'unknown';
   }
 
-  if (fakePage && controls) {
-    boundary.gateBCharacterizationComplete = true;
-  } else if (!fakePage) {
-    const gateB = await runGateBCharacterization(page);
-    boundary.gateBCharacterizationComplete = gateB.complete;
-  }
+  boundary.gateBCharacterizationComplete = Boolean(fakePage && controls);
 
   boundary.dispatchObservationEngaged = fakePage
     ? Boolean(controls)
-    : true;
+    : cdpEstablished;
 
-  if (boundary.dispatchObservationEngaged && !dispatchObservationCoverageComplete(boundary)) {
+  if (boundary.dispatchObservationEngaged && !dispatchObservationEstablished(boundary)) {
     throw new DispatchObservationEstablishmentError('dispatch_observation_establishment_failed');
   }
 
