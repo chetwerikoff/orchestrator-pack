@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { revalidateProcessDestinationReservations } from './coordination.ts';
 import {
+  assertDispatchObservationReadyForDispatch,
   DispatchObservationEstablishmentError,
   establishDispatchObservationBoundary,
   evaluateDispatchRequestNotObserved,
@@ -1303,6 +1304,14 @@ export async function sendTurn(
   const send = page.locator('[data-testid="send-button"]');
   const sendAvailable = (await send.count()) > 0;
   revalidateProcessDestinationReservations();
+  try {
+    assertDispatchObservationReadyForDispatch(dispatchObservation);
+  } catch (error) {
+    if (error instanceof DispatchObservationEstablishmentError) {
+      throw error;
+    }
+    throw new DispatchObservationEstablishmentError('dispatch_observation_establishment_failed');
+  }
   await onBeforeSend?.();
   try {
     revalidateProcessDestinationReservations();

@@ -13,12 +13,18 @@ export interface DispatchObservationTestControls {
   readonly requireCdpWebSocketSent?: boolean;
   readonly incompleteWebSocketTargets?: boolean;
   readonly initialCoverageIntact?: boolean;
+  readonly coverageLossAfterArm?: boolean;
   readonly cdpMethodsSupported?: {
     readonly setAutoAttach?: boolean;
     readonly setDiscoverTargets?: boolean;
+    readonly getTargets?: boolean;
+    readonly attachToTarget?: boolean;
+    readonly sendMessageToTarget?: boolean;
     readonly networkEnable?: boolean;
     readonly webSocketFrameSent?: boolean;
     readonly targetAttached?: boolean;
+    readonly targetDetached?: boolean;
+    readonly runIfWaitingForDebugger?: boolean;
   };
 }
 
@@ -34,6 +40,7 @@ export interface DispatchObservationDiagnostic {
 }
 
 export interface DispatchObservationBoundary {
+  dispatchObservationEngaged: boolean;
   httpContextArmed: boolean;
   httpContextCoverage: DispatchCoverageStatus;
   websocketTargetsArmed: boolean;
@@ -58,6 +65,14 @@ export class DispatchObservationEstablishmentError extends Error {
 }
 
 export let lastDispatchObservationDiagnostic: DispatchObservationDiagnostic | undefined;
+
+const RELEVANT_TARGET_TYPES = new Set([
+  'page',
+  'service_worker',
+  'worker',
+  'shared_worker',
+  'iframe',
+]);
 
 function coverageSummary(boundary: DispatchObservationBoundary): string {
   const http = boundary.httpContextCoverage;
@@ -110,6 +125,39 @@ function testControls(page: unknown): DispatchObservationTestControls | undefine
   return (page as { __dispatchObservation?: DispatchObservationTestControls }).__dispatchObservation;
 }
 
+function isFakeTurnPage(page: unknown): boolean {
+  return (page as { __fakeTurnPage?: boolean }).__fakeTurnPage === true;
+}
+
+function isRelevantTargetType(type: string | undefined): boolean {
+  return type !== undefined && RELEVANT_TARGET_TYPES.has(type);
+}
+
+async function sendChildCdpCommand(
+  cdp: { send: (method: string, params?: Record<string, unknown>) => Promise<unknown> },
+  sessionId: string,
+  method: string,
+  params: Record<string, unknown> = {},
+): Promise<void> {
+  const message = JSON.stringify({ id: 1, method, params });
+  await cdp.send('Target.sendMessageToTarget', { sessionId, message });
+}
+
+export function dispatchObservationCoverageComplete(boundary: DispatchObservationBoundary): boolean {
+  return boundary.coverageIntact
+    && boundary.httpContextArmed
+    && boundary.httpContextCoverage === 'complete'
+    && boundary.websocketTargetsArmed
+    && boundary.websocketTargetsCoverage === 'complete';
+}
+
+export function assertDispatchObservationReadyForDispatch(boundary: DispatchObservationBoundary): void {
+  if (!boundary.dispatchObservationEngaged) return;
+  if (!dispatchObservationCoverageComplete(boundary)) {
+    throw new DispatchObservationEstablishmentError('dispatch_observation_establishment_failed');
+  }
+}
+
 export async function establishDispatchObservationBoundary(
   page: any,
   options: {
@@ -121,12 +169,15 @@ export async function establishDispatchObservationBoundary(
   },
 ): Promise<DispatchObservationBoundary> {
   const controls = testControls(page);
+  const fakePage = isFakeTurnPage(page);
   if (controls?.establishmentFails) {
     throw new DispatchObservationEstablishmentError('dispatch_observation_establishment_failed');
   }
 
   let armed = false;
+  let cdpEstablished = false;
   const boundary: DispatchObservationBoundary = {
+    dispatchObservationEngaged: false,
     httpContextArmed: false,
     httpContextCoverage: 'unknown',
     websocketTargetsArmed: false,
@@ -139,7 +190,12 @@ export async function establishDispatchObservationBoundary(
     userNodeBaselineReliable: options.userNodeBaselineReliable,
     urlBaselineReliable: options.urlBaselineReliable,
     newChatMode: options.newChatMode,
-    armDispatchObservation() { armed = true; },
+    armDispatchObservation() {
+      armed = true;
+      if (fakePage && controls?.coverageLossAfterArm) {
+        boundary.markCoverageLost();
+      }
+    },
     markCoverageLost() { this.coverageIntact = false; },
   };
 
@@ -150,14 +206,18 @@ export async function establishDispatchObservationBoundary(
 
   try {
     if (typeof context.on !== 'function') {
-      boundary.httpContextCoverage = controls?.httpContextCoverage ?? 'unknown';
+      boundary.httpContextCoverage = fakePage && controls?.httpContextCoverage
+        ? controls.httpContextCoverage
+        : 'unknown';
     } else {
       context.on('request', () => {
         if (!armed) return;
         boundary.postArmHttpRequestCount++;
       });
       boundary.httpContextArmed = true;
-      boundary.httpContextCoverage = controls?.httpContextCoverage ?? 'complete';
+      boundary.httpContextCoverage = fakePage && controls?.httpContextCoverage
+        ? controls.httpContextCoverage
+        : 'complete';
     }
   } catch {
     throw new DispatchObservationEstablishmentError('dispatch_observation_http_failed');
@@ -168,20 +228,57 @@ export async function establishDispatchObservationBoundary(
     boundary.postArmWebSocketFrameSentCount++;
   };
 
-  let wsObservationLayers = 0;
   if (typeof page.on === 'function') {
     page.on('websocket', (ws: { on?: (event: string, handler: () => void) => void }) => {
       ws.on?.('framesent', noteWsSent);
     });
-    wsObservationLayers++;
   }
 
   const cdpMethods = controls?.cdpMethodsSupported ?? {
     setAutoAttach: true,
     setDiscoverTargets: true,
+    getTargets: true,
+    attachToTarget: true,
+    sendMessageToTarget: true,
     networkEnable: true,
     webSocketFrameSent: true,
     targetAttached: true,
+    targetDetached: true,
+    runIfWaitingForDebugger: true,
+  };
+
+  let attachedTargetCount = 0;
+  let failedTargetAttach = false;
+
+  const enableChildTargetSession = async (
+    cdp: { send: (method: string, params?: Record<string, unknown>) => Promise<unknown>; on: (event: string, handler: (event: Record<string, unknown>) => void) => void },
+    sessionId: string,
+    waitingForDebugger = false,
+  ): Promise<void> => {
+    if (!sessionId) {
+      failedTargetAttach = true;
+      boundary.markCoverageLost();
+      boundary.websocketTargetsCoverage = 'incomplete';
+      return;
+    }
+    try {
+      if (cdpMethods.sendMessageToTarget && cdpMethods.networkEnable) {
+        await sendChildCdpCommand(cdp, sessionId, 'Network.enable');
+      } else {
+        failedTargetAttach = true;
+        boundary.markCoverageLost();
+        boundary.websocketTargetsCoverage = 'incomplete';
+        return;
+      }
+      if (waitingForDebugger && cdpMethods.runIfWaitingForDebugger) {
+        await sendChildCdpCommand(cdp, sessionId, 'Runtime.runIfWaitingForDebugger');
+      }
+      attachedTargetCount++;
+    } catch {
+      failedTargetAttach = true;
+      boundary.markCoverageLost();
+      boundary.websocketTargetsCoverage = 'incomplete';
+    }
   };
 
   if (typeof context.newCDPSession === 'function') {
@@ -190,37 +287,88 @@ export async function establishDispatchObservationBoundary(
         context.newCDPSession(page),
         new Promise<null>((resolve) => { setTimeout(() => resolve(null), 5_000); }),
       ]);
-      if (cdp) {
-        if (cdpMethods.setAutoAttach) {
-          await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
+      if (!cdp) {
+        if (controls?.requireCdpWebSocketSent) {
+          boundary.websocketTargetsCoverage = 'incomplete';
         }
+      } else {
+        const onTargetDetached = () => {
+          boundary.markCoverageLost();
+          if (boundary.websocketTargetsCoverage === 'complete') {
+            boundary.websocketTargetsCoverage = 'incomplete';
+          }
+        };
+
+        if (cdpMethods.targetDetached) {
+          cdp.on('Target.detachedFromTarget', onTargetDetached);
+        }
+        if (typeof cdp.on === 'function') {
+          cdp.on('disconnected', onTargetDetached);
+        }
+
+        if (cdpMethods.targetAttached) {
+          cdp.on('Target.attachedToTarget', async (event: { sessionId?: string; waitingForDebugger?: boolean }) => {
+            await enableChildTargetSession(cdp, event.sessionId ?? '', event.waitingForDebugger === true);
+          });
+        }
+
         if (cdpMethods.setDiscoverTargets) {
           await cdp.send('Target.setDiscoverTargets', { discover: true });
         }
+
+        if (cdpMethods.getTargets && cdpMethods.attachToTarget) {
+          try {
+            const targets = await cdp.send('Target.getTargets') as { targetInfos?: Array<{ targetId?: string; type?: string }> };
+            const relevantTargets = (targets.targetInfos ?? []).filter((target) => isRelevantTargetType(target.type));
+            const secondaryTargets = relevantTargets.filter((target) => target.type !== 'page');
+            for (const target of secondaryTargets) {
+              if (!target.targetId) continue;
+              try {
+                const attached = await cdp.send('Target.attachToTarget', {
+                  targetId: target.targetId,
+                  flatten: true,
+                }) as { sessionId?: string };
+                await enableChildTargetSession(cdp, attached.sessionId ?? '');
+              } catch {
+                failedTargetAttach = true;
+                boundary.markCoverageLost();
+                boundary.websocketTargetsCoverage = 'incomplete';
+              }
+            }
+            if (secondaryTargets.length > 0 && attachedTargetCount < secondaryTargets.length) {
+              failedTargetAttach = true;
+              boundary.markCoverageLost();
+              boundary.websocketTargetsCoverage = 'incomplete';
+            }
+          } catch {
+            failedTargetAttach = true;
+            boundary.markCoverageLost();
+            boundary.websocketTargetsCoverage = 'incomplete';
+          }
+        }
+
+        if (cdpMethods.setAutoAttach) {
+          await cdp.send('Target.setAutoAttach', {
+            autoAttach: true,
+            waitForDebuggerOnStart: true,
+            flatten: true,
+          });
+        }
+
+        let rootNetworkEnabled = false;
         if (cdpMethods.networkEnable) {
           await cdp.send('Network.enable');
+          rootNetworkEnabled = true;
         }
         if (cdpMethods.webSocketFrameSent) {
           cdp.on('Network.webSocketFrameSent', noteWsSent);
-          wsObservationLayers++;
         }
-        if (cdpMethods.targetAttached) {
-          cdp.on('Target.attachedToTarget', async (event: { sessionId?: string }) => {
-            if (!event.sessionId) {
-              boundary.markCoverageLost();
-              boundary.websocketTargetsCoverage = 'incomplete';
-              return;
-            }
-            try {
-              await cdp.send('Network.enable', {}, event.sessionId);
-            } catch {
-              boundary.markCoverageLost();
-              boundary.websocketTargetsCoverage = 'incomplete';
-            }
-          });
-        }
-      } else if (controls?.requireCdpWebSocketSent) {
-        boundary.websocketTargetsCoverage = 'incomplete';
+
+        cdpEstablished = !failedTargetAttach
+          && rootNetworkEnabled
+          && cdpMethods.setAutoAttach === true
+          && cdpMethods.webSocketFrameSent === true
+          && cdpMethods.targetAttached === true;
       }
     } catch {
       if (controls?.requireCdpWebSocketSent) {
@@ -229,27 +377,26 @@ export async function establishDispatchObservationBoundary(
     }
   }
 
-  if (controls?.websocketTargetsCoverage) {
+  if (fakePage && controls?.websocketTargetsCoverage) {
     boundary.websocketTargetsCoverage = controls.websocketTargetsCoverage;
     boundary.websocketTargetsArmed = controls.websocketTargetsCoverage === 'complete';
-  } else if (controls?.incompleteWebSocketTargets) {
+  } else if (fakePage && controls?.incompleteWebSocketTargets) {
     boundary.websocketTargetsCoverage = 'incomplete';
-  } else if (wsObservationLayers >= 2) {
+  } else if (cdpEstablished && boundary.coverageIntact) {
     boundary.websocketTargetsArmed = true;
     boundary.websocketTargetsCoverage = 'complete';
-  } else if (wsObservationLayers === 1) {
-    boundary.websocketTargetsCoverage = 'incomplete';
+  } else {
+    boundary.websocketTargetsArmed = false;
+    boundary.websocketTargetsCoverage = failedTargetAttach || controls?.requireCdpWebSocketSent
+      ? 'incomplete'
+      : 'unknown';
   }
 
-  return boundary;
-}
+  boundary.dispatchObservationEngaged = fakePage
+    ? Boolean(controls)
+    : cdpEstablished;
 
-export function dispatchObservationCoverageComplete(boundary: DispatchObservationBoundary): boolean {
-  return boundary.coverageIntact
-    && boundary.httpContextArmed
-    && boundary.httpContextCoverage === 'complete'
-    && boundary.websocketTargetsArmed
-    && boundary.websocketTargetsCoverage === 'complete';
+  return boundary;
 }
 
 export async function evaluateDispatchRequestNotObserved(

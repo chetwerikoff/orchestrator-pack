@@ -330,19 +330,40 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
           if (event === 'request') contextRequestHandlers.push(handler);
         },
       } : {}),
-      newCDPSession: async () => ({
-        send: async (method: string) => {
-          if (observeComplete && (method === 'Target.setAutoAttach' || method === 'Target.setDiscoverTargets' || method === 'Network.enable')) return {};
-          return {};
-        },
-        on: (event: string, handler: (value: { response?: { payloadData?: string }; sessionId?: string }) => unknown) => {
-          if (event === 'Network.webSocketFrameReceived') wsHandlers.push(handler);
-          if (observeComplete && event === 'Network.webSocketFrameSent') wsSentHandlers.push(() => handler({}));
-          if (observeComplete && event === 'Target.attachedToTarget') {
-            handler({ sessionId: 'fixture-target-session' });
-          }
-        },
-      }),
+      newCDPSession: async () => {
+        const attachedHandlers: Array<(value: any) => unknown> = [];
+        const detachedHandlers: Array<(value: any) => unknown> = [];
+        const session = {
+          send: async (method: string, params?: { sessionId?: string; message?: string; targetId?: string }) => {
+            if (!observeComplete) return {};
+            if (method === 'Target.getTargets') {
+              return {
+                targetInfos: [
+                  { targetId: 'fixture-page-target', type: 'page' },
+                  { targetId: 'fixture-worker-target', type: 'service_worker' },
+                ],
+              };
+            }
+            if (method === 'Target.attachToTarget') {
+              const sessionId = `fixture-${params?.targetId ?? 'target'}-session`;
+              for (const handler of attachedHandlers) {
+                await handler({ sessionId, waitingForDebugger: true });
+              }
+              return { sessionId };
+            }
+            if (method === 'Target.sendMessageToTarget') return {};
+            if (method === 'Target.setAutoAttach' || method === 'Target.setDiscoverTargets' || method === 'Network.enable') return {};
+            return {};
+          },
+          on: (event: string, handler: (value: { response?: { payloadData?: string }; sessionId?: string; waitingForDebugger?: boolean }) => unknown) => {
+            if (event === 'Network.webSocketFrameReceived') wsHandlers.push(handler);
+            if (observeComplete && event === 'Network.webSocketFrameSent') wsSentHandlers.push(() => handler({}));
+            if (observeComplete && event === 'Target.attachedToTarget') attachedHandlers.push(handler);
+            if (observeComplete && event === 'Target.detachedFromTarget') detachedHandlers.push(handler);
+          },
+        };
+        return session;
+      },
     }),
     on: (event: string, handler: (value: any) => unknown) => {
       if (event === 'websocket') {

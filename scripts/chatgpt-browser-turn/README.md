@@ -85,6 +85,8 @@ On the supported Chromium/Playwright runtime, operators should verify the produc
 
 If either live boundary probe is unavailable or unproven, the helper keeps possible-delivery behavior and does not mint proven non-delivery.
 
+Operator probe entrypoint: `scripts/chatgpt-browser-turn/gate-b-characterization.ts` (`runGateBCharacterization`). Run it against the live automation profile before relying on proven non-delivery in production.
+
 ## Result and retry rules
 
 `turn` writes exactly one JSON `turn-result/v1` line. `ok` exits 0. Invocation-local validation/send failures use exit family 10, exact recovery/conversation ambiguity 11, profile walls/busy/orphan state 12, machine/driver failure 13, and incompatible durable state 14.

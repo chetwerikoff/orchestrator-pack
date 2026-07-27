@@ -1843,34 +1843,26 @@ describe('issue 1024 Half A proven non-delivery', () => {
     expect(result.possibleDelivery).toBe(true);
   });
 
-  it('AC2 blocks proven non-delivery when HTTP context coverage is unknown', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    __testTiming.now = () => Date.now();
+  it('AC3 unknown HTTP context coverage performs zero send before dispatch boundary', async () => {
     const fixture = issue1024ZeroActivityFixture({
       dispatchObservation: {
         ...issue1024CompleteObservation,
         httpContextCoverage: 'unknown',
       },
     });
-    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
-
-    expect(result.cause).toBe('submitted_turn_id_unproven');
-    expect(result.possibleDelivery).toBe(true);
+    await expect(sendTurn(fixture.page, 'payload', issue1024BaseConfig())).rejects.toThrow('dispatch_observation_establishment_failed');
+    expect(fixture.getSendClicks()).toBe(0);
   });
 
-  it('AC2 blocks proven non-delivery when websocket target coverage is incomplete', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    __testTiming.now = () => Date.now();
+  it('AC3 incomplete websocket target coverage performs zero send before dispatch boundary', async () => {
     const fixture = issue1024ZeroActivityFixture({
       dispatchObservation: {
         ...issue1024CompleteObservation,
         websocketTargetsCoverage: 'incomplete',
       },
     });
-    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
-
-    expect(result.cause).toBe('submitted_turn_id_unproven');
-    expect(result.possibleDelivery).toBe(true);
+    await expect(sendTurn(fixture.page, 'payload', issue1024BaseConfig())).rejects.toThrow('dispatch_observation_establishment_failed');
+    expect(fixture.getSendClicks()).toBe(0);
   });
 
   it('AC2 forbids proven non-delivery before submitted-turn window exhaustion', async () => {
@@ -1899,6 +1891,21 @@ describe('issue 1024 Half A proven non-delivery', () => {
       postArmContextRequests: [{ url: 'https://chatgpt.com/backend-api/f/conversation' }],
     });
     const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC4 post-boundary coverage loss remains possible-delivery', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      dispatchObservation: {
+        ...issue1024CompleteObservation,
+        coverageLossAfterArm: true,
+      },
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+    expect(result.state).toBe('recovery_required');
     expect(result.cause).toBe('submitted_turn_id_unproven');
     expect(result.possibleDelivery).toBe(true);
   });
@@ -1935,6 +1942,28 @@ describe('issue 1024 gate-B characterization notes', () => {
     expect(notes).toContain('service-worker-owned HTTP');
     expect(notes).toContain('worker/secondary-target outbound WebSocket');
     expect(notes).toContain('dispatch_request_not_observed');
+    expect(notes).toContain('gate-b-characterization.ts');
+  });
+
+  it('ships the Gate-B live characterization probe module', async () => {
+    const module = await import('../chatgpt-browser-turn/gate-b-characterization.ts');
+    expect(module.GATE_B_REQUIRED_PROBES).toEqual([
+      'service-worker-owned-http-on-configured-context',
+      'worker-or-secondary-target-websocket-frame-sent',
+    ]);
+    const summary = module.summarizeGateBCharacterization([
+      {
+        probe: 'service-worker-owned-http-on-configured-context',
+        observed: true,
+        detail: 'context_request_observed',
+      },
+      {
+        probe: 'worker-or-secondary-target-websocket-frame-sent',
+        observed: false,
+        detail: 'pending_live_run',
+      },
+    ]);
+    expect(summary.complete).toBe(false);
   });
 });
 
