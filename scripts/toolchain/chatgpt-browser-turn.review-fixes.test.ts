@@ -20,6 +20,7 @@ import {
   applyCapabilityAfterSuccessfulTurn,
   capabilityStatus,
   downgradeCapability,
+  recordSerializedTransitionAnchor,
   quarantineOpaque,
   statusList,
   __testWriteCapability,
@@ -363,6 +364,46 @@ describe('issue 1008 capability self-arm race safety', () => {
     const current = capabilityStatus(profileKey, binding);
     expect(current.state).toBe('downgraded');
     expect(current.capability?.downgrade_generation).toBe(1);
+  });
+
+  it('arms after parallel admission observes external downgrade and transitions to serialized scope', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    const now = Date.now();
+    __testWriteCapability(profileKey, {
+      ...binding,
+      browser_provenance: 'Chromium test',
+      evidence_digest: sha256('parallel-admission'),
+      observed_at: new Date(now - 1_000).toISOString(),
+      expires_at: new Date(now + 60_000).toISOString(),
+      downgrade_generation: 0,
+      parallel_eligible: true,
+    });
+    const admitted = capabilityStatus(profileKey, binding);
+    expect(admitted.state).toBe('ok');
+
+    __testWriteCapability(profileKey, {
+      ...binding,
+      browser_provenance: 'Chromium test',
+      evidence_digest: sha256('external-downgrade'),
+      observed_at: admitted.capability!.observed_at,
+      expires_at: admitted.capability!.expires_at,
+      downgrade_generation: 1,
+      parallel_eligible: false,
+    });
+
+    const postTransition = capabilityStatus(profileKey, binding);
+    expect(postTransition.state).toBe('downgraded');
+    recordSerializedTransitionAnchor(profileKey, postTransition);
+
+    const outcome = applyCapabilityAfterSuccessfulTurn(
+      profileKey,
+      completion(binding, 'serialized-warm-up-after-external-downgrade'),
+    );
+    expect(outcome.applied).toBe(true);
+    const armed = capabilityStatus(profileKey, binding);
+    expect(armed.state).toBe('ok');
+    expect(armed.capability?.downgrade_generation).toBe(2);
+    expect(armed.capability?.parallel_eligible).toBe(true);
   });
 
   it('arms exactly once after this invocation downgrades and switches to serialized scope', () => {

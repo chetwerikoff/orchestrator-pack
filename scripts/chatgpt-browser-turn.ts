@@ -30,6 +30,7 @@ import {
   deleteIncident,
   applyCapabilityAfterSuccessfulTurn,
   downgradeCapability,
+  recordSerializedTransitionAnchor,
   listReadableIncidents,
   quarantineOpaque,
   statusList,
@@ -423,6 +424,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       const rechecked = capabilityStatus(profileKey, expectedBinding);
       witnessSurface = await runtimeWitnessSurfaceAvailable(turnPage);
       if (rechecked.state !== 'ok' || !witnessSurface) {
+        const observedExternalDowngrade = rechecked.state !== 'ok' && witnessSurface;
         if (!witnessSurface) downgradeCapability(profileKey);
         safeRelease(scheduleLock);
         scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
@@ -432,6 +434,9 @@ async function runTurn(args: ParsedArgs): Promise<number> {
           safeReleaseDestination(reservation);
           reservation = null;
           return emitTurnAndCode(turnResult('profile_busy', 'profile', 'pre_send_parallel_recheck_failed', invocationId, profileKey));
+        }
+        if (observedExternalDowngrade) {
+          recordSerializedTransitionAnchor(profileKey, capability);
         }
       }
     }

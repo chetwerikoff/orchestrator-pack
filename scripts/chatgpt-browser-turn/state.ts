@@ -579,6 +579,16 @@ export function applyCapabilityAfterSuccessfulTurn(
   }
 }
 
+export function recordSerializedTransitionAnchor(
+  profileKey: string,
+  observed: ControlResultV1 & { capability?: CapabilityRecordV1 },
+): void {
+  const generation = generationOf(observed);
+  if (generation !== null) {
+    selfDowngradeGenerations.set(profileKey, generation);
+  }
+}
+
 export function downgradeCapability(profileKey: string): void {
   const lock = acquireCapabilityMutationLock(profileKey);
   try {
