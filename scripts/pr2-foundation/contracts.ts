@@ -142,7 +142,9 @@ export function validateEstateSplit(
   }
   for (const path of CUTOVER_ROWS) {
     const row = byPath.get(path);
-    if (!row || row.terminalState !== 'owned-by-PR-2-cutover' || row.replacementOwner !== 'draft 315') {
+    const preCutover = row?.terminalState === 'owned-by-PR-2-cutover' && row.replacementOwner === 'draft 315';
+    const terminalized = row?.terminalState === 'cutover-terminalized' && row.replacementOwner === 'scripts/orchestrator-cutover-activate.ts';
+    if (!row || (!preCutover && !terminalized)) {
       return { ok: false, reason: `cutover_row_invalid:${path}` };
     }
   }

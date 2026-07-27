@@ -12,6 +12,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // measurement, so timing it inside the pre-topology pass can create manifest
   // drift that the real light lane correctly owns.
   'scripts/reachability-purge.test.ts': 120,
+  'scripts/cutover/issue-928.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
@@ -29,24 +30,16 @@ export function shouldMeasurePreTopology(repoRoot, options = {}) {
   return existsSync(join(repoRoot, '.git'));
 }
 
-export function resolvePreTopologyMeasurementTargets(result, options = {}) {
-  const maxFiles = Number(options.maxFiles ?? PRE_TOPOLOGY_MAX_FILES);
-  const targets = [...new Set(
+export function resolvePreTopologyMeasurementTargets(result) {
+  return [...new Set(
     (result?.topology?.unresolvedGuardWeights ?? [])
       .map((entry) => String(entry?.file ?? '').replace(/\\/g, '/'))
       .filter((file) => file.endsWith('.test.ts')),
   )].sort();
-  if (targets.length > maxFiles) {
-    throw new Error(
-      `pre-topology measurement bound exceeded: ${targets.length} files > ${maxFiles}; ` +
-      'split the change or refresh measured runtime history',
-    );
-  }
-  return targets;
 }
 
 export function resolvePreTopologyMeasurementPlan(result, options = {}) {
-  const allTargets = resolvePreTopologyMeasurementTargets(result, options);
+  const allTargets = resolvePreTopologyMeasurementTargets(result);
   const classification = result?.config?.classification ?? result?.lanesConfig?.classification ?? {};
   const measurements = {};
   const targets = [];
@@ -57,6 +50,13 @@ export function resolvePreTopologyMeasurementPlan(result, options = {}) {
       continue;
     }
     targets.push(file);
+  }
+  const maxFiles = Number(options.maxFiles ?? PRE_TOPOLOGY_MAX_FILES);
+  if (targets.length > maxFiles) {
+    throw new Error(
+      `pre-topology measurement bound exceeded: ${targets.length} files > ${maxFiles}; ` +
+      'split the change or refresh measured runtime history',
+    );
   }
   return { targets, measurements, allTargets };
 }

@@ -8,6 +8,7 @@
     "kept",
     "owned-by-PR-2",
     "foundation-terminalized",
+    "cutover-terminalized",
     "owned-by-PR-2-cutover",
     "pr1-artifact"
   ],
@@ -40318,10 +40319,10 @@
     {
       "path": "scripts/lib/Get-ReactionMessagesFromYaml.ps1",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2-cutover",
-      "replacementOwner": "draft 315",
+      "terminalState": "cutover-terminalized",
+      "replacementOwner": "scripts/orchestrator-cutover-activate.ts",
       "baseSha256": "7f349a1975385bbd252666cd8fa28009c3c8c05dc2a7b65405397a2cc25bfe18",
-      "reason": "reassigned to draft 315 PR 2-cutover activation"
+      "reason": "Issue #928 terminalized this row through the staged TypeScript activation transaction."
     },
     {
       "path": "scripts/lib/Get-ReconcileChecksByPr.ps1",
@@ -40935,9 +40936,10 @@
     {
       "path": "scripts/lib/Orchestrator-SideProcessSupervisor.ps1",
       "baseTracked": true,
-      "terminalState": "kept",
+      "terminalState": "deleted-now",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots"
+      "reason": "Issue #928 deleted the legacy PowerShell surface; surviving production duty is owned by scripts/lib/orchestrator-side-process-supervisor.ts.",
+      "replacementOwner": "scripts/lib/orchestrator-side-process-supervisor.ts"
     },
     {
       "path": "scripts/lib/Orchestrator-WakeSupervisor.ps1",
@@ -41243,9 +41245,10 @@
     {
       "path": "scripts/lib/Review-StartClaim.ps1",
       "baseTracked": true,
-      "terminalState": "kept",
+      "terminalState": "deleted-now",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots"
+      "reason": "Issue #928 deleted the legacy PowerShell surface; surviving production duty is owned by scripts/lib/review-start-claim-store.ts.",
+      "replacementOwner": "scripts/lib/review-start-claim-store.ts"
     },
     {
       "path": "scripts/lib/Review-StartClaimLifecycle.ps1",
@@ -42012,9 +42015,10 @@
     {
       "path": "scripts/orchestrator-wake-supervisor.ps1",
       "baseTracked": true,
-      "terminalState": "kept",
+      "terminalState": "deleted-now",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots"
+      "reason": "Issue #928 deleted the legacy PowerShell surface; surviving production duty is owned by scripts/orchestrator-wake-supervisor.ts.",
+      "replacementOwner": "scripts/orchestrator-wake-supervisor.ts"
     },
     {
       "path": "scripts/orchestrator-wake-supervisor.shared.ts",
@@ -42200,18 +42204,18 @@
     {
       "path": "scripts/reaction-config-messages.d.mts",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2-cutover",
-      "replacementOwner": "draft 315",
+      "terminalState": "cutover-terminalized",
+      "replacementOwner": "scripts/orchestrator-cutover-activate.ts",
       "baseSha256": "4a6964c127a22daadeb7cbfdea0a8f05efc96bc6c38b0705c75a5106917b0bde",
-      "reason": "reassigned to draft 315 PR 2-cutover activation"
+      "reason": "Issue #928 terminalized this row through the staged TypeScript activation transaction."
     },
     {
       "path": "scripts/reaction-config-messages.mjs",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2-cutover",
-      "replacementOwner": "draft 315",
+      "terminalState": "cutover-terminalized",
+      "replacementOwner": "scripts/orchestrator-cutover-activate.ts",
       "baseSha256": "2767207fce118a0a70c9ae17bcb9cdefa508612bb63f590a73008373bc9c4138",
-      "reason": "reassigned to draft 315 PR 2-cutover activation"
+      "reason": "Issue #928 terminalized this row through the staged TypeScript activation transaction."
     },
     {
       "path": "scripts/reaction-config-messages.test.ts",
@@ -42379,10 +42383,10 @@
     {
       "path": "scripts/review-ready-report-state-seed.ps1",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2-cutover",
-      "replacementOwner": "draft 315",
+      "terminalState": "cutover-terminalized",
+      "replacementOwner": "scripts/orchestrator-cutover-activate.ts",
       "baseSha256": "e89c4fa0713011a2ff4d9c80d8e5b2e68678c0d4d8f5176580725258c9f822a8",
-      "reason": "reassigned to draft 315 PR 2-cutover activation"
+      "reason": "Issue #928 terminalized this row through the staged TypeScript activation transaction."
     },
     {
       "path": "scripts/review-ready-report-state-seed.test.ts",
@@ -42446,9 +42450,10 @@
     {
       "path": "scripts/review-start-claim-reaper.ps1",
       "baseTracked": true,
-      "terminalState": "kept",
+      "terminalState": "deleted-now",
       "keepCategory": "D",
-      "reason": "CI, operator recovery, and safety-plugin roots"
+      "reason": "Issue #928 deleted the legacy PowerShell surface; surviving production duty is owned by scripts/lib/review-start-claim-reaper.ts.",
+      "replacementOwner": "scripts/lib/review-start-claim-reaper.ts"
     },
     {
       "path": "scripts/review-start-claim-run-binding.test.ts",
@@ -42540,10 +42545,10 @@
     {
       "path": "scripts/review-trigger-reconcile.ps1",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2-cutover",
-      "replacementOwner": "draft 315",
+      "terminalState": "cutover-terminalized",
+      "replacementOwner": "scripts/orchestrator-cutover-activate.ts",
       "baseSha256": "20762cfc1549a1c7d03516b87da7c8d0a6d9daf9606cac99d27f3cc3ee1864d8",
-      "reason": "reassigned to draft 315 PR 2-cutover activation"
+      "reason": "Issue #928 terminalized this row through the staged TypeScript activation transaction."
     },
     {
       "path": "scripts/review-trigger-reconcile.test.ts",
@@ -42555,10 +42560,10 @@
     {
       "path": "scripts/review-trigger-reeval.ps1",
       "baseTracked": true,
-      "terminalState": "owned-by-PR-2-cutover",
-      "replacementOwner": "draft 315",
+      "terminalState": "cutover-terminalized",
+      "replacementOwner": "scripts/orchestrator-cutover-activate.ts",
       "baseSha256": "301a202f6eadfdabd21ecfd70c2d0a72f680c42f4cc9f4b2d8a2e57158140721",
-      "reason": "reassigned to draft 315 PR 2-cutover activation"
+      "reason": "Issue #928 terminalized this row through the staged TypeScript activation transaction."
     },
     {
       "path": "scripts/review-trigger-reeval.test.ts",
