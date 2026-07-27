@@ -16,6 +16,8 @@
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/toolchain/chatgpt-browser-turn.diagnostics.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
