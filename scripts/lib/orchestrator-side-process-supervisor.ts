@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import { FileEpochAuthority } from './cutover/activation-epoch-authority.ts';
@@ -81,28 +82,35 @@ function liveLockOwner(options: Pick<SupervisorOptions, 'stateDir'>): Supervisor
 }
 
 function acquireSupervisorLock(options: SupervisorOptions, self: ReturnType<typeof readProcessIdentity>): void {
+  mkdirSync(options.stateDir, { recursive: true });
   const lock = supervisorLockPath(options);
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      mkdirSync(lock);
-      writeDurableJson(supervisorLockOwnerPath(options), {
-        schemaVersion: 1,
-        pid: self.pid,
-        startTicks: self.startTicks,
-        epochId: options.epochId,
-        nonce: options.nonce,
-        acquiredAt: new Date().toISOString(),
-      } satisfies SupervisorLockOwner);
-      return;
-    } catch (error) {
-      const code = error instanceof Error && 'code' in error ? String((error as NodeJS.ErrnoException).code ?? '') : '';
-      if (code !== 'EEXIST') throw error;
-      const owner = liveLockOwner(options);
-      if (owner) throw new Error(`typescript_supervisor_already_running:${owner.pid}`);
-      rmSync(lock, { recursive: true, force: true });
+  const candidate = path.join(options.stateDir, `.typescript-supervisor.lock.${self.pid}.${randomUUID()}`);
+  mkdirSync(candidate);
+  writeDurableJson(path.join(candidate, 'owner.json'), {
+    schemaVersion: 1,
+    pid: self.pid,
+    startTicks: self.startTicks,
+    epochId: options.epochId,
+    nonce: options.nonce,
+    acquiredAt: new Date().toISOString(),
+  } satisfies SupervisorLockOwner);
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        renameSync(candidate, lock);
+        return;
+      } catch (error) {
+        const code = error instanceof Error && 'code' in error ? String((error as NodeJS.ErrnoException).code ?? '') : '';
+        if (code !== 'EEXIST' && code !== 'ENOTEMPTY') throw error;
+        const owner = liveLockOwner(options);
+        if (owner) throw new Error(`typescript_supervisor_already_running:${owner.pid}`);
+        rmSync(lock, { recursive: true, force: true });
+      }
     }
+    throw new Error('typescript_supervisor_lock_acquire_failed');
+  } finally {
+    if (existsSync(candidate)) rmSync(candidate, { recursive: true, force: true });
   }
-  throw new Error('typescript_supervisor_lock_acquire_failed');
 }
 
 function releaseSupervisorLock(options: SupervisorOptions, self: ReturnType<typeof readProcessIdentity>): void {
