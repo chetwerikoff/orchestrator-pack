@@ -618,3 +618,161 @@ describe('[AC4] scheduler-driven #918 successor slice', () => {
     expect(started).toBe(false);
   });
 });
+
+describe('[pack-review-4] regression coverage', () => {
+  it('classifies executable target-library references from otherwise-unlisted candidate sources', async () => {
+    const { candidateLegacyReferenceRows } = await import('../lib/cutover/activation-transaction.ts');
+    const rows = candidateLegacyReferenceRows(
+      [
+        "deadbeef:scripts/unlisted-cutover-consumer.ts:1:import '../lib/Review-StartClaim.ps1';",
+        "deadbeef:docs/historical-note.md:1:const historicalName = 'Review-StartClaim.ps1';",
+      ].join('\n'),
+      [
+        { path: 'scripts/unlisted-cutover-consumer.ts', executionClass: 'reachable-helper' },
+        { path: 'docs/historical-note.md', executionClass: 'dead' },
+      ],
+    );
+    expect(rows.filter(isExecutableLegacyReference).map((row) => row.source)).toEqual([
+      'scripts/unlisted-cutover-consumer.ts',
+    ]);
+  });
+
+  it('reuses a waiting supervisor and waits for delayed durable delivery', async () => {
+    const { readProcessIdentity } = await import('../lib/cutover/activation-cordon.ts');
+    const { observeSchedulerHealthAndDelivery, productionRecoveryBoundary } = await import('../lib/cutover/activation-recovery.ts');
+    const { createPackReviewRun } = await import('../lib/pack-review-run-store.ts');
+    const root = tempRoot();
+    const identity = readProcessIdentity(process.pid);
+    const core: EpochCommitCore = {
+      epochId: 'epoch-review4-wait',
+      nonce: 'nonce-review4-wait',
+      hostId: 'test-host',
+      repoRoot,
+      installedCommitSha: 'e'.repeat(40),
+      snapshotDigests: { reconcile: 'r', reevaluation: 'e', reportStateSeed: 's' },
+      importDigests: { reconcile: 'ir', reevaluation: 'ie', reportStateSeed: 'is' },
+      registryHash: 'registry-review4',
+      preCommitLogDigest: 'phase-review4',
+      commitAt: new Date(Date.now() - 1_000).toISOString(),
+    };
+    const request = {
+      epochId: core.epochId,
+      expectedOldEpochId: null,
+      hostId: core.hostId,
+      repoRoot,
+      installedCommitSha: core.installedCommitSha,
+      oldInstalledRevisionRoot: repoRoot,
+      legacySupervisorPid: process.pid,
+      knownMemberRoster: [{ hostId: core.hostId }],
+      stores: [],
+      paths: {
+        stateDir: root,
+        cordonPath: path.join(root, 'cordon.json'),
+        phaseOnePath: path.join(root, 'phase-one.json'),
+        followupPath: path.join(root, 'followups.json'),
+        epochAuthorityPath: path.join(root, 'authority.json'),
+        targetRegistryPath: path.join(root, 'target-registry.json'),
+        projectedRegistryPath: path.join(root, 'projected-registry.json'),
+        snapshotDir: path.join(root, 'snapshots'),
+        supervisorStateDir: root,
+        foundationEvidencePath: path.join(root, 'foundation.json'),
+      },
+    } as ActivationRequest;
+    writeJson(path.join(root, 'typescript-supervisor-status.json'), {
+      schemaVersion: 1,
+      epochId: core.epochId,
+      nonce: core.nonce,
+      supervisorPid: process.pid,
+      supervisorStartTicks: identity.startTicks,
+      registryHash: core.registryHash,
+      registrySource: request.paths.targetRegistryPath,
+      childId: 'pr2-scheduler',
+      childPid: null,
+      childGeneration: 3,
+      childRestarts: 2,
+      restartState: 'waiting-restart',
+      startedAt: new Date().toISOString(),
+      lastChildStartAt: new Date().toISOString(),
+      cordonReason: 'post-cas-epoch-owner',
+      refusalReason: null,
+    });
+
+    await expect(productionRecoveryBoundary.ensureTypeScriptSupervisor(request, core.nonce)).resolves.toEqual({
+      supervisorPid: process.pid,
+      childGeneration: 3,
+    });
+
+    const storeRoot = path.join(root, 'review-runs');
+    initializePackReviewRunStore(storeRoot);
+    const headSha = 'f'.repeat(40);
+    const delayedDelivery = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      const created = createPackReviewRun({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        prNumber: 928,
+        headSha,
+        linkedSessionId: 'worker-review4',
+        startReason: 'scheduler',
+        surface: 'pr2-scheduler',
+        trustedPackRoot: repoRoot,
+        sourceRepoRoot: repoRoot,
+      });
+      const now = new Date().toISOString();
+      updatePackReviewRun(created.run.id, {
+        status: 'up_to_date',
+        latestRunStatus: 'up_to_date',
+        reviewVerdict: 'clean',
+        findingCount: 0,
+        findings: [],
+        journalOutcome: {
+          state: 'persisted',
+          recordedAtUtc: now,
+          reason: 'verdict_persisted',
+          idempotencyKey: `verdict:${created.run.id}:${headSha}`,
+          attempts: 1,
+        },
+        githubReviewId: 92804,
+        githubReviewUrl: 'fixture://issue-928/review4',
+        githubReviewReconciliation: {
+          schemaVersion: 1,
+          event: 'COMMENT',
+          phase: 'complete',
+          actorLogin: 'issue-928-reviewer',
+          commentBody: 'clean',
+          commentReviewId: 92804,
+          commentReviewUrl: 'fixture://issue-928/review4',
+          pendingDismissalReviewIds: [],
+          dismissedReviewIds: [],
+          preparedAtUtc: now,
+          updatedAtUtc: now,
+        },
+        deliveryOutcomes: {
+          requiredStatus: {
+            state: 'succeeded',
+            recordedAtUtc: now,
+            reason: 'fixture_status_written',
+            idempotencyKey: `required-status:orchestrator-pack/pack-review:${headSha}`,
+          },
+          workerNotification: {
+            state: 'delivered',
+            recordedAtUtc: now,
+            reason: 'fixture_worker_delivered',
+            idempotencyKey: `worker-notification:${created.run.id}:${headSha}`,
+          },
+        },
+      }, { projectId: 'orchestrator-pack', storeRoot });
+    })();
+
+    const observation = await observeSchedulerHealthAndDelivery(
+      request,
+      core,
+      { supervisorPid: process.pid, childGeneration: 3 },
+      storeRoot,
+      { timeoutMs: 1_000, pollMs: 10 },
+    );
+    await delayedDelivery;
+    expect(observation.supervisor.restartState).toBe('waiting-restart');
+    expect(observation.delivery.headSha).toBe(headSha);
+  });
+});
