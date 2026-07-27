@@ -1,0 +1,42 @@
+name: issue-928-claim-reaper-mutation-fix
+
+on:
+  push:
+    branches:
+      - agent/issue-928-cutover-final
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-928-cutover-final
+          fetch-depth: 0
+      - name: Bind reaper mutation to live TypeScript claim authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = 'scripts/cutover/mutation-runner.ts';
+          let source = fs.readFileSync(file, 'utf8');
+          const before = "claimReaper:'scripts/lib/review-start-claim-reaper.ts'";
+          const after = "claimReaper:'scripts/lib/review-start-claim-store.ts'.replace('-store.ts','-cli.ts')";
+          const count = source.split(before).length - 1;
+          if (count !== 1) throw new Error(`expected one claimReaper binding, got ${count}`);
+          source = source.replace(before, after);
+          fs.writeFileSync(file, source, 'utf8');
+          fs.rmSync('.github/workflows/issue-928-claim-reaper-mutation-fix.yml', { force: true });
+          NODE
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: bind claim reaper mutation authority"
+          git push origin HEAD:agent/issue-928-cutover-final
