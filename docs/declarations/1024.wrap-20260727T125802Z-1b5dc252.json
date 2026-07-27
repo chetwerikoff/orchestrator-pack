@@ -1,0 +1,23 @@
+{
+  "issue_number": 1024,
+  "iteration_id": "wrap-20260727T125802Z-1b5dc252",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "wrap-20260727T125503Z-cc81e771",
+  "created_at": "2026-07-27T12:58:02.670Z",
+  "baseline": {
+    "commit_sha": "8ac9ed546bffa3b8429dfcc9e4eb2d7d03424d7e",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:7a42988afa290d47aba7cb3607e7e7b17329df284531a0f5413dee0831755b5a"
+  },
+  "declared_paths": [
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/chatgpt-browser-turn/dispatch-observation.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts"
+  ],
+  "declared_globs": [
+    "scripts/toolchain/chatgpt-browser-turn*.test.ts"
+  ],
+  "amendments": []
+}
