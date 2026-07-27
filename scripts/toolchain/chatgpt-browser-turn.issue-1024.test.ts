@@ -48,11 +48,6 @@ async function exhaustSubmittedTurnWindow(
   return turn;
 }
 
-function parseDiagnosticOperation(operation: string | undefined): DispatchObservationDiagnostic {
-  expect(operation).toBeTruthy();
-  return JSON.parse(operation!) as DispatchObservationDiagnostic;
-}
-
 describe('issue 1024 Half A proven non-delivery', () => {
   afterEach(() => {
     __testTiming.now = undefined;
