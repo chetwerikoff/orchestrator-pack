@@ -1055,16 +1055,18 @@ describe('issue 964 retained recovery binary lifecycle', () => {
     const base = ['--profile', join(root, 'profile'), '--cdp', cdp];
 
     let liveBrowserProvenance = 'Chromium retained-test';
+    let cdpAvailable = false;
     try {
       const chromium = loadChromium();
       const browser = await chromium.connectOverCDP(cdp);
       try {
         liveBrowserProvenance = String(browser.version?.() ?? 'chromium-cdp');
+        cdpAvailable = true;
       } finally {
         await releaseCdpBrowser(browser);
       }
     } catch {
-      // Fall back to the fixture provenance when CDP is unavailable in this environment.
+      // CDP is unavailable in CI; parallel arm assertions below use the fail-closed branch.
     }
 
     let observed = run(['capability', ...base]);
@@ -1082,13 +1084,18 @@ describe('issue 964 retained recovery binary lifecycle', () => {
       admission_epoch: 4,
     });
     observed = run(['capability', ...base, '--admission-policy', 'parallel']);
-    expect(observed.status).toBe(0);
-    expect(observed.body?.mutation).toEqual({ applied: true });
-    expect(observed.body?.admission).toEqual({ policy: 'parallel', epoch: 4 });
+    if (cdpAvailable) {
+      expect(observed.status).toBe(0);
+      expect(observed.body?.mutation).toEqual({ applied: true });
+      expect(observed.body?.admission).toEqual({ policy: 'parallel', epoch: 4 });
+    } else {
+      expect(observed.status).toBe(22);
+      expect(observed.body?.cause).toBe('cdp_unavailable');
+    }
     observed = run(['capability', ...base, '--admission-policy', 'serialized']);
     expect(observed.status).toBe(0);
     expect(observed.body?.mutation).toEqual({ applied: true });
-    expect(observed.body?.admission).toEqual({ policy: 'serialized', epoch: 5 });
+    expect(observed.body?.admission).toEqual({ policy: 'serialized', epoch: cdpAvailable ? 5 : 4 });
 
     const readable = writeIncident(profileKey, {
       kind: 'conversation_incident',
