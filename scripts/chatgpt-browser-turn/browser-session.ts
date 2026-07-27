@@ -37,9 +37,9 @@ export async function abandonLatePageHandle(
 export async function closeOwnedTurnPage(
   opened: TurnPageHandle | undefined,
   options: { readonly retainPage: boolean; readonly cleanupBudgetMs?: number },
-): Promise<ResourceCleanupOutcome> {
-  if (!opened?.owned || options.retainPage) return 'skipped';
-  return await boundedResourceCleanup(
+): Promise<void> {
+  if (!opened?.owned || options.retainPage) return;
+  await boundedResourceCleanup(
     () => (opened.page as { close: () => Promise<void> }).close(),
     options.cleanupBudgetMs ?? RESOURCE_CLEANUP_BOUND_MS,
   );
@@ -48,9 +48,9 @@ export async function closeOwnedTurnPage(
 export async function releaseCdpBrowser(
   browser: unknown | null | undefined,
   cleanupBudgetMs = RESOURCE_CLEANUP_BOUND_MS,
-): Promise<ResourceCleanupOutcome> {
-  if (!browser) return 'skipped';
-  return await boundedResourceCleanup(
+): Promise<void> {
+  if (!browser) return;
+  await boundedResourceCleanup(
     () => (browser as { close: () => Promise<void> }).close(),
     cleanupBudgetMs,
   );

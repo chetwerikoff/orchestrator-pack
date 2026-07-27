@@ -1727,7 +1727,9 @@ describe('issue 1023 operation-level bounds', () => {
   });
   it('AC2: bounded owner probe timeout is failure-to-know, not profile negative evidence', async () => {
     const ownerPath = join(repoRoot, '.claude', 'skills', 'discuss-with-gpt', 'verify-cdp-owner.mjs');
-    const ownerMod = await import(pathToFileURL(ownerPath).href) as typeof import('../../.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs');
+    const ownerMod = await import(pathToFileURL(ownerPath).href) as {
+      __testOwnerProbe: { stallExecFile: boolean; stallFetch: boolean };
+    };
     ownerMod.__testOwnerProbe.stallExecFile = true;
     const budget = createPreSendSegmentBudget(150);
     await expect(verifyProfile({
@@ -1741,7 +1743,10 @@ describe('issue 1023 operation-level bounds', () => {
 
   it('AC2: stalled reachability fetch aborts with distinguishable timeout', async () => {
     const ownerPath = join(repoRoot, '.claude', 'skills', 'discuss-with-gpt', 'verify-cdp-owner.mjs');
-    const ownerMod = await import(pathToFileURL(ownerPath).href) as typeof import('../../.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs');
+    const ownerMod = await import(pathToFileURL(ownerPath).href) as {
+      __testOwnerProbe: { stallExecFile: boolean; stallFetch: boolean };
+      isCdpReachable: (cdpUrl: string, options?: { timeoutMs?: number }) => Promise<boolean>;
+    };
     ownerMod.__testOwnerProbe.stallFetch = true;
     await expect(ownerMod.isCdpReachable(cdp, { timeoutMs: 100 })).rejects.toMatchObject({ message: 'cdp_reachability_timeout' });
     ownerMod.__testOwnerProbe.stallFetch = false;

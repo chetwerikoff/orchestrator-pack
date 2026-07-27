@@ -5,7 +5,8 @@
 //   node verify-cdp-owner.mjs verify --profile <user-data-dir> [--cdp url]
 //   node verify-cdp-owner.mjs record --profile <user-data-dir> [--cdp url]
 
-import { execFile, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { runProcess } from '../../../scripts/kernel/subprocess.ts';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -46,33 +47,29 @@ function extractUserDataDir(cmdline) {
   return m ? (m[1] || m[2] || m[3]) : null;
 }
 
-function execFileBounded(file, args, timeoutMs) {
+async function execFileBounded(file, args, timeoutMs) {
   if (timeoutMs <= 0) {
-    return Promise.reject(Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' }));
+    throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
   }
   if (__testOwnerProbe.stallExecFile) {
-    return new Promise((_, reject) => {
+    await new Promise((_, reject) => {
       setTimeout(() => reject(Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' })), timeoutMs);
     });
   }
-  return new Promise((resolve, reject) => {
-    execFile(
-      file,
-      args,
-      { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs },
-      (error, stdout) => {
-        if (error) {
-          if (error.killed || error.signal === 'SIGTERM' || error.code === 'ERR_CHILD_PROCESS_TERMINATED') {
-            reject(Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' }));
-            return;
-          }
-          reject(error);
-          return;
-        }
-        resolve(stdout);
-      },
-    );
+  const result = await runProcess({
+    command: file,
+    args,
+    timeoutMs,
+    encoding: 'utf8',
+    inheritParentEnv: true,
   });
+  if (result.timedOut || result.cancelled) {
+    throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
+  }
+  if (!result.ok) {
+    throw new Error(result.error ?? 'owner_probe_failed');
+  }
+  return result.stdout;
 }
 
 function findWindowsListenerPidSync(port) {
