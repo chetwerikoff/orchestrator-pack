@@ -61,6 +61,30 @@ npm run chatgpt-browser-turn -- clear \
 
 A stale generation, changed evidence, live owner, unreadable lock, or publication that cannot be proven uncommitted remains blocked.
 
+
+## Proven non-delivery (`dispatch_request_not_observed`)
+
+After the existing 30-second submitted-turn observation window exhausts with no service-proven user id, the helper may return `send_failed` with `cause: dispatch_request_not_observed` and `possibleDelivery: false` only when **all** of the following held from `armDispatch()` through that exhaustion:
+
+- configured-context HTTP observation and target-complete outbound-WebSocket sent-frame observation were established before dispatch and remained gap-free;
+- zero outbound HTTP(S) requests on the context boundary;
+- zero outbound WebSocket frames on covered targets;
+- no new user DOM nodes beyond the pre-dispatch baseline;
+- for `--new-chat`, the normalized page URL stayed unchanged.
+
+Any post-arm outbound HTTP request, WebSocket frame, DOM user node, fresh-chat URL transition, or boundary-coverage loss keeps the existing `submitted_turn_id_unproven` possible-delivery path. Pre-dispatch observer establishment failure performs zero send and returns `driver_error` / `driver_exception_before_send`.
+
+Proven non-delivery reuses the existing non-possible-delivery cleanup path: close an invocation-owned page, delete only this invocation's incident, and release schedule/destination locks. A later independent invocation may retry normally.
+
+### Gate-B live characterization (Half A)
+
+On the supported Chromium/Playwright runtime, operators should verify the production path can observe:
+
+1. **service-worker-owned HTTP** on the configured `BrowserContext` request surface; and
+2. **worker/secondary-target outbound WebSocket sends** via target auto-attach and `Network.webSocketFrameSent`.
+
+If either live boundary probe is unavailable or unproven, the helper keeps possible-delivery behavior and does not mint proven non-delivery.
+
 ## Result and retry rules
 
 `turn` writes exactly one JSON `turn-result/v1` line. `ok` exits 0. Invocation-local validation/send failures use exit family 10, exact recovery/conversation ambiguity 11, profile walls/busy/orphan state 12, machine/driver failure 13, and incompatible durable state 14.

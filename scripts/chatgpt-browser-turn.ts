@@ -38,6 +38,7 @@ import {
   writeIncident,
 } from './chatgpt-browser-turn/state.ts';
 import { configuredProfileKey, sha256 } from './chatgpt-browser-turn/storage-common.ts';
+import { lastDispatchObservationDiagnostic } from './chatgpt-browser-turn/dispatch-observation.ts';
 import { recordSwallowedDriverException } from './chatgpt-browser-turn/diagnostics.ts';
 import { readStableInput } from './chatgpt-browser-turn/input.ts';
 import {
@@ -498,6 +499,19 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       scheduleLock!.updatePhase('possible_delivery');
       reservation!.markPossibleDelivery();
     });
+
+    if (result.cause === 'dispatch_request_not_observed' && lastDispatchObservationDiagnostic) {
+      recordSwallowedDriverException(
+        profileKey,
+        invocationId,
+        result.cause,
+        new Error('dispatch_observation_summary'),
+        {
+          invocation_id: invocationId,
+          operation: JSON.stringify(lastDispatchObservationDiagnostic),
+        },
+      );
+    }
 
     if (!result.possibleDelivery) {
       await closeOwnedTurnPage(opened, { retainPage: false });

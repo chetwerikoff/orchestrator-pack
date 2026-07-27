@@ -4,6 +4,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { revalidateProcessDestinationReservations } from './coordination.ts';
 import {
+  DispatchObservationEstablishmentError,
+  establishDispatchObservationBoundary,
+  evaluateDispatchRequestNotObserved,
+  recordDispatchObservationDiagnostic,
+  type DispatchObservationBoundary,
+} from './dispatch-observation.ts';
+import {
   mergeContinuationSegments,
   SEMANTIC_UI_FILTER,
   serializeSemanticNodes,
@@ -1254,6 +1261,41 @@ export async function sendTurn(
     if (id) baselineIds.add(id);
   }
 
+  const usersBeforeDispatch = page.locator('[data-message-author-role="user"]');
+  let preDispatchUserNodeCount = 0;
+  let userNodeBaselineReliable = true;
+  try {
+    preDispatchUserNodeCount = await usersBeforeDispatch.count();
+  } catch {
+    userNodeBaselineReliable = false;
+    preDispatchUserNodeCount = -1;
+  }
+
+  let preDispatchNormalizedUrl = '';
+  let urlBaselineReliable = true;
+  try {
+    preDispatchNormalizedUrl = normalizeConversationUrl(page.url());
+  } catch {
+    urlBaselineReliable = false;
+    preDispatchNormalizedUrl = '';
+  }
+
+  let dispatchObservation: DispatchObservationBoundary;
+  try {
+    dispatchObservation = await establishDispatchObservationBoundary(page, {
+      newChatMode: config.newChat,
+      preDispatchUserNodeCount,
+      preDispatchNormalizedUrl,
+      userNodeBaselineReliable,
+      urlBaselineReliable,
+    });
+  } catch (error) {
+    if (error instanceof DispatchObservationEstablishmentError) {
+      throw error;
+    }
+    throw new DispatchObservationEstablishmentError('dispatch_observation_establishment_failed');
+  }
+
   await composer.click();
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
   await page.keyboard.press('Delete');
@@ -1276,6 +1318,7 @@ export async function sendTurn(
     new Promise<void>((resolve) => { setTimeout(resolve, 10_000); }),
   ]);
   network.armDispatch();
+  dispatchObservation.armDispatchObservation();
   try {
     network.ingestingDispatchServiceFrames = true;
     if (sendAvailable) await send.click();
@@ -1303,7 +1346,24 @@ export async function sendTurn(
     userId = observed.values().next().value ?? '';
     if (!userId) await witnessPollDelay(page, 250);
   }
-  if (!userId) return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
+  if (!userId) {
+    const nonDelivery = await evaluateDispatchRequestNotObserved(
+      dispatchObservation,
+      page,
+      baselineIds,
+      async (targetPage) => await targetPage.locator('[data-message-author-role="user"]').count(),
+      serviceId,
+    );
+    if (nonDelivery.proven) {
+      recordDispatchObservationDiagnostic(nonDelivery.diagnostic, 'dispatch_request_not_observed');
+      return {
+        state: 'send_failed',
+        cause: 'dispatch_request_not_observed',
+        possibleDelivery: false,
+      };
+    }
+    return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
+  }
   userId = canonicalSubmittedUserId(network, baselineIds) || userId;
 
   const segments: string[] = [];
