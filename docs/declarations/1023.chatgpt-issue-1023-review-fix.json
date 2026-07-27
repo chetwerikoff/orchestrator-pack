@@ -22,5 +22,18 @@
     "docs/declarations/1023.chatgpt-issue-1023-review-fix.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:18fecefe39effa64548da6f8d51c670060b00e40aa55aa469bbffc63f8be4f2b",
+      "new_active_scope_hash": "sha256:18fecefe39effa64548da6f8d51c670060b00e40aa55aa469bbffc63f8be4f2b",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "Second-round pack review P1 fixes",
+      "actor": "local",
+      "timestamp": "2026-07-27T15:00:33.042Z",
+      "applied": true
+    }
+  ]
 }
