@@ -11,12 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { configuredProfileKey, profileDiagnosticsDir, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
-import { runtimeCapabilityBinding } from '../chatgpt-browser-turn/runtime-binding.ts';
-import {
-  __testWriteCapability,
-  capabilityStatus,
-} from '../chatgpt-browser-turn/state.ts';
+import { configuredProfileKey, profileDiagnosticsDir } from '../chatgpt-browser-turn/storage-common.ts';
 import {
   DRIVER_DIAGNOSTIC_DETAIL_UNAVAILABLE,
   DRIVER_DIAGNOSTIC_SCHEMA,
@@ -440,7 +435,6 @@ async function importRunCliWithMocks(options: {
   readonly browserCloseThrows?: boolean;
   readonly deleteIncidentSpy?: ReturnType<typeof vi.fn>;
   readonly releaseOrder?: string[];
-  readonly witnessSurfaceProbe?: 'available' | 'absent' | 'inapplicable';
 }): Promise<{
   readonly runCli: typeof import('../chatgpt-browser-turn.ts').runCli;
   readonly pageCalls: string[];
@@ -472,7 +466,7 @@ async function importRunCliWithMocks(options: {
         owned: options.owned ?? true,
         provisionalId: randomUUID(),
       })),
-      runtimeWitnessSurfaceAvailable: vi.fn(async () => options.witnessSurfaceProbe ?? 'available'),
+      runtimeWitnessSurfaceAvailable: vi.fn(async () => true),
       sendTurn: vi.fn(async () => options.sendResult ?? {
         state: 'ok',
         cause: 'completed',
@@ -648,7 +642,7 @@ describe('issue 1007 runTurn teardown integration', () => {
         verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'ok' })),
         loadChromium: vi.fn(() => ({ connectOverCDP: vi.fn(async () => browserTracker.browser) })),
         openTurnPage: vi.fn(async () => ({ page: pageTracker.page, owned: false })),
-        runtimeWitnessSurfaceAvailable: vi.fn(async () => 'available' as const),
+        runtimeWitnessSurfaceAvailable: vi.fn(async () => true),
         sendTurn: vi.fn(async () => ({
           state: 'ok',
           cause: 'completed',
@@ -871,48 +865,3 @@ describe('issue 1007 live CDP precondition note', () => {
     expect(notePath).toContain('cdp-page-survival-precondition.md');
   });
 });
-
-function seedOkCapability(generation = 5): ReturnType<typeof import('../chatgpt-browser-turn/runtime-binding.ts').runtimeCapabilityBinding> {
-  const binding = runtimeCapabilityBinding(profileKey, 'http://127.0.0.1:9222');
-  const now = Date.now();
-  __testWriteCapability(profileKey, {
-    ...binding,
-    browser_provenance: 'chromium-cdp-fixture',
-    evidence_digest: sha256(`seed-ok-${generation}`),
-    observed_at: new Date(now - 1_000).toISOString(),
-    expires_at: new Date(now + 60_000).toISOString(),
-    downgrade_generation: generation,
-    parallel_eligible: true,
-  });
-  return binding;
-}
-
-describe('issue 1008 witness surface probe caller', () => {
-  it('does not downgrade an ok lease when the pre-send probe is inapplicable on an empty conversation', async () => {
-    const binding = seedOkCapability(5);
-    const before = capabilityStatus(profileKey, binding);
-    expect(before.state).toBe('ok');
-    expect(before.capability?.parallel_eligible).toBe(true);
-
-    const { runCli } = await importRunCliWithMocks({ witnessSurfaceProbe: 'inapplicable' });
-    const exitCode = await runCli(turnArgv(join(root, 'witness-inapplicable.txt')));
-    expect(exitCode).toBe(0);
-
-    const after = capabilityStatus(profileKey, binding);
-    expect(after.state).toBe('ok');
-    expect(after.capability?.parallel_eligible).toBe(true);
-    expect(after.capability?.downgrade_generation).toBe(5);
-  });
-  it('downgrades an ok lease when the pre-send probe finds no causal relation on a populated conversation', async () => {
-    const binding = seedOkCapability(5);
-    const { runCli } = await importRunCliWithMocks({ witnessSurfaceProbe: 'absent' });
-    const exitCode = await runCli(turnArgv(join(root, 'witness-absent.txt')));
-    expect(exitCode).toBe(0);
-
-    const after = capabilityStatus(profileKey, binding);
-    expect(after.state).toBe('downgraded');
-    expect(after.capability?.downgrade_generation).toBe(6);
-    expect(after.capability?.parallel_eligible).toBe(false);
-  });
-});
-

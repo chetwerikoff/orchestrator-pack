@@ -995,6 +995,10 @@ async function parentServiceId(locator: any): Promise<string> {
 
 export type WitnessSurfaceProbe = 'available' | 'absent' | 'inapplicable';
 
+export function witnessSurfaceProbeRequiresDowngrade(probe: WitnessSurfaceProbe): boolean {
+  return probe === 'absent';
+}
+
 export async function runtimeWitnessSurfaceAvailable(page: any): Promise<WitnessSurfaceProbe> {
   const messages = page.locator('[data-message-author-role]');
   const count = await messages.count().catch(() => 0);

@@ -47,6 +47,7 @@ import {
   runtimeWitnessSurfaceAvailable,
   sendTurn,
   type BrowserConfig,
+  witnessSurfaceProbeRequiresDowngrade,
   type WitnessSurfaceProbe,
   verifyProfile,
 } from './chatgpt-browser-turn/ui-adapter.ts';
@@ -408,7 +409,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     const turnPage = opened.page;
 
     let witnessSurfaceProbe: WitnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage);
-    if (capability.state === 'ok' && witnessSurfaceProbe === 'absent') {
+    if (capability.state === 'ok' && witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe)) {
       downgradeCapability(profileKey);
       safeRelease(scheduleLock);
       scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
@@ -424,9 +425,9 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     if (capability.state === 'ok') {
       const rechecked = capabilityStatus(profileKey, expectedBinding);
       witnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage);
-      if (rechecked.state !== 'ok' || witnessSurfaceProbe === 'absent') {
-        const observedExternalDowngrade = rechecked.state !== 'ok' && witnessSurfaceProbe !== 'absent';
-        if (witnessSurfaceProbe === 'absent') downgradeCapability(profileKey);
+      if (rechecked.state !== 'ok' || witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe)) {
+        const observedExternalDowngrade = rechecked.state !== 'ok' && !witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe);
+        if (witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe)) downgradeCapability(profileKey);
         safeRelease(scheduleLock);
         scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
         capability = capabilityStatus(profileKey, expectedBinding);
@@ -480,7 +481,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       if (statusList(profileKey).state === 'profile_blocked') throw new Error('pre_send_profile_blocked');
       if (findProfileWall(profileKey)) throw new Error('pre_send_profile_wall');
       if (capability.state === 'ok') {
-        if ((await runtimeWitnessSurfaceAvailable(turnPage)) === 'absent') {
+        if (witnessSurfaceProbeRequiresDowngrade(await runtimeWitnessSurfaceAvailable(turnPage))) {
           downgradeCapability(profileKey);
           capability = capabilityStatus(profileKey, expectedBinding);
           throw new Error('pre_send_witness_unavailable');

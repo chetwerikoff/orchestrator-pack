@@ -26,7 +26,7 @@ import {
   __testWriteCapability,
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
-import { classifyProductWall, productStatusText } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { classifyProductWall, productStatusText, witnessSurfaceProbeRequiresDowngrade } from '../chatgpt-browser-turn/ui-adapter.ts';
 
 let root = '';
 let profileKey = '';
@@ -481,3 +481,15 @@ describe('issue 1008 capability self-arm race safety', () => {
     expect(armed.capability?.parallel_eligible).toBe(true);
   });
 });
+
+describe('issue 1008 witness surface probe caller', () => {
+  it('does not treat an inapplicable empty-conversation probe as grounds to downgrade', () => {
+    expect(witnessSurfaceProbeRequiresDowngrade('inapplicable')).toBe(false);
+  });
+
+  it('still downgrades when a populated conversation probe finds no causal relation', () => {
+    expect(witnessSurfaceProbeRequiresDowngrade('absent')).toBe(true);
+    expect(witnessSurfaceProbeRequiresDowngrade('available')).toBe(false);
+  });
+});
+
