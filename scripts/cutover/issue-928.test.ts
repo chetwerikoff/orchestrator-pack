@@ -25,7 +25,7 @@ import { buildPlanningManifest } from '../pr2a/closed-world-scanner.ts';
 import { D928 } from '../pr2a/contracts.ts';
 import { getPackReviewRun, initializePackReviewRunStore, updatePackReviewRun } from '../lib/pack-review-run-store.ts';
 import { packReviewDeliveryNeedsResume } from '../lib/pack-review-delivery.ts';
-import { runPackReviewEntry } from '../estate-cut/task-311-tests/task-311-common.test-support.ts';
+import { startPackReview } from '../pack-review-runner.ts';
 
 const repoRoot = path.resolve(process.cwd());
 const roots: string[] = [];
@@ -509,7 +509,7 @@ describe('[AC8] platform and canonical bytes', () => {
 });
 
 describe('[AC4] scheduler-driven #918 successor slice', () => {
-  it('drives the scheduler into the real #918 runner and durable delivery path', async () => {
+  it('extends the existing #918 gate through the real scheduler/runner durable-delivery path', async () => {
     const root = tempRoot();
     const authorityPath = path.join(root, 'authority.json');
     const core = committedEpoch(authorityPath);
@@ -528,103 +528,76 @@ describe('[AC4] scheduler-driven #918 successor slice', () => {
       start: async (row, head) => {
         starts.push({ pr: row.prNumber, head });
         const reviews: any[] = [];
-        const result = await runPackReviewEntry({
-          root: path.join(root, 'issue-918-runner'),
-          target: { prNumber: row.prNumber, headSha: head, sessionId: row.sessionId },
-          storeRoot,
-          tracePath: path.join(root, 'issue-918-runner.trace.jsonl'),
-          githubTransport: {
-            async resolveActorLogin() { return 'issue-928-reviewer'; },
-            async listReviews() { return [...reviews]; },
-            async postReview(input) {
-              const review = {
-                id: 92801 + reviews.length,
-                state: 'COMMENTED',
-                userLogin: 'issue-928-reviewer',
-                submittedAt: new Date().toISOString(),
-                body: input.body,
-                commitId: input.commitId,
-                url: `fixture://issue-928/review/${92801 + reviews.length}`,
-              };
-              reviews.push(review);
-              return { id: review.id, url: review.url };
+        const previousHarness = process.env.OPK_VITEST_HARNESS;
+        const previousClaimRoot = process.env.AO_REVIEW_CLAIM_DIR;
+        process.env.OPK_VITEST_HARNESS = '1';
+        process.env.AO_REVIEW_CLAIM_DIR = path.join(root, 'claims');
+        try {
+          const result = await startPackReview({
+            projectId: 'orchestrator-pack',
+            linkedSessionId: row.sessionId,
+            prNumber: row.prNumber,
+            headSha: head,
+            sourceRepoRoot: repoRoot,
+            startReason: 'scheduler',
+            surface: 'pr2-scheduler',
+            claimMode: 'acquire',
+            storeRoot,
+            fixtureReviewStdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
+            fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+            fixtureGithubReviewTransport: {
+              async resolveActorLogin() { return 'issue-928-reviewer'; },
+              async listReviews() { return [...reviews]; },
+              async postReview(input) {
+                const review = {
+                  id: 92801 + reviews.length,
+                  state: 'COMMENTED',
+                  userLogin: 'issue-928-reviewer',
+                  submittedAt: new Date().toISOString(),
+                  body: input.body,
+                  commitId: input.commitId,
+                  url: `fixture://issue-928/review/${92801 + reviews.length}`,
+                };
+                reviews.push(review);
+                return { id: review.id, url: review.url };
+              },
+              async dismissReview() { /* no prior approval exists in this fixture */ },
             },
-            async dismissReview() { /* no prior approval exists in this fixture */ },
-          },
-          statusWriter: async () => { /* success is persisted by the real delivery layer */ },
-          workerNotifier: async () => ({ state: 'delivered', reason: 'issue_928_fixture_dispatched' }),
-          journalWriter: (runId, fields, options) => updatePackReviewRun(runId, fields, options),
-        });
-        expect(result).toMatchObject({ ok: true, created: true });
-        const runId = String(result.runId);
-        const run = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
-        expect(run).not.toBeNull();
-        expect(run?.journalOutcome?.state).toBe('persisted');
-        expect(packReviewDeliveryNeedsResume(run!)).toBe(false);
-        expect(run?.reviewVerdict).toBe('clean');
-        durableRuns.push(runId);
-        return { ok: true };
+            fixtureRequiredStatusWriter: async () => { /* real delivery persists the successful outcome */ },
+            fixtureWorkerNotifier: async () => ({ state: 'delivered', reason: 'issue_928_fixture_dispatched' }),
+          });
+          expect(result).toMatchObject({ ok: true, created: true });
+          const runId = String(result.runId);
+          const run = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+          expect(run).not.toBeNull();
+          expect(run).toMatchObject({ surface: 'pr2-scheduler', startReason: 'scheduler', headSha: head, targetSha: head });
+          expect(run?.journalOutcome?.state).toBe('persisted');
+          expect(packReviewDeliveryNeedsResume(run!)).toBe(false);
+          expect(run?.reviewVerdict).toBe('clean');
+          expect(findCompletedSchedulerDelivery(core, storeRoot)).toMatchObject({ runId, prNumber: row.prNumber, headSha: head });
+
+          const worker = run!.deliveryOutcomes.workerNotification!;
+          updatePackReviewRun(runId, {
+            deliveryOutcomes: {
+              ...run!.deliveryOutcomes,
+              workerNotification: { ...worker, state: 'failed', reason: 'fixture_delivery_failed' },
+            },
+          }, { projectId: 'orchestrator-pack', storeRoot });
+          expect(findCompletedSchedulerDelivery(core, storeRoot)).toBeNull();
+          durableRuns.push(runId);
+          return { ok: true };
+        } finally {
+          if (previousHarness === undefined) delete process.env.OPK_VITEST_HARNESS;
+          else process.env.OPK_VITEST_HARNESS = previousHarness;
+          if (previousClaimRoot === undefined) delete process.env.AO_REVIEW_CLAIM_DIR;
+          else process.env.AO_REVIEW_CLAIM_DIR = previousClaimRoot;
+        }
       },
     };
     expect(await runSchedulerTick(boundary, env)).toEqual({ attempted: 1, started: 1, skipped: 0 });
     expect(starts).toEqual([{ pr: 928, head: candidate.boundHeadSha }]);
     expect(durableRuns).toHaveLength(1);
     await expect(runSchedulerTick(boundary, { ...env, ORCHESTRATOR_CUTOVER_NONCE: 'copied-stale-nonce' })).rejects.toThrow(/epoch_nonce_mismatch/);
-  }, 120_000);
-
-  it('recognizes only a scheduler-owned completed delivery receipt for activation observation', () => {
-    const root = tempRoot();
-    const storeRoot = path.join(root, 'review-runs');
-    initializePackReviewRunStore(storeRoot);
-    const core = coreFixture();
-    const now = new Date(Date.parse(core.commitAt) + 1_000).toISOString();
-    writeJson(path.join(storeRoot, 'runs', 'prr-scheduler-delivery.json'), {
-      schemaVersion: 1,
-      id: 'prr-scheduler-delivery',
-      runId: 'prr-scheduler-delivery',
-      projectId: 'orchestrator-pack',
-      key: `pr-928-${'c'.repeat(40)}`,
-      prNumber: 928,
-      targetSha: 'c'.repeat(40),
-      headSha: 'c'.repeat(40),
-      status: 'up_to_date',
-      latestRunStatus: 'up_to_date',
-      linkedSessionId: 'worker-1',
-      startReason: 'scheduler',
-      surface: 'pr2-scheduler',
-      trustedPackRoot: repoRoot,
-      sourceRepoRoot: repoRoot,
-      runnerPid: process.pid,
-      createdAt: now,
-      updatedAt: now,
-      heartbeatAtUtc: now,
-      completedAtUtc: now,
-      githubReviewId: 311,
-      githubReviewUrl: 'fixture://review/311',
-      githubReviewEvent: 'COMMENT',
-      githubReviewReconciliation: {
-        schemaVersion: 1,
-        event: 'COMMENT',
-        phase: 'complete',
-        actorLogin: 'fixture-reviewer',
-        commentBody: 'clean',
-        commentReviewId: 311,
-        commentReviewUrl: 'fixture://review/311',
-        pendingDismissalReviewIds: [],
-        dismissedReviewIds: [],
-        preparedAtUtc: now,
-        updatedAtUtc: now,
-      },
-      reviewVerdict: 'clean',
-      findingCount: 0,
-      findings: [],
-      journalOutcome: { state: 'persisted', recordedAtUtc: now, reason: 'persisted', idempotencyKey: 'journal', attempts: 1 },
-      deliveryOutcomes: {
-        requiredStatus: { state: 'succeeded', recordedAtUtc: now, reason: 'success', idempotencyKey: `required-status:orchestrator-pack/pack-review:${'c'.repeat(40)}` },
-        workerNotification: { state: 'delivered', recordedAtUtc: now, reason: 'delivered', idempotencyKey: `worker-notification:prr-scheduler-delivery:${'c'.repeat(40)}` },
-      },
-    });
-    expect(findCompletedSchedulerDelivery(core, storeRoot)).toMatchObject({ runId: 'prr-scheduler-delivery', prNumber: 928 });
   });
 
   it('refuses a fresh-head drift before review start', async () => {
