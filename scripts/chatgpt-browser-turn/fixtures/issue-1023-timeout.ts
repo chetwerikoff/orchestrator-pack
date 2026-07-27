@@ -29,6 +29,12 @@ export function delayedComposerFakePage(options: DelayedComposerOptions = {}) {
             }
             composerClicked = true;
           },
+          fill: async (text: string) => {
+            if (base.insertTextDelayMs) {
+              await new Promise((resolve) => { setTimeout(resolve, base.insertTextDelayMs); });
+            }
+            if (composerClicked) insertedText = text;
+          },
         };
       }
       if (selector === '[data-testid="send-button"]') {

@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { abandonLatePageHandle, boundedResourceCleanup, RESOURCE_CLEANUP_BOUND_MS } from './browser-session.ts';
 import { revalidateProcessDestinationReservations } from './coordination.ts';
 import {
   mergeContinuationSegments,
@@ -159,12 +160,26 @@ export class BrowserOperationTimeoutError extends Error {
   }
 }
 
+export function isPlaywrightTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === 'TimeoutError'
+    || /timeout/i.test(error.message)
+    || /Timeout \d+ms exceeded/i.test(error.message);
+}
+
+export function coerceBrowserOperationTimeout(error: unknown, operationClass: string): unknown {
+  if (error instanceof BrowserOperationTimeoutError) return error;
+  if (isPlaywrightTimeoutError(error)) return new BrowserOperationTimeoutError(operationClass);
+  return error;
+}
+
 export function browserOperationClassFromError(error: unknown): string | undefined {
   if (error instanceof BrowserOperationTimeoutError) return error.operationClass;
   if (error instanceof Error && error.message.startsWith('browser_operation_timeout:')) {
     return error.message.split(':')[1] ?? undefined;
   }
   if (isCdpReachabilityTimeout(error)) return 'cdp_reachability';
+  if (isPlaywrightTimeoutError(error)) return 'playwright_operation';
   return undefined;
 }
 
@@ -1195,7 +1210,7 @@ async function pageWalls(page: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Pro
   return classifyProductWall(await productStatusText(page, waitMs));
 }
 
-async function semanticNodes(locator: any): Promise<SemanticNode[]> {
+async function semanticNodes(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<SemanticNode[]> {
   return await locator.evaluate((root: Element, filter: {
     skippedTags: readonly string[];
     testidPattern: string;
@@ -1240,11 +1255,11 @@ async function semanticNodes(locator: any): Promise<SemanticNode[]> {
       return walkChildren(el);
     };
     return walkChildren(root);
-  }, SEMANTIC_UI_FILTER);
+  }, SEMANTIC_UI_FILTER, { timeout: waitMs });
 }
 
-async function assistantText(locator: any): Promise<string> {
-  return serializeSemanticNodes(await semanticNodes(locator));
+async function assistantText(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<string> {
+  return serializeSemanticNodes(await semanticNodes(locator, waitMs));
 }
 
 async function observedDispatchUserIds(
@@ -1295,17 +1310,17 @@ async function adoptNewPageWithBudget(
     page = await boundedPlaywrightOperation(waitMs, () => pagePromise);
   } catch (error) {
     pagePromise
-      .then((latePage: any) => latePage.close().catch(() => {}))
+      .then((latePage: any) => abandonLatePageHandle(latePage, RESOURCE_CLEANUP_BOUND_MS))
       .catch(() => {});
     if (error instanceof BrowserOperationTimeoutError) throw new BrowserOperationTimeoutError('new_page');
-    throw error;
+    throw coerceBrowserOperationTimeout(error, 'new_page');
   }
   try {
     await goto(page);
     return page;
   } catch (error) {
-    await page.close().catch(() => {});
-    throw error;
+    await boundedResourceCleanup(() => page.close(), RESOURCE_CLEANUP_BOUND_MS);
+    throw coerceBrowserOperationTimeout(error, 'goto');
   }
 }
 
@@ -1389,21 +1404,23 @@ export async function sendTurn(
   const role = '[data-message-author-role]';
   const baseline = page.locator(role);
   const baselineIds = new Set<string>();
-  const baselineWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  let baselineWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
   if (segmentBudget && baselineWait <= 0) throw new BrowserOperationTimeoutError('pre_send_baseline');
   const baselineCount = await baseline.count(playwrightTimeout(baselineWait)).catch(() => 0);
   for (let index = 0; index < baselineCount; index++) {
+    baselineWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+    if (segmentBudget && baselineWait <= 0) throw new BrowserOperationTimeoutError('pre_send_baseline');
     const id = await serviceId(baseline.nth(index), baselineWait);
     if (id) baselineIds.add(id);
   }
 
-  const mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  let mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
   if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
   const mutationTimeout = playwrightTimeout(mutationWait);
   await boundedPlaywrightOperation(mutationWait, () => composer.click(mutationTimeout));
-  await boundedPlaywrightOperation(mutationWait, () => page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A', mutationTimeout));
-  await boundedPlaywrightOperation(mutationWait, () => page.keyboard.press('Delete', mutationTimeout));
-  await boundedPlaywrightOperation(mutationWait, () => page.keyboard.insertText(text, mutationTimeout));
+  mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
+  await boundedPlaywrightOperation(mutationWait, () => composer.fill(text, playwrightTimeout(mutationWait)!));
   const send = page.locator('[data-testid="send-button"]');
   const sendAvailable = (await send.count(mutationTimeout).catch(() => 0)) > 0;
   revalidateProcessDestinationReservations();
@@ -1466,15 +1483,17 @@ export async function sendTurn(
   let awaitingFreshTerminalAfterContinuation = false;
   let terminalPublishEligible = true;
   const deadline = Date.now() + config.timeoutMs;
-  while (Date.now() < deadline) {
-    const replyWait = loopOperationWaitMs(deadline, Date.now());
+  while (wallClock() < deadline) {
+    let replyWait = loopOperationWaitMs(deadline, wallClock());
     if (replyWait <= 0) break;
-    const wall = await boundedPlaywrightOperation(replyWait, () => pageWalls(page, replyWait));
+    const wall = await boundedPlaywrightOperation(replyWait, () => pageWalls(page, loopOperationWaitMs(deadline, wallClock())));
     const canonicalUserIdEarly = canonicalSubmittedUserId(network, baselineIds);
     if (!canonicalUserIdEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true, userMessageId: userId };
     }
-    const observedDispatch = await boundedPlaywrightOperation(replyWait, () => observedDispatchUserIds(page, network, baselineIds, replyWait));
+    replyWait = loopOperationWaitMs(deadline, wallClock());
+    if (replyWait <= 0) break;
+    const observedDispatch = await boundedPlaywrightOperation(replyWait, () => observedDispatchUserIds(page, network, baselineIds, loopOperationWaitMs(deadline, wallClock())));
     const canonicalUserId = canonicalSubmittedUserId(network, baselineIds);
     if (canonicalUserId) userId = canonicalUserId;
     if (observedDispatch.size > 1) {
@@ -1484,10 +1503,14 @@ export async function sendTurn(
       return { state: 'foreign_activity', cause: 'submitted_turn_witness_changed', possibleDelivery: true, userMessageId: userId };
     }
 
+    replyWait = loopOperationWaitMs(deadline, wallClock());
+    if (replyWait <= 0) break;
     const users = page.locator('[data-message-author-role="user"]');
     const newUserIds = new Set<string>();
     const userCount = await users.count(playwrightTimeout(replyWait)).catch(() => 0);
     for (let index = 0; index < userCount; index++) {
+      replyWait = loopOperationWaitMs(deadline, wallClock());
+      if (replyWait <= 0) break;
       const id = await serviceId(users.nth(index), replyWait);
       if (id && !baselineIds.has(id)) newUserIds.add(id);
     }
@@ -1495,10 +1518,14 @@ export async function sendTurn(
       return { state: 'foreign_activity', cause: 'unexpected_user_turn', possibleDelivery: true, userMessageId: userId };
     }
 
+    replyWait = loopOperationWaitMs(deadline, wallClock());
+    if (replyWait <= 0) break;
     const assistants = page.locator('[data-message-author-role="assistant"]');
     const assistantLocators = new Map<string, any>();
     const assistantCount = await assistants.count(playwrightTimeout(replyWait)).catch(() => 0);
     for (let index = 0; index < assistantCount; index++) {
+      replyWait = loopOperationWaitMs(deadline, wallClock());
+      if (replyWait <= 0) break;
       const locator = assistants.nth(index);
       const id = await serviceId(locator, replyWait);
       if (!id || baselineIds.has(id)) continue;
@@ -1526,6 +1553,8 @@ export async function sendTurn(
       }
     }
 
+    replyWait = loopOperationWaitMs(deadline, wallClock());
+    if (replyWait <= 0) break;
     const cont = page.getByText(/continue generating/i);
     if (await cont.count(playwrightTimeout(replyWait)).catch(() => 0)) {
       let continuationLocator: any = null;
@@ -1534,6 +1563,8 @@ export async function sendTurn(
       }
       if (!continuationLocator) {
         for (let index = 0; index < assistantCount; index++) {
+          replyWait = loopOperationWaitMs(deadline, wallClock());
+          if (replyWait <= 0) break;
           const locator = assistants.nth(index);
           const id = await serviceId(locator, replyWait);
           if (id && isMessageAttributedToUserTurn(id, userId, network.terminal.messages)) {
@@ -1543,9 +1574,14 @@ export async function sendTurn(
         }
       }
       if (continuationLocator) {
-        const current = await assistantText(continuationLocator).catch(() => '');
+        replyWait = loopOperationWaitMs(deadline, wallClock());
+        if (replyWait <= 0) break;
+        const current = await boundedPlaywrightOperation(replyWait, () => assistantText(continuationLocator, replyWait)).catch(() => '');
         if (current && (!segments.length || segments[segments.length - 1] !== current)) segments.push(current);
-        await cont.first().click().catch(() => {});
+        replyWait = loopOperationWaitMs(deadline, wallClock());
+        if (replyWait > 0) {
+          await boundedPlaywrightOperation(replyWait, () => cont.first().click(playwrightTimeout(replyWait)!)).catch(() => {});
+        }
         continuationActive = true;
         awaitingFreshTerminalAfterContinuation = true;
         terminalPublishEligible = false;
@@ -1580,6 +1616,8 @@ export async function sendTurn(
       let matched = assistantLocators.get(boundAssistantId) ?? null;
       if (!matched) {
         for (let index = 0; index < assistantCount; index++) {
+          replyWait = loopOperationWaitMs(deadline, wallClock());
+          if (replyWait <= 0) break;
           if (await serviceId(assistants.nth(index), replyWait) === boundAssistantId) {
             matched = assistants.nth(index);
             break;
@@ -1587,7 +1625,9 @@ export async function sendTurn(
         }
       }
       if (matched && terminalPublishEligible) {
-        const current = await assistantText(matched).catch(() => '');
+        replyWait = loopOperationWaitMs(deadline, wallClock());
+        if (replyWait <= 0) break;
+        const current = await boundedPlaywrightOperation(replyWait, () => assistantText(matched, replyWait)).catch(() => '');
         if (current) {
           if (!segments.length || segments[segments.length - 1] !== current) segments.push(current);
           const replyCandidate = continuationActive ? mergeContinuationSegments(segments) : current;
@@ -1622,6 +1662,8 @@ export async function sendTurn(
         ...(boundAssistantId ? { assistantMessageId: boundAssistantId } : {}),
       };
     }
+    replyWait = loopOperationWaitMs(deadline, wallClock());
+    if (replyWait <= 0) break;
     await witnessPollDelay(page, Math.min(750, replyWait));
   }
 
@@ -1634,7 +1676,8 @@ export async function sendTurn(
       ...(boundAssistantId ? { assistantMessageId: boundAssistantId } : {}),
     };
   }
-  const statusText = (await productStatusText(page)).text;
+  const finalStatusWait = loopOperationWaitMs(deadline, wallClock());
+  const statusText = (await productStatusText(page, finalStatusWait)).text;
   if (/error generating|something went wrong|unable to generate/i.test(statusText)) {
     return { state: 'no_reply', cause: 'terminal_no_reply_evidence', possibleDelivery: true, userMessageId: userId };
   }

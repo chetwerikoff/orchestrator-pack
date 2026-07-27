@@ -41,7 +41,9 @@ import { configuredProfileKey, sha256 } from './chatgpt-browser-turn/storage-com
 import { recordSwallowedDriverException } from './chatgpt-browser-turn/diagnostics.ts';
 import { readStableInput } from './chatgpt-browser-turn/input.ts';
 import {
+  BrowserOperationTimeoutError,
   browserOperationClassFromError,
+  coerceBrowserOperationTimeout,
   createPreSendSegmentBudget,
   loadChromium,
   normalizeConversationUrl,
@@ -321,9 +323,10 @@ async function runTurn(args: ParsedArgs): Promise<number> {
   let possibleDelivery = false;
   let opened: { page: any; owned: boolean; provisionalId?: string } | undefined;
   let browser: any = null;
+  let config: BrowserConfig | undefined;
 
   try {
-    const config = browserConfig(args);
+    config = browserConfig(args);
     profileKey = configuredProfileKey(config.profile, config.cdp);
     const snapshot = readStableInput(required(args, 'input'));
     const destination = destinationIdentity(required(args, 'output'));
@@ -396,7 +399,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     const chromium = loadChromium();
     const connectWaitMs = segmentBudget.clampOperationWaitMs();
-    if (connectWaitMs <= 0) throw new Error('browser_operation_timeout:connect_over_cdp');
+    if (connectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
     const connectPromise = chromium.connectOverCDP(config.cdp, { timeout: connectWaitMs });
     try {
       browser = await connectPromise;
@@ -404,7 +407,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       connectPromise
         .then((lateBrowser: unknown) => releaseCdpBrowser(lateBrowser, RESOURCE_CLEANUP_BOUND_MS))
         .catch(() => {});
-      throw connectError;
+      throw coerceBrowserOperationTimeout(connectError, 'connect_over_cdp');
     }
     const browserProvenance = String(browser.version?.() ?? 'chromium-cdp');
     if (capability.state === 'ok' && capability.capability?.browser_provenance !== browserProvenance) {
@@ -694,6 +697,42 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         : 'driver_exception_before_send';
 
     await closeOwnedTurnPage(opened, { retainPage: possibleDelivery });
+    if (possibleDelivery && config?.newChat && incidentId) {
+      const freshConversationId = config.chatUrl ? normalizeConversationUrl(config.chatUrl) : undefined;
+      const canonicalFreshUnproven = !freshConversationId
+        || freshConversationId === normalizeConversationUrl(config.projectUrl!);
+      if (canonicalFreshUnproven) {
+        try {
+          const incident = updateIncident(profileKey, incidentId, {
+            kind: 'fresh_orphan',
+            phase: 'possible_delivery',
+            cause: 'canonical_fresh_conversation_unproven',
+            owner: undefined,
+          });
+          safeRelease(scheduleLock);
+          safeReleaseDestination(reservation);
+          const operationClass = browserOperationClassFromError(error);
+          const driverDiagnosticId = recordSwallowedDriverException(
+            profileKey !== 'profile-unresolved' ? profileKey : undefined,
+            profileKey !== 'profile-unresolved' ? invocationId : undefined,
+            cause,
+            error,
+            {
+              invocation_id: invocationId,
+              ...(operationClass ? { operation: 'browser_operation_timeout:' + operationClass } : {}),
+            },
+          );
+          return emitTurnAndCode(turnResult('orphaned_fresh_turn', 'profile', 'canonical_fresh_conversation_unproven', invocationId, profileKey, {
+            ...(opened?.provisionalId ? { provisional_id: opened.provisionalId } : {}),
+            incident_id: incidentId,
+            generation: incident.generation,
+            ...(driverDiagnosticId ? { driver_diagnostic_id: driverDiagnosticId } : {}),
+          }));
+        } catch {
+          // Existing durable state remains fail-closed.
+        }
+      }
+    }
     if (incidentId) {
       if (possibleDelivery) {
         try {

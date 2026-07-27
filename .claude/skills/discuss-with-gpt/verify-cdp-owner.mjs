@@ -84,10 +84,12 @@ function findWindowsListenerPidSync(port) {
   return null;
 }
 
-async function findWindowsListenerPidBounded(port, timeoutMs) {
+async function findWindowsListenerPidBounded(port, deadlineMs) {
+  const budget = remainingMs(deadlineMs);
+  if (budget <= 0) throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
   const netstat = '/mnt/c/Windows/System32/netstat.exe';
   if (!existsSync(netstat)) return null;
-  const out = await execFileBounded(netstat, ['-ano'], timeoutMs);
+  const out = await execFileBounded(netstat, ['-ano'], budget);
   for (const line of out.split(/\r?\n/)) {
     if (!/LISTENING/i.test(line)) continue;
     const m = line.match(new RegExp(`:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'i'));
@@ -110,9 +112,11 @@ function findLinuxListenerPidSync(port) {
   return null;
 }
 
-async function findLinuxListenerPidBounded(port, timeoutMs) {
+async function findLinuxListenerPidBounded(port, deadlineMs) {
   try {
-    const out = await execFileBounded('ss', ['-tlnp'], timeoutMs);
+    const ssBudget = remainingMs(deadlineMs);
+    if (ssBudget <= 0) throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
+    const out = await execFileBounded('ss', ['-tlnp'], ssBudget);
     const m = out.match(new RegExp(`:${port}\\s+[^\\n]*pid=(\\d+)`, 'i'));
     if (m) return m[1];
   } catch (error) {
@@ -120,7 +124,9 @@ async function findLinuxListenerPidBounded(port, timeoutMs) {
     /* try lsof */
   }
   try {
-    const out = await execFileBounded('lsof', ['-i', `:${port}`, '-sTCP:LISTEN', '-t'], timeoutMs);
+    const lsofBudget = remainingMs(deadlineMs);
+    if (lsofBudget <= 0) throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
+    const out = await execFileBounded('lsof', ['-i', `:${port}`, '-sTCP:LISTEN', '-t'], lsofBudget);
     const pid = out.trim().split('\n').find(Boolean);
     if (pid) return pid;
   } catch (error) {
@@ -143,14 +149,16 @@ function getWindowsCmdlineSync(pid) {
   }
 }
 
-async function getWindowsCmdlineBounded(pid, timeoutMs) {
+async function getWindowsCmdlineBounded(pid, deadlineMs) {
+  const budget = remainingMs(deadlineMs);
+  if (budget <= 0) throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
   const ps = '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
   if (!existsSync(ps)) return null;
   try {
     return (await execFileBounded(
       ps,
       ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`],
-      timeoutMs,
+      budget,
     )).trim();
   } catch (error) {
     if (error?.code === 'TIMEOUT') throw error;
@@ -178,12 +186,15 @@ function getCmdlineSync(pid) {
   return getWindowsCmdlineSync(pid) || getLinuxCmdlineSync(pid);
 }
 
-async function getCmdlineBounded(pid, timeoutMs) {
-  const windows = await getWindowsCmdlineBounded(pid, timeoutMs).catch((error) => {
+async function getCmdlineBounded(pid, deadlineMs) {
+  const windows = await getWindowsCmdlineBounded(pid, deadlineMs).catch((error) => {
     if (error?.code === 'TIMEOUT') throw error;
     return null;
   });
   if (windows) return windows;
+  if (remainingMs(deadlineMs) <= 0) {
+    throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
+  }
   return getLinuxCmdlineBounded(pid);
 }
 
@@ -191,14 +202,17 @@ export function findCdpListenerPid(cdpUrl) {
   return findWindowsListenerPidSync(parseCdpPort(cdpUrl)) || findLinuxListenerPidSync(parseCdpPort(cdpUrl));
 }
 
-async function findCdpListenerPidBounded(cdpUrl, timeoutMs) {
+async function findCdpListenerPidBounded(cdpUrl, deadlineMs) {
   const port = parseCdpPort(cdpUrl);
-  const windows = await findWindowsListenerPidBounded(port, timeoutMs).catch((error) => {
+  const windowsBudget = remainingMs(deadlineMs);
+  if (windowsBudget <= 0) throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
+  const windows = await findWindowsListenerPidBounded(port, deadlineMs).catch((error) => {
     if (error?.code === 'TIMEOUT') throw error;
     return null;
   });
   if (windows) return windows;
-  return await findLinuxListenerPidBounded(port, timeoutMs);
+  if (remainingMs(deadlineMs) <= 0) throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
+  return await findLinuxListenerPidBounded(port, deadlineMs);
 }
 
 function remainingMs(deadlineMs) {
@@ -331,8 +345,11 @@ export async function verifyCdpProfileBounded({ cdp = 'http://localhost:9222', p
     if (pidBudget <= 0) {
       return { ok: false, reason: 'uninspectable', message: 'owner_probe_timeout', timedOut: true };
     }
-    const pid = await findCdpListenerPidBounded(cdp, pidBudget);
+    const pid = await findCdpListenerPidBounded(cdp, deadlineMs);
     if (!pid) {
+      if (remainingMs(deadlineMs) <= 0) {
+        return { ok: false, reason: 'uninspectable', message: 'owner_probe_timeout', timedOut: true };
+      }
       return {
         ok: false,
         reason: 'not_listening',
@@ -343,7 +360,7 @@ export async function verifyCdpProfileBounded({ cdp = 'http://localhost:9222', p
     if (cmdBudget <= 0) {
       return { ok: false, reason: 'uninspectable', message: 'owner_probe_timeout', timedOut: true };
     }
-    const cmdline = await getCmdlineBounded(pid, cmdBudget);
+    const cmdline = await getCmdlineBounded(pid, deadlineMs);
     if (!cmdline) {
       return {
         ok: false,

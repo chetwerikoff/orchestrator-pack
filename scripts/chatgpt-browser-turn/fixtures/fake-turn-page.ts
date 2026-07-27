@@ -305,7 +305,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     },
     url: () => 'https://chatgpt.com/c/example',
     locator: (selector: string) => {
-      if (selector === '#prompt-textarea') return { ...emptyLocator(), count: async () => composerPresent ? 1 : 0, click: async () => {} };
+      if (selector === '#prompt-textarea') return { ...emptyLocator(), count: async () => composerPresent ? 1 : 0, click: async () => {}, fill: async () => {} };
       if (selector === '[data-testid="send-button"]') return send;
       if (selector === '[data-testid="stop-button"]') return emptyLocator();
       if (selector === '[data-message-author-role]') return { count: async () => messages.length, nth: (index: number) => messages[index] ?? emptyLocator() };
