@@ -12,6 +12,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // measurement, so timing it inside the pre-topology pass can create manifest
   // drift that the real light lane correctly owns.
   'scripts/reachability-purge.test.ts': 120,
+  'scripts/cutover/issue-928.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
