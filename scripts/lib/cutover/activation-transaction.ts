@@ -3,12 +3,14 @@ import path from 'node:path';
 import { runProcessSync, runProcess } from '../../kernel/subprocess.ts';
 import { appendFollowup, appendPhaseOne, finalizePhaseOne, verifyPhaseOneDigest } from './activation-evidence.ts';
 import {
+  assertCordonRequestBinding,
   assertLegacySupervisor,
   captureLegacyWriters,
   createCordon,
   fileDigestOrAbsent,
   markImportBegun,
   processAlive,
+  readCordonState,
   readProcessIdentity,
   releaseLegacyStartBarrier,
   terminateProcessTree,
@@ -19,7 +21,8 @@ import { buildEpochCommitCore, FileEpochAuthority, mapCutoverStoreDigests } from
 import { importSnapshot, snapshotStores } from './activation-import.ts';
 import { localHostId, runActivationPlatformPreflight, type PlatformPreflightResult } from './activation-platform-preflight.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
-import type { ActivationRequest, CutoverStoreId, FoundationAdmissionEvidence } from './types.ts';
+import { observeSchedulerHealthAndDelivery, type SchedulerHealthDeliveryObservation } from './activation-recovery.ts';
+import type { ActivationRequest, CutoverStoreId, EpochCommitCore, FoundationAdmissionEvidence } from './types.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 import { D928 as D928_PATHS, TARGET_LIBRARIES as TARGET_LIBRARY_PATHS } from '../../pr2a/contracts.ts';
 import { validateAoPreflight } from '../../pr2-foundation/binding.ts';
@@ -32,17 +35,36 @@ const PR2A_LANDING_COMMIT = '17ac39d725ba9ae7c881816405d5225e541177c7';
 const FOUNDATION_HEARTBEAT_MAX_AGE_MS = 5 * 60_000;
 const D928 = new Set<string>(D928_PATHS);
 const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);
-const GOVERNANCE_REFERENCE_PREFIXES = ['scripts/pr2a/', 'scripts/estate-cut/'] as const;
-const GOVERNANCE_REFERENCE_PATHS = new Set([
-  'scripts/pr2-foundation/contracts.ts',
-  'scripts/pr2-foundation/mutation-catalog.ts',
-  'scripts/pr2-foundation/mutation-behavior-probes.ts',
-  'scripts/pr2-foundation/mutation-semantic-gates.ts',
-  'scripts/lib/orchestrator-side-process-observer.ts',
-  'docs/launch-argv-registry.mjs',
-  'docs/orchestrator-message-registry.mjs',
-  'docs/review-start-preflight-shield.mjs',
-]);
+
+type ClosureExecutionClass = 'root' | 'reachable-helper' | 'explicitly-unsupported' | 'dead';
+export interface ClosureReferenceRow {
+  source?: string;
+  target?: string;
+  primitiveClass?: string;
+  selector?: string;
+  sourceExecutionClass?: ClosureExecutionClass;
+}
+
+function regexEscape(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function isExecutableLegacyReference(row: ClosureReferenceRow): boolean {
+  if (row.sourceExecutionClass === 'dead' || row.sourceExecutionClass === 'explicitly-unsupported') return false;
+  const target = String(row.target ?? '').replace(/\\/g, '/');
+  if (!TARGET_LIBRARIES.has(target)) return false;
+  const selector = String(row.selector ?? '');
+  const basename = path.posix.basename(target);
+  if (!selector.includes(basename)) return false;
+  const escaped = regexEscape(basename);
+  const patterns = [
+    new RegExp(`(?:from\\s+|import\\s*\\(|require\\s*\\()\\s*['\"][^'\"]*${escaped}`, 'iu'),
+    new RegExp(`(?:spawn|execFile|fork|exec)\\s*\\([^\\r\\n]*${escaped}`, 'iu'),
+    new RegExp(`(?:Import-Module|Start-Process|pwsh|powershell|&\\s+|\\.\\s*\\()[^\\r\\n]*${escaped}`, 'iu'),
+    new RegExp(`(?:run|command|args)\\s*[:=][^\\r\\n]*${escaped}`, 'iu'),
+  ];
+  return patterns.some((pattern) => pattern.test(selector));
+}
 
 function git(repoRoot: string, args: string[]): string {
   const result = runProcessSync({ command: 'git', args: ['-C', repoRoot, ...args], cwd: repoRoot, inheritParentEnv: true });
@@ -65,11 +87,6 @@ function assertFoundationAndPr2a(repoRoot: string, installedCommitSha: string): 
   return baseRef;
 }
 
-function governanceOnlyReference(source: string): boolean {
-  return GOVERNANCE_REFERENCE_PREFIXES.some((prefix) => source.startsWith(prefix))
-    || GOVERNANCE_REFERENCE_PATHS.has(source);
-}
-
 function recomputeClosure(repoRoot: string, baseRef: string): { inputTree: string; referenceCount: number } {
   const scanner = path.join(repoRoot, 'scripts', 'pr2a', 'closed-world-scanner.ts');
   const result = runProcessSync({
@@ -82,7 +99,7 @@ function recomputeClosure(repoRoot: string, baseRef: string): { inputTree: strin
   const manifest = JSON.parse(result.stdout) as {
     schemaVersion?: number;
     lineage?: { planningBaseTreeOid?: string };
-    references?: Array<{ source?: string; target?: string }>;
+    references?: ClosureReferenceRow[];
     unknown?: unknown[];
     dynamicUnsupported?: unknown[];
   };
@@ -94,7 +111,7 @@ function recomputeClosure(repoRoot: string, baseRef: string): { inputTree: strin
   const references = (manifest.references ?? []).filter((row) => TARGET_LIBRARIES.has(String(row.target ?? '').replace(/\\/g, '/')));
   const external = references.filter((row) => {
     const source = String(row.source ?? '').replace(/\\/g, '/');
-    return !D928.has(source) && !governanceOnlyReference(source);
+    return !D928.has(source) && isExecutableLegacyReference(row);
   });
   if (external.length !== 0) throw new Error(`external_legacy_reference:${external.map((row) => row.source).join(',')}`);
   return { inputTree: manifest.lineage.planningBaseTreeOid, referenceCount: references.length };
@@ -253,6 +270,11 @@ export interface ActivationBoundary {
   terminateLegacyProcesses(identities: ReturnType<typeof readProcessIdentity>[]): Promise<number[]>;
   verifyLegacyProcessesGone(request: ActivationRequest, legacySupervisor: ReturnType<typeof readProcessIdentity>): { supervisorAlive: boolean; writers: LegacyWriterRecord[] };
   startTypeScriptSupervisor(request: ActivationRequest, nonce: string): Promise<{ supervisorPid: number; childGeneration: number }>;
+  observeFinalHealthAndDelivery(
+    request: ActivationRequest,
+    core: EpochCommitCore,
+    supervisor: { supervisorPid: number; childGeneration: number },
+  ): Promise<SchedulerHealthDeliveryObservation>;
 }
 
 export const productionActivationBoundary: ActivationBoundary = {
@@ -285,6 +307,7 @@ export const productionActivationBoundary: ActivationBoundary = {
     writers: captureLegacyWriters(request.oldInstalledRevisionRoot, request.paths.supervisorStateDir),
   }),
   startTypeScriptSupervisor: (request, nonce) => startSupervisor(request, nonce),
+  observeFinalHealthAndDelivery: observeSchedulerHealthAndDelivery,
 };
 
 export async function activateCutover(
@@ -308,6 +331,7 @@ export async function activateCutover(
     legacyStateRoot: request.paths.supervisorStateDir,
     legacySupervisor,
     stores: request.stores,
+    paths: request.paths,
   });
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { preflight, foundation, closure, baseRef });
   appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'cordon', { writersClosed: true, noRespawn: true, noTypeScriptStart: true });
@@ -372,8 +396,9 @@ export async function activateCutover(
   });
   appendFollowup(request.paths.followupPath, request.epochId, 'machine-local-completion-fsync-confirmed', { path: request.paths.followupPath });
   appendFollowup(request.paths.followupPath, request.epochId, 'final-step-timestamp-recorded', { at: new Date().toISOString() });
-  appendFollowup(request.paths.followupPath, request.epochId, 'final-health-delivery-observed', { result: 'observed' });
-  appendFollowup(request.paths.followupPath, request.epochId, 'activation-complete', { at: new Date().toISOString() });
+  const observation = await boundary.observeFinalHealthAndDelivery(request, committed, supervisor);
+  appendFollowup(request.paths.followupPath, request.epochId, 'final-health-delivery-observed', observation);
+  appendFollowup(request.paths.followupPath, request.epochId, 'activation-complete', { at: new Date().toISOString(), observationResult: observation.result });
 
   return {
     cutover: {
@@ -392,12 +417,10 @@ export async function activateCutover(
 
 export function abandonPreImportCordon(request: ActivationRequest): void {
   if (!existsSync(request.paths.cordonPath)) return;
-  const cordon = JSON.parse(readFileSync(request.paths.cordonPath, 'utf8')) as {
-    importBegunAt?: string | null;
-    preImportTargetDigests?: Partial<Record<CutoverStoreId, string>>;
-  };
+  const cordon = readCordonState(request.paths.cordonPath);
+  assertCordonRequestBinding(request, cordon);
   if (cordon.importBegunAt) throw new Error('forward_only_recovery_required');
-  for (const store of request.stores) {
+  for (const store of cordon.recoveryBindings.stores) {
     if (fileDigestOrAbsent(store.targetPath) !== cordon.preImportTargetDigests?.[store.id]) {
       throw new Error(`preimport_target_changed:${store.id}`);
     }
