@@ -252,8 +252,13 @@ function cloneStores(stores: readonly CutoverStoreSpec[]): CutoverStoreSpec[] {
   return stores.map((store) => ({ ...store, coveredFields: [...store.coveredFields] }));
 }
 
-export function recoveryBindings(paths: ActivationPaths, stores: readonly CutoverStoreSpec[]): CutoverRecoveryBindings {
+export function recoveryBindings(
+  paths: ActivationPaths,
+  stores: readonly CutoverStoreSpec[],
+  expectedOldEpochId: string | null = null,
+): CutoverRecoveryBindings {
   return {
+    expectedOldEpochId,
     phaseOnePath: paths.phaseOnePath,
     followupPath: paths.followupPath,
     epochAuthorityPath: paths.epochAuthorityPath,
@@ -283,7 +288,7 @@ function requestBindingShape(request: ActivationRequest): unknown {
     repoRoot: request.repoRoot,
     installedCommitSha: request.installedCommitSha,
     oldInstalledRevisionRoot: request.oldInstalledRevisionRoot,
-    recoveryBindings: recoveryBindings(request.paths, request.stores),
+    recoveryBindings: recoveryBindings(request.paths, request.stores, request.expectedOldEpochId),
   };
 }
 
@@ -295,6 +300,7 @@ export function assertCordonRequestBinding(request: ActivationRequest, state: Co
 
 function assertPreparedInput(input: {
   epochId: string;
+  expectedOldEpochId?: string | null;
   hostId: string;
   repoRoot: string;
   installedCommitSha: string;
@@ -310,7 +316,7 @@ function assertPreparedInput(input: {
     installedCommitSha: input.installedCommitSha,
     oldInstalledRevisionRoot: String(input.oldInstalledRevisionRoot),
     legacySupervisor: input.legacySupervisor,
-    recoveryBindings: recoveryBindings(input.paths, input.stores),
+    recoveryBindings: recoveryBindings(input.paths, input.stores, input.expectedOldEpochId ?? null),
   };
   const observed = {
     epochId: prepared.epochId,
@@ -341,6 +347,7 @@ export function readCordonState(pathName: string): CordonState {
     || !record.installedCommitSha
     || !record.oldInstalledRevisionRoot
     || !record.recoveryBindings
+    || !('expectedOldEpochId' in record.recoveryBindings)
     || record.typescriptSupervisorInert?.result !== 'typescript-supervisor-inert'
     || record.typescriptSupervisorInert.supervisorAlive !== false
     || record.typescriptSupervisorInert.childAlive !== false
@@ -353,6 +360,7 @@ export function readCordonState(pathName: string): CordonState {
 export function createCordon(input: {
   path: string;
   epochId: string;
+  expectedOldEpochId?: string | null;
   hostId: string;
   repoRoot: string;
   installedCommitSha: string;
@@ -391,7 +399,7 @@ export function createCordon(input: {
       typescriptSupervisorInert,
       importBegunAt: null,
       preImportTargetDigests,
-      recoveryBindings: recoveryBindings(input.paths, input.stores),
+      recoveryBindings: recoveryBindings(input.paths, input.stores, input.expectedOldEpochId ?? null),
     };
     // Recovery-authoritative intent is durable before the first barrier byte. A crash at any
     // later point can resume the same nonce/bindings instead of leaving an orphan barrier.
