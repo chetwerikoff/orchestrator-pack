@@ -1942,11 +1942,11 @@ describe('issue 1024 gate-B characterization notes', () => {
     expect(notes).toContain('service-worker-owned HTTP');
     expect(notes).toContain('worker/secondary-target outbound WebSocket');
     expect(notes).toContain('dispatch_request_not_observed');
-    expect(notes).toContain('gate-b-characterization.ts');
+    expect(notes).toContain('runGateBCharacterization');
   });
 
   it('ships the Gate-B live characterization probe module', async () => {
-    const module = await import('../chatgpt-browser-turn/gate-b-characterization.ts');
+    const module = await import('../chatgpt-browser-turn/dispatch-observation.ts');
     expect(module.GATE_B_REQUIRED_PROBES).toEqual([
       'service-worker-owned-http-on-configured-context',
       'worker-or-secondary-target-websocket-frame-sent',

@@ -85,7 +85,7 @@ On the supported Chromium/Playwright runtime, operators should verify the produc
 
 If either live boundary probe is unavailable or unproven, the helper keeps possible-delivery behavior and does not mint proven non-delivery.
 
-Operator probe entrypoint: `scripts/chatgpt-browser-turn/gate-b-characterization.ts` (`runGateBCharacterization`). Run it against the live automation profile before relying on proven non-delivery in production.
+Operator probe entrypoint: `runGateBCharacterization` in `scripts/chatgpt-browser-turn/dispatch-observation.ts`. Run it against the live automation profile before relying on proven non-delivery in production.
 
 ## Result and retry rules
 
