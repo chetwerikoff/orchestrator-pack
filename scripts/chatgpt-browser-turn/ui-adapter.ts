@@ -993,16 +993,26 @@ async function parentServiceId(locator: any): Promise<string> {
   return '';
 }
 
-export type WitnessSurfaceProbe = 'available' | 'absent' | 'inapplicable';
+export type WitnessSurfaceProbe = 'available' | 'absent' | 'empty';
 
-export function witnessSurfaceProbeRequiresDowngrade(probe: WitnessSurfaceProbe): boolean {
-  return probe === 'absent';
+export function witnessSurfaceProbeRequiresDowngrade(
+  probe: WitnessSurfaceProbe,
+  freshConversation: boolean,
+): boolean {
+  if (probe === 'available') return false;
+  if (probe === 'empty' && freshConversation) return false;
+  return true;
 }
 
 export async function runtimeWitnessSurfaceAvailable(page: any): Promise<WitnessSurfaceProbe> {
   const messages = page.locator('[data-message-author-role]');
-  const count = await messages.count().catch(() => 0);
-  if (count === 0) return 'inapplicable';
+  let count: number;
+  try {
+    count = await messages.count();
+  } catch {
+    return 'absent';
+  }
+  if (count === 0) return 'empty';
   const userIds = new Set<string>();
   const assistantParents: string[] = [];
   for (let index = Math.max(0, count - 8); index < count; index++) {

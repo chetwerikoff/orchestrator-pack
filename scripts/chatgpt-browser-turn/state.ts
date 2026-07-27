@@ -18,6 +18,7 @@ import {
   type StatusItemV1,
 } from './contracts.ts';
 import { acquireDomainLock, clearDomainLock, type DomainLock } from './coordination.ts';
+import { recordSwallowedDriverException } from './diagnostics.ts';
 import { discardUncommittedPublication, publicationRecordCompatible } from './publication.ts';
 import { atomicJson, fsyncDirectory, profileDirs, sha256 } from './storage-common.ts';
 
@@ -319,6 +320,7 @@ export interface CapabilityTurnCompletion {
   readonly browserProvenance: string;
   readonly evidenceDigest: string;
   readonly witnessed: boolean;
+  readonly invocationId?: string;
 }
 
 export type CapabilityMutationOutcome =
@@ -566,17 +568,34 @@ export function applyCapabilityAfterSuccessfulTurn(
     return { applied: false, reason: 'write_failed', error };
   }
 
+  let outcome: CapabilityMutationOutcome;
   try {
     const current = readCapabilityStatus(profileKey, completion.expectedBinding);
     if (!productionCompletionStillEligible(profileKey, current, completion)) {
-      return { applied: false, reason: 'not_eligible' };
+      outcome = { applied: false, reason: 'not_eligible' };
+    } else {
+      outcome = commitCapabilityAfterSuccessfulTurn(profileKey, current, completion);
     }
-    return commitCapabilityAfterSuccessfulTurn(profileKey, current, completion);
+  } catch (error) {
+    outcome = { applied: false, reason: 'write_failed', error };
   } finally {
     capabilityAdmissions.delete(profileKey);
     selfDowngradeGenerations.delete(profileKey);
-    lock.release();
+    try {
+      lock.release();
+    } catch (error) {
+      if (completion.invocationId) {
+        recordSwallowedDriverException(
+          profileKey,
+          completion.invocationId,
+          'capability_mutation_lock_release_failed',
+          error,
+          { invocation_id: completion.invocationId, operation: 'capability_mutation' },
+        );
+      }
+    }
   }
+  return outcome;
 }
 
 export function recordSerializedTransitionAnchor(

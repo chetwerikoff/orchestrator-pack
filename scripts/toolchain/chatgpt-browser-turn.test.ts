@@ -273,7 +273,9 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
     const emptyConversation = { locator: () => ({ count: async () => 0, nth: () => emptyLocator() }) };
     expect(await runtimeWitnessSurfaceAvailable(pageWithRelation)).toBe('available');
     expect(await runtimeWitnessSurfaceAvailable(pageWithoutRelation)).toBe('absent');
-    expect(await runtimeWitnessSurfaceAvailable(emptyConversation)).toBe('inapplicable');
+    expect(await runtimeWitnessSurfaceAvailable(emptyConversation)).toBe('empty');
+    const countThrows = { locator: () => ({ count: async () => { throw new Error('dom query failed'); }, nth: () => emptyLocator() }) };
+    expect(await runtimeWitnessSurfaceAvailable(countThrows)).toBe('absent');
   });
 
   it('S1 binds a dispatch candidate only after the same ID is service-visible; historical response IDs are ignored', async () => {

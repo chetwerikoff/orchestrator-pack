@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { destinationIdentityForPath } from '../chatgpt-browser-turn/coordination.ts';
 import { publicationStatus, publishReply } from '../chatgpt-browser-turn/publication.ts';
 import { runtimeCapabilityBinding } from '../chatgpt-browser-turn/runtime-binding.ts';
@@ -26,6 +26,8 @@ import {
   __testWriteCapability,
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
+import * as coordination from '../chatgpt-browser-turn/coordination.ts';
+import { readDriverDiagnostic } from '../chatgpt-browser-turn/diagnostics.ts';
 import { classifyProductWall, productStatusText, witnessSurfaceProbeRequiresDowngrade } from '../chatgpt-browser-turn/ui-adapter.ts';
 
 let root = '';
@@ -483,13 +485,58 @@ describe('issue 1008 capability self-arm race safety', () => {
 });
 
 describe('issue 1008 witness surface probe caller', () => {
-  it('does not treat an inapplicable empty-conversation probe as grounds to downgrade', () => {
-    expect(witnessSurfaceProbeRequiresDowngrade('inapplicable')).toBe(false);
+  it('does not downgrade when the caller declares a fresh conversation with zero nodes', () => {
+    expect(witnessSurfaceProbeRequiresDowngrade('empty', true)).toBe(false);
+  });
+
+  it('downgrades an existing conversation that reports zero nodes', () => {
+    expect(witnessSurfaceProbeRequiresDowngrade('empty', false)).toBe(true);
+  });
+
+  it('downgrades when the probe query throws', () => {
+    expect(witnessSurfaceProbeRequiresDowngrade('absent', false)).toBe(true);
+    expect(witnessSurfaceProbeRequiresDowngrade('absent', true)).toBe(true);
   });
 
   it('still downgrades when a populated conversation probe finds no causal relation', () => {
-    expect(witnessSurfaceProbeRequiresDowngrade('absent')).toBe(true);
-    expect(witnessSurfaceProbeRequiresDowngrade('available')).toBe(false);
+    expect(witnessSurfaceProbeRequiresDowngrade('absent', false)).toBe(true);
+    expect(witnessSurfaceProbeRequiresDowngrade('available', false)).toBe(false);
+    expect(witnessSurfaceProbeRequiresDowngrade('available', true)).toBe(false);
+  });
+
+  it('records a driver diagnostic when capability mutation lock release fails without changing the mutation outcome', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    const now = Date.now();
+    const invocationId = 'capability-lock-release-test';
+    __testWriteCapability(profileKey, {
+      ...binding,
+      browser_provenance: 'Chromium test',
+      evidence_digest: sha256('lock-release-seed'),
+      observed_at: new Date(now - 1_000).toISOString(),
+      expires_at: new Date(now + 60_000).toISOString(),
+      downgrade_generation: 0,
+      parallel_eligible: true,
+    });
+    const originalAcquire = coordination.acquireDomainLock;
+    vi.spyOn(coordination, 'acquireDomainLock').mockImplementation((profileKeyArg, key, staleMs) => {
+      const lock = originalAcquire(profileKeyArg, key, staleMs);
+      if (!lock || !key.startsWith('capability-mutation:')) return lock;
+      return {
+        ...lock,
+        release: () => { throw new Error('test capability mutation lock release failed'); },
+      };
+    });
+    const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, {
+      expectedBinding: binding,
+      browserProvenance: 'Chromium test',
+      evidenceDigest: sha256('lock-release-success'),
+      witnessed: true,
+      invocationId,
+    });
+    expect(outcome.applied).toBe(true);
+    const diagnostic = readDriverDiagnostic(profileKey, invocationId);
+    expect(diagnostic?.cause).toBe('capability_mutation_lock_release_failed');
+    vi.restoreAllMocks();
   });
 });
 
