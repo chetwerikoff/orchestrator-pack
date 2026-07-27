@@ -39,7 +39,8 @@ export interface ProfileVerification {
 
 interface CdpOwnerModule {
   verifyCdpProfile(input: { cdp: string; profile: string }): { ok?: boolean; message?: string; reason?: string } | undefined;
-  isCdpReachable(cdp: string): Promise<boolean>;
+  verifyCdpProfileBounded?(input: { cdp: string; profile: string; timeoutMs: number }): Promise<{ ok?: boolean; message?: string; reason?: string; timedOut?: boolean } | undefined>;
+  isCdpReachable(cdp: string, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<boolean>;
 }
 
 async function loadCdpOwnerModule(): Promise<CdpOwnerModule> {
@@ -50,15 +51,40 @@ async function loadCdpOwnerModule(): Promise<CdpOwnerModule> {
   return await import(pathToFileURL(modulePath).href) as CdpOwnerModule;
 }
 
-export async function verifyProfile(config: BrowserConfig): Promise<ProfileVerification> {
+export async function verifyProfile(
+  config: BrowserConfig,
+  segmentBudget?: TurnOperationBudget,
+): Promise<ProfileVerification> {
   try {
     const mod = await loadCdpOwnerModule();
+    if (segmentBudget) {
+      const ownerWaitMs = segmentBudget.clampOperationWaitMs();
+      if (ownerWaitMs <= 0) throw new BrowserOperationTimeoutError('profile_segment_exhausted');
+      const bounded = mod.verifyCdpProfileBounded;
+      if (!bounded) throw new BrowserOperationTimeoutError('owner_probe', 'bounded_mode_missing');
+      const result = await bounded({ cdp: config.cdp, profile: config.profile, timeoutMs: ownerWaitMs });
+      if (result?.timedOut || result?.message === 'owner_probe_timeout') {
+        throw new BrowserOperationTimeoutError('owner_probe');
+      }
+      if (result?.ok) return { state: 'verified', cause: 'verified', evidence: String(result.message ?? result.reason ?? 'verified') };
+      const reachWaitMs = segmentBudget.clampOperationWaitMs();
+      if (reachWaitMs <= 0) throw new BrowserOperationTimeoutError('profile_segment_exhausted');
+      try {
+        const reachable = await mod.isCdpReachable(config.cdp, { timeoutMs: reachWaitMs });
+        if (!reachable) return { state: 'unavailable', cause: 'chrome_not_running', evidence: 'cdp_unreachable' };
+      } catch (reachError) {
+        if (isCdpReachabilityTimeout(reachError)) throw new BrowserOperationTimeoutError('cdp_reachability');
+        throw reachError;
+      }
+      return { state: 'mismatch', cause: String(result?.reason ?? 'owner_unverifiable'), evidence: String(result?.message ?? 'profile mismatch') };
+    }
     const result = mod.verifyCdpProfile({ cdp: config.cdp, profile: config.profile });
     if (result?.ok) return { state: 'verified', cause: 'verified', evidence: String(result.message ?? result.reason ?? 'verified') };
     const reachable = await mod.isCdpReachable(config.cdp).catch(() => false);
     if (!reachable) return { state: 'unavailable', cause: 'chrome_not_running', evidence: 'cdp_unreachable' };
     return { state: 'mismatch', cause: String(result?.reason ?? 'owner_unverifiable'), evidence: String(result?.message ?? 'profile mismatch') };
   } catch (error) {
+    if (error instanceof BrowserOperationTimeoutError) throw error;
     return { state: 'mismatch', cause: 'owner_unverifiable', evidence: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -93,8 +119,80 @@ interface NetworkMessage extends CausalMessageObservation {
 
 export const __testTiming: { now?: () => number } = {};
 
+export const MAX_BROWSER_OPERATION_WAIT_MS = 30_000;
+
+export interface TurnOperationBudget {
+  readonly endsAtMs: number;
+  remainingMs(now?: number): number;
+  clampOperationWaitMs(now?: number): number;
+  canStartOperation(now?: number): boolean;
+}
+
+export function createTurnOperationBudget(budgetMs: number, now = Date.now()): TurnOperationBudget {
+  const endsAtMs = now + Math.max(0, budgetMs);
+  return {
+    endsAtMs,
+    remainingMs(now = Date.now()) {
+      return Math.max(0, endsAtMs - now);
+    },
+    clampOperationWaitMs(now = Date.now()) {
+      return Math.min(MAX_BROWSER_OPERATION_WAIT_MS, Math.max(0, endsAtMs - now));
+    },
+    canStartOperation(now = Date.now()) {
+      return now < endsAtMs;
+    },
+  };
+}
+
+export function createPreSendSegmentBudget(timeoutMs: number, now = Date.now()): TurnOperationBudget {
+  return createTurnOperationBudget(Math.min(timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS), now);
+}
+
+export class BrowserOperationTimeoutError extends Error {
+  readonly operationClass: string;
+
+  constructor(operationClass: string, detail?: string) {
+    const prefix = 'browser_operation_timeout:' + operationClass;
+    super(detail ? prefix + ':' + detail : prefix);
+    this.name = 'BrowserOperationTimeoutError';
+    this.operationClass = operationClass;
+  }
+}
+
+export function browserOperationClassFromError(error: unknown): string | undefined {
+  if (error instanceof BrowserOperationTimeoutError) return error.operationClass;
+  if (error instanceof Error && error.message.startsWith('browser_operation_timeout:')) {
+    return error.message.split(':')[1] ?? undefined;
+  }
+  if (isCdpReachabilityTimeout(error)) return 'cdp_reachability';
+  return undefined;
+}
+
+function isCdpReachabilityTimeout(error: unknown): boolean {
+  return error instanceof Error
+    && (error.message === 'cdp_reachability_timeout' || error.name === 'CdpReachabilityTimeoutError');
+}
+
 function wallClock(): number {
   return __testTiming.now?.() ?? Date.now();
+}
+
+function loopOperationWaitMs(loopEndsAt: number, now = wallClock()): number {
+  return Math.min(MAX_BROWSER_OPERATION_WAIT_MS, Math.max(0, loopEndsAt - now));
+}
+
+async function boundedPlaywrightOperation<T>(waitMs: number, operation: () => Promise<T>): Promise<T> {
+  if (waitMs <= 0) throw new BrowserOperationTimeoutError('playwright_operation');
+  return await Promise.race([
+    operation(),
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new BrowserOperationTimeoutError('playwright_operation')), waitMs);
+    }),
+  ]);
+}
+
+function playwrightTimeout(waitMs: number): { timeout: number } | undefined {
+  return waitMs > 0 ? { timeout: waitMs } : undefined;
 }
 
 interface NetworkWitnessState {
@@ -972,22 +1070,24 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
   return state;
 }
 
-async function serviceId(locator: any): Promise<string> {
+async function serviceId(locator: any, waitMs?: number): Promise<string> {
+  const timeout = playwrightTimeout(waitMs ?? MAX_BROWSER_OPERATION_WAIT_MS);
   for (const attr of ['data-message-id', 'data-turn-id']) {
-    const direct = await locator.getAttribute(attr).catch(() => null);
+    const direct = await locator.getAttribute(attr, timeout).catch(() => null);
     if (direct && direct.length >= 8) return direct;
     const parent = locator.locator(`[${attr}]`).first();
-    const nested = await parent.getAttribute(attr).catch(() => null);
+    const nested = await parent.getAttribute(attr, timeout).catch(() => null);
     if (nested && nested.length >= 8) return nested;
   }
   return '';
 }
 
-async function parentServiceId(locator: any): Promise<string> {
+async function parentServiceId(locator: any, waitMs?: number): Promise<string> {
+  const timeout = playwrightTimeout(waitMs ?? MAX_BROWSER_OPERATION_WAIT_MS);
   for (const attr of ['data-parent-message-id', 'data-parent-turn-id']) {
-    const direct = await locator.getAttribute(attr).catch(() => null);
+    const direct = await locator.getAttribute(attr, timeout).catch(() => null);
     if (direct && direct.length >= 8) return direct;
-    const nested = await locator.locator(`[${attr}]`).first().getAttribute(attr).catch(() => null);
+    const nested = await locator.locator(`[${attr}]`).first().getAttribute(attr, timeout).catch(() => null);
     if (nested && nested.length >= 8) return nested;
   }
   return '';
@@ -1004,12 +1104,19 @@ export function witnessSurfaceProbeRequiresDowngrade(
   return true;
 }
 
-export async function runtimeWitnessSurfaceAvailable(page: any): Promise<WitnessSurfaceProbe> {
+export async function runtimeWitnessSurfaceAvailable(
+  page: any,
+  segmentBudget?: TurnOperationBudget,
+): Promise<WitnessSurfaceProbe> {
+  const waitMs = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  if (segmentBudget && waitMs <= 0) throw new BrowserOperationTimeoutError('witness_surface');
+  const timeout = playwrightTimeout(waitMs);
   const messages = page.locator('[data-message-author-role]');
   let count: number;
   try {
-    count = await messages.count();
-  } catch {
+    count = await boundedPlaywrightOperation(waitMs, () => messages.count(timeout));
+  } catch (error) {
+    if (error instanceof BrowserOperationTimeoutError) throw error;
     return 'absent';
   }
   if (count === 0) return 'empty';
@@ -1017,13 +1124,13 @@ export async function runtimeWitnessSurfaceAvailable(page: any): Promise<Witness
   const assistantParents: string[] = [];
   for (let index = Math.max(0, count - 8); index < count; index++) {
     const locator = messages.nth(index);
-    const role = await locator.getAttribute('data-message-author-role').catch(() => null);
+    const role = await locator.getAttribute('data-message-author-role', timeout).catch(() => null);
     if (role === 'user') {
-      const id = await serviceId(locator);
+      const id = await serviceId(locator, waitMs);
       if (id) userIds.add(id);
     } else if (role === 'assistant') {
-      const id = await serviceId(locator);
-      const parent = await parentServiceId(locator);
+      const id = await serviceId(locator, waitMs);
+      const parent = await parentServiceId(locator, waitMs);
       if (id && parent) assistantParents.push(parent);
     }
   }
@@ -1031,11 +1138,11 @@ export async function runtimeWitnessSurfaceAvailable(page: any): Promise<Witness
   for (let index = Math.max(0, count - 8); index < count - 1; index++) {
     const locator = messages.nth(index);
     const next = messages.nth(index + 1);
-    const role = await locator.getAttribute('data-message-author-role').catch(() => null);
-    const nextRole = await next.getAttribute('data-message-author-role').catch(() => null);
+    const role = await locator.getAttribute('data-message-author-role', timeout).catch(() => null);
+    const nextRole = await next.getAttribute('data-message-author-role', timeout).catch(() => null);
     if (role !== 'user' || nextRole !== 'assistant') continue;
-    const userId = await serviceId(locator);
-    const turnStart = await next.getAttribute('data-turn-start-message').catch(() => null);
+    const userId = await serviceId(locator, waitMs);
+    const turnStart = await next.getAttribute('data-turn-start-message', timeout).catch(() => null);
     if (userId && turnStart === 'true') return 'available';
   }
   return 'absent';
@@ -1046,8 +1153,9 @@ export interface ProductStatusSurface {
   readonly composer: boolean;
 }
 
-export async function productStatusText(page: any): Promise<ProductStatusSurface> {
-  const composer = (await page.locator('#prompt-textarea').count().catch(() => 0)) > 0;
+export async function productStatusText(page: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<ProductStatusSurface> {
+  const timeout = playwrightTimeout(waitMs);
+  const composer = (await page.locator('#prompt-textarea').count(timeout).catch(() => 0)) > 0;
   const selectors = [
     '[role="alert"]',
     '[role="dialog"]',
@@ -1063,9 +1171,9 @@ export async function productStatusText(page: any): Promise<ProductStatusSurface
   const parts: string[] = [];
   for (const selector of selectors) {
     const locator = page.locator(selector);
-    const count = Math.min(await locator.count().catch(() => 0), 8);
+    const count = Math.min(await locator.count(timeout).catch(() => 0), 8);
     for (let index = 0; index < count; index++) {
-      const text = await locator.nth(index).innerText().catch(() => '');
+      const text = await locator.nth(index).innerText(timeout).catch(() => '');
       if (text) parts.push(text);
     }
   }
@@ -1083,8 +1191,8 @@ export function classifyProductWall(surface: ProductStatusSurface): { state?: 'q
   return {};
 }
 
-async function pageWalls(page: any): Promise<{ state?: string; cause?: string }> {
-  return classifyProductWall(await productStatusText(page));
+async function pageWalls(page: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<{ state?: string; cause?: string }> {
+  return classifyProductWall(await productStatusText(page, waitMs));
 }
 
 async function semanticNodes(locator: any): Promise<SemanticNode[]> {
@@ -1143,6 +1251,7 @@ async function observedDispatchUserIds(
   page: any,
   network: NetworkWitnessState,
   baselineIds: ReadonlySet<string>,
+  waitMs?: number,
 ): Promise<Set<string>> {
   const serviceIds = [...network.serviceSubmittedUserIds].filter((id) => !baselineIds.has(id));
   if (serviceIds.length === 1) return new Set(serviceIds);
@@ -1151,9 +1260,9 @@ async function observedDispatchUserIds(
   const candidates = boundDispatchCandidateIds(network);
   if (candidates.size === 0) return observed;
   const users = page.locator('[data-message-author-role="user"]');
-  const count = await users.count().catch(() => 0);
+  const count = await users.count(playwrightTimeout(waitMs ?? MAX_BROWSER_OPERATION_WAIT_MS)).catch(() => 0);
   for (let index = Math.max(0, count - 8); index < count; index++) {
-    const id = await serviceId(users.nth(index));
+    const id = await serviceId(users.nth(index), waitMs);
     if (id && !baselineIds.has(id) && candidates.has(id)) observed.add(id);
   }
   for (const message of network.messages) {
@@ -1174,7 +1283,40 @@ export interface TurnBrowserResult {
   possibleDelivery: boolean;
 }
 
-export async function openTurnPage(browser: any, config: BrowserConfig): Promise<{ page: any; owned: boolean; provisionalId?: string }> {
+async function adoptNewPageWithBudget(
+  ctx: any,
+  goto: (page: any) => Promise<void>,
+  waitMs: number,
+): Promise<any> {
+  if (waitMs <= 0) throw new BrowserOperationTimeoutError('new_page');
+  const pagePromise = ctx.newPage();
+  let page: any;
+  try {
+    page = await boundedPlaywrightOperation(waitMs, () => pagePromise);
+  } catch (error) {
+    pagePromise
+      .then((latePage: any) => latePage.close().catch(() => {}))
+      .catch(() => {});
+    if (error instanceof BrowserOperationTimeoutError) throw new BrowserOperationTimeoutError('new_page');
+    throw error;
+  }
+  try {
+    await goto(page);
+    return page;
+  } catch (error) {
+    await page.close().catch(() => {});
+    throw error;
+  }
+}
+
+export async function openTurnPage(
+  browser: any,
+  config: BrowserConfig,
+  options?: { segmentBudget?: TurnOperationBudget },
+): Promise<{ page: any; owned: boolean; provisionalId?: string }> {
+  const segmentBudget = options?.segmentBudget;
+  const gotoTimeout = segmentBudget?.clampOperationWaitMs() ?? Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
+  if (segmentBudget && !segmentBudget.canStartOperation()) throw new BrowserOperationTimeoutError('open_turn_page');
   const contexts = browser.contexts();
   if (contexts.length !== 1) throw new Error('ui_contract_mismatch:context_count');
   const ctx = contexts[0];
@@ -1186,32 +1328,22 @@ export async function openTurnPage(browser: any, config: BrowserConfig): Promise
     });
     if (matches.length > 1) throw new Error('ui_contract_mismatch:duplicate_tabs');
     if (matches.length === 1) {
-      await matches[0].bringToFront().catch(() => {});
+      await matches[0].bringToFront(playwrightTimeout(gotoTimeout)).catch(() => {});
       return { page: matches[0], owned: false };
     }
-    const page = await ctx.newPage();
-    try {
-      await page.goto(target, { waitUntil: 'domcontentloaded' });
-      if (normalizeConversationUrl(page.url()) !== target) {
-        await page.close().catch(() => {});
+    const page = await adoptNewPageWithBudget(ctx, async (opened) => {
+      await opened.goto(target, { waitUntil: 'domcontentloaded', timeout: gotoTimeout });
+      if (normalizeConversationUrl(opened.url()) !== target) {
         throw new Error('ui_contract_mismatch:conversation_redirect');
       }
-      return { page, owned: true };
-    } catch (error) {
-      if (error instanceof Error && error.message === 'ui_contract_mismatch:conversation_redirect') throw error;
-      await page.close().catch(() => {});
-      throw error;
-    }
+    }, gotoTimeout);
+    return { page, owned: true };
   }
   if (!config.projectUrl) throw new Error('ui_contract_mismatch:project_url_required');
-  const page = await ctx.newPage();
-  try {
-    await page.goto(config.projectUrl, { waitUntil: 'domcontentloaded' });
-    return { page, owned: true, provisionalId: crypto.randomUUID() };
-  } catch (error) {
-    await page.close().catch(() => {});
-    throw error;
-  }
+  const page = await adoptNewPageWithBudget(ctx, async (opened) => {
+    await opened.goto(config.projectUrl, { waitUntil: 'domcontentloaded', timeout: gotoTimeout });
+  }, gotoTimeout);
+  return { page, owned: true, provisionalId: crypto.randomUUID() };
 }
 
 function witnessDelay(ms: number): Promise<void> {
@@ -1232,34 +1364,48 @@ export async function sendTurn(
   config: BrowserConfig,
   provisionalId?: string,
   onBeforeSend?: () => void | Promise<void>,
+  segmentBudget?: TurnOperationBudget,
 ): Promise<TurnBrowserResult> {
   const network = attachNetworkWitness(page);
   const composer = page.locator('#prompt-textarea');
-  const readyDeadline = Date.now() + Math.min(config.timeoutMs, 30_000);
-  while (Date.now() < readyDeadline) {
-    const wall = await pageWalls(page);
+  const readyEndsAt = segmentBudget?.endsAtMs ?? Date.now() + Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
+  while (Date.now() < readyEndsAt) {
+    const waitMs = loopOperationWaitMs(readyEndsAt, Date.now());
+    if (waitMs <= 0) break;
+    const wall = await boundedPlaywrightOperation(waitMs, () => pageWalls(page, waitMs));
     if (wall.state) return { state: wall.state as TurnBrowserResult['state'], cause: wall.cause!, possibleDelivery: false };
-    if (await composer.count().catch(() => 0)) break;
-    await witnessPollDelay(page, 500);
+    const composerVisible = await composer.count(playwrightTimeout(waitMs)).catch(() => 0);
+    if (composerVisible) break;
+    await witnessPollDelay(page, Math.min(500, waitMs));
   }
-  if (!(await composer.count().catch(() => 0))) {
+  const composerReadyWait = loopOperationWaitMs(readyEndsAt, Date.now());
+  if (!(await composer.count(playwrightTimeout(composerReadyWait)).catch(() => 0))) {
+    if (segmentBudget && Date.now() >= readyEndsAt) {
+      throw new BrowserOperationTimeoutError('composer_readiness');
+    }
     return { state: 'ui_contract_mismatch', cause: 'composer_unavailable', possibleDelivery: false };
   }
 
   const role = '[data-message-author-role]';
   const baseline = page.locator(role);
   const baselineIds = new Set<string>();
-  for (let index = 0, count = await baseline.count(); index < count; index++) {
-    const id = await serviceId(baseline.nth(index));
+  const baselineWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  if (segmentBudget && baselineWait <= 0) throw new BrowserOperationTimeoutError('pre_send_baseline');
+  const baselineCount = await baseline.count(playwrightTimeout(baselineWait)).catch(() => 0);
+  for (let index = 0; index < baselineCount; index++) {
+    const id = await serviceId(baseline.nth(index), baselineWait);
     if (id) baselineIds.add(id);
   }
 
-  await composer.click();
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
-  await page.keyboard.press('Delete');
-  await page.keyboard.insertText(text);
+  const mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
+  const mutationTimeout = playwrightTimeout(mutationWait);
+  await boundedPlaywrightOperation(mutationWait, () => composer.click(mutationTimeout));
+  await boundedPlaywrightOperation(mutationWait, () => page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A', mutationTimeout));
+  await boundedPlaywrightOperation(mutationWait, () => page.keyboard.press('Delete', mutationTimeout));
+  await boundedPlaywrightOperation(mutationWait, () => page.keyboard.insertText(text, mutationTimeout));
   const send = page.locator('[data-testid="send-button"]');
-  const sendAvailable = (await send.count()) > 0;
+  const sendAvailable = (await send.count(mutationTimeout).catch(() => 0)) > 0;
   revalidateProcessDestinationReservations();
   await onBeforeSend?.();
   try {
@@ -1275,11 +1421,14 @@ export async function sendTurn(
     network.witnessInstall,
     new Promise<void>((resolve) => { setTimeout(resolve, 10_000); }),
   ]);
+  const dispatchWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  if (segmentBudget && dispatchWait <= 0) throw new BrowserOperationTimeoutError('dispatch');
+  const dispatchTimeout = playwrightTimeout(dispatchWait);
   network.armDispatch();
   try {
     network.ingestingDispatchServiceFrames = true;
-    if (sendAvailable) await send.click();
-    else await page.keyboard.press('Enter');
+    if (sendAvailable) await boundedPlaywrightOperation(dispatchWait, () => send.click(dispatchTimeout));
+    else await boundedPlaywrightOperation(dispatchWait, () => page.keyboard.press('Enter', dispatchTimeout));
     network.turnDispatchCommitted = true;
   } catch {
     network.ingestingDispatchServiceFrames = false;
@@ -1289,8 +1438,8 @@ export async function sendTurn(
   network.ingestingDispatchServiceFrames = false;
 
   let userId = '';
-  const deliveredDeadline = wallClock() + 30_000;
-  while (wallClock() < deliveredDeadline && !userId) {
+  const deliveredEndsAt = wallClock() + MAX_BROWSER_OPERATION_WAIT_MS;
+  while (wallClock() < deliveredEndsAt && !userId) {
     if (dispatchExchangeIsAmbiguous(network)) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
     }
@@ -1298,10 +1447,12 @@ export async function sendTurn(
     if (!canonicalEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
     }
-    const observed = await observedDispatchUserIds(page, network, baselineIds);
+    const deliveredWait = loopOperationWaitMs(deliveredEndsAt);
+    if (deliveredWait <= 0) break;
+    const observed = await boundedPlaywrightOperation(deliveredWait, () => observedDispatchUserIds(page, network, baselineIds, deliveredWait));
     if (observed.size > 1) return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
     userId = observed.values().next().value ?? '';
-    if (!userId) await witnessPollDelay(page, 250);
+    if (!userId) await witnessPollDelay(page, Math.min(250, deliveredWait));
   }
   if (!userId) return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
   userId = canonicalSubmittedUserId(network, baselineIds) || userId;
@@ -1316,12 +1467,14 @@ export async function sendTurn(
   let terminalPublishEligible = true;
   const deadline = Date.now() + config.timeoutMs;
   while (Date.now() < deadline) {
-    const wall = await pageWalls(page);
+    const replyWait = loopOperationWaitMs(deadline, Date.now());
+    if (replyWait <= 0) break;
+    const wall = await boundedPlaywrightOperation(replyWait, () => pageWalls(page, replyWait));
     const canonicalUserIdEarly = canonicalSubmittedUserId(network, baselineIds);
     if (!canonicalUserIdEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true, userMessageId: userId };
     }
-    const observedDispatch = await observedDispatchUserIds(page, network, baselineIds);
+    const observedDispatch = await boundedPlaywrightOperation(replyWait, () => observedDispatchUserIds(page, network, baselineIds, replyWait));
     const canonicalUserId = canonicalSubmittedUserId(network, baselineIds);
     if (canonicalUserId) userId = canonicalUserId;
     if (observedDispatch.size > 1) {
@@ -1333,8 +1486,9 @@ export async function sendTurn(
 
     const users = page.locator('[data-message-author-role="user"]');
     const newUserIds = new Set<string>();
-    for (let index = 0, count = await users.count(); index < count; index++) {
-      const id = await serviceId(users.nth(index));
+    const userCount = await users.count(playwrightTimeout(replyWait)).catch(() => 0);
+    for (let index = 0; index < userCount; index++) {
+      const id = await serviceId(users.nth(index), replyWait);
       if (id && !baselineIds.has(id)) newUserIds.add(id);
     }
     if ([...newUserIds].some((id) => id !== userId)) {
@@ -1343,9 +1497,10 @@ export async function sendTurn(
 
     const assistants = page.locator('[data-message-author-role="assistant"]');
     const assistantLocators = new Map<string, any>();
-    for (let index = 0, count = await assistants.count(); index < count; index++) {
+    const assistantCount = await assistants.count(playwrightTimeout(replyWait)).catch(() => 0);
+    for (let index = 0; index < assistantCount; index++) {
       const locator = assistants.nth(index);
-      const id = await serviceId(locator);
+      const id = await serviceId(locator, replyWait);
       if (!id || baselineIds.has(id)) continue;
       assistantLocators.set(id, locator);
     }
@@ -1372,15 +1527,15 @@ export async function sendTurn(
     }
 
     const cont = page.getByText(/continue generating/i);
-    if (await cont.count().catch(() => 0)) {
+    if (await cont.count(playwrightTimeout(replyWait)).catch(() => 0)) {
       let continuationLocator: any = null;
       if (boundAssistantId) {
         continuationLocator = assistantLocators.get(boundAssistantId) ?? null;
       }
       if (!continuationLocator) {
-        for (let index = 0, count = await assistants.count(); index < count; index++) {
+        for (let index = 0; index < assistantCount; index++) {
           const locator = assistants.nth(index);
-          const id = await serviceId(locator);
+          const id = await serviceId(locator, replyWait);
           if (id && isMessageAttributedToUserTurn(id, userId, network.terminal.messages)) {
             continuationLocator = locator;
             break;
@@ -1424,8 +1579,8 @@ export async function sendTurn(
       boundAssistantId = terminal.assistantMessageId;
       let matched = assistantLocators.get(boundAssistantId) ?? null;
       if (!matched) {
-        for (let index = 0, count = await assistants.count(); index < count; index++) {
-          if (await serviceId(assistants.nth(index)) === boundAssistantId) {
+        for (let index = 0; index < assistantCount; index++) {
+          if (await serviceId(assistants.nth(index), replyWait) === boundAssistantId) {
             matched = assistants.nth(index);
             break;
           }
@@ -1467,7 +1622,7 @@ export async function sendTurn(
         ...(boundAssistantId ? { assistantMessageId: boundAssistantId } : {}),
       };
     }
-    await witnessPollDelay(page, 750);
+    await witnessPollDelay(page, Math.min(750, replyWait));
   }
 
   if (terminalSuccessSeen) {

@@ -15,7 +15,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TURN_STATES, turnExitCode, type FailureScope, type TurnState } from '../chatgpt-browser-turn/contracts.ts';
 import {
@@ -47,12 +47,18 @@ import {
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import {
+  createPreSendSegmentBudget,
+  createTurnOperationBudget,
   openTurnPage,
   resolveCausalAssistant,
   runtimeWitnessSurfaceAvailable,
   sendTurn,
+  verifyProfile,
+  __testTiming,
   type BrowserConfig,
 } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { boundedResourceCleanup } from '../chatgpt-browser-turn/browser-session.ts';
+import { delayedComposerFakePage } from '../chatgpt-browser-turn/fixtures/issue-1023-timeout.ts';
 import { emptyLocator, fakeTurnPage, messageLocator } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import {
   DELTA_ONLY_FRAME,
@@ -1710,3 +1716,107 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
   });
 });
 
+
+describe('issue 1023 operation-level bounds', () => {
+  const issue1023Config = (): BrowserConfig => ({
+    cdp,
+    profile: join(root, 'profile'),
+    chatUrl: 'https://chatgpt.com/c/example',
+    newChat: false,
+    timeoutMs: 2_000,
+  });
+  it('AC2: bounded owner probe timeout is failure-to-know, not profile negative evidence', async () => {
+    const ownerPath = join(repoRoot, '.claude', 'skills', 'discuss-with-gpt', 'verify-cdp-owner.mjs');
+    const ownerMod = await import(pathToFileURL(ownerPath).href) as typeof import('../../.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs');
+    ownerMod.__testOwnerProbe.stallExecFile = true;
+    const budget = createPreSendSegmentBudget(150);
+    await expect(verifyProfile({
+      cdp,
+      profile: join(root, 'profile'),
+      newChat: false,
+      timeoutMs: 60_000,
+    }, budget)).rejects.toThrow('browser_operation_timeout:owner_probe');
+    ownerMod.__testOwnerProbe.stallExecFile = false;
+  });
+
+  it('AC2: stalled reachability fetch aborts with distinguishable timeout', async () => {
+    const ownerPath = join(repoRoot, '.claude', 'skills', 'discuss-with-gpt', 'verify-cdp-owner.mjs');
+    const ownerMod = await import(pathToFileURL(ownerPath).href) as typeof import('../../.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs');
+    ownerMod.__testOwnerProbe.stallFetch = true;
+    await expect(ownerMod.isCdpReachable(cdp, { timeoutMs: 100 })).rejects.toMatchObject({ message: 'cdp_reachability_timeout' });
+    ownerMod.__testOwnerProbe.stallFetch = false;
+  });
+
+  it('AC3: pre-send composer mutation cannot settle late after bounded timeout', async () => {
+    const fixture = delayedComposerFakePage({ composerClickDelayMs: 400 });
+    const budget = createTurnOperationBudget(100);
+    await expect(sendTurn(fixture.page, 'late-payload', {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/example',
+      newChat: false,
+      timeoutMs: 60_000,
+    }, undefined, undefined, budget)).rejects.toThrow('browser_operation_timeout:');
+    expect(fixture.page.getComposerClicked()).toBe(false);
+    expect(fixture.page.getInsertedText()).toBe('');
+  });
+
+  it('AC4: segment and loop budgets clamp to remaining remainder', () => {
+    const segment = createPreSendSegmentBudget(500, 1_000);
+    expect(segment.clampOperationWaitMs(1_200)).toBe(300);
+    expect(segment.canStartOperation(1_500)).toBe(false);
+    const deliveredBudget = createTurnOperationBudget(30, 4_970);
+    expect(deliveredBudget.clampOperationWaitMs(4_980)).toBe(20);
+  });
+
+  it('AC4: healthy post-dispatch polls can complete before the turn deadline', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'done', appearOnSend: true }],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...issue1023Config(), timeoutMs: 200 });
+    expect(result.state).toBe('ok');
+  });
+
+
+  it('AC6: late newPage handle is not adopted and cleanup is bounded', async () => {
+    const ctx = {
+      pages: () => [],
+      newPage: () => new Promise((resolve) => {
+        setTimeout(() => resolve({ close: async () => {}, goto: async () => {} }), 500);
+      }),
+    };
+    const browser = { contexts: () => [ctx] };
+    const budget = createPreSendSegmentBudget(80);
+    await expect(openTurnPage(browser, {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/new',
+      newChat: false,
+      timeoutMs: 60_000,
+    }, { segmentBudget: budget })).rejects.toThrow('browser_operation_timeout:new_page');
+  });
+
+  it('AC6: never-settling page.close does not block terminalization beyond cleanup bound', async () => {
+    const started = Date.now();
+    const outcome = await boundedResourceCleanup(
+      () => new Promise<void>(() => {}),
+      50,
+    );
+    expect(outcome).toBe('unconfirmed');
+    expect(Date.now() - started).toBeLessThan(200);
+  });
+});

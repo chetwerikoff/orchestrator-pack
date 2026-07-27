@@ -540,3 +540,45 @@ describe('issue 1008 witness surface probe caller', () => {
   });
 });
 
+
+describe('issue 1023 timeout diagnostics', () => {
+  it('AC7: before-send browser timeout records distinguishable driver diagnostic operation', async () => {
+    vi.resetModules();
+    vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
+      return {
+        ...actual,
+        verifyProfile: vi.fn(async () => {
+          throw new actual.BrowserOperationTimeoutError('owner_probe');
+        }),
+      };
+    });
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    const input = join(root, 'timeout-input.txt');
+    const output = join(root, 'timeout-diagnostic.txt');
+    writeFileSync(input, 'hello\n');
+    let stdout = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    const exitCode = await runCli([
+      'turn',
+      '--profile', join(root, 'profile'),
+      '--cdp', cdp,
+      '--input', input,
+      '--output', output,
+      '--chat-url', 'https://chatgpt.com/c/example',
+      '--timeout-ms', '30000',
+    ]);
+    process.stdout.write = originalStdout;
+    vi.resetModules();
+    expect(exitCode).toBe(13);
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(body.cause).toBe('driver_exception_before_send');
+    expect(body.driver_diagnostic_id).toBeDefined();
+    const diagnostic = readDriverDiagnostic(profileKey, String(body.invocation_id));
+    expect(diagnostic?.operation).toBe('browser_operation_timeout:owner_probe');
+  });
+});
