@@ -53,14 +53,19 @@ export function isExecutableLegacyReference(row: ClosureReferenceRow): boolean {
   if (row.sourceExecutionClass === 'dead' || row.sourceExecutionClass === 'explicitly-unsupported') return false;
   const target = String(row.target ?? '').replace(/\\/g, '/');
   if (!TARGET_LIBRARIES.has(target)) return false;
+  const primitiveClass = String(row.primitiveClass ?? '');
+  if (primitiveClass === 'javascript-static-import' || primitiveClass === 'node-child-process' || primitiveClass === 'powershell-dot-source') {
+    return true;
+  }
   const selector = String(row.selector ?? '');
   const basename = path.posix.basename(target);
   if (!selector.includes(basename)) return false;
   const escaped = regexEscape(basename);
   const patterns = [
-    new RegExp(`(?:from\\s+|import\\s*\\(|require\\s*\\()\\s*['\"][^'\"]*${escaped}`, 'iu'),
+    new RegExp(`(?:from\\s+|import\\s+|import\\s*\\(|require\\s*\\()\\s*['\"][^'\"]*${escaped}`, 'iu'),
     new RegExp(`(?:spawn|execFile|fork|exec)\\s*\\([^\\r\\n]*${escaped}`, 'iu'),
-    new RegExp(`(?:Import-Module|Start-Process|pwsh|powershell|&\\s+|\\.\\s*\\()[^\\r\\n]*${escaped}`, 'iu'),
+    new RegExp(`(?:Import-Module|Start-Process|pwsh|powershell)[^\\r\\n]*${escaped}`, 'iu'),
+    new RegExp(`(?:^|\\s)(?:\\.|&)\\s*(?:\\(\\s*)?(?:Join-Path\\s+[^\\r\\n]*?\\s+)?['\"][^'\"]*${escaped}`, 'iu'),
     new RegExp(`(?:run|command|args)\\s*[:=][^\\r\\n]*${escaped}`, 'iu'),
   ];
   return patterns.some((pattern) => pattern.test(selector));
@@ -324,6 +329,7 @@ export async function activateCutover(
   const cordon = createCordon({
     path: request.paths.cordonPath,
     epochId: request.epochId,
+    expectedOldEpochId: request.expectedOldEpochId,
     hostId: request.hostId,
     repoRoot: preflight.repoRoot,
     installedCommitSha: request.installedCommitSha,
