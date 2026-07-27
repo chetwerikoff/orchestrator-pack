@@ -993,10 +993,26 @@ async function parentServiceId(locator: any): Promise<string> {
   return '';
 }
 
-export async function runtimeWitnessSurfaceAvailable(page: any): Promise<boolean> {
+export type WitnessSurfaceProbe = 'available' | 'absent' | 'empty';
+
+export function witnessSurfaceProbeRequiresDowngrade(
+  probe: WitnessSurfaceProbe,
+  freshConversation: boolean,
+): boolean {
+  if (probe === 'available') return false;
+  if (probe === 'empty' && freshConversation) return false;
+  return true;
+}
+
+export async function runtimeWitnessSurfaceAvailable(page: any): Promise<WitnessSurfaceProbe> {
   const messages = page.locator('[data-message-author-role]');
-  const count = await messages.count().catch(() => 0);
-  if (count === 0) return false;
+  let count: number;
+  try {
+    count = await messages.count();
+  } catch {
+    return 'absent';
+  }
+  if (count === 0) return 'empty';
   const userIds = new Set<string>();
   const assistantParents: string[] = [];
   for (let index = Math.max(0, count - 8); index < count; index++) {
@@ -1011,7 +1027,7 @@ export async function runtimeWitnessSurfaceAvailable(page: any): Promise<boolean
       if (id && parent) assistantParents.push(parent);
     }
   }
-  if (assistantParents.some((parent) => userIds.has(parent))) return true;
+  if (assistantParents.some((parent) => userIds.has(parent))) return 'available';
   for (let index = Math.max(0, count - 8); index < count - 1; index++) {
     const locator = messages.nth(index);
     const next = messages.nth(index + 1);
@@ -1020,9 +1036,9 @@ export async function runtimeWitnessSurfaceAvailable(page: any): Promise<boolean
     if (role !== 'user' || nextRole !== 'assistant') continue;
     const userId = await serviceId(locator);
     const turnStart = await next.getAttribute('data-turn-start-message').catch(() => null);
-    if (userId && turnStart === 'true') return true;
+    if (userId && turnStart === 'true') return 'available';
   }
-  return false;
+  return 'absent';
 }
 
 export interface ProductStatusSurface {

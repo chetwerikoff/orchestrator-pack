@@ -148,17 +148,16 @@ npm run chatgpt-browser-turn -- capability   --profile /absolute/path/to/automat
 ```
 
 Record `expected_binding.candidate_digest`, `build_digest`, `config_digest`, and
-`gate_digest`. For the operator-controlled live characterization invocations only,
-bind the exact gate digest **on the characterization command itself** — never a
-shell-wide `export` that would leak to later production turns:
+`gate_digest`. Run the serialized live characterization turn with the normal helper
+command — no gate-digest environment variable is required:
 
 ```bash
-CHATGPT_BROWSER_TURN_GATE_B_DIGEST='<expected_binding.gate_digest>'   npm run chatgpt-browser-turn -- turn ...characterization argv...
+npm run chatgpt-browser-turn -- turn ...characterization argv...
 ```
 
-Unset any characterization-only assignment immediately after the characterization
-sequence completes (`unset CHATGPT_BROWSER_TURN_GATE_B_DIGEST`). Do not reuse a
-digest after any candidate, verifier, runtime-build, or Gate-B test-source change.
+The helper arms parallel eligibility from the witnessed `ok` completion itself. Do not
+reuse characterization telemetry after any candidate, verifier, runtime-build, or
+Gate-B test-source change.
 
 The live smoke minimum (serialized, on the dedicated automation profile) must
 demonstrate:
@@ -518,8 +517,8 @@ GPT pass state in the owning artifact/Issue flow.
   recorded, and the digest-pinned recovery root under
   `~/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`
   is retained (Gate-B characterization turns themselves are exempt).
-- Leave `CHATGPT_BROWSER_TURN_GATE_B_DIGEST` exported in the shell after
-  characterization; bind it per characterization command only.
+- Expect parallel eligibility to self-arm from a witnessed characterization `ok`
+  turn; do not export any gate-digest environment variable.
 - Treat a tracked-helper non-`ok` state, timeout, or missing stdout as fallback
   authorization or resend permission.
 - Run legacy/scratchpad sends while helper-owned unresolved state blocks
