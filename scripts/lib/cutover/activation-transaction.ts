@@ -257,6 +257,8 @@ async function startSupervisor(request: ActivationRequest, nonce: string): Promi
     ],
     cwd: request.repoRoot,
     inheritParentEnv: true,
+    allowEmptyStdout: false,
+    timeoutMs: 20_000,
   });
   if (!result.ok) throw new Error(`typescript_supervisor_start_failed:${result.stderr || result.error || result.exitCode}`);
   const parsed = JSON.parse(result.stdout.trim()) as { pid?: number };
