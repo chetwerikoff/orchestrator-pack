@@ -839,9 +839,12 @@ requires independent conversation inspection; wait out a foreign busy profile.
 
 Eligible scratchpad/legacy fallback per `discuss-with-gpt` stays **serialized only**
 and alone may use the existing caller cross-task exclusivity
-(`orchestrator-pack:create-issue-draft:browser-turn`): establish before the one
-fallback browser effect, release immediately after; contention leaves fallback pending.
-Never wrap ordinary tracked-helper turns in that mutex or add lock machinery.
+(`orchestrator-pack:create-issue-draft:browser-turn`): every flow-manager MUST
+resolve that literal key to the same local mutual-exclusion object in the operator
+environment (not derived from Issue, task, chat URL, or manager identity);
+establish before the one fallback browser effect, release immediately after;
+contention leaves fallback pending. Never wrap ordinary tracked-helper turns in
+that mutex or add lock machinery.
 
 Before the first **production** tracked-helper turn on a new/uncharacterized #964
 candidate, complete Gate B in `discuss-with-gpt` and record characterization evidence.
