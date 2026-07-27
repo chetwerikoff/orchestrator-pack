@@ -37,8 +37,10 @@ what gets built, in what order, with what boundaries. The planner
   constraints/out-of-scope, and verified grounding pointers. Delegate spec
   authoring to the **Cursor draft-author session** when relocation is active
   (Issue #579) — it runs the full **`create-issue-draft`** procedure in an
-  isolated workspace and returns the draft plus completion proof. **Codex or
-  Sonnet 5** may author only on explicit user request; default engine is Cursor.
+  isolated workspace and returns the draft plus completion proof. **Browser GPT
+  is the default authoring engine** — the Cursor session is the flow-manager
+  driving it. A **Cursor agent** may author the spec itself only on explicit
+  user request; Codex is out of the authoring routing.
   You own the T3 architect lens pass, tier-gate escalations, and pre-sync review
   before any issue sync. Until relocation is active, or when the
   draft-author session is unavailable/incomplete, run **`create-issue-draft`**
