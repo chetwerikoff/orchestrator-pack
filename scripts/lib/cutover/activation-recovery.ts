@@ -8,15 +8,19 @@ import {
   processAlive,
   readCordon,
   readCordonState,
+  readProcessIdentity,
 } from './activation-cordon.ts';
 import { appendFollowup, appendPhaseOne, finalizePhaseOne, readPhaseOneDetail, verifyPhaseOneDetails, verifyPhaseOneDigest } from './activation-evidence.ts';
 import { importSnapshot } from './activation-import.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
 import type { CordonRecord, FollowupRecord, ActivationRequest, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
-import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
+import { readSupervisorStatus, type SupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
 import { listPackReviewRuns, type PackReviewRunRecord } from '../pack-review-run-store.ts';
 import { packReviewDeliveryNeedsResume } from '../pack-review-delivery.ts';
+
+const DEFAULT_SCHEDULER_DELIVERY_WAIT_MS = 46 * 60_000;
+const DEFAULT_SCHEDULER_DELIVERY_POLL_MS = 250;
 
 export interface SchedulerHealthDeliveryObservation {
   result: 'scheduler-health-delivery-observed';
@@ -27,9 +31,9 @@ export interface SchedulerHealthDeliveryObservation {
   supervisor: {
     pid: number;
     childGeneration: number;
-    childPid: number;
+    childPid: number | null;
     registryHash: string;
-    restartState: 'running';
+    restartState: 'running' | 'waiting-restart';
   };
   delivery: {
     result: 'scheduler-durable-delivery-observed';
@@ -94,29 +98,36 @@ function appendIfMissing(pathName: string, epochId: string, step: string, detail
   appendFollowup(pathName, epochId, step, detail);
 }
 
-function readySupervisorStatus(request: ActivationRequest, nonce: string): { supervisorPid: number; childGeneration: number } | null {
+function liveSupervisorStatus(request: ActivationRequest, nonce: string): SupervisorStatus | null {
   const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
-  if (
-    status
-    && status.epochId === request.epochId
-    && status.nonce === nonce
-    && status.restartState === 'running'
-    && processAlive(status.supervisorPid)
-    && status.registryHash
-    && status.childPid !== null
-    && processAlive(status.childPid)
-    && status.childGeneration >= 1
-  ) {
-    return { supervisorPid: status.supervisorPid, childGeneration: status.childGeneration };
+  if (!status) return null;
+  let identity;
+  try {
+    identity = readProcessIdentity(status.supervisorPid);
+  } catch {
+    return null;
   }
-  return null;
+  if (identity.startTicks !== status.supervisorStartTicks) return null;
+  if (status.epochId !== request.epochId || status.nonce !== nonce) throw new Error('recovery_supervisor_context_conflict');
+  if (status.restartState === 'refused') throw new Error(`recovery_supervisor_refused:${status.refusalReason ?? 'unknown'}`);
+  if (status.restartState === 'stopping') throw new Error('recovery_supervisor_stopping');
+  return status;
+}
+
+function readySupervisorStatus(request: ActivationRequest, nonce: string): { supervisorPid: number; childGeneration: number } | null {
+  const status = liveSupervisorStatus(request, nonce);
+  if (!status || !status.registryHash || status.childGeneration < 1) return null;
+  if (status.restartState === 'running') {
+    if (status.childPid === null || !processAlive(status.childPid)) return null;
+  } else if (status.restartState !== 'waiting-restart') {
+    return null;
+  }
+  return { supervisorPid: status.supervisorPid, childGeneration: status.childGeneration };
 }
 
 async function waitForSupervisor(request: ActivationRequest, nonce: string): Promise<{ supervisorPid: number; childGeneration: number }> {
   const deadline = Date.now() + 10_000;
   do {
-    const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
-    if (status?.restartState === 'refused') throw new Error(`recovery_supervisor_refused:${status.refusalReason ?? 'unknown'}`);
     const ready = readySupervisorStatus(request, nonce);
     if (ready) return ready;
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -143,29 +154,49 @@ export function findCompletedSchedulerDelivery(core: EpochCommitCore, storeRoot?
     && !packReviewDeliveryNeedsResume(run)) ?? null;
 }
 
+function observedSupervisorStatus(
+  request: ActivationRequest,
+  core: EpochCommitCore,
+  supervisor: { supervisorPid: number; childGeneration: number },
+): SupervisorStatus | null {
+  const status = liveSupervisorStatus(request, core.nonce);
+  if (
+    !status
+    || status.supervisorPid !== supervisor.supervisorPid
+    || status.childGeneration < supervisor.childGeneration
+    || status.registryHash !== core.registryHash
+  ) return null;
+  if (status.restartState === 'running') {
+    if (status.childPid === null || !processAlive(status.childPid)) return null;
+    return status;
+  }
+  return status.restartState === 'waiting-restart' ? status : null;
+}
+
 export async function observeSchedulerHealthAndDelivery(
   request: ActivationRequest,
   core: EpochCommitCore,
   supervisor: { supervisorPid: number; childGeneration: number },
   storeRoot?: string,
+  options: { timeoutMs?: number; pollMs?: number } = {},
 ): Promise<SchedulerHealthDeliveryObservation> {
-  const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
-  if (
-    !status
-    || status.epochId !== core.epochId
-    || status.nonce !== core.nonce
-    || status.supervisorPid !== supervisor.supervisorPid
-    || status.childGeneration !== supervisor.childGeneration
-    || status.restartState !== 'running'
-    || !status.registryHash
-    || status.childPid === null
-    || !processAlive(status.supervisorPid)
-    || !processAlive(status.childPid)
-  ) {
-    throw new Error('scheduler_health_not_observed');
+  const timeoutMs = options.timeoutMs ?? DEFAULT_SCHEDULER_DELIVERY_WAIT_MS;
+  const pollMs = options.pollMs ?? DEFAULT_SCHEDULER_DELIVERY_POLL_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(pollMs) || pollMs <= 0) {
+    throw new Error('scheduler_delivery_wait_invalid');
   }
-  const delivered = findCompletedSchedulerDelivery(core, storeRoot);
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus: SupervisorStatus | null = null;
+  let delivered: PackReviewRunRecord | null = null;
+  do {
+    lastStatus = observedSupervisorStatus(request, core, supervisor);
+    delivered = findCompletedSchedulerDelivery(core, storeRoot);
+    if (lastStatus && delivered) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(1, deadline - Date.now()))));
+  } while (Date.now() < deadline);
+
   if (!delivered) throw new Error('scheduler_delivery_not_observed');
+  if (!lastStatus) throw new Error('scheduler_health_not_observed');
   return {
     result: 'scheduler-health-delivery-observed',
     epochId: core.epochId,
@@ -173,11 +204,11 @@ export async function observeSchedulerHealthAndDelivery(
     installedCommitSha: core.installedCommitSha,
     observedAt: new Date().toISOString(),
     supervisor: {
-      pid: status.supervisorPid,
-      childGeneration: status.childGeneration,
-      childPid: status.childPid,
-      registryHash: status.registryHash,
-      restartState: 'running',
+      pid: lastStatus.supervisorPid,
+      childGeneration: lastStatus.childGeneration,
+      childPid: lastStatus.childPid,
+      registryHash: lastStatus.registryHash!,
+      restartState: lastStatus.restartState as 'running' | 'waiting-restart',
     },
     delivery: {
       result: 'scheduler-durable-delivery-observed',
@@ -195,6 +226,7 @@ export const productionRecoveryBoundary: RecoveryBoundary = {
   ensureTypeScriptSupervisor: async (request, nonce) => {
     const ready = readySupervisorStatus(request, nonce);
     if (ready) return ready;
+    if (liveSupervisorStatus(request, nonce)) return waitForSupervisor(request, nonce);
     const entry = path.join(request.repoRoot, 'scripts', 'orchestrator-wake-supervisor.ts');
     const result = await runProcess({
       command: process.execPath,
