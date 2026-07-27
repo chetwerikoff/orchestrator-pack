@@ -1783,7 +1783,7 @@ describe('issue 1024 Half A proven non-delivery', () => {
       newChatUrlAfterArm: 'https://chatgpt.com/c/new-conversation',
     });
     const result = await issue1024ExhaustSubmittedTurnWindow(fixture, {
-      issue1024Cdp,
+      cdp: issue1024Cdp,
       profile: 'automation',
       newChat: true,
       projectUrl: 'https://chatgpt.com/',
