@@ -38,7 +38,7 @@ import {
   applyCapabilityAfterSuccessfulTurn,
   capabilityStatus,
   clearReadable,
-  downgradeCapability,
+  mutateCapabilityAdmissionPolicy,
   planCapabilityAfterSuccessfulTurn,
   quarantineOpaque,
   statusList,
@@ -760,45 +760,88 @@ describe('issue 964 durable incident recovery — S10 and opaque force', () => {
   });
 });
 
+
+function capabilityFixture(
+  binding: ReturnType<typeof runtimeCapabilityBinding>,
+  overrides: Partial<{
+    browser_provenance: string;
+    evidence_digest: string;
+    characterized_at: string;
+    admission_policy: 'parallel' | 'serialized';
+    admission_epoch: number;
+  }> = {},
+) {
+  const now = Date.now();
+  return {
+    ...binding,
+    browser_provenance: 'Chromium test',
+    evidence_digest: sha256('capability-fixture'),
+    characterized_at: new Date(now - 1_000).toISOString(),
+    admission_policy: 'parallel' as const,
+    admission_epoch: 0,
+    ...overrides,
+  };
+}
+
+function legacyCapabilityFixture(
+  binding: ReturnType<typeof runtimeCapabilityBinding>,
+  overrides: Partial<{
+    browser_provenance: string;
+    evidence_digest: string;
+    observed_at: string;
+    expires_at: string;
+    downgrade_generation: number;
+    parallel_eligible: boolean;
+  }> = {},
+) {
+  const now = Date.now();
+  return {
+    schema: 'chatgpt-browser-turn-capability/v1' as const,
+    version: 1 as const,
+    configured_profile_key: '',
+    ...binding,
+    browser_provenance: 'Chromium test',
+    evidence_digest: sha256('legacy-capability-fixture'),
+    observed_at: new Date(now - 1_000).toISOString(),
+    expires_at: new Date(now + 60_000).toISOString(),
+    downgrade_generation: 0,
+    parallel_eligible: true,
+    ...overrides,
+  };
+}
+
 describe('issue 964 capability policy', () => {
-  it('binds positive evidence to exact candidate/build/config/gate and downgrades visibly', () => {
+  it('binds parallel operator policy to exact candidate/build/config/gate and serializes visibly', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const now = Date.now();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('causal-witness-fixture'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: new Date(now + 60_000).toISOString(),
-      downgrade_generation: 0,
-      parallel_eligible: true,
-    });
+    __testWriteCapability(profileKey, capabilityFixture(binding));
     expect(capabilityStatus(profileKey, binding).state).toBe('ok');
     expect(capabilityStatus(profileKey, { ...binding, gate_digest: sha256('different-gate') }).state).toBe('downgraded');
-    downgradeCapability(profileKey);
+    mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     const downgraded = capabilityStatus(profileKey, binding);
     expect(downgraded.state).toBe('downgraded');
-    expect(downgraded.capability?.downgrade_generation).toBe(1);
+    expect(downgraded.capability?.admission_policy).toBe('serialized');
+    expect(downgraded.capability?.admission_epoch).toBe(1);
   });
 
-  it('expires evidence and never treats stale characterization as parallel authority', () => {
+  it('never treats idle legacy lease expiry as admission-policy loss', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const now = Date.now();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('old-evidence'),
+    const legacy = legacyCapabilityFixture(binding, {
       observed_at: new Date(now - 120_000).toISOString(),
       expires_at: new Date(now - 60_000).toISOString(),
-      downgrade_generation: 0,
       parallel_eligible: true,
     });
-    expect(capabilityStatus(profileKey, binding).state).toBe('expired');
+    legacy.configured_profile_key = profileKey;
+    atomicJson(profileDirs(profileKey).capability, legacy);
+    const migrated = capabilityStatus(profileKey, binding);
+    expect(migrated.state).toBe('downgraded');
+    expect(migrated.capability?.admission_policy).toBe('serialized');
+    expect(migrated.characterization?.characterized).toBe(true);
   });
 });
 
 
-describe('issue 1008 capability self-arm', () => {
+describe('issue 1028 admission policy separation', () => {
   function completion(binding: ReturnType<typeof runtimeCapabilityBinding>, evidenceKey: string, browser = 'Chromium test') {
     return {
       expectedBinding: binding,
@@ -808,109 +851,68 @@ describe('issue 1008 capability self-arm', () => {
     };
   }
 
-  it('arms parallel eligibility from witnessed completion with no operator env', () => {
+  it('characterizes from witnessed completion without self-arming parallel policy', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'self-arm-no-env'));
+    const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'characterize-only'));
     expect(outcome.applied).toBe(true);
+    const status = capabilityStatus(profileKey, binding);
+    expect(status.state).toBe('downgraded');
+    expect(status.capability?.admission_policy).toBe('serialized');
+    expect(status.characterization?.characterized).toBe(true);
+  });
+
+  it('requires deliberate operator arm for parallel admission after characterization', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'arm-prereq'));
+    const armed = mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
+    expect(armed.mutation?.applied).toBe(true);
     expect(capabilityStatus(profileKey, binding).state).toBe('ok');
-    expect(capabilityStatus(profileKey, binding).capability?.parallel_eligible).toBe(true);
   });
 
-  it('re-reads capability state so a stale refresh snapshot loses to a downgrade', () => {
+  it('refuses parallel arm without prior characterization', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const now = Date.now();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('before-downgrade'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: new Date(now + 60_000).toISOString(),
-      downgrade_generation: 0,
-      parallel_eligible: true,
-    });
-    const stale = capabilityStatus(profileKey, binding);
-    expect(stale.state).toBe('ok');
-    expect(planCapabilityAfterSuccessfulTurn(stale, completion(binding, 'stale-refresh')).parallel_eligible).toBe(true);
-    downgradeCapability(profileKey);
-    const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'post-downgrade-arm'));
-    expect(outcome.applied).toBe(true);
-    const armed = capabilityStatus(profileKey, binding);
-    expect(armed.state).toBe('ok');
-    expect(armed.capability?.downgrade_generation).toBe(2);
-    expect(armed.capability?.evidence_digest).toBe(sha256('post-downgrade-arm'));
+    const armed = mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
+    expect(armed.mutation?.applied).toBe(false);
+    expect(armed.mutation?.reason).toBe('not_characterized');
   });
 
-
-  it('re-read after a competing refresh prevents an older completion from regressing expiry', () => {
+  it('preserves explicit policy and epoch across characterization refresh', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const now = Date.now();
-    const nearFuture = new Date(now + 60 * 60 * 1000).toISOString();
-    const farFuture = new Date(now + 5 * 60 * 60 * 1000).toISOString();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('initial-near'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: nearFuture,
-      downgrade_generation: 0,
-      parallel_eligible: true,
-    });
-    const staleRead = capabilityStatus(profileKey, binding);
-    expect(staleRead.state).toBe('ok');
-
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('competing-newer'),
-      observed_at: new Date(now).toISOString(),
-      expires_at: farFuture,
-      downgrade_generation: 0,
-      parallel_eligible: true,
-    });
-    const newerExpires = capabilityStatus(profileKey, binding).capability!.expires_at;
-    expect(Date.parse(newerExpires)).toBe(Date.parse(farFuture));
-
-    const stalePlan = planCapabilityAfterSuccessfulTurn(staleRead, completion(binding, 'older-refresh'));
-    expect(Date.parse(stalePlan.expires_at)).toBeLessThan(Date.parse(newerExpires));
-
-    const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'older-refresh'));
-    expect(outcome.applied).toBe(true);
-    expect(Date.parse(capabilityStatus(profileKey, binding).capability!.expires_at)).toBeGreaterThanOrEqual(Date.parse(newerExpires));
-    expect(capabilityStatus(profileKey, binding).capability?.downgrade_generation).toBe(0);
+    __testWriteCapability(profileKey, capabilityFixture(binding, { admission_epoch: 2 }));
+    const before = capabilityStatus(profileKey, binding);
+    const planned = planCapabilityAfterSuccessfulTurn(before, completion(binding, 'refresh-only'));
+    expect(planned.admission_policy).toBe('parallel');
+    expect(planned.admission_epoch).toBe(2);
+    applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'refresh-only'));
+    const after = capabilityStatus(profileKey, binding);
+    expect(after.capability?.admission_policy).toBe('parallel');
+    expect(after.capability?.admission_epoch).toBe(2);
+    expect(after.capability?.evidence_digest).toBe(sha256('refresh-only'));
   });
 
-  it('never shortens expiry on refresh', () => {
+  it('rejects stale-epoch completion after operator serialize', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const now = Date.now();
-    const farFuture = new Date(now + 3 * 60 * 60 * 1000).toISOString();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('initial'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: farFuture,
-      downgrade_generation: 1,
-      parallel_eligible: true,
-    });
-    const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'refresh-extends'));
-    expect(outcome.applied).toBe(true);
-    const refreshed = capabilityStatus(profileKey, binding);
-    expect(Date.parse(refreshed.capability!.expires_at)).toBeGreaterThanOrEqual(Date.parse(farFuture));
-    expect(refreshed.capability?.downgrade_generation).toBe(1);
+    __testWriteCapability(profileKey, capabilityFixture(binding));
+    const admitted = capabilityStatus(profileKey, binding);
+    expect(admitted.state).toBe('ok');
+    mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'stale-after-serialize'));
+    expect(outcome.applied).toBe(false);
+    expect(outcome.reason).toBe('not_eligible');
+  });
+
+  it('keeps idle characterization stable without policy decay', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    const old = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    __testWriteCapability(profileKey, capabilityFixture(binding, { characterized_at: old, admission_policy: 'parallel' }));
+    const status = capabilityStatus(profileKey, binding);
+    expect(status.state).toBe('ok');
+    expect(status.capability?.characterized_at).toBe(old);
   });
 
   it('swallows capability store write failures', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const now = Date.now();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('before-write-failure'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: new Date(now + 60_000).toISOString(),
-      downgrade_generation: 0,
-      parallel_eligible: true,
-    });
+    __testWriteCapability(profileKey, capabilityFixture(binding));
     const profileRoot = profileDirs(profileKey).root;
     chmodSync(profileRoot, 0o555);
     try {
@@ -923,32 +925,22 @@ describe('issue 1008 capability self-arm', () => {
     }
   });
 
-  it('arms from serialized completion after provenance downgrade', () => {
+  it('characterizes a new browser provenance under serialized policy without self-arming', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const now = Date.now();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'old-browser',
-      evidence_digest: sha256('old-provenance'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: new Date(now + 60_000).toISOString(),
-      downgrade_generation: 0,
-      parallel_eligible: true,
-    });
-    downgradeCapability(profileKey);
-    expect(capabilityStatus(profileKey, binding).state).toBe('downgraded');
+    __testWriteCapability(profileKey, capabilityFixture(binding, { browser_provenance: 'old-browser' }));
+    mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     const outcome = applyCapabilityAfterSuccessfulTurn(
       profileKey,
-      completion(binding, 'new-provenance-arm', 'new-browser'),
+      completion(binding, 'new-provenance-characterize', 'new-browser'),
     );
     expect(outcome.applied).toBe(true);
-    const armed = capabilityStatus(profileKey, binding);
-    expect(armed.state).toBe('ok');
-    expect(armed.capability?.browser_provenance).toBe('new-browser');
-    expect(armed.capability?.parallel_eligible).toBe(true);
-    expect(armed.capability?.downgrade_generation).toBe(2);
+    const status = capabilityStatus(profileKey, binding);
+    expect(status.state).toBe('downgraded');
+    expect(status.capability?.browser_provenance).toBe('new-browser');
+    expect(status.capability?.admission_policy).toBe('serialized');
   });
 });
+
 
 describe('issue 964 privacy boundary', () => {
   it('keeps plaintext, encoded, transformed, and known-digest canaries out of helper JSON state', () => {

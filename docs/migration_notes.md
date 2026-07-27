@@ -6,6 +6,43 @@
 - After a successful witnessed turn on the current binding, the helper arms or extends parallel capability evidence automatically. Query `npm run chatgpt-browser-turn -- capability` for telemetry; no manual digest export is required before characterization or production turns.
 - `gate_digest` in `expected_binding` remains a Gate-B staleness binding to the gate-bound test sources; it is not an operator attestation input.
 
+## 2026-07-27 — Separate parallel admission policy from witness observation (Issue #1028)
+
+### What changed
+
+- Capability persistence is now **v2**: durable **characterization** (witnessed production evidence) is separate from durable **operator admission policy** (`parallel` / `serialized`) and **admission epoch**.
+- Witnessed successful turns **characterize only**; they no longer self-arm parallel admission or extend a lease. Issue #1008 self-arm behavior is retired.
+- Negative witness probes and browser-provenance mismatch during a turn are **invocation-local** (profile-scope fallback or pre-send refusal). They do **not** rewrite operator policy.
+- The four-hour lease is retired as an admission-policy expiry; idle time alone does not flip policy.
+- Operator policy mutation stays on the existing `capability` command via `--admission-policy parallel|serialized`.
+
+### Post-merge operator adoption (required)
+
+1. **Quiesce the external 30-second keeper** that rewrote `parallel_eligible` / lease state. Do not run it in parallel with the upgraded helper.
+2. Query capability for the live profile/CDP and record `expected_binding`, `characterization`, and `admission` from stdout.
+3. **Legacy positive records enter serialized policy** after first read/migration. Compatible evidence is characterization only.
+4. **When exact characterization for the post-merge candidate is absent** (normal after candidate-digest change), run **one supported real witnessed production turn while serialized** to establish characterization, then re-read binding/provenance.
+5. **Deliberately arm parallel** only when characterization remains valid for the exact binding and browser provenance:
+
+```bash
+npm run chatgpt-browser-turn -- capability   --profile /absolute/path/to/automation-profile   --cdp http://127.0.0.1:9222   --admission-policy parallel
+```
+
+6. Verify `capability` read shows `admission.policy: parallel` and `state: ok` before parallel smoke.
+7. **Retire the keeper** (disable service/cron). Confirm capability state is not rewritten every 30 seconds.
+8. Run real parallel smoke (distinct conversations/fresh identities) with keeper stopped; witness failures must remain per-invocation only.
+9. To return to serialized scheduling without losing characterization:
+
+```bash
+npm run chatgpt-browser-turn -- capability   --profile /absolute/path/to/automation-profile   --cdp http://127.0.0.1:9222   --admission-policy serialized
+```
+
+### Rollback
+
+- Roll back the helper to the pre-#1028 build. Admission defaults to **serialized** on migrated v2 reads; rollback must not manufacture resend authority or delete #964 recovery state.
+- Re-enable keeper only as a temporary operational workaround; it is unsupported with the v2 model.
+
+
 # Migration notes
 
 
