@@ -149,7 +149,6 @@ export async function runGptPackReview(
   const scope = resolveScopeContext({
     repoRoot: request.repoRoot,
     issueNumber,
-    prNumber: request.prNumber,
   });
   const prUrl = merged.resolvePrUrl(request.repoSlug, request.prNumber);
   const prompt = buildGptReviewPrompt({
