@@ -6,10 +6,16 @@ import { runProcessSync } from '../kernel/subprocess.ts';
 import { stableStringify } from '../lib/cutover/stable-stringify.ts';
 import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
 import { activateCutover, type ActivationBoundary } from '../lib/cutover/activation-transaction.ts';
-import { createCordon, markImportBegun } from '../lib/cutover/activation-cordon.ts';
+import { isExecutableLegacyReference } from '../lib/cutover/activation-transaction.ts';
+import { createCordon, markImportBegun, readCordonState } from '../lib/cutover/activation-cordon.ts';
 import { appendPhaseOne } from '../lib/cutover/activation-evidence.ts';
 import { snapshotStores } from '../lib/cutover/activation-import.ts';
-import { provePreImportRollbackSafe, recoverCommittedCutover } from '../lib/cutover/activation-recovery.ts';
+import {
+  findCompletedSchedulerDelivery,
+  provePreImportRollbackSafe,
+  recoverCommittedCutover,
+  type SchedulerHealthDeliveryObservation,
+} from '../lib/cutover/activation-recovery.ts';
 import { runActivationPlatformPreflight } from '../lib/cutover/activation-platform-preflight.ts';
 import { validateSchedulerRegistry } from '../lib/cutover/activation-registry-projection.ts';
 import type { ActivationRequest, EpochCommitCore, ProcessIdentity } from '../lib/cutover/types.ts';
@@ -17,45 +23,7 @@ import { runSchedulerTick, type SchedulerBoundary } from '../pr2-foundation/sche
 import { CUTOVER_ROWS, FOUNDATION_DOC_ROWS, validateEstateSplit } from '../pr2-foundation/contracts.ts';
 import { buildPlanningManifest } from '../pr2a/closed-world-scanner.ts';
 import { D928 } from '../pr2a/contracts.ts';
-
-
-describe('[AC4][AC6] estate successor state', () => {
-  it('terminalizes the exact Issue #906 cutover denominator rows', () => {
-    const manifest = JSON.parse(
-      readFileSync(path.join(repoRoot, 'scripts/estate-cut/issue-906.manifest.json'), 'utf8'),
-    ) as {
-      objectiveStateDomain?: string[];
-      rows?: Array<{ path: string; terminalState: string; replacementOwner?: string }>;
-    };
-    expect(manifest.objectiveStateDomain?.filter((state) => state === 'cutover-terminalized')).toHaveLength(1);
-    const denominator = (manifest.rows ?? []).filter((row) =>
-      (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)
-      || (CUTOVER_ROWS as readonly string[]).includes(row.path),
-    );
-    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-16-cutover-6' });
-
-    const byPath = new Map((manifest.rows ?? []).map((row) => [row.path, row]));
-    for (const file of CUTOVER_ROWS) {
-      expect(byPath.get(file)).toMatchObject({
-        terminalState: 'cutover-terminalized',
-        replacementOwner: 'scripts/orchestrator-cutover-activate.ts',
-      });
-    }
-
-    const replacementOwners = [
-      'scripts/orchestrator-wake-supervisor.ts',
-      'scripts/lib/orchestrator-side-process-supervisor.ts',
-      'scripts/lib/review-start-claim-store.ts',
-      'scripts/lib/review-start-claim-reaper.ts',
-    ] as const;
-    D928.forEach((file, index) => {
-      expect(byPath.get(file)).toMatchObject({
-        terminalState: 'deleted-now',
-        replacementOwner: replacementOwners[index],
-      });
-    });
-  });
-});
+import { initializePackReviewRunStore } from '../lib/pack-review-run-store.ts';
 
 const repoRoot = path.resolve(process.cwd());
 const roots: string[] = [];
@@ -70,11 +38,6 @@ const REQUIRED_CHECKS = [
   'run pack contract tests',
   'self-architect lint',
 ];
-
-function governanceOnlyReference(source: string): boolean {
-  const exact = ['scripts/pr2-foundation/contracts.ts', 'scripts/pr2-foundation/mutation-catalog.ts', 'scripts/pr2-foundation/mutation-behavior-probes.ts', 'scripts/pr2-foundation/mutation-semantic-gates.ts', 'scripts/lib/orchestrator-side-process-observer.ts', 'docs/launch-argv-registry.mjs', 'docs/orchestrator-message-registry.mjs', 'docs/review-start-preflight-shield.mjs'];
-  return source.startsWith('scripts/pr2a/') || source.startsWith('scripts/estate-cut/') || exact.includes(source);
-}
 
 function tempRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), 'opk-928-'));
@@ -102,6 +65,32 @@ function writeJson(file: string, value: unknown): void {
 
 function source(relative: string): string {
   return readFileSync(path.join(repoRoot, relative), 'utf8');
+}
+
+function fixtureObservation(core: EpochCommitCore, supervisorPid = 43210, childGeneration = 1): SchedulerHealthDeliveryObservation {
+  return {
+    result: 'scheduler-health-delivery-observed',
+    epochId: core.epochId,
+    nonce: core.nonce,
+    installedCommitSha: core.installedCommitSha,
+    observedAt: new Date().toISOString(),
+    supervisor: {
+      pid: supervisorPid,
+      childGeneration,
+      childPid: 54321,
+      registryHash: core.registryHash,
+      restartState: 'running',
+    },
+    delivery: {
+      result: 'scheduler-durable-delivery-observed',
+      runId: 'prr-fixture-delivery',
+      prNumber: 928,
+      headSha: 'c'.repeat(40),
+      status: 'up_to_date',
+      journalState: 'persisted',
+      deliveryOutcomes: {},
+    },
+  };
 }
 
 function activationFixture(): { request: ActivationRequest; boundary: ActivationBoundary; root: string } {
@@ -169,12 +158,20 @@ function activationFixture(): { request: ActivationRequest; boundary: Activation
       if (authority.currentEpochId !== request.epochId) throw new Error('typescript_supervisor_before_cas');
       return { supervisorPid: 43210, childGeneration: 1 };
     },
+    observeFinalHealthAndDelivery: async (_request, core, supervisor) => fixtureObservation(core, supervisor.supervisorPid, supervisor.childGeneration),
   };
   return { request, boundary, root };
 }
 
-function committedEpoch(file: string, epochId = 'epoch-scheduler', nonce = 'nonce-scheduler'): void {
-  const core: EpochCommitCore = {
+function recoveryBoundary() {
+  return {
+    ensureTypeScriptSupervisor: async () => ({ supervisorPid: 43210, childGeneration: 1 }),
+    observeFinalHealthAndDelivery: async (_request: ActivationRequest, core: EpochCommitCore, supervisor: { supervisorPid: number; childGeneration: number }) => fixtureObservation(core, supervisor.supervisorPid, supervisor.childGeneration),
+  };
+}
+
+function coreFixture(epochId = 'epoch-scheduler', nonce = 'nonce-scheduler'): EpochCommitCore {
+  return {
     epochId,
     nonce,
     hostId: 'test-host',
@@ -186,20 +183,76 @@ function committedEpoch(file: string, epochId = 'epoch-scheduler', nonce = 'nonc
     preCommitLogDigest: 'phase-one',
     commitAt: new Date().toISOString(),
   };
-  new FileEpochAuthority(file).commit(null, core);
 }
 
+function committedEpoch(file: string, epochId = 'epoch-scheduler', nonce = 'nonce-scheduler'): EpochCommitCore {
+  const core = coreFixture(epochId, nonce);
+  new FileEpochAuthority(file).commit(null, core);
+  return core;
+}
+
+describe('[AC4][AC6] estate successor state', () => {
+  it('terminalizes the exact Issue #906 cutover denominator rows', () => {
+    const manifest = JSON.parse(
+      readFileSync(path.join(repoRoot, 'scripts/estate-cut/issue-906.manifest.json'), 'utf8'),
+    ) as {
+      objectiveStateDomain?: string[];
+      rows?: Array<{ path: string; terminalState: string; replacementOwner?: string }>;
+    };
+    expect(manifest.objectiveStateDomain?.filter((state) => state === 'cutover-terminalized')).toHaveLength(1);
+    const denominator = (manifest.rows ?? []).filter((row) =>
+      (FOUNDATION_DOC_ROWS as readonly string[]).includes(row.path)
+      || (CUTOVER_ROWS as readonly string[]).includes(row.path),
+    );
+    expect(validateEstateSplit(denominator)).toEqual({ ok: true, result: 'foundation-16-cutover-6' });
+    const byPath = new Map((manifest.rows ?? []).map((row) => [row.path, row]));
+    for (const file of CUTOVER_ROWS) {
+      expect(byPath.get(file)).toMatchObject({ terminalState: 'cutover-terminalized', replacementOwner: 'scripts/orchestrator-cutover-activate.ts' });
+    }
+    const replacementOwners = [
+      'scripts/orchestrator-wake-supervisor.ts',
+      'scripts/lib/orchestrator-side-process-supervisor.ts',
+      'scripts/lib/review-start-claim-store.ts',
+      'scripts/lib/review-start-claim-reaper.ts',
+    ] as const;
+    D928.forEach((file, index) => {
+      expect(byPath.get(file)).toMatchObject({ terminalState: 'deleted-now', replacementOwner: replacementOwners[index] });
+    });
+  });
+});
+
 describe('[AC1] admission and closure', () => {
-  it('recomputes #948 reverse closure against the merge base and has no external executable target-library reference', () => {
+  it('recomputes #948 closure and rejects every executable target-library edge outside D928', () => {
     const base = git(['merge-base', 'origin/main', 'HEAD']);
     const manifest = buildPlanningManifest(base);
     expect(manifest.schemaVersion).toBe(1);
     expect(manifest.unknown).toEqual([]);
     expect(manifest.dynamicUnsupported).toEqual([]);
     const targets = new Set(['scripts/lib/Orchestrator-SideProcessSupervisor.ps1', 'scripts/lib/Review-StartClaim.ps1']);
-    const external = manifest.references.filter((row) => targets.has(row.target) && !(D928 as readonly string[]).includes(row.source) && !governanceOnlyReference(row.source));
+    const external = manifest.references.filter((row) =>
+      targets.has(row.target)
+      && !(D928 as readonly string[]).includes(row.source)
+      && isExecutableLegacyReference(row),
+    );
     expect(external).toEqual([]);
-    expect(manifest.references.some((row) => targets.has(row.target) && governanceOnlyReference(row.source))).toBe(true);
+  });
+
+  it('classifies executable selectors instead of whitelisting governance source paths', () => {
+    const target = 'scripts/lib/Review-StartClaim.ps1';
+    expect(isExecutableLegacyReference({
+      source: 'scripts/pr2a/example.ts',
+      target,
+      sourceExecutionClass: 'reachable-helper',
+      primitiveClass: 'javascript-import-child-or-actionable-reference',
+      selector: "import legacy from '../lib/Review-StartClaim.ps1';",
+    })).toBe(true);
+    expect(isExecutableLegacyReference({
+      source: 'scripts/pr2a/example.ts',
+      target,
+      sourceExecutionClass: 'reachable-helper',
+      primitiveClass: 'javascript-import-child-or-actionable-reference',
+      selector: "const historicalName = 'Review-StartClaim.ps1';",
+    })).toBe(false);
   });
 
   it('refuses before cordon when foundation adoption evidence is unavailable', async () => {
@@ -238,8 +291,11 @@ describe('[AC1] admission and closure', () => {
 });
 
 describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
-  it('runs the real transaction through synthetic process/store/CAS boundaries with CAS as the sole commit', async () => {
+  it('runs the transaction with one CAS and an explicit observed health/delivery receipt', async () => {
     const { request, boundary } = activationFixture();
+    let observed = 0;
+    const originalObserve = boundary.observeFinalHealthAndDelivery;
+    boundary.observeFinalHealthAndDelivery = async (...args) => { observed += 1; return originalObserve(...args); };
     const result = await activateCutover(request, boundary) as any;
     expect(result.cutover.admission.result).toBe('foundation-single-host-adopted');
     expect(result.cutover.activation.result).toBe('C1-C18-ts-transfer-pass');
@@ -248,10 +304,9 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
     expect(result.cutover.activation_evidence.result).toBe('bound-central-cas-record');
     expect(result.supervisorPid).toBe(43210);
     expect(result.childGeneration).toBe(1);
+    expect(observed).toBe(1);
     const cordon = JSON.parse(readFileSync(request.paths.cordonPath, 'utf8'));
-    expect(cordon).toMatchObject({ writersClosed: true, noRespawn: true, noTypeScriptStart: true });
-    expect(existsSync(path.join(request.paths.supervisorStateDir, 'stopping'))).toBe(true);
-    expect(existsSync(path.join(request.paths.supervisorStateDir, 'maintenance.epoch'))).toBe(true);
+    expect(cordon).toMatchObject({ state: 'active', writersClosed: true, noRespawn: true, noTypeScriptStart: true });
     const phaseOne = JSON.parse(readFileSync(request.paths.phaseOnePath, 'utf8'));
     expect(phaseOne.records.map((row: any) => row.step)).toEqual([
       'admission','cordon','writer-drain','legacy-supervisor-and-writers-terminated','snapshots','import-begun','imports','registry-projected',
@@ -262,18 +317,87 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
       'commitAt','epochId','hostId','importDigests','installedCommitSha','nonce','preCommitLogDigest','registryHash','repoRoot','snapshotDigests',
     ].sort());
     expect(JSON.parse(readFileSync(request.paths.followupPath, 'utf8')).map((row: any) => row.step)).toEqual([
-      'committed-registry-reprojected',
-      'typescript-supervisor-started',
-      'scheduler-owned',
-      'machine-local-completion-fsync-confirmed',
-      'final-step-timestamp-recorded',
-      'final-health-delivery-observed',
-      'activation-complete',
+      'committed-registry-reprojected','typescript-supervisor-started','scheduler-owned','machine-local-completion-fsync-confirmed','final-step-timestamp-recorded','final-health-delivery-observed','activation-complete',
     ]);
-    await expect(recoverCommittedCutover(request, {
-      ensureTypeScriptSupervisor: async () => ({ supervisorPid: 43210, childGeneration: 1 }),
-    })).resolves.toMatchObject({ result: 'forward-repair-ready', supervisorPid: 43210, childGeneration: 1 });
+    await expect(recoverCommittedCutover(request, recoveryBoundary())).resolves.toMatchObject({ result: 'forward-repair-ready', supervisorPid: 43210, childGeneration: 1 });
     expect(() => provePreImportRollbackSafe(request)).toThrow(/forward_only/);
+  });
+
+  it('does not fabricate final health/delivery evidence when observation fails', async () => {
+    const { request, boundary } = activationFixture();
+    boundary.observeFinalHealthAndDelivery = async () => { throw new Error('health_delivery_not_observed'); };
+    await expect(activateCutover(request, boundary)).rejects.toThrow(/health_delivery_not_observed/);
+    expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBe(request.epochId);
+    const steps = JSON.parse(readFileSync(request.paths.followupPath, 'utf8')).map((row: any) => row.step);
+    expect(steps).toEqual([
+      'committed-registry-reprojected','typescript-supervisor-started','scheduler-owned','machine-local-completion-fsync-confirmed','final-step-timestamp-recorded',
+    ]);
+    expect(steps).not.toContain('final-health-delivery-observed');
+    expect(steps).not.toContain('activation-complete');
+  });
+
+  it('resumes a crash after the first barrier write from the durable preparing intent', () => {
+    const { request, boundary } = activationFixture();
+    const identity = boundary.readLegacySupervisor(request);
+    const input = { path: request.paths.cordonPath, epochId: request.epochId, hostId: request.hostId, repoRoot: request.repoRoot, installedCommitSha: request.installedCommitSha, oldInstalledRevisionRoot: request.oldInstalledRevisionRoot, legacyStateRoot: request.paths.supervisorStateDir, legacySupervisor: identity, stores: request.stores, paths: request.paths };
+    const first = createCordon(input);
+    const prepared: any = { ...first, state: 'preparing' };
+    delete prepared.writersClosed;
+    delete prepared.noRespawn;
+    delete prepared.noTypeScriptStart;
+    writeJson(request.paths.cordonPath, prepared);
+    rmSync(path.join(request.paths.supervisorStateDir, 'maintenance.epoch'), { force: true });
+    expect(existsSync(path.join(request.paths.supervisorStateDir, 'stopping'))).toBe(true);
+    const resumed = createCordon(input);
+    expect(resumed.nonce).toBe(first.nonce);
+    expect(resumed.state).toBe('active');
+    expect(existsSync(path.join(request.paths.supervisorStateDir, 'maintenance.epoch'))).toBe(true);
+  });
+
+  it('resumes forward from import boundary before CAS and rejects a changed recovery tuple', async () => {
+    const { request, boundary } = activationFixture();
+    const identity = boundary.readLegacySupervisor(request);
+    const cordon = createCordon({ path: request.paths.cordonPath, epochId: request.epochId, hostId: request.hostId, repoRoot: request.repoRoot, installedCommitSha: request.installedCommitSha, oldInstalledRevisionRoot: request.oldInstalledRevisionRoot, legacyStateRoot: request.paths.supervisorStateDir, legacySupervisor: identity, stores: request.stores, paths: request.paths });
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { recoveredFixture: true });
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'cordon', { writersClosed: true, noRespawn: true, noTypeScriptStart: true });
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain', { writerWatermark: 'drained-test-watermark' });
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'legacy-supervisor-and-writers-terminated', { reenumeratedEmpty: true });
+    const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, 'drained-test-watermark');
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'snapshots', snapshots);
+    const marked = markImportBegun(request.paths.cordonPath);
+    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'import-begun', { importBegunAt: marked.importBegunAt });
+    const tampered: ActivationRequest = {
+      ...request,
+      stores: request.stores.map((store, index) => index === 0 ? { ...store, targetPath: `${store.targetPath}.other` } : store),
+    };
+    await expect(recoverCommittedCutover(tampered, recoveryBoundary())).rejects.toThrow(/recovery_request_binding_mismatch/);
+    expect(existsSync(request.paths.epochAuthorityPath)).toBe(false);
+    await expect(recoverCommittedCutover(request, recoveryBoundary())).resolves.toMatchObject({ result: 'forward-repair-ready', supervisorPid: 43210 });
+    expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBe(request.epochId);
+  });
+
+  it('rejects a missing watermark and surviving writer before snapshot/import', async () => {
+    const missing = activationFixture();
+    missing.boundary.drainLegacyWriters = async () => ({ writerWatermark: '', drainedAt: new Date().toISOString() });
+    await expect(activateCutover(missing.request, missing.boundary)).rejects.toThrow(/writer_watermark_missing/);
+    expect(existsSync(missing.request.paths.snapshotDir)).toBe(false);
+
+    const survivor = activationFixture();
+    const writer: ProcessIdentity = { pid: 23456, startTicks: '77', cmdline: ['legacy-writer'] };
+    survivor.boundary.verifyLegacyProcessesGone = () => ({ supervisorAlive: false, writers: [{ childId: 'mutation-writer', identity: writer, sideEffectLockPath: null }] });
+    await expect(activateCutover(survivor.request, survivor.boundary)).rejects.toThrow(/legacy_process_survivor/);
+    expect(existsSync(survivor.request.paths.snapshotDir)).toBe(false);
+  });
+
+  it('allows rollback only before import mutation and binds it to the original targets', () => {
+    const { request, boundary } = activationFixture();
+    const identity = boundary.readLegacySupervisor(request);
+    createCordon({ path: request.paths.cordonPath, epochId: request.epochId, hostId: request.hostId, repoRoot: request.repoRoot, installedCommitSha: request.installedCommitSha, oldInstalledRevisionRoot: request.oldInstalledRevisionRoot, legacyStateRoot: request.paths.supervisorStateDir, legacySupervisor: identity, stores: request.stores, paths: request.paths });
+    expect(provePreImportRollbackSafe(request).safe).toBe(true);
+    const tampered = { ...request, hostId: 'other-host' };
+    expect(() => provePreImportRollbackSafe(tampered)).toThrow(/recovery_request_binding_mismatch/);
+    writeJson(request.stores[0]!.targetPath, { changed: true });
+    expect(() => provePreImportRollbackSafe(request)).toThrow(/preimport_target_changed/);
   });
 
   it('retains cordon-first, import, projection, CAS and supervisor ordering', () => {
@@ -289,65 +413,10 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
       'projectRegistry(request.paths.targetRegistryPath',
       'authority.commit(request.expectedOldEpochId, core)',
       'boundary.startTypeScriptSupervisor(request, cordon.nonce)',
+      'boundary.observeFinalHealthAndDelivery(request, committed, supervisor)',
     ].map((token) => body.indexOf(token));
     expect(ordered.every((index) => index >= 0)).toBe(true);
     expect(ordered).toEqual([...ordered].sort((a, b) => a - b));
-  });
-
-  it('rejects a missing writer watermark before snapshots', async () => {
-    const { request, boundary } = activationFixture();
-    boundary.drainLegacyWriters = async () => ({ writerWatermark: '', drainedAt: new Date().toISOString() });
-    await expect(activateCutover(request, boundary)).rejects.toThrow(/writer_watermark_missing/);
-    expect(existsSync(request.paths.snapshotDir)).toBe(false);
-  });
-
-  it('rejects a surviving legacy writer after drain and termination', async () => {
-    const { request, boundary } = activationFixture();
-    const writer: ProcessIdentity = { pid: 23456, startTicks: '77', cmdline: ['legacy-writer'] };
-    boundary.verifyLegacyProcessesGone = () => ({ supervisorAlive: false, writers: [{ childId: 'mutation-writer', identity: writer, sideEffectLockPath: null }] });
-    await expect(activateCutover(request, boundary)).rejects.toThrow(/legacy_process_survivor/);
-    expect(existsSync(request.paths.snapshotDir)).toBe(false);
-  });
-
-  it('resumes forward from the import boundary when CAS has not happened yet', async () => {
-    const { request, boundary } = activationFixture();
-    const identity = boundary.readLegacySupervisor(request);
-    const cordon = createCordon({ path: request.paths.cordonPath, epochId: request.epochId, hostId: request.hostId, repoRoot: request.repoRoot, installedCommitSha: request.installedCommitSha, oldInstalledRevisionRoot: request.oldInstalledRevisionRoot, legacyStateRoot: request.paths.supervisorStateDir, legacySupervisor: identity, stores: request.stores });
-    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'admission', { recoveredFixture: true });
-    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'cordon', { writersClosed: true, noRespawn: true, noTypeScriptStart: true });
-    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'writer-drain', { writerWatermark: 'drained-test-watermark' });
-    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'legacy-supervisor-and-writers-terminated', { reenumeratedEmpty: true });
-    const snapshots = snapshotStores(request.stores, request.paths.snapshotDir, 'drained-test-watermark');
-    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'snapshots', snapshots);
-    const marked = markImportBegun(request.paths.cordonPath);
-    appendPhaseOne(request.paths.phaseOnePath, request.epochId, cordon.nonce, 'import-begun', { importBegunAt: marked.importBegunAt });
-    expect(existsSync(request.paths.epochAuthorityPath)).toBe(false);
-    await expect(recoverCommittedCutover(request, {
-      ensureTypeScriptSupervisor: async () => ({ supervisorPid: 43210, childGeneration: 1 }),
-    })).resolves.toMatchObject({ result: 'forward-repair-ready', supervisorPid: 43210 });
-    const authority = new FileEpochAuthority(request.paths.epochAuthorityPath).read();
-    expect(authority.currentEpochId).toBe(request.epochId);
-    expect(authority.records).toHaveLength(1);
-    expect(JSON.parse(readFileSync(request.paths.phaseOnePath, 'utf8')).records.map((row: any) => row.step)).toEqual([
-      'admission','cordon','writer-drain','legacy-supervisor-and-writers-terminated','snapshots','import-begun','imports','registry-projected',
-    ]);
-    expect(existsSync(path.join(request.paths.supervisorStateDir, 'stopping'))).toBe(true);
-  });
-
-  it('refuses snapshot/import when legacy processes survive re-enumeration', async () => {
-    const { request, boundary } = activationFixture();
-    boundary.verifyLegacyProcessesGone = () => ({ supervisorAlive: true, writers: [] });
-    await expect(activateCutover(request, boundary)).rejects.toThrow(/legacy_process_survivor/);
-    expect(existsSync(request.paths.snapshotDir)).toBe(false);
-  });
-
-  it('allows old-revision rollback only before import mutation and refuses target drift', () => {
-    const { request, boundary } = activationFixture();
-    const identity = boundary.readLegacySupervisor(request);
-    createCordon({ path: request.paths.cordonPath, epochId: request.epochId, hostId: request.hostId, repoRoot: request.repoRoot, installedCommitSha: request.installedCommitSha, oldInstalledRevisionRoot: request.oldInstalledRevisionRoot, legacyStateRoot: request.paths.supervisorStateDir, legacySupervisor: identity, stores: request.stores });
-    expect(provePreImportRollbackSafe(request).safe).toBe(true);
-    writeJson(request.stores[0]!.targetPath, { changed: true });
-    expect(() => provePreImportRollbackSafe(request)).toThrow(/preimport_target_changed/);
   });
 
   it('retains snapshot/import identity, validation and convergence guards', () => {
@@ -395,46 +464,17 @@ describe('[AC8] platform and canonical bytes', () => {
     for (const vector of vectors) expect(stableStringify(vector.input)).toBe(vector.canonical);
   });
 
-  it('fails unsupported Node before any cordon path can be created', () => {
+  it('fails unsupported Node and native Windows before cordon', () => {
     const { request } = activationFixture();
-    expect(() => runActivationPlatformPreflight({
-      repoRoot,
-      installedCommitSha: git(['rev-parse', 'HEAD']),
-      oldInstalledRevisionRoot: repoRoot,
-      targetRegistryPath: request.paths.targetRegistryPath,
-      projectedRegistryPath: request.paths.projectedRegistryPath,
-      nodeVersion: '20.19.0',
-      platform: 'linux',
-    })).toThrow(/node22_required/);
+    expect(() => runActivationPlatformPreflight({ repoRoot, installedCommitSha: git(['rev-parse', 'HEAD']), oldInstalledRevisionRoot: repoRoot, targetRegistryPath: request.paths.targetRegistryPath, projectedRegistryPath: request.paths.projectedRegistryPath, nodeVersion: '20.19.0', platform: 'linux' })).toThrow(/node22_required/);
+    expect(() => runActivationPlatformPreflight({ repoRoot, installedCommitSha: git(['rev-parse', 'HEAD']), oldInstalledRevisionRoot: repoRoot, targetRegistryPath: request.paths.targetRegistryPath, projectedRegistryPath: request.paths.projectedRegistryPath, nodeVersion: '22.0.0', platform: 'win32' })).toThrow(/unsupported_platform/);
   });
 
-  it('fails unsupported native Windows before any cordon path can be created', () => {
-    const { request } = activationFixture();
-    expect(() => runActivationPlatformPreflight({
-      repoRoot,
-      installedCommitSha: git(['rev-parse', 'HEAD']),
-      oldInstalledRevisionRoot: repoRoot,
-      targetRegistryPath: request.paths.targetRegistryPath,
-      projectedRegistryPath: request.paths.projectedRegistryPath,
-      nodeVersion: '22.0.0',
-      platform: 'win32',
-    })).toThrow(/unsupported_platform/);
-  });
-
-  it('rejects a non-canonical repository root instead of normalizing it', () => {
+  it('rejects a non-canonical repository root', () => {
     const { request } = activationFixture();
     const nonCanonical = `${repoRoot}${path.sep}..${path.sep}${path.basename(repoRoot)}`;
     expect(path.normalize(nonCanonical)).toBe(repoRoot);
-    expect(nonCanonical).not.toBe(repoRoot);
-    expect(() => runActivationPlatformPreflight({
-      repoRoot: nonCanonical,
-      installedCommitSha: git(['rev-parse', 'HEAD']),
-      oldInstalledRevisionRoot: repoRoot,
-      targetRegistryPath: request.paths.targetRegistryPath,
-      projectedRegistryPath: request.paths.projectedRegistryPath,
-      nodeVersion: '22.0.0',
-      platform: 'linux',
-    })).toThrow(/repo_root_not_canonical/);
+    expect(() => runActivationPlatformPreflight({ repoRoot: nonCanonical, installedCommitSha: git(['rev-parse', 'HEAD']), oldInstalledRevisionRoot: repoRoot, targetRegistryPath: request.paths.targetRegistryPath, projectedRegistryPath: request.paths.projectedRegistryPath, nodeVersion: '22.0.0', platform: 'linux' })).toThrow(/repo_root_not_canonical/);
   });
 
   it('retains durability, exclusion, process identity and central nonce primitives', () => {
@@ -447,7 +487,7 @@ describe('[AC8] platform and canonical bytes', () => {
     for (const token of ['fsyncSync(fd);', 'renameSync(temporary, target);', 'syncDirectory(directory);']) expect(evidence).toContain(token);
     for (const token of ['mkdirSync(lock);', 'document.currentEpochId !== expectedOldEpochId', 'record.nonce !== nonce']) expect(epoch).toContain(token);
     for (const token of ["randomBytes(32).toString('hex')", 'writeDurableFile(barrier.stopping', 'current.startTicks !== identity.startTicks', 'if (survivors.length) throw new Error']) expect(cordon).toContain(token);
-    for (const token of ['completePreCasRecovery', 'authority.commit(request.expectedOldEpochId, core);']) expect(recovery).toContain(token);
+    for (const token of ['completePreCasRecovery', 'authority.commit(request.expectedOldEpochId, core);', 'assertCordonRequestBinding(request, cordon);']) expect(recovery).toContain(token);
     for (const token of ['verifyEpochAndProjection(options)', 'projectRegistry(options.targetRegistryPath, options.projectedRegistryPath)']) expect(supervisor).toContain(token);
     for (const token of ["if (platform !== 'linux') throw new Error('unsupported_platform');", 'statSync(targetParent).dev !== statSync(projectionParent).dev']) expect(preflight).toContain(token);
   });
@@ -460,11 +500,13 @@ describe('[AC8] platform and canonical bytes', () => {
 });
 
 describe('[AC4] scheduler-driven #918 successor slice', () => {
-  it('starts exactly one exact-head review only after central epoch/nonce verification and fresh checks', async () => {
+  it('drives an exact-head scheduler start into a durable run-store delivery receipt', async () => {
     const root = tempRoot();
     const authorityPath = path.join(root, 'authority.json');
-    committedEpoch(authorityPath);
-    const env = { ...process.env, ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath, ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-scheduler', ORCHESTRATOR_CUTOVER_NONCE: 'nonce-scheduler' };
+    const core = committedEpoch(authorityPath);
+    const env = { ...process.env, ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath, ORCHESTRATOR_CUTOVER_EPOCH_ID: core.epochId, ORCHESTRATOR_CUTOVER_NONCE: core.nonce };
+    const storeRoot = path.join(root, 'review-runs');
+    initializePackReviewRunStore(storeRoot);
     const starts: Array<{ pr: number; head: string }> = [];
     const candidate = { sessionId: 'worker-1', repoSlug: 'chetwerikoff/orchestrator-pack', prNumber: 928, boundHeadSha: 'c'.repeat(40) };
     const boundary: SchedulerBoundary = {
@@ -472,18 +514,70 @@ describe('[AC4] scheduler-driven #918 successor slice', () => {
       readCurrentPr: async () => ({ number: 928, headRefOid: candidate.boundHeadSha, state: 'OPEN', isDraft: false }),
       readChecks: async () => REQUIRED_CHECKS.map((name) => ({ name, state: 'SUCCESS' })),
       listReviewRuns: () => [],
-      start: async (row, head) => { starts.push({ pr: row.prNumber, head }); return { ok: true }; },
+      start: async (row, head) => {
+        starts.push({ pr: row.prNumber, head });
+        const runId = 'prr-scheduler-delivery';
+        const now = new Date(Date.parse(core.commitAt) + 1_000).toISOString();
+        writeJson(path.join(storeRoot, 'runs', `${runId}.json`), {
+          schemaVersion: 1,
+          id: runId,
+          runId,
+          projectId: 'orchestrator-pack',
+          key: `pr-${row.prNumber}-${head}`,
+          prNumber: row.prNumber,
+          targetSha: head,
+          headSha: head,
+          status: 'up_to_date',
+          latestRunStatus: 'up_to_date',
+          linkedSessionId: row.sessionId,
+          startReason: 'scheduler',
+          surface: 'pr2-scheduler',
+          trustedPackRoot: repoRoot,
+          sourceRepoRoot: repoRoot,
+          runnerPid: process.pid,
+          createdAt: now,
+          updatedAt: now,
+          heartbeatAtUtc: now,
+          completedAtUtc: now,
+          githubReviewId: 311,
+          githubReviewUrl: 'fixture://review/311',
+          githubReviewEvent: 'COMMENT',
+          githubReviewReconciliation: {
+            schemaVersion: 1,
+            event: 'COMMENT',
+            phase: 'complete',
+            actorLogin: 'fixture-reviewer',
+            commentBody: 'clean',
+            commentReviewId: 311,
+            commentReviewUrl: 'fixture://review/311',
+            pendingDismissalReviewIds: [],
+            dismissedReviewIds: [],
+            preparedAtUtc: now,
+            updatedAtUtc: now,
+          },
+          reviewVerdict: 'clean',
+          findingCount: 0,
+          findings: [],
+          journalOutcome: { state: 'persisted', recordedAtUtc: now, reason: 'persisted', idempotencyKey: 'journal', attempts: 1 },
+          deliveryOutcomes: {
+            requiredStatus: { state: 'succeeded', recordedAtUtc: now, reason: 'success', idempotencyKey: `required-status:orchestrator-pack/pack-review:${head}` },
+            workerNotification: { state: 'delivered', recordedAtUtc: now, reason: 'delivered', idempotencyKey: `worker-notification:${runId}:${head}` },
+          },
+        });
+        return { ok: true };
+      },
     };
     expect(await runSchedulerTick(boundary, env)).toEqual({ attempted: 1, started: 1, skipped: 0 });
     expect(starts).toEqual([{ pr: 928, head: candidate.boundHeadSha }]);
+    expect(findCompletedSchedulerDelivery(core, storeRoot)).toMatchObject({ runId: 'prr-scheduler-delivery', prNumber: 928, headSha: candidate.boundHeadSha, journalOutcome: { state: 'persisted' } });
     await expect(runSchedulerTick(boundary, { ...env, ORCHESTRATOR_CUTOVER_NONCE: 'copied-stale-nonce' })).rejects.toThrow(/epoch_nonce_mismatch/);
   });
 
   it('refuses a fresh-head drift before review start', async () => {
     const root = tempRoot();
     const authorityPath = path.join(root, 'authority.json');
-    committedEpoch(authorityPath);
-    const env = { ...process.env, ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath, ORCHESTRATOR_CUTOVER_EPOCH_ID: 'epoch-scheduler', ORCHESTRATOR_CUTOVER_NONCE: 'nonce-scheduler' };
+    const core = committedEpoch(authorityPath);
+    const env = { ...process.env, ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath, ORCHESTRATOR_CUTOVER_EPOCH_ID: core.epochId, ORCHESTRATOR_CUTOVER_NONCE: core.nonce };
     let started = false;
     const candidate = { sessionId: 'worker-1', repoSlug: 'chetwerikoff/orchestrator-pack', prNumber: 928, boundHeadSha: 'c'.repeat(40) };
     const boundary: SchedulerBoundary = {
