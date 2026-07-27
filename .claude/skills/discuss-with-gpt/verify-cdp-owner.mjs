@@ -47,29 +47,41 @@ function extractUserDataDir(cmdline) {
   return m ? (m[1] || m[2] || m[3]) : null;
 }
 
-async function execFileBounded(file, args, timeoutMs) {
-  if (timeoutMs <= 0) {
+async function execFileBounded(file, args, budgetMs) {
+  if (budgetMs <= 0) {
     throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
   }
   if (__testOwnerProbe.stallExecFile) {
     await new Promise((_, reject) => {
-      setTimeout(() => reject(Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' })), timeoutMs);
+      setTimeout(() => reject(Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' })), budgetMs);
     });
   }
-  const result = await runProcess({
-    command: file,
-    args,
-    timeoutMs,
-    encoding: 'utf8',
-    inheritParentEnv: true,
+  let timer;
+  const deadlineError = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' })), budgetMs);
   });
-  if (result.timedOut || result.cancelled) {
-    throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
+  try {
+    const result = await Promise.race([
+      runProcess({
+        command: file,
+        args,
+        timeoutMs: budgetMs,
+        killGraceMs: 0,
+        encoding: 'utf8',
+        inheritParentEnv: true,
+      }),
+      deadlineError,
+    ]);
+    if (result.timedOut || result.cancelled) {
+      throw Object.assign(new Error('owner_probe_timeout'), { code: 'TIMEOUT' });
+    }
+    if (!result.ok) {
+      throw new Error(result.error ?? 'owner_probe_failed');
+    }
+    return result.stdout;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  if (!result.ok) {
-    throw new Error(result.error ?? 'owner_probe_failed');
-  }
-  return result.stdout;
 }
 
 function findWindowsListenerPidSync(port) {

@@ -1753,7 +1753,7 @@ describe('issue 1023 operation-level bounds', () => {
   });
 
   it('AC3: pre-send composer mutation cannot settle late after bounded timeout', async () => {
-    const fixture = delayedComposerFakePage({ composerClickDelayMs: 400 });
+    const fixture = delayedComposerFakePage({ insertTextDelayMs: 400 });
     const budget = createTurnOperationBudget(100);
     await expect(sendTurn(fixture.page, 'late-payload', {
       cdp,
@@ -1762,7 +1762,7 @@ describe('issue 1023 operation-level bounds', () => {
       newChat: false,
       timeoutMs: 60_000,
     }, undefined, undefined, budget)).rejects.toThrow('browser_operation_timeout:');
-    expect(fixture.page.getComposerClicked()).toBe(false);
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
     expect(fixture.page.getInsertedText()).toBe('');
   });
 
@@ -1798,10 +1798,18 @@ describe('issue 1023 operation-level bounds', () => {
 
 
   it('AC6: late newPage handle is not adopted and cleanup is bounded', async () => {
+    let latePageCreated = false;
+    let latePageClosed = false;
     const ctx = {
       pages: () => [],
       newPage: () => new Promise((resolve) => {
-        setTimeout(() => resolve({ close: async () => {}, goto: async () => {} }), 500);
+        setTimeout(() => {
+          latePageCreated = true;
+          resolve({
+            close: async () => { latePageClosed = true; },
+            goto: async () => {},
+          });
+        }, 500);
       }),
     };
     const browser = { contexts: () => [ctx] };
@@ -1813,6 +1821,9 @@ describe('issue 1023 operation-level bounds', () => {
       newChat: false,
       timeoutMs: 60_000,
     }, { segmentBudget: budget })).rejects.toThrow('browser_operation_timeout:new_page');
+    await new Promise((resolve) => { setTimeout(resolve, 600); });
+    expect(latePageCreated).toBe(true);
+    expect(latePageClosed).toBe(true);
   });
 
   it('AC6: never-settling page.close does not block terminalization beyond cleanup bound', async () => {

@@ -308,6 +308,22 @@ function browserConfig(args: ParsedArgs): BrowserConfig {
   return { cdp, profile, newChat, timeoutMs, ...(chatUrl ? { chatUrl } : {}), ...(projectUrl ? { projectUrl } : {}) };
 }
 
+
+function canonicalConversationFromOpenedPage(
+  config: BrowserConfig,
+  opened: { page: any } | undefined,
+): string | undefined {
+  if (!config.newChat || !opened?.page || !config.projectUrl) return undefined;
+  try {
+    const normalized = normalizeConversationUrl(opened.page.url());
+    const project = normalizeConversationUrl(config.projectUrl);
+    if (!normalized || normalized === project) return undefined;
+    return normalized;
+  } catch {
+    return undefined;
+  }
+}
+
 function emitTurnAndCode(result: TurnResultV1): number {
   emit(result);
   return turnExitCode(result.state);
@@ -698,9 +714,8 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     await closeOwnedTurnPage(opened, { retainPage: possibleDelivery });
     if (possibleDelivery && config?.newChat && incidentId) {
-      const freshConversationId = config.chatUrl ? normalizeConversationUrl(config.chatUrl) : undefined;
-      const canonicalFreshUnproven = !freshConversationId
-        || freshConversationId === normalizeConversationUrl(config.projectUrl!);
+      const canonicalConversation = canonicalConversationFromOpenedPage(config, opened);
+      const canonicalFreshUnproven = !canonicalConversation;
       if (canonicalFreshUnproven) {
         try {
           const incident = updateIncident(profileKey, incidentId, {

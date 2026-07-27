@@ -196,6 +196,13 @@ function loopOperationWaitMs(loopEndsAt: number, now = wallClock()): number {
   return Math.min(MAX_BROWSER_OPERATION_WAIT_MS, Math.max(0, loopEndsAt - now));
 }
 
+function segmentOperationWait(
+  segmentBudget?: TurnOperationBudget,
+  fallbackMs = MAX_BROWSER_OPERATION_WAIT_MS,
+): number {
+  return segmentBudget?.clampOperationWaitMs() ?? fallbackMs;
+}
+
 async function boundedPlaywrightOperation<T>(waitMs: number, operation: () => Promise<T>): Promise<T> {
   if (waitMs <= 0) throw new BrowserOperationTimeoutError('playwright_operation');
   return await Promise.race([
@@ -1123,13 +1130,16 @@ export async function runtimeWitnessSurfaceAvailable(
   page: any,
   segmentBudget?: TurnOperationBudget,
 ): Promise<WitnessSurfaceProbe> {
-  const waitMs = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
-  if (segmentBudget && waitMs <= 0) throw new BrowserOperationTimeoutError('witness_surface');
-  const timeout = playwrightTimeout(waitMs);
+  const clampWitnessWait = (): number => {
+    const waitMs = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+    if (segmentBudget && waitMs <= 0) throw new BrowserOperationTimeoutError('witness_surface');
+    return waitMs;
+  };
+  let waitMs = clampWitnessWait();
   const messages = page.locator('[data-message-author-role]');
   let count: number;
   try {
-    count = await boundedPlaywrightOperation(waitMs, () => messages.count(timeout));
+    count = await boundedPlaywrightOperation(waitMs, () => messages.count(playwrightTimeout(waitMs)));
   } catch (error) {
     if (error instanceof BrowserOperationTimeoutError) throw error;
     return 'absent';
@@ -1138,8 +1148,9 @@ export async function runtimeWitnessSurfaceAvailable(
   const userIds = new Set<string>();
   const assistantParents: string[] = [];
   for (let index = Math.max(0, count - 8); index < count; index++) {
+    waitMs = clampWitnessWait();
     const locator = messages.nth(index);
-    const role = await locator.getAttribute('data-message-author-role', timeout).catch(() => null);
+    const role = await locator.getAttribute('data-message-author-role', playwrightTimeout(waitMs)).catch(() => null);
     if (role === 'user') {
       const id = await serviceId(locator, waitMs);
       if (id) userIds.add(id);
@@ -1151,13 +1162,14 @@ export async function runtimeWitnessSurfaceAvailable(
   }
   if (assistantParents.some((parent) => userIds.has(parent))) return 'available';
   for (let index = Math.max(0, count - 8); index < count - 1; index++) {
+    waitMs = clampWitnessWait();
     const locator = messages.nth(index);
     const next = messages.nth(index + 1);
-    const role = await locator.getAttribute('data-message-author-role', timeout).catch(() => null);
-    const nextRole = await next.getAttribute('data-message-author-role', timeout).catch(() => null);
+    const role = await locator.getAttribute('data-message-author-role', playwrightTimeout(waitMs)).catch(() => null);
+    const nextRole = await next.getAttribute('data-message-author-role', playwrightTimeout(waitMs)).catch(() => null);
     if (role !== 'user' || nextRole !== 'assistant') continue;
     const userId = await serviceId(locator, waitMs);
-    const turnStart = await next.getAttribute('data-turn-start-message', timeout).catch(() => null);
+    const turnStart = await next.getAttribute('data-turn-start-message', playwrightTimeout(waitMs)).catch(() => null);
     if (userId && turnStart === 'true') return 'available';
   }
   return 'absent';
@@ -1300,10 +1312,12 @@ export interface TurnBrowserResult {
 
 async function adoptNewPageWithBudget(
   ctx: any,
-  goto: (page: any) => Promise<void>,
-  waitMs: number,
+  goto: (page: any, gotoWaitMs: number) => Promise<void>,
+  segmentBudget?: TurnOperationBudget,
+  fallbackMs = MAX_BROWSER_OPERATION_WAIT_MS,
 ): Promise<any> {
-  if (waitMs <= 0) throw new BrowserOperationTimeoutError('new_page');
+  let waitMs = segmentOperationWait(segmentBudget, fallbackMs);
+  if (segmentBudget && waitMs <= 0) throw new BrowserOperationTimeoutError('new_page');
   const pagePromise = ctx.newPage();
   let page: any;
   try {
@@ -1315,8 +1329,10 @@ async function adoptNewPageWithBudget(
     if (error instanceof BrowserOperationTimeoutError) throw new BrowserOperationTimeoutError('new_page');
     throw coerceBrowserOperationTimeout(error, 'new_page');
   }
+  waitMs = segmentOperationWait(segmentBudget, fallbackMs);
+  if (segmentBudget && waitMs <= 0) throw new BrowserOperationTimeoutError('goto');
   try {
-    await goto(page);
+    await boundedPlaywrightOperation(waitMs, () => goto(page, waitMs));
     return page;
   } catch (error) {
     await boundedResourceCleanup(() => page.close(), RESOURCE_CLEANUP_BOUND_MS);
@@ -1330,7 +1346,7 @@ export async function openTurnPage(
   options?: { segmentBudget?: TurnOperationBudget },
 ): Promise<{ page: any; owned: boolean; provisionalId?: string }> {
   const segmentBudget = options?.segmentBudget;
-  const gotoTimeout = segmentBudget?.clampOperationWaitMs() ?? Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
+  const fallbackGotoMs = Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
   if (segmentBudget && !segmentBudget.canStartOperation()) throw new BrowserOperationTimeoutError('open_turn_page');
   const contexts = browser.contexts();
   if (contexts.length !== 1) throw new Error('ui_contract_mismatch:context_count');
@@ -1343,21 +1359,23 @@ export async function openTurnPage(
     });
     if (matches.length > 1) throw new Error('ui_contract_mismatch:duplicate_tabs');
     if (matches.length === 1) {
-      await matches[0].bringToFront(playwrightTimeout(gotoTimeout)).catch(() => {});
+      const bringWait = segmentOperationWait(segmentBudget, fallbackGotoMs);
+      if (segmentBudget && bringWait <= 0) throw new BrowserOperationTimeoutError('open_turn_page');
+      await boundedPlaywrightOperation(bringWait, () => matches[0].bringToFront(playwrightTimeout(bringWait)!));
       return { page: matches[0], owned: false };
     }
-    const page = await adoptNewPageWithBudget(ctx, async (opened) => {
-      await opened.goto(target, { waitUntil: 'domcontentloaded', timeout: gotoTimeout });
+    const page = await adoptNewPageWithBudget(ctx, async (opened, gotoWaitMs) => {
+      await opened.goto(target, { waitUntil: 'domcontentloaded', timeout: gotoWaitMs });
       if (normalizeConversationUrl(opened.url()) !== target) {
         throw new Error('ui_contract_mismatch:conversation_redirect');
       }
-    }, gotoTimeout);
+    }, segmentBudget, fallbackGotoMs);
     return { page, owned: true };
   }
   if (!config.projectUrl) throw new Error('ui_contract_mismatch:project_url_required');
-  const page = await adoptNewPageWithBudget(ctx, async (opened) => {
-    await opened.goto(config.projectUrl, { waitUntil: 'domcontentloaded', timeout: gotoTimeout });
-  }, gotoTimeout);
+  const page = await adoptNewPageWithBudget(ctx, async (opened, gotoWaitMs) => {
+    await opened.goto(config.projectUrl, { waitUntil: 'domcontentloaded', timeout: gotoWaitMs });
+  }, segmentBudget, fallbackGotoMs);
   return { page, owned: true, provisionalId: crypto.randomUUID() };
 }
 
@@ -1416,13 +1434,17 @@ export async function sendTurn(
 
   let mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
   if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
-  const mutationTimeout = playwrightTimeout(mutationWait);
-  await boundedPlaywrightOperation(mutationWait, () => composer.click(mutationTimeout));
-  mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
-  if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
-  await boundedPlaywrightOperation(mutationWait, () => composer.fill(text, playwrightTimeout(mutationWait)!));
+  try {
+    await composer.click(playwrightTimeout(mutationWait)!);
+    mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+    if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
+    await composer.fill(text, playwrightTimeout(mutationWait)!);
+  } catch (error) {
+    throw coerceBrowserOperationTimeout(error, 'pre_send_mutation');
+  }
   const send = page.locator('[data-testid="send-button"]');
-  const sendAvailable = (await send.count(mutationTimeout).catch(() => 0)) > 0;
+  mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  const sendAvailable = (await send.count(playwrightTimeout(mutationWait)).catch(() => 0)) > 0;
   revalidateProcessDestinationReservations();
   await onBeforeSend?.();
   try {
@@ -1434,10 +1456,9 @@ export async function sendTurn(
       possibleDelivery: false,
     };
   }
-  await Promise.race([
-    network.witnessInstall,
-    new Promise<void>((resolve) => { setTimeout(resolve, 10_000); }),
-  ]);
+  const witnessInstallWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  if (segmentBudget && witnessInstallWait <= 0) throw new BrowserOperationTimeoutError('witness_install');
+  await boundedPlaywrightOperation(witnessInstallWait, () => network.witnessInstall);
   const dispatchWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
   if (segmentBudget && dispatchWait <= 0) throw new BrowserOperationTimeoutError('dispatch');
   const dispatchTimeout = playwrightTimeout(dispatchWait);
@@ -1677,9 +1698,11 @@ export async function sendTurn(
     };
   }
   const finalStatusWait = loopOperationWaitMs(deadline, wallClock());
-  const statusText = (await productStatusText(page, finalStatusWait)).text;
-  if (/error generating|something went wrong|unable to generate/i.test(statusText)) {
-    return { state: 'no_reply', cause: 'terminal_no_reply_evidence', possibleDelivery: true, userMessageId: userId };
+  if (finalStatusWait > 0) {
+    const statusText = (await productStatusText(page, finalStatusWait)).text;
+    if (/error generating|something went wrong|unable to generate/i.test(statusText)) {
+      return { state: 'no_reply', cause: 'terminal_no_reply_evidence', possibleDelivery: true, userMessageId: userId };
+    }
   }
   if (process.env.CHATGPT_BROWSER_TURN_DEBUG === '1') {
     console.error(JSON.stringify({

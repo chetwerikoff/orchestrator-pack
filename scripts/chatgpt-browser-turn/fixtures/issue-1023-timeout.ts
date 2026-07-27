@@ -23,17 +23,41 @@ export function delayedComposerFakePage(options: DelayedComposerOptions = {}) {
       if (selector === '#prompt-textarea') {
         return {
           count: async () => (base.composer ?? true) ? 1 : 0,
-          click: async () => {
-            if (base.composerClickDelayMs) {
-              await new Promise((resolve) => { setTimeout(resolve, base.composerClickDelayMs); });
+          click: async (options?: { timeout?: number }) => {
+            const timeoutMs = options?.timeout ?? 30_000;
+            const delayMs = base.composerClickDelayMs ?? 0;
+            if (delayMs > 0) {
+              await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(() => reject(Object.assign(new Error('Timeout 100ms exceeded'), { name: 'TimeoutError' })), timeoutMs);
+                setTimeout(() => {
+                  clearTimeout(timer);
+                  composerClicked = true;
+                  resolve();
+                }, delayMs);
+              });
+            } else {
+              composerClicked = true;
             }
-            composerClicked = true;
           },
-          fill: async (text: string) => {
-            if (base.insertTextDelayMs) {
-              await new Promise((resolve) => { setTimeout(resolve, base.insertTextDelayMs); });
+          fill: async (text: string, options?: { timeout?: number }) => {
+            const timeoutMs = options?.timeout ?? 30_000;
+            const delayMs = base.insertTextDelayMs ?? 0;
+            if (delayMs > 0) {
+              let cancelled = false;
+              await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(() => {
+                  cancelled = true;
+                  reject(Object.assign(new Error('Timeout 100ms exceeded'), { name: 'TimeoutError' }));
+                }, timeoutMs);
+                setTimeout(() => {
+                  clearTimeout(timer);
+                  if (!cancelled && composerClicked) insertedText = text;
+                  resolve();
+                }, delayMs);
+              });
+            } else if (composerClicked) {
+              insertedText = text;
             }
-            if (composerClicked) insertedText = text;
           },
         };
       }
