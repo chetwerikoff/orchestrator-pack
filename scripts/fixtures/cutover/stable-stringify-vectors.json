@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "vectors": [
+    {"name":"nested-key-order","input":{"z":1,"a":{"d":4,"b":2}},"canonical":"{\"a\":{\"b\":2,\"d\":4},\"z\":1}"},
+    {"name":"unicode","input":{"message":"Привет 世界 😀"},"canonical":"{\"message\":\"Привет 世界 😀\"}"},
+    {"name":"escapes","input":{"value":"quote=\" slash=\\ newline=\n tab=\t"},"canonical":"{\"value\":\"quote=\\\" slash=\\\\ newline=\\n tab=\\t\"}"},
+    {"name":"negative-zero","input":{"n":0},"canonical":"{\"n\":0}"},
+    {"name":"exponents","input":{"large":1e+30,"small":1e-7},"canonical":"{\"large\":1e+30,\"small\":1e-7}"}
+  ]
+}

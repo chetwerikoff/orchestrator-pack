@@ -1,4 +1,20 @@
 import type { FoundationConfig } from './config.ts';
+import { parseFoundationConfig } from './config.ts';
+import { FileEpochAuthority } from '../lib/cutover/activation-epoch-authority.ts';
+import { runProcess } from '../kernel/subprocess.ts';
+import { evaluateHeadReadyForReview } from './review-head-ready.ts';
+import { listPackReviewRuns } from '../lib/pack-review-run-store.ts';
+import { startPackReview } from '../pack-review-runner.ts';
+import {
+  isRowStale,
+  readWorkerStatusStoreFile,
+  resolveWorkerStatusStorePath,
+} from '../lib/worker-status-store.mjs';
+import {
+  lookupBindingBySession,
+  readPrSessionBindingCacheFile,
+  resolvePrSessionBindingCachePath,
+} from '../../docs/pr-session-binding-cache.mjs';
 
 export interface DormantSchedulerState {
   component: 'pr2-foundation-scheduler';
@@ -14,6 +30,35 @@ export interface DormantActuatorResult {
   ok: true;
   executed: false;
   reason: 'foundation_inert';
+}
+
+export interface ActivatedSchedulerCandidate {
+  sessionId: string;
+  repoSlug: string;
+  prNumber: number;
+  boundHeadSha: string;
+}
+
+export interface SchedulerBoundary {
+  listCandidates(): ActivatedSchedulerCandidate[];
+  readCurrentPr(candidate: ActivatedSchedulerCandidate): Promise<{ number: number; headRefOid: string; state: string; isDraft: boolean }>;
+  readChecks(candidate: ActivatedSchedulerCandidate): Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>;
+  listReviewRuns(): ReturnType<typeof listPackReviewRuns>;
+  start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
+}
+
+function requiredEnv(name: string, env: NodeJS.ProcessEnv): string {
+  const value = String(env[name] ?? '').trim();
+  if (!value) throw new Error(`scheduler_missing_${name.toLowerCase()}`);
+  return value;
+}
+
+export function assertSchedulerEpoch(env: NodeJS.ProcessEnv = process.env): { epochId: string; nonce: string } {
+  const authorityPath = requiredEnv('ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY', env);
+  const epochId = requiredEnv('ORCHESTRATOR_CUTOVER_EPOCH_ID', env);
+  const nonce = requiredEnv('ORCHESTRATOR_CUTOVER_NONCE', env);
+  new FileEpochAuthority(authorityPath).verify(epochId, nonce);
+  return { epochId, nonce };
 }
 
 export function buildDormantScheduler(config: FoundationConfig): DormantSchedulerState {
@@ -62,4 +107,153 @@ export function assertFoundationInert(input: {
   return failure
     ? { ok: false, reason: failure[1] }
     : { ok: true, result: 'live-acquirers-unchanged' };
+}
+
+function liveCandidates(env: NodeJS.ProcessEnv = process.env): ActivatedSchedulerCandidate[] {
+  const workerStore = readWorkerStatusStoreFile(resolveWorkerStatusStorePath(env));
+  const bindingStore = readPrSessionBindingCacheFile(resolvePrSessionBindingCachePath(env));
+  const nowMs = Date.now();
+  const candidates: ActivatedSchedulerCandidate[] = [];
+  for (const row of Object.values(workerStore.records ?? {})) {
+    if ((row.derivedStatus ?? row.status) !== 'ready_for_review' || isRowStale(row, nowMs, Number(workerStore.repoTickGeneration ?? 0))) continue;
+    const sessionId = String(row.sessionId ?? '').trim();
+    const repoSlug = String(row.repoSlug ?? env.GITHUB_REPOSITORY ?? '').trim().toLowerCase();
+    if (!sessionId || !repoSlug) continue;
+    const binding = lookupBindingBySession(bindingStore, repoSlug, sessionId);
+    if (!binding || Number(binding.prNumber ?? 0) <= 0 || !String(binding.headSha ?? '').trim()) continue;
+    candidates.push({ sessionId, repoSlug, prNumber: Number(binding.prNumber), boundHeadSha: String(binding.headSha) });
+  }
+  return candidates;
+}
+
+async function ghJson(repoRoot: string, args: string[]): Promise<unknown> {
+  const result = await runProcess({
+    command: pathlessGh(repoRoot),
+    args,
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    allowEmptyStdout: false,
+    timeoutMs: 30_000,
+  });
+  if (!result.ok) throw new Error(`scheduler_gh_failed:${args.join('_')}:${result.stderr || result.error || result.exitCode}`);
+  return JSON.parse(result.stdout);
+}
+
+function pathlessGh(repoRoot: string): string {
+  return `${repoRoot}/scripts/gh`;
+}
+
+export function productionSchedulerBoundary(input: {
+  repoRoot: string;
+  projectId?: string;
+  env?: NodeJS.ProcessEnv;
+}): SchedulerBoundary {
+  const env = input.env ?? process.env;
+  const projectId = input.projectId ?? 'orchestrator-pack';
+  return {
+    listCandidates: () => liveCandidates(env),
+    readCurrentPr: async (candidate) => ghJson(input.repoRoot, [
+      'pr', 'view', String(candidate.prNumber), '--repo', candidate.repoSlug,
+      '--json', 'number,headRefOid,state,isDraft',
+    ]) as Promise<{ number: number; headRefOid: string; state: string; isDraft: boolean }>,
+    readChecks: async (candidate) => ghJson(input.repoRoot, [
+      'pr', 'checks', String(candidate.prNumber), '--repo', candidate.repoSlug,
+      '--json', 'name,state,conclusion,status',
+    ]) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
+    listReviewRuns: () => listPackReviewRuns({ projectId }),
+    start: async (candidate, freshHeadSha) => {
+      const result = await startPackReview({
+        projectId,
+        linkedSessionId: candidate.sessionId,
+        prNumber: candidate.prNumber,
+        headSha: freshHeadSha,
+        sourceRepoRoot: input.repoRoot,
+        startReason: 'scheduler',
+        surface: 'pr2-scheduler',
+        claimMode: 'acquire',
+      });
+      return {
+        ok: result.ok === true,
+        ...(typeof result.reason === 'string' ? { reason: result.reason } : {}),
+      };
+    },
+  };
+}
+
+export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.ProcessEnv = process.env): Promise<{ attempted: number; started: number; skipped: number }> {
+  assertSchedulerEpoch(env);
+  let attempted = 0;
+  let started = 0;
+  let skipped = 0;
+  for (const candidate of boundary.listCandidates()) {
+    attempted += 1;
+    assertSchedulerEpoch(env);
+    const fresh = await boundary.readCurrentPr(candidate);
+    const freshHead = String(fresh.headRefOid ?? '').trim().toLowerCase();
+    if (fresh.state !== 'OPEN' && String(fresh.state).toLowerCase() !== 'open') { skipped += 1; continue; }
+    if (fresh.isDraft === true || freshHead !== candidate.boundHeadSha.toLowerCase()) { skipped += 1; continue; }
+    const checks = await boundary.readChecks(candidate);
+    const runs = boundary.listReviewRuns();
+    const decision = evaluateHeadReadyForReview({
+      prNumber: candidate.prNumber,
+      headSha: freshHead,
+      session: {
+        id: candidate.sessionId,
+        role: 'worker',
+        status: 'ready_for_review',
+        ownedHeadSha: freshHead,
+        reports: [{ reportState: 'ready_for_review', headRefOid: freshHead, accepted: true }],
+      },
+      ciChecks: checks,
+      reviewRuns: runs,
+    });
+    if (!decision.eligible) { skipped += 1; continue; }
+    assertSchedulerEpoch(env);
+    const result = await boundary.start(candidate, freshHead);
+    if (result.ok) started += 1; else skipped += 1;
+  }
+  return { attempted, started, skipped };
+}
+
+function loadProductionBoundary(): { boundary: SchedulerBoundary; cadence: number } {
+  const parsed = parseFoundationConfig({});
+  if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
+  const repoRoot = process.cwd();
+  return {
+    boundary: productionSchedulerBoundary({ repoRoot }),
+    cadence: parsed.config.scheduler.pollIntervalMs,
+  };
+}
+
+async function runSingleTick(): Promise<void> {
+  const { boundary } = loadProductionBoundary();
+  const result = await runSchedulerTick(boundary);
+  process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
+}
+
+async function runLoop(): Promise<void> {
+  const { boundary, cadence } = loadProductionBoundary();
+  for (;;) {
+    try {
+      const result = await runSchedulerTick(boundary);
+      process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
+    } catch (error) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, cadence));
+  }
+}
+
+if (process.argv[1]?.endsWith('scheduler.ts')) {
+  if (process.argv[2] === 'run') {
+    runLoop().catch((error) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    });
+  } else if (process.argv[2] === 'tick') {
+    runSingleTick().catch((error) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    });
+  }
 }
