@@ -45,6 +45,11 @@ export interface ClosureReferenceRow {
   sourceExecutionClass?: ClosureExecutionClass;
 }
 
+interface ClosureDenominatorRow {
+  path?: string;
+  executionClass?: ClosureExecutionClass;
+}
+
 function regexEscape(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -94,7 +99,44 @@ function assertFoundationAndPr2a(repoRoot: string, installedCommitSha: string): 
   return baseRef;
 }
 
-function recomputeClosure(repoRoot: string, baseRef: string): { inputTree: string; referenceCount: number } {
+function candidateReferencePrimitiveClass(source: string): string {
+  if (/\.(?:ps1|psm1)$/iu.test(source)) return 'powershell-dot-source-or-actionable-reference';
+  if (/\.(?:ts|mts|cts|js|mjs|cjs)$/iu.test(source)) return 'javascript-import-child-or-actionable-reference';
+  return 'config-or-policy-reference';
+}
+
+export function candidateLegacyReferenceRows(
+  grepOutput: string,
+  denominator: readonly ClosureDenominatorRow[],
+): ClosureReferenceRow[] {
+  const executionByPath = new Map(
+    denominator
+      .filter((row): row is Required<ClosureDenominatorRow> => Boolean(row.path && row.executionClass))
+      .map((row) => [row.path.replace(/\\/g, '/'), row.executionClass]),
+  );
+  const rows: ClosureReferenceRow[] = [];
+  for (const rawLine of grepOutput.split(/\r?\n/u).filter(Boolean)) {
+    const match = /^[^:]+:([^:]+):(\d+):(.*)$/u.exec(rawLine);
+    if (!match) throw new Error(`closure_reference_unparseable:${rawLine}`);
+    const source = match[1]!.replace(/\\/g, '/');
+    const selector = match[3]!;
+    const sourceExecutionClass = executionByPath.get(source);
+    if (!sourceExecutionClass) throw new Error(`closure_source_unclassified:${source}`);
+    for (const target of TARGET_LIBRARY_PATHS) {
+      if (!selector.includes(path.posix.basename(target))) continue;
+      rows.push({
+        source,
+        target,
+        primitiveClass: candidateReferencePrimitiveClass(source),
+        selector,
+        sourceExecutionClass,
+      });
+    }
+  }
+  return rows;
+}
+
+export function recomputeClosure(repoRoot: string, baseRef: string): { inputTree: string; referenceCount: number } {
   const scanner = path.join(repoRoot, 'scripts', 'pr2a', 'closed-world-scanner.ts');
   const result = runProcessSync({
     command: process.execPath,
@@ -106,7 +148,7 @@ function recomputeClosure(repoRoot: string, baseRef: string): { inputTree: strin
   const manifest = JSON.parse(result.stdout) as {
     schemaVersion?: number;
     lineage?: { planningBaseTreeOid?: string };
-    references?: ClosureReferenceRow[];
+    denominator?: ClosureDenominatorRow[];
     unknown?: unknown[];
     dynamicUnsupported?: unknown[];
   };
@@ -115,7 +157,20 @@ function recomputeClosure(repoRoot: string, baseRef: string): { inputTree: strin
   if ((manifest.unknown ?? []).length !== 0 || (manifest.dynamicUnsupported ?? []).length !== 0) {
     throw new Error('closure_unresolved_set_nonempty');
   }
-  const references = (manifest.references ?? []).filter((row) => TARGET_LIBRARIES.has(String(row.target ?? '').replace(/\\/g, '/')));
+  if (!Array.isArray(manifest.denominator)) throw new Error('closure_denominator_missing');
+
+  const grep = runProcessSync({
+    command: 'git',
+    args: [
+      '-C', repoRoot, 'grep', '-n', '-I', '-E',
+      '(Review-StartClaim\\.ps1|Orchestrator-SideProcessSupervisor\\.ps1)',
+      baseRef,
+    ],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+  });
+  if (!grep.ok && grep.exitCode !== 1) throw new Error(`closure_reference_scan_failed:${grep.stderr || grep.error || grep.exitCode}`);
+  const references = candidateLegacyReferenceRows(grep.stdout, manifest.denominator);
   const external = references.filter((row) => {
     const source = String(row.source ?? '').replace(/\\/g, '/');
     return !D928.has(source) && isExecutableLegacyReference(row);
