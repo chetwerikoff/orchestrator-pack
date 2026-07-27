@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "8a4e167e2aae7014ff0ad45dcbc654116d49f8a8",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:036f8cf5d37566bc470a33b8725d3cc14c521d1cc889bbbdd5c804f25dc83dcd"
+    "active_scope_hash": "sha256:0fd1ea3a9b2c6a090fa35adbd2d00d60550507a732569f86a9c22b0fa73e66ca"
   },
   "declared_paths": [
     "scripts/chatgpt-browser-turn.ts",
@@ -16,8 +16,24 @@
     "scripts/chatgpt-browser-turn/fixtures/issue-1023-timeout.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
-    ".claude/skills/discuss-with-gpt/verify-cdp-owner.mjs"
+    ".claude/skills/discuss-with-gpt/verify-cdp-owner.mjs",
+    "docs/declarations/1023.chatgpt-issue-1023.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:036f8cf5d37566bc470a33b8725d3cc14c521d1cc889bbbdd5c804f25dc83dcd",
+      "new_active_scope_hash": "sha256:0fd1ea3a9b2c6a090fa35adbd2d00d60550507a732569f86a9c22b0fa73e66ca",
+      "changed": {
+        "added": [
+          "docs/declarations/1023.chatgpt-issue-1023.json"
+        ],
+        "removed": []
+      },
+      "reason": "Include declaration snapshot in active scope",
+      "actor": "local",
+      "timestamp": "2026-07-27T13:23:07.041Z",
+      "applied": true
+    }
+  ]
 }
