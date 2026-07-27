@@ -74,6 +74,7 @@ export interface TypeScriptSupervisorInertProof {
 }
 
 export interface CutoverRecoveryBindings {
+  expectedOldEpochId: string | null;
   phaseOnePath: string;
   followupPath: string;
   epochAuthorityPath: string;
