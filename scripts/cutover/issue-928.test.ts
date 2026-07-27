@@ -23,7 +23,9 @@ import { runSchedulerTick, type SchedulerBoundary } from '../pr2-foundation/sche
 import { CUTOVER_ROWS, FOUNDATION_DOC_ROWS, validateEstateSplit } from '../pr2-foundation/contracts.ts';
 import { buildPlanningManifest } from '../pr2a/closed-world-scanner.ts';
 import { D928 } from '../pr2a/contracts.ts';
-import { initializePackReviewRunStore } from '../lib/pack-review-run-store.ts';
+import { getPackReviewRun, initializePackReviewRunStore, updatePackReviewRun } from '../lib/pack-review-run-store.ts';
+import { packReviewDeliveryNeedsResume } from '../lib/pack-review-delivery.ts';
+import { runPackReviewEntry } from '../estate-cut/task-311-tests/task-311-common.test-support.ts';
 
 const repoRoot = path.resolve(process.cwd());
 const roots: string[] = [];
@@ -239,13 +241,19 @@ describe('[AC1] admission and closure', () => {
 
   it('classifies executable selectors instead of whitelisting governance source paths', () => {
     const target = 'scripts/lib/Review-StartClaim.ps1';
-    expect(isExecutableLegacyReference({
-      source: 'scripts/pr2a/example.ts',
-      target,
-      sourceExecutionClass: 'reachable-helper',
-      primitiveClass: 'javascript-import-child-or-actionable-reference',
-      selector: "import legacy from '../lib/Review-StartClaim.ps1';",
-    })).toBe(true);
+    for (const selector of [
+      "import legacy from '../lib/Review-StartClaim.ps1';",
+      "import '../lib/Review-StartClaim.ps1';",
+      ". (Join-Path $PSScriptRoot 'Review-StartClaim.ps1')",
+    ]) {
+      expect(isExecutableLegacyReference({
+        source: 'scripts/pr2a/example.ts',
+        target,
+        sourceExecutionClass: 'reachable-helper',
+        primitiveClass: selector.startsWith('.') ? 'powershell-dot-source-or-actionable-reference' : 'javascript-import-child-or-actionable-reference',
+        selector,
+      })).toBe(true);
+    }
     expect(isExecutableLegacyReference({
       source: 'scripts/pr2a/example.ts',
       target,
@@ -371,6 +379,7 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
       stores: request.stores.map((store, index) => index === 0 ? { ...store, targetPath: `${store.targetPath}.other` } : store),
     };
     await expect(recoverCommittedCutover(tampered, recoveryBoundary())).rejects.toThrow(/recovery_request_binding_mismatch/);
+    await expect(recoverCommittedCutover({ ...request, expectedOldEpochId: 'foreign-predecessor' }, recoveryBoundary())).rejects.toThrow(/recovery_request_binding_mismatch/);
     expect(existsSync(request.paths.epochAuthorityPath)).toBe(false);
     await expect(recoverCommittedCutover(request, recoveryBoundary())).resolves.toMatchObject({ result: 'forward-repair-ready', supervisorPid: 43210 });
     expect(new FileEpochAuthority(request.paths.epochAuthorityPath).read().currentEpochId).toBe(request.epochId);
@@ -500,15 +509,17 @@ describe('[AC8] platform and canonical bytes', () => {
 });
 
 describe('[AC4] scheduler-driven #918 successor slice', () => {
-  it('drives an exact-head scheduler start into a durable run-store delivery receipt', async () => {
+  it('drives the scheduler into the real #918 runner and durable delivery path', async () => {
     const root = tempRoot();
     const authorityPath = path.join(root, 'authority.json');
     const core = committedEpoch(authorityPath);
     const env = { ...process.env, ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath, ORCHESTRATOR_CUTOVER_EPOCH_ID: core.epochId, ORCHESTRATOR_CUTOVER_NONCE: core.nonce };
     const storeRoot = path.join(root, 'review-runs');
     initializePackReviewRunStore(storeRoot);
+    const currentHead = git(['rev-parse', 'HEAD']);
     const starts: Array<{ pr: number; head: string }> = [];
-    const candidate = { sessionId: 'worker-1', repoSlug: 'chetwerikoff/orchestrator-pack', prNumber: 928, boundHeadSha: 'c'.repeat(40) };
+    const durableRuns: string[] = [];
+    const candidate = { sessionId: 'worker-1', repoSlug: 'chetwerikoff/orchestrator-pack', prNumber: 928, boundHeadSha: currentHead };
     const boundary: SchedulerBoundary = {
       listCandidates: () => [candidate],
       readCurrentPr: async () => ({ number: 928, headRefOid: candidate.boundHeadSha, state: 'OPEN', isDraft: false }),
@@ -516,61 +527,91 @@ describe('[AC4] scheduler-driven #918 successor slice', () => {
       listReviewRuns: () => [],
       start: async (row, head) => {
         starts.push({ pr: row.prNumber, head });
-        const runId = 'prr-scheduler-delivery';
-        const now = new Date(Date.parse(core.commitAt) + 1_000).toISOString();
-        writeJson(path.join(storeRoot, 'runs', `${runId}.json`), {
-          schemaVersion: 1,
-          id: runId,
-          runId,
-          projectId: 'orchestrator-pack',
-          key: `pr-${row.prNumber}-${head}`,
-          prNumber: row.prNumber,
-          targetSha: head,
-          headSha: head,
-          status: 'up_to_date',
-          latestRunStatus: 'up_to_date',
-          linkedSessionId: row.sessionId,
-          startReason: 'scheduler',
-          surface: 'pr2-scheduler',
-          trustedPackRoot: repoRoot,
-          sourceRepoRoot: repoRoot,
-          runnerPid: process.pid,
-          createdAt: now,
-          updatedAt: now,
-          heartbeatAtUtc: now,
-          completedAtUtc: now,
-          githubReviewId: 311,
-          githubReviewUrl: 'fixture://review/311',
-          githubReviewEvent: 'COMMENT',
-          githubReviewReconciliation: {
-            schemaVersion: 1,
-            event: 'COMMENT',
-            phase: 'complete',
-            actorLogin: 'fixture-reviewer',
-            commentBody: 'clean',
-            commentReviewId: 311,
-            commentReviewUrl: 'fixture://review/311',
-            pendingDismissalReviewIds: [],
-            dismissedReviewIds: [],
-            preparedAtUtc: now,
-            updatedAtUtc: now,
+        const reviews: any[] = [];
+        const result = await runPackReviewEntry({
+          root: path.join(root, 'issue-918-runner'),
+          target: { prNumber: row.prNumber, headSha: head, sessionId: row.sessionId },
+          storeRoot,
+          tracePath: path.join(root, 'issue-918-runner.trace.jsonl'),
+          githubTransport: {
+            async resolveActorLogin() { return 'issue-928-reviewer'; },
+            async listReviews() { return [...reviews]; },
+            async postReview(input) {
+              const review = {
+                id: 92801 + reviews.length,
+                state: 'COMMENTED',
+                userLogin: 'issue-928-reviewer',
+                submittedAt: new Date().toISOString(),
+                body: input.body,
+                commitId: input.commitId,
+                url: `fixture://issue-928/review/${92801 + reviews.length}`,
+              };
+              reviews.push(review);
+              return { id: review.id, url: review.url };
+            },
+            async dismissReview() { /* no prior approval exists in this fixture */ },
           },
-          reviewVerdict: 'clean',
-          findingCount: 0,
-          findings: [],
-          journalOutcome: { state: 'persisted', recordedAtUtc: now, reason: 'persisted', idempotencyKey: 'journal', attempts: 1 },
-          deliveryOutcomes: {
-            requiredStatus: { state: 'succeeded', recordedAtUtc: now, reason: 'success', idempotencyKey: `required-status:orchestrator-pack/pack-review:${head}` },
-            workerNotification: { state: 'delivered', recordedAtUtc: now, reason: 'delivered', idempotencyKey: `worker-notification:${runId}:${head}` },
-          },
+          statusWriter: async () => { /* success is persisted by the real delivery layer */ },
+          workerNotifier: async () => ({ state: 'delivered', reason: 'issue_928_fixture_dispatched' }),
+          journalWriter: (runId, fields, options) => updatePackReviewRun(runId, fields, options),
         });
+        expect(result).toMatchObject({ ok: true, created: true });
+        const runId = String(result.runId);
+        const run = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+        expect(run).not.toBeNull();
+        expect(run?.journalOutcome?.state).toBe('persisted');
+        expect(packReviewDeliveryNeedsResume(run!)).toBe(false);
+        expect(run?.reviewVerdict).toBe('clean');
+        durableRuns.push(runId);
         return { ok: true };
       },
     };
     expect(await runSchedulerTick(boundary, env)).toEqual({ attempted: 1, started: 1, skipped: 0 });
     expect(starts).toEqual([{ pr: 928, head: candidate.boundHeadSha }]);
-    expect(findCompletedSchedulerDelivery(core, storeRoot)).toMatchObject({ runId: 'prr-scheduler-delivery', prNumber: 928, headSha: candidate.boundHeadSha, journalOutcome: { state: 'persisted' } });
+    expect(durableRuns).toHaveLength(1);
     await expect(runSchedulerTick(boundary, { ...env, ORCHESTRATOR_CUTOVER_NONCE: 'copied-stale-nonce' })).rejects.toThrow(/epoch_nonce_mismatch/);
+  });
+
+  it('recognizes only a scheduler-owned completed delivery receipt for activation observation', () => {
+    const root = tempRoot();
+    const storeRoot = path.join(root, 'review-runs');
+    initializePackReviewRunStore(storeRoot);
+    const core = coreFixture();
+    const now = new Date(Date.parse(core.commitAt) + 1_000).toISOString();
+    writeJson(path.join(storeRoot, 'runs', 'prr-scheduler-delivery.json'), {
+      schemaVersion: 1,
+      id: 'prr-scheduler-delivery',
+      runId: 'prr-scheduler-delivery',
+      projectId: 'orchestrator-pack',
+      key: `pr-928-${'c'.repeat(40)}`,
+      prNumber: 928,
+      targetSha: 'c'.repeat(40),
+      headSha: 'c'.repeat(40),
+      status: 'up_to_date',
+      latestRunStatus: 'up_to_date',
+      linkedSessionId: 'worker-1',
+      startReason: 'scheduler',
+      surface: 'pr2-scheduler',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      runnerPid: process.pid,
+      createdAt: now,
+      updatedAt: now,
+      heartbeatAtUtc: now,
+      completedAtUtc: now,
+      githubReviewId: 311,
+      githubReviewUrl: 'fixture://review/311',
+      githubReviewEvent: 'COMMENT',
+      reviewVerdict: 'clean',
+      findingCount: 0,
+      findings: [],
+      journalOutcome: { state: 'persisted', recordedAtUtc: now, reason: 'persisted', idempotencyKey: 'journal', attempts: 1 },
+      deliveryOutcomes: {
+        requiredStatus: { state: 'succeeded', recordedAtUtc: now, reason: 'success', idempotencyKey: `required-status:orchestrator-pack/pack-review:${'c'.repeat(40)}` },
+        workerNotification: { state: 'delivered', recordedAtUtc: now, reason: 'delivered', idempotencyKey: `worker-notification:prr-scheduler-delivery:${'c'.repeat(40)}` },
+      },
+    });
+    expect(findCompletedSchedulerDelivery(core, storeRoot)).toMatchObject({ runId: 'prr-scheduler-delivery', prNumber: 928 });
   });
 
   it('refuses a fresh-head drift before review start', async () => {
