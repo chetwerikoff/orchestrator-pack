@@ -242,12 +242,13 @@ export async function runGateBCharacterization(page: {
         }) as { sessionId?: string };
         const sessionId = String(attached.sessionId ?? '');
         if (sessionId) {
-          await cdp.send('Network.enable', {}, sessionId);
-          await cdp.send('Runtime.enable', {}, sessionId);
-          await cdp.send('Runtime.evaluate', {
+          const flatCdp = cdp as FlatCdpSessionSend;
+          await sendFlatChildCdpCommand(flatCdp, sessionId, 'Network.enable');
+          await sendFlatChildCdpCommand(flatCdp, sessionId, 'Runtime.enable');
+          await sendFlatChildCdpCommand(flatCdp, sessionId, 'Runtime.evaluate', {
             expression: "(async () => { await fetch('https://chatgpt.com/favicon.ico', { mode: 'no-cors' }); })()",
             awaitPromise: true,
-          }, sessionId);
+          });
           const stimulusDeadline = Date.now() + 5_000;
           while (Date.now() < stimulusDeadline && !cdpServiceWorkerHttpObserved) {
             await new Promise((resolve) => { setTimeout(resolve, 100); });
@@ -361,6 +362,24 @@ function isFakeTurnPage(page: unknown): boolean {
 
 function isRelevantTargetType(type: string | undefined): boolean {
   return type !== undefined && RELEVANT_TARGET_TYPES.has(type);
+}
+
+
+type FlatCdpSessionSend = {
+  send: (
+    method: string,
+    params?: Record<string, unknown>,
+    sessionId?: string,
+  ) => Promise<unknown>;
+};
+
+async function sendFlatChildCdpCommand(
+  cdp: FlatCdpSessionSend,
+  sessionId: string,
+  method: string,
+  params: Record<string, unknown> = {},
+): Promise<unknown> {
+  return cdp.send(method, params, sessionId);
 }
 
 async function sendChildCdpCommand(
