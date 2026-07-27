@@ -308,7 +308,7 @@ function assertPreparedInput(input: {
     hostId: input.hostId,
     repoRoot: input.repoRoot,
     installedCommitSha: input.installedCommitSha,
-    oldInstalledRevisionRoot: input.oldInstalledRevisionRoot,
+    oldInstalledRevisionRoot: String(input.oldInstalledRevisionRoot),
     legacySupervisor: input.legacySupervisor,
     recoveryBindings: recoveryBindings(input.paths, input.stores),
   };
