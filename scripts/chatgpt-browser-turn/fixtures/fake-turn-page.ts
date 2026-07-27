@@ -326,8 +326,9 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   const page = {
     context: () => ({
       ...(observeComplete ? {
-        on: (event: string, handler: (request: { url: () => string }) => unknown) => {
-          if (event === 'request') contextRequestHandlers.push(handler);
+        on: (event: string, handler: (...args: any[]) => unknown) => {
+          if (event === 'request') contextRequestHandlers.push(handler as (request: { url: () => string }) => unknown);
+          if (event === 'page' || event === 'serviceworker') handler({});
         },
       } : {}),
       newCDPSession: async () => {

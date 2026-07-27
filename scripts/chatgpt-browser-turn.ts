@@ -38,7 +38,11 @@ import {
   writeIncident,
 } from './chatgpt-browser-turn/state.ts';
 import { configuredProfileKey, sha256 } from './chatgpt-browser-turn/storage-common.ts';
-import { lastDispatchObservationDiagnostic } from './chatgpt-browser-turn/dispatch-observation.ts';
+import {
+  lastDispatchObservationDiagnostic,
+  runGateBCharacterization,
+  writeGateBCharacterizationRecord,
+} from './chatgpt-browser-turn/dispatch-observation.ts';
 import { recordSwallowedDriverException } from './chatgpt-browser-turn/diagnostics.ts';
 import { readStableInput } from './chatgpt-browser-turn/input.ts';
 import {
@@ -753,6 +757,40 @@ async function runStatus(args: ParsedArgs): Promise<number> {
   return emitControlAndCode(statusList(profileKey));
 }
 
+
+async function runGateBCharacterizationCommand(args: ParsedArgs): Promise<number> {
+  assertAllowedOptions(args, ['profile', 'cdp', 'chat-url']);
+  const { profile, cdp, profileKey } = profileArgs(args);
+  const chatUrl = option(args, 'chat-url') ?? 'https://chatgpt.com/';
+  const config: BrowserConfig = {
+    cdp,
+    profile,
+    chatUrl,
+    newChat: false,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+  };
+  let browser: Awaited<ReturnType<ReturnType<typeof loadChromium>['connectOverCDP']>> | undefined;
+  try {
+    const chromium = loadChromium();
+    browser = await chromium.connectOverCDP(config.cdp);
+    const opened = await openTurnPage(browser, config);
+    const result = await runGateBCharacterization(opened.page);
+    writeGateBCharacterizationRecord(profileKey, result);
+    const control: ControlResultV1 = {
+      schema: 'control-result/v1',
+      operation: 'status/list',
+      state: result.complete ? 'ok' : 'refused_active',
+      configured_profile_key: profileKey,
+      ...(result.complete ? {} : { cause: 'gate_b_characterization_incomplete' }),
+    };
+    emit(control);
+    if (opened.owned) await opened.page.close().catch(() => {});
+    return result.complete ? 0 : 10;
+  } finally {
+    await releaseCdpBrowser(browser);
+  }
+}
+
 async function runCapability(args: ParsedArgs): Promise<number> {
   assertAllowedOptions(args, ['profile', 'cdp']);
   const { profileKey, cdp } = profileArgs(args);
@@ -834,6 +872,7 @@ async function runClear(args: ParsedArgs): Promise<number> {
 
 function controlOperation(args: ParsedArgs): ControlResultV1['operation'] {
   if (args.command === 'clear') return 'clear';
+  if (args.command === 'gate-b-characterization') return 'status/list';
   if (args.command === 'capability') return 'capability';
   return 'status/list';
 }
@@ -859,6 +898,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     if (args.command === 'status/list') return await runStatus(args);
     if (args.command === 'clear') return await runClear(args);
     if (args.command === 'capability') return await runCapability(args);
+    if (args.command === 'gate-b-characterization') return await runGateBCharacterizationCommand(args);
     if (args.command === 'publication-status') return await runPublicationStatus(args);
     emit({ schema: 'control-result/v1', operation: 'status/list', state: 'driver_error', configured_profile_key: 'profile-unresolved', cause: 'command_invalid' });
     return 22;

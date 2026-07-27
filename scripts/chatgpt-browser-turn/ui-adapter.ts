@@ -11,6 +11,7 @@ import {
   recordDispatchObservationDiagnostic,
   type DispatchObservationBoundary,
 } from './dispatch-observation.ts';
+import { configuredProfileKey } from './storage-common.ts';
 import {
   mergeContinuationSegments,
   SEMANTIC_UI_FILTER,
@@ -1289,6 +1290,7 @@ export async function sendTurn(
       preDispatchNormalizedUrl,
       userNodeBaselineReliable,
       urlBaselineReliable,
+      profileKey: configuredProfileKey(config.profile, config.cdp),
     });
   } catch (error) {
     if (error instanceof DispatchObservationEstablishmentError) {

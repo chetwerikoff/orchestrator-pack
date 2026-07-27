@@ -1942,7 +1942,7 @@ describe('issue 1024 gate-B characterization notes', () => {
     expect(notes).toContain('service-worker-owned HTTP');
     expect(notes).toContain('worker/secondary-target outbound WebSocket');
     expect(notes).toContain('dispatch_request_not_observed');
-    expect(notes).toContain('runGateBCharacterization');
+    expect(notes).toContain('gate-b-characterization');
   });
 
   it('ships the Gate-B live characterization probe module', async () => {
@@ -1964,6 +1964,25 @@ describe('issue 1024 gate-B characterization notes', () => {
       },
     ]);
     expect(summary.complete).toBe(false);
+  });
+
+  it('persists and reloads Gate-B characterization records per configured profile', async () => {
+    const module = await import('../chatgpt-browser-turn/dispatch-observation.ts');
+    const profileKey = 'profile-test-gate-b-record';
+    const complete = module.summarizeGateBCharacterization([
+      {
+        probe: 'service-worker-owned-http-on-configured-context',
+        observed: true,
+        detail: 'context_request_observed',
+      },
+      {
+        probe: 'worker-or-secondary-target-websocket-frame-sent',
+        observed: true,
+        detail: 'websocket_frame_sent_observed',
+      },
+    ]);
+    module.writeGateBCharacterizationRecord(profileKey, complete);
+    expect(module.readGateBCharacterizationRecord(profileKey)?.complete).toBe(true);
   });
 });
 
