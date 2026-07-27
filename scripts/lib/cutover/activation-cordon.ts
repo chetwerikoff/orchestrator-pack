@@ -1,9 +1,19 @@
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
+import { sha256Bytes, sha256Stable, stableStringify } from './stable-stringify.ts';
 import { writeDurableFile, writeDurableJson } from './activation-evidence.ts';
-import type { CordonRecord, CutoverStoreSpec, ProcessIdentity, TypeScriptSupervisorInertProof } from './types.ts';
+import type {
+  ActivationPaths,
+  ActivationRequest,
+  CordonPreparedRecord,
+  CordonRecord,
+  CordonState,
+  CutoverRecoveryBindings,
+  CutoverStoreSpec,
+  ProcessIdentity,
+  TypeScriptSupervisorInertProof,
+} from './types.ts';
 import { D928 } from '../../pr2a/contracts.ts';
 
 interface LegacyRegistryChild {
@@ -124,18 +134,33 @@ export function legacyBarrierActive(stateRoot: string): boolean {
   return existsSync(barrier.stopping) || existsSync(barrier.maintenance);
 }
 
-function persistLegacyStartBarrier(stateRoot: string, epochId: string): void {
+function maintenanceBelongsToEpoch(pathName: string, epochId: string): boolean {
+  if (!existsSync(pathName)) return false;
+  try {
+    const value = JSON.parse(readFileSync(pathName, 'utf8')) as { reason?: unknown; epochId?: unknown };
+    return value.reason === 'issue-928-cutover' && value.epochId === epochId;
+  } catch {
+    return false;
+  }
+}
+
+function persistLegacyStartBarrier(stateRoot: string, epochId: string, allowResume = false): void {
   const barrier = legacyBarrierPaths(stateRoot);
-  if (legacyBarrierActive(stateRoot)) throw new Error('recovery_required_existing_legacy_barrier');
-  // The legacy loop checks `stopping` before any recovery/restart work, and Start treats
-  // either `stopping` or `maintenance.epoch` as an active stop-maintenance epoch. Writing
-  // `stopping` first therefore closes both respawn and new-start ingress as the first mutation.
-  writeDurableFile(barrier.stopping, `${new Date().toISOString()}\n`);
-  writeDurableJson(barrier.maintenance, {
-    reason: 'issue-928-cutover',
-    epochId,
-    startedMs: Date.now(),
-  });
+  if (!allowResume && legacyBarrierActive(stateRoot)) throw new Error('recovery_required_existing_legacy_barrier');
+  if (!existsSync(barrier.stopping)) {
+    // The legacy loop checks `stopping` before any recovery/restart work, and Start treats
+    // either `stopping` or `maintenance.epoch` as an active stop-maintenance epoch.
+    writeDurableFile(barrier.stopping, `${new Date().toISOString()}\n`);
+  }
+  if (existsSync(barrier.maintenance)) {
+    if (!maintenanceBelongsToEpoch(barrier.maintenance, epochId)) throw new Error('legacy_barrier_epoch_conflict');
+  } else {
+    writeDurableJson(barrier.maintenance, {
+      reason: 'issue-928-cutover',
+      epochId,
+      startedMs: Date.now(),
+    });
+  }
 }
 
 export function releaseLegacyStartBarrier(stateRoot: string): void {
@@ -223,6 +248,108 @@ function proveTypeScriptSupervisorInert(stateRoot: string): TypeScriptSupervisor
   return { result: 'typescript-supervisor-inert', statusObserved: true, supervisorAlive: false, childAlive: false };
 }
 
+function cloneStores(stores: readonly CutoverStoreSpec[]): CutoverStoreSpec[] {
+  return stores.map((store) => ({ ...store, coveredFields: [...store.coveredFields] }));
+}
+
+export function recoveryBindings(paths: ActivationPaths, stores: readonly CutoverStoreSpec[]): CutoverRecoveryBindings {
+  return {
+    phaseOnePath: paths.phaseOnePath,
+    followupPath: paths.followupPath,
+    epochAuthorityPath: paths.epochAuthorityPath,
+    targetRegistryPath: paths.targetRegistryPath,
+    projectedRegistryPath: paths.projectedRegistryPath,
+    snapshotDir: paths.snapshotDir,
+    supervisorStateDir: paths.supervisorStateDir,
+    stores: cloneStores(stores),
+  };
+}
+
+function stateBindingShape(state: CordonState): unknown {
+  return {
+    epochId: state.epochId,
+    hostId: state.hostId,
+    repoRoot: state.repoRoot,
+    installedCommitSha: state.installedCommitSha,
+    oldInstalledRevisionRoot: state.oldInstalledRevisionRoot,
+    recoveryBindings: state.recoveryBindings,
+  };
+}
+
+function requestBindingShape(request: ActivationRequest): unknown {
+  return {
+    epochId: request.epochId,
+    hostId: request.hostId,
+    repoRoot: request.repoRoot,
+    installedCommitSha: request.installedCommitSha,
+    oldInstalledRevisionRoot: request.oldInstalledRevisionRoot,
+    recoveryBindings: recoveryBindings(request.paths, request.stores),
+  };
+}
+
+export function assertCordonRequestBinding(request: ActivationRequest, state: CordonState): void {
+  if (stableStringify(requestBindingShape(request)) !== stableStringify(stateBindingShape(state))) {
+    throw new Error('recovery_request_binding_mismatch');
+  }
+}
+
+function assertPreparedInput(input: {
+  epochId: string;
+  hostId: string;
+  repoRoot: string;
+  installedCommitSha: string;
+  oldInstalledRevisionRoot: string;
+  legacySupervisor: ProcessIdentity;
+  stores: CutoverStoreSpec[];
+  paths: ActivationPaths;
+}, prepared: CordonPreparedRecord): void {
+  const expected = {
+    epochId: input.epochId,
+    hostId: input.hostId,
+    repoRoot: input.repoRoot,
+    installedCommitSha: input.installedCommitSha,
+    oldInstalledRevisionRoot: input.oldInstalledRevisionRoot,
+    legacySupervisor: input.legacySupervisor,
+    recoveryBindings: recoveryBindings(input.paths, input.stores),
+  };
+  const observed = {
+    epochId: prepared.epochId,
+    hostId: prepared.hostId,
+    repoRoot: prepared.repoRoot,
+    installedCommitSha: prepared.installedCommitSha,
+    oldInstalledRevisionRoot: prepared.oldInstalledRevisionRoot,
+    legacySupervisor: prepared.legacySupervisor,
+    recoveryBindings: prepared.recoveryBindings,
+  };
+  if (stableStringify(expected) !== stableStringify(observed)) throw new Error('cordon_resume_binding_mismatch');
+}
+
+function refuseCompetingTransaction(input: { path: string }): void {
+  if (existsSync(input.path)) throw new Error('competing_transaction_admitted');
+}
+
+export function readCordonState(pathName: string): CordonState {
+  if (!existsSync(pathName)) throw new Error('cordon_missing');
+  const record = JSON.parse(readFileSync(pathName, 'utf8')) as CordonState;
+  if (
+    record.schemaVersion !== 1
+    || (record.state !== 'preparing' && record.state !== 'active')
+    || !record.epochId
+    || !record.nonce
+    || !record.hostId
+    || !record.repoRoot
+    || !record.installedCommitSha
+    || !record.oldInstalledRevisionRoot
+    || !record.recoveryBindings
+    || record.typescriptSupervisorInert?.result !== 'typescript-supervisor-inert'
+    || record.typescriptSupervisorInert.supervisorAlive !== false
+    || record.typescriptSupervisorInert.childAlive !== false
+  ) {
+    throw new Error('cordon_invalid');
+  }
+  return record;
+}
+
 export function createCordon(input: {
   path: string;
   epochId: string;
@@ -233,43 +360,63 @@ export function createCordon(input: {
   legacyStateRoot: string;
   legacySupervisor: ProcessIdentity;
   stores: CutoverStoreSpec[];
+  paths: ActivationPaths;
 }): CordonRecord {
-  if (existsSync(input.path)) throw new Error('competing_transaction_admitted');
-  const typescriptSupervisorInert = proveTypeScriptSupervisorInert(input.legacyStateRoot);
-  const preImportTargetDigests: CordonRecord['preImportTargetDigests'] = {};
-  for (const store of input.stores) preImportTargetDigests[store.id] = fileDigestOrAbsent(store.targetPath);
+  let prepared: CordonPreparedRecord;
+  if (existsSync(input.path)) {
+    const existing = readCordonState(input.path);
+    if (existing.state === 'preparing') {
+      assertPreparedInput(input, existing);
+      prepared = existing;
+    } else {
+      refuseCompetingTransaction(input);
+      throw new Error('unreachable_competing_transaction');
+    }
+  } else {
+    if (legacyBarrierActive(input.legacyStateRoot)) throw new Error('recovery_required_existing_legacy_barrier');
+    const typescriptSupervisorInert = proveTypeScriptSupervisorInert(input.legacyStateRoot);
+    const preImportTargetDigests: CordonRecord['preImportTargetDigests'] = {};
+    for (const store of input.stores) preImportTargetDigests[store.id] = fileDigestOrAbsent(store.targetPath);
+    prepared = {
+      schemaVersion: 1,
+      state: 'preparing',
+      epochId: input.epochId,
+      nonce: randomBytes(32).toString('hex'),
+      hostId: input.hostId,
+      repoRoot: input.repoRoot,
+      installedCommitSha: input.installedCommitSha,
+      oldInstalledRevisionRoot: input.oldInstalledRevisionRoot,
+      legacySupervisor: input.legacySupervisor,
+      startedAt: new Date().toISOString(),
+      typescriptSupervisorInert,
+      importBegunAt: null,
+      preImportTargetDigests,
+      recoveryBindings: recoveryBindings(input.paths, input.stores),
+    };
+    // Recovery-authoritative intent is durable before the first barrier byte. A crash at any
+    // later point can resume the same nonce/bindings instead of leaving an orphan barrier.
+    writeDurableJson(input.path, prepared);
+  }
+
+  persistLegacyStartBarrier(input.legacyStateRoot, input.epochId, true);
   const record: CordonRecord = {
-    schemaVersion: 1,
-    epochId: input.epochId,
-    nonce: randomBytes(32).toString('hex'),
-    hostId: input.hostId,
-    repoRoot: input.repoRoot,
-    installedCommitSha: input.installedCommitSha,
-    oldInstalledRevisionRoot: input.oldInstalledRevisionRoot,
-    legacySupervisor: input.legacySupervisor,
-    startedAt: new Date().toISOString(),
+    ...prepared,
+    state: 'active',
     writersClosed: true,
     noRespawn: true,
     noTypeScriptStart: true,
-    typescriptSupervisorInert,
-    importBegunAt: null,
-    preImportTargetDigests,
   };
-  persistLegacyStartBarrier(input.legacyStateRoot, input.epochId);
   writeDurableJson(input.path, record);
   return record;
 }
 
 export function readCordon(pathName: string): CordonRecord {
-  const record = JSON.parse(readFileSync(pathName, 'utf8')) as CordonRecord;
+  const record = readCordonState(pathName);
   if (
-    record.schemaVersion !== 1
+    record.state !== 'active'
     || !record.writersClosed
     || !record.noRespawn
     || !record.noTypeScriptStart
-    || record.typescriptSupervisorInert?.result !== 'typescript-supervisor-inert'
-    || record.typescriptSupervisorInert.supervisorAlive !== false
-    || record.typescriptSupervisorInert.childAlive !== false
   ) {
     throw new Error('cordon_invalid');
   }
