@@ -1,8 +1,23 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { readProcessIdentity } from '../lib/cutover/activation-cordon.ts';
 import { appendPhaseOne, readPhaseOneDetail, verifyPhaseOneDetails } from '../lib/cutover/activation-evidence.ts';
+import {
+  observeSchedulerHealthAndDelivery,
+  productionRecoveryBoundary,
+} from '../lib/cutover/activation-recovery.ts';
+import {
+  candidateLegacyReferenceRows,
+  isExecutableLegacyReference,
+} from '../lib/cutover/activation-transaction.ts';
+import type { ActivationRequest, EpochCommitCore } from '../lib/cutover/types.ts';
+import {
+  createPackReviewRun,
+  initializePackReviewRunStore,
+  updatePackReviewRun,
+} from '../lib/pack-review-run-store.ts';
 import { AC_MUTATION_CONTROLS } from './contracts.ts';
 import {
   MUTATION_BEHAVIOR_PROBE_KEYS,
@@ -19,6 +34,7 @@ const ISSUE_928_CUTOVER_MARKERS = Object.freeze([
   'scripts/pr2a/final-conformance-precutover.ts',
 ]);
 const TERMINALIZED_FOUNDATION_MUTATION_KEY = 'AC9:registry-or-supervisor-modified';
+const repoRoot = path.resolve(process.cwd());
 
 function issue928CutoverPresent(): boolean {
   return ISSUE_928_CUTOVER_MARKERS.every((file) => existsSync(path.resolve(file)));
@@ -150,5 +166,216 @@ describe('[Issue #928] durable phase-one detail evidence', () => {
     expect(recovery).toContain("readPhaseOneDetail(request.paths.phaseOnePath, request.epochId, nonce, 'snapshots')");
     expect(recovery).toContain("throw new Error(`precas_snapshot_digest_mismatch:${spec.id}`)");
     expect(recovery).toContain('verifyPhaseOneDetails(request.paths.phaseOnePath, request.epochId, nonce);');
+  });
+
+  it('classifies an executable target-library edge from an otherwise-unlisted candidate source', () => {
+    const rows = candidateLegacyReferenceRows(
+      [
+        "deadbeef:scripts/unlisted-cutover-consumer.ts:1:import '../lib/Review-StartClaim.ps1';",
+        "deadbeef:docs/historical-note.md:1:const historicalName = 'Review-StartClaim.ps1';",
+      ].join('\n'),
+      [
+        { path: 'scripts/unlisted-cutover-consumer.ts', executionClass: 'reachable-helper' },
+        { path: 'docs/historical-note.md', executionClass: 'dead' },
+      ],
+    );
+    expect(rows.filter(isExecutableLegacyReference).map((row) => row.source)).toEqual([
+      'scripts/unlisted-cutover-consumer.ts',
+    ]);
+  });
+
+  it('reuses a live waiting-restart supervisor instead of detaching a second owner', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'opk-928-supervisor-recovery-'));
+    try {
+      const stateDir = path.join(root, 'supervisor');
+      mkdirSync(stateDir, { recursive: true });
+      const identity = readProcessIdentity(process.pid);
+      const request = {
+        epochId: 'epoch-waiting-supervisor',
+        expectedOldEpochId: null,
+        hostId: 'host-test',
+        repoRoot,
+        installedCommitSha: 'a'.repeat(40),
+        oldInstalledRevisionRoot: repoRoot,
+        legacySupervisorPid: process.pid,
+        knownMemberRoster: [{ hostId: 'host-test' }],
+        stores: [],
+        paths: {
+          stateDir: root,
+          cordonPath: path.join(root, 'cordon.json'),
+          phaseOnePath: path.join(root, 'phase-one.json'),
+          followupPath: path.join(root, 'followups.json'),
+          epochAuthorityPath: path.join(root, 'authority.json'),
+          targetRegistryPath: path.join(root, 'target-registry.json'),
+          projectedRegistryPath: path.join(root, 'projected-registry.json'),
+          snapshotDir: path.join(root, 'snapshots'),
+          supervisorStateDir: stateDir,
+          foundationEvidencePath: path.join(root, 'foundation.json'),
+        },
+      } as ActivationRequest;
+      const nonce = 'waiting-supervisor-nonce';
+      writeFileSync(path.join(stateDir, 'typescript-supervisor-status.json'), `${JSON.stringify({
+        schemaVersion: 1,
+        epochId: request.epochId,
+        nonce,
+        supervisorPid: process.pid,
+        supervisorStartTicks: identity.startTicks,
+        registryHash: 'registry-hash',
+        registrySource: request.paths.targetRegistryPath,
+        childId: 'pr2-scheduler',
+        childPid: null,
+        childGeneration: 2,
+        childRestarts: 1,
+        restartState: 'waiting-restart',
+        startedAt: new Date().toISOString(),
+        lastChildStartAt: new Date().toISOString(),
+        cordonReason: 'post-cas-epoch-owner',
+        refusalReason: null,
+      })}\n`, 'utf8');
+
+      await expect(productionRecoveryBoundary.ensureTypeScriptSupervisor(request, nonce)).resolves.toEqual({
+        supervisorPid: process.pid,
+        childGeneration: 2,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('waits for durable scheduler delivery after child completion instead of failing one-shot', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'opk-928-delivery-wait-'));
+    try {
+      const stateDir = path.join(root, 'supervisor');
+      const storeRoot = path.join(root, 'review-runs');
+      mkdirSync(stateDir, { recursive: true });
+      initializePackReviewRunStore(storeRoot);
+      const identity = readProcessIdentity(process.pid);
+      const core: EpochCommitCore = {
+        epochId: 'epoch-delivery-wait',
+        nonce: 'nonce-delivery-wait',
+        hostId: 'host-test',
+        repoRoot,
+        installedCommitSha: 'b'.repeat(40),
+        snapshotDigests: { reconcile: 'r', reevaluation: 'e', reportStateSeed: 's' },
+        importDigests: { reconcile: 'ir', reevaluation: 'ie', reportStateSeed: 'is' },
+        registryHash: 'registry-hash',
+        preCommitLogDigest: 'phase-one',
+        commitAt: new Date(Date.now() - 1_000).toISOString(),
+      };
+      const request = {
+        epochId: core.epochId,
+        expectedOldEpochId: null,
+        hostId: core.hostId,
+        repoRoot,
+        installedCommitSha: core.installedCommitSha,
+        oldInstalledRevisionRoot: repoRoot,
+        legacySupervisorPid: process.pid,
+        knownMemberRoster: [{ hostId: core.hostId }],
+        stores: [],
+        paths: {
+          stateDir: root,
+          cordonPath: path.join(root, 'cordon.json'),
+          phaseOnePath: path.join(root, 'phase-one.json'),
+          followupPath: path.join(root, 'followups.json'),
+          epochAuthorityPath: path.join(root, 'authority.json'),
+          targetRegistryPath: path.join(root, 'target-registry.json'),
+          projectedRegistryPath: path.join(root, 'projected-registry.json'),
+          snapshotDir: path.join(root, 'snapshots'),
+          supervisorStateDir: stateDir,
+          foundationEvidencePath: path.join(root, 'foundation.json'),
+        },
+      } as ActivationRequest;
+      writeFileSync(path.join(stateDir, 'typescript-supervisor-status.json'), `${JSON.stringify({
+        schemaVersion: 1,
+        epochId: core.epochId,
+        nonce: core.nonce,
+        supervisorPid: process.pid,
+        supervisorStartTicks: identity.startTicks,
+        registryHash: core.registryHash,
+        registrySource: request.paths.targetRegistryPath,
+        childId: 'pr2-scheduler',
+        childPid: null,
+        childGeneration: 3,
+        childRestarts: 2,
+        restartState: 'waiting-restart',
+        startedAt: new Date().toISOString(),
+        lastChildStartAt: new Date().toISOString(),
+        cordonReason: 'post-cas-epoch-owner',
+        refusalReason: null,
+      })}\n`, 'utf8');
+
+      const headSha = 'c'.repeat(40);
+      const delayedDelivery = (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        const created = createPackReviewRun({
+          projectId: 'orchestrator-pack',
+          storeRoot,
+          prNumber: 928,
+          headSha,
+          linkedSessionId: 'worker-delayed',
+          startReason: 'scheduler',
+          surface: 'pr2-scheduler',
+          trustedPackRoot: repoRoot,
+          sourceRepoRoot: repoRoot,
+        });
+        const now = new Date().toISOString();
+        updatePackReviewRun(created.run.id, {
+          status: 'up_to_date',
+          latestRunStatus: 'up_to_date',
+          reviewVerdict: 'clean',
+          findingCount: 0,
+          findings: [],
+          journalOutcome: {
+            state: 'persisted',
+            recordedAtUtc: now,
+            reason: 'verdict_persisted',
+            idempotencyKey: `verdict:${created.run.id}:${headSha}`,
+            attempts: 1,
+          },
+          githubReviewId: 92801,
+          githubReviewUrl: 'fixture://issue-928/delayed-review',
+          githubReviewReconciliation: {
+            schemaVersion: 1,
+            event: 'COMMENT',
+            phase: 'complete',
+            actorLogin: 'issue-928-reviewer',
+            commentBody: 'clean',
+            commentReviewId: 92801,
+            commentReviewUrl: 'fixture://issue-928/delayed-review',
+            pendingDismissalReviewIds: [],
+            dismissedReviewIds: [],
+            preparedAtUtc: now,
+            updatedAtUtc: now,
+          },
+          deliveryOutcomes: {
+            requiredStatus: {
+              state: 'succeeded',
+              recordedAtUtc: now,
+              reason: 'fixture_status_written',
+              idempotencyKey: `required-status:orchestrator-pack/pack-review:${headSha}`,
+            },
+            workerNotification: {
+              state: 'delivered',
+              recordedAtUtc: now,
+              reason: 'fixture_worker_delivered',
+              idempotencyKey: `worker-notification:${created.run.id}:${headSha}`,
+            },
+          },
+        }, { projectId: 'orchestrator-pack', storeRoot });
+      })();
+
+      const observation = await observeSchedulerHealthAndDelivery(
+        request,
+        core,
+        { supervisorPid: process.pid, childGeneration: 3 },
+        storeRoot,
+        { timeoutMs: 1_000, pollMs: 10 },
+      );
+      await delayedDelivery;
+      expect(observation.supervisor.restartState).toBe('waiting-restart');
+      expect(observation.delivery.headSha).toBe(headSha);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
