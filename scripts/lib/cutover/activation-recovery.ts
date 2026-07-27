@@ -31,19 +31,15 @@ export interface SchedulerHealthDeliveryObservation {
     registryHash: string;
     restartState: 'running';
   };
-  delivery:
-    | {
-        result: 'scheduler-durable-delivery-observed';
-        runId: string;
-        prNumber: number;
-        headSha: string;
-        status: string;
-        journalState: 'persisted';
-        deliveryOutcomes: PackReviewRunRecord['deliveryOutcomes'];
-      }
-    | {
-        result: 'no-post-activation-delivery-observed';
-      };
+  delivery: {
+    result: 'scheduler-durable-delivery-observed';
+    runId: string;
+    prNumber: number;
+    headSha: string;
+    status: string;
+    journalState: 'persisted';
+    deliveryOutcomes: PackReviewRunRecord['deliveryOutcomes'];
+  };
 }
 
 export interface RecoveryBoundary {
@@ -141,6 +137,9 @@ export function findCompletedSchedulerDelivery(core: EpochCommitCore, storeRoot?
     && run.headSha === run.targetSha
     && Date.parse(run.createdAt) >= committedAt
     && run.journalOutcome?.state === 'persisted'
+    && run.githubReviewReconciliation?.phase === 'complete'
+    && run.deliveryOutcomes?.requiredStatus?.state === 'succeeded'
+    && run.deliveryOutcomes?.workerNotification?.state === 'delivered'
     && !packReviewDeliveryNeedsResume(run)) ?? null;
 }
 
