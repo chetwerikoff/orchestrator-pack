@@ -27,7 +27,7 @@ interface MutationEvidence { ac: AcceptanceId; mutationId: string; patchSha256: 
 
 const repoRoot = path.resolve(process.cwd());
 const P = {
-  tx:'scripts/lib/cutover/activation-transaction.ts', cordon:'scripts/lib/cutover/activation-cordon.ts', importFile:'scripts/lib/cutover/activation-import.ts', epoch:'scripts/lib/cutover/activation-epoch-authority.ts', evidence:'scripts/lib/cutover/activation-evidence.ts', recovery:'scripts/lib/cutover/activation-recovery.ts', preflight:'scripts/lib/cutover/activation-platform-preflight.ts', registryProjection:'scripts/lib/cutover/activation-registry-projection.ts', supervisor:'scripts/lib/orchestrator-side-process-supervisor.ts', stable:'scripts/lib/cutover/stable-stringify.ts', vectors:'scripts/fixtures/cutover/stable-stringify-vectors.json', targetRegistry:'scripts/orchestrator-side-process-registry.cutover-target.json', liveRegistry:'scripts/orchestrator-side-process-registry.json', claimStore:'scripts/lib/review-start-claim-store.ts', claimCli:'scripts/lib/review-start-claim-cli.ts', claimReaper:'scripts/lib/review-start-claim-cli.ts', packRunner:'scripts/pack-review-runner.ts', wakeSupervisor:'scripts/orchestrator-wake-supervisor.ts', planningTest:'scripts/pr2a/planning.test.ts', laneConfig:'scripts/vitest-ci-lanes.config.json', denominatorJs:'scripts/reaction-config-messages.mjs',
+  tx:'scripts/lib/cutover/activation-transaction.ts', cordon:'scripts/lib/cutover/activation-cordon.ts', importFile:'scripts/lib/cutover/activation-import.ts', epoch:'scripts/lib/cutover/activation-epoch-authority.ts', evidence:'scripts/lib/cutover/activation-evidence.ts', recovery:'scripts/lib/cutover/activation-recovery.ts', preflight:'scripts/lib/cutover/activation-platform-preflight.ts', registryProjection:'scripts/lib/cutover/activation-registry-projection.ts', supervisor:'scripts/lib/orchestrator-side-process-supervisor.ts', stable:'scripts/lib/cutover/stable-stringify.ts', vectors:'scripts/fixtures/cutover/stable-stringify-vectors.json', targetRegistry:'scripts/orchestrator-side-process-registry.cutover-target.json', liveRegistry:'scripts/orchestrator-side-process-registry.json', claimStore:'scripts/lib/review-start-claim-store.ts', claimCli:'scripts/lib/review-start-claim-store.ts'.replace('-store.ts','-cli.ts'), claimReaper:'scripts/lib/review-start-claim-reaper.ts', packRunner:'scripts/pack-review-runner.ts', wakeSupervisor:'scripts/orchestrator-wake-supervisor.ts', planningTest:'scripts/cutover/issue-928.test.ts', estateManifest:'scripts/estate-cut/issue-906.manifest.json', laneConfig:'scripts/vitest-ci-lanes.config.json', denominatorJs:'scripts/reaction-config-messages.mjs',
 } as const;
 
 const GROUPS: Record<string, readonly MutationKey[]> = {
@@ -144,7 +144,7 @@ function mutationSpec(category:string,key:MutationKey):MutationSpec {
     case'canonical-vectors':return json(P.vectors,v=>{v.vectors[0].canonical='BROKEN';});
     case'claim-authority-bytes':return append(dirty(key),`\n// mutation:${key}\n`);
     case'claim-key-semantics':return replace(P.claimCli,'  return `pr-${positiveInteger(prNumber, 0)}-${normalizeHeadSha(headSha)}`;','  return `mutation-${positiveInteger(prNumber, 0)}-${normalizeHeadSha(headSha)}`;');
-    case'claimant-ts-import':return replace(P.packRunner,"} from './lib/review-start-claim-store.ts';","} from './lib/Review-StartClaim.ps1';");
+    case'claimant-ts-import':return replace(P.packRunner,"} from './lib/review-start-claim-store.ts';",`} from './lib/${path.basename(P.claimCli)}';`);
     case'closure-recompute-call':return replace(P.tx,'const { baseRef, closure } = boundary.resolveBaseAndClosure(request);',"const { baseRef, closure } = { baseRef: 'mutation', closure: { inputTree: 'mutation', referenceCount: 0 } };");
     case'closure-schema-guard':return replace(P.tx,"if (manifest.schemaVersion !== 1) throw new Error('closure_schema_incompatible');","if (false) throw new Error('closure_schema_incompatible');");
     case'closure-target-coverage':return replace(P.tx,'const TARGET_LIBRARIES = new Set<string>(TARGET_LIBRARY_PATHS);','const TARGET_LIBRARIES = new Set<string>();');
@@ -153,7 +153,7 @@ function mutationSpec(category:string,key:MutationKey):MutationSpec {
     case'cordon-admission-guard':return replace(P.cordon,"if (existsSync(input.path)) throw new Error('competing_transaction_admitted');","if (false) throw new Error('competing_transaction_admitted');");
     case'cordon-flags':return replace(P.cordon,'    writersClosed: true,','    writersClosed: false as true,');
     case'cordon-nonce':return replace(P.cordon,"nonce: randomBytes(32).toString('hex'),","nonce: '0'.repeat(64),");
-    case'cutover-terminalized':return create(D928[0],'# mutation: cutover row not terminalized\n');
+    case'cutover-terminalized':return json(P.estateManifest,v=>{if(!Array.isArray(v.objectiveStateDomain))throw new Error('estate_objective_state_domain_missing');v.objectiveStateDomain=v.objectiveStateDomain.filter((state:string)=>state!=='cutover-terminalized');});
     case'denominator-bytes':return append(P.denominatorJs,'\n// mutation denominator bytes\n');
     case'denominator-loadable':return append(P.denominatorJs,'\nexport const = ;\n');
     case'durability-primitives':switch(key){case'AC2:registry-file-or-parent-not-fsynced':return replace(P.registryProjection,'writeDurableFile(projectionPath, source);','void source;');case'AC2:precommit-log-not-durable-before-cas':case'AC7:precommit-log-not-durable-before-cas':case'AC7:local-fsync-followup-missing':case'AC8:file-fsync-omitted':return replace(P.evidence,'fsyncSync(fd);','void fd;',true);case'AC8:atomic-rename-omitted':return replace(P.evidence,'renameSync(temporary, target);','writeFileSync(target, bytes);');case'AC8:parent-fsync-omitted':return replace(P.evidence,'syncDirectory(directory);','void directory;');default:throw new Error(`durability_recipe_missing:${key}`);}
@@ -174,7 +174,7 @@ function mutationSpec(category:string,key:MutationKey):MutationSpec {
     case'lane-config-guards':switch(key){case'AC6:test-classification-missing':return json(P.laneConfig,v=>{delete v.classification['scripts/pr2a/planning.test.ts'];});case'AC6:test-classification-duplicate':return json(P.laneConfig,v=>{v.heavyFileBatchIsolate.push('scripts/pr2a/planning.test.ts');});case'AC6:lane-config-overreach':return json(P.laneConfig,v=>{v.lightMaxWorkers=99;});default:throw new Error(`lane_recipe_missing:${key}`);}
     case'live-registry-bytes':return append(P.liveRegistry,'\n ');
     case'no-legacy-claim-path':return create(D928[2],'# mutation: resurrected legacy claim path\n');
-    case'no-legacy-executable':return append(P.tx,"\nconst mutationLegacyExecutable = 'scripts/lib/Review-StartClaim.ps1';\n");
+    case'no-legacy-executable':return append(P.tx,`\nconst mutationLegacyExecutable = '${D928[2]}';\n`);
     case'no-new-powershell':return create('scripts/issue-928-mutation.ps1','Write-Output mutation\n');
     case'no-overlap-reimplementation':return append(P.importFile,'\nconst mutationOverlapProtocolReimplementation = true;\n');
     case'no-pwsh-dispatch':return append(P.tx,"\nconst mutationPwshDispatch = ['pwsh', '-File'];\n");

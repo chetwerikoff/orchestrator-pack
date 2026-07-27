@@ -17,8 +17,7 @@ export * from './final-conformance-precutover.ts';
 const repoRoot = path.resolve(process.cwd());
 const PRE_CUTOVER_BLOB_SHA = '8840d070078f9fa61813a04ea66279d351013cfd';
 const PRE_CUTOVER_HELPER = 'scripts/pr2a/final-conformance-precutover.ts';
-const ISSUE_928_TEST = 'scripts/pr2a/planning.test.ts';
-const ISSUE_928_MUTATION_RUNNER = 'scripts/cutover/mutation-runner.ts';
+const ISSUE_928_TEST = 'scripts/cutover/issue-928.test.ts';
 const CUTOVER_MARKERS = [
   'scripts/orchestrator-cutover-activate.ts',
   'scripts/orchestrator-side-process-registry.cutover-target.json',
@@ -57,8 +56,6 @@ function completePr2CutoverSignature(ref: string): boolean {
 function keepFinding(row: ConformanceFinding, ref: string, completeCutover: boolean): boolean {
   if (completeCutover && row.code === 'd928_target_missing_before_pr2_cutover' && row.path && D928.includes(row.path as (typeof D928)[number])) return false;
   if (completeCutover && row.code === 'd928_test_or_harness_reference' && row.path === ISSUE_928_TEST) return false;
-  if (completeCutover && row.code === 'd928_external_executable_reference' && row.path === ISSUE_928_MUTATION_RUNNER) return false;
-  if (completeCutover && row.code === 'claim_internal_implementation_externally_reachable' && row.path === ISSUE_928_MUTATION_RUNNER) return false;
   if (helperBlobPreserved(ref) && row.code === 'claim_internal_implementation_externally_reachable' && row.path === PRE_CUTOVER_HELPER) return false;
   return true;
 }
@@ -81,7 +78,7 @@ const M = {
   evidence: 'scripts/lib/cutover/activation-evidence.ts', recovery: 'scripts/lib/cutover/activation-recovery.ts',
   preflight: 'scripts/lib/cutover/activation-platform-preflight.ts', projection: 'scripts/lib/cutover/activation-registry-projection.ts',
   supervisor: 'scripts/lib/orchestrator-side-process-supervisor.ts', stable: 'scripts/lib/cutover/stable-stringify.ts',
-  planning: 'scripts/pr2a/planning.test.ts', targetRegistry: 'scripts/orchestrator-side-process-registry.cutover-target.json',
+  planning: 'scripts/cutover/issue-928.test.ts', estate: 'scripts/estate-cut/issue-906.manifest.json', targetRegistry: 'scripts/orchestrator-side-process-registry.cutover-target.json',
   lane: 'scripts/vitest-ci-lanes.config.json', vectors: 'scripts/fixtures/cutover/stable-stringify-vectors.json',
 } as const;
 const EXPECTED_FOLLOWUP_STEPS = [
@@ -93,6 +90,57 @@ const EXPECTED_FOLLOWUP_STEPS = [
   'final-health-delivery-observed',
   'activation-complete',
 ] as const;
+
+const CUTOVER_TERMINAL_ROWS = [
+  'scripts/lib/Get-ReactionMessagesFromYaml.ps1',
+  'scripts/reaction-config-messages.d.mts',
+  'scripts/reaction-config-messages.mjs',
+  'scripts/review-ready-report-state-seed.ps1',
+  'scripts/review-trigger-reconcile.ps1',
+  'scripts/review-trigger-reeval.ps1',
+] as const;
+const D928_REPLACEMENT_OWNERS = [
+  'scripts/orchestrator-wake-supervisor.ts',
+  'scripts/lib/orchestrator-side-process-supervisor.ts',
+  'scripts/lib/review-start-claim-store.ts',
+  'scripts/lib/review-start-claim-reaper.ts',
+] as const;
+function estateRows(value: unknown, rows: Array<{ path: string; terminalState?: unknown; replacementOwner?: unknown }> = []): Array<{ path: string; terminalState?: unknown; replacementOwner?: unknown }> {
+  if (Array.isArray(value)) {
+    for (const entry of value) estateRows(entry, rows);
+  } else if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (typeof record.path === 'string' && 'terminalState' in record) {
+      rows.push({ path: record.path, terminalState: record.terminalState, replacementOwner: record.replacementOwner });
+    }
+    for (const entry of Object.values(record)) estateRows(entry, rows);
+  }
+  return rows;
+}
+function estateSuccessorOk(): boolean {
+  try {
+    const value = JSON.parse(read(M.estate)) as { objectiveStateDomain?: unknown[] };
+    if (!Array.isArray(value.objectiveStateDomain)
+      || value.objectiveStateDomain.filter((state) => state === 'cutover-terminalized').length !== 1) return false;
+    const rows = estateRows(value);
+    for (const file of CUTOVER_TERMINAL_ROWS) {
+      const matches = rows.filter((row) => row.path === file);
+      if (matches.length !== 1
+        || matches[0]!.terminalState !== 'cutover-terminalized'
+        || matches[0]!.replacementOwner !== 'scripts/orchestrator-cutover-activate.ts') return false;
+    }
+    D928.forEach((file, index) => {
+      const matches = rows.filter((row) => row.path === file);
+      if (matches.length !== 1
+        || matches[0]!.terminalState !== 'deleted-now'
+        || matches[0]!.replacementOwner !== D928_REPLACEMENT_OWNERS[index]) throw new Error('d928_estate_successor_invalid');
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function read(file: string): string { return readFileSync(path.resolve(repoRoot, file), 'utf8'); }
 function exists(file: string): boolean { return existsSync(path.resolve(repoRoot, file)); }
 function has(file: string, token: string): boolean { return exists(file) && read(file).includes(token); }
@@ -103,7 +151,7 @@ function ordered(source: string, tokens: readonly string[]): boolean { let previ
 function all(file: string, tokens: readonly string[]): boolean { return tokens.every((token)=>has(file,token)); }
 function registryOk(): boolean { try { const value=JSON.parse(read(M.targetRegistry)) as any; return value?.schemaVersion===2&&value.requiredChildIds?.length===1&&value.requiredChildIds[0]==='pr2-scheduler'&&value.children?.length===1&&value.children[0]?.id==='pr2-scheduler'&&value.children[0]?.runtime==='node'&&value.children[0]?.script==='pr2-foundation/scheduler.ts'&&value.children[0]?.sideEffecting===true; } catch { return false; } }
 function vectorsOk(): boolean { try { const value=JSON.parse(read(M.vectors)) as any; return Array.isArray(value?.vectors)&&value.vectors.length>0&&value.vectors.every((row:any)=>stableStringify(row.input)===row.canonical); } catch { return false; } }
-function laneOk(): boolean { try { const value=JSON.parse(read(M.lane)) as any; return value?.lightMaxWorkers===2&&value?.classification?.['scripts/pr2a/planning.test.ts']==='light'&&Array.isArray(value?.heavyFileBatchIsolate)&&!value.heavyFileBatchIsolate.includes('scripts/pr2a/planning.test.ts'); } catch { return false; } }
+function laneOk(): boolean { try { const value=JSON.parse(read(M.lane)) as any; return value?.lightMaxWorkers===2&&value?.classification?.['scripts/cutover/issue-928.test.ts']==='light'&&Array.isArray(value?.heavyFileBatchIsolate)&&!value.heavyFileBatchIsolate.includes('scripts/cutover/issue-928.test.ts'); } catch { return false; } }
 function followupStepsOk(): boolean {
   const source = read(M.evidence);
   const marker = 'export const REQUIRED_FOLLOWUP_STEPS = [';
@@ -174,6 +222,7 @@ function mutationFailures(key:string, artifact:string):string[]{
     [M.stable,['Object.keys(object).sort()','return canonical(value, new Set());']],
   ];
   for(const [file,tokens] of required) need(all(file,tokens),`required:${file}`);
+  need(estateSuccessorOk(),'estate:cutover-terminalized');
   need(followupStepsOk(),'evidence:required-followups');
   need(inertProofOk(),'cordon:typescript-supervisor-inert');
   need(has(M.tx,'assertLegacySupervisor(legacyIdentity, request.oldInstalledRevisionRoot);')&&has(M.tx,'assertLegacySupervisor(identity, request.oldInstalledRevisionRoot);'),'identity:legacy-supervisor-boundaries');

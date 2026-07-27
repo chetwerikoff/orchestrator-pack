@@ -94,7 +94,8 @@
     "scripts/toolchain/chatgpt-browser-turn.issue-1010.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.test.ts": "light",
-    "scripts/worker-message-submit-reconcile.test.ts": "heavy"
+    "scripts/worker-message-submit-reconcile.test.ts": "heavy",
+    "scripts/cutover/issue-928.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,
