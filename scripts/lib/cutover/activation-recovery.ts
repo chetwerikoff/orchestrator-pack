@@ -338,7 +338,7 @@ function completePreCasRecovery(request: ActivationRequest, cordon: CordonRecord
     registryHash: projection.registryHash,
     preCommitLogDigest: phaseOne.digest,
   });
-  authority.commit(request.expectedOldEpochId, core);
+  authority.commit(cordon.recoveryBindings.expectedOldEpochId, core);
   return authority.verify(request.epochId, nonce);
 }
 
@@ -356,7 +356,7 @@ export async function recoverCommittedCutover(
   if (document.currentEpochId === request.epochId) {
     core = authority.verify(request.epochId, cordon.nonce);
   } else {
-    if (document.currentEpochId !== request.expectedOldEpochId || document.records.some((row) => row.epochId === request.epochId)) {
+    if (document.currentEpochId !== cordon.recoveryBindings.expectedOldEpochId || document.records.some((row) => row.epochId === request.epochId)) {
       throw new Error('epoch_cas_conflict');
     }
     core = completePreCasRecovery(request, cordon, authority);
