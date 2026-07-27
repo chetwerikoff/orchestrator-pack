@@ -65,7 +65,7 @@ This script:
 **Manual equivalent** (only if scripts unavailable):
 
 ```powershell
-[Environment]::SetEnvironmentVariable('PACK_REVIEWER', '<codex|claude>', 'User')
+[Environment]::SetEnvironmentVariable('PACK_REVIEWER', '<gpt|codex|claude>', 'User')
 Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
 ao stop
 ao start orchestrator-pack
@@ -84,7 +84,7 @@ ao start orchestrator-pack
 Standalone check:
 
 ```powershell
-pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1 -Expected <codex|claude>
+pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1 -Expected <gpt|codex|claude>
 ```
 
 The status script clears process scope before resolving so **User** wins when global is set.

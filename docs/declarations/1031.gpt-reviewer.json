@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "46647e51c223646a580970f00a4d96677628a4c2",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:881cb96c55bc159074aa0ee2859889fba3efc7be3b7b775e4a8f7239ad1d1533"
+    "active_scope_hash": "sha256:cee1424463c828a48e34e2b2fb17a7e6346e2e2f45a67b4b2f4408489d125983"
   },
   "declared_paths": [
     ".claude/skills/switch-pack-reviewer/SKILL.md",
@@ -19,6 +19,7 @@
     "prompts/codex_review_prompt.md",
     "prompts/gpt_pack_review_prompt.md",
     "prompts/pack_pr_review_contract.md",
+    "scripts/export-pack-reviewer-resolution.ps1",
     "scripts/invoke-pack-review.ps1",
     "scripts/lib/Get-PackReviewCommand.ps1",
     "scripts/lib/Resolve-PackReviewer.ps1",
@@ -26,6 +27,7 @@
     "scripts/lib/pack-pr-review-contract.ts",
     "scripts/lib/resolve-pack-reviewer.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/pack-gpt-browser-path.test.ts",
     "scripts/pack-gpt-reviewer.test.ts",
     "scripts/pack-pr-review-contract.test.ts",
     "scripts/pack-review-runner-gpt.test.ts",

@@ -547,6 +547,24 @@ async function invokeReviewer(options: {
     layerOverrides: options.fixtureReviewerLayerOverrides,
     emulateWin32: options.fixtureEmulateWin32Selector,
   });
+  const reviewerArgs = [
+    '-NoProfile',
+    '-File', options.reviewerPath,
+    '--repo-root', options.reviewTargetRoot,
+    '--base', options.baseRef,
+    '--pr-number', String(options.prNumber),
+  ];
+  if (options.issueNumber) reviewerArgs.push('--issue', String(options.issueNumber));
+
+  const invocationLog = trim(process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG);
+  if (process.env.OPK_VITEST_HARNESS === '1' && invocationLog) {
+    appendFileSync(invocationLog, `${JSON.stringify({
+      reviewer: resolvedReviewer,
+      command: 'pwsh',
+      args: reviewerArgs,
+    })}\n`);
+  }
+
   const engagementFile = trim(process.env.PACK_REVIEW_RUNNER_GPT_ENGAGEMENT_FILE);
   if (process.env.OPK_VITEST_HARNESS === '1' && engagementFile && resolvedReviewer === 'gpt') {
     appendFileSync(engagementFile, `${JSON.stringify({ runId: options.runId, prNumber: options.prNumber, headSha: options.headSha })}\n`);
@@ -576,14 +594,7 @@ async function invokeReviewer(options: {
     };
   }
 
-  const args = [
-    '-NoProfile',
-    '-File', options.reviewerPath,
-    '--repo-root', options.reviewTargetRoot,
-    '--base', options.baseRef,
-    '--pr-number', String(options.prNumber),
-  ];
-  if (options.issueNumber) args.push('--issue', String(options.issueNumber));
+  const args = reviewerArgs;
   const env: NodeJS.ProcessEnv = {
     AO_PR_NUMBER: String(options.prNumber),
     GITHUB_PR_NUMBER: String(options.prNumber),
@@ -597,15 +608,6 @@ async function invokeReviewer(options: {
   if (options.sessionId) {
     env.AO_SESSION_ID = options.sessionId;
     env.AO_WORKER_SESSION_ID = options.sessionId;
-  }
-
-  const invocationLog = trim(process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG);
-  if (process.env.OPK_VITEST_HARNESS === '1' && invocationLog) {
-    appendFileSync(invocationLog, `${JSON.stringify({
-      reviewer: resolvedReviewer,
-      command: 'pwsh',
-      args,
-    })}\n`);
   }
 
   const result = await runProcess({

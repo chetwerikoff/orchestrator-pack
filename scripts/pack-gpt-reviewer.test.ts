@@ -34,7 +34,7 @@ describe('PACK_REVIEWER selector (Issue #1031)', () => {
     expect(resolvePackReviewerFromEnv({})).toBeNull();
   });
 
-  it('matches PowerShell stale-process clearing when User layer is configured', () => {
+  it('delegates selector resolution to Resolve-PackReviewer.ps1', () => {
     expect(resolvePackReviewerSelectorValue(
       { PACK_REVIEWER: 'codex' },
       {

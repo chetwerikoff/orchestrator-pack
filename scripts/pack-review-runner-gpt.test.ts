@@ -1,5 +1,4 @@
 import {
-  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -143,14 +142,13 @@ describe('GPT failure matrix (Issue #1031 AC5)', () => {
       expect(() => readFileSync(capture, 'utf8')).toThrow();
       expect(process.env.PACK_REVIEWER).toBe('gpt');
 
-      if (existsSync(invocationLog)) {
-        const lines = readFileSync(invocationLog, 'utf8').trim().split('\n').filter(Boolean);
-        for (const line of lines) {
-          const entry = JSON.parse(line) as { reviewer?: string; args?: string[] };
-          expect(entry.reviewer).toBe('gpt');
-          expect(entry.args?.join(' ')).toContain('invoke-pack-review.ps1');
-          expect(entry.args?.join(' ')).not.toContain('run-pack-review.ps1');
-        }
+      const lines = readFileSync(invocationLog, 'utf8').trim().split('\n').filter(Boolean);
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        const entry = JSON.parse(line) as { reviewer?: string; args?: string[] };
+        expect(entry.reviewer).toBe('gpt');
+        expect(entry.args?.join(' ')).toContain('invoke-pack-review.ps1');
+        expect(entry.args?.join(' ')).not.toContain('run-pack-review.ps1');
       }
     });
   }
@@ -177,6 +175,38 @@ describe('GPT claim race (Issue #1031 AC11)', () => {
     });
 
     expect(result.ok, JSON.stringify(result)).toBe(true);
+    const lines = readFileSync(engagement, 'utf8').trim().split('\n').filter(Boolean);
+    expect(lines).toHaveLength(1);
+  });
+
+  it('admits only one concurrent GPT start for the same PR head', async () => {
+    const storeRoot = tempRoot('opk-gpt-concurrent-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    const engagement = path.join(storeRoot, 'gpt-engagements.jsonl');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_REVIEW_RUNNER_GPT_ENGAGEMENT_FILE = engagement;
+
+    const shared = {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 1031,
+      headSha: HEAD_A,
+      fixturePostReviewHeadSha: HEAD_A,
+      claimMode: 'acquire' as const,
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureReviewStdout: cleanTerminalPayload(),
+    };
+
+    const [first, second] = await Promise.all([
+      startPackReview(shared),
+      startPackReview(shared),
+    ]);
+
+    const successes = [first, second].filter((result) => result.ok);
+    expect(successes).toHaveLength(1);
+    const blocked = [first, second].filter((result) => !result.ok || result.reused);
+    expect(blocked.length).toBeGreaterThan(0);
     const lines = readFileSync(engagement, 'utf8').trim().split('\n').filter(Boolean);
     expect(lines).toHaveLength(1);
   });

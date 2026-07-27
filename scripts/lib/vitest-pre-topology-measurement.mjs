@@ -16,6 +16,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1031 light-lane GPT reviewer tests: fast unit coverage without runtime-history
   // harvest yet; fixed estimates keep pre-topology measurement within the 32-file bound.
   'scripts/pack-gpt-reviewer.test.ts': 120,
+  'scripts/pack-gpt-browser-path.test.ts': 120,
   'scripts/pack-pr-review-contract.test.ts': 120,
   'scripts/pack-review-runner-gpt.test.ts': 120,
 });
