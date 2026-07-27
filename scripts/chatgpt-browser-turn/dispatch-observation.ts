@@ -88,6 +88,8 @@ function attachCdpOutboundWebSocketObserver(
 
 export const GATE_B_CHARACTERIZATION_VERSION = 'gate-b-characterization/v1';
 
+export const GATE_B_PROBE_WINDOW_MS = 30_000;
+
 export const GATE_B_REQUIRED_PROBES = [
   'service-worker-owned-http-on-configured-context',
   'worker-or-secondary-target-websocket-frame-sent',
@@ -119,8 +121,11 @@ export function summarizeGateBCharacterization(probes: readonly GateBProbeResult
 }
 
 export async function runGateBCharacterization(page: {
+  reload?: (options?: { waitUntil?: string }) => Promise<unknown>;
   context?: () => {
     on?: (event: string, handler: (request: { url: () => string }) => void) => void;
+    pages?: () => unknown[];
+    serviceWorkers?: () => unknown[];
     newCDPSession?: (target: unknown) => Promise<{
       send: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
       on: (event: string, handler: (event: Record<string, unknown>) => void) => void;
@@ -145,54 +150,123 @@ export async function runGateBCharacterization(page: {
   }
 
   let serviceWorkerHttpObserved = false;
+  let contextHttpObserved = false;
+  let websocketSentObserved = false;
+  let serviceWorkerHttpDetail = 'no_service_worker_http_observed_within_probe_window';
+  const noteServiceWorkerHttp = (detail = 'context_request_observed') => {
+    serviceWorkerHttpObserved = true;
+    serviceWorkerHttpDetail = detail;
+  };
+  const noteWebSocketSent = () => {
+    websocketSentObserved = true;
+  };
+  const serviceWorkerCount = typeof context.serviceWorkers === 'function' ? context.serviceWorkers().length : 0;
+
   if (typeof context.on === 'function') {
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 2_000);
-      context.on?.('request', (request: { url: () => string; serviceWorker?: () => unknown | null }) => {
-        if (typeof request.serviceWorker === 'function' && request.serviceWorker()) {
-          serviceWorkerHttpObserved = true;
-          clearTimeout(timer);
-          resolve();
-        }
-      });
+    context.on('request', (request: { url: () => string; serviceWorker?: () => unknown | null }) => {
+      contextHttpObserved = true;
+      if (typeof request.serviceWorker === 'function' && request.serviceWorker()) {
+        noteServiceWorkerHttp();
+      }
     });
   }
-  probes.push({
-    probe: 'service-worker-owned-http-on-configured-context',
-    observed: serviceWorkerHttpObserved,
-    detail: serviceWorkerHttpObserved ? 'context_request_observed' : 'no_service_worker_http_observed_within_probe_window',
-  });
 
-  let websocketSentObserved = false;
+  const observedCdpTargets = new WeakSet<object>();
+  const attachGateBWebSocketObservers = async (): Promise<void> => {
+    if (typeof context.newCDPSession !== 'function') return;
+    const targets: unknown[] = [page];
+    if (typeof context.pages === 'function') {
+      for (const otherPage of context.pages()) targets.push(otherPage);
+    }
+    if (typeof context.serviceWorkers === 'function') {
+      targets.push(...context.serviceWorkers());
+    }
+    for (const target of targets) {
+      if (typeof target !== 'object' || target === null || observedCdpTargets.has(target)) continue;
+      observedCdpTargets.add(target);
+      try {
+        const session = await context.newCDPSession(target);
+        await session.send('Network.enable');
+        attachCdpOutboundWebSocketObserver(session, noteWebSocketSent);
+      } catch {
+        // Individual target attach failures are non-fatal for characterization.
+      }
+    }
+  };
+
   if (typeof context.newCDPSession === 'function') {
     try {
-      const cdp = await context.newCDPSession(page);
-      await cdp.send('Target.setDiscoverTargets', { discover: true });
-      await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
-      await cdp.send('Network.enable');
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 2_000);
-        const markObserved = () => {
-          websocketSentObserved = true;
-          clearTimeout(timer);
-          resolve();
-        };
-        attachCdpOutboundWebSocketObserver(cdp, markObserved);
-        cdp.on('Target.attachedToTarget', async (event) => {
-          const sessionId = String(event.sessionId ?? '');
-          if (!sessionId) return;
-          const message = JSON.stringify({ id: 1, method: 'Network.enable', params: {} });
-          await cdp.send('Target.sendMessageToTarget', { sessionId, message });
-          if (event.waitingForDebugger === true) {
-            const resume = JSON.stringify({ id: 2, method: 'Runtime.runIfWaitingForDebugger', params: {} });
-            await cdp.send('Target.sendMessageToTarget', { sessionId, message: resume });
-          }
-        });
-      });
+      await attachGateBWebSocketObservers();
+      if (typeof context.on === 'function') {
+        context.on('page', () => { void attachGateBWebSocketObservers(); });
+        context.on('serviceworker', () => { void attachGateBWebSocketObservers(); });
+      }
     } catch {
       websocketSentObserved = false;
     }
   }
+
+  if (typeof page.reload === 'function') {
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+    } catch {
+      // Passive observation may still succeed on an already-active ChatGPT surface.
+    }
+  }
+
+  const deadline = Date.now() + GATE_B_PROBE_WINDOW_MS;
+  while (Date.now() < deadline) {
+    if (serviceWorkerHttpObserved && websocketSentObserved) break;
+    await new Promise((resolve) => { setTimeout(resolve, 100); });
+  }
+
+  if (!serviceWorkerHttpObserved && serviceWorkerCount > 0 && contextHttpObserved && typeof context.newCDPSession === 'function') {
+    try {
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Target.setDiscoverTargets', { discover: true });
+      await cdp.send('Network.enable');
+      let cdpServiceWorkerHttpObserved = false;
+      const noteCdpServiceWorkerHttp = () => {
+        cdpServiceWorkerHttpObserved = true;
+      };
+      cdp.on('Network.requestWillBeSent', noteCdpServiceWorkerHttp);
+      cdp.on('event', (payload: { method?: string }) => {
+        if (payload?.method === 'Network.requestWillBeSent') noteCdpServiceWorkerHttp();
+      });
+      const targets = await cdp.send('Target.getTargets') as { targetInfos?: Array<{ targetId?: string; type?: string }> };
+      const serviceWorkerTarget = (targets.targetInfos ?? []).find((row) => row.type === 'service_worker' && row.targetId);
+      if (serviceWorkerTarget?.targetId) {
+        const attached = await cdp.send('Target.attachToTarget', {
+          targetId: serviceWorkerTarget.targetId,
+          flatten: true,
+        }) as { sessionId?: string };
+        const sessionId = String(attached.sessionId ?? '');
+        if (sessionId) {
+          await cdp.send('Network.enable', {}, sessionId);
+          await cdp.send('Runtime.enable', {}, sessionId);
+          await cdp.send('Runtime.evaluate', {
+            expression: "(async () => { await fetch('https://chatgpt.com/favicon.ico', { mode: 'no-cors' }); })()",
+            awaitPromise: true,
+          }, sessionId);
+          const stimulusDeadline = Date.now() + 5_000;
+          while (Date.now() < stimulusDeadline && !cdpServiceWorkerHttpObserved) {
+            await new Promise((resolve) => { setTimeout(resolve, 100); });
+          }
+          if (cdpServiceWorkerHttpObserved) {
+            noteServiceWorkerHttp('context_http_and_service_worker_cdp_network_observed');
+          }
+        }
+      }
+    } catch {
+      // Stimulus failure is non-fatal; incomplete characterization remains fail-closed.
+    }
+  }
+
+  probes.push({
+    probe: 'service-worker-owned-http-on-configured-context',
+    observed: serviceWorkerHttpObserved,
+    detail: serviceWorkerHttpDetail,
+  });
   probes.push({
     probe: 'worker-or-secondary-target-websocket-frame-sent',
     observed: websocketSentObserved,
