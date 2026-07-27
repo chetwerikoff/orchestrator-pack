@@ -823,20 +823,24 @@ describe('issue 964 capability policy', () => {
     expect(downgraded.capability?.admission_epoch).toBe(1);
   });
 
-  it('never treats idle legacy lease expiry as admission-policy loss', () => {
+  it('migrates legacy positive and negative eligibility to serialized characterization without idle expiry', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const now = Date.now();
-    const legacy = legacyCapabilityFixture(binding, {
-      observed_at: new Date(now - 120_000).toISOString(),
-      expires_at: new Date(now - 60_000).toISOString(),
-      parallel_eligible: true,
-    });
-    legacy.configured_profile_key = profileKey;
-    atomicJson(profileDirs(profileKey).capability, legacy);
-    const migrated = capabilityStatus(profileKey, binding);
-    expect(migrated.state).toBe('downgraded');
-    expect(migrated.capability?.admission_policy).toBe('serialized');
-    expect(migrated.characterization?.characterized).toBe(true);
+    for (const parallelEligible of [true, false]) {
+      const legacy = legacyCapabilityFixture(binding, {
+        observed_at: new Date(now - 120_000).toISOString(),
+        expires_at: new Date(now - 60_000).toISOString(),
+        parallel_eligible: parallelEligible,
+      });
+      legacy.configured_profile_key = profileKey;
+      atomicJson(profileDirs(profileKey).capability, legacy);
+      const migrated = capabilityStatus(profileKey, binding);
+      expect(migrated.state).toBe('downgraded');
+      expect(migrated.capability?.admission_policy).toBe('serialized');
+      expect(migrated.characterization?.characterized).toBe(true);
+      expect(JSON.parse(readFileSync(profileDirs(profileKey).capability, 'utf8')).schema)
+        .toBe('chatgpt-browser-turn-capability/v2');
+    }
   });
 });
 
@@ -867,13 +871,42 @@ describe('issue 1028 admission policy separation', () => {
     const armed = mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
     expect(armed.mutation?.applied).toBe(true);
     expect(capabilityStatus(profileKey, binding).state).toBe('ok');
+
+    const serialized = mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    expect(serialized.mutation?.applied).toBe(true);
+    expect(serialized.capability?.admission_policy).toBe('serialized');
+    expect(serialized.capability?.admission_epoch).toBe(1);
+
+    const serializedAgain = mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    expect(serializedAgain.mutation?.applied).toBe(true);
+    expect(serializedAgain.capability?.admission_epoch).toBe(2);
+
+    const rearmed = mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
+    expect(rearmed.mutation?.applied).toBe(true);
+    expect(rearmed.capability?.admission_policy).toBe('parallel');
+    expect(rearmed.capability?.admission_epoch).toBe(2);
+  });
+
+  it('fails serialize busy without mutating policy when a fine scheduling lock is active', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, capabilityFixture(binding));
+    const fineLock = acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/active');
+    expect(fineLock).not.toBeNull();
+    try {
+      const outcome = mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+      expect(outcome.mutation).toMatchObject({ applied: false, reason: 'barrier_busy' });
+      const unchanged = capabilityStatus(profileKey, binding);
+      expect(unchanged.capability?.admission_policy).toBe('parallel');
+      expect(unchanged.capability?.admission_epoch).toBe(0);
+    } finally {
+      fineLock?.release();
+    }
   });
 
   it('refuses parallel arm without prior characterization', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const armed = mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
-    expect(armed.mutation?.applied).toBe(false);
-    expect(armed.mutation?.reason).toBe('not_characterized');
+    expect(armed.mutation).toEqual({ applied: false, reason: 'not_characterized' });
   });
 
   it('preserves explicit policy and epoch across characterization refresh', () => {
@@ -1003,13 +1036,36 @@ describe('issue 964 retained recovery binary lifecycle', () => {
     };
     const base = ['--profile', join(root, 'profile'), '--cdp', cdp];
 
+    let observed = run(['capability', ...base]);
+    expect(observed.status).toBe(0);
+    expect(observed.body?.state).toBe('no_evidence');
+    atomicJson(profileDirs(profileKey).capability, {
+      schema: 'chatgpt-browser-turn-capability/v2',
+      version: 2,
+      configured_profile_key: profileKey,
+      ...observed.body!.expected_binding,
+      browser_provenance: 'Chromium retained-test',
+      evidence_digest: sha256('retained-capability-evidence'),
+      characterized_at: new Date().toISOString(),
+      admission_policy: 'serialized',
+      admission_epoch: 4,
+    });
+    observed = run(['capability', ...base, '--admission-policy', 'parallel']);
+    expect(observed.status).toBe(0);
+    expect(observed.body?.mutation).toEqual({ applied: true });
+    expect(observed.body?.admission).toEqual({ policy: 'parallel', epoch: 4 });
+    observed = run(['capability', ...base, '--admission-policy', 'serialized']);
+    expect(observed.status).toBe(0);
+    expect(observed.body?.mutation).toEqual({ applied: true });
+    expect(observed.body?.admission).toEqual({ policy: 'serialized', epoch: 5 });
+
     const readable = writeIncident(profileKey, {
       kind: 'conversation_incident',
       generation: 1,
       phase: 'possible_delivery',
       cause: 'fixture',
     });
-    let observed = run(['status/list', ...base]);
+    observed = run(['status/list', ...base]);
     expect(observed.status).toBe(0);
     expect(observed.body?.items.some((item: any) => item.identity === readable.identity)).toBe(true);
     observed = run([
@@ -1701,4 +1757,3 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
     expect(body).toContain('message_stream_complete');
   });
 });
-

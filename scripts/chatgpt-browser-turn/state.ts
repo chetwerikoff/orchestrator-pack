@@ -305,8 +305,6 @@ interface LegacyCapabilityRecordV1 {
   readonly parallel_eligible: boolean;
 }
 
-export type CapabilityRecordV1 = CapabilityRecordV2;
-
 function validCapabilityDigests(record: {
   readonly candidate_digest: string;
   readonly build_digest: string;
@@ -402,11 +400,11 @@ export type CapabilityPolicyMutationOutcome =
 
 interface CapabilityAdmissionSnapshot {
   readonly state: string;
-  readonly downgradeGeneration: number | null;
+  readonly admissionEpoch: number | null;
 }
 
 const capabilityAdmissions = new Map<string, CapabilityAdmissionSnapshot>();
-const selfDowngradeGenerations = new Map<string, number>();
+const serializedTransitionEpochs = new Map<string, number>();
 
 function capabilityMutationLockKey(profileKey: string): string {
   return `capability-mutation:${profileKey}`;
@@ -450,6 +448,44 @@ function writeCapabilityRaw(
   });
 }
 
+function writeCapabilityRecord(profileKey: string, capability: CapabilityRecordV2): void {
+  writeCapabilityRaw(profileKey, {
+    candidate_digest: capability.candidate_digest,
+    build_digest: capability.build_digest,
+    browser_provenance: capability.browser_provenance,
+    config_digest: capability.config_digest,
+    gate_digest: capability.gate_digest,
+    evidence_digest: capability.evidence_digest,
+    characterized_at: capability.characterized_at,
+    admission_policy: capability.admission_policy,
+    admission_epoch: capability.admission_epoch,
+  });
+}
+
+function migrateLegacyCapabilityOnRead(
+  profileKey: string,
+  parsed: LegacyCapabilityRecordV1,
+  mutationLockHeld: boolean,
+): CapabilityRecordV2 {
+  if (mutationLockHeld) {
+    const migrated = migrateLegacyCapabilityV1(parsed);
+    writeCapabilityRecord(profileKey, migrated);
+    return migrated;
+  }
+
+  const lock = acquireCapabilityMutationLock(profileKey);
+  try {
+    const latest: unknown = JSON.parse(readFileSync(profileDirs(profileKey).capability, 'utf8'));
+    if (compatibleCapabilityV2(latest, profileKey)) return latest;
+    if (!compatibleLegacyCapabilityV1(latest, profileKey)) throw new Error('capability_incompatible');
+    const migrated = migrateLegacyCapabilityV1(latest);
+    writeCapabilityRecord(profileKey, migrated);
+    return migrated;
+  } finally {
+    lock.release();
+  }
+}
+
 /** Test fixture only — production mutations use applyCapabilityAfterSuccessfulTurn / mutateCapabilityAdmissionPolicy. */
 export function __testWriteCapability(
   profileKey: string,
@@ -486,6 +522,7 @@ function capabilityPresentation(capability: CapabilityRecordV2) {
 function readCapabilityStatus(
   profileKey: string,
   expected?: CapabilityBinding,
+  mutationLockHeld = false,
 ): CapabilityStatusResult {
   const listed = statusList(profileKey);
   if (listed.state === 'profile_blocked') {
@@ -498,20 +535,9 @@ function readCapabilityStatus(
     const parsed: unknown = JSON.parse(readFileSync(capabilityPath, 'utf8'));
     const normalized = normalizeCapabilityRecord(parsed, profileKey);
     if (!normalized) return control('capability', 'profile_blocked', profileKey, 'capability_incompatible');
-    capability = normalized;
-    if (compatibleLegacyCapabilityV1(parsed, profileKey)) {
-      writeCapabilityRaw(profileKey, {
-        candidate_digest: capability.candidate_digest,
-        build_digest: capability.build_digest,
-        browser_provenance: capability.browser_provenance,
-        config_digest: capability.config_digest,
-        gate_digest: capability.gate_digest,
-        evidence_digest: capability.evidence_digest,
-        characterized_at: capability.characterized_at,
-        admission_policy: capability.admission_policy,
-        admission_epoch: capability.admission_epoch,
-      });
-    }
+    capability = compatibleLegacyCapabilityV1(parsed, profileKey)
+      ? migrateLegacyCapabilityOnRead(profileKey, parsed, mutationLockHeld)
+      : normalized;
   } catch {
     return control('capability', 'profile_blocked', profileKey, 'capability_unreadable');
   }
@@ -543,14 +569,14 @@ function readCapabilityStatus(
   };
 }
 
-function generationOf(current: CapabilityStatusResult): number | null {
+function admissionEpochOf(current: CapabilityStatusResult): number | null {
   return current.capability?.admission_epoch ?? null;
 }
 
 function snapshotAdmission(current: CapabilityStatusResult): CapabilityAdmissionSnapshot {
   return {
     state: current.state,
-    downgradeGeneration: generationOf(current),
+    admissionEpoch: admissionEpochOf(current),
   };
 }
 
@@ -648,10 +674,10 @@ function productionCompletionStillEligible(
   if (current.state === 'profile_blocked') return false;
 
   const admission = capabilityAdmissions.get(profileKey) ?? snapshotAdmission(current);
-  const invocationEpoch = selfDowngradeGenerations.get(profileKey);
+  const invocationEpoch = serializedTransitionEpochs.get(profileKey);
   const startedParallel = admission.state === 'ok';
-  const admittedEpoch = invocationEpoch ?? admission.downgradeGeneration;
-  const currentEpoch = generationOf(current);
+  const admittedEpoch = invocationEpoch ?? admission.admissionEpoch;
+  const currentEpoch = admissionEpochOf(current);
 
   if (startedParallel
     && admittedEpoch !== null
@@ -684,7 +710,7 @@ export function applyCapabilityAfterSuccessfulTurn(
 
   let outcome: CapabilityMutationOutcome;
   try {
-    const current = readCapabilityStatus(profileKey, completion.expectedBinding);
+    const current = readCapabilityStatus(profileKey, completion.expectedBinding, true);
     if (!productionCompletionStillEligible(profileKey, current, completion)) {
       outcome = { applied: false, reason: 'not_eligible' };
     } else {
@@ -694,7 +720,7 @@ export function applyCapabilityAfterSuccessfulTurn(
     outcome = { applied: false, reason: 'write_failed', error };
   } finally {
     capabilityAdmissions.delete(profileKey);
-    selfDowngradeGenerations.delete(profileKey);
+    serializedTransitionEpochs.delete(profileKey);
     try {
       lock.release();
     } catch (error) {
@@ -716,9 +742,9 @@ export function recordSerializedTransitionAnchor(
   profileKey: string,
   observed: CapabilityStatusResult,
 ): void {
-  const generation = generationOf(observed);
-  if (generation !== null) {
-    selfDowngradeGenerations.set(profileKey, generation);
+  const epoch = admissionEpochOf(observed);
+  if (epoch !== null) {
+    serializedTransitionEpochs.set(profileKey, epoch);
   }
 }
 
@@ -758,7 +784,7 @@ export function mutateCapabilityAdmissionPolicy(
   }
 
   try {
-    const current = readCapabilityStatus(profileKey, expected);
+    const current = readCapabilityStatus(profileKey, expected, true);
     if (current.state === 'profile_blocked') {
       return {
         ...current,
@@ -796,7 +822,7 @@ export function mutateCapabilityAdmissionPolicy(
       };
     }
 
-    const nextEpoch = policy === 'serialized' && capability.admission_policy !== 'serialized'
+    const nextEpoch = policy === 'serialized'
       ? capability.admission_epoch + 1
       : capability.admission_epoch;
     const nextPolicy = policy;
@@ -807,18 +833,8 @@ export function mutateCapabilityAdmissionPolicy(
       };
     }
 
-    writeCapabilityRaw(profileKey, {
-      candidate_digest: capability.candidate_digest,
-      build_digest: capability.build_digest,
-      browser_provenance: capability.browser_provenance,
-      config_digest: capability.config_digest,
-      gate_digest: capability.gate_digest,
-      evidence_digest: capability.evidence_digest,
-      characterized_at: capability.characterized_at,
-      admission_policy: nextPolicy,
-      admission_epoch: nextEpoch,
-    });
-    const refreshed = readCapabilityStatus(profileKey, expected);
+    writeCapabilityRecord(profileKey, { ...capability, admission_policy: nextPolicy, admission_epoch: nextEpoch });
+    const refreshed = readCapabilityStatus(profileKey, expected, true);
     return { ...refreshed, mutation: { applied: true } };
   } catch (error) {
     return {
@@ -831,11 +847,6 @@ export function mutateCapabilityAdmissionPolicy(
       try { barrier.release(); } catch { /* fail-closed */ }
     }
   }
-}
-
-/** @deprecated Issue #1028 — witness health no longer mutates durable policy; use mutateCapabilityAdmissionPolicy. */
-export function downgradeCapability(profileKey: string): void {
-  mutateCapabilityAdmissionPolicy(profileKey, 'serialized');
 }
 
 export function statusList(profileKey: string): ControlResultV1 {

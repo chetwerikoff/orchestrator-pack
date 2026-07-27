@@ -117,7 +117,10 @@ Run one successful serialized existing-chat characterization turn on the exact p
 After characterization, deliberately arm parallel admission when the exact binding and browser provenance still match:
 
 ```bash
-npm run chatgpt-browser-turn -- capability   --profile /absolute/path/to/automation-profile   --cdp http://127.0.0.1:9222   --admission-policy parallel
+npm run chatgpt-browser-turn -- capability \
+  --profile /absolute/path/to/automation-profile \
+  --cdp http://127.0.0.1:9222 \
+  --admission-policy parallel
 ```
 
 Query `capability` again and retain `characterization`, `admission.policy`, `admission.epoch`, and browser provenance as Gate-C telemetry. Aggregate `state: ok` means parallel policy plus compatible characterization/binding; witness health is per-invocation and is not stored as durable policy. To return to serialized scheduling without losing characterization, pass `--admission-policy serialized`.

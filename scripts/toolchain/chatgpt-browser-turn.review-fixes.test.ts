@@ -20,7 +20,6 @@ import {
   applyCapabilityAfterSuccessfulTurn,
   capabilityStatus,
   mutateCapabilityAdmissionPolicy,
-  recordSerializedTransitionAnchor,
   quarantineOpaque,
   statusList,
   __testWriteCapability,
@@ -388,23 +387,47 @@ describe('issue 1028 capability policy race safety', () => {
     expect(outcome.reason).toBe('not_witnessed');
     expect(capabilityStatus(profileKey, binding).capability?.admission_epoch).toBe(0);
   });
+
+  it('keeps repeated keeper-free witness failures invocation-local without policy mutation', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    const initial = capabilityFixture(binding, {
+      evidence_digest: sha256('stable-operator-policy'),
+      admission_epoch: 7,
+    });
+    __testWriteCapability(profileKey, initial);
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect(witnessSurfaceProbeRequiresDowngrade('absent', false)).toBe(true);
+      const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, {
+        ...completion(binding, `unwitnessed-${attempt}`),
+        witnessed: false,
+      });
+      expect(outcome).toMatchObject({ applied: false, reason: 'not_witnessed' });
+    }
+
+    const current = capabilityStatus(profileKey, binding);
+    expect(current.state).toBe('ok');
+    expect(current.capability?.admission_policy).toBe('parallel');
+    expect(current.capability?.admission_epoch).toBe(7);
+    expect(current.capability?.evidence_digest).toBe(initial.evidence_digest);
+  });
 });
 
-describe('issue 1008 witness surface probe caller', () => {
-  it('does not downgrade when the caller declares a fresh conversation with zero nodes', () => {
+describe('issue 1028 invocation-local witness surface fallback', () => {
+  it('does not request fallback when a fresh conversation has zero nodes', () => {
     expect(witnessSurfaceProbeRequiresDowngrade('empty', true)).toBe(false);
   });
 
-  it('downgrades an existing conversation that reports zero nodes', () => {
+  it('requests fallback for an existing conversation that reports zero nodes', () => {
     expect(witnessSurfaceProbeRequiresDowngrade('empty', false)).toBe(true);
   });
 
-  it('downgrades when the probe query throws', () => {
+  it('requests fallback when the probe query throws', () => {
     expect(witnessSurfaceProbeRequiresDowngrade('absent', false)).toBe(true);
     expect(witnessSurfaceProbeRequiresDowngrade('absent', true)).toBe(true);
   });
 
-  it('still downgrades when a populated conversation probe finds no causal relation', () => {
+  it('requests fallback when a populated conversation probe finds no causal relation', () => {
     expect(witnessSurfaceProbeRequiresDowngrade('absent', false)).toBe(true);
     expect(witnessSurfaceProbeRequiresDowngrade('available', false)).toBe(false);
     expect(witnessSurfaceProbeRequiresDowngrade('available', true)).toBe(false);
@@ -444,4 +467,3 @@ describe('issue 1008 witness surface probe caller', () => {
     vi.restoreAllMocks();
   });
 });
-

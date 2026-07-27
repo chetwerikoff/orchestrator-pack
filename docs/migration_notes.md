@@ -25,7 +25,10 @@
 5. **Deliberately arm parallel** only when characterization remains valid for the exact binding and browser provenance:
 
 ```bash
-npm run chatgpt-browser-turn -- capability   --profile /absolute/path/to/automation-profile   --cdp http://127.0.0.1:9222   --admission-policy parallel
+npm run chatgpt-browser-turn -- capability \
+  --profile /absolute/path/to/automation-profile \
+  --cdp http://127.0.0.1:9222 \
+  --admission-policy parallel
 ```
 
 6. Verify `capability` read shows `admission.policy: parallel` and `state: ok` before parallel smoke.
@@ -34,13 +37,18 @@ npm run chatgpt-browser-turn -- capability   --profile /absolute/path/to/automat
 9. To return to serialized scheduling without losing characterization:
 
 ```bash
-npm run chatgpt-browser-turn -- capability   --profile /absolute/path/to/automation-profile   --cdp http://127.0.0.1:9222   --admission-policy serialized
+npm run chatgpt-browser-turn -- capability \
+  --profile /absolute/path/to/automation-profile \
+  --cdp http://127.0.0.1:9222 \
+  --admission-policy serialized
 ```
 
-### Rollback
+### Rollback sequence
 
-- Roll back the helper to the pre-#1028 build. Admission defaults to **serialized** on migrated v2 reads; rollback must not manufacture resend authority or delete #964 recovery state.
-- Re-enable keeper only as a temporary operational workaround; it is unsupported with the v2 model.
+1. While the v2 helper is still active, set `--admission-policy serialized` and verify the returned policy and incremented epoch.
+2. Quiesce browser-turn invocations and retain a backup of `capability.json` for audit. Do not remove or rewrite incident, publication, tombstone, quarantine, or destination-reservation state from Issue #964.
+3. Restore the pre-#1028 helper. Move only the incompatible v2 `capability.json` out of the live profile state directory; the old helper then has no positive capability evidence and schedules conservatively at profile scope.
+4. Re-enable the legacy keeper only if the rollback operating model requires it. Never run that keeper against the v2 helper or reuse v2 evidence as a fabricated v1 positive lease.
 
 
 # Migration notes
