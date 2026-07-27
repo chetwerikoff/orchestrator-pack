@@ -338,7 +338,7 @@ function completePreCasRecovery(request: ActivationRequest, cordon: CordonRecord
     registryHash: projection.registryHash,
     preCommitLogDigest: phaseOne.digest,
   });
-  authority.commit(cordon.recoveryBindings.expectedOldEpochId, core);
+  authority.commit(request.expectedOldEpochId, core);
   return authority.verify(request.epochId, nonce);
 }
 
