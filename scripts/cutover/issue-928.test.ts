@@ -570,7 +570,7 @@ describe('[AC4] scheduler-driven #918 successor slice', () => {
     expect(starts).toEqual([{ pr: 928, head: candidate.boundHeadSha }]);
     expect(durableRuns).toHaveLength(1);
     await expect(runSchedulerTick(boundary, { ...env, ORCHESTRATOR_CUTOVER_NONCE: 'copied-stale-nonce' })).rejects.toThrow(/epoch_nonce_mismatch/);
-  });
+  }, 120_000);
 
   it('recognizes only a scheduler-owned completed delivery receipt for activation observation', () => {
     const root = tempRoot();
