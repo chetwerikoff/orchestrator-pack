@@ -49,6 +49,7 @@ import {
   type PackReviewRequiredStatusWriter,
   type PackReviewWorkerNotifier,
 } from './lib/pack-review-delivery.ts';
+import { resolvePackReviewerFromEnv } from './lib/resolve-pack-reviewer.ts';
 
 interface StartInput {
   projectId?: string;
@@ -67,6 +68,7 @@ interface StartInput {
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
+  fixturePostReviewHeadSha?: string;
   fixtureGithubReviewId?: number;
   fixtureRepoSlug?: string;
   fixtureGithubReviewTransport?: GithubReviewTransport;
@@ -310,6 +312,22 @@ function parseReviewPayload(stdout: string): ReviewPayload {
   throw new Error('reviewer produced no valid terminal verdict payload');
 }
 
+export async function assertBoundHeadStillCurrent(options: {
+  repoRoot: string;
+  repoSlug: string;
+  prNumber: number;
+  boundHeadSha: string;
+  fixturePostReviewHeadSha?: string;
+}): Promise<void> {
+  const current = options.fixturePostReviewHeadSha
+    ?? await resolveCurrentPrHead(options.repoRoot, options.repoSlug, options.prNumber);
+  if (current.toLowerCase() !== options.boundHeadSha.toLowerCase()) {
+    throw new Error(
+      `review target head changed after reviewer returned: bound ${options.boundHeadSha}, current ${current}`,
+    );
+  }
+}
+
 function asReviewPayloadFinding(value: unknown): ReviewPayloadFinding | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as ReviewPayloadFinding
@@ -518,6 +536,7 @@ async function invokeReviewer(options: {
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
+  headSha: string;
 }): Promise<ProcessResult> {
   if (process.env.OPK_VITEST_HARNESS === '1' && options.fixtureReviewTimedOut) {
     return { outcome: 'timeout', ok: false, exitCode: null, signal: null, stdout: '', stderr: '', timedOut: true, cancelled: false };
@@ -550,6 +569,7 @@ async function invokeReviewer(options: {
     GITHUB_PR_NUMBER: String(options.prNumber),
     AO_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_RUN_ID: options.runId,
+    PACK_REVIEW_TARGET_HEAD_SHA: options.headSha,
   };
   if (options.sessionId) {
     env.AO_SESSION_ID = options.sessionId;
@@ -739,6 +759,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         fixtureReviewStdout: input.fixtureReviewStdout,
         fixtureReviewExitCode: input.fixtureReviewExitCode,
         fixtureReviewTimedOut: input.fixtureReviewTimedOut,
+        headSha: target.headSha,
       });
     } finally {
       clearInterval(heartbeat);
@@ -790,6 +811,35 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         status: malformed.status,
         httpStatus: 422,
       };
+    }
+
+    if (resolvePackReviewerFromEnv() === 'gpt') {
+      try {
+        await assertBoundHeadStillCurrent({
+          repoRoot: target.sourceRepoRoot,
+          repoSlug: target.repoSlug,
+          prNumber: target.prNumber,
+          boundHeadSha: target.headSha,
+          fixturePostReviewHeadSha: input.fixturePostReviewHeadSha,
+        });
+      } catch (error) {
+        setPackReviewRunTerminal(run.id, 'failed', {
+          exitCode: 1,
+          failureReason: 'stale_head_after_review',
+        }, { projectId, storeRoot });
+        terminal = true;
+        const runs = listPackReviewRuns({ projectId, storeRoot });
+        if (claimLease) await claimLease.release('run_started', runs);
+        return {
+          ok: false,
+          created: true,
+          reused: false,
+          reason: describeError(error),
+          runId: run.id,
+          status: 'failed',
+          httpStatus: 409,
+        };
+      }
     }
 
     const deliveryRun = run;

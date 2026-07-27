@@ -8,7 +8,7 @@ export type FindingType =
 
 export type FindingSeverity = 'blocking' | 'non-blocking';
 
-export type ReviewSource = 'codex-local' | 'codex-github-action';
+export type ReviewSource = 'codex-local' | 'codex-github-action' | 'gpt-browser';
 
 export interface StructuredFinding {
   type: FindingType | string;

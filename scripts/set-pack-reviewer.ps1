@@ -3,14 +3,14 @@
 .SYNOPSIS
   Set PACK_REVIEWER for pack review (User scope on Win32NT; Process scope elsewhere).
 .PARAMETER Reviewer
-  codex | claude
+  gpt | codex | claude
 .PARAMETER RestartAo
   Run ao stop / ao start orchestrator-pack when ao is on PATH.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('codex', 'claude')]
+    [ValidateSet('gpt', 'codex', 'claude')]
     [string]$Reviewer,
 
     [switch]$RestartAo

@@ -1,5 +1,5 @@
 # Reviewer-agnostic AO review entrypoint (Issue #86).
-# REVIEW_COMMAND names this script only; PACK_REVIEWER selects claude | codex.
+# REVIEW_COMMAND names this script only; PACK_REVIEWER selects gpt | claude | codex.
 #Requires -Version 5.1
 param()
 
@@ -21,6 +21,15 @@ if (-not $reviewer) {
 $wrapperPath = Get-PackReviewWrapperPathForReviewer -Reviewer $reviewer -ScriptsRoot $PSScriptRoot
 if (-not (Test-Path -LiteralPath $wrapperPath -PathType Leaf)) {
     [Console]::Error.WriteLine("Pack review wrapper not found at $wrapperPath (PACK_REVIEWER=$reviewer)")
+    exit 1
+}
+
+$packRoot = Split-Path -Parent $PSScriptRoot
+$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+$typeScriptLauncher = Join-Path $packRoot 'scripts/lib/Invoke-TypeScriptCli.ts'
+$wrapperIsTypeScript = $wrapperPath -like '*.ts'
+if ($wrapperIsTypeScript -and -not $node) {
+    [Console]::Error.WriteLine('OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required to run TypeScript pack review wrappers.')
     exit 1
 }
 
@@ -55,7 +64,34 @@ if ($evidenceHandle.ok) {
 
 $wrapperArgs = @('--repo-root', $resolvedRoot, '--base', $cli.Base) + $forwardArgs.ToArray()
 
+function Invoke-PackReviewTypeScriptWrapper {
+    param(
+        [string]$NodePath,
+        [string]$LauncherPath,
+        [string]$ScriptPath,
+        [string[]]$ScriptArgs
+    )
+
+    $argv = @('--experimental-strip-types', $LauncherPath, '--script', $ScriptPath, '--') + $ScriptArgs
+    & $NodePath @argv
+    return $LASTEXITCODE
+}
+
 try {
+    if ($wrapperIsTypeScript) {
+        if ($evidenceHandle.ok) {
+            Update-ReviewFailureEvidencePhase -Handle $evidenceHandle -Phase 'wrapper_started' | Out-Null
+        }
+        $exitCode = Invoke-PackReviewTypeScriptWrapper -NodePath $node.Source -LauncherPath $typeScriptLauncher -ScriptPath $wrapperPath -ScriptArgs $wrapperArgs
+        if ($evidenceHandle.ok) {
+            if ($exitCode -eq 0) {
+                Update-ReviewFailureEvidencePhase -Handle $evidenceHandle -Phase 'normal_completion' | Out-Null
+            }
+            Update-ReviewFailureEvidencePhase -Handle $evidenceHandle -Phase 'wrapper_exited' | Out-Null
+        }
+        exit $exitCode
+    }
+
     if ($evidenceHandle.ok) {
         $wrapperResult = Invoke-PackReviewWrapperWithFailureEvidence -WrapperPath $wrapperPath -WrapperArgs $wrapperArgs -EvidenceHandle $evidenceHandle
         if ($wrapperResult.exitCode -eq 0 -and $evidenceHandle.ok) {

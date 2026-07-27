@@ -5,7 +5,7 @@ orchestrator executes `ao review run … --execute --command …`.
 
 AO 0.9.x does not read a `reviewer:` YAML block. **REVIEW_COMMAND** is a single
 reviewer-agnostic line (`scripts/invoke-pack-review.ps1`). Which executor runs
-is set only by the **`PACK_REVIEWER`** environment variable (`codex` or
+is set only by the **`PACK_REVIEWER`** environment variable (`gpt`, `codex`, or
 `claude`). **User-level** `PACK_REVIEWER` (Windows User environment) is
 sufficient for AO review spawn: `invoke-pack-review.ps1` reads persistent User
 and Machine layers when process scope is empty. Set process-level export before
@@ -13,14 +13,18 @@ and Machine layers when process scope is empty. Set process-level export before
 changing selector or YAML. Restart the IDE when its integrated terminal must
 pick up profile changes unrelated to review spawn.
 
-Both paths use the same pack contract (`prompts/codex_review_prompt.md`,
-`NO_FINDINGS`, structured JSON findings, `plugins/ao-codex-pr-reviewer` parser).
-Only the **dispatch target** behind `invoke-pack-review.ps1` changes.
+Both Codex/Claude paths and GPT use the same pack findings contract
+(`NO_FINDINGS`, structured JSON findings, `plugins/ao-codex-pr-reviewer`
+parser/emitter). GPT inspects the PR through the browser/GitHub read surface and
+returns a terminal payload; **the pack runner remains the sole GitHub publisher**.
+GPT failure, quota/login issues, malformed output, or stale-head rejection do
+**not** auto-switch to Codex — set `PACK_REVIEWER=codex` explicitly for backup.
 
 ## Defaults
 
 | Reviewer | `PACK_REVIEWER` | Dispatched wrapper |
 |----------|-----------------|-------------------|
+| **Browser GPT** (explicit opt-in) | `gpt` | `scripts/run-pack-review-gpt.ts` |
 | **Codex** (example default) | `codex` | `scripts/run-pack-review.ps1` |
 | **Claude Sonnet** (quota / fallback) | `claude` | `scripts/run-pack-review-claude.ps1` |
 

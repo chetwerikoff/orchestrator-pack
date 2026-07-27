@@ -1,0 +1,121 @@
+#!/usr/bin/env -S node --experimental-strip-types
+
+import './toolchain/native-entrypoint-preflight.ts';
+import {
+  resolveHeadSha,
+  resolveRepositorySlug,
+  runGptPackReview,
+} from './lib/pack-gpt-reviewer.ts';
+import { runProcess } from './kernel/subprocess.ts';
+
+function trim(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+function usage(): string {
+  return [
+    'Usage: run-pack-review-gpt.ts --repo-root <path> --base <ref> [--pr-number N] [--issue N] [--head-sha SHA]',
+    '',
+    'Browser GPT pack reviewer (Issue #1031). Emits terminal verdict JSON on stdout.',
+  ].join('\n');
+}
+
+function parseArgs(argv: string[]): {
+  repoRoot: string;
+  baseRef: string;
+  prNumber?: number;
+  issueNumber?: number;
+  headSha?: string;
+} {
+  let repoRoot = process.cwd();
+  let baseRef = 'origin/main';
+  let prNumber: number | undefined;
+  let issueNumber: number | undefined;
+  let headSha: string | undefined;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index]!;
+    switch (flag) {
+      case '--repo-root':
+        repoRoot = argv[++index] ?? repoRoot;
+        break;
+      case '--base':
+        baseRef = argv[++index] ?? baseRef;
+        break;
+      case '--pr-number':
+        prNumber = Number(argv[++index]);
+        break;
+      case '--issue':
+        issueNumber = Number(argv[++index]);
+        break;
+      case '--head-sha':
+        headSha = trim(argv[++index]).toLowerCase();
+        break;
+      case '--help':
+      case '-h':
+        process.stdout.write(`${usage()}\n`);
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`unknown argument '${flag}'\n${usage()}`);
+    }
+  }
+
+  void baseRef;
+  return { repoRoot, baseRef, prNumber, issueNumber, headSha };
+}
+
+async function main(): Promise<void> {
+  const options = parseArgs(process.argv.slice(2));
+  const prFromEnv = Number(process.env.AO_PR_NUMBER || process.env.GITHUB_PR_NUMBER || 0);
+  const prNumber = Number.isInteger(options.prNumber) && options.prNumber! > 0
+    ? options.prNumber!
+    : prFromEnv;
+  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+    throw new Error('run-pack-review-gpt requires --pr-number or AO_PR_NUMBER');
+  }
+
+  const repoSlug = trim(process.env.PACK_GPT_FIXTURE_REPO_SLUG) || await resolveRepositorySlug(options.repoRoot);
+  const boundHead = trim(process.env.PACK_REVIEW_TARGET_HEAD_SHA);
+  let headSha = options.headSha || boundHead;
+  if (!headSha) {
+    const gitHead = await runProcess({
+      command: 'git',
+      args: ['rev-parse', 'HEAD'],
+      cwd: options.repoRoot,
+      inheritParentEnv: true,
+      allowEmptyStdout: false,
+    });
+    if (gitHead.ok) {
+      headSha = trim(gitHead.stdout).toLowerCase();
+    }
+  }
+  if (!headSha) {
+    headSha = trim(process.env.PACK_GPT_FIXTURE_HEAD_SHA) || await resolveHeadSha(options.repoRoot, prNumber, repoSlug);
+  }
+
+  const result = await runGptPackReview({
+    repoRoot: options.repoRoot,
+    repoSlug,
+    prNumber,
+    headSha,
+    issueNumber: options.issueNumber,
+    baseRef: options.baseRef,
+  });
+
+  if (result.stderr) {
+    process.stderr.write(`${result.stderr}\n`);
+  }
+  if (result.stdout) {
+    process.stdout.write(`${result.stdout}\n`);
+  }
+  process.exit(result.exitCode);
+}
+
+try {
+  await main();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`${message}\n`);
+  process.exit(1);
+}

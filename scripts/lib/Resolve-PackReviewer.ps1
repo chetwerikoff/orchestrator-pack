@@ -9,6 +9,7 @@ $Script:PackReviewScriptsRoot = Split-Path -Parent $PSScriptRoot
 $Script:PackReviewerWrapperById = @{
     codex  = 'run-pack-review.ps1'
     claude = 'run-pack-review-claude.ps1'
+    gpt    = 'run-pack-review-gpt.ts'
 }
 
 function Get-PackReviewerLayerValue {
@@ -115,16 +116,16 @@ function Get-PackReviewerSelectorErrorMessage {
     }
 
     if ([string]::IsNullOrWhiteSpace($SelectorValue)) {
-        return 'PACK_REVIEWER is not set. Set PACK_REVIEWER to claude or codex before running pack review (see docs/reviewer-switch-runbook.md).'
+        return 'PACK_REVIEWER is not set. Set PACK_REVIEWER to gpt, claude, or codex before running pack review (see docs/reviewer-switch-runbook.md).'
     }
 
-    return ("PACK_REVIEWER has unrecognized value '{0}'. Set PACK_REVIEWER to claude or codex." -f $SelectorValue.Trim())
+    return ("PACK_REVIEWER has unrecognized value '{0}'. Set PACK_REVIEWER to gpt, claude, or codex." -f $SelectorValue.Trim())
 }
 
 function Get-PackReviewWrapperBasenameForReviewer {
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('claude', 'codex')]
+        [ValidateSet('claude', 'codex', 'gpt')]
         [string]$Reviewer
     )
 
@@ -134,7 +135,7 @@ function Get-PackReviewWrapperBasenameForReviewer {
 function Get-PackReviewWrapperPathForReviewer {
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('claude', 'codex')]
+        [ValidateSet('claude', 'codex', 'gpt')]
         [string]$Reviewer,
         [string]$ScriptsRoot = $Script:PackReviewScriptsRoot
     )
