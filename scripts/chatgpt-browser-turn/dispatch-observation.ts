@@ -41,6 +41,7 @@ export interface DispatchObservationDiagnostic {
 
 export interface DispatchObservationBoundary {
   dispatchObservationEngaged: boolean;
+  gateBCharacterizationComplete: boolean;
   httpContextArmed: boolean;
   httpContextCoverage: DispatchCoverageStatus;
   websocketTargetsArmed: boolean;
@@ -157,6 +158,7 @@ async function sendChildCdpCommand(
 
 export function dispatchObservationCoverageComplete(boundary: DispatchObservationBoundary): boolean {
   return boundary.coverageIntact
+    && boundary.gateBCharacterizationComplete
     && boundary.httpContextArmed
     && boundary.httpContextCoverage === 'complete'
     && boundary.websocketTargetsArmed
@@ -190,6 +192,7 @@ export async function establishDispatchObservationBoundary(
   let cdpEstablished = false;
   const boundary: DispatchObservationBoundary = {
     dispatchObservationEngaged: false,
+    gateBCharacterizationComplete: false,
     httpContextArmed: false,
     httpContextCoverage: 'unknown',
     websocketTargetsArmed: false,
@@ -443,6 +446,13 @@ export async function establishDispatchObservationBoundary(
     boundary.websocketTargetsCoverage = failedTargetAttach || controls?.requireCdpWebSocketSent
       ? 'incomplete'
       : 'unknown';
+  }
+
+  if (fakePage && controls) {
+    boundary.gateBCharacterizationComplete = true;
+  } else if (!fakePage) {
+    const gateB = await runGateBCharacterization(page);
+    boundary.gateBCharacterizationComplete = gateB.complete;
   }
 
   boundary.dispatchObservationEngaged = fakePage
