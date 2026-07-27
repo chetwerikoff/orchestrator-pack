@@ -276,6 +276,27 @@ export function clearDomainLock(profileKey: string, key: string): boolean {
   }
 }
 
+/** One bounded pass: reclaim orphan fine-grained locks blocking a profile-scope barrier. */
+export function reconcileAbandonedSchedulingConflicts(
+  profileKey: string,
+  requestedKey: string,
+  staleMs = 120_000,
+): boolean {
+  if (!requestedKey.startsWith('profile:')) return false;
+  const locks = profileDirs(profileKey).locks;
+  let reclaimed = false;
+  for (const entry of readdirSync(locks, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const directory = join(locks, entry.name);
+    if (!existsSync(ownerPath(directory))) continue;
+    const current = readLockRecord(directory, profileKey);
+    if (!current || !isSchedulingKey(current.key)) continue;
+    if (!current.key.startsWith('conversation:') && !current.key.startsWith('fresh:')) continue;
+    if (tryReclaim(profileKey, current.key, directory, staleMs) !== null) reclaimed = true;
+  }
+  return reclaimed;
+}
+
 function likelyCaseInsensitive(path: string): boolean {
   return process.platform === 'win32' || /^\/mnt\/[a-z](?:\/|$)/i.test(path);
 }

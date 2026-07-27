@@ -46,7 +46,9 @@ import {
   writeIncident,
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
+import { releaseCdpBrowser } from '../chatgpt-browser-turn/browser-session.ts';
 import {
+  loadChromium,
   openTurnPage,
   resolveCausalAssistant,
   runtimeWitnessSurfaceAvailable,
@@ -903,6 +905,22 @@ describe('issue 1028 admission policy separation', () => {
     }
   });
 
+  it('refuses parallel arm without live browser provenance verification', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, capabilityFixture(binding));
+    const armed = mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding);
+    expect(armed.mutation).toEqual({ applied: false, reason: 'binding_mismatch' });
+  });
+
+  it('reclaims a dead orphan fine lock before committing serialized policy', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, capabilityFixture(binding));
+    deadOwnerRecord(`fresh:orphan-${randomUUID()}`, 'pre_send');
+    const outcome = mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    expect(outcome.mutation?.applied).toBe(true);
+    expect(outcome.capability?.admission_policy).toBe('serialized');
+  });
+
   it('refuses parallel arm without prior characterization', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const armed = mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
@@ -1007,7 +1025,7 @@ describe('issue 964 privacy boundary', () => {
 });
 
 describe('issue 964 retained recovery binary lifecycle', () => {
-  it('runs an out-of-worktree retained copy for status, clear, quarantine/adjudication, and publication status', () => {
+  it('runs an out-of-worktree retained copy for status, clear, quarantine/adjudication, and publication status', async () => {
     const retained = join(root, 'retained-copy');
     mkdirSync(join(retained, 'scripts', 'kernel'), { recursive: true });
     mkdirSync(join(retained, '.claude', 'skills', 'discuss-with-gpt'), { recursive: true });
@@ -1036,6 +1054,19 @@ describe('issue 964 retained recovery binary lifecycle', () => {
     };
     const base = ['--profile', join(root, 'profile'), '--cdp', cdp];
 
+    let liveBrowserProvenance = 'Chromium retained-test';
+    try {
+      const chromium = loadChromium();
+      const browser = await chromium.connectOverCDP(cdp);
+      try {
+        liveBrowserProvenance = String(browser.version?.() ?? 'chromium-cdp');
+      } finally {
+        await releaseCdpBrowser(browser);
+      }
+    } catch {
+      // Fall back to the fixture provenance when CDP is unavailable in this environment.
+    }
+
     let observed = run(['capability', ...base]);
     expect(observed.status).toBe(0);
     expect(observed.body?.state).toBe('no_evidence');
@@ -1044,7 +1075,7 @@ describe('issue 964 retained recovery binary lifecycle', () => {
       version: 2,
       configured_profile_key: profileKey,
       ...observed.body!.expected_binding,
-      browser_provenance: 'Chromium retained-test',
+      browser_provenance: liveBrowserProvenance,
       evidence_digest: sha256('retained-capability-evidence'),
       characterized_at: new Date().toISOString(),
       admission_policy: 'serialized',

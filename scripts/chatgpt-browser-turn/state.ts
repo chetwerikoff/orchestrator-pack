@@ -17,7 +17,12 @@ import {
   type ControlResultV1,
   type StatusItemV1,
 } from './contracts.ts';
-import { acquireDomainLock, clearDomainLock, type DomainLock } from './coordination.ts';
+import {
+  acquireDomainLock,
+  clearDomainLock,
+  reconcileAbandonedSchedulingConflicts,
+  type DomainLock,
+} from './coordination.ts';
 import { recordSwallowedDriverException } from './diagnostics.ts';
 import { discardUncommittedPublication, publicationRecordCompatible } from './publication.ts';
 import { atomicJson, fsyncDirectory, profileDirs, sha256 } from './storage-common.ts';
@@ -763,7 +768,11 @@ export function mutateCapabilityAdmissionPolicy(
 
   let barrier: DomainLock | null = null;
   if (policy === 'serialized') {
-    barrier = acquireDomainLock(profileKey, `profile:${profileKey}`);
+    const profileBarrierKey = `profile:${profileKey}`;
+    barrier = acquireDomainLock(profileKey, profileBarrierKey);
+    if (!barrier && reconcileAbandonedSchedulingConflicts(profileKey, profileBarrierKey)) {
+      barrier = acquireDomainLock(profileKey, profileBarrierKey);
+    }
     if (!barrier) {
       return {
         ...control('capability', 'profile_busy', profileKey, 'serialize_barrier_busy'),
@@ -812,7 +821,10 @@ export function mutateCapabilityAdmissionPolicy(
         mutation: { applied: false, reason: 'binding_mismatch' },
       };
     }
-    if (policy === 'parallel' && browserProvenance && capability.browser_provenance !== browserProvenance) {
+    if (policy === 'parallel' && (
+      !browserProvenance
+      || capability.browser_provenance !== browserProvenance
+    )) {
       return {
         ...control('capability', 'downgraded', profileKey, 'capability_binding_mismatch'),
         capability,

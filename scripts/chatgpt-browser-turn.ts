@@ -175,6 +175,17 @@ function parallelAdmissionEpochOf(
   return status.capability?.admission_epoch ?? null;
 }
 
+
+async function probeLiveBrowserProvenance(cdp: string): Promise<string> {
+  const chromium = loadChromium();
+  const browser = await chromium.connectOverCDP(cdp);
+  try {
+    return String(browser.version?.() ?? 'chromium-cdp');
+  } finally {
+    await releaseCdpBrowser(browser);
+  }
+}
+
 async function releaseFineLockForProfileFallback(
   scheduleLock: DomainLock | null,
   profileKey: string,
@@ -394,6 +405,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     let capability = capabilityStatus(profileKey, expectedBinding);
     let parallelAdmission = capability.state === 'ok';
     let admittedAdmissionEpoch = parallelAdmission ? parallelAdmissionEpochOf(capability) : null;
+    let profileScopeFallbackCause: string | null = null;
     const lockKey = parallelAdmission
       ? (conversationId ? `conversation:${conversationId}` : `fresh:${randomUUID()}`)
       : `profile:${profileKey}`;
@@ -415,6 +427,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       scheduleLock = await releaseFineLockForProfileFallback(scheduleLock, profileKey);
       parallelAdmission = false;
       admittedAdmissionEpoch = null;
+      profileScopeFallbackCause ??= 'browser_provenance_downgrade_profile_fallback';
       capability = capabilityStatus(profileKey, expectedBinding);
       if (!scheduleLock) {
         safeReleaseDestination(reservation);
@@ -431,6 +444,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       scheduleLock = await releaseFineLockForProfileFallback(scheduleLock, profileKey);
       parallelAdmission = false;
       admittedAdmissionEpoch = null;
+      profileScopeFallbackCause ??= 'witness_downgrade_profile_fallback';
       capability = capabilityStatus(profileKey, expectedBinding);
       if (!scheduleLock) {
         if (opened.owned) await opened.page.close().catch(() => {});
@@ -451,6 +465,9 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         scheduleLock = await releaseFineLockForProfileFallback(scheduleLock, profileKey);
         parallelAdmission = false;
         admittedAdmissionEpoch = null;
+        if (witnessUnavailable) {
+          profileScopeFallbackCause ??= 'witness_downgrade_profile_fallback';
+        }
         capability = capabilityStatus(profileKey, expectedBinding);
         if (!scheduleLock) {
           if (opened.owned) await opened.page.close().catch(() => {});
@@ -637,7 +654,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       );
     }
 
-    return emitTurnAndCode(turnResult('ok', 'none', 'completed', invocationId, profileKey, {
+    return emitTurnAndCode(turnResult('ok', 'none', profileScopeFallbackCause ?? 'completed', invocationId, profileKey, {
       conversation_id: canonicalConversation,
       ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
       output: {
@@ -767,10 +784,19 @@ async function runCapability(args: ParsedArgs): Promise<number> {
     if (policyArg !== 'parallel' && policyArg !== 'serialized') {
       return emitControlAndCode(controlResult('capability', 'driver_error', profileKey, 'argument_invalid'));
     }
+    let browserProvenance: string | undefined;
+    if (policyArg === 'parallel') {
+      try {
+        browserProvenance = await probeLiveBrowserProvenance(cdp);
+      } catch {
+        return emitControlAndCode(controlResult('capability', 'driver_error', profileKey, 'cdp_unavailable'));
+      }
+    }
     const result = mutateCapabilityAdmissionPolicy(
       profileKey,
       policyArg,
       expectedBinding,
+      browserProvenance,
     );
     emit({ ...result, expected_binding: expectedBinding });
     return controlExitCode(result.state);
