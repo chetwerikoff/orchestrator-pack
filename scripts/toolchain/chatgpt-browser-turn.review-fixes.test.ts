@@ -22,7 +22,7 @@ import {
   downgradeCapability,
   quarantineOpaque,
   statusList,
-  writeCapability,
+  __testWriteCapability,
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import { classifyProductWall, productStatusText } from '../chatgpt-browser-turn/ui-adapter.ts';
@@ -332,7 +332,7 @@ describe('issue 1008 capability self-arm race safety', () => {
   it('does not let a parallel completion resurrect a newer downgrade', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const now = Date.now();
-    writeCapability(profileKey, {
+    __testWriteCapability(profileKey, {
       ...binding,
       browser_provenance: 'Chromium test',
       evidence_digest: sha256('parallel-admission'),
@@ -344,7 +344,7 @@ describe('issue 1008 capability self-arm race safety', () => {
     const admitted = capabilityStatus(profileKey, binding);
     expect(admitted.state).toBe('ok');
 
-    writeCapability(profileKey, {
+    __testWriteCapability(profileKey, {
       ...binding,
       browser_provenance: 'Chromium test',
       evidence_digest: sha256('newer-downgrade'),
@@ -368,7 +368,7 @@ describe('issue 1008 capability self-arm race safety', () => {
   it('arms exactly once after this invocation downgrades and switches to serialized scope', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const now = Date.now();
-    writeCapability(profileKey, {
+    __testWriteCapability(profileKey, {
       ...binding,
       browser_provenance: 'old-browser',
       evidence_digest: sha256('old-browser-evidence'),

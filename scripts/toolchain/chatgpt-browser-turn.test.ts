@@ -41,9 +41,8 @@ import {
   downgradeCapability,
   planCapabilityAfterSuccessfulTurn,
   quarantineOpaque,
-  writeCapabilityAfterSuccessfulTurn,
   statusList,
-  writeCapability,
+  __testWriteCapability,
   writeIncident,
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
@@ -761,7 +760,7 @@ describe('issue 964 capability policy', () => {
   it('binds positive evidence to exact candidate/build/config/gate and downgrades visibly', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const now = Date.now();
-    writeCapability(profileKey, {
+    __testWriteCapability(profileKey, {
       ...binding,
       browser_provenance: 'Chromium test',
       evidence_digest: sha256('causal-witness-fixture'),
@@ -781,7 +780,7 @@ describe('issue 964 capability policy', () => {
   it('expires evidence and never treats stale characterization as parallel authority', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const now = Date.now();
-    writeCapability(profileKey, {
+    __testWriteCapability(profileKey, {
       ...binding,
       browser_provenance: 'Chromium test',
       evidence_digest: sha256('old-evidence'),
@@ -816,7 +815,7 @@ describe('issue 1008 capability self-arm', () => {
   it('re-reads capability state so a stale refresh snapshot loses to a downgrade', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const now = Date.now();
-    writeCapability(profileKey, {
+    __testWriteCapability(profileKey, {
       ...binding,
       browser_provenance: 'Chromium test',
       evidence_digest: sha256('before-downgrade'),
@@ -843,7 +842,7 @@ describe('issue 1008 capability self-arm', () => {
     const now = Date.now();
     const nearFuture = new Date(now + 60 * 60 * 1000).toISOString();
     const farFuture = new Date(now + 5 * 60 * 60 * 1000).toISOString();
-    writeCapability(profileKey, {
+    __testWriteCapability(profileKey, {
       ...binding,
       browser_provenance: 'Chromium test',
       evidence_digest: sha256('initial-near'),
@@ -855,7 +854,7 @@ describe('issue 1008 capability self-arm', () => {
     const staleRead = capabilityStatus(profileKey, binding);
     expect(staleRead.state).toBe('ok');
 
-    writeCapability(profileKey, {
+    __testWriteCapability(profileKey, {
       ...binding,
       browser_provenance: 'Chromium test',
       evidence_digest: sha256('competing-newer'),
@@ -868,32 +867,19 @@ describe('issue 1008 capability self-arm', () => {
     expect(Date.parse(newerExpires)).toBe(Date.parse(farFuture));
 
     const stalePlan = planCapabilityAfterSuccessfulTurn(staleRead, completion(binding, 'older-refresh'));
-    expect(Date.parse(stalePlan!.expires_at)).toBeLessThan(Date.parse(newerExpires));
+    expect(Date.parse(stalePlan.expires_at)).toBeLessThan(Date.parse(newerExpires));
 
-    const staleWrite = writeCapabilityAfterSuccessfulTurn(profileKey, staleRead, completion(binding, 'older-refresh'));
-    expect(staleWrite.applied).toBe(true);
-    expect(Date.parse(capabilityStatus(profileKey, binding).capability!.expires_at)).toBeLessThan(Date.parse(newerExpires));
-
-    writeCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('competing-newer'),
-      observed_at: new Date(now).toISOString(),
-      expires_at: farFuture,
-      downgrade_generation: 0,
-      parallel_eligible: true,
-    });
-
-    const recoveredOutcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'older-refresh'));
-    expect(recoveredOutcome.applied).toBe(true);
+    const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'older-refresh'));
+    expect(outcome.applied).toBe(true);
     expect(Date.parse(capabilityStatus(profileKey, binding).capability!.expires_at)).toBeGreaterThanOrEqual(Date.parse(newerExpires));
+    expect(capabilityStatus(profileKey, binding).capability?.downgrade_generation).toBe(0);
   });
 
   it('never shortens expiry on refresh', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const now = Date.now();
     const farFuture = new Date(now + 3 * 60 * 60 * 1000).toISOString();
-    writeCapability(profileKey, {
+    __testWriteCapability(profileKey, {
       ...binding,
       browser_provenance: 'Chromium test',
       evidence_digest: sha256('initial'),
@@ -912,7 +898,7 @@ describe('issue 1008 capability self-arm', () => {
   it('swallows capability store write failures', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const now = Date.now();
-    writeCapability(profileKey, {
+    __testWriteCapability(profileKey, {
       ...binding,
       browser_provenance: 'Chromium test',
       evidence_digest: sha256('before-write-failure'),
@@ -936,7 +922,7 @@ describe('issue 1008 capability self-arm', () => {
   it('arms from serialized completion after provenance downgrade', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const now = Date.now();
-    writeCapability(profileKey, {
+    __testWriteCapability(profileKey, {
       ...binding,
       browser_provenance: 'old-browser',
       evidence_digest: sha256('old-provenance'),

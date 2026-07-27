@@ -377,7 +377,8 @@ function writeCapabilityRaw(
   });
 }
 
-export function writeCapability(
+/** Test fixture only — production mutations use applyCapabilityAfterSuccessfulTurn / downgradeCapability. */
+export function __testWriteCapability(
   profileKey: string,
   record: Omit<CapabilityRecordV1, 'schema' | 'version' | 'configured_profile_key'>,
 ): void {
@@ -514,7 +515,7 @@ export function planCapabilityAfterSuccessfulTurn(
   };
 }
 
-export function writeCapabilityAfterSuccessfulTurn(
+function commitCapabilityAfterSuccessfulTurn(
   profileKey: string,
   currentAtWrite: ControlResultV1 & { capability?: CapabilityRecordV1 },
   completion: CapabilityTurnCompletion,
@@ -570,7 +571,7 @@ export function applyCapabilityAfterSuccessfulTurn(
     if (!productionCompletionStillEligible(profileKey, current, completion)) {
       return { applied: false, reason: 'not_eligible' };
     }
-    return writeCapabilityAfterSuccessfulTurn(profileKey, current, completion);
+    return commitCapabilityAfterSuccessfulTurn(profileKey, current, completion);
   } finally {
     capabilityAdmissions.delete(profileKey);
     selfDowngradeGenerations.delete(profileKey);
