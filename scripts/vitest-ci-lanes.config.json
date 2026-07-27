@@ -35,7 +35,7 @@
     "plugins/ao-token-chain-ledger/tests/writer.test.ts": "light",
     "scripts/ci-green-wake-reconcile.test.ts": "heavy",
     "scripts/contract-evidence-legacy-list-guard.test.ts": "heavy",
-    "scripts/cutover/issue-928.test.ts": "heavy",
+    "scripts/cutover/issue-928.test.ts": "light",
     "scripts/estate-cut/issue-906-vertical-slice.test.ts": "light",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "heavy",
     "scripts/finding-ledger-guard.test.ts": "light",
