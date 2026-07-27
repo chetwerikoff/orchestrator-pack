@@ -223,7 +223,7 @@ describe('[AC4][AC6] estate successor state', () => {
   });
 });
 
-describe.skip('[AC1] admission and closure', () => {
+describe('[AC1] admission and closure', () => {
   it('recomputes #948 closure and rejects every executable target-library edge outside D928', () => {
     const base = git(['merge-base', 'origin/main', 'HEAD']);
     const manifest = buildPlanningManifest(base);
@@ -508,7 +508,7 @@ describe('[AC8] platform and canonical bytes', () => {
   });
 });
 
-describe.skip('[AC4] scheduler-driven #918 successor slice', () => {
+describe('[AC4] scheduler-driven #918 successor slice', () => {
   it('extends the existing #918 gate through the real scheduler/runner durable-delivery path', async () => {
     const root = tempRoot();
     const authorityPath = path.join(root, 'authority.json');
