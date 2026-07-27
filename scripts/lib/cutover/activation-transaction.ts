@@ -57,16 +57,18 @@ export function isExecutableLegacyReference(row: ClosureReferenceRow): boolean {
   if (primitiveClass === 'javascript-static-import' || primitiveClass === 'node-child-process' || primitiveClass === 'powershell-dot-source') {
     return true;
   }
+
   const selector = String(row.selector ?? '');
   const basename = path.posix.basename(target);
   if (!selector.includes(basename)) return false;
   const escaped = regexEscape(basename);
   const patterns = [
-    new RegExp(`(?:from\\s+|import\\s+|import\\s*\\(|require\\s*\\()\\s*['\"][^'\"]*${escaped}`, 'iu'),
-    new RegExp(`(?:spawn|execFile|fork|exec)\\s*\\([^\\r\\n]*${escaped}`, 'iu'),
-    new RegExp(`(?:Import-Module|Start-Process|pwsh|powershell)[^\\r\\n]*${escaped}`, 'iu'),
-    new RegExp(`(?:^|\\s)(?:\\.|&)\\s*(?:\\(\\s*)?(?:Join-Path\\s+[^\\r\\n]*?\\s+)?['\"][^'\"]*${escaped}`, 'iu'),
-    new RegExp(`(?:run|command|args)\\s*[:=][^\\r\\n]*${escaped}`, 'iu'),
+    new RegExp(`^\\s*import\\s+(?:(?:[^'\"]+?\\s+from\\s+)?['\"][^'\"]*${escaped}|\\(\\s*['\"][^'\"]*${escaped})`, 'iu'),
+    new RegExp(`^\\s*(?:(?:const|let|var)\\s+[^=]+?=\\s*)?require\\s*\\(\\s*['\"][^'\"]*${escaped}`, 'iu'),
+    new RegExp(`^\\s*(?:await\\s+)?(?:spawn|execFile|fork|exec)\\s*\\([^\\r\\n]*${escaped}`, 'iu'),
+    new RegExp(`^\\s*(?:Import-Module|Start-Process|pwsh|powershell)\\b[^\\r\\n]*${escaped}`, 'iu'),
+    new RegExp(`^\\s*(?:\\.|&)\\s*(?:\\(\\s*)?(?:Join-Path\\s+[^\\r\\n]*?\\s+)?['\"][^'\"]*${escaped}`, 'iu'),
+    new RegExp(`^\\s*(?:run|command|args)\\s*[:=][^\\r\\n]*${escaped}`, 'iu'),
   ];
   return patterns.some((pattern) => pattern.test(selector));
 }
@@ -255,8 +257,6 @@ async function startSupervisor(request: ActivationRequest, nonce: string): Promi
     ],
     cwd: request.repoRoot,
     inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: 20_000,
   });
   if (!result.ok) throw new Error(`typescript_supervisor_start_failed:${result.stderr || result.error || result.exitCode}`);
   const parsed = JSON.parse(result.stdout.trim()) as { pid?: number };
