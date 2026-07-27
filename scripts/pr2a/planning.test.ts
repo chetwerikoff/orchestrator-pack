@@ -8,6 +8,7 @@ const reviewed = JSON.parse(readFileSync('scripts/pr2a/planning-manifest.json', 
   lineage: { planningCommit: string };
 };
 
+// #928 intentionally deletes D928 at HEAD; #948 planning assertions stay bound to the reviewed planning snapshot.
 function reviewedPlanningManifest() {
   return buildPlanningManifest(reviewed.lineage.planningCommit);
 }
