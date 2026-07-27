@@ -448,6 +448,10 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
   });
 });
 
+function d928RemovedOnMain(): boolean {
+  return D928.every((pathName) => !existsSync(path.join(repoRoot, pathName)));
+}
+
 describe('[AC6] scope', () => {
   it('contains exactly the four PowerShell deletions and preserves #948 claim authority/tracked registry', () => {
     const base = git(['merge-base', 'origin/main', 'HEAD']);
@@ -456,12 +460,20 @@ describe('[AC6] scope', () => {
       return { status, path: parts.at(-1)! };
     });
     const powershell = rows.filter((row) => /\.(ps1|psm1|psd1)$/i.test(row.path)).sort((a, b) => a.path.localeCompare(b.path));
-    expect(powershell).toEqual([...D928].map((pathName) => ({ status: 'D', path: pathName })).sort((a, b) => a.path.localeCompare(b.path)));
+    const cutoverAlreadyLanded = d928RemovedOnMain();
+    if (!cutoverAlreadyLanded) {
+      expect(powershell).toEqual([...D928].map((pathName) => ({ status: 'D', path: pathName })).sort((a, b) => a.path.localeCompare(b.path)));
+      const newTests = rows.filter((row) => row.status === 'A' && /^scripts\/.*\.test\.ts$/.test(row.path)).map((row) => row.path);
+      expect(newTests).toEqual(['scripts/cutover/issue-928.test.ts']);
+    } else {
+      for (const pathName of D928) {
+        expect(rows.some((row) => row.path === pathName && row.status === 'A')).toBe(false);
+      }
+      expect(powershell.filter((row) => (D928 as readonly string[]).includes(row.path))).toEqual([]);
+    }
     for (const protectedPath of CLAIM_AUTHORITY) expect(rows.some((row) => row.path === protectedPath)).toBe(false);
     expect(rows.some((row) => row.path === 'scripts/orchestrator-side-process-registry.json')).toBe(false);
     expect(rows.some((row) => row.path === 'scripts/check-side-process-launch-contract.ps1')).toBe(false);
-    const newTests = rows.filter((row) => row.status === 'A' && /^scripts\/.*\.test\.ts$/.test(row.path)).map((row) => row.path);
-    expect(newTests).toEqual(['scripts/cutover/issue-928.test.ts']);
     const protectedWorktree = [...D928, ...CLAIM_AUTHORITY, 'scripts/orchestrator-side-process-registry.json', 'scripts/vitest-ci-lanes.config.json'];
     expect(git(['status', '--porcelain=v1', '--untracked-files=all', '--', ...protectedWorktree])).toBe('');
   });
