@@ -839,8 +839,8 @@ browser runtime lock, helper state machine, daemon, lease, or ownership store.
 Before the first **production** tracked-helper turn on a newly built or
 uncharacterized #964 candidate, complete the Gate-B gate in `discuss-with-gpt`:
 `npm run test:issue-964` green, operator live characterization (`capability` →
-command-scoped `CHATGPT_BROWSER_TURN_GATE_B_DIGEST` on characterization turns →
-serialized live smoke → post-smoke `capability` telemetry, then `unset`), and a
+serialized live smoke that self-arms parallel eligibility → post-smoke `capability`
+telemetry), and a
 retained digest-pinned recovery root under
 `~/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`.
 The Gate-B characterization turns themselves are exempt from this production gate.

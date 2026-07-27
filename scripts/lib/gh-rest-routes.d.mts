@@ -19,6 +19,7 @@ export function routePrChecks(
   repo: { slug: string; host: string },
   prNumber: number,
   cwd: string,
+  includeAppId?: boolean,
 ): unknown[];
 
 export function executeRestRoute(

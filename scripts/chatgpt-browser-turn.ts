@@ -19,6 +19,7 @@ import {
   type DestinationReservation,
   type DomainLock,
 } from './chatgpt-browser-turn/coordination.ts';
+import { closeOwnedTurnPage, releaseCdpBrowser } from './chatgpt-browser-turn/browser-session.ts';
 import { probeProfileReady } from './chatgpt-browser-turn/profile-probe.ts';
 import { publicationStatus, publishReply } from './chatgpt-browser-turn/publication.ts';
 import { runtimeCapabilityBinding } from './chatgpt-browser-turn/runtime-binding.ts';
@@ -27,12 +28,13 @@ import {
   capabilityStatus,
   clearReadable,
   deleteIncident,
+  applyCapabilityAfterSuccessfulTurn,
   downgradeCapability,
+  recordSerializedTransitionAnchor,
   listReadableIncidents,
   quarantineOpaque,
   statusList,
   updateIncident,
-  writeCapability,
   writeIncident,
 } from './chatgpt-browser-turn/state.ts';
 import { configuredProfileKey, sha256 } from './chatgpt-browser-turn/storage-common.ts';
@@ -45,6 +47,8 @@ import {
   runtimeWitnessSurfaceAvailable,
   sendTurn,
   type BrowserConfig,
+  witnessSurfaceProbeRequiresDowngrade,
+  type WitnessSurfaceProbe,
   verifyProfile,
 } from './chatgpt-browser-turn/ui-adapter.ts';
 
@@ -314,6 +318,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
   let incidentId: string | undefined;
   let possibleDelivery = false;
   let opened: { page: any; owned: boolean; provisionalId?: string } | undefined;
+  let browser: any = null;
 
   try {
     const config = browserConfig(args);
@@ -387,7 +392,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     const chromium = loadChromium();
-    const browser = await chromium.connectOverCDP(config.cdp);
+    browser = await chromium.connectOverCDP(config.cdp);
     const browserProvenance = String(browser.version?.() ?? 'chromium-cdp');
     if (capability.state === 'ok' && capability.capability?.browser_provenance !== browserProvenance) {
       downgradeCapability(profileKey);
@@ -403,8 +408,9 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     opened = await openTurnPage(browser, config);
     const turnPage = opened.page;
 
-    let witnessSurface = await runtimeWitnessSurfaceAvailable(turnPage);
-    if (capability.state === 'ok' && !witnessSurface) {
+    const freshConversation = config.newChat;
+    let witnessSurfaceProbe: WitnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage);
+    if (capability.state === 'ok' && witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) {
       downgradeCapability(profileKey);
       safeRelease(scheduleLock);
       scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
@@ -419,9 +425,10 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     if (capability.state === 'ok') {
       const rechecked = capabilityStatus(profileKey, expectedBinding);
-      witnessSurface = await runtimeWitnessSurfaceAvailable(turnPage);
-      if (rechecked.state !== 'ok' || !witnessSurface) {
-        if (!witnessSurface) downgradeCapability(profileKey);
+      witnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage);
+      if (rechecked.state !== 'ok' || witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) {
+        const observedExternalDowngrade = rechecked.state !== 'ok' && !witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation);
+        if (witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) downgradeCapability(profileKey);
         safeRelease(scheduleLock);
         scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
         capability = capabilityStatus(profileKey, expectedBinding);
@@ -431,12 +438,15 @@ async function runTurn(args: ParsedArgs): Promise<number> {
           reservation = null;
           return emitTurnAndCode(turnResult('profile_busy', 'profile', 'pre_send_parallel_recheck_failed', invocationId, profileKey));
         }
+        if (observedExternalDowngrade) {
+          recordSerializedTransitionAnchor(profileKey, capability);
+        }
       }
     }
 
     const finalBlocker = blockerBeforeSend(profileKey, reservation.identity, conversationId);
     if (finalBlocker) {
-      if (opened.owned) await opened.page.close().catch(() => {});
+      await closeOwnedTurnPage(opened, { retainPage: false });
       safeRelease(scheduleLock);
       scheduleLock = null;
       safeReleaseDestination(reservation);
@@ -472,7 +482,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       if (statusList(profileKey).state === 'profile_blocked') throw new Error('pre_send_profile_blocked');
       if (findProfileWall(profileKey)) throw new Error('pre_send_profile_wall');
       if (capability.state === 'ok') {
-        if (!(await runtimeWitnessSurfaceAvailable(turnPage))) {
+        if (witnessSurfaceProbeRequiresDowngrade(await runtimeWitnessSurfaceAvailable(turnPage), freshConversation)) {
           downgradeCapability(profileKey);
           capability = capabilityStatus(profileKey, expectedBinding);
           throw new Error('pre_send_witness_unavailable');
@@ -490,13 +500,13 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     });
 
     if (!result.possibleDelivery) {
+      await closeOwnedTurnPage(opened, { retainPage: false });
       deleteIncident(profileKey, incidentId);
       incidentId = undefined;
       safeRelease(scheduleLock);
       scheduleLock = null;
       safeReleaseDestination(reservation);
       reservation = null;
-      if (opened.owned) await opened.page.close().catch(() => {});
 
       if (result.state === 'quota' || result.state === 'challenge' || result.state === 'login') {
         const wall = ensureProfileWall(profileKey, result.state);
@@ -582,6 +592,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     updateIncident(profileKey, incidentId, { phase: 'committed', cause: 'committed' });
+    await closeOwnedTurnPage(opened, { retainPage: false });
     deleteIncident(profileKey, incidentId);
     incidentId = undefined;
     safeRelease(scheduleLock);
@@ -589,19 +600,22 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     safeReleaseDestination(reservation);
     reservation = null;
 
-    const gateEvidence = process.env.CHATGPT_BROWSER_TURN_GATE_B_DIGEST;
-    if (capability.state !== 'ok' && witnessSurface && gateEvidence === expectedBinding.gate_digest) {
-      const priorGeneration = capability.capability?.downgrade_generation ?? 0;
-      const observedAt = new Date();
-      writeCapability(profileKey, {
-        ...expectedBinding,
-        browser_provenance: browserProvenance,
-        evidence_digest: sha256(`${result.userMessageId}\n${result.assistantMessageId}\n${canonicalConversation}`),
-        observed_at: observedAt.toISOString(),
-        expires_at: new Date(observedAt.getTime() + 4 * 60 * 60 * 1000).toISOString(),
-        downgrade_generation: priorGeneration + 1,
-        parallel_eligible: true,
-      });
+    const capabilityOutcome = applyCapabilityAfterSuccessfulTurn(profileKey, {
+      expectedBinding,
+      browserProvenance,
+      evidenceDigest: sha256(`${result.userMessageId}\n${result.assistantMessageId}\n${canonicalConversation}`),
+      witnessed: result.state === 'ok'
+        && Boolean(result.userMessageId && result.assistantMessageId),
+      invocationId,
+    });
+    if (!capabilityOutcome.applied && capabilityOutcome.reason === 'write_failed') {
+      recordSwallowedDriverException(
+        profileKey,
+        invocationId,
+        'capability_mutation_failed',
+        capabilityOutcome.error,
+        { invocation_id: invocationId },
+      );
     }
 
     return emitTurnAndCode(turnResult('ok', 'none', 'completed', invocationId, profileKey, {
@@ -621,6 +635,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'driver_error';
     if (!possibleDelivery && message.startsWith('pre_send_')) {
+      await closeOwnedTurnPage(opened, { retainPage: false });
       if (incidentId) {
         try {
           deleteIncident(profileKey, incidentId);
@@ -629,7 +644,6 @@ async function runTurn(args: ParsedArgs): Promise<number> {
           // Existing durable state remains fail-closed.
         }
       }
-      if (opened?.owned) await opened.page.close().catch(() => {});
       safeRelease(scheduleLock);
       safeReleaseDestination(reservation);
       if (message === 'pre_send_profile_blocked') {
@@ -666,6 +680,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         ? 'driver_exception_after_possible_delivery'
         : 'driver_exception_before_send';
 
+    await closeOwnedTurnPage(opened, { retainPage: possibleDelivery });
     if (incidentId) {
       if (possibleDelivery) {
         try {
@@ -687,7 +702,6 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         }
       }
     }
-    if (!possibleDelivery && opened?.owned) await opened.page.close().catch(() => {});
     safeRelease(scheduleLock);
     safeReleaseDestination(reservation);
     const driverDiagnosticId = (cause === 'driver_exception_before_send' || cause === 'driver_exception_after_possible_delivery')
@@ -703,6 +717,8 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       ...(incidentId ? { incident_id: incidentId } : {}),
       ...(driverDiagnosticId ? { driver_diagnostic_id: driverDiagnosticId } : {}),
     }));
+  } finally {
+    await releaseCdpBrowser(browser);
   }
 }
 

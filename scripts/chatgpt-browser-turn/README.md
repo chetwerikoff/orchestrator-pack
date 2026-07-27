@@ -65,6 +65,19 @@ A stale generation, changed evidence, live owner, unreadable lock, or publicatio
 
 `turn` writes exactly one JSON `turn-result/v1` line. `ok` exits 0. Invocation-local validation/send failures use exit family 10, exact recovery/conversation ambiguity 11, profile walls/busy/orphan state 12, machine/driver failure 13, and incompatible durable state 14.
 
+## Page lifetime and process exit
+
+Each `turn` invocation connects to the operator's already-running Chrome over CDP, may create or reuse a ChatGPT tab, and must release what it acquired on every terminal path:
+
+- a page the helper **created** (`owned: true`) is closed before durable incident deletion and lock release on success and on failures that are not possible-delivery;
+- a page the helper **reused** (`owned: false`) is never closed;
+- a failure after **possible delivery** keeps its page open as operator recovery evidence;
+- the CDP client connection is always released in a `finally` block so the one-shot process can exit once the terminal result is emitted.
+
+Releasing the CDP client disconnects Playwright from the operator's Chrome; it does not terminate the browser process. Possible-delivery recovery therefore depends on adopted-context tabs surviving client disconnect — see `fixtures/cdp-page-survival-precondition.md` for the live observation record.
+
+`clear` performs a live profile-wall readiness probe when the target incident is a profile wall; that probe connects over CDP and releases its short-lived connection before returning. `status/list` does not connect to Chrome.
+
 `status/list`, `clear`, and `capability` write `control-result/v1`. `publication-status` writes `publication-status/v1`. These envelopes are body-free: they may contain identifiers, paths, generations, hashes, byte lengths, timestamps, and causes, but never prompt or reply bodies.
 
 Never resend after possible delivery merely because the caller missed the terminal result. Query `publication-status` and `status/list` first. Possible-delivery incidents are not timer-cleared or stale-lock reclaimed.
@@ -97,13 +110,11 @@ npm run chatgpt-browser-turn -- capability \
   --cdp http://127.0.0.1:9222
 ```
 
-The `candidate_digest`, `build_digest`, `config_digest`, and `gate_digest` in `expected_binding` are the Gate-B binding for that exact runtime candidate. `candidate_digest` covers the tracked TypeScript transport plus the reused `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs` verifier; `build_digest` additionally binds the exact Node version, platform, and architecture. For the operator-controlled live characterization invocation only, export the exact gate digest before running the successful serialized existing-chat turn:
+The `candidate_digest`, `build_digest`, `config_digest`, and `gate_digest` in `expected_binding` are the Gate-B binding for that exact runtime candidate. `candidate_digest` covers the tracked TypeScript transport plus the reused `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs` verifier; `build_digest` additionally binds the exact Node version, platform, and architecture. `gate_digest` hashes the gate-bound test sources; it is a staleness binding only and is not an operator attestation input.
 
-```bash
-export CHATGPT_BROWSER_TURN_GATE_B_DIGEST='<expected_binding.gate_digest>'
-```
+Run one successful serialized existing-chat characterization turn on the exact profile/CDP. The helper arms parallel eligibility by itself when the turn reaches `ok` with a live witness surface on this binding — no environment variable is required. Each later successful witnessed turn extends the lease in place; continuous successful operation does not expire until idleness exceeds the TTL.
 
-Do not reuse a value after any candidate, verifier, runtime-build, or Gate-B test-source change. A successful turn can create positive capability evidence only when the live witness surface is present and this environment value equals the current `gate_digest`. Query `capability` again after characterization and retain its browser provenance, evidence digest, observation/expiry timestamps, and downgrade generation as Gate-C telemetry. If the result is not `state: ok`, parallel smoke is not admitted; fallback remains configured-profile serialization.
+Query `capability` again after characterization and retain its browser provenance, evidence digest, observation/expiry timestamps, and downgrade generation as Gate-C telemetry. If the result is not `state: ok`, parallel smoke is not admitted; fallback remains configured-profile serialization.
 
 ## Driver diagnostics
 

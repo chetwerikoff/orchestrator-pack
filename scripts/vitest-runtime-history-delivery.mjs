@@ -120,7 +120,7 @@ export function verifyRefreshRun(run, provenance) {
     : fail('provenance-invalid', `refresh workflow episode ended ${conclusion || provenance.state}`);
 }
 
-export function normalizeCurrentRequiredPolicy(policy) {
+export function normalizeCurrentRequiredPolicy(policy, options = {}) {
   if (!policy || typeof policy !== 'object' || typeof policy.strict !== 'boolean') return fail('current-policy-unavailable', 'current main required-status policy is malformed');
   const source = Array.isArray(policy.checks) ? policy.checks : Array.isArray(policy.contexts) ? policy.contexts.map((context) => ({ context, app_id: null })) : null;
   if (!source) return fail('current-policy-unsupported', 'current main required-status policy has no checks/contexts list');
@@ -128,14 +128,19 @@ export function normalizeCurrentRequiredPolicy(policy) {
   const checks = [];
   for (const raw of source) {
     const context = typeof raw === 'string' ? raw : raw?.context;
-    const appId = typeof raw === 'object' && raw !== null ? (raw.app_id ?? null) : null;
+    const rawAppId = typeof raw === 'object' && raw !== null ? (raw.app_id ?? null) : null;
     if (!context || typeof context !== 'string' || seen.has(context)) return fail('current-policy-unsupported', 'current policy contains malformed or duplicate required checks');
-    if (appId !== null) {
-      if (!Number.isSafeInteger(Number(appId)) || Number(appId) <= 0) return fail('current-policy-unsupported', `invalid app restriction for ${context}`);
-      return fail('current-policy-unsupported', `provider/app restriction for ${context} cannot be proven by the current pr-checks transport`);
+    let appId = null;
+    if (rawAppId !== null) {
+      const parsedAppId = Number(rawAppId);
+      if (!Number.isSafeInteger(parsedAppId) || parsedAppId === 0 || parsedAppId < -1) return fail('current-policy-unsupported', `invalid app restriction for ${context}`);
+      if (parsedAppId > 0) {
+        if (!options.providerProofAvailable) return fail('current-policy-unsupported', `provider/app restriction for ${context} cannot be proven by the current pr-checks transport`);
+        appId = parsedAppId;
+      }
     }
     seen.add(context);
-    checks.push({ context, appId: null });
+    checks.push({ context, appId });
   }
   return { ok: true, strict: policy.strict, checks, names: checks.map((x) => x.context) };
 }
@@ -148,21 +153,58 @@ function checkState(check) {
   return 'pending';
 }
 
+function appIdOf(check) {
+  if (check?.appId === null || check?.appId === undefined || check?.appId === '') return null;
+  const value = Number(check.appId);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function requiredCheckEvidence(checks, requirement, byName) {
+  if (requirement.appId === null) {
+    return byName.has(requirement.context)
+      ? { state: byName.get(requirement.context) }
+      : { state: 'missing' };
+  }
+  const named = checks.filter((x) => String(x?.name ?? '') === requirement.context);
+  if (named.length === 0) return { state: 'missing' };
+  const matching = named.filter((x) => appIdOf(x) === requirement.appId);
+  if (matching.length === 0) {
+    if (named.some((x) => checkState(x) === 'pending')) return { state: 'pending' };
+    return { state: 'provider-unproven' };
+  }
+  const states = [...new Set(matching.map((x) => checkState(x)))];
+  if (states.length !== 1) return { state: 'provider-ambiguous' };
+  return { state: states[0] };
+}
+
 export function evaluateRequiredChecks({ checks, policy, packReviewProjection, machineAdmissionAttempted = false }) {
   if (!Array.isArray(checks)) return { action: 'fail', outcome: 'current-checks-unavailable', reason: 'current checks payload is malformed' };
   if (!policy?.ok) return { action: 'fail', outcome: policy?.outcome ?? 'current-policy-unavailable', reason: policy?.reason ?? 'current policy unavailable' };
   const byName = new Map(checks.filter((x) => x?.name).map((x) => [String(x.name), checkState(x)]));
-  const ordinary = policy.names.filter((x) => x !== PACK_REVIEW_CONTEXT);
-  const failed = ordinary.filter((x) => byName.get(x) === 'fail');
+  const ordinary = policy.checks.filter((x) => x.context !== PACK_REVIEW_CONTEXT);
+  const evidence = ordinary.map((requirement) => ({ requirement, ...requiredCheckEvidence(checks, requirement, byName) }));
+  const providerUnproven = evidence.filter((x) => x.state === 'provider-unproven' || x.state === 'provider-ambiguous');
+  if (providerUnproven.length) {
+    return {
+      action: 'fail',
+      outcome: 'required-provider-unproven',
+      reason: `required check provider identity unproven: ${providerUnproven.map((x) => `${x.requirement.context}@${x.requirement.appId}`).join(', ')}`,
+    };
+  }
+  const failed = evidence.filter((x) => x.state === 'fail').map((x) => x.requirement.context);
   if (failed.length) return { action: 'fail', outcome: 'required-check-failed', reason: `required checks failed: ${failed.join(', ')}` };
-  const pending = ordinary.filter((x) => byName.get(x) === 'pending');
+  const pending = evidence.filter((x) => x.state === 'pending').map((x) => x.requirement.context);
   if (pending.length) return { action: 'wait', outcome: 'required-check-pending', reason: `required checks pending: ${pending.join(', ')}` };
-  const missing = ordinary.filter((x) => !byName.has(x));
+  const missing = evidence.filter((x) => x.state === 'missing').map((x) => x.requirement.context);
   if (missing.length) {
     if (checks.length === 0 || checks.some((x) => checkState(x) === 'pending')) return { action: 'wait', outcome: 'required-check-pending', reason: `required checks not reported yet: ${missing.join(', ')}` };
     return { action: 'fail', outcome: 'required-context-unreported', reason: `required contexts unreported: ${missing.join(', ')}` };
   }
   if (!policy.names.includes(PACK_REVIEW_CONTEXT)) return { action: 'ready', reason: 'all current required checks pass; pack-review is not required' };
+  const packRequirement = policy.checks.find((x) => x.context === PACK_REVIEW_CONTEXT);
+  if (packRequirement?.appId !== null) {
+    return { action: 'fail', outcome: 'current-policy-unsupported', reason: `provider/app restriction for ${PACK_REVIEW_CONTEXT} cannot be proven by commit-status machine admission` };
+  }
   if (!packReviewProjection?.ok) return { action: 'fail', outcome: packReviewProjection?.outcome ?? 'status-history-unprovable', reason: packReviewProjection?.reason ?? 'pack-review status history unavailable' };
   if (packReviewProjection.state === 'veto') return { action: 'fail', outcome: 'operator-veto-observed', reason: 'latest out-of-band pack-review state is failure/error' };
   if (packReviewProjection.state === 'pending') return { action: 'wait', outcome: 'operator-status-pending', reason: 'latest out-of-band pack-review state is pending' };
@@ -214,7 +256,7 @@ function createRealIo(options) {
     getPr: () => runGhJson(options.repoRoot, ['api', `repos/${owner}/${repo}/pulls/${n}`]),
     getFiles: () => runGhJson(options.repoRoot, ['api', `repos/${owner}/${repo}/pulls/${n}/files?per_page=100`]) ?? [],
     getChecks: () => {
-      const r = runGh(options.repoRoot, ['pr', 'checks', n, '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'], { allowedExitCodes: [0, 1, 8] });
+      const r = runGh(options.repoRoot, ['pr', 'checks', n, '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description,appId'], { allowedExitCodes: [0, 1, 8] });
       return r.stdout.trim() ? JSON.parse(r.stdout) : [];
     },
     getPolicy: () => runGhJson(options.repoRoot, ['api', `repos/${owner}/${repo}/branches/${DELIVERY_BASE}/protection/required_status_checks`]),
@@ -260,7 +302,7 @@ async function inspect(config, io) {
   let rawPolicy;
   try { rawPolicy = await io.getPolicy(); }
   catch (e) { return { terminal: true, ...fail('current-policy-unavailable', `current main policy read failed: ${e.message}`), pr }; }
-  const policy = normalizeCurrentRequiredPolicy(rawPolicy);
+  const policy = normalizeCurrentRequiredPolicy(rawPolicy, { providerProofAvailable: true });
   if (!policy.ok) return { terminal: true, ...policy, pr };
   const projection = projectPackReviewStatusHistory(history);
   if (!projection.ok) return { terminal: true, ...projection, pr };
