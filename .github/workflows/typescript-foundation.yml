@@ -16,7 +16,7 @@ concurrency:
 jobs:
   runtime:
     name: TypeScript runtime (Node 22)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +33,7 @@ jobs:
 
   typecheck:
     name: TypeScript strict typecheck
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -48,7 +48,7 @@ jobs:
 
   lint:
     name: TypeScript policy lint
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 10
     env:
       PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
@@ -67,7 +67,7 @@ jobs:
 
   kernels:
     name: TypeScript kernel tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +82,7 @@ jobs:
 
   powershell-child-growth:
     name: PowerShell child-test growth guard
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 10
     env:
       PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
@@ -101,7 +101,7 @@ jobs:
 
   contract-mutations:
     name: Contract mutation evidence
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

@@ -23,7 +23,7 @@ jobs:
   classify-pr-changes:
     name: Classify PR changes
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 10
     permissions:
       contents: read
@@ -81,7 +81,7 @@ jobs:
 
   verify-pack:
     name: Verify orchestrator-pack structure
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -128,7 +128,7 @@ jobs:
   pr-scope-guard:
     name: PR scope guard
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 15
     permissions:
       contents: read
@@ -204,7 +204,7 @@ jobs:
       !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 15
     permissions:
       contents: read
@@ -235,7 +235,7 @@ jobs:
       !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -269,7 +269,7 @@ jobs:
       !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 20
     outputs:
       heavy_shard_count: ${{ steps.plan.outputs.heavy_shard_count }}
@@ -323,7 +323,7 @@ jobs:
       !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -365,7 +365,7 @@ jobs:
       !cancelled() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 20
     permissions:
       contents: read
@@ -396,7 +396,7 @@ jobs:
       always() &&
       (needs.classify-pr-changes.result == 'skipped' ||
        needs.classify-pr-changes.outputs.markdown_only != 'true')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -423,7 +423,7 @@ jobs:
       always() &&
       github.event_name == 'pull_request' &&
       needs.classify-pr-changes.outputs.markdown_only != 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     timeout-minutes: 10
     permissions:
       contents: read

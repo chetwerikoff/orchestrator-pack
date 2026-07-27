@@ -21,7 +21,7 @@ jobs:
       && github.event.pull_request.base.ref == 'main'
       && github.event.pull_request.head.ref == 'ci/vitest-runtime-history-refresh'
       && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     steps:
       - name: Checkout trusted base workflow revision
         uses: actions/checkout@v4

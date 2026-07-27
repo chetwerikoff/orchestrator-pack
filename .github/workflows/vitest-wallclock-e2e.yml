@@ -20,7 +20,7 @@ jobs:
   test-vitest-wallclock:
     name: Vitest wall-clock acceptance
     if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     permissions:
       contents: read
     steps:
@@ -44,7 +44,7 @@ jobs:
     name: Wall-clock acceptance gate
     needs: test-vitest-wallclock
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     permissions:
       contents: read
     steps:
@@ -63,7 +63,7 @@ jobs:
     name: wall-clock-e2e-containment
     needs: [test-vitest-wallclock, test-wallclock-aggregate]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     permissions:
       contents: read
     env:
@@ -107,7 +107,7 @@ jobs:
     name: Wall-clock failure alert
     needs: [test-vitest-wallclock, test-wallclock-aggregate, emit-containment]
     if: failure() && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     permissions:
       contents: read
       issues: write

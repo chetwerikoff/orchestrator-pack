@@ -21,7 +21,7 @@ jobs:
     name: Live harness [Pn] smoke
     # Armed only when operator configures PACK_HARNESS_PN_SMOKE_SESSION (merge-blocking then).
     if: ${{ vars.PACK_HARNESS_PN_SMOKE_SESSION != '' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, orchestrator-wsl]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
