@@ -142,12 +142,6 @@ function completionDetail(step: string, pathName: string, existing: FollowupReco
         observedAt: new Date().toISOString(),
         durableThroughSequence: existing.length,
       };
-    case 'final-health-delivery-observed':
-      return {
-        schedulerOwnershipRecorded: existing.some((row) => row.step === 'scheduler-owned'),
-        supervisorStartRecorded: existing.some((row) => row.step === 'typescript-supervisor-started'),
-        deliverySurface: 'committed-epoch-scheduler-owner-ready',
-      };
     default:
       throw new Error(`followup_auto_step_unsupported:${step}`);
   }
@@ -164,6 +158,7 @@ export function appendFollowup(pathName: string, epochId: string, step: string, 
     while (existing.length < requestedIndex) {
       const nextStep = REQUIRED_FOLLOWUP_STEPS[existing.length];
       if (!nextStep || nextStep === 'activation-complete') throw new Error('followup_completion_gap');
+      if (nextStep === 'final-health-delivery-observed') throw new Error('followup_health_delivery_observation_required');
       appendFollowupRecord(pathName, existing, epochId, nextStep, completionDetail(nextStep, pathName, existing));
     }
   }
