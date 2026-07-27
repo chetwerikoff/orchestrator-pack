@@ -73,8 +73,37 @@ export interface TypeScriptSupervisorInertProof {
   childAlive: false;
 }
 
+export interface CutoverRecoveryBindings {
+  phaseOnePath: string;
+  followupPath: string;
+  epochAuthorityPath: string;
+  targetRegistryPath: string;
+  projectedRegistryPath: string;
+  snapshotDir: string;
+  supervisorStateDir: string;
+  stores: CutoverStoreSpec[];
+}
+
+export interface CordonPreparedRecord {
+  schemaVersion: 1;
+  state: 'preparing';
+  epochId: string;
+  nonce: string;
+  hostId: string;
+  repoRoot: string;
+  installedCommitSha: string;
+  oldInstalledRevisionRoot: string;
+  legacySupervisor: ProcessIdentity;
+  startedAt: string;
+  typescriptSupervisorInert: TypeScriptSupervisorInertProof;
+  importBegunAt: null;
+  preImportTargetDigests: Partial<Record<CutoverStoreId, string>>;
+  recoveryBindings: CutoverRecoveryBindings;
+}
+
 export interface CordonRecord {
   schemaVersion: 1;
+  state: 'active';
   epochId: string;
   nonce: string;
   hostId: string;
@@ -89,7 +118,10 @@ export interface CordonRecord {
   typescriptSupervisorInert: TypeScriptSupervisorInertProof;
   importBegunAt: string | null;
   preImportTargetDigests: Partial<Record<CutoverStoreId, string>>;
+  recoveryBindings: CutoverRecoveryBindings;
 }
+
+export type CordonState = CordonPreparedRecord | CordonRecord;
 
 export interface FoundationHeartbeatEvidence {
   hostId: string;
