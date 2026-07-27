@@ -1,0 +1,49 @@
+---
+description: Flow-manager MUST monitor ChatGPT chats (not shell PIDs) during tracked browser turns
+alwaysApply: true
+---
+
+# Flow-manager browser-turn monitoring (binding)
+
+Canonical contract: [`.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md) — **Tracked helper long-turn monitoring** and **Owned-turn completion and cleanup**.
+
+## The failure mode to prevent
+
+**Chat ready ≠ turn process exited.** A running `npm run chatgpt-browser-turn` shell, empty `*-turn.log`, or `possible_delivery` in `status/list` does **not** mean GPT is still generating. Do not hand off as "waiting" when the assistant reply is already visible or the live Issue body has changed.
+
+## What to monitor (every poll cycle)
+
+While a tracked `turn` you own is outstanding, each poll MUST include **all** of:
+
+1. **Conversation** — independent of helper phase:
+   - CDP read of last assistant block (e.g. workdir `salvage-authoring-chat.mjs`), **or**
+   - live Issue `updatedAt` / body pull when the turn was a task-chat relay.
+   - If assistant text is stable and complete → **salvage immediately**, notify operator, pull revision — do not wait for shell `EXIT`.
+
+2. **Helper control plane** — `status/list` (every **5–10 min** when operator asked to watch; otherwise **10–15 min** per skill):
+   - Record `conversation_id` / chat URL in `$REVIEW_DIR/chats.md` as soon as known (`--new-chat` → grep status/list or CDP URL).
+
+3. **Publication** — when `invocation_id` exists: `publication-status` for that invocation.
+
+4. **Capture on disk** — only after terminal `ok` **or** successful salvage + Issue pull; empty log is not evidence of progress.
+
+## Forbidden monitoring
+
+- Waiting only on shell exit, `EXIT:` in terminal metadata, or log file growth.
+- Reporting "still running" without checking the conversation or GitHub Issue this cycle.
+- `pgrep` / PID liveness as proof GPT is working.
+- Applying standalone `driver.mjs` page-poll rules to tracked `chatgpt-browser-turn` turns (skill contrast clause).
+
+## Phase → action (minimum)
+
+| Signal | Action |
+|--------|--------|
+| Assistant reply complete in UI | Salvage → pull Issue if relay → update operator **now** |
+| Issue `updatedAt` moved | `gh issue view` → anchor `r0N` → tier receipt if needed |
+| `possible_delivery` + stable assistant | Salvage; do not wait full 30m timeout |
+| `stream_timeout` / `no_terminal_evidence` | Salvage + Issue check before declaring failure |
+| Terminal `ok` + capture | Progress stage; then owned-turn cleanup per skill |
+
+## Session handoff
+
+Never end a flow-manager turn with only "background job running". Status must name: chat URL, last poll time, what was observed (UI / Issue / status/list), and next action.
