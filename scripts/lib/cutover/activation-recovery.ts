@@ -2,22 +2,80 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { runProcess } from '../../kernel/subprocess.ts';
 import { buildEpochCommitCore, FileEpochAuthority, mapCutoverStoreDigests } from './activation-epoch-authority.ts';
-import { fileDigestOrAbsent, processAlive, readCordon } from './activation-cordon.ts';
+import {
+  assertCordonRequestBinding,
+  fileDigestOrAbsent,
+  processAlive,
+  readCordon,
+  readCordonState,
+} from './activation-cordon.ts';
 import { appendFollowup, appendPhaseOne, finalizePhaseOne, readPhaseOneDetail, verifyPhaseOneDetails, verifyPhaseOneDigest } from './activation-evidence.ts';
 import { importSnapshot } from './activation-import.ts';
 import { projectRegistry } from './activation-registry-projection.ts';
 import { sha256Bytes, sha256Stable } from './stable-stringify.ts';
-import type { FollowupRecord, ActivationRequest, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
+import type { CordonRecord, FollowupRecord, ActivationRequest, EpochCommitCore, ImportRecord, PhaseOneEnvelope, SnapshotRecord } from './types.ts';
 import { readSupervisorStatus } from '../orchestrator-side-process-supervisor.ts';
+import { listPackReviewRuns, type PackReviewRunRecord } from '../pack-review-run-store.ts';
+import { packReviewDeliveryNeedsResume } from '../pack-review-delivery.ts';
+
+export interface SchedulerHealthDeliveryObservation {
+  result: 'scheduler-health-delivery-observed';
+  epochId: string;
+  nonce: string;
+  installedCommitSha: string;
+  observedAt: string;
+  supervisor: {
+    pid: number;
+    childGeneration: number;
+    childPid: number;
+    registryHash: string;
+    restartState: 'running';
+  };
+  delivery:
+    | {
+        result: 'scheduler-durable-delivery-observed';
+        runId: string;
+        prNumber: number;
+        headSha: string;
+        status: string;
+        journalState: 'persisted';
+        deliveryOutcomes: PackReviewRunRecord['deliveryOutcomes'];
+      }
+    | {
+        result: 'no-post-activation-delivery-observed';
+      };
+}
 
 export interface RecoveryBoundary {
   ensureTypeScriptSupervisor(request: ActivationRequest, nonce: string): Promise<{ supervisorPid: number; childGeneration: number }>;
+  observeFinalHealthAndDelivery(
+    request: ActivationRequest,
+    core: EpochCommitCore,
+    supervisor: { supervisorPid: number; childGeneration: number },
+  ): Promise<SchedulerHealthDeliveryObservation>;
+}
+
+function assertCommittedContext(request: ActivationRequest, cordon: CordonRecord, core: EpochCommitCore): void {
+  if (
+    core.epochId !== cordon.epochId
+    || core.nonce !== cordon.nonce
+    || core.hostId !== cordon.hostId
+    || core.repoRoot !== cordon.repoRoot
+    || core.installedCommitSha !== cordon.installedCommitSha
+    || request.epochId !== core.epochId
+    || request.hostId !== core.hostId
+    || request.repoRoot !== core.repoRoot
+    || request.installedCommitSha !== core.installedCommitSha
+  ) {
+    throw new Error('recovery_commit_context_mismatch');
+  }
 }
 
 export function provePreImportRollbackSafe(request: ActivationRequest): { safe: true; result: 'pre-import-old-revision-restorable' } {
-  const cordon = readCordon(request.paths.cordonPath);
+  const cordon = readCordonState(request.paths.cordonPath);
+  assertCordonRequestBinding(request, cordon);
   if (cordon.importBegunAt) throw new Error('forward_only_recovery_required');
-  for (const store of request.stores) {
+  for (const store of cordon.recoveryBindings.stores) {
     if (fileDigestOrAbsent(store.targetPath) !== cordon.preImportTargetDigests[store.id]) {
       throw new Error(`preimport_target_changed:${store.id}`);
     }
@@ -70,6 +128,71 @@ async function waitForSupervisor(request: ActivationRequest, nonce: string): Pro
   throw new Error('recovery_supervisor_not_ready');
 }
 
+export function findCompletedSchedulerDelivery(core: EpochCommitCore, storeRoot?: string): PackReviewRunRecord | null {
+  const committedAt = Date.parse(core.commitAt);
+  if (!Number.isFinite(committedAt)) throw new Error('recovery_commit_timestamp_invalid');
+  const runs = listPackReviewRuns({
+    projectId: 'orchestrator-pack',
+    ...(storeRoot ? { storeRoot } : {}),
+  });
+  return runs.find((run) =>
+    run.surface === 'pr2-scheduler'
+    && run.startReason === 'scheduler'
+    && run.headSha === run.targetSha
+    && Date.parse(run.createdAt) >= committedAt
+    && run.journalOutcome?.state === 'persisted'
+    && !packReviewDeliveryNeedsResume(run)) ?? null;
+}
+
+export async function observeSchedulerHealthAndDelivery(
+  request: ActivationRequest,
+  core: EpochCommitCore,
+  supervisor: { supervisorPid: number; childGeneration: number },
+  storeRoot?: string,
+): Promise<SchedulerHealthDeliveryObservation> {
+  const status = readSupervisorStatus({ stateDir: request.paths.supervisorStateDir });
+  if (
+    !status
+    || status.epochId !== core.epochId
+    || status.nonce !== core.nonce
+    || status.supervisorPid !== supervisor.supervisorPid
+    || status.childGeneration !== supervisor.childGeneration
+    || status.restartState !== 'running'
+    || !status.registryHash
+    || status.childPid === null
+    || !processAlive(status.supervisorPid)
+    || !processAlive(status.childPid)
+  ) {
+    throw new Error('scheduler_health_not_observed');
+  }
+  const delivered = findCompletedSchedulerDelivery(core, storeRoot);
+  return {
+    result: 'scheduler-health-delivery-observed',
+    epochId: core.epochId,
+    nonce: core.nonce,
+    installedCommitSha: core.installedCommitSha,
+    observedAt: new Date().toISOString(),
+    supervisor: {
+      pid: status.supervisorPid,
+      childGeneration: status.childGeneration,
+      childPid: status.childPid,
+      registryHash: status.registryHash,
+      restartState: 'running',
+    },
+    delivery: delivered
+      ? {
+          result: 'scheduler-durable-delivery-observed',
+          runId: delivered.runId,
+          prNumber: delivered.prNumber,
+          headSha: delivered.headSha,
+          status: delivered.status,
+          journalState: 'persisted',
+          deliveryOutcomes: delivered.deliveryOutcomes,
+        }
+      : { result: 'no-post-activation-delivery-observed' },
+  };
+}
+
 export const productionRecoveryBoundary: RecoveryBoundary = {
   ensureTypeScriptSupervisor: async (request, nonce) => {
     const ready = readySupervisorStatus(request, nonce);
@@ -98,6 +221,7 @@ export const productionRecoveryBoundary: RecoveryBoundary = {
     if (!Number.isInteger(pid) || pid <= 1) throw new Error('recovery_supervisor_pid_invalid');
     return waitForSupervisor(request, nonce);
   },
+  observeFinalHealthAndDelivery: observeSchedulerHealthAndDelivery,
 };
 
 const REQUIRED_PREIMPORT_STEPS = [
@@ -189,7 +313,8 @@ function recoverySnapshots(request: ActivationRequest, nonce: string): SnapshotR
   });
 }
 
-function completePreCasRecovery(request: ActivationRequest, nonce: string, authority: FileEpochAuthority): EpochCommitCore {
+function completePreCasRecovery(request: ActivationRequest, cordon: CordonRecord, authority: FileEpochAuthority): EpochCommitCore {
+  const nonce = cordon.nonce;
   assertForwardRecoveryPrefix(request.paths.phaseOnePath, request.epochId, nonce);
   verifyPhaseOneDetails(request.paths.phaseOnePath, request.epochId, nonce);
   const snapshots = recoverySnapshots(request, nonce);
@@ -204,11 +329,11 @@ function completePreCasRecovery(request: ActivationRequest, nonce: string, autho
   ensurePhaseOneStep(request.paths.phaseOnePath, request.epochId, nonce, 'registry-projected', projection);
   const phaseOne = finalizePhaseOne(request.paths.phaseOnePath, request.epochId, nonce);
   const core = buildEpochCommitCore({
-    epochId: request.epochId,
+    epochId: cordon.epochId,
     nonce,
-    hostId: request.hostId,
-    repoRoot: readCordon(request.paths.cordonPath).repoRoot,
-    installedCommitSha: request.installedCommitSha,
+    hostId: cordon.hostId,
+    repoRoot: cordon.repoRoot,
+    installedCommitSha: cordon.installedCommitSha,
     snapshotDigests: mapCutoverStoreDigests(snapshots, (row) => row.snapshotDigest),
     importDigests: mapCutoverStoreDigests(imports, (row) => row.importTargetDigest),
     registryHash: projection.registryHash,
@@ -224,6 +349,7 @@ export async function recoverCommittedCutover(
 ): Promise<{ result: 'forward-repair-ready'; epochId: string; nonce: string; supervisorPid: number; childGeneration: number }> {
   if (!existsSync(request.paths.cordonPath)) throw new Error('cordon_missing');
   const cordon = readCordon(request.paths.cordonPath);
+  assertCordonRequestBinding(request, cordon);
   if (!cordon.importBegunAt) throw new Error('commit_recovery_before_import_boundary');
   const authority = new FileEpochAuthority(request.paths.epochAuthorityPath);
   const document = authority.read();
@@ -234,8 +360,9 @@ export async function recoverCommittedCutover(
     if (document.currentEpochId !== request.expectedOldEpochId || document.records.some((row) => row.epochId === request.epochId)) {
       throw new Error('epoch_cas_conflict');
     }
-    core = completePreCasRecovery(request, cordon.nonce, authority);
+    core = completePreCasRecovery(request, cordon, authority);
   }
+  assertCommittedContext(request, cordon, core);
   verifyPhaseOneDigest(request.paths.phaseOnePath, request.epochId, cordon.nonce, core.preCommitLogDigest);
   const projection = projectRegistry(request.paths.targetRegistryPath, request.paths.projectedRegistryPath);
   if (projection.registryHash !== core.registryHash) throw new Error('recovery_registry_hash_mismatch');
@@ -243,6 +370,13 @@ export async function recoverCommittedCutover(
   const supervisor = await boundary.ensureTypeScriptSupervisor(request, cordon.nonce);
   appendIfMissing(request.paths.followupPath, request.epochId, 'typescript-supervisor-started', { supervisorPid: supervisor.supervisorPid });
   appendIfMissing(request.paths.followupPath, request.epochId, 'scheduler-owned', { supervisorPid: supervisor.supervisorPid, childGeneration: supervisor.childGeneration });
+  appendIfMissing(request.paths.followupPath, request.epochId, 'machine-local-completion-fsync-confirmed', {
+    followupPath: path.resolve(request.paths.followupPath),
+    durability: 'file-fsync-atomic-rename-parent-fsync',
+  });
+  appendIfMissing(request.paths.followupPath, request.epochId, 'final-step-timestamp-recorded', { observedAt: new Date().toISOString() });
+  const observation = await boundary.observeFinalHealthAndDelivery(request, core, supervisor);
+  appendIfMissing(request.paths.followupPath, request.epochId, 'final-health-delivery-observed', observation);
   appendIfMissing(request.paths.followupPath, request.epochId, 'activation-complete', { recovered: true });
   return { result: 'forward-repair-ready', epochId: request.epochId, nonce: cordon.nonce, ...supervisor };
 }
