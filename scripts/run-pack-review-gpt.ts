@@ -5,6 +5,7 @@ import {
   resolveHeadSha,
   resolveRepositorySlug,
   runGptPackReview,
+  assertGptHarnessFixtureAllowed,
 } from './lib/pack-gpt-reviewer.ts';
 import { runProcess } from './kernel/subprocess.ts';
 
@@ -75,7 +76,12 @@ async function main(): Promise<void> {
     throw new Error('run-pack-review-gpt requires --pr-number or AO_PR_NUMBER');
   }
 
-  const repoSlug = trim(process.env.PACK_GPT_FIXTURE_REPO_SLUG) || await resolveRepositorySlug(options.repoRoot);
+  const repoSlug = trim(process.env.PACK_GPT_FIXTURE_REPO_SLUG);
+  const fixtureHead = trim(process.env.PACK_GPT_FIXTURE_HEAD_SHA);
+  if (repoSlug || fixtureHead) {
+    assertGptHarnessFixtureAllowed();
+  }
+  const resolvedRepoSlug = repoSlug || await resolveRepositorySlug(options.repoRoot);
   const boundHead = trim(process.env.PACK_REVIEW_TARGET_HEAD_SHA);
   let headSha = options.headSha || boundHead;
   if (!headSha) {
@@ -91,12 +97,12 @@ async function main(): Promise<void> {
     }
   }
   if (!headSha) {
-    headSha = trim(process.env.PACK_GPT_FIXTURE_HEAD_SHA) || await resolveHeadSha(options.repoRoot, prNumber, repoSlug);
+    headSha = fixtureHead || await resolveHeadSha(options.repoRoot, prNumber, resolvedRepoSlug);
   }
 
   const result = await runGptPackReview({
     repoRoot: options.repoRoot,
-    repoSlug,
+    repoSlug: resolvedRepoSlug,
     prNumber,
     headSha,
     issueNumber: options.issueNumber,

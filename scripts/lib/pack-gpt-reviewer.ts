@@ -3,16 +3,43 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   emitTerminalVerdictPayload,
-  parseTerminalVerdictPayload,
   toAoFindings,
 } from '../../plugins/ao-codex-pr-reviewer/lib/emit.ts';
-import { parseCodexOutput } from '../../plugins/ao-codex-pr-reviewer/lib/parse_output.ts';
 import {
   resolveIssueNumber,
   resolveScopeContext,
 } from '../../plugins/ao-codex-pr-reviewer/lib/scope_context.ts';
+import { parseCodexOutput } from '../../plugins/ao-codex-pr-reviewer/lib/parse_output.ts';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { buildGptReviewPrompt, resolvePackRepoRoot } from './pack-pr-review-contract.ts';
+
+const GPT_BROWSER_SOURCE = 'gpt-browser';
+const VALID_GPT_SEVERITIES = new Set(['blocking', 'non-blocking']);
+
+export function assertGptHarnessFixtureAllowed(env: NodeJS.ProcessEnv = process.env): void {
+  if (env.OPK_VITEST_HARNESS === '1') {
+    return;
+  }
+  throw new Error('PACK_GPT_* fixture env vars are only allowed when OPK_VITEST_HARNESS=1');
+}
+
+function assertGptFixtureBinding(
+  env: NodeJS.ProcessEnv,
+  request: Pick<GptReviewRequest, 'repoSlug' | 'prNumber' | 'headSha'>,
+): void {
+  const fixturePr = Number(env.PACK_GPT_FIXTURE_PR_NUMBER ?? 0);
+  const fixtureHead = trim(env.PACK_GPT_FIXTURE_HEAD_SHA).toLowerCase();
+  const fixtureSlug = trim(env.PACK_GPT_FIXTURE_REPO_SLUG);
+  if (fixturePr > 0 && fixturePr !== request.prNumber) {
+    throw new Error(`PACK_GPT fixture PR binding mismatch: fixture #${fixturePr}, request #${request.prNumber}`);
+  }
+  if (fixtureHead && fixtureHead !== request.headSha.toLowerCase()) {
+    throw new Error('PACK_GPT fixture head binding mismatch');
+  }
+  if (fixtureSlug && fixtureSlug !== request.repoSlug) {
+    throw new Error('PACK_GPT fixture repo binding mismatch');
+  }
+}
 
 export interface GptBrowserTurnConfig {
   profile: string;
@@ -104,13 +131,21 @@ const defaultDependencies: GptReviewDependencies = {
   resolvePrUrl: defaultResolvePrUrl,
 };
 
-export function mapGptReplyToTerminalStdout(replyText: string): string {
-  const direct = parseTerminalVerdictPayload(replyText);
-  if (direct) {
-    if (direct.findingCount !== direct.findings.length) {
-      throw new Error('GPT terminal payload findingCount does not match findings length');
+function validateGptStructuredFindings(findings: ReturnType<typeof parseCodexOutput> & { kind: 'findings' }): void {
+  for (const [index, finding] of findings.findings.entries()) {
+    if (finding.source !== GPT_BROWSER_SOURCE) {
+      throw new Error(`GPT finding ${index + 1} source must be ${GPT_BROWSER_SOURCE}`);
     }
-    return JSON.stringify(direct);
+    if (!VALID_GPT_SEVERITIES.has(String(finding.severity))) {
+      throw new Error(`GPT finding ${index + 1} severity must be blocking or non-blocking`);
+    }
+  }
+}
+
+export function mapGptReplyToTerminalStdout(replyText: string): string {
+  const trimmed = replyText.trim();
+  if (/^\{[\s\S]*"verdict"\s*:/.test(trimmed)) {
+    throw new Error('GPT must not return pre-mapped terminal verdict JSON');
   }
 
   const parsed = parseCodexOutput(replyText);
@@ -118,6 +153,7 @@ export function mapGptReplyToTerminalStdout(replyText: string): string {
     return emitTerminalVerdictPayload({ verdict: 'clean', findings: [] });
   }
   if (parsed.kind === 'findings') {
+    validateGptStructuredFindings(parsed);
     const findings = toAoFindings(parsed.findings);
     return emitTerminalVerdictPayload({ verdict: 'findings', findings });
   }
@@ -132,7 +168,9 @@ export async function runGptPackReview(
   const merged = { ...defaultDependencies, ...deps };
   const fixtureReply = trim(env.PACK_GPT_REVIEWER_FIXTURE_REPLY);
   if (fixtureReply) {
+    assertGptHarnessFixtureAllowed(env);
     try {
+      assertGptFixtureBinding(env, request);
       return { stdout: mapGptReplyToTerminalStdout(fixtureReply), stderr: '', exitCode: 0 };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

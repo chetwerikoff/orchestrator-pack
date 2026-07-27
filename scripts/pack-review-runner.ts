@@ -1,5 +1,6 @@
 import './toolchain/native-entrypoint-preflight.ts';
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -49,7 +50,7 @@ import {
   type PackReviewRequiredStatusWriter,
   type PackReviewWorkerNotifier,
 } from './lib/pack-review-delivery.ts';
-import { resolvePackReviewerFromEnv } from './lib/resolve-pack-reviewer.ts';
+import { resolvePackReviewerFromEnv, type PackReviewer, type PackReviewerLayerOverrides } from './lib/resolve-pack-reviewer.ts';
 
 interface StartInput {
   projectId?: string;
@@ -68,6 +69,8 @@ interface StartInput {
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
+  fixtureReviewerLayerOverrides?: PackReviewerLayerOverrides;
+  fixtureEmulateWin32Selector?: boolean;
   fixturePostReviewHeadSha?: string;
   fixtureGithubReviewId?: number;
   fixtureRepoSlug?: string;
@@ -537,22 +540,39 @@ async function invokeReviewer(options: {
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
   headSha: string;
-}): Promise<ProcessResult> {
+  fixtureReviewerLayerOverrides?: PackReviewerLayerOverrides;
+  fixtureEmulateWin32Selector?: boolean;
+}): Promise<{ result: ProcessResult; resolvedReviewer: PackReviewer | null }> {
+  const resolvedReviewer = resolvePackReviewerFromEnv(process.env, {
+    layerOverrides: options.fixtureReviewerLayerOverrides,
+    emulateWin32: options.fixtureEmulateWin32Selector,
+  });
+  const engagementFile = trim(process.env.PACK_REVIEW_RUNNER_GPT_ENGAGEMENT_FILE);
+  if (process.env.OPK_VITEST_HARNESS === '1' && engagementFile && resolvedReviewer === 'gpt') {
+    appendFileSync(engagementFile, `${JSON.stringify({ runId: options.runId, prNumber: options.prNumber, headSha: options.headSha })}\n`);
+  }
+
   if (process.env.OPK_VITEST_HARNESS === '1' && options.fixtureReviewTimedOut) {
-    return { outcome: 'timeout', ok: false, exitCode: null, signal: null, stdout: '', stderr: '', timedOut: true, cancelled: false };
+    return {
+      resolvedReviewer,
+      result: { outcome: 'timeout', ok: false, exitCode: null, signal: null, stdout: '', stderr: '', timedOut: true, cancelled: false },
+    };
   }
 
   if (process.env.OPK_VITEST_HARNESS === '1' && options.fixtureReviewStdout !== undefined) {
     const exitCode = options.fixtureReviewExitCode ?? 0;
     return {
-      outcome: 'exit',
-      ok: exitCode === 0,
-      exitCode,
-      signal: null,
-      stdout: options.fixtureReviewStdout,
-      stderr: '',
-      timedOut: false,
-      cancelled: false,
+      resolvedReviewer,
+      result: {
+        outcome: 'exit',
+        ok: exitCode === 0,
+        exitCode,
+        signal: null,
+        stdout: options.fixtureReviewStdout,
+        stderr: '',
+        timedOut: false,
+        cancelled: false,
+      },
     };
   }
 
@@ -571,12 +591,24 @@ async function invokeReviewer(options: {
     PACK_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_TARGET_HEAD_SHA: options.headSha,
   };
+  if (resolvedReviewer) {
+    env.PACK_REVIEWER = resolvedReviewer;
+  }
   if (options.sessionId) {
     env.AO_SESSION_ID = options.sessionId;
     env.AO_WORKER_SESSION_ID = options.sessionId;
   }
 
-  return runProcess({
+  const invocationLog = trim(process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG);
+  if (process.env.OPK_VITEST_HARNESS === '1' && invocationLog) {
+    appendFileSync(invocationLog, `${JSON.stringify({
+      reviewer: resolvedReviewer,
+      command: 'pwsh',
+      args,
+    })}\n`);
+  }
+
+  const result = await runProcess({
     command: 'pwsh',
     args,
     cwd: options.trustedPackRoot,
@@ -594,8 +626,8 @@ async function invokeReviewer(options: {
       void pid;
     },
   });
+  return { result, resolvedReviewer };
 }
-
 export async function startPackReview(input: StartInput): Promise<Record<string, unknown>> {
   const trusted = resolveTrustedRunnerPaths();
   const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
@@ -743,8 +775,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     heartbeat.unref();
 
     let result: ProcessResult;
+    let resolvedReviewer: PackReviewer | null = null;
     try {
-      result = await invokeReviewer({
+      const invocation = await invokeReviewer({
         reviewerPath: trusted.reviewerPath,
         trustedPackRoot: trusted.trustedPackRoot,
         reviewTargetRoot: worktree,
@@ -759,8 +792,12 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         fixtureReviewStdout: input.fixtureReviewStdout,
         fixtureReviewExitCode: input.fixtureReviewExitCode,
         fixtureReviewTimedOut: input.fixtureReviewTimedOut,
+        fixtureReviewerLayerOverrides: input.fixtureReviewerLayerOverrides,
+        fixtureEmulateWin32Selector: input.fixtureEmulateWin32Selector,
         headSha: target.headSha,
       });
+      result = invocation.result;
+      resolvedReviewer = invocation.resolvedReviewer;
     } finally {
       clearInterval(heartbeat);
     }
@@ -813,7 +850,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
 
-    if (resolvePackReviewerFromEnv() === 'gpt') {
+    if (resolvedReviewer === 'gpt') {
       try {
         await assertBoundHeadStillCurrent({
           repoRoot: target.sourceRepoRoot,
