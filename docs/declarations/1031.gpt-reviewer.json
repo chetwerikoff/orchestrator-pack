@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "46647e51c223646a580970f00a4d96677628a4c2",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:066f4f7a612533f875181431706a299b7b8e29d17c4c24b4c0fe5950fa981662"
+    "active_scope_hash": "sha256:881cb96c55bc159074aa0ee2859889fba3efc7be3b7b775e4a8f7239ad1d1533"
   },
   "declared_paths": [
     ".claude/skills/switch-pack-reviewer/SKILL.md",
@@ -25,6 +25,7 @@
     "scripts/lib/pack-gpt-reviewer.ts",
     "scripts/lib/pack-pr-review-contract.ts",
     "scripts/lib/resolve-pack-reviewer.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/pack-gpt-reviewer.test.ts",
     "scripts/pack-pr-review-contract.test.ts",
     "scripts/pack-review-runner-gpt.test.ts",

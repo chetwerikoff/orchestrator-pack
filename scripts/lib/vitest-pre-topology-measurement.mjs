@@ -13,6 +13,11 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // drift that the real light lane correctly owns.
   'scripts/reachability-purge.test.ts': 120,
   'scripts/cutover/issue-928.test.ts': 120,
+  // Issue #1031 light-lane GPT reviewer tests: fast unit coverage without runtime-history
+  // harvest yet; fixed estimates keep pre-topology measurement within the 32-file bound.
+  'scripts/pack-gpt-reviewer.test.ts': 120,
+  'scripts/pack-pr-review-contract.test.ts': 120,
+  'scripts/pack-review-runner-gpt.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
