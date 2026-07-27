@@ -57,16 +57,6 @@ function command(executable: string, args: string[], cwd = repoRoot): string {
   return result.stdout.trim();
 }
 
-
-function pathTrackedAt(ref: string, pathName: string): boolean {
-  try {
-    git(['cat-file', '-e', `${ref}:${pathName}`]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function git(args: string[]): string {
   return command('git', ['-C', repoRoot, ...args]);
 }
@@ -466,17 +456,12 @@ describe('[AC6] scope', () => {
       return { status, path: parts.at(-1)! };
     });
     const powershell = rows.filter((row) => /\.(ps1|psm1|psd1)$/i.test(row.path)).sort((a, b) => a.path.localeCompare(b.path));
-    const d928DeletionAlreadyOnBase = D928.every((pathName) => !pathTrackedAt(base, pathName));
-    if (!d928DeletionAlreadyOnBase) {
-      expect(powershell).toEqual([...D928].map((pathName) => ({ status: 'D', path: pathName })).sort((a, b) => a.path.localeCompare(b.path)));
-      const newTests = rows.filter((row) => row.status === 'A' && /^scripts\/.*\.test\.ts$/.test(row.path)).map((row) => row.path);
-      expect(newTests).toEqual(['scripts/cutover/issue-928.test.ts']);
-    } else {
-      expect(powershell.filter((row) => row.status === 'D')).toEqual([]);
-    }
+    expect(powershell).toEqual([...D928].map((pathName) => ({ status: 'D', path: pathName })).sort((a, b) => a.path.localeCompare(b.path)));
     for (const protectedPath of CLAIM_AUTHORITY) expect(rows.some((row) => row.path === protectedPath)).toBe(false);
     expect(rows.some((row) => row.path === 'scripts/orchestrator-side-process-registry.json')).toBe(false);
     expect(rows.some((row) => row.path === 'scripts/check-side-process-launch-contract.ps1')).toBe(false);
+    const newTests = rows.filter((row) => row.status === 'A' && /^scripts\/.*\.test\.ts$/.test(row.path)).map((row) => row.path);
+    expect(newTests).toEqual(['scripts/cutover/issue-928.test.ts']);
     const protectedWorktree = [...D928, ...CLAIM_AUTHORITY, 'scripts/orchestrator-side-process-registry.json', 'scripts/vitest-ci-lanes.config.json'];
     expect(git(['status', '--porcelain=v1', '--untracked-files=all', '--', ...protectedWorktree])).toBe('');
   });
