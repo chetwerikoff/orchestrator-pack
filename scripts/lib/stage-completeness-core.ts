@@ -14,6 +14,7 @@ export const COMPETITIVE_WAIVER_FILENAME = 'competitive-stage-waiver.json';
 
 const COUNTED_STAGE_TOKENS = new Set([
   'competitive',
+  'architectural',
   'architectural-lens',
   'architectural-final',
 ]);
@@ -24,7 +25,8 @@ const CAPTURE_FILENAME_RE =
 const COUNTED_STAGE_FILENAME_TOKEN_RE =
   /competitive|architectural-lens|architectural-final/i;
 
-const WAIVER_REASONS = new Set(['codex-substitution', 'operator-waiver']);
+const PARSEABLE_WAIVER_REASONS = new Set(['codex-substitution', 'operator-waiver']);
+const CREDITED_COMPETITIVE_WAIVER_REASONS = new Set(['operator-waiver']);
 
 export interface ParsedCapture {
   passIndex: number;
@@ -117,7 +119,7 @@ export function parseCompetitiveWaiver(
   const record = parsed as Record<string, unknown>;
   const reason = typeof record.reason === 'string' ? record.reason.trim() : '';
   const recordedAt = typeof record['recorded-at'] === 'string' ? record['recorded-at'].trim() : '';
-  if (!WAIVER_REASONS.has(reason) || !recordedAt || !isStrictIso8601Timestamp(recordedAt)) {
+  if (!PARSEABLE_WAIVER_REASONS.has(reason) || !recordedAt || !isStrictIso8601Timestamp(recordedAt)) {
     return { waiver: null, invalid: true };
   }
 
@@ -180,6 +182,60 @@ function maxPassIndex(captures: ParsedCapture[], stage: string): number | null {
   return Math.max(...matches.map((capture) => capture.passIndex));
 }
 
+function creditedCompetitiveWaiver(waiver: CompetitiveWaiver | null): CompetitiveWaiver | null {
+  if (waiver === null || !CREDITED_COMPETITIVE_WAIVER_REASONS.has(waiver.reason)) {
+    return null;
+  }
+  return waiver;
+}
+
+function resolveCountedArchitecturalMax(
+  captures: ParsedCapture[],
+  competitiveAnchor: number | null,
+  lensMax: number | null,
+): { countedMax: number | null; orderingErrors: string[] } {
+  const orderingErrors: string[] = [];
+  const architecturalCaptures = captures.filter((capture) => capture.stage === 'architectural');
+
+  if (architecturalCaptures.length === 0) {
+    return { countedMax: null, orderingErrors: ['missing architectural stage'] };
+  }
+
+  if (competitiveAnchor === null) {
+    return { countedMax: null, orderingErrors };
+  }
+
+  const afterCompetitive = architecturalCaptures.filter(
+    (capture) => capture.passIndex > competitiveAnchor,
+  );
+  if (afterCompetitive.length === 0) {
+    orderingErrors.push(
+      'architectural stage out of order (must be strictly after competitive anchor)',
+    );
+    return { countedMax: null, orderingErrors };
+  }
+
+  if (lensMax === null) {
+    return {
+      countedMax: Math.max(...afterCompetitive.map((capture) => capture.passIndex)),
+      orderingErrors,
+    };
+  }
+
+  const beforeLens = afterCompetitive.filter((capture) => capture.passIndex < lensMax);
+  if (beforeLens.length === 0) {
+    orderingErrors.push(
+      'architectural stage out of order (must be strictly before architect-lens)',
+    );
+    return { countedMax: null, orderingErrors };
+  }
+
+  return {
+    countedMax: Math.max(...beforeLens.map((capture) => capture.passIndex)),
+    orderingErrors,
+  };
+}
+
 export function resolveRepoRootFromDraftPath(draftPath?: string): string {
   if (!draftPath) {
     return process.cwd();
@@ -227,9 +283,10 @@ export function checkStageCompletenessGuard(
   const { waiver, invalid: invalidWaiver } = parseCompetitiveWaiver(capturesDir);
 
   const hasCompetitive = competitiveMax !== null;
-  const hasValidWaiver = waiver !== null;
+  const creditedWaiver = creditedCompetitiveWaiver(waiver);
+  const hasCreditedWaiver = creditedWaiver !== null;
 
-  if (!hasCompetitive && !hasValidWaiver) {
+  if (!hasCompetitive && !hasCreditedWaiver) {
     if (invalidWaiver) {
       errors.push('invalid competitive-stage waiver record');
     }
@@ -239,13 +296,19 @@ export function checkStageCompletenessGuard(
   let competitiveAnchor: number | null = null;
   if (hasCompetitive) {
     competitiveAnchor = competitiveMax;
-  } else if (hasValidWaiver) {
-    competitiveAnchor = waiver!.afterPass;
+  } else if (hasCreditedWaiver) {
+    competitiveAnchor = creditedWaiver!.afterPass;
   }
 
   const lensMax = maxPassIndex(captures, 'architectural-lens');
+  const { countedMax: architecturalMax, orderingErrors: architecturalOrderingErrors } =
+    resolveCountedArchitecturalMax(captures, competitiveAnchor, lensMax);
+  errors.push(...architecturalOrderingErrors);
+
   if (lensMax === null) {
     errors.push('missing architect-lens stage');
+  } else if (architecturalMax !== null && lensMax <= architecturalMax) {
+    errors.push('architect-lens stage out of order (must be strictly after architectural stage)');
   } else if (competitiveAnchor !== null && lensMax <= competitiveAnchor) {
     errors.push('architect-lens stage out of order (must be strictly after competitive anchor)');
   }
