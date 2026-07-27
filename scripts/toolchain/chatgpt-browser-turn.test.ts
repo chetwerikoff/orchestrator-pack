@@ -270,8 +270,10 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
     const assistant = messageLocator('assistant', 'assistant-12345678', 'user-12345678');
     const pageWithRelation = { locator: () => ({ count: async () => 2, nth: (index: number) => [user, assistant][index] }) };
     const pageWithoutRelation = { locator: () => ({ count: async () => 2, nth: (index: number) => [user, messageLocator('assistant', 'assistant-12345678')][index] }) };
-    expect(await runtimeWitnessSurfaceAvailable(pageWithRelation)).toBe(true);
-    expect(await runtimeWitnessSurfaceAvailable(pageWithoutRelation)).toBe(false);
+    const emptyConversation = { locator: () => ({ count: async () => 0, nth: () => emptyLocator() }) };
+    expect(await runtimeWitnessSurfaceAvailable(pageWithRelation)).toBe('available');
+    expect(await runtimeWitnessSurfaceAvailable(pageWithoutRelation)).toBe('absent');
+    expect(await runtimeWitnessSurfaceAvailable(emptyConversation)).toBe('inapplicable');
   });
 
   it('S1 binds a dispatch candidate only after the same ID is service-visible; historical response IDs are ignored', async () => {

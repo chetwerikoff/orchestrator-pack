@@ -47,6 +47,7 @@ import {
   runtimeWitnessSurfaceAvailable,
   sendTurn,
   type BrowserConfig,
+  type WitnessSurfaceProbe,
   verifyProfile,
 } from './chatgpt-browser-turn/ui-adapter.ts';
 
@@ -406,8 +407,8 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     opened = await openTurnPage(browser, config);
     const turnPage = opened.page;
 
-    let witnessSurface = await runtimeWitnessSurfaceAvailable(turnPage);
-    if (capability.state === 'ok' && !witnessSurface) {
+    let witnessSurfaceProbe: WitnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage);
+    if (capability.state === 'ok' && witnessSurfaceProbe === 'absent') {
       downgradeCapability(profileKey);
       safeRelease(scheduleLock);
       scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
@@ -422,10 +423,10 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     if (capability.state === 'ok') {
       const rechecked = capabilityStatus(profileKey, expectedBinding);
-      witnessSurface = await runtimeWitnessSurfaceAvailable(turnPage);
-      if (rechecked.state !== 'ok' || !witnessSurface) {
-        const observedExternalDowngrade = rechecked.state !== 'ok' && witnessSurface;
-        if (!witnessSurface) downgradeCapability(profileKey);
+      witnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage);
+      if (rechecked.state !== 'ok' || witnessSurfaceProbe === 'absent') {
+        const observedExternalDowngrade = rechecked.state !== 'ok' && witnessSurfaceProbe !== 'absent';
+        if (witnessSurfaceProbe === 'absent') downgradeCapability(profileKey);
         safeRelease(scheduleLock);
         scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
         capability = capabilityStatus(profileKey, expectedBinding);
@@ -479,7 +480,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       if (statusList(profileKey).state === 'profile_blocked') throw new Error('pre_send_profile_blocked');
       if (findProfileWall(profileKey)) throw new Error('pre_send_profile_wall');
       if (capability.state === 'ok') {
-        if (!(await runtimeWitnessSurfaceAvailable(turnPage))) {
+        if ((await runtimeWitnessSurfaceAvailable(turnPage)) === 'absent') {
           downgradeCapability(profileKey);
           capability = capabilityStatus(profileKey, expectedBinding);
           throw new Error('pre_send_witness_unavailable');
@@ -601,7 +602,8 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       expectedBinding,
       browserProvenance,
       evidenceDigest: sha256(`${result.userMessageId}\n${result.assistantMessageId}\n${canonicalConversation}`),
-      witnessed: witnessSurface,
+      witnessed: result.state === 'ok'
+        && Boolean(result.userMessageId && result.assistantMessageId),
     });
     if (!capabilityOutcome.applied && capabilityOutcome.reason === 'write_failed') {
       recordSwallowedDriverException(

@@ -406,6 +406,53 @@ describe('issue 1008 capability self-arm race safety', () => {
     expect(armed.capability?.parallel_eligible).toBe(true);
   });
 
+
+  it('arms from a witnessed fresh-conversation completion independent of pre-send probe state', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    const now = Date.now();
+    __testWriteCapability(profileKey, {
+      ...binding,
+      browser_provenance: 'Chromium test',
+      evidence_digest: sha256('downgraded-before-fresh-chat'),
+      observed_at: new Date(now - 1_000).toISOString(),
+      expires_at: new Date(now + 60_000).toISOString(),
+      downgrade_generation: 3,
+      parallel_eligible: false,
+    });
+    expect(capabilityStatus(profileKey, binding).state).toBe('downgraded');
+
+    const outcome = applyCapabilityAfterSuccessfulTurn(
+      profileKey,
+      completion(binding, 'fresh-chat-service-witness'),
+    );
+    expect(outcome.applied).toBe(true);
+    const armed = capabilityStatus(profileKey, binding);
+    expect(armed.state).toBe('ok');
+    expect(armed.capability?.parallel_eligible).toBe(true);
+    expect(armed.capability?.downgrade_generation).toBe(4);
+  });
+
+  it('refuses capability mutation when witnessed is false even with an ok lease record', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    const now = Date.now();
+    __testWriteCapability(profileKey, {
+      ...binding,
+      browser_provenance: 'Chromium test',
+      evidence_digest: sha256('ok-but-unwitnessed'),
+      observed_at: new Date(now - 1_000).toISOString(),
+      expires_at: new Date(now + 60_000).toISOString(),
+      downgrade_generation: 0,
+      parallel_eligible: true,
+    });
+    const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, {
+      ...completion(binding, 'stale-pre-send-probe'),
+      witnessed: false,
+    });
+    expect(outcome.applied).toBe(false);
+    expect(outcome.reason).toBe('not_witnessed');
+    expect(capabilityStatus(profileKey, binding).capability?.downgrade_generation).toBe(0);
+  });
+
   it('arms exactly once after this invocation downgrades and switches to serialized scope', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     const now = Date.now();
