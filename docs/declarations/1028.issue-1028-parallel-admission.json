@@ -7,16 +7,32 @@
   "baseline": {
     "commit_sha": "1822f18e4060be78ec856cbab9497d87d20de366",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:b0d8dc64085073d8157943c0b48c52939623b9cb3f5eb25ef16a0747cfc005f1"
+    "active_scope_hash": "sha256:64a8dfb22f6d2ab970803875adaf4f97ff9c23240f6608c17b3db880e05d4c1e"
   },
   "declared_paths": [
     "docs/migration_notes.md",
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/coordination.ts",
     "scripts/chatgpt-browser-turn/state.ts",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:b0d8dc64085073d8157943c0b48c52939623b9cb3f5eb25ef16a0747cfc005f1",
+      "new_active_scope_hash": "sha256:64a8dfb22f6d2ab970803875adaf4f97ff9c23240f6608c17b3db880e05d4c1e",
+      "changed": {
+        "added": [
+          "scripts/chatgpt-browser-turn/coordination.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Add coordination.ts to scope after pack review fixes",
+      "actor": "local",
+      "timestamp": "2026-07-27T23:52:20.665Z",
+      "applied": true
+    }
+  ]
 }
