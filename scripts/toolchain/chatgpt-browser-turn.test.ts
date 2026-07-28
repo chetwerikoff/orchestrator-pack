@@ -593,19 +593,16 @@ describe('issue 964 destination and scheduling fences — S4/S5/S6', () => {
     first!.release();
   });
 
-  it('S6 permits distinct fresh identities but profile fallback conflicts with active parallel owners', () => {
+  it('S6 permits distinct fresh identities and independent conversation locks without profile-wide exclusion', () => {
     const freshOne = acquireDomainLock(profileKey, 'fresh:one');
     const freshTwo = acquireDomainLock(profileKey, 'fresh:two');
+    const conversation = acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/new');
     expect(freshOne).not.toBeNull();
     expect(freshTwo).not.toBeNull();
-    expect(acquireDomainLock(profileKey, `profile:${profileKey}`)).toBeNull();
+    expect(conversation).not.toBeNull();
+    conversation!.release();
     freshTwo!.release();
     freshOne!.release();
-
-    const profile = acquireDomainLock(profileKey, `profile:${profileKey}`);
-    expect(profile).not.toBeNull();
-    expect(acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/new')).toBeNull();
-    profile!.release();
   });
 
   it('reclaims only proven-dead stale pre-send owners; unknown start-token evidence remains busy', () => {
@@ -1002,17 +999,16 @@ describe('issue 1028 admission policy separation', () => {
     expect(rearmed.capability?.admission_epoch).toBe(2);
   });
 
-  it('fails serialize busy without mutating policy when a fine scheduling lock is active', async () => {
+  it('serializes policy without profile admission barrier while a fine scheduling lock is active', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const fineLock = acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/active');
     expect(fineLock).not.toBeNull();
     try {
       const outcome = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
-      expect(outcome.mutation).toMatchObject({ applied: false, reason: 'barrier_busy' });
-      const unchanged = capabilityStatus(profileKey, binding);
-      expect(unchanged.capability?.admission_policy).toBe('parallel');
-      expect(unchanged.capability?.admission_epoch).toBe(0);
+      expect(outcome.mutation).toMatchObject({ applied: true });
+      expect(outcome.capability?.admission_policy).toBe('serialized');
+      expect(outcome.capability?.admission_epoch).toBe(1);
     } finally {
       fineLock?.release();
     }
@@ -1025,7 +1021,7 @@ describe('issue 1028 admission policy separation', () => {
     expect(armed.mutation).toEqual({ applied: false, reason: 'binding_mismatch' });
   });
 
-  it('does not reclaim a stale pre_send lock when a readable incident is already possible_delivery', async () => {
+  it('serializes policy without reclaiming unrelated fine scheduling locks', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const lockKey = 'conversation:https://chatgpt.com/c/crash-window';
@@ -1039,11 +1035,11 @@ describe('issue 1028 admission policy separation', () => {
       owner: { pid: 999999, started_at: new Date().toISOString(), nonce: randomUUID() },
     });
     const outcome = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
-    expect(outcome.mutation).toMatchObject({ applied: false, reason: 'barrier_busy' });
+    expect(outcome.mutation).toMatchObject({ applied: true });
     expect(existsSync(join(profileDirs(profileKey).locks, sha256(lockKey), 'owner.json'))).toBe(true);
   });
 
-  it('does not reclaim a stale pre_send lock when a readable active_owner is still pre_send', async () => {
+  it('serializes policy while an unrelated active pre_send lock remains held', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const lockKey = 'conversation:https://chatgpt.com/c/active-pre-send';
@@ -1057,7 +1053,7 @@ describe('issue 1028 admission policy separation', () => {
       owner: { pid: 999999, started_at: new Date().toISOString(), nonce: randomUUID() },
     });
     const outcome = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
-    expect(outcome.mutation).toMatchObject({ applied: false, reason: 'barrier_busy' });
+    expect(outcome.mutation).toMatchObject({ applied: true });
     expect(existsSync(join(profileDirs(profileKey).locks, sha256(lockKey), 'owner.json'))).toBe(true);
   });
 
@@ -1102,15 +1098,14 @@ describe('issue 1028 admission policy separation', () => {
     expect(after.capability?.evidence_digest).toBe(sha256('refresh-only'));
   });
 
-  it('rejects stale-epoch completion after operator serialize', async () => {
+  it('allows completion refresh after operator serialize because admission epoch is not a turn gate', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const admitted = capabilityStatus(profileKey, binding);
     expect(admitted.state).toBe('ok');
     await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'stale-after-serialize'));
-    expect(outcome.applied).toBe(false);
-    expect(outcome.reason).toBe('not_eligible');
+    expect(outcome.applied).toBe(true);
   });
 
   it('keeps idle characterization stable without policy decay', () => {

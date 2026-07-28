@@ -20,7 +20,6 @@ import {
 import {
   acquireDomainLock,
   clearDomainLock,
-  reconcileAbandonedSchedulingConflicts,
   type DomainLock,
 } from './coordination.ts';
 import { recordSwallowedDriverException } from './diagnostics.ts';
@@ -401,15 +400,7 @@ export type CapabilityMutationOutcome =
 
 export type CapabilityPolicyMutationOutcome =
   | { applied: true }
-  | { applied: false; reason: 'not_characterized' | 'binding_mismatch' | 'barrier_busy' | 'profile_blocked' | 'invalid_policy' | 'write_failed'; error?: unknown };
-
-interface CapabilityAdmissionSnapshot {
-  readonly state: string;
-  readonly admissionEpoch: number | null;
-}
-
-const capabilityAdmissions = new Map<string, CapabilityAdmissionSnapshot>();
-const serializedTransitionEpochs = new Map<string, number>();
+  | { applied: false; reason: 'not_characterized' | 'binding_mismatch' | 'profile_blocked' | 'invalid_policy' | 'write_failed'; error?: unknown };
 
 function capabilityMutationLockKey(profileKey: string): string {
   return `capability-mutation:${profileKey}`;
@@ -539,12 +530,12 @@ function readCapabilityStatus(
   try {
     const parsed: unknown = JSON.parse(readFileSync(capabilityPath, 'utf8'));
     const normalized = normalizeCapabilityRecord(parsed, profileKey);
-    if (!normalized) return control('capability', 'profile_blocked', profileKey, 'capability_incompatible');
+    if (!normalized) return control('capability', 'downgraded', profileKey, 'capability_incompatible');
     capability = compatibleLegacyCapabilityV1(parsed, profileKey)
       ? migrateLegacyCapabilityOnRead(profileKey, parsed, mutationLockHeld)
       : normalized;
   } catch {
-    return control('capability', 'profile_blocked', profileKey, 'capability_unreadable');
+    return control('capability', 'downgraded', profileKey, 'capability_unreadable');
   }
 
   const presentation = capabilityPresentation(capability);
@@ -574,26 +565,11 @@ function readCapabilityStatus(
   };
 }
 
-function admissionEpochOf(current: CapabilityStatusResult): number | null {
-  return current.capability?.admission_epoch ?? null;
-}
-
-function snapshotAdmission(current: CapabilityStatusResult): CapabilityAdmissionSnapshot {
-  return {
-    state: current.state,
-    admissionEpoch: admissionEpochOf(current),
-  };
-}
-
 export function capabilityStatus(
   profileKey: string,
   expected?: CapabilityBinding,
 ): CapabilityStatusResult {
-  const result = readCapabilityStatus(profileKey, expected);
-  if (!capabilityAdmissions.has(profileKey)) {
-    capabilityAdmissions.set(profileKey, snapshotAdmission(result));
-  }
-  return result;
+  return readCapabilityStatus(profileKey, expected);
 }
 
 function completionMatchesCapability(
@@ -672,32 +648,15 @@ function bindingMatchesCapability(
 }
 
 function productionCompletionStillEligible(
-  profileKey: string,
+  _profileKey: string,
   current: CapabilityStatusResult,
   completion: CapabilityTurnCompletion,
 ): boolean {
   if (current.state === 'profile_blocked') return false;
-
-  const admission = capabilityAdmissions.get(profileKey) ?? snapshotAdmission(current);
-  const invocationEpoch = serializedTransitionEpochs.get(profileKey);
-  const startedParallel = admission.state === 'ok';
-  const admittedEpoch = invocationEpoch ?? admission.admissionEpoch;
-  const currentEpoch = admissionEpochOf(current);
-
-  if (startedParallel
-    && admittedEpoch !== null
-    && currentEpoch !== null
-    && currentEpoch > admittedEpoch) {
-    return false;
-  }
-  if (admittedEpoch !== null && currentEpoch !== null && currentEpoch < admittedEpoch) {
-    return false;
-  }
-
   if (!current.capability) return true;
   if (completionMatchesCapability(current.capability, completion)) return true;
   if (bindingMatchesCapability(current.capability, completion)) return true;
-  return !startedParallel;
+  return true;
 }
 
 export function applyCapabilityAfterSuccessfulTurn(
@@ -724,8 +683,6 @@ export function applyCapabilityAfterSuccessfulTurn(
   } catch (error) {
     outcome = { applied: false, reason: 'write_failed', error };
   } finally {
-    capabilityAdmissions.delete(profileKey);
-    serializedTransitionEpochs.delete(profileKey);
     try {
       lock.release();
     } catch (error) {
@@ -743,32 +700,6 @@ export function applyCapabilityAfterSuccessfulTurn(
   return outcome;
 }
 
-export function recordSerializedTransitionAnchor(
-  profileKey: string,
-  observed: CapabilityStatusResult,
-): void {
-  const epoch = admissionEpochOf(observed);
-  if (epoch !== null) {
-    serializedTransitionEpochs.set(profileKey, epoch);
-  }
-}
-
-
-function serializeBarrierLockReclaimable(profileKey: string): (lockKey: string) => boolean {
-  let incidents: ReturnType<typeof listReadableIncidents>;
-  try {
-    incidents = listReadableIncidents(profileKey);
-  } catch {
-    return () => false;
-  }
-  const protectedKeys = new Set(
-    incidents
-      .filter(({ record }) => Boolean(record.lock_key))
-      .map(({ record }) => record.lock_key as string),
-  );
-  return (lockKey: string) => !protectedKeys.has(lockKey);
-}
-
 export type BrowserProvenanceSource = string | (() => string | Promise<string>);
 
 export async function mutateCapabilityAdmissionPolicy(
@@ -784,26 +715,10 @@ export async function mutateCapabilityAdmissionPolicy(
     };
   }
 
-  let barrier: DomainLock | null = null;
-  if (policy === 'serialized') {
-    const profileBarrierKey = `profile:${profileKey}`;
-    barrier = acquireDomainLock(profileKey, profileBarrierKey);
-    if (!barrier && reconcileAbandonedSchedulingConflicts(profileKey, profileBarrierKey, 120_000, serializeBarrierLockReclaimable(profileKey))) {
-      barrier = acquireDomainLock(profileKey, profileBarrierKey);
-    }
-    if (!barrier) {
-      return {
-        ...control('capability', 'profile_busy', profileKey, 'serialize_barrier_busy'),
-        mutation: { applied: false, reason: 'barrier_busy' },
-      };
-    }
-  }
-
   let lock: DomainLock;
   try {
     lock = acquireCapabilityMutationLock(profileKey);
   } catch (error) {
-    if (barrier) barrier.release();
     return {
       ...control('capability', 'driver_error', profileKey, 'capability_mutation_failed'),
       mutation: { applied: false, reason: 'write_failed', error },
@@ -818,9 +733,6 @@ export async function mutateCapabilityAdmissionPolicy(
         : browserProvenance;
     } catch (error) {
       try { lock.release(); } catch { /* fail-closed */ }
-      if (barrier) {
-        try { barrier.release(); } catch { /* fail-closed */ }
-      }
       throw error;
     }
   }
@@ -888,9 +800,6 @@ export async function mutateCapabilityAdmissionPolicy(
     };
   } finally {
     try { lock.release(); } catch { /* fail-closed */ }
-    if (barrier) {
-      try { barrier.release(); } catch { /* fail-closed */ }
-    }
   }
 }
 
@@ -991,9 +900,14 @@ export function statusList(profileKey: string): ControlResultV1 {
   if (existsSync(d.capability)) {
     try {
       const parsed: unknown = JSON.parse(readFileSync(d.capability, 'utf8'));
-      if (!normalizeCapabilityRecord(parsed, profileKey)) throw new Error('incompatible');
+      if (!normalizeCapabilityRecord(parsed, profileKey)) {
+        try {
+          items.push(opaqueStatusItem(profileKey, 'capability', 'capability.json'));
+        } catch {
+          items.push({ identity: 'opaque:capability:Y2FwYWJpbGl0eS5qc29u:unreadable', kind: 'opaque_record', generation: 0, evidence_token: 'unreadable', opaque: true });
+        }
+      }
     } catch {
-      blocked = true;
       try {
         items.push(opaqueStatusItem(profileKey, 'capability', 'capability.json'));
       } catch {

@@ -155,9 +155,9 @@ command — no gate-digest environment variable is required:
 npm run chatgpt-browser-turn -- turn ...characterization argv...
 ```
 
-The helper arms parallel eligibility from the witnessed `ok` completion itself. Do not
-reuse characterization telemetry after any candidate, verifier, runtime-build, or
-Gate-B test-source change.
+Characterization records bounded diagnostic evidence; it does not self-arm parallel
+admission or govern turn concurrency. Do not reuse characterization telemetry after any
+candidate, verifier, runtime-build, or Gate-B test-source change.
 
 The live smoke minimum (serialized, on the dedicated automation profile) must
 demonstrate:
@@ -171,11 +171,10 @@ demonstrate:
 5. `status/list`, exact `clear`, opaque quarantine/tombstone, and
    `publication-status` remain usable after a forced interrupted run.
 
-Query `capability` again after characterization. Record capability
-before/after (`state`, browser provenance, evidence digest, observation/expiry
-timestamps, downgrade generation). Positive parallel capability is admitted only
-when the post-smoke result is `state: ok`; otherwise remain on configured-profile
-serialization. Do not mint positive capability from synthetic tests alone.
+Query `capability` again after characterization. Record capability before/after
+(`state`, browser provenance, evidence digest, characterized_at, admission policy/epoch
+when present). Capability output is diagnostic; invocation-local live witness and send
+safety remain authoritative. Do not mint positive capability from synthetic tests alone.
 
 Only after steps 1–3 are complete may **production** `create-issue-draft`
 one-shot turns use the tracked helper on that candidate/profile/CDP binding (the
@@ -517,8 +516,8 @@ GPT pass state in the owning artifact/Issue flow.
   recorded, and the digest-pinned recovery root under
   `~/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`
   is retained (Gate-B characterization turns themselves are exempt).
-- Expect parallel eligibility to self-arm from a witnessed characterization `ok`
-  turn; do not export any gate-digest environment variable.
+- Expect capability characterization to remain diagnostic-only; turn scheduling uses
+  fine-grained destination domains, not capability admission state.
 - Treat a tracked-helper non-`ok` state, timeout, or missing stdout as fallback
   authorization or resend permission.
 - Run legacy/scratchpad sends while helper-owned unresolved state blocks
