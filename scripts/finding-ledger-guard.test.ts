@@ -470,25 +470,25 @@ describe('finding ledger review economics #975', () => {
       expect(stalePending.ok, stalePending.errors.join('\n')).toBe(true);
     });
 
-    it('accepts valid author activation at final acceptance only with current unambiguous no-contest evidence', () => {
+    it('accepts valid author activation at final acceptance with current pre-terminal no-contest evidence', () => {
       const result = finalRun(
         [
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1')),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
       expect(result.ok, result.errors.join('\n')).toBe(true);
     });
 
-    it('keeps an open contest until explicit withdrawal/adjudication and rejects ambiguous lens records', () => {
+    it('keeps an open pre-terminal contest until explicit withdrawal/adjudication and rejects ambiguous lens records', () => {
       const stillOpen = finalRun(
         [
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1', { contest: 'contested' })),
           cap('pass-03-architectural-lens.capture.txt', 1_300, currentLens('S1', { contest: 'none' })),
-          cap('pass-04-architectural-final.capture.txt', 1_400, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-04-architectural.capture.txt', 1_400, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
@@ -500,7 +500,7 @@ describe('finding ledger review economics #975', () => {
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1', { contest: 'contested' })),
           cap('pass-03-architectural-lens.capture.txt', 1_300, currentLens('S1', { contest: 'contest-withdrawn' })),
-          cap('pass-04-architectural-final.capture.txt', 1_400, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-04-architectural.capture.txt', 1_400, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
@@ -510,7 +510,7 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, `${currentLens('S1')}\n${currentLens('S1', { contest: 'contested' })}`),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
@@ -522,7 +522,7 @@ describe('finding ledger review economics #975', () => {
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1')),
           cap('pass-03-architectural-lens.capture.txt', 1_300, 'm3-protected: id=S1 | revision=r3 | contest=unknown | outcome=none | evidence= | why-now='),
-          cap('pass-04-architectural-final.capture.txt', 1_400, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-04-architectural.capture.txt', 1_400, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
@@ -530,7 +530,7 @@ describe('finding ledger review economics #975', () => {
       expect(malformed.errors.join('\n')).toContain('malformed m3-protected record for S1');
     });
 
-    it('supports current architect activation/non-activation and rejects stale architectPending at final acceptance', () => {
+    it('supports current pre-terminal architect activation/non-activation and rejects stale architectPending at final acceptance', () => {
       const activate = finalRun(
         [
           cap('pass-01-architectural.capture.txt', 1_100, zeroSignal),
@@ -539,7 +539,7 @@ describe('finding ledger review economics #975', () => {
             evidence: 'The changed path is out of scope under allowed_roots.',
             whyNow: 'This task owns that path change.',
           })),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
         [row('S1', { type: 'scope-violation' })],
       );
@@ -549,7 +549,7 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, zeroSignal),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1', { outcome: 'non-activate' })),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', disposition: 'rejected', rejectReason: 'no real protected defect' })],
       );
@@ -559,7 +559,7 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1')),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation, architectPending: true })],
       );
@@ -568,8 +568,8 @@ describe('finding ledger review economics #975', () => {
     });
   });
 
-  describe('M5 exact terminal simplification verdict and anchor', () => {
-    it('enforces clean/candidate token shapes, multiple candidates, and raw/ledger agreement', () => {
+  describe('M5 terminal GPT simplification verdict and anchor', () => {
+    it('enforces clean/candidate token shapes, multiple candidates, and raw/ledger agreement at pre-lens', () => {
       const clean = run([cap('pass-01-architectural.capture.txt', 1_100, markedClean())], []);
       expect(clean.ok, clean.errors.join('\n')).toBe(true);
 
@@ -617,73 +617,70 @@ describe('finding ledger review economics #975', () => {
       expect(proseOnly.ok, proseOnly.errors.join('\n')).toBe(true);
     });
 
-    it('requires post-adoption pre-lens re-entry and reuses the anchor across same-episode relenses', () => {
-      const preAdoption = finalRun(
+    it('selects terminal architectural after Claude and rejects old pre-lens-only ordering', () => {
+      const terminal = finalRun(
         [
-          cap('pass-01-architectural.capture.txt', 500, 'NO_FINDINGS'),
-          cap('pass-02-architectural-lens.capture.txt', 700, 'first lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_200, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'claude lens'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
+        [],
+      );
+      expect(terminal.ok, terminal.errors.join('\n')).toBe(true);
+
+      const oldOrder = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'claude lens'),
+          cap('pass-03-architectural-final.capture.txt', 1_300, markedClean()),
+        ],
+        [],
+      );
+      expect(oldOrder.ok).toBe(false);
+      expect(oldOrder.errors.join('\n')).toContain('cannot resolve a terminal GPT M5 anchor');
+    });
+
+    it('supports the no-Claude T1/T2-shaped final anchor and applies final M5 tokens to terminal GPT', () => {
+      const noClaude = finalRun(
+        [cap('pass-01-architectural.capture.txt', 1_100, markedClean())],
+        [],
+      );
+      expect(noClaude.ok, noClaude.errors.join('\n')).toBe(true);
+
+      const terminalCandidate = finalRun(
+        [
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'claude lens'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedFinding('CUT1', { candidate: 'yes', clean: false })),
+        ],
+        [row('CUT1', { 'simplification-cut-candidate': true })],
+      );
+      expect(terminalCandidate.ok, terminalCandidate.errors.join('\n')).toBe(true);
+
+      const missingClean = finalRun(
+        [
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'claude lens'),
+          cap('pass-03-architectural.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+        ],
+        [],
+      );
+      expect(missingClean.ok).toBe(false);
+      expect(missingClean.errors.join('\n')).toContain('SIMPLIFICATION_CLEAN');
+    });
+
+    it('rejects a terminal GPT anchor that is pre-adoption', () => {
+      const preAdoption = finalRun(
+        [cap('pass-01-architectural.capture.txt', 500, markedClean())],
         [],
       );
       expect(preAdoption.ok).toBe(false);
-      expect(preAdoption.errors.join('\n')).toContain('pre-adoption M5 anchor cannot satisfy final acceptance');
-
-      const reentered = finalRun(
-        [
-          cap('pass-01-architectural.capture.txt', 500, 'NO_FINDINGS'),
-          cap('pass-02-architectural-lens.capture.txt', 700, 'first lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_200, 'review-economics-contract: v1\nNO_FINDINGS'),
-          cap('pass-04-architectural.capture.txt', 1_300, markedClean()),
-          cap('pass-05-architectural-lens.capture.txt', 1_400, 'new segment lens'),
-          cap('pass-06-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
-        ],
-        [],
-      );
-      expect(reentered.ok, reentered.errors.join('\n')).toBe(true);
-
-      const sameEpisode = finalRun(
-        [
-          cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
-          cap('pass-02-architectural-lens.capture.txt', 1_200, 'first lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
-          cap('pass-04-architectural-lens.capture.txt', 1_400, 'newer same-episode lens'),
-          cap('pass-05-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
-        ],
-        [],
-      );
-      expect(sameEpisode.ok, sameEpisode.errors.join('\n')).toBe(true);
-    });
-
-    it('keeps historical M5 anchor separate from later M2 candidate state', () => {
-      const postLensCandidate = finalRun(
-        [
-          cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
-          cap('pass-02-architectural-lens.capture.txt', 1_200, 'first lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_300, markedFinding('POST1', { candidate: 'yes', clean: false })),
-          cap('pass-04-architectural-lens.capture.txt', 1_400, 'newer lens'),
-          cap('pass-05-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
-        ],
-        [row('POST1', { 'simplification-cut-candidate': true })],
-      );
-      expect(postLensCandidate.ok, postLensCandidate.errors.join('\n')).toBe(true);
-
-      const clearedLater = finalRun(
-        [
-          cap('pass-01-architectural.capture.txt', 1_100, markedFinding('CUT1', { candidate: 'yes', clean: false })),
-          cap('pass-02-architectural-lens.capture.txt', 1_200, 'first lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_300, markedFinding('CUT1')),
-          cap('pass-04-architectural-lens.capture.txt', 1_400, 'newer lens'),
-          cap('pass-05-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
-        ],
-        [row('CUT1')],
-      );
-      expect(clearedLater.ok, clearedLater.errors.join('\n')).toBe(true);
+      expect(preAdoption.errors.join('\n')).toContain('pre-adoption terminal GPT M5 anchor');
     });
   });
 
-  describe('post-final protected nomination state transitions', () => {
-    it('supports author-activation audit and architect adjudication without a synthetic Issue edit', () => {
+  describe('terminal GPT protected nomination state', () => {
+    it('uses author activation or ordinary M1 disposition without a post-terminal architect', () => {
       const nomination = markedFinding('PF1', {
         type: 'scope-violation',
         evidence: 'The proposed file is out of scope under allowed_roots.',
@@ -691,36 +688,62 @@ describe('finding ledger review economics #975', () => {
       });
       const authorPath = finalRun(
         [
-          cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
           cap('pass-02-architectural-lens.capture.txt', 1_200, 'initial lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_300, nomination),
-          cap('pass-04-architectural-lens.capture.txt', 1_400, currentLens('PF1', { contest: 'none' })),
-          cap('pass-05-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, nomination),
         ],
         [row('PF1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
       expect(authorPath.ok, authorPath.errors.join('\n')).toBe(true);
 
-      const zeroNomination = markedFinding('PF1', {
+      const zeroNomination = markedFinding('PF2', {
         type: 'scope-violation',
         evidence: 'The proposed file relationship is unclear.',
-        recommendation: 'Add a denylist rule.',
+        recommendation: 'Reject the unsupported nomination.',
       });
-      const architectPath = finalRun(
+      const ordinaryM1 = finalRun(
         [
-          cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
           cap('pass-02-architectural-lens.capture.txt', 1_200, 'initial lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_300, zeroNomination),
-          cap('pass-04-architectural-lens.capture.txt', 1_400, currentLens('PF1', {
-            outcome: 'activate',
-            evidence: 'The proposed path is out of scope under allowed_roots.',
-            whyNow: 'The current task owns the proposed path change.',
-          })),
-          cap('pass-05-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, zeroNomination),
         ],
-        [row('PF1', { type: 'scope-violation' })],
+        [row('PF2', { type: 'scope-violation', disposition: 'rejected', rejectReason: 'no real protected signal' })],
       );
-      expect(architectPath.ok, architectPath.errors.join('\n')).toBe(true);
+      expect(ordinaryM1.ok, ordinaryM1.errors.join('\n')).toBe(true);
+    });
+
+    it('does not permit stale architectPending to survive on a terminal-only nomination', () => {
+      const nomination = markedFinding('PF1', {
+        type: 'scope-violation',
+        evidence: 'The proposed file is out of scope under allowed_roots.',
+      });
+      const result = finalRun(
+        [
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'initial lens'),
+          cap('pass-03-architectural.capture.txt', 1_300, nomination),
+        ],
+        [row('PF1', { type: 'scope-violation', protectedActivation: authorActivation, architectPending: true })],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('must not remain architect-pending');
+    });
+
+    it('preserves a genuine pre-terminal architect-required condition', () => {
+      const nomination = markedFinding('PF1', {
+        type: 'scope-violation',
+        evidence: 'The proposed file relationship is unclear.',
+      });
+      const result = finalRun(
+        [
+          cap('pass-01-competitive.capture.txt', 1_100, nomination),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'lens without adjudication'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
+        ],
+        [row('PF1', { type: 'scope-violation', architectRequired: true })],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toMatch(/unknown\/stale architect contest state|requires current architect adjudication/);
     });
   });
 
