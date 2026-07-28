@@ -24,6 +24,7 @@ import {
   normalizeSmokeReport,
   ownedSmokeTerminalClosedFromReports,
   parseSmokeAgentReport,
+  verifySmokeHeadBinding,
   resolveSmokeRequirement,
   scrubSmokeOutput,
   type SmokeReport,
@@ -157,6 +158,44 @@ function publishPrComment(prNumber: number, body: string, repoRoot: string): voi
   }
 }
 
+
+function resolveGitHead(cwd: string): string {
+  return requireProcessOutput('git rev-parse HEAD', runProcessSync({
+    command: 'git',
+    args: ['rev-parse', 'HEAD'],
+    cwd,
+  })).trim().toLowerCase();
+}
+
+function resolveReviewAcceptable(prNumber: number, headSha: string, repoRoot: string): boolean {
+  const output = requireProcessOutput('gh api pr reviews', runProcessSync({
+    command: 'gh',
+    args: ['api', `repos/{owner}/{repo}/pulls/${prNumber}/reviews`],
+    cwd: repoRoot,
+  }));
+  const reviews = JSON.parse(output) as { commit_id?: string; state?: string; body?: string }[];
+  if (!Array.isArray(reviews) || reviews.length === 0) {
+    return false;
+  }
+  const normalizedHead = headSha.trim().toLowerCase();
+  const forHead = reviews.filter((review) => (review.commit_id ?? '').trim().toLowerCase() === normalizedHead);
+  if (forHead.length === 0) {
+    return false;
+  }
+  const latest = forHead[forHead.length - 1]!;
+  const body = String(latest.body ?? '');
+  if (/BLOCK\s*\/\s*FINDINGS|changes required|P1/i.test(body)) {
+    return false;
+  }
+  if (latest.state === 'APPROVED') {
+    return true;
+  }
+  if (latest.state === 'COMMENTED' && /NO_FINDINGS|clean review|no material findings/i.test(body)) {
+    return true;
+  }
+  return latest.state !== 'CHANGES_REQUESTED';
+}
+
 function resolveCiGreen(prNumber: number, headSha: string, repoRoot: string): boolean {
   const output = requireProcessOutput('gh pr checks', runProcessSync({
     command: 'gh',
@@ -193,13 +232,17 @@ function runGateCheck(options: CliOptions): number {
   const worktree = probeOrcaWorktree(options.cwd);
   const decision = evaluateWorkerSmokeGate({
     issueBody,
+    issueNumber: options.issueNumber,
     prNumber: options.prNumber,
     headSha: options.headSha,
     prComments: comments,
     ciGreen: options.prNumber > 0 ? resolveCiGreen(options.prNumber, options.headSha, options.repoRoot) : false,
+    reviewAcceptable: options.prNumber > 0
+      ? resolveReviewAcceptable(options.prNumber, options.headSha, options.repoRoot)
+      : false,
     orcaWorktreeOk: worktree.ok,
     ownedTerminalClosed: options.prNumber > 0
-      ? ownedSmokeTerminalClosedFromReports(comments, options.prNumber, options.headSha)
+      ? ownedSmokeTerminalClosedFromReports(comments, options.prNumber, options.headSha, options.issueNumber)
       : false,
   });
   emit({ ok: decision.allowed, ...decision }, options.json);
@@ -265,6 +308,93 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       terminalCleanup: 'not_started',
       limitations: [],
       environmentNotes: ['orca worktree current failed'],
+    };
+    const normalized = normalizeSmokeReport(blocked, {
+      issueNumber: options.issueNumber,
+      prNumber: options.prNumber,
+      headSha: options.headSha,
+    });
+    if (!normalized.ok) {
+      fail(normalized.reason);
+    }
+    publishSmokeReport(normalized.report, options);
+    emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
+    return 1;
+  }
+
+  const gitHeadSha = resolveGitHead(options.cwd);
+  const headBinding = verifySmokeHeadBinding({
+    requestedHeadSha: options.headSha,
+    orcaHeadSha: worktree.headSha,
+    gitHeadSha,
+  });
+  if (!headBinding.ok) {
+    const blocked: Partial<SmokeReport> = {
+      result: 'BLOCKED',
+      scenarios: [{
+        action: 'bind smoke run to current checkout head',
+        expected: `orca/git head equals ${options.headSha}`,
+        observed: `${headBinding.reason}:${headBinding.observed}`,
+        outcome: 'blocked',
+      }],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'not_started',
+      limitations: [],
+      environmentNotes: ['head binding failed'],
+    };
+    const normalized = normalizeSmokeReport(blocked, {
+      issueNumber: options.issueNumber,
+      prNumber: options.prNumber,
+      headSha: options.headSha,
+    });
+    if (!normalized.ok) {
+      fail(normalized.reason);
+    }
+    publishSmokeReport(normalized.report, options);
+    emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
+    return 1;
+  }
+
+  if (!resolveCiGreen(options.prNumber, options.headSha, options.repoRoot)) {
+    const blocked: Partial<SmokeReport> = {
+      result: 'BLOCKED',
+      scenarios: [{
+        action: 'wait for required CI green',
+        expected: 'current-head required CI is green',
+        observed: 'required_ci_not_green',
+        outcome: 'blocked',
+      }],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'not_started',
+      limitations: [],
+      environmentNotes: ['smoke deferred until CI green'],
+    };
+    const normalized = normalizeSmokeReport(blocked, {
+      issueNumber: options.issueNumber,
+      prNumber: options.prNumber,
+      headSha: options.headSha,
+    });
+    if (!normalized.ok) {
+      fail(normalized.reason);
+    }
+    publishSmokeReport(normalized.report, options);
+    emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
+    return 1;
+  }
+
+  if (!resolveReviewAcceptable(options.prNumber, options.headSha, options.repoRoot)) {
+    const blocked: Partial<SmokeReport> = {
+      result: 'BLOCKED',
+      scenarios: [{
+        action: 'wait for acceptable current-head pack review',
+        expected: 'current-head review is clean or approved',
+        observed: 'current_head_review_not_acceptable',
+        outcome: 'blocked',
+      }],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'not_started',
+      limitations: [],
+      environmentNotes: ['smoke deferred until review convergence'],
     };
     const normalized = normalizeSmokeReport(blocked, {
       issueNumber: options.issueNumber,

@@ -187,16 +187,31 @@ if ($DryRun) {
 
 if ($State -eq 'ready_for_review') {
     $issueNumber = 0
-    if ($env:AO_ISSUE_NUMBER) {
-        $issueNumber = [int]$env:AO_ISSUE_NUMBER
-    }
-    if ($issueNumber -le 0 -and $PrNumber -gt 0) {
+    $boundIssueNumber = 0
+    if ($PrNumber -gt 0) {
         $prJson = & gh pr view $PrNumber --json body 2>$null
         if ($LASTEXITCODE -eq 0 -and $prJson) {
             $prBody = ([string](ConvertFrom-Json $prJson).body)
             if ($prBody -match '(?im)^\s*(?:Closes|Fixes|Resolves)\s+#(\d+)') {
-                $issueNumber = [int]$Matches[1]
+                $boundIssueNumber = [int]$Matches[1]
             }
+        }
+    }
+    if ($boundIssueNumber -gt 0) {
+        $issueNumber = $boundIssueNumber
+    }
+    if ($env:AO_ISSUE_NUMBER) {
+        $envIssueNumber = [int]$env:AO_ISSUE_NUMBER
+        if ($boundIssueNumber -gt 0 -and $envIssueNumber -ne $boundIssueNumber) {
+            [pscustomobject]@{
+                ok     = $false
+                reason = 'issue_binding_mismatch'
+                state  = $State
+            } | ConvertTo-Json -Compress -Depth 5
+            exit 1
+        }
+        if ($issueNumber -le 0) {
+            $issueNumber = $envIssueNumber
         }
     }
     $issueBodyFile = New-TemporaryFile

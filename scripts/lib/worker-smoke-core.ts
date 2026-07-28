@@ -247,6 +247,9 @@ export function normalizeSmokeReport(
       if (!scenario.outcome) {
         return { ok: false, reason: `pass_scenario_${index + 1}_missing_outcome` };
       }
+      if (scenario.outcome !== 'pass') {
+        return { ok: false, reason: `pass_scenario_${index + 1}_not_pass` };
+      }
     }
     if (partial.terminalCleanup && partial.terminalCleanup !== 'closed_owned_handle') {
       return { ok: false, reason: 'pass_requires_terminal_cleanup' };
@@ -354,14 +357,56 @@ export function extractSmokeReportsFromComments(comments: readonly { body?: stri
   return reports;
 }
 
+
+
+export function verifySmokeHeadBinding(input: {
+  requestedHeadSha: string;
+  orcaHeadSha?: string;
+  gitHeadSha?: string;
+}): { ok: true } | { ok: false; reason: string; observed: string } {
+  const requested = input.requestedHeadSha.trim().toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(requested)) {
+    return { ok: false, reason: 'invalid_requested_head', observed: requested };
+  }
+  const orca = input.orcaHeadSha?.trim().toLowerCase() ?? '';
+  const git = input.gitHeadSha?.trim().toLowerCase() ?? '';
+  if (!orca || orca !== requested) {
+    return { ok: false, reason: 'orca_head_mismatch', observed: orca || 'missing' };
+  }
+  if (!git || git !== requested) {
+    return { ok: false, reason: 'git_head_mismatch', observed: git || 'missing' };
+  }
+  return { ok: true };
+}
+
+export function smokeReportCoversPlan(report: SmokeReport, plan: SmokeTestPlan): boolean {
+  if (plan.scenarios.length === 0) {
+    return true;
+  }
+  for (const [index, required] of plan.scenarios.entries()) {
+    const match = report.scenarios.find((scenario) => (
+      scenario.action.trim() === required.action.trim()
+      && scenario.outcome === 'pass'
+    ));
+    if (!match) {
+      return false;
+    }
+    void index;
+  }
+  return true;
+}
+
 export function findLatestSmokeReportForHead(
   comments: readonly { body?: string }[],
   prNumber: number,
   headSha: string,
+  issueNumber?: number,
 ): SmokeReport | null {
   const normalizedHead = headSha.trim().toLowerCase();
   const reports = extractSmokeReportsFromComments(comments)
-    .filter((report) => report.prNumber === prNumber && report.headSha.toLowerCase() === normalizedHead);
+    .filter((report) => report.prNumber === prNumber
+      && report.headSha.toLowerCase() === normalizedHead
+      && (!issueNumber || issueNumber <= 0 || report.issueNumber === issueNumber));
   return reports.at(-1) ?? null;
 }
 
@@ -369,8 +414,9 @@ export function findCurrentHeadSmokePass(
   comments: readonly { body?: string }[],
   prNumber: number,
   headSha: string,
+  issueNumber?: number,
 ): SmokeReport | null {
-  const latest = findLatestSmokeReportForHead(comments, prNumber, headSha);
+  const latest = findLatestSmokeReportForHead(comments, prNumber, headSha, issueNumber);
   if (!latest || latest.result !== 'PASS') {
     return null;
   }
@@ -384,17 +430,20 @@ export function ownedSmokeTerminalClosedFromReports(
   comments: readonly { body?: string }[],
   prNumber: number,
   headSha: string,
+  issueNumber?: number,
 ): boolean {
-  const latest = findLatestSmokeReportForHead(comments, prNumber, headSha);
+  const latest = findLatestSmokeReportForHead(comments, prNumber, headSha, issueNumber);
   return latest?.terminalCleanup === 'closed_owned_handle';
 }
 
 export interface WorkerSmokeGateInput {
   issueBody: string;
+  issueNumber: number;
   prNumber: number;
   headSha: string;
   prComments: readonly { body?: string }[];
   ciGreen: boolean;
+  reviewAcceptable: boolean;
   orcaWorktreeOk: boolean;
   ownedTerminalClosed: boolean;
 }
@@ -424,9 +473,23 @@ export function evaluateWorkerSmokeGate(input: WorkerSmokeGateInput): WorkerSmok
     return { allowed: false, reason: 'orca_worktree_unresolved', smokeRequired: true };
   }
 
-  const latest = findLatestSmokeReportForHead(input.prComments, input.prNumber, input.headSha);
+  if (!input.reviewAcceptable) {
+    return { allowed: false, reason: 'current_head_review_not_acceptable', smokeRequired: true };
+  }
+
+  const latest = findLatestSmokeReportForHead(
+    input.prComments,
+    input.prNumber,
+    input.headSha,
+    input.issueNumber,
+  );
   const ownedTerminalClosed = input.ownedTerminalClosed
-    || ownedSmokeTerminalClosedFromReports(input.prComments, input.prNumber, input.headSha);
+    || ownedSmokeTerminalClosedFromReports(
+      input.prComments,
+      input.prNumber,
+      input.headSha,
+      input.issueNumber,
+    );
   if (!ownedTerminalClosed) {
     return { allowed: false, reason: 'owned_smoke_terminal_uncleaned', smokeRequired: true };
   }
@@ -435,7 +498,12 @@ export function evaluateWorkerSmokeGate(input: WorkerSmokeGateInput): WorkerSmok
     return { allowed: false, reason: `smoke_${latest.result.toLowerCase()}`, smokeRequired: true };
   }
 
-  const pass = findCurrentHeadSmokePass(input.prComments, input.prNumber, input.headSha);
+  const pass = findCurrentHeadSmokePass(
+    input.prComments,
+    input.prNumber,
+    input.headSha,
+    input.issueNumber,
+  );
   if (!pass) {
     const reports = extractSmokeReportsFromComments(input.prComments)
       .filter((report) => report.prNumber === input.prNumber);
@@ -448,6 +516,10 @@ export function evaluateWorkerSmokeGate(input: WorkerSmokeGateInput): WorkerSmok
 
   if (!input.ciGreen) {
     return { allowed: false, reason: 'required_ci_not_green', smokeRequired: true };
+  }
+
+  if (!smokeReportCoversPlan(pass, plan)) {
+    return { allowed: false, reason: 'smoke_plan_not_fully_covered', smokeRequired: true };
   }
 
   return { allowed: true, reason: 'smoke_pass_and_ci_green', smokeRequired: true };

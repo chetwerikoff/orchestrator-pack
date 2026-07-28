@@ -15,6 +15,8 @@ import {
   evaluateWorkerSmokeGate,
   extractSmokeReportsFromComments,
   findCurrentHeadSmokePass,
+  smokeReportCoversPlan,
+  verifySmokeHeadBinding,
   formatSmokeReportComment,
   normalizeSmokeReport,
   parseSmokeAgentReport,
@@ -25,6 +27,26 @@ import { checkSmokeTestPlan, resolveSmokeRequirement } from './draft-discipline.
 const fixtureRoot = join(import.meta.dirname, '..', 'tests', 'fixtures', 'worker-smoke');
 const headA = 'a'.repeat(40);
 const headB = 'b'.repeat(40);
+
+const gateBase = {
+  issueNumber: 1061,
+  reviewAcceptable: true,
+} as const;
+
+const planPassScenarios = [
+  {
+    action: 'run `worker-smoke-run validate-plan --issue-body-file issue.md`',
+    expected: 'exits 0',
+    observed: 'exits 0',
+    outcome: 'pass' as const,
+  },
+  {
+    action: 'invoke the new helper against fixture input',
+    expected: 'prints structured PASS payload',
+    observed: 'structured PASS payload',
+    outcome: 'pass' as const,
+  },
+];
 
 function readFixture(name: string): string {
   return readFileSync(join(fixtureRoot, name), 'utf8');
@@ -49,6 +71,7 @@ describe('worker smoke plan authoring floor', () => {
     const markdown = readFixture('legacy-pre-floor-issue.md');
     expect(resolveSmokeRequirement(markdown).requirement).toBe('legacy-exempt');
     const decision = evaluateWorkerSmokeGate({
+      ...gateBase,
       issueBody: markdown,
       prNumber: 42,
       headSha: headA,
@@ -139,12 +162,7 @@ describe('ready_for_review smoke and CI orthogonality', () => {
     issueNumber: 1061,
     prNumber: 7,
     headSha: headA,
-    scenarios: [{
-      action: 'run helper',
-      expected: 'prints ok',
-      observed: 'ok',
-      outcome: 'pass',
-    }],
+    scenarios: planPassScenarios,
     limitations: [],
     trackedFilesUnmodified: true,
     terminalCleanup: 'closed_owned_handle',
@@ -153,6 +171,7 @@ describe('ready_for_review smoke and CI orthogonality', () => {
 
   it('allows only current-head smoke PASS plus green CI', () => {
     const allowed = evaluateWorkerSmokeGate({
+      ...gateBase,
       issueBody,
       prNumber: 7,
       headSha: headA,
@@ -164,6 +183,7 @@ describe('ready_for_review smoke and CI orthogonality', () => {
     expect(allowed).toEqual({ allowed: true, reason: 'smoke_pass_and_ci_green', smokeRequired: true });
 
     expect(evaluateWorkerSmokeGate({
+      ...gateBase,
       issueBody,
       prNumber: 7,
       headSha: headA,
@@ -172,6 +192,18 @@ describe('ready_for_review smoke and CI orthogonality', () => {
       orcaWorktreeOk: true,
       ownedTerminalClosed: true,
     }).allowed).toBe(false);
+
+    expect(evaluateWorkerSmokeGate({
+      ...gateBase,
+      reviewAcceptable: false,
+      issueBody,
+      prNumber: 7,
+      headSha: headA,
+      prComments: [{ body: passComment }],
+      ciGreen: true,
+      orcaWorktreeOk: true,
+      ownedTerminalClosed: true,
+    }).reason).toBe('current_head_review_not_acceptable');
 
     expect(findCurrentHeadSmokePass([{ body: passComment }], 7, headB)).toBeNull();
   });
@@ -233,6 +265,7 @@ describe('orca cleanup and role boundaries', () => {
 describe('pre-cutover blocked behavior', () => {
   it('reports BLOCKED when Orca worktree resolution fails instead of testing elsewhere', () => {
     const decision = evaluateWorkerSmokeGate({
+      ...gateBase,
       issueBody: readFixture('action-producing-with-plan.md'),
       prNumber: 8,
       headSha: headA,
@@ -268,12 +301,7 @@ describe('review finding regressions', () => {
       issueNumber: 1061,
       prNumber: 7,
       headSha: headA,
-      scenarios: [{
-        action: 'run helper',
-        expected: 'prints ok',
-        observed: 'ok',
-        outcome: 'pass',
-      }],
+      scenarios: planPassScenarios,
       limitations: [],
       trackedFilesUnmodified: true,
       terminalCleanup: 'closed_owned_handle',
@@ -298,6 +326,7 @@ describe('review finding regressions', () => {
     const comments = [{ body: passComment }, { body: failComment }];
     expect(findCurrentHeadSmokePass(comments, 7, headA)).toBeNull();
     expect(evaluateWorkerSmokeGate({
+      ...gateBase,
       issueBody,
       prNumber: 7,
       headSha: headA,
@@ -333,6 +362,7 @@ describe('review finding regressions', () => {
   it('fails closed when issue body is unavailable instead of legacy-exempt', () => {
     expect(resolveSmokeRequirement('').requirement).toBe('unknown');
     expect(evaluateWorkerSmokeGate({
+      ...gateBase,
       issueBody: '',
       prNumber: 7,
       headSha: headA,
@@ -341,5 +371,86 @@ describe('review finding regressions', () => {
       orcaWorktreeOk: true,
       ownedTerminalClosed: true,
     }).reason).toBe('issue_body_unavailable');
+  });
+
+  it('rejects PASS reports that omit required plan scenarios or include failing outcomes', () => {
+    const plan = resolveSmokeRequirement(issueBody);
+    const incompletePass = formatSmokeReportComment({
+      result: 'PASS',
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: [planPassScenarios[0]],
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+    });
+    const reports = extractSmokeReportsFromComments([{ body: incompletePass }]);
+    expect(smokeReportCoversPlan(reports[0]!, plan)).toBe(false);
+    expect(evaluateWorkerSmokeGate({
+      ...gateBase,
+      issueBody,
+      prNumber: 7,
+      headSha: headA,
+      prComments: [{ body: incompletePass }],
+      ciGreen: true,
+      orcaWorktreeOk: true,
+      ownedTerminalClosed: true,
+    }).reason).toBe('smoke_plan_not_fully_covered');
+
+    const failingOutcome = formatSmokeReportComment({
+      result: 'PASS',
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: planPassScenarios.map((scenario, index) => (
+        index === 0 ? { ...scenario, outcome: 'fail' as const } : scenario
+      )),
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+    });
+    expect(normalizeSmokeReport(parseSmokeAgentReport(failingOutcome) ?? {}, {
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+    }).reason).toBe('pass_scenario_1_not_pass');
+  });
+
+  it('binds smoke reports to issue number and verifies Orca/git head alignment', () => {
+    const passComment = formatSmokeReportComment({
+      result: 'PASS',
+      issueNumber: 999,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: planPassScenarios,
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+    });
+    expect(findCurrentHeadSmokePass([{ body: passComment }], 7, headA, 1061)).toBeNull();
+
+    expect(verifySmokeHeadBinding({
+      requestedHeadSha: headA,
+      orcaHeadSha: headB,
+      gitHeadSha: headA,
+    })).toEqual({
+      ok: false,
+      reason: 'orca_head_mismatch',
+      observed: headB,
+    });
+    expect(verifySmokeHeadBinding({
+      requestedHeadSha: headA,
+      orcaHeadSha: headA,
+      gitHeadSha: headA,
+    })).toEqual({ ok: true });
+  });
+
+  it('requires explicit grandfather marker for legacy-exempt omission', () => {
+    const withoutFence = '# Task\n\n```behavior-kind\naction-producing\n```\n';
+    expect(resolveSmokeRequirement(withoutFence).requirement).toBe('required');
   });
 });

@@ -214,10 +214,7 @@ export function resolveSmokeRequirement(markdown) {
   if (isSmokePlanGrandfathered(trimmed)) {
     return { requirement: 'legacy-exempt', scenarios: [], reason: 'grandfathered' };
   }
-  if (parseBehaviorKind(trimmed) === 'action-producing') {
-    return { requirement: 'required', scenarios: [] };
-  }
-  return { requirement: 'legacy-exempt', scenarios: [] };
+  return { requirement: 'required', scenarios: [] };
 }
 
 export function checkSmokeTestPlan(markdown) {
