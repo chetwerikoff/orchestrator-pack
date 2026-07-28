@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { runProcessSync } from './kernel/subprocess.ts';
 
 export type ArchitectReviewKind = 'issue-draft' | 'adoption-proposal' | 'rca-memo';
 
@@ -119,13 +119,14 @@ export function runArchitectArtifactReview(options: {
 
   let output = '';
   try {
-    const result = spawnSync('codex', ['review', '-c', 'sandbox_mode=danger-full-access', prompt], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
+    const result = runProcessSync({
+      command: 'codex',
+      args: ['review', '-c', 'sandbox_mode=danger-full-access', prompt],
+      inheritParentEnv: true,
     });
-    output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trimEnd();
+    output = `${result.stdout}${result.stderr}`.trimEnd();
     if (output) process.stdout.write(`${output}\n`);
-    if (result.error) throw result.error;
+    if (result.outcome === 'spawn-failure') throw new Error(result.error ?? 'codex review spawn failed');
   } finally {
     for (const [name, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[name];
