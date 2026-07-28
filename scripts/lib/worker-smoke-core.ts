@@ -35,9 +35,13 @@ export interface SmokeReport {
   trackedFilesUnmodified: boolean;
   terminalCleanup: string;
   environmentNotes: string[];
+  producer?: string;
+  orcaExecutable?: string;
+  terminalHandle?: string;
 }
 
 export const SMOKE_REPORT_MARKER = 'pack-worker-smoke-report/v1';
+export const SMOKE_REPORT_PRODUCER = 'orchestrator-pack/worker-smoke-run/v1';
 
 const FENCE_PATTERN = /```([a-z0-9-]+)\s*\r?\n([\s\S]*?)```/gi;
 const SMOKE_REPORT_BLOCK = /```worker-smoke-report\s*\r?\n([\s\S]*?)```/i;
@@ -214,6 +218,9 @@ export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null
     limitations,
     environmentNotes,
     terminalCleanup: String(fields['terminal-cleanup'] ?? '').trim(),
+    producer: String(fields.producer ?? '').trim() || undefined,
+    orcaExecutable: String(fields['orca-executable'] ?? fields['orca-cli'] ?? '').trim() || undefined,
+    terminalHandle: String(fields['terminal-handle'] ?? '').trim() || undefined,
   };
 }
 
@@ -254,6 +261,15 @@ export function normalizeSmokeReport(
     if (partial.terminalCleanup && partial.terminalCleanup !== 'closed_owned_handle') {
       return { ok: false, reason: 'pass_requires_terminal_cleanup' };
     }
+    if (partial.producer !== SMOKE_REPORT_PRODUCER) {
+      return { ok: false, reason: 'pass_missing_producer' };
+    }
+    if (!partial.terminalHandle?.trim()) {
+      return { ok: false, reason: 'pass_missing_terminal_handle' };
+    }
+    if (!partial.orcaExecutable?.trim()) {
+      return { ok: false, reason: 'pass_missing_orca_executable' };
+    }
   }
 
   return {
@@ -268,6 +284,9 @@ export function normalizeSmokeReport(
       trackedFilesUnmodified: partial.trackedFilesUnmodified === true,
       terminalCleanup: partial.terminalCleanup ?? 'not_recorded',
       environmentNotes: partial.environmentNotes ?? [],
+      producer: partial.producer,
+      orcaExecutable: partial.orcaExecutable,
+      terminalHandle: partial.terminalHandle,
     },
   };
 }
@@ -302,6 +321,9 @@ export function formatSmokeReportComment(report: SmokeReport): string {
   const machineBlock = [
     '```worker-smoke-report',
     `result: ${report.result}`,
+    `producer: ${report.producer ?? SMOKE_REPORT_PRODUCER}`,
+    `orca-executable: ${report.orcaExecutable ?? ''}`,
+    `terminal-handle: ${report.terminalHandle ?? ''}`,
     `tracked-files-unmodified: ${report.trackedFilesUnmodified ? 'true' : 'false'}`,
     `terminal-cleanup: ${report.terminalCleanup}`,
     report.environmentNotes.length > 0 ? `environment-notes: ${report.environmentNotes.join('; ')}` : '',
@@ -337,7 +359,7 @@ export function extractSmokeReportsFromComments(comments: readonly { body?: stri
   const reports: SmokeReport[] = [];
   for (const comment of comments) {
     const body = comment.body ?? '';
-    if (!body.includes(SMOKE_REPORT_MARKER) && !SMOKE_REPORT_HEADING.test(body)) {
+    if (!SMOKE_REPORT_BLOCK.test(body)) {
       continue;
     }
     const partial = parseSmokeAgentReport(body);
@@ -437,6 +459,18 @@ export function ownedSmokeTerminalClosedFromReports(
   return latest?.terminalCleanup === 'closed_owned_handle';
 }
 
+
+export function smokeTerminalHandleLooksValid(handle: string | undefined): boolean {
+  const trimmed = String(handle ?? '').trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{2,}$/.test(trimmed);
+}
+
+export function smokeReportHasPackProducer(report: SmokeReport): boolean {
+  return report.producer === SMOKE_REPORT_PRODUCER
+    && smokeTerminalHandleLooksValid(report.terminalHandle)
+    && Boolean(report.orcaExecutable?.trim());
+}
+
 export interface WorkerSmokeGateInput {
   issueBody: string;
   issueNumber: number;
@@ -446,6 +480,7 @@ export interface WorkerSmokeGateInput {
   ciGreen: boolean;
   orcaWorktreeOk: boolean;
   ownedTerminalClosed: boolean;
+  terminalProvenanceOk: boolean;
 }
 
 export interface WorkerSmokeGateDecision {
@@ -516,6 +551,10 @@ export function evaluateWorkerSmokeGate(input: WorkerSmokeGateInput): WorkerSmok
 
   if (!smokeReportCoversPlan(pass, plan)) {
     return { allowed: false, reason: 'smoke_plan_not_fully_covered', smokeRequired: true };
+  }
+
+  if (!input.terminalProvenanceOk) {
+    return { allowed: false, reason: 'smoke_terminal_provenance_unverified', smokeRequired: true };
   }
 
   return { allowed: true, reason: 'smoke_pass_and_ci_green', smokeRequired: true };

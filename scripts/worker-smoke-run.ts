@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
 import './toolchain/native-entrypoint-preflight.ts';
-import { bucketForState, exitCodeForPrChecks } from './lib/gh-pr-checks.mjs';
+import { classifyRequiredCiLevel } from '../docs/review-ready-stuck-guard.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,6 +12,7 @@ import {
   probeOrcaWorktree,
   readOrcaTerminal,
   resolveOrcaExecutable,
+  runOrcaJson,
   sendOrcaTerminal,
   waitOrcaTerminal,
 } from './lib/orca-cli.ts';
@@ -22,10 +23,13 @@ import {
   hasPreexistingTrackedDirtiness,
   trackedPorcelainPaths,
   evaluateWorkerSmokeGate,
+  findCurrentHeadSmokePass,
   formatSmokeReportComment,
   normalizeSmokeReport,
   ownedSmokeTerminalClosedFromReports,
   parseSmokeAgentReport,
+  smokeReportHasPackProducer,
+  SMOKE_REPORT_PRODUCER,
   verifySmokeHeadBinding,
   resolveSmokeRequirement,
   scrubSmokeOutput,
@@ -186,20 +190,65 @@ function resolveGitHead(cwd: string): string {
 }
 
 function resolveCiGreen(prNumber: number, headSha: string, repoRoot: string): boolean {
-  const output = requireProcessOutput('required-ci-checks', runProcessSync({
+  const prMetaRaw = requireProcessOutput('pr-view-head-base', runProcessSync({
+    command: 'gh',
+    args: ['pr', 'view', String(prNumber), '--json', 'headRefOid,baseRefName'],
+    cwd: repoRoot,
+  }));
+  const prMeta = JSON.parse(prMetaRaw) as { headRefOid?: string; baseRefName?: string };
+  const normalizedHead = headSha.trim().toLowerCase();
+  if ((prMeta.headRefOid ?? '').trim().toLowerCase() !== normalizedHead) {
+    return false;
+  }
+  const checksRaw = requireProcessOutput('required-ci-checks', runProcessSync({
     command: 'gh',
     args: ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'],
     cwd: repoRoot,
   }));
-  const checks = JSON.parse(output) as { name?: string; state?: string; bucket?: string }[];
-  if (!Array.isArray(checks) || checks.length === 0) {
+  const checks = JSON.parse(checksRaw) as { name?: string; state?: string; bucket?: string }[];
+  let requiredCheckNames: string[] = [];
+  let requiredCheckLookupFailed = false;
+  const baseRef = String(prMeta.baseRefName ?? 'main').trim() || 'main';
+  const protection = runProcessSync({
+    command: 'gh',
+    args: ['api', `repos/{owner}/{repo}/branches/${baseRef}/protection/required_status_checks`],
+    cwd: repoRoot,
+  });
+  if (protection.ok) {
+    try {
+      const parsed = JSON.parse(protection.stdout) as { contexts?: string[] };
+      requiredCheckNames = Array.isArray(parsed.contexts) ? parsed.contexts : [];
+    } catch {
+      requiredCheckLookupFailed = true;
+    }
+  }
+  return classifyRequiredCiLevel(checks, { requiredCheckNames, requiredCheckLookupFailed }) === 'green';
+}
+
+function verifySmokeTerminalProvenance(report: SmokeReport, cwd: string): boolean {
+  if (!smokeReportHasPackProducer(report)) {
     return false;
   }
-  void headSha;
-  const buckets = checks.map((check) => ({
-    bucket: check.bucket ?? bucketForState(String(check.state ?? '').toUpperCase()),
-  }));
-  return exitCodeForPrChecks(buckets) === 0;
+  const read = runOrcaJson<{ lines?: string[] }>(['terminal', 'read', '--terminal', report.terminalHandle!, '--limit', '1'], { cwd });
+  if (!read.ok) {
+    const code = String(read.error?.code ?? '').toLowerCase();
+    const message = String(read.error?.message ?? '').toLowerCase();
+    return code.includes('not_found')
+      || code.includes('unknown')
+      || code.includes('closed')
+      || message.includes('not found')
+      || message.includes('closed');
+  }
+  return false;
+}
+
+function attachPackProducerFields(report: SmokeReport, input: { terminalHandle?: string; orcaExecutable?: string }): SmokeReport {
+  return {
+    ...report,
+    producer: SMOKE_REPORT_PRODUCER,
+    orcaExecutable: input.orcaExecutable ?? resolveOrcaExecutable(),
+    terminalHandle: input.terminalHandle ?? report.terminalHandle,
+  };
 }
 
 function runValidatePlan(options: CliOptions): number {
@@ -219,6 +268,9 @@ function runGateCheck(options: CliOptions): number {
   const issueBody = readIssueBody(options.issueBodyFile);
   const comments = options.prNumber > 0 ? fetchPrComments(options.prNumber, options.repoRoot) : [];
   const worktree = probeOrcaWorktree(options.cwd);
+  const pass = options.prNumber > 0
+    ? findCurrentHeadSmokePass(comments, options.prNumber, options.headSha, options.issueNumber)
+    : null;
   const decision = evaluateWorkerSmokeGate({
     issueBody,
     issueNumber: options.issueNumber,
@@ -230,6 +282,7 @@ function runGateCheck(options: CliOptions): number {
     ownedTerminalClosed: options.prNumber > 0
       ? ownedSmokeTerminalClosedFromReports(comments, options.prNumber, options.headSha, options.issueNumber)
       : false,
+    terminalProvenanceOk: pass ? verifySmokeTerminalProvenance(pass, options.cwd) : false,
   });
   emit({ ok: decision.allowed, ...decision }, options.json);
   return decision.allowed ? 0 : 1;
@@ -375,7 +428,30 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     command: 'cursor-agent',
   });
   if (!created.ok) {
-    fail(created.reason);
+    const blocked: Partial<SmokeReport> = {
+      result: 'BLOCKED',
+      scenarios: [{
+        action: 'create Orca smoke terminal',
+        expected: 'terminal create succeeds',
+        observed: created.reason,
+        outcome: 'blocked',
+      }],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'not_started',
+      limitations: [],
+      environmentNotes: ['orca terminal create failed'],
+    };
+    const normalized = normalizeSmokeReport(blocked, {
+      issueNumber: options.issueNumber,
+      prNumber: options.prNumber,
+      headSha: options.headSha,
+    });
+    if (!normalized.ok) {
+      fail(normalized.reason);
+    }
+    publishSmokeReport(attachPackProducerFields(normalized.report, {}), options);
+    emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
+    return 1;
   }
 
   const handle = created.terminal.handle;
@@ -461,18 +537,36 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       partial.trackedFilesUnmodified = false;
     }
 
-    const normalized = normalizeSmokeReport(partial, {
+    const normalized = normalizeSmokeReport(attachPackProducerFields({
+      ...partial,
+      result: partial.result ?? 'FAIL',
+      scenarios: partial.scenarios ?? [],
+      limitations: partial.limitations ?? [],
+      trackedFilesUnmodified: partial.trackedFilesUnmodified ?? !mutated,
+      terminalCleanup: partial.terminalCleanup ?? 'pending',
+      environmentNotes: partial.environmentNotes ?? [],
+    }, { terminalHandle: handle }), {
       issueNumber: options.issueNumber,
       prNumber: options.prNumber,
       headSha: options.headSha,
     });
     if (!normalized.ok && partial.result !== 'FAIL' && partial.result !== 'BLOCKED') {
-      fail(normalized.reason);
+      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
+      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
+      const report = attachPackProducerFields(buildOperationalSmokeReport('FAIL', options, {
+        action: 'normalize smoke agent report',
+        expected: 'valid PASS evidence',
+        observed: normalized.reason,
+        terminalCleanup,
+      }), { terminalHandle: handle });
+      publishSmokeReport(report, options);
+      emit({ ok: false, report, published: !options.dryRun }, options.json);
+      return 1;
     }
 
     const report: SmokeReport = normalized.ok
       ? normalized.report
-      : {
+      : attachPackProducerFields({
           result: partial.result === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
           issueNumber: options.issueNumber,
           prNumber: options.prNumber,
@@ -482,7 +576,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
           trackedFilesUnmodified: !mutated,
           terminalCleanup: 'pending',
           environmentNotes: partial.environmentNotes ?? [],
-        };
+        }, { terminalHandle: handle });
 
     const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
     terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;

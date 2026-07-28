@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { delimiter, join } from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
 
 /** Capture-backed Orca JSON field grounding for Issue #1061 (see tests/external-output-references/captures/orca-worker-smoke/). */
@@ -44,22 +45,31 @@ function requireStdout(result: ReturnType<typeof runProcessSync>): string {
   return result.stdout;
 }
 
+export function findExecutableOnPath(name: string, pathEnv = process.env.PATH ?? ''): string | null {
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) {
+      continue;
+    }
+    const full = join(dir, name);
+    try {
+      accessSync(full, constants.X_OK);
+      return name;
+    } catch {
+      // keep scanning PATH
+    }
+  }
+  return null;
+}
+
 export function resolveOrcaExecutable(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.ORCA_CLI_COMMAND?.trim();
   if (override) {
     return override;
   }
+  const pathEnv = env.PATH ?? process.env.PATH ?? '';
   for (const candidate of ORCA_CANDIDATES) {
-    try {
-      const resolved = requireStdout(runProcessSync({
-        command: 'command',
-        args: ['-v', candidate],
-      })).trim();
-      if (resolved) {
-        return candidate;
-      }
-    } catch {
-      // try next candidate
+    if (findExecutableOnPath(candidate, pathEnv)) {
+      return candidate;
     }
   }
   return 'orca';
@@ -224,14 +234,14 @@ export function closeOrcaTerminal(
   return runOrcaJson(['terminal', 'close', '--terminal', handle], options);
 }
 
-export function orcaExecutableLooksAvailable(executable: string): boolean {
+export function orcaExecutableLooksAvailable(executable: string, env: NodeJS.ProcessEnv = process.env): boolean {
   if (executable.includes('/')) {
-    return existsSync(executable);
+    try {
+      accessSync(executable, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
   }
-  try {
-    requireStdout(runProcessSync({ command: 'command', args: ['-v', executable] }));
-    return true;
-  } catch {
-    return false;
-  }
+  return findExecutableOnPath(executable, env.PATH ?? process.env.PATH ?? '') !== null;
 }

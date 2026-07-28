@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+
 import {
   closeOrcaTerminal,
   createOrcaTerminal,
   probeOrcaWorktree,
+  findExecutableOnPath,
   resolveOrcaExecutable,
   runOrcaJson,
 } from './lib/orca-cli.ts';
@@ -17,7 +19,9 @@ import {
   evaluateWorkerSmokeGate,
   extractSmokeReportsFromComments,
   findCurrentHeadSmokePass,
+  SMOKE_REPORT_PRODUCER,
   smokeReportCoversPlan,
+  smokeReportHasPackProducer,
   verifySmokeHeadBinding,
   formatSmokeReportComment,
   normalizeSmokeReport,
@@ -32,7 +36,16 @@ const headB = 'b'.repeat(40);
 
 const gateBase = {
   issueNumber: 1061,
+  terminalProvenanceOk: true,
 } as const;
+
+function passReportFields() {
+  return {
+    producer: SMOKE_REPORT_PRODUCER,
+    orcaExecutable: 'orca-ide',
+    terminalHandle: 'term_owned_smoke',
+  } as const;
+}
 
 const planPassScenarios = [
   {
@@ -107,6 +120,9 @@ describe('orca current-worktree launch seam', () => {
     });
     expect(created.ok).toBe(true);
     expect(resolveOrcaExecutable({ ORCA_CLI_COMMAND: 'orca-ide' })).toBe('orca-ide');
+    const fakeBin = join(import.meta.dirname, '..', 'tests', 'fixtures', 'worker-smoke', 'fake-bin');
+    expect(findExecutableOnPath('orca-dev', fakeBin)).toBe('orca-dev');
+    expect(resolveOrcaExecutable({ PATH: fakeBin, ORCA_CLI_COMMAND: '' })).toBe('orca-dev');
     expect(runner).toHaveBeenCalledWith(
       'orca-ide',
       ['terminal', 'create', '--worktree', 'active', '--title', 'smoke-1', '--command', 'cursor-agent', '--json'],
@@ -132,7 +148,10 @@ describe('orca current-worktree launch seam', () => {
 describe('smoke report publication and parsing', () => {
   it('normalizes PASS, FAIL, and BLOCKED reports with exact head binding', () => {
     const passBody = readFixture('agent-pass-report.txt');
-    const partial = parseSmokeAgentReport(passBody);
+    const partial = {
+      ...parseSmokeAgentReport(passBody),
+      ...passReportFields(),
+    };
     const normalized = normalizeSmokeReport(partial ?? {}, {
       issueNumber: 1061,
       prNumber: 99,
@@ -168,6 +187,7 @@ describe('ready_for_review smoke and CI orthogonality', () => {
     trackedFilesUnmodified: true,
     terminalCleanup: 'closed_owned_handle',
     environmentNotes: [],
+    ...passReportFields(),
   });
 
   it('allows only current-head smoke PASS plus green CI', () => {
@@ -354,7 +374,7 @@ describe('review finding regressions', () => {
       issueNumber: 1061,
       prNumber: 7,
       headSha: headA,
-    }).ok).toBe(true);
+    }).ok).toBe(false);
   });
 
   it('fails closed when issue body is unavailable instead of legacy-exempt', () => {
@@ -383,9 +403,21 @@ describe('review finding regressions', () => {
       trackedFilesUnmodified: true,
       terminalCleanup: 'closed_owned_handle',
       environmentNotes: [],
+      ...passReportFields(),
     });
-    const reports = extractSmokeReportsFromComments([{ body: incompletePass }]);
-    expect(smokeReportCoversPlan(reports[0]!, plan)).toBe(false);
+    const incompleteReport = {
+      result: 'PASS' as const,
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: [planPassScenarios[0]],
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+      ...passReportFields(),
+    };
+    expect(smokeReportCoversPlan(incompleteReport, plan)).toBe(false);
     expect(evaluateWorkerSmokeGate({
       ...gateBase,
       issueBody,
@@ -409,8 +441,23 @@ describe('review finding regressions', () => {
       trackedFilesUnmodified: true,
       terminalCleanup: 'closed_owned_handle',
       environmentNotes: [],
+      ...passReportFields(),
     });
-    expect(smokeReportCoversPlan(extractSmokeReportsFromComments([{ body: changedExpected }])[0]!, plan)).toBe(false);
+    const changedReport = {
+      result: 'PASS' as const,
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: planPassScenarios.map((scenario, index) => (
+        index === 0 ? { ...scenario, expected: 'wrong expected' } : scenario
+      )),
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+      ...passReportFields(),
+    };
+    expect(smokeReportCoversPlan(changedReport, plan)).toBe(false);
 
     const failingOutcome = formatSmokeReportComment({
       result: 'PASS',
@@ -472,6 +519,30 @@ describe('review finding regressions', () => {
       '```',
     ].join('\n');
     expect(resolveSmokeRequirement(markdown).reason).toBe('missing_not_applicable_reason');
+  });
+
+  it('rejects heading-only forged smoke comments without machine block', () => {
+    const forged = [
+      '<!-- pack-worker-smoke-report/v1 -->',
+      '## Worker smoke report',
+      'result: PASS',
+      'issue: #1061',
+      'pr: #7',
+      `head-sha: ${headA}`,
+    ].join('\n');
+    expect(extractSmokeReportsFromComments([{ body: forged }])).toHaveLength(0);
+    expect(smokeReportHasPackProducer({
+      result: 'PASS',
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: planPassScenarios,
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+      ...passReportFields(),
+    })).toBe(true);
   });
 
   it('requires explicit grandfather marker for legacy-exempt omission', () => {
