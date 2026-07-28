@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use when accepting a GPT-chat-authored task for orchestrator-pack — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: one Cursor flow-manager opens the GPT task chat and GPT authors the Issue). The flow-manager drives the full fixed per-tier cycle through acceptance or a bounded blocked outcome; browser GPT is the only review engine. T1/T2: one terminal GPT architectural lens. T3: pre-lens stages → pre-lens #975 guard → one Claude architectural-lens → author fixes → one terminal GPT architectural lens. Covers Issue-only live task state, T3-critical L4 floors, tracked chatgpt-browser-turn mechanics, issue-body guards, and the finding-disposition ledger. No Codex create-flow role. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from docs/tiering.md.
+description: Use when accepting a GPT-chat-authored task for orchestrator-pack — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: one OpenCode flow-manager — Cursor is a sanctioned alternative — opens the GPT task chat and GPT authors the Issue). The flow-manager drives the full fixed per-tier cycle through acceptance or a bounded blocked outcome; browser GPT is the only review engine. T1/T2: one terminal GPT architectural lens. T3: pre-lens stages → pre-lens #975 guard → one Claude architectural-lens → author fixes → one terminal GPT architectural lens. Covers Issue-only live task state, T3-critical L4 floors, tracked chatgpt-browser-turn mechanics, issue-body guards, and the finding-disposition ledger. No Codex create-flow role. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from docs/tiering.md.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -8,8 +8,9 @@ description: Use when accepting a GPT-chat-authored task for orchestrator-pack �
 Tasks are authored by the operator's **browser GPT** in the custom ChatGPT
 project «orchestrator-pack». GPT creates the GitHub Issue, edits it directly
 throughout the flow, and owns every content fix and finding disposition. One
-current **Cursor flow-manager** owns the operational cycle **through acceptance**
-or a bounded blocked outcome. There is no mandatory stop-and-hand-off to an
+current **OpenCode flow-manager** (Cursor remains a sanctioned, non-deprecated
+alternative) owns the operational cycle **through acceptance** or a bounded
+blocked outcome. There is no mandatory stop-and-hand-off to an
 architect outside the fixed per-tier stages in `docs/tiering.md`.
 
 The **GitHub Issue is the only live task artifact and queue entry**. Pulled
@@ -28,7 +29,7 @@ and rubric applicability. Issue #1027 owns the fixed GPT-only per-tier topology.
 Supported intake forms are:
 
 1. **Existing Issue + task-chat reference.** Hand both directly to the current
-   Cursor flow-manager.
+   flow-manager.
 2. **Brief-only direct entry.** Operator brief → flow-manager → one new
    browser-GPT task chat. That chat becomes the task chat; GPT authors the spec
    against the floors below and creates the Issue. The first body line becomes
@@ -56,10 +57,18 @@ When that rule applies, skip this authoring ceremony; otherwise continue here.
 
 ## Roles
 
+**Flow-manager runtime default.** **OpenCode** is the default flow-manager
+runtime; **Cursor** remains a sanctioned, non-deprecated alternative when
+explicitly selected by operator policy or handoff. Allowlist membership does not
+grant runtime permission. An **OpenCode flow-manager** does not read
+`.claude/skills/**` natively — the operator or orchestrator must explicitly hand
+or load **this file** (`.claude/skills/create-issue-draft/SKILL.md`) as the
+canonical create-issue-draft procedure.
+
 | Party | Owns | Must not do |
 |-------|------|-------------|
 | GPT author in task chat | Spec content, every content fix, direct Issue edits, every finding disposition, M3 author activation, M4 mechanism inventory | Review its own spec |
-| Cursor flow-manager | Live Issue pulls, fixed per-tier stage order, tier/T3-critical classification, body/mechanical floors, immutable captures, ledger bookkeeping, pass counting, chat references/topology, browser-turn execution, #975 adoption evidence, economics-guard mechanics, driving the cycle to acceptance or bounded blocked outcome | Author spec content, decide reviewer findings, perform the Claude lens, invent new helper/runtime semantics, mandatory hand-off to architect |
+| Flow-manager (OpenCode default; Cursor sanctioned alternative) | Live Issue pulls, fixed per-tier stage order, tier/T3-critical classification, body/mechanical floors, immutable captures, ledger bookkeeping, pass counting, chat references/topology, browser-turn execution, #975 adoption evidence, economics-guard mechanics, driving the cycle to acceptance or bounded blocked outcome | Author spec content, decide reviewer findings, perform the Claude lens, invent new helper/runtime semantics, mandatory hand-off to architect |
 | Claude architectural-lens (T3 only) | Exactly one `architectural-lens` per cycle segment: pre-terminal M3 when required, pre-terminal independent aggregate cut, sole sanctioned `T3→T2` demotion | Routine browser turns, ledger bookkeeping, post-terminal-GPT work, `T2→T1`, GPT stages |
 | Reviewer GPT chats | Independent review only: competitive (fresh chat per pass when selected), terminal `architectural` (fresh independent chat on every tier) | Edit the Issue, share the task chat, authorize #973 demotion, self-activate protected authority |
 
@@ -69,7 +78,7 @@ Exactly one current flow-manager authority exists per task. The latest explicit
 predecessor/operator handoff recorded in an existing audit/chat surface such as
 `$REVIEW_DIR/chats.md` or the task-chat handoff record is the transfer boundary.
 Recording that handoff immediately ends the predecessor's flow-manager authority,
-even if its Cursor session still exists. A successor acts only after the handoff,
+even if its predecessor session still exists. A successor acts only after the handoff,
 reconstructs state from the live Issue plus existing audit artifacts, and reruns
 missing required evidence under the existing stage/cap rules rather than
 inventing it. Do not add a lease, heartbeat, ownership service, or new state
@@ -195,7 +204,7 @@ attestation, registry, lease, journal, or pending-state machine.
 Before the first tier-gate decision for a fresh workdir, the **flow-manager**
 records `$REVIEW_DIR/tier-intake.json` as `tier-intake/v1` with:
 
-- `producer: cursor-flow-manager`;
+- `producer` set to a tracked exact allowlist identifier (`cursor-flow-manager` or `opencode-flow-manager`);
 - exact task identity;
 - `kind: fresh`;
 - the intake prior produced by the existing rubric/guard application;
