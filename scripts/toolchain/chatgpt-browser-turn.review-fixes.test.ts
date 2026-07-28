@@ -583,88 +583,6 @@ describe('issue 1023 timeout diagnostics', () => {
   });
 });
 
-function trackablePage(owned = true) {
-  const calls: string[] = [];
-  const page = {
-    close: vi.fn(async () => { calls.push('close'); }),
-    goto: vi.fn(async () => {}),
-    url: () => 'https://chatgpt.com/c/example',
-    bringToFront: vi.fn(async () => {}),
-  };
-  return { page, owned, calls };
-}
-
-function trackableBrowser() {
-  const calls: string[] = [];
-  const browser = {
-    close: vi.fn(async () => { calls.push('close'); }),
-    version: () => 'chromium-cdp-fixture',
-    contexts: () => [{ pages: () => [] }],
-  };
-  return { browser, calls };
-}
-
-async function importRunCliWithMocks(options: {
-  readonly owned?: boolean;
-  readonly sendResult?: Record<string, unknown>;
-}): Promise<{ readonly runCli: typeof import('../chatgpt-browser-turn.ts').runCli }> {
-  const pageTracker = trackablePage(options.owned ?? true);
-  const browserTracker = trackableBrowser();
-
-  vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
-    return {
-      ...actual,
-      verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'ok' })),
-      loadChromium: vi.fn(() => ({
-        connectOverCDP: vi.fn(async () => browserTracker.browser),
-      })),
-      openTurnPage: vi.fn(async () => ({
-        page: pageTracker.page,
-        owned: options.owned ?? true,
-        provisionalId: randomUUID(),
-      })),
-      runtimeWitnessSurfaceAvailable: vi.fn(async () => true),
-      sendTurn: vi.fn(async () => options.sendResult ?? {
-        state: 'ok',
-        cause: 'completed',
-        possibleDelivery: false,
-        reply: 'fixture reply',
-        userMessageId: 'user-fixture-12345678',
-        assistantMessageId: 'asst-fixture-12345678',
-        conversationId: 'https://chatgpt.com/c/fixture',
-      }),
-    };
-  });
-
-  vi.doMock('../chatgpt-browser-turn/publication.ts', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../chatgpt-browser-turn/publication.ts')>();
-    return {
-      ...actual,
-      publishReply: vi.fn(() => ({
-        state: 'committed_ok',
-        output_bytes: 13,
-        output_sha256: 'sha256:fixture',
-      })),
-    };
-  });
-
-  const mod = await import('../chatgpt-browser-turn.ts');
-  return { runCli: mod.runCli };
-}
-
-function turnArgv(outputPath: string): string[] {
-  const input = join(root, 'message.txt');
-  writeFileSync(input, 'hello\n');
-  return [
-    'turn',
-    '--profile', join(root, 'profile'),
-    '--cdp', cdp,
-    '--input', input,
-    '--output', outputPath,
-    '--chat-url', 'https://chatgpt.com/c/fixture',
-  ];
-}
 
 describe('issue 1023 runTurn timeout integration', () => {
   afterEach(() => {
@@ -674,81 +592,106 @@ describe('issue 1023 runTurn timeout integration', () => {
     vi.doUnmock('../chatgpt-browser-turn/publication.ts');
   });
 
-  function newChatTurnArgv(outputPath: string): string[] {
-    const input = join(root, 'message.txt');
-    writeFileSync(input, 'hello\n');
+  function turnArgvFor(outputPath: string, flags: string[] = [], includeChatUrl = true): string[] {
+    const input = join(root, `turn-input-${randomUUID()}.txt`);
+    writeFileSync(input, 'turn payload\n');
     return [
       'turn',
       '--profile', join(root, 'profile'),
       '--cdp', cdp,
       '--input', input,
       '--output', outputPath,
-      '--new-chat',
-      '--project-url', 'https://chatgpt.com/g/g-p-6a5dae8454f88191b03140356941cf89-issues/project',
+      ...(includeChatUrl ? ['--chat-url', 'https://chatgpt.com/c/fixture-conv'] : []),
+      ...flags,
     ];
   }
 
-  it('AC5: stream_timeout after possible delivery durably records conversation_incident via runTurn', async () => {
-    const { runCli } = await importRunCliWithMocks({
-      sendResult: {
-        state: 'stream_timeout',
-        cause: 'no_terminal_evidence',
-        possibleDelivery: true,
-        userMessageId: 'user-owned-12345678',
-      },
+  async function runWithSendMock(
+    argv: string[],
+    sendResult: Record<string, unknown>,
+    publicationStub = true,
+  ): Promise<number> {
+    vi.resetModules();
+    const stubPage = {
+      close: vi.fn(async () => {}),
+      goto: vi.fn(async () => {}),
+      url: () => 'https://chatgpt.com/c/fixture-conv',
+      bringToFront: vi.fn(async () => {}),
+    };
+    const stubBrowser = {
+      close: vi.fn(async () => {}),
+      version: () => 'chromium-fixture',
+      contexts: () => [{ pages: () => [] }],
+    };
+    vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
+      const verified = { state: 'verified' as const, cause: 'ok' };
+      return {
+        ...actual,
+        verifyProfile: vi.fn(async () => verified),
+        loadChromium: vi.fn(() => ({ connectOverCDP: vi.fn(async () => stubBrowser) })),
+        openTurnPage: vi.fn(async () => ({ page: stubPage, owned: true, provisionalId: randomUUID() })),
+        runtimeWitnessSurfaceAvailable: vi.fn(async () => true),
+        sendTurn: vi.fn(async () => sendResult),
+      };
     });
+    if (publicationStub) {
+      vi.doMock('../chatgpt-browser-turn/publication.ts', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('../chatgpt-browser-turn/publication.ts')>();
+        return {
+          ...actual,
+          publishReply: vi.fn(() => ({ state: 'committed_ok', output_bytes: 13, output_sha256: 'sha256:fixture' })),
+        };
+      });
+    }
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    return runCli(argv);
+  }
+
+  it('AC5: stream_timeout after possible delivery durably records conversation_incident via runTurn', async () => {
     const output = join(root, 'ac5-runturn-out.txt');
-    const exitCode = await runCli(turnArgv(output));
+    const exitCode = await runWithSendMock(turnArgvFor(output), {
+      state: 'stream_timeout',
+      cause: 'no_terminal_evidence',
+      possibleDelivery: true,
+      userMessageId: 'user-owned-12345678',
+    });
     expect(exitCode).toBe(11);
     const listed = statusList(profileKey);
     expect(listed.items?.some((item) => item.kind === 'conversation_incident' && item.phase === 'possible_delivery')).toBe(true);
   });
 
   it('AC12: new-chat stream_timeout with unproven identity becomes fresh_orphan via runTurn', async () => {
-    const { runCli } = await importRunCliWithMocks({
-      sendResult: {
+    const output = join(root, 'ac12-runturn-out.txt');
+    const exitCode = await runWithSendMock(
+      turnArgvFor(output, ['--new-chat', '--project-url', 'https://chatgpt.com/g/g-p-6a5dae8454f88191b03140356941cf89-issues/project'], false),
+      {
         state: 'stream_timeout',
         cause: 'no_terminal_evidence',
         possibleDelivery: true,
         userMessageId: 'user-owned-12345678',
       },
-    });
-    const output = join(root, 'ac12-runturn-out.txt');
-    const exitCode = await runCli(newChatTurnArgv(output));
+    );
     expect(exitCode).toBe(12);
     const listed = statusList(profileKey);
     expect(listed.items?.some((item) => item.kind === 'fresh_orphan' && item.phase === 'possible_delivery')).toBe(true);
   });
 
   it('AC8: successful runTurn publication remains exactly-once after cleanup-unconfirmed', async () => {
-    const pageTracker = trackablePage(true);
-    const browserTracker = trackableBrowser();
-    vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
-      return {
-        ...actual,
-        verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'ok' })),
-        loadChromium: vi.fn(() => ({ connectOverCDP: vi.fn(async () => browserTracker.browser) })),
-        openTurnPage: vi.fn(async () => ({ page: pageTracker.page, owned: true, provisionalId: randomUUID() })),
-        runtimeWitnessSurfaceAvailable: vi.fn(async () => true),
-        sendTurn: vi.fn(async () => ({
-          state: 'ok',
-          cause: 'completed',
-          possibleDelivery: true,
-          reply: 'committed reply text',
-          userMessageId: 'user-fixture-12345678',
-          assistantMessageId: 'asst-fixture-12345678',
-          conversationId: 'https://chatgpt.com/c/fixture',
-        })),
-      };
-    });
-    vi.doMock('../chatgpt-browser-turn/state.ts', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('../chatgpt-browser-turn/state.ts')>();
-      return { ...actual, deleteIncident: vi.fn() };
-    });
-    const { runCli } = await import('../chatgpt-browser-turn.ts');
     const output = join(root, 'ac8-runturn-out.txt');
-    const exitCode = await runCli(turnArgv(output));
+    const exitCode = await runWithSendMock(
+      turnArgvFor(output),
+      {
+        state: 'ok',
+        cause: 'completed',
+        possibleDelivery: true,
+        reply: 'committed reply text',
+        userMessageId: 'user-fixture-12345678',
+        assistantMessageId: 'asst-fixture-12345678',
+        conversationId: 'https://chatgpt.com/c/fixture-conv',
+      },
+      false,
+    );
     expect(exitCode).toBe(0);
     expect(readFileSync(output, 'utf8')).toBe('committed reply text');
     const invocations = readdirSync(profileDirs(profileKey).publications);
