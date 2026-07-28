@@ -1261,7 +1261,10 @@ export async function sendTurn(
   const send = page.locator('[data-testid="send-button"]');
   const sendAvailable = (await send.count()) > 0;
   revalidateProcessDestinationReservations();
-  await onBeforeSend?.();
+  await Promise.race([
+    network.witnessInstall,
+    new Promise<void>((resolve) => { setTimeout(resolve, 10_000); }),
+  ]);
   try {
     revalidateProcessDestinationReservations();
   } catch (error) {
@@ -1271,10 +1274,7 @@ export async function sendTurn(
       possibleDelivery: false,
     };
   }
-  await Promise.race([
-    network.witnessInstall,
-    new Promise<void>((resolve) => { setTimeout(resolve, 10_000); }),
-  ]);
+  await onBeforeSend?.();
   network.armDispatch();
   try {
     network.ingestingDispatchServiceFrames = true;

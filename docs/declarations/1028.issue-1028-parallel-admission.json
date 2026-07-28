@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "1822f18e4060be78ec856cbab9497d87d20de366",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:64a8dfb22f6d2ab970803875adaf4f97ff9c23240f6608c17b3db880e05d4c1e"
+    "active_scope_hash": "sha256:5b56dd2f2bf536799b09385ea4dca9c8426c8bdc656f61fe16ff5d5cec8ccb95"
   },
   "declared_paths": [
     "docs/migration_notes.md",
@@ -15,6 +15,7 @@
     "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/coordination.ts",
     "scripts/chatgpt-browser-turn/state.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
@@ -32,6 +33,20 @@
       "reason": "Add coordination.ts to scope after pack review fixes",
       "actor": "local",
       "timestamp": "2026-07-27T23:52:20.665Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:64a8dfb22f6d2ab970803875adaf4f97ff9c23240f6608c17b3db880e05d4c1e",
+      "new_active_scope_hash": "sha256:5b56dd2f2bf536799b09385ea4dca9c8426c8bdc656f61fe16ff5d5cec8ccb95",
+      "changed": {
+        "added": [
+          "scripts/chatgpt-browser-turn/ui-adapter.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Allow dispatch-fence ordering fix in ui-adapter per GPT pack review P1",
+      "actor": "local",
+      "timestamp": "2026-07-28T02:33:30.453773Z",
       "applied": true
     }
   ]
