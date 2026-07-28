@@ -1,6 +1,6 @@
 ---
 name: discuss-with-gpt
-description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". With only a brief and no artifact, route through create-issue-draft's brief-only entry; that wrapper floors tier at T2 and requires the competitive pre-stage before the terminal GPT architectural lens. Otherwise run the standalone GPT adversarial loop (≤3 fresh-chat passes, evaluate-don't-obey) over a local markdown artifact. Also the canonical tracked browser-turn mechanics home for create-issue-draft; its one-shot turns use `npm run chatgpt-browser-turn`, while `driver.mjs` retains standalone adversarial duties. Browser-GPT twin of adversarial-draft-review; for «с кодексом» use that skill. Skip plain "создай драфт" with no «с gpt» marker.
+description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". With only a brief and no artifact, route through create-issue-draft's brief-only entry; that wrapper floors tier at T2 and routes into create-issue-draft without adding a competitive create-flow stage. Otherwise run the standalone GPT adversarial loop (≤3 fresh-chat passes, evaluate-don't-obey) over a local markdown artifact. Also the canonical tracked browser-turn mechanics home for create-issue-draft; its one-shot turns use `npm run chatgpt-browser-turn`, while `driver.mjs` retains standalone adversarial duties. Browser-GPT twin of adversarial-draft-review; for «с кодексом» use that skill. Skip plain "создай драфт" with no «с gpt» marker.
 ---
 
 # discuss-with-gpt
@@ -47,7 +47,7 @@ T3 `architectural-lens` stage defined there — not a universal final architect 
 gpt" with no existing local artifact or Issue, do **not** start the standalone
 driver. Route immediately to `create-issue-draft`'s brief-only entry and record
 that this wrapper was explicitly requested. That flow creates the Issue and
-forces its browser-GPT competitive pre-stage before the terminal GPT architectural lens; accepted findings
+runs the fixed T2 topology (one terminal GPT architectural lens only); accepted findings
 are relayed through the task chat and therefore change the Issue itself.
 
 Do not impose the standalone loop by default — it spends ChatGPT quota and
@@ -477,7 +477,7 @@ If a later review materially changes the artifact, log
 ### 7. Hand back
 
 Standalone runs: the artifact continues on its normal path (architect review,
-then publish when asked). Brief-only creation and competitive-stage runs stay
+then publish when asked). Brief-only creation runs stay
 inside `create-issue-draft` **before acceptance** — captures land as
 `pass-NN-competitive.capture.txt` in the task's review workdir, and accepted
 findings are relayed to the task chat so the Issue is updated. Task-chat turns

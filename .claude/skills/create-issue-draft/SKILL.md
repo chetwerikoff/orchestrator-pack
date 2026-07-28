@@ -45,9 +45,9 @@ flow-manager opens exactly one new browser-GPT task chat and records its URL.
 
 Explicit wrapper routing:
 
-- brief-only `discuss-with-gpt` floors the effective tier at **T2** and requires
-  the browser-GPT **competitive** pre-stage before the terminal GPT `architectural`
-  lens;
+- brief-only `discuss-with-gpt` floors the effective tier at **T2** and routes into
+  this flow; it does **not** add a competitive create-flow stage beyond the single
+  terminal GPT `architectural` lens;
 - `adversarial-draft-review` is **standalone Codex only** — it does not add an
   in-flow stage to create-issue-draft.
 
@@ -92,12 +92,10 @@ restart from intake without historical provenance inference.
 ### T2
 
 1. Intake through tier gate (same as T1).
-2. Optional **competitive** stage only when an explicit `discuss-with-gpt`
-   wrapper selected it; otherwise skip.
-3. Exactly **one** terminal independent browser-GPT `architectural` lens.
-4. Author dispositions/fixes.
-5. **`final-acceptance`** and acceptance. **No** pre-lens #975 phase. **No** tier
-   downgrade path.
+2. Exactly **one** terminal independent browser-GPT `architectural` lens.
+3. Author dispositions/fixes.
+4. **`final-acceptance`** and acceptance. **No** pre-lens #975 phase. **No**
+   competitive create-flow stage. **No** tier downgrade path.
 
 ### T3
 
@@ -117,12 +115,15 @@ restart from intake without historical provenance inference.
 **No `architectural-final` stage.** **No Codex** review role. **No engine
 substitution** on browser outage.
 
-**Staleness.**
+**Staleness / review-episode binding.**
 
-- Post-Claude content fixes → rerun **terminal GPT `architectural` only**; no
-  second Claude lens.
-- Post-terminal-GPT accepted fixes → ledger/guards decide acceptance; no second
-  GPT lens.
+- Claude `architectural-lens` captures bind to the **source Issue revision**
+  reviewed; post-Claude author fixes are the normal T3 path and do not invalidate
+  that capture or force a second Claude lens. Post-Claude fixes proceed to
+  **terminal GPT `architectural` only**.
+- Terminal GPT `architectural` remains the **review-episode M5 anchor** after
+  accepted terminal-GPT fixes; the resulting current body still owes all existing
+  mechanical/body/tier/ledger acceptance checks — no second GPT lens.
 
 ## Chat topology
 
@@ -303,10 +304,10 @@ Keep the existing stable row and add only row-local facts needed by the guard:
 - `architectRequired: true` only when another existing rule independently requires
   Claude adjudication.
 
-## Step 3 — Competitive review (T3 or explicit T2 wrapper only)
+## Step 3 — Competitive review (T3 only)
 
-Run when T3 selects it or when brief-only `discuss-with-gpt` forced competitive.
-T1 never runs competitive. T2 runs it only under that explicit wrapper.
+Run when T3 selects competitive as a pre-lens stage. **T1 and T2 never run
+competitive.**
 
 Each pass: fresh `--new-chat`, shared contract, save as `pass-NN-competitive.capture.txt`,
 normalize, relay to task chat, update M4, re-pull, rerun body floors when changed.
@@ -407,10 +408,11 @@ T1/T2 skip `pre-lens` phase; T3 requires it green before Claude ran and
 
 Final acceptance requires:
 
-1. terminal GPT `architectural` covers the exact Issue revision being accepted and
-   is the M5 anchor;
-2. on T3, Claude `architectural-lens` covers the candidate it judged and has valid
-   producing-run evidence when Claude ran in this segment;
+1. terminal GPT `architectural` is the M5 anchor for the review episode; accepted
+   terminal-GPT fixes do not require a second GPT lens — guards validate the
+   resulting current body;
+2. on T3, Claude `architectural-lens` covers the **source revision** it judged
+   and has valid producing-run evidence when Claude ran in this segment;
 3. full `checkTierGateGuard` green on the current anchor, including #973 demotion
    narrow revalidation when applicable;
 4. body floors, stage completeness, and finding-ledger guard green;

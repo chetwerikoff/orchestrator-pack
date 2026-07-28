@@ -74,6 +74,16 @@ remain outside the repository. Pre-existing `docs/issues_drafts/**` and
 new work. `.claude/skills/create-issue-draft/SKILL.md` owns the exact procedure and
 out-of-repository layout.
 
+### Guard-alignment prerequisite (#1030 intent)
+
+Issue #1027's ordered #1030 prerequisite is the **guard-alignment** requirement:
+landed `stage-completeness` and `finding-ledger-guard` behavior must match the
+fixed topology below (terminal GPT `architectural` as M5 anchor; T1/T2 with no
+`architectural-lens`; T3 with Claude pre-terminal then terminal GPT). When that
+behavior is present — including via #1062 / PR #1073 — the prerequisite is
+**satisfied** even if live Issue #1030 still describes superseded r03 ordering.
+Policy acceptance does not require re-syncing the stale #1030 Issue body.
+
 ### Per-tier pipeline (ceilings, not quotas)
 
 The flow-manager drives the full cycle through acceptance or a bounded blocked
@@ -84,7 +94,7 @@ has no create-flow role.
 | Tier | Review sequence | Pre-lens #975 | Terminal lens | Tier downgrade |
 |------|-----------------|---------------|---------------|----------------|
 | **T1** | Exactly **one** independent browser-GPT `architectural` lens (not the task chat) → acceptance | **No** | Same GPT lens owns aggregate cut + M5 anchor | **None** |
-| **T2** | Exactly **one** independent browser-GPT `architectural` lens → acceptance. No competitive unless an explicit `discuss-with-gpt` wrapper selects it | **No** | Same GPT lens owns aggregate cut + M5 anchor | **None** |
+| **T2** | Exactly **one** independent browser-GPT `architectural` lens → acceptance. **No** competitive create-flow stage | **No** | Same GPT lens owns aggregate cut + M5 anchor | **None** |
 | **T3** | Selected **pre-lens** stages (e.g. competitive when selected) → **pre-lens #975 guard** → exactly **one** full Claude `architectural-lens` → author dispositions/fixes → exactly **one** terminal independent browser-GPT `architectural` lens → acceptance | **Yes** (after pre-lens stages terminal) | Claude owns **pre-terminal** aggregate cut; terminal GPT owns **final** aggregate cut + M5 anchor | **T3→T2 only**, at Claude lens |
 
 There is **no** `architectural-final` stage. Historical captures with that name
@@ -264,10 +274,15 @@ The Claude lens has four mandatory goals, in this exact order:
 
 For T3, record explicit **keep** or **cut** for each major mechanism.
 
-**Staleness.** Any Issue content change after a Claude lens invalidates that lens.
-Post-Claude author fixes require **terminal GPT `architectural` only** — no second
-Claude lens. Post-terminal-GPT accepted fixes do not trigger a second GPT lens;
-ledger/guards decide acceptance.
+**Staleness / review-episode binding.** A Claude `architectural-lens` capture is
+bound to the **source Issue revision** it reviewed and remains valid pre-terminal
+M3 evidence for that revision. The normal T3 path **requires** post-Claude author
+dispositions/fixes before terminal GPT runs; those edits do not invalidate the
+Claude capture or force a second Claude lens. Post-Claude fixes proceed to
+**terminal GPT `architectural` only** — no second Claude lens. A terminal GPT
+`architectural` capture remains the **review-episode M5 anchor** after accepted
+terminal-GPT fixes; the resulting current body still owes all existing
+mechanical/body/tier/ledger acceptance checks — no second GPT lens.
 
 ### Terminal GPT architectural lens (all tiers)
 
@@ -286,9 +301,9 @@ excess / is missing.
 
 ### Explicit wrappers
 
-- **`discuss-with-gpt` brief-only wrapper** — floors effective tier at **T2** and
-  requires the browser-GPT **competitive** stage before the terminal GPT
-  `architectural` lens (T2 topology otherwise has no competitive).
+- **`discuss-with-gpt` brief-only wrapper** — routes into `create-issue-draft` and
+  floors effective tier at **T2**; it does **not** add a competitive create-flow
+  stage beyond the single terminal GPT `architectural` lens.
 - **`adversarial-draft-review`** — standalone Codex only; **not** in create-flow.
 
 If a low/contained-stakes artifact exits adversarial review with approximately
