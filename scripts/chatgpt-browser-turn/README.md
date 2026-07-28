@@ -122,6 +122,13 @@ A crash after rename but before result emission is recoverable by `publication-s
 
 ## Gate B and first live use
 
+### Operator attestation record
+
+Half A requires a complete `gate-b-characterization.json` for the exact configured profile/CDP binding before proven non-delivery may be minted.
+
+See command below under Gate B.
+
+
 Deterministic Gate-B coverage is in `scripts/toolchain/chatgpt-browser-turn.test.ts` and the review-regression companion `scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts`; both are run by the repository Vitest lanes plus:
 
 ```bash

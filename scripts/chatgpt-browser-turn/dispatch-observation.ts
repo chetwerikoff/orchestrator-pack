@@ -205,7 +205,10 @@ export async function runGateBCharacterization(page: {
       if (typeof context.pages === 'function') {
         for (const otherPage of context.pages()) {
           if (otherPage === page) continue;
-          void otherPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+          const reloadable = otherPage as { reload?: (options?: { waitUntil?: string }) => Promise<unknown> };
+          if (typeof reloadable.reload === 'function') {
+            void reloadable.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+          }
         }
       }
     } catch {
