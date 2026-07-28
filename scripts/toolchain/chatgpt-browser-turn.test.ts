@@ -291,6 +291,107 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
     expect(await runtimeWitnessSurfaceAvailable(countThrows)).toBe('absent');
   });
 
+  it('classifies absent parent service attributes as absent without service_attribute timeout (#1077)', async () => {
+    const budget = createTurnOperationBudget(5_000);
+    let nestedFirstCalls = 0;
+    const hangingNestedFirst = () => ({
+      getAttribute: async () => {
+        nestedFirstCalls++;
+        await new Promise((resolve) => { setTimeout(resolve, budget.remainingMs()); });
+        return null;
+      },
+    });
+    const message = (role: 'user' | 'assistant', id: string) => ({
+      getAttribute: async (name: string) => {
+        if (name === 'data-message-author-role') return role;
+        if (name === 'data-message-id') return id;
+        return null;
+      },
+      locator: (selector: string) => ({
+        count: async () => (selector.includes('data-parent-message-id') || selector.includes('data-parent-turn-id') ? 0 : 1),
+        first: () => hangingNestedFirst(),
+      }),
+    });
+    const page = {
+      locator: () => ({
+        count: async () => 2,
+        nth: (index: number) => message(index === 0 ? 'user' : 'assistant', index === 0 ? 'user-12345678' : 'assistant-12345678'),
+      }),
+    };
+    const started = Date.now();
+    await expect(runtimeWitnessSurfaceAvailable(page, budget)).resolves.toBe('absent');
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(nestedFirstCalls).toBe(0);
+  });
+
+  it('keeps stalled parent service attribute reads as bounded service_attribute timeouts (#1077)', async () => {
+    const budget = createTurnOperationBudget(80);
+    const page = {
+      locator: () => ({
+        count: async () => 1,
+        nth: () => ({
+          getAttribute: async (name: string) => {
+            if (name === 'data-message-author-role') return 'assistant';
+            if (name === 'data-message-id') return 'assistant-12345678';
+            return null;
+          },
+          locator: (selector: string) => ({
+            count: async () => (selector.includes('data-parent-message-id') ? 1 : 0),
+            first: () => ({
+              getAttribute: async () => {
+                const error = new Error('Timeout 80ms exceeded');
+                error.name = 'TimeoutError';
+                throw error;
+              },
+            }),
+          }),
+        }),
+      }),
+    };
+    await expect(runtimeWitnessSurfaceAvailable(page, budget)).rejects.toThrow('browser_operation_timeout:service_attribute');
+  });
+
+  it('existing-chat witness probe returns absent when product DOM omits parent service attrs (#1077)', async () => {
+    const user = messageLocator('user', 'user-existing-12345678');
+    const assistant = messageLocator('assistant', 'assistant-existing-12345678');
+    const page = {
+      locator: () => ({ count: async () => 2, nth: (index: number) => [user, assistant][index] }),
+    };
+    await expect(runtimeWitnessSurfaceAvailable(page, createTurnOperationBudget(5_000))).resolves.toBe('absent');
+  });
+
+  it('reclamps nested parent count wait after earlier probe consumes segment budget (#1077 review)', async () => {
+    const budget = createTurnOperationBudget(200);
+    let nestedCountWait = -1;
+    const page = {
+      locator: () => ({
+        count: async () => 1,
+        nth: () => ({
+          getAttribute: async (name: string) => {
+            if (name === 'data-message-author-role') return 'assistant';
+            if (name === 'data-message-id') return 'assistant-12345678';
+            if (name === 'data-parent-message-id') {
+              await new Promise((resolve) => { setTimeout(resolve, 150); });
+              return null;
+            }
+            return null;
+          },
+          locator: (selector: string) => ({
+            count: async () => {
+              nestedCountWait = budget.clampOperationWaitMs();
+              return 0;
+            },
+            first: () => ({ getAttribute: async () => null }),
+          }),
+        }),
+      }),
+    };
+    await expect(runtimeWitnessSurfaceAvailable(page, budget)).resolves.toBe('absent');
+    expect(nestedCountWait).toBeGreaterThanOrEqual(0);
+    expect(nestedCountWait).toBeLessThanOrEqual(80);
+    expect(nestedCountWait).toBeLessThan(150);
+  });
+
   it('S1 binds a dispatch candidate only after the same ID is service-visible; historical response IDs are ignored', async () => {
     const own = 'user-owned-12345678';
     const fixture = fakeTurnPage({
