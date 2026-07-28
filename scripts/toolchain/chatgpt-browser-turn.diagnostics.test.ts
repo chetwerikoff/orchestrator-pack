@@ -466,7 +466,7 @@ async function importRunCliWithMocks(options: {
         owned: options.owned ?? true,
         provisionalId: randomUUID(),
       })),
-      runtimeWitnessSurfaceAvailable: vi.fn(async () => true),
+      runtimeWitnessSurfaceAvailable: vi.fn(async () => 'available' as const),
       sendTurn: vi.fn(async () => options.sendResult ?? {
         state: 'ok',
         cause: 'completed',
@@ -642,7 +642,7 @@ describe('issue 1007 runTurn teardown integration', () => {
         verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'ok' })),
         loadChromium: vi.fn(() => ({ connectOverCDP: vi.fn(async () => browserTracker.browser) })),
         openTurnPage: vi.fn(async () => ({ page: pageTracker.page, owned: false })),
-        runtimeWitnessSurfaceAvailable: vi.fn(async () => true),
+        runtimeWitnessSurfaceAvailable: vi.fn(async () => 'available' as const),
         sendTurn: vi.fn(async () => ({
           state: 'ok',
           cause: 'completed',
