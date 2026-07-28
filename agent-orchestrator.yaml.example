@@ -555,7 +555,7 @@ projects:
 
       REVIEW-CYCLE CAP (Issue #646 — tier-keyed distinct-head budget). Count budget
       units by distinct reviewed head (normalized targetSha) from Get-AoReviewRuns rows,
-      not raw run count. Tier caps: T1 = 2, T2 = 4, T3 = 8 (default T2 when the bound
+      not raw run count. Tier caps: T1 = 1, T2 = 2, T3 = 4 (default T2 when the bound
       issue has no complexity-tier fence). First terminal clean run on a distinct head
       records clean_early_stop and makes the PR merge-eligible — stop auto review starts
       on that head until a new commit opens a fresh cycle. When the distinct-head budget
