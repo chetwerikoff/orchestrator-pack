@@ -502,8 +502,8 @@ GPT pass state in the owning artifact/Issue flow.
   recorded, and the digest-pinned recovery root under
   `~/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`
   is retained (Gate-B characterization turns themselves are exempt).
-- Expect capability characterization to remain diagnostic-only; turn scheduling uses
-  fine-grained destination domains, not capability admission state.
+- Use capability characterization or profile-scope admission to schedule turns;
+  fine-grained destination domains are the only scheduling gate.
 - Treat a tracked-helper non-`ok` state, timeout, or missing stdout as fallback
   authorization or resend permission.
 - Run legacy/scratchpad sends while helper-owned unresolved state blocks
