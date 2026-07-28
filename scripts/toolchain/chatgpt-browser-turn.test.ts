@@ -2912,6 +2912,22 @@ describe('issue 1060 remove profile-wide admission', () => {
     expect(listReadableIncidents(profileKey).some(({ record }) => record.kind === 'active_owner')).toBe(true);
   });
 
+  it('AC4/AC11b: sendTurn pre-dispatch failure keeps fine lock when incident cleanup fails', async () => {
+    const output = join(root, 'send-cleanup-fail-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+      sendResult: {
+        state: 'driver_error',
+        cause: 'composer_unavailable',
+        possibleDelivery: false,
+      },
+      deleteIncidentFails: true,
+    });
+    expect(exitCode).toBe(13);
+    expect(stdout).toContain('pre_send_incident_cleanup_failed');
+    expect(acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/fixture-conv')).toBeNull();
+    expect(listReadableIncidents(profileKey).some(({ record }) => record.kind === 'active_owner')).toBe(true);
+  });
+
   it('AC5/AC11e: same-conversation overlap refuses the turn before duplicate send', async () => {
     const key = 'conversation:https://chatgpt.com/c/fixture-conv';
     const first = acquireDomainLock(profileKey, key);

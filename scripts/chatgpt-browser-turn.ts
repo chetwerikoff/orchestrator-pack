@@ -185,6 +185,22 @@ function safeReleaseDestination(reservation: DestinationReservation | null | und
   }
 }
 
+function tryDeleteActiveOwnerIncident(
+  profileKey: string,
+  incidentId: string | undefined,
+): { incidentId: string | undefined; incidentCleanupFailed: boolean } {
+  if (!incidentId) {
+    return { incidentId: undefined, incidentCleanupFailed: false };
+  }
+  try {
+    deleteIncident(profileKey, incidentId);
+    return { incidentId: undefined, incidentCleanupFailed: false };
+  } catch {
+    return { incidentId, incidentCleanupFailed: true };
+  }
+}
+
+
 
 async function probeLiveBrowserProvenance(cdp: string): Promise<string> {
   const chromium = loadChromium();
@@ -528,12 +544,18 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     if (!result.possibleDelivery) {
       await closeOwnedTurnPage(opened, { retainPage: false });
-      deleteIncident(profileKey, incidentId);
-      incidentId = undefined;
-      safeRelease(scheduleLock);
-      scheduleLock = null;
-      safeReleaseDestination(reservation);
-      reservation = null;
+      const preDispatchCleanup = tryDeleteActiveOwnerIncident(profileKey, incidentId);
+      incidentId = preDispatchCleanup.incidentId;
+      if (!preDispatchCleanup.incidentCleanupFailed) {
+        safeRelease(scheduleLock);
+        scheduleLock = null;
+        safeReleaseDestination(reservation);
+        reservation = null;
+      } else {
+        return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_incident_cleanup_failed', invocationId, profileKey, {
+          incident_id: incidentId,
+        }));
+      }
 
       if (result.state === 'quota' || result.state === 'challenge' || result.state === 'login') {
         const wall = ensureProfileWall(profileKey, result.state);
@@ -663,15 +685,9 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     const message = error instanceof Error ? error.message : 'driver_error';
     if (!possibleDelivery && message.startsWith('pre_send_')) {
       await closeOwnedTurnPage(opened, { retainPage: false });
-      let incidentCleanupFailed = false;
-      if (incidentId) {
-        try {
-          deleteIncident(profileKey, incidentId);
-          incidentId = undefined;
-        } catch {
-          incidentCleanupFailed = true;
-        }
-      }
+      const preSendCleanup = tryDeleteActiveOwnerIncident(profileKey, incidentId);
+      incidentId = preSendCleanup.incidentId;
+      const incidentCleanupFailed = preSendCleanup.incidentCleanupFailed;
       if (!incidentCleanupFailed) {
         safeRelease(scheduleLock);
         scheduleLock = null;
@@ -773,11 +789,12 @@ async function runTurn(args: ParsedArgs): Promise<number> {
           // Existing durable state remains fail-closed.
         }
       } else {
-        try {
-          deleteIncident(profileKey, incidentId);
-          incidentId = undefined;
-        } catch {
-          // Existing durable state remains fail-closed.
+        const catchCleanup = tryDeleteActiveOwnerIncident(profileKey, incidentId);
+        incidentId = catchCleanup.incidentId;
+        if (catchCleanup.incidentCleanupFailed) {
+          return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_incident_cleanup_failed', invocationId, profileKey, {
+            incident_id: incidentId,
+          }));
         }
       }
     }
