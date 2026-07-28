@@ -613,9 +613,75 @@ export function detectTrackedImplementationMutation(
   return false;
 }
 
+/** Parent env carriers forwarded only to smoke-owned `gh` children (not full parent inheritance). */
+export const SMOKE_GH_AUTH_ENV_KEYS = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+  'GHE_TOKEN',
+  'GH_HOST',
+  'GH_REPO',
+  'GH_CONFIG_DIR',
+  'XDG_CONFIG_HOME',
+  'HOME',
+  'USERPROFILE',
+] as const;
+
+export type SmokeGhAuthEnvKey = (typeof SMOKE_GH_AUTH_ENV_KEYS)[number];
+
+export function buildSmokeGhChildEnv(parentEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const forwarded: NodeJS.ProcessEnv = {};
+  for (const key of SMOKE_GH_AUTH_ENV_KEYS) {
+    const value = parentEnv[key];
+    if (value !== undefined && value !== '') {
+      forwarded[key] = value;
+    }
+  }
+  return forwarded;
+}
+
+export type SmokeNonPassCause =
+  | 'zero_parsed_scenarios'
+  | 'missing_agent_report'
+  | 'executed_scenario_failure';
+
+export function classifySmokeNonPassCause(input: {
+  zeroParsedScenarios?: boolean;
+  partial: Partial<SmokeReport> | null;
+  agentActivityObserved: boolean;
+}): SmokeNonPassCause | undefined {
+  if (input.zeroParsedScenarios) {
+    return 'zero_parsed_scenarios';
+  }
+  if (!input.partial) {
+    return input.agentActivityObserved ? 'missing_agent_report' : undefined;
+  }
+  const scenarios = input.partial.scenarios ?? [];
+  const hasFailedScenario = scenarios.some((scenario) => scenario.outcome === 'fail');
+  if (input.partial.result === 'FAIL' || hasFailedScenario) {
+    return 'executed_scenario_failure';
+  }
+  return undefined;
+}
+
+export function smokeAgentTerminalActivityDetected(currentText: string, baselineText: string): boolean {
+  if (currentText.length > baselineText.length) {
+    return true;
+  }
+  if (currentText !== baselineText) {
+    return true;
+  }
+  if (currentText.includes('worker-smoke-report') && !baselineText.includes('worker-smoke-report')) {
+    return true;
+  }
+  return false;
+}
+
 export function scrubSmokeOutput(text: string): string {
   return text
     .replace(/(?:ghp_|github_pat_)[A-Za-z0-9_]+/g, '[redacted-token]')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted]')
-    .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, '[redacted-secret]');
+    .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, '[redacted-secret]')
+    .replace(/fixture-gh-auth-sentinel-[A-Za-z0-9_-]+/g, '[redacted-auth-sentinel]');
 }

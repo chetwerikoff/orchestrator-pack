@@ -13,6 +13,8 @@ import {
 } from './lib/orca-cli.ts';
 import {
   buildSmokeAgentPrompt,
+  buildSmokeGhChildEnv,
+  classifySmokeNonPassCause,
   detectTrackedImplementationMutation,
   hasPreexistingTrackedDirtiness,
   trackedPorcelainPaths,
@@ -20,15 +22,20 @@ import {
   evaluateWorkerSmokeGate,
   extractSmokeReportsFromComments,
   findCurrentHeadSmokePass,
+  SMOKE_GH_AUTH_ENV_KEYS,
   SMOKE_REPORT_PRODUCER,
+  smokeAgentTerminalActivityDetected,
   smokeReportCoversPlan,
   smokeReportHasPackProducer,
+  scrubSmokeOutput,
   verifySmokeHeadBinding,
   formatSmokeReportComment,
   normalizeSmokeReport,
   parseSmokeAgentReport,
   SMOKE_REPORT_MARKER,
 } from './lib/worker-smoke-core.ts';
+import { runProcessSync } from './kernel/subprocess.ts';
+import { waitForSmokeAgentCompletion } from './worker-smoke-run.ts';
 import { readWorkerSmokeReceipt, verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { checkSmokeTestPlan, resolveSmokeRequirement } from './draft-discipline.mjs';
 
@@ -589,3 +596,242 @@ describe('review finding regressions', () => {
     expect(resolveSmokeRequirement(withoutFence).requirement).toBe('required');
   });
 });
+
+describe('worker smoke gh child env forwarding (#1101)', () => {
+  const authSentinel = 'fixture-gh-auth-sentinel-abc123';
+  const unrelatedSentinel = 'fixture-unrelated-parent-sentinel-xyz';
+
+  it('forwards supported gh auth/config carriers without unrelated parent env', () => {
+    const parent = {
+      PATH: '/bin',
+      GH_TOKEN: authSentinel,
+      GH_CONFIG_DIR: '/tmp/gh-config',
+      UNRELATED_SENTINEL: unrelatedSentinel,
+    } as NodeJS.ProcessEnv;
+    const child = buildSmokeGhChildEnv(parent);
+    expect(child.GH_TOKEN).toBe(authSentinel);
+    expect(child.GH_CONFIG_DIR).toBe('/tmp/gh-config');
+    expect(child.UNRELATED_SENTINEL).toBeUndefined();
+    for (const key of SMOKE_GH_AUTH_ENV_KEYS) {
+      if (parent[key] !== undefined) {
+        expect(child[key]).toBe(parent[key]);
+      }
+    }
+  });
+
+  it('supports config-home carriers independently of token carriers', () => {
+    const parent = {
+      HOME: '/home/smoke-user',
+      XDG_CONFIG_HOME: '/home/smoke-user/.config',
+    } as NodeJS.ProcessEnv;
+    const child = buildSmokeGhChildEnv(parent);
+    expect(child.HOME).toBe('/home/smoke-user');
+    expect(child.XDG_CONFIG_HOME).toBe('/home/smoke-user/.config');
+    expect(child.GH_TOKEN).toBeUndefined();
+  });
+
+  it('restores authenticated gh child behavior on the smoke-owned seam without leaking sentinels', () => {
+    const fakeBin = join(fixtureRoot, 'fake-bin');
+    const ghProbe = join(fakeBin, 'gh-auth-probe');
+    const withoutAuth = runProcessSync({
+      command: ghProbe,
+      args: ['auth-probe'],
+      env: { PATH: fakeBin },
+    });
+    expect(withoutAuth.ok).toBe(false);
+    expect(withoutAuth.stderr).toContain('auth-carrier-missing');
+
+    const withAuth = runProcessSync({
+      command: ghProbe,
+      args: ['auth-probe'],
+      env: {
+        PATH: fakeBin,
+        ...buildSmokeGhChildEnv({
+          GH_TOKEN: authSentinel,
+          UNRELATED_SENTINEL: unrelatedSentinel,
+        } as NodeJS.ProcessEnv),
+      },
+    });
+    expect(withAuth.ok).toBe(true);
+    expect(withAuth.stdout).toContain('auth-carrier-present');
+    expect(withAuth.stdout).not.toContain(authSentinel);
+    expect(withAuth.stderr).not.toContain(authSentinel);
+  });
+
+
+  it('restores config-home carriers on the smoke-owned gh seam', () => {
+    const fakeBin = join(fixtureRoot, 'fake-bin');
+    const ghProbe = join(fakeBin, 'gh-auth-probe');
+    const withConfigHome = runProcessSync({
+      command: ghProbe,
+      args: ['config-home-probe'],
+      env: {
+        PATH: fakeBin,
+        ...buildSmokeGhChildEnv({
+          HOME: '/home/smoke-user',
+          XDG_CONFIG_HOME: '/home/smoke-user/.config',
+        } as NodeJS.ProcessEnv),
+      },
+    });
+    expect(withConfigHome.ok).toBe(true);
+    expect(withConfigHome.stdout).toContain('config-home-present');
+  });
+
+  it('scrubs credential sentinels from stderr-derived failure surfaces', () => {
+    const fakeBin = join(fixtureRoot, 'fake-bin');
+    const ghProbe = join(fakeBin, 'gh-auth-probe');
+    const failed = runProcessSync({
+      command: ghProbe,
+      args: ['fail-with-sentinel'],
+      env: {
+        PATH: fakeBin,
+        ...buildSmokeGhChildEnv({ GH_TOKEN: authSentinel } as NodeJS.ProcessEnv),
+      },
+    });
+    const scrubbed = scrubSmokeOutput(`${failed.stderr}${failed.stdout}`);
+    expect(scrubbed).not.toContain(authSentinel);
+    expect(scrubbed).toContain('[redacted-auth-sentinel]');
+  });
+});
+
+describe('worker smoke agent start-aware wait (#1101)', () => {
+  it('detects positive terminal activity beyond the post-send baseline', () => {
+    expect(smokeAgentTerminalActivityDetected('idle prompt', 'idle prompt')).toBe(false);
+    expect(smokeAgentTerminalActivityDetected('idle prompt\nagent started', 'idle prompt')).toBe(true);
+    expect(smokeAgentTerminalActivityDetected('```worker-smoke-report', '')).toBe(true);
+  });
+
+  it('does not complete during initial idle before delayed first output', () => {
+    let now = 0;
+    let readCalls = 0;
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal read')) {
+        readCalls += 1;
+        if (readCalls < 3) {
+          return { stdout: JSON.stringify({ ok: true, result: { lines: ['idle'], nextCursor: 1 } }), stderr: '', status: 0 };
+        }
+        return {
+          stdout: JSON.stringify({ ok: true, result: { lines: ['idle', 'agent output'], nextCursor: 2 } }),
+          stderr: '',
+          status: 0,
+        };
+      }
+      if (joined.includes('terminal wait') && joined.includes('tui-idle')) {
+        return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+      }
+      return { stdout: JSON.stringify({ ok: false, error: { message: 'unexpected' } }), stderr: '', status: 1 };
+    });
+
+    const result = waitForSmokeAgentCompletion('term_delayed', {
+      runner: runner as never,
+      now: () => now,
+      deadlineMs: 5_000,
+      sleepMs: (ms) => {
+        now += ms;
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.agentActivityObserved).toBe(true);
+    expect(readCalls).toBeGreaterThanOrEqual(3);
+  });
+
+  it('terminates at the shared deadline when the agent never starts', () => {
+    let now = 0;
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal read')) {
+        return { stdout: JSON.stringify({ ok: true, result: { lines: ['idle'], nextCursor: 1 } }), stderr: '', status: 0 };
+      }
+      return { stdout: JSON.stringify({ ok: false, error: { message: 'unexpected' } }), stderr: '', status: 1 };
+    });
+
+    const result = waitForSmokeAgentCompletion('term_never', {
+      runner: runner as never,
+      now: () => now,
+      deadlineMs: 600,
+      sleepMs: (ms) => {
+        now += ms;
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.agentActivityObserved).toBe(false);
+    expect(result.error?.code).toBe('smoke_agent_never_started');
+    expect(now).toBeLessThanOrEqual(600);
+  });
+});
+
+describe('worker smoke non-pass cause classification (#1101)', () => {
+  it('distinguishes zero-parsed-scenarios, missing-agent-report, and executed-scenario-failure', () => {
+    expect(classifySmokeNonPassCause({ zeroParsedScenarios: true, partial: null, agentActivityObserved: false }))
+      .toBe('zero_parsed_scenarios');
+    expect(classifySmokeNonPassCause({ partial: null, agentActivityObserved: true }))
+      .toBe('missing_agent_report');
+    expect(classifySmokeNonPassCause({
+      partial: {
+        result: 'FAIL',
+        scenarios: [{ action: 'x', expected: 'y', observed: 'z', outcome: 'fail' }],
+      },
+      agentActivityObserved: true,
+    })).toBe('executed_scenario_failure');
+  });
+
+  it('parses numbered prose to zero scenarios and blocks gate-check without implying execution', () => {
+    const markdown = readFixture('zero-scenario-numbered-prose.md');
+    const plan = resolveSmokeRequirement(markdown);
+    expect(plan.requirement).toBe('required');
+    expect(plan.scenarios).toHaveLength(0);
+    const decision = evaluateWorkerSmokeGate({
+      ...gateBase,
+      issueBody: markdown,
+      prNumber: 7,
+      headSha: headA,
+      prComments: [],
+      ciGreen: true,
+      orcaWorktreeOk: true,
+      ownedTerminalClosed: true,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe('missing_smoke_plan');
+  });
+
+  it('run emits zero_parsed_scenarios before terminal creation for numbered-prose plans', () => {
+    const bodyFile = join(fixtureRoot, 'zero-scenario-numbered-prose.md');
+    const result = runProcessSync({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types',
+        join(import.meta.dirname, 'worker-smoke-run.ts'),
+        'run',
+        '--issue', '1101',
+        '--pr', '1',
+        '--head-sha', headA,
+        '--issue-body-file', bodyFile,
+        '--dry-run',
+        '--json',
+      ],
+      inheritParentEnv: true,
+    });
+    expect(result.ok).toBe(false);
+    const payload = JSON.parse(result.stdout.trim());
+    expect(payload.nonPassCause).toBe('zero_parsed_scenarios');
+    expect(payload.terminalCreated).toBe(false);
+    expect(payload.published).toBe(false);
+  });
+
+    it('still serializes canonical non-empty scenarios into the smoke-agent prompt', () => {
+    const markdown = readFixture('action-producing-with-plan.md');
+    const plan = resolveSmokeRequirement(markdown);
+    expect(plan.scenarios.length).toBeGreaterThan(0);
+    const prompt = buildSmokeAgentPrompt({
+      issueNumber: 1101,
+      issueBody: markdown,
+      prNumber: 1,
+      headSha: headA,
+      plan,
+    });
+    expect(prompt).toContain(plan.scenarios[0]?.action ?? '');
+    expect(prompt).not.toContain('(none — report BLOCKED');
+  });
+});
+
