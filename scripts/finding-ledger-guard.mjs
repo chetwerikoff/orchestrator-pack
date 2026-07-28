@@ -808,8 +808,11 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
     }
 
     const firstOccurrence = firstOccurrenceById.get(finding.id);
-    const terminalOnlyNomination = latestLensIndex < 0
-      || Boolean(firstOccurrence && firstOccurrence.index > latestLensIndex);
+    const terminalOnlyNomination = Boolean(
+      firstOccurrence
+      && firstOccurrence.meta.stage === 'architectural'
+      && (latestLensIndex < 0 || firstOccurrence.index > latestLensIndex),
+    );
     if (terminalOnlyNomination) {
       if (row.architectPending) {
         errors.push(`review-economics: terminal protected nomination ${finding.id} must not remain architect-pending when no future architect stage exists`);
