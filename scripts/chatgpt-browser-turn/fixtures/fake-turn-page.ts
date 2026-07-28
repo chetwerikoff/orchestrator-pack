@@ -1,4 +1,5 @@
 import type { SemanticNode } from '../semantic.ts';
+import type { DispatchObservationTestControls } from '../dispatch-observation.ts';
 
 export interface FakeAssistantSpec {
   readonly id: string;
@@ -36,6 +37,13 @@ export interface FakeTurnPageOptions {
   readonly postClickServiceFrames?: readonly Record<string, unknown>[];
   readonly postClickRawSseBodies?: readonly string[];
   readonly turnExchangeId?: string;
+  readonly dispatchObservation?: DispatchObservationTestControls;
+  readonly postArmContextRequests?: readonly { readonly url: string }[];
+  readonly postArmWebSocketSent?: readonly { readonly target?: string }[];
+  readonly preDispatchUserDomIds?: readonly string[];
+  readonly postArmUserDomIds?: readonly string[];
+  readonly newChatUrlAfterArm?: string;
+  readonly serviceWorkerHttpAfterArm?: readonly { readonly url: string }[];
   readonly hideSendButton?: boolean;
   readonly composerPressDelayMs?: number;
 }
@@ -112,13 +120,29 @@ function defaultTerminalFrames(userId: string, assistantId: string, parent: stri
 
 export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; getSendClicks: () => number; getEnterPresses: () => number } {
   const handlers = new Map<string, Array<(event: any) => unknown>>();
+  const contextRequestHandlers: Array<(request: { url: () => string }) => unknown> = [];
   const wsHandlers: Array<(event: { response?: { payloadData?: string } }) => unknown> = [];
+  const wsSentHandlers: Array<() => unknown> = [];
   const frameListeners: Array<(frame: { payload: string }) => unknown> = [];
   const messages: any[] = [];
   let sendClicks = 0;
   let sent = false;
+  let pageUrl = 'https://chatgpt.com/c/example';
+  const observeComplete = Boolean(options.dispatchObservation);
   const dispatchIds = [...(options.dispatchCandidateIds ?? ['user-owned-12345678'])];
+  for (const id of options.preDispatchUserDomIds ?? []) messages.push(messageLocator('user', id));
   const composerPresent = options.composer !== false;
+
+
+  const emitContextRequest = async (url: string): Promise<void> => {
+    const request = { url: () => url };
+    for (const handler of contextRequestHandlers) await handler(request);
+    await emit('request', request);
+  };
+
+  const emitWebSocketSent = async (): Promise<void> => {
+    for (const handler of wsSentHandlers) await handler();
+  };
 
   const emit = async (event: string, payload: any): Promise<void> => {
     for (const handler of handlers.get(event) ?? []) await handler(payload);
@@ -211,6 +235,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
           : []);
       if (options.preDispatchServiceFrames?.length) await emitServiceFrames(options.preDispatchServiceFrames);
       if (frames.length > 0) await emitServiceFrames(frames);
+      await emitPostArmObservationTraffic();
       for (const body of options.postClickRawSseBodies ?? []) {
         await emit('response', {
           url: () => 'https://chatgpt.com/backend-api/conversation',
@@ -236,6 +261,25 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   let pendingTerminalFrames: readonly Record<string, unknown>[] | undefined;
   let postClickServiceEmitted = false;
   let postClickFrameIndex = 0;
+  const emitPostArmObservationTraffic = async (): Promise<void> => {
+    if (!observeComplete) return;
+    for (const req of options.serviceWorkerHttpAfterArm ?? []) {
+      await emitContextRequest(req.url);
+    }
+    for (const req of options.postArmContextRequests ?? []) {
+      await emitContextRequest(req.url);
+    }
+    for (let index = 0; index < (options.postArmWebSocketSent ?? []).length; index++) {
+      await emitWebSocketSent();
+    }
+    for (const id of options.postArmUserDomIds ?? []) {
+      messages.push(messageLocator('user', id));
+    }
+    if (options.newChatUrlAfterArm) {
+      pageUrl = options.newChatUrlAfterArm;
+    }
+  };
+
   const emitPostClickForeign = async (): Promise<void> => {
     if (postClickServiceEmitted) return;
     postClickServiceEmitted = true;
@@ -288,18 +332,59 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
 
   const page = {
     context: () => ({
-      newCDPSession: async () => ({
-        send: async () => {},
-        on: (event: string, handler: (value: { response?: { payloadData?: string } }) => unknown) => {
-          if (event === 'Network.webSocketFrameReceived') wsHandlers.push(handler);
+      ...(observeComplete ? {
+        on: (event: string, handler: (...args: any[]) => unknown) => {
+          if (event === 'request') contextRequestHandlers.push(handler as (request: { url: () => string }) => unknown);
+          if (event === 'page' || event === 'serviceworker') handler({});
         },
-      }),
+      } : {}),
+      newCDPSession: async () => {
+        const attachedHandlers: Array<(value: any) => unknown> = [];
+        const detachedHandlers: Array<(value: any) => unknown> = [];
+        const session = {
+          send: async (method: string, params?: { sessionId?: string; message?: string; targetId?: string; expression?: string; returnByValue?: boolean }, sessionId?: string) => {
+            if (!observeComplete) return {};
+            const flatSessionId = sessionId ?? params?.sessionId;
+            if (flatSessionId && method === 'Runtime.evaluate') {
+              return { result: { value: 2 } };
+            }
+            if (flatSessionId && method === 'Network.enable') return {};
+            if (flatSessionId && method === 'Runtime.runIfWaitingForDebugger') return {};
+            if (method === 'Target.getTargets') {
+              return {
+                targetInfos: [
+                  { targetId: 'fixture-page-target', type: 'page' },
+                  { targetId: 'fixture-worker-target', type: 'service_worker' },
+                ],
+              };
+            }
+            if (method === 'Target.attachToTarget') {
+              const sessionId = `fixture-${params?.targetId ?? 'target'}-session`;
+              for (const handler of attachedHandlers) {
+                await handler({ sessionId, waitingForDebugger: true });
+              }
+              return { sessionId };
+            }
+            if (method === 'Target.sendMessageToTarget') return {};
+            if (method === 'Target.setAutoAttach' || method === 'Target.setDiscoverTargets' || method === 'Network.enable') return {};
+            return {};
+          },
+          on: (event: string, handler: (value: { response?: { payloadData?: string }; sessionId?: string; waitingForDebugger?: boolean }) => unknown) => {
+            if (event === 'Network.webSocketFrameReceived') wsHandlers.push(handler);
+            if (observeComplete && event === 'Network.webSocketFrameSent') wsSentHandlers.push(() => handler({}));
+            if (observeComplete && event === 'Target.attachedToTarget') attachedHandlers.push(handler);
+            if (observeComplete && event === 'Target.detachedFromTarget') detachedHandlers.push(handler);
+          },
+        };
+        return session;
+      },
     }),
     on: (event: string, handler: (value: any) => unknown) => {
       if (event === 'websocket') {
         handler({
           on: (frameEvent: string, frameHandler: (frame: { payload: string }) => unknown) => {
             if (frameEvent === 'framereceived') frameListeners.push(frameHandler);
+            if (observeComplete && frameEvent === 'framesent') wsSentHandlers.push(() => frameHandler({ payload: '' }));
           },
         });
         return;
@@ -308,7 +393,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
       list.push(handler);
       handlers.set(event, list);
     },
-    url: () => 'https://chatgpt.com/c/example',
+    url: () => pageUrl,
     locator: (selector: string) => {
       if (selector === '#prompt-textarea') {
         return {
@@ -377,6 +462,9 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   };
 
   (page as { __fakeTurnPage?: boolean }).__fakeTurnPage = true;
+  if (options.dispatchObservation) {
+    (page as { __dispatchObservation?: DispatchObservationTestControls }).__dispatchObservation = options.dispatchObservation;
+  }
   return { page, getSendClicks: () => sendClicks, getEnterPresses: () => enterPresses };
 }
 

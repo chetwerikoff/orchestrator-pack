@@ -61,6 +61,32 @@ npm run chatgpt-browser-turn -- clear \
 
 A stale generation, changed evidence, live owner, unreadable lock, or publication that cannot be proven uncommitted remains blocked.
 
+
+## Proven non-delivery (`dispatch_request_not_observed`)
+
+After the existing 30-second submitted-turn observation window exhausts with no service-proven user id, the helper may return `send_failed` with `cause: dispatch_request_not_observed` and `possibleDelivery: false` only when **all** of the following held from `armDispatch()` through that exhaustion:
+
+- configured-context HTTP observation and target-complete outbound-WebSocket sent-frame observation were established before dispatch and remained gap-free;
+- zero outbound HTTP(S) requests on the context boundary;
+- zero outbound WebSocket frames on covered targets;
+- no new user DOM nodes beyond the pre-dispatch baseline;
+- for `--new-chat`, the normalized page URL stayed unchanged.
+
+Any post-arm outbound HTTP request, WebSocket frame, DOM user node, fresh-chat URL transition, or boundary-coverage loss keeps the existing `submitted_turn_id_unproven` possible-delivery path. Pre-dispatch observer establishment failure performs zero send and returns `driver_error` / `driver_exception_before_send`.
+
+Proven non-delivery reuses the existing non-possible-delivery cleanup path: close an invocation-owned page, delete only this invocation's incident, and release schedule/destination locks. A later independent invocation may retry normally.
+
+### Gate-B live characterization (Half A)
+
+On the supported Chromium/Playwright runtime, operators should verify the production path can observe:
+
+1. **service-worker-owned HTTP** on the configured `BrowserContext` request surface; and
+2. **worker/secondary-target outbound WebSocket sends** via target auto-attach and `Network.webSocketFrameSent`.
+
+If either live boundary probe is unavailable or unproven, the helper keeps possible-delivery behavior and does not mint proven non-delivery.
+
+Operator probe entrypoint: `npm run chatgpt-browser-turn -- gate-b-characterization --profile <path> --cdp <url> [--chat-url <url>]`. Persists `gate-b-characterization.json` under the configured profile store; proven non-delivery requires that record to be complete. The probe reloads the selected ChatGPT surface and accepts only `BrowserContext` requests where `request.serviceWorker()` is truthy; page-owned HTTP or CDP-only network events do not satisfy the service-worker probe. The worker/secondary-target WebSocket probe observes only non-probe `BrowserContext` pages via dedicated `newCDPSession` targets; the configured probe page's own WebSocket traffic does not satisfy that row.
+
 ## Result and retry rules
 
 `turn` writes exactly one JSON `turn-result/v1` line. `ok` exits 0. Invocation-local validation/send failures use exit family 10, exact recovery/conversation ambiguity 11, profile walls/busy/orphan state 12, machine/driver failure 13, and incompatible durable state 14.
@@ -95,6 +121,13 @@ The helper creates a same-directory `0600` temporary file and durably persists a
 A crash after rename but before result emission is recoverable by `publication-status` from the inode witness. A destination that appears before the no-clobber commit remains untouched and yields `recovery_required` with the complete temp retained.
 
 ## Gate B and first live use
+
+### Operator attestation record
+
+Half A requires a complete `gate-b-characterization.json` bound to the current runtime capability digests (`candidate_digest`, `build_digest`, `config_digest`, `gate_digest`) for the exact configured profile/CDP pair before proven non-delivery may be minted. Stale or unbound records are ignored.
+
+See command below under Gate B.
+
 
 Deterministic Gate-B coverage is in `scripts/toolchain/chatgpt-browser-turn.test.ts` and the review-regression companion `scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts`; both are run by the repository Vitest lanes plus:
 

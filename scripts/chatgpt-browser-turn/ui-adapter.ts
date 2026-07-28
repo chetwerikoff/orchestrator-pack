@@ -5,6 +5,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { abandonLatePageHandle, boundedResourceCleanup, RESOURCE_CLEANUP_BOUND_MS } from './browser-session.ts';
 import { revalidateProcessDestinationReservations } from './coordination.ts';
 import {
+  assertDispatchObservationReadyForDispatch,
+  DispatchObservationEstablishmentError,
+  establishDispatchObservationBoundary,
+  evaluateDispatchRequestNotObserved,
+  recordDispatchObservationDiagnostic,
+  type DispatchObservationBoundary,
+} from './dispatch-observation.ts';
+import { configuredProfileKey } from './storage-common.ts';
+import {
   mergeContinuationSegments,
   SEMANTIC_UI_FILTER,
   serializeSemanticNodes,
@@ -1358,6 +1367,24 @@ export interface TurnBrowserResult {
   possibleDelivery: boolean;
 }
 
+
+
+export async function openGateBCharacterizationPage(browser: any, chatUrl = 'https://chatgpt.com/'): Promise<{ page: any; owned: boolean }> {
+  const contexts = browser.contexts();
+  if (contexts.length !== 1) throw new Error('ui_contract_mismatch:context_count');
+  const ctx = contexts[0];
+  const existing = ctx.pages().find((page: { url: () => string }) => {
+    try { return page.url().includes('chatgpt.com'); } catch { return false; }
+  });
+  if (existing) {
+    await existing.bringToFront().catch(() => {});
+    return { page: existing, owned: false };
+  }
+  const page = await ctx.newPage();
+  await page.goto(chatUrl, { waitUntil: 'domcontentloaded' });
+  return { page, owned: true };
+}
+
 async function adoptNewPageWithBudget(
   ctx: any,
   goto: (page: any, gotoWaitMs: number) => Promise<void>,
@@ -1484,6 +1511,43 @@ export async function sendTurn(
     if (id) baselineIds.add(id);
   }
 
+  const usersBeforeDispatch = page.locator('[data-message-author-role="user"]');
+  let preDispatchUserNodeCount = 0;
+  let userNodeBaselineReliable = true;
+  try {
+    preDispatchUserNodeCount = await usersBeforeDispatch.count();
+  } catch {
+    userNodeBaselineReliable = false;
+    preDispatchUserNodeCount = -1;
+  }
+
+  let preDispatchNormalizedUrl = '';
+  let urlBaselineReliable = true;
+  try {
+    preDispatchNormalizedUrl = normalizeConversationUrl(page.url());
+  } catch {
+    urlBaselineReliable = false;
+    preDispatchNormalizedUrl = '';
+  }
+
+  let dispatchObservation: DispatchObservationBoundary;
+  try {
+    dispatchObservation = await establishDispatchObservationBoundary(page, {
+      newChatMode: config.newChat,
+      preDispatchUserNodeCount,
+      preDispatchNormalizedUrl,
+      userNodeBaselineReliable,
+      urlBaselineReliable,
+      profileKey: configuredProfileKey(config.profile, config.cdp),
+      cdp: config.cdp,
+    });
+  } catch (error) {
+    if (error instanceof DispatchObservationEstablishmentError) {
+      throw error;
+    }
+    throw new DispatchObservationEstablishmentError('dispatch_observation_establishment_failed');
+  }
+
   let mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
   if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
   try {
@@ -1498,6 +1562,14 @@ export async function sendTurn(
   mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
   const sendAvailable = (await boundedLocatorCount(send, mutationWait)) > 0;
   revalidateProcessDestinationReservations();
+  try {
+    assertDispatchObservationReadyForDispatch(dispatchObservation);
+  } catch (error) {
+    if (error instanceof DispatchObservationEstablishmentError) {
+      throw error;
+    }
+    throw new DispatchObservationEstablishmentError('dispatch_observation_establishment_failed');
+  }
   await onBeforeSend?.();
   try {
     revalidateProcessDestinationReservations();
@@ -1515,6 +1587,7 @@ export async function sendTurn(
   if (segmentBudget && dispatchWait <= 0) throw new BrowserOperationTimeoutError('dispatch');
   const dispatchTimeout = playwrightTimeout(dispatchWait);
   network.armDispatch();
+  dispatchObservation.armDispatchObservation();
   try {
     network.ingestingDispatchServiceFrames = true;
     if (sendAvailable) await boundedPlaywrightOperation(dispatchWait, () => send.click(dispatchTimeout));
@@ -1548,7 +1621,24 @@ export async function sendTurn(
     userId = observed.values().next().value ?? '';
     if (!userId) await witnessPollDelay(page, Math.min(250, deliveredWait));
   }
-  if (!userId) return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
+  if (!userId) {
+    const nonDelivery = await evaluateDispatchRequestNotObserved(
+      dispatchObservation,
+      page,
+      baselineIds,
+      async (targetPage) => await targetPage.locator('[data-message-author-role="user"]').count(),
+      serviceId,
+    );
+    if (nonDelivery.proven) {
+      recordDispatchObservationDiagnostic(nonDelivery.diagnostic, 'dispatch_request_not_observed');
+      return {
+        state: 'send_failed',
+        cause: 'dispatch_request_not_observed',
+        possibleDelivery: false,
+      };
+    }
+    return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
+  }
   userId = canonicalSubmittedUserId(network, baselineIds) || userId;
 
   const segments: string[] = [];

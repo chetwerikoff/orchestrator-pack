@@ -727,6 +727,36 @@ describe('issue 1007 runTurn teardown integration', () => {
     ]);
   });
 
+  it('closes a created page before incident deletion on proven non-delivery send failure', async () => {
+    const timeline: string[] = [];
+    const deleteIncident = vi.fn(() => { timeline.push('deleteIncident'); });
+    const { runCli } = await importRunCliWithMocks({
+      owned: true,
+      deleteIncidentSpy: deleteIncident,
+      releaseOrder: timeline,
+      sendResult: {
+        state: 'send_failed',
+        cause: 'dispatch_request_not_observed',
+        possibleDelivery: false,
+      },
+    });
+    const pageClose = vi.fn(async () => { timeline.push('page.close'); });
+    const ui = await import('../chatgpt-browser-turn/ui-adapter.ts');
+    (ui.openTurnPage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      page: { close: pageClose },
+      owned: true,
+    });
+
+    const exitCode = await runCli(turnArgv(join(root, 'reply-proven-non-delivery.txt')));
+    expect(exitCode).toBe(10);
+    expect(timeline).toEqual([
+      'page.close',
+      'deleteIncident',
+      'scheduleLock.release',
+      'destination.release',
+    ]);
+  });
+
   it('retains the page after possible-delivery failure but still releases the browser', async () => {
     const { runCli, pageCalls, browserCalls } = await importRunCliWithMocks({
       owned: true,

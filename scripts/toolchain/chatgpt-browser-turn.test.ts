@@ -16,7 +16,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TURN_STATES, turnExitCode, type FailureScope, type TurnState } from '../chatgpt-browser-turn/contracts.ts';
 import {
   acquireDomainLock,
@@ -61,6 +61,7 @@ import {
   WITNESS_INSTALL_MAX_WAIT_MS,
   type BrowserConfig,
 } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { lastDispatchObservationDiagnostic } from '../chatgpt-browser-turn/dispatch-observation.ts';
 import { boundedResourceCleanup } from '../chatgpt-browser-turn/browser-session.ts';
 import { delayedComposerFakePage } from '../chatgpt-browser-turn/fixtures/issue-1023-timeout.ts';
 import { emptyLocator, fakeTurnPage, messageLocator } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
@@ -1721,6 +1722,297 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
   });
 });
 
+
+const issue1024Cdp = 'http://127.0.0.1:9222';
+const issue1024RepoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const issue1024CompleteObservation = {
+  httpContextCoverage: 'complete' as const,
+  websocketTargetsCoverage: 'complete' as const,
+};
+
+const issue1024BaseConfig = (overrides: Partial<BrowserConfig> = {}): BrowserConfig => ({
+  cdp: issue1024Cdp,
+  profile: 'automation',
+  chatUrl: 'https://chatgpt.com/c/example',
+  newChat: false,
+  timeoutMs: 60_000,
+  ...overrides,
+});
+
+function issue1024ZeroActivityFixture(overrides: Parameters<typeof fakeTurnPage>[0] = {}) {
+  return fakeTurnPage({
+    dispatchCandidateIds: [],
+    serviceObserveDispatch: false,
+    serviceFrames: [],
+    assistants: [],
+    dispatchObservation: issue1024CompleteObservation,
+    ...overrides,
+  });
+}
+
+async function issue1024ExhaustSubmittedTurnWindow(
+  fixture: ReturnType<typeof fakeTurnPage>,
+  config: BrowserConfig = issue1024BaseConfig(),
+) {
+  fixture.page.waitForTimeout = async (ms: number) => {
+    await vi.advanceTimersByTimeAsync(ms);
+  };
+  const turn = sendTurn(fixture.page, 'payload', config);
+  await vi.advanceTimersByTimeAsync(31_000);
+  return turn;
+}
+
+describe('issue 1024 Half A proven non-delivery', () => {
+  afterEach(() => {
+    __testTiming.now = undefined;
+    vi.useRealTimers();
+  });
+
+  it('AC1 returns send_failed dispatch_request_not_observed after full window with complete boundary and zero activity', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture();
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result).toEqual({
+      state: 'send_failed',
+      cause: 'dispatch_request_not_observed',
+      possibleDelivery: false,
+    });
+    expect(lastDispatchObservationDiagnostic?.submitted_turn_window_exhausted).toBe(true);
+    expect(lastDispatchObservationDiagnostic?.post_arm_http_request_count).toBe(0);
+    expect(lastDispatchObservationDiagnostic?.post_arm_websocket_frame_sent_count).toBe(0);
+    expect(lastDispatchObservationDiagnostic?.user_node_delta).toBe(0);
+    expect(lastDispatchObservationDiagnostic?.new_chat_url_changed).toBe('na');
+  });
+
+  it('AC1 new-chat unchanged URL is required for proven non-delivery', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      newChatUrlAfterArm: 'https://chatgpt.com/c/new-conversation',
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture, {
+      cdp: issue1024Cdp,
+      profile: 'automation',
+      newChat: true,
+      projectUrl: 'https://chatgpt.com/',
+      timeoutMs: 60_000,
+    });
+
+    expect(result.state).toBe('recovery_required');
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC2 blocks proven non-delivery for post-arm context HTTP regardless of origin', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      postArmContextRequests: [{ url: 'https://example.com/any-path' }],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC2 blocks proven non-delivery for service-worker-owned HTTP on the context boundary', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      serviceWorkerHttpAfterArm: [{ url: 'https://chatgpt.com/sw-owned-request' }],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC2 blocks proven non-delivery for outbound WebSocket frame on covered target', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      postArmWebSocketSent: [{}],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC2 blocks proven non-delivery for new user DOM node beyond baseline', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      postArmUserDomIds: ['user-new-dom-12345678'],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC2 blocks proven non-delivery when equal-count user nodes include unreadable service ids', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      preDispatchUserDomIds: ['short'],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result.state).toBe('recovery_required');
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC3 unknown HTTP context coverage performs zero send before dispatch boundary', async () => {
+    const fixture = issue1024ZeroActivityFixture({
+      dispatchObservation: {
+        ...issue1024CompleteObservation,
+        httpContextCoverage: 'unknown',
+      },
+    });
+    await expect(sendTurn(fixture.page, 'payload', issue1024BaseConfig())).rejects.toThrow('dispatch_observation_establishment_failed');
+    expect(fixture.getSendClicks()).toBe(0);
+  });
+
+  it('AC3 incomplete websocket target coverage performs zero send before dispatch boundary', async () => {
+    const fixture = issue1024ZeroActivityFixture({
+      dispatchObservation: {
+        ...issue1024CompleteObservation,
+        websocketTargetsCoverage: 'incomplete',
+      },
+    });
+    await expect(sendTurn(fixture.page, 'payload', issue1024BaseConfig())).rejects.toThrow('dispatch_observation_establishment_failed');
+    expect(fixture.getSendClicks()).toBe(0);
+  });
+
+  it('AC2 forbids proven non-delivery before submitted-turn window exhaustion', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture();
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', issue1024BaseConfig());
+    await vi.advanceTimersByTimeAsync(5_000);
+    const early = await Promise.race([
+      turn.then((value) => ({ done: true as const, value })),
+      Promise.resolve({ done: false as const }),
+    ]);
+    expect(early.done).toBe(false);
+    await vi.advanceTimersByTimeAsync(26_000);
+    const result = await turn;
+    expect(result.cause).toBe('dispatch_request_not_observed');
+  });
+
+  it('AC2 late-window outbound HTTP still blocks proven non-delivery', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      postArmContextRequests: [{ url: 'https://chatgpt.com/backend-api/f/conversation' }],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC4 post-boundary coverage loss remains possible-delivery', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      dispatchObservation: {
+        ...issue1024CompleteObservation,
+        coverageLossAfterArm: true,
+      },
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+    expect(result.state).toBe('recovery_required');
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC3 pre-dispatch observer establishment failure performs zero send', async () => {
+    const fixture = issue1024ZeroActivityFixture({
+      dispatchObservation: { establishmentFails: true },
+    });
+    await expect(sendTurn(fixture.page, 'payload', issue1024BaseConfig())).rejects.toThrow('dispatch_observation_establishment_failed');
+    expect(fixture.getSendClicks()).toBe(0);
+  });
+
+  it('AC10 records body-free dispatch observation diagnostic fields', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture();
+    await issue1024ExhaustSubmittedTurnWindow(fixture);
+    const diagnostic = lastDispatchObservationDiagnostic;
+    expect(diagnostic?.http_context_armed).toBe(true);
+    expect(diagnostic?.websocket_targets_armed).toBe(true);
+    expect(diagnostic?.coverage_summary).toContain('http-context:complete');
+    expect(diagnostic?.coverage_summary).toContain('websocket-targets:complete');
+    expect(JSON.stringify(diagnostic)).not.toMatch(/payload|reply|prompt/i);
+  });
+
+});
+
+describe('issue 1024 gate-B characterization notes', () => {
+  it('documents live boundary probes required on supported Chromium/Playwright runtime', () => {
+    const notes = readFileSync(
+      join(issue1024RepoRoot, 'scripts/chatgpt-browser-turn/README.md'),
+      'utf8',
+    );
+    expect(notes).toContain('service-worker-owned HTTP');
+    expect(notes).toContain('worker/secondary-target outbound WebSocket');
+    expect(notes).toContain('dispatch_request_not_observed');
+    expect(notes).toContain('gate-b-characterization');
+  });
+
+  it('ships the Gate-B live characterization probe module', async () => {
+    const module = await import('../chatgpt-browser-turn/dispatch-observation.ts');
+    expect(module.GATE_B_REQUIRED_PROBES).toEqual([
+      'service-worker-owned-http-on-configured-context',
+      'worker-or-secondary-target-websocket-frame-sent',
+    ]);
+    const summary = module.summarizeGateBCharacterization([
+      {
+        probe: 'service-worker-owned-http-on-configured-context',
+        observed: true,
+        detail: 'context_request_observed',
+      },
+      {
+        probe: 'worker-or-secondary-target-websocket-frame-sent',
+        observed: false,
+        detail: 'pending_live_run',
+      },
+    ]);
+    expect(summary.complete).toBe(false);
+  });
+
+  it('persists and reloads Gate-B characterization records per configured profile', async () => {
+    const module = await import('../chatgpt-browser-turn/dispatch-observation.ts');
+    const profileKey = 'profile-test-gate-b-record';
+    const complete = module.bindGateBCharacterizationRecord(
+      module.summarizeGateBCharacterization([
+        {
+          probe: 'service-worker-owned-http-on-configured-context',
+          observed: true,
+          detail: 'context_request_observed',
+        },
+        {
+          probe: 'worker-or-secondary-target-websocket-frame-sent',
+          observed: true,
+          detail: 'websocket_frame_sent_observed',
+        },
+      ]),
+      profileKey,
+      issue1024Cdp,
+    );
+    module.writeGateBCharacterizationRecord(profileKey, complete);
+    expect(module.readGateBCharacterizationRecord(profileKey, issue1024Cdp)?.complete).toBe(true);
+    expect(module.readGateBCharacterizationRecord(profileKey, 'http://127.0.0.1:9223')).toBeNull();
+  });
+});
 
 describe('issue 1023 operation-level bounds', () => {
   const issue1023Config = (): BrowserConfig => ({
