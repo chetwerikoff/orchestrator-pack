@@ -101,7 +101,7 @@ These canonical surfaces **cannot** yield `zero_consumer = true` today because l
 | `review.trigger`, `review.session-list`, `review.runs.aggregate` | Review pipeline |
 | `pack.worker-report` | Active worker handoff |
 | `plugin.declare`, `plugin.scope-guard`, `plugin.review-command`, `plugin.token-ledger` | Plugin hooks |
-| All axis-4 store bindings | **drain** not satisfied; escalation store additionally **presently unprovable** |
+| All axis-4 store bindings (`durable-store.*` per [`surface-identity-map.md`](./surface-identity-map.md)) | **drain** not satisfied; escalation store additionally **presently unprovable** |
 
 **Shed surfaces** (`report.worker-state`, `review.project-list`, `review.daemon-cli`) may reach `zero_consumer = true` **only after** §3.3 confirms no live normative text or code references remain (several **shed** doc-debt bindings still mention them — see census §5.3).
 

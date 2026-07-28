@@ -39,7 +39,7 @@ export REV=8fabf182f4df0a70e2f08f67899658ee886ab337
 git checkout "$REV"
 
 # Axis 1 — CLI-shaped AO use (production scripts/plugins/docs + config example)
-grep -rE '\bao (status|session|orchestrator|send|spawn|stop|start|events|review|report)\b' \
+grep -rE '\bao (status|session|orchestrator|send|spawn|stop|start|events|review|report|project)\b' \
   scripts plugins docs AGENTS.md CLAUDE.md prompts .claude .cursor agent-orchestrator.yaml.example \
   --include='*.ps1' --include='*.ts' --include='*.mjs' --include='*.md' --include='*.yaml*' \
   | grep -v '/tests/' | grep -v '/fixtures/' | grep -v 'docs/investigations/' | wc -l

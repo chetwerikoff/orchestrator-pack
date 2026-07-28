@@ -129,7 +129,7 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 
 | Pass | Method | Coverage argument |
 |---|---|---|
-| **1a CLI** | `grep -rE '\bao (status|session|orchestrator|send|spawn|stop|start|events|review|report|acknowledge)\b' scripts plugins docs AGENTS.md CLAUDE.md prompts .claude .cursor agent-orchestrator.yaml.example` excluding `tests/**`, `fixtures/**`, `docs/investigations/**` | Hits every script/doc/config-example with literal `ao` verb invocation; cross-checked against adapter exports in `Invoke-AoCliJson.ps1` |
+| **1a CLI** | `grep -rE '\bao (status|session|orchestrator|send|spawn|stop|start|events|review|report|acknowledge|project)\b' scripts plugins docs AGENTS.md CLAUDE.md prompts .claude .cursor agent-orchestrator.yaml.example` excluding `tests/**`, `fixtures/**`, `docs/investigations/**` | Hits every script/doc/config-example with literal `ao` verb invocation including `ao project get`; cross-checked against adapter exports in `Invoke-AoCliJson.ps1` |
 | **1e command-config** | Same pattern scoped to `agent-orchestrator.yaml.example` only (execution-root `command-config` per §2.3) | Independent pass for normative orchestratorRules text omitted from script-only greps |
 | **1b HTTP/API** | `grep -rE '/api/v1/|Invoke-AoDaemonHttpJson|Invoke-WebRequest.*127\.0\.0\.1' scripts` | Independent of CLI grep; finds daemon HTTP consumers |
 | **1c Library/adapter** | Read exports: `Invoke-AoCliJson.ps1`, `Invoke-AoReviewApi.ps1`, `pack-review-runner.ts`, `docs/ao-0-10-review-api.mjs` | Ensures adapter hub surfaces not missed by literal `ao` string in caller |
@@ -142,7 +142,7 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 |---|---|---|
 | **Primary** | `grep -rhoE 'AO_[A-Z0-9_]+'` over tracked corpus (§1.1), excluding wildcard fragments (`grep -vE '_$'`) and path exclusions (`docs/issues_drafts/**`, `docs/archive/**`, `docs/investigations/**`, `tests/external-output-references/**`) | Enumerates every distinct name in the declared corpus only |
 | **Per-consumer bindings** | For each name: `grep -rl` every reader path after exclusions; emit one row per consumer path × canonical surface (no token-level collapse) | Full axis-2 inventory in [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) |
-| **Completeness** | **273** distinct token names; **918** consumer×surface binding rows at inspected revision (reproduction in inventory header) |
+| **Completeness** | **273** distinct token names; **919** consumer×surface binding rows at inspected revision (reproduction in inventory header) |
 
 ### Axis 3 — Worker-facing behavioral text
 
@@ -172,7 +172,7 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 
 ## 4. Axis 2 summary — `AO_*` variable taxonomy
 
-**Distinct tracked names:** 273 (**918** binding rows — full per-consumer inventory: [`ao-env-token-inventory.md`](./ao-env-token-inventory.md)).
+**Distinct tracked names:** 273 (**919** binding rows — full per-consumer inventory: [`ao-env-token-inventory.md`](./ao-env-token-inventory.md)).
 
 ### 4.1 AO-runtime injected (identity / project context)
 
@@ -249,6 +249,9 @@ Read by production code expecting AO daemon to set values.
 | `plugins/ao-scope-guard/bin/scope-check.ts` | `plugin.scope-guard` | Plugin bin | Scope enforcement | **port** |
 | `plugins/ao-codex-pr-reviewer/lib/review_cli.ts` | `plugin.review-command` | `REVIEW_COMMAND` subprocess | PR review execution | **port** |
 | `plugins/ao-token-chain-ledger/lib/writer.ts` | `plugin.token-ledger` | Plugin hook env | Cost accounting | **port** |
+| `.claude/skills/merge-with-local-adoption/SKILL.md` | `project.config.read` | `ao project get orchestrator-pack --json` | Post-merge adoption snapshot | **port** |
+| `.claude/skills/change-orchestrator-runtime/SKILL.md` | `project.config.read` | `ao project get … --json` | Runtime verification | **port** |
+| `docs/ao-0-10-review-harness-adoption.md` | `project.config.read` | `ao project get orchestrator-pack --json` | Harness adoption read | **port** |
 | `scripts/check-ao-cli-argv-shape.ps1` | `session.*`, `daemon.health` | Live argv probes | CI guard for adapter adoption | **port** |
 | `scripts/check-ao-dead-argv-bypass.ps1` | retired + active surfaces | Forbidden argv patterns | Prevents retired surface bypass | **port** |
 | Historical callers of `ao report` / `ao review list` | `report.worker-state`, `review.project-list` | grep hits only in runbooks/drafts | No production script at live roots | **shed** |
@@ -293,6 +296,7 @@ Read by production code expecting AO daemon to set values.
 | `mechanical-transport` | `durable-store.mechanical-transport` | Target session in transport payload files | `journaled-worker-send.ps1`, mechanical reconcile | `AO_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS` | No unconsumed transport files | **Observable:** directory listing + age |
 | `dead-worker-reconcile-state` | `durable-store.dead-worker-reconcile-state` | Last known worker `sessionId` | `dead-worker-reconcile.ps1` | Reconcile state machine terminal | Reconcile finished or session respawned | **Observable:** state file via resolver |
 | `orchestrator-escalation-state` | `durable-store.orchestrator-escalation-state` | Orchestrator `sessionId` in escalation records | `Orchestrator-Escalation.ps1`, escalation router | Escalation terminal states | No open escalation requiring AO orchestrator session | **Partially observable:** state file read; cross-check with `ao session get` — **presently unprovable** for pure file→liveness without operator session pull. **Owner:** PR7 deletion wave. **Zero-consumer blocked** until evaluation-time session liveness proof supplied |
+| `review-handoff-wake-admission` | `durable-store.review-handoff-wake-admission` | `sessionId` in handoff wake admission audit rows | `Record-ReviewHandoffWakeAdmission.ps1`, `docs/review-handoff-wake-admission.mjs`, review wake filters | Admission row keyed by session\|pr\|head; retained per contract TTL | No supported reader treats admission row as actionable AO session target | **Observable:** `docs/review-handoff-wake-admission.mjs` CLI + state file via `Get-ReviewHandoffWakeAdmissionStatePath` |
 
 **Axis-4 open question (permitted — does not change `drain` class):** For `orchestrator-escalation-state`, whether all records are drained requires proving target orchestrator session is terminated. Production lacks a single automated producer that emits “escalation drained” without `session.get`. Recorded as **presently unprovable**; zero-consumer for surfaces depending on that store remains **blocked**.
 

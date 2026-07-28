@@ -30,6 +30,18 @@ Revision-bound to census inspected source: `8fabf182f4df0a70e2f08f67899658ee886a
 | `plugin.review-command` | Execute pack review subprocess | `REVIEW_COMMAND` → `invoke-pack-review.ps1` / `ao-codex-review` | — | `plugins/ao-codex-pr-reviewer/`; `AGENTS.md` |
 | `plugin.token-ledger` | Token/cost accounting hook | Plugin writer reading `AO_CHAIN_ID`, `AO_TASK_ID`, `AO_SESSION_INFO_JSON` | — | `plugins/ao-token-chain-ledger/` |
 | `pack.worker-report` | Worker lifecycle report (replaces retired `ao report`) | `pack-worker-report` command | — | `docs/worker-report-store.mjs`; `scripts/pack-worker-report.ps1` |
+| `project.config.read` (CLI) | Read project configuration via CLI | `ao project get <name> --json` | Same semantic boundary as HTTP `project.config.read` | `.claude/skills/merge-with-local-adoption/SKILL.md`; `.claude/skills/change-orchestrator-runtime/SKILL.md`; `docs/ao-0-10-review-harness-adoption.md` |
+
+## Axis-2 environment obligation surfaces
+
+Canonical IDs for `AO_*` bindings (axis 2). These are **not** AO transport surfaces; they denote pack/runtime configuration obligations referenced by env-var consumers.
+
+| Canonical ID | Semantics | Example tokens / consumers |
+|---|---|---|
+| `env.runtime.session-context` | AO-injected session/project/issue identity at process start | `AO_SESSION_ID`, `AO_PROJECT_ID`, `AO_ISSUE_NUMBER` → `plugins/**`, `AGENTS.md` |
+| `env.pack.store-path` | Pack-owned durable/capability JSON path override | `AO_WORKER_REPORT_STORE`, `AO_PR_SESSION_BINDING_CACHE`, `AO_*_STATE` resolvers |
+| `env.pack.config` | Pack tuning / harness / feature flags without durable AO identity | `AO_CI_*`, `AO_AUTONOMOUS_*`, resolver toggles in `docs/*.mjs` |
+| `env.plugin.tuning` | Reviewer/scope plugin subprocess configuration | `AO_CODEX_REVIEW_*`, `AO_SCOPE_GUARD_*` |
 
 ## Durable store surfaces (axis 4 — AO identity in pack JSON)
 
@@ -47,6 +59,7 @@ Each store ID is a **canonical surface** for zero-consumer evaluation `B(S)` on 
 | `durable-store.mechanical-transport` | `mechanical-transport` | target session in payload | `journaled-worker-send.ps1` |
 | `durable-store.dead-worker-reconcile-state` | `dead-worker-reconcile-state` | last known worker `sessionId` | `dead-worker-reconcile.ps1` |
 | `durable-store.orchestrator-escalation-state` | `orchestrator-escalation-state` | orchestrator `sessionId` | `Orchestrator-Escalation.ps1` |
+| `durable-store.review-handoff-wake-admission` | `review-handoff-wake-admission` | `sessionId` in admission audit rows | `Record-ReviewHandoffWakeAdmission.ps1`, `docs/review-handoff-wake-admission.mjs` |
 
 ## Retired / shed surfaces (historical representations)
 
