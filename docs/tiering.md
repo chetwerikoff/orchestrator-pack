@@ -271,11 +271,11 @@ records one independently established ISO-8601 adoption timestamp on a
 file. This adds no service, registry, or tracked store.
 
 The first reviewer capture chronologically after that boundary, and every later
-reviewer capture, must be marked. A later self-supplied rubric downgrade cannot forgive an
+reviewer capture, must be marked. A later self-supplied marker cannot forgive an
 earlier unmarked post-adoption capture. Missing or ambiguous chronology fails
 closed. Reviewer stages are `competitive`, `architectural`, and
 `architectural-final`; `architectural-lens` is architect evidence and is excluded
-from rubric continuity. Immutable pre-adoption captures are not rewritten and do
+from marker continuity. Immutable pre-adoption captures are not rewritten and do
 not owe retroactive M2 fields. Before acceptance there must be governed reviewer
 evidence after adoption.
 

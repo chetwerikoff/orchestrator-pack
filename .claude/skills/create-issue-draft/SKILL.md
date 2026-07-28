@@ -239,7 +239,7 @@ Reviewer output never chooses its own #975 cutover.
   `review-economics-adopted-at: <ISO-8601>`
 
   Reuse that exact value as `ADOPTION_TS`; do not infer it from a later reviewer
-  rubric downgrade or rewrite old captures.
+  marker or rewrite old captures.
 
 Capture chronology is immutable-by-procedure audit evidence under the same-user
 trust model as the existing review workdir. Missing/ambiguous adoption chronology
@@ -1262,7 +1262,7 @@ not edit sibling Issues or add workflow/plugin/core machinery.
 - Let reviewer `type: security|scope-violation` self-activate protected authority.
 - Scan recommendation/economics prose to manufacture M3 zero-signal evidence.
 - Infer or synthesize missing raw Codex/browser economics during transcription.
-- Let a later reviewer finding move the independent M2 adoption boundary.
+- Let a later reviewer marker move the independent M2 adoption boundary.
 - Rewrite immutable pre-adoption captures to add M2/M5 tokens.
 - Add a confirmation reviewer pass solely to mint `SIMPLIFICATION_CLEAN`.
 - Treat `architectural-final` as M5 merely because it follows a lens.
