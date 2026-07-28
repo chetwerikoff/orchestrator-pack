@@ -126,7 +126,6 @@ function gitPorcelain(cwd: string): string[] {
     command: 'git',
     args: ['status', '--porcelain'],
     cwd,
-    allowEmptyStdout: true,
   }));
   return output.split(/\r?\n/u).filter(Boolean);
 }
@@ -150,7 +149,6 @@ function publishPrComment(prNumber: number, body: string, repoRoot: string): voi
       command: 'gh',
       args: ['pr', 'comment', String(prNumber), '--body-file', bodyFile],
       cwd: repoRoot,
-      allowEmptyStdout: true,
     }));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });

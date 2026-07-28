@@ -50,7 +50,6 @@ export function resolveOrcaExecutable(env: NodeJS.ProcessEnv = process.env): str
       const resolved = requireStdout(runProcessSync({
         command: 'command',
         args: ['-v', candidate],
-        allowEmptyStdout: true,
       })).trim();
       if (resolved) {
         return candidate;
@@ -226,7 +225,7 @@ export function orcaExecutableLooksAvailable(executable: string): boolean {
     return existsSync(executable);
   }
   try {
-    requireStdout(runProcessSync({ command: 'command', args: ['-v', executable], allowEmptyStdout: true }));
+    requireStdout(runProcessSync({ command: 'command', args: ['-v', executable] }));
     return true;
   } catch {
     return false;
