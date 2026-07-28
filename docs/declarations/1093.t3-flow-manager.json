@@ -11,7 +11,9 @@
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
+    ".claude/skills/discuss-with-gpt/SKILL.md",
     ".cursor/rules/draft-author-relocation.mdc",
+    ".cursor/skills/create-issue-draft/SKILL.md",
     "docs/tiering.md",
     "scripts/lib/tier-gate-core.ts",
     "scripts/tier-gate-guard.test.ts"
