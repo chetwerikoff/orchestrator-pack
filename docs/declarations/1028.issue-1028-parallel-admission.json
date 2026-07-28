@@ -23,30 +23,17 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:b0d8dc64085073d8157943c0b48c52939623b9cb3f5eb25ef16a0747cfc005f1",
-      "new_active_scope_hash": "sha256:64a8dfb22f6d2ab970803875adaf4f97ff9c23240f6608c17b3db880e05d4c1e",
-      "changed": {
-        "added": [
-          "scripts/chatgpt-browser-turn/coordination.ts"
-        ],
-        "removed": []
-      },
-      "reason": "Add coordination.ts to scope after pack review fixes",
-      "actor": "local",
-      "timestamp": "2026-07-27T23:52:20.665Z",
-      "applied": true
-    },
-    {
-      "previous_active_scope_hash": "sha256:64a8dfb22f6d2ab970803875adaf4f97ff9c23240f6608c17b3db880e05d4c1e",
       "new_active_scope_hash": "sha256:5b56dd2f2bf536799b09385ea4dca9c8426c8bdc656f61fe16ff5d5cec8ccb95",
       "changed": {
         "added": [
+          "scripts/chatgpt-browser-turn/coordination.ts",
           "scripts/chatgpt-browser-turn/ui-adapter.ts"
         ],
         "removed": []
       },
-      "reason": "Allow dispatch-fence ordering fix in ui-adapter per GPT pack review P1",
+      "reason": "Add coordination.ts and ui-adapter dispatch-fence scope after pack review fixes",
       "actor": "local",
-      "timestamp": "2026-07-28T02:33:30.453773Z",
+      "timestamp": "2026-07-28T02:40:00.000Z",
       "applied": true
     }
   ]
