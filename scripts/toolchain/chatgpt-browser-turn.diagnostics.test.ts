@@ -823,7 +823,7 @@ describe('issue 1007 probeProfileReady connection release', () => {
         loadChromium: vi.fn(() => ({
           connectOverCDP: vi.fn(async () => browserTracker.browser),
         })),
-        productStatusText: vi.fn(async () => ({ composer: true, text: '' })),
+        productStatusText: vi.fn(async () => ({ composer: true, text: '', elements: [] })),
         classifyProductWall: vi.fn(() => ({})),
       };
     });

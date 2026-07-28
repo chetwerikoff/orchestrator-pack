@@ -1416,9 +1416,24 @@ export async function runtimeWitnessSurfaceAvailable(
   return 'absent';
 }
 
+export interface ProductStatusElement {
+  readonly text: string;
+  readonly testId?: string;
+}
+
 export interface ProductStatusSurface {
   readonly text: string;
   readonly composer: boolean;
+  readonly elements: readonly ProductStatusElement[];
+}
+
+const CONVERSATION_HISTORY_QUOTA_TEST_ID = 'modal-conversation-history-rate-limit';
+
+function isConversationHistoryQuotaElement(element: ProductStatusElement): boolean {
+  if (element.testId === CONVERSATION_HISTORY_QUOTA_TEST_ID) return true;
+  if (!/please wait a few minutes/i.test(element.text)) return false;
+  return Boolean(element.testId?.includes('conversation-history'))
+    || /conversation history/i.test(element.text);
 }
 
 export async function productStatusText(page: any, waitSource?: OperationWaitSource): Promise<ProductStatusSurface> {
@@ -1439,17 +1454,29 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
     'a[href*="/auth/signup"]',
   ];
   const parts: string[] = [];
+  const elements: ProductStatusElement[] = [];
   for (const selector of selectors) {
     const locator = page.locator(selector);
     const countWait = requireOperationWait(waitSource, 'product_status');
     const count = Math.min(await boundedLocatorCount(locator, countWait), 8);
     for (let index = 0; index < count; index++) {
       const textWait = requireOperationWait(waitSource, 'product_status');
-      const text = await boundedPlaywrightOperation(textWait, () => locator.nth(index).innerText(playwrightTimeout(textWait)!));
-      if (text) parts.push(String(text));
+      const itemLocator = locator.nth(index);
+      const text = await boundedPlaywrightOperation(textWait, () => itemLocator.innerText(playwrightTimeout(textWait)!));
+      if (!text) continue;
+      const normalizedText = String(text);
+      parts.push(normalizedText);
+      const testId = await boundedPlaywrightOperation(textWait, async () => {
+        if (typeof itemLocator.getAttribute !== 'function') return null;
+        return await itemLocator.getAttribute('data-testid', playwrightTimeout(textWait)!);
+      });
+      elements.push({
+        text: normalizedText,
+        ...(testId ? { testId: String(testId) } : {}),
+      });
     }
   }
-  return { text: parts.join('\n'), composer };
+  return { text: parts.join('\n'), composer, elements };
 }
 
 export function classifyProductWall(surface: ProductStatusSurface): { state?: 'quota'|'challenge'|'login'; cause?: string } {
@@ -1463,8 +1490,26 @@ export function classifyProductWall(surface: ProductStatusSurface): { state?: 'q
   return {};
 }
 
+export function classifyPreDispatchProductWall(surface: ProductStatusSurface): { state?: string; cause?: string } {
+  for (const element of surface.elements) {
+    if (isConversationHistoryQuotaElement(element)) {
+      return { state: 'quota', cause: 'conversation_history_quota' };
+    }
+  }
+  const wall = classifyProductWall(surface);
+  if (wall.state) return wall;
+  if (surface.elements.length > 0 && !surface.composer) {
+    const testId = surface.elements.find((element) => element.testId)?.testId;
+    return {
+      state: 'ui_contract_mismatch',
+      cause: testId ? `unclassified_blocking_dialog:${testId}` : 'unclassified_blocking_dialog',
+    };
+  }
+  return {};
+}
+
 async function pageWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
-  return classifyProductWall(await productStatusText(page, waitSource));
+  return classifyPreDispatchProductWall(await productStatusText(page, waitSource));
 }
 
 async function semanticNodes(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<SemanticNode[]> {
@@ -1661,7 +1706,16 @@ export async function openTurnPage(
     const matches = ctx.pages().filter((page: any) => {
       try { return normalizeConversationUrl(page.url()) === target; } catch { return false; }
     });
-    if (matches.length > 1) throw new Error('ui_contract_mismatch:duplicate_tabs');
+    if (matches.length > 1) {
+      const descriptors = matches.map((page: any, index: number) => {
+        try {
+          return `url=${normalizeConversationUrl(page.url())}`;
+        } catch {
+          return `index=${index}`;
+        }
+      });
+      throw new Error(`ui_contract_mismatch:duplicate_tabs:count=${matches.length}:${descriptors.join(';')}`);
+    }
     if (matches.length === 1) {
       const reused = matches[0];
       try {

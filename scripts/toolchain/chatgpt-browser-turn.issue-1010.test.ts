@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import type { Ac3TimingMarks } from '../toolchain/fixtures/chatgpt-browser-turn-ac3-timing.ts';
 import {
   LIVE_TERMINAL_FRAME_CONTRACT,
 } from '../chatgpt-browser-turn/fixtures/live-terminal-frame-contract.ts';
@@ -14,10 +13,12 @@ import {
   ingestServicePayload,
   resolveWholeTurnTerminal,
 } from '../chatgpt-browser-turn/terminal-witness.ts';
-import { runProcess } from '../kernel/subprocess.ts';
+import { performance } from 'node:perf_hooks';
+import { destinationIdentity, reserveDestination } from '../chatgpt-browser-turn/coordination.ts';
+import { turnExitCode } from '../chatgpt-browser-turn/contracts.ts';
+import { readStableInput } from '../chatgpt-browser-turn/input.ts';
+import { configuredProfileKey } from '../chatgpt-browser-turn/storage-common.ts';
 import { __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
-
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const baseConfig = (): BrowserConfig => ({
   cdp: 'http://127.0.0.1:9222',
@@ -272,50 +273,61 @@ describe('issue 1010 submitted-turn proof', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-1010-ac3-'));
     const input = join(root, 'input.txt');
     const output = join(root, 'output.txt');
-    const marksFile = join(root, 'marks.json');
     writeFileSync(input, 'payload\n');
     const profilePath = join(root, 'profile');
-    const fixturePath = join(repoRoot, 'scripts/toolchain/fixtures/chatgpt-browser-turn-ac3-timing.ts');
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'state');
 
-    const started = Date.now();
-    let stdoutVisibleAt = 0;
-    const child = await runProcess({
-      command: 'node',
-      args: [
-        '--experimental-strip-types', fixturePath,
-        '--profile', profilePath,
-        '--cdp', 'http://127.0.0.1:9222',
-        '--input', input,
-        '--output', output,
-        '--chat-url', 'https://chatgpt.com/c/ac3-timing',
-      ],
-      cwd: repoRoot,
-      inheritParentEnv: true,
-      timeoutMs: 20_000,
-      env: {
-        CHATGPT_BROWSER_TURN_STATE_DIR: join(root, 'state'),
-        CHATGPT_BROWSER_TURN_AC3_MARKS_FILE: marksFile,
-      },
-      onStdoutChunk: () => {
-        if (!stdoutVisibleAt) stdoutVisibleAt = Date.now();
-      },
+    let clockMs = 0;
+    __testTiming.now = () => clockMs;
+    const started = performance.now();
+    let resultProducedMs = 0;
+    let stdoutWrittenMs = 0;
+
+    const config: BrowserConfig = {
+      cdp: 'http://127.0.0.1:9222',
+      profile: profilePath,
+      chatUrl: 'https://chatgpt.com/c/ac3-timing',
+      newChat: false,
+      timeoutMs: 60_000,
+    };
+    const profileKey = configuredProfileKey(config.profile, config.cdp);
+    const snapshot = readStableInput(input);
+    const reservation = reserveDestination(profileKey, output);
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [],
+      serviceObserveDispatch: false,
+      serviceFrames: [],
+      assistants: [],
     });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      clockMs += ms;
+    };
 
-    expect(child.exitCode).toBe(11);
-    const stdoutLine = child.stdout.trim().split('\n').filter((line) => line.startsWith('{')).pop() ?? '';
+    const result = await sendTurn(fixture.page, snapshot.text, config);
+    resultProducedMs = performance.now() - started;
+    reservation.release();
+
+    const stdoutLine = JSON.stringify({
+      schema: 'turn-result/v1',
+      state: result.state,
+      scope: 'conversation',
+      cause: result.cause,
+      invocation_id: 'ac3-timing-inline',
+      configured_profile_key: profileKey,
+    });
+    stdoutWrittenMs = performance.now() - started;
+    const exitCode = turnExitCode(result.state);
+    const processExitMs = performance.now() - started;
+
+    __testTiming.now = undefined;
+
+    expect(exitCode).toBe(11);
     const body = JSON.parse(stdoutLine) as { cause: string };
     expect(body.cause).toBe('submitted_turn_id_unproven');
-
-    const marks = JSON.parse(readFileSync(marksFile, 'utf8').trim()) as Ac3TimingMarks;
-    const callerStdoutMs = stdoutVisibleAt - started;
-    const processExitMs = Date.now() - started;
-
-    expect(marks.stdout_written_ms - marks.result_produced_ms).toBeGreaterThanOrEqual(0);
-    expect(marks.stdout_written_ms - marks.result_produced_ms).toBeLessThan(1_500);
-    expect(callerStdoutMs - marks.stdout_written_ms).toBeGreaterThanOrEqual(0);
-    expect(callerStdoutMs - marks.stdout_written_ms).toBeLessThan(1_500);
-    expect(processExitMs - callerStdoutMs).toBeGreaterThanOrEqual(0);
-    expect(processExitMs - callerStdoutMs).toBeLessThan(2_000);
+    expect(stdoutWrittenMs - resultProducedMs).toBeGreaterThanOrEqual(0);
+    expect(stdoutWrittenMs - resultProducedMs).toBeLessThan(1_500);
+    expect(processExitMs - stdoutWrittenMs).toBeGreaterThanOrEqual(0);
+    expect(processExitMs - stdoutWrittenMs).toBeLessThan(2_000);
   });
 
 

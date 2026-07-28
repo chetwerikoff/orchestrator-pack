@@ -76,6 +76,28 @@ const DEFAULT_TIMEOUT_MS = 1_800_000;
 const STALE_PRE_SEND_MS = 120_000;
 const BOOLEAN_OPTIONS = new Set(['new-chat', 'quarantine', 'adjudicate']);
 
+const CLI_USAGE_LINES = [
+  'Usage: npm run chatgpt-browser-turn -- <command> [options]',
+  '',
+  'Commands: turn, status/list, clear, capability, gate-b-characterization, publication-status',
+];
+
+function emitCliUsage(): void {
+  process.stderr.write(`${CLI_USAGE_LINES.join('\n')}\n`);
+}
+
+function resolveControlCommandCause(error: unknown): string {
+  const message = error instanceof Error ? error.message : 'driver_error';
+  if (message.startsWith('argument_') || message.startsWith('ui_contract_mismatch:')) return message;
+  if (browserOperationClassFromError(error) === 'connect_over_cdp') return 'cdp_degraded';
+  if (message === 'cdp_degraded') return message;
+  return 'command_failed';
+}
+
+function isArgumentValidationCause(cause: string): boolean {
+  return cause.startsWith('argument_');
+}
+
 interface ParsedArgs {
   readonly command: string;
   readonly options: Map<string, string | true>;
@@ -384,6 +406,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
   let opened: { page: any; owned: boolean; provisionalId?: string } | undefined;
   let browser: any = null;
   let config: BrowserConfig | undefined;
+  let chromeReachableForConnect = false;
   const freshIdentity = createFreshIdentityRetention((canonicalConversationId) => {
     if (!incidentId || profileKey === 'profile-unresolved') {
       throw new Error('fresh_identity_retention_before_incident');
@@ -461,6 +484,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         generation: wall.generation,
       }));
     }
+    chromeReachableForConnect = true;
 
     const expectedBinding = runtimeCapabilityBinding(profileKey, config.cdp);
     const capabilityAtSchedule = capabilityStatus(profileKey, expectedBinding);
@@ -746,11 +770,15 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       : possibleDelivery
         ? 'conversation'
         : 'machine';
+    const connectDegraded = chromeReachableForConnect
+      && browserOperationClassFromError(error) === 'connect_over_cdp';
     const cause = isInput || isOutput || isUiContract
       ? message
       : possibleDelivery
         ? 'driver_exception_after_possible_delivery'
-        : 'driver_exception_before_send';
+        : connectDegraded
+          ? 'cdp_degraded'
+          : 'driver_exception_before_send';
 
     await closeOwnedTurnPage(opened, { retainPage: possibleDelivery });
     if (possibleDelivery && config?.newChat && incidentId) {
@@ -817,7 +845,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     safeRelease(scheduleLock);
     safeReleaseDestination(reservation);
     const operationClass = browserOperationClassFromError(error);
-    const driverDiagnosticId = (cause === 'driver_exception_before_send' || cause === 'driver_exception_after_possible_delivery')
+    const driverDiagnosticId = (cause === 'driver_exception_before_send' || cause === 'driver_exception_after_possible_delivery' || cause === 'cdp_degraded')
       ? recordSwallowedDriverException(
         profileKey !== 'profile-unresolved' ? profileKey : undefined,
         profileKey !== 'profile-unresolved' ? invocationId : undefined,
@@ -881,7 +909,7 @@ async function runGateBCharacterizationCommand(args: ParsedArgs): Promise<number
     writeGateBCharacterizationRecord(profileKey, result);
     const control: ControlResultV1 = {
       schema: 'control-result/v1',
-      operation: 'status/list',
+      operation: 'gate-b-characterization',
       state: result.complete ? 'ok' : 'refused_active',
       configured_profile_key: profileKey,
       ...(result.complete ? {} : { cause: 'gate_b_characterization_incomplete' }),
@@ -1034,8 +1062,10 @@ async function runClear(args: ParsedArgs): Promise<number> {
 
 function controlOperation(args: ParsedArgs): ControlResultV1['operation'] {
   if (args.command === 'clear') return 'clear';
-  if (args.command === 'gate-b-characterization') return 'status/list';
+  if (args.command === 'gate-b-characterization') return 'gate-b-characterization';
   if (args.command === 'capability') return 'capability';
+  if (args.command === 'publication-status') return 'publication-status';
+  if (args.command === 'status/list') return 'status/list';
   return 'status/list';
 }
 
@@ -1067,20 +1097,22 @@ export async function runCli(argv: readonly string[]): Promise<number> {
   } catch (error) {
     const operation = controlOperation(args);
     const resolvedProfileKey = resolvedControlProfileKey(args);
+    const cause = resolveControlCommandCause(error);
     const diagnosticIdentity = resolvedProfileKey !== 'profile-unresolved' ? randomUUID() : undefined;
     const driverDiagnosticId = recordSwallowedDriverException(
       resolvedProfileKey !== 'profile-unresolved' ? resolvedProfileKey : undefined,
       diagnosticIdentity,
-      'command_failed',
+      cause,
       error,
       { operation },
     );
+    if (isArgumentValidationCause(cause)) emitCliUsage();
     emit({
       schema: 'control-result/v1',
       operation,
       state: 'driver_error',
       configured_profile_key: 'profile-unresolved',
-      cause: 'command_failed',
+      cause,
       ...(driverDiagnosticId ? { driver_diagnostic_id: driverDiagnosticId } : {}),
     });
     return 22;

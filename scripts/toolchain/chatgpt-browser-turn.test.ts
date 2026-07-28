@@ -636,7 +636,7 @@ describe('issue 964 UI ownership and profile walls — S7/S8/S9', () => {
       chatUrl: 'https://chatgpt.com/c/a',
       newChat: false,
       timeoutMs: 100,
-    })).rejects.toThrow('ui_contract_mismatch:duplicate_tabs');
+    })).rejects.toThrow(/ui_contract_mismatch:duplicate_tabs:count=2/);
   });
 
   it('S8 recognizes a product-owned quota alert before send', async () => {
