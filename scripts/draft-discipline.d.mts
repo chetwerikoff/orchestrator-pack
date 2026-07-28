@@ -59,7 +59,7 @@ export interface SmokeScenarioPlan {
 }
 
 export interface SmokeTestPlanResult {
-  requirement: 'required' | 'not-applicable' | 'legacy-exempt';
+  requirement: 'required' | 'not-applicable' | 'legacy-exempt' | 'unknown';
   reason?: string;
   scenarios: SmokeScenarioPlan[];
 }
