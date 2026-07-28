@@ -750,9 +750,9 @@ function latestEvidenceById(metadata) {
 function protectedFindingOriginatedBeforeLatestLens(metadata, findingId) {
   const latestLensIndex = metadata.map((meta) => meta.stage).lastIndexOf('architectural-lens');
   if (latestLensIndex < 0) return false;
-  for (let index = 0; index < latestLensIndex; index += 1) {
+  for (let index = 0; index <= latestLensIndex; index += 1) {
     const meta = metadata[index];
-    if (!REVIEWER_STAGES.has(meta.stage)) continue;
+    if (meta.stage !== 'architectural-lens' && !REVIEWER_STAGES.has(meta.stage)) continue;
     for (const [id] of parseEvidenceByFindingId(meta.text)) {
       if (id === findingId) return true;
     }

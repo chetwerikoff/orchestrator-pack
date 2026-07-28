@@ -763,6 +763,25 @@ describe('finding ledger review economics #975', () => {
     });
 
 
+
+    it('rejects final acceptance when a protected nomination first appears in the Claude lens without architect state', () => {
+      const lensNomination = markedFinding('S1', {
+        type: 'scope-violation',
+        evidence: 'The proposed file is out of scope under allowed_roots.',
+        recommendation: 'Keep the implementation in the declared path.',
+      });
+      const result = finalRun(
+        [
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, lensNomination),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
+        ],
+        [row('S1', { type: 'scope-violation', disposition: 'rejected', rejectReason: 'not material' })],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('unknown/stale architect contest state');
+    });
+
     it('rejects final acceptance when a pre-lens protected nomination lacks a current lens record', () => {
       const preLens = markedFinding('S1', {
         type: 'scope-violation',
