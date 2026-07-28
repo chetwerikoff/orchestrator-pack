@@ -53,6 +53,7 @@ import {
   openTurnPage,
   resolveCausalAssistant,
   runtimeWitnessSurfaceAvailable,
+  productStatusText,
   sendTurn,
   verifyProfile,
   __testTiming,
@@ -2039,5 +2040,48 @@ describe('issue 1023 operation-level bounds', () => {
     expect(result.possibleDelivery).toBe(true);
   });
 
+  it('AC11: Enter dispatch without send button cannot settle late after timeout', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      hideSendButton: true,
+      composerPressDelayMs: 400,
+      dispatchCandidateIds: [own],
+    });
+    const budget = createPreSendSegmentBudget(100);
+    const result = await sendTurn(fixture.page, 'payload', issue1023Config(), undefined, undefined, budget);
+    expect(result.state).toBe('recovery_required');
+    expect(fixture.getEnterPresses()).toBe(1);
+    expect(fixture.getSendClicks()).toBe(0);
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+    expect(fixture.getSendClicks()).toBe(0);
+  });
+
+  it('AC11: productStatusText reclamps sequential reads to the governing remainder', async () => {
+    let reads = 0;
+    const page = {
+      locator: (selector: string) => {
+        if (selector === '#prompt-textarea') return { count: async () => 1 };
+        if (selector === '[role="alert"]') {
+          return {
+            count: async () => 5,
+            nth: (index: number) => ({
+              innerText: async () => {
+                reads++;
+                clock += 60;
+                return `alert-${index}`;
+              },
+            }),
+          };
+        }
+        return { count: async () => 0, nth: () => ({ innerText: async () => '' }) };
+      },
+    };
+    let clock = 1_000;
+    __testTiming.now = () => clock;
+    const deadline = 1_100;
+    await expect(productStatusText(page, () => Math.max(0, deadline - __testTiming.now!()))).rejects.toThrow('browser_operation_timeout:product_status');
+    expect(reads).toBeLessThan(5);
+    __testTiming.now = undefined;
+  });
 
 });

@@ -245,6 +245,22 @@ async function readLocatorAttribute(locator: any, attr: string, waitSource?: Ope
   }
 }
 
+async function readWitnessAttribute(locator: any, attr: string, waitSource: OperationWaitSource): Promise<string | null> {
+  const waitMs = resolveOperationWaitMs(waitSource);
+  if (waitMs <= 0) throw new BrowserOperationTimeoutError('witness_surface');
+  try {
+    return await locator.getAttribute(attr, playwrightTimeout(waitMs)!);
+  } catch (error) {
+    throw coerceBrowserOperationTimeout(error, 'witness_surface');
+  }
+}
+
+function requireOperationWait(waitSource?: OperationWaitSource, operationClass = 'product_status'): number {
+  const waitMs = resolveOperationWaitMs(waitSource);
+  if (waitMs <= 0) throw new BrowserOperationTimeoutError(operationClass);
+  return waitMs;
+}
+
 interface NetworkWitnessState {
   readonly messages: NetworkMessage[];
   readonly dispatchCandidateIds: Set<string>;
@@ -1176,7 +1192,7 @@ export async function runtimeWitnessSurfaceAvailable(
   for (let index = Math.max(0, count - 8); index < count; index++) {
     waitMs = clampWitnessWait();
     const locator = messages.nth(index);
-    const role = await locator.getAttribute('data-message-author-role', playwrightTimeout(waitMs)).catch(() => null);
+    const role = await readWitnessAttribute(locator, 'data-message-author-role', clampWitnessWait);
     if (role === 'user') {
       const id = await serviceId(locator, clampWitnessWait);
       if (id) userIds.add(id);
@@ -1191,11 +1207,11 @@ export async function runtimeWitnessSurfaceAvailable(
     waitMs = clampWitnessWait();
     const locator = messages.nth(index);
     const next = messages.nth(index + 1);
-    const role = await locator.getAttribute('data-message-author-role', playwrightTimeout(waitMs)).catch(() => null);
-    const nextRole = await next.getAttribute('data-message-author-role', playwrightTimeout(waitMs)).catch(() => null);
+    const role = await readWitnessAttribute(locator, 'data-message-author-role', clampWitnessWait);
+    const nextRole = await readWitnessAttribute(next, 'data-message-author-role', clampWitnessWait);
     if (role !== 'user' || nextRole !== 'assistant') continue;
     const userId = await serviceId(locator, clampWitnessWait);
-    const turnStart = await next.getAttribute('data-turn-start-message', playwrightTimeout(waitMs)).catch(() => null);
+    const turnStart = await readWitnessAttribute(next, 'data-turn-start-message', clampWitnessWait);
     if (userId && turnStart === 'true') return 'available';
   }
   return 'absent';
@@ -1206,8 +1222,11 @@ export interface ProductStatusSurface {
   readonly composer: boolean;
 }
 
-export async function productStatusText(page: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<ProductStatusSurface> {
-  const composer = (await boundedLocatorCount(page.locator('#prompt-textarea'), waitMs).catch(() => 0)) > 0;
+export async function productStatusText(page: any, waitSource?: OperationWaitSource): Promise<ProductStatusSurface> {
+  const composer = (await boundedLocatorCount(
+    page.locator('#prompt-textarea'),
+    requireOperationWait(waitSource, 'product_status'),
+  )) > 0;
   const selectors = [
     '[role="alert"]',
     '[role="dialog"]',
@@ -1223,9 +1242,11 @@ export async function productStatusText(page: any, waitMs = MAX_BROWSER_OPERATIO
   const parts: string[] = [];
   for (const selector of selectors) {
     const locator = page.locator(selector);
-    const count = Math.min(await boundedLocatorCount(locator, waitMs), 8);
+    const countWait = requireOperationWait(waitSource, 'product_status');
+    const count = Math.min(await boundedLocatorCount(locator, countWait), 8);
     for (let index = 0; index < count; index++) {
-      const text = await locator.nth(index).innerText(playwrightTimeout(waitMs)).catch(() => '');
+      const textWait = requireOperationWait(waitSource, 'product_status');
+      const text = await boundedPlaywrightOperation(textWait, () => locator.nth(index).innerText(playwrightTimeout(textWait)!));
       if (text) parts.push(text);
     }
   }
@@ -1243,8 +1264,8 @@ export function classifyProductWall(surface: ProductStatusSurface): { state?: 'q
   return {};
 }
 
-async function pageWalls(page: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<{ state?: string; cause?: string }> {
-  return classifyProductWall(await productStatusText(page, waitMs));
+async function pageWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
+  return classifyProductWall(await productStatusText(page, waitSource));
 }
 
 async function semanticNodes(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<SemanticNode[]> {
@@ -1436,7 +1457,7 @@ export async function sendTurn(
   while (wallClock() < readyEndsAt) {
     const waitMs = loopOperationWaitMs(readyEndsAt, wallClock());
     if (waitMs <= 0) break;
-    const wall = await boundedPlaywrightOperation(waitMs, () => pageWalls(page, waitMs));
+    const wall = await boundedPlaywrightOperation(waitMs, () => pageWalls(page, () => segmentOperationWait(segmentBudget, waitMs)));
     if (wall.state) return { state: wall.state as TurnBrowserResult['state'], cause: wall.cause!, possibleDelivery: false };
     const composerVisible = await boundedLocatorCount(composer, waitMs);
     if (composerVisible) break;
@@ -1497,7 +1518,11 @@ export async function sendTurn(
   try {
     network.ingestingDispatchServiceFrames = true;
     if (sendAvailable) await boundedPlaywrightOperation(dispatchWait, () => send.click(dispatchTimeout));
-    else await boundedPlaywrightOperation(dispatchWait, () => page.keyboard.press('Enter', dispatchTimeout));
+    else {
+      const composer = page.locator('#prompt-textarea');
+      if ((await boundedLocatorCount(composer, dispatchWait)) <= 0) throw new BrowserOperationTimeoutError('dispatch');
+      await boundedPlaywrightOperation(dispatchWait, () => composer.press('Enter', { timeout: dispatchWait }));
+    }
     network.turnDispatchCommitted = true;
   } catch {
     network.ingestingDispatchServiceFrames = false;
@@ -1728,11 +1753,15 @@ export async function sendTurn(
       ...(boundAssistantId ? { assistantMessageId: boundAssistantId } : {}),
     };
   }
-  const finalStatusWait = loopOperationWaitMs(deadline, wallClock());
-  if (finalStatusWait > 0) {
-    const statusText = (await productStatusText(page, finalStatusWait)).text;
-    if (/error generating|something went wrong|unable to generate/i.test(statusText)) {
-      return { state: 'no_reply', cause: 'terminal_no_reply_evidence', possibleDelivery: true, userMessageId: userId };
+  const finalStatusSource = () => loopOperationWaitMs(deadline, wallClock());
+  if (resolveOperationWaitMs(finalStatusSource) > 0) {
+    try {
+      const statusText = (await productStatusText(page, finalStatusSource)).text;
+      if (/error generating|something went wrong|unable to generate/i.test(statusText)) {
+        return { state: 'no_reply', cause: 'terminal_no_reply_evidence', possibleDelivery: true, userMessageId: userId };
+      }
+    } catch (error) {
+      if (!(error instanceof BrowserOperationTimeoutError)) throw error;
     }
   }
   if (process.env.CHATGPT_BROWSER_TURN_DEBUG === '1') {
