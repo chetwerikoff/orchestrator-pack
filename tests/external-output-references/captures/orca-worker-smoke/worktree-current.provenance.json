@@ -1,0 +1,6 @@
+{
+  "sourceCommand": "orca worktree current --json",
+  "groundingCommit": "89968a10614d0e5f5a6b7805c81dccc3a1b5110b",
+  "issue": 1061,
+  "captureKind": "producer-contract-evidence"
+}

@@ -196,7 +196,8 @@
     "scripts/kernel/subprocess.test.ts": 1982,
     "scripts/pr2-foundation/mutation-external-ci.test.ts": 498,
     "scripts/pr2-foundation/foundation.test.ts": 57,
-    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 43021
+    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 43021,
+    "scripts/worker-smoke.test.ts": 45000
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -391,7 +392,8 @@
     "scripts/kernel/subprocess.test.ts": "measured",
     "scripts/pr2-foundation/mutation-external-ci.test.ts": "measured",
     "scripts/pr2-foundation/foundation.test.ts": "measured",
-    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "measured"
+    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "measured",
+    "scripts/worker-smoke.test.ts": "estimated"
   },
   "recentSamples": {
     "scripts/contract-evidence-legacy-list-guard.test.ts": [

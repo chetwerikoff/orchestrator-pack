@@ -196,6 +196,12 @@
       "ownerClass": "rest_direct",
       "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}statuses/[^/\\s]+(?:\\s|$)",
       "ownerIssue": 894
+    },
+    {
+      "id": "rest-repos-issues-comments",
+      "ownerClass": "rest_direct",
+      "pattern": "^gh api repos/(?:[^/\\s]+/){1,2}issues/[^/\\s]+/comments(?:\\s|$)",
+      "ownerIssue": 1061
     }
   ]
 }
