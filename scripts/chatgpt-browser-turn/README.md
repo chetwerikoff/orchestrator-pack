@@ -62,19 +62,23 @@ npm run chatgpt-browser-turn -- clear \
 A stale generation, changed evidence, live owner, unreadable lock, or publication that cannot be proven uncommitted remains blocked.
 
 
-## Proven non-delivery (`dispatch_request_not_observed`)
+## Proven non-delivery (`dispatch_request_not_issued`)
 
-After the existing 30-second submitted-turn observation window exhausts with no service-proven user id, the helper may return `send_failed` with `cause: dispatch_request_not_observed` and `possibleDelivery: false` only when **all** of the following held from `armDispatch()` through that exhaustion:
+After the submitted-turn observation window exhausts with no service-proven user id, the helper may return `send_failed` with `cause: dispatch_request_not_issued` and `possibleDelivery: false` only when **all** of the following held from dispatch through that exhaustion:
 
-- configured-context HTTP observation and target-complete outbound-WebSocket sent-frame observation were established before dispatch and remained gap-free;
-- zero outbound HTTP(S) requests on the context boundary;
-- zero outbound WebSocket frames on covered targets;
-- no new user DOM nodes beyond the pre-dispatch baseline;
-- for `--new-chat`, the normalized page URL stayed unchanged.
+- the dispatch **request observer** was proven ready before click/Enter and remained continuously active through the submitted-id deadline;
+- zero recognized ChatGPT conversation-submission requests (`POST /backend-api/f/conversation`) were observed during that covered window;
+- click/Enter completed without throwing after the possible-delivery boundary.
 
-Any post-arm outbound HTTP request, WebSocket frame, DOM user node, fresh-chat URL transition, or boundary-coverage loss keeps the existing `submitted_turn_id_unproven` possible-delivery path. Pre-dispatch observer establishment failure performs zero send and returns `driver_error` / `driver_exception_before_send`.
+Completing the WebSocket `witnessInstall` race alone does **not** prove request-observer coverage. Any observed recognized submission request remains possible-delivery even when transport later fails, the service id is unparseable, or the response errors. Pre-dispatch observer establishment failure performs zero send and returns `driver_error` / `driver_exception_before_send`.
 
 Proven non-delivery reuses the existing non-possible-delivery cleanup path: close an invocation-owned page, delete only this invocation's incident, and release schedule/destination locks. A later independent invocation may retry normally.
+
+## Finished reply without service terminal (`reply_finished_terminal_unproven`)
+
+When exactly one assistant reply is service-attributable to the submitted user turn, the UI conservatively shows that reply as finished (not actively generating), and the visible content has remained stable across the bounded dwell, but `resolveWholeTurnTerminal(...)` still cannot resolve a publishable service terminal, the helper exits promptly as `recovery_required` with `cause: reply_finished_terminal_unproven`. It publishes no output, retains possible-delivery blocking recovery state, and carries the ordinary `invocation_id` in `turn-result/v1`.
+
+DOM-visible content, text stability alone, or UI adjacency never creates `ok` or publication. Only service terminal `success` can make a reply publishable.
 
 ### Gate-B live characterization (Half A)
 

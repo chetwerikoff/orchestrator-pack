@@ -8,6 +8,7 @@ export interface FakeAssistantSpec {
   readonly textSequence?: readonly string[];
   readonly semanticNodes?: readonly SemanticNode[];
   readonly appearOnSend?: boolean;
+  readonly streaming?: boolean;
 }
 
 export interface ContinueGeneratingSpec {
@@ -33,6 +34,8 @@ export interface FakeTurnPageOptions {
   readonly serviceObserveDispatch?: boolean;
   readonly preDispatchServiceFrames?: readonly Record<string, unknown>[];
   readonly preClickRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
+  readonly postDispatchDelayedRequests?: readonly { readonly url: string; readonly method?: string; readonly postData?: string }[];
+  readonly postDispatchContextRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
   readonly postClickRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
   readonly postClickServiceFrames?: readonly Record<string, unknown>[];
   readonly postClickRawSseBodies?: readonly string[];
@@ -46,6 +49,19 @@ export interface FakeTurnPageOptions {
   readonly serviceWorkerHttpAfterArm?: readonly { readonly url: string }[];
   readonly hideSendButton?: boolean;
   readonly composerPressDelayMs?: number;
+  readonly requestObserverCoverage?: 'complete' | 'incomplete';
+  readonly foreignDomUserIdsOnPoll?: readonly string[];
+  readonly pageLevelStopButton?: boolean;
+  readonly lateTerminalFramesOnPoll?: { readonly poll: number; readonly frames: readonly Record<string, unknown>[] };
+}
+
+
+function makeDispatchRequest(url: string, postData?: string, method = 'POST'): { url: () => string; method: () => string; postData: () => string | null } {
+  return {
+    url: () => url,
+    method: () => method,
+    postData: () => postData ?? null,
+  };
 }
 
 function emptyLocator(): any {
@@ -74,6 +90,7 @@ function messageLocator(
   text = '',
   textSequence?: readonly string[],
   semanticNodes?: readonly SemanticNode[],
+  streaming = false,
 ): any {
   let sequenceIndex = 0;
   const currentText = () => {
@@ -92,6 +109,8 @@ function messageLocator(
       if (name === 'data-message-author-role') return role;
       if (name === 'data-message-id') return id;
       if (name === 'data-parent-message-id') return parent ?? null;
+      if (name === 'data-is-streaming') return streaming ? 'true' : 'false';
+      if (name === 'aria-busy') return streaming ? 'true' : 'false';
       return null;
     },
     locator: () => ({ count: async () => 0, first: () => ({ getAttribute: async () => null }) }),
@@ -140,6 +159,10 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     await emit('request', request);
   };
 
+  const emitContextOnlyRequest = async (request: { url: () => string; method: () => string; postData: () => string | null }): Promise<void> => {
+    for (const handler of contextRequestHandlers) await handler(request);
+  };
+
   const emitWebSocketSent = async (): Promise<void> => {
     for (const handler of wsSentHandlers) await handler();
   };
@@ -181,17 +204,14 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     sendClicks++;
     sent = true;
       for (const req of options.preClickRequests ?? []) {
-        await emit('request', {
-          url: () => 'https://chatgpt.com/backend-api/f/conversation',
-          postData: () => JSON.stringify({
-            ...(req.turnExchangeId ? { metadata: { turn_exchange_id: req.turnExchangeId } } : {}),
-            messages: [{
-              ...(req.userId ? { id: req.userId } : {}),
-              author: { role: 'user' },
-              content: { content_type: 'text', parts: [''] },
-            }],
-          }),
-        });
+        await emit('request', makeDispatchRequest('https://chatgpt.com/backend-api/f/conversation', JSON.stringify({
+          ...(req.turnExchangeId ? { metadata: { turn_exchange_id: req.turnExchangeId } } : {}),
+          messages: [{
+            ...(req.userId ? { id: req.userId } : {}),
+            author: { role: 'user' },
+            content: { content_type: 'text', parts: [''] },
+          }],
+        })));
       }
       for (const id of options.historicalResponseUserIds ?? []) {
         await emit('response', {
@@ -200,16 +220,13 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
         });
       }
       for (const id of dispatchIds) {
-        await emit('request', {
-          url: () => 'https://chatgpt.com/backend-api/f/conversation',
-          postData: () => JSON.stringify({
-            messages: [{
-              id,
-              author: { role: 'user' },
-              ...(options.turnExchangeId ? { metadata: { turn_exchange_id: options.turnExchangeId } } : {}),
-            }],
-          }),
-        });
+        await emit('request', makeDispatchRequest('https://chatgpt.com/backend-api/f/conversation', JSON.stringify({
+          messages: [{
+            id,
+            author: { role: 'user' },
+            ...(options.turnExchangeId ? { metadata: { turn_exchange_id: options.turnExchangeId } } : {}),
+          }],
+        })));
       }
       if (!dispatchIds.length && options.turnExchangeId) {
         await emit('request', {
@@ -226,7 +243,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
       for (const id of options.foreignDomUserIds ?? []) messages.push(messageLocator('user', id));
       for (const spec of assistantSpecs) {
         if (spec.appearOnSend !== false) {
-          messages.push(messageLocator('assistant', spec.id, spec.parent, spec.text ?? '', spec.textSequence, spec.semanticNodes));
+          messages.push(messageLocator('assistant', spec.id, spec.parent, spec.text ?? '', spec.textSequence, spec.semanticNodes, spec.streaming));
         }
       }
       const frames = options.serviceFrames
@@ -260,6 +277,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   let continueClicked = false;
   let pendingTerminalFrames: readonly Record<string, unknown>[] | undefined;
   let postClickServiceEmitted = false;
+  let waitForTimeoutPolls = 0;
   let postClickFrameIndex = 0;
   const emitPostArmObservationTraffic = async (): Promise<void> => {
     if (!observeComplete) return;
@@ -281,20 +299,31 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   };
 
   const emitPostClickForeign = async (): Promise<void> => {
+    if (!sent) return;
     if (postClickServiceEmitted) return;
     postClickServiceEmitted = true;
+    for (const req of options.postDispatchDelayedRequests ?? []) {
+      await emit('request', makeDispatchRequest(req.url, req.postData, req.method ?? 'GET'));
+    }
+    for (const req of options.postDispatchContextRequests ?? []) {
+      await emitContextOnlyRequest(makeDispatchRequest('https://chatgpt.com/backend-api/f/conversation', JSON.stringify({
+        ...(req.turnExchangeId ? { metadata: { turn_exchange_id: req.turnExchangeId } } : {}),
+        messages: [{
+          ...(req.userId ? { id: req.userId } : {}),
+          author: { role: 'user' },
+          content: { content_type: 'text', parts: [''] },
+        }],
+      })));
+    }
     for (const req of options.postClickRequests ?? []) {
-      await emit('request', {
-        url: () => 'https://chatgpt.com/backend-api/f/conversation',
-        postData: () => JSON.stringify({
-          ...(req.turnExchangeId ? { metadata: { turn_exchange_id: req.turnExchangeId } } : {}),
-          messages: [{
-            ...(req.userId ? { id: req.userId } : {}),
-            author: { role: 'user' },
-            content: { content_type: 'text', parts: [''] },
-          }],
-        }),
-      });
+      await emit('request', makeDispatchRequest('https://chatgpt.com/backend-api/f/conversation', JSON.stringify({
+        ...(req.turnExchangeId ? { metadata: { turn_exchange_id: req.turnExchangeId } } : {}),
+        messages: [{
+          ...(req.userId ? { id: req.userId } : {}),
+          author: { role: 'user' },
+          content: { content_type: 'text', parts: [''] },
+        }],
+      })));
     }
     if (options.postClickServiceFrames?.length) {
       await emitServiceFrames(options.postClickServiceFrames);
@@ -422,7 +451,10 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
         };
       }
       if (selector === '[data-testid="send-button"]') return send;
-      if (selector === '[data-testid="stop-button"]') return emptyLocator();
+      if (selector === '[data-testid="stop-button"]') {
+        if (!options.pageLevelStopButton) return emptyLocator();
+        return { ...emptyLocator(), count: async () => 1, first: () => ({ ...emptyLocator(), count: async () => 1 }) };
+      }
       if (selector === '[data-message-author-role]') return { count: async () => messages.length, nth: (index: number) => messages[index] ?? emptyLocator() };
       if (selector === '[data-message-author-role="user"]') return selectMessages('user');
       if (selector === '[data-message-author-role="assistant"]') return selectMessages('assistant');
@@ -436,10 +468,17 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     },
     keyboard: { press: async () => {}, insertText: async () => {} },
     waitForTimeout: async () => {
+      waitForTimeoutPolls++;
+      if (options.lateTerminalFramesOnPoll?.poll === waitForTimeoutPolls) {
+        await emitServiceFrames(options.lateTerminalFramesOnPoll.frames);
+      }
       for (const message of messages) message.advanceText?.();
       if (options.continueGenerating?.growthSequence?.length) applyContinueGrowth();
       await maybeEmitContinuationTerminal();
       await emitPostClickForeign();
+      for (const id of options.foreignDomUserIdsOnPoll ?? []) {
+        if (!messages.some((message) => message.__id === id)) messages.push(messageLocator('user', id));
+      }
     },
     getByText: (pattern: string | RegExp) => {
       const label = typeof pattern === 'string' ? pattern : pattern.source;
@@ -456,13 +495,19 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
       };
     },
     addAssistant: (spec: FakeAssistantSpec) => {
-      messages.push(messageLocator('assistant', spec.id, spec.parent, spec.text ?? '', spec.textSequence, spec.semanticNodes));
+      messages.push(messageLocator('assistant', spec.id, spec.parent, spec.text ?? '', spec.textSequence, spec.semanticNodes, spec.streaming));
     },
     emitServiceFrames,
   };
 
   (page as { __fakeTurnPage?: boolean }).__fakeTurnPage = true;
-  if (options.dispatchObservation) {
+  if (options.requestObserverCoverage) {
+    (page as { __requestObserverTestControls?: { coverage?: 'complete' | 'incomplete' } }).__requestObserverTestControls = {
+      coverage: options.requestObserverCoverage,
+    };
+  }
+
+    if (options.dispatchObservation) {
     (page as { __dispatchObservation?: DispatchObservationTestControls }).__dispatchObservation = options.dispatchObservation;
   }
   return { page, getSendClicks: () => sendClicks, getEnterPresses: () => enterPresses };

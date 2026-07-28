@@ -37,6 +37,7 @@ export interface TerminalWitnessState {
   readonly messages: Map<string, WitnessMessage>;
   readonly terminalByMessageId: Map<string, AssistantTerminalMetadata>;
   readonly terminalAuthorityFrameByMessageId: Map<string, number>;
+  readonly terminalizationAttemptsById: Map<string, boolean>;
   readonly frames: ServiceFrameRecord[];
   streamCompleteSeen: boolean;
   terminalAuthorityAfterFrame: number;
@@ -47,6 +48,7 @@ export function createTerminalWitnessState(): TerminalWitnessState {
     messages: new Map(),
     terminalByMessageId: new Map(),
     terminalAuthorityFrameByMessageId: new Map(),
+    terminalizationAttemptsById: new Map(),
     frames: [],
     streamCompleteSeen: false,
     terminalAuthorityAfterFrame: 0,
@@ -192,7 +194,25 @@ function classifyFrameType(rawType: string): ServiceFrameKind {
   return 'other';
 }
 
+export function noteTerminalizationAttempt(
+  state: TerminalWitnessState,
+  payload: Record<string, unknown>,
+): void {
+  const candidates = [
+    asRecord(asRecord(payload.v)?.message),
+    asRecord(payload.message),
+  ];
+  for (const message of candidates) {
+    if (!message) continue;
+    const id = typeof message.id === 'string' ? message.id : '';
+    if (id.length >= 8 && message.end_turn === true) {
+      state.terminalizationAttemptsById.set(id, true);
+    }
+  }
+}
+
 export function ingestServicePayload(state: TerminalWitnessState, payload: Record<string, unknown>): void {
+  noteTerminalizationAttempt(state, payload);
   const rawType = typeof payload.type === 'string' ? payload.type : 'other';
   const kind = classifyFrameType(rawType);
   state.frames.push({ kind, rawType });
@@ -230,14 +250,32 @@ export function ingestServicePayload(state: TerminalWitnessState, payload: Recor
   }
 }
 
-export function ingestServicePayloadTree(state: TerminalWitnessState, value: unknown): void {
+
+const UNGROUNDED_SERVICE_WRAPPER_TYPES = new Set(['rogue_wrapper', 'rogue_terminal_frame']);
+
+export function ingestServicePayloadTree(
+  state: TerminalWitnessState,
+  value: unknown,
+  witnessOnly = false,
+): void {
   if (!value || typeof value !== 'object') return;
   if (Array.isArray(value)) {
-    for (const item of value) ingestServicePayloadTree(state, item);
+    for (const item of value) ingestServicePayloadTree(state, item, witnessOnly);
     return;
   }
   const obj = value as Record<string, unknown>;
-  if (typeof obj.type === 'string') ingestServicePayload(state, obj);
+  const rawType = typeof obj.type === 'string' ? obj.type : '';
+  if (witnessOnly) {
+    noteTerminalizationAttempt(state, obj);
+    if (obj.payload !== undefined) ingestServicePayloadTree(state, obj.payload, true);
+    if (obj.nested !== undefined) ingestServicePayloadTree(state, obj.nested, true);
+    return;
+  }
+  if (UNGROUNDED_SERVICE_WRAPPER_TYPES.has(rawType)) {
+    ingestServicePayloadTree(state, obj, true);
+    return;
+  }
+  if (rawType) ingestServicePayload(state, obj);
   if (typeof obj.encoded_item === 'string') {
     for (const raw of obj.encoded_item.split(/\r?\n/)) {
       const line = raw.startsWith('data:') ? raw.slice(5).trim() : raw.trim();
@@ -311,6 +349,18 @@ export function resolveWholeTurnTerminal(
     return { state: 'success', assistantMessageId: latestSuccess.assistantMessageId };
   }
   return { state: 'none' };
+}
+
+
+export function hasTerminalWitnessActivityForAssistant(
+  state: TerminalWitnessState,
+  assistantMessageId: string,
+): boolean {
+  const metadata = state.terminalByMessageId.get(assistantMessageId);
+  if (!metadata) return false;
+  if (nodeLocalStopWithoutWholeTurn(metadata)) return false;
+  return metadata.endTurn === true
+    || (metadata.status !== undefined && metadata.status !== 'in_progress');
 }
 
 export function deltaPatchOrStreamCompleteWithoutTerminal(
