@@ -7,17 +7,33 @@
   "baseline": {
     "commit_sha": "8ac9ed546bffa3b8429dfcc9e4eb2d7d03424d7e",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:7a42988afa290d47aba7cb3607e7e7b17329df284531a0f5413dee0831755b5a"
+    "active_scope_hash": "sha256:df81a78e52f87ab0b215a910be25ca07b1aa9ad82b25d892221eed4b59b6de05"
   },
   "declared_paths": [
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
     "scripts/chatgpt-browser-turn/dispatch-observation.ts",
     "scripts/chatgpt-browser-turn/README.md",
-    "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts"
+    "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts",
+    "scripts/chatgpt-browser-turn/browser-session.ts"
   ],
   "declared_globs": [
     "scripts/toolchain/chatgpt-browser-turn*.test.ts"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:7a42988afa290d47aba7cb3607e7e7b17329df284531a0f5413dee0831755b5a",
+      "new_active_scope_hash": "sha256:df81a78e52f87ab0b215a910be25ca07b1aa9ad82b25d892221eed4b59b6de05",
+      "changed": {
+        "added": [
+          "scripts/chatgpt-browser-turn/browser-session.ts"
+        ],
+        "removed": []
+      },
+      "reason": "add browser-session.ts for Gate-B CDP connect helpers",
+      "actor": "issue-1024-ci-fix",
+      "timestamp": "2026-07-28T03:08:55.994Z",
+      "applied": true
+    }
+  ]
 }
