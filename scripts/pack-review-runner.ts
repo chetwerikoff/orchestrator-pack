@@ -726,6 +726,17 @@ export async function reconcileStalePackReviewRuns(
     const beforeWrite = input.beforeStaleStatusWrite;
     if (beforeWrite) await beforeWrite(run);
 
+    const recordsBeforeStaleStatusWrite = listPackReviewRunRecordsRaw({ projectId, storeRoot });
+    if (hasNewerPackReviewRunForKey(recordsBeforeStaleStatusWrite, run)) {
+      results.push({
+        runId: run.id,
+        terminalized,
+        statusReconciled: false,
+        reason: 'newer_run_authoritative',
+      });
+      continue;
+    }
+
     const statusWriter = input.fixtureRequiredStatusWriter
       ?? ((request) => publishPackReviewRequiredStatus({
         repoRoot: input.sourceRepoRoot,

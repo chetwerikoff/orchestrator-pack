@@ -632,8 +632,10 @@ export function setPackReviewRunTerminal(
   options: PackReviewStoreOptions = {},
 ): PackReviewRunRecord {
   if (!PACK_REVIEW_TERMINAL_STATUSES.has(status)) throw new Error(`invalid terminal review status '${status}'`);
+  const verdictTerminal = PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(status);
   return updatePackReviewRun(runId, {
     ...fields,
+    ...(verdictTerminal ? { failureReason: undefined, stale: undefined } : {}),
     status,
     latestRunStatus: status,
     completedAtUtc: (options.now ?? new Date()).toISOString(),

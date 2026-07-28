@@ -711,6 +711,100 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
     expect(run?.failureReason).not.toContain('npm ERR!');
   });
 
+  it('does not clobber a newer same-head run required status after reconcile barrier (AC6 race)', async () => {
+    const storeRoot = tempRoot('opk-1067-newer-run-race-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    const newerCapture = path.join(storeRoot, 'newer.json');
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      beforeStaleStatusWrite: async () => {
+        const newer = createPackReviewRun({
+          projectId: 'orchestrator-pack',
+          storeRoot,
+          prNumber: 1067,
+          headSha: STALE_HEAD_A,
+          linkedSessionId: 'worker-newer-race',
+          startReason: 'newer-race',
+          surface: 'pack-review-stale-reconcile-test',
+          trustedPackRoot: repoRoot,
+          sourceRepoRoot: repoRoot,
+          canonicalRepository: STALE_REPO_A,
+        });
+        await recordPackReviewPendingStatus({
+          projectId: 'orchestrator-pack',
+          storeRoot,
+          run: newer.run,
+          writeRequiredStatus: async (request) => {
+            writeFileSync(newerCapture, `${JSON.stringify(request)}\n`);
+          },
+        });
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      runId: staleRunId,
+      statusReconciled: false,
+      reason: 'newer_run_authoritative',
+    });
+    expect(JSON.parse(readFileSync(newerCapture, 'utf8')).state).toBe('pending');
+    expect(JSON.parse(readFileSync(staleCapture, 'utf8')).state).toBe('pending');
+  });
+
+  it('clears stale failureReason when resuming a journaled verdict after stale terminalization', async () => {
+    const storeRoot = tempRoot('opk-1067-stale-journaled-resume-');
+    harnessStaleEnv(storeRoot, path.join(storeRoot, 'status.json'));
+    const runId = seedActiveStaleRun(storeRoot);
+    updatePackReviewRun(runId, {
+      status: 'reviewing',
+      latestRunStatus: 'reviewing',
+      reviewVerdict: 'clean',
+      findingCount: 0,
+      findings: [],
+      journalOutcome: {
+        state: 'persisted',
+        recordedAtUtc: '2026-07-28T16:00:00.000Z',
+        reason: 'verdict_persisted',
+        idempotencyKey: `verdict:${runId}:${STALE_HEAD_A}`,
+        attempts: 1,
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    markRunStale(storeRoot, runId);
+    terminalizePackReviewStaleRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+      status: 'failed',
+      failureReason: 'runner_disappeared_stale',
+    });
+
+    const run = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    if (!run) throw new Error(`missing run ${runId}`);
+    const result = await resumePackReviewVerdictDelivery({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run,
+      async postGithubComment() {
+        return { id: 106701, url: 'fixture://review/106701', event: 'COMMENT' };
+      },
+      async writeRequiredStatus() {},
+      async notifyWorker() {
+        return { state: 'delivered', reason: 'fixture_dispatched' };
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, status: 'up_to_date' });
+    const resumedRun = getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(resumedRun).toMatchObject({ status: 'up_to_date' });
+    expect(resumedRun?.failureReason).toBeUndefined();
+    expect(resumedRun?.stale).toBeUndefined();
+  });
+
   it('exposes resolveRepositorySlug for legacy repository resolution', () => {
     expect(typeof resolveRepositorySlug).toBe('function');
   });
