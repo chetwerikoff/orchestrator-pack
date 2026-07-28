@@ -20,11 +20,11 @@
   },
   "hookWiringFingerprint": {
     "wrapper": "scripts/invoke-read-delegation-audit-stop.ts",
-    "wrapperHash": "d1b0f031aed3b64275302cb5ff01ec2657649db986a9457f5f33d09e85989c84",
+    "wrapperHash": "4b3cfd5bec0c56d8b9f9d0578762e1cbc3cb8172d3a7547f89af035d9450e32b",
     "commandShape": "node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/json-producers/read-delegation-audit-stop.ts [--artifact-path <redacted>] [--repo-root <repo>]"
   },
   "codeHashes": {
     "docs/read-delegation-audit.mjs": "40c0f96074eecb05ffc1ce49ecb3edb2e0c8361337bf192e4bb6301e3440c9e9",
-    "scripts/invoke-read-delegation-audit-stop.ts": "d1b0f031aed3b64275302cb5ff01ec2657649db986a9457f5f33d09e85989c84"
+    "scripts/invoke-read-delegation-audit-stop.ts": "4b3cfd5bec0c56d8b9f9d0578762e1cbc3cb8172d3a7547f89af035d9450e32b"
   }
 }
