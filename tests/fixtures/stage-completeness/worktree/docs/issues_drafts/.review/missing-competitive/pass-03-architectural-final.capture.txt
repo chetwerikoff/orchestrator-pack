@@ -1,4 +1,0 @@
-P0 — Sample finding
-type: security
-id: sec-sample
-
