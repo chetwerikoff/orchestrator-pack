@@ -3148,6 +3148,7 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
   function acquireDomainLockInWorker(
     profileKeyArg: string,
     key: string,
+    options?: { admissionRetryDeadlineMs?: number },
   ): Promise<{ ok: boolean; elapsedMs: number }> {
     return new Promise((resolve, reject) => {
       const worker = new Worker(`
@@ -3155,7 +3156,10 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
         (async () => {
           const { acquireDomainLock } = await import(workerData.coordinationModuleUrl);
           const started = Date.now();
-          const lock = acquireDomainLock(workerData.profileKey, workerData.key);
+          const lockOptions = workerData.admissionRetryDeadlineMs === undefined
+            ? undefined
+            : { admissionRetryDeadlineMs: workerData.admissionRetryDeadlineMs };
+          const lock = acquireDomainLock(workerData.profileKey, workerData.key, 120_000, lockOptions);
           parentPort.postMessage({ ok: lock !== null, elapsedMs: Date.now() - started });
           lock?.release();
         })().catch((error) => parentPort.postMessage({ error: String(error) }));
@@ -3170,6 +3174,7 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
           profileKey: profileKeyArg,
           key,
           coordinationModuleUrl,
+          admissionRetryDeadlineMs: options?.admissionRetryDeadlineMs,
         },
       });
       worker.on('message', (message: { ok?: boolean; elapsedMs?: number; error?: string }) => {
@@ -3189,9 +3194,11 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
     const gate = acquireDomainLock(profileKey, admissionKey);
     expect(gate).not.toBeNull();
 
+    const productionDeadlineMs = Date.now() + 10_000;
     const contender = acquireDomainLockInWorker(
       profileKey,
       'conversation:https://chatgpt.com/c/admission-contender',
+      { admissionRetryDeadlineMs: productionDeadlineMs },
     );
     await new Promise((resolve) => setTimeout(resolve, 50));
     gate!.release();
@@ -3206,7 +3213,12 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
     const gate = acquireDomainLock(profileKey, admissionKey);
     expect(gate).not.toBeNull();
 
-    const contender = acquireDomainLockInWorker(profileKey, `fresh:${randomUUID()}`);
+    const productionDeadlineMs = Date.now() + 10_000;
+    const contender = acquireDomainLockInWorker(
+      profileKey,
+      `fresh:${randomUUID()}`,
+      { admissionRetryDeadlineMs: productionDeadlineMs },
+    );
     await new Promise((resolve) => setTimeout(resolve, 50));
     gate!.release();
 
