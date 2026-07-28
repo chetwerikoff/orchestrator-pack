@@ -27,6 +27,13 @@ The output path is reserved before browser interaction. A pre-existing or alread
 
 All control commands require the same `--profile` and `--cdp`, which derive the configured-profile key.
 
+Configured-profile identity follows host filesystem semantics: on native case-sensitive Linux, paths that differ only by case are distinct identities and distinct state roots; on Windows/WSL-backed profiles, supported `C:\...` and `/mnt/<drive>/...` spellings and ordinary case variants of the same physical directory remain one identity. `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs` uses the same equivalence rule.
+
+When a post-change derivation would select a different key than the legacy lowercase-derived key, safety-bearing state under the legacy namespace for the same physical profile blocks startup until existing `status/list`, exact `clear`, and `publication-status` recovery resolves it. Control surfaces enumerate safety-bearing records under both the current and legacy keys. Ambiguous legacy ownership from case-collision lowercasing remains fail-closed.
+
+In fresh-chat mode, once the helper observes an authoritative canonical conversation identity correlated to the submitted exchange, that normalized identity is retained across later page teardown or unreadable URLs. Promotion is monotonic and fail-closed when service correlators, observed URL prefixes, or concurrent traffic are ambiguous; unproven fresh turns remain `orphaned_fresh_turn / canonical_fresh_conversation_unproven` per #964.
+
+
 ```bash
 npm run chatgpt-browser-turn -- status/list --profile <path> --cdp <url>
 npm run chatgpt-browser-turn -- capability --profile <path> --cdp <url>

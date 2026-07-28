@@ -477,7 +477,7 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
 });
 
 describe('issue 964 configured profile identity', () => {
-  it('collapses filesystem, Windows/WSL, and case aliases into one lock namespace', () => {
+  it('collapses filesystem and Windows/WSL spellings while preserving native Linux case', () => {
     const actual = join(root, 'Profile-Actual');
     const alias = join(root, 'profile-alias');
     mkdirSync(actual);
@@ -485,7 +485,9 @@ describe('issue 964 configured profile identity', () => {
     expect(configuredProfileKey(actual, cdp)).toBe(configuredProfileKey(alias, cdp));
     if (process.platform !== 'win32') {
       expect(configuredProfileKey('C:\\Users\\Automation\\Profile', cdp))
-        .toBe(configuredProfileKey('/mnt/c/users/automation/profile/', cdp));
+        .toBe(configuredProfileKey('/mnt/c/Users/Automation/Profile', cdp));
+      expect(configuredProfileKey('/mnt/c/Users/Automation/Profile', cdp))
+        .not.toBe(configuredProfileKey('/mnt/c/users/automation/profile/', cdp));
     }
   });
 });
