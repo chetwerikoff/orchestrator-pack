@@ -235,6 +235,16 @@ function resolveOperationWaitMs(source?: OperationWaitSource): number {
   return ms > 0 ? ms : 0;
 }
 
+async function readLocatorAttribute(locator: any, attr: string, waitSource?: OperationWaitSource): Promise<string | null> {
+  const waitMs = resolveOperationWaitMs(waitSource);
+  if (waitMs <= 0) throw new BrowserOperationTimeoutError('service_attribute');
+  try {
+    return await locator.getAttribute(attr, playwrightTimeout(waitMs)!);
+  } catch (error) {
+    throw coerceBrowserOperationTimeout(error, 'service_attribute');
+  }
+}
+
 interface NetworkWitnessState {
   readonly messages: NetworkMessage[];
   readonly dispatchCandidateIds: Set<string>;
@@ -1112,15 +1122,10 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
 
 async function serviceId(locator: any, waitSource?: OperationWaitSource): Promise<string> {
   for (const attr of ['data-message-id', 'data-turn-id']) {
-    const waitMs = resolveOperationWaitMs(waitSource);
-    if (waitMs <= 0) return '';
-    const timeout = playwrightTimeout(waitMs);
-    const direct = await locator.getAttribute(attr, timeout).catch(() => null);
+    const direct = await readLocatorAttribute(locator, attr, waitSource);
     if (direct && direct.length >= 8) return direct;
     const parent = locator.locator(`[${attr}]`).first();
-    const nestedWait = resolveOperationWaitMs(waitSource);
-    if (nestedWait <= 0) return '';
-    const nested = await parent.getAttribute(attr, playwrightTimeout(nestedWait)).catch(() => null);
+    const nested = await readLocatorAttribute(parent, attr, waitSource);
     if (nested && nested.length >= 8) return nested;
   }
   return '';
@@ -1128,14 +1133,9 @@ async function serviceId(locator: any, waitSource?: OperationWaitSource): Promis
 
 async function parentServiceId(locator: any, waitSource?: OperationWaitSource): Promise<string> {
   for (const attr of ['data-parent-message-id', 'data-parent-turn-id']) {
-    const waitMs = resolveOperationWaitMs(waitSource);
-    if (waitMs <= 0) return '';
-    const timeout = playwrightTimeout(waitMs);
-    const direct = await locator.getAttribute(attr, timeout).catch(() => null);
+    const direct = await readLocatorAttribute(locator, attr, waitSource);
     if (direct && direct.length >= 8) return direct;
-    const nestedWait = resolveOperationWaitMs(waitSource);
-    if (nestedWait <= 0) return '';
-    const nested = await locator.locator(`[${attr}]`).first().getAttribute(attr, playwrightTimeout(nestedWait)).catch(() => null);
+    const nested = await readLocatorAttribute(locator.locator(`[${attr}]`).first(), attr, waitSource);
     if (nested && nested.length >= 8) return nested;
   }
   return '';
@@ -1303,7 +1303,7 @@ async function observedDispatchUserIds(
   page: any,
   network: NetworkWitnessState,
   baselineIds: ReadonlySet<string>,
-  waitMs?: number,
+  waitSource?: OperationWaitSource,
 ): Promise<Set<string>> {
   const serviceIds = [...network.serviceSubmittedUserIds].filter((id) => !baselineIds.has(id));
   if (serviceIds.length === 1) return new Set(serviceIds);
@@ -1312,9 +1312,11 @@ async function observedDispatchUserIds(
   const candidates = boundDispatchCandidateIds(network);
   if (candidates.size === 0) return observed;
   const users = page.locator('[data-message-author-role="user"]');
-  const count = await boundedLocatorCount(users, waitMs ?? MAX_BROWSER_OPERATION_WAIT_MS);
+  const countWait = resolveOperationWaitMs(waitSource);
+  if (countWait <= 0) return observed;
+  const count = await boundedLocatorCount(users, countWait);
   for (let index = Math.max(0, count - 8); index < count; index++) {
-    const id = await serviceId(users.nth(index), waitMs);
+    const id = await serviceId(users.nth(index), waitSource);
     if (id && !baselineIds.has(id) && candidates.has(id)) observed.add(id);
   }
   for (const message of network.messages) {
@@ -1457,7 +1459,7 @@ export async function sendTurn(
   for (let index = 0; index < baselineCount; index++) {
     baselineWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
     if (segmentBudget && baselineWait <= 0) throw new BrowserOperationTimeoutError('pre_send_baseline');
-    const id = await serviceId(baseline.nth(index), baselineWait);
+    const id = await serviceId(baseline.nth(index), () => segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS);
     if (id) baselineIds.add(id);
   }
 
@@ -1516,7 +1518,7 @@ export async function sendTurn(
     }
     const deliveredWait = loopOperationWaitMs(deliveredEndsAt);
     if (deliveredWait <= 0) break;
-    const observed = await boundedPlaywrightOperation(deliveredWait, () => observedDispatchUserIds(page, network, baselineIds, deliveredWait));
+    const observed = await boundedPlaywrightOperation(deliveredWait, () => observedDispatchUserIds(page, network, baselineIds, () => loopOperationWaitMs(deliveredEndsAt)));
     if (observed.size > 1) return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
     userId = observed.values().next().value ?? '';
     if (!userId) await witnessPollDelay(page, Math.min(250, deliveredWait));
@@ -1543,7 +1545,7 @@ export async function sendTurn(
     }
     replyWait = loopOperationWaitMs(deadline, wallClock());
     if (replyWait <= 0) break;
-    const observedDispatch = await boundedPlaywrightOperation(replyWait, () => observedDispatchUserIds(page, network, baselineIds, loopOperationWaitMs(deadline, wallClock())));
+    const observedDispatch = await boundedPlaywrightOperation(replyWait, () => observedDispatchUserIds(page, network, baselineIds, () => loopOperationWaitMs(deadline, wallClock())));
     const canonicalUserId = canonicalSubmittedUserId(network, baselineIds);
     if (canonicalUserId) userId = canonicalUserId;
     if (observedDispatch.size > 1) {
@@ -1561,7 +1563,7 @@ export async function sendTurn(
     for (let index = 0; index < userCount; index++) {
       replyWait = loopOperationWaitMs(deadline, wallClock());
       if (replyWait <= 0) break;
-      const id = await serviceId(users.nth(index), replyWait);
+      const id = await serviceId(users.nth(index), () => loopOperationWaitMs(deadline, wallClock()));
       if (id && !baselineIds.has(id)) newUserIds.add(id);
     }
     if ([...newUserIds].some((id) => id !== userId)) {
@@ -1577,7 +1579,7 @@ export async function sendTurn(
       replyWait = loopOperationWaitMs(deadline, wallClock());
       if (replyWait <= 0) break;
       const locator = assistants.nth(index);
-      const id = await serviceId(locator, replyWait);
+      const id = await serviceId(locator, () => loopOperationWaitMs(deadline, wallClock()));
       if (!id || baselineIds.has(id)) continue;
       assistantLocators.set(id, locator);
     }
@@ -1616,7 +1618,7 @@ export async function sendTurn(
           replyWait = loopOperationWaitMs(deadline, wallClock());
           if (replyWait <= 0) break;
           const locator = assistants.nth(index);
-          const id = await serviceId(locator, replyWait);
+          const id = await serviceId(locator, () => loopOperationWaitMs(deadline, wallClock()));
           if (id && isMessageAttributedToUserTurn(id, userId, network.terminal.messages)) {
             continuationLocator = locator;
             break;
@@ -1668,7 +1670,7 @@ export async function sendTurn(
         for (let index = 0; index < assistantCount; index++) {
           replyWait = loopOperationWaitMs(deadline, wallClock());
           if (replyWait <= 0) break;
-          if (await serviceId(assistants.nth(index), replyWait) === boundAssistantId) {
+          if (await serviceId(assistants.nth(index), () => loopOperationWaitMs(deadline, wallClock())) === boundAssistantId) {
             matched = assistants.nth(index);
             break;
           }

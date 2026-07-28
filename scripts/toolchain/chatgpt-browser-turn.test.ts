@@ -1908,19 +1908,70 @@ describe('issue 1023 operation-level bounds', () => {
     expect(Date.now() - started).toBeLessThan(200);
   });
 
-  it('AC4: healthy post-dispatch polls may continue beyond 30s until turn deadline', async () => {
+  it('AC4: healthy post-dispatch polls may continue beyond 30s and still reach ok', async () => {
     let clock = 1_000;
     __testTiming.now = () => clock;
     const own = 'user-owned-12345678';
-    const fixture = fakeTurnPage({ dispatchCandidateIds: [own] });
-    fixture.page.waitForTimeout = async (ms: number) => { clock += ms; };
+    const assistantId = 'assistant-owned-12345678';
+    let assistantVisible = false;
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: assistantId, parent: own, text: 'late ok', appearOnSend: false }],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: assistantId,
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+    });
+    const baseLocator = fixture.page.locator.bind(fixture.page);
+    fixture.page.locator = (selector: string) => {
+      if (selector === '[data-message-author-role="assistant"]') {
+        return {
+          count: async () => assistantVisible ? 1 : 0,
+          nth: (index: number) => messageLocator('assistant', assistantId, own, 'late ok'),
+        };
+      }
+      return baseLocator(selector);
+    };
+    fixture.page.waitForTimeout = async (ms: number) => {
+      clock += ms;
+      if (clock >= 36_000) assistantVisible = true;
+    };
     const result = await sendTurn(fixture.page, 'payload', {
       ...issue1023Config(),
       timeoutMs: 60_000,
     }, undefined, undefined, createPreSendSegmentBudget(30_000));
-    expect(result.state).toBe('stream_timeout');
-    expect(result.possibleDelivery).toBe(true);
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('late ok');
     expect(clock - 1_000).toBeGreaterThan(30_000);
+    __testTiming.now = undefined;
+  });
+
+  it('AC4: delivered loop respects remainder when less than 30s remains', async () => {
+    let clock = 5_000;
+    __testTiming.now = () => clock;
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [],
+    });
+    fixture.page.waitForTimeout = async (ms: number) => { clock += ms; };
+    const started = clock;
+    const result = await sendTurn(fixture.page, 'payload', {
+      ...issue1023Config(),
+      timeoutMs: 5_500,
+    }, undefined, undefined, createPreSendSegmentBudget(30_000));
+    expect(result.possibleDelivery).toBe(true);
+    expect(['stream_timeout', 'recovery_required']).toContain(result.state);
+    expect(clock - started).toBeLessThan(35_000);
     __testTiming.now = undefined;
   });
 
@@ -1988,49 +2039,5 @@ describe('issue 1023 operation-level bounds', () => {
     expect(result.possibleDelivery).toBe(true);
   });
 
-  it('AC5: conversation possible-delivery incident survives restart and blocks premature clear', () => {
-    const conv = 'https://chatgpt.com/c/example';
-    const incident = writeIncident(profileKey, {
-      kind: 'conversation_incident',
-      generation: 12,
-      phase: 'possible_delivery',
-      conversation_id: conv,
-      cause: 'stream_timeout',
-    });
-    const afterRestart = statusList(profileKey);
-    expect(afterRestart.items?.some((item) => item.identity === incident.identity)).toBe(true);
-    const readable = listReadableIncidents(profileKey);
-    expect(readable.some((row) => row.record.conversation_id === conv && row.record.phase === 'possible_delivery')).toBe(true);
-    expect(clearReadable(profileKey, incident.identity, 11, incident.record.evidence_token).state).toBe('stale_generation');
-    expect(clearReadable(profileKey, incident.identity, 12, incident.record.evidence_token).state).toBe('cleared');
-  });
 
-  it('AC8: committed publication remains exactly-once after cleanup-unconfirmed', async () => {
-    const output = resolve(join(root, 'ac8-committed-once.txt'));
-    const destination = destinationIdentityForPath(output);
-    const published = publishReply(profileKey, 'ac8-once', output, destination.identity, 'committed reply');
-    expect(published.state).toBe('committed_ok');
-    expect(readFileSync(output, 'utf8')).toBe('committed reply');
-    const cleanup = await boundedResourceCleanup(() => new Promise<void>(() => {}), 50);
-    expect(cleanup).toBe('unconfirmed');
-    const recovered = publicationStatus(profileKey, 'ac8-once');
-    expect(recovered.state).toBe('committed_ok');
-    expect(readFileSync(output, 'utf8')).toBe('committed reply');
-    expect(existsSync(output)).toBe(true);
-  });
-
-  it('AC12: fresh-orphan possible-delivery block survives simulated restart', () => {
-    const orphan = writeIncident(profileKey, {
-      kind: 'fresh_orphan',
-      generation: 10,
-      phase: 'possible_delivery',
-      provisional_id: 'prov-orphan-restart',
-      cause: 'canonical_fresh_conversation_unproven',
-    });
-    const relisted = statusList(profileKey);
-    expect(relisted.items?.some((item) => item.kind === 'fresh_orphan' && item.identity === orphan.identity)).toBe(true);
-    expect(listReadableIncidents(profileKey).some((row) => row.record.kind === 'fresh_orphan' && row.record.phase === 'possible_delivery')).toBe(true);
-    expect(clearReadable(profileKey, orphan.identity, 9, orphan.record.evidence_token).state).toBe('stale_generation');
-    expect(clearReadable(profileKey, orphan.identity, 10, orphan.record.evidence_token).state).toBe('cleared');
-  });
 });
