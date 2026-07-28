@@ -1,6 +1,6 @@
 # Task complexity tiering (architect / draft-author)
 
-Worker **pre-flight** (blocking marker check before implementation) lives in
+Worker **pre-flight** (blocking rubric reassessment before implementation) lives in
 [`AGENTS.md`](../AGENTS.md) (**Review / CI / Handoff worker contract**).
 This page holds the full tier rubric and per-tier draft-review flow for architects and task-spec authors.
 
@@ -24,72 +24,41 @@ block** — *Skips when*).
   local cosmetics; little design judgment.
 - **T2** — moderate ceremony: one component needing real design judgment on
   *how*; still a single coherent surface.
-- **T3** — full ceremony: subsystem behavior, system guarantees, or any red-flag
-  marker below — size does not discount danger.
+- **T3** — full ceremony: subsystem behavior, system guarantees, or other high
+  blast-radius work — size does not discount danger.
 
 ### Failure-type lens (apply first)
 
 Ask: **what is the worst thing this task can break?**
 
-- Text/cosmetics only → usually **T1** (after marker silence).
-- Local behavior of one function or module → usually **T2** (after marker silence).
+- Text/cosmetics only → usually **T1**.
+- Local behavior of one function or module → usually **T2**.
 - A subsystem's behavior or a system guarantee (CI gate, recovery, durable state,
   trust, concurrency, merge safety, operator evidence) → **T3**.
 
-The enumerated red-flag markers below are the **reference backstop** for this
-lens — not a substitute for reading it. Concrete examples live in the labeled
-calibration sample (`tests/fixtures/task-complexity-tier-calibration.json`), not
-here. That sample includes **on-ladder tasks only** — below-ladder work per the
-skip line above is intentionally omitted.
+Read the actual task with fresh eyes. Vocabulary in the Issue body does not
+mechanically set tier; blast radius and failure type do. Merely naming a subject,
+quoting prior art, describing a rejected alternative, or reusing an unchanged
+primitive is not by itself enough to justify T3.
 
 ### Classification order (hard precedence)
 
-1. **Red-flag markers → unconditional T3.** If **any** marker below is present,
-   the task is **T3** regardless of apparent size.
-2. **Only if every marker is silent — size.** Small, obvious, ~1–2 files,
-   self-contained → **T1**. One component needing real design judgment → **T2**.
+1. **Failure-type lens.** Apply the rubric above to the real change, not keyword
+   matches in prose.
+2. **Size and design judgment.** Small, obvious, ~1–2 files, self-contained →
+   **T1**. One component needing real design judgment → **T2**.
 3. **Doubt escalates up (fail-up).** Between two tiers, take the **higher**.
 
 **Demote-only magnitude rule.** Numeric file/diff ceilings may only
 **disqualify** a task from a lower tier (push it up). They may **never qualify**
 a task into **T1**. Smallness is necessary but not sufficient for T1.
 
-### Red-flag markers (any one → T3)
-
-| Marker class | Present when the task… |
-|---|---|
-| **trust-boundary** | touches auth, permission, or trust-boundary surfaces |
-| **spawn-capability** | grants spawn, capability, or elevated execution |
-| **concurrency-state-retry** | changes concurrency, state-machine, event-ordering, or retry semantics |
-| **ci-review-gating** | changes required CI/review gating, branch protection, merge authorization, or fail-closed check aggregation |
-| **durable-state-evidence** | mutates durable state, evidence, provenance, ledgers, audit logs, or operator-visible snapshots |
-| **test-harness-correctness** | risks fixture isolation, real-vs-stub binaries, self-certifying tests, or fixtures touching live state |
-| **crash-recovery** | changes crash/recovery, restart mid-phase, orphaned claims/processes, duplicate execution, or liveness/kill-restart thresholds |
-| **external-api-transport** | **changes** external-API transport behavior (retry, fallback, rate-limit, timeout, response-shape assumptions) — not mere API presence |
-| **shared-contract-dependency** | introduces a new contract ≥2 future issues will depend on |
-| **multi-surface** | spans multiple otherwise-independent surfaces |
-| **ambiguity** | leaves genuine ambiguity in what is being asked |
-
-**Blast-radius binding (#973).** A marker is substantively present when the
-**change itself satisfies that marker row's canonical `Present when the task…`
-predicate**. Merely naming the subject, quoting/citing prior art, describing a
-rejected alternative, or reusing an already-shipped primitive unchanged is not
-by itself enough. This rule narrows applicability to the existing row predicates;
-it does not weaken or replace any predicate, including `shared-contract-dependency`,
-`multi-surface`, or `ambiguity`. Context-only lexical hits that remain in text
-continue to use the existing #781 fingerprint-bound receipt path; #973 adds no
-marker heuristic or suppression mechanism.
-
-For #973 audit records, the flow-manager serializes the existing rubric decision
-with stable machine labels that map to the rubric above rather than creating a new
-rubric: `failure-type:text-cosmetics`, `failure-type:local-behavior`,
-`failure-type:subsystem-or-system-guarantee`, `size:small-obvious-self-contained`,
-`size:single-component-design-judgment`, and `fail-up:doubt`. The applicable
-labels plus every fired canonical marker row form the guard-enumerable driver set
-for that immutable tier decision.
-
-Mechanical guard: `scripts/check-tier-calibration-consistency.ps1` over the
-committed calibration sample.
+For #973 audit records, the flow-manager serializes the rubric decision with
+stable machine labels: `failure-type:text-cosmetics`,
+`failure-type:local-behavior`, `failure-type:subsystem-or-system-guarantee`,
+`size:small-obvious-self-contained`, `size:single-component-design-judgment`,
+and `fail-up:doubt`. The applicable rubric labels form the guard-enumerable driver
+set for that immutable tier decision.
 
 ## Per-tier draft-review flow
 
@@ -151,7 +120,7 @@ does not create a second browser architectural stream. An explicit
 `adversarial-draft-review` loop never replaces the GPT competitive stage or the
 normal architectural stage.
 
-The flow-manager applies the existing rubric, marker screen, stage-selection
+The flow-manager applies the existing rubric, stage-selection
 rules, and T3-critical/L4 classification at intake, after every material
 Issue/scope change, and immediately before the final architect lens. Ambiguous or
 unparseable classification follows the existing fail-up behavior. If that
@@ -178,7 +147,7 @@ local workdir shape.
 
 After every immutable pull, the flow-manager records the applied tier decision in
 that `rNN` directory as `tier-gate-decision/v1`: producer, revision, tier, fired
-canonical marker rows, applicable rubric labels from the mapping above, and the
+applicable rubric labels from the mapping above, and the
 current L4 result (`clear|active|ambiguous|missing|stale`). This is same-user
 audit evidence, not cryptographic authorization. Once a first valid revision
 exists, the highest tier in preceding immutable revisions is the transition
@@ -189,7 +158,7 @@ architect lens, at most once in the task lifecycle. The original lens capture
 contains one fenced `tier-demotion-event/v1` JSON record with an event id,
 `role: architect`, `stage: final-architect-lens`, exact source revision, before and
 after tiers, and one non-empty prose rationale for every source driver. The driver
-set must equal the source decision's marker rows plus rubric labels exactly; no
+set must equal the source decision's rubric labels exactly; no
 missing, extra, or substituted driver is accepted. The Issue complexity-tier
 fence then carries the stable original event id and immediately pre-demotion tier
 (`demotion-event` + `demotion-from`). Author text, intake evidence, or those fence
@@ -206,10 +175,7 @@ machine is added. Same-event revalidation may repeat after same-tier fixes witho
 consuming another demotion. Any later up-escalation is allowed and required, but
 closes event reuse; a later downstep is a forbidden second demotion.
 
-A below-T3 candidate also requires current `clear` L4 evidence. Any live
-unsuppressed marker remains dominant and cannot be suppressed by intake, demotion,
-or revalidation evidence; #781 receipts remain the only existing marker
-suppression mechanism. Missing, stale, ambiguous, conflicting, partial, or
+A below-T3 candidate also requires current `clear` L4 evidence. Missing, stale, ambiguous, conflicting, partial, or
 wrong-stage/role evidence fails closed. Same-user fabrication remains the explicit
 CX973-1 residual trust risk: these records provide mechanical auditability and
 consistency, not unforgeable identity authentication, and #973 adds no signer,
@@ -305,11 +271,11 @@ records one independently established ISO-8601 adoption timestamp on a
 file. This adds no service, registry, or tracked store.
 
 The first reviewer capture chronologically after that boundary, and every later
-reviewer capture, must be marked. A later self-supplied marker cannot forgive an
+reviewer capture, must be marked. A later self-supplied rubric downgrade cannot forgive an
 earlier unmarked post-adoption capture. Missing or ambiguous chronology fails
 closed. Reviewer stages are `competitive`, `architectural`, and
 `architectural-final`; `architectural-lens` is architect evidence and is excluded
-from marker continuity. Immutable pre-adoption captures are not rewritten and do
+from rubric continuity. Immutable pre-adoption captures are not rewritten and do
 not owe retroactive M2 fields. Before acceptance there must be governed reviewer
 evidence after adoption.
 
@@ -442,7 +408,7 @@ pass.
 #975 phase. The #975 flow calls the same guard in two bounded phases:
 
 - **`pre-lens`** — only after existing stage/completion authority declares the
-  selected pre-lens sequence legally terminal; enforces post-adoption M2 marker
+  selected pre-lens sequence legally terminal; enforces post-adoption M2 rubric
   continuity/structure and M5 terminal evidence, and permits genuinely
   architect-required M3 state only as `architect-pending` for progression to the
   lens. It never certifies acceptance.
@@ -518,7 +484,7 @@ For T3, record explicit **keep** or **cut** for each major mechanism using expli
 stakes × mechanism cost/risk × cheapest sufficient alternative. Repackaging or
 splitting an over-built mechanism across sibling tasks is not itself a cut. Same-
 episode relenses reuse the post-adoption M5 anchor but inspect the latest body and
-M4 inventory. Issue #973 remains the owner of demotion records and marker
+M4 inventory. Issue #973 remains the owner of demotion records and rubric
 applicability.
 
 When that lens authorizes a #973 downgrade, ordering is strict: source-revision

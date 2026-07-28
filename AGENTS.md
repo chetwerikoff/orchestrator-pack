@@ -376,9 +376,9 @@ input, not a merge executor.
 
 #### Worker pre-flight (blocking)
 
-Before implementation, **re-run the tier marker check with fresh eyes**. If reality exceeds the
+Before implementation, **re-read the actual task and apply the T1/T2/T3 failure-type rubric with fresh eyes**. If reality exceeds the
 assigned tier, **stop and escalate upward** — never silently proceed. Full rubric and draft-author
-ceremony: [`docs/tiering.md`](docs/tiering.md). Guard: `scripts/check-tier-calibration-consistency.ps1`.
+ceremony: [`docs/tiering.md`](docs/tiering.md).
 
 ### Managed session constraints
 

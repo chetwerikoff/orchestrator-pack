@@ -21,7 +21,7 @@ prior art for this flow.
 Issue #972 owns the flow-manager/author/architect role split and browser-chat
 topology. The #975 M1–M5 economics below are independent of that ownership split
 and must be preserved without reverting #972. Issue #973 remains the owner of
-tier-demotion records and marker applicability.
+tier-demotion records and rubric applicability.
 
 ## Inputs and routing
 
@@ -143,7 +143,7 @@ Task identity is `<N>-<slug>`. Create:
 No repository support files are copied into `$WORKDIR`. Repository-owned guards
 and the sync helper run from a trusted checkout root and receive the **absolute**
 anchor path. The sync helper's tier validation uses `process.cwd()` as its
-repository root and needs tracked marker, contract-evidence, manifest, and corpus
+repository root and needs tracked tier, contract-evidence, manifest, and corpus
 files available there.
 
 The anchor is draft-shaped, not a raw body:
@@ -170,8 +170,8 @@ adoption timestamp in `$REVIEW_DIR/chats.md`. Record Codex invocations separatel
 they have no browser-chat URL.
 
 At intake, after every material Issue/scope change, and immediately before the
-final architect lens, the flow-manager applies the existing tier rubric, marker
-screen, stage-selection rules, and T3-critical/L4 classification. Ambiguous or
+final architect lens, the flow-manager applies the existing tier rubric,
+stage-selection rules, and T3-critical/L4 classification. Ambiguous or
 unparseable classification follows existing fail-up behavior. If the pre-final
 recompute makes the task T3-critical, the mandatory independent Codex addition
 must complete before the final lens.
@@ -207,7 +207,7 @@ from workdir shape.
 
 After each immutable pull and tier/L4 recomputation, the flow-manager records
 `$WORKDIR/rNN/tier-gate-receipt.json` as `tier-gate-decision/v1` with the exact
-revision, resulting tier, every fired canonical marker row, the applicable rubric
+revision, resulting tier, the applicable rubric
 classes, and current L4 status (`clear|active|ambiguous|missing|stale`). Use only
 these stable rubric labels, which map the existing canon rather than defining a
 new rubric:
@@ -219,21 +219,11 @@ new rubric:
 - `size:single-component-design-judgment`;
 - `fail-up:doubt`.
 
-The fired marker rows plus those applicable rubric labels are the exact
-guard-enumerable driver set for that immutable decision. After the first valid
-revision, transition direction comes from the highest tier in preceding immutable
-`rNN` revisions, not from the author-editable `advisory-prior`; a hidden downstep
-therefore remains visible.
-
-Marker applicability is bound to the canonical row predicate: a marker is
-substantively present when the **change itself** satisfies that row's `Present when
-the task…` predicate. Merely naming the subject, quoting/citing prior art,
-describing a rejected alternative, or reusing an already-shipped primitive
-unchanged is not enough by itself. Do not weaken structural predicates such as
-`shared-contract-dependency`, `multi-surface`, or `ambiguity`, and do not change
-marker heuristics. Context-only lexical hits that remain in text continue through
-the existing #781 fingerprint-bound receipt path. Intake/demotion evidence is
-never a marker receipt.
+The applicable rubric labels are the exact guard-enumerable driver set for that
+immutable decision. After the first valid revision, transition direction comes from
+the highest tier in preceding immutable `rNN` revisions, not from the author-editable
+`advisory-prior`; a hidden downstep therefore remains visible. Tier is judged from
+blast radius and failure type, not from keyword matches in Issue prose.
 
 ## Step 2 — Task-chat disposition/fix round
 ### Independent review-economics adoption boundary
@@ -249,7 +239,7 @@ Reviewer output never chooses its own #975 cutover.
   `review-economics-adopted-at: <ISO-8601>`
 
   Reuse that exact value as `ADOPTION_TS`; do not infer it from a later reviewer
-  marker or rewrite old captures.
+  rubric downgrade or rewrite old captures.
 
 Capture chronology is immutable-by-procedure audit evidence under the same-user
 trust model as the existing review workdir. Missing/ambiguous adoption chronology
@@ -348,8 +338,8 @@ existing defect-level `disposition` stays `addressed|rejected`.
 
 Run when selected by the effective tier or forced by an explicit
 `discuss-with-gpt` wrapper. T3 always runs it; T2 runs it only when an explicit
-wrapper/contract selects it. A red-flag marker recomputes the task to T3 rather
-than creating a red-flagged T2 path. Only a direct operator decision may waive an
+wrapper/contract selects it. Human/flow-manager rubric judgment may escalate the
+task to T3 rather than creating an under-tier path. Only a direct operator decision may waive an
 otherwise selected non-critical competitive stage, and the waiver is recorded.
 
 Each pass:
@@ -587,12 +577,12 @@ contains exactly one fenced JSON event of this shape (field order is irrelevant)
   "beforeTier": "T3",
   "afterTier": "T2",
   "drivers": [
-    { "kind": "marker|rubric", "id": "<exact-source-driver>", "rationale": "<why it no longer applies>" }
+    { "kind": "rubric", "id": "<exact-source-driver>", "rationale": "<why it no longer applies>" }
   ]
 }
 ```
 
-`drivers` must disposition **exactly** the source receipt's marker rows plus rubric
+`drivers` must disposition **exactly** the source receipt's rubric
 classes: no omission, extra row, or substitute. Rationales remain human-audited
 architect prose; the guard checks set equality and exact source binding. Author
 Issue prose, signer strings, intake records, or fence metadata cannot substitute
@@ -743,7 +733,7 @@ Final acceptance requires:
    valid co-located producing-run evidence from its independent Claude Code CLI
    invocation, and the normal latest-lens/latest-final relationship holds;
 2. the full `checkTierGateGuard` is green on that exact current anchor, including
-   intake/history/demotion/current-revalidation and marker/L4 floors when applicable;
+   intake/history/demotion/current-revalidation and applicable L4 floors when applicable;
 3. clean final pass over that exact revision when required;
 4. body floors, stage completeness, and full finding-ledger guard green;
 5. every typed finding normalized and remedy outcome separate from defect
@@ -792,7 +782,7 @@ node scripts/publish-issue-body-sync.ts verify \
 Why this works:
 
 - tier validation uses `process.cwd()` and therefore sees tracked contract-evidence
-  and marker support files under `$REPO_ROOT`;
+  and tier-gate support files under `$REPO_ROOT`;
 - stage completeness derives `$WORKDIR` from the absolute draft path;
 - finding-ledger validation resolves `.review/<stem>` beside the absolute anchor.
 
@@ -1085,10 +1075,10 @@ an absolute anchor path:
 node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
 ```
 
-The marker screen is fail-closed. A red marker with a below-T3 assignment or a
-skipped mandatory stage blocks acceptance; unparseable input becomes T3.
+Tier-gate floors remain fail-closed for malformed fences, never-skipped safety
+floors, intake/high-watermark/demotion provenance, and applicable L4 requirements.
 Downward movement occurs only at final lens and never erases evidence. #973 owns
-auditable demotion/marker rules.
+auditable demotion and rubric rules.
 
 Tier stages/ceilings remain unchanged by #975:
 
@@ -1272,7 +1262,7 @@ not edit sibling Issues or add workflow/plugin/core machinery.
 - Let reviewer `type: security|scope-violation` self-activate protected authority.
 - Scan recommendation/economics prose to manufacture M3 zero-signal evidence.
 - Infer or synthesize missing raw Codex/browser economics during transcription.
-- Let a later reviewer marker move the independent M2 adoption boundary.
+- Let a later reviewer finding move the independent M2 adoption boundary.
 - Rewrite immutable pre-adoption captures to add M2/M5 tokens.
 - Add a confirmation reviewer pass solely to mint `SIMPLIFICATION_CLEAN`.
 - Treat `architectural-final` as M5 merely because it follows a lens.
