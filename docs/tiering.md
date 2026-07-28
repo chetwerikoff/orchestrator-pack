@@ -471,7 +471,7 @@ The final lens has four mandatory goals, in this exact order:
    explicitly reconsider whether the task still needs its current complexity tier:
    ask whether simplification or removal of higher-tier drivers makes a lower tier
    valid under the existing rubric. Apply the existing final-lens downgrade path
-   when it does; otherwise record why the current tier remains required. Marker/L4
+   when it does; otherwise record why the current tier remains required. Applicable L4
    floors and the active demotion contract still bind, so tier reconsideration
    never forces a downgrade. “Traces to a finding” alone is not a
    keep-justification. A lens verdict without both the forced-cut answer and an

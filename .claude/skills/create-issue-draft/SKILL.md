@@ -543,7 +543,7 @@ It has four mandatory goals, in this exact order:
    keep-justification explaining why it is necessary. As part of the same goal,
    explicitly reconsider whether the task still needs its current complexity tier;
    apply the final-lens downgrade path when higher-tier drivers are gone, otherwise
-   record why the tier remains required. Marker/L4 floors and #973 demotion
+   record why the tier remains required. Applicable L4 floors and #973 demotion
    mechanics still bind. “Traces to a finding” alone is not a keep-justification.
    A verdict without both forced-cut answer and explicit tier reconsideration is
    invalid.
