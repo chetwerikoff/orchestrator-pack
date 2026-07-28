@@ -1,6 +1,6 @@
 ---
 name: discuss-with-gpt
-description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". With only a brief and no artifact, route through create-issue-draft's brief-only entry and preserve the requested GPT competitive stage before acceptance. Otherwise run the standalone GPT adversarial loop (≤3 fresh-chat passes, evaluate-don't-obey) over a local markdown artifact. Also the canonical tracked browser-turn mechanics home for create-issue-draft; its one-shot turns use `npm run chatgpt-browser-turn`, while `driver.mjs` retains standalone adversarial duties. Browser-GPT twin of adversarial-draft-review; for «с кодексом» use that skill. Skip plain "создай драфт" with no «с gpt» marker.
+description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". With only a brief and no artifact, route through create-issue-draft's brief-only entry; that wrapper floors tier at T2 and requires the competitive pre-stage before the terminal GPT architectural lens. Otherwise run the standalone GPT adversarial loop (≤3 fresh-chat passes, evaluate-don't-obey) over a local markdown artifact. Also the canonical tracked browser-turn mechanics home for create-issue-draft; its one-shot turns use `npm run chatgpt-browser-turn`, while `driver.mjs` retains standalone adversarial duties. Browser-GPT twin of adversarial-draft-review; for «с кодексом» use that skill. Skip plain "создай драфт" with no «с gpt» marker.
 ---
 
 # discuss-with-gpt
@@ -18,9 +18,8 @@ Two roles under the GPT-chat authoring flow
 - **Mechanics home** — `create-issue-draft` one-shot task/review turns use the
   tracked Issue #964 helper `scripts/chatgpt-browser-turn.ts` through
   `npm run chatgpt-browser-turn -- ...`: task-chat turns use exact `--chat-url`;
-  fresh task/competitive/final turns use `--new-chat --project-url`; ordinary
-  architectural review opens one dedicated chat once and reuses its exact
-  `--chat-url` across ordinary architectural rounds. The old untracked scratchpad
+  fresh task/competitive/terminal-architectural turns use `--new-chat --project-url`;
+  The old untracked scratchpad
   is not a fallback transport for this flow.
 
 **Trust model differs from Codex.** Codex returns process-level JSON. This path
@@ -31,8 +30,8 @@ contract. Treat either path according to its own validation contract.
 
 Issue-body floors, ledger normalization, tier gate, decision logging, chat-role
 separation, and acceptance stay owned by `create-issue-draft`'s current Cursor
-flow-manager; browser GPT owns content/finding dispositions and the architect owns
-only the final lens judgment defined there.
+flow-manager; browser GPT owns content/finding dispositions. Claude runs only the
+T3 `architectural-lens` stage defined there — not a universal final architect lens.
 
 ## When to invoke
 
@@ -40,7 +39,7 @@ only the final lens judgment defined there.
 |---------|-------|
 | «с gpt» / «с гпт» / «обсуди с gpt» / «драфт с gpt» / "draft with gpt" | **this skill** |
 | «с кодексом» / "with codex" | [`adversarial-draft-review`](../adversarial-draft-review/SKILL.md) |
-| GPT-authored Issue task (Issue + task-chat links) | `create-issue-draft` — this skill supplies the tracked persistent-task / dedicated-architectural / fresh-competitive-final browser mechanics |
+| GPT-authored Issue task (Issue + task-chat links) | `create-issue-draft` — this skill supplies tracked task-chat, fresh competitive when selected, and fresh terminal architectural browser mechanics |
 | plain «создай драфт» (no marker) | `create-issue-draft` directly |
 | bug/root-cause consult («почему упал…») | `investigate-root-cause` / `codex:rescue` |
 
@@ -48,7 +47,7 @@ only the final lens judgment defined there.
 gpt" with no existing local artifact or Issue, do **not** start the standalone
 driver. Route immediately to `create-issue-draft`'s brief-only entry and record
 that this wrapper was explicitly requested. That flow creates the Issue and
-forces its browser-GPT competitive stage before acceptance; accepted findings
+forces its browser-GPT competitive pre-stage before the terminal GPT architectural lens; accepted findings
 are relayed through the task chat and therefore change the Issue itself.
 
 Do not impose the standalone loop by default — it spends ChatGPT quota and
@@ -334,7 +333,7 @@ tracked helper turns.
 ## Tabs and chat identities: reuse one, never merge streams
 
 For tracked `create-issue-draft` turns, `--chat-url <url>` targets an exact
-existing task or dedicated ordinary-architectural conversation, while
+existing task or competitive review conversation, while
 `--new-chat --project-url <url>` creates a fresh destination. The helper owns page
 selection/coordination; do not use a legacy send to work around helper
 busy/recovery state.
@@ -348,10 +347,8 @@ the project URL.
 
 - task chat: its own stable `--chat-url`;
 - competitive: a fresh `--new-chat` per pass, never reused;
-- ordinary architectural: the first round opens one `--new-chat`, then all later
-  ordinary architectural rounds reuse that exact returned `--chat-url`;
-- final architectural verification: a fresh `--new-chat`, never the dedicated
-  ordinary-architectural or any prior review URL.
+- terminal GPT architectural lens: a fresh `--new-chat`, never the task chat,
+  competitive review chat, or any prior review URL.
 
 A successful standalone review turn's durable `ARTIFACT` may provide its exact
 chat URL for audit recording, but that URL is not an input to a later standalone
@@ -484,8 +481,8 @@ then publish when asked). Brief-only creation and competitive-stage runs stay
 inside `create-issue-draft` **before acceptance** — captures land as
 `pass-NN-competitive.capture.txt` in the task's review workdir, and accepted
 findings are relayed to the task chat so the Issue is updated. Task-chat turns
-and architectural/final review turns are normal `create-issue-draft` stages, not
-the standalone adversarial loop. No GPT pass replaces the final architect lens.
+and reviewer lens turns are normal `create-issue-draft` stages, not
+the standalone adversarial loop. No GPT pass replaces the T3 Claude `architectural-lens` or skips the fixed per-tier topology.
 
 ### 8. Publish
 
@@ -509,12 +506,9 @@ GPT pass state in the owning artifact/Issue flow.
 - Run legacy/scratchpad sends while helper-owned unresolved state blocks
   coexistence for the configured profile.
 - Proceed silently on standalone `skipped` / `invalid` / `fallback_codex`.
-- Let a browser review replace the final architect lens or task-chat content-fix
-  path in `create-issue-draft`.
+- Let a browser review replace the T3 Claude lens, terminal architectural lens, or task-chat content-fix path in `create-issue-draft`.
 - Merge task and review streams into one chat.
-- Reuse any competitive or final `create-issue-draft` review chat for a later
-  pass, or create a second ordinary-architectural chat after the dedicated one
-  exists.
+- Reuse any competitive or terminal `create-issue-draft` review chat for a later pass.
 - Trust `VALIDATION≠ok` standalone replies without manual checks.
 - Type credentials or attempt login.
 - Report standalone liveness without polling the page.
