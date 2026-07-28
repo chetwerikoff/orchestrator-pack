@@ -85,7 +85,7 @@ On the supported Chromium/Playwright runtime, operators should verify the produc
 
 If either live boundary probe is unavailable or unproven, the helper keeps possible-delivery behavior and does not mint proven non-delivery.
 
-Operator probe entrypoint: `npm run chatgpt-browser-turn -- gate-b-characterization --profile <path> --cdp <url> [--chat-url <url>]`. Persists `gate-b-characterization.json` under the configured profile store; proven non-delivery requires that record to be complete. The probe reloads the selected ChatGPT surface to generate live traffic; if no extension service-worker HTTP is observed passively, it performs a bounded CDP stimulus fetch on an attached service-worker target while requiring the configured-context request listener to already be live.
+Operator probe entrypoint: `npm run chatgpt-browser-turn -- gate-b-characterization --profile <path> --cdp <url> [--chat-url <url>]`. Persists `gate-b-characterization.json` under the configured profile store; proven non-delivery requires that record to be complete. The probe reloads the selected ChatGPT surface and accepts only `BrowserContext` requests where `request.serviceWorker()` is truthy; page-owned HTTP or CDP-only network events do not satisfy the service-worker probe.
 
 ## Result and retry rules
 

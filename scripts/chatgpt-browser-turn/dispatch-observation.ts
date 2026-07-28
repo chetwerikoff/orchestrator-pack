@@ -88,7 +88,7 @@ function attachCdpOutboundWebSocketObserver(
 
 export const GATE_B_CHARACTERIZATION_VERSION = 'gate-b-characterization/v1';
 
-export const GATE_B_PROBE_WINDOW_MS = 30_000;
+export const GATE_B_PROBE_WINDOW_MS = 60_000;
 
 export const GATE_B_REQUIRED_PROBES = [
   'service-worker-owned-http-on-configured-context',
@@ -150,7 +150,6 @@ export async function runGateBCharacterization(page: {
   }
 
   let serviceWorkerHttpObserved = false;
-  let contextHttpObserved = false;
   let websocketSentObserved = false;
   let serviceWorkerHttpDetail = 'no_service_worker_http_observed_within_probe_window';
   const noteServiceWorkerHttp = (detail = 'context_request_observed') => {
@@ -160,11 +159,8 @@ export async function runGateBCharacterization(page: {
   const noteWebSocketSent = () => {
     websocketSentObserved = true;
   };
-  const serviceWorkerCount = typeof context.serviceWorkers === 'function' ? context.serviceWorkers().length : 0;
-
   if (typeof context.on === 'function') {
     context.on('request', (request: { url: () => string; serviceWorker?: () => unknown | null }) => {
-      contextHttpObserved = true;
       if (typeof request.serviceWorker === 'function' && request.serviceWorker()) {
         noteServiceWorkerHttp();
       }
@@ -177,9 +173,6 @@ export async function runGateBCharacterization(page: {
     const targets: unknown[] = [page];
     if (typeof context.pages === 'function') {
       for (const otherPage of context.pages()) targets.push(otherPage);
-    }
-    if (typeof context.serviceWorkers === 'function') {
-      targets.push(...context.serviceWorkers());
     }
     for (const target of targets) {
       if (typeof target !== 'object' || target === null || observedCdpTargets.has(target)) continue;
@@ -209,6 +202,12 @@ export async function runGateBCharacterization(page: {
   if (typeof page.reload === 'function') {
     try {
       await page.reload({ waitUntil: 'domcontentloaded' });
+      if (typeof context.pages === 'function') {
+        for (const otherPage of context.pages()) {
+          if (otherPage === page) continue;
+          void otherPage.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+        }
+      }
     } catch {
       // Passive observation may still succeed on an already-active ChatGPT surface.
     }
@@ -218,49 +217,6 @@ export async function runGateBCharacterization(page: {
   while (Date.now() < deadline) {
     if (serviceWorkerHttpObserved && websocketSentObserved) break;
     await new Promise((resolve) => { setTimeout(resolve, 100); });
-  }
-
-  if (!serviceWorkerHttpObserved && serviceWorkerCount > 0 && contextHttpObserved && typeof context.newCDPSession === 'function') {
-    try {
-      const cdp = await context.newCDPSession(page);
-      await cdp.send('Target.setDiscoverTargets', { discover: true });
-      await cdp.send('Network.enable');
-      let cdpServiceWorkerHttpObserved = false;
-      const noteCdpServiceWorkerHttp = () => {
-        cdpServiceWorkerHttpObserved = true;
-      };
-      cdp.on('Network.requestWillBeSent', noteCdpServiceWorkerHttp);
-      cdp.on('event', (payload: { method?: string }) => {
-        if (payload?.method === 'Network.requestWillBeSent') noteCdpServiceWorkerHttp();
-      });
-      const targets = await cdp.send('Target.getTargets') as { targetInfos?: Array<{ targetId?: string; type?: string }> };
-      const serviceWorkerTarget = (targets.targetInfos ?? []).find((row) => row.type === 'service_worker' && row.targetId);
-      if (serviceWorkerTarget?.targetId) {
-        const attached = await cdp.send('Target.attachToTarget', {
-          targetId: serviceWorkerTarget.targetId,
-          flatten: true,
-        }) as { sessionId?: string };
-        const sessionId = String(attached.sessionId ?? '');
-        if (sessionId) {
-          const flatCdp = cdp as FlatCdpSessionSend;
-          await sendFlatChildCdpCommand(flatCdp, sessionId, 'Network.enable');
-          await sendFlatChildCdpCommand(flatCdp, sessionId, 'Runtime.enable');
-          await sendFlatChildCdpCommand(flatCdp, sessionId, 'Runtime.evaluate', {
-            expression: "(async () => { await fetch('https://chatgpt.com/favicon.ico', { mode: 'no-cors' }); })()",
-            awaitPromise: true,
-          });
-          const stimulusDeadline = Date.now() + 5_000;
-          while (Date.now() < stimulusDeadline && !cdpServiceWorkerHttpObserved) {
-            await new Promise((resolve) => { setTimeout(resolve, 100); });
-          }
-          if (cdpServiceWorkerHttpObserved) {
-            noteServiceWorkerHttp('context_http_and_service_worker_cdp_network_observed');
-          }
-        }
-      }
-    } catch {
-      // Stimulus failure is non-fatal; incomplete characterization remains fail-closed.
-    }
   }
 
   probes.push({
@@ -495,7 +451,7 @@ export async function establishDispatchObservationBoundary(
     setDiscoverTargets: true,
     getTargets: true,
     attachToTarget: true,
-    sendMessageToTarget: true,
+    sendMessageToTarget: false,
     networkEnable: true,
     webSocketFrameSent: true,
     targetAttached: true,
@@ -520,16 +476,15 @@ export async function establishDispatchObservationBoundary(
       return;
     }
     try {
-      if (cdpMethods.sendMessageToTarget && cdpMethods.networkEnable) {
-        await sendChildCdpCommand(cdp, sessionId, 'Network.enable');
-      } else {
+      if (!cdpMethods.networkEnable) {
         failedTargetAttach = true;
         boundary.markCoverageLost();
         boundary.websocketTargetsCoverage = 'incomplete';
         return;
       }
+      await sendFlatChildCdpCommand(cdp as FlatCdpSessionSend, sessionId, 'Network.enable');
       if (waitingForDebugger && cdpMethods.runIfWaitingForDebugger) {
-        await sendChildCdpCommand(cdp, sessionId, 'Runtime.runIfWaitingForDebugger');
+        await sendFlatChildCdpCommand(cdp as FlatCdpSessionSend, sessionId, 'Runtime.runIfWaitingForDebugger');
       }
       attachedTargetCount++;
     } catch {
@@ -550,9 +505,6 @@ export async function establishDispatchObservationBoundary(
       for (const otherPage of context.pages()) {
         targets.push(otherPage);
       }
-    }
-    if (typeof context.serviceWorkers === 'function') {
-      targets.push(...context.serviceWorkers());
     }
     for (const target of targets) {
       if (typeof target === 'object' && target !== null && observedCdpTargets.has(target)) continue;
@@ -589,9 +541,17 @@ export async function establishDispatchObservationBoundary(
     }
   };
 
+  const onSiblingTargetAfterArm = (): void => {
+    if (armed) {
+      boundary.markCoverageLost();
+      boundary.websocketTargetsCoverage = 'incomplete';
+    }
+    void attachSiblingTarget();
+  };
+
   if (typeof context.on === 'function') {
-    context.on('page', () => { void attachSiblingTarget(); });
-    context.on('serviceworker', () => { void attachSiblingTarget(); });
+    context.on('page', onSiblingTargetAfterArm);
+    context.on('serviceworker', onSiblingTargetAfterArm);
   }
 
   if (typeof context.newCDPSession === 'function') {
