@@ -467,3 +467,168 @@ describe('issue 1028 invocation-local witness surface fallback', () => {
     vi.restoreAllMocks();
   });
 });
+
+
+describe('issue 1023 timeout diagnostics', () => {
+  it('AC7: before-send browser timeout records distinguishable driver diagnostic operation', async () => {
+    vi.resetModules();
+    vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
+      return {
+        ...actual,
+        verifyProfile: vi.fn(async () => {
+          throw new actual.BrowserOperationTimeoutError('owner_probe');
+        }),
+      };
+    });
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    const input = join(root, 'timeout-input.txt');
+    const output = join(root, 'timeout-diagnostic.txt');
+    writeFileSync(input, 'hello\n');
+    let stdout = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    const exitCode = await runCli([
+      'turn',
+      '--profile', join(root, 'profile'),
+      '--cdp', cdp,
+      '--input', input,
+      '--output', output,
+      '--chat-url', 'https://chatgpt.com/c/example',
+      '--timeout-ms', '30000',
+    ]);
+    process.stdout.write = originalStdout;
+    vi.resetModules();
+    expect(exitCode).toBe(13);
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(body.cause).toBe('driver_exception_before_send');
+    expect(body.driver_diagnostic_id).toBeDefined();
+    const diagnostic = readDriverDiagnostic(profileKey, String(body.invocation_id));
+    expect(diagnostic?.operation).toBe('browser_operation_timeout:owner_probe');
+  });
+});
+
+
+describe('issue 1023 runTurn timeout integration', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.doUnmock('../chatgpt-browser-turn/ui-adapter.ts');
+    vi.doUnmock('../chatgpt-browser-turn/state.ts');
+    vi.doUnmock('../chatgpt-browser-turn/publication.ts');
+  });
+
+  function turnArgvFor(outputPath: string, flags: string[] = [], includeChatUrl = true): string[] {
+    const input = join(root, `turn-input-${randomUUID()}.txt`);
+    writeFileSync(input, 'turn payload\n');
+    return [
+      'turn',
+      '--profile', join(root, 'profile'),
+      '--cdp', cdp,
+      '--input', input,
+      '--output', outputPath,
+      ...(includeChatUrl ? ['--chat-url', 'https://chatgpt.com/c/fixture-conv'] : []),
+      ...flags,
+    ];
+  }
+
+  async function runWithSendMock(
+    argv: string[],
+    sendResult: Record<string, unknown>,
+    publicationStub = true,
+  ): Promise<number> {
+    vi.resetModules();
+    const stubPage = {
+      close: vi.fn(async () => {}),
+      goto: vi.fn(async () => {}),
+      url: () => 'https://chatgpt.com/c/fixture-conv',
+      bringToFront: vi.fn(async () => {}),
+    };
+    const stubBrowser = {
+      close: vi.fn(async () => {}),
+      version: () => 'chromium-fixture',
+      contexts: () => [{ pages: () => [] }],
+    };
+    vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
+      const verified = { state: 'verified' as const, cause: 'ok' };
+      return {
+        ...actual,
+        verifyProfile: vi.fn(async () => verified),
+        loadChromium: vi.fn(() => ({ connectOverCDP: vi.fn(async () => stubBrowser) })),
+        openTurnPage: vi.fn(async () => ({ page: stubPage, owned: true, provisionalId: randomUUID() })),
+        runtimeWitnessSurfaceAvailable: vi.fn(async () => true),
+        sendTurn: vi.fn(async () => sendResult),
+      };
+    });
+    if (publicationStub) {
+      vi.doMock('../chatgpt-browser-turn/publication.ts', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('../chatgpt-browser-turn/publication.ts')>();
+        return {
+          ...actual,
+          publishReply: vi.fn(() => ({ state: 'committed_ok', output_bytes: 13, output_sha256: 'sha256:fixture' })),
+        };
+      });
+    }
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    return runCli(argv);
+  }
+
+  it('AC5: stream_timeout after possible delivery durably records conversation_incident via runTurn', async () => {
+    const output = join(root, 'ac5-runturn-out.txt');
+    const exitCode = await runWithSendMock(turnArgvFor(output), {
+      state: 'stream_timeout',
+      cause: 'no_terminal_evidence',
+      possibleDelivery: true,
+      userMessageId: 'user-owned-12345678',
+    });
+    expect(exitCode).toBe(11);
+    const listed = statusList(profileKey);
+    expect(listed.items?.some((item) => item.kind === 'conversation_incident' && item.phase === 'possible_delivery')).toBe(true);
+  });
+
+  it('AC12: new-chat stream_timeout with unproven identity becomes fresh_orphan via runTurn', async () => {
+    const output = join(root, 'ac12-runturn-out.txt');
+    const exitCode = await runWithSendMock(
+      turnArgvFor(output, ['--new-chat', '--project-url', 'https://chatgpt.com/g/g-p-6a5dae8454f88191b03140356941cf89-issues/project'], false),
+      {
+        state: 'stream_timeout',
+        cause: 'no_terminal_evidence',
+        possibleDelivery: true,
+        userMessageId: 'user-owned-12345678',
+      },
+    );
+    expect(exitCode).toBe(12);
+    const listed = statusList(profileKey);
+    expect(listed.items?.some((item) => item.kind === 'fresh_orphan' && item.phase === 'possible_delivery')).toBe(true);
+  });
+
+  it('AC8: successful runTurn publication remains exactly-once after cleanup-unconfirmed', async () => {
+    const output = join(root, 'ac8-runturn-out.txt');
+    const exitCode = await runWithSendMock(
+      turnArgvFor(output),
+      {
+        state: 'ok',
+        cause: 'completed',
+        possibleDelivery: true,
+        reply: 'committed reply text',
+        userMessageId: 'user-fixture-12345678',
+        assistantMessageId: 'asst-fixture-12345678',
+        conversationId: 'https://chatgpt.com/c/fixture-conv',
+      },
+      false,
+    );
+    expect(exitCode).toBe(0);
+    expect(readFileSync(output, 'utf8')).toBe('committed reply text');
+    const invocations = readdirSync(profileDirs(profileKey).publications);
+    const invocationId = invocations.find((name) => name.endsWith('.json'))!.replace('.json', '');
+    expect(publicationStatus(profileKey, invocationId).state).toBe('committed_ok');
+    const { boundedResourceCleanup } = await import('../chatgpt-browser-turn/browser-session.ts');
+    const cleanup = await boundedResourceCleanup(() => new Promise<void>(() => {}), 50);
+    expect(cleanup).toBe('unconfirmed');
+    expect(publicationStatus(profileKey, invocationId).state).toBe('committed_ok');
+    expect(readFileSync(output, 'utf8')).toBe('committed reply text');
+  });
+});

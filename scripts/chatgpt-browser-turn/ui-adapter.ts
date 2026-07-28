@@ -2,7 +2,17 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { abandonLatePageHandle, boundedResourceCleanup, RESOURCE_CLEANUP_BOUND_MS } from './browser-session.ts';
 import { revalidateProcessDestinationReservations } from './coordination.ts';
+import {
+  assertDispatchObservationReadyForDispatch,
+  DispatchObservationEstablishmentError,
+  establishDispatchObservationBoundary,
+  evaluateDispatchRequestNotObserved,
+  recordDispatchObservationDiagnostic,
+  type DispatchObservationBoundary,
+} from './dispatch-observation.ts';
+import { configuredProfileKey } from './storage-common.ts';
 import {
   mergeContinuationSegments,
   SEMANTIC_UI_FILTER,
@@ -39,7 +49,8 @@ export interface ProfileVerification {
 
 interface CdpOwnerModule {
   verifyCdpProfile(input: { cdp: string; profile: string }): { ok?: boolean; message?: string; reason?: string } | undefined;
-  isCdpReachable(cdp: string): Promise<boolean>;
+  verifyCdpProfileBounded?(input: { cdp: string; profile: string; timeoutMs: number }): Promise<{ ok?: boolean; message?: string; reason?: string; timedOut?: boolean } | undefined>;
+  isCdpReachable(cdp: string, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<boolean>;
 }
 
 async function loadCdpOwnerModule(): Promise<CdpOwnerModule> {
@@ -50,15 +61,40 @@ async function loadCdpOwnerModule(): Promise<CdpOwnerModule> {
   return await import(pathToFileURL(modulePath).href) as CdpOwnerModule;
 }
 
-export async function verifyProfile(config: BrowserConfig): Promise<ProfileVerification> {
+export async function verifyProfile(
+  config: BrowserConfig,
+  segmentBudget?: TurnOperationBudget,
+): Promise<ProfileVerification> {
   try {
     const mod = await loadCdpOwnerModule();
+    if (segmentBudget) {
+      const ownerWaitMs = segmentBudget.clampOperationWaitMs();
+      if (ownerWaitMs <= 0) throw new BrowserOperationTimeoutError('profile_segment_exhausted');
+      const bounded = mod.verifyCdpProfileBounded;
+      if (!bounded) throw new BrowserOperationTimeoutError('owner_probe', 'bounded_mode_missing');
+      const result = await bounded({ cdp: config.cdp, profile: config.profile, timeoutMs: ownerWaitMs });
+      if (result?.timedOut || result?.message === 'owner_probe_timeout') {
+        throw new BrowserOperationTimeoutError('owner_probe');
+      }
+      if (result?.ok) return { state: 'verified', cause: 'verified', evidence: String(result.message ?? result.reason ?? 'verified') };
+      const reachWaitMs = segmentBudget.clampOperationWaitMs();
+      if (reachWaitMs <= 0) throw new BrowserOperationTimeoutError('profile_segment_exhausted');
+      try {
+        const reachable = await mod.isCdpReachable(config.cdp, { timeoutMs: reachWaitMs });
+        if (!reachable) return { state: 'unavailable', cause: 'chrome_not_running', evidence: 'cdp_unreachable' };
+      } catch (reachError) {
+        if (isCdpReachabilityTimeout(reachError)) throw new BrowserOperationTimeoutError('cdp_reachability');
+        throw reachError;
+      }
+      return { state: 'mismatch', cause: String(result?.reason ?? 'owner_unverifiable'), evidence: String(result?.message ?? 'profile mismatch') };
+    }
     const result = mod.verifyCdpProfile({ cdp: config.cdp, profile: config.profile });
     if (result?.ok) return { state: 'verified', cause: 'verified', evidence: String(result.message ?? result.reason ?? 'verified') };
     const reachable = await mod.isCdpReachable(config.cdp).catch(() => false);
     if (!reachable) return { state: 'unavailable', cause: 'chrome_not_running', evidence: 'cdp_unreachable' };
     return { state: 'mismatch', cause: String(result?.reason ?? 'owner_unverifiable'), evidence: String(result?.message ?? 'profile mismatch') };
   } catch (error) {
+    if (error instanceof BrowserOperationTimeoutError) throw error;
     return { state: 'mismatch', cause: 'owner_unverifiable', evidence: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -93,8 +129,145 @@ interface NetworkMessage extends CausalMessageObservation {
 
 export const __testTiming: { now?: () => number } = {};
 
+export const MAX_BROWSER_OPERATION_WAIT_MS = 30_000;
+export const WITNESS_INSTALL_MAX_WAIT_MS = 10_000;
+
+export interface TurnOperationBudget {
+  readonly endsAtMs: number;
+  remainingMs(now?: number): number;
+  clampOperationWaitMs(now?: number): number;
+  canStartOperation(now?: number): boolean;
+}
+
+export function createTurnOperationBudget(budgetMs: number, now = Date.now()): TurnOperationBudget {
+  const endsAtMs = now + Math.max(0, budgetMs);
+  return {
+    endsAtMs,
+    remainingMs(now = Date.now()) {
+      return Math.max(0, endsAtMs - now);
+    },
+    clampOperationWaitMs(now = Date.now()) {
+      return Math.min(MAX_BROWSER_OPERATION_WAIT_MS, Math.max(0, endsAtMs - now));
+    },
+    canStartOperation(now = Date.now()) {
+      return now < endsAtMs;
+    },
+  };
+}
+
+export function createPreSendSegmentBudget(timeoutMs: number, now = Date.now()): TurnOperationBudget {
+  return createTurnOperationBudget(Math.min(timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS), now);
+}
+
+export class BrowserOperationTimeoutError extends Error {
+  readonly operationClass: string;
+
+  constructor(operationClass: string, detail?: string) {
+    const prefix = 'browser_operation_timeout:' + operationClass;
+    super(detail ? prefix + ':' + detail : prefix);
+    this.name = 'BrowserOperationTimeoutError';
+    this.operationClass = operationClass;
+  }
+}
+
+export function isPlaywrightTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === 'TimeoutError'
+    || /timeout/i.test(error.message)
+    || /Timeout \d+ms exceeded/i.test(error.message);
+}
+
+export function coerceBrowserOperationTimeout(error: unknown, operationClass: string): unknown {
+  if (error instanceof BrowserOperationTimeoutError) return error;
+  if (isPlaywrightTimeoutError(error)) return new BrowserOperationTimeoutError(operationClass);
+  return error;
+}
+
+export function browserOperationClassFromError(error: unknown): string | undefined {
+  if (error instanceof BrowserOperationTimeoutError) return error.operationClass;
+  if (error instanceof Error && error.message.startsWith('browser_operation_timeout:')) {
+    return error.message.split(':')[1] ?? undefined;
+  }
+  if (isCdpReachabilityTimeout(error)) return 'cdp_reachability';
+  if (isPlaywrightTimeoutError(error)) return 'playwright_operation';
+  return undefined;
+}
+
+function isCdpReachabilityTimeout(error: unknown): boolean {
+  return error instanceof Error
+    && (error.message === 'cdp_reachability_timeout' || error.name === 'CdpReachabilityTimeoutError');
+}
+
 function wallClock(): number {
   return __testTiming.now?.() ?? Date.now();
+}
+
+function loopOperationWaitMs(loopEndsAt: number, now = wallClock()): number {
+  return Math.min(MAX_BROWSER_OPERATION_WAIT_MS, Math.max(0, loopEndsAt - now));
+}
+
+function segmentOperationWait(
+  segmentBudget?: TurnOperationBudget,
+  fallbackMs = MAX_BROWSER_OPERATION_WAIT_MS,
+): number {
+  return segmentBudget?.clampOperationWaitMs() ?? fallbackMs;
+}
+
+async function boundedPlaywrightOperation<T>(waitMs: number, operation: () => Promise<T>): Promise<T> {
+  if (waitMs <= 0) throw new BrowserOperationTimeoutError('playwright_operation');
+  return await Promise.race([
+    operation(),
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new BrowserOperationTimeoutError('playwright_operation')), waitMs);
+    }),
+  ]);
+}
+
+async function boundedLocatorCount(locator: any, waitMs: number): Promise<number> {
+  if (waitMs <= 0) return 0;
+  return await boundedPlaywrightOperation(waitMs, () => locator.count());
+}
+
+export function witnessInstallOperationWaitMs(segmentBudget?: TurnOperationBudget): number {
+  const remainder = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  return Math.min(remainder, WITNESS_INSTALL_MAX_WAIT_MS);
+}
+
+function playwrightTimeout(waitMs: number): { timeout: number } | undefined {
+  return waitMs > 0 ? { timeout: waitMs } : undefined;
+}
+
+type OperationWaitSource = number | (() => number);
+
+function resolveOperationWaitMs(source?: OperationWaitSource): number {
+  const ms = typeof source === 'function' ? source() : (source ?? MAX_BROWSER_OPERATION_WAIT_MS);
+  return ms > 0 ? ms : 0;
+}
+
+async function readLocatorAttribute(locator: any, attr: string, waitSource?: OperationWaitSource): Promise<string | null> {
+  const waitMs = resolveOperationWaitMs(waitSource);
+  if (waitMs <= 0) return null;
+  try {
+    return await locator.getAttribute(attr, playwrightTimeout(waitMs)!);
+  } catch (error) {
+    throw coerceBrowserOperationTimeout(error, 'service_attribute');
+  }
+}
+
+async function readWitnessAttribute(locator: any, attr: string, waitSource: OperationWaitSource): Promise<string | null> {
+  const waitMs = resolveOperationWaitMs(waitSource);
+  if (waitMs <= 0) throw new BrowserOperationTimeoutError('witness_surface');
+  try {
+    return await locator.getAttribute(attr, playwrightTimeout(waitMs)!);
+  } catch (error) {
+    throw coerceBrowserOperationTimeout(error, 'witness_surface');
+  }
+}
+
+function requireOperationWait(waitSource?: OperationWaitSource, operationClass = 'product_status'): number {
+  const waitMs = resolveOperationWaitMs(waitSource);
+  if (waitMs <= 0) throw new BrowserOperationTimeoutError(operationClass);
+  return waitMs;
 }
 
 interface NetworkWitnessState {
@@ -972,22 +1145,22 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
   return state;
 }
 
-async function serviceId(locator: any): Promise<string> {
+async function serviceId(locator: any, waitSource?: OperationWaitSource): Promise<string> {
   for (const attr of ['data-message-id', 'data-turn-id']) {
-    const direct = await locator.getAttribute(attr).catch(() => null);
+    const direct = await readLocatorAttribute(locator, attr, waitSource);
     if (direct && direct.length >= 8) return direct;
     const parent = locator.locator(`[${attr}]`).first();
-    const nested = await parent.getAttribute(attr).catch(() => null);
+    const nested = await readLocatorAttribute(parent, attr, waitSource);
     if (nested && nested.length >= 8) return nested;
   }
   return '';
 }
 
-async function parentServiceId(locator: any): Promise<string> {
+async function parentServiceId(locator: any, waitSource?: OperationWaitSource): Promise<string> {
   for (const attr of ['data-parent-message-id', 'data-parent-turn-id']) {
-    const direct = await locator.getAttribute(attr).catch(() => null);
+    const direct = await readLocatorAttribute(locator, attr, waitSource);
     if (direct && direct.length >= 8) return direct;
-    const nested = await locator.locator(`[${attr}]`).first().getAttribute(attr).catch(() => null);
+    const nested = await readLocatorAttribute(locator.locator(`[${attr}]`).first(), attr, waitSource);
     if (nested && nested.length >= 8) return nested;
   }
   return '';
@@ -1004,38 +1177,50 @@ export function witnessSurfaceProbeRequiresDowngrade(
   return true;
 }
 
-export async function runtimeWitnessSurfaceAvailable(page: any): Promise<WitnessSurfaceProbe> {
+export async function runtimeWitnessSurfaceAvailable(
+  page: any,
+  segmentBudget?: TurnOperationBudget,
+): Promise<WitnessSurfaceProbe> {
+  const clampWitnessWait = (): number => {
+    const waitMs = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+    if (segmentBudget && waitMs <= 0) throw new BrowserOperationTimeoutError('witness_surface');
+    return waitMs;
+  };
+  let waitMs = clampWitnessWait();
   const messages = page.locator('[data-message-author-role]');
   let count: number;
   try {
-    count = await messages.count();
-  } catch {
+    count = await boundedLocatorCount(messages, waitMs);
+  } catch (error) {
+    if (error instanceof BrowserOperationTimeoutError) throw error;
     return 'absent';
   }
   if (count === 0) return 'empty';
   const userIds = new Set<string>();
   const assistantParents: string[] = [];
   for (let index = Math.max(0, count - 8); index < count; index++) {
+    waitMs = clampWitnessWait();
     const locator = messages.nth(index);
-    const role = await locator.getAttribute('data-message-author-role').catch(() => null);
+    const role = await readWitnessAttribute(locator, 'data-message-author-role', clampWitnessWait);
     if (role === 'user') {
-      const id = await serviceId(locator);
+      const id = await serviceId(locator, clampWitnessWait);
       if (id) userIds.add(id);
     } else if (role === 'assistant') {
-      const id = await serviceId(locator);
-      const parent = await parentServiceId(locator);
+      const id = await serviceId(locator, clampWitnessWait);
+      const parent = await parentServiceId(locator, clampWitnessWait);
       if (id && parent) assistantParents.push(parent);
     }
   }
   if (assistantParents.some((parent) => userIds.has(parent))) return 'available';
   for (let index = Math.max(0, count - 8); index < count - 1; index++) {
+    waitMs = clampWitnessWait();
     const locator = messages.nth(index);
     const next = messages.nth(index + 1);
-    const role = await locator.getAttribute('data-message-author-role').catch(() => null);
-    const nextRole = await next.getAttribute('data-message-author-role').catch(() => null);
+    const role = await readWitnessAttribute(locator, 'data-message-author-role', clampWitnessWait);
+    const nextRole = await readWitnessAttribute(next, 'data-message-author-role', clampWitnessWait);
     if (role !== 'user' || nextRole !== 'assistant') continue;
-    const userId = await serviceId(locator);
-    const turnStart = await next.getAttribute('data-turn-start-message').catch(() => null);
+    const userId = await serviceId(locator, clampWitnessWait);
+    const turnStart = await readWitnessAttribute(next, 'data-turn-start-message', clampWitnessWait);
     if (userId && turnStart === 'true') return 'available';
   }
   return 'absent';
@@ -1046,8 +1231,11 @@ export interface ProductStatusSurface {
   readonly composer: boolean;
 }
 
-export async function productStatusText(page: any): Promise<ProductStatusSurface> {
-  const composer = (await page.locator('#prompt-textarea').count().catch(() => 0)) > 0;
+export async function productStatusText(page: any, waitSource?: OperationWaitSource): Promise<ProductStatusSurface> {
+  const composer = (await boundedLocatorCount(
+    page.locator('#prompt-textarea'),
+    requireOperationWait(waitSource, 'product_status'),
+  )) > 0;
   const selectors = [
     '[role="alert"]',
     '[role="dialog"]',
@@ -1063,10 +1251,12 @@ export async function productStatusText(page: any): Promise<ProductStatusSurface
   const parts: string[] = [];
   for (const selector of selectors) {
     const locator = page.locator(selector);
-    const count = Math.min(await locator.count().catch(() => 0), 8);
+    const countWait = requireOperationWait(waitSource, 'product_status');
+    const count = Math.min(await boundedLocatorCount(locator, countWait), 8);
     for (let index = 0; index < count; index++) {
-      const text = await locator.nth(index).innerText().catch(() => '');
-      if (text) parts.push(text);
+      const textWait = requireOperationWait(waitSource, 'product_status');
+      const text = await boundedPlaywrightOperation(textWait, () => locator.nth(index).innerText(playwrightTimeout(textWait)!));
+      if (text) parts.push(String(text));
     }
   }
   return { text: parts.join('\n'), composer };
@@ -1083,11 +1273,11 @@ export function classifyProductWall(surface: ProductStatusSurface): { state?: 'q
   return {};
 }
 
-async function pageWalls(page: any): Promise<{ state?: string; cause?: string }> {
-  return classifyProductWall(await productStatusText(page));
+async function pageWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
+  return classifyProductWall(await productStatusText(page, waitSource));
 }
 
-async function semanticNodes(locator: any): Promise<SemanticNode[]> {
+async function semanticNodes(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<SemanticNode[]> {
   return await locator.evaluate((root: Element, filter: {
     skippedTags: readonly string[];
     testidPattern: string;
@@ -1132,17 +1322,18 @@ async function semanticNodes(locator: any): Promise<SemanticNode[]> {
       return walkChildren(el);
     };
     return walkChildren(root);
-  }, SEMANTIC_UI_FILTER);
+  }, SEMANTIC_UI_FILTER, { timeout: waitMs });
 }
 
-async function assistantText(locator: any): Promise<string> {
-  return serializeSemanticNodes(await semanticNodes(locator));
+async function assistantText(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<string> {
+  return serializeSemanticNodes(await semanticNodes(locator, waitMs));
 }
 
 async function observedDispatchUserIds(
   page: any,
   network: NetworkWitnessState,
   baselineIds: ReadonlySet<string>,
+  waitSource?: OperationWaitSource,
 ): Promise<Set<string>> {
   const serviceIds = [...network.serviceSubmittedUserIds].filter((id) => !baselineIds.has(id));
   if (serviceIds.length === 1) return new Set(serviceIds);
@@ -1151,9 +1342,11 @@ async function observedDispatchUserIds(
   const candidates = boundDispatchCandidateIds(network);
   if (candidates.size === 0) return observed;
   const users = page.locator('[data-message-author-role="user"]');
-  const count = await users.count().catch(() => 0);
+  const countWait = resolveOperationWaitMs(waitSource);
+  if (countWait <= 0) return observed;
+  const count = await boundedLocatorCount(users, countWait);
   for (let index = Math.max(0, count - 8); index < count; index++) {
-    const id = await serviceId(users.nth(index));
+    const id = await serviceId(users.nth(index), waitSource);
     if (id && !baselineIds.has(id) && candidates.has(id)) observed.add(id);
   }
   for (const message of network.messages) {
@@ -1174,7 +1367,62 @@ export interface TurnBrowserResult {
   possibleDelivery: boolean;
 }
 
-export async function openTurnPage(browser: any, config: BrowserConfig): Promise<{ page: any; owned: boolean; provisionalId?: string }> {
+
+
+export async function openGateBCharacterizationPage(browser: any, chatUrl = 'https://chatgpt.com/'): Promise<{ page: any; owned: boolean }> {
+  const contexts = browser.contexts();
+  if (contexts.length !== 1) throw new Error('ui_contract_mismatch:context_count');
+  const ctx = contexts[0];
+  const existing = ctx.pages().find((page: { url: () => string }) => {
+    try { return page.url().includes('chatgpt.com'); } catch { return false; }
+  });
+  if (existing) {
+    await existing.bringToFront().catch(() => {});
+    return { page: existing, owned: false };
+  }
+  const page = await ctx.newPage();
+  await page.goto(chatUrl, { waitUntil: 'domcontentloaded' });
+  return { page, owned: true };
+}
+
+async function adoptNewPageWithBudget(
+  ctx: any,
+  goto: (page: any, gotoWaitMs: number) => Promise<void>,
+  segmentBudget?: TurnOperationBudget,
+  fallbackMs = MAX_BROWSER_OPERATION_WAIT_MS,
+): Promise<any> {
+  let waitMs = segmentOperationWait(segmentBudget, fallbackMs);
+  if (segmentBudget && waitMs <= 0) throw new BrowserOperationTimeoutError('new_page');
+  const pagePromise = ctx.newPage();
+  let page: any;
+  try {
+    page = await boundedPlaywrightOperation(waitMs, () => pagePromise);
+  } catch (error) {
+    pagePromise
+      .then((latePage: any) => abandonLatePageHandle(latePage, RESOURCE_CLEANUP_BOUND_MS))
+      .catch(() => {});
+    if (error instanceof BrowserOperationTimeoutError) throw new BrowserOperationTimeoutError('new_page');
+    throw coerceBrowserOperationTimeout(error, 'new_page');
+  }
+  waitMs = segmentOperationWait(segmentBudget, fallbackMs);
+  if (segmentBudget && waitMs <= 0) throw new BrowserOperationTimeoutError('goto');
+  try {
+    await boundedPlaywrightOperation(waitMs, () => goto(page, waitMs));
+    return page;
+  } catch (error) {
+    await boundedResourceCleanup(() => page.close(), RESOURCE_CLEANUP_BOUND_MS);
+    throw coerceBrowserOperationTimeout(error, 'goto');
+  }
+}
+
+export async function openTurnPage(
+  browser: any,
+  config: BrowserConfig,
+  options?: { segmentBudget?: TurnOperationBudget },
+): Promise<{ page: any; owned: boolean; provisionalId?: string }> {
+  const segmentBudget = options?.segmentBudget;
+  const fallbackGotoMs = Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
+  if (segmentBudget && !segmentBudget.canStartOperation()) throw new BrowserOperationTimeoutError('open_turn_page');
   const contexts = browser.contexts();
   if (contexts.length !== 1) throw new Error('ui_contract_mismatch:context_count');
   const ctx = contexts[0];
@@ -1186,32 +1434,28 @@ export async function openTurnPage(browser: any, config: BrowserConfig): Promise
     });
     if (matches.length > 1) throw new Error('ui_contract_mismatch:duplicate_tabs');
     if (matches.length === 1) {
-      await matches[0].bringToFront().catch(() => {});
-      return { page: matches[0], owned: false };
+      const reused = matches[0];
+      try {
+        if (normalizeConversationUrl(reused.url()) === target) {
+          return { page: reused, owned: false };
+        }
+      } catch {
+        /* unreadable tab URL — do not goto a foreign shared handle */
+      }
     }
-    const page = await ctx.newPage();
-    try {
-      await page.goto(target, { waitUntil: 'domcontentloaded' });
-      if (normalizeConversationUrl(page.url()) !== target) {
-        await page.close().catch(() => {});
+    const page = await adoptNewPageWithBudget(ctx, async (opened, gotoWaitMs) => {
+      await opened.goto(target, { waitUntil: 'domcontentloaded', timeout: gotoWaitMs });
+      if (normalizeConversationUrl(opened.url()) !== target) {
         throw new Error('ui_contract_mismatch:conversation_redirect');
       }
-      return { page, owned: true };
-    } catch (error) {
-      if (error instanceof Error && error.message === 'ui_contract_mismatch:conversation_redirect') throw error;
-      await page.close().catch(() => {});
-      throw error;
-    }
+    }, segmentBudget, fallbackGotoMs);
+    return { page, owned: true };
   }
   if (!config.projectUrl) throw new Error('ui_contract_mismatch:project_url_required');
-  const page = await ctx.newPage();
-  try {
-    await page.goto(config.projectUrl, { waitUntil: 'domcontentloaded' });
-    return { page, owned: true, provisionalId: crypto.randomUUID() };
-  } catch (error) {
-    await page.close().catch(() => {});
-    throw error;
-  }
+  const page = await adoptNewPageWithBudget(ctx, async (opened, gotoWaitMs) => {
+    await opened.goto(config.projectUrl, { waitUntil: 'domcontentloaded', timeout: gotoWaitMs });
+  }, segmentBudget, fallbackGotoMs);
+  return { page, owned: true, provisionalId: crypto.randomUUID() };
 }
 
 function witnessDelay(ms: number): Promise<void> {
@@ -1232,39 +1476,101 @@ export async function sendTurn(
   config: BrowserConfig,
   provisionalId?: string,
   onBeforeSend?: () => void | Promise<void>,
+  segmentBudget?: TurnOperationBudget,
 ): Promise<TurnBrowserResult> {
   const network = attachNetworkWitness(page);
   const composer = page.locator('#prompt-textarea');
-  const readyDeadline = Date.now() + Math.min(config.timeoutMs, 30_000);
-  while (Date.now() < readyDeadline) {
-    const wall = await pageWalls(page);
+  const readyEndsAt = segmentBudget?.endsAtMs ?? wallClock() + Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
+  while (wallClock() < readyEndsAt) {
+    const waitMs = loopOperationWaitMs(readyEndsAt, wallClock());
+    if (waitMs <= 0) break;
+    const wall = await boundedPlaywrightOperation(waitMs, () => pageWalls(page, () => segmentOperationWait(segmentBudget, waitMs)));
     if (wall.state) return { state: wall.state as TurnBrowserResult['state'], cause: wall.cause!, possibleDelivery: false };
-    if (await composer.count().catch(() => 0)) break;
-    await witnessPollDelay(page, 500);
+    const composerVisible = await boundedLocatorCount(composer, waitMs);
+    if (composerVisible) break;
+    await witnessPollDelay(page, Math.min(500, waitMs));
   }
-  if (!(await composer.count().catch(() => 0))) {
+  const composerReadyWait = loopOperationWaitMs(readyEndsAt, wallClock());
+  if (!(await boundedLocatorCount(composer, composerReadyWait))) {
+    if (segmentBudget && wallClock() >= readyEndsAt) {
+      throw new BrowserOperationTimeoutError('composer_readiness');
+    }
     return { state: 'ui_contract_mismatch', cause: 'composer_unavailable', possibleDelivery: false };
   }
 
   const role = '[data-message-author-role]';
   const baseline = page.locator(role);
   const baselineIds = new Set<string>();
-  for (let index = 0, count = await baseline.count(); index < count; index++) {
-    const id = await serviceId(baseline.nth(index));
+  let baselineWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  if (segmentBudget && baselineWait <= 0) throw new BrowserOperationTimeoutError('pre_send_baseline');
+  const baselineCount = await boundedLocatorCount(baseline, baselineWait);
+  for (let index = 0; index < baselineCount; index++) {
+    baselineWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+    if (segmentBudget && baselineWait <= 0) throw new BrowserOperationTimeoutError('pre_send_baseline');
+    const id = await serviceId(baseline.nth(index), () => segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS);
     if (id) baselineIds.add(id);
   }
 
-  await composer.click();
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
-  await page.keyboard.press('Delete');
-  await page.keyboard.insertText(text);
+  const usersBeforeDispatch = page.locator('[data-message-author-role="user"]');
+  let preDispatchUserNodeCount = 0;
+  let userNodeBaselineReliable = true;
+  try {
+    preDispatchUserNodeCount = await usersBeforeDispatch.count();
+  } catch {
+    userNodeBaselineReliable = false;
+    preDispatchUserNodeCount = -1;
+  }
+
+  let preDispatchNormalizedUrl = '';
+  let urlBaselineReliable = true;
+  try {
+    preDispatchNormalizedUrl = normalizeConversationUrl(page.url());
+  } catch {
+    urlBaselineReliable = false;
+    preDispatchNormalizedUrl = '';
+  }
+
+  let dispatchObservation: DispatchObservationBoundary;
+  try {
+    dispatchObservation = await establishDispatchObservationBoundary(page, {
+      newChatMode: config.newChat,
+      preDispatchUserNodeCount,
+      preDispatchNormalizedUrl,
+      userNodeBaselineReliable,
+      urlBaselineReliable,
+      profileKey: configuredProfileKey(config.profile, config.cdp),
+      cdp: config.cdp,
+    });
+  } catch (error) {
+    if (error instanceof DispatchObservationEstablishmentError) {
+      throw error;
+    }
+    throw new DispatchObservationEstablishmentError('dispatch_observation_establishment_failed');
+  }
+
+  let mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
+  try {
+    await composer.click(playwrightTimeout(mutationWait)!);
+    mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+    if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
+    await composer.fill(text, playwrightTimeout(mutationWait)!);
+  } catch (error) {
+    throw coerceBrowserOperationTimeout(error, 'pre_send_mutation');
+  }
   const send = page.locator('[data-testid="send-button"]');
-  const sendAvailable = (await send.count()) > 0;
+  mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  const sendAvailable = (await boundedLocatorCount(send, mutationWait)) > 0;
   revalidateProcessDestinationReservations();
-  await Promise.race([
-    network.witnessInstall,
-    new Promise<void>((resolve) => { setTimeout(resolve, 10_000); }),
-  ]);
+  try {
+    assertDispatchObservationReadyForDispatch(dispatchObservation);
+  } catch (error) {
+    if (error instanceof DispatchObservationEstablishmentError) {
+      throw error;
+    }
+    throw new DispatchObservationEstablishmentError('dispatch_observation_establishment_failed');
+  }
+  await onBeforeSend?.();
   try {
     revalidateProcessDestinationReservations();
   } catch (error) {
@@ -1274,12 +1580,22 @@ export async function sendTurn(
       possibleDelivery: false,
     };
   }
-  await onBeforeSend?.();
+  const witnessInstallWait = witnessInstallOperationWaitMs(segmentBudget);
+  if (segmentBudget && witnessInstallWait <= 0) throw new BrowserOperationTimeoutError('witness_install');
+  await boundedPlaywrightOperation(witnessInstallWait, () => network.witnessInstall);
+  const dispatchWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  if (segmentBudget && dispatchWait <= 0) throw new BrowserOperationTimeoutError('dispatch');
+  const dispatchTimeout = playwrightTimeout(dispatchWait);
   network.armDispatch();
+  dispatchObservation.armDispatchObservation();
   try {
     network.ingestingDispatchServiceFrames = true;
-    if (sendAvailable) await send.click();
-    else await page.keyboard.press('Enter');
+    if (sendAvailable) await boundedPlaywrightOperation(dispatchWait, () => send.click(dispatchTimeout));
+    else {
+      const composer = page.locator('#prompt-textarea');
+      if ((await boundedLocatorCount(composer, dispatchWait)) <= 0) throw new BrowserOperationTimeoutError('dispatch');
+      await boundedPlaywrightOperation(dispatchWait, () => composer.press('Enter', { timeout: dispatchWait }));
+    }
     network.turnDispatchCommitted = true;
   } catch {
     network.ingestingDispatchServiceFrames = false;
@@ -1289,8 +1605,8 @@ export async function sendTurn(
   network.ingestingDispatchServiceFrames = false;
 
   let userId = '';
-  const deliveredDeadline = wallClock() + 30_000;
-  while (wallClock() < deliveredDeadline && !userId) {
+  const deliveredEndsAt = wallClock() + MAX_BROWSER_OPERATION_WAIT_MS;
+  while (wallClock() < deliveredEndsAt && !userId) {
     if (dispatchExchangeIsAmbiguous(network)) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
     }
@@ -1298,12 +1614,31 @@ export async function sendTurn(
     if (!canonicalEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
     }
-    const observed = await observedDispatchUserIds(page, network, baselineIds);
+    const deliveredWait = loopOperationWaitMs(deliveredEndsAt);
+    if (deliveredWait <= 0) break;
+    const observed = await boundedPlaywrightOperation(deliveredWait, () => observedDispatchUserIds(page, network, baselineIds, () => loopOperationWaitMs(deliveredEndsAt)));
     if (observed.size > 1) return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true };
     userId = observed.values().next().value ?? '';
-    if (!userId) await witnessPollDelay(page, 250);
+    if (!userId) await witnessPollDelay(page, Math.min(250, deliveredWait));
   }
-  if (!userId) return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
+  if (!userId) {
+    const nonDelivery = await evaluateDispatchRequestNotObserved(
+      dispatchObservation,
+      page,
+      baselineIds,
+      async (targetPage) => await targetPage.locator('[data-message-author-role="user"]').count(),
+      serviceId,
+    );
+    if (nonDelivery.proven) {
+      recordDispatchObservationDiagnostic(nonDelivery.diagnostic, 'dispatch_request_not_observed');
+      return {
+        state: 'send_failed',
+        cause: 'dispatch_request_not_observed',
+        possibleDelivery: false,
+      };
+    }
+    return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
+  }
   userId = canonicalSubmittedUserId(network, baselineIds) || userId;
 
   const segments: string[] = [];
@@ -1314,14 +1649,18 @@ export async function sendTurn(
   let continuationActive = false;
   let awaitingFreshTerminalAfterContinuation = false;
   let terminalPublishEligible = true;
-  const deadline = Date.now() + config.timeoutMs;
-  while (Date.now() < deadline) {
-    const wall = await pageWalls(page);
+  const deadline = wallClock() + config.timeoutMs;
+  while (wallClock() < deadline) {
+    let replyWait = loopOperationWaitMs(deadline, wallClock());
+    if (replyWait <= 0) break;
+    const wall = await boundedPlaywrightOperation(replyWait, () => pageWalls(page, loopOperationWaitMs(deadline, wallClock())));
     const canonicalUserIdEarly = canonicalSubmittedUserId(network, baselineIds);
     if (!canonicalUserIdEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true, userMessageId: userId };
     }
-    const observedDispatch = await observedDispatchUserIds(page, network, baselineIds);
+    replyWait = loopOperationWaitMs(deadline, wallClock());
+    if (replyWait <= 0) break;
+    const observedDispatch = await boundedPlaywrightOperation(replyWait, () => observedDispatchUserIds(page, network, baselineIds, () => loopOperationWaitMs(deadline, wallClock())));
     const canonicalUserId = canonicalSubmittedUserId(network, baselineIds);
     if (canonicalUserId) userId = canonicalUserId;
     if (observedDispatch.size > 1) {
@@ -1331,21 +1670,31 @@ export async function sendTurn(
       return { state: 'foreign_activity', cause: 'submitted_turn_witness_changed', possibleDelivery: true, userMessageId: userId };
     }
 
+    replyWait = loopOperationWaitMs(deadline, wallClock());
+    if (replyWait <= 0) break;
     const users = page.locator('[data-message-author-role="user"]');
     const newUserIds = new Set<string>();
-    for (let index = 0, count = await users.count(); index < count; index++) {
-      const id = await serviceId(users.nth(index));
+    const userCount = await boundedLocatorCount(users, replyWait);
+    for (let index = 0; index < userCount; index++) {
+      replyWait = loopOperationWaitMs(deadline, wallClock());
+      if (replyWait <= 0) break;
+      const id = await serviceId(users.nth(index), () => loopOperationWaitMs(deadline, wallClock()));
       if (id && !baselineIds.has(id)) newUserIds.add(id);
     }
     if ([...newUserIds].some((id) => id !== userId)) {
       return { state: 'foreign_activity', cause: 'unexpected_user_turn', possibleDelivery: true, userMessageId: userId };
     }
 
+    replyWait = loopOperationWaitMs(deadline, wallClock());
+    if (replyWait <= 0) break;
     const assistants = page.locator('[data-message-author-role="assistant"]');
     const assistantLocators = new Map<string, any>();
-    for (let index = 0, count = await assistants.count(); index < count; index++) {
+    const assistantCount = await boundedLocatorCount(assistants, replyWait);
+    for (let index = 0; index < assistantCount; index++) {
+      replyWait = loopOperationWaitMs(deadline, wallClock());
+      if (replyWait <= 0) break;
       const locator = assistants.nth(index);
-      const id = await serviceId(locator);
+      const id = await serviceId(locator, () => loopOperationWaitMs(deadline, wallClock()));
       if (!id || baselineIds.has(id)) continue;
       assistantLocators.set(id, locator);
     }
@@ -1371,16 +1720,20 @@ export async function sendTurn(
       }
     }
 
+    replyWait = loopOperationWaitMs(deadline, wallClock());
+    if (replyWait <= 0) break;
     const cont = page.getByText(/continue generating/i);
-    if (await cont.count().catch(() => 0)) {
+    if (await boundedLocatorCount(cont, replyWait)) {
       let continuationLocator: any = null;
       if (boundAssistantId) {
         continuationLocator = assistantLocators.get(boundAssistantId) ?? null;
       }
       if (!continuationLocator) {
-        for (let index = 0, count = await assistants.count(); index < count; index++) {
+        for (let index = 0; index < assistantCount; index++) {
+          replyWait = loopOperationWaitMs(deadline, wallClock());
+          if (replyWait <= 0) break;
           const locator = assistants.nth(index);
-          const id = await serviceId(locator);
+          const id = await serviceId(locator, () => loopOperationWaitMs(deadline, wallClock()));
           if (id && isMessageAttributedToUserTurn(id, userId, network.terminal.messages)) {
             continuationLocator = locator;
             break;
@@ -1388,9 +1741,14 @@ export async function sendTurn(
         }
       }
       if (continuationLocator) {
-        const current = await assistantText(continuationLocator).catch(() => '');
+        replyWait = loopOperationWaitMs(deadline, wallClock());
+        if (replyWait <= 0) break;
+        const current = await boundedPlaywrightOperation(replyWait, () => assistantText(continuationLocator, replyWait)).catch(() => '');
         if (current && (!segments.length || segments[segments.length - 1] !== current)) segments.push(current);
-        await cont.first().click().catch(() => {});
+        replyWait = loopOperationWaitMs(deadline, wallClock());
+        if (replyWait > 0) {
+          await boundedPlaywrightOperation(replyWait, () => cont.first().click(playwrightTimeout(replyWait)!)).catch(() => {});
+        }
         continuationActive = true;
         awaitingFreshTerminalAfterContinuation = true;
         terminalPublishEligible = false;
@@ -1424,15 +1782,19 @@ export async function sendTurn(
       boundAssistantId = terminal.assistantMessageId;
       let matched = assistantLocators.get(boundAssistantId) ?? null;
       if (!matched) {
-        for (let index = 0, count = await assistants.count(); index < count; index++) {
-          if (await serviceId(assistants.nth(index)) === boundAssistantId) {
+        for (let index = 0; index < assistantCount; index++) {
+          replyWait = loopOperationWaitMs(deadline, wallClock());
+          if (replyWait <= 0) break;
+          if (await serviceId(assistants.nth(index), () => loopOperationWaitMs(deadline, wallClock())) === boundAssistantId) {
             matched = assistants.nth(index);
             break;
           }
         }
       }
       if (matched && terminalPublishEligible) {
-        const current = await assistantText(matched).catch(() => '');
+        replyWait = loopOperationWaitMs(deadline, wallClock());
+        if (replyWait <= 0) break;
+        const current = await boundedPlaywrightOperation(replyWait, () => assistantText(matched, replyWait)).catch(() => '');
         if (current) {
           if (!segments.length || segments[segments.length - 1] !== current) segments.push(current);
           const replyCandidate = continuationActive ? mergeContinuationSegments(segments) : current;
@@ -1467,7 +1829,9 @@ export async function sendTurn(
         ...(boundAssistantId ? { assistantMessageId: boundAssistantId } : {}),
       };
     }
-    await witnessPollDelay(page, 750);
+    replyWait = loopOperationWaitMs(deadline, wallClock());
+    if (replyWait <= 0) break;
+    await witnessPollDelay(page, Math.min(750, replyWait));
   }
 
   if (terminalSuccessSeen) {
@@ -1479,9 +1843,16 @@ export async function sendTurn(
       ...(boundAssistantId ? { assistantMessageId: boundAssistantId } : {}),
     };
   }
-  const statusText = (await productStatusText(page)).text;
-  if (/error generating|something went wrong|unable to generate/i.test(statusText)) {
-    return { state: 'no_reply', cause: 'terminal_no_reply_evidence', possibleDelivery: true, userMessageId: userId };
+  const finalStatusSource = () => loopOperationWaitMs(deadline, wallClock());
+  if (resolveOperationWaitMs(finalStatusSource) > 0) {
+    try {
+      const statusText = (await productStatusText(page, finalStatusSource)).text;
+      if (/error generating|something went wrong|unable to generate/i.test(statusText)) {
+        return { state: 'no_reply', cause: 'terminal_no_reply_evidence', possibleDelivery: true, userMessageId: userId };
+      }
+    } catch (error) {
+      if (!(error instanceof BrowserOperationTimeoutError)) throw error;
+    }
   }
   if (process.env.CHATGPT_BROWSER_TURN_DEBUG === '1') {
     console.error(JSON.stringify({

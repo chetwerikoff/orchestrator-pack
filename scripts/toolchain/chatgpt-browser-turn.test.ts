@@ -15,8 +15,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TURN_STATES, turnExitCode, type FailureScope, type TurnState } from '../chatgpt-browser-turn/contracts.ts';
 import {
   acquireDomainLock,
@@ -43,18 +43,29 @@ import {
   quarantineOpaque,
   statusList,
   __testWriteCapability,
+  listReadableIncidents,
   writeIncident,
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import { releaseCdpBrowser } from '../chatgpt-browser-turn/browser-session.ts';
 import {
+  createPreSendSegmentBudget,
+  createTurnOperationBudget,
   loadChromium,
   openTurnPage,
   resolveCausalAssistant,
   runtimeWitnessSurfaceAvailable,
+  productStatusText,
   sendTurn,
+  verifyProfile,
+  __testTiming,
+  witnessInstallOperationWaitMs,
+  WITNESS_INSTALL_MAX_WAIT_MS,
   type BrowserConfig,
 } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { lastDispatchObservationDiagnostic } from '../chatgpt-browser-turn/dispatch-observation.ts';
+import { boundedResourceCleanup } from '../chatgpt-browser-turn/browser-session.ts';
+import { delayedComposerFakePage } from '../chatgpt-browser-turn/fixtures/issue-1023-timeout.ts';
 import { emptyLocator, fakeTurnPage, messageLocator } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import {
   DELTA_ONLY_FRAME,
@@ -334,13 +345,14 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
 
   it('S3 returns stream_timeout after possible delivery when no attributed assistant terminal appears', async () => {
     const fixture = fakeTurnPage({ dispatchCandidateIds: ['user-owned-12345678'] });
+    const segmentBudget = createPreSendSegmentBudget(30_000);
     const result = await sendTurn(fixture.page, 'payload', {
       cdp,
       profile: join(root, 'profile'),
       chatUrl: 'https://chatgpt.com/c/example',
       newChat: false,
       timeoutMs: 1,
-    });
+    }, undefined, undefined, segmentBudget);
     expect(result.state).toBe('stream_timeout');
     expect(result.possibleDelivery).toBe(true);
   });
@@ -1842,4 +1854,665 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
     expect(body).toContain('"finish_details"');
     expect(body).toContain('message_stream_complete');
   });
+});
+
+
+const issue1024Cdp = 'http://127.0.0.1:9222';
+const issue1024RepoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const issue1024CompleteObservation = {
+  httpContextCoverage: 'complete' as const,
+  websocketTargetsCoverage: 'complete' as const,
+};
+
+const issue1024BaseConfig = (overrides: Partial<BrowserConfig> = {}): BrowserConfig => ({
+  cdp: issue1024Cdp,
+  profile: 'automation',
+  chatUrl: 'https://chatgpt.com/c/example',
+  newChat: false,
+  timeoutMs: 60_000,
+  ...overrides,
+});
+
+function issue1024ZeroActivityFixture(overrides: Parameters<typeof fakeTurnPage>[0] = {}) {
+  return fakeTurnPage({
+    dispatchCandidateIds: [],
+    serviceObserveDispatch: false,
+    serviceFrames: [],
+    assistants: [],
+    dispatchObservation: issue1024CompleteObservation,
+    ...overrides,
+  });
+}
+
+async function issue1024ExhaustSubmittedTurnWindow(
+  fixture: ReturnType<typeof fakeTurnPage>,
+  config: BrowserConfig = issue1024BaseConfig(),
+) {
+  fixture.page.waitForTimeout = async (ms: number) => {
+    await vi.advanceTimersByTimeAsync(ms);
+  };
+  const turn = sendTurn(fixture.page, 'payload', config);
+  await vi.advanceTimersByTimeAsync(31_000);
+  return turn;
+}
+
+describe('issue 1024 Half A proven non-delivery', () => {
+  afterEach(() => {
+    __testTiming.now = undefined;
+    vi.useRealTimers();
+  });
+
+  it('AC1 returns send_failed dispatch_request_not_observed after full window with complete boundary and zero activity', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture();
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result).toEqual({
+      state: 'send_failed',
+      cause: 'dispatch_request_not_observed',
+      possibleDelivery: false,
+    });
+    expect(lastDispatchObservationDiagnostic?.submitted_turn_window_exhausted).toBe(true);
+    expect(lastDispatchObservationDiagnostic?.post_arm_http_request_count).toBe(0);
+    expect(lastDispatchObservationDiagnostic?.post_arm_websocket_frame_sent_count).toBe(0);
+    expect(lastDispatchObservationDiagnostic?.user_node_delta).toBe(0);
+    expect(lastDispatchObservationDiagnostic?.new_chat_url_changed).toBe('na');
+  });
+
+  it('AC1 new-chat unchanged URL is required for proven non-delivery', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      newChatUrlAfterArm: 'https://chatgpt.com/c/new-conversation',
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture, {
+      cdp: issue1024Cdp,
+      profile: 'automation',
+      newChat: true,
+      projectUrl: 'https://chatgpt.com/',
+      timeoutMs: 60_000,
+    });
+
+    expect(result.state).toBe('recovery_required');
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC2 blocks proven non-delivery for post-arm context HTTP regardless of origin', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      postArmContextRequests: [{ url: 'https://example.com/any-path' }],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC2 blocks proven non-delivery for service-worker-owned HTTP on the context boundary', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      serviceWorkerHttpAfterArm: [{ url: 'https://chatgpt.com/sw-owned-request' }],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC2 blocks proven non-delivery for outbound WebSocket frame on covered target', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      postArmWebSocketSent: [{}],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC2 blocks proven non-delivery for new user DOM node beyond baseline', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      postArmUserDomIds: ['user-new-dom-12345678'],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC2 blocks proven non-delivery when equal-count user nodes include unreadable service ids', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      preDispatchUserDomIds: ['short'],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result.state).toBe('recovery_required');
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC3 unknown HTTP context coverage performs zero send before dispatch boundary', async () => {
+    const fixture = issue1024ZeroActivityFixture({
+      dispatchObservation: {
+        ...issue1024CompleteObservation,
+        httpContextCoverage: 'unknown',
+      },
+    });
+    await expect(sendTurn(fixture.page, 'payload', issue1024BaseConfig())).rejects.toThrow('dispatch_observation_establishment_failed');
+    expect(fixture.getSendClicks()).toBe(0);
+  });
+
+  it('AC3 incomplete websocket target coverage performs zero send before dispatch boundary', async () => {
+    const fixture = issue1024ZeroActivityFixture({
+      dispatchObservation: {
+        ...issue1024CompleteObservation,
+        websocketTargetsCoverage: 'incomplete',
+      },
+    });
+    await expect(sendTurn(fixture.page, 'payload', issue1024BaseConfig())).rejects.toThrow('dispatch_observation_establishment_failed');
+    expect(fixture.getSendClicks()).toBe(0);
+  });
+
+  it('AC2 forbids proven non-delivery before submitted-turn window exhaustion', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture();
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', issue1024BaseConfig());
+    await vi.advanceTimersByTimeAsync(5_000);
+    const early = await Promise.race([
+      turn.then((value) => ({ done: true as const, value })),
+      Promise.resolve({ done: false as const }),
+    ]);
+    expect(early.done).toBe(false);
+    await vi.advanceTimersByTimeAsync(26_000);
+    const result = await turn;
+    expect(result.cause).toBe('dispatch_request_not_observed');
+  });
+
+  it('AC2 late-window outbound HTTP still blocks proven non-delivery', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      postArmContextRequests: [{ url: 'https://chatgpt.com/backend-api/f/conversation' }],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC4 post-boundary coverage loss remains possible-delivery', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      dispatchObservation: {
+        ...issue1024CompleteObservation,
+        coverageLossAfterArm: true,
+      },
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+    expect(result.state).toBe('recovery_required');
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC3 pre-dispatch observer establishment failure performs zero send', async () => {
+    const fixture = issue1024ZeroActivityFixture({
+      dispatchObservation: { establishmentFails: true },
+    });
+    await expect(sendTurn(fixture.page, 'payload', issue1024BaseConfig())).rejects.toThrow('dispatch_observation_establishment_failed');
+    expect(fixture.getSendClicks()).toBe(0);
+  });
+
+  it('AC10 records body-free dispatch observation diagnostic fields', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture();
+    await issue1024ExhaustSubmittedTurnWindow(fixture);
+    const diagnostic = lastDispatchObservationDiagnostic;
+    expect(diagnostic?.http_context_armed).toBe(true);
+    expect(diagnostic?.websocket_targets_armed).toBe(true);
+    expect(diagnostic?.coverage_summary).toContain('http-context:complete');
+    expect(diagnostic?.coverage_summary).toContain('websocket-targets:complete');
+    expect(JSON.stringify(diagnostic)).not.toMatch(/payload|reply|prompt/i);
+  });
+
+});
+
+describe('issue 1024 gate-B characterization notes', () => {
+  it('documents live boundary probes required on supported Chromium/Playwright runtime', () => {
+    const notes = readFileSync(
+      join(issue1024RepoRoot, 'scripts/chatgpt-browser-turn/README.md'),
+      'utf8',
+    );
+    expect(notes).toContain('service-worker-owned HTTP');
+    expect(notes).toContain('worker/secondary-target outbound WebSocket');
+    expect(notes).toContain('dispatch_request_not_observed');
+    expect(notes).toContain('gate-b-characterization');
+  });
+
+  it('ships the Gate-B live characterization probe module', async () => {
+    const module = await import('../chatgpt-browser-turn/dispatch-observation.ts');
+    expect(module.GATE_B_REQUIRED_PROBES).toEqual([
+      'service-worker-owned-http-on-configured-context',
+      'worker-or-secondary-target-websocket-frame-sent',
+    ]);
+    const summary = module.summarizeGateBCharacterization([
+      {
+        probe: 'service-worker-owned-http-on-configured-context',
+        observed: true,
+        detail: 'context_request_observed',
+      },
+      {
+        probe: 'worker-or-secondary-target-websocket-frame-sent',
+        observed: false,
+        detail: 'pending_live_run',
+      },
+    ]);
+    expect(summary.complete).toBe(false);
+  });
+
+  it('persists and reloads Gate-B characterization records per configured profile', async () => {
+    const module = await import('../chatgpt-browser-turn/dispatch-observation.ts');
+    const profileKey = 'profile-test-gate-b-record';
+    const complete = module.bindGateBCharacterizationRecord(
+      module.summarizeGateBCharacterization([
+        {
+          probe: 'service-worker-owned-http-on-configured-context',
+          observed: true,
+          detail: 'context_request_observed',
+        },
+        {
+          probe: 'worker-or-secondary-target-websocket-frame-sent',
+          observed: true,
+          detail: 'websocket_frame_sent_observed',
+        },
+      ]),
+      profileKey,
+      issue1024Cdp,
+    );
+    module.writeGateBCharacterizationRecord(profileKey, complete);
+    expect(module.readGateBCharacterizationRecord(profileKey, issue1024Cdp)?.complete).toBe(true);
+    expect(module.readGateBCharacterizationRecord(profileKey, 'http://127.0.0.1:9223')).toBeNull();
+  });
+});
+
+describe('issue 1023 operation-level bounds', () => {
+  const issue1023Config = (): BrowserConfig => ({
+    cdp,
+    profile: join(root, 'profile'),
+    chatUrl: 'https://chatgpt.com/c/example',
+    newChat: false,
+    timeoutMs: 2_000,
+  });
+  it('AC2: bounded owner probe timeout is failure-to-know, not profile negative evidence', async () => {
+    const ownerPath = join(repoRoot, '.claude', 'skills', 'discuss-with-gpt', 'verify-cdp-owner.mjs');
+    const ownerMod = await import(pathToFileURL(ownerPath).href) as {
+      __testOwnerProbe: { stallExecFile: boolean; stallFetch: boolean };
+    };
+    ownerMod.__testOwnerProbe.stallExecFile = true;
+    const budget = createPreSendSegmentBudget(150);
+    await expect(verifyProfile({
+      cdp,
+      profile: join(root, 'profile'),
+      newChat: false,
+      timeoutMs: 60_000,
+    }, budget)).rejects.toThrow('browser_operation_timeout:owner_probe');
+    ownerMod.__testOwnerProbe.stallExecFile = false;
+  });
+
+  it('AC2: stalled reachability fetch aborts with distinguishable timeout', async () => {
+    const ownerPath = join(repoRoot, '.claude', 'skills', 'discuss-with-gpt', 'verify-cdp-owner.mjs');
+    const ownerMod = await import(pathToFileURL(ownerPath).href) as {
+      __testOwnerProbe: { stallExecFile: boolean; stallFetch: boolean };
+      isCdpReachable: (cdpUrl: string, options?: { timeoutMs?: number }) => Promise<boolean>;
+    };
+    ownerMod.__testOwnerProbe.stallFetch = true;
+    const start = Date.now();
+    await expect(ownerMod.isCdpReachable(cdp, { timeoutMs: 100 })).rejects.toMatchObject({ message: 'cdp_reachability_timeout' });
+    expect(Date.now() - start).toBeLessThan(500);
+    ownerMod.__testOwnerProbe.stallFetch = false;
+  });
+
+  it('AC3: pre-send composer mutation cannot settle late after bounded timeout', async () => {
+    const fixture = delayedComposerFakePage({ insertTextDelayMs: 400 });
+    const budget = createTurnOperationBudget(100);
+    await expect(sendTurn(fixture.page, 'late-payload', {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/example',
+      newChat: false,
+      timeoutMs: 60_000,
+    }, undefined, undefined, budget)).rejects.toThrow('browser_operation_timeout:');
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+    expect(fixture.page.getInsertedText()).toBe('');
+  });
+
+  it('AC4: segment and loop budgets clamp to remaining remainder', () => {
+    const segment = createPreSendSegmentBudget(500, 1_000);
+    expect(segment.clampOperationWaitMs(1_200)).toBe(300);
+    expect(segment.canStartOperation(1_500)).toBe(false);
+    const deliveredBudget = createTurnOperationBudget(30, 4_970);
+    expect(deliveredBudget.clampOperationWaitMs(4_980)).toBe(20);
+  });
+
+  it('AC4: healthy post-dispatch polls can complete before the turn deadline', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: 'assistant-owned-12345678', parent: own, text: 'done', appearOnSend: true }],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: 'assistant-owned-12345678',
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+    });
+    const result = await sendTurn(fixture.page, 'payload', { ...issue1023Config(), timeoutMs: 200 });
+    expect(result.state).toBe('ok');
+  });
+
+
+  it('AC6: late newPage handle is not adopted and cleanup is bounded', async () => {
+    let latePageCreated = false;
+    let latePageClosed = false;
+    const ctx = {
+      pages: () => [],
+      newPage: () => new Promise((resolve) => {
+        setTimeout(() => {
+          latePageCreated = true;
+          resolve({
+            close: async () => { latePageClosed = true; },
+            goto: async () => {},
+          });
+        }, 500);
+      }),
+    };
+    const browser = { contexts: () => [ctx] };
+    const budget = createPreSendSegmentBudget(80);
+    await expect(openTurnPage(browser, {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: 'https://chatgpt.com/c/new',
+      newChat: false,
+      timeoutMs: 60_000,
+    }, { segmentBudget: budget })).rejects.toThrow('browser_operation_timeout:new_page');
+    await new Promise((resolve) => { setTimeout(resolve, 600); });
+    expect(latePageCreated).toBe(true);
+    expect(latePageClosed).toBe(true);
+  });
+
+
+  it('AC4: witness install wait is capped at 10s within segment remainder', () => {
+    const wide = createPreSendSegmentBudget(30_000);
+    expect(witnessInstallOperationWaitMs(wide)).toBe(WITNESS_INSTALL_MAX_WAIT_MS);
+    const tightBudget = {
+      endsAtMs: 0,
+      remainingMs: () => 500,
+      clampOperationWaitMs: () => 500,
+      canStartOperation: () => true,
+    };
+    expect(witnessInstallOperationWaitMs(tightBudget)).toBe(500);
+  });
+
+  it('openTurnPage reuses an existing tab without goto when URL already matches', async () => {
+    const target = 'https://chatgpt.com/c/focus-tab-12345678';
+    let gotoCalled = false;
+    const page = {
+      url: () => target,
+      goto: async () => {
+        gotoCalled = true;
+        throw new Error('goto should not run when URL already matches');
+      },
+      bringToFront: async () => { throw new Error('bringToFront should not run'); },
+    };
+    const browser = { contexts: () => [{ pages: () => [page] }] };
+    const out = await openTurnPage(browser, {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: target,
+      newChat: false,
+      timeoutMs: 60_000,
+    });
+    expect(gotoCalled).toBe(false);
+    expect(out.page).toBe(page);
+    expect(out.owned).toBe(false);
+  });
+
+  it('openTurnPage opens an owned page when no existing tab matches the conversation URL', async () => {
+    const target = 'https://chatgpt.com/c/focus-tab-12345678';
+    let newPageCreated = false;
+    const foreign = {
+      url: () => 'https://chatgpt.com/c/other-tab-12345678',
+      goto: async () => { throw new Error('foreign tab goto should not run'); },
+    };
+    const ctx = {
+      pages: () => [foreign],
+      newPage: async () => {
+        newPageCreated = true;
+        let current = 'about:blank';
+        return {
+          url: () => current,
+          goto: async (url: string, opts: { timeout?: number }) => {
+            expect(url).toBe(target);
+            expect(opts.timeout).toBeGreaterThan(0);
+            current = url;
+          },
+          close: async () => {},
+        };
+      },
+    };
+    const out = await openTurnPage({ contexts: () => [ctx] }, {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: target,
+      newChat: false,
+      timeoutMs: 60_000,
+    });
+    expect(newPageCreated).toBe(true);
+    expect(out.owned).toBe(true);
+  });
+
+  it('AC6: never-settling page.close does not block terminalization beyond cleanup bound', async () => {
+    const started = Date.now();
+    const outcome = await boundedResourceCleanup(
+      () => new Promise<void>(() => {}),
+      50,
+    );
+    expect(outcome).toBe('unconfirmed');
+    expect(Date.now() - started).toBeLessThan(200);
+  });
+
+  it('AC4: healthy post-dispatch polls may continue beyond 30s and still reach ok', async () => {
+    let clock = 1_000;
+    __testTiming.now = () => clock;
+    const own = 'user-owned-12345678';
+    const assistantId = 'assistant-owned-12345678';
+    let assistantVisible = false;
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      assistants: [{ id: assistantId, parent: own, text: 'late ok', appearOnSend: false }],
+      serviceFrames: [{
+        type: 'delta',
+        v: {
+          message: {
+            id: assistantId,
+            author: { role: 'assistant' },
+            parent: own,
+            end_turn: true,
+            metadata: { finish_details: { type: 'stop' } },
+          },
+        },
+      }],
+    });
+    const baseLocator = fixture.page.locator.bind(fixture.page);
+    fixture.page.locator = (selector: string) => {
+      if (selector === '[data-message-author-role="assistant"]') {
+        return {
+          count: async () => assistantVisible ? 1 : 0,
+          nth: (index: number) => messageLocator('assistant', assistantId, own, 'late ok'),
+        };
+      }
+      return baseLocator(selector);
+    };
+    fixture.page.waitForTimeout = async (ms: number) => {
+      clock += ms;
+      if (clock >= 36_000) assistantVisible = true;
+    };
+    const result = await sendTurn(fixture.page, 'payload', {
+      ...issue1023Config(),
+      timeoutMs: 60_000,
+    }, undefined, undefined, createPreSendSegmentBudget(30_000));
+    expect(result.state).toBe('ok');
+    expect(result.reply).toBe('late ok');
+    expect(clock - 1_000).toBeGreaterThan(30_000);
+    __testTiming.now = undefined;
+  });
+
+  it('AC4: delivered loop respects remainder when less than 30s remains', async () => {
+    let clock = 5_000;
+    __testTiming.now = () => clock;
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceObserveDispatch: false,
+      serviceFrames: [],
+    });
+    fixture.page.waitForTimeout = async (ms: number) => { clock += ms; };
+    const started = clock;
+    const result = await sendTurn(fixture.page, 'payload', {
+      ...issue1023Config(),
+      timeoutMs: 5_500,
+    }, undefined, undefined, createPreSendSegmentBudget(30_000));
+    expect(result.possibleDelivery).toBe(true);
+    expect(['stream_timeout', 'recovery_required']).toContain(result.state);
+    expect(clock - started).toBeLessThan(35_000);
+    __testTiming.now = undefined;
+  });
+
+  it('AC11: witness surface reclamps wait between sequential serviceId reads', async () => {
+    const budget = createTurnOperationBudget(80);
+    let attrCalls = 0;
+    const page = {
+      locator: () => ({
+        count: async () => 1,
+        nth: () => ({
+          getAttribute: async (name: string) => {
+            attrCalls++;
+            await new Promise((resolve) => { setTimeout(resolve, 40); });
+            if (name === 'data-message-author-role') return 'assistant';
+            return null;
+          },
+          locator: () => ({ first: () => ({ getAttribute: async () => null }) }),
+        }),
+      }),
+    };
+    await expect(runtimeWitnessSurfaceAvailable(page, budget)).rejects.toThrow('browser_operation_timeout:witness_surface');
+    expect(attrCalls).toBeGreaterThan(1);
+  });
+
+  it('AC6: cleanup-unconfirmed residual tab is re-enumerated on next openTurnPage', async () => {
+    const target = 'https://chatgpt.com/c/residual-tab-12345678';
+    const residual = {
+      url: () => target,
+      close: async () => new Promise<void>(() => {}),
+      goto: async () => {},
+    };
+    let newPageCreated = false;
+    const ctx = {
+      pages: () => [residual],
+      newPage: async () => {
+        newPageCreated = true;
+        return {
+          url: () => 'about:blank',
+          goto: async (url: string) => { residual.url = () => url; },
+          close: async () => {},
+        };
+      },
+    };
+    const browser = { contexts: () => [ctx] };
+    const cleanup = await boundedResourceCleanup(() => residual.close(), 50);
+    expect(cleanup).toBe('unconfirmed');
+    const opened = await openTurnPage(browser, {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: target,
+      newChat: false,
+      timeoutMs: 60_000,
+    });
+    expect(opened.page).toBe(residual);
+    expect(opened.owned).toBe(false);
+    expect(newPageCreated).toBe(false);
+  });
+
+  it('AC8: timeout before terminal reply creates no publication side effect', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({ dispatchCandidateIds: [own] });
+    const result = await sendTurn(fixture.page, 'payload', { ...issue1023Config(), timeoutMs: 1 }, undefined, undefined, createPreSendSegmentBudget(30_000));
+    expect(result.state).toBe('stream_timeout');
+    expect(result.reply).toBeUndefined();
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC11: Enter dispatch without send button cannot settle late after timeout', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({
+      hideSendButton: true,
+      composerPressDelayMs: 400,
+      dispatchCandidateIds: [own],
+    });
+    const budget = createPreSendSegmentBudget(100);
+    const result = await sendTurn(fixture.page, 'payload', issue1023Config(), undefined, undefined, budget);
+    expect(result.state).toBe('recovery_required');
+    expect(fixture.getEnterPresses()).toBe(1);
+    expect(fixture.getSendClicks()).toBe(0);
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+    expect(fixture.getSendClicks()).toBe(0);
+  });
+
+  it('AC11: productStatusText reclamps sequential reads to the governing remainder', async () => {
+    let reads = 0;
+    const page = {
+      locator: (selector: string) => {
+        if (selector === '#prompt-textarea') return { count: async () => 1 };
+        if (selector === '[role="alert"]') {
+          return {
+            count: async () => 5,
+            nth: (index: number) => ({
+              innerText: async () => {
+                reads++;
+                clock += 60;
+                return `alert-${index}`;
+              },
+            }),
+          };
+        }
+        return { count: async () => 0, nth: () => ({ innerText: async () => '' }) };
+      },
+    };
+    let clock = 1_000;
+    __testTiming.now = () => clock;
+    const deadline = 1_100;
+    await expect(productStatusText(page, () => Math.max(0, deadline - __testTiming.now!()))).rejects.toThrow('browser_operation_timeout:product_status');
+    expect(reads).toBeLessThan(5);
+    __testTiming.now = undefined;
+  });
+
 });

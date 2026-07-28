@@ -1,8 +1,8 @@
 ---
 name: switch-pack-reviewer
 description: >-
-  Switch local pack PR reviewer between Codex and Claude via PACK_REVIEWER.
-  Use when the user asks to switch reviewer, set codex/claude for review,
+  Switch local pack PR reviewer between GPT, Codex, and Claude via PACK_REVIEWER.
+  Use when the user asks to switch reviewer, set gpt/codex/claude for review,
   fix wrong reviewer running, or avoid Process overriding User env — e.g.
   «переключи ревьюера», «поставь codex», «используется claude вместо codex»,
   «PACK_REVIEWER», «switch reviewer», «reviewer codex/claude».
@@ -19,7 +19,7 @@ Canonical docs: [`docs/reviewer-switch-runbook.md`](../../../docs/reviewer-switc
 
 ## Triggers
 
-- User names target: **codex** or **claude**
+- User names target: **gpt**, **codex**, or **claude**
 - User reports mismatch: global User is one value, reviews use another
 - User asks to «переключить ревьюера», «поставь codex/claude», «fix PACK_REVIEWER»
 
@@ -34,7 +34,11 @@ Canonical docs: [`docs/reviewer-switch-runbook.md`](../../../docs/reviewer-switc
 
 ## Checklist — apply switch
 
-Target reviewer: `codex` or `claude` (from user message; if unclear, ask once).
+Target reviewer: `gpt`, `codex`, or `claude` (from user message; if unclear, ask once).
+
+**GPT note:** `PACK_REVIEWER=gpt` uses browser ChatGPT to inspect the PR and
+return a terminal review payload. The pack runner still publishes the GitHub
+review. GPT failures do not auto-failover to Codex.
 
 ### 1. Record baseline
 
@@ -49,7 +53,7 @@ Note Process / User / Machine and **Effective**. If Process differs from User, w
 ### 2. Apply (preferred — one command)
 
 ```powershell
-pwsh -NoProfile -File scripts/set-pack-reviewer.ps1 -Reviewer <codex|claude> -RestartAo
+pwsh -NoProfile -File scripts/set-pack-reviewer.ps1 -Reviewer <gpt|codex|claude> -RestartAo
 ```
 
 This script:
@@ -61,7 +65,7 @@ This script:
 **Manual equivalent** (only if scripts unavailable):
 
 ```powershell
-[Environment]::SetEnvironmentVariable('PACK_REVIEWER', '<codex|claude>', 'User')
+[Environment]::SetEnvironmentVariable('PACK_REVIEWER', '<gpt|codex|claude>', 'User')
 Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
 ao stop
 ao start orchestrator-pack
@@ -80,7 +84,7 @@ ao start orchestrator-pack
 Standalone check:
 
 ```powershell
-pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1 -Expected <codex|claude>
+pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1 -Expected <gpt|codex|claude>
 ```
 
 The status script clears process scope before resolving so **User** wins when global is set.
@@ -107,6 +111,7 @@ On next review failure, `terminationReason` should name:
 
 | Target | Wrapper in terminationReason |
 |--------|------------------------------|
+| gpt | `run-pack-review-gpt.ts` |
 | codex | `run-pack-review.ps1` |
 | claude | `run-pack-review-claude.ps1` |
 
