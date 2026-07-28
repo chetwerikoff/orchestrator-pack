@@ -12,7 +12,6 @@ import {
   probeOrcaWorktree,
   readOrcaTerminal,
   resolveOrcaExecutable,
-  runOrcaJson,
   sendOrcaTerminal,
   waitOrcaTerminal,
 } from './lib/orca-cli.ts';
@@ -225,21 +224,8 @@ function resolveCiGreen(prNumber: number, headSha: string, repoRoot: string): bo
   return classifyRequiredCiLevel(checks, { requiredCheckNames, requiredCheckLookupFailed }) === 'green';
 }
 
-function verifySmokeTerminalProvenance(report: SmokeReport, cwd: string): boolean {
-  if (!smokeReportHasPackProducer(report)) {
-    return false;
-  }
-  const read = runOrcaJson<{ lines?: string[] }>(['terminal', 'read', '--terminal', report.terminalHandle!, '--limit', '1'], { cwd });
-  if (!read.ok) {
-    const code = String(read.error?.code ?? '').toLowerCase();
-    const message = String(read.error?.message ?? '').toLowerCase();
-    return code.includes('not_found')
-      || code.includes('unknown')
-      || code.includes('closed')
-      || message.includes('not found')
-      || message.includes('closed');
-  }
-  return false;
+function verifyPublishedSmokeProvenance(report: SmokeReport): boolean {
+  return smokeReportHasPackProducer(report) && verifySmokeRunReceipt(report);
 }
 
 function attachPackProducerFields(report: SmokeReport, input: { terminalHandle?: string; orcaExecutable?: string }): SmokeReport {
@@ -282,7 +268,7 @@ function runGateCheck(options: CliOptions): number {
     ownedTerminalClosed: options.prNumber > 0
       ? ownedSmokeTerminalClosedFromReports(comments, options.prNumber, options.headSha, options.issueNumber)
       : false,
-    terminalProvenanceOk: pass ? verifySmokeTerminalProvenance(pass, options.cwd) : false,
+    terminalProvenanceOk: pass ? verifyPublishedSmokeProvenance(pass) : false,
   });
   emit({ ok: decision.allowed, ...decision }, options.json);
   return decision.allowed ? 0 : 1;
@@ -296,6 +282,7 @@ function publishSmokeReport(
   const comment = formatSmokeReportComment(report);
   if (!options.dryRun) {
     publishPrComment(options.prNumber, comment, options.repoRoot);
+    writeWorkerSmokeReceipt(report);
   }
 }
 

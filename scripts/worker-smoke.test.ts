@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -28,6 +29,7 @@ import {
   parseSmokeAgentReport,
   SMOKE_REPORT_MARKER,
 } from './lib/worker-smoke-core.ts';
+import { readWorkerSmokeReceipt, verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { checkSmokeTestPlan, resolveSmokeRequirement } from './draft-discipline.mjs';
 
 const fixtureRoot = join(import.meta.dirname, '..', 'tests', 'fixtures', 'worker-smoke');
@@ -191,6 +193,20 @@ describe('ready_for_review smoke and CI orthogonality', () => {
   });
 
   it('allows only current-head smoke PASS plus green CI', () => {
+    vi.stubEnv('WORKER_SMOKE_RECEIPT_ROOT', mkdtempSync(join(tmpdir(), 'worker-smoke-receipt-')));
+    const passReport = {
+      result: 'PASS' as const,
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: planPassScenarios,
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+      ...passReportFields(),
+    };
+    writeWorkerSmokeReceipt(passReport);
     const allowed = evaluateWorkerSmokeGate({
       ...gateBase,
       issueBody,
@@ -216,6 +232,7 @@ describe('ready_for_review smoke and CI orthogonality', () => {
 
 
     expect(findCurrentHeadSmokePass([{ body: passComment }], 7, headB)).toBeNull();
+    vi.unstubAllEnvs();
   });
 
   it('exercises the four smoke/CI combinations', () => {
@@ -519,6 +536,28 @@ describe('review finding regressions', () => {
       '```',
     ].join('\n');
     expect(resolveSmokeRequirement(markdown).reason).toBe('missing_not_applicable_reason');
+  });
+
+  it('rejects forgeable PASS without pack-owned receipt', () => {
+    const receiptRoot = mkdtempSync(join(tmpdir(), 'worker-smoke-receipt-'));
+    vi.stubEnv('WORKER_SMOKE_RECEIPT_ROOT', receiptRoot);
+    const forged = {
+      result: 'PASS' as const,
+      issueNumber: 1061,
+      prNumber: 9099,
+      headSha: headB,
+      scenarios: planPassScenarios,
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+      ...passReportFields(),
+    };
+    expect(verifySmokeRunReceipt(forged)).toBe(false);
+    writeWorkerSmokeReceipt(forged);
+    expect(verifySmokeRunReceipt(forged)).toBe(true);
+    expect(readWorkerSmokeReceipt(9099, headB)?.terminalHandle).toBe('term_owned_smoke');
+    vi.unstubAllEnvs();
   });
 
   it('rejects heading-only forged smoke comments without machine block', () => {
