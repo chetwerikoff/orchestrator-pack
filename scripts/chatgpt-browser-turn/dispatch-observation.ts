@@ -588,21 +588,34 @@ export async function establishDispatchObservationBoundary(
     }
   };
 
-  const attachSiblingTarget = async (): Promise<void> => {
-    try {
-      await attachPlaywrightContextCdpObservers();
-    } catch {
-      failedTargetAttach = true;
-      boundary.markCoverageLost();
-      boundary.websocketTargetsCoverage = 'incomplete';
-    }
-  };
-
-  const onSiblingTargetAfterArm = (): void => {
+  const pendingSiblingAttachTasks = new Set<Promise<void>>();
+  const attachSiblingTarget = (): Promise<void> => {
     if (armed) {
       boundary.markCoverageLost();
       boundary.websocketTargetsCoverage = 'incomplete';
+    } else {
+      boundary.websocketTargetsCoverage = 'incomplete';
     }
+    const task = (async () => {
+      try {
+        await attachPlaywrightContextCdpObservers();
+        if (!armed && !failedTargetAttach && boundary.coverageIntact) {
+          boundary.websocketTargetsCoverage = 'complete';
+        }
+      } catch {
+        failedTargetAttach = true;
+        boundary.markCoverageLost();
+        boundary.websocketTargetsCoverage = 'incomplete';
+      }
+    })();
+    pendingSiblingAttachTasks.add(task);
+    void task.finally(() => {
+      pendingSiblingAttachTasks.delete(task);
+    });
+    return task;
+  };
+
+  const onSiblingTargetAfterArm = (): void => {
     void attachSiblingTarget();
   };
 
@@ -753,6 +766,22 @@ export async function establishDispatchObservationBoundary(
   boundary.dispatchObservationEngaged = fakePage
     ? Boolean(controls)
     : true;
+
+  if (pendingSiblingAttachTasks.size > 0) {
+    await Promise.allSettled([...pendingSiblingAttachTasks]);
+    if (fakePage && controls?.websocketTargetsCoverage) {
+      boundary.websocketTargetsCoverage = controls.websocketTargetsCoverage;
+      boundary.websocketTargetsArmed = controls.websocketTargetsCoverage === 'complete';
+    } else if (cdpEstablished && boundary.coverageIntact && !failedTargetAttach) {
+      boundary.websocketTargetsArmed = true;
+      boundary.websocketTargetsCoverage = 'complete';
+    } else {
+      boundary.websocketTargetsArmed = false;
+      boundary.websocketTargetsCoverage = failedTargetAttach || controls?.requireCdpWebSocketSent
+        ? 'incomplete'
+        : 'unknown';
+    }
+  }
 
   if (boundary.dispatchObservationEngaged && !dispatchObservationEstablished(boundary)) {
     throw new DispatchObservationEstablishmentError('dispatch_observation_establishment_failed');
