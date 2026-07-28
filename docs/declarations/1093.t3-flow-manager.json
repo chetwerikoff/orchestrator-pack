@@ -10,10 +10,11 @@
     "active_scope_hash": "sha256:d4decb1726892c55b8afee74b58631df944bc61cf598d6d6d777a2f8fc5cdabf"
   },
   "declared_paths": [
-    "scripts/lib/tier-gate-core.ts",
-    "scripts/tier-gate-guard.test.ts",
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/rules/draft-author-relocation.mdc",
     "docs/tiering.md",
-    ".claude/skills/create-issue-draft/SKILL.md"
+    "scripts/lib/tier-gate-core.ts",
+    "scripts/tier-gate-guard.test.ts"
   ],
   "declared_globs": [
     "docs/declarations/**"
