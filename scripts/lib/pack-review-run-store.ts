@@ -133,7 +133,7 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   surface?: string;
   trustedPackRoot: string;
   sourceRepoRoot: string;
-  canonicalRepository: string;
+  canonicalRepository?: string;
 }
 
 interface LockHandle {
@@ -555,7 +555,9 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(completed[0]!), storeRoot };
     }
 
-    const canonicalRepository = normalizePackReviewCanonicalRepository(input.canonicalRepository);
+    const canonicalRepository = input.canonicalRepository
+      ? normalizePackReviewCanonicalRepository(input.canonicalRepository)
+      : undefined;
     const now = (input.now ?? new Date()).toISOString();
     const runId = `prr-${randomUUID().replaceAll('-', '')}`;
     const record: PackReviewRunRecord = {
