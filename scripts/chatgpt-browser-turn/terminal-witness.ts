@@ -250,26 +250,32 @@ export function ingestServicePayload(state: TerminalWitnessState, payload: Recor
   }
 }
 
-export function noteTerminalizationAttemptTree(state: TerminalWitnessState, value: unknown): void {
-  if (!value || typeof value !== 'object') return;
-  if (Array.isArray(value)) {
-    for (const item of value) noteTerminalizationAttemptTree(state, item);
-    return;
-  }
-  const obj = value as Record<string, unknown>;
-  noteTerminalizationAttempt(state, obj);
-  for (const child of Object.values(obj)) noteTerminalizationAttemptTree(state, child);
-}
 
-export function ingestServicePayloadTree(state: TerminalWitnessState, value: unknown): void {
-  noteTerminalizationAttemptTree(state, value);
+const UNGROUNDED_SERVICE_WRAPPER_TYPES = new Set(['rogue_wrapper', 'rogue_terminal_frame']);
+
+export function ingestServicePayloadTree(
+  state: TerminalWitnessState,
+  value: unknown,
+  witnessOnly = false,
+): void {
   if (!value || typeof value !== 'object') return;
   if (Array.isArray(value)) {
-    for (const item of value) ingestServicePayloadTree(state, item);
+    for (const item of value) ingestServicePayloadTree(state, item, witnessOnly);
     return;
   }
   const obj = value as Record<string, unknown>;
-  if (typeof obj.type === 'string') ingestServicePayload(state, obj);
+  const rawType = typeof obj.type === 'string' ? obj.type : '';
+  if (witnessOnly) {
+    noteTerminalizationAttempt(state, obj);
+    if (obj.payload !== undefined) ingestServicePayloadTree(state, obj.payload, true);
+    if (obj.nested !== undefined) ingestServicePayloadTree(state, obj.nested, true);
+    return;
+  }
+  if (UNGROUNDED_SERVICE_WRAPPER_TYPES.has(rawType)) {
+    ingestServicePayloadTree(state, obj, true);
+    return;
+  }
+  if (rawType) ingestServicePayload(state, obj);
   if (typeof obj.encoded_item === 'string') {
     for (const raw of obj.encoded_item.split(/\r?\n/)) {
       const line = raw.startsWith('data:') ? raw.slice(5).trim() : raw.trim();
