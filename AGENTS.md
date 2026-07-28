@@ -332,6 +332,27 @@ or `.agent-report-audit` files. If the command cannot determine the current repo
 binding, skip silently for the report write only and continue the required task work. Do not
 substitute PR comments or issue comments for worker report state.
 
+
+#### Worker smoke gate (`ready_for_review`)
+
+After implementation reaches a concrete PR head and before `pack-worker-report --state ready_for_review`, run the pack-owned Orca smoke path when the source Issue requires it:
+
+```bash
+export PATH="$PWD/scripts:$PATH"
+worker-smoke-run run --issue <N> --pr <PR> --head-sha <40-hex> --issue-body-file <path> --repo-root "$PWD" --cwd "$PWD"
+```
+
+Rules:
+
+- Resolve the supported Orca executable (`ORCA_CLI_COMMAND` when set, otherwise `orca-dev` / `orca-ide` / `orca`) and prove `orca worktree current` matches the worker cwd. If the cwd is not Orca-managed, smoke is `BLOCKED` — do not create another worktree or checkout.
+- Create one fresh Orca terminal in the active worktree with `cursor-agent`, retain the returned handle, send the smoke prompt, capture the `worker-smoke-report` block, publish it as a top-level PR comment, then `orca terminal close --terminal <owned-handle>`. Never use worktree-wide terminal stop for normal cleanup.
+- The smoke agent is a verifier only: no tracked implementation edits, commits, pushes, merges, Issue edits, pack review, or `pack-worker-report`.
+- `ready_for_review` requires current-head smoke `PASS` (when required) **and** current-head required CI green. Legacy Issues without a `smoke-test-plan` fence remain handoff-eligible once CI is green; explicit `not-applicable` skips smoke; omission on new action-producing tasks is not equivalent to N/A.
+- `pack-worker-report --state ready_for_review` fails closed when smoke is required and the current head lacks a bound `PASS`, the latest result is `FAIL`/`BLOCKED`, an owned smoke terminal remains uncleaned, or the cwd is not Orca-managed.
+
+Authoring floor: new action-producing tasks must include a `smoke-test-plan` fence with realistic scenarios or an explicit reasoned `not-applicable` form (`node scripts/draft-discipline.mjs smoke-test-plan --draft <issue-body-file>`).
+
+
 #### Worker CI gate (`ready_for_review` and self-fix)
 
 **Self-fix is primary.** Do **not** run `pack-worker-report --state ready_for_review` while required

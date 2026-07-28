@@ -1,0 +1,378 @@
+import { parseKeyValueBlock } from '../markdown-key-value.mjs';
+import {
+  checkSmokeTestPlan,
+  parseSmokeTestPlan,
+  resolveSmokeRequirement,
+} from '../worker-smoke-plan.mjs';
+
+export { checkSmokeTestPlan, parseSmokeTestPlan, resolveSmokeRequirement };
+
+export type SmokeResult = 'PASS' | 'FAIL' | 'BLOCKED';
+
+export interface SmokeScenario {
+  action: string;
+  expected: string;
+  observed?: string;
+  outcome?: 'pass' | 'fail' | 'skipped' | 'blocked';
+  skipReason?: string;
+}
+
+export type SmokeRequirement = 'required' | 'not-applicable' | 'legacy-exempt';
+
+export interface SmokeTestPlan {
+  requirement: SmokeRequirement;
+  reason?: string;
+  scenarios: SmokeScenario[];
+}
+
+export interface SmokeReport {
+  result: SmokeResult;
+  issueNumber: number;
+  prNumber: number;
+  headSha: string;
+  scenarios: SmokeScenario[];
+  limitations: string[];
+  trackedFilesUnmodified: boolean;
+  terminalCleanup: string;
+  environmentNotes: string[];
+}
+
+export const SMOKE_REPORT_MARKER = 'pack-worker-smoke-report/v1';
+
+const FENCE_PATTERN = /```([a-z0-9-]+)\s*\r?\n([\s\S]*?)```/gi;
+const SMOKE_REPORT_BLOCK = /```worker-smoke-report\s*\r?\n([\s\S]*?)```/i;
+const SMOKE_REPORT_HEADING = /^## Worker smoke report\b/im;
+
+const FORBIDDEN_SMOKE_AGENT_ACTIONS = [
+  /\bcommit\b/i,
+  /\bpush\b/i,
+  /\bmerge\b/i,
+  /\bpack-worker-report\b/i,
+  /\bready_for_review\b/i,
+  /\bREVIEW_COMMAND\b/i,
+  /\bPACK_REVIEWER\b/i,
+  /\bedit(?:ing)?\s+(?:the\s+)?(?:issue|task spec)\b/i,
+] as const;
+
+export function buildSmokeAgentPrompt(input: {
+  issueNumber: number;
+  issueBody: string;
+  prNumber: number;
+  headSha: string;
+  plan: SmokeTestPlan;
+}): string {
+  const scenarioLines = input.plan.scenarios
+    .map((scenario, index) => `${index + 1}. action: ${scenario.action}\n   expected: ${scenario.expected}`)
+    .join('\n');
+
+  return [
+    'You are an independent smoke verifier for orchestrator-pack.',
+    'Execute only the smoke scenarios below against the current worktree.',
+    'Do not edit tracked implementation files, commit, push, merge, alter the Issue, invoke pack review, or call pack-worker-report.',
+    'When finished, emit exactly one fenced block:',
+    '',
+    '```worker-smoke-report',
+    'result: PASS|FAIL|BLOCKED',
+    'tracked-files-unmodified: true|false',
+    'environment-notes: <optional>',
+    'limitations: <optional comma-separated>',
+    'scenarios:',
+    '  - action: <what you ran>',
+    '    expected: <from plan>',
+    '    observed: <what happened>',
+    '    outcome: pass|fail|skipped|blocked',
+    '```',
+    '',
+    `Issue: #${input.issueNumber}`,
+    `PR: #${input.prNumber}`,
+    `Head SHA: ${input.headSha}`,
+    '',
+    'Smoke scenarios:',
+    scenarioLines || '(none — report BLOCKED with concrete reason)',
+    '',
+    'Issue body for context:',
+    input.issueBody,
+  ].join('\n');
+}
+
+export function smokePromptForbidsWorkerActions(prompt: string): string[] {
+  const violations: string[] = [];
+  for (const pattern of FORBIDDEN_SMOKE_AGENT_ACTIONS) {
+    if (pattern.test(prompt) && !/must not|do not|cannot/i.test(prompt)) {
+      violations.push(pattern.source);
+    }
+  }
+  return violations;
+}
+
+export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null {
+  const match = text.match(SMOKE_REPORT_BLOCK);
+  if (!match) {
+    return null;
+  }
+  const fields = parseKeyValueBlock(match[1]);
+  const result = String(fields.result ?? '').trim().toUpperCase();
+  if (result !== 'PASS' && result !== 'FAIL' && result !== 'BLOCKED') {
+    return null;
+  }
+
+  const scenarios: SmokeScenario[] = [];
+  for (const line of match[1].split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('-')) {
+      continue;
+    }
+    const action = trimmed.match(/action:\s*([^|]+)/i)?.[1]?.trim() ?? '';
+    const expected = trimmed.match(/expected:\s*([^|]+)/i)?.[1]?.trim() ?? '';
+    const observed = trimmed.match(/observed:\s*([^|]+)/i)?.[1]?.trim() ?? '';
+    const outcome = trimmed.match(/outcome:\s*([a-z]+)/i)?.[1]?.trim().toLowerCase() as SmokeScenario['outcome'];
+    const skipReason = trimmed.match(/skip-reason:\s*(.+)$/i)?.[1]?.trim();
+    if (action || expected || observed) {
+      scenarios.push({ action, expected, observed, outcome, skipReason });
+    }
+  }
+
+  const trackedRaw = String(fields['tracked-files-unmodified'] ?? fields['tracked-files'] ?? '').toLowerCase();
+  const limitations = String(fields.limitations ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const environmentNotes = String(fields['environment-notes'] ?? fields.environment ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  return {
+    result: result as SmokeResult,
+    scenarios,
+    trackedFilesUnmodified: trackedRaw === 'true' || trackedRaw === 'yes',
+    limitations,
+    environmentNotes,
+    terminalCleanup: String(fields['terminal-cleanup'] ?? '').trim(),
+  };
+}
+
+export function normalizeSmokeReport(
+  partial: Partial<SmokeReport>,
+  binding: { issueNumber: number; prNumber: number; headSha: string },
+): { ok: true; report: SmokeReport } | { ok: false; reason: string } {
+  if (!partial.result || !['PASS', 'FAIL', 'BLOCKED'].includes(partial.result)) {
+    return { ok: false, reason: 'missing_result' };
+  }
+  if (!binding.headSha || binding.headSha.length !== 40) {
+    return { ok: false, reason: 'invalid_head_sha' };
+  }
+  if (!Number.isInteger(binding.issueNumber) || binding.issueNumber <= 0) {
+    return { ok: false, reason: 'invalid_issue_number' };
+  }
+  if (!Number.isInteger(binding.prNumber) || binding.prNumber <= 0) {
+    return { ok: false, reason: 'invalid_pr_number' };
+  }
+  if (partial.result === 'PASS' && partial.trackedFilesUnmodified !== true) {
+    return { ok: false, reason: 'pass_requires_unmodified_tracked_files' };
+  }
+  if (!Array.isArray(partial.scenarios) || partial.scenarios.length === 0) {
+    return { ok: false, reason: 'missing_scenarios' };
+  }
+
+  return {
+    ok: true,
+    report: {
+      result: partial.result,
+      issueNumber: binding.issueNumber,
+      prNumber: binding.prNumber,
+      headSha: binding.headSha,
+      scenarios: partial.scenarios,
+      limitations: partial.limitations ?? [],
+      trackedFilesUnmodified: partial.trackedFilesUnmodified === true,
+      terminalCleanup: partial.terminalCleanup ?? 'not_recorded',
+      environmentNotes: partial.environmentNotes ?? [],
+    },
+  };
+}
+
+export function formatSmokeReportComment(report: SmokeReport): string {
+  const scenarioLines = report.scenarios.map((scenario) => {
+    const parts = [
+      `- action: ${scenario.action}`,
+      `expected: ${scenario.expected}`,
+      `observed: ${scenario.observed ?? '(not recorded)'}`,
+      `outcome: ${scenario.outcome ?? 'unknown'}`,
+    ];
+    if (scenario.skipReason) {
+      parts.push(`skip-reason: ${scenario.skipReason}`);
+    }
+    return parts.join(' | ');
+  });
+
+  const machineScenarioLines = report.scenarios.map((scenario) => {
+    const parts = [
+      `action: ${scenario.action}`,
+      `expected: ${scenario.expected}`,
+      `observed: ${scenario.observed ?? ''}`,
+      `outcome: ${scenario.outcome ?? 'unknown'}`,
+    ];
+    if (scenario.skipReason) {
+      parts.push(`skip-reason: ${scenario.skipReason}`);
+    }
+    return `  - ${parts.join(' | ')}`;
+  });
+
+  const machineBlock = [
+    '```worker-smoke-report',
+    `result: ${report.result}`,
+    `tracked-files-unmodified: ${report.trackedFilesUnmodified ? 'true' : 'false'}`,
+    `terminal-cleanup: ${report.terminalCleanup}`,
+    report.environmentNotes.length > 0 ? `environment-notes: ${report.environmentNotes.join('; ')}` : '',
+    report.limitations.length > 0 ? `limitations: ${report.limitations.join('; ')}` : '',
+    'scenarios:',
+    ...machineScenarioLines,
+    '```',
+  ].filter(Boolean).join('\n');
+
+  return [
+    `<!-- ${SMOKE_REPORT_MARKER} -->`,
+    '## Worker smoke report',
+    '',
+    `- result: **${report.result}**`,
+    `- issue: #${report.issueNumber}`,
+    `- pr: #${report.prNumber}`,
+    `- head-sha: \`${report.headSha}\``,
+    `- tracked-implementation-files-unmodified: ${report.trackedFilesUnmodified ? 'yes' : 'no'}`,
+    `- orca-terminal-cleanup: ${report.terminalCleanup}`,
+    report.environmentNotes.length > 0 ? `- environment-notes: ${report.environmentNotes.join('; ')}` : '',
+    report.limitations.length > 0 ? `- limitations/skips: ${report.limitations.join('; ')}` : '',
+    '',
+    '### Scenarios',
+    ...scenarioLines,
+    '',
+    'The smoke agent did not modify tracked implementation files through the supported protocol.',
+    '',
+    machineBlock,
+  ].filter(Boolean).join('\n');
+}
+
+export function extractSmokeReportsFromComments(comments: readonly { body?: string; createdAt?: string }[]): SmokeReport[] {
+  const reports: SmokeReport[] = [];
+  for (const comment of comments) {
+    const body = comment.body ?? '';
+    if (!body.includes(SMOKE_REPORT_MARKER) && !SMOKE_REPORT_HEADING.test(body)) {
+      continue;
+    }
+    const partial = parseSmokeAgentReport(body);
+    if (!partial?.result) {
+      continue;
+    }
+    const issueNumber = Number(body.match(/issue:\s*#(\d+)/i)?.[1] ?? partial.issueNumber ?? 0);
+    const prNumber = Number(body.match(/pr:\s*#(\d+)/i)?.[1] ?? partial.prNumber ?? 0);
+    const headSha = body.match(/head-sha:\s*`?([0-9a-f]{40})`?/i)?.[1]
+      ?? body.match(/head sha:\s*([0-9a-f]{40})/i)?.[1]
+      ?? '';
+    const normalized = normalizeSmokeReport(partial, { issueNumber, prNumber, headSha });
+    if (normalized.ok) {
+      reports.push(normalized.report);
+    }
+  }
+  return reports;
+}
+
+export function findCurrentHeadSmokePass(
+  comments: readonly { body?: string }[],
+  prNumber: number,
+  headSha: string,
+): SmokeReport | null {
+  const normalizedHead = headSha.trim().toLowerCase();
+  const reports = extractSmokeReportsFromComments(comments)
+    .filter((report) => report.prNumber === prNumber && report.headSha.toLowerCase() === normalizedHead);
+  const pass = [...reports].reverse().find((report) => report.result === 'PASS');
+  return pass ?? null;
+}
+
+export interface WorkerSmokeGateInput {
+  issueBody: string;
+  prNumber: number;
+  headSha: string;
+  prComments: readonly { body?: string }[];
+  ciGreen: boolean;
+  orcaWorktreeOk: boolean;
+  ownedTerminalClosed: boolean;
+}
+
+export interface WorkerSmokeGateDecision {
+  allowed: boolean;
+  reason: string;
+  smokeRequired: boolean;
+}
+
+export function evaluateWorkerSmokeGate(input: WorkerSmokeGateInput): WorkerSmokeGateDecision {
+  const plan = resolveSmokeRequirement(input.issueBody);
+  if (plan.requirement === 'legacy-exempt' || plan.requirement === 'not-applicable') {
+    if (!input.ciGreen) {
+      return { allowed: false, reason: 'required_ci_not_green', smokeRequired: false };
+    }
+    return { allowed: true, reason: 'smoke_not_required', smokeRequired: false };
+  }
+
+  if (!input.orcaWorktreeOk) {
+    return { allowed: false, reason: 'orca_worktree_unresolved', smokeRequired: true };
+  }
+  if (!input.ownedTerminalClosed) {
+    return { allowed: false, reason: 'owned_smoke_terminal_uncleaned', smokeRequired: true };
+  }
+
+  const pass = findCurrentHeadSmokePass(input.prComments, input.prNumber, input.headSha);
+  if (!pass) {
+    const reports = extractSmokeReportsFromComments(input.prComments)
+      .filter((report) => report.prNumber === input.prNumber);
+    const latest = reports.at(-1);
+    if (latest && latest.headSha.toLowerCase() !== input.headSha.trim().toLowerCase()) {
+      return { allowed: false, reason: 'stale_smoke_pass_for_older_head', smokeRequired: true };
+    }
+    if (latest && (latest.result === 'FAIL' || latest.result === 'BLOCKED')) {
+      return { allowed: false, reason: `smoke_${latest.result.toLowerCase()}`, smokeRequired: true };
+    }
+    return { allowed: false, reason: 'missing_smoke_pass', smokeRequired: true };
+  }
+
+  if (!input.ciGreen) {
+    return { allowed: false, reason: 'required_ci_not_green', smokeRequired: true };
+  }
+
+  return { allowed: true, reason: 'smoke_pass_and_ci_green', smokeRequired: true };
+}
+
+export function evaluateReadyForReviewCombinations(input: {
+  smokePass: boolean;
+  ciGreen: boolean;
+}): boolean {
+  return input.smokePass && input.ciGreen;
+}
+
+export function detectTrackedImplementationMutation(
+  before: readonly string[],
+  after: readonly string[],
+): boolean {
+  const normalize = (lines: readonly string[]) => new Set(
+    lines
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('??')),
+  );
+  const beforeSet = normalize(before);
+  const afterSet = normalize(after);
+  if (afterSet.size > beforeSet.size) {
+    return true;
+  }
+  for (const line of afterSet) {
+    if (!beforeSet.has(line)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function scrubSmokeOutput(text: string): string {
+  return text
+    .replace(/(?:ghp_|github_pat_)[A-Za-z0-9_]+/g, '[redacted-token]')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted]')
+    .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, '[redacted-secret]');
+}

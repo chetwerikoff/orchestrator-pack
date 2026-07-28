@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeLine, parseKeyValueBlock } from './markdown-key-value.mjs';
 import { checkContractEvidence } from './contract-evidence-validator.mjs';
+import { checkSmokeTestPlan } from './worker-smoke-plan.mjs';
 
 const require = createRequire(import.meta.url);
 const taxonomy = require('./draft-discipline-action-taxonomy.json');
@@ -250,6 +251,7 @@ const MACHINE_PARSED_FENCE_LABELS = new Set([
   'behavior-kind',
   'complexity-tier',
   'parked-root-cause',
+  'smoke-test-plan',
 ]);
 
 function extractPathTokenCandidate(token) {
@@ -559,7 +561,22 @@ export function runCli(argv) {
     return 0;
   }
 
-  process.stderr.write('draft-discipline: unknown command (positive-outcome | parked-root | contract-evidence | surfaces)\n');
+  if (command === 'smoke-test-plan') {
+    const result = checkSmokeTestPlan(markdown);
+    for (const warning of result.warnings) {
+      process.stderr.write(`draft-discipline warning: ${warning}\n`);
+    }
+    if (!result.ok) {
+      for (const error of result.errors) {
+        process.stderr.write(`draft-discipline: ${error}\n`);
+      }
+      return 1;
+    }
+    process.stdout.write('draft-discipline smoke-test-plan: PASS\n');
+    return 0;
+  }
+
+  process.stderr.write('draft-discipline: unknown command (positive-outcome | parked-root | contract-evidence | smoke-test-plan | surfaces)\n');
   return 2;
 }
 
