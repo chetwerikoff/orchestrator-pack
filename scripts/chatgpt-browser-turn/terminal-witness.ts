@@ -37,6 +37,7 @@ export interface TerminalWitnessState {
   readonly messages: Map<string, WitnessMessage>;
   readonly terminalByMessageId: Map<string, AssistantTerminalMetadata>;
   readonly terminalAuthorityFrameByMessageId: Map<string, number>;
+  readonly terminalizationAttemptsById: Map<string, boolean>;
   readonly frames: ServiceFrameRecord[];
   streamCompleteSeen: boolean;
   terminalAuthorityAfterFrame: number;
@@ -47,6 +48,7 @@ export function createTerminalWitnessState(): TerminalWitnessState {
     messages: new Map(),
     terminalByMessageId: new Map(),
     terminalAuthorityFrameByMessageId: new Map(),
+    terminalizationAttemptsById: new Map(),
     frames: [],
     streamCompleteSeen: false,
     terminalAuthorityAfterFrame: 0,
@@ -192,7 +194,25 @@ function classifyFrameType(rawType: string): ServiceFrameKind {
   return 'other';
 }
 
+export function noteTerminalizationAttempt(
+  state: TerminalWitnessState,
+  payload: Record<string, unknown>,
+): void {
+  const candidates = [
+    asRecord(asRecord(payload.v)?.message),
+    asRecord(payload.message),
+  ];
+  for (const message of candidates) {
+    if (!message) continue;
+    const id = typeof message.id === 'string' ? message.id : '';
+    if (id.length >= 8 && message.end_turn === true) {
+      state.terminalizationAttemptsById.set(id, true);
+    }
+  }
+}
+
 export function ingestServicePayload(state: TerminalWitnessState, payload: Record<string, unknown>): void {
+  noteTerminalizationAttempt(state, payload);
   const rawType = typeof payload.type === 'string' ? payload.type : 'other';
   const kind = classifyFrameType(rawType);
   state.frames.push({ kind, rawType });
@@ -230,7 +250,19 @@ export function ingestServicePayload(state: TerminalWitnessState, payload: Recor
   }
 }
 
+export function noteTerminalizationAttemptTree(state: TerminalWitnessState, value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const item of value) noteTerminalizationAttemptTree(state, item);
+    return;
+  }
+  const obj = value as Record<string, unknown>;
+  noteTerminalizationAttempt(state, obj);
+  for (const child of Object.values(obj)) noteTerminalizationAttemptTree(state, child);
+}
+
 export function ingestServicePayloadTree(state: TerminalWitnessState, value: unknown): void {
+  noteTerminalizationAttemptTree(state, value);
   if (!value || typeof value !== 'object') return;
   if (Array.isArray(value)) {
     for (const item of value) ingestServicePayloadTree(state, item);
@@ -311,6 +343,18 @@ export function resolveWholeTurnTerminal(
     return { state: 'success', assistantMessageId: latestSuccess.assistantMessageId };
   }
   return { state: 'none' };
+}
+
+
+export function hasTerminalWitnessActivityForAssistant(
+  state: TerminalWitnessState,
+  assistantMessageId: string,
+): boolean {
+  const metadata = state.terminalByMessageId.get(assistantMessageId);
+  if (!metadata) return false;
+  return metadata.endTurn !== undefined
+    || metadata.finishDetailsType !== undefined
+    || metadata.status !== undefined;
 }
 
 export function deltaPatchOrStreamCompleteWithoutTerminal(

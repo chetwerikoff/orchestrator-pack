@@ -736,7 +736,7 @@ describe('issue 1007 runTurn teardown integration', () => {
       releaseOrder: timeline,
       sendResult: {
         state: 'send_failed',
-        cause: 'dispatch_request_not_observed',
+        cause: 'dispatch_request_not_issued',
         possibleDelivery: false,
       },
     });
