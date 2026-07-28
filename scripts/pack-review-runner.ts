@@ -20,12 +20,17 @@ import {
 import {
   createPackReviewRun,
   getPackReviewRun,
+  hasNewerPackReviewRunForKey,
   heartbeatPackReviewRun,
+  isPackReviewRunStale,
+  isPackReviewStaleTerminalRun,
+  listPackReviewRunRecordsRaw,
   listPackReviewRuns,
   packReviewLogsDir,
   packReviewWorktreesDir,
   resolvePackReviewRunStoreRoot,
   setPackReviewRunTerminal,
+  terminalizePackReviewStaleRun,
   updatePackReviewRun,
   type PackReviewRunRecord,
   type PackReviewRunStatus,
@@ -38,12 +43,16 @@ import {
   type GithubReviewTransport,
 } from './lib/github-review-reconciliation.ts';
 import {
+  classifyPackReviewFailureReason,
   deliverPackReviewVerdict,
   packReviewDeliveryNeedsResume,
   packReviewJournaledPayload,
+  packReviewRequiredStatusNeedsStaleReconciliation,
   publishPackReviewRequiredStatus,
   recordMalformedPackReviewStatus,
   recordPackReviewPendingStatus,
+  recordPackReviewStaleRequiredStatus,
+  restorePackReviewAuthoritativeRequiredStatus,
   resumePackReviewVerdictDelivery,
   sendPackReviewWorkerNotification,
   type PackReviewJournalWriter,
@@ -56,6 +65,8 @@ import {
   type PackReviewer,
   type PackReviewerLayerOverrides,
 } from './lib/resolve-pack-reviewer.ts';
+import { resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
+export { resolveRepositorySlug };
 
 interface StartInput {
   projectId?: string;
@@ -83,6 +94,20 @@ interface StartInput {
   fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
   fixtureWorkerNotifier?: PackReviewWorkerNotifier;
   fixtureJournalWriter?: PackReviewJournalWriter;
+  fixtureBeforeStaleStatusWrite?: (run: PackReviewRunRecord) => void | Promise<void>;
+}
+
+export interface ReconcileStalePackReviewRunsInput {
+  repoSlug: string;
+  sourceRepoRoot: string;
+  projectId?: string;
+  storeRoot?: string;
+  fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
+  resolveRepositorySlug?: (repoRoot: string) => Promise<string>;
+  beforeStaleStatusWrite?: (run: PackReviewRunRecord) => void | Promise<void>;
+  fixturePauseBeforeStaleStatusWrite?: () => void | Promise<void>;
+  fixturePauseAfterStaleStatusWrite?: () => void | Promise<void>;
+  fixturePauseAfterPendingRestoreWrite?: () => void | Promise<void>;
 }
 
 interface ListInput {
@@ -235,19 +260,6 @@ async function runGit(repoRoot: string, args: readonly string[], label: string):
   }), label);
 }
 
-async function resolveRepositorySlug(repoRoot: string): Promise<string> {
-  const result = await runProcess({
-    command: 'gh',
-    args: ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'],
-    cwd: repoRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: 30_000,
-  });
-  const slug = await requireProcess(result, 'gh repo view');
-  if (!/^[^/\s]+\/[^/\s]+$/.test(slug)) throw new Error(`gh repo view returned invalid repository slug '${slug}'`);
-  return slug;
-}
 
 async function resolveCurrentPrHead(repoRoot: string, repoSlug: string, prNumber: number): Promise<string> {
   const result = await runProcess({
@@ -636,6 +648,148 @@ async function invokeReviewer(options: {
   });
   return { result, resolvedReviewer };
 }
+
+async function resolvePackReviewRunCanonicalRepository(
+  run: PackReviewRunRecord,
+  resolveSlug: (repoRoot: string) => Promise<string>,
+): Promise<{ ok: true; slug: string } | { ok: false; reason: string }> {
+  if (trim(run.canonicalRepository)) {
+    return { ok: true, slug: trim(run.canonicalRepository) };
+  }
+  if (!trim(run.sourceRepoRoot)) {
+    return { ok: false, reason: 'legacy_repository_unresolved' };
+  }
+  try {
+    const slug = await resolveSlug(run.sourceRepoRoot);
+    if (!/^[^/\s]+\/[^/\s]+$/.test(slug)) {
+      return { ok: false, reason: 'legacy_repository_ambiguous' };
+    }
+    return { ok: true, slug };
+  } catch {
+    return { ok: false, reason: 'legacy_repository_unresolved' };
+  }
+}
+
+export async function reconcileStalePackReviewRuns(
+  input: ReconcileStalePackReviewRunsInput,
+): Promise<{ ok: true; results: Array<Record<string, unknown>> }> {
+  const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
+  const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
+  const repoSlug = trim(input.repoSlug);
+  if (!repoSlug) throw new Error('pack review stale reconciliation requires a canonical repository slug');
+  const resolveSlug = input.resolveRepositorySlug ?? resolveRepositorySlug;
+  const records = listPackReviewRunRecordsRaw({ projectId, storeRoot });
+  const results: Array<Record<string, unknown>> = [];
+
+  for (const candidate of records) {
+    const activeStale = isPackReviewRunStale(candidate);
+    const staleTerminal = isPackReviewStaleTerminalRun(candidate);
+    if (!activeStale && !staleTerminal) continue;
+
+    const identity = await resolvePackReviewRunCanonicalRepository(candidate, resolveSlug);
+    if (!identity.ok || identity.slug !== repoSlug) {
+      results.push({
+        runId: candidate.id,
+        terminalized: false,
+        statusReconciled: false,
+        reason: identity.ok ? 'repository_mismatch' : identity.reason,
+      });
+      continue;
+    }
+
+    let terminalized = false;
+    let run = candidate;
+    if (activeStale) {
+      const terminal = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
+      terminalized = terminal.changed;
+      run = getPackReviewRun(run.id, { projectId, storeRoot }) ?? terminal.run;
+    }
+
+    if (!isPackReviewStaleTerminalRun(run)) continue;
+
+    if (hasNewerPackReviewRunForKey(records, run)) {
+      results.push({
+        runId: run.id,
+        terminalized,
+        statusReconciled: false,
+        reason: 'newer_run_authoritative',
+      });
+      continue;
+    }
+
+    if (!packReviewRequiredStatusNeedsStaleReconciliation(run)) {
+      results.push({
+        runId: run.id,
+        terminalized,
+        statusReconciled: false,
+        reason: 'status_already_reconciled',
+      });
+      continue;
+    }
+
+    const beforeWrite = input.beforeStaleStatusWrite;
+    if (beforeWrite) await beforeWrite(run);
+
+    const recordsBeforeStaleStatusWrite = listPackReviewRunRecordsRaw({ projectId, storeRoot });
+    if (hasNewerPackReviewRunForKey(recordsBeforeStaleStatusWrite, run)) {
+      results.push({
+        runId: run.id,
+        terminalized,
+        statusReconciled: false,
+        reason: 'newer_run_authoritative',
+      });
+      continue;
+    }
+
+    const statusWriter = input.fixtureRequiredStatusWriter
+      ?? ((request) => publishPackReviewRequiredStatus({
+        repoRoot: input.sourceRepoRoot,
+        repoSlug,
+        headSha: run.targetSha,
+        request,
+      }));
+    const authorizeStaleWrite = () => !hasNewerPackReviewRunForKey(
+      listPackReviewRunRecordsRaw({ projectId, storeRoot }),
+      run,
+    );
+    const repairSupersededStaleWrite = async () => {
+      const newerRun = listPackReviewRunRecordsRaw({ projectId, storeRoot })
+        .filter((candidate) => candidate.key === run.key
+          && candidate.id !== run.id
+          && Date.parse(candidate.createdAt) > Date.parse(run.createdAt))
+        .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+      if (!newerRun) return;
+      await restorePackReviewAuthoritativeRequiredStatus({
+        run: newerRun,
+        projectId,
+        storeRoot,
+        writeRequiredStatus: statusWriter,
+        pauseAfterPendingWrite: input.fixturePauseAfterPendingRestoreWrite,
+      });
+    };
+
+    const outcome = await recordPackReviewStaleRequiredStatus({
+      run,
+      projectId,
+      storeRoot,
+      writeRequiredStatus: statusWriter,
+      authorizeWrite: authorizeStaleWrite,
+      repairSupersededWrite: repairSupersededStaleWrite,
+      pauseBeforeWrite: input.fixturePauseBeforeStaleStatusWrite,
+      pauseAfterWrite: input.fixturePauseAfterStaleStatusWrite,
+    });
+
+    results.push({
+      runId: run.id,
+      terminalized,
+      statusReconciled: outcome.state === 'succeeded',
+      reason: outcome.reason,
+    });
+  }
+
+  return { ok: true, results };
+}
+
 export async function startPackReview(input: StartInput): Promise<Record<string, unknown>> {
   const trusted = resolveTrustedRunnerPaths();
   const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
@@ -643,6 +797,13 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   const timeoutSeconds = positiveInteger(input.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS, 'timeoutSeconds') ?? DEFAULT_TIMEOUT_SECONDS;
   const target = await resolveTarget(input, trusted.trustedPackRoot);
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
+  await reconcileStalePackReviewRuns({
+    repoSlug: target.repoSlug,
+    sourceRepoRoot: target.sourceRepoRoot,
+    projectId,
+    storeRoot,
+    beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
+  });
   const claimMode = input.claimMode ?? 'acquire';
   const resumeCandidate = findJournaledDeliveryResumeCandidate({
     projectId,
@@ -744,6 +905,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       surface: trim(input.surface) || 'pack-review-runner',
       trustedPackRoot: trusted.trustedPackRoot,
       sourceRepoRoot: target.sourceRepoRoot,
+      canonicalRepository: target.repoSlug,
     });
     run = created.run;
     if (created.reused) {
@@ -822,7 +984,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     if (!result.ok) {
       setPackReviewRunTerminal(run.id, 'failed', {
         exitCode: result.exitCode,
-        failureReason: trim(result.error || result.stderr || result.stdout) || 'reviewer_process_failed',
+        failureReason: classifyPackReviewFailureReason('reviewer_process_failed'),
       }, { projectId, storeRoot });
       terminal = true;
       throw new Error(`reviewer process failed (exit ${String(result.exitCode)})`);
@@ -939,7 +1101,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       try {
         setPackReviewRunTerminal(run.id, 'failed', {
           exitCode: 1,
-          failureReason: describeError(error),
+          failureReason: classifyPackReviewFailureReason('runner_internal_failure'),
         }, { projectId, storeRoot });
       } catch {
         // Preserve the primary failure; store corruption remains fail-closed on next read.
@@ -978,6 +1140,9 @@ function usage(): string {
     'Status:',
     '  node --experimental-strip-types scripts/pack-review-runner.ts list [--project-id orchestrator-pack]',
     '',
+    'Stale reconciliation:',
+    '  node --experimental-strip-types scripts/pack-review-runner.ts reconcile --source-repo-root <path> --repo-slug owner/name',
+    '',
     'The runner/store/reviewer scripts resolve from the trusted pack checkout, never from the reviewed PR worktree.',
   ].join('\n');
 }
@@ -997,6 +1162,7 @@ function parseArgs(argv: string[]): Record<string, unknown> {
     '--store-root': 'storeRoot',
     '--timeout-seconds': 'timeoutSeconds',
     '--claim-mode': 'claimMode',
+    '--repo-slug': 'fixtureRepoSlug',
   };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index]!;
@@ -1038,6 +1204,24 @@ async function main(): Promise<void> {
     const runId = trim(input.runId);
     if (!runId) throw new Error('status requires runId in JSON payload');
     process.stdout.write(`${JSON.stringify({ run: getPackReviewRun(runId, input as ListInput) })}\n`);
+    return;
+  }
+  if (subcommand === 'reconcile') {
+    const trusted = resolveTrustedRunnerPaths();
+    const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
+    const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trusted.trustedPackRoot);
+    const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1' && Boolean(trim(input.fixtureRepoSlug));
+    const repoSlug = harnessExplicit
+      ? trim(input.fixtureRepoSlug)
+      : trim(input.fixtureRepoSlug) || await resolveRepositorySlug(sourceRepoRoot);
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug,
+      sourceRepoRoot,
+      projectId,
+      storeRoot: trim(input.storeRoot) || undefined,
+      fixtureRequiredStatusWriter: (input as StartInput).fixtureRequiredStatusWriter,
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
   if (subcommand === 'start') {
