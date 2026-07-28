@@ -12,7 +12,6 @@ import {
   type TierDemotionRevalidationRecord,
   type TierTransitionEvidence,
 } from './lib/tier-gate-core.ts';
-import { fingerprintProtectedSignalSpan } from './lib/protected-signal-receipt.mjs';
 
 type Tier = 'T1' | 'T2' | 'T3';
 const identity = '973-fixture';
@@ -262,17 +261,10 @@ describe('Issue #973 tier provenance', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('requires exact source drivers and clear current L4', () => {
+  it('requires exact source rubric drivers and clear current L4', () => {
     const drivers = validDemotion();
     drivers.evidence.events[0].record.drivers = [{ kind: 'rubric', id: 'failure-type:local-behavior', rationale: 'Wrong substitute.' }];
     expect(run(drivers.current, drivers.evidence).errors.join('\n')).toContain('exactly match source trigger set');
-
-    const incompleteSource = validDemotion();
-    incompleteSource.evidence.revisions[0].text = draft('T3', 'T3', {
-      body: 'This change modifies required CI behavior.',
-    });
-    expect(run(incompleteSource.current, incompleteSource.evidence).errors.join('\n'))
-      .toContain('marker driver set mismatch for r01');
 
     const l4 = validDemotion();
     l4.evidence.revisions[1].receipt!.l4Status = 'active';
@@ -280,68 +272,6 @@ describe('Issue #973 tier provenance', () => {
     const l4Errors = run(l4.current, l4.evidence).errors.join('\n');
     expect(l4Errors).toContain('below-T3 candidate requires current clear L4 evidence');
     expect(l4Errors).toContain('revalidation L4 evidence must be clear');
-  });
-
-  it('never lets demotion evidence suppress a live marker', () => {
-    const source = draft('T3', 'T3');
-    const current = draft('T2', 'T3', { from: 'T3', eventId: 'demotion-1', body: 'This change modifies required CI behavior.' });
-    const result = run(current, evidence([
-      { revision: 'r01', text: source, tier: 'T3', receipt: receipt('r01', 'T3') },
-      { revision: 'r02', text: current, tier: 'T2', receipt: receipt('r02', 'T2', { markerRows: ['ci-review-gating'] }) },
-    ], { events: [{ record: event(), captureName: 'pass-01-architectural-lens.capture.txt', captureText: 'architect final lens' }], revalidations: [{ record: revalidation('r02'), captureName: 'pass-02-architectural-lens.capture.txt', captureText: 'architect final lens' }] }));
-    expect(result.errors.join('\n')).toContain('red-flag marker hit (ci-review-gating) with tier T2 below T3');
-  });
-
-  it('routes unquoted context-only marker vocabulary through #781 receipts and preserves structural predicates', () => {
-    const root = mkdtempSync(join(tmpdir(), 'opk-973-marker-receipt-'));
-    try {
-      const stem = '973-marker-receipt-fixture';
-      const anchorDir = join(root, 'docs', 'issues_drafts');
-      const reviewDir = join(anchorDir, '.review', stem);
-      mkdirSync(reviewDir, { recursive: true });
-      const anchor = join(anchorDir, `${stem}.md`);
-      const contextOnly = draft('T2', 'T2', {
-        body: 'Background mentions required CI from prior art; this task does not change it.',
-      });
-      writeFileSync(anchor, contextOnly);
-
-      const unsuppressed = checkTierGateGuard(contextOnly, {
-        repoRoot: process.cwd(),
-        draftPath: anchor,
-      });
-      expect(unsuppressed.screen.hits).toContain('ci-review-gating');
-
-      writeFileSync(
-        join(reviewDir, 'decision-log.md'),
-        'Architect adjudicated the context-only prior-art mention.\n',
-      );
-      writeFileSync(
-        join(reviewDir, 'protected-signal-receipt.json'),
-        JSON.stringify({
-          'recorded-at': '2026-07-25T00:00:00Z',
-          'decision-log': 'decision-log.md',
-          entries: [{
-            guard: 'tier-marker',
-            signal: 'ci-review-gating',
-            fingerprint: fingerprintProtectedSignalSpan('required CI'),
-            reason: 'architect-false-positive',
-            rationale: 'The phrase only describes unchanged prior art; this task does not change CI/review gating.',
-          }],
-        }),
-      );
-      const suppressed = checkTierGateGuard(contextOnly, {
-        repoRoot: process.cwd(),
-        draftPath: anchor,
-      });
-      expect(suppressed.screen.hits).toEqual([]);
-      expect(suppressed.screen.suppressed?.map((entry) => entry.signal))
-        .toContain('ci-review-gating');
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-
-    const structural = draft('T3', 'T3', { body: 'This task introduces a new contract >= 2 future issues will depend on.' });
-    expect(checkTierGateGuard(structural, { repoRoot: process.cwd() }).screen.hits).toContain('shared-contract-dependency');
   });
 
   it('keeps compatibility demotion dormant unless fixture membership and historical evidence are explicit', () => {
@@ -362,5 +292,38 @@ describe('Issue #973 tier provenance', () => {
     expect(run(current, compat).errors.join('\n')).toContain('compatibility intake requires frozen cutover membership');
     compat.captures = [];
     expect(run(current, compat, [identity], [identity]).errors.join('\n')).toContain('historical final-lens capture is missing');
+  });
+});
+
+describe('Issue #1029 lexical marker retirement', () => {
+  const markerSuffix = '\n\nBackground mentions concurrency, required CI, durable state, provenance, crash/recovery, and liveness.';
+
+  function skipLineDraft(): string {
+    return `# Fixture\n\n## Goal\nOperator config tweak.\n\n\`\`\`behavior-kind\nrecord-only\n\`\`\`\n\n\`\`\`complexity-tier\nskip-line: true\n\`\`\`\n\n\`\`\`denylist\nvendor/**\npackages/core/**\n\`\`\`\n\n\`\`\`allowed-roots\ndocs/example.md\n\`\`\`\n\n## Acceptance criteria\n1. Fixture holds.\n\n## Verification\nRun focused tests.\n\n\`\`\`contract-evidence\nnone\n\`\`\`\n`;
+  }
+
+  it('preserves lower-tier and skip-line gate outcomes when former marker vocabulary is injected', () => {
+    const cases = [
+      { label: 'T1', text: draft('T1', 'T1') },
+      { label: 'T2', text: draft('T2', 'T2') },
+      { label: 'no-tier', text: skipLineDraft() },
+    ];
+    for (const testCase of cases) {
+      const baseline = checkTierGateGuard(testCase.text, { repoRoot: process.cwd() });
+      const injected = checkTierGateGuard(`${testCase.text}${markerSuffix}`, { repoRoot: process.cwd() });
+      expect(injected.ok, testCase.label).toBe(baseline.ok);
+      expect(injected.errors, testCase.label).toEqual(baseline.errors);
+      expect(injected.stages, testCase.label).toEqual(baseline.stages);
+      expect(injected.receipt, testCase.label).toEqual(baseline.receipt);
+    }
+  });
+
+  it('ignores legacy marker drivers when validating demotion source-driver equality', () => {
+    const valid = validDemotion();
+    valid.evidence.events[0].record.drivers = [
+      { kind: 'marker', id: 'ci-review-gating', rationale: 'Legacy marker row no longer authoritative.' },
+      { kind: 'rubric', id: 'failure-type:subsystem-or-system-guarantee', rationale: 'Still applies.' },
+    ];
+    expect(run(valid.current, valid.evidence).ok).toBe(true);
   });
 });

@@ -28,7 +28,7 @@ const golden = JSON.parse(
 const movedClean = {
   'AGENTS.md': '## Coworker CLI delegation\n## RTK read-exploration\n## RCA spec discipline',
   'docs/coworker-delegation.md': 'PR diff recipe\ngit diff <base-ref>...HEAD > /tmp/review.diff\nRoot-cause work must read ~900 lines',
-  'docs/tiering.md': '## Task complexity tier rubric\n### Red-flag markers (any one → T3)\n## Per-tier draft-review flow\n### Per-tier pipeline (ceilings, not quotas)',
+  'docs/tiering.md': '## Task complexity tier rubric\n### Failure-type lens (apply first)\n## Per-tier draft-review flow\n### Per-tier pipeline (ceilings, not quotas)',
   'docs/script-owned-review-pipeline.md': '## Event-driven review trigger\n## Orchestrator review-run coverage\n## Head ready for review\nevent-driven review trigger',
 };
 
@@ -71,6 +71,11 @@ describe('pre-delete legacy captures', () => {
     for (const item of positives) {
       const result = report.results.find((candidate) => candidate.gateId === item.gateId);
       expect(result?.status, item.gateId).toBe('PASS');
+      if (item.gateId === 'agent-rules-size-budget' && item.case === 'real-clean-tree') {
+        // Frozen pre-delete capture stays bound to baseCommitSha; live AGENTS.md may shrink without rewriting history.
+        expect(result?.legacyStdout, item.gateId).toMatch(/^\[PASS\] AGENTS\.md size budget \(\d+ lines, \d+ bytes\)\n$/u);
+        continue;
+      }
       expect(result?.legacyStdout, item.gateId).toBe(item.stdout);
     }
   });

@@ -1,10 +1,9 @@
 /**
- * Tier gate core: marker screen, fence parsing, stage selection, floor checks (Issue #576).
+ * Tier gate core: fence parsing, stage selection, floor checks (Issue #576).
  * Tier transition provenance and bounded final-lens demotion enforcement (Issue #973).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { screenRedFlagMarkers } from './tier-marker-screen.ts';
 import { checkNeverSkippedFloors } from './tier-gate-floor.ts';
 
 export { checkWorkerSafetyFloor } from './tier-gate-floor.ts';
@@ -61,7 +60,8 @@ export interface TierDecisionReceiptRecord {
   producer: 'cursor-flow-manager';
   revision: string;
   tier: Tier;
-  markerRows: string[];
+  /** Legacy audit field; no longer produced or enforced (#1029). */
+  markerRows?: string[];
   rubricClasses: string[];
   l4Status: L4Status;
 }
@@ -230,13 +230,6 @@ export function selectAuthoringReviewStages(input: StageSelectionInput): StageSe
   return { effectiveTier, floor, authoring, review, wrapperFloorApplied };
 }
 
-function designAdversarialSkipped(stages: StageSelectionResult) {
-  const designSkipped = !stages.authoring.includes('full-design-analysis')
-    && !stages.authoring.includes('light-design-analysis');
-  const adversarialSkipped = !stages.review.includes('competitive-adversarial');
-  return { designSkipped, adversarialSkipped };
-}
-
 export interface TierGateGuardOptions {
   tier?: string | null;
   skipLine?: boolean;
@@ -251,14 +244,13 @@ export interface TierGateGuardOptions {
 }
 
 export type TierGateReceipt =
-  | { kind: 'no-tier'; skipLine: true; markers: string[] }
+  | { kind: 'no-tier'; skipLine: true }
   | {
       kind: 'tier-fence';
       tier: string;
       advisoryPrior?: string;
       demotionFrom?: string;
       demotionEvent?: string;
-      markers: string[];
       effectiveTier: string | null;
       wrapperFloorApplied: boolean;
       explicitAdversarialWrapper: boolean;
@@ -268,7 +260,6 @@ export interface TierGateGuardResult {
   ok: boolean;
   errors: string[];
   receipt: TierGateReceipt | null;
-  screen: ReturnType<typeof screenRedFlagMarkers>;
   fence: ComplexityTierFence;
   stages: StageSelectionResult;
 }
@@ -324,15 +315,16 @@ function parseDecisionReceipt(value: unknown): TierDecisionReceiptRecord | null 
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   const tier = asTier(record.tier);
-  const markerRows = parseStringArray(record.markerRows);
   const rubricClasses = parseStringArray(record.rubricClasses);
+  const legacyMarkerRows = record.markerRows === undefined
+    ? undefined
+    : parseStringArray(record.markerRows) ?? undefined;
   if (
     record.schema !== 'tier-gate-decision/v1'
     || record.producer !== 'cursor-flow-manager'
     || typeof record.revision !== 'string'
     || !REVISION_RE.test(record.revision)
     || !tier
-    || !markerRows
     || !rubricClasses
     || rubricClasses.length === 0
     || rubricClasses.some((item) => !TIER_RUBRIC_CLASSES.has(item))
@@ -345,7 +337,7 @@ function parseDecisionReceipt(value: unknown): TierDecisionReceiptRecord | null 
     producer: 'cursor-flow-manager',
     revision: record.revision,
     tier,
-    markerRows,
+    markerRows: legacyMarkerRows,
     rubricClasses,
     l4Status: record.l4Status as L4Status,
   };
@@ -618,10 +610,7 @@ function isArchitectLensCaptureName(name: string): boolean {
 
 function validateDecisionReceipt(
   revision: TierTransitionEvidence['revisions'][number],
-  repoRoot: string | undefined,
-  draftPath: string | undefined,
   errors: string[],
-  verifyMarkerRows = false,
 ): void {
   if (!revision.receipt) {
     errors.push(`tier provenance: missing or malformed tier-gate receipt for ${revision.revision}`);
@@ -629,15 +618,6 @@ function validateDecisionReceipt(
   }
   if (revision.receipt.revision !== revision.revision || revision.receipt.tier !== revision.tier) {
     errors.push(`tier provenance: tier-gate receipt binding mismatch for ${revision.revision}`);
-  }
-  if (verifyMarkerRows) {
-    const screen = screenRedFlagMarkers(revision.text, {
-      repoRoot,
-      draftPath,
-    });
-    if (screen.unparseable || !sameStringSet(revision.receipt.markerRows, screen.hits)) {
-      errors.push(`tier provenance: marker driver set mismatch for ${revision.revision}`);
-    }
   }
 }
 
@@ -680,7 +660,6 @@ function validateCompatibilityEvent(
 function validateTierTransition(
   text: string,
   fence: ComplexityTierFence,
-  screen: ReturnType<typeof screenRedFlagMarkers>,
   opts: TierGateGuardOptions,
   errors: string[],
 ): void {
@@ -729,7 +708,7 @@ function validateTierTransition(
   if (current.tier !== currentTier) {
     errors.push('tier provenance: current immutable revision tier does not match candidate');
   }
-  validateDecisionReceipt(current, opts.repoRoot, opts.draftPath, errors, true);
+  validateDecisionReceipt(current, errors);
   if (current.receipt && currentTier !== 'T3' && current.receipt.l4Status !== 'clear') {
     errors.push(`tier demotion: below-T3 candidate requires current clear L4 evidence (${current.receipt.l4Status})`);
   }
@@ -752,7 +731,7 @@ function validateTierTransition(
   const preceding = evidence.revisions.slice(0, currentIndex).filter((item) => item.tier);
   if (preceding.length === 0) return;
   for (const revision of preceding) {
-    validateDecisionReceipt(revision, opts.repoRoot, opts.draftPath, errors);
+    validateDecisionReceipt(revision, errors);
   }
 
   const highRank = Math.max(...preceding.map((item) => tierRank(item.tier as Tier)));
@@ -764,7 +743,7 @@ function validateTierTransition(
     errors.push('tier demotion: source high-watermark decision receipt is unavailable');
     return;
   }
-  validateDecisionReceipt(source, opts.repoRoot, opts.draftPath, errors, true);
+  validateDecisionReceipt(source, errors);
 
   if (!fence.demotionFrom || !fence.demotionEvent) {
     errors.push('tier demotion: observed downstep requires demotion-from and demotion-event fence fields');
@@ -809,18 +788,12 @@ function validateTierTransition(
     validateCompatibilityEvent(eventEntry, evidence, errors);
   }
 
-  const expectedDrivers = [
-    ...source.receipt.markerRows.map((id) => driverKey('marker', id)),
-    ...source.receipt.rubricClasses.map((id) => driverKey('rubric', id)),
-  ];
-  const actualDrivers = event.drivers.map((driver) => driverKey(driver.kind, driver.id));
+  const expectedDrivers = source.receipt.rubricClasses.map((id) => driverKey('rubric', id));
+  const actualDrivers = event.drivers
+    .filter((driver) => driver.kind === 'rubric')
+    .map((driver) => driverKey(driver.kind, driver.id));
   if (!sameStringSet(expectedDrivers, actualDrivers)) {
     errors.push('tier demotion: event driver dispositions must exactly match source trigger set');
-  }
-
-  // Live unsuppressed markers always win; demotion evidence can never act as a marker receipt.
-  if (screen.hits.length > 0 && currentTier !== 'T3') {
-    errors.push('tier demotion: live marker hit cannot be suppressed by demotion evidence');
   }
 
   const matchingRevalidations = evidence.revalidations.filter(
@@ -873,14 +846,6 @@ export function checkTierGateGuard(
 ): TierGateGuardResult {
   const errors: string[] = [];
   const fence = parseComplexityTierFence(text);
-  const screen = screenRedFlagMarkers(text, {
-    repoRoot: opts.repoRoot,
-    draftPath: opts.draftPath,
-  });
-
-  if (screen.unparseable) {
-    errors.push('marker screen: vocabulary/heuristic map incomplete — fail closed to T3');
-  }
 
   const tier = opts.tier ?? (fence.kind === 'tier-fence' ? fence.tier : null);
   const skipLine = opts.skipLine ?? (fence.kind === 'no-tier');
@@ -891,43 +856,12 @@ export function checkTierGateGuard(
     explicitAdversarialWrapper: opts.explicitAdversarialWrapper,
   });
 
-  const skipped = designAdversarialSkipped(stages);
-  const designSkipped = opts.designSkipped ?? skipped.designSkipped;
-  const adversarialSkipped = opts.adversarialSkipped ?? skipped.adversarialSkipped;
-
-  if (screen.hits.length > 0) {
-    if (tier && tier !== 'T3') {
-      errors.push(
-        `red-flag marker hit (${screen.hits.join(', ')}) with tier ${tier} below T3`,
-      );
-    }
-    if (designSkipped) {
-      errors.push(
-        `red-flag marker hit (${screen.hits.join(', ')}) with design-analysis stage skipped`,
-      );
-    }
-    if (adversarialSkipped && !opts.explicitAdversarialWrapper) {
-      errors.push(
-        `red-flag marker hit (${screen.hits.join(', ')}) with adversarial stage skipped`,
-      );
-    }
-    if (skipLine) {
-      errors.push(
-        `red-flag marker hit (${screen.hits.join(', ')}) on skip-line input — marker dominance`,
-      );
-    }
-  }
-
   if (fence.kind === 'unparseable' && !skipLine) {
     errors.push(`unparseable complexity-tier fence — fail closed (${fence.reason})`);
   }
 
-  if (screen.unparseable && (!tier || tier !== 'T3')) {
-    errors.push('unparseable marker screen — fail closed to T3');
-  }
-
   if (!skipLine) {
-    validateTierTransition(text, fence, screen, opts, errors);
+    validateTierTransition(text, fence, opts, errors);
   }
 
   const workerSafety = checkNeverSkippedFloors(text, {
@@ -941,7 +875,7 @@ export function checkTierGateGuard(
   let receipt: TierGateReceipt | null = null;
   if (errors.length === 0) {
     if (skipLine || fence.kind === 'no-tier') {
-      receipt = { kind: 'no-tier', skipLine: true, markers: screen.hits };
+      receipt = { kind: 'no-tier', skipLine: true };
     } else {
       receipt = {
         kind: 'tier-fence',
@@ -949,7 +883,6 @@ export function checkTierGateGuard(
         advisoryPrior: fence.kind === 'tier-fence' ? fence.advisoryPrior : undefined,
         demotionFrom: fence.kind === 'tier-fence' ? fence.demotionFrom : undefined,
         demotionEvent: fence.kind === 'tier-fence' ? fence.demotionEvent : undefined,
-        markers: screen.hits,
         effectiveTier: stages.effectiveTier,
         wrapperFloorApplied: stages.wrapperFloorApplied,
         explicitAdversarialWrapper: Boolean(opts.explicitAdversarialWrapper),
@@ -961,7 +894,6 @@ export function checkTierGateGuard(
     ok: errors.length === 0,
     errors,
     receipt,
-    screen,
     fence,
     stages,
   };
@@ -972,11 +904,11 @@ export function formatTierGatePassMessage(result: TierGateGuardResult): string {
     return 'tier-gate guard: PASS';
   }
   if (result.receipt.kind === 'no-tier') {
-    return `tier-gate guard: PASS (receipt=no-tier skip-line markers=${result.receipt.markers.length})`;
+    return 'tier-gate guard: PASS (receipt=no-tier skip-line)';
   }
   const wrapperNote = result.receipt.wrapperFloorApplied ? ' wrapper-floor=T2' : '';
   const demotionNote = result.receipt.demotionEvent
     ? ` demotion-event=${result.receipt.demotionEvent}`
     : '';
-  return `tier-gate guard: PASS (receipt=tier-fence tier=${result.receipt.tier}${wrapperNote}${demotionNote} markers=${result.receipt.markers.length})`;
+  return `tier-gate guard: PASS (receipt=tier-fence tier=${result.receipt.tier}${wrapperNote}${demotionNote})`;
 }

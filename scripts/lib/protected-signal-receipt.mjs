@@ -4,7 +4,8 @@ import path from 'node:path';
 
 export const PROTECTED_SIGNAL_RECEIPT_FILENAME = 'protected-signal-receipt.json';
 
-const VALID_GUARDS = new Set(['tier-marker', 'finding-ledger']);
+const VALID_GUARDS = new Set(['finding-ledger']);
+const RETIRED_GUARDS = new Set(['tier-marker']);
 const VALID_REASONS = new Set(['architect-false-positive', 'fixture-self-reference']);
 const ISO_8601_TIMESTAMP_RE =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -96,6 +97,9 @@ export function loadProtectedSignalReceipt(options = {}) {
       return { entries: [], invalid: true, receiptDir, receiptPath, reason: `invalid-entry-${index}` };
     }
     const guard = typeof entry.guard === 'string' ? entry.guard.trim() : '';
+    if (RETIRED_GUARDS.has(guard)) {
+      continue;
+    }
     const signal = typeof entry.signal === 'string' ? entry.signal.trim() : '';
     const fingerprint = typeof entry.fingerprint === 'string' ? entry.fingerprint.trim() : '';
     const reason = typeof entry.reason === 'string' ? entry.reason.trim() : '';
