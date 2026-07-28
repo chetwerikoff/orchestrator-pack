@@ -130,12 +130,16 @@ function resolveAoFixtureSession() {
   });
 }
 
-function runReviewerReverifyCommand({ aoSessionId, env: envOverrides } = {}) {
+function runReviewerReverifyCommand({ env: envOverrides } = {}) {
   const args = [
     '-NoProfile',
     '-File',
-    'scripts/run-reviewer-reverify-ao-review-command.ps1',
+    'scripts/launch-contract-evidence-reverify.ps1',
     '-RepoRoot',
+    packRoot,
+    '-ReviewTargetRoot',
+    packRoot,
+    '-TrustedBaseRoot',
     packRoot,
     '-FixtureDir',
     'tests/fixtures/contract-evidence-reverify/e2e',
@@ -143,14 +147,12 @@ function runReviewerReverifyCommand({ aoSessionId, env: envOverrides } = {}) {
     'tests/fixtures/contract-evidence-reverify/capture-manifest.json',
     '-ExplicitIssue',
     '376',
+    '-Summary',
   ];
-  if (aoSessionId) {
-    args.push('-AoSessionId', aoSessionId);
-  }
   return spawnSync('pwsh', args, {
     cwd: packRoot,
     encoding: 'utf8',
-    env: liveE2eEnv(envOverrides),
+    env: liveE2eEnv({ OPK_REVERIFY_E2E_REQUIRED: '1', ...envOverrides }),
   });
 }
 
@@ -292,7 +294,7 @@ if (!output.viaAoReviewExecute) {
   process.exit(1);
 }
 
-const mechanicalProc = runReviewerReverifyCommand({ aoSessionId: sessionId });
+const mechanicalProc = runReviewerReverifyCommand();
 output.viaMechanicalReviewerCommand = mechanicalProc.status === 0;
 if (!output.viaMechanicalReviewerCommand) {
   output.error = `checkpoint-2 mechanical reviewer command failed (exit ${mechanicalProc.status ?? 'null'})`;

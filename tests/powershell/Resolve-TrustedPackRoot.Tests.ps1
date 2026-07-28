@@ -67,14 +67,6 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $bootstrapContent | Should -Match 'Assert-TrustedRootOverrideEligible'
     }
 
-    It 'PR-checkout invoke wrapper refuses direct execution' {
-        $invokeScript = Join-Path $script:RepoRoot 'scripts/invoke-contract-evidence-reverify.ps1'
-        $content = Get-Content -LiteralPath $invokeScript -Raw
-        $content | Should -Match 'launch-contract-evidence-reverify\.ps1'
-        $content | Should -Match 'exit 2'
-        $content | Should -Not -Match 'Resolve-TrustedReverifyInvokeScript'
-    }
-
     It 'preserves disposable bootstrap archive roots instead of re-validating them as overrides' {
         $implementationScript = Join-Path $script:RepoRoot 'scripts/lib/Contract-EvidenceReverify-Core.ps1'
         $content = Get-Content -LiteralPath $implementationScript -Raw
@@ -116,18 +108,6 @@ Describe 'scripts/lib/Resolve-TrustedPackRoot.ps1' {
         $content | Should -Not -Match "archiveRefs = @\('origin/main', 'HEAD'\)"
         $content | Should -Not -Match 'git archive \$archiveRef'
         $content | Should -Not -Match 'launcherBootstrapCorePath'
-    }
-
-    It 'ao review command bootstrap archives launcher and core helpers from origin/main only' {
-        $aoReviewCommand = Join-Path $script:RepoRoot 'scripts/run-reviewer-reverify-ao-review-command.ps1'
-        $content = Get-Content -LiteralPath $aoReviewCommand -Raw
-        $content | Should -Match 'bootstrapArchivePaths'
-        $content | Should -Match 'Contract-EvidenceReverify-Core\.ps1'
-        $content | Should -Match 'Import-TrustedReverifyBootstrap\.ps1'
-        $content | Should -Match 'git archive origin/main -- @bootstrapArchivePaths'
-        $content | Should -Not -Match "GitRef 'HEAD'"
-        $content | Should -Not -Match 'git archive \$archiveRef'
-        $content | Should -Not -Match 'git worktree add --detach'
     }
 
     It 'bootstrap import module dot-sources helpers from resolved trusted root' {

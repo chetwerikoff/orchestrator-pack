@@ -62,14 +62,13 @@ describe('reviewer effective budget (AC#1)', () => {
 });
 
 describe('command-guard platform shims', () => {
-  it('ships Windows cmd/ps1 shims beside POSIX wrappers', () => {
+  it('ships Windows cmd shims beside POSIX wrappers', () => {
     for (const executable of GUARDED_EXECUTABLES) {
       expect(existsSync(join(GUARD_DIR, executable))).toBe(true);
       expect(existsSync(join(GUARD_DIR, `${executable}.cmd`))).toBe(true);
-      expect(existsSync(join(GUARD_DIR, `${executable}.ps1`))).toBe(true);
     }
     expect(existsSync(join(GUARD_DIR, '_invoke-guard.cmd'))).toBe(true);
-    expect(existsSync(join(GUARD_DIR, '_invoke-guard.ps1'))).toBe(true);
+    expect(existsSync(join(GUARD_DIR, 'guard-lib.sh'))).toBe(true);
   });
 });
 

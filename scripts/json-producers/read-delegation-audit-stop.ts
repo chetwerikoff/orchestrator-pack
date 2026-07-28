@@ -20,9 +20,9 @@ import {
   readStdin,
 } from './cli.ts';
 
-export const READ_DELEGATION_STOP_WRAPPER = 'scripts/invoke-read-delegation-audit-stop.ps1';
+export const READ_DELEGATION_STOP_WRAPPER = 'scripts/invoke-read-delegation-audit-stop.ts';
 export const READ_DELEGATION_STOP_COMMAND_SHAPE =
-  'pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]';
+  'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/json-producers/read-delegation-audit-stop.ts [--artifact-path <redacted>] [--repo-root <repo>]';
 
 function asObject(value: JsonValue): JsonObject {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return {};

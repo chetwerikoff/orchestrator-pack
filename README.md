@@ -49,9 +49,8 @@ and [`plugins/ao-codex-pr-reviewer/README.md`](plugins/ao-codex-pr-reviewer/READ
   literals and paired script/template drift (see `prompts/self_architect_check.md`).
 - `scripts/install-git-hooks.ps1` — optional local pre-push hook installer that
   runs verification before `git push`.
-- `scripts/patch-codex-review4.ps1` — **legacy (retired on Linux):** temporary
-  patch for AO 0.9.2 built-in Codex review on native Windows only. Not used on
-  Ubuntu/WSL2; removal tracked separately.
+- Legacy AO 0.9.2 built-in Codex review patch (`patch-codex-review4`) was retired with the
+  AO estate cut (see migration wave PR7). Not used on Ubuntu/WSL2.
 - `docs/github_issues_cursor_codex_setup.md` — GitHub Issues + Cursor CLI
   planner/worker + Codex reviewer setup notes.
 - `.gitignore` — keeps local AO configs, runtime state, target repos, vendor

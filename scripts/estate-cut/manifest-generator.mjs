@@ -38,7 +38,6 @@ const PINNED_LEGACY_SUBJECTS = new Set([
   'scripts/check-reusable.ps1',
   'scripts/check-review-start-claim-guard.ps1',
   'scripts/check-review-delivery-no-visibility-poll.ps1',
-  'scripts/check-scripted-review-confirmed-delivery-gate.ps1',
   'scripts/check-side-process-launch-contract.ps1',
   'scripts/check-verify-runtime.ps1',
   'scripts/verify.ps1',

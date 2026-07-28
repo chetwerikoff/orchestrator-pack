@@ -57,7 +57,6 @@
     "scripts/orchestrator-message-protected-runtime.manifest.json",
     "scripts/orchestrator-message-allowlist.json",
     "scripts/check-orchestrator-message-registry.ps1",
-    "scripts/generate-orchestrator-message-map.ps1",
     "scripts/orchestrator-message-registry.test.ts",
     "docs/orchestrator-message-registry.d.mts",
     "docs/orchestrator-message-registry.d.ts",

@@ -7,9 +7,9 @@ param(
     [string]$RepoRoot
 )
 
-. (Join-Path $PSScriptRoot 'lib/Initialize-PackGateCheck.ps1')
-$gate = Initialize-PackGateCheck -RepoRoot $RepoRoot -CallerScriptRoot $PSScriptRoot
-$RepoRoot = $gate.RepoRoot
+if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+}
 
 $canonical = Join-Path $RepoRoot 'AGENTS.md'
 if (-not (Test-Path -LiteralPath $canonical)) {

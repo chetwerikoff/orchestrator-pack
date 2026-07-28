@@ -63,7 +63,6 @@ foreach ($rel in ($textByRel.Keys | Sort-Object)) {
     if ($rel -like 'scripts/check-*.ps1' -or $rel -like 'scripts/*test*.ps1' -or
         $rel -like 'scripts/reviewer-workspace-preflight.ps1' -or
         $rel -like 'scripts/lib/Invoke-ReviewerWorkspacePreflight.ps1' -or
-        $rel -like 'scripts/lib/Review-Send-MechanicalForbiddenCommand.ps1' -or
         $rel -like 'scripts/lib/Review-MechanicalForbiddenCommand.ps1' -or
         $rel -like 'scripts/review-send-reconcile.ps1') { continue }
     if ($allow.ContainsKey($rel)) { continue }
