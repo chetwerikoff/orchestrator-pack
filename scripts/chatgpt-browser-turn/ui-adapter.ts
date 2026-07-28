@@ -6,10 +6,9 @@ import { abandonLatePageHandle, boundedResourceCleanup, RESOURCE_CLEANUP_BOUND_M
 import { revalidateProcessDestinationReservations } from './coordination.ts';
 import {
   assertDispatchObservationReadyForDispatch,
+  dispatchObservationCoverageComplete,
   DispatchObservationEstablishmentError,
   establishDispatchObservationBoundary,
-  evaluateDispatchRequestNotObserved,
-  recordDispatchObservationDiagnostic,
   type DispatchObservationBoundary,
 } from './dispatch-observation.ts';
 import { configuredProfileKey } from './storage-common.ts';
@@ -26,6 +25,7 @@ import {
   invalidateTerminalEvidenceForContinuation,
   isMessageAttributedToUserTurn,
   registerLegacyObservation,
+  hasTerminalWitnessActivityForAssistant,
   resolveWholeTurnTerminal,
   type TerminalWitnessState,
 } from './terminal-witness.ts';
@@ -130,6 +130,8 @@ interface NetworkMessage extends CausalMessageObservation {
 export const __testTiming: { now?: () => number } = {};
 
 export const MAX_BROWSER_OPERATION_WAIT_MS = 30_000;
+const FINISHED_REPLY_STABILITY_POLLS = 2;
+const FINISHED_TERMINAL_UNPROVEN_MAX_MS = 30_000;
 export const WITNESS_INSTALL_MAX_WAIT_MS = 10_000;
 
 export interface TurnOperationBudget {
@@ -281,6 +283,9 @@ interface NetworkWitnessState {
   ingestingDispatchServiceFrames: boolean;
   dispatchRequestUserId?: string;
   dispatchRequestWitnessed: boolean;
+  recognizedSubmissionRequestIssued: boolean;
+  dispatchRequestObserverReady: boolean;
+  dispatchRequestObserverCoverageComplete: boolean;
   dispatchTurnExchangeId?: string;
   dispatchExchangeAmbiguous: boolean;
   witnessedTurnExchangeIds: Set<string>;
@@ -340,7 +345,33 @@ function promotePendingServiceUserIds(state: NetworkWitnessState): void {
   }
 }
 
+export function isRecognizedConversationSubmissionRequest(request: any): boolean {
+  try {
+    const method = typeof request.method === 'function' ? String(request.method()).toUpperCase() : '';
+    if (method !== 'POST') return false;
+    const url = new URL(String(request.url()));
+    return /\/backend-api\/f\/conversation\/?$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+export function canClassifyDispatchRequestNotIssued(
+  state: NetworkWitnessState,
+  boundary: DispatchObservationBoundary,
+): boolean {
+  return state.turnDispatchCommitted
+    && state.dispatchRequestObserverReady
+    && state.dispatchRequestObserverCoverageComplete
+    && dispatchObservationCoverageComplete(boundary)
+    && boundary.coverageIntact
+    && !state.recognizedSubmissionRequestIssued;
+}
+
 function witnessDispatchRequest(state: NetworkWitnessState, request: any): void {
+  if (isRecognizedConversationSubmissionRequest(request)) {
+    state.recognizedSubmissionRequestIssued = true;
+  }
   const url = String(request.url());
   if (!/conversation|messages|responses/i.test(url)) return;
   const turnExchangeId = parseRequestTurnExchangeId(request);
@@ -371,6 +402,18 @@ function provenActiveTurnUserId(state: NetworkWitnessState): string | undefined 
   const id = state.activeTurnUserId;
   if (!id || !state.serviceSubmittedUserIds.has(id)) return undefined;
   return id;
+}
+
+
+function isAssistantAttributableToSubmittedUser(
+  assistantMessageId: string,
+  userMessageId: string,
+  terminal: TerminalWitnessState,
+  observations: readonly NetworkMessage[],
+): boolean {
+  if (isMessageAttributedToUserTurn(assistantMessageId, userMessageId, terminal.messages)) return true;
+  const causal = resolveCausalAssistant(userMessageId, observations);
+  return causal.state === 'matched' && causal.assistantMessageId === assistantMessageId;
 }
 
 export function resolveCausalAssistant(
@@ -1107,6 +1150,9 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     turnDispatchCommitted: false,
     ingestingDispatchServiceFrames: false,
     dispatchRequestWitnessed: false,
+    recognizedSubmissionRequestIssued: false,
+    dispatchRequestObserverReady: false,
+    dispatchRequestObserverCoverageComplete: true,
     dispatchExchangeAmbiguous: false,
     witnessedTurnExchangeIds: new Set<string>(),
     dispatchWitnessFrozen: false,
@@ -1122,13 +1168,21 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     witnessInstall: Promise.resolve(),
   };
   state.witnessInstall = installWebSocketWitness(page, state).catch(() => {});
-  page.on('request', (request: any) => {
+  const requestObserverControls = (page as { __requestObserverTestControls?: { coverage?: 'complete' | 'incomplete' } }).__requestObserverTestControls;
+  state.dispatchRequestObserverReady = requestObserverControls?.coverage !== 'incomplete';
+  const onDispatchRequestWitness = (request: any) => {
     try {
       if (!state.dispatchArmed) return;
-      if (!state.ingestingDispatchServiceFrames && !(state.turnDispatchCommitted && !state.dispatchRequestWitnessed)) return;
+      if (!state.dispatchRequestObserverCoverageComplete) return;
+      if (!state.ingestingDispatchServiceFrames && !(state.turnDispatchCommitted && !state.recognizedSubmissionRequestIssued)) return;
       witnessDispatchRequest(state, request);
     } catch { /* missing request witness remains fail-closed */ }
-  });
+  };
+  page.on('request', onDispatchRequestWitness);
+  try {
+    const context = typeof page.context === 'function' ? page.context() : undefined;
+    context?.on?.('request', onDispatchRequestWitness);
+  } catch { /* BrowserContext request witness remains optional */ }
   page.on('response', async (response: any) => {
     try {
       const url = String(response.url());
@@ -1331,6 +1385,32 @@ async function semanticNodes(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_M
 
 async function assistantText(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<string> {
   return serializeSemanticNodes(await semanticNodes(locator, waitMs));
+}
+
+async function assistantIsActivelyGenerating(page: any, locator: any, waitSource?: OperationWaitSource): Promise<boolean> {
+  const waitMs = resolveOperationWaitMs(waitSource);
+  if (waitMs <= 0) return true;
+  try {
+    const pageStop = page.locator('[data-testid="stop-button"], button[aria-label*="Stop"]').first();
+    if (typeof pageStop?.count === 'function' && (await boundedLocatorCount(pageStop, waitMs)) > 0) {
+      return true;
+    }
+  } catch {
+    /* fall through to locator-scoped generation signals */
+  }
+  const streaming = await readLocatorAttribute(locator, 'data-is-streaming', waitSource);
+  if (streaming === 'true') return true;
+  const busy = await readLocatorAttribute(locator, 'aria-busy', waitSource);
+  if (busy === 'true') return true;
+  try {
+    const stopButton = locator.locator('[data-testid="stop-button"], button[aria-label*="Stop"]').first();
+    if (typeof stopButton?.count === 'function') {
+      return (await boundedLocatorCount(stopButton, waitMs)) > 0;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 async function observedDispatchUserIds(
@@ -1626,18 +1706,13 @@ export async function sendTurn(
     if (!userId) await witnessPollDelay(page, Math.min(250, deliveredWait));
   }
   if (!userId) {
-    const nonDelivery = await evaluateDispatchRequestNotObserved(
-      dispatchObservation,
-      page,
-      baselineIds,
-      async (targetPage) => await targetPage.locator('[data-message-author-role="user"]').count(),
-      serviceId,
-    );
-    if (nonDelivery.proven) {
-      recordDispatchObservationDiagnostic(nonDelivery.diagnostic, 'dispatch_request_not_observed');
+    if (!dispatchObservation.coverageIntact) {
+      network.dispatchRequestObserverCoverageComplete = false;
+    }
+    if (canClassifyDispatchRequestNotIssued(network, dispatchObservation)) {
       return {
         state: 'send_failed',
-        cause: 'dispatch_request_not_observed',
+        cause: 'dispatch_request_not_issued',
         possibleDelivery: false,
       };
     }
@@ -1652,12 +1727,17 @@ export async function sendTurn(
   let lastTerminalContent = '';
   let continuationActive = false;
   let awaitingFreshTerminalAfterContinuation = false;
+  let finishedReplyStablePolls = 0;
+  let lastFinishedReplyContent = '';
+  let finishedReplyPredicateAt: number | undefined;
   let terminalPublishEligible = true;
   const deadline = wallClock() + config.timeoutMs;
   while (wallClock() < deadline) {
     let replyWait = loopOperationWaitMs(deadline, wallClock());
     if (replyWait <= 0) break;
-    const wall = await boundedPlaywrightOperation(replyWait, () => pageWalls(page, loopOperationWaitMs(deadline, wallClock())));
+    const wallWait = Math.min(replyWait, loopOperationWaitMs(deadline, wallClock()));
+    if (wallWait <= 0) break;
+    const wall = await boundedPlaywrightOperation(wallWait, () => pageWalls(page, () => wallWait));
     const canonicalUserIdEarly = canonicalSubmittedUserId(network, baselineIds);
     if (!canonicalUserIdEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true, userMessageId: userId };
@@ -1773,6 +1853,85 @@ export async function sendTurn(
         userMessageId: userId,
         assistantMessageId: terminal.assistantMessageId,
       };
+    }
+
+    if (terminal.state === 'none' && !awaitingFreshTerminalAfterContinuation) {
+      const attributableAssistants: Array<{ id: string; locator: any }> = [];
+      for (const [assistantMessageId, locator] of assistantLocators) {
+        if (!isAssistantAttributableToSubmittedUser(
+          assistantMessageId,
+          userId,
+          network.terminal,
+          network.messages,
+        )) continue;
+        attributableAssistants.push({ id: assistantMessageId, locator });
+      }
+      if (attributableAssistants.length === 1) {
+        const { id: finishedAssistantId, locator: finishedLocator } = attributableAssistants[0]!;
+        if (network.terminal.terminalizationAttemptsById.has(finishedAssistantId)
+          || hasTerminalWitnessActivityForAssistant(network.terminal, finishedAssistantId)) {
+          finishedReplyStablePolls = 0;
+          lastFinishedReplyContent = '';
+          finishedReplyPredicateAt = undefined;
+        } else {
+        replyWait = loopOperationWaitMs(deadline, wallClock());
+        if (replyWait > 0) {
+          const generating = await boundedPlaywrightOperation(
+            replyWait,
+            () => assistantIsActivelyGenerating(page, finishedLocator, () => replyWait),
+          ).catch(() => true);
+          const finishedContent = await boundedPlaywrightOperation(
+            replyWait,
+            () => assistantText(finishedLocator, replyWait),
+          ).catch(() => '');
+          if (finishedContent && !generating) {
+            if (finishedContent === lastFinishedReplyContent) {
+              finishedReplyStablePolls++;
+            } else {
+              finishedReplyStablePolls = 1;
+              lastFinishedReplyContent = finishedContent;
+              finishedReplyPredicateAt = undefined;
+            }
+            if (finishedReplyStablePolls >= FINISHED_REPLY_STABILITY_POLLS) {
+              if (!finishedReplyPredicateAt) finishedReplyPredicateAt = wallClock();
+              if (wallClock() - finishedReplyPredicateAt <= FINISHED_TERMINAL_UNPROVEN_MAX_MS) {
+                const latestTerminal = resolveWholeTurnTerminal(userId, network.terminal);
+                if (latestTerminal.state === 'failure') {
+                  return {
+                    state: 'no_reply',
+                    cause: latestTerminal.cause,
+                    possibleDelivery: true,
+                    userMessageId: userId,
+                    assistantMessageId: latestTerminal.assistantMessageId,
+                  };
+                }
+                if (latestTerminal.state === 'success') {
+                  finishedReplyStablePolls = 0;
+                  lastFinishedReplyContent = '';
+                  finishedReplyPredicateAt = undefined;
+                  continue;
+                }
+                return {
+                  state: 'recovery_required',
+                  cause: 'reply_finished_terminal_unproven',
+                  possibleDelivery: true,
+                  userMessageId: userId,
+                  assistantMessageId: finishedAssistantId,
+                };
+              }
+            }
+          } else {
+            finishedReplyStablePolls = 0;
+            lastFinishedReplyContent = '';
+            finishedReplyPredicateAt = undefined;
+          }
+        }
+        }
+      } else {
+        finishedReplyStablePolls = 0;
+        lastFinishedReplyContent = '';
+        finishedReplyPredicateAt = undefined;
+      }
     }
 
     if (terminal.state === 'success') {

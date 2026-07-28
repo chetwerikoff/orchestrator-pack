@@ -16,6 +16,52 @@ $Root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $Root 'scripts/lib/WorkerReportStore.ps1')
 $DebugBinding = $env:AO_WORKER_REPORT_DEBUG -eq '1'
 
+
+function Invoke-WorkerSmokeReadyGate {
+    param(
+        [string]$RepoRoot,
+        [int]$PrNumber,
+        [string]$HeadSha,
+        [int]$IssueNumber,
+        [string]$IssueBodyFile
+    )
+
+    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $node) {
+        return @{ ok = $false; reason = 'node_runtime_missing' }
+    }
+    $launcher = Join-Path $RepoRoot 'scripts/lib/Invoke-TypeScriptCli.ts'
+    $gateScript = Join-Path $RepoRoot 'scripts/worker-smoke-run.ts'
+    $args = @(
+        '--experimental-strip-types', $launcher.Source,
+        '--script', $gateScript, '--',
+        'gate-check',
+        '--pr', [string]$PrNumber,
+        '--head-sha', $HeadSha,
+        '--issue-body-file', $IssueBodyFile,
+        '--repo-root', $RepoRoot,
+        '--cwd', $RepoRoot,
+        '--json'
+    )
+    if ($IssueNumber -gt 0) {
+        $args += @('--issue', [string]$IssueNumber)
+    }
+    $output = & $node.Source @args 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        return @{ ok = $false; reason = "worker_smoke_gate_failed:$output" }
+    }
+    try {
+        $parsed = $output.Trim() | ConvertFrom-Json
+        if (-not $parsed.ok) {
+            return @{ ok = $false; reason = [string]$parsed.reason }
+        }
+        return @{ ok = $true; reason = [string]$parsed.reason }
+    }
+    catch {
+        return @{ ok = $false; reason = 'worker_smoke_gate_parse_failed' }
+    }
+}
+
 function Write-WorkerReportDebug {
     param([string]$Message)
 
@@ -136,6 +182,64 @@ if ($DryRun) {
         record = $record
     } | ConvertTo-Json -Compress -Depth 10
     exit 0
+}
+
+
+if ($State -eq 'ready_for_review') {
+    $issueNumber = 0
+    $boundIssueNumber = 0
+    if ($PrNumber -gt 0) {
+        $prJson = & gh pr view $PrNumber --json body 2>$null
+        if ($LASTEXITCODE -eq 0 -and $prJson) {
+            $prBody = ([string](ConvertFrom-Json $prJson).body)
+            if ($prBody -match '(?im)^\s*(?:Closes|Fixes|Resolves)\s+#(\d+)') {
+                $boundIssueNumber = [int]$Matches[1]
+            }
+        }
+    }
+    if ($boundIssueNumber -gt 0) {
+        $issueNumber = $boundIssueNumber
+    }
+    if ($env:AO_ISSUE_NUMBER) {
+        $envIssueNumber = [int]$env:AO_ISSUE_NUMBER
+        if ($boundIssueNumber -gt 0 -and $envIssueNumber -ne $boundIssueNumber) {
+            [pscustomobject]@{
+                ok     = $false
+                reason = 'issue_binding_mismatch'
+                state  = $State
+            } | ConvertTo-Json -Compress -Depth 5
+            exit 1
+        }
+        if ($issueNumber -le 0) {
+            $issueNumber = $envIssueNumber
+        }
+    }
+    $issueBodyFile = New-TemporaryFile
+    try {
+        if ($issueNumber -gt 0) {
+            $issueJson = & gh issue view $issueNumber --json body 2>$null
+            if ($LASTEXITCODE -eq 0 -and $issueJson) {
+                $issueBody = ([string](ConvertFrom-Json $issueJson).body)
+                Set-Content -LiteralPath $issueBodyFile.FullName -Value $issueBody -Encoding utf8NoBOM
+            }
+        }
+        if (-not (Test-Path -LiteralPath $issueBodyFile.FullName) -or (Get-Item $issueBodyFile.FullName).Length -eq 0) {
+            Set-Content -LiteralPath $issueBodyFile.FullName -Value '' -Encoding utf8NoBOM
+        }
+        $smokeGate = Invoke-WorkerSmokeReadyGate -RepoRoot $RepoRoot -PrNumber $PrNumber -HeadSha $HeadSha -IssueNumber $issueNumber -IssueBodyFile $issueBodyFile.FullName
+        if (-not $smokeGate.ok) {
+            Write-WorkerReportDebug "worker smoke gate rejected ready_for_review reason=$($smokeGate.reason)"
+            [pscustomobject]@{
+                ok     = $false
+                reason = $smokeGate.reason
+                state  = $State
+            } | ConvertTo-Json -Compress -Depth 5
+            exit 1
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $issueBodyFile.FullName -Force -ErrorAction SilentlyContinue
+    }
 }
 
 try {

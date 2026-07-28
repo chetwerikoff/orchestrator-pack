@@ -143,6 +143,127 @@ export function detectDeferralWithoutBlock(markdown) {
   return DEFERRAL_WITHOUT_BLOCK_PATTERNS.some((pattern) => pattern.test(withoutParkedBlocks));
 }
 
+function parseSmokeScenarioLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('-')) {
+    return null;
+  }
+  const actionMatch = trimmed.match(/action:\s*(.+?)(?:\s*\|\s*expected:\s*(.+))?$/i);
+  if (actionMatch) {
+    return {
+      action: actionMatch[1].trim(),
+      expected: (actionMatch[2] ?? '').trim(),
+    };
+  }
+  const parts = trimmed.replace(/^-\s*/, '').split(/\s*\|\s*/);
+  if (parts.length >= 2) {
+    return { action: parts[0].trim(), expected: parts[1].trim() };
+  }
+  return null;
+}
+
+export function parseSmokeTestPlan(markdown) {
+  const blocks = extractFencedBlocks(markdown);
+  const raw = blocks.get('smoke-test-plan')?.[0];
+  if (!raw) {
+    return null;
+  }
+  const fields = parseKeyValueBlock(raw);
+  const notApplicable = ['true', 'yes', '1'].includes(String(fields['not-applicable'] ?? fields.na ?? '').toLowerCase());
+  if (notApplicable) {
+    return {
+      requirement: 'not-applicable',
+      reason: fields.reason?.trim() || fields['n/a-reason']?.trim() || '',
+      scenarios: [],
+    };
+  }
+
+  const scenarios = [];
+  for (const line of raw.split(/\r?\n/u)) {
+    const scenario = parseSmokeScenarioLine(line);
+    if (scenario?.action && scenario.expected) {
+      scenarios.push(scenario);
+    }
+  }
+
+  return {
+    requirement: 'required',
+    scenarios,
+  };
+}
+
+function isSmokePlanGrandfathered(markdown) {
+  const blocks = extractFencedBlocks(markdown);
+  const raw = blocks.get('smoke-plan-floor')?.[0];
+  if (!raw) {
+    return false;
+  }
+  const fields = parseKeyValueBlock(raw);
+  return ['true', 'yes', '1'].includes(String(fields.grandfathered ?? '').toLowerCase());
+}
+
+export function resolveSmokeRequirement(markdown) {
+  const trimmed = String(markdown ?? '').trim();
+  if (!trimmed) {
+    return { requirement: 'unknown', scenarios: [] };
+  }
+  const parsed = parseSmokeTestPlan(trimmed);
+  if (parsed) {
+    if (parsed.requirement === 'not-applicable' && !String(parsed.reason ?? '').trim()) {
+      return { requirement: 'required', scenarios: [], reason: 'missing_not_applicable_reason' };
+    }
+    return parsed;
+  }
+  if (isSmokePlanGrandfathered(trimmed)) {
+    return { requirement: 'legacy-exempt', scenarios: [], reason: 'grandfathered' };
+  }
+  return { requirement: 'required', scenarios: [] };
+}
+
+export function checkSmokeTestPlan(markdown) {
+  const errors = [];
+  const warnings = [];
+  const behaviorKind = parseBehaviorKind(markdown);
+  const blocks = extractFencedBlocks(markdown);
+  const hasFence = blocks.has('smoke-test-plan');
+
+  if (!hasFence) {
+    if (behaviorKind === 'action-producing') {
+      errors.push('action-producing task lacks a ```smoke-test-plan``` block');
+    }
+    return { ok: errors.length === 0, errors, warnings, plan: null };
+  }
+
+  const plan = parseSmokeTestPlan(markdown);
+  if (!plan) {
+    errors.push('smoke-test-plan fence is present but could not be parsed');
+    return { ok: false, errors, warnings, plan: null };
+  }
+
+  if (plan.requirement === 'not-applicable') {
+    if (!plan.reason || plan.reason.length < 8) {
+      errors.push('smoke-test-plan not-applicable requires a one-line reason of at least 8 characters');
+    }
+    return { ok: errors.length === 0, errors, warnings, plan };
+  }
+
+  if (plan.scenarios.length === 0) {
+    errors.push('smoke-test-plan must list at least one scenario with action and expected result, or declare not-applicable with reason');
+    return { ok: false, errors, warnings, plan };
+  }
+
+  for (const [index, scenario] of plan.scenarios.entries()) {
+    if (!scenario.action.trim()) {
+      errors.push(`smoke-test-plan scenario ${index + 1} is missing action`);
+    }
+    if (!scenario.expected.trim()) {
+      errors.push(`smoke-test-plan scenario ${index + 1} is missing expected observable result`);
+    }
+  }
+
+  return { ok: errors.length === 0, errors, warnings, plan };
+}
+
 export function checkPositiveOutcome(markdown) {
   const behaviorKind = parseBehaviorKind(markdown);
   if (!behaviorKind) {
@@ -250,6 +371,7 @@ const MACHINE_PARSED_FENCE_LABELS = new Set([
   'behavior-kind',
   'complexity-tier',
   'parked-root-cause',
+  'smoke-test-plan',
 ]);
 
 function extractPathTokenCandidate(token) {
@@ -559,7 +681,22 @@ export function runCli(argv) {
     return 0;
   }
 
-  process.stderr.write('draft-discipline: unknown command (positive-outcome | parked-root | contract-evidence | surfaces)\n');
+  if (command === 'smoke-test-plan') {
+    const result = checkSmokeTestPlan(markdown);
+    for (const warning of result.warnings) {
+      process.stderr.write(`draft-discipline warning: ${warning}\n`);
+    }
+    if (!result.ok) {
+      for (const error of result.errors) {
+        process.stderr.write(`draft-discipline: ${error}\n`);
+      }
+      return 1;
+    }
+    process.stdout.write('draft-discipline smoke-test-plan: PASS\n');
+    return 0;
+  }
+
+  process.stderr.write('draft-discipline: unknown command (positive-outcome | parked-root | contract-evidence | smoke-test-plan | surfaces)\n');
   return 2;
 }
 

@@ -27,7 +27,9 @@ import {
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import * as coordination from '../chatgpt-browser-turn/coordination.ts';
 import { readDriverDiagnostic } from '../chatgpt-browser-turn/diagnostics.ts';
-import { classifyProductWall, productStatusText, witnessSurfaceProbeRequiresDowngrade } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { classifyProductWall, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
+import { liveTurnStreamSequence } from '../chatgpt-browser-turn/fixtures/live-turn-stream-contract.ts';
 
 let root = '';
 let profileKey = '';
@@ -632,3 +634,276 @@ describe('issue 1023 runTurn timeout integration', () => {
     expect(readFileSync(output, 'utf8')).toBe('committed reply text');
   });
 });
+
+
+const issue1025HalfBCdp = 'http://127.0.0.1:9222';
+const issue1025HalfBBaseConfig = (overrides: Partial<BrowserConfig> = {}): BrowserConfig => ({
+  cdp: issue1025HalfBCdp,
+  profile: 'automation',
+  chatUrl: 'https://chatgpt.com/c/example',
+  newChat: false,
+  timeoutMs: 60_000,
+  ...overrides,
+});
+
+describe('issue 1025 Half B finished reply without terminal', () => {
+  const own = 'user-owned-12345678';
+  const assistantId = 'assistant-owned-12345678';
+
+  function finishedReplyFixture(overrides: Parameters<typeof fakeTurnPage>[0] = {}) {
+    return fakeTurnPage({
+      dispatchCandidateIds: [own],
+      serviceFrames: [
+        {
+          type: 'input_message',
+          input_message: {
+            id: own,
+            author: { role: 'user' },
+            content: { content_type: 'text', parts: ['payload'] },
+          },
+        },
+        {
+          message: {
+            id: assistantId,
+            author: { role: 'assistant' },
+            parent: own,
+            content: { content_type: 'text', parts: ['finished reply text'] },
+          },
+        },
+      ],
+      assistants: [{
+        id: assistantId,
+        parent: own,
+        text: 'finished reply text',
+        streaming: false,
+      }],
+      ...overrides,
+    });
+  }
+
+  it('AC5 exits promptly as recovery_required reply_finished_terminal_unproven without publication', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = finishedReplyFixture();
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const started = Date.now();
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await turn;
+    expect(result).toMatchObject({
+      state: 'recovery_required',
+      cause: 'reply_finished_terminal_unproven',
+      possibleDelivery: true,
+      userMessageId: own,
+      assistantMessageId: assistantId,
+    });
+    expect(result.reply).toBeUndefined();
+    expect(Date.now() - started).toBeLessThanOrEqual(30_000);
+  });
+
+  it('AC5 live in_progress service shape without resolvable terminal still early-exits', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const turnId = 'turn-live-12345678';
+    const liveFrames = liveTurnStreamSequence(own, assistantId, { turnId }, { replyText: 'finished reply text' });
+    const unresolvedTerminalFrames = liveFrames.filter((frame) => {
+      const payload = (frame as { payload?: { payload?: { encoded_item?: string } } }).payload?.payload?.encoded_item ?? '';
+      return !payload.includes('"o":"patch"') || !payload.includes('finished_successfully');
+    });
+    const fixture = finishedReplyFixture({
+      serviceFrames: unresolvedTerminalFrames,
+    });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await turn;
+    expect(result).toMatchObject({
+      state: 'recovery_required',
+      cause: 'reply_finished_terminal_unproven',
+      possibleDelivery: true,
+      userMessageId: own,
+      assistantMessageId: assistantId,
+    });
+  });
+
+  it('AC6 stable text with active generation UI does not early-exit', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = finishedReplyFixture({
+      pageLevelStopButton: true,
+      assistants: [{
+        id: assistantId,
+        parent: own,
+        text: 'finished reply text',
+        streaming: false,
+      }],
+    });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 5_000 });
+    await vi.advanceTimersByTimeAsync(5_100);
+    const result = await turn;
+    expect(result.cause).not.toBe('reply_finished_terminal_unproven');
+    expect(result.state).toBe('stream_timeout');
+  });
+
+  it('AC5 explicit end_turn:false metadata does not suppress finished-reply early exit', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = finishedReplyFixture({
+      serviceFrames: [
+        {
+          type: 'input_message',
+          input_message: {
+            id: own,
+            author: { role: 'user' },
+            content: { content_type: 'text', parts: ['payload'] },
+          },
+        },
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: assistantId,
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: false,
+              content: { content_type: 'text', parts: ['finished reply text'] },
+            },
+          },
+        },
+      ],
+    });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await turn;
+    expect(result).toMatchObject({
+      state: 'recovery_required',
+      cause: 'reply_finished_terminal_unproven',
+      possibleDelivery: true,
+      userMessageId: own,
+      assistantMessageId: assistantId,
+    });
+  });
+
+  it('AC5 node-local finish_details:stop without whole-turn terminal still early-exits', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = finishedReplyFixture({
+      serviceFrames: [
+        {
+          type: 'input_message',
+          input_message: {
+            id: own,
+            author: { role: 'user' },
+            content: { content_type: 'text', parts: ['payload'] },
+          },
+        },
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: assistantId,
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: false,
+              metadata: { finish_details: { type: 'stop' } },
+              content: { content_type: 'text', parts: ['finished reply text'] },
+            },
+          },
+        },
+      ],
+    });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await turn;
+    expect(result).toMatchObject({
+      state: 'recovery_required',
+      cause: 'reply_finished_terminal_unproven',
+      possibleDelivery: true,
+      userMessageId: own,
+      assistantMessageId: assistantId,
+    });
+    expect(result.reply).toBeUndefined();
+  });
+
+  it('AC5 terminal evidence arriving during finished-reply probes wins over recovery exit', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = finishedReplyFixture({
+      lateTerminalFramesOnPoll: {
+        poll: 1,
+        frames: [{
+          type: 'delta',
+          v: {
+            message: {
+              id: assistantId,
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
+            },
+          },
+        }],
+      },
+    });
+    const originalWaitForTimeout = fixture.page.waitForTimeout?.bind(fixture.page);
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+      if (originalWaitForTimeout) await originalWaitForTimeout(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await turn;
+    expect(result.state).toBe('ok');
+    expect(result.cause).toBe('completed');
+    expect(result.cause).not.toBe('reply_finished_terminal_unproven');
+  });
+
+  it('AC7 suppresses finished-reply diagnosis while awaiting fresh terminal after continuation', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = finishedReplyFixture({
+      continueGenerating: {
+        hideAfterClick: true,
+        growthSequence: ['finished reply text'],
+      },
+    });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 8_000 });
+    await vi.advanceTimersByTimeAsync(8_100);
+    const result = await turn;
+    expect(result.cause).not.toBe('reply_finished_terminal_unproven');
+  });
+
+  it('AC8 foreign user activity wins before finished-reply diagnosis', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = finishedReplyFixture({
+      foreignDomUserIds: ['foreign-user-12345678'],
+    });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 8_000 });
+    await vi.advanceTimersByTimeAsync(8_100);
+    const result = await turn;
+    expect(result.state).toBe('foreign_activity');
+    expect(result.cause).not.toBe('reply_finished_terminal_unproven');
+  });
+});
+
+

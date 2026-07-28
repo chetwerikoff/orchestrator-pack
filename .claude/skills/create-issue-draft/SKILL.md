@@ -1113,8 +1113,9 @@ The Issue body must use this order:
 9. mandatory `allowed-roots` fence, listing every allowed root.
 10. **Acceptance criteria** — numbered, observable, testable.
 11. **Upgrade-safety check**.
-12. **Verification** mapped to acceptance criteria.
-13. `contract-evidence` fence or explicit `contract-evidence: none` form accepted
+12. **Smoke-test plan** — realistic operator-visible scenarios with expected observable results, or explicit reasoned `not-applicable` inside a ```smoke-test-plan``` fence.
+13. **Verification** mapped to acceptance criteria.
+14. `contract-evidence` fence or explicit `contract-evidence: none` form accepted
     by repository validator.
 
 ### Required fence examples
@@ -1174,6 +1175,7 @@ node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
 node scripts/draft-discipline.mjs positive-outcome --draft "$ANCHOR"
 node scripts/draft-discipline.mjs parked-root --draft "$ANCHOR"
 node scripts/draft-discipline.mjs contract-evidence --draft "$ANCHOR"
+node scripts/draft-discipline.mjs smoke-test-plan --draft "$ANCHOR"
 node scripts/stage-completeness-guard.ts \
   --text-file "$ANCHOR" --draft-path "$ANCHOR" --repo-root "$WORKDIR"
 ```

@@ -1,0 +1,8 @@
+```worker-smoke-report
+result: PASS
+tracked-files-unmodified: true
+environment-notes: orca-managed worktree
+scenarios:
+  - action: run helper | expected: prints ok | observed: ok | outcome: pass
+terminal-cleanup: closed_owned_handle
+```

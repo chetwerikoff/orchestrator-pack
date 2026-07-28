@@ -47,7 +47,7 @@ Use `--allow-code` only under the upstream file gate below.
 
 **Invalid forms:** `--file`, `--stdin`, pipes, heredocs, or bare questions without `--question`.
 
-Deep-dive examples, PR-diff recipe, and delegation-ladder rationale:
+Examples and delegation rationale:
 [`docs/coworker-delegation.md`](docs/coworker-delegation.md).
 
 **Contract-mapping pass (reviewers only).** When the diff is over the delegation floor **and**
@@ -332,6 +332,8 @@ or `.agent-report-audit` files. If the command cannot determine the current repo
 binding, skip silently for the report write only and continue the required task work. Do not
 substitute PR comments or issue comments for worker report state.
 
+#### Worker smoke gate (`ready_for_review`) — [`docs/worker-smoke-testing.md`](docs/worker-smoke-testing.md).
+
 #### Worker CI gate (`ready_for_review` and self-fix)
 
 **Self-fix is primary.** Do **not** run `pack-worker-report --state ready_for_review` while required
@@ -357,8 +359,8 @@ Script-owned orchestrator review starters and predicates:
 
 #### Review delivery telemetry (Issue #718)
 
-Trust reviewer terminal JSON, the current-head GitHub review, and dispatch journal. The pack store is operational only; daemon review HTTP and `ao review submit` are REMOVED. On telemetry failure, skip silently—never post substitute notifications or synthesize findings from store rows.
-**Worker status (Issue #720):** use `Get-WorkerStatusDecisionSessions`/pack store for decisions; on disabled/stale/unknown/degraded skip worker reactions silently; diagnostics via `scripts/show-worker-status-report.ps1`.
+Trust reviewer terminal JSON, current-head GitHub review, and dispatch journal; pack store is operational only (`ao review submit` removed). On telemetry failure, skip silently—no substitute notifications or synthesized findings.
+**Worker status (#720):** `Get-WorkerStatusDecisionSessions`/pack store; skip silently on disabled/stale/unknown/degraded; diagnostics: `scripts/show-worker-status-report.ps1`.
 #### Review-cycle cap (Issue #646)
 
 Automated review starts consult `docs/review-cycle-cap.mjs` via `Review-CycleCap.ps1` on

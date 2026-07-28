@@ -590,6 +590,30 @@
       "path": "captures/gh-pr-open/pulls-mergeable-state.raw.json",
       "contentHash": "sha256:c0c2c9663462ac8343335487bd82e9eea7b18c58a9e109fe8c8b96a9f0d62083"
     },
+    "orca-worker-smoke/terminal-create": {
+      "id": "orca-worker-smoke/terminal-create",
+      "producer": "orca-worker-smoke",
+      "sourceCommand": "orca terminal create --worktree active --command cursor-agent --json",
+      "kind": "structured",
+      "path": "captures/orca-worker-smoke/terminal-create.raw.json",
+      "contentHash": "sha256:922343448d0ea1d5096bd7859520d8ff5bde9fdbc006451a0bcca133f61996a0"
+    },
+    "orca-worker-smoke/terminal-read": {
+      "id": "orca-worker-smoke/terminal-read",
+      "producer": "orca-worker-smoke",
+      "sourceCommand": "orca terminal read --terminal <owned-handle> --json",
+      "kind": "structured",
+      "path": "captures/orca-worker-smoke/terminal-read.raw.json",
+      "contentHash": "sha256:f410af34e1c3da3e9eb8971e864016ccf5bf22cfae557d043af52e934bc46a28"
+    },
+    "orca-worker-smoke/worktree-current": {
+      "id": "orca-worker-smoke/worktree-current",
+      "producer": "orca-worker-smoke",
+      "sourceCommand": "orca worktree current --json",
+      "kind": "structured",
+      "path": "captures/orca-worker-smoke/worktree-current.raw.json",
+      "contentHash": "sha256:ef5e1a74fbd29417fc40296e22a74e2b3b73332294c2141aa77d48094d45ac82"
+    },
     "spawn-worktree-branch-operand-binding/integration-spawn-561-feat-issue-561": {
       "id": "spawn-worktree-branch-operand-binding/integration-spawn-561-feat-issue-561",
       "producer": "spawn-worktree-branch-operand-binding",
