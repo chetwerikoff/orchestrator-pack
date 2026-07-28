@@ -46,30 +46,6 @@ function issueBlocksCommittedDeclarationSnapshots(constraints: IssueConstraints)
   return pathMatchesAnyPattern(DECLARATION_SNAPSHOT_SAMPLE, constraints.denylist);
 }
 
-function normalizeTrailingSlashAllowedRoot(root: string): string {
-  if (
-    root.endsWith('/')
-    && !root.endsWith('/**')
-    && !root.endsWith('/*')
-  ) {
-    return `${root}**`;
-  }
-  return root;
-}
-
-function normalizeIssueConstraintsForScope(
-  constraints: ReturnType<typeof normalizeIssueConstraints>,
-): ReturnType<typeof normalizeIssueConstraints> {
-  if (constraints.allowed_roots === undefined) {
-    return constraints;
-  }
-
-  return {
-    ...constraints,
-    allowed_roots: constraints.allowed_roots.map(normalizeTrailingSlashAllowedRoot),
-  };
-}
-
 function splitIssueAllowedRootsToDeclaredScope(allowedRoots: string[]): {
   declared_paths: string[];
   declared_globs: string[];
@@ -78,11 +54,10 @@ function splitIssueAllowedRootsToDeclaredScope(allowedRoots: string[]): {
   const declared_globs: string[] = [];
 
   for (const root of allowedRoots) {
-    const normalized = normalizeTrailingSlashAllowedRoot(root);
-    if (normalized.includes('*')) {
-      declared_globs.push(normalized);
+    if (root.includes('*')) {
+      declared_globs.push(root);
     } else {
-      declared_paths.push(normalized);
+      declared_paths.push(root);
     }
   }
 
@@ -665,7 +640,7 @@ function checkImplementationPrScope(
           declared_paths: snapshot!.declared_paths,
           declared_globs: snapshot!.declared_globs,
         },
-        normalizeIssueConstraintsForScope(issueConstraints),
+        issueConstraints,
       );
 
       if (!declarationCheck.ok) {

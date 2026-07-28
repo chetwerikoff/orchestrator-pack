@@ -3,34 +3,17 @@
   "iteration_id": "t3-flow-manager",
   "iteration_id_source": "wrapper_generated",
   "supersedes": null,
-  "created_at": "2026-07-28T15:42:04.978Z",
+  "created_at": "2026-07-28T15:57:20.834Z",
   "baseline": {
-    "commit_sha": "3291d33e4e6df81f7ba27f22cc2ce2ab91bf9dab",
+    "commit_sha": "35c46e2cdd7f775162d8b9dd606b525836ec1895",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:5f9d697109f704f693a99d453e12dbecb6fa561fbb37f7434f6b7c9c81fd7825"
+    "active_scope_hash": "sha256:780ad237a19ee92085c194ab28f91146a1db91a80192f728ba668ce220d873e3"
   },
   "declared_paths": [
-    ".claude/skills/create-issue-draft/SKILL.md",
-    "docs/tiering.md",
-    "scripts/lib/tier-gate-core.ts",
-    "scripts/pr-scope-check.ts",
-    "scripts/tier-gate-guard.test.ts"
+    "scripts/",
+    "docs/",
+    ".claude/skills/"
   ],
   "declared_globs": [],
-  "amendments": [
-    {
-      "previous_active_scope_hash": "sha256:bd28dbd328c1ad542cdc8f13c2545cced160817442b2f42c84add9b1b3d60068",
-      "new_active_scope_hash": "sha256:5f9d697109f704f693a99d453e12dbecb6fa561fbb37f7434f6b7c9c81fd7825",
-      "changed": {
-        "added": [
-          "scripts/pr-scope-check.ts"
-        ],
-        "removed": []
-      },
-      "reason": "Include scope-guard normalization required for issue #1093 trailing-slash allowed_roots.",
-      "actor": "local",
-      "timestamp": "2026-07-28T15:46:55.842Z",
-      "applied": true
-    }
-  ]
+  "amendments": []
 }
