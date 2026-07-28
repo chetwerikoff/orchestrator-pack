@@ -56,6 +56,7 @@
     "scripts/kernel/json-artifact.test.ts": "light",
     "scripts/kernel/json-contract.test.ts": "light",
     "scripts/kernel/subprocess.test.ts": "heavy",
+    "scripts/lib/protected-signal-receipt.test.ts": "light",
     "scripts/orchestrator-escalation-router.test.ts": "parked",
     "scripts/orchestrator-escalation.test.ts": "light",
     "scripts/orchestrator-wake-supervisor-side-process-registry.test.ts": "postMergeWallclock",

@@ -80,7 +80,7 @@ export const agentRulesMovedContentGate: DeclarativeGateDefinition = {
           path: 'docs/tiering.md',
           contains: [
             '## Task complexity tier rubric',
-            '### Red-flag markers (any one → T3)',
+            '### Failure-type lens (apply first)',
             '## Per-tier draft-review flow',
             '### Per-tier pipeline (ceilings, not quotas)',
           ],

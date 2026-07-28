@@ -49,7 +49,7 @@ tier-downgrade point and is the sole independent aggregate cut authority for
 review-added machinery; it checks contradictions, feasibility, overengineering
 as the primary goal (including a forced-cut answer and explicit reconsideration
 of whether simplification makes a lower complexity tier valid under the existing
-rubric and marker/L4 floors), and missed gaps on the exact candidate accepted.
+rubric and applicable L4 floors), and missed gaps on the exact candidate accepted.
 
 Codex remains limited to the mandatory independent addition for T3-critical
 tasks, a recorded browser-outage substitution for one browser-GPT review stage,
