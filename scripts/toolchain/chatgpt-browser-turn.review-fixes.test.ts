@@ -27,7 +27,7 @@ import {
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import * as coordination from '../chatgpt-browser-turn/coordination.ts';
 import { readDriverDiagnostic } from '../chatgpt-browser-turn/diagnostics.ts';
-import { classifyProductWall, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { BrowserOperationTimeoutError, classifyPreDispatchProductWall, classifyProductWall, openTurnPage, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
 import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import { liveTurnStreamSequence } from '../chatgpt-browser-turn/fixtures/live-turn-stream-contract.ts';
 
@@ -1436,6 +1436,165 @@ describe('issue 1068 fresh canonical identity retention', () => {
     expect(resolveCanonicalFreshConversation(config, retentionB, undefined, correlatedNetwork(userB, uuidB), userB)).toBe(urlB);
     expect(resolveCanonicalFreshConversation(config, retentionA, undefined, correlatedNetwork(userB, uuidB), userB)).toBe(urlA);
   });
+
+
+describe('issue 1065 browser-surface classification', () => {
+  function productStatusPage(elements: Array<{ text: string; testId?: string; role?: string }>, composer = false): any {
+    return {
+      locator: (selector: string) => {
+        if (selector === '#prompt-textarea') {
+          return { count: async () => composer ? 1 : 0 };
+        }
+        const matches = elements.filter((element) => {
+          if (selector === '[role="alert"]') return element.role === 'alert';
+          if (selector === '[role="dialog"]') return element.role === 'dialog';
+          if (selector === '[data-testid*="limit"]') return element.testId?.includes('limit');
+          if (selector === '[data-testid*="quota"]') return element.testId?.includes('quota');
+          if (selector === '[data-testid*="challenge"]') return element.testId?.includes('challenge');
+          if (selector === '[data-testid*="login"]') return element.testId?.includes('login');
+          if (selector === '[data-testid*="auth"]') return element.testId?.includes('auth');
+          if (selector === '[data-testid*="error"]') return element.testId?.includes('error');
+          return false;
+        });
+        return {
+          count: async () => matches.length,
+          nth: (index: number) => ({
+            innerText: async () => matches[index]?.text ?? '',
+            getAttribute: async (name: string) => name === 'data-testid' ? matches[index]?.testId ?? null : null,
+          }),
+        };
+      },
+    };
+  }
+
+  it('AC1: names the observed conversation-history quota wall before dispatch', async () => {
+    const page = productStatusPage([
+      {
+        role: 'dialog',
+        testId: 'modal-conversation-history-rate-limit',
+        text: 'Please wait a few minutes before trying again.',
+      },
+    ], true);
+    expect(classifyPreDispatchProductWall(await productStatusText(page))).toEqual({
+      state: 'quota',
+      cause: 'conversation_history_quota',
+    });
+  });
+
+  it('AC2: unknown blocking dialogs fail closed; visible non-blocking product status is ignored', async () => {
+    const blocking = productStatusPage([
+      { role: 'dialog', testId: 'modal-unknown-product-wall', text: 'Unexpected product blocker' },
+    ], false);
+    expect(classifyPreDispatchProductWall(await productStatusText(blocking))).toEqual({
+      state: 'ui_contract_mismatch',
+      cause: 'unclassified_blocking_dialog:modal-unknown-product-wall',
+    });
+
+    const nonBlocking = productStatusPage([
+      { role: 'alert', text: 'benign product notice' },
+    ], true);
+    expect(classifyPreDispatchProductWall(await productStatusText(nonBlocking))).toEqual({});
+    expect(classifyProductWall(await productStatusText(nonBlocking))).toEqual({});
+  });
+
+  it('AC3: duplicate tabs expose bounded match diagnostics without auto-closing tabs', async () => {
+    const page = (url: string) => ({ url: () => url, bringToFront: async () => {} });
+    const browser = {
+      contexts: () => [{
+        pages: () => [
+          page('https://chatgpt.com/c/a'),
+          page('https://chatgpt.com/c/a'),
+        ],
+      }],
+    };
+    await expect(openTurnPage(browser, {
+      cdp: 'http://127.0.0.1:9222',
+      profile: join(root, 'profile-1065'),
+      chatUrl: 'https://chatgpt.com/c/a',
+      newChat: false,
+      timeoutMs: 100,
+    })).rejects.toThrow(
+      'ui_contract_mismatch:duplicate_tabs:count=2:url=https://chatgpt.com/c/a;url=https://chatgpt.com/c/a',
+    );
+    expect(browser.contexts()[0]!.pages().length).toBe(2);
+  });
+
+  it('AC4: Gate-B characterization control results use gate-b-characterization operation', () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../chatgpt-browser-turn.ts'), 'utf8');
+    expect(source).toContain("operation: 'gate-b-characterization'");
+    expect(source).toContain("if (args.command === 'gate-b-characterization') return 'gate-b-characterization';");
+  });
+
+  it('AC5: bounded connectOverCDP degradation reports cdp_degraded with diagnostics', async () => {
+    vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
+      return {
+        ...actual,
+        verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'verified', evidence: 'verified' })),
+        loadChromium: vi.fn(() => ({
+          connectOverCDP: vi.fn(async () => { throw new BrowserOperationTimeoutError('connect_over_cdp'); }),
+        })),
+      };
+    });
+    const profile = join(root, 'profile-1065-cdp');
+    const profileKey = configuredProfileKey(profile, cdp);
+    const input = join(root, 'message-1065.txt');
+    const output = join(root, 'reply-1065.txt');
+    writeFileSync(input, 'payload\n');
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    let stdout = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    const exitCode = await runCli([
+      'turn',
+      '--profile', profile,
+      '--cdp', cdp,
+      '--input', input,
+      '--output', output,
+      '--chat-url', 'https://chatgpt.com/c/example',
+    ]);
+    process.stdout.write = originalStdout;
+    vi.resetModules();
+    expect(exitCode).toBe(13);
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(body.cause).toBe('cdp_degraded');
+    expect(body.driver_diagnostic_id).toBeTruthy();
+    const diagnostic = readDriverDiagnostic(profileKey, String(body.driver_diagnostic_id));
+    expect(diagnostic?.cause).toBe('cdp_degraded');
+  });
+
+  it('AC6: unknown CLI options preserve argument cause and emit Usage on stderr', async () => {
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    const profile = join(root, 'profile-1065-cli');
+    let stdout = '';
+    let stderr = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    const originalStderr = process.stderr.write.bind(process.stderr);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr += String(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    const exitCode = await runCli([
+      'status/list',
+      '--profile', profile,
+      '--cdp', cdp,
+      '--bogus-flag', 'value',
+    ]);
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+    expect(exitCode).toBe(22);
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(body.cause).toBe('argument_unknown:bogus-flag');
+    expect(stderr).toContain('Usage:');
+  });
+});
 
 });
 
