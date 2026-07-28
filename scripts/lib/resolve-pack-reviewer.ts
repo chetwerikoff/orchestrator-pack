@@ -1,8 +1,7 @@
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { runProcessSync } from '../kernel/subprocess.ts';
 
 export const PACK_REVIEWER_ENV = 'PACK_REVIEWER';
+export const PACK_REVIEW_BOUND_REVIEWER_ENV = 'PACK_REVIEW_BOUND_REVIEWER';
 
 export const PACK_REVIEWER_VALUES = ['codex', 'claude', 'gpt'] as const;
 export type PackReviewer = (typeof PACK_REVIEWER_VALUES)[number];
@@ -22,10 +21,11 @@ export interface PackReviewerLayerOverrides {
 }
 
 export interface ResolvePackReviewerOptions {
-  /** Test hook forwarded to Resolve-PackReviewer.ps1 OverrideLayers. */
+  /** Test hook for layer overrides. */
   layerOverrides?: PackReviewerLayerOverrides;
   /** Harness-only: consult User/Machine layers on non-Win32 hosts. */
   emulateWin32?: boolean;
+  readLayer?: (target: PackReviewerLayer) => string | null;
 }
 
 export interface PackReviewerResolution {
@@ -34,68 +34,104 @@ export interface PackReviewerResolution {
   errorMessage: string | null;
 }
 
-const SCRIPTS_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const EXPORT_SCRIPT = join(SCRIPTS_ROOT, 'export-pack-reviewer-resolution.ps1');
-
 function trim(value: unknown): string {
   return String(value ?? '').trim();
 }
 
-function parseResolution(stdout: string): PackReviewerResolution {
-  const parsed = JSON.parse(stdout) as {
-    selectorValue?: string | null;
-    reviewer?: string | null;
-    errorMessage?: string | null;
-  };
-  const reviewer = normalizePackReviewer(parsed.reviewer);
-  const selectorValue = trim(parsed.selectorValue) || null;
-  const errorMessage = trim(parsed.errorMessage) || null;
-  return { selectorValue, reviewer, errorMessage };
+function isPersistentLayerHost(options: ResolvePackReviewerOptions = {}): boolean {
+  return options.emulateWin32 === true || process.platform === 'win32';
 }
 
-/**
- * Delegates to scripts/lib/Resolve-PackReviewer.ps1 — the single selector authority.
- */
-export function resolvePackReviewerResolution(
-  env: NodeJS.ProcessEnv = process.env,
-  options: ResolvePackReviewerOptions = {},
-): PackReviewerResolution {
-  const args = ['-NoProfile', '-File', EXPORT_SCRIPT];
-  if (options.layerOverrides && Object.keys(options.layerOverrides).length > 0) {
-    args.push('-OverrideLayersJson', JSON.stringify(options.layerOverrides));
-  }
-  if (options.emulateWin32) {
-    args.push('-HarnessEmulatePersistentLayers');
-  }
+let cachedWindowsLayers: PackReviewerLayerOverrides | undefined;
 
-  const isolatedEnv = env !== process.env;
-  const result = runProcessSync({
-    command: 'pwsh',
-    args,
-    cwd: SCRIPTS_ROOT,
-    inheritParentEnv: !isolatedEnv,
-    env: isolatedEnv
-      ? {
-        PATH: process.env.PATH,
-        SystemRoot: process.env.SystemRoot,
-        COMSPEC: process.env.COMSPEC,
-        PATHEXT: process.env.PATHEXT,
-        ...env,
-      }
-      : undefined,
-  });
-  if (!result.ok) {
-    const detail = trim(result.stderr || result.stdout || result.error) || 'pack reviewer resolution failed';
-    throw new Error(detail);
+function readWindowsRegistryLayers(): PackReviewerLayerOverrides {
+  if (cachedWindowsLayers !== undefined) {
+    return cachedWindowsLayers;
   }
-  return parseResolution(result.stdout);
+  if (process.platform !== 'win32') {
+    cachedWindowsLayers = {};
+    return cachedWindowsLayers;
+  }
+  try {
+    const result = runProcessSync({
+      command: 'pwsh',
+      args: [
+        '-NoProfile',
+        '-Command',
+        [
+          '$layers = @{',
+          "  Process = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','Process');",
+          "  User = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','User');",
+          "  Machine = [Environment]::GetEnvironmentVariable('PACK_REVIEWER','Machine')",
+          '}',
+          '$layers | ConvertTo-Json -Compress',
+        ].join(' '),
+      ],
+      inheritParentEnv: true,
+    });
+    if (!result.ok) {
+      cachedWindowsLayers = {};
+      return cachedWindowsLayers;
+    }
+    const parsed = JSON.parse(result.stdout.trim()) as PackReviewerLayerOverrides;
+    cachedWindowsLayers = {
+      Process: trim(parsed.Process) || null,
+      User: trim(parsed.User) || null,
+      Machine: trim(parsed.Machine) || null,
+    };
+  } catch {
+    cachedWindowsLayers = {};
+  }
+  return cachedWindowsLayers;
 }
 
+function defaultReadLayer(
+  env: NodeJS.ProcessEnv,
+  target: PackReviewerLayer,
+  options: ResolvePackReviewerOptions,
+): string | null {
+  if (options.layerOverrides && Object.prototype.hasOwnProperty.call(options.layerOverrides, target)) {
+    const override = options.layerOverrides[target];
+    return trim(override) || null;
+  }
+  if (target === 'Process') {
+    return trim(env[PACK_REVIEWER_ENV]) || null;
+  }
+  if (!isPersistentLayerHost(options)) {
+    return null;
+  }
+  const layers = readWindowsRegistryLayers();
+  return trim(layers[target]) || null;
+}
+
+/** Canonical selector authority for pack review (Issue #1031). */
 export function resolvePackReviewerSelectorValue(
   env: NodeJS.ProcessEnv = process.env,
   options: ResolvePackReviewerOptions = {},
 ): string | null {
-  return resolvePackReviewerResolution(env, options).selectorValue;
+  const bound = normalizePackReviewer(env[PACK_REVIEW_BOUND_REVIEWER_ENV]);
+  if (bound) {
+    return bound;
+  }
+
+  const readLayer = options.readLayer
+    ?? ((target: PackReviewerLayer) => defaultReadLayer(env, target, options));
+
+  const userValue = readLayer('User');
+  const machineValue = readLayer('Machine');
+  const processValue = readLayer('Process');
+  const effectiveProcess = isPersistentLayerHost(options) && userValue ? null : processValue;
+
+  if (effectiveProcess) {
+    return effectiveProcess;
+  }
+  if (userValue) {
+    return userValue;
+  }
+  if (machineValue) {
+    return machineValue;
+  }
+  return null;
 }
 
 export function normalizePackReviewer(value: unknown): PackReviewer | null {
@@ -104,6 +140,18 @@ export function normalizePackReviewer(value: unknown): PackReviewer | null {
     return normalized as PackReviewer;
   }
   return null;
+}
+
+export function resolvePackReviewerResolution(
+  env: NodeJS.ProcessEnv = process.env,
+  options: ResolvePackReviewerOptions = {},
+): PackReviewerResolution {
+  const selectorValue = resolvePackReviewerSelectorValue(env, options);
+  const reviewer = normalizePackReviewer(selectorValue);
+  const errorMessage = reviewer
+    ? null
+    : packReviewerSelectorErrorMessage(selectorValue ?? undefined, options, env);
+  return { selectorValue, reviewer, errorMessage };
 }
 
 export function resolvePackReviewerFromEnv(
@@ -116,17 +164,9 @@ export function resolvePackReviewerFromEnv(
 export function packReviewerSelectorErrorMessage(
   selectorValue?: string,
   options: ResolvePackReviewerOptions = {},
+  env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const resolution = resolvePackReviewerResolution(
-    selectorValue === undefined
-      ? process.env
-      : { ...process.env, [PACK_REVIEWER_ENV]: selectorValue },
-    options,
-  );
-  if (resolution.errorMessage) {
-    return resolution.errorMessage;
-  }
-  const raw = selectorValue ?? process.env[PACK_REVIEWER_ENV] ?? '';
+  const raw = selectorValue ?? resolvePackReviewerSelectorValue(env, options) ?? env[PACK_REVIEWER_ENV] ?? '';
   if (!String(raw).trim()) {
     return 'PACK_REVIEWER is not set. Set PACK_REVIEWER to gpt, claude, or codex before running pack review (see docs/reviewer-switch-runbook.md).';
   }

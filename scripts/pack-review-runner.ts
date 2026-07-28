@@ -50,7 +50,12 @@ import {
   type PackReviewRequiredStatusWriter,
   type PackReviewWorkerNotifier,
 } from './lib/pack-review-delivery.ts';
-import { resolvePackReviewerFromEnv, type PackReviewer, type PackReviewerLayerOverrides } from './lib/resolve-pack-reviewer.ts';
+import {
+  PACK_REVIEW_BOUND_REVIEWER_ENV,
+  resolvePackReviewerFromEnv,
+  type PackReviewer,
+  type PackReviewerLayerOverrides,
+} from './lib/resolve-pack-reviewer.ts';
 
 interface StartInput {
   projectId?: string;
@@ -604,6 +609,7 @@ async function invokeReviewer(options: {
   };
   if (resolvedReviewer) {
     env.PACK_REVIEWER = resolvedReviewer;
+    env[PACK_REVIEW_BOUND_REVIEWER_ENV] = resolvedReviewer;
   }
   if (options.sessionId) {
     env.AO_SESSION_ID = options.sessionId;

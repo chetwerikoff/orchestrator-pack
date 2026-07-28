@@ -10,8 +10,14 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Review-RunLiveness.ps1')
 . (Join-Path $PSScriptRoot 'lib/Review-FailureEvidence.ps1')
 
-Clear-StalePackReviewerProcessScope
-$reviewer = Get-PackReviewerFromSelector
+$boundReviewer = [Environment]::GetEnvironmentVariable('PACK_REVIEW_BOUND_REVIEWER', 'Process')
+if (-not [string]::IsNullOrWhiteSpace($boundReviewer)) {
+    $reviewer = Get-PackReviewerFromSelector -SelectorValue $boundReviewer.Trim()
+}
+else {
+    Clear-StalePackReviewerProcessScope
+    $reviewer = Get-PackReviewerFromSelector
+}
 if (-not $reviewer) {
     $message = Get-PackReviewerSelectorErrorMessage
     Write-Error $message -ErrorAction Continue

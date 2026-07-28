@@ -2,12 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as subprocess from './kernel/subprocess.ts';
 import {
   defaultRunBrowserTurn,
   runGptPackReview,
   type GptReviewDependencies,
 } from './lib/pack-gpt-reviewer.ts';
-import * as subprocess from './kernel/subprocess.ts';
 
 const originalEnv = { ...process.env };
 
@@ -135,5 +135,47 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
     expect(result.exitCode).toBe(124);
     expect(result.stdout).toBe('');
     expect(result.stderr).toMatch(/timed out/i);
+  });
+
+  it('returns parseable terminal stdout through default browser turn and adapter chain', async () => {
+    const runProcess = vi.spyOn(subprocess, 'runProcess').mockImplementation(async (options) => {
+      const outputIndex = options.args?.indexOf('--output') ?? -1;
+      if (options.command === 'npm' && outputIndex >= 0) {
+        const outputPath = options.args![outputIndex + 1]!;
+        writeFileSync(outputPath, 'NO_FINDINGS', 'utf8');
+        return {
+          outcome: 'exit',
+          ok: true,
+          exitCode: 0,
+          signal: null,
+          stdout: '',
+          stderr: '',
+          timedOut: false,
+          cancelled: false,
+        };
+      }
+      throw new Error(`unexpected subprocess call: ${options.command} ${options.args?.join(' ')}`);
+    });
+
+    try {
+      const result = await runGptPackReview({
+        repoRoot: process.cwd(),
+        repoSlug: 'example/repo',
+        prNumber: 42,
+        headSha: 'f'.repeat(40),
+      }, {}, {
+        PACK_GPT_BROWSER_PROFILE: '/tmp/profile',
+        PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
+        PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/test',
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ verdict: 'clean', findingCount: 0, findings: [] });
+      expect(runProcess).toHaveBeenCalled();
+      const npmCall = runProcess.mock.calls.find(([options]) => options.command === 'npm');
+      expect(npmCall?.[0].args).toEqual(expect.arrayContaining(['run', 'chatgpt-browser-turn', '--', 'turn']));
+    } finally {
+      runProcess.mockRestore();
+    }
   });
 });

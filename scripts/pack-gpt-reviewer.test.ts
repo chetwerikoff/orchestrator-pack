@@ -34,7 +34,14 @@ describe('PACK_REVIEWER selector (Issue #1031)', () => {
     expect(resolvePackReviewerFromEnv({})).toBeNull();
   });
 
-  it('delegates selector resolution to Resolve-PackReviewer.ps1', () => {
+  it('honors PACK_REVIEW_BOUND_REVIEWER over stale process layer', () => {
+    expect(resolvePackReviewerFromEnv({
+      PACK_REVIEWER: 'codex',
+      PACK_REVIEW_BOUND_REVIEWER: 'gpt',
+    })).toBe('gpt');
+  });
+
+  it('matches persistent-layer stale-process clearing when User layer is configured', () => {
     expect(resolvePackReviewerSelectorValue(
       { PACK_REVIEWER: 'codex' },
       {
