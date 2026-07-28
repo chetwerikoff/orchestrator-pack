@@ -73,17 +73,6 @@ export function globIsWithinAllowedRoot(glob: string, allowedRoot: string): bool
     return true;
   }
 
-  if (
-    allowedRoot.endsWith('/')
-    && !allowedRoot.endsWith('/**')
-    && !allowedRoot.endsWith('/*')
-  ) {
-    const prefix = allowedRoot.slice(0, -1);
-    if (glob === prefix || glob.startsWith(`${prefix}/`)) {
-      return true;
-    }
-  }
-
   if (allowedRoot.endsWith('/**')) {
     const prefix = allowedRoot.slice(0, -3);
     if (prefix === '') {
