@@ -632,20 +632,21 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
 
   it('restores authenticated gh child behavior on the smoke-owned seam without leaking sentinels', () => {
     const fakeBin = join(fixtureRoot, 'fake-bin');
+    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
     const ghProbe = join(fakeBin, 'gh-auth-probe');
     const withoutAuth = runProcessSync({
-      command: ghProbe,
-      args: ['auth-probe'],
-      env: { PATH: fakeBin },
+      command: 'sh',
+      args: [ghProbe, 'auth-probe'],
+      env: { PATH: probePath },
     });
     expect(withoutAuth.ok).toBe(false);
     expect(withoutAuth.stderr).toContain('auth-carrier-missing');
 
     const withAuth = runProcessSync({
-      command: ghProbe,
-      args: ['auth-probe'],
+      command: 'sh',
+      args: [ghProbe, 'auth-probe'],
       env: {
-        PATH: fakeBin,
+        PATH: probePath,
         ...buildSmokeGhChildEnv({
           GH_TOKEN: authSentinel,
           UNRELATED_SENTINEL: unrelatedSentinel,
@@ -661,12 +662,13 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
 
   it('restores config-home carriers on the smoke-owned gh seam', () => {
     const fakeBin = join(fixtureRoot, 'fake-bin');
+    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
     const ghProbe = join(fakeBin, 'gh-auth-probe');
     const withConfigHome = runProcessSync({
-      command: ghProbe,
-      args: ['config-home-probe'],
+      command: 'sh',
+      args: [ghProbe, 'config-home-probe'],
       env: {
-        PATH: fakeBin,
+        PATH: probePath,
         ...buildSmokeGhChildEnv({
           HOME: '/home/smoke-user',
           XDG_CONFIG_HOME: '/home/smoke-user/.config',
@@ -679,12 +681,13 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
 
   it('scrubs credential sentinels from stderr-derived failure surfaces', () => {
     const fakeBin = join(fixtureRoot, 'fake-bin');
+    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
     const ghProbe = join(fakeBin, 'gh-auth-probe');
     const failed = runProcessSync({
-      command: ghProbe,
-      args: ['fail-with-sentinel'],
+      command: 'sh',
+      args: [ghProbe, 'fail-with-sentinel'],
       env: {
-        PATH: fakeBin,
+        PATH: probePath,
         ...buildSmokeGhChildEnv({ GH_TOKEN: authSentinel } as NodeJS.ProcessEnv),
       },
     });
