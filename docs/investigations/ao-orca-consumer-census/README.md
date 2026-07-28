@@ -16,6 +16,7 @@ Supporting reference (representation map extracted for checklist reuse):
 | Reference | File |
 |---|---|
 | Canonical AO surface identities + representation map | [`surface-identity-map.md`](./surface-identity-map.md) |
+| Per-token `AO_*` axis-2 bindings (273 rows) | [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) |
 
 ## Record-only boundary
 
@@ -37,20 +38,25 @@ From a clean checkout at the inspected revision:
 export REV=8fabf182f4df0a70e2f08f67899658ee886ab337
 git checkout "$REV"
 
-# Axis 1 — CLI-shaped AO use (production scripts/plugins, excluding tests/fixtures)
+# Axis 1 — CLI-shaped AO use (production scripts/plugins/docs + config example)
 grep -rE '\bao (status|session|orchestrator|send|spawn|stop|start|events|review|report)\b' \
-  scripts plugins docs --include='*.ps1' --include='*.ts' --include='*.mjs' \
-  | grep -v '/tests/' | grep -v '/fixtures/' | wc -l
+  scripts plugins docs AGENTS.md CLAUDE.md prompts .claude .cursor agent-orchestrator.yaml.example \
+  --include='*.ps1' --include='*.ts' --include='*.mjs' --include='*.md' --include='*.yaml*' \
+  | grep -v '/tests/' | grep -v '/fixtures/' | grep -v 'docs/investigations/' | wc -l
+
+# Axis 1 — command-config only (orchestratorRules example)
+grep -nE '\bao (status|session|send|spawn|stop|start|events|review|report)\b' agent-orchestrator.yaml.example
 
 # Axis 1 — direct daemon HTTP paths
 grep -rE '/api/v1/(projects|sessions)' scripts docs --include='*.ps1' --include='*.mjs' --include='*.ts'
 
-# Axis 2 — tracked AO_* names
+# Axis 2 — tracked AO_* names (wildcard-fragment filter)
 grep -rhoE 'AO_[A-Z0-9_]+' scripts plugins docs AGENTS.md CLAUDE.md prompts \
-  .claude .cursor agent-orchestrator.yaml.example 2>/dev/null | sort -u
+  .claude .cursor agent-orchestrator.yaml.example package.json .github 2>/dev/null \
+  | grep -vE '_$' | sort -u | tee /tmp/ao-tokens.txt | wc -l
 
 # Axis 3 — worker-facing normative AO text (primary pass)
-grep -lE '\bao (session|spawn|send|stop|start|review|report)\b' AGENTS.md CLAUDE.md prompts/*.md docs/*runbook*.md
+grep -lE '\bao (session|spawn|send|stop|start|review|report)\b' AGENTS.md CLAUDE.md prompts/*.md docs/*runbook*.md agent-orchestrator.yaml.example
 
 # Axis 3 — independent cross-check (skills mirror)
 grep -lE '\bao (session|spawn|send|stop|start|review|report)\b' .claude/skills/*/SKILL.md .cursor/skills/*/SKILL.md

@@ -103,7 +103,7 @@ These canonical surfaces **cannot** yield `zero_consumer = true` today because l
 | `plugin.declare`, `plugin.scope-guard`, `plugin.review-command`, `plugin.token-ledger` | Plugin hooks |
 | All axis-4 store bindings | **drain** not satisfied; escalation store additionally **presently unprovable** |
 
-**Shed surfaces** (`report.worker-state`, `review.project-list`, `review.daemon-cli`) may reach `zero_consumer = true` **only after** §3.3 confirms no live normative text or code references remain (several **drain** doc-debt bindings still mention them — see census §5.3).
+**Shed surfaces** (`report.worker-state`, `review.project-list`, `review.daemon-cli`) may reach `zero_consumer = true` **only after** §3.3 confirms no live normative text or code references remain (several **shed** doc-debt bindings still mention them — see census §5.3).
 
 ---
 

@@ -129,27 +129,28 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 
 | Pass | Method | Coverage argument |
 |---|---|---|
-| **1a CLI** | `grep -rE '\bao (status|session|orchestrator|send|spawn|stop|start|events|review|report|acknowledge)\b' scripts plugins docs` excluding `tests/**`, `fixtures/**` | Hits every script/doc with literal `ao` verb invocation; cross-checked against adapter exports in `Invoke-AoCliJson.ps1` |
+| **1a CLI** | `grep -rE '\bao (status|session|orchestrator|send|spawn|stop|start|events|review|report|acknowledge)\b' scripts plugins docs AGENTS.md CLAUDE.md prompts .claude .cursor agent-orchestrator.yaml.example` excluding `tests/**`, `fixtures/**`, `docs/investigations/**` | Hits every script/doc/config-example with literal `ao` verb invocation; cross-checked against adapter exports in `Invoke-AoCliJson.ps1` |
+| **1e command-config** | Same pattern scoped to `agent-orchestrator.yaml.example` only (execution-root `command-config` per §2.3) | Independent pass for normative orchestratorRules text omitted from script-only greps |
 | **1b HTTP/API** | `grep -rE '/api/v1/|Invoke-AoDaemonHttpJson|Invoke-WebRequest.*127\.0\.0\.1' scripts` | Independent of CLI grep; finds daemon HTTP consumers |
 | **1c Library/adapter** | Read exports: `Invoke-AoCliJson.ps1`, `Invoke-AoReviewApi.ps1`, `pack-review-runner.ts`, `docs/ao-0-10-review-api.mjs` | Ensures adapter hub surfaces not missed by literal `ao` string in caller |
 | **1d Retired surface guard** | `scripts/json-producers/retired-surfaces.json`, `scripts/check-ao-dead-argv-bypass.ps1` | Classifies retired verbs vs live |
-| **Completeness** | Union of 1a–1d must cover every function in adapter hubs and every production script in side-process registry + reconcile family | CLI-only search **insufficient** — 1b required and recorded |
+| **Completeness** | Union of 1a–1e must cover every function in adapter hubs, every production script in side-process registry + reconcile family, and `agent-orchestrator.yaml.example` orchestratorRules | CLI-only search over `scripts plugins docs` alone is **insufficient** — 1b and 1e required and recorded |
 
 ### Axis 2 — Environment variables (`AO_*`)
 
 | Pass | Method | Coverage argument |
 |---|---|---|
-| **Primary** | `grep -rhoE 'AO_[A-Z0-9_]+'` over tracked corpus (§1.1) | Enumerates every distinct name |
-| **Classification** | For each name: grep readers in `scripts/**`, `plugins/**`, `docs/**.mjs`; compare to `scripts/vitest-live-store-preload.mjs` harness list | Separates AO-runtime injection vs pack-owned store addresses vs test-only fixtures |
-| **Completeness** | 262 distinct `AO_*` tokens at inspected revision; every token appears in §4.2 table or §7 exclusion (test-only) |
+| **Primary** | `grep -rhoE 'AO_[A-Z0-9_]+'` over tracked corpus (§1.1), excluding wildcard fragments (`grep -vE '_$'`) | Enumerates every distinct name |
+| **Per-token bindings** | For each name: `grep -rl` primary reader in `scripts/**`, `plugins/**`, `docs/**`, config example; record consumer path + canonical surface + `port|shed` | Full axis-2 inventory — no grouped wildcards (`AO_*` families) in place of per-name rows |
+| **Completeness** | **273** distinct `AO_*` tokens at inspected revision (reproduction: [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) header); every token appears in that inventory or §7.2 exclusion |
 
 ### Axis 3 — Worker-facing behavioral text
 
 | Pass | Method | Coverage argument |
 |---|---|---|
-| **Primary** | Grep `ao ` instructions in `AGENTS.md`, `CLAUDE.md`, `prompts/**`, `docs/*runbook*.md`, `plugins/**/README.md` | Normative worker/operator surfaces |
+| **Primary** | Grep `ao ` instructions in `AGENTS.md`, `CLAUDE.md`, `prompts/**`, `docs/*runbook*.md`, `plugins/**/README.md`, `agent-orchestrator.yaml.example` | Normative worker/operator surfaces including orchestratorRules example |
 | **Independent cross-check** | Grep same pattern in `.claude/skills/**/SKILL.md`, `.cursor/skills/**/SKILL.md` | Different root set (skills not in primary grep path) |
-| **Discrepancy accounting** | `switch-pack-reviewer` skill still mentions `ao review list` — recorded as **drain** doc debt binding `review.project-list` (shed surface) in §5.3 | No silent drop |
+| **Discrepancy accounting** | `switch-pack-reviewer` skill still mentions `ao review list` — recorded as **shed** doc-debt binding on `review.project-list` in §5.3 | No silent drop |
 
 ### Axis 4 — AO-generated identity in durable records
 
@@ -165,13 +166,15 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 |---|---|---|
 | **Primary** | `docs/orchestrator-recovery-runbook.md`, `AGENTS.md` managed-session constraints, `scripts/wait-orchestrator-launch.ps1` | Normative lifecycle |
 | **Independent cross-check** | `grep -lE 'Get-AoDaemonHealthJson|ao stop|ao start|session kill|session restore' scripts/lib/*.ps1 scripts/*.ps1` | Implementation-enforced assumptions |
-| **Discrepancy accounting** | Runbook still documents retired `ao status --reports` / `ao review list` — bound as **drain** historical text (§5.5) |
+| **Discrepancy accounting** | Runbook still documents retired `ao status --reports` / `ao review list` — bound as **shed** historical text (§5.5) |
 
 ---
 
 ## 4. Axis 2 summary — `AO_*` variable taxonomy
 
-**Distinct tracked names:** 262 (reproduction: README quick reproduction axis-2 command).
+**Distinct tracked names:** 273 (full per-token bindings: [`ao-env-token-inventory.md`](./ao-env-token-inventory.md); reproduction command in that file header).
+
+Grouped taxonomy below is a **summary view** only; axis-2 accounting closure uses the per-token inventory (no `AO_*` wildcard rows).
 
 ### 4.1 AO-runtime injected (identity / project context)
 
@@ -233,7 +236,14 @@ Read by production code expecting AO daemon to set values.
 | `scripts/lib/Worker-Recovery.ps1` | `spawn.worker` | `ao spawn` argv | Dead worker recovery | **port** |
 | `scripts/set-pack-reviewer.ps1` | `daemon.lifecycle` | `ao stop` / `ao start` | Operator reviewer switch | **port** |
 | `scripts/orchestrator-diagnose.ps1` | `daemon.health`, `review.runs.aggregate`, `events.list` | Adapter calls | Read-only diagnostics | **port** |
-| `scripts/terminal-flood-detect.ps1` | `events.list` | `ao events list` | Terminal flood detection | **drain** (CLI removed on some builds; consumer must shed or port to alternate telemetry) |
+| `scripts/terminal-flood-detect.ps1` | `events.list` | `ao events list` | Terminal flood detection obligation | **port** (behavior survives; must migrate off retired CLI to pack-store/degraded telemetry — not axis-4 `drain`) |
+| `agent-orchestrator.yaml.example` | `send.message` | `ao send` in orchestratorRules / heartbeat | Orchestrator nudge transport | **port** |
+| `agent-orchestrator.yaml.example` | `session.merged-view` | `ao status --json --reports full` | Worker/orchestrator session + report snapshot | **port** |
+| `agent-orchestrator.yaml.example` | `events.list` | `ao events list --json` | Event-silence / ping dedup evidence | **port** |
+| `agent-orchestrator.yaml.example` | `session.lifecycle` | `ao session kill` | Stale worker recycle | **port** |
+| `agent-orchestrator.yaml.example` | `spawn.claim-pr` | `ao spawn --claim-pr` | Worker respawn after ping timeout | **port** |
+| `agent-orchestrator.yaml.example` | `daemon.lifecycle` | `ao stop` / `ao start` | Operator rules adoption | **port** |
+| `agent-orchestrator.yaml.example` | `report.worker-state` | `ao report` (legacy ack text) | Retired worker ack path | **shed** |
 | `scripts/review-trigger-reconcile.ps1` | `review.runs.aggregate`, `review.trigger` | `Get-AoReviewRuns` + runner | Automatic review starts | **port** |
 | `scripts/harness-post-submit-pn-reconcile.ps1` | `review.fail-stale` | HTTP POST fail-stale | Harness PN recovery | **port** (gated on `AO_REVIEW_FAIL_STALE_SURFACE`) |
 | `scripts/pack-worker-report.ps1` | `pack.worker-report` | Pack CLI | Replaces `report.worker-state` | **port** |
@@ -265,8 +275,8 @@ Read by production code expecting AO daemon to set values.
 | Orchestrator recovery (`session kill`/`restore`, daemon health) | `docs/orchestrator-recovery-runbook.md` | **port** | Operator recovery |
 | Merge adoption session recycle | `.claude/skills/merge-with-local-adoption/SKILL.md` | **port** | Post-merge lifecycle |
 | Change orchestrator runtime (AO restart) | `.claude/skills/change-orchestrator-runtime/SKILL.md` | **port** | Operator |
-| Retired `ao review list` in skill/runbook | `.claude/skills/switch-pack-reviewer/SKILL.md`, recovery runbook sections | **drain** | Doc debt on **shed** surfaces; must be removed or marked historical before zero-consumer on `review.project-list` |
-| Retired `ao report` / `ao status --reports` in prompts | `prompts/investigate_root_cause.md` | **drain** | Doc debt |
+| Retired `ao review list` in skill/runbook | `.claude/skills/switch-pack-reviewer/SKILL.md`, recovery runbook sections | **shed** | Normative text on retired surface; remove or mark historical before zero-consumer on `review.project-list` |
+| Retired `ao report` / `ao status --reports` in prompts | `prompts/investigate_root_cause.md`, `agent-orchestrator.yaml.example` (legacy ack lines) | **shed** | No durable AO identity; historical instruction bytes only |
 | Architect `ao spawn` delegation | `CLAUDE.md` | **port** | Architect spawns workers via AO today |
 
 ### 5.4 Axis 4 — durable stores with AO session identity
@@ -319,7 +329,7 @@ Read by production code expecting AO daemon to set values.
 | `plugin.*` | ✓ | | | Hook ports |
 | `report.worker-state` / `report.status-embed` | | ✓ | | Retired |
 | `review.project-list` / `review.daemon-cli` | | ✓ | | Retired |
-| `events.list` | | ✓ | ✓ | CLI shed; `terminal-flood-detect` drain |
+| `events.list` | ✓ | ✓ | | CLI representation shed on some builds; live consumers **port** to alternate telemetry |
 | Axis-4 stores (all) | | | ✓ | Drain before deletion |
 
 ---
@@ -350,7 +360,7 @@ Files under census deny-list (`vendor/**`, etc.) may mention AO in comments; exc
 Every raw discovery from §3 methods is accounted as:
 
 1. A binding row in §5 (axes 1, 3, 4, 5), or
-2. An axis-2 taxonomy row in §4, or
+2. A per-token axis-2 row in [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) (or §4 summary for grouped reference only), or
 3. An explicit exclusion in §7.
 
 **Unaccounted discoveries at inspected revision:** none.

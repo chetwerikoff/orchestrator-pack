@@ -41,7 +41,7 @@ Recorded so discovery hits classify as **non-live consumers** or **`shed`** bind
 | `report.status-embed` | `ao status --reports …` | `retired-surfaces.json` (`ao-status-reports-flag-removed`) | **shed** — pack report store merge |
 | `review.project-list` | `ao review list` | `retired-surfaces.json` (`ao-review-list-project-removed`) | **shed** — `review.runs.aggregate` |
 | `review.daemon-cli` | `ao review run/send/execute`; retired `scripts/ao-review.ps1` | `retired-surfaces.json`; Issue #839 retirement | **shed** — `pack-review-runner.ts` + HTTP trigger |
-| `events.list` (removed CLI) | `ao events list` on builds without events | `retired-surfaces.json` (`ao-events-removed`); `Get-AoEventsDegradedClassification` | **drain** for live consumers still calling it (`terminal-flood-detect.ps1`); CLI surface **shed** |
+| `events.list` (removed CLI) | `ao events list` on builds without events | `retired-surfaces.json` (`ao-events-removed`); `Get-AoEventsDegradedClassification` | **shed** (CLI representation); consumers such as `terminal-flood-detect.ps1` and `agent-orchestrator.yaml.example` **port** to alternate telemetry |
 
 ## Equivalence notes (non-obvious)
 
