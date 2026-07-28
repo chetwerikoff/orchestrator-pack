@@ -30,6 +30,20 @@ export function pathInDeclaredScope(
   if (declaredPaths.includes(path)) {
     return true;
   }
+
+  for (const declared of declaredPaths) {
+    if (
+      declared.endsWith('/')
+      && !declared.endsWith('/**')
+      && !declared.endsWith('/*')
+    ) {
+      const prefix = declared.slice(0, -1);
+      if (path === prefix || path.startsWith(`${prefix}/`)) {
+        return true;
+      }
+    }
+  }
+
   return pathMatchesAnyPattern(path, declaredGlobs);
 }
 
