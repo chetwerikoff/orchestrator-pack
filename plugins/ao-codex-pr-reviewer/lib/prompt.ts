@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadCanonicalReviewContract } from '../../../scripts/lib/pack-pr-review-contract.ts';
 import { formatScopeSection, type ResolvedScopeContext } from './scope_context.ts';
 import type { ReviewSource } from './types.ts';
 
@@ -39,8 +40,10 @@ export function buildReviewPrompt(options: {
     'Do not treat the full repository outside that diff as in scope for findings.',
     '',
   ].join('\n');
+  const packRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
   return template
     .replace('{{BASE_SCOPE_SECTION}}', baseScopeSection)
     .replace('{{SCOPE_SECTION}}', scopeSection)
+    .replace('{{CANONICAL_CONTRACT}}', loadCanonicalReviewContract(packRoot))
     .replace(/\{\{SOURCE\}\}/g, options.source);
 }

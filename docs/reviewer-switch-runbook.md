@@ -1,11 +1,11 @@
-# Switching the local AO reviewer (Codex ↔ Claude Sonnet)
+# Switching the local AO reviewer (GPT ↔ Codex ↔ Claude)
 
 Operator runbook for changing which model runs **local** PR review when the
 orchestrator executes `ao review run … --execute --command …`.
 
 AO 0.9.x does not read a `reviewer:` YAML block. **REVIEW_COMMAND** is a single
 reviewer-agnostic line (`scripts/invoke-pack-review.ps1`). Which executor runs
-is set only by the **`PACK_REVIEWER`** environment variable (`codex` or
+is set only by the **`PACK_REVIEWER`** environment variable (`gpt`, `codex`, or
 `claude`). **User-level** `PACK_REVIEWER` (Windows User environment) is
 sufficient for AO review spawn: `invoke-pack-review.ps1` reads persistent User
 and Machine layers when process scope is empty. Set process-level export before
@@ -13,14 +13,18 @@ and Machine layers when process scope is empty. Set process-level export before
 changing selector or YAML. Restart the IDE when its integrated terminal must
 pick up profile changes unrelated to review spawn.
 
-Both paths use the same pack contract (`prompts/codex_review_prompt.md`,
-`NO_FINDINGS`, structured JSON findings, `plugins/ao-codex-pr-reviewer` parser).
-Only the **dispatch target** behind `invoke-pack-review.ps1` changes.
+Both Codex/Claude paths and GPT use the same pack findings contract
+(`NO_FINDINGS`, structured JSON findings, `plugins/ao-codex-pr-reviewer`
+parser/emitter). GPT inspects the PR through the browser/GitHub read surface and
+returns a terminal payload; **the pack runner remains the sole GitHub publisher**.
+GPT failure, quota/login issues, malformed output, or stale-head rejection do
+**not** auto-switch to Codex — set `PACK_REVIEWER=codex` explicitly for backup.
 
 ## Defaults
 
 | Reviewer | `PACK_REVIEWER` | Dispatched wrapper |
 |----------|-----------------|-------------------|
+| **Browser GPT** (explicit opt-in) | `gpt` | `scripts/run-pack-review-gpt.ts` |
 | **Codex** (example default) | `codex` | `scripts/run-pack-review.ps1` |
 | **Claude Sonnet** (quota / fallback) | `claude` | `scripts/run-pack-review-claude.ps1` |
 
@@ -39,6 +43,24 @@ pack — no persistent-env fallback; unset process scope remains fail-closed.
 Before merge or declaring review clean, run `.\scripts\orchestrator-diagnose.ps1
 -Strict` (live AO) or rely on CI `scripts/invoke-pack-review-strict-gate.ps1`
 (fixture-only).
+
+## Switch to GPT (browser)
+
+1. **Set** `PACK_REVIEWER=gpt` in the environment AO inherits (user profile,
+   service unit, or shell before `ao start`).
+
+2. **Configure browser transport** for the operator machine:
+   - `PACK_GPT_BROWSER_PROFILE` — absolute path to the dedicated automation profile
+   - `PACK_GPT_BROWSER_CDP` — CDP endpoint (default `http://127.0.0.1:9222`)
+   - `PACK_GPT_BROWSER_CHAT_URL` or `PACK_GPT_BROWSER_PROJECT_URL` — target chat or project
+
+3. **Point live YAML** at the reviewer-agnostic entrypoint (`invoke-pack-review.ps1`).
+
+4. **Restart AO** after selector or YAML edits.
+
+5. **Smoke one review** (optional) with `PACK_REVIEWER=gpt`; on failure,
+   `terminationReason` should reference `run-pack-review-gpt.ts`. GPT failure does
+   **not** auto-failover to Codex.
 
 ## Switch to Codex
 
@@ -97,7 +119,7 @@ not use `.ao/` in **REVIEW_COMMAND**.
 
 | Check | Command / signal |
 |-------|------------------|
-| Selector in use | `PACK_REVIEWER` is `codex` or `claude` before `ao start` |
+| Selector in use | `PACK_REVIEWER` is `gpt`, `codex`, or `claude` before `ao start` |
 | Rules reloaded | Orchestrator restarted after selector or YAML edit |
 | Executor matches selector | Latest `terminationReason` names the wrapper for `PACK_REVIEWER` |
 | Clean vs failed | `ao review list <project> --json` — only `clean` + `findingCount: 0` is clean |
@@ -108,10 +130,11 @@ not use `.ao/` in **REVIEW_COMMAND**.
 
 | Symptom | Likely cause | Action |
 |---------|----------------|--------|
-| Review exits immediately, PACK_REVIEWER message | Selector unset/invalid in all layers | Set User or process `PACK_REVIEWER` to `codex` or `claude` |
+| Review exits immediately, PACK_REVIEWER message | Selector unset/invalid in all layers | Set User or process `PACK_REVIEWER` to `gpt`, `codex`, or `claude` |
 | Wrong model ran | Selector not set before `ao start` | Fix env, restart AO; check `terminationReason` vs `PACK_REVIEWER` |
+| GPT browser turn blocked/failed | Profile incidents or transport ambiguity | Run `npm run chatgpt-browser-turn -- status/list`; resolve `possible_delivery` before retry |
 | Strict gate selector-mismatch | Drift or wrong env | Align `PACK_REVIEWER` with wrapper named in `terminationReason` |
-| Codex usage limit | Quota | Set `PACK_REVIEWER=claude` temporarily |
+| Codex usage limit | Quota | Set `PACK_REVIEWER=claude` or `gpt` temporarily |
 | Orchestrator never picks new reviewer | No restart | `ao stop` / `ao start` after selector change |
 
 ## Operator scripts (checklist + verify)
