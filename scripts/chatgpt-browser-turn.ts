@@ -19,7 +19,7 @@ import {
   type DestinationReservation,
   type DomainLock,
 } from './chatgpt-browser-turn/coordination.ts';
-import { closeOwnedTurnPage, releaseCdpBrowser } from './chatgpt-browser-turn/browser-session.ts';
+import { closeOwnedTurnPage, connectCdpBrowser, releaseCdpBrowser, trimExcessCdpPageTargets } from './chatgpt-browser-turn/browser-session.ts';
 import { probeProfileReady } from './chatgpt-browser-turn/profile-probe.ts';
 import { publicationStatus, publishReply } from './chatgpt-browser-turn/publication.ts';
 import { runtimeCapabilityBinding } from './chatgpt-browser-turn/runtime-binding.ts';
@@ -399,7 +399,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     const chromium = loadChromium();
-    browser = await chromium.connectOverCDP(config.cdp);
+    browser = await connectCdpBrowser(chromium, config.cdp);
     const browserProvenance = String(browser.version?.() ?? 'chromium-cdp');
     if (capability.state === 'ok' && capability.capability?.browser_provenance !== browserProvenance) {
       downgradeCapability(profileKey);
@@ -773,8 +773,9 @@ async function runGateBCharacterizationCommand(args: ParsedArgs): Promise<number
   };
   let browser: Awaited<ReturnType<ReturnType<typeof loadChromium>['connectOverCDP']>> | undefined;
   try {
+    await trimExcessCdpPageTargets(config.cdp, { urlIncludes: 'chatgpt.com', keep: 3 });
     const chromium = loadChromium();
-    browser = await chromium.connectOverCDP(config.cdp);
+    browser = await connectCdpBrowser(chromium, config.cdp);
     const opened = await openGateBCharacterizationPage(browser, chatUrl);
     const result = bindGateBCharacterizationRecord(
       await runGateBCharacterization(opened.page),

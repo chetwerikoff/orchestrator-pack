@@ -180,6 +180,15 @@ export async function runGateBCharacterization(page: {
     });
   }
 
+  const probePage = page as { goto?: (url: string, options?: { waitUntil?: string }) => Promise<unknown> };
+  if (typeof probePage.goto === 'function') {
+    try {
+      await probePage.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded' });
+    } catch {
+      // Passive observation may still succeed on an already-active ChatGPT surface.
+    }
+  }
+
   const observedCdpTargets = new WeakSet<object>();
   const characterizationPages: Array<{
     close?: () => Promise<unknown>;
