@@ -1,0 +1,20 @@
+{
+  "issue_number": 1077,
+  "iteration_id": "issue-1077-hotfix",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-28T10:13:03.506Z",
+  "baseline": {
+    "commit_sha": "35c2bebd9ba80ec826e827788ad35c90e0ef50fc",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:a50438ea278d834ca41280fce4dbe9c94e0acb7e79aab1dc074b3ef61b2f9f2b"
+  },
+  "declared_paths": [
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts"
+  ],
+  "declared_globs": [
+    "scripts/toolchain/chatgpt-browser-turn*.test.ts"
+  ],
+  "amendments": []
+}
