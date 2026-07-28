@@ -794,6 +794,50 @@ describe('issue 1025 Half B finished reply without terminal', () => {
     });
   });
 
+  it('AC5 node-local finish_details:stop without whole-turn terminal still early-exits', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = finishedReplyFixture({
+      serviceFrames: [
+        {
+          type: 'input_message',
+          input_message: {
+            id: own,
+            author: { role: 'user' },
+            content: { content_type: 'text', parts: ['payload'] },
+          },
+        },
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: assistantId,
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: false,
+              metadata: { finish_details: { type: 'stop' } },
+              content: { content_type: 'text', parts: ['finished reply text'] },
+            },
+          },
+        },
+      ],
+    });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await turn;
+    expect(result).toMatchObject({
+      state: 'recovery_required',
+      cause: 'reply_finished_terminal_unproven',
+      possibleDelivery: true,
+      userMessageId: own,
+      assistantMessageId: assistantId,
+    });
+    expect(result.reply).toBeUndefined();
+  });
+
   it('AC5 terminal evidence arriving during finished-reply probes wins over recovery exit', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     __testTiming.now = () => Date.now();

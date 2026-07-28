@@ -358,8 +358,8 @@ export function hasTerminalWitnessActivityForAssistant(
 ): boolean {
   const metadata = state.terminalByMessageId.get(assistantMessageId);
   if (!metadata) return false;
+  if (nodeLocalStopWithoutWholeTurn(metadata)) return false;
   return metadata.endTurn === true
-    || metadata.finishDetailsType !== undefined
     || (metadata.status !== undefined && metadata.status !== 'in_progress');
 }
 
