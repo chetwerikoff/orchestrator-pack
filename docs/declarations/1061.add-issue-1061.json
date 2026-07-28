@@ -7,18 +7,21 @@
   "baseline": {
     "commit_sha": "cd07c08e698e01a3ddd1dbd246a555ca93be8bc7",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:4094a0738679e31484dbee88426cff249e9321b30ce8a9523cd3a9fab811f5c7"
+    "active_scope_hash": "sha256:fe0af0c6989e3375b6f1e189f92489d791bbb38a592cbcc070c8a5621ca2ed0b"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
     "AGENTS.md",
+    "docs/declarations/1061.add-issue-1061.json",
     "docs/worker-smoke-testing.md",
+    "scripts/draft-discipline.d.mts",
     "scripts/draft-discipline.mjs",
     "scripts/lib/orca-cli.ts",
     "scripts/lib/worker-smoke-core.ts",
     "scripts/pack-worker-report.ps1",
     "scripts/toolchain/raw-child-process-baseline.json",
-    "scripts/worker-smoke-plan.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
     "scripts/worker-smoke-run",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts",
@@ -29,5 +32,25 @@
     "tests/fixtures/worker-smoke/record-only-na-plan.md"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:4094a0738679e31484dbee88426cff249e9321b30ce8a9523cd3a9fab811f5c7",
+      "new_active_scope_hash": "sha256:fe0af0c6989e3375b6f1e189f92489d791bbb38a592cbcc070c8a5621ca2ed0b",
+      "changed": {
+        "added": [
+          "docs/declarations/1061.add-issue-1061.json",
+          "scripts/draft-discipline.d.mts",
+          "scripts/vitest-ci-lanes.config.json",
+          "scripts/vitest-runtime-history.json"
+        ],
+        "removed": [
+          "scripts/worker-smoke-plan.mjs"
+        ]
+      },
+      "reason": "sync declaration with final PR scope",
+      "actor": "local",
+      "timestamp": "2026-07-28T06:31:27.865Z",
+      "applied": true
+    }
+  ]
 }
