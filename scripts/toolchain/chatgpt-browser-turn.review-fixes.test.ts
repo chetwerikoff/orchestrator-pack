@@ -734,11 +734,12 @@ describe('issue 1025 Half B finished reply without terminal', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     __testTiming.now = () => Date.now();
     const fixture = finishedReplyFixture({
+      pageLevelStopButton: true,
       assistants: [{
         id: assistantId,
         parent: own,
         text: 'finished reply text',
-        streaming: true,
+        streaming: false,
       }],
     });
     fixture.page.waitForTimeout = async (ms: number) => {
@@ -749,6 +750,39 @@ describe('issue 1025 Half B finished reply without terminal', () => {
     const result = await turn;
     expect(result.cause).not.toBe('reply_finished_terminal_unproven');
     expect(result.state).toBe('stream_timeout');
+  });
+
+  it('AC5 terminal evidence arriving during finished-reply probes wins over recovery exit', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = finishedReplyFixture({
+      lateTerminalFramesOnPoll: {
+        poll: 1,
+        frames: [{
+          type: 'delta',
+          v: {
+            message: {
+              id: assistantId,
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: true,
+              metadata: { finish_details: { type: 'stop' } },
+            },
+          },
+        }],
+      },
+    });
+    const originalWaitForTimeout = fixture.page.waitForTimeout?.bind(fixture.page);
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+      if (originalWaitForTimeout) await originalWaitForTimeout(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await turn;
+    expect(result.state).toBe('ok');
+    expect(result.cause).toBe('completed');
+    expect(result.cause).not.toBe('reply_finished_terminal_unproven');
   });
 
   it('AC7 suppresses finished-reply diagnosis while awaiting fresh terminal after continuation', async () => {

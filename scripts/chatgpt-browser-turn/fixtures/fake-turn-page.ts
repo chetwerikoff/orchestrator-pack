@@ -50,6 +50,8 @@ export interface FakeTurnPageOptions {
   readonly composerPressDelayMs?: number;
   readonly requestObserverCoverage?: 'complete' | 'incomplete';
   readonly foreignDomUserIdsOnPoll?: readonly string[];
+  readonly pageLevelStopButton?: boolean;
+  readonly lateTerminalFramesOnPoll?: { readonly poll: number; readonly frames: readonly Record<string, unknown>[] };
 }
 
 
@@ -270,6 +272,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   let continueClicked = false;
   let pendingTerminalFrames: readonly Record<string, unknown>[] | undefined;
   let postClickServiceEmitted = false;
+  let waitForTimeoutPolls = 0;
   let postClickFrameIndex = 0;
   const emitPostArmObservationTraffic = async (): Promise<void> => {
     if (!observeComplete) return;
@@ -433,7 +436,10 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
         };
       }
       if (selector === '[data-testid="send-button"]') return send;
-      if (selector === '[data-testid="stop-button"]') return emptyLocator();
+      if (selector === '[data-testid="stop-button"]') {
+        if (!options.pageLevelStopButton) return emptyLocator();
+        return { ...emptyLocator(), count: async () => 1, first: () => ({ ...emptyLocator(), count: async () => 1 }) };
+      }
       if (selector === '[data-message-author-role]') return { count: async () => messages.length, nth: (index: number) => messages[index] ?? emptyLocator() };
       if (selector === '[data-message-author-role="user"]') return selectMessages('user');
       if (selector === '[data-message-author-role="assistant"]') return selectMessages('assistant');
@@ -447,6 +453,10 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     },
     keyboard: { press: async () => {}, insertText: async () => {} },
     waitForTimeout: async () => {
+      waitForTimeoutPolls++;
+      if (options.lateTerminalFramesOnPoll?.poll === waitForTimeoutPolls) {
+        await emitServiceFrames(options.lateTerminalFramesOnPoll.frames);
+      }
       for (const message of messages) message.advanceText?.();
       if (options.continueGenerating?.growthSequence?.length) applyContinueGrowth();
       await maybeEmitContinuationTerminal();

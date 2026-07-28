@@ -1382,9 +1382,17 @@ async function assistantText(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_M
   return serializeSemanticNodes(await semanticNodes(locator, waitMs));
 }
 
-async function assistantIsActivelyGenerating(locator: any, waitSource?: OperationWaitSource): Promise<boolean> {
+async function assistantIsActivelyGenerating(page: any, locator: any, waitSource?: OperationWaitSource): Promise<boolean> {
   const waitMs = resolveOperationWaitMs(waitSource);
   if (waitMs <= 0) return true;
+  try {
+    const pageStop = page.locator('[data-testid="stop-button"], button[aria-label*="Stop"]').first();
+    if (typeof pageStop?.count === 'function' && (await boundedLocatorCount(pageStop, waitMs)) > 0) {
+      return true;
+    }
+  } catch {
+    /* fall through to locator-scoped generation signals */
+  }
   const streaming = await readLocatorAttribute(locator, 'data-is-streaming', waitSource);
   if (streaming === 'true') return true;
   const busy = await readLocatorAttribute(locator, 'aria-busy', waitSource);
@@ -1865,7 +1873,7 @@ export async function sendTurn(
         if (replyWait > 0) {
           const generating = await boundedPlaywrightOperation(
             replyWait,
-            () => assistantIsActivelyGenerating(finishedLocator, () => replyWait),
+            () => assistantIsActivelyGenerating(page, finishedLocator, () => replyWait),
           ).catch(() => true);
           const finishedContent = await boundedPlaywrightOperation(
             replyWait,
@@ -1882,6 +1890,22 @@ export async function sendTurn(
             if (finishedReplyStablePolls >= FINISHED_REPLY_STABILITY_POLLS) {
               if (!finishedReplyPredicateAt) finishedReplyPredicateAt = wallClock();
               if (wallClock() - finishedReplyPredicateAt <= FINISHED_TERMINAL_UNPROVEN_MAX_MS) {
+                const latestTerminal = resolveWholeTurnTerminal(userId, network.terminal);
+                if (latestTerminal.state === 'failure') {
+                  return {
+                    state: 'no_reply',
+                    cause: latestTerminal.cause,
+                    possibleDelivery: true,
+                    userMessageId: userId,
+                    assistantMessageId: latestTerminal.assistantMessageId,
+                  };
+                }
+                if (latestTerminal.state === 'success') {
+                  finishedReplyStablePolls = 0;
+                  lastFinishedReplyContent = '';
+                  finishedReplyPredicateAt = undefined;
+                  continue;
+                }
                 return {
                   state: 'recovery_required',
                   cause: 'reply_finished_terminal_unproven',
