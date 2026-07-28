@@ -82,6 +82,22 @@ function captureStderr(run: () => void): string {
   return stderr;
 }
 
+
+async function importRunCliWithConnectDegraded(): Promise<typeof import('../chatgpt-browser-turn.ts')> {
+  const { BrowserOperationTimeoutError } = await import('../chatgpt-browser-turn/ui-adapter.ts');
+  vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
+    return {
+      ...actual,
+      verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'verified', evidence: 'verified' })),
+      loadChromium: vi.fn(() => ({
+        connectOverCDP: vi.fn(async () => { throw new BrowserOperationTimeoutError('connect_over_cdp'); }),
+      })),
+    };
+  });
+  return import('../chatgpt-browser-turn.ts');
+}
+
 async function importRunCliWithUiAdapterMock(throwMessage: string): Promise<typeof import('../chatgpt-browser-turn.ts')> {
   vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
@@ -557,6 +573,35 @@ function turnArgv(outputPath: string): string[] {
     '--chat-url', 'https://chatgpt.com/c/fixture',
   ];
 }
+
+
+  it('issue 1065: connect_over_cdp maps turn to cdp_degraded with diagnostics', async () => {
+    const input = join(root, 'message-1065-cdp.txt');
+    const output = join(root, 'reply-1065-cdp.txt');
+    writeFileSync(input, 'payload\n');
+    const { runCli } = await importRunCliWithConnectDegraded();
+    let stdout = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    const exitCode = await runCli([
+      'turn',
+      '--profile', profilePath,
+      '--cdp', 'http://127.0.0.1:9222',
+      '--input', input,
+      '--output', output,
+      '--chat-url', 'https://chatgpt.com/c/example',
+    ]);
+    process.stdout.write = originalStdout;
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(exitCode).toBe(13);
+    expect(body.cause).toBe('cdp_degraded');
+    expect(body.driver_diagnostic_id).toBeTruthy();
+    const stored = readDriverDiagnostic(profileKey, String(body.driver_diagnostic_id));
+    expect(stored?.cause).toBe('cdp_degraded');
+  });
 
 describe('issue 1007 browser-session helpers', () => {
   it('closes an owned page when not retained', async () => {

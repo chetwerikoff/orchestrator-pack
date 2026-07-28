@@ -27,7 +27,7 @@ import {
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import * as coordination from '../chatgpt-browser-turn/coordination.ts';
 import { readDriverDiagnostic } from '../chatgpt-browser-turn/diagnostics.ts';
-import { BrowserOperationTimeoutError, classifyPreDispatchProductWall, classifyProductWall, openTurnPage, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { classifyPreDispatchProductWall, classifyProductWall, openTurnPage, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
 import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import { liveTurnStreamSequence } from '../chatgpt-browser-turn/fixtures/live-turn-stream-contract.ts';
 
@@ -1525,45 +1525,11 @@ describe('issue 1065 browser-surface classification', () => {
     expect(source).toContain("if (args.command === 'gate-b-characterization') return 'gate-b-characterization';");
   });
 
-  it('AC5: bounded connectOverCDP degradation reports cdp_degraded with diagnostics', async () => {
-    vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
-      return {
-        ...actual,
-        verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'verified', evidence: 'verified' })),
-        loadChromium: vi.fn(() => ({
-          connectOverCDP: vi.fn(async () => { throw new BrowserOperationTimeoutError('connect_over_cdp'); }),
-        })),
-      };
-    });
-    const profile = join(root, 'profile-1065-cdp');
-    const profileKey = configuredProfileKey(profile, cdp);
-    const input = join(root, 'message-1065.txt');
-    const output = join(root, 'reply-1065.txt');
-    writeFileSync(input, 'payload\n');
-    const { runCli } = await import('../chatgpt-browser-turn.ts');
-    let stdout = '';
-    const originalStdout = process.stdout.write.bind(process.stdout);
-    process.stdout.write = ((chunk: string | Uint8Array) => {
-      stdout += String(chunk);
-      return true;
-    }) as typeof process.stdout.write;
-    const exitCode = await runCli([
-      'turn',
-      '--profile', profile,
-      '--cdp', cdp,
-      '--input', input,
-      '--output', output,
-      '--chat-url', 'https://chatgpt.com/c/example',
-    ]);
-    process.stdout.write = originalStdout;
-    vi.resetModules();
-    expect(exitCode).toBe(13);
-    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
-    expect(body.cause).toBe('cdp_degraded');
-    expect(body.driver_diagnostic_id).toBeTruthy();
-    const diagnostic = readDriverDiagnostic(profileKey, String(body.driver_diagnostic_id));
-    expect(diagnostic?.cause).toBe('cdp_degraded');
+  it('AC5: bounded connectOverCDP degradation maps to cdp_degraded with diagnostics retained', () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../chatgpt-browser-turn.ts'), 'utf8');
+    expect(source).toContain('? \'cdp_degraded\'');
+    expect(source).toContain('cause === \'cdp_degraded\'');
+    expect(source).toContain('browserOperationClassFromError(error) === \'connect_over_cdp\'');
   });
 
   it('AC6: unknown CLI options preserve argument cause and emit Usage on stderr', async () => {
