@@ -332,7 +332,7 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
           cap('pass-02-architectural-lens.capture.txt', 1_200, 'architect lens evidence without reviewer marker'),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
         [],
       );
@@ -475,7 +475,7 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1')),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
@@ -488,7 +488,7 @@ describe('finding ledger review economics #975', () => {
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1', { contest: 'contested' })),
           cap('pass-03-architectural-lens.capture.txt', 1_300, currentLens('S1', { contest: 'none' })),
-          cap('pass-04-architectural-final.capture.txt', 1_400, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-04-architectural.capture.txt', 1_400, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
@@ -500,7 +500,7 @@ describe('finding ledger review economics #975', () => {
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1', { contest: 'contested' })),
           cap('pass-03-architectural-lens.capture.txt', 1_300, currentLens('S1', { contest: 'contest-withdrawn' })),
-          cap('pass-04-architectural-final.capture.txt', 1_400, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-04-architectural.capture.txt', 1_400, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
@@ -510,7 +510,7 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, `${currentLens('S1')}\n${currentLens('S1', { contest: 'contested' })}`),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
@@ -522,7 +522,7 @@ describe('finding ledger review economics #975', () => {
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1')),
           cap('pass-03-architectural-lens.capture.txt', 1_300, 'm3-protected: id=S1 | revision=r3 | contest=unknown | outcome=none | evidence= | why-now='),
-          cap('pass-04-architectural-final.capture.txt', 1_400, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-04-architectural.capture.txt', 1_400, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
@@ -539,7 +539,7 @@ describe('finding ledger review economics #975', () => {
             evidence: 'The changed path is out of scope under allowed_roots.',
             whyNow: 'This task owns that path change.',
           })),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
         [row('S1', { type: 'scope-violation' })],
       );
@@ -549,7 +549,7 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, zeroSignal),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1', { outcome: 'non-activate' })),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', disposition: 'rejected', rejectReason: 'no real protected defect' })],
       );
@@ -559,7 +559,7 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, nonZero),
           cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1')),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
         ],
         [row('S1', { type: 'scope-violation', protectedActivation: authorActivation, architectPending: true })],
       );
@@ -620,9 +620,9 @@ describe('finding ledger review economics #975', () => {
     it('requires post-adoption pre-lens re-entry and reuses the anchor across same-episode relenses', () => {
       const preAdoption = finalRun(
         [
-          cap('pass-01-architectural.capture.txt', 500, 'NO_FINDINGS'),
+          cap('pass-01-competitive.capture.txt', 500, markedClean()),
           cap('pass-02-architectural-lens.capture.txt', 700, 'first lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_200, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 900, markedClean()),
         ],
         [],
       );
@@ -633,10 +633,10 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 500, 'NO_FINDINGS'),
           cap('pass-02-architectural-lens.capture.txt', 700, 'first lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_200, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_200, markedClean()),
           cap('pass-04-architectural.capture.txt', 1_300, markedClean()),
           cap('pass-05-architectural-lens.capture.txt', 1_400, 'new segment lens'),
-          cap('pass-06-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-06-architectural.capture.txt', 1_500, markedClean()),
         ],
         [],
       );
@@ -646,9 +646,9 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
           cap('pass-02-architectural-lens.capture.txt', 1_200, 'first lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_300, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
           cap('pass-04-architectural-lens.capture.txt', 1_400, 'newer same-episode lens'),
-          cap('pass-05-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-05-architectural.capture.txt', 1_500, markedClean()),
         ],
         [],
       );
@@ -660,9 +660,9 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
           cap('pass-02-architectural-lens.capture.txt', 1_200, 'first lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_300, markedFinding('POST1', { candidate: 'yes', clean: false })),
+          cap('pass-03-architectural.capture.txt', 1_300, markedFinding('POST1', { candidate: 'yes', clean: false })),
           cap('pass-04-architectural-lens.capture.txt', 1_400, 'newer lens'),
-          cap('pass-05-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-05-architectural.capture.txt', 1_500, markedClean()),
         ],
         [row('POST1', { 'simplification-cut-candidate': true })],
       );
@@ -672,9 +672,9 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, markedFinding('CUT1', { candidate: 'yes', clean: false })),
           cap('pass-02-architectural-lens.capture.txt', 1_200, 'first lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_300, markedFinding('CUT1')),
+          cap('pass-03-architectural.capture.txt', 1_300, markedFinding('CUT1')),
           cap('pass-04-architectural-lens.capture.txt', 1_400, 'newer lens'),
-          cap('pass-05-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-05-architectural.capture.txt', 1_500, markedClean()),
         ],
         [row('CUT1')],
       );
@@ -693,9 +693,9 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
           cap('pass-02-architectural-lens.capture.txt', 1_200, 'initial lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_300, nomination),
+          cap('pass-03-architectural.capture.txt', 1_300, nomination),
           cap('pass-04-architectural-lens.capture.txt', 1_400, currentLens('PF1', { contest: 'none' })),
-          cap('pass-05-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-05-architectural.capture.txt', 1_500, markedClean()),
         ],
         [row('PF1', { type: 'scope-violation', protectedActivation: authorActivation })],
       );
@@ -710,13 +710,13 @@ describe('finding ledger review economics #975', () => {
         [
           cap('pass-01-architectural.capture.txt', 1_100, markedClean()),
           cap('pass-02-architectural-lens.capture.txt', 1_200, 'initial lens'),
-          cap('pass-03-architectural-final.capture.txt', 1_300, zeroNomination),
+          cap('pass-03-architectural.capture.txt', 1_300, zeroNomination),
           cap('pass-04-architectural-lens.capture.txt', 1_400, currentLens('PF1', {
             outcome: 'activate',
             evidence: 'The proposed path is out of scope under allowed_roots.',
             whyNow: 'The current task owns the proposed path change.',
           })),
-          cap('pass-05-architectural-final.capture.txt', 1_500, 'review-economics-contract: v1\nNO_FINDINGS'),
+          cap('pass-05-architectural.capture.txt', 1_500, markedClean()),
         ],
         [row('PF1', { type: 'scope-violation' })],
       );
@@ -734,6 +734,64 @@ describe('finding ledger review economics #975', () => {
     expect(result.errors.join('\n')).toContain('existing stage authority');
   });
 });
+
+
+  describe('#1062 terminal GPT guard realignment', () => {
+    it('resolves final-acceptance M5 from terminal architectural without architectural-lens', () => {
+      const result = finalRun(
+        [cap('pass-01-architectural.capture.txt', 1_100, markedClean())],
+        [],
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    });
+
+    it('accepts a protected nomination first present in terminal GPT when author activation is valid', () => {
+      const nomination = markedFinding('S1', {
+        type: 'scope-violation',
+        evidence: 'The proposed file is out of scope under allowed_roots.',
+        recommendation: 'Keep the implementation in the declared path.',
+      });
+      const result = finalRun(
+        [
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'initial lens without S1 record'),
+          cap('pass-03-architectural.capture.txt', 1_300, nomination),
+        ],
+        [row('S1', { type: 'scope-violation', protectedActivation: authorActivation })],
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    });
+
+    it('keeps pre-existing architectRequired binding at final acceptance without a post-terminal lens record', () => {
+      const result = finalRun(
+        [
+          cap('pass-01-architectural.capture.txt', 1_100, markedFinding('S1', {
+            type: 'scope-violation',
+            evidence: 'The proposed file is out of scope under allowed_roots.',
+          })),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'initial lens'),
+          cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
+        ],
+        [row('S1', { type: 'scope-violation', architectRequired: true })],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('requires current architect adjudication');
+    });
+
+    it('rejects final acceptance when terminal architectural is stale relative to the latest lens', () => {
+      const result = finalRun(
+        [
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural.capture.txt', 1_150, markedClean()),
+          cap('pass-03-architectural-lens.capture.txt', 1_200, 'first lens'),
+          cap('pass-04-architectural-lens.capture.txt', 1_400, 'newer lens'),
+        ],
+        [],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('cannot resolve a terminal architectural M5 anchor');
+    });
+  });
 
 describe('legacy finding-ledger behavior remains default', () => {
   it('still rejects protected finding disposition rejected without #975 phase', () => {

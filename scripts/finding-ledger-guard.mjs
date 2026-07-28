@@ -802,7 +802,14 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
       continue;
     }
     if (!lensCurrent) {
-      errors.push(`review-economics: protected nomination ${finding.id} has unknown/stale architect contest state for revision ${currentRevision}`);
+      if (row.architectRequired) {
+        errors.push(`review-economics: protected nomination ${finding.id} requires current architect adjudication`);
+        continue;
+      }
+      if (validAuthorActivation) {
+        if (row.disposition !== 'addressed') errors.push(`review-economics: author-activated protected nomination ${finding.id} must be disposition addressed`);
+        continue;
+      }
       continue;
     }
     if (architectOutcome === 'activate') {
@@ -830,11 +837,13 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
 function selectM5Anchor(metadata, phase) {
   if (phase === 'pre-lens') return [...metadata].reverse().find((meta) => PRE_LENS_REVIEWER_STAGES.has(meta.stage)) ?? null;
   const latestLensIndex = metadata.map((meta) => meta.stage).lastIndexOf('architectural-lens');
-  if (latestLensIndex < 0) return null;
-  for (let index = latestLensIndex - 1; index >= 0; index -= 1) {
-    if (PRE_LENS_REVIEWER_STAGES.has(metadata[index].stage)) return metadata[index];
+  if (latestLensIndex >= 0) {
+    for (let index = metadata.length - 1; index > latestLensIndex; index -= 1) {
+      if (metadata[index].stage === 'architectural') return metadata[index];
+    }
+    return null;
   }
-  return null;
+  return [...metadata].reverse().find((meta) => meta.stage === 'architectural') ?? null;
 }
 
 function validateM5(metadata, ledger, parsedByName, options, errors) {
@@ -845,7 +854,11 @@ function validateM5(metadata, ledger, parsedByName, options, errors) {
   }
   const anchor = selectM5Anchor(metadata, options.phase);
   if (!anchor) {
-    errors.push(`review-economics: ${options.phase} cannot resolve a terminal pre-lens M5 anchor`);
+    if (options.phase === 'final-acceptance') {
+      errors.push('review-economics: final-acceptance cannot resolve a terminal architectural M5 anchor');
+    } else {
+      errors.push('review-economics: pre-lens progression cannot resolve a terminal pre-lens M5 anchor');
+    }
     return;
   }
   if (anchor.timestampMs === null || !Number.isFinite(adoptionTimestampMs)) return;
