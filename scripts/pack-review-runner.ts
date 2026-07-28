@@ -64,6 +64,8 @@ import {
   type PackReviewer,
   type PackReviewerLayerOverrides,
 } from './lib/resolve-pack-reviewer.ts';
+import { resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
+export { resolveRepositorySlug };
 
 interface StartInput {
   projectId?: string;
@@ -254,19 +256,6 @@ async function runGit(repoRoot: string, args: readonly string[], label: string):
   }), label);
 }
 
-export async function resolveRepositorySlug(repoRoot: string): Promise<string> {
-  const result = await runProcess({
-    command: 'gh',
-    args: ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'],
-    cwd: repoRoot,
-    inheritParentEnv: true,
-    allowEmptyStdout: false,
-    timeoutMs: 30_000,
-  });
-  const slug = await requireProcess(result, 'gh repo view');
-  if (!/^[^/\s]+\/[^/\s]+$/.test(slug)) throw new Error(`gh repo view returned invalid repository slug '${slug}'`);
-  return slug;
-}
 
 async function resolveCurrentPrHead(repoRoot: string, repoSlug: string, prNumber: number): Promise<string> {
   const result = await runProcess({
