@@ -29,6 +29,7 @@ import * as coordination from '../chatgpt-browser-turn/coordination.ts';
 import { readDriverDiagnostic } from '../chatgpt-browser-turn/diagnostics.ts';
 import { classifyProductWall, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
 import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
+import { liveTurnStreamSequence } from '../chatgpt-browser-turn/fixtures/live-turn-stream-contract.ts';
 
 let root = '';
 let profileKey = '';
@@ -700,6 +701,33 @@ describe('issue 1025 Half B finished reply without terminal', () => {
     });
     expect(result.reply).toBeUndefined();
     expect(Date.now() - started).toBeLessThanOrEqual(30_000);
+  });
+
+  it('AC5 live in_progress service shape without resolvable terminal still early-exits', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const turnId = 'turn-live-12345678';
+    const liveFrames = liveTurnStreamSequence(own, assistantId, { turnId }, { replyText: 'finished reply text' });
+    const unresolvedTerminalFrames = liveFrames.filter((frame) => {
+      const payload = (frame as { payload?: { payload?: { encoded_item?: string } } }).payload?.payload?.encoded_item ?? '';
+      return !payload.includes('"o":"patch"') || !payload.includes('finished_successfully');
+    });
+    const fixture = finishedReplyFixture({
+      serviceFrames: unresolvedTerminalFrames,
+    });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await turn;
+    expect(result).toMatchObject({
+      state: 'recovery_required',
+      cause: 'reply_finished_terminal_unproven',
+      possibleDelivery: true,
+      userMessageId: own,
+      assistantMessageId: assistantId,
+    });
   });
 
   it('AC6 stable text with active generation UI does not early-exit', async () => {

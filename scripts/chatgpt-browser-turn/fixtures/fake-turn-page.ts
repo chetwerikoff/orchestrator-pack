@@ -34,6 +34,7 @@ export interface FakeTurnPageOptions {
   readonly serviceObserveDispatch?: boolean;
   readonly preDispatchServiceFrames?: readonly Record<string, unknown>[];
   readonly preClickRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
+  readonly postDispatchDelayedRequests?: readonly { readonly url: string; readonly method?: string; readonly postData?: string }[];
   readonly postClickRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
   readonly postClickServiceFrames?: readonly Record<string, unknown>[];
   readonly postClickRawSseBodies?: readonly string[];
@@ -290,8 +291,12 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   };
 
   const emitPostClickForeign = async (): Promise<void> => {
+    if (!sent) return;
     if (postClickServiceEmitted) return;
     postClickServiceEmitted = true;
+    for (const req of options.postDispatchDelayedRequests ?? []) {
+      await emit('request', makeDispatchRequest(req.url, req.postData, req.method ?? 'GET'));
+    }
     for (const req of options.postClickRequests ?? []) {
       await emit('request', makeDispatchRequest('https://chatgpt.com/backend-api/f/conversation', JSON.stringify({
         ...(req.turnExchangeId ? { metadata: { turn_exchange_id: req.turnExchangeId } } : {}),

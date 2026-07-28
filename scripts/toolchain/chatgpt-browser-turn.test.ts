@@ -1990,8 +1990,10 @@ async function issue1025ExhaustSubmittedTurnWindow(
   fixture: ReturnType<typeof fakeTurnPage>,
   config: BrowserConfig = issue1025BaseConfig(),
 ) {
+  const originalWaitForTimeout = fixture.page.waitForTimeout?.bind(fixture.page);
   fixture.page.waitForTimeout = async (ms: number) => {
     await vi.advanceTimersByTimeAsync(ms);
+    if (originalWaitForTimeout) await originalWaitForTimeout(ms);
   };
   const turn = sendTurn(fixture.page, 'payload', config);
   await vi.advanceTimersByTimeAsync(31_000);
@@ -2166,6 +2168,19 @@ describe('issue 1025 Half A proven non-delivery', () => {
       dispatchObservation: issue1025CompleteObservation,
     });
     const result = await issue1025ExhaustSubmittedTurnWindow(fixture);
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC3 broad legacy dispatch witness before recognized submission still blocks proven non-delivery', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1025ZeroActivityFixture({
+      postDispatchDelayedRequests: [{ url: 'https://chatgpt.com/backend-api/messages', method: 'GET' }],
+      postClickRequests: [{ userId: 'user-owned-12345678' }],
+    });
+    const result = await issue1025ExhaustSubmittedTurnWindow(fixture);
+    expect(result.state).toBe('recovery_required');
     expect(result.cause).toBe('submitted_turn_id_unproven');
     expect(result.possibleDelivery).toBe(true);
   });

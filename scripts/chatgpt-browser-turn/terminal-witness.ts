@@ -360,7 +360,7 @@ export function hasTerminalWitnessActivityForAssistant(
   if (!metadata) return false;
   return metadata.endTurn !== undefined
     || metadata.finishDetailsType !== undefined
-    || metadata.status !== undefined;
+    || (metadata.status !== undefined && metadata.status !== 'in_progress');
 }
 
 export function deltaPatchOrStreamCompleteWithoutTerminal(

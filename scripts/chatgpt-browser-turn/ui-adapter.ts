@@ -1174,7 +1174,7 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     try {
       if (!state.dispatchArmed) return;
       if (!state.dispatchRequestObserverCoverageComplete) return;
-      if (!state.ingestingDispatchServiceFrames && !(state.turnDispatchCommitted && !state.dispatchRequestWitnessed)) return;
+      if (!state.ingestingDispatchServiceFrames && !(state.turnDispatchCommitted && !state.recognizedSubmissionRequestIssued)) return;
       witnessDispatchRequest(state, request);
     } catch { /* missing request witness remains fail-closed */ }
   });
