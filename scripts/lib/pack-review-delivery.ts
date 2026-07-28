@@ -10,6 +10,7 @@ import {
   type PackReviewDeliveryChannel,
   type PackReviewDeliveryOutcome,
   type PackReviewJournalOutcome,
+  isPackReviewStaleTerminalRun,
   type PackReviewRunRecord,
   type PackReviewRunStatus,
   type PackReviewStoreOptions,
@@ -58,9 +59,9 @@ export function packReviewRequiredStatusStaleReconciliationComplete(run: PackRev
 export function packReviewRequiredStatusNeedsStaleReconciliation(run: PackReviewRunRecord): boolean {
   if (packReviewRequiredStatusStaleReconciliationComplete(run)) return false;
   const outcome = run.deliveryOutcomes?.requiredStatus;
-  if (!outcome) return false;
   const pendingKey = packReviewPendingRequiredStatusIdempotencyKey(run);
   const staleKey = packReviewStaleRequiredStatusIdempotencyKey(run);
+  if (!outcome) return isPackReviewStaleTerminalRun(run);
   if (outcome.idempotencyKey === pendingKey && outcome.state === 'succeeded') return true;
   if (outcome.idempotencyKey === staleKey && outcome.state === 'failed') return true;
   return false;
@@ -147,6 +148,12 @@ interface RecordPendingReviewOptions extends PackReviewStoreOptions {
   run: PackReviewRunRecord;
   writeRequiredStatus: PackReviewRequiredStatusWriter;
   clock?: () => Date;
+}
+
+interface RecordStaleRequiredStatusOptions extends RecordPendingReviewOptions {
+  authorizeWrite?: () => boolean | Promise<boolean>;
+  repairSupersededWrite?: () => void | Promise<void>;
+  pauseBeforeWrite?: () => void | Promise<void>;
 }
 
 interface RecordMalformedReviewOptions extends PackReviewStoreOptions {
@@ -533,9 +540,13 @@ export async function resumePackReviewVerdictDelivery(
 
 
 export async function recordPackReviewStaleRequiredStatus(
-  options: RecordPendingReviewOptions,
+  options: RecordStaleRequiredStatusOptions,
 ): Promise<PackReviewDeliveryOutcome> {
   const idempotencyKey = packReviewStaleRequiredStatusIdempotencyKey(options.run);
+  if (options.pauseBeforeWrite) await options.pauseBeforeWrite();
+  if (options.authorizeWrite && !(await options.authorizeWrite())) {
+    return outcome('failed', 'newer_run_authoritative', idempotencyKey, options.clock);
+  }
   let statusOutcome: PackReviewDeliveryOutcome;
   try {
     await options.writeRequiredStatus({
@@ -548,6 +559,10 @@ export async function recordPackReviewStaleRequiredStatus(
   } catch (error) {
     statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
   }
+  if (options.authorizeWrite && !(await options.authorizeWrite())) {
+    if (options.repairSupersededWrite) await options.repairSupersededWrite();
+    return outcome('failed', 'newer_run_authoritative', idempotencyKey, options.clock);
+  }
   persistChannelOutcome(options.run.id, 'requiredStatus', statusOutcome, options);
   return statusOutcome;
 }
@@ -555,8 +570,9 @@ export async function recordPackReviewStaleRequiredStatus(
 export async function recordPackReviewPendingStatus(
   options: RecordPendingReviewOptions,
 ): Promise<PackReviewDeliveryOutcome> {
-  const idempotencyKey = `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${options.run.targetSha}:pending`;
-  let statusOutcome: PackReviewDeliveryOutcome;
+  const idempotencyKey = packReviewPendingRequiredStatusIdempotencyKey(options.run);
+  let statusOutcome = outcome('succeeded', 'status_pending', idempotencyKey, options.clock);
+  persistChannelOutcome(options.run.id, 'requiredStatus', statusOutcome, options);
   try {
     await options.writeRequiredStatus({
       state: 'pending',
@@ -564,11 +580,10 @@ export async function recordPackReviewPendingStatus(
       description: 'Pack review is running for this exact head.',
       idempotencyKey,
     });
-    statusOutcome = outcome('succeeded', 'status_pending', idempotencyKey, options.clock);
   } catch (error) {
     statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
+    persistChannelOutcome(options.run.id, 'requiredStatus', statusOutcome, options);
   }
-  persistChannelOutcome(options.run.id, 'requiredStatus', statusOutcome, options);
   return statusOutcome;
 }
 

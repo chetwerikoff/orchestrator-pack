@@ -104,6 +104,7 @@ export interface ReconcileStalePackReviewRunsInput {
   fixtureRequiredStatusWriter?: PackReviewRequiredStatusWriter;
   resolveRepositorySlug?: (repoRoot: string) => Promise<string>;
   beforeStaleStatusWrite?: (run: PackReviewRunRecord) => void | Promise<void>;
+  fixturePauseBeforeStaleStatusWrite?: () => void | Promise<void>;
 }
 
 interface ListInput {
@@ -744,12 +745,33 @@ export async function reconcileStalePackReviewRuns(
         headSha: run.targetSha,
         request,
       }));
+    const authorizeStaleWrite = () => !hasNewerPackReviewRunForKey(
+      listPackReviewRunRecordsRaw({ projectId, storeRoot }),
+      run,
+    );
+    const repairSupersededStaleWrite = async () => {
+      const newerRun = listPackReviewRunRecordsRaw({ projectId, storeRoot })
+        .filter((candidate) => candidate.key === run.key
+          && candidate.id !== run.id
+          && Date.parse(candidate.createdAt) > Date.parse(run.createdAt))
+        .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+      if (!newerRun) return;
+      await recordPackReviewPendingStatus({
+        run: newerRun,
+        projectId,
+        storeRoot,
+        writeRequiredStatus: statusWriter,
+      });
+    };
 
     const outcome = await recordPackReviewStaleRequiredStatus({
       run,
       projectId,
       storeRoot,
       writeRequiredStatus: statusWriter,
+      authorizeWrite: authorizeStaleWrite,
+      repairSupersededWrite: repairSupersededStaleWrite,
+      pauseBeforeWrite: input.fixturePauseBeforeStaleStatusWrite,
     });
 
     results.push({

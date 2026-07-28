@@ -720,34 +720,49 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
     await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
     markRunStale(storeRoot, staleRunId);
 
-    const result = await reconcileStalePackReviewRuns({
+    let releasePause: () => void = () => undefined;
+    const paused = new Promise<void>((resolve) => {
+      releasePause = resolve;
+    });
+    let pauseEntered = false;
+
+    const reconcilePromise = reconcileStalePackReviewRuns({
       repoSlug: STALE_REPO_A,
       sourceRepoRoot: repoRoot,
       projectId: 'orchestrator-pack',
       storeRoot,
-      beforeStaleStatusWrite: async () => {
-        const newer = createPackReviewRun({
-          projectId: 'orchestrator-pack',
-          storeRoot,
-          prNumber: 1067,
-          headSha: STALE_HEAD_A,
-          linkedSessionId: 'worker-newer-race',
-          startReason: 'newer-race',
-          surface: 'pack-review-stale-reconcile-test',
-          trustedPackRoot: repoRoot,
-          sourceRepoRoot: repoRoot,
-          canonicalRepository: STALE_REPO_A,
-        });
-        await recordPackReviewPendingStatus({
-          projectId: 'orchestrator-pack',
-          storeRoot,
-          run: newer.run,
-          writeRequiredStatus: async (request) => {
-            writeFileSync(newerCapture, `${JSON.stringify(request)}\n`);
-          },
-        });
+      fixturePauseBeforeStaleStatusWrite: async () => {
+        pauseEntered = true;
+        await paused;
       },
     });
+
+    while (!pauseEntered) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    const newer = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-newer-race',
+      startReason: 'newer-race',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+    await recordPackReviewPendingStatus({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run: newer.run,
+      writeRequiredStatus: async (request) => {
+        writeFileSync(newerCapture, `${JSON.stringify(request)}\n`);
+      },
+    });
+    releasePause();
+    const result = await reconcilePromise;
 
     expect(result.results[0]).toMatchObject({
       runId: staleRunId,
@@ -756,6 +771,25 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
     });
     expect(JSON.parse(readFileSync(newerCapture, 'utf8')).state).toBe('pending');
     expect(JSON.parse(readFileSync(staleCapture, 'utf8')).state).toBe('pending');
+  });
+
+  it('reconciles stale error when requiredStatus outcome is missing after pending crash', async () => {
+    const storeRoot = tempRoot('opk-1067-missing-outcome-');
+    const capture = path.join(storeRoot, 'status.json');
+    harnessStaleEnv(storeRoot, capture);
+    const runId = seedActiveStaleRun(storeRoot);
+    markRunStale(storeRoot, runId);
+    terminalizePackReviewStaleRun(runId, { projectId: 'orchestrator-pack', storeRoot });
+    expect(getPackReviewRun(runId, { projectId: 'orchestrator-pack', storeRoot })?.deliveryOutcomes?.requiredStatus).toBeUndefined();
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+    });
+    expect(result.results[0]?.statusReconciled).toBe(true);
+    expect(JSON.parse(readFileSync(capture, 'utf8')).state).toBe('error');
   });
 
   it('clears stale failureReason when resuming a journaled verdict after stale terminalization', async () => {
