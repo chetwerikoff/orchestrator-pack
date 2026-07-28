@@ -753,6 +753,29 @@ export function recordSerializedTransitionAnchor(
   }
 }
 
+
+function serializeBarrierLockReclaimable(profileKey: string): (lockKey: string) => boolean {
+  let incidents: ReturnType<typeof listReadableIncidents>;
+  try {
+    incidents = listReadableIncidents(profileKey);
+  } catch {
+    return () => false;
+  }
+  const protectedKeys = new Set(
+    incidents
+      .filter(({ record }) => {
+        if (!record.lock_key) return false;
+        if (record.kind === 'fresh_orphan') return true;
+        return record.phase === 'possible_delivery'
+          || record.phase === 'reply_complete'
+          || record.phase === 'publication_prepared'
+          || record.phase === 'committed';
+      })
+      .map(({ record }) => record.lock_key as string),
+  );
+  return (lockKey: string) => !protectedKeys.has(lockKey);
+}
+
 export function mutateCapabilityAdmissionPolicy(
   profileKey: string,
   policy: AdmissionPolicy,
@@ -770,7 +793,7 @@ export function mutateCapabilityAdmissionPolicy(
   if (policy === 'serialized') {
     const profileBarrierKey = `profile:${profileKey}`;
     barrier = acquireDomainLock(profileKey, profileBarrierKey);
-    if (!barrier && reconcileAbandonedSchedulingConflicts(profileKey, profileBarrierKey)) {
+    if (!barrier && reconcileAbandonedSchedulingConflicts(profileKey, profileBarrierKey, 120_000, serializeBarrierLockReclaimable(profileKey))) {
       barrier = acquireDomainLock(profileKey, profileBarrierKey);
     }
     if (!barrier) {
