@@ -65,14 +65,15 @@ Add a `stop` entry alongside existing hooks (e.g. RTK `beforeShellExecution`):
   "hooks": {
     "stop": [
       {
-        "command": "node --experimental-strip-types /ABS/PATH/TO/orchestrator-pack/scripts/invoke-read-delegation-audit-stop.ts"
+        "command": "node --experimental-strip-types scripts/invoke-read-delegation-audit-stop.ts"
       }
     ]
   }
 }
 ```
 
-Replace `/ABS/PATH/TO/orchestrator-pack` with your checkout path.
+Hook JSON requires absolute paths: prefix `scripts/invoke-read-delegation-audit-stop.ts` with your
+orchestrator-pack checkout root (for example `/home/you/orchestrator-pack/scripts/invoke-read-delegation-audit-stop.ts`).
 
 **Verify:** complete one fresh no-side-effect Cursor worker turn with an ordinary >400-line read; confirm
 `~/.orchestrator-pack/read-delegation-audit.jsonl` gains a `work_unit_verdict` line with `reviewerPath:false` and `inDenominator:true`. The stop
@@ -89,12 +90,14 @@ Add a `Stop` hook (file is gitignored — operator-local only):
     "Stop": [
       {
         "type": "command",
-        "command": "node --experimental-strip-types /ABS/PATH/TO/orchestrator-pack/scripts/invoke-read-delegation-audit-stop.ts"
+        "command": "node --experimental-strip-types scripts/invoke-read-delegation-audit-stop.ts"
       }
     ]
   }
 }
 ```
+
+Use the same absolute-path prefix rule as Cursor (`<checkout>/scripts/invoke-read-delegation-audit-stop.ts`).
 
 **Verify:** same JSONL artifact append as Cursor after a fresh no-side-effect Claude session completes one ordinary >400-line work unit (`reviewerPath:false`, `inDenominator:true`).
 

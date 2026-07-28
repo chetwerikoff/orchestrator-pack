@@ -3,6 +3,7 @@
  * Stop-hook entry for coworker read-delegation audit (Issue #255).
  * Fail-open compatibility wrapper: pipes hook stdin to the TypeScript producer.
  */
+import './toolchain/native-entrypoint-preflight.ts';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
