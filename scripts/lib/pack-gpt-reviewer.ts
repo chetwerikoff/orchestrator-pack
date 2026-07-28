@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -225,8 +225,18 @@ export async function runGptPackReview(
       return { stdout: '', stderr: detail, exitCode: turn.exitCode ?? 1 };
     }
     const reply = readFileSync(outputPath, 'utf8');
+    const evidenceDir = trim(env.PACK_GPT_BROWSER_EVIDENCE_DIR);
+    if (evidenceDir) {
+      mkdirSync(evidenceDir, { recursive: true });
+      copyFileSync(inputPath, join(evidenceDir, 'adapter-prompt.txt'));
+      writeFileSync(join(evidenceDir, 'terminal-reply.txt'), reply, 'utf8');
+    }
     try {
-      return { stdout: mapGptReplyToTerminalStdout(reply), stderr: '', exitCode: 0 };
+      const stdout = mapGptReplyToTerminalStdout(reply);
+      if (evidenceDir) {
+        writeFileSync(join(evidenceDir, 'adapter-stdout.json'), `${stdout}\n`, 'utf8');
+      }
+      return { stdout, stderr: '', exitCode: 0 };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { stdout: '', stderr: message, exitCode: 1 };

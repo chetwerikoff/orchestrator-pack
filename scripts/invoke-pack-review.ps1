@@ -64,6 +64,18 @@ foreach ($arg in $cli.ForwardArgs) {
 
 Add-PackReviewAutoForwardArgs -ForwardArgs $forwardArgs -RepoRoot $resolvedRoot | Out-Null
 
+# Codex-only auto-forward flags must not reach the browser GPT adapter.
+if ($reviewer -eq 'gpt') {
+    for ($index = $forwardArgs.Count - 1; $index -ge 0; $index--) {
+        if ($forwardArgs[$index] -eq '--source') {
+            if (($index + 1) -lt $forwardArgs.Count) {
+                $forwardArgs.RemoveAt($index + 1)
+            }
+            $forwardArgs.RemoveAt($index)
+        }
+    }
+}
+
 if ($evidenceHandle.ok) {
     Update-ReviewFailureEvidencePhase -Handle $evidenceHandle -Phase 'arguments_prepared' | Out-Null
 }

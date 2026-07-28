@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -6,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as subprocess from './kernel/subprocess.ts';
 import {
   defaultRunBrowserTurn,
+  mapGptReplyToTerminalStdout,
   runGptPackReview,
   type GptReviewDependencies,
 } from './lib/pack-gpt-reviewer.ts';
@@ -16,33 +18,28 @@ const harnessSmokeRecord = JSON.parse(readFileSync(
   join(repoRoot, 'tests/external-output-references/pack-gpt-browser-smoke-56875db8.json'),
   'utf8',
 )) as { headSha: string; replyToken: string; evidenceKind: string };
-const liveSmokeRecord = JSON.parse(readFileSync(
-  join(repoRoot, 'tests/external-output-references/pack-gpt-browser-smoke-1935fe18.json'),
+const runnerSmokeRecord = JSON.parse(readFileSync(
+  join(repoRoot, 'tests/external-output-references/pack-gpt-browser-smoke-e83275e3.json'),
   'utf8',
 )) as {
   headSha: string;
   evidenceKind: string;
+  packReviewRunId: string;
   githubReviewId: number;
-  liveChatEvidence: string;
-  adapterPromptEvidence: string;
+  adapterPromptPath: string;
+  adapterPromptSha256: string;
+  terminalReplyPath: string;
+  terminalReplySha256: string;
+  adapterStdoutPath: string;
   harnessIntegrationOnly: string;
-};
-const liveChatRecord = JSON.parse(readFileSync(
-  join(repoRoot, liveSmokeRecord.liveChatEvidence),
-  'utf8',
-)) as { headSha: string; githubReviewId: number };
-const adapterPromptRecord = JSON.parse(readFileSync(
-  join(repoRoot, liveSmokeRecord.adapterPromptEvidence),
-  'utf8',
-)) as {
-  includesPrUrl: boolean;
-  includesHeadSha: boolean;
-  includesCanonicalMarkers: boolean;
-  forbidsDiffPaste: boolean;
-  forbidsGithubMutation: boolean;
 };
 
 const originalEnv = { ...process.env };
+
+function sha256File(relativePath: string): string {
+  const bytes = readFileSync(join(repoRoot, relativePath));
+  return createHash('sha256').update(bytes).digest('hex');
+}
 
 afterEach(() => {
   process.env = { ...originalEnv };
@@ -50,19 +47,26 @@ afterEach(() => {
 });
 
 describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
-  it('retains operator-live AC3 smoke evidence bound to PR #1050 head', () => {
-    expect(liveSmokeRecord.evidenceKind).toBe('operator-live-tracked-turn');
-    expect(liveSmokeRecord.headSha).toMatch(/^[0-9a-f]{40}$/);
-    expect(liveSmokeRecord.githubReviewId).toBeGreaterThan(0);
-    expect(liveChatRecord.headSha).toBe(liveSmokeRecord.headSha);
-    expect(liveChatRecord.githubReviewId).toBe(liveSmokeRecord.githubReviewId);
+  it('retains runner-driven AC3 smoke evidence with causal adapter→reply→stdout→publication binding', () => {
+    expect(runnerSmokeRecord.evidenceKind).toBe('runner-driven-adapter-turn');
+    expect(runnerSmokeRecord.headSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(runnerSmokeRecord.packReviewRunId).toMatch(/^prr-/);
+    expect(runnerSmokeRecord.githubReviewId).toBeGreaterThan(0);
     expect(harnessSmokeRecord.evidenceKind).toBe('harness-integration-only');
-    expect(liveSmokeRecord.harnessIntegrationOnly).toContain('pack-gpt-browser-smoke-56875db8.json');
-    expect(adapterPromptRecord.includesPrUrl).toBe(true);
-    expect(adapterPromptRecord.includesHeadSha).toBe(true);
-    expect(adapterPromptRecord.includesCanonicalMarkers).toBe(true);
-    expect(adapterPromptRecord.forbidsDiffPaste).toBe(true);
-    expect(adapterPromptRecord.forbidsGithubMutation).toBe(true);
+    expect(runnerSmokeRecord.harnessIntegrationOnly).toContain('pack-gpt-browser-smoke-56875db8.json');
+
+    expect(sha256File(runnerSmokeRecord.adapterPromptPath)).toBe(runnerSmokeRecord.adapterPromptSha256);
+    expect(sha256File(runnerSmokeRecord.terminalReplyPath)).toBe(runnerSmokeRecord.terminalReplySha256);
+
+    const prompt = readFileSync(join(repoRoot, runnerSmokeRecord.adapterPromptPath), 'utf8');
+    const reply = readFileSync(join(repoRoot, runnerSmokeRecord.terminalReplyPath), 'utf8');
+    const stdout = readFileSync(join(repoRoot, runnerSmokeRecord.adapterStdoutPath), 'utf8').trim();
+
+    expect(prompt).toContain(runnerSmokeRecord.headSha);
+    expect(prompt).toContain('https://github.com/chetwerikoff/orchestrator-pack/pull/1050');
+    expect(prompt).toContain('Do **not** create GitHub reviews');
+    expect(prompt).not.toMatch(/выполни пак ревью/i);
+    expect(mapGptReplyToTerminalStdout(reply)).toBe(stdout);
   });
 
   it('defaultRunBrowserTurn invokes npm run chatgpt-browser-turn -- turn with profile, cdp, and chat-url', async () => {

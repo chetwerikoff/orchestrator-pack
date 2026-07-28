@@ -1,4 +1,6 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   assertGptHarnessFixtureAllowed,
@@ -201,5 +203,47 @@ describe('GPT pack reviewer adapter', () => {
       delete process.env.PACK_GPT_REVIEWER_FIXTURE_REPLY;
       delete process.env.PACK_GPT_FIXTURE_PR_NUMBER;
     }
+  });
+
+  it('writes adapter prompt, terminal reply, and mapped stdout when evidence dir is set', async () => {
+    const evidenceDir = mkdtempSync(join(tmpdir(), 'opk-gpt-evidence-'));
+    const deps: GptReviewDependencies = {
+      resolveBrowserConfig: () => ({
+        profile: '/tmp/profile',
+        cdpUrl: 'http://127.0.0.1:9222',
+        chatUrl: 'https://chatgpt.com/c/test',
+      }),
+      runBrowserTurn: async ({ inputPath, outputPath }) => {
+        writeFileSync(outputPath, 'NO_FINDINGS', 'utf8');
+        return {
+          outcome: 'exit' as const,
+          ok: true,
+          exitCode: 0,
+          signal: null,
+          stdout: '',
+          stderr: '',
+          timedOut: false,
+          cancelled: false,
+        };
+      },
+      resolvePrUrl: () => 'https://github.com/example/repo/pull/42',
+    };
+
+    const result = await runGptPackReview({
+      repoRoot: process.cwd(),
+      repoSlug: 'example/repo',
+      prNumber: 42,
+      headSha: 'd'.repeat(40),
+    }, deps, {
+      PACK_GPT_BROWSER_PROFILE: '/tmp/profile',
+      PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
+      PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/test',
+      PACK_GPT_BROWSER_EVIDENCE_DIR: evidenceDir,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(join(evidenceDir, 'terminal-reply.txt'), 'utf8')).toBe('NO_FINDINGS');
+    expect(readFileSync(join(evidenceDir, 'adapter-stdout.json'), 'utf8').trim()).toBe(result.stdout.trim());
+    rmSync(evidenceDir, { recursive: true, force: true });
   });
 });

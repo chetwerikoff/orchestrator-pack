@@ -52,6 +52,10 @@ function parseArgs(argv: string[]): {
       case '--head-sha':
         headSha = trim(argv[++index]).toLowerCase();
         break;
+      case '--source':
+      case '--model':
+        index += 1;
+        break;
       case '--help':
       case '-h':
         process.stdout.write(`${usage()}\n`);

@@ -10,5 +10,5 @@
   "terminalVerdict": "clean",
   "replyToken": "NO_FINDINGS",
   "testFile": "scripts/pack-gpt-browser-path.test.ts",
-  "notes": "Bounded harness npm shim exercises defaultRunBrowserTurn subprocess argv wiring only. Not AC3 operator-live proof; see pack-gpt-browser-smoke-1935fe18.json."
+  "notes": "Bounded harness npm shim exercises defaultRunBrowserTurn subprocess argv wiring only. Not AC3 proof; see pack-gpt-browser-smoke-e83275e3.json."
 }
