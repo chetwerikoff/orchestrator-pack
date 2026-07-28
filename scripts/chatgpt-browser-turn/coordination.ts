@@ -202,11 +202,25 @@ function schedulingAdmissionKey(profileKey: string): string {
   return `scheduling-admission:${profileKey}`;
 }
 
+export interface AcquireDomainLockOptions {
+  readonly admissionRetryDeadlineMs?: number;
+}
+
+function resolveAdmissionRetryDeadlineMs(
+  admissionRetryDeadlineMs?: number,
+): number {
+  const retryCeiling = Date.now() + SCHEDULING_ADMISSION_RETRY_CEILING_MS;
+  return admissionRetryDeadlineMs === undefined
+    ? retryCeiling
+    : Math.min(retryCeiling, admissionRetryDeadlineMs);
+}
+
 function acquireSchedulingAdmissionGate(
   profileKey: string,
   staleMs: number,
+  outerAdmissionRetryDeadlineMs?: number,
 ): DomainLock | null {
-  const deadline = Date.now() + SCHEDULING_ADMISSION_RETRY_CEILING_MS;
+  const deadline = resolveAdmissionRetryDeadlineMs(outerAdmissionRetryDeadlineMs);
   let gate = acquireDomainLock(profileKey, schedulingAdmissionKey(profileKey), staleMs);
   if (gate) return gate;
 
@@ -242,10 +256,15 @@ export function acquireDomainLock(
   profileKey: string,
   key: string,
   staleMs = 120_000,
+  options?: AcquireDomainLockOptions,
 ): DomainLock | null {
   let admissionGate: DomainLock | null = null;
   if (isSchedulingKey(key)) {
-    admissionGate = acquireSchedulingAdmissionGate(profileKey, staleMs);
+    admissionGate = acquireSchedulingAdmissionGate(
+      profileKey,
+      staleMs,
+      options?.admissionRetryDeadlineMs,
+    );
     if (!admissionGate) return null;
   }
 

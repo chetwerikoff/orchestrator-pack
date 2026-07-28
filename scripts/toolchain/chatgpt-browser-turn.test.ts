@@ -3246,6 +3246,25 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
     owner!.release();
   });
 
+  it('AC5: admission retry consumes an external pre-send deadline instead of extending it', () => {
+    const admissionKey = `scheduling-admission:${profileKey}`;
+    const gate = acquireDomainLock(profileKey, admissionKey);
+    expect(gate).not.toBeNull();
+
+    const started = Date.now();
+    const contender = acquireDomainLock(
+      profileKey,
+      'conversation:https://chatgpt.com/c/budget-bound',
+      120_000,
+      { admissionRetryDeadlineMs: started + 80 },
+    );
+    const elapsed = Date.now() - started;
+
+    expect(contender).toBeNull();
+    expect(elapsed).toBeLessThan(250);
+    gate!.release();
+  });
+
   it('AC5: admission retry stops at the 2,000 ms ceiling when the gate stays busy', async () => {
     const admissionKey = `scheduling-admission:${profileKey}`;
     const gate = acquireDomainLock(profileKey, admissionKey);
