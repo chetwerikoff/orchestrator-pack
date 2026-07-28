@@ -74,7 +74,7 @@ remain outside the repository. Pre-existing `docs/issues_drafts/**` and
 new work. `.claude/skills/create-issue-draft/SKILL.md` owns the exact procedure and
 out-of-repository layout.
 
-### Fixed per-tier topology (#1027)
+### Per-tier pipeline (ceilings, not quotas)
 
 The flow-manager drives the full cycle through acceptance or a bounded blocked
 outcome. There is no mandatory stop-and-hand-off to an architect outside the
