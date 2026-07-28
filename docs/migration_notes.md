@@ -2679,3 +2679,14 @@ Only then is code rollback safe. Reverting restores the old lowercase-derived ke
 
 No operator adoption required for AO yaml, daemon restart, or profile topology changes beyond the quiescence and recovery rules above.
 
+### AC5 live acceptance evidence (operator-run, not unit-test substitute)
+
+Issue #1068 AC5 requires a real WSL/Windows-backed physical-profile check on the configured CDP profile. Unit alias tests for `C:\...` versus `/mnt/<drive>/...` do not satisfy this gate.
+
+Record positive evidence in the PR or operator log before merge when available:
+
+1. **DrvFs/9p profile-path stability** — on the operator WSL host, run `verify-cdp-owner.mjs` against the live Chrome profile with both `C:\...` and `/mnt/<drive>/...` spellings; capture stdout showing the same normalized identity and `verified`.
+2. **Production-path canonical `conversation_id`** — run one fresh-chat browser turn on the live profile, then `status/list` and confirm the promoted `conversation_id` matches the normalized URL for that chat and correlates to the submitted exchange.
+
+Until those live checks are recorded, treat AC5 as operator-pending; do not substitute additional unit fixtures.
+

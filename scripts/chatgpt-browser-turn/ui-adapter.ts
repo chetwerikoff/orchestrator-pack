@@ -158,34 +158,9 @@ export function observeFreshConversationUrl(
     if (!retention.observedConversationUrls.includes(normalized)) {
       retention.observedConversationUrls.push(normalized);
     }
-    const prefixes = new Set(
-      retention.observedConversationUrls
-        .map((url) => conversationPrefixFromObservedUrl(url))
-        .filter((value): value is string => Boolean(value)),
-    );
-    if (prefixes.size > 1) {
-      retention.canonicalConversationId = undefined;
-    }
   } catch {
     // unreadable URLs remain fail-closed
   }
-}
-
-function resolveConversationPrefix(
-  retention: FreshIdentityRetention,
-  config: BrowserConfig,
-): string | undefined {
-  const prefixes = new Set(
-    retention.observedConversationUrls
-      .map((url) => conversationPrefixFromObservedUrl(url))
-      .filter((value): value is string => Boolean(value)),
-  );
-  if (prefixes.size === 1) return [...prefixes][0];
-  if (prefixes.size > 1) return undefined;
-  if (config.projectUrl && retention.observedConversationUrls.length === 0) {
-    return projectConversationPrefix(config.projectUrl);
-  }
-  return undefined;
 }
 
 function serviceConversationUuidForSubmittedUser(
@@ -241,7 +216,9 @@ export function promoteFreshCanonicalIdentity(
     return retainCanonicalFreshConversation(retention, exactObserved[0]!);
   }
   if (exactObserved.length > 1 && new Set(exactObserved).size > 1) return undefined;
-  const prefix = resolveConversationPrefix(retention, config);
+  if (retention.observedConversationUrls.length > 0) return undefined;
+  if (!config.projectUrl) return undefined;
+  const prefix = projectConversationPrefix(config.projectUrl);
   if (!prefix) return undefined;
   const canonical = buildConversationUrlFromPrefix(prefix, conversationUuid);
   return retainCanonicalFreshConversation(retention, canonical);

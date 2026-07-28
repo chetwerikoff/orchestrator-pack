@@ -36,13 +36,13 @@ function toPortableProfilePath(profile: string): string {
   return resolve(portable);
 }
 
-export function isWindowsBackedProfilePath(absolutePath: string): boolean {
-  return /^\/mnt\/[a-z]\//i.test(absolutePath.replaceAll('\\', '/'));
+export function isWindowsBackedProfilePath(_absolutePath: string): boolean {
+  // DrvFs/9p case semantics cannot be inferred from /mnt/<drive>/ pathname shape on Linux.
+  return process.platform === 'win32';
 }
 
-function usesCaseInsensitiveProfileIdentity(absolutePath: string): boolean {
-  if (process.platform === 'win32') return true;
-  return isWindowsBackedProfilePath(absolutePath);
+function usesCaseInsensitiveProfileIdentity(_absolutePath: string): boolean {
+  return process.platform === 'win32';
 }
 
 function normalizeProfileIdentityString(path: string, caseInsensitive: boolean): string {

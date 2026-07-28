@@ -44,6 +44,7 @@ import {
 import {
   configuredProfileIdentity,
   legacyConfiguredProfileIdentity,
+  isWindowsBackedProfilePath,
   legacyProfileKeyAmbiguous,
   profileNamespaceExists,
   profileStoreRoot,
@@ -981,7 +982,7 @@ describe('issue 1068 profile identity and legacy keys', () => {
       expect(owner.normalizeProfilePath(upper)).not.toBe(owner.normalizeProfilePath(lower));
     }
     expect(owner.normalizeProfilePath('C:\\Users\\Automation\\Profile'))
-      .toBe(owner.normalizeProfilePath('/mnt/c/users/automation/profile'));
+      .toBe(owner.normalizeProfilePath('/mnt/c/Users/Automation/Profile'));
   });
 
   it('AC5: deterministic Windows-drive and /mnt aliases stay stable', () => {
@@ -1178,6 +1179,53 @@ describe('issue 1068 profile identity and legacy keys', () => {
     expect(body.state).toBe('profile_blocked');
   });
 
+
+  it('AC4: /mnt/<drive> paths are not case-insensitive on native Linux by pathname shape', () => {
+    if (process.platform === 'win32') return;
+    const upper = '/mnt/c/Users/Automation/Profile';
+    const lower = '/mnt/c/users/automation/profile';
+    expect(isWindowsBackedProfilePath(upper)).toBe(false);
+    expect(configuredProfileKey(upper, cdp)).not.toBe(configuredProfileKey(lower, cdp));
+    expect(configuredProfileIdentity(upper)).not.toBe(configuredProfileIdentity(lower));
+  });
+
+  it('blocks clear from mutating ambiguous legacy namespace incidents', async () => {
+    if (process.platform === 'win32') return;
+    const parent = join(issue1068Root, 'clear-ambiguous-parent');
+    const upper = join(parent, 'ProfileA');
+    const lower = join(parent, 'profilea');
+    mkdirSync(upper, { recursive: true });
+    mkdirSync(lower, { recursive: true });
+    if (!existsSync(upper) || !existsSync(lower) || upper === lower) return;
+    const resolved = resolveConfiguredProfile(upper, cdp);
+    const incident = writeIncident(resolved.legacyProfileKey, {
+      kind: 'conversation_incident',
+      generation: 2,
+      phase: 'possible_delivery',
+      conversation_id: 'https://chatgpt.com/c/legacy-only',
+      cause: 'stream_timeout',
+    });
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    let stdout = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    const exitCode = await runCli([
+      'clear', '--profile', upper, '--cdp', cdp,
+      '--identity', incident.identity,
+      '--generation', String(incident.record.generation),
+      '--evidence-token', incident.record.evidence_token,
+    ]);
+    process.stdout.write = originalStdout;
+    expect(exitCode).toBe(21);
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(body.state).toBe('profile_blocked');
+    expect(body.cause).toBe('legacy_profile_clear_ambiguous');
+    expect(listReadableIncidents(resolved.legacyProfileKey)).toHaveLength(1);
+  });
+
   it('resolves symlink aliases to the same configured profile key', () => {
     const actual = join(issue1068Root, 'Profile-Actual');
     const alias = join(issue1068Root, 'profile-alias');
@@ -1275,6 +1323,102 @@ describe('issue 1068 fresh canonical identity retention', () => {
       userMessageId,
     )).toBe(inProjectConversation);
     expect(retained).toEqual([inProjectConversation]);
+  });
+
+
+  it('rejects foreign observed chat prefix when correlating service UUID', () => {
+    const userMessageId = 'user-owned-12345678';
+    const foreignUuid = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const ownUuid = '6a65acd9-4d44-83ec-bcb9-5787832fac24';
+    const foreignUrl = `https://chatgpt.com/c/${foreignUuid}`;
+    const config: BrowserConfig = { cdp, profile: 'automation', projectUrl, newChat: true, timeoutMs: 60_000 };
+    const retention = createFreshIdentityRetention();
+    observeFreshConversationUrl(retention, foreignUrl, projectUrl);
+    expect(resolveCanonicalFreshConversation(
+      config,
+      retention,
+      undefined,
+      correlatedNetwork(userMessageId, ownUuid),
+      userMessageId,
+    )).toBeUndefined();
+  });
+
+  it('AC2/AC3: realistic sendTurn fixture retains canonical identity across URL loss and blocks same-chat resend', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const profile = join(issue1068Root, 'Profile');
+    mkdirSync(profile, { recursive: true });
+    const pk = configuredProfileKey(profile, cdp);
+    const conversationUuid = '6a65acd9-4d44-83ec-bcb9-5787832fac24';
+    const canonicalUrl = conversationUrlFromPrefix(normalizeConversationUrl(projectUrl), conversationUuid);
+    const own = 'user-owned-12345678';
+    const assistantId = 'assistant-owned-12345678';
+    const turnId = 'turn-owned-12345678';
+    const fixture = fakeTurnPage({
+      dispatchCandidateIds: [own],
+      newChatUrlAfterArm: canonicalUrl,
+      serviceFrames: [{
+        conversation_id: conversationUuid,
+        type: 'input_message',
+        input_message: {
+          id: own,
+          author: { role: 'user' },
+          content: { content_type: 'text', parts: ['payload'] },
+        },
+      }],
+      postClickRawSseBodies: liveTurnStreamSequence(own, assistantId, { turnId, conversationId: conversationUuid }),
+      assistants: [{ id: assistantId, parent: own, text: 'growing', streaming: true, appearOnSend: true }],
+    });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const retained: string[] = [];
+    const freshIdentity = createFreshIdentityRetention((identity) => retained.push(identity));
+    const turn = sendTurn(fixture.page, 'payload', {
+      cdp,
+      profile,
+      newChat: true,
+      projectUrl,
+      timeoutMs: 10_000,
+    }, undefined, undefined, undefined, freshIdentity);
+    await vi.advanceTimersByTimeAsync(10_500);
+    const result = await turn;
+    expect(result.state).toBe('stream_timeout');
+    expect(result.conversationId).toBe(canonicalUrl);
+    expect(retained).toEqual([canonicalUrl]);
+    fixture.page.url = () => { throw new Error('page_url_unreadable'); };
+    expect(resolveCanonicalFreshConversation(
+      { cdp, profile, newChat: true, projectUrl, timeoutMs: 60_000 },
+      freshIdentity,
+      fixture.page,
+    )).toBe(canonicalUrl);
+    writeIncident(pk, {
+      kind: 'conversation_incident',
+      generation: 1,
+      phase: 'possible_delivery',
+      conversation_id: canonicalUrl,
+      cause: 'no_terminal_evidence',
+    });
+    const input = join(issue1068Root, 'blocked-input.txt');
+    const output = join(issue1068Root, 'blocked-output.txt');
+    writeFileSync(input, 'retry\n');
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    let stdout = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    const exitCode = await runCli([
+      'turn', '--profile', profile, '--cdp', cdp,
+      '--input', input, '--output', output,
+      '--chat-url', canonicalUrl,
+    ]);
+    process.stdout.write = originalStdout;
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(exitCode).toBe(11);
+    expect(body.state).toBe('conversation_busy');
+    expect(body.cause).toBe('conversation_incident_active');
   });
 
   it('AC3: concurrent fresh-turn retention handles cannot steal each other\'s identity', () => {

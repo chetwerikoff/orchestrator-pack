@@ -45,7 +45,7 @@ import {
   updateIncident,
   writeIncident,
 } from './chatgpt-browser-turn/state.ts';
-import { configuredProfileKey, profileNamespaceExists, resolveConfiguredProfile, sha256 } from './chatgpt-browser-turn/storage-common.ts';
+import { configuredProfileKey, legacyProfileKeyAmbiguous, profileNamespaceExists, resolveConfiguredProfile, sha256 } from './chatgpt-browser-turn/storage-common.ts';
 import {
   runGateBCharacterization,
   bindGateBCharacterizationRecord,
@@ -982,6 +982,13 @@ async function runClear(args: ParsedArgs): Promise<number> {
     }
   });
   if (matchingKeys.length > 1) {
+    return emitControlAndCode(controlResult('clear', 'profile_blocked', profileKey, 'legacy_profile_clear_ambiguous'));
+  }
+  if (
+    matchingKeys.length === 1
+    && matchingKeys[0] === resolvedProfile.legacyProfileKey
+    && legacyProfileKeyAmbiguous(profile)
+  ) {
     return emitControlAndCode(controlResult('clear', 'profile_blocked', profileKey, 'legacy_profile_clear_ambiguous'));
   }
   if (matchingKeys[0]) profileKey = matchingKeys[0];
