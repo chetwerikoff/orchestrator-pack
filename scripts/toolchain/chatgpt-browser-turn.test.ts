@@ -2991,10 +2991,13 @@ describe('issue 1060 remove profile-wide admission', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
 
-    const [a, b] = await runParallelTurnsWithMocks1060([
+    const results = await runParallelTurnsWithMocks1060([
       { argv: turnArgvFor1060Conversation(outA, convA) },
       { argv: turnArgvFor1060Conversation(outB, convB) },
     ]);
+    expect(results).toHaveLength(2);
+    const a = results[0]!;
+    const b = results[1]!;
     expect(a.exitCode).toBe(0);
     expect(b.exitCode).toBe(0);
     expect(a.stdout).toContain('concurrent-a');
@@ -3023,7 +3026,7 @@ describe('issue 1060 remove profile-wide admission', () => {
     const okConv = 'https://chatgpt.com/c/witness-sibling-ok';
     const failOut = join(root, 'witness-fail-out.txt');
     const okOut = join(root, 'witness-sibling-out.txt');
-    const [failed, ok] = await runParallelTurnsWithMocks1060([
+    const witnessResults = await runParallelTurnsWithMocks1060([
       {
         argv: turnArgvFor1060Conversation(failOut, failConv),
         witness: ['absent'],
@@ -3033,6 +3036,9 @@ describe('issue 1060 remove profile-wide admission', () => {
         witness: ['available'],
       },
     ]);
+    expect(witnessResults).toHaveLength(2);
+    const failed = witnessResults[0]!;
+    const ok = witnessResults[1]!;
     expect(failed.exitCode).toBe(13);
     expect(failed.stdout).toContain('pre_send_witness_unavailable');
     expect(ok.exitCode).toBe(0);
