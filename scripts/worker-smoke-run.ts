@@ -34,6 +34,7 @@ import {
   scrubSmokeOutput,
   type SmokeReport,
 } from './lib/worker-smoke-core.ts';
+import { verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 
 interface CliOptions {
   command: string;
@@ -228,7 +229,10 @@ function verifyPublishedSmokeProvenance(report: SmokeReport): boolean {
   return smokeReportHasPackProducer(report) && verifySmokeRunReceipt(report);
 }
 
-function attachPackProducerFields(report: SmokeReport, input: { terminalHandle?: string; orcaExecutable?: string }): SmokeReport {
+function attachPackProducerFields<T extends Partial<SmokeReport>>(
+  report: T,
+  input: { terminalHandle?: string; orcaExecutable?: string },
+): T {
   return {
     ...report,
     producer: SMOKE_REPORT_PRODUCER,
@@ -552,7 +556,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     }
 
     const report: SmokeReport = normalized.ok
-      ? normalized.report
+      ? attachPackProducerFields(normalized.report, { terminalHandle: handle })
       : attachPackProducerFields({
           result: partial.result === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
           issueNumber: options.issueNumber,
@@ -563,7 +567,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
           trackedFilesUnmodified: !mutated,
           terminalCleanup: 'pending',
           environmentNotes: partial.environmentNotes ?? [],
-        }, { terminalHandle: handle });
+        } as SmokeReport, { terminalHandle: handle });
 
     const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
     terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
