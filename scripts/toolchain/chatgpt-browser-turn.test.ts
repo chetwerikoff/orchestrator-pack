@@ -1095,7 +1095,7 @@ describe('issue 964 retained recovery binary lifecycle', () => {
     observed = run(['capability', ...base, '--admission-policy', 'serialized']);
     expect(observed.status).toBe(0);
     expect(observed.body?.mutation).toEqual({ applied: true });
-    expect(observed.body?.admission).toEqual({ policy: 'serialized', epoch: cdpAvailable ? 5 : 4 });
+    expect(observed.body?.admission).toEqual({ policy: 'serialized', epoch: 5 });
 
     const readable = writeIncident(profileKey, {
       kind: 'conversation_incident',
