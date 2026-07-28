@@ -20,7 +20,7 @@ import {
   parseSmokeAgentReport,
   SMOKE_REPORT_MARKER,
 } from './lib/worker-smoke-core.ts';
-import { checkSmokeTestPlan, resolveSmokeRequirement } from './worker-smoke-plan.mjs';
+import { checkSmokeTestPlan, resolveSmokeRequirement } from './draft-discipline.mjs';
 
 const fixtureRoot = join(import.meta.dirname, '..', 'tests', 'fixtures', 'worker-smoke');
 const headA = 'a'.repeat(40);

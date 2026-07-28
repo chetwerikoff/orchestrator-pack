@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
 import './toolchain/native-entrypoint-preflight.ts';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { runProcessSync } from './kernel/subprocess.ts';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -114,18 +114,29 @@ function readIssueBody(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
+function requireProcessOutput(label: string, result: ReturnType<typeof runProcessSync>): string {
+  if (!result.ok) {
+    fail(`${label}: ${result.stderr || result.error || 'non-zero exit'}`);
+  }
+  return result.stdout;
+}
+
 function gitPorcelain(cwd: string): string[] {
-  return execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' })
-    .split(/\r?\n/u)
-    .filter(Boolean);
+  const output = requireProcessOutput('git status --porcelain', runProcessSync({
+    command: 'git',
+    args: ['status', '--porcelain'],
+    cwd,
+    allowEmptyStdout: true,
+  }));
+  return output.split(/\r?\n/u).filter(Boolean);
 }
 
 function fetchPrComments(prNumber: number, repoRoot: string): { body?: string }[] {
-  const output = execFileSync(
-    'gh',
-    ['api', `repos/{owner}/{repo}/issues/${prNumber}/comments`, '--paginate'],
-    { cwd: repoRoot, encoding: 'utf8' },
-  );
+  const output = requireProcessOutput('gh api pr comments', runProcessSync({
+    command: 'gh',
+    args: ['api', `repos/{owner}/{repo}/issues/${prNumber}/comments`, '--paginate'],
+    cwd: repoRoot,
+  }));
   const parsed = JSON.parse(output);
   return Array.isArray(parsed) ? parsed : [];
 }
@@ -135,21 +146,23 @@ function publishPrComment(prNumber: number, body: string, repoRoot: string): voi
   const bodyFile = join(tempDir, 'body.md');
   try {
     writeFileSync(bodyFile, body, 'utf8');
-    execFileSync('gh', ['pr', 'comment', String(prNumber), '--body-file', bodyFile], {
+    requireProcessOutput('gh pr comment', runProcessSync({
+      command: 'gh',
+      args: ['pr', 'comment', String(prNumber), '--body-file', bodyFile],
       cwd: repoRoot,
-      stdio: 'inherit',
-    });
+      allowEmptyStdout: true,
+    }));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
 function resolveCiGreen(prNumber: number, headSha: string, repoRoot: string): boolean {
-  const output = execFileSync(
-    'gh',
-    ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket'],
-    { cwd: repoRoot, encoding: 'utf8' },
-  );
+  const output = requireProcessOutput('gh pr checks', runProcessSync({
+    command: 'gh',
+    args: ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket'],
+    cwd: repoRoot,
+  }));
   const checks = JSON.parse(output) as { name?: string; state?: string; bucket?: string }[];
   if (!Array.isArray(checks) || checks.length === 0) {
     return false;

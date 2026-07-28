@@ -1,5 +1,6 @@
-import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { runProcessSync } from '../kernel/subprocess.ts';
 
 export interface OrcaJsonResponse<T = unknown> {
   ok: boolean;
@@ -32,6 +33,13 @@ export interface OrcaTerminalReadResult {
 
 const ORCA_CANDIDATES = ['orca-dev', 'orca-ide', 'orca'] as const;
 
+function requireStdout(result: ReturnType<typeof runProcessSync>): string {
+  if (!result.ok) {
+    throw new Error(result.stderr || result.error || 'process failed');
+  }
+  return result.stdout;
+}
+
 export function resolveOrcaExecutable(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.ORCA_CLI_COMMAND?.trim();
   if (override) {
@@ -39,7 +47,11 @@ export function resolveOrcaExecutable(env: NodeJS.ProcessEnv = process.env): str
   }
   for (const candidate of ORCA_CANDIDATES) {
     try {
-      const resolved = execFileSync('command', ['-v', candidate], { encoding: 'utf8' }).trim();
+      const resolved = requireStdout(runProcessSync({
+        command: 'command',
+        args: ['-v', candidate],
+        allowEmptyStdout: true,
+      })).trim();
       if (resolved) {
         return candidate;
       }
@@ -116,8 +128,8 @@ export function probeOrcaWorktree(
   let resolvedCwd = cwd;
   let resolvedWorktree = worktreePath;
   try {
-    resolvedCwd = execFileSync('realpath', ['-e', cwd], { encoding: 'utf8' }).trim();
-    resolvedWorktree = execFileSync('realpath', ['-e', worktreePath], { encoding: 'utf8' }).trim();
+    resolvedCwd = requireStdout(runProcessSync({ command: 'realpath', args: ['-e', cwd] })).trim();
+    resolvedWorktree = requireStdout(runProcessSync({ command: 'realpath', args: ['-e', worktreePath] })).trim();
   } catch {
     return { ok: false, reason: 'cwd_not_orca_managed_worktree' };
   }
@@ -214,7 +226,7 @@ export function orcaExecutableLooksAvailable(executable: string): boolean {
     return existsSync(executable);
   }
   try {
-    execFileSync('command', ['-v', executable], { encoding: 'utf8' });
+    requireStdout(runProcessSync({ command: 'command', args: ['-v', executable], allowEmptyStdout: true }));
     return true;
   } catch {
     return false;

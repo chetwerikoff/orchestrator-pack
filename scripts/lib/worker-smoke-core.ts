@@ -3,7 +3,7 @@ import {
   checkSmokeTestPlan,
   parseSmokeTestPlan,
   resolveSmokeRequirement,
-} from '../worker-smoke-plan.mjs';
+} from '../draft-discipline.mjs';
 
 export { checkSmokeTestPlan, parseSmokeTestPlan, resolveSmokeRequirement };
 

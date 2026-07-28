@@ -51,3 +51,24 @@ export function checkRcaSpecDisciplineSurfaces(
   ok: boolean;
   errors: string[];
 };
+
+
+export interface SmokeScenarioPlan {
+  action: string;
+  expected: string;
+}
+
+export interface SmokeTestPlanResult {
+  requirement: 'required' | 'not-applicable' | 'legacy-exempt';
+  reason?: string;
+  scenarios: SmokeScenarioPlan[];
+}
+
+export function parseSmokeTestPlan(markdown: string): SmokeTestPlanResult | null;
+export function resolveSmokeRequirement(markdown: string): SmokeTestPlanResult;
+export function checkSmokeTestPlan(markdown: string): {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  plan: SmokeTestPlanResult | null;
+};
