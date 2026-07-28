@@ -1247,7 +1247,7 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
     for (let index = 0; index < count; index++) {
       const textWait = requireOperationWait(waitSource, 'product_status');
       const text = await boundedPlaywrightOperation(textWait, () => locator.nth(index).innerText(playwrightTimeout(textWait)!));
-      if (text) parts.push(text);
+      if (text) parts.push(String(text));
     }
   }
   return { text: parts.join('\n'), composer };

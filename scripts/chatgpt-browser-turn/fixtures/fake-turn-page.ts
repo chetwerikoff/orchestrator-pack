@@ -110,7 +110,7 @@ function defaultTerminalFrames(userId: string, assistantId: string, parent: stri
   }];
 }
 
-export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; getSendClicks: () => number } {
+export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; getSendClicks: () => number; getEnterPresses: () => number } {
   const handlers = new Map<string, Array<(event: any) => unknown>>();
   const wsHandlers: Array<(event: { response?: { payloadData?: string } }) => unknown> = [];
   const frameListeners: Array<(frame: { payload: string }) => unknown> = [];
