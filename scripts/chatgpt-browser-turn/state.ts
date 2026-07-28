@@ -810,6 +810,21 @@ export async function mutateCapabilityAdmissionPolicy(
     };
   }
 
+  let resolvedBrowserProvenance: string | undefined;
+  if (policy === 'parallel') {
+    try {
+      resolvedBrowserProvenance = typeof browserProvenance === 'function'
+        ? await browserProvenance()
+        : browserProvenance;
+    } catch (error) {
+      try { lock.release(); } catch { /* fail-closed */ }
+      if (barrier) {
+        try { barrier.release(); } catch { /* fail-closed */ }
+      }
+      throw error;
+    }
+  }
+
   try {
     const current = readCapabilityStatus(profileKey, expected, true);
     if (current.state === 'profile_blocked') {
@@ -838,14 +853,6 @@ export async function mutateCapabilityAdmissionPolicy(
         admission: current.admission,
         mutation: { applied: false, reason: 'binding_mismatch' },
       };
-    }
-    let resolvedBrowserProvenance: string | undefined;
-    if (policy === 'parallel') {
-      if (typeof browserProvenance === 'function') {
-        resolvedBrowserProvenance = await browserProvenance();
-      } else {
-        resolvedBrowserProvenance = browserProvenance;
-      }
     }
     if (policy === 'parallel' && (
       !resolvedBrowserProvenance
