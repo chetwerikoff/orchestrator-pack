@@ -117,6 +117,138 @@ export function normalizeConversationUrl(value: string): string {
   return url.toString().replace(/\/$/, '');
 }
 
+const SERVICE_CONVERSATION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface FreshIdentityRetention {
+  canonicalConversationId?: string;
+  readonly observedConversationUrls: string[];
+  readonly retain?: (canonicalConversationId: string) => void;
+}
+
+export function createFreshIdentityRetention(
+  retain?: (canonicalConversationId: string) => void,
+): FreshIdentityRetention {
+  return { observedConversationUrls: [], ...(retain ? { retain } : {}) };
+}
+
+function projectConversationPrefix(projectUrl: string): string {
+  return normalizeConversationUrl(projectUrl).replace(/\/+$/, '');
+}
+
+function conversationPrefixFromObservedUrl(normalizedUrl: string): string | undefined {
+  const match = /^(.*)\/c\/[0-9a-f-]{36}$/i.exec(normalizedUrl);
+  return match?.[1];
+}
+
+function buildConversationUrlFromPrefix(prefix: string, conversationUuid: string): string {
+  return normalizeConversationUrl(`${prefix.replace(/\/+$/, '')}/c/${conversationUuid}`);
+}
+
+export function observeFreshConversationUrl(
+  retention: FreshIdentityRetention,
+  rawUrl: string,
+  projectUrl?: string,
+): void {
+  try {
+    const normalized = normalizeConversationUrl(rawUrl);
+    const project = projectUrl ? projectConversationPrefix(projectUrl) : undefined;
+    if (!normalized || (project && normalized === project)) return;
+    if (!normalized.includes('/c/')) return;
+    if (!conversationPrefixFromObservedUrl(normalized)) return;
+    if (!retention.observedConversationUrls.includes(normalized)) {
+      retention.observedConversationUrls.push(normalized);
+    }
+  } catch {
+    // unreadable URLs remain fail-closed
+  }
+}
+
+function serviceConversationUuidForSubmittedUser(
+  network: NetworkWitnessState,
+  userMessageId: string,
+): string | undefined {
+  const candidates = new Set<string>();
+  for (const message of network.messages) {
+    if (message.role !== 'user' || message.id !== userMessageId) continue;
+    const conversationId = message.conversationId;
+    if (typeof conversationId === 'string' && SERVICE_CONVERSATION_UUID_RE.test(conversationId)) {
+      candidates.add(conversationId.toLowerCase());
+    }
+  }
+  return candidates.size === 1 ? [...candidates][0] : undefined;
+}
+
+function retainCanonicalFreshConversation(
+  retention: FreshIdentityRetention,
+  canonicalConversationId: string,
+): string | undefined {
+  if (retention.canonicalConversationId) {
+    return retention.canonicalConversationId === canonicalConversationId
+      ? retention.canonicalConversationId
+      : undefined;
+  }
+  retention.retain?.(canonicalConversationId);
+  retention.canonicalConversationId = canonicalConversationId;
+  return canonicalConversationId;
+}
+
+export function promoteFreshCanonicalIdentity(
+  retention: FreshIdentityRetention,
+  config: BrowserConfig,
+  network: NetworkWitnessState,
+  userMessageId?: string,
+): string | undefined {
+  if (!config.newChat || !userMessageId || !network.serviceSubmittedUserIds.has(userMessageId)) {
+    return undefined;
+  }
+  if (retention.canonicalConversationId) return retention.canonicalConversationId;
+  const conversationUuid = serviceConversationUuidForSubmittedUser(network, userMessageId);
+  if (!conversationUuid) return undefined;
+  const exactObserved = retention.observedConversationUrls.filter((url) => {
+    try {
+      const match = /\/c\/([0-9a-f-]{36})$/i.exec(new URL(url).pathname);
+      return match?.[1]?.toLowerCase() === conversationUuid.toLowerCase();
+    } catch {
+      return false;
+    }
+  });
+  if (exactObserved.length === 1) {
+    return retainCanonicalFreshConversation(retention, exactObserved[0]!);
+  }
+  if (exactObserved.length > 1 && new Set(exactObserved).size > 1) return undefined;
+  if (retention.observedConversationUrls.length > 0) return undefined;
+  if (!config.projectUrl) return undefined;
+  const prefix = projectConversationPrefix(config.projectUrl);
+  if (!prefix) return undefined;
+  const canonical = buildConversationUrlFromPrefix(prefix, conversationUuid);
+  return retainCanonicalFreshConversation(retention, canonical);
+}
+
+export function resolveCanonicalFreshConversation(
+  config: BrowserConfig,
+  retention: FreshIdentityRetention | undefined,
+  page?: { url?: () => string },
+  network?: NetworkWitnessState,
+  userMessageId?: string,
+): string | undefined {
+  if (!config.newChat || !retention) return undefined;
+  if (page) {
+    try {
+      if (typeof page.url === 'function') observeFreshConversationUrl(retention, page.url(), config.projectUrl);
+    } catch {
+      // page URL may be unreadable after teardown
+    }
+  }
+  if (network && userMessageId) {
+    const promoted = promoteFreshCanonicalIdentity(retention, config, network, userMessageId);
+    if (promoted) return promoted;
+    return undefined;
+  }
+  if (retention.canonicalConversationId) return retention.canonicalConversationId;
+  return undefined;
+}
+
+
 export interface CausalMessageObservation {
   id: string;
   role: 'user'|'assistant';
@@ -1441,6 +1573,19 @@ async function observedDispatchUserIds(
   return observed;
 }
 
+
+function withRetainedFreshConversationId(
+  config: BrowserConfig,
+  retention: FreshIdentityRetention | undefined,
+  page: any,
+  network: NetworkWitnessState,
+  result: TurnBrowserResult,
+): TurnBrowserResult {
+  if (!config.newChat || !retention || result.conversationId) return result;
+  const conversationId = resolveCanonicalFreshConversation(config, retention, page, network, result.userMessageId);
+  return conversationId ? { ...result, conversationId } : result;
+}
+
 export interface TurnBrowserResult {
   state: 'ok'|'quota'|'challenge'|'login'|'stream_timeout'|'send_failed'|'no_reply'|'ui_contract_mismatch'|'foreign_activity'|'recovery_required'|'orphaned_fresh_turn'|'output_conflict';
   cause: string;
@@ -1561,8 +1706,16 @@ export async function sendTurn(
   provisionalId?: string,
   onBeforeSend?: () => void | Promise<void>,
   segmentBudget?: TurnOperationBudget,
+  freshIdentity?: FreshIdentityRetention,
 ): Promise<TurnBrowserResult> {
   const network = attachNetworkWitness(page);
+  if (config.newChat && freshIdentity) {
+    page.on('framenavigated', () => {
+      try {
+        observeFreshConversationUrl(freshIdentity, page.url(), config.projectUrl);
+      } catch { /* unreadable page URL */ }
+    });
+  }
   const composer = page.locator('#prompt-textarea');
   const readyEndsAt = segmentBudget?.endsAtMs ?? wallClock() + Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
   while (wallClock() < readyEndsAt) {
@@ -1612,6 +1765,9 @@ export async function sendTurn(
   } catch {
     urlBaselineReliable = false;
     preDispatchNormalizedUrl = '';
+  }
+  if (config.newChat && freshIdentity) {
+    observeFreshConversationUrl(freshIdentity, preDispatchNormalizedUrl || page.url(), config.projectUrl);
   }
 
   let dispatchObservation: DispatchObservationBoundary;
@@ -1719,6 +1875,9 @@ export async function sendTurn(
     return { state: 'recovery_required', cause: 'submitted_turn_id_unproven', possibleDelivery: true };
   }
   userId = canonicalSubmittedUserId(network, baselineIds) || userId;
+  if (config.newChat && freshIdentity) {
+    resolveCanonicalFreshConversation(config, freshIdentity, page, network, userId);
+  }
 
   const segments: string[] = [];
   let boundAssistantId = '';
@@ -1733,6 +1892,9 @@ export async function sendTurn(
   let terminalPublishEligible = true;
   const deadline = wallClock() + config.timeoutMs;
   while (wallClock() < deadline) {
+    if (config.newChat && freshIdentity) {
+      resolveCanonicalFreshConversation(config, freshIdentity, page, network, userId);
+    }
     let replyWait = loopOperationWaitMs(deadline, wallClock());
     if (replyWait <= 0) break;
     const wallWait = Math.min(replyWait, loopOperationWaitMs(deadline, wallClock()));
@@ -1852,6 +2014,7 @@ export async function sendTurn(
         possibleDelivery: true,
         userMessageId: userId,
         assistantMessageId: terminal.assistantMessageId,
+        ...(config.newChat ? { conversationId: resolveCanonicalFreshConversation(config, freshIdentity, page, network, userId) } : {}),
       };
     }
 
@@ -1911,13 +2074,13 @@ export async function sendTurn(
                   finishedReplyPredicateAt = undefined;
                   continue;
                 }
-                return {
+                return withRetainedFreshConversationId(config, freshIdentity, page, network, {
                   state: 'recovery_required',
                   cause: 'reply_finished_terminal_unproven',
                   possibleDelivery: true,
                   userMessageId: userId,
                   assistantMessageId: finishedAssistantId,
-                };
+                });
               }
             }
           } else {
@@ -1964,14 +2127,16 @@ export async function sendTurn(
           if (current === lastTerminalContent) {
             contentStablePolls++;
             if (contentStablePolls >= 1) {
-              const conversationId = normalizeConversationUrl(page.url());
+              const conversationId = config.newChat
+                ? resolveCanonicalFreshConversation(config, freshIdentity, page, network, userId)
+                : normalizeConversationUrl(page.url());
               return {
                 state: 'ok',
                 cause: 'completed',
                 possibleDelivery: true,
                 userMessageId: userId,
                 assistantMessageId: boundAssistantId,
-                conversationId,
+                ...(conversationId ? { conversationId } : {}),
                 reply: replyCandidate,
               };
             }
@@ -2026,5 +2191,5 @@ export async function sendTurn(
       terminalMeta: [...network.terminal.terminalByMessageId.entries()].map(([id, meta]) => ({ id, ...meta })),
     }));
   }
-  return { state: 'stream_timeout', cause: 'no_terminal_evidence', possibleDelivery: true, userMessageId: userId };
+  return withRetainedFreshConversationId(config, freshIdentity, page, network, { state: 'stream_timeout', cause: 'no_terminal_evidence', possibleDelivery: true, userMessageId: userId });
 }

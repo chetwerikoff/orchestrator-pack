@@ -39,11 +39,13 @@ import {
   mutateCapabilityAdmissionPolicy,
   listReadableIncidents,
   quarantineOpaque,
+  profileStartupCompatibility,
   statusList,
+  statusListForConfiguredProfile,
   updateIncident,
   writeIncident,
 } from './chatgpt-browser-turn/state.ts';
-import { configuredProfileKey, sha256 } from './chatgpt-browser-turn/storage-common.ts';
+import { configuredProfileKey, legacyProfileKeyAmbiguous, profileNamespaceExists, resolveConfiguredProfile, sha256 } from './chatgpt-browser-turn/storage-common.ts';
 import {
   runGateBCharacterization,
   bindGateBCharacterizationRecord,
@@ -55,11 +57,13 @@ import {
   BrowserOperationTimeoutError,
   browserOperationClassFromError,
   coerceBrowserOperationTimeout,
+  createFreshIdentityRetention,
   createPreSendSegmentBudget,
   loadChromium,
   normalizeConversationUrl,
   openGateBCharacterizationPage,
   openTurnPage,
+  resolveCanonicalFreshConversation,
   runtimeWitnessSurfaceAvailable,
   sendTurn,
   type BrowserConfig,
@@ -351,16 +355,17 @@ function browserConfig(args: ParsedArgs): BrowserConfig {
 function canonicalConversationFromOpenedPage(
   config: BrowserConfig,
   opened: { page: any } | undefined,
+  freshIdentity?: ReturnType<typeof createFreshIdentityRetention>,
+  retainedUserMessageId?: string,
 ): string | undefined {
-  if (!config.newChat || !opened?.page || !config.projectUrl) return undefined;
-  try {
-    const normalized = normalizeConversationUrl(opened.page.url());
-    const project = normalizeConversationUrl(config.projectUrl);
-    if (!normalized || normalized === project) return undefined;
-    return normalized;
-  } catch {
-    return undefined;
-  }
+  if (!config.newChat || !config.projectUrl) return undefined;
+  return resolveCanonicalFreshConversation(
+    config,
+    freshIdentity,
+    opened?.page,
+    undefined,
+    retainedUserMessageId,
+  );
 }
 
 function emitTurnAndCode(result: TurnResultV1): number {
@@ -379,10 +384,31 @@ async function runTurn(args: ParsedArgs): Promise<number> {
   let opened: { page: any; owned: boolean; provisionalId?: string } | undefined;
   let browser: any = null;
   let config: BrowserConfig | undefined;
+  const freshIdentity = createFreshIdentityRetention((canonicalConversationId) => {
+    if (!incidentId || profileKey === 'profile-unresolved') {
+      throw new Error('fresh_identity_retention_before_incident');
+    }
+    updateIncident(profileKey, incidentId, { conversation_id: canonicalConversationId });
+  });
+  let retainedUserMessageId: string | undefined;
 
   try {
     config = browserConfig(args);
     profileKey = configuredProfileKey(config.profile, config.cdp);
+    const startupCompatibility = profileStartupCompatibility(config.profile, config.cdp);
+    if (startupCompatibility) {
+      return emitTurnAndCode(turnResult(
+        'incompatible_record',
+        'profile',
+        startupCompatibility.cause ?? 'legacy_profile_namespace_active',
+        invocationId,
+        profileKey,
+        {
+          legacy_configured_profile_key: startupCompatibility.legacy_configured_profile_key,
+          legacy_namespace_root: startupCompatibility.legacy_namespace_root,
+        },
+      ));
+    }
     const snapshot = readStableInput(required(args, 'input'));
     const destination = destinationIdentity(required(args, 'output'));
     const conversationId = config.chatUrl ? normalizeConversationUrl(config.chatUrl) : undefined;
@@ -526,7 +552,9 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       updateIncident(profileKey, incidentId!, { phase: 'possible_delivery' });
       scheduleLock!.updatePhase('possible_delivery');
       reservation!.markPossibleDelivery();
-    }, segmentBudget);
+    }, segmentBudget, freshIdentity);
+
+    if (result.userMessageId) retainedUserMessageId = result.userMessageId;
 
     if (!result.possibleDelivery) {
       await closeOwnedTurnPage(opened, { retainPage: false });
@@ -724,7 +752,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     await closeOwnedTurnPage(opened, { retainPage: possibleDelivery });
     if (possibleDelivery && config?.newChat && incidentId) {
-      const canonicalConversation = canonicalConversationFromOpenedPage(config, opened);
+      const canonicalConversation = canonicalConversationFromOpenedPage(config, opened, freshIdentity, retainedUserMessageId);
       const canonicalFreshUnproven = !canonicalConversation;
       if (canonicalFreshUnproven) {
         try {
@@ -762,7 +790,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       if (possibleDelivery) {
         try {
           const recoveryConversationId = config?.newChat
-            ? canonicalConversationFromOpenedPage(config, opened)
+            ? canonicalConversationFromOpenedPage(config, opened, freshIdentity, retainedUserMessageId)
             : (config?.chatUrl ? normalizeConversationUrl(config.chatUrl) : undefined);
           updateIncident(profileKey, incidentId, {
             kind: 'conversation_incident',
@@ -821,8 +849,8 @@ function emitControlAndCode(result: ControlResultV1): number {
 
 async function runStatus(args: ParsedArgs): Promise<number> {
   assertAllowedOptions(args, ['profile', 'cdp']);
-  const { profileKey } = profileArgs(args);
-  return emitControlAndCode(statusList(profileKey));
+  const { profile, cdp } = profileArgs(args);
+  return emitControlAndCode(statusListForConfiguredProfile(profile, cdp));
 }
 
 
@@ -897,14 +925,30 @@ async function runCapability(args: ParsedArgs): Promise<number> {
 
 async function runPublicationStatus(args: ParsedArgs): Promise<number> {
   assertAllowedOptions(args, ['profile', 'cdp', 'invocation']);
-  const { profileKey } = profileArgs(args);
+  const { profileKey, profile, cdp } = profileArgs(args);
   const invocationId = required(args, 'invocation');
-  const result = publicationStatus(profileKey, invocationId);
+  const resolvedProfile = resolveConfiguredProfile(profile, cdp);
+  let result = publicationStatus(profileKey, invocationId);
+  if (result.state === 'not_committed'
+    && resolvedProfile.keysDiffer
+    && profileNamespaceExists(resolvedProfile.legacyProfileKey)) {
+    const legacyResult = publicationStatus(resolvedProfile.legacyProfileKey, invocationId);
+    if (legacyResult.state !== 'not_committed') {
+      result = {
+        ...legacyResult,
+        legacy_configured_profile_key: resolvedProfile.legacyProfileKey,
+        ...(statusListForConfiguredProfile(profile, cdp).legacy_namespace_root
+          ? { legacy_namespace_root: statusListForConfiguredProfile(profile, cdp).legacy_namespace_root }
+          : {}),
+      };
+    }
+  }
   if (result.state === 'committed_ok') {
     emit(result);
     return publicationExitCode(result.state);
   }
-  if (statusList(profileKey).state === 'profile_blocked' && result.state !== 'profile_blocked') {
+  const configuredProfileStatus = statusListForConfiguredProfile(profile, cdp);
+  if (result.state === 'not_committed' && configuredProfileStatus.state === 'profile_blocked') {
     const blocked: PublicationStatusV1 = {
       schema: 'publication-status/v1',
       state: 'profile_blocked',
@@ -924,9 +968,30 @@ async function runClear(args: ParsedArgs): Promise<number> {
     'profile', 'cdp', 'identity', 'generation', 'evidence-token', 'quarantine', 'adjudicate',
     'adjudication-evidence-file', 'expected-adjudication-sha256',
   ]);
-  const { profileKey, profile, cdp } = profileArgs(args);
+  let { profileKey, profile, cdp } = profileArgs(args);
   const identity = required(args, 'identity');
   const generation = parseInteger(required(args, 'generation'), 0);
+  const resolvedProfile = resolveConfiguredProfile(profile, cdp);
+  const sourceKeys = [profileKey, ...(resolvedProfile.keysDiffer ? [resolvedProfile.legacyProfileKey] : [])];
+  const matchingKeys = sourceKeys.filter((sourceKey) => {
+    try {
+      return statusList(sourceKey, { ensureDirectories: false }).items
+        ?.some((item) => item.identity === identity && item.generation === generation) ?? false;
+    } catch {
+      return false;
+    }
+  });
+  if (matchingKeys.length > 1) {
+    return emitControlAndCode(controlResult('clear', 'profile_blocked', profileKey, 'legacy_profile_clear_ambiguous'));
+  }
+  if (
+    matchingKeys.length === 1
+    && matchingKeys[0] === resolvedProfile.legacyProfileKey
+    && legacyProfileKeyAmbiguous(profile)
+  ) {
+    return emitControlAndCode(controlResult('clear', 'profile_blocked', profileKey, 'legacy_profile_clear_ambiguous'));
+  }
+  if (matchingKeys[0]) profileKey = matchingKeys[0];
 
   if (flag(args, 'quarantine')) {
     if (flag(args, 'adjudicate')) return emitControlAndCode(controlResult('clear', 'driver_error', profileKey, 'clear_mode_conflict'));
