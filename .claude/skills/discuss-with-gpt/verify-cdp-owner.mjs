@@ -239,17 +239,25 @@ export async function isCdpReachable(cdpUrl, options = {}) {
     err.name = 'CdpReachabilityTimeoutError';
     throw err;
   }
+  const controller = new AbortController();
   if (__testOwnerProbe.stallFetch) {
-    await new Promise((_, reject) => {
-      const wait = timeoutMs ?? 30_000;
-      setTimeout(() => {
+    const base = String(cdpUrl).replace(/\/$/, '');
+    const stallTimeoutMs = timeoutMs ?? 30_000;
+    const stallTimeoutId = stallTimeoutMs > 0 ? setTimeout(() => controller.abort(), stallTimeoutMs) : undefined;
+    const abortPromise = new Promise((_, reject) => {
+      controller.signal.addEventListener('abort', () => {
         const err = new Error('cdp_reachability_timeout');
         err.name = 'CdpReachabilityTimeoutError';
         reject(err);
-      }, wait);
+      }, { once: true });
     });
+    void fetch(`${base}/json/version`, { signal: controller.signal }).catch(() => {});
+    try {
+      await abortPromise;
+    } finally {
+      if (stallTimeoutId) clearTimeout(stallTimeoutId);
+    }
   }
-  const controller = new AbortController();
   let timeoutId;
   if (timeoutMs !== undefined && timeoutMs > 0) {
     timeoutId = setTimeout(() => controller.abort(), timeoutMs);

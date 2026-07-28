@@ -19,7 +19,7 @@ import {
   type DestinationReservation,
   type DomainLock,
 } from './chatgpt-browser-turn/coordination.ts';
-import { closeOwnedTurnPage, releaseCdpBrowser, RESOURCE_CLEANUP_BOUND_MS } from './chatgpt-browser-turn/browser-session.ts';
+import { boundedResourceCleanup, closeOwnedTurnPage, releaseCdpBrowser, RESOURCE_CLEANUP_BOUND_MS } from './chatgpt-browser-turn/browser-session.ts';
 import { probeProfileReady } from './chatgpt-browser-turn/profile-probe.ts';
 import { publicationStatus, publishReply } from './chatgpt-browser-turn/publication.ts';
 import { runtimeCapabilityBinding } from './chatgpt-browser-turn/runtime-binding.ts';
@@ -448,7 +448,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
       capability = capabilityStatus(profileKey, expectedBinding);
       if (!scheduleLock) {
-        if (opened.owned) await opened.page.close().catch(() => {});
+        if (opened.owned) await boundedResourceCleanup(() => (opened.page as { close: () => Promise<void> }).close(), RESOURCE_CLEANUP_BOUND_MS);
         safeReleaseDestination(reservation);
         reservation = null;
         return emitTurnAndCode(turnResult('profile_busy', 'profile', 'witness_downgrade_fallback_busy', invocationId, profileKey));
@@ -465,7 +465,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
         capability = capabilityStatus(profileKey, expectedBinding);
         if (!scheduleLock) {
-          if (opened.owned) await opened.page.close().catch(() => {});
+          if (opened.owned) await boundedResourceCleanup(() => (opened.page as { close: () => Promise<void> }).close(), RESOURCE_CLEANUP_BOUND_MS);
           safeReleaseDestination(reservation);
           reservation = null;
           return emitTurnAndCode(turnResult('profile_busy', 'profile', 'pre_send_parallel_recheck_failed', invocationId, profileKey));
@@ -751,11 +751,15 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     if (incidentId) {
       if (possibleDelivery) {
         try {
+          const recoveryConversationId = config?.newChat
+            ? canonicalConversationFromOpenedPage(config, opened)
+            : conversationId;
           updateIncident(profileKey, incidentId, {
             kind: 'conversation_incident',
             phase: 'possible_delivery',
             cause,
             owner: undefined,
+            ...(recoveryConversationId ? { conversation_id: recoveryConversationId } : {}),
           });
         } catch {
           // Existing durable state remains fail-closed.

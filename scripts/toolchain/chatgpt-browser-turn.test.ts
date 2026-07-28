@@ -55,6 +55,8 @@ import {
   sendTurn,
   verifyProfile,
   __testTiming,
+  witnessInstallOperationWaitMs,
+  WITNESS_INSTALL_MAX_WAIT_MS,
   type BrowserConfig,
 } from '../chatgpt-browser-turn/ui-adapter.ts';
 import { boundedResourceCleanup } from '../chatgpt-browser-turn/browser-session.ts';
@@ -1748,7 +1750,9 @@ describe('issue 1023 operation-level bounds', () => {
       isCdpReachable: (cdpUrl: string, options?: { timeoutMs?: number }) => Promise<boolean>;
     };
     ownerMod.__testOwnerProbe.stallFetch = true;
+    const start = Date.now();
     await expect(ownerMod.isCdpReachable(cdp, { timeoutMs: 100 })).rejects.toMatchObject({ message: 'cdp_reachability_timeout' });
+    expect(Date.now() - start).toBeLessThan(500);
     ownerMod.__testOwnerProbe.stallFetch = false;
   });
 
@@ -1824,6 +1828,39 @@ describe('issue 1023 operation-level bounds', () => {
     await new Promise((resolve) => { setTimeout(resolve, 600); });
     expect(latePageCreated).toBe(true);
     expect(latePageClosed).toBe(true);
+  });
+
+
+  it('AC4: witness install wait is capped at 10s within segment remainder', () => {
+    const wide = createPreSendSegmentBudget(30_000);
+    expect(witnessInstallOperationWaitMs(wide)).toBe(WITNESS_INSTALL_MAX_WAIT_MS);
+    const tight = createTurnOperationBudget(500, Date.now());
+    expect(witnessInstallOperationWaitMs(tight)).toBe(500);
+  });
+
+  it('openTurnPage focuses an existing tab with bounded goto instead of bringToFront', async () => {
+    const target = 'https://chatgpt.com/c/focus-tab-12345678';
+    let gotoCalled = false;
+    const page = {
+      url: () => target,
+      goto: async (url: string, opts: { timeout?: number }) => {
+        gotoCalled = true;
+        expect(url).toBe(target);
+        expect(opts.timeout).toBeGreaterThan(0);
+      },
+      bringToFront: async () => { throw new Error('bringToFront should not run'); },
+    };
+    const browser = { contexts: () => [{ pages: () => [page] }] };
+    const out = await openTurnPage(browser, {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: target,
+      newChat: false,
+      timeoutMs: 60_000,
+    });
+    expect(gotoCalled).toBe(true);
+    expect(out.page).toBe(page);
+    expect(out.owned).toBe(false);
   });
 
   it('AC6: never-settling page.close does not block terminalization beyond cleanup bound', async () => {

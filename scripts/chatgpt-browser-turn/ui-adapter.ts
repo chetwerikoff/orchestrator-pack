@@ -121,6 +121,7 @@ interface NetworkMessage extends CausalMessageObservation {
 export const __testTiming: { now?: () => number } = {};
 
 export const MAX_BROWSER_OPERATION_WAIT_MS = 30_000;
+export const WITNESS_INSTALL_MAX_WAIT_MS = 10_000;
 
 export interface TurnOperationBudget {
   readonly endsAtMs: number;
@@ -211,6 +212,16 @@ async function boundedPlaywrightOperation<T>(waitMs: number, operation: () => Pr
       setTimeout(() => reject(new BrowserOperationTimeoutError('playwright_operation')), waitMs);
     }),
   ]);
+}
+
+async function boundedLocatorCount(locator: any, waitMs: number): Promise<number> {
+  if (waitMs <= 0) return 0;
+  return await boundedPlaywrightOperation(waitMs, () => locator.count());
+}
+
+export function witnessInstallOperationWaitMs(segmentBudget?: TurnOperationBudget): number {
+  const remainder = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  return Math.min(remainder, WITNESS_INSTALL_MAX_WAIT_MS);
 }
 
 function playwrightTimeout(waitMs: number): { timeout: number } | undefined {
@@ -1139,7 +1150,7 @@ export async function runtimeWitnessSurfaceAvailable(
   const messages = page.locator('[data-message-author-role]');
   let count: number;
   try {
-    count = await boundedPlaywrightOperation(waitMs, () => messages.count(playwrightTimeout(waitMs)));
+    count = await boundedLocatorCount(messages, waitMs);
   } catch (error) {
     if (error instanceof BrowserOperationTimeoutError) throw error;
     return 'absent';
@@ -1181,8 +1192,7 @@ export interface ProductStatusSurface {
 }
 
 export async function productStatusText(page: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<ProductStatusSurface> {
-  const timeout = playwrightTimeout(waitMs);
-  const composer = (await page.locator('#prompt-textarea').count(timeout).catch(() => 0)) > 0;
+  const composer = (await boundedLocatorCount(page.locator('#prompt-textarea'), waitMs).catch(() => 0)) > 0;
   const selectors = [
     '[role="alert"]',
     '[role="dialog"]',
@@ -1198,9 +1208,9 @@ export async function productStatusText(page: any, waitMs = MAX_BROWSER_OPERATIO
   const parts: string[] = [];
   for (const selector of selectors) {
     const locator = page.locator(selector);
-    const count = Math.min(await locator.count(timeout).catch(() => 0), 8);
+    const count = Math.min(await boundedLocatorCount(locator, waitMs), 8);
     for (let index = 0; index < count; index++) {
-      const text = await locator.nth(index).innerText(timeout).catch(() => '');
+      const text = await locator.nth(index).innerText(playwrightTimeout(waitMs)).catch(() => '');
       if (text) parts.push(text);
     }
   }
@@ -1287,7 +1297,7 @@ async function observedDispatchUserIds(
   const candidates = boundDispatchCandidateIds(network);
   if (candidates.size === 0) return observed;
   const users = page.locator('[data-message-author-role="user"]');
-  const count = await users.count(playwrightTimeout(waitMs ?? MAX_BROWSER_OPERATION_WAIT_MS)).catch(() => 0);
+  const count = await boundedLocatorCount(users, waitMs ?? MAX_BROWSER_OPERATION_WAIT_MS);
   for (let index = Math.max(0, count - 8); index < count; index++) {
     const id = await serviceId(users.nth(index), waitMs);
     if (id && !baselineIds.has(id) && candidates.has(id)) observed.add(id);
@@ -1361,7 +1371,9 @@ export async function openTurnPage(
     if (matches.length === 1) {
       const bringWait = segmentOperationWait(segmentBudget, fallbackGotoMs);
       if (segmentBudget && bringWait <= 0) throw new BrowserOperationTimeoutError('open_turn_page');
-      await boundedPlaywrightOperation(bringWait, () => matches[0].bringToFront(playwrightTimeout(bringWait)!));
+      await boundedPlaywrightOperation(bringWait, () =>
+        matches[0].goto(target, { waitUntil: 'domcontentloaded', timeout: bringWait }),
+      );
       return { page: matches[0], owned: false };
     }
     const page = await adoptNewPageWithBudget(ctx, async (opened, gotoWaitMs) => {
@@ -1407,12 +1419,12 @@ export async function sendTurn(
     if (waitMs <= 0) break;
     const wall = await boundedPlaywrightOperation(waitMs, () => pageWalls(page, waitMs));
     if (wall.state) return { state: wall.state as TurnBrowserResult['state'], cause: wall.cause!, possibleDelivery: false };
-    const composerVisible = await composer.count(playwrightTimeout(waitMs)).catch(() => 0);
+    const composerVisible = await boundedLocatorCount(composer, waitMs);
     if (composerVisible) break;
     await witnessPollDelay(page, Math.min(500, waitMs));
   }
   const composerReadyWait = loopOperationWaitMs(readyEndsAt, Date.now());
-  if (!(await composer.count(playwrightTimeout(composerReadyWait)).catch(() => 0))) {
+  if (!(await boundedLocatorCount(composer, composerReadyWait))) {
     if (segmentBudget && Date.now() >= readyEndsAt) {
       throw new BrowserOperationTimeoutError('composer_readiness');
     }
@@ -1424,7 +1436,7 @@ export async function sendTurn(
   const baselineIds = new Set<string>();
   let baselineWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
   if (segmentBudget && baselineWait <= 0) throw new BrowserOperationTimeoutError('pre_send_baseline');
-  const baselineCount = await baseline.count(playwrightTimeout(baselineWait)).catch(() => 0);
+  const baselineCount = await boundedLocatorCount(baseline, baselineWait);
   for (let index = 0; index < baselineCount; index++) {
     baselineWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
     if (segmentBudget && baselineWait <= 0) throw new BrowserOperationTimeoutError('pre_send_baseline');
@@ -1444,7 +1456,7 @@ export async function sendTurn(
   }
   const send = page.locator('[data-testid="send-button"]');
   mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
-  const sendAvailable = (await send.count(playwrightTimeout(mutationWait)).catch(() => 0)) > 0;
+  const sendAvailable = (await boundedLocatorCount(send, mutationWait)) > 0;
   revalidateProcessDestinationReservations();
   await onBeforeSend?.();
   try {
@@ -1456,7 +1468,7 @@ export async function sendTurn(
       possibleDelivery: false,
     };
   }
-  const witnessInstallWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
+  const witnessInstallWait = witnessInstallOperationWaitMs(segmentBudget);
   if (segmentBudget && witnessInstallWait <= 0) throw new BrowserOperationTimeoutError('witness_install');
   await boundedPlaywrightOperation(witnessInstallWait, () => network.witnessInstall);
   const dispatchWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
@@ -1528,7 +1540,7 @@ export async function sendTurn(
     if (replyWait <= 0) break;
     const users = page.locator('[data-message-author-role="user"]');
     const newUserIds = new Set<string>();
-    const userCount = await users.count(playwrightTimeout(replyWait)).catch(() => 0);
+    const userCount = await boundedLocatorCount(users, replyWait);
     for (let index = 0; index < userCount; index++) {
       replyWait = loopOperationWaitMs(deadline, wallClock());
       if (replyWait <= 0) break;
@@ -1543,7 +1555,7 @@ export async function sendTurn(
     if (replyWait <= 0) break;
     const assistants = page.locator('[data-message-author-role="assistant"]');
     const assistantLocators = new Map<string, any>();
-    const assistantCount = await assistants.count(playwrightTimeout(replyWait)).catch(() => 0);
+    const assistantCount = await boundedLocatorCount(assistants, replyWait);
     for (let index = 0; index < assistantCount; index++) {
       replyWait = loopOperationWaitMs(deadline, wallClock());
       if (replyWait <= 0) break;
@@ -1577,7 +1589,7 @@ export async function sendTurn(
     replyWait = loopOperationWaitMs(deadline, wallClock());
     if (replyWait <= 0) break;
     const cont = page.getByText(/continue generating/i);
-    if (await cont.count(playwrightTimeout(replyWait)).catch(() => 0)) {
+    if (await boundedLocatorCount(cont, replyWait)) {
       let continuationLocator: any = null;
       if (boundAssistantId) {
         continuationLocator = assistantLocators.get(boundAssistantId) ?? null;
