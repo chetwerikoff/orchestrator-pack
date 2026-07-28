@@ -190,6 +190,15 @@ if ($State -eq 'ready_for_review') {
     if ($env:AO_ISSUE_NUMBER) {
         $issueNumber = [int]$env:AO_ISSUE_NUMBER
     }
+    if ($issueNumber -le 0 -and $PrNumber -gt 0) {
+        $prJson = & gh pr view $PrNumber --json body 2>$null
+        if ($LASTEXITCODE -eq 0 -and $prJson) {
+            $prBody = ([string](ConvertFrom-Json $prJson).body)
+            if ($prBody -match '(?im)^\s*(?:Closes|Fixes|Resolves)\s+#(\d+)') {
+                $issueNumber = [int]$Matches[1]
+            }
+        }
+    }
     $issueBodyFile = New-TemporaryFile
     try {
         if ($issueNumber -gt 0) {

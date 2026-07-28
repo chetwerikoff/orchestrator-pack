@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "result": {
+    "terminal": {
+      "handle": "term_smoke_owned",
+      "worktreeId": "wt-example",
+      "title": "smoke-1061"
+    }
+  }
+}

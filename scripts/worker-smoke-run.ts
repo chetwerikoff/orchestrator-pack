@@ -1,6 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types
 
 import './toolchain/native-entrypoint-preflight.ts';
+import { bucketForState, exitCodeForPrChecks } from './lib/gh-pr-checks.mjs';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,6 +22,7 @@ import {
   evaluateWorkerSmokeGate,
   formatSmokeReportComment,
   normalizeSmokeReport,
+  ownedSmokeTerminalClosedFromReports,
   parseSmokeAgentReport,
   resolveSmokeRequirement,
   scrubSmokeOutput,
@@ -166,10 +168,10 @@ function resolveCiGreen(prNumber: number, headSha: string, repoRoot: string): bo
     return false;
   }
   void headSha;
-  return checks.every((check) => {
-    const state = String(check.state ?? check.bucket ?? '').toLowerCase();
-    return state === 'success' || state === 'pass' || state === 'successful';
-  });
+  const buckets = checks.map((check) => ({
+    bucket: check.bucket ?? bucketForState(String(check.state ?? '').toUpperCase()),
+  }));
+  return exitCodeForPrChecks(buckets) === 0;
 }
 
 function runValidatePlan(options: CliOptions): number {
@@ -196,10 +198,54 @@ function runGateCheck(options: CliOptions): number {
     prComments: comments,
     ciGreen: options.prNumber > 0 ? resolveCiGreen(options.prNumber, options.headSha, options.repoRoot) : false,
     orcaWorktreeOk: worktree.ok,
-    ownedTerminalClosed: true,
+    ownedTerminalClosed: options.prNumber > 0
+      ? ownedSmokeTerminalClosedFromReports(comments, options.prNumber, options.headSha)
+      : false,
   });
   emit({ ok: decision.allowed, ...decision }, options.json);
   return decision.allowed ? 0 : 1;
+}
+
+
+function publishSmokeReport(
+  report: SmokeReport,
+  options: CliOptions,
+): void {
+  const comment = formatSmokeReportComment(report);
+  if (!options.dryRun) {
+    publishPrComment(options.prNumber, comment, options.repoRoot);
+  }
+}
+
+function buildOperationalSmokeReport(
+  result: SmokeReport['result'],
+  options: CliOptions,
+  input: {
+    action: string;
+    expected: string;
+    observed: string;
+    terminalCleanup?: string;
+    limitations?: string[];
+    environmentNotes?: string[];
+    trackedFilesUnmodified?: boolean;
+  },
+): SmokeReport {
+  return {
+    result,
+    issueNumber: options.issueNumber,
+    prNumber: options.prNumber,
+    headSha: options.headSha,
+    scenarios: [{
+      action: input.action,
+      expected: input.expected,
+      observed: input.observed,
+      outcome: result === 'BLOCKED' ? 'blocked' : 'fail',
+    }],
+    limitations: input.limitations ?? [],
+    trackedFilesUnmodified: input.trackedFilesUnmodified ?? true,
+    terminalCleanup: input.terminalCleanup ?? 'not_started',
+    environmentNotes: input.environmentNotes ?? [],
+  };
 }
 
 async function runSmokeAttempt(options: CliOptions): Promise<number> {
@@ -228,10 +274,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     if (!normalized.ok) {
       fail(normalized.reason);
     }
-    const comment = formatSmokeReportComment(normalized.report);
-    if (!options.dryRun) {
-      publishPrComment(options.prNumber, comment, options.repoRoot);
-    }
+    publishSmokeReport(normalized.report, options);
     emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
     return 1;
   }
@@ -258,7 +301,17 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     });
     const sendResult = sendOrcaTerminal(handle, prompt, { cwd: options.cwd });
     if (!sendResult.ok) {
-      fail(sendResult.error?.message ?? 'terminal_send_failed');
+      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
+      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
+      const report = buildOperationalSmokeReport('BLOCKED', options, {
+        action: 'send smoke prompt to Orca terminal',
+        expected: 'terminal send succeeds',
+        observed: sendResult.error?.message ?? 'terminal_send_failed',
+        terminalCleanup,
+      });
+      publishSmokeReport(report, options);
+      emit({ ok: false, report, published: !options.dryRun }, options.json);
+      return 1;
     }
 
     const waitResult = waitOrcaTerminal(handle, {
@@ -267,7 +320,17 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       cwd: options.cwd,
     });
     if (!waitResult.ok) {
-      fail(waitResult.error?.message ?? 'terminal_wait_failed');
+      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
+      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
+      const report = buildOperationalSmokeReport('BLOCKED', options, {
+        action: 'wait for smoke agent completion',
+        expected: 'terminal wait succeeds',
+        observed: waitResult.error?.message ?? 'terminal_wait_failed',
+        terminalCleanup,
+      });
+      publishSmokeReport(report, options);
+      emit({ ok: false, report, published: !options.dryRun }, options.json);
+      return 1;
     }
 
     const readResult = readOrcaTerminal(handle, { cwd: options.cwd, limit: 2000 });
@@ -277,7 +340,17 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     const mutated = detectTrackedImplementationMutation(beforeStatus, afterStatus);
 
     if (!partial) {
-      fail('smoke agent output missing worker-smoke-report block');
+      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
+      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
+      const report = buildOperationalSmokeReport('FAIL', options, {
+        action: 'parse smoke agent report',
+        expected: 'worker-smoke-report block present',
+        observed: 'missing worker-smoke-report block',
+        terminalCleanup,
+      });
+      publishSmokeReport(report, options);
+      emit({ ok: false, report, published: !options.dryRun }, options.json);
+      return 1;
     }
 
     if (mutated) {
@@ -308,14 +381,20 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
           environmentNotes: partial.environmentNotes ?? [],
         };
 
-    const comment = formatSmokeReportComment(report);
-    if (!options.dryRun) {
-      publishPrComment(options.prNumber, comment, options.repoRoot);
-    }
-
     const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
     terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
     report.terminalCleanup = terminalCleanup;
+    if (report.result === 'PASS' && terminalCleanup !== 'closed_owned_handle') {
+      report.result = 'FAIL';
+      report.scenarios.push({
+        action: 'close owned Orca terminal handle',
+        expected: 'terminal close succeeds',
+        observed: terminalCleanup,
+        outcome: 'fail',
+      });
+    }
+
+    publishSmokeReport(report, options);
 
     emit({
       ok: report.result === 'PASS',

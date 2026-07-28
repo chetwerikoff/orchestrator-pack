@@ -2,6 +2,10 @@ import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { runProcessSync } from '../kernel/subprocess.ts';
 
+/** Capture-backed Orca JSON field grounding for Issue #1061 (see tests/external-output-references/captures/orca-worker-smoke/). */
+export const ORCA_WORKER_SMOKE_CONTRACT_EVIDENCE_DIR =
+  'tests/external-output-references/captures/orca-worker-smoke';
+
 export interface OrcaJsonResponse<T = unknown> {
   ok: boolean;
   result?: T;

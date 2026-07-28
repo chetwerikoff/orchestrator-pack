@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "result": {
+    "worktree": {
+      "path": "/home/che/orca/workspaces/orchestrator-pack/add-issue-1061",
+      "head": "d504d8de2546dc45d1f6d932afc06915d014ec7e",
+      "branch": "chetwerikoff/add-issue-1061",
+      "linkedIssue": 1061,
+      "id": "wt-example"
+    }
+  }
+}

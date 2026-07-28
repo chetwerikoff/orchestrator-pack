@@ -192,12 +192,32 @@ export function parseSmokeTestPlan(markdown) {
   };
 }
 
-export function resolveSmokeRequirement(markdown) {
-  const parsed = parseSmokeTestPlan(markdown);
-  if (!parsed) {
-    return { requirement: 'legacy-exempt', scenarios: [] };
+function isSmokePlanGrandfathered(markdown) {
+  const blocks = extractFencedBlocks(markdown);
+  const raw = blocks.get('smoke-plan-floor')?.[0];
+  if (!raw) {
+    return false;
   }
-  return parsed;
+  const fields = parseKeyValueBlock(raw);
+  return ['true', 'yes', '1'].includes(String(fields.grandfathered ?? '').toLowerCase());
+}
+
+export function resolveSmokeRequirement(markdown) {
+  const trimmed = String(markdown ?? '').trim();
+  if (!trimmed) {
+    return { requirement: 'unknown', scenarios: [] };
+  }
+  const parsed = parseSmokeTestPlan(trimmed);
+  if (parsed) {
+    return parsed;
+  }
+  if (isSmokePlanGrandfathered(trimmed)) {
+    return { requirement: 'legacy-exempt', scenarios: [], reason: 'grandfathered' };
+  }
+  if (parseBehaviorKind(trimmed) === 'action-producing') {
+    return { requirement: 'required', scenarios: [] };
+  }
+  return { requirement: 'legacy-exempt', scenarios: [] };
 }
 
 export function checkSmokeTestPlan(markdown) {

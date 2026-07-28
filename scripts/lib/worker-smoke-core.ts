@@ -17,7 +17,7 @@ export interface SmokeScenario {
   skipReason?: string;
 }
 
-export type SmokeRequirement = 'required' | 'not-applicable' | 'legacy-exempt';
+export type SmokeRequirement = 'required' | 'not-applicable' | 'legacy-exempt' | 'unknown';
 
 export interface SmokeTestPlan {
   requirement: SmokeRequirement;
@@ -77,10 +77,7 @@ export function buildSmokeAgentPrompt(input: {
     'environment-notes: <optional>',
     'limitations: <optional comma-separated>',
     'scenarios:',
-    '  - action: <what you ran>',
-    '    expected: <from plan>',
-    '    observed: <what happened>',
-    '    outcome: pass|fail|skipped|blocked',
+    '  - action: <what you ran> | expected: <from plan> | observed: <what happened> | outcome: pass|fail|skipped|blocked',
     '```',
     '',
     `Issue: #${input.issueNumber}`,
@@ -105,6 +102,72 @@ export function smokePromptForbidsWorkerActions(prompt: string): string[] {
   return violations;
 }
 
+function applyScenarioField(scenario: SmokeScenario, key: string, value: string): void {
+  const normalized = key.trim().toLowerCase();
+  const trimmed = value.trim();
+  if (normalized === 'action') {
+    scenario.action = trimmed;
+  } else if (normalized === 'expected') {
+    scenario.expected = trimmed;
+  } else if (normalized === 'observed') {
+    scenario.observed = trimmed;
+  } else if (normalized === 'outcome') {
+    scenario.outcome = trimmed.toLowerCase() as SmokeScenario['outcome'];
+  } else if (normalized === 'skip-reason') {
+    scenario.skipReason = trimmed;
+  }
+}
+
+function parseScenarioFieldToken(token: string, scenario: SmokeScenario): void {
+  const match = token.match(/^([a-z-]+):\s*(.*)$/i);
+  if (!match) {
+    return;
+  }
+  applyScenarioField(scenario, match[1], match[2]);
+}
+
+function parseSmokeScenarioBlock(block: string): SmokeScenario[] {
+  const scenarios: SmokeScenario[] = [];
+  let current: SmokeScenario | null = null;
+  let inScenarios = false;
+
+  for (const rawLine of block.split(/\r?\n/u)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (/^scenarios:\s*$/i.test(trimmed)) {
+      inScenarios = true;
+      continue;
+    }
+    if (!inScenarios) {
+      continue;
+    }
+    if (trimmed.startsWith('-')) {
+      if (current && (current.action || current.expected || current.observed)) {
+        scenarios.push(current);
+      }
+      current = { action: '', expected: '' };
+      const content = trimmed.replace(/^-\s*/, '');
+      for (const part of content.split('|')) {
+        parseScenarioFieldToken(part.trim(), current);
+      }
+      if (!content.includes('|')) {
+        parseScenarioFieldToken(content, current);
+      }
+      continue;
+    }
+    if (current && /^\s{2,}/.test(rawLine)) {
+      parseScenarioFieldToken(trimmed, current);
+    }
+  }
+
+  if (current && (current.action || current.expected || current.observed)) {
+    scenarios.push(current);
+  }
+  return scenarios;
+}
+
 export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null {
   const match = text.match(SMOKE_REPORT_BLOCK);
   if (!match) {
@@ -116,19 +179,21 @@ export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null
     return null;
   }
 
-  const scenarios: SmokeScenario[] = [];
-  for (const line of match[1].split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('-')) {
-      continue;
-    }
-    const action = trimmed.match(/action:\s*([^|]+)/i)?.[1]?.trim() ?? '';
-    const expected = trimmed.match(/expected:\s*([^|]+)/i)?.[1]?.trim() ?? '';
-    const observed = trimmed.match(/observed:\s*([^|]+)/i)?.[1]?.trim() ?? '';
-    const outcome = trimmed.match(/outcome:\s*([a-z]+)/i)?.[1]?.trim().toLowerCase() as SmokeScenario['outcome'];
-    const skipReason = trimmed.match(/skip-reason:\s*(.+)$/i)?.[1]?.trim();
-    if (action || expected || observed) {
-      scenarios.push({ action, expected, observed, outcome, skipReason });
+  const scenarios = parseSmokeScenarioBlock(match[1]);
+  if (scenarios.length === 0) {
+    for (const line of match[1].split(/\r?\n/u)) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('-')) {
+        continue;
+      }
+      const action = trimmed.match(/action:\s*([^|]+)/i)?.[1]?.trim() ?? '';
+      const expected = trimmed.match(/expected:\s*([^|]+)/i)?.[1]?.trim() ?? '';
+      const observed = trimmed.match(/observed:\s*([^|]+)/i)?.[1]?.trim() ?? '';
+      const outcome = trimmed.match(/outcome:\s*([a-z]+)/i)?.[1]?.trim().toLowerCase() as SmokeScenario['outcome'];
+      const skipReason = trimmed.match(/skip-reason:\s*(.+)$/i)?.[1]?.trim();
+      if (action || expected || observed) {
+        scenarios.push({ action, expected, observed, outcome, skipReason });
+      }
     }
   }
 
@@ -173,6 +238,19 @@ export function normalizeSmokeReport(
   }
   if (!Array.isArray(partial.scenarios) || partial.scenarios.length === 0) {
     return { ok: false, reason: 'missing_scenarios' };
+  }
+  if (partial.result === 'PASS') {
+    for (const [index, scenario] of partial.scenarios.entries()) {
+      if (!scenario.action?.trim() || !scenario.expected?.trim() || !scenario.observed?.trim()) {
+        return { ok: false, reason: `pass_scenario_${index + 1}_incomplete` };
+      }
+      if (!scenario.outcome) {
+        return { ok: false, reason: `pass_scenario_${index + 1}_missing_outcome` };
+      }
+    }
+    if (partial.terminalCleanup && partial.terminalCleanup !== 'closed_owned_handle') {
+      return { ok: false, reason: 'pass_requires_terminal_cleanup' };
+    }
   }
 
   return {
@@ -276,7 +354,7 @@ export function extractSmokeReportsFromComments(comments: readonly { body?: stri
   return reports;
 }
 
-export function findCurrentHeadSmokePass(
+export function findLatestSmokeReportForHead(
   comments: readonly { body?: string }[],
   prNumber: number,
   headSha: string,
@@ -284,8 +362,31 @@ export function findCurrentHeadSmokePass(
   const normalizedHead = headSha.trim().toLowerCase();
   const reports = extractSmokeReportsFromComments(comments)
     .filter((report) => report.prNumber === prNumber && report.headSha.toLowerCase() === normalizedHead);
-  const pass = [...reports].reverse().find((report) => report.result === 'PASS');
-  return pass ?? null;
+  return reports.at(-1) ?? null;
+}
+
+export function findCurrentHeadSmokePass(
+  comments: readonly { body?: string }[],
+  prNumber: number,
+  headSha: string,
+): SmokeReport | null {
+  const latest = findLatestSmokeReportForHead(comments, prNumber, headSha);
+  if (!latest || latest.result !== 'PASS') {
+    return null;
+  }
+  if (latest.terminalCleanup !== 'closed_owned_handle') {
+    return null;
+  }
+  return latest;
+}
+
+export function ownedSmokeTerminalClosedFromReports(
+  comments: readonly { body?: string }[],
+  prNumber: number,
+  headSha: string,
+): boolean {
+  const latest = findLatestSmokeReportForHead(comments, prNumber, headSha);
+  return latest?.terminalCleanup === 'closed_owned_handle';
 }
 
 export interface WorkerSmokeGateInput {
@@ -306,30 +407,41 @@ export interface WorkerSmokeGateDecision {
 
 export function evaluateWorkerSmokeGate(input: WorkerSmokeGateInput): WorkerSmokeGateDecision {
   const plan = resolveSmokeRequirement(input.issueBody);
+  if (plan.requirement === 'unknown') {
+    return { allowed: false, reason: 'issue_body_unavailable', smokeRequired: true };
+  }
   if (plan.requirement === 'legacy-exempt' || plan.requirement === 'not-applicable') {
     if (!input.ciGreen) {
       return { allowed: false, reason: 'required_ci_not_green', smokeRequired: false };
     }
     return { allowed: true, reason: 'smoke_not_required', smokeRequired: false };
   }
+  if (plan.requirement === 'required' && plan.scenarios.length === 0) {
+    return { allowed: false, reason: 'missing_smoke_plan', smokeRequired: true };
+  }
 
   if (!input.orcaWorktreeOk) {
     return { allowed: false, reason: 'orca_worktree_unresolved', smokeRequired: true };
   }
-  if (!input.ownedTerminalClosed) {
+
+  const latest = findLatestSmokeReportForHead(input.prComments, input.prNumber, input.headSha);
+  const ownedTerminalClosed = input.ownedTerminalClosed
+    || ownedSmokeTerminalClosedFromReports(input.prComments, input.prNumber, input.headSha);
+  if (!ownedTerminalClosed) {
     return { allowed: false, reason: 'owned_smoke_terminal_uncleaned', smokeRequired: true };
+  }
+
+  if (latest && (latest.result === 'FAIL' || latest.result === 'BLOCKED')) {
+    return { allowed: false, reason: `smoke_${latest.result.toLowerCase()}`, smokeRequired: true };
   }
 
   const pass = findCurrentHeadSmokePass(input.prComments, input.prNumber, input.headSha);
   if (!pass) {
     const reports = extractSmokeReportsFromComments(input.prComments)
       .filter((report) => report.prNumber === input.prNumber);
-    const latest = reports.at(-1);
-    if (latest && latest.headSha.toLowerCase() !== input.headSha.trim().toLowerCase()) {
+    const latestAnyHead = reports.at(-1);
+    if (latestAnyHead && latestAnyHead.headSha.toLowerCase() !== input.headSha.trim().toLowerCase()) {
       return { allowed: false, reason: 'stale_smoke_pass_for_older_head', smokeRequired: true };
-    }
-    if (latest && (latest.result === 'FAIL' || latest.result === 'BLOCKED')) {
-      return { allowed: false, reason: `smoke_${latest.result.toLowerCase()}`, smokeRequired: true };
     }
     return { allowed: false, reason: 'missing_smoke_pass', smokeRequired: true };
   }

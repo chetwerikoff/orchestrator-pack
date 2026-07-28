@@ -258,3 +258,88 @@ describe('orca json runner', () => {
     expect(bad.ok).toBe(false);
   });
 });
+
+describe('review finding regressions', () => {
+  const issueBody = readFixture('action-producing-with-plan.md');
+
+  it('revokes an earlier same-head PASS when a later FAIL is published', () => {
+    const passComment = formatSmokeReportComment({
+      result: 'PASS',
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: [{
+        action: 'run helper',
+        expected: 'prints ok',
+        observed: 'ok',
+        outcome: 'pass',
+      }],
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+    });
+    const failComment = formatSmokeReportComment({
+      result: 'FAIL',
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: [{
+        action: 'run helper',
+        expected: 'prints ok',
+        observed: 'error',
+        outcome: 'fail',
+      }],
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+    });
+    const comments = [{ body: passComment }, { body: failComment }];
+    expect(findCurrentHeadSmokePass(comments, 7, headA)).toBeNull();
+    expect(evaluateWorkerSmokeGate({
+      issueBody,
+      prNumber: 7,
+      headSha: headA,
+      prComments: comments,
+      ciGreen: true,
+      orcaWorktreeOk: true,
+      ownedTerminalClosed: true,
+    }).allowed).toBe(false);
+  });
+
+  it('parses multiline smoke scenario blocks and rejects incomplete PASS evidence', () => {
+    const multiline = [
+      '```worker-smoke-report',
+      'result: PASS',
+      'tracked-files-unmodified: true',
+      'terminal-cleanup: closed_owned_handle',
+      'scenarios:',
+      '  - action: run gate-check',
+      '    expected: exits 0',
+      '    observed: exits 0',
+      '    outcome: pass',
+      '```',
+    ].join('\n');
+    const partial = parseSmokeAgentReport(multiline);
+    expect(partial?.scenarios?.[0]?.observed).toBe('exits 0');
+    expect(normalizeSmokeReport(partial ?? {}, {
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+    }).ok).toBe(true);
+  });
+
+  it('fails closed when issue body is unavailable instead of legacy-exempt', () => {
+    expect(resolveSmokeRequirement('').requirement).toBe('unknown');
+    expect(evaluateWorkerSmokeGate({
+      issueBody: '',
+      prNumber: 7,
+      headSha: headA,
+      prComments: [],
+      ciGreen: true,
+      orcaWorktreeOk: true,
+      ownedTerminalClosed: true,
+    }).reason).toBe('issue_body_unavailable');
+  });
+});
