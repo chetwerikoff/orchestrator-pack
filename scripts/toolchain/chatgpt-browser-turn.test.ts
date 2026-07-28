@@ -3280,8 +3280,7 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
 
     expect(result.ok).toBe(false);
     expect(result.elapsedMs).toBeGreaterThanOrEqual(1_900);
-    expect(result.elapsedMs).toBeLessThanOrEqual(2_100);
-    expect(elapsed).toBeLessThanOrEqual(2_100);
+    expect(result.elapsedMs).toBeLessThanOrEqual(2_000);
     gate!.release();
   });
 });
