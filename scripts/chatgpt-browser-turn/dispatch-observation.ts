@@ -217,33 +217,11 @@ export async function runGateBCharacterization(page: {
         const secondaryPage = await context.newPage();
         characterizationPages.push(secondaryPage);
         await attachGateBSecondaryPageObservers(secondaryPage);
-        const characterizationUrl = typeof page.url === 'function' ? page.url() : 'https://chatgpt.com/';
         if (typeof secondaryPage.goto === 'function') {
-          await secondaryPage.goto(characterizationUrl, { waitUntil: 'domcontentloaded' });
+          await secondaryPage.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded' });
         }
       }
       await attachGateBWebSocketObservers();
-      const probeCdp = await context.newCDPSession(page) as FlatCdpSessionSend;
-      attachCdpOutboundWebSocketObserver(probeCdp, noteWebSocketSent);
-      await probeCdp.send('Target.setDiscoverTargets', { discover: true });
-      const workerTargets = await probeCdp.send('Target.getTargets') as {
-        targetInfos?: Array<{ targetId?: string; type?: string }>;
-      };
-      for (const target of (workerTargets.targetInfos ?? []).slice(0, 6)) {
-        const type = target.type ?? '';
-        if (!['service_worker', 'worker', 'shared_worker'].includes(type) || !target.targetId) continue;
-        try {
-          const attached = await probeCdp.send('Target.attachToTarget', {
-            targetId: target.targetId,
-            flatten: true,
-          }) as { sessionId?: string };
-          const sessionId = attached.sessionId ?? '';
-          if (!sessionId) continue;
-          await sendFlatChildCdpCommand(probeCdp, sessionId, 'Network.enable');
-        } catch {
-          // Worker attach failures are non-fatal for characterization.
-        }
-      }
       if (typeof context.on === 'function') {
         context.on('page', (createdPage: unknown) => { void attachGateBSecondaryPageObservers(createdPage); });
       }
@@ -690,6 +668,8 @@ export async function establishDispatchObservationBoundary(
           cdp.on('Target.targetCreated', async (event: { targetInfo?: { targetId?: string; type?: string } }) => {
             const targetId = event.targetInfo?.targetId;
             if (!targetId || !isRelevantTargetType(event.targetInfo?.type)) return;
+            boundary.websocketTargetsCoverage = 'incomplete';
+            if (armed) boundary.markCoverageLost();
             try {
               const attached = await cdp.send('Target.attachToTarget', {
                 targetId,
