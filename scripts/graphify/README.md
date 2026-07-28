@@ -16,7 +16,7 @@ into CI, a required status check, or any worker session/report status transition
   write into `CLAUDE.md`, `AGENTS.md`, or `.cursor/rules/**` -- files this repo's architect owns.
   `scripts/graphify/lib/Resolve-GraphifyEnv.ps1` is the single point that shells out to the real
   `graphify` executable and hard-restricts the allowed subcommand set to `extract` and `update`;
-  `scripts/graphify/check-graphify-no-installer.ps1` guards this statically.
+  `scripts/graphify/check-graphify-no-installer.ts` guards this statically.
 - No doc/PDF/image/video extraction, no LLM-backed community-naming (`label`, `cluster-only
   --backend`), no multi-platform skill generation, no cross-repo/global-graph features. v1 scope
   is code-only, single-repo, and limited to the three platforms this pack operates (Cursor, Codex,

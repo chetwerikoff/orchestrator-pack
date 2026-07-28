@@ -1209,8 +1209,12 @@
       "sourceKind": "check-script",
       "sourcePath": "scripts/check-scripted-review-confirmed-delivery-gate.ps1",
       "marker": "check-scripted-review-confirmed-delivery-gate.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #1039 removes scripts/check-scripted-review-confirmed-delivery-gate.ps1 as part of the PR1 AO-era PowerShell estate cut; confirmed-delivery enforcement retires with the AO divorce (forward-reference PR7).",
+        "replacement": "Review delivery telemetry (Issue #718) and stdout-first delivery guards remain on surviving TypeScript surfaces; this legacy PowerShell gate is not independently executed."
+      }
     },
     {
       "id": "check-script:scripts/check-seed-snapshot-failure-bounded-read-economy.ps1",
@@ -3007,8 +3011,12 @@
       "sourceKind": "verify-script-member",
       "sourcePath": "scripts/verify.ps1",
       "marker": "scripts/check-scripted-review-confirmed-delivery-gate.ps1",
-      "classification": "kept-in-pr1",
-      "keepCategory": "D"
+      "classification": "retired-in-bulk",
+      "retirementJustification": {
+        "reasonCode": "superseded-compatibility-surface",
+        "behavior": "Issue #1039 removes scripts/check-scripted-review-confirmed-delivery-gate.ps1 from verify.ps1 as part of the PR1 AO-era PowerShell estate cut; confirmed-delivery enforcement retires with the AO divorce (forward-reference PR7).",
+        "replacement": "Review delivery telemetry (Issue #718) and stdout-first delivery guards remain on surviving TypeScript surfaces; this legacy verify invocation is not independently executed."
+      }
     },
     {
       "id": "verify-script:scripts/check-seed-snapshot-failure-bounded-read-economy.ps1",

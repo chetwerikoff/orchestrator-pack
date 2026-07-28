@@ -19,12 +19,12 @@
     "externalMutation": "none"
   },
   "hookWiringFingerprint": {
-    "wrapper": "scripts/invoke-read-delegation-audit-stop.ps1",
-    "wrapperHash": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d",
-    "commandShape": "pwsh <repo>/scripts/invoke-read-delegation-audit-stop.ps1 [-ArtifactPath <redacted>] [-RepoRoot <repo>]"
+    "wrapper": "scripts/invoke-read-delegation-audit-stop.ts",
+    "wrapperHash": "4b3cfd5bec0c56d8b9f9d0578762e1cbc3cb8172d3a7547f89af035d9450e32b",
+    "commandShape": "node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/invoke-read-delegation-audit-stop.ts [--artifact-path <redacted>] [--repo-root <repo>]"
   },
   "codeHashes": {
     "docs/read-delegation-audit.mjs": "40c0f96074eecb05ffc1ce49ecb3edb2e0c8361337bf192e4bb6301e3440c9e9",
-    "scripts/invoke-read-delegation-audit-stop.ps1": "7b34e3976f9d1dfc973cf506c6fe23e234943df7d46b379cbd03b8940514903d"
+    "scripts/invoke-read-delegation-audit-stop.ts": "4b3cfd5bec0c56d8b9f9d0578762e1cbc3cb8172d3a7547f89af035d9450e32b"
   }
 }

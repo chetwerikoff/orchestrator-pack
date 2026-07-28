@@ -61,7 +61,7 @@ export function resolveHarnessExecutionSurfaces(trustedPackRoot) {
   return {
     trustedPackRoot: root,
     promptPath: join(root, 'prompts/codex_review_prompt.md'),
-    bridgeEntrypoint: join(root, 'scripts/harness-review-bridge.ps1'),
+    bridgeEntrypoint: join(root, 'scripts/harness-review-bridge.ts'),
     bridgeRunner: join(root, 'scripts/harness-review-bridge.ts'),
     mapperPath: join(root, 'plugins/ao-codex-pr-reviewer/lib/review_jsonl.ts'),
     reviewScript: join(root, 'plugins/ao-codex-pr-reviewer/bin/review.ps1'),

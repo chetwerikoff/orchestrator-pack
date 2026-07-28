@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { runProcessSync } from './kernel/subprocess.mjs';
 import {
   FIXTURE_HOLDER_PROMPT,
   claimOrSpawnFixtureHolder,
@@ -130,12 +131,16 @@ function resolveAoFixtureSession() {
   });
 }
 
-function runReviewerReverifyCommand({ aoSessionId, env: envOverrides } = {}) {
+function runReviewerReverifyCommand({ env: envOverrides } = {}) {
   const args = [
     '-NoProfile',
     '-File',
-    'scripts/run-reviewer-reverify-ao-review-command.ps1',
+    'scripts/launch-contract-evidence-reverify.ps1',
     '-RepoRoot',
+    packRoot,
+    '-ReviewTargetRoot',
+    packRoot,
+    '-TrustedBaseRoot',
     packRoot,
     '-FixtureDir',
     'tests/fixtures/contract-evidence-reverify/e2e',
@@ -143,14 +148,14 @@ function runReviewerReverifyCommand({ aoSessionId, env: envOverrides } = {}) {
     'tests/fixtures/contract-evidence-reverify/capture-manifest.json',
     '-ExplicitIssue',
     '376',
+    '-Summary',
   ];
-  if (aoSessionId) {
-    args.push('-AoSessionId', aoSessionId);
-  }
-  return spawnSync('pwsh', args, {
+  return runProcessSync({
+    command: 'pwsh',
+    args,
     cwd: packRoot,
-    encoding: 'utf8',
-    env: liveE2eEnv(envOverrides),
+    inheritParentEnv: true,
+    env: liveE2eEnv({ OPK_REVERIFY_E2E_REQUIRED: '1', ...envOverrides }),
   });
 }
 
@@ -292,10 +297,10 @@ if (!output.viaAoReviewExecute) {
   process.exit(1);
 }
 
-const mechanicalProc = runReviewerReverifyCommand({ aoSessionId: sessionId });
-output.viaMechanicalReviewerCommand = mechanicalProc.status === 0;
+const mechanicalProc = runReviewerReverifyCommand();
+output.viaMechanicalReviewerCommand = mechanicalProc.ok;
 if (!output.viaMechanicalReviewerCommand) {
-  output.error = `checkpoint-2 mechanical reviewer command failed (exit ${mechanicalProc.status ?? 'null'})`;
+  output.error = `checkpoint-2 mechanical reviewer command failed (exit ${mechanicalProc.exitCode ?? 'null'})`;
   output.summary = (mechanicalProc.stdout ?? mechanicalProc.stderr ?? '').trim();
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   process.exit(1);

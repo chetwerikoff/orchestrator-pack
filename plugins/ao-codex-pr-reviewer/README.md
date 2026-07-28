@@ -18,7 +18,7 @@ Run PR-level review with Codex CLI while AO planning and coding stay on Cursor C
 ## Reviewer time budget (Issue #461)
 
 - Effective hard budget defaults to **10 minutes** (`AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS`).
-- Slow/full-suite test commands are blocked by `bin/command-guard/*` wrappers prepended to `PATH` for trusted local review. Windows ships matching `.cmd`/`.ps1` shims that delegate to the POSIX guard via Git `sh`.
+- Slow/full-suite test commands are blocked by `bin/command-guard/*` wrappers prepended to `PATH` for trusted local review. Windows ships matching `.cmd` shims that delegate to the POSIX guard via Git `sh`.
 - Timeout before verdict emits `reviewer-evidence` with `failureClass: timeout_no_verdict` (distinct from empty-output failure).
 - Repeated same-head `timeout_no_verdict` failures stop automatic retries at review-start with `escalationReason: repeated_timeout_no_verdict`.
 
@@ -56,7 +56,7 @@ AO 0.9.2 has two upstream bugs on Windows that break the built-in review:
 Apply the patch before running AO:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/patch-codex-review4.ps1
+node docs/orchestrator-message-registry.mjs generate-map
 ```
 
 The script patches the bundled Next.js chunk in:
@@ -108,12 +108,12 @@ secrets from the Codex child env so prompt injection cannot exfiltrate them
 (trusted local review is network-capable and still reviews PR diffs). Codex
 CLI auth uses `~/.codex` on disk, not those env vars.
 
-Architect / draft-spec review (`scripts/review-architect-artifact.ps1` /
+Architect / draft-spec review (`scripts/review-architect-artifact.ts` /
 `codex review -c sandbox_mode=workspace-write -c sandbox_workspace_write.network_access=true`) is always
 trusted-local and coworker-capable. The script strips the same exfiltratable env
 vars as the PR wrapper before spawning Codex.
 
-The Windows AO 0.9.2 patch path (`scripts/patch-codex-review4.ps1`) is legacy:
+The Windows AO 0.9.2 patch path was removed in the PR1 estate cut; legacy reference:
 it still invokes `codex exec --sandbox read-only` without network and is **not**
 coworker-capable. Pack review uses the scoped wrapper above, not that path.
 

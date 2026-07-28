@@ -26,7 +26,7 @@
     {
       "gateId": "coworker-delegation-threshold-drift",
       "legacyScript": "scripts/check-coworker-delegation-threshold-drift.ps1",
-      "sourceBlobSha": "3605aeff39385d09a8245763f990d20832fc4df9",
+      "sourceBlobSha": "4081cf827f298ef4384ddc0525dc5db74d24b075",
       "case": "real-clean-tree",
       "argv": [
         "pwsh",
@@ -86,7 +86,7 @@
     {
       "gateId": "review-010-vocabulary",
       "legacyScript": "scripts/check-review-010-vocabulary.ps1",
-      "sourceBlobSha": "6763a4e68d8ab18db9ea3b5431d330b7a8f9f461",
+      "sourceBlobSha": "c796ca10809ec850be97f19e6a19afe5621b9860",
       "case": "real-clean-tree",
       "argv": [
         "pwsh",
@@ -187,7 +187,7 @@
     {
       "gateId": "coworker-delegation-threshold-drift",
       "legacyScript": "scripts/check-coworker-delegation-threshold-drift.ps1",
-      "sourceBlobSha": "3605aeff39385d09a8245763f990d20832fc4df9",
+      "sourceBlobSha": "4081cf827f298ef4384ddc0525dc5db74d24b075",
       "case": "negative-stale-600-literal",
       "captureMode": "fixture-replay",
       "scenario": "coworker-stale-600",
@@ -262,7 +262,7 @@
     {
       "gateId": "review-010-vocabulary",
       "legacyScript": "scripts/check-review-010-vocabulary.ps1",
-      "sourceBlobSha": "6763a4e68d8ab18db9ea3b5431d330b7a8f9f461",
+      "sourceBlobSha": "c796ca10809ec850be97f19e6a19afe5621b9860",
       "case": "negative-dead-review-argv",
       "captureMode": "fixture-replay",
       "scenario": "review-dead-argv",

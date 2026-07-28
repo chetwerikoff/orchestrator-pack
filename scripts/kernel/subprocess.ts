@@ -46,6 +46,7 @@ export interface RunProcessSyncOptions {
   readonly env?: Readonly<NodeJS.ProcessEnv>;
   readonly inheritParentEnv?: boolean;
   readonly encoding?: BufferEncoding;
+  readonly input?: string | Uint8Array;
 }
 
 interface TerminalIntent {
@@ -349,6 +350,7 @@ export function runProcessSync(options: RunProcessSyncOptions): ProcessResult {
       shell: false,
       windowsHide: true,
       encoding,
+      input: options.input,
     });
   } catch (error) {
     return {

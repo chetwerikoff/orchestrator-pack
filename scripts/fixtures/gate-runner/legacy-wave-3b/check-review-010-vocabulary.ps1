@@ -11,7 +11,6 @@ $allowlist = @(
     'scripts/check-review-010-vocabulary.ps1',
     'scripts/check-review-producer-contract.ps1',
     'scripts/check-ao-0-10-review-trigger.ps1',
-    'scripts/patch-codex-review4.ps1',
     'scripts/check-review-send-reconcile.ps1',
     'scripts/check-review-start-claim-guard.ps1',
     'scripts/check-review-trigger-reconcile.ps1',
@@ -19,7 +18,6 @@ $allowlist = @(
     'scripts/check-review-cycle-cap.ps1',
     'scripts/check-merge-triage-gate.ps1',
     'scripts/lib/Review-MechanicalForbiddenCommand.ps1',
-    'scripts/lib/Review-Send-MechanicalForbiddenCommand.ps1',
     'scripts/review-send-reconcile.ps1',
     'docs/ao-0-10-review-api.mjs',
     'docs/review-mechanical-cli.mjs'

@@ -6,7 +6,7 @@ review and emits metrics for a deferred Phase-2 hard-block decision.
 
 Canonical ask thresholds live in [`AGENTS.md`](../AGENTS.md).
 Implementation: [`docs/read-delegation-audit.mjs`](../docs/read-delegation-audit.mjs).
-Hook entry: [`scripts/invoke-read-delegation-audit-stop.ps1`](../scripts/invoke-read-delegation-audit-stop.ps1).
+Hook entry: [`scripts/invoke-read-delegation-audit-stop.ts`](../scripts/invoke-read-delegation-audit-stop.ts).
 
 ## Contract invariants
 
@@ -43,7 +43,7 @@ EOF
 
 ## Operator adoption (post-merge)
 
-For installations that already point both Stop/stop hooks at `scripts/invoke-read-delegation-audit-stop.ps1`, no hook JSON wiring change is required for #264. Machine-local hook JSON is **not** tracked; new installations should wire the same handler on both surfaces.
+For installations that already point both Stop/stop hooks at the deleted PowerShell wrapper (`scripts/invoke-read-delegation-audit-stop.ps1`), repoint them at `scripts/invoke-read-delegation-audit-stop.ts` at merge time (see operator action below). Machine-local hook JSON is **not** tracked; new installations should wire the TypeScript handler on both surfaces.
 
 ### 1. Resync tracked policy copies
 
@@ -65,14 +65,17 @@ Add a `stop` entry alongside existing hooks (e.g. RTK `beforeShellExecution`):
   "hooks": {
     "stop": [
       {
-        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File /ABS/PATH/TO/orchestrator-pack/scripts/invoke-read-delegation-audit-stop.ps1"
+        "command": "node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/invoke-read-delegation-audit-stop.ts"
       }
     ]
   }
 }
 ```
 
-Replace `/ABS/PATH/TO/orchestrator-pack` with your checkout path.
+Hook JSON requires absolute paths: prefix each `scripts/...` segment with your
+orchestrator-pack checkout root (for example
+`/home/you/orchestrator-pack/scripts/lib/Invoke-TypeScriptCli.ts` and
+`/home/you/orchestrator-pack/scripts/invoke-read-delegation-audit-stop.ts`).
 
 **Verify:** complete one fresh no-side-effect Cursor worker turn with an ordinary >400-line read; confirm
 `~/.orchestrator-pack/read-delegation-audit.jsonl` gains a `work_unit_verdict` line with `reviewerPath:false` and `inDenominator:true`. The stop
@@ -89,12 +92,15 @@ Add a `Stop` hook (file is gitignored — operator-local only):
     "Stop": [
       {
         "type": "command",
-        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File /ABS/PATH/TO/orchestrator-pack/scripts/invoke-read-delegation-audit-stop.ps1"
+        "command": "node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/invoke-read-delegation-audit-stop.ts"
       }
     ]
   }
 }
 ```
+
+Use the same absolute-path prefix rule as Cursor for both `Invoke-TypeScriptCli.ts` and
+`invoke-read-delegation-audit-stop.ts` under your checkout root.
 
 **Verify:** same JSONL artifact append as Cursor after a fresh no-side-effect Claude session completes one ordinary >400-line work unit (`reviewerPath:false`, `inDenominator:true`).
 
