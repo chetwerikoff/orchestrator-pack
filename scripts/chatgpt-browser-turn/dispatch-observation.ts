@@ -122,10 +122,18 @@ export function summarizeGateBCharacterization(probes: readonly GateBProbeResult
 
 export async function runGateBCharacterization(page: {
   reload?: (options?: { waitUntil?: string }) => Promise<unknown>;
+  url?: () => string;
   context?: () => {
     on?: (event: string, handler: (request: { url: () => string }) => void) => void;
     pages?: () => unknown[];
     serviceWorkers?: () => unknown[];
+    newPage?: () => Promise<{
+      on?: (event: string, handler: (value: unknown) => void) => void;
+      goto?: (url: string, options?: { waitUntil?: string }) => Promise<unknown>;
+      reload?: (options?: { waitUntil?: string }) => Promise<unknown>;
+      close?: () => Promise<unknown>;
+      url?: () => string;
+    }>;
     newCDPSession?: (target: unknown) => Promise<{
       send: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
       on: (event: string, handler: (event: Record<string, unknown>) => void) => void;
@@ -168,30 +176,76 @@ export async function runGateBCharacterization(page: {
   }
 
   const observedCdpTargets = new WeakSet<object>();
-  const attachGateBWebSocketObservers = async (): Promise<void> => {
+  const characterizationPages: Array<{
+    close?: () => Promise<unknown>;
+    reload?: (options?: { waitUntil?: string }) => Promise<unknown>;
+  }> = [];
+  const attachGateBSecondaryPageObservers = async (secondaryPage: unknown): Promise<void> => {
+    if (typeof secondaryPage !== 'object' || secondaryPage === null || observedCdpTargets.has(secondaryPage)) return;
+    observedCdpTargets.add(secondaryPage);
+    const pageLike = secondaryPage as {
+      on?: (event: string, handler: (value: unknown) => void) => void;
+    };
+    if (typeof pageLike.on === 'function') {
+      pageLike.on('websocket', (value: unknown) => {
+        const ws = value as { on?: (event: string, handler: () => void) => void };
+        ws.on?.('framesent', noteWebSocketSent);
+      });
+    }
     if (typeof context.newCDPSession !== 'function') return;
+    try {
+      const session = await context.newCDPSession(secondaryPage);
+      await session.send('Network.enable');
+      attachCdpOutboundWebSocketObserver(session, noteWebSocketSent);
+    } catch {
+      // Individual secondary-page attach failures are non-fatal for characterization.
+    }
+  };
+
+  const attachGateBWebSocketObservers = async (): Promise<void> => {
     if (typeof context.pages === 'function') {
-      for (const otherPage of context.pages()) {
-        if (otherPage === page) continue;
-        if (typeof otherPage !== 'object' || otherPage === null || observedCdpTargets.has(otherPage)) continue;
-        observedCdpTargets.add(otherPage);
-        try {
-          const session = await context.newCDPSession(otherPage);
-          await session.send('Network.enable');
-          attachCdpOutboundWebSocketObserver(session, noteWebSocketSent);
-        } catch {
-          // Individual secondary-page attach failures are non-fatal for characterization.
-        }
+      const siblings = context.pages().filter((candidate) => candidate !== page).slice(0, 3);
+      for (const otherPage of siblings) {
+        await attachGateBSecondaryPageObservers(otherPage);
       }
     }
   };
 
   if (typeof context.newCDPSession === 'function') {
     try {
+      if (typeof context.newPage === 'function') {
+        const secondaryPage = await context.newPage();
+        characterizationPages.push(secondaryPage);
+        await attachGateBSecondaryPageObservers(secondaryPage);
+        const characterizationUrl = typeof page.url === 'function' ? page.url() : 'https://chatgpt.com/';
+        if (typeof secondaryPage.goto === 'function') {
+          await secondaryPage.goto(characterizationUrl, { waitUntil: 'domcontentloaded' });
+        }
+      }
       await attachGateBWebSocketObservers();
+      const probeCdp = await context.newCDPSession(page) as FlatCdpSessionSend;
+      attachCdpOutboundWebSocketObserver(probeCdp, noteWebSocketSent);
+      await probeCdp.send('Target.setDiscoverTargets', { discover: true });
+      const workerTargets = await probeCdp.send('Target.getTargets') as {
+        targetInfos?: Array<{ targetId?: string; type?: string }>;
+      };
+      for (const target of (workerTargets.targetInfos ?? []).slice(0, 6)) {
+        const type = target.type ?? '';
+        if (!['service_worker', 'worker', 'shared_worker'].includes(type) || !target.targetId) continue;
+        try {
+          const attached = await probeCdp.send('Target.attachToTarget', {
+            targetId: target.targetId,
+            flatten: true,
+          }) as { sessionId?: string };
+          const sessionId = attached.sessionId ?? '';
+          if (!sessionId) continue;
+          await sendFlatChildCdpCommand(probeCdp, sessionId, 'Network.enable');
+        } catch {
+          // Worker attach failures are non-fatal for characterization.
+        }
+      }
       if (typeof context.on === 'function') {
-        context.on('page', () => { void attachGateBWebSocketObservers(); });
-        context.on('serviceworker', () => { void attachGateBWebSocketObservers(); });
+        context.on('page', (createdPage: unknown) => { void attachGateBSecondaryPageObservers(createdPage); });
       }
     } catch {
       websocketSentObserved = false;
@@ -200,13 +254,17 @@ export async function runGateBCharacterization(page: {
 
   if (typeof page.reload === 'function') {
     try {
+      for (const secondaryPage of characterizationPages) {
+        if (typeof secondaryPage.reload === 'function') {
+          await secondaryPage.reload({ waitUntil: 'domcontentloaded' });
+        }
+      }
       await page.reload({ waitUntil: 'domcontentloaded' });
       if (typeof context.pages === 'function') {
-        for (const otherPage of context.pages()) {
-          if (otherPage === page) continue;
+        for (const otherPage of context.pages().filter((candidate) => candidate !== page).slice(0, 3)) {
           const reloadable = otherPage as { reload?: (options?: { waitUntil?: string }) => Promise<unknown> };
           if (typeof reloadable.reload === 'function') {
-            void reloadable.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+            await reloadable.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
           }
         }
       }
@@ -215,9 +273,19 @@ export async function runGateBCharacterization(page: {
     }
   }
 
+  let secondaryHomeNavigationAttempted = false;
   const deadline = Date.now() + GATE_B_PROBE_WINDOW_MS;
   while (Date.now() < deadline) {
     if (serviceWorkerHttpObserved && websocketSentObserved) break;
+    if (!serviceWorkerHttpObserved
+      && !secondaryHomeNavigationAttempted
+      && Date.now() + 30_000 > deadline) {
+      secondaryHomeNavigationAttempted = true;
+      const secondaryPage = characterizationPages[0] as { goto?: (url: string, options?: { waitUntil?: string }) => Promise<unknown> } | undefined;
+      if (typeof secondaryPage?.goto === 'function') {
+        await secondaryPage.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded' }).catch(() => {});
+      }
+    }
     await new Promise((resolve) => { setTimeout(resolve, 100); });
   }
 
@@ -231,6 +299,10 @@ export async function runGateBCharacterization(page: {
     observed: websocketSentObserved,
     detail: websocketSentObserved ? 'websocket_frame_sent_observed' : 'no_websocket_frame_sent_observed_within_probe_window',
   });
+
+  for (const secondaryPage of characterizationPages) {
+    await secondaryPage.close?.().catch(() => {});
+  }
 
   return summarizeGateBCharacterization(probes);
 }

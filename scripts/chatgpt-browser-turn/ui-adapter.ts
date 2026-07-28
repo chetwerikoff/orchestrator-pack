@@ -1183,6 +1183,23 @@ export interface TurnBrowserResult {
   possibleDelivery: boolean;
 }
 
+
+export async function openGateBCharacterizationPage(browser: any, chatUrl = 'https://chatgpt.com/'): Promise<{ page: any; owned: boolean }> {
+  const contexts = browser.contexts();
+  if (contexts.length !== 1) throw new Error('ui_contract_mismatch:context_count');
+  const ctx = contexts[0];
+  const existing = ctx.pages().find((page: { url: () => string }) => {
+    try { return page.url().includes('chatgpt.com'); } catch { return false; }
+  });
+  if (existing) {
+    await existing.bringToFront().catch(() => {});
+    return { page: existing, owned: false };
+  }
+  const page = await ctx.newPage();
+  await page.goto(chatUrl, { waitUntil: 'domcontentloaded' });
+  return { page, owned: true };
+}
+
 export async function openTurnPage(browser: any, config: BrowserConfig): Promise<{ page: any; owned: boolean; provisionalId?: string }> {
   const contexts = browser.contexts();
   if (contexts.length !== 1) throw new Error('ui_contract_mismatch:context_count');

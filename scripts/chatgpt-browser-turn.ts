@@ -48,6 +48,7 @@ import { readStableInput } from './chatgpt-browser-turn/input.ts';
 import {
   loadChromium,
   normalizeConversationUrl,
+  openGateBCharacterizationPage,
   openTurnPage,
   runtimeWitnessSurfaceAvailable,
   sendTurn,
@@ -773,7 +774,7 @@ async function runGateBCharacterizationCommand(args: ParsedArgs): Promise<number
   try {
     const chromium = loadChromium();
     browser = await chromium.connectOverCDP(config.cdp);
-    const opened = await openTurnPage(browser, config);
+    const opened = await openGateBCharacterizationPage(browser, chatUrl);
     const result = await runGateBCharacterization(opened.page);
     writeGateBCharacterizationRecord(profileKey, result);
     const control: ControlResultV1 = {
