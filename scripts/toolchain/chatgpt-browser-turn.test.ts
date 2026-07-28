@@ -62,6 +62,7 @@ import {
   witnessInstallOperationWaitMs,
   WITNESS_INSTALL_MAX_WAIT_MS,
   type BrowserConfig,
+  type WitnessSurfaceProbe,
 } from '../chatgpt-browser-turn/ui-adapter.ts';
 import { lastDispatchObservationDiagnostic } from '../chatgpt-browser-turn/dispatch-observation.ts';
 import { boundedResourceCleanup } from '../chatgpt-browser-turn/browser-session.ts';
@@ -593,19 +594,16 @@ describe('issue 964 destination and scheduling fences — S4/S5/S6', () => {
     first!.release();
   });
 
-  it('S6 permits distinct fresh identities but profile fallback conflicts with active parallel owners', () => {
+  it('S6 permits distinct fresh identities and independent conversation locks without profile-wide exclusion', () => {
     const freshOne = acquireDomainLock(profileKey, 'fresh:one');
     const freshTwo = acquireDomainLock(profileKey, 'fresh:two');
+    const conversation = acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/new');
     expect(freshOne).not.toBeNull();
     expect(freshTwo).not.toBeNull();
-    expect(acquireDomainLock(profileKey, `profile:${profileKey}`)).toBeNull();
+    expect(conversation).not.toBeNull();
+    conversation!.release();
     freshTwo!.release();
     freshOne!.release();
-
-    const profile = acquireDomainLock(profileKey, `profile:${profileKey}`);
-    expect(profile).not.toBeNull();
-    expect(acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/new')).toBeNull();
-    profile!.release();
   });
 
   it('reclaims only proven-dead stale pre-send owners; unknown start-token evidence remains busy', () => {
@@ -1002,17 +1000,16 @@ describe('issue 1028 admission policy separation', () => {
     expect(rearmed.capability?.admission_epoch).toBe(2);
   });
 
-  it('fails serialize busy without mutating policy when a fine scheduling lock is active', async () => {
+  it('serializes policy without profile admission barrier while a fine scheduling lock is active', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const fineLock = acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/active');
     expect(fineLock).not.toBeNull();
     try {
       const outcome = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
-      expect(outcome.mutation).toMatchObject({ applied: false, reason: 'barrier_busy' });
-      const unchanged = capabilityStatus(profileKey, binding);
-      expect(unchanged.capability?.admission_policy).toBe('parallel');
-      expect(unchanged.capability?.admission_epoch).toBe(0);
+      expect(outcome.mutation).toMatchObject({ applied: true });
+      expect(outcome.capability?.admission_policy).toBe('serialized');
+      expect(outcome.capability?.admission_epoch).toBe(1);
     } finally {
       fineLock?.release();
     }
@@ -1025,7 +1022,7 @@ describe('issue 1028 admission policy separation', () => {
     expect(armed.mutation).toEqual({ applied: false, reason: 'binding_mismatch' });
   });
 
-  it('does not reclaim a stale pre_send lock when a readable incident is already possible_delivery', async () => {
+  it('serializes policy without reclaiming unrelated fine scheduling locks', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const lockKey = 'conversation:https://chatgpt.com/c/crash-window';
@@ -1039,11 +1036,11 @@ describe('issue 1028 admission policy separation', () => {
       owner: { pid: 999999, started_at: new Date().toISOString(), nonce: randomUUID() },
     });
     const outcome = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
-    expect(outcome.mutation).toMatchObject({ applied: false, reason: 'barrier_busy' });
+    expect(outcome.mutation).toMatchObject({ applied: true });
     expect(existsSync(join(profileDirs(profileKey).locks, sha256(lockKey), 'owner.json'))).toBe(true);
   });
 
-  it('does not reclaim a stale pre_send lock when a readable active_owner is still pre_send', async () => {
+  it('serializes policy while an unrelated active pre_send lock remains held', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const lockKey = 'conversation:https://chatgpt.com/c/active-pre-send';
@@ -1057,7 +1054,7 @@ describe('issue 1028 admission policy separation', () => {
       owner: { pid: 999999, started_at: new Date().toISOString(), nonce: randomUUID() },
     });
     const outcome = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
-    expect(outcome.mutation).toMatchObject({ applied: false, reason: 'barrier_busy' });
+    expect(outcome.mutation).toMatchObject({ applied: true });
     expect(existsSync(join(profileDirs(profileKey).locks, sha256(lockKey), 'owner.json'))).toBe(true);
   });
 
@@ -1102,15 +1099,14 @@ describe('issue 1028 admission policy separation', () => {
     expect(after.capability?.evidence_digest).toBe(sha256('refresh-only'));
   });
 
-  it('rejects stale-epoch completion after operator serialize', async () => {
+  it('allows completion refresh after operator serialize because admission epoch is not a turn gate', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const admitted = capabilityStatus(profileKey, binding);
     expect(admitted.state).toBe('ok');
     await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'stale-after-serialize'));
-    expect(outcome.applied).toBe(false);
-    expect(outcome.reason).toBe('not_eligible');
+    expect(outcome.applied).toBe(true);
   });
 
   it('keeps idle characterization stable without policy decay', () => {
@@ -1920,7 +1916,14 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
 
   it('AC10 no-terminal retains deadline failure and continuation merge stays covered', async () => {
     const fixture = fakeTurnPage({ dispatchCandidateIds: ['user-owned-12345678'] });
-    const timeoutResult = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 50 });
+    const timeoutResult = await sendTurn(
+      fixture.page,
+      'payload',
+      { ...baseConfig(), timeoutMs: 50 },
+      undefined,
+      undefined,
+      createPreSendSegmentBudget(30_000),
+    );
     expect(timeoutResult.state).toBe('stream_timeout');
     expect(timeoutResult.cause).toBe('no_terminal_evidence');
     expect(mergeContinuationSegments(['alpha\nbeta', 'alpha\nbeta\ngamma'])).toBe('alpha\nbeta\ngamma');
@@ -2650,3 +2653,488 @@ describe('issue 1023 operation-level bounds', () => {
   });
 
 });
+
+async function runTurnWithMocks1060(
+  argv: string[],
+  options: {
+    witness?: WitnessSurfaceProbe | WitnessSurfaceProbe[];
+    sendResult?: Record<string, unknown>;
+    browserProvenance?: string;
+    onBeforeSend?: () => void | Promise<void>;
+    deleteIncidentFails?: boolean;
+  } = {},
+): Promise<{ exitCode: number; stdout: string }> {
+  vi.resetModules();
+  const witnessQueue = Array.isArray(options.witness)
+    ? [...options.witness]
+    : [options.witness ?? 'available'];
+  const stubPage = {
+    close: vi.fn(async () => {}),
+    goto: vi.fn(async () => {}),
+    url: () => 'https://chatgpt.com/c/fixture-conv',
+    bringToFront: vi.fn(async () => {}),
+  };
+  const stubBrowser = {
+    close: vi.fn(async () => {}),
+    version: () => options.browserProvenance ?? 'chromium-fixture',
+    contexts: () => [{ pages: () => [] }],
+  };
+  vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
+    return {
+      ...actual,
+      verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'ok' })),
+      loadChromium: vi.fn(() => ({ connectOverCDP: vi.fn(async () => stubBrowser) })),
+      openTurnPage: vi.fn(async () => ({ page: stubPage, owned: true, provisionalId: randomUUID() })),
+      runtimeWitnessSurfaceAvailable: vi.fn(async () => witnessQueue.shift() ?? 'available'),
+      sendTurn: vi.fn(async (_page, _text, _config, _provisionalId, onBeforeSend) => {
+        if (onBeforeSend) await onBeforeSend();
+        if (options.onBeforeSend) await options.onBeforeSend();
+        return options.sendResult ?? {
+          state: 'ok',
+          cause: 'completed',
+          possibleDelivery: true,
+          reply: 'reply text',
+          userMessageId: 'user-fixture-12345678',
+          assistantMessageId: 'asst-fixture-12345678',
+          conversationId: 'https://chatgpt.com/c/fixture-conv',
+        };
+      }),
+    };
+  });
+  vi.doMock('../chatgpt-browser-turn/publication.ts', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../chatgpt-browser-turn/publication.ts')>();
+    return {
+      ...actual,
+      publishReply: vi.fn(() => ({ state: 'committed_ok', output_bytes: 10, output_sha256: 'sha256:fixture' })),
+    };
+  });
+  const chunks: string[] = [];
+  vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+    chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  });
+  let deleteIncidentSpy: ReturnType<typeof vi.spyOn> | undefined;
+  if (options.deleteIncidentFails) {
+    const stateMod = await import('../chatgpt-browser-turn/state.ts');
+    deleteIncidentSpy = vi.spyOn(stateMod, 'deleteIncident').mockImplementation(() => {
+      throw new Error('cleanup_failed');
+    });
+  }
+  const { runCli } = await import('../chatgpt-browser-turn.ts');
+  const exitCode = await runCli(argv);
+  deleteIncidentSpy?.mockRestore();
+  vi.spyOn(process.stdout, 'write').mockRestore();
+  return { exitCode, stdout: chunks.join('') };
+}
+
+
+async function runParallelTurnsWithMocks1060(
+  specs: Array<{
+    argv: string[];
+    witness?: WitnessSurfaceProbe | WitnessSurfaceProbe[];
+    onBeforeSend?: () => void | Promise<void>;
+    sendResult?: Record<string, unknown>;
+    pageUrl?: string;
+  }>,
+): Promise<Array<{ exitCode: number; stdout: string }>> {
+  vi.resetModules();
+  let started = 0;
+  let releaseBarrier: (() => void) | undefined;
+  const allStarted = new Promise<void>((resolve) => {
+    releaseBarrier = resolve;
+  });
+  const witnessQueues = new Map<string, WitnessSurfaceProbe[]>();
+  for (const spec of specs) {
+    const chatFlag = spec.argv.indexOf('--chat-url');
+    const key = chatFlag >= 0 ? spec.argv[chatFlag + 1]! : 'default';
+    witnessQueues.set(key, Array.isArray(spec.witness)
+      ? [...spec.witness]
+      : [spec.witness ?? 'available']);
+  }
+  const specByUrl = new Map(specs.map((spec) => {
+    const chatFlag = spec.argv.indexOf('--chat-url');
+    const key = chatFlag >= 0 ? spec.argv[chatFlag + 1]! : 'https://chatgpt.com/c/fixture-conv';
+    return [key, spec];
+  }));
+  const stubBrowser = {
+    close: vi.fn(async () => {}),
+    version: () => 'chromium-fixture',
+    contexts: () => [{ pages: () => [] }],
+  };
+  vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
+    return {
+      ...actual,
+      verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'ok' })),
+      loadChromium: vi.fn(() => ({ connectOverCDP: vi.fn(async () => stubBrowser) })),
+      openTurnPage: vi.fn(async (_browser, config) => {
+        started += 1;
+        if (started >= specs.length) releaseBarrier?.();
+        await allStarted;
+        const pageUrl = config.chatUrl ?? 'https://chatgpt.com/c/fixture-conv';
+        const stubPage = {
+          close: vi.fn(async () => {}),
+          goto: vi.fn(async () => {}),
+          url: () => pageUrl,
+          bringToFront: vi.fn(async () => {}),
+        };
+        return { page: stubPage, owned: true, provisionalId: randomUUID() };
+      }),
+      runtimeWitnessSurfaceAvailable: vi.fn(async (page) => {
+        const queue = witnessQueues.get(page.url()) ?? witnessQueues.get('default') ?? ['available'];
+        return queue.shift() ?? 'available';
+      }),
+      sendTurn: vi.fn(async (page, _text, _config, _provisionalId, onBeforeSend) => {
+        const spec = specByUrl.get(page.url());
+        if (onBeforeSend) await onBeforeSend();
+        if (spec?.onBeforeSend) await spec.onBeforeSend();
+        return spec?.sendResult ?? {
+          state: 'ok',
+          cause: 'completed',
+          possibleDelivery: true,
+          reply: 'reply text',
+          userMessageId: 'user-fixture-12345678',
+          assistantMessageId: 'asst-fixture-12345678',
+          conversationId: page.url(),
+        };
+      }),
+    };
+  });
+  vi.doMock('../chatgpt-browser-turn/publication.ts', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../chatgpt-browser-turn/publication.ts')>();
+    return {
+      ...actual,
+      publishReply: vi.fn(() => ({ state: 'committed_ok', output_bytes: 10, output_sha256: 'sha256:fixture' })),
+    };
+  });
+  const { AsyncLocalStorage } = await import('node:async_hooks');
+  const captureStore = new AsyncLocalStorage<string[]>();
+  const { runCli } = await import('../chatgpt-browser-turn.ts');
+  const restore = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+    const chunks = captureStore.getStore();
+    if (chunks) {
+      chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    }
+    return true;
+  });
+  const results = await Promise.all(specs.map(async (spec) => captureStore.run([], async () => {
+    const exitCode = await runCli(spec.argv);
+    return { exitCode, stdout: (captureStore.getStore() ?? []).join('') };
+  })));
+  restore.mockRestore();
+  return results;
+}
+
+function turnArgvFor1060Conversation(outputPath: string, conversationUrl: string): string[] {
+  const input = join(root, `turn-input-${randomUUID()}.txt`);
+  writeFileSync(input, 'turn payload\n');
+  return [
+    'turn',
+    '--profile', join(root, 'profile'),
+    '--cdp', cdp,
+    '--input', input,
+    '--output', outputPath,
+    '--chat-url', conversationUrl,
+  ];
+}
+
+function turnArgvFor1060(outputPath: string, flags: string[] = []): string[] {
+  const input = join(root, `turn-input-${randomUUID()}.txt`);
+  writeFileSync(input, 'turn payload\n');
+  return [
+    'turn',
+    '--profile', join(root, 'profile'),
+    '--cdp', cdp,
+    '--input', input,
+    '--output', outputPath,
+    '--chat-url', 'https://chatgpt.com/c/fixture-conv',
+    ...flags,
+  ];
+}
+
+describe('issue 1060 remove profile-wide admission', () => {
+  it('AC1/AC11a: independent conversations race while capability is absent and changing', async () => {
+    const [one, two] = await Promise.all([
+      Promise.resolve().then(() => acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/one')),
+      Promise.resolve().then(() => acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/two')),
+    ]);
+    expect(one).not.toBeNull();
+    expect(two).not.toBeNull();
+
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, capabilityFixture(binding, {
+      admission_policy: 'serialized',
+      admission_epoch: 3,
+      browser_provenance: 'stale-browser',
+    }));
+    writeFileSync(profileDirs(profileKey).capability, '{ "schema": "changed-mid-race" }');
+
+    const three = acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/three');
+    expect(three).not.toBeNull();
+    expect(statusList(profileKey).state).not.toBe('profile_blocked');
+    three!.release();
+    two!.release();
+    one!.release();
+  });
+
+  it('AC2/AC6/AC11c: incompatible capability is diagnostic and does not profile-block status/list', () => {
+    writeFileSync(profileDirs(profileKey).capability, '{ "schema": "broken" }');
+    const listed = statusList(profileKey);
+    expect(listed.state).not.toBe('profile_blocked');
+    expect(listed.items?.some((item) => item.kind === 'opaque_record')).toBe(true);
+
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    const status = capabilityStatus(profileKey, binding);
+    expect(status.state).toBe('downgraded');
+    expect(status.cause).toBe('capability_incompatible');
+
+    __testWriteCapability(profileKey, capabilityFixture(binding));
+    expect(capabilityStatus(profileKey, binding).state).toBe('ok');
+    expect(statusList(profileKey).state).toBe('none');
+  });
+
+  it('AC3/AC11b: witness loss fails invocation locally while sibling conversation lock stays usable', async () => {
+    const siblingKey = 'conversation:https://chatgpt.com/c/sibling';
+    const sibling = acquireDomainLock(profileKey, siblingKey);
+    expect(sibling).not.toBeNull();
+
+    const output = join(root, 'witness-fail-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+      witness: ['absent'],
+    });
+    expect(exitCode).toBe(13);
+    expect(stdout).toContain('pre_send_witness_unavailable');
+
+    const stillHeld = acquireDomainLock(profileKey, siblingKey);
+    expect(stillHeld).toBeNull();
+    const independent = acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/continues');
+    expect(independent).not.toBeNull();
+    independent!.release();
+    sibling!.release();
+  });
+
+  it('AC4/AC11b: final pre-send witness loss cleans owner and releases fine lock', async () => {
+    const siblingKey = 'conversation:https://chatgpt.com/c/final-sibling';
+    const sibling = acquireDomainLock(profileKey, siblingKey);
+    expect(sibling).not.toBeNull();
+    const output = join(root, 'final-witness-fail-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+      witness: ['available', 'absent'],
+    });
+    expect(exitCode).toBe(13);
+    expect(stdout).toContain('pre_send_witness_unavailable');
+    expect(listReadableIncidents(profileKey).some(({ record }) => record.kind === 'active_owner')).toBe(false);
+    const recovered = acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/fixture-conv');
+    expect(recovered).not.toBeNull();
+    expect(acquireDomainLock(profileKey, siblingKey)).toBeNull();
+    recovered!.release();
+    sibling!.release();
+  });
+
+
+  it('AC4/AC11b: pre-send witness failure keeps fine lock when incident cleanup fails', async () => {
+    const output = join(root, 'cleanup-fail-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+      witness: ['available', 'absent'],
+      deleteIncidentFails: true,
+    });
+    expect(exitCode).toBe(13);
+    expect(stdout).toContain('pre_send_incident_cleanup_failed');
+    expect(acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/fixture-conv')).toBeNull();
+    expect(listReadableIncidents(profileKey).some(({ record }) => record.kind === 'active_owner')).toBe(true);
+  });
+
+  it('AC4/AC11b: sendTurn pre-dispatch failure keeps fine lock when incident cleanup fails', async () => {
+    const output = join(root, 'send-cleanup-fail-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+      sendResult: {
+        state: 'driver_error',
+        cause: 'composer_unavailable',
+        possibleDelivery: false,
+      },
+      deleteIncidentFails: true,
+    });
+    expect(exitCode).toBe(13);
+    expect(stdout).toContain('pre_send_incident_cleanup_failed');
+    expect(acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/fixture-conv')).toBeNull();
+    expect(listReadableIncidents(profileKey).some(({ record }) => record.kind === 'active_owner')).toBe(true);
+  });
+
+  it('AC5/AC11e: same-conversation overlap refuses the turn before duplicate send', async () => {
+    const key = 'conversation:https://chatgpt.com/c/fixture-conv';
+    const first = acquireDomainLock(profileKey, key);
+    expect(first).not.toBeNull();
+    const output = join(root, 'same-conversation-overlap.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output));
+    expect(exitCode).toBe(11);
+    expect(stdout).toContain('conversation_busy');
+    expect(existsSync(output)).toBe(false);
+    first!.release();
+  });
+
+  it('AC11d: dead pre-send owner on one fine domain can be reclaimed without profile-wide state', () => {
+    const lockKey = 'conversation:https://chatgpt.com/c/reclaim';
+    deadOwnerRecord(lockKey, 'pre_send');
+    const reclaimed = acquireDomainLock(profileKey, lockKey, 1);
+    expect(reclaimed).not.toBeNull();
+    expect(statusList(profileKey).state).not.toBe('profile_blocked');
+    reclaimed!.release();
+  });
+
+  it('AC8/AC11f: fresh-chat runTurn uses fresh lock domain without profile scheduling', async () => {
+    const output = join(root, 'fresh-chat-out.txt');
+    const input = join(root, `turn-input-${randomUUID()}.txt`);
+    writeFileSync(input, 'fresh turn payload\n');
+    const projectUrl = 'https://chatgpt.com/g/fixture-project';
+    const freshConversation = 'https://chatgpt.com/c/fresh-conversation';
+    const { exitCode, stdout } = await runTurnWithMocks1060([
+      'turn',
+      '--profile', join(root, 'profile'),
+      '--cdp', cdp,
+      '--input', input,
+      '--output', output,
+      '--new-chat',
+      '--project-url', projectUrl,
+    ], {
+      sendResult: {
+        state: 'ok',
+        cause: 'completed',
+        possibleDelivery: true,
+        reply: 'fresh reply',
+        userMessageId: 'user-fresh-12345678',
+        assistantMessageId: 'asst-fresh-12345678',
+        conversationId: freshConversation,
+      },
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain('profile_busy');
+    expect(stdout).not.toContain('profile:');
+    expect(stdout).not.toContain('conversation_busy');
+    expect(stdout).toContain('fresh-conversation');
+  });
+
+  it('AC2: binding-mismatch capability is diagnostic and runTurn still completes', async () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, {
+      ...capabilityFixture(binding),
+      config_digest: sha256('mismatched-binding'),
+    });
+    expect(capabilityStatus(profileKey, binding).cause).toBe('capability_binding_mismatch');
+
+    const output = join(root, 'binding-mismatch-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output));
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain('profile_busy');
+    expect(stdout).not.toContain('capability_binding_mismatch');
+  });
+
+  it('AC2: stale browser provenance is observable on successful runTurn without admission downgrade', async () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, capabilityFixture(binding, {
+      browser_provenance: 'stale-browser-provenance',
+    }));
+
+    const output = join(root, 'provenance-drift-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+      browserProvenance: 'live-browser-provenance',
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('browser_provenance_drift_observed');
+    expect(stdout).not.toContain('profile_busy');
+  });
+
+  it('AC6: capability quarantine stays non-blocking for status/list and runTurn', async () => {
+    writeFileSync(profileDirs(profileKey).capability, '{ "schema": "broken-capability" }\n');
+    const listed = statusList(profileKey);
+    expect(listed.state).not.toBe('profile_blocked');
+    const opaque = listed.items!.find((item) => item.kind === 'opaque_record' && item.identity.includes(':capability:'));
+    expect(opaque).toBeDefined();
+    expect(quarantineOpaque(profileKey, opaque!.identity, opaque!.generation).state).toBe('quarantined');
+    expect(statusList(profileKey).state).not.toBe('profile_blocked');
+    expect(statusList(profileKey).items!.some((item) => item.kind === 'blocking_tombstone')).toBe(true);
+
+    const output = join(root, 'capability-quarantine-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output));
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain('profile_busy');
+    expect(stdout).not.toContain('pre_send_profile_blocked');
+  });
+
+  it('AC1/AC11a: two concurrent runTurn calls on independent conversations both complete', async () => {
+    const convA = 'https://chatgpt.com/c/concurrent-a';
+    const convB = 'https://chatgpt.com/c/concurrent-b';
+    const outA = join(root, 'concurrent-a-out.txt');
+    const outB = join(root, 'concurrent-b-out.txt');
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, capabilityFixture(binding));
+
+    const results = await runParallelTurnsWithMocks1060([
+      { argv: turnArgvFor1060Conversation(outA, convA) },
+      { argv: turnArgvFor1060Conversation(outB, convB) },
+    ]);
+    expect(results).toHaveLength(2);
+    const a = results[0]!;
+    const b = results[1]!;
+    expect(a.exitCode).toBe(0);
+    expect(b.exitCode).toBe(0);
+    expect(a.stdout).toContain('concurrent-a');
+    expect(b.stdout).toContain('concurrent-b');
+    expect(a.stdout).not.toContain('profile_busy');
+    expect(b.stdout).not.toContain('profile_busy');
+  });
+
+  it('AC11a: mid-run capability corruption during send does not profile-block runTurn', async () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, capabilityFixture(binding));
+    const output = join(root, 'mid-run-send-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+      onBeforeSend: () => {
+        writeFileSync(profileDirs(profileKey).capability, '{ "schema": "changed-mid-run" }');
+      },
+    });
+    expect(capabilityStatus(profileKey, binding).state).toBe('downgraded');
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain('profile_busy');
+    expect(statusList(profileKey).state).not.toBe('profile_blocked');
+  });
+
+  it('AC3/AC11b: witness-failing turn and publishing sibling runTurn overlap concurrently', async () => {
+    const failConv = 'https://chatgpt.com/c/witness-fail';
+    const okConv = 'https://chatgpt.com/c/witness-sibling-ok';
+    const failOut = join(root, 'witness-fail-out.txt');
+    const okOut = join(root, 'witness-sibling-out.txt');
+    const witnessResults = await runParallelTurnsWithMocks1060([
+      {
+        argv: turnArgvFor1060Conversation(failOut, failConv),
+        witness: ['absent'],
+      },
+      {
+        argv: turnArgvFor1060Conversation(okOut, okConv),
+        witness: ['available'],
+      },
+    ]);
+    expect(witnessResults).toHaveLength(2);
+    const failed = witnessResults[0]!;
+    const ok = witnessResults[1]!;
+    expect(failed.exitCode).toBe(13);
+    expect(failed.stdout).toContain('pre_send_witness_unavailable');
+    expect(ok.exitCode).toBe(0);
+    expect(ok.stdout).toContain('witness-sibling-ok');
+    expect(ok.stdout).toContain('completed');
+  });
+
+  it('AC7: serialized capability does not force profile scheduling in runTurn', async () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, capabilityFixture(binding, {
+      admission_policy: 'serialized',
+      admission_epoch: 9,
+    }));
+    const output = join(root, 'serialized-cap-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output));
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain('profile_busy');
+    expect(stdout).not.toContain('profile:');
+  });
+});
+

@@ -355,7 +355,7 @@ describe('issue 1028 capability policy race safety', () => {
     }
   });
 
-  it('does not let a stale parallel completion overwrite a newer serialized epoch', () => {
+  it('refreshes characterization after serialize without admission-epoch gating', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const admitted = capabilityStatus(profileKey, binding);
@@ -369,13 +369,13 @@ describe('issue 1028 capability policy race safety', () => {
 
     const outcome = applyCapabilityAfterSuccessfulTurn(
       profileKey,
-      completion(binding, 'stale-parallel-completion'),
+      completion(binding, 'post-serialize-refresh'),
     );
-    expect(outcome.applied).toBe(false);
-    expect(outcome.reason).toBe('not_eligible');
+    expect(outcome.applied).toBe(true);
     const current = capabilityStatus(profileKey, binding);
     expect(current.capability?.admission_epoch).toBe(1);
     expect(current.capability?.admission_policy).toBe('serialized');
+    expect(current.capability?.evidence_digest).toBe(sha256('post-serialize-refresh'));
   });
 
   it('refuses capability mutation when witnessed is false even with parallel policy', () => {
@@ -561,7 +561,7 @@ describe('issue 1023 runTurn timeout integration', () => {
         verifyProfile: vi.fn(async () => verified),
         loadChromium: vi.fn(() => ({ connectOverCDP: vi.fn(async () => stubBrowser) })),
         openTurnPage: vi.fn(async () => ({ page: stubPage, owned: true, provisionalId: randomUUID() })),
-        runtimeWitnessSurfaceAvailable: vi.fn(async () => true),
+        runtimeWitnessSurfaceAvailable: vi.fn(async () => 'available' as const),
         sendTurn: vi.fn(async () => sendResult),
       };
     });

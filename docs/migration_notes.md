@@ -2634,3 +2634,25 @@ See `scripts/graphify/README.md` for build/refresh/query usage once bootstrapped
 - `invoke-pack-review.ps1` no longer invokes post-submit delivery in-process, so wrapper stdout and exit code are unaffected by delivery failures. The existing PowerShell worker-send path remains only as the isolated adapter invoked by TypeScript.
 - `AO_SCRIPTED_REVIEW_SKIP_POST_SUBMIT_DELIVERY` remains recognized by the legacy adapter as an operator kill-switch, but the main entrypoint no longer depends on the adapter or the flag.
 - The direct REST inventory includes the exact-head commit-status write shape `repos/{owner}/{repo}/statuses/{sha}`; it uses the same existing `gh` authentication as COMMENT review posting.
+
+
+## Tracked browser helper: remove profile-wide admission (Issue #1060)
+
+**Operator adoption** — after merge:
+
+1. **Recycle active flow-manager sessions** so tracked `create-issue-draft` /
+   `discuss-with-gpt` managers reload the updated `.claude` skill contracts.
+2. **No keeper rewrite, policy purge, or state migration** is required. Existing
+   capability-v2 bytes remain readable; admission fields stay present for rollback
+   compatibility but no longer choose turn scheduling.
+3. **No new mutex or fallback path**: managed flows must not acquire
+   `orchestrator-pack:create-issue-draft:browser-turn` or authorize scratchpad/legacy
+   browser sending when the tracked transport is unavailable — use existing stage
+   pending/outage/substitution rules instead.
+4. **Rollback** intentionally restores prior profile-scope admission semantics from
+   pre-#1060 helper code; #964 possible-delivery, publication, and recovery records
+   remain authoritative in either direction.
+5. **Capability quarantine/tombstones are diagnostic-only** after #1060: `clear --quarantine` on incompatible `capability.json` no longer sets `status/list.state=profile_blocked`; delivery-relevant records/publications quarantine remains fail-closed.
+6. **AC12 headed-Chrome parallel smoke** is operator-run on the configured CDP profile; see `scripts/chatgpt-browser-turn/fixtures/issue-1060-ac12-parallel-smoke.md`.
+
+No operator adoption required for AO yaml, daemon restart, or profile topology changes.

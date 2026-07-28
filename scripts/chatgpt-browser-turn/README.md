@@ -41,7 +41,7 @@ npm run chatgpt-browser-turn -- clear \
   --identity <identity> --generation <n> --evidence-token <sha256>
 ```
 
-Unknown/incompatible durable bytes block the entire configured profile. They may be moved to opaque quarantine only by exact identity and generation:
+Unknown/incompatible durable bytes in delivery-relevant areas (`records`, `publications`) block the entire configured profile. Incompatible `capability.json` bytes are diagnostic-only and do not block turns. Opaque quarantine applies by exact identity and generation:
 
 ```bash
 npm run chatgpt-browser-turn -- clear \
@@ -49,7 +49,7 @@ npm run chatgpt-browser-turn -- clear \
   --identity <opaque-identity> --generation <n> --quarantine
 ```
 
-Quarantine does not unblock the profile. It creates a blocking tombstone and preserves the original bytes. If the process is interrupted while that tombstone is still `preparing`, `status/list` exposes that blocking tombstone; repeating `clear --quarantine` with its exact current tombstone identity and generation resumes the recorded move instead of creating a second tombstone. Final adjudication requires an operator-supplied evidence file and its expected SHA-256:
+Quarantine for delivery-relevant opaque bytes does not unblock the profile: it creates a blocking tombstone and preserves the original bytes. Capability quarantine/tombstones remain non-blocking telemetry/recovery artifacts only. If the process is interrupted while that tombstone is still `preparing`, `status/list` exposes that blocking tombstone; repeating `clear --quarantine` with its exact current tombstone identity and generation resumes the recorded move instead of creating a second tombstone. Final adjudication requires an operator-supplied evidence file and its expected SHA-256:
 
 ```bash
 npm run chatgpt-browser-turn -- clear \
@@ -112,11 +112,22 @@ Releasing the CDP client disconnects Playwright from the operator's Chrome; it d
 
 Never resend after possible delivery merely because the caller missed the terminal result. Query `publication-status` and `status/list` first. Possible-delivery incidents are not timer-cleared or stale-lock reclaimed.
 
-## Parallel admission
+## Fine-grained scheduling and capability diagnostics
 
-Parallel operation is fail-closed. Without current positive capability evidence bound to the exact candidate digest, build digest, configured profile/CDP digest, browser provenance, and Gate-B digest, the helper serializes at configured-profile scope.
+Normal `turn` scheduling is destination-derived, not capability-derived:
 
-Even with positive capability evidence, every invocation rechecks the current browser provenance and service-issued witness surface before parallel dispatch. Missing or contradictory witness evidence, changed browser provenance, or changed capability binding downgrades capability visibly and falls back to configured-profile serialization or a zero-send profile-scoped refusal. Same-conversation turns remain serialized or refused. Causal success requires an exact service-issued submitted user-message ID and exactly one assistant-message ID linked as its reply; DOM order/count/timing/text similarity never creates `ok`, and ambiguous user or assistant observations fail closed.
+- existing chat → `conversation:<normalized conversation>`
+- fresh chat → independent `fresh:<invocation identity>`
+
+Missing, stale, serialized, or binding-mismatched capability does **not** select `profile:<configured profile key>` scheduling and does not return `profile_busy` because another independent turn is active. Capability characterization, `admission.policy`, and `admission.epoch` remain readable for diagnostics and rollback compatibility only.
+
+Every invocation still performs invocation-local send safety before possible delivery:
+
+- live configured profile/CDP verification
+- live service-issued witness surface checks
+- same-conversation overlap remains serialized or refused
+
+Stored capability/browser-provenance drift is recorded as bounded diagnostic evidence when observed; it is not an admission gate. Witness loss before possible delivery fails only the affected invocation locally. Causal success still requires an exact service-issued submitted user-message ID and exactly one assistant-message ID linked as its reply; DOM order/count/timing/text similarity never creates `ok`, and ambiguous user or assistant observations fail closed.
 
 ## Publication safety
 
@@ -160,7 +171,7 @@ npm run chatgpt-browser-turn -- capability \
   --admission-policy parallel
 ```
 
-Query `capability` again and retain `characterization`, `admission.policy`, `admission.epoch`, and browser provenance as Gate-C telemetry. Aggregate `state: ok` means parallel policy plus compatible characterization/binding; witness health is per-invocation and is not stored as durable policy. To return to serialized scheduling without losing characterization, pass `--admission-policy serialized`.
+Query `capability` again and retain `characterization`, `admission.policy`, `admission.epoch`, and browser provenance as Gate-C telemetry. Aggregate `state: ok` means parallel policy plus compatible characterization/binding for telemetry only; it does not authorize profile-scope turn scheduling. Witness health is per-invocation and is not stored as durable policy. `--admission-policy` mutates stored bytes for operator/rollback use only.
 
 ## Driver diagnostics
 
@@ -178,7 +189,7 @@ Before the first real ChatGPT turn with a newly built candidate, the operator mu
 4. destination collision leaves external bytes untouched and produces the correct pre-send or post-delivery state;
 5. `status/list`, exact `clear`, opaque quarantine/tombstone, and `publication-status` remain usable after a forced interrupted run.
 
-Do not mint positive parallel capability evidence from a synthetic test alone. Parallel characterization proceeds only after the serialized live success above, and every parallel invocation must independently retain current witness availability, browser provenance, and exact capability binding until dispatch.
+Do not mint positive parallel capability evidence from a synthetic test alone. Characterization proceeds only after the serialized live success above, and every invocation must independently retain current witness availability until dispatch; provenance/binding drift is diagnostic, not an admission downgrade.
 
 ## Retained recovery copy and rollback
 

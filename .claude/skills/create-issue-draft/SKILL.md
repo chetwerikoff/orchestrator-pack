@@ -810,38 +810,35 @@ the browser-turn execution. It may use the sanctioned execution channel defined
 by the landed helper contract, but that execution does not transfer judgment or
 fallback authority to a hands-only executor.
 
-### Cross-task browser critical section
+### Cross-task browser coordination
 
-For ordinary tracked-helper `turn` calls, **helper admission is authoritative**.
-While current positive capability for the helper's candidate/build/profile/gate binding
-admits parallel work, do not take a caller-side cross-task mutex: managers on
-different existing conversations and independent fresh-chat (`--new-chat`) turns
-may proceed in parallel per helper admission. Same-conversation overlap remains
+For ordinary tracked-helper `turn` calls, **fine-grained helper scheduling is authoritative**:
+existing conversations use `conversation:<normalized conversation>` and fresh chats use
+independent `fresh:<invocation identity>` domains. Different conversations and independent
+fresh-chat (`--new-chat`) turns may proceed in parallel. Same-conversation overlap remains
 serialized or refused by the helper; callers must not clear, restart, or work around it.
 
-Losing positive capability is normal automatic downgrade to configured-profile scope.
-Do not "repair" that downgrade to regain parallelism; the helper contract owns
-re-arm and caller repair can strand records. Helper-source drift from `main` can
-invalidate the capability binding and present as silent serialization, not error.
+Capability characterization and binding/provenance drift are **diagnostic only**. Missing,
+stale, serialized, or mismatched capability must not downgrade managed tracked turns to
+configured-profile scheduling, acquire a profile-wide queue, or return `profile_busy`
+because another independent turn is active. Record drift through helper diagnostics and,
+when applicable, the existing recurrence journal — do not caller-repair admission policy.
+
+When the tracked transport itself is unavailable, record that transport failure for the
+owning stage and follow the existing stage pending/outage/substitution rules. Do **not**
+authorize scratchpad/legacy browser sending as a tracked-helper fallback and do **not**
+take `orchestrator-pack:create-issue-draft:browser-turn` or any other caller mutex.
 
 Ownership/recovery is unchanged: clear only owned state; `possible_delivery` still
-requires independent conversation inspection; wait out a foreign busy profile.
-
-Eligible scratchpad/legacy fallback per `discuss-with-gpt` stays **serialized only**
-and alone may use the existing caller cross-task exclusivity
-(`orchestrator-pack:create-issue-draft:browser-turn`): every flow-manager MUST
-resolve that literal key to the same local mutual-exclusion object in the operator
-environment (not derived from Issue, task, chat URL, or manager identity);
-establish before the one fallback browser effect, release immediately after;
-contention leaves fallback pending. Never wrap ordinary tracked-helper turns in
-that mutex or add lock machinery.
+requires independent conversation inspection.
 
 Before the first **production** tracked-helper turn on a new/uncharacterized #964
 candidate, complete Gate B in `discuss-with-gpt` and record characterization evidence.
 
 Non-`ok` output, timeout, missing stdout, or process-liveness uncertainty is never
-resend or scratchpad-fallback authorization by itself; use tracked
-status/publication/recovery per `discuss-with-gpt`.
+resend authorization by itself; use tracked status/publication/recovery per
+`discuss-with-gpt`. Standalone `discuss-with-gpt` `driver.mjs` remains available but is
+not tracked-helper success.
 
 ### Tracked helper long-turn monitoring
 
@@ -1034,20 +1031,11 @@ machine writer, journal lock/service, identity registry, deduplication history,
 rollup, central upload, recurrence threshold, review cadence, notification, or
 automatic follow-up as part of this flow.
 
-The former untracked one-shot scratchpad is fallback-only. It may be used only
-when either (a) the tracked executable or sanctioned flow-manager execution
-channel is proven unavailable before any tracked-helper/browser effect, or (b) a
-complete compatible #964 control/publication result proves no possible delivery
-and no blocking state. Record every fallback in task/review artifacts and final
-status; never report it as a successful tracked-helper run. It stays serialized
-and does not create a second parallel-use policy.
-
-Preserve #964 coexistence and rollback safety: while helper-owned unresolved
-conversation/provisional/publication state, a profile wall/block, opaque
-quarantine, or blocking tombstone remains for the configured profile, do not run
-legacy-driver or scratchpad sends against it. Reverting to the old scratchpad
-mandate requires a complete compatible #964 status/incident check proving no
-blockers; without that proof the prohibition remains until exact clearance.
+The former untracked one-shot scratchpad and legacy driver are not fallback
+transports for this flow. Tracked transport unavailability is handled only by the
+selected stage's existing pending/outage/substitution rules and is recorded in
+task/review artifacts and final status. Helper failures, missing output, or clean
+control state never authorize an alternate browser send.
 
 `driver.mjs` keeps its standalone `discuss-with-gpt` adversarial duties, including
 prompt construction and PASS_ID/SHA/verdict validation; this flow does not
@@ -1275,11 +1263,9 @@ not edit sibling Issues or add workflow/plugin/core machinery.
 - Let Codex become default architectural engine, claim substitution without
   recorded browser unavailability, or double-count substitution as independent
   T3-critical Codex addition.
-- Wrap ordinary tracked-helper turns in caller-side cross-task exclusivity when
-  helper admission already governs parallel work; reserve
-  `orchestrator-pack:create-issue-draft:browser-turn` for eligible
-  scratchpad/legacy fallback only. Do not extend exclusivity over Issue/ledger work
-  or add new runtime lock here.
+- Wrap ordinary tracked-helper turns in caller-side cross-task exclusivity or use
+  scratchpad/legacy browser sending as a tracked-helper fallback. Do not add new runtime
+  lock machinery here.
 - Clear or kill a tracked helper turn that is foreign or not provably owned by the
   current flow-manager merely to free the configured profile.
 - Hand-write, pre-create, replace, annotate, or otherwise modify a tracked-helper
@@ -1287,9 +1273,9 @@ not edit sibling Issues or add workflow/plugin/core machinery.
 - Treat `clear`, unresolved conversation identity, or process liveness as proof of
   non-delivery or resend authorization.
 - Treat tracked-helper non-`ok`, timeout, missing stdout, or unresolved status as
-  scratchpad/legacy fallback authorization or resend permission.
+  resend authorization by itself.
 - Run legacy/scratchpad browser sends while helper-owned unresolved state blocks
-  coexistence for configured profile.
+  coexistence for the configured profile.
 - Accept or credit a final architect-lens capture without matching producing-run
   evidence from its independent Claude Code CLI invocation.
 - Trust chat reply without live Issue re-pull and diff.

@@ -1,0 +1,26 @@
+{
+  "issue_number": 1060,
+  "iteration_id": "issue-1060-remove-profile",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-28T06:35:00.000Z",
+  "baseline": {
+    "commit_sha": "a6e1ff8cffdbf6c97186f93bfcf7d2bbb1852610",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f92e8e3cad2f95fcb05d2abe0b51320ebb7dbc36d7caa21d2ea2a4d4b02cc68f"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".claude/skills/discuss-with-gpt/SKILL.md",
+    "docs/declarations/1060.issue-1060-remove-profile.json",
+    "docs/migration_notes.md",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/fixtures/issue-1060-ac12-parallel-smoke.md",
+    "scripts/chatgpt-browser-turn/state.ts"
+  ],
+  "declared_globs": [
+    "scripts/toolchain/chatgpt-browser-turn*.test.ts"
+  ],
+  "amendments": []
+}

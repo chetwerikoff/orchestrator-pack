@@ -37,7 +37,6 @@ import {
   deleteIncident,
   applyCapabilityAfterSuccessfulTurn,
   mutateCapabilityAdmissionPolicy,
-  recordSerializedTransitionAnchor,
   listReadableIncidents,
   quarantineOpaque,
   statusList,
@@ -185,11 +184,19 @@ function safeReleaseDestination(reservation: DestinationReservation | null | und
   }
 }
 
-
-function parallelAdmissionEpochOf(
-  status: ReturnType<typeof capabilityStatus>,
-): number | null {
-  return status.capability?.admission_epoch ?? null;
+function tryDeleteActiveOwnerIncident(
+  profileKey: string,
+  incidentId: string | undefined,
+): { incidentId: string | undefined; incidentCleanupFailed: boolean } {
+  if (!incidentId) {
+    return { incidentId: undefined, incidentCleanupFailed: false };
+  }
+  try {
+    deleteIncident(profileKey, incidentId);
+    return { incidentId: undefined, incidentCleanupFailed: false };
+  } catch {
+    return { incidentId, incidentCleanupFailed: true };
+  }
 }
 
 
@@ -202,14 +209,6 @@ async function probeLiveBrowserProvenance(cdp: string): Promise<string> {
   } finally {
     await releaseCdpBrowser(browser);
   }
-}
-
-async function releaseFineLockForProfileFallback(
-  scheduleLock: DomainLock | null,
-  profileKey: string,
-): Promise<DomainLock | null> {
-  safeRelease(scheduleLock);
-  return acquireDomainLock(profileKey, `profile:${profileKey}`);
 }
 
 function stalePreSendOwner(record: ReturnType<typeof listReadableIncidents>[number]['record']): boolean {
@@ -438,19 +437,14 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     const expectedBinding = runtimeCapabilityBinding(profileKey, config.cdp);
-    let capability = capabilityStatus(profileKey, expectedBinding);
-    let parallelAdmission = capability.state === 'ok';
-    let admittedAdmissionEpoch = parallelAdmission ? parallelAdmissionEpochOf(capability) : null;
-    let profileScopeFallbackCause: string | null = null;
-    const lockKey = parallelAdmission
-      ? (conversationId ? `conversation:${conversationId}` : `fresh:${randomUUID()}`)
-      : `profile:${profileKey}`;
+    const capabilityAtSchedule = capabilityStatus(profileKey, expectedBinding);
+    const lockKey = conversationId ? `conversation:${conversationId}` : `fresh:${randomUUID()}`;
     scheduleLock = acquireDomainLock(profileKey, lockKey);
     if (!scheduleLock) {
       safeReleaseDestination(reservation);
       reservation = null;
-      const state: TurnState = parallelAdmission && conversationId ? 'conversation_busy' : 'profile_busy';
-      const scope: FailureScope = state === 'conversation_busy' ? 'conversation' : 'profile';
+      const state: TurnState = conversationId ? 'conversation_busy' : 'driver_error';
+      const scope: FailureScope = conversationId ? 'conversation' : 'machine';
       return emitTurnAndCode(turnResult(state, scope, 'scheduling_lock_busy', invocationId, profileKey, {
         ...(conversationId ? { conversation_id: conversationId } : {}),
       }));
@@ -469,68 +463,23 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       throw coerceBrowserOperationTimeout(connectError, 'connect_over_cdp');
     }
     const browserProvenance = String(browser.version?.() ?? 'chromium-cdp');
-    if (parallelAdmission && capability.capability?.browser_provenance !== browserProvenance) {
-      scheduleLock = await releaseFineLockForProfileFallback(scheduleLock, profileKey);
-      parallelAdmission = false;
-      admittedAdmissionEpoch = null;
-      profileScopeFallbackCause ??= 'browser_provenance_downgrade_profile_fallback';
-      capability = capabilityStatus(profileKey, expectedBinding);
-      if (!scheduleLock) {
-        safeReleaseDestination(reservation);
-        reservation = null;
-        return emitTurnAndCode(turnResult('profile_busy', 'profile', 'browser_provenance_downgrade_fallback_busy', invocationId, profileKey));
-      }
-    }
+    const storedProvenance = capabilityAtSchedule.capability?.browser_provenance;
+    const provenanceDriftObserved = Boolean(
+      storedProvenance
+      && storedProvenance !== browserProvenance,
+    );
     opened = await openTurnPage(browser, config, { segmentBudget });
     const turnPage = opened.page;
 
     const freshConversation = config.newChat;
-    let witnessSurfaceProbe: WitnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget);
-    if (parallelAdmission && witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) {
-      scheduleLock = await releaseFineLockForProfileFallback(scheduleLock, profileKey);
-      parallelAdmission = false;
-      admittedAdmissionEpoch = null;
-      profileScopeFallbackCause ??= 'witness_downgrade_profile_fallback';
-      capability = capabilityStatus(profileKey, expectedBinding);
-      if (!scheduleLock) {
-        if (opened?.owned) {
-          const ownedPage = opened.page;
-          await boundedResourceCleanup(() => (ownedPage as { close: () => Promise<void> }).close(), RESOURCE_CLEANUP_BOUND_MS);
-        }
-        safeReleaseDestination(reservation);
-        reservation = null;
-        return emitTurnAndCode(turnResult('profile_busy', 'profile', 'witness_downgrade_fallback_busy', invocationId, profileKey));
-      }
-    }
-
-    if (parallelAdmission) {
-      const rechecked = capabilityStatus(profileKey, expectedBinding);
-      witnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget);
-      const witnessUnavailable = witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation);
-      const policyEpochDrift = rechecked.state !== 'ok'
-        || parallelAdmissionEpochOf(rechecked) !== admittedAdmissionEpoch;
-      if (policyEpochDrift || witnessUnavailable) {
-        const observedExternalDowngrade = policyEpochDrift && !witnessUnavailable;
-        scheduleLock = await releaseFineLockForProfileFallback(scheduleLock, profileKey);
-        parallelAdmission = false;
-        admittedAdmissionEpoch = null;
-        if (witnessUnavailable) {
-          profileScopeFallbackCause ??= 'witness_downgrade_profile_fallback';
-        }
-        capability = capabilityStatus(profileKey, expectedBinding);
-        if (!scheduleLock) {
-          if (opened?.owned) {
-          const ownedPage = opened.page;
-          await boundedResourceCleanup(() => (ownedPage as { close: () => Promise<void> }).close(), RESOURCE_CLEANUP_BOUND_MS);
-        }
-          safeReleaseDestination(reservation);
-          reservation = null;
-          return emitTurnAndCode(turnResult('profile_busy', 'profile', 'pre_send_parallel_recheck_failed', invocationId, profileKey));
-        }
-        if (observedExternalDowngrade) {
-          recordSerializedTransitionAnchor(profileKey, capability);
-        }
-      }
+    const witnessSurfaceProbe: WitnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget);
+    if (witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) {
+      await closeOwnedTurnPage(opened, { retainPage: false });
+      safeRelease(scheduleLock);
+      scheduleLock = null;
+      safeReleaseDestination(reservation);
+      reservation = null;
+      return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_witness_unavailable', invocationId, profileKey));
     }
 
     const finalBlocker = blockerBeforeSend(profileKey, reservation.identity, conversationId);
@@ -570,16 +519,8 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     const result = await sendTurn(turnPage, snapshot.text, config, opened.provisionalId, async () => {
       if (statusList(profileKey).state === 'profile_blocked') throw new Error('pre_send_profile_blocked');
       if (findProfileWall(profileKey)) throw new Error('pre_send_profile_wall');
-      if (parallelAdmission) {
-        if (witnessSurfaceProbeRequiresDowngrade(await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget), freshConversation)) {
-          throw new Error('pre_send_witness_unavailable');
-        }
-        const currentCapability = capabilityStatus(profileKey, expectedBinding);
-        if (currentCapability.state !== 'ok'
-          || parallelAdmissionEpochOf(currentCapability) !== admittedAdmissionEpoch) {
-          capability = currentCapability;
-          throw new Error('pre_send_capability_changed');
-        }
+      if (witnessSurfaceProbeRequiresDowngrade(await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget), freshConversation)) {
+        throw new Error('pre_send_witness_unavailable');
       }
       possibleDelivery = true;
       updateIncident(profileKey, incidentId!, { phase: 'possible_delivery' });
@@ -589,12 +530,18 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     if (!result.possibleDelivery) {
       await closeOwnedTurnPage(opened, { retainPage: false });
-      deleteIncident(profileKey, incidentId);
-      incidentId = undefined;
-      safeRelease(scheduleLock);
-      scheduleLock = null;
-      safeReleaseDestination(reservation);
-      reservation = null;
+      const preDispatchCleanup = tryDeleteActiveOwnerIncident(profileKey, incidentId);
+      incidentId = preDispatchCleanup.incidentId;
+      if (!preDispatchCleanup.incidentCleanupFailed) {
+        safeRelease(scheduleLock);
+        scheduleLock = null;
+        safeReleaseDestination(reservation);
+        reservation = null;
+      } else {
+        return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_incident_cleanup_failed', invocationId, profileKey, {
+          incident_id: incidentId,
+        }));
+      }
 
       if (result.state === 'quota' || result.state === 'challenge' || result.state === 'login') {
         const wall = ensureProfileWall(profileKey, result.state);
@@ -706,7 +653,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       );
     }
 
-    return emitTurnAndCode(turnResult('ok', 'none', profileScopeFallbackCause ?? 'completed', invocationId, profileKey, {
+    return emitTurnAndCode(turnResult('ok', 'none', provenanceDriftObserved ? 'browser_provenance_drift_observed' : 'completed', invocationId, profileKey, {
       conversation_id: canonicalConversation,
       ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
       output: {
@@ -724,16 +671,20 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     const message = error instanceof Error ? error.message : 'driver_error';
     if (!possibleDelivery && message.startsWith('pre_send_')) {
       await closeOwnedTurnPage(opened, { retainPage: false });
-      if (incidentId) {
-        try {
-          deleteIncident(profileKey, incidentId);
-          incidentId = undefined;
-        } catch {
-          // Existing durable state remains fail-closed.
-        }
+      const preSendCleanup = tryDeleteActiveOwnerIncident(profileKey, incidentId);
+      incidentId = preSendCleanup.incidentId;
+      const incidentCleanupFailed = preSendCleanup.incidentCleanupFailed;
+      if (!incidentCleanupFailed) {
+        safeRelease(scheduleLock);
+        scheduleLock = null;
+        safeReleaseDestination(reservation);
+        reservation = null;
       }
-      safeRelease(scheduleLock);
-      safeReleaseDestination(reservation);
+      if (incidentCleanupFailed) {
+        return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_incident_cleanup_failed', invocationId, profileKey, {
+          incident_id: incidentId,
+        }));
+      }
       if (message === 'pre_send_profile_blocked') {
         return emitTurnAndCode(turnResult('incompatible_record', 'profile', 'configured_profile_store_blocked', invocationId, profileKey));
       }
@@ -744,7 +695,10 @@ async function runTurn(args: ParsedArgs): Promise<number> {
           ...(wall ? { incident_id: wall.identity, generation: wall.record.generation } : {}),
         }));
       }
-      return emitTurnAndCode(turnResult('profile_busy', 'profile', message, invocationId, profileKey));
+      if (message === 'pre_send_witness_unavailable') {
+        return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_witness_unavailable', invocationId, profileKey));
+      }
+      return emitTurnAndCode(turnResult('driver_error', 'invocation', message, invocationId, profileKey));
     }
 
     const isInput = message.startsWith('input_invalid:');
@@ -821,11 +775,12 @@ async function runTurn(args: ParsedArgs): Promise<number> {
           // Existing durable state remains fail-closed.
         }
       } else {
-        try {
-          deleteIncident(profileKey, incidentId);
-          incidentId = undefined;
-        } catch {
-          // Existing durable state remains fail-closed.
+        const catchCleanup = tryDeleteActiveOwnerIncident(profileKey, incidentId);
+        incidentId = catchCleanup.incidentId;
+        if (catchCleanup.incidentCleanupFailed) {
+          return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_incident_cleanup_failed', invocationId, profileKey, {
+            incident_id: incidentId,
+          }));
         }
       }
     }
