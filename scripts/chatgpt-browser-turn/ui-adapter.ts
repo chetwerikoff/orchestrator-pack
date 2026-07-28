@@ -237,7 +237,7 @@ function resolveOperationWaitMs(source?: OperationWaitSource): number {
 
 async function readLocatorAttribute(locator: any, attr: string, waitSource?: OperationWaitSource): Promise<string | null> {
   const waitMs = resolveOperationWaitMs(waitSource);
-  if (waitMs <= 0) throw new BrowserOperationTimeoutError('service_attribute');
+  if (waitMs <= 0) return null;
   try {
     return await locator.getAttribute(attr, playwrightTimeout(waitMs)!);
   } catch (error) {
