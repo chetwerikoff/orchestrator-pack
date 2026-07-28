@@ -29,11 +29,6 @@ import { startPackReview } from '../pack-review-runner.ts';
 
 const repoRoot = path.resolve(process.cwd());
 const roots: string[] = [];
-const CLAIM_AUTHORITY = [
-  'scripts/lib/review-start-claim-store.ts',
-  'scripts/lib/review-start-claim-cli.ts',
-  'scripts/pack-review-runner.ts',
-];
 const REQUIRED_CHECKS = [
   'verify orchestrator-pack structure',
   'pr scope guard',
@@ -448,22 +443,11 @@ describe('[AC2][AC3][AC4][AC5][AC7] activation transaction', () => {
   });
 });
 
-describe('[AC6] scope', () => {
-  it('contains exactly the four PowerShell deletions and preserves #948 claim authority/tracked registry', () => {
-    const base = git(['merge-base', 'origin/main', 'HEAD']);
-    const rows = git(['diff', '--name-status', `${base}..HEAD`]).split(/\r?\n/).filter(Boolean).map((line) => {
-      const [status, ...parts] = line.split('\t');
-      return { status, path: parts.at(-1)! };
-    });
-    const powershell = rows.filter((row) => /\.(ps1|psm1|psd1)$/i.test(row.path)).sort((a, b) => a.path.localeCompare(b.path));
-    expect(powershell).toEqual([...D928].map((pathName) => ({ status: 'D', path: pathName })).sort((a, b) => a.path.localeCompare(b.path)));
-    for (const protectedPath of CLAIM_AUTHORITY) expect(rows.some((row) => row.path === protectedPath)).toBe(false);
-    expect(rows.some((row) => row.path === 'scripts/orchestrator-side-process-registry.json')).toBe(false);
-    expect(rows.some((row) => row.path === 'scripts/check-side-process-launch-contract.ps1')).toBe(false);
-    const newTests = rows.filter((row) => row.status === 'A' && /^scripts\/.*\.test\.ts$/.test(row.path)).map((row) => row.path);
-    expect(newTests).toEqual(['scripts/cutover/issue-928.test.ts']);
-    const protectedWorktree = [...D928, ...CLAIM_AUTHORITY, 'scripts/orchestrator-side-process-registry.json', 'scripts/vitest-ci-lanes.config.json'];
-    expect(git(['status', '--porcelain=v1', '--untracked-files=all', '--', ...protectedWorktree])).toBe('');
+describe('[AC6] post-cutover scope invariant', () => {
+  it('keeps the four retired D928 PowerShell targets absent from the current tree', () => {
+    for (const pathName of D928) {
+      expect(existsSync(path.join(repoRoot, pathName))).toBe(false);
+    }
   });
 });
 

@@ -1,14 +1,18 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Canonical PACK_REVIEWER selector: claude | codex (single source of truth).
+  PowerShell compatibility shim for PACK_REVIEWER selector (Issue #86 / #1031).
+  Selector authority lives in scripts/lib/resolve-pack-reviewer.ts.
 #>
 $Script:PackReviewerEnvVar = 'PACK_REVIEWER'
+$Script:PackReviewBoundReviewerEnvVar = 'PACK_REVIEW_BOUND_REVIEWER'
 $Script:PackReviewScriptsRoot = Split-Path -Parent $PSScriptRoot
+$Script:PackReviewRepoRoot = Split-Path -Parent $Script:PackReviewScriptsRoot
 
 $Script:PackReviewerWrapperById = @{
     codex  = 'run-pack-review.ps1'
     claude = 'run-pack-review-claude.ps1'
+    gpt    = 'run-pack-review-gpt.ts'
 }
 
 function Get-PackReviewerLayerValue {
@@ -27,25 +31,26 @@ function Get-PackReviewerLayerValue {
 }
 
 function Test-PackReviewerPersistentLayersAvailable {
-    <#
-    .SYNOPSIS
-      Windows registry-backed User/Machine layers (decision section N). Non-Win32NT hosts
-      stay process-only for review spawn; do not use $IsWindows.
-    #>
+    param([switch]$HarnessEmulatePersistentLayers)
+    if ($HarnessEmulatePersistentLayers) { return $true }
     return ($PSVersionTable.Platform -eq 'Win32NT')
 }
 
 function Clear-StalePackReviewerProcessScope {
-    <#
-    .SYNOPSIS
-      Drop process-scoped PACK_REVIEWER when User is configured so global operator choice wins.
-      IDE/agent parents often inject process values; AO review dispatch should follow User/Machine.
-    #>
-    if (-not (Test-PackReviewerPersistentLayersAvailable)) {
+    param(
+        [hashtable]$OverrideLayers,
+        [switch]$HarnessEmulatePersistentLayers
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Script:PackReviewBoundReviewerEnvVar, 'Process'))) {
         return
     }
 
-    $userValue = Get-PackReviewerLayerValue -Target 'User' -OverrideLayers $null
+    if (-not (Test-PackReviewerPersistentLayersAvailable -HarnessEmulatePersistentLayers:$HarnessEmulatePersistentLayers)) {
+        return
+    }
+
+    $userValue = Get-PackReviewerLayerValue -Target 'User' -OverrideLayers $OverrideLayers
     if ([string]::IsNullOrWhiteSpace($userValue)) {
         return
     }
@@ -53,78 +58,98 @@ function Clear-StalePackReviewerProcessScope {
     Remove-Item Env:$Script:PackReviewerEnvVar -ErrorAction SilentlyContinue
 }
 
-function Get-PackReviewerSelectorValue {
-    <#
-    .SYNOPSIS
-      Resolves PACK_REVIEWER from process scope, then User/Machine persistent layers.
-      Precedence: Process > User > Machine (User overrides Machine when process is unset).
-    .PARAMETER OverrideLayers
-      Optional test hook: keys Process, User, Machine override registry reads for that layer.
-    #>
+function Invoke-PackReviewerResolutionExport {
     param(
-        [hashtable]$OverrideLayers
+        [hashtable]$OverrideLayers,
+        [switch]$HarnessEmulatePersistentLayers,
+        [switch]$SkipStaleClear
     )
 
-    $targets = if (Test-PackReviewerPersistentLayersAvailable) {
-        @('Process', 'User', 'Machine')
-    }
-    else {
-        @('Process')
+    if (-not $SkipStaleClear -and -not $OverrideLayers) {
+        Clear-StalePackReviewerProcessScope -HarnessEmulatePersistentLayers:$HarnessEmulatePersistentLayers
     }
 
-    foreach ($target in $targets) {
-        $value = Get-PackReviewerLayerValue -Target $target -OverrideLayers $OverrideLayers
-        if (-not [string]::IsNullOrWhiteSpace($value)) {
-            return $value
-        }
+    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $node) {
+        throw 'OPK_NODE_RUNTIME_MISSING: Node.js 22.x is required for PACK_REVIEWER resolution.'
     }
 
-    return $null
+    $launcher = Join-Path $Script:PackReviewRepoRoot 'scripts/lib/Invoke-TypeScriptCli.ts'
+    $exportScript = Join-Path $Script:PackReviewRepoRoot 'scripts/export-pack-reviewer-resolution.ts'
+    $argv = @(
+        $node.Path,
+        '--experimental-strip-types',
+        $launcher,
+        '--script', $exportScript,
+        '--'
+    )
+    if ($OverrideLayers) {
+        $argv += '--override-layers-json'
+        $argv += ($OverrideLayers | ConvertTo-Json -Compress)
+    }
+    if ($HarnessEmulatePersistentLayers) {
+        $argv += '--harness-emulate-persistent-layers'
+    }
+
+    $stdout = & $argv[0] $argv[1..($argv.Length - 1)]
+    $json = (($stdout | Out-String).Trim())
+    if ([string]::IsNullOrWhiteSpace($json)) {
+        throw 'PACK_REVIEWER resolution export returned empty stdout.'
+    }
+    return $json | ConvertFrom-Json
+}
+
+function Get-PackReviewerSelectorValue {
+    param(
+        [hashtable]$OverrideLayers,
+        [switch]$HarnessEmulatePersistentLayers
+    )
+
+    return (Invoke-PackReviewerResolutionExport -OverrideLayers $OverrideLayers -HarnessEmulatePersistentLayers:$HarnessEmulatePersistentLayers).selectorValue
 }
 
 function Get-PackReviewerFromSelector {
     param(
         [hashtable]$OverrideLayers,
-        [string]$SelectorValue
+        [string]$SelectorValue,
+        [switch]$HarnessEmulatePersistentLayers
     )
 
-    if ([string]::IsNullOrWhiteSpace($SelectorValue)) {
-        $SelectorValue = Get-PackReviewerSelectorValue -OverrideLayers $OverrideLayers
-    }
-
-    if ([string]::IsNullOrWhiteSpace($SelectorValue)) {
+    if (-not [string]::IsNullOrWhiteSpace($SelectorValue)) {
+        $normalized = $SelectorValue.Trim().ToLowerInvariant()
+        if ($Script:PackReviewerWrapperById.ContainsKey($normalized)) {
+            return $normalized
+        }
         return $null
     }
 
-    $normalized = $SelectorValue.Trim().ToLowerInvariant()
-    if ($Script:PackReviewerWrapperById.ContainsKey($normalized)) {
-        return $normalized
-    }
-
-    return $null
+    return (Invoke-PackReviewerResolutionExport -OverrideLayers $OverrideLayers -HarnessEmulatePersistentLayers:$HarnessEmulatePersistentLayers).reviewer
 }
 
 function Get-PackReviewerSelectorErrorMessage {
     param(
         [hashtable]$OverrideLayers,
-        [string]$SelectorValue
+        [string]$SelectorValue,
+        [switch]$HarnessEmulatePersistentLayers
     )
 
-    if ([string]::IsNullOrWhiteSpace($SelectorValue)) {
-        $SelectorValue = Get-PackReviewerSelectorValue -OverrideLayers $OverrideLayers
+    if (-not [string]::IsNullOrWhiteSpace($SelectorValue)) {
+        $reviewer = Get-PackReviewerFromSelector -SelectorValue $SelectorValue
+        if ($reviewer) { return $null }
+        return ("PACK_REVIEWER has unrecognized value '{0}'. Set PACK_REVIEWER to gpt, claude, or codex." -f $SelectorValue.Trim())
     }
 
-    if ([string]::IsNullOrWhiteSpace($SelectorValue)) {
-        return 'PACK_REVIEWER is not set. Set PACK_REVIEWER to claude or codex before running pack review (see docs/reviewer-switch-runbook.md).'
+    $resolution = Invoke-PackReviewerResolutionExport -OverrideLayers $OverrideLayers -HarnessEmulatePersistentLayers:$HarnessEmulatePersistentLayers
+    if ($resolution.errorMessage) {
+        return $resolution.errorMessage
     }
-
-    return ("PACK_REVIEWER has unrecognized value '{0}'. Set PACK_REVIEWER to claude or codex." -f $SelectorValue.Trim())
+    return 'PACK_REVIEWER is not set. Set PACK_REVIEWER to gpt, claude, or codex before running pack review (see docs/reviewer-switch-runbook.md).'
 }
 
 function Get-PackReviewWrapperBasenameForReviewer {
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('claude', 'codex')]
+        [ValidateSet('claude', 'codex', 'gpt')]
         [string]$Reviewer
     )
 
@@ -134,7 +159,7 @@ function Get-PackReviewWrapperBasenameForReviewer {
 function Get-PackReviewWrapperPathForReviewer {
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('claude', 'codex')]
+        [ValidateSet('claude', 'codex', 'gpt')]
         [string]$Reviewer,
         [string]$ScriptsRoot = $Script:PackReviewScriptsRoot
     )

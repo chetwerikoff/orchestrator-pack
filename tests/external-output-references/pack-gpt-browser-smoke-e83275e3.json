@@ -1,0 +1,23 @@
+{
+  "schema": "pack-gpt-browser-runner-run/v1",
+  "issue": 1031,
+  "prNumber": 1050,
+  "headSha": "e83275e3cb126031166e69ff582d0563843a6615",
+  "recordedAt": "2026-07-28T02:35:52.370Z",
+  "evidenceKind": "runner-driven-adapter-turn",
+  "adapterEntrypoint": "scripts/run-pack-review-gpt.ts",
+  "runnerEntrypoint": "scripts/pack-review-runner.ts",
+  "packReviewRunId": "prr-0be2bffb8f6049cc9bc8f872b4c81808",
+  "adapterPromptPath": "tests/external-output-references/pack-gpt-browser-runner-prompt-e83275e3.txt",
+  "adapterPromptSha256": "d4b8b575ff90824f8541f210a34786a6c12c9f8a558713dc7c39ba1bd153d42c",
+  "terminalReplyPath": "tests/external-output-references/pack-gpt-browser-runner-reply-e83275e3.txt",
+  "terminalReplySha256": "b4099b966b8b40b59fece91231d7a90fb9cb59bc8bce0128e98dc4e8701c2fa7",
+  "adapterStdoutPath": "tests/external-output-references/pack-gpt-browser-runner-stdout-e83275e3.json",
+  "chatUrl": "https://chatgpt.com/g/g-p-6a1920e1c1608191bef6089396d947b4-orchestrator-pack/c/6a681115-47dc-83ec-8849-26b2da4546d3",
+  "githubReviewId": 4793258950,
+  "githubReviewState": "COMMENT",
+  "browserProfile": "/mnt/c/pw-probe-profile",
+  "browserCdp": "http://127.0.0.1:9222",
+  "harnessIntegrationOnly": "tests/external-output-references/pack-gpt-browser-smoke-56875db8.json",
+  "notes": "Runner-driven adapter turn for PR #1050 head e83275e3: pack-review-runner run prr-0be2bffb invoked invoke-pack-review.ps1 -> run-pack-review-gpt.ts, which generated the adapter prompt, executed chatgpt-browser-turn, parsed the terminal findings JSON into adapter stdout, and pack-review-runner published GitHub review 4793258950 from that same run."
+}

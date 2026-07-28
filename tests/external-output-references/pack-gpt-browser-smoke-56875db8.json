@@ -1,0 +1,14 @@
+{
+  "schema": "pack-gpt-browser-smoke/v1",
+  "issue": 1031,
+  "prNumber": 1050,
+  "headSha": "56875db8ec7bcb41d6561a1a76739cabc9b901f9",
+  "recordedAt": "2026-07-28T00:55:00Z",
+  "evidenceKind": "harness-integration-only",
+  "entrypoint": "npm run chatgpt-browser-turn -- turn",
+  "adapter": "scripts/lib/pack-gpt-reviewer.ts#defaultRunBrowserTurn",
+  "terminalVerdict": "clean",
+  "replyToken": "NO_FINDINGS",
+  "testFile": "scripts/pack-gpt-browser-path.test.ts",
+  "notes": "Bounded harness npm shim exercises defaultRunBrowserTurn subprocess argv wiring only. Not AC3 proof; see pack-gpt-browser-smoke-e83275e3.json."
+}

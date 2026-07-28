@@ -3,11 +3,11 @@
 .SYNOPSIS
   Show PACK_REVIEWER layers and the value pack review would use.
 .PARAMETER Expected
-  If set (codex | claude), exit 0 only when effective reviewer matches.
+  If set (gpt | codex | claude), exit 0 only when effective reviewer matches.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('codex', 'claude')]
+    [ValidateSet('gpt', 'codex', 'claude')]
     [string]$Expected
 )
 
