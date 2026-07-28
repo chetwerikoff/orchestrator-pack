@@ -1,8 +1,7 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   checkStageCompletenessGuard,
   formatStageCompletenessPassMessage,
@@ -10,279 +9,269 @@ import {
 } from './lib/stage-completeness-core.ts';
 import { runCli } from './stage-completeness-guard.ts';
 
-const repoRoot = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../tests/fixtures/stage-completeness/worktree',
-);
-const draftsDir = path.join(repoRoot, 'docs/issues_drafts');
+const roots: string[] = [];
 
-function loadDraft(name: string): string {
-  return readFileSync(path.join(draftsDir, `${name}.md`), 'utf8');
+function draftText(tier: 'T1' | 'T2' | 'T3' = 'T3'): string {
+  return [
+    '# test draft',
+    '',
+    '```complexity-tier',
+    `tier: ${tier}`,
+    `advisory-prior: ${tier}`,
+    '```',
+    '',
+  ].join('\n');
 }
 
-function draftPath(name: string): string {
-  return path.join(draftsDir, `${name}.md`);
+function makeCase(
+  name: string,
+  options: {
+    tier?: 'T1' | 'T2' | 'T3';
+    captures?: Record<string, string>;
+    waiver?: unknown;
+  } = {},
+) {
+  const root = mkdtempSync(join(tmpdir(), 'stage-completeness-'));
+  roots.push(root);
+  const draftsDir = join(root, 'docs/issues_drafts');
+  const reviewDir = join(draftsDir, '.review', name);
+  mkdirSync(reviewDir, { recursive: true });
+  const target = join(draftsDir, `${name}.md`);
+  writeFileSync(target, draftText(options.tier ?? 'T3'), 'utf8');
+  for (const [fileName, body] of Object.entries(options.captures ?? {})) {
+    writeFileSync(join(reviewDir, fileName), body, 'utf8');
+  }
+  if (options.waiver !== undefined) {
+    writeFileSync(join(reviewDir, 'competitive-stage-waiver.json'), JSON.stringify(options.waiver), 'utf8');
+  }
+  return {
+    root,
+    target,
+    reviewDir,
+    check: () => checkStageCompletenessGuard(readFileSync(target, 'utf8'), { repoRoot: root, draftPath: target }),
+  };
 }
 
-function check(name: string) {
-  return checkStageCompletenessGuard(loadDraft(name), {
-    repoRoot,
-    draftPath: draftPath(name),
-  });
-}
-
-describe('stage-completeness missing competitive', () => {
-  it('fails when competitive captures and waiver are both absent', () => {
-    const result = check('missing-competitive');
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/missing competitive stage/);
-  });
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('stage-completeness missing architectural', () => {
-  it('fails when competitive, lens, and final exist but architectural is absent', () => {
-    const result = check('missing-architectural');
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/missing architectural stage/);
+describe('stage-completeness terminal GPT topology', () => {
+  it('accepts competitive -> architect-lens -> terminal architectural without architectural-final', () => {
+    const testCase = makeCase('conforming-terminal-gpt', {
+      captures: {
+        'pass-01-competitive.capture.txt': 'competitive',
+        'pass-02-architectural-lens.capture.txt': 'claude lens',
+        'pass-03-architectural.capture.txt': 'terminal gpt',
+      },
+    });
+    const result = testCase.check();
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.receipt).toEqual({
+      tier: 'T3',
+      competitiveAnchor: 1,
+      lensMax: 2,
+      finalPass: 3,
+    });
   });
-});
 
-describe('stage-completeness architectural ordering', () => {
-  it('fails when architectural capture is not strictly before architect-lens', () => {
-    const result = check('architectural-ordering');
+  it('rejects the landed r03 order with architectural before architect-lens', () => {
+    const testCase = makeCase('old-r03-order', {
+      captures: {
+        'pass-01-competitive.capture.txt': 'competitive',
+        'pass-02-architectural.capture.txt': 'old pre-lens gpt',
+        'pass-03-architectural-lens.capture.txt': 'claude lens',
+        'pass-04-architectural-final.capture.txt': 'old final stage',
+      },
+    });
+    const result = testCase.check();
     expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(
-      /architectural stage out of order \(must be strictly before architect-lens\)/,
+    expect(result.errors.join('\n')).toContain(
+      'terminal architectural must be strictly after architect-lens',
     );
   });
-});
 
-describe('stage-completeness missing final', () => {
-  it('fails when no architectural-final capture exists', () => {
-    const result = check('missing-final');
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/missing final architectural stage/);
-  });
-});
-
-describe('stage-completeness lens ordering', () => {
-  it('fails when architect-lens pass index is not after competitive anchor', () => {
-    const result = check('lens-ordering');
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/architect-lens stage out of order/);
-  });
-
-  it('uses competitive max over stale waiver anchor when both signals exist', () => {
-    const result = check('both-signals');
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/architect-lens stage out of order/);
-  });
-});
-
-describe('stage-completeness final ordering', () => {
-  it('fails when final architectural pass index is not after lens maximum', () => {
-    const result = check('final-ordering');
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/final architectural stage out of order/);
-  });
-});
-
-describe('stage-completeness t1 t2 noop', () => {
-  it('passes for T1 drafts without T3 captures', () => {
-    const result = checkStageCompletenessGuard(loadDraft('t1-base'), {
-      repoRoot,
-      draftPath: draftPath('t1-base'),
+  it('requires a terminal architectural capture after the lens', () => {
+    const testCase = makeCase('missing-terminal-gpt', {
+      captures: {
+        'pass-01-competitive.capture.txt': 'competitive',
+        'pass-02-architectural-lens.capture.txt': 'claude lens',
+        'pass-03-architectural-final.capture.txt': 'historical final only',
+      },
     });
-    expect(result.ok).toBe(true);
-    expect(result.noop).toBe(true);
+    const result = testCase.check();
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('missing architectural stage');
   });
 
-  it('passes for T2 drafts without T3 captures', () => {
-    const result = checkStageCompletenessGuard(loadDraft('t2-base'), {
-      repoRoot,
-      draftPath: draftPath('t2-base'),
+  it('allows only one terminal architectural pass after the lens', () => {
+    const testCase = makeCase('terminal-ceiling', {
+      captures: {
+        'pass-01-competitive.capture.txt': 'competitive',
+        'pass-02-architectural-lens.capture.txt': 'claude lens',
+        'pass-03-architectural.capture.txt': 'terminal gpt one',
+        'pass-04-architectural.capture.txt': 'terminal gpt two',
+      },
     });
-    expect(result.ok).toBe(true);
-    expect(result.noop).toBe(true);
+    const result = testCase.check();
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain(
+      'architectural stage ceiling exceeded (exactly one terminal pass allowed after architect-lens)',
+    );
   });
-});
 
-describe('stage-completeness waiver path', () => {
-  it('passes with a valid operator waiver and ordered architectural, lens, and final captures', () => {
-    const result = check('waiver-valid');
-    expect(result.ok).toBe(true);
-    expect(result.receipt?.competitiveAnchor).toBe(0);
-    expect(result.receipt?.lensMax).toBe(2);
+  it('still requires architect-lens strictly after the competitive anchor', () => {
+    const missingLens = makeCase('missing-lens', {
+      captures: {
+        'pass-01-competitive.capture.txt': 'competitive',
+        'pass-02-architectural.capture.txt': 'architectural',
+      },
+    }).check();
+    expect(missingLens.ok).toBe(false);
+    expect(missingLens.errors.join('\n')).toContain('missing architect-lens stage');
+
+    const wrongOrder = makeCase('lens-before-competitive', {
+      captures: {
+        'pass-01-architectural-lens.capture.txt': 'claude lens',
+        'pass-02-competitive.capture.txt': 'competitive',
+        'pass-03-architectural.capture.txt': 'terminal gpt',
+      },
+    }).check();
+    expect(wrongOrder.ok).toBe(false);
+    expect(wrongOrder.errors.join('\n')).toContain(
+      'architect-lens stage out of order (must be strictly after competitive anchor)',
+    );
+  });
+
+  it('does not require architectural-final and ignores historical final bytes for current terminal selection', () => {
+    const testCase = makeCase('historical-final-tolerated', {
+      captures: {
+        'pass-01-competitive.capture.txt': 'competitive',
+        'pass-02-architectural-lens.capture.txt': 'claude lens',
+        'pass-03-architectural.capture.txt': 'terminal gpt',
+        'pass-04-architectural-final.capture.txt': 'historical audit bytes',
+      },
+    });
+    const result = testCase.check();
+    expect(result.ok, result.errors.join('\n')).toBe(true);
     expect(result.receipt?.finalPass).toBe(3);
   });
+});
 
-  it('rejects codex-substitution waiver for missing competitive stage credit', () => {
-    const result = check('codex-substitution-waiver');
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/missing competitive stage/);
+describe('stage-completeness competitive waiver compatibility', () => {
+  const recordedAt = '2026-07-28T00:00:00.000Z';
+
+  it('keeps operator-waiver credit with the new lens -> terminal GPT order', () => {
+    const testCase = makeCase('operator-waiver', {
+      waiver: { reason: 'operator-waiver', 'recorded-at': recordedAt, 'after-pass': 0 },
+      captures: {
+        'pass-01-architectural-lens.capture.txt': 'claude lens',
+        'pass-02-architectural.capture.txt': 'terminal gpt',
+      },
+    });
+    const result = testCase.check();
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.receipt?.competitiveAnchor).toBe(0);
   });
 
-  it('fails when waiver record is malformed and competitive captures are absent', () => {
-    const result = check('waiver-invalid');
+  it('keeps codex-substitution parseable as historical bytes but grants no stage credit', () => {
+    const testCase = makeCase('codex-substitution-waiver', {
+      waiver: { reason: 'codex-substitution', 'recorded-at': recordedAt, 'after-pass': 0 },
+      captures: {
+        'pass-01-architectural-lens.capture.txt': 'claude lens',
+        'pass-02-architectural.capture.txt': 'terminal gpt',
+      },
+    });
+    const parsed = parseCompetitiveWaiver(testCase.reviewDir);
+    expect(parsed.invalid).toBe(false);
+    expect(parsed.waiver?.reason).toBe('codex-substitution');
+    const result = testCase.check();
     expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/missing competitive stage/);
+    expect(result.errors.join('\n')).toContain('missing competitive stage');
   });
 
-  it('rejects waiver records with loose recorded-at or coerced after-pass values', () => {
-    const reviewDir = mkdtempSync(join(tmpdir(), 'stage-completeness-waiver-'));
+  it('strictly validates waiver timestamp and after-pass fields', () => {
+    const testCase = makeCase('waiver-shape');
     const cases = [
-      {
-        label: 'non-ISO recorded-at',
-        body: JSON.stringify({
-          reason: 'codex-substitution',
-          'recorded-at': '2026-07-06',
-          'after-pass': 0,
-        }),
-      },
-      {
-        label: 'null after-pass',
-        body: JSON.stringify({
-          reason: 'operator-waiver',
-          'recorded-at': '2026-07-06T00:00:00.000Z',
-          'after-pass': null,
-        }),
-      },
-      {
-        label: 'string after-pass',
-        body: JSON.stringify({
-          reason: 'operator-waiver',
-          'recorded-at': '2026-07-06T00:00:00.000Z',
-          'after-pass': '0',
-        }),
-      },
-      {
-        label: 'boolean after-pass',
-        body: JSON.stringify({
-          reason: 'operator-waiver',
-          'recorded-at': '2026-07-06T00:00:00.000Z',
-          'after-pass': false,
-        }),
-      },
+      { reason: 'operator-waiver', 'recorded-at': '2026-07-28', 'after-pass': 0 },
+      { reason: 'operator-waiver', 'recorded-at': recordedAt, 'after-pass': null },
+      { reason: 'operator-waiver', 'recorded-at': recordedAt, 'after-pass': '0' },
+      { reason: 'operator-waiver', 'recorded-at': recordedAt, 'after-pass': false },
     ];
+    for (const value of cases) {
+      writeFileSync(join(testCase.reviewDir, 'competitive-stage-waiver.json'), JSON.stringify(value), 'utf8');
+      const parsed = parseCompetitiveWaiver(testCase.reviewDir);
+      expect(parsed.waiver).toBeNull();
+      expect(parsed.invalid).toBe(true);
+    }
+  });
+});
 
-    for (const testCase of cases) {
-      writeFileSync(join(reviewDir, 'competitive-stage-waiver.json'), testCase.body, 'utf8');
-      const parsed = parseCompetitiveWaiver(reviewDir);
-      expect(parsed.waiver, testCase.label).toBeNull();
-      expect(parsed.invalid, testCase.label).toBe(true);
+describe('stage-completeness compatibility floors', () => {
+  it('remains a no-op for T1 and T2', () => {
+    for (const tier of ['T1', 'T2'] as const) {
+      const result = makeCase(`noop-${tier}`, { tier }).check();
+      expect(result.ok).toBe(true);
+      expect(result.noop).toBe(true);
     }
   });
 
-  it('still parses historical codex-substitution waiver bytes without granting stage credit', () => {
-    const reviewDir = mkdtempSync(join(tmpdir(), 'stage-completeness-codex-waiver-'));
-    writeFileSync(
-      join(reviewDir, 'competitive-stage-waiver.json'),
-      JSON.stringify({
-        reason: 'codex-substitution',
-        'recorded-at': '2026-07-06T00:00:00.000Z',
-        'after-pass': 0,
-      }),
-      'utf8',
-    );
-    const parsed = parseCompetitiveWaiver(reviewDir);
-    expect(parsed.waiver?.reason).toBe('codex-substitution');
-    expect(parsed.invalid).toBe(false);
-  });
-});
-
-describe('stage-completeness grandfather', () => {
-  it('passes for the hardcoded grandfather review-dir basename without captures', () => {
-    const result = check('206-ao-010-session-status-readers-migration');
+  it('preserves the existing grandfather exception', () => {
+    const result = makeCase('206-ao-010-session-status-readers-migration').check();
     expect(result.ok).toBe(true);
     expect(result.receipt).toBeNull();
   });
-});
 
-describe('stage-completeness empty capture', () => {
-  it('fails when a counted capture file is empty after trim', () => {
-    const result = check('empty-capture');
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/empty capture file/);
+  it('still rejects empty and malformed counted captures', () => {
+    const empty = makeCase('empty-capture', {
+      captures: {
+        'pass-01-competitive.capture.txt': '   ',
+        'pass-02-architectural-lens.capture.txt': 'claude lens',
+        'pass-03-architectural.capture.txt': 'terminal gpt',
+      },
+    }).check();
+    expect(empty.ok).toBe(false);
+    expect(empty.errors.join('\n')).toContain('empty capture file');
+
+    const malformed = makeCase('malformed-capture', {
+      captures: {
+        'competitive.capture.txt': 'competitive',
+        'pass-02-architectural-lens.capture.txt': 'claude lens',
+        'pass-03-architectural.capture.txt': 'terminal gpt',
+      },
+    }).check();
+    expect(malformed.ok).toBe(false);
+    expect(malformed.errors.join('\n')).toContain(
+      'unparseable capture filename: competitive.capture.txt',
+    );
   });
 
-  it('fails when a capture filename is not parseable as pass-NN-stage', () => {
-    const result = check('malformed-filename');
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/unparseable capture filename: competitive\.capture\.txt/);
-  });
-
-  it('tolerates malformed plain architectural capture filenames when a valid architectural pass exists', () => {
-    const result = check('tolerated-architectural-filename');
-    expect(result.ok).toBe(true);
-    expect(result.receipt?.finalPass).toBe(4);
-  });
-});
-
-describe('stage-completeness missing lens', () => {
-  it('fails when architect-lens captures are absent', () => {
-    const result = check('missing-lens');
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/missing architect-lens stage/);
-  });
-});
-
-describe('stage-completeness final ceiling', () => {
-  it('fails when more than one final architectural pass exceeds the lens maximum', () => {
-    const result = check('final-ceiling');
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/final architectural stage ceiling exceeded/);
-  });
-});
-
-describe('stage-completeness success receipt', () => {
-  it('emits a machine-readable pass receipt naming tier=T3 and stage anchors', () => {
-    const result = check('conforming');
-    expect(result.ok).toBe(true);
+  it('emits the existing receipt shape with final-pass bound to terminal architectural', () => {
+    const testCase = makeCase('receipt', {
+      captures: {
+        'pass-04-competitive.capture.txt': 'competitive',
+        'pass-05-architectural-lens.capture.txt': 'claude lens',
+        'pass-06-architectural.capture.txt': 'terminal gpt',
+      },
+    });
+    const result = testCase.check();
+    expect(result.ok, result.errors.join('\n')).toBe(true);
     const message = formatStageCompletenessPassMessage(result);
-    expect(message).toMatch(/tier=T3/);
-    expect(message).toMatch(/competitive-anchor=1/);
-    expect(message).toMatch(/lens-max=3/);
-    expect(message).toMatch(/final-pass=4/);
+    expect(message).toContain('tier=T3');
+    expect(message).toContain('competitive-anchor=4');
+    expect(message).toContain('lens-max=5');
+    expect(message).toContain('final-pass=6');
     expect(
       runCli([
         'node',
         'stage-completeness-guard.ts',
         '--text-file',
-        draftPath('conforming'),
+        testCase.target,
         '--draft-path',
-        draftPath('conforming'),
+        testCase.target,
         '--repo-root',
-        repoRoot,
+        testCase.root,
       ]),
     ).toBe(0);
-  });
-});
-
-describe('stage-completeness positive outcome', () => {
-  it('refuses T3 drafts with only architectural-final captures at sync time', async () => {
-    const { syncPublishIssueBody } = await import('./lib/publish-issue-body-sync.ts');
-    const draftContent = loadDraft('positive-outcome');
-    const deps = {
-      runGh() {
-        throw new Error('gh should not run when stage-completeness guard fails');
-      },
-      writeBodyFile() {
-        return '/tmp/issue-body.md';
-      },
-      emitAudit() {},
-      validateTierGateGuard() {
-        return { ok: true, message: 'tier-gate guard: PASS (test stub)' };
-      },
-    };
-    const blocked = syncPublishIssueBody(deps, {
-      mode: 'create',
-      draftPath: draftPath('positive-outcome'),
-      draftContent,
-      repo: 'chetwerikoff/orchestrator-pack',
-    });
-    expect(blocked.ok).toBe(false);
-    if (!blocked.ok) {
-      expect(blocked.message).toContain('stage-completeness guard');
-    }
   });
 });
