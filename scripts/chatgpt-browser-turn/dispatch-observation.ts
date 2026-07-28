@@ -75,11 +75,18 @@ export let lastDispatchObservationDiagnostic: DispatchObservationDiagnostic | un
 function attachCdpOutboundWebSocketObserver(
   cdp: { on: (event: string, handler: (...args: any[]) => void) => void },
   noteWsSent: () => void,
+  options?: { sessionId?: string },
 ): void {
-  const record = () => noteWsSent();
+  const matchesSession = (payload?: { sessionId?: string }) => {
+    if (!options?.sessionId) return true;
+    return payload?.sessionId === options.sessionId;
+  };
+  const record = (payload?: { sessionId?: string }) => {
+    if (matchesSession(payload)) noteWsSent();
+  };
   cdp.on('Network.webSocketFrameSent', record);
-  cdp.on('event', (payload: { method?: string }) => {
-    if (payload?.method === 'Network.webSocketFrameSent') record();
+  cdp.on('event', (payload: { method?: string; sessionId?: string }) => {
+    if (payload?.method === 'Network.webSocketFrameSent' && matchesSession(payload)) record(payload);
   });
 }
 
@@ -168,22 +175,55 @@ export async function runGateBCharacterization(page: {
   }
 
   const observedCdpTargets = new WeakSet<object>();
+  const gateBWorkerTargetKeys = new Set<string>();
+  let gateBCdp: FlatCdpSessionSend | null = null;
   const attachGateBWebSocketObservers = async (): Promise<void> => {
     if (typeof context.newCDPSession !== 'function') return;
-    const targets: unknown[] = [page];
     if (typeof context.pages === 'function') {
-      for (const otherPage of context.pages()) targets.push(otherPage);
-    }
-    for (const target of targets) {
-      if (typeof target !== 'object' || target === null || observedCdpTargets.has(target)) continue;
-      observedCdpTargets.add(target);
-      try {
-        const session = await context.newCDPSession(target);
-        await session.send('Network.enable');
-        attachCdpOutboundWebSocketObserver(session, noteWebSocketSent);
-      } catch {
-        // Individual target attach failures are non-fatal for characterization.
+      for (const otherPage of context.pages()) {
+        if (otherPage === page) continue;
+        if (typeof otherPage !== 'object' || otherPage === null || observedCdpTargets.has(otherPage)) continue;
+        observedCdpTargets.add(otherPage);
+        try {
+          const session = await context.newCDPSession(otherPage);
+          await session.send('Network.enable');
+          attachCdpOutboundWebSocketObserver(session, noteWebSocketSent);
+        } catch {
+          // Individual secondary-page attach failures are non-fatal for characterization.
+        }
       }
+    }
+    try {
+      if (!gateBCdp) {
+        gateBCdp = await context.newCDPSession(page) as FlatCdpSessionSend;
+        attachCdpOutboundWebSocketObserver(gateBCdp, noteWebSocketSent);
+        await gateBCdp.send('Target.setDiscoverTargets', { discover: true });
+      }
+      const targets = await gateBCdp.send('Target.getTargets') as {
+        targetInfos?: Array<{ targetId?: string; type?: string }>;
+      };
+      for (const target of targets.targetInfos ?? []) {
+        const type = target.type ?? '';
+        if (!['service_worker', 'worker', 'shared_worker'].includes(type)) continue;
+        if (!target.targetId) continue;
+        const key = `${type}:${target.targetId}`;
+        if (gateBWorkerTargetKeys.has(key)) continue;
+        try {
+          const attached = await gateBCdp.send('Target.attachToTarget', {
+            targetId: target.targetId,
+            flatten: true,
+          }) as { sessionId?: string };
+          const sessionId = attached.sessionId ?? '';
+          if (!sessionId) continue;
+          await sendFlatChildCdpCommand(gateBCdp, sessionId, 'Network.enable');
+          attachCdpOutboundWebSocketObserver(gateBCdp, noteWebSocketSent, { sessionId });
+          gateBWorkerTargetKeys.add(key);
+        } catch {
+          // Individual worker attach failures are non-fatal for characterization.
+        }
+      }
+    } catch {
+      // Worker-target CDP attach failures are non-fatal for characterization.
     }
   };
 
@@ -330,6 +370,7 @@ type FlatCdpSessionSend = {
     params?: Record<string, unknown>,
     sessionId?: string,
   ) => Promise<unknown>;
+  on: (event: string, handler: (...args: any[]) => void) => void;
 };
 
 async function sendFlatChildCdpCommand(
@@ -338,7 +379,13 @@ async function sendFlatChildCdpCommand(
   method: string,
   params: Record<string, unknown> = {},
 ): Promise<unknown> {
-  return cdp.send(method, params, sessionId);
+  // Playwright routes flattened child commands via an undocumented third sessionId
+  // argument at runtime; Target.sendMessageToTarget is rejected in flatten mode.
+  try {
+    return await cdp.send(method, params, sessionId);
+  } catch {
+    return cdp.send(method, { ...params, sessionId });
+  }
 }
 
 async function sendChildCdpCommand(
@@ -468,7 +515,7 @@ export async function establishDispatchObservationBoundary(
   let contextCdpSessions = 0;
 
   const enableChildTargetSession = async (
-    cdp: { send: (method: string, params?: Record<string, unknown>) => Promise<unknown> },
+    cdp: FlatCdpSessionSend,
     sessionId: string,
     waitingForDebugger = false,
   ): Promise<void> => {
@@ -485,9 +532,12 @@ export async function establishDispatchObservationBoundary(
         boundary.websocketTargetsCoverage = 'incomplete';
         return;
       }
-      await sendFlatChildCdpCommand(cdp as FlatCdpSessionSend, sessionId, 'Network.enable');
+      await sendFlatChildCdpCommand(cdp, sessionId, 'Network.enable');
       if (waitingForDebugger && cdpMethods.runIfWaitingForDebugger) {
-        await sendFlatChildCdpCommand(cdp as FlatCdpSessionSend, sessionId, 'Runtime.runIfWaitingForDebugger');
+        await sendFlatChildCdpCommand(cdp, sessionId, 'Runtime.runIfWaitingForDebugger');
+      }
+      if (cdpMethods.webSocketFrameSent) {
+        attachCdpOutboundWebSocketObserver(cdp, noteWsSent, { sessionId });
       }
       attachedTargetCount++;
     } catch {
@@ -530,6 +580,10 @@ export async function establishDispatchObservationBoundary(
         contextCdpSessions++;
       } catch {
         failedTargetAttach = true;
+        if (armed) {
+          boundary.markCoverageLost();
+          boundary.websocketTargetsCoverage = 'incomplete';
+        }
       }
     }
   };
@@ -567,6 +621,9 @@ export async function establishDispatchObservationBoundary(
       if (!cdp) {
         failedTargetAttach = true;
       } else {
+        if (cdpMethods.webSocketFrameSent) {
+          attachCdpOutboundWebSocketObserver(cdp, noteWsSent);
+        }
         const onTargetDetached = () => {
           boundary.markCoverageLost();
           if (boundary.websocketTargetsCoverage === 'complete') {
@@ -653,9 +710,6 @@ export async function establishDispatchObservationBoundary(
         if (cdpMethods.networkEnable) {
           await cdp.send('Network.enable');
           rootNetworkEnabled = true;
-        }
-        if (cdpMethods.webSocketFrameSent) {
-          attachCdpOutboundWebSocketObserver(cdp, noteWsSent);
         }
 
         cdpEstablished = !failedTargetAttach
