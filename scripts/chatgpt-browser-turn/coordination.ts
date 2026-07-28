@@ -187,6 +187,59 @@ function isSchedulingKey(key: string): boolean {
   return key.startsWith('profile:') || key.startsWith('conversation:') || key.startsWith('fresh:');
 }
 
+/** Outer ceiling for transient scheduling-admission gate contention only. */
+export const SCHEDULING_ADMISSION_RETRY_CEILING_MS = 2_000;
+
+const SCHEDULING_ADMISSION_RETRY_POLL_MS = 25;
+
+function sleepSync(milliseconds: number): void {
+  if (milliseconds <= 0) return;
+  const cell = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(cell, 0, 0, milliseconds);
+}
+
+function schedulingAdmissionKey(profileKey: string): string {
+  return `scheduling-admission:${profileKey}`;
+}
+
+export interface AcquireDomainLockOptions {
+  readonly admissionRetryDeadlineMs?: number;
+}
+
+function resolveAdmissionRetryDeadlineMs(
+  admissionRetryDeadlineMs?: number,
+): number {
+  const retryCeiling = Date.now() + SCHEDULING_ADMISSION_RETRY_CEILING_MS;
+  return admissionRetryDeadlineMs === undefined
+    ? retryCeiling
+    : Math.min(retryCeiling, admissionRetryDeadlineMs);
+}
+
+function acquireSchedulingAdmissionGate(
+  profileKey: string,
+  staleMs: number,
+  outerAdmissionRetryDeadlineMs?: number,
+): DomainLock | null {
+  const deadline = resolveAdmissionRetryDeadlineMs(outerAdmissionRetryDeadlineMs);
+  let gate = acquireDomainLock(profileKey, schedulingAdmissionKey(profileKey), staleMs);
+  if (gate) return gate;
+
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    if (remaining <= SCHEDULING_ADMISSION_RETRY_POLL_MS) {
+      gate = acquireDomainLock(profileKey, schedulingAdmissionKey(profileKey), staleMs);
+      if (gate) return gate;
+      break;
+    }
+    sleepSync(SCHEDULING_ADMISSION_RETRY_POLL_MS);
+    if (Date.now() >= deadline) break;
+    gate = acquireDomainLock(profileKey, schedulingAdmissionKey(profileKey), staleMs);
+    if (gate) return gate;
+  }
+  return null;
+}
+
 function hasSchedulingConflict(profileKey: string, requestedKey: string): boolean {
   const locks = profileDirs(profileKey).locks;
   for (const entry of readdirSync(locks, { withFileTypes: true })) {
@@ -209,10 +262,15 @@ export function acquireDomainLock(
   profileKey: string,
   key: string,
   staleMs = 120_000,
+  options?: AcquireDomainLockOptions,
 ): DomainLock | null {
   let admissionGate: DomainLock | null = null;
   if (isSchedulingKey(key)) {
-    admissionGate = acquireDomainLock(profileKey, `scheduling-admission:${profileKey}`, staleMs);
+    admissionGate = acquireSchedulingAdmissionGate(
+      profileKey,
+      staleMs,
+      options?.admissionRetryDeadlineMs,
+    );
     if (!admissionGate) return null;
   }
 

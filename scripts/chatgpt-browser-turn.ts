@@ -465,7 +465,9 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     const expectedBinding = runtimeCapabilityBinding(profileKey, config.cdp);
     const capabilityAtSchedule = capabilityStatus(profileKey, expectedBinding);
     const lockKey = conversationId ? `conversation:${conversationId}` : `fresh:${randomUUID()}`;
-    scheduleLock = acquireDomainLock(profileKey, lockKey);
+    scheduleLock = acquireDomainLock(profileKey, lockKey, 120_000, {
+      admissionRetryDeadlineMs: segmentBudget.endsAtMs,
+    });
     if (!scheduleLock) {
       safeReleaseDestination(reservation);
       reservation = null;
