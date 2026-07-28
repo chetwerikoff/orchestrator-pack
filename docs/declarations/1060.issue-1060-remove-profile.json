@@ -15,6 +15,7 @@
     "docs/declarations/1060.issue-1060-remove-profile.json",
     "docs/migration_notes.md",
     "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state.ts"
   ],
   "declared_globs": [

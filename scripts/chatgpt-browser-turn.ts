@@ -422,6 +422,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     const expectedBinding = runtimeCapabilityBinding(profileKey, config.cdp);
+    const capabilityAtSchedule = capabilityStatus(profileKey, expectedBinding);
     const lockKey = conversationId ? `conversation:${conversationId}` : `fresh:${randomUUID()}`;
     scheduleLock = acquireDomainLock(profileKey, lockKey);
     if (!scheduleLock) {
@@ -447,6 +448,11 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       throw coerceBrowserOperationTimeout(connectError, 'connect_over_cdp');
     }
     const browserProvenance = String(browser.version?.() ?? 'chromium-cdp');
+    const storedProvenance = capabilityAtSchedule.capability?.browser_provenance;
+    const provenanceDriftObserved = Boolean(
+      storedProvenance
+      && storedProvenance !== browserProvenance,
+    );
     opened = await openTurnPage(browser, config, { segmentBudget });
     const turnPage = opened.page;
 
@@ -639,7 +645,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       );
     }
 
-    return emitTurnAndCode(turnResult('ok', 'none', 'completed', invocationId, profileKey, {
+    return emitTurnAndCode(turnResult('ok', 'none', provenanceDriftObserved ? 'browser_provenance_drift_observed' : 'completed', invocationId, profileKey, {
       conversation_id: canonicalConversation,
       ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
       output: {

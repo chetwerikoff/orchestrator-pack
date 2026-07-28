@@ -2791,6 +2791,81 @@ describe('issue 1060 remove profile-wide admission', () => {
     reclaimed!.release();
   });
 
+  it('AC8/AC11f: fresh-chat runTurn uses fresh lock domain without profile scheduling', async () => {
+    const output = join(root, 'fresh-chat-out.txt');
+    const input = join(root, `turn-input-${randomUUID()}.txt`);
+    writeFileSync(input, 'fresh turn payload\n');
+    const projectUrl = 'https://chatgpt.com/g/fixture-project';
+    const freshConversation = 'https://chatgpt.com/c/fresh-conversation';
+    const { exitCode, stdout } = await runTurnWithMocks1060([
+      'turn',
+      '--profile', join(root, 'profile'),
+      '--cdp', cdp,
+      '--input', input,
+      '--output', output,
+      '--new-chat',
+      '--project-url', projectUrl,
+    ], {
+      sendResult: {
+        state: 'ok',
+        cause: 'completed',
+        possibleDelivery: true,
+        reply: 'fresh reply',
+        userMessageId: 'user-fresh-12345678',
+        assistantMessageId: 'asst-fresh-12345678',
+        conversationId: freshConversation,
+      },
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain('profile_busy');
+    expect(stdout).not.toContain('profile:');
+    expect(stdout).not.toContain('conversation_busy');
+    expect(stdout).toContain('fresh-conversation');
+  });
+
+  it('AC2: binding-mismatch capability is diagnostic and runTurn still completes', async () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, {
+      ...capabilityFixture(binding),
+      config_digest: sha256('mismatched-binding'),
+    });
+    expect(capabilityStatus(profileKey, binding).cause).toBe('capability_binding_mismatch');
+
+    const output = join(root, 'binding-mismatch-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output));
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain('profile_busy');
+    expect(stdout).not.toContain('capability_binding_mismatch');
+  });
+
+  it('AC2: stale browser provenance is observable on successful runTurn without admission downgrade', async () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, capabilityFixture(binding, {
+      browser_provenance: 'stale-browser-provenance',
+    }));
+
+    const output = join(root, 'provenance-drift-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+      browserProvenance: 'live-browser-provenance',
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('browser_provenance_drift_observed');
+    expect(stdout).not.toContain('profile_busy');
+  });
+
+  it('AC11a: mid-run capability corruption stays diagnostic and does not profile-block runTurn', async () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, capabilityFixture(binding));
+    writeFileSync(profileDirs(profileKey).capability, '{ "schema": "changed-mid-run" }');
+    expect(capabilityStatus(profileKey, binding).state).toBe('downgraded');
+
+    const output = join(root, 'mid-run-capability-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output));
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain('profile_busy');
+    expect(statusList(profileKey).state).not.toBe('profile_blocked');
+  });
+
   it('AC7: serialized capability does not force profile scheduling in runTurn', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding, {
