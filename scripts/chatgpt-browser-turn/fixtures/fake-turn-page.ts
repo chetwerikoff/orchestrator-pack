@@ -35,6 +35,7 @@ export interface FakeTurnPageOptions {
   readonly preDispatchServiceFrames?: readonly Record<string, unknown>[];
   readonly preClickRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
   readonly postDispatchDelayedRequests?: readonly { readonly url: string; readonly method?: string; readonly postData?: string }[];
+  readonly postDispatchContextRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
   readonly postClickRequests?: readonly { readonly turnExchangeId?: string; readonly userId?: string }[];
   readonly postClickServiceFrames?: readonly Record<string, unknown>[];
   readonly postClickRawSseBodies?: readonly string[];
@@ -156,6 +157,10 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     const request = { url: () => url };
     for (const handler of contextRequestHandlers) await handler(request);
     await emit('request', request);
+  };
+
+  const emitContextOnlyRequest = async (request: { url: () => string; method: () => string; postData: () => string | null }): Promise<void> => {
+    for (const handler of contextRequestHandlers) await handler(request);
   };
 
   const emitWebSocketSent = async (): Promise<void> => {
@@ -299,6 +304,16 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     postClickServiceEmitted = true;
     for (const req of options.postDispatchDelayedRequests ?? []) {
       await emit('request', makeDispatchRequest(req.url, req.postData, req.method ?? 'GET'));
+    }
+    for (const req of options.postDispatchContextRequests ?? []) {
+      await emitContextOnlyRequest(makeDispatchRequest('https://chatgpt.com/backend-api/f/conversation', JSON.stringify({
+        ...(req.turnExchangeId ? { metadata: { turn_exchange_id: req.turnExchangeId } } : {}),
+        messages: [{
+          ...(req.userId ? { id: req.userId } : {}),
+          author: { role: 'user' },
+          content: { content_type: 'text', parts: [''] },
+        }],
+      })));
     }
     for (const req of options.postClickRequests ?? []) {
       await emit('request', makeDispatchRequest('https://chatgpt.com/backend-api/f/conversation', JSON.stringify({

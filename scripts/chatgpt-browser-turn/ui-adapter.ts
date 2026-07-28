@@ -1170,14 +1170,19 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
   state.witnessInstall = installWebSocketWitness(page, state).catch(() => {});
   const requestObserverControls = (page as { __requestObserverTestControls?: { coverage?: 'complete' | 'incomplete' } }).__requestObserverTestControls;
   state.dispatchRequestObserverReady = requestObserverControls?.coverage !== 'incomplete';
-  page.on('request', (request: any) => {
+  const onDispatchRequestWitness = (request: any) => {
     try {
       if (!state.dispatchArmed) return;
       if (!state.dispatchRequestObserverCoverageComplete) return;
       if (!state.ingestingDispatchServiceFrames && !(state.turnDispatchCommitted && !state.recognizedSubmissionRequestIssued)) return;
       witnessDispatchRequest(state, request);
     } catch { /* missing request witness remains fail-closed */ }
-  });
+  };
+  page.on('request', onDispatchRequestWitness);
+  try {
+    const context = typeof page.context === 'function' ? page.context() : undefined;
+    context?.on?.('request', onDispatchRequestWitness);
+  } catch { /* BrowserContext request witness remains optional */ }
   page.on('response', async (response: any) => {
     try {
       const url = String(response.url());

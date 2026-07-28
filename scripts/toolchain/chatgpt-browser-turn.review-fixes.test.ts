@@ -752,6 +752,48 @@ describe('issue 1025 Half B finished reply without terminal', () => {
     expect(result.state).toBe('stream_timeout');
   });
 
+  it('AC5 explicit end_turn:false metadata does not suppress finished-reply early exit', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = finishedReplyFixture({
+      serviceFrames: [
+        {
+          type: 'input_message',
+          input_message: {
+            id: own,
+            author: { role: 'user' },
+            content: { content_type: 'text', parts: ['payload'] },
+          },
+        },
+        {
+          type: 'delta',
+          v: {
+            message: {
+              id: assistantId,
+              author: { role: 'assistant' },
+              parent: own,
+              end_turn: false,
+              content: { content_type: 'text', parts: ['finished reply text'] },
+            },
+          },
+        },
+      ],
+    });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(fixture.page, 'payload', { ...issue1025HalfBBaseConfig(), timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await turn;
+    expect(result).toMatchObject({
+      state: 'recovery_required',
+      cause: 'reply_finished_terminal_unproven',
+      possibleDelivery: true,
+      userMessageId: own,
+      assistantMessageId: assistantId,
+    });
+  });
+
   it('AC5 terminal evidence arriving during finished-reply probes wins over recovery exit', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     __testTiming.now = () => Date.now();

@@ -2172,6 +2172,18 @@ describe('issue 1025 Half A proven non-delivery', () => {
     expect(result.possibleDelivery).toBe(true);
   });
 
+  it('AC3 service-worker recognized submission blocks proven non-delivery', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1025ZeroActivityFixture({
+      postDispatchContextRequests: [{ userId: 'user-owned-12345678' }],
+    });
+    const result = await issue1025ExhaustSubmittedTurnWindow(fixture);
+    expect(result.state).toBe('recovery_required');
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
   it('AC3 broad legacy dispatch witness before recognized submission still blocks proven non-delivery', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     __testTiming.now = () => Date.now();
