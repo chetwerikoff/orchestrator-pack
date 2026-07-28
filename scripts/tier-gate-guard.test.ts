@@ -207,6 +207,98 @@ describe('Issue #1093 tier provenance producer allowlist', () => {
     expect(parseDecisionReceipt({ ...baseDecision, producer: null })).toBeNull();
   });
 
+  it('fail-closed at guard level for unknown, missing, and non-string producers', () => {
+    const text = draft('T2', 'T2');
+    const stem = '1093-guard-negative-fixture';
+    const root = mkdtempSync(join(tmpdir(), 'opk-1093-guard-'));
+    try {
+      const anchorDir = join(root, 'docs', 'issues_drafts');
+      const reviewDir = join(anchorDir, '.review', stem);
+      const revisionDir = join(root, 'r01');
+      mkdirSync(reviewDir, { recursive: true });
+      mkdirSync(revisionDir, { recursive: true });
+      const anchor = join(anchorDir, `${stem}.md`);
+      writeFileSync(anchor, text);
+      writeFileSync(join(revisionDir, `${stem}.md`), text);
+      writeFileSync(join(revisionDir, 'tier-gate-receipt.json'), JSON.stringify(receipt('r01', 'T2')));
+
+      const intakeCases: Array<[string, Record<string, unknown>, string]> = [
+        ['unknown intake producer', {
+          schema: 'tier-intake/v1',
+          producer: 'unsanctioned-flow-manager',
+          taskIdentity: stem,
+          kind: 'fresh',
+          priorTier: 'T2',
+          firstRevision: 'r01',
+        }, 'malformed flow-manager intake evidence'],
+        ['missing intake producer', {
+          schema: 'tier-intake/v1',
+          taskIdentity: stem,
+          kind: 'fresh',
+          priorTier: 'T2',
+          firstRevision: 'r01',
+        }, 'malformed flow-manager intake evidence'],
+        ['non-string intake producer', {
+          schema: 'tier-intake/v1',
+          producer: 42,
+          taskIdentity: stem,
+          kind: 'fresh',
+          priorTier: 'T2',
+          firstRevision: 'r01',
+        }, 'malformed flow-manager intake evidence'],
+      ];
+      for (const [label, intakeRecord, expected] of intakeCases) {
+        writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify(intakeRecord));
+        const result = checkTierGateGuard(text, { repoRoot: process.cwd(), draftPath: anchor });
+        expect(result.ok, label).toBe(false);
+        expect(result.errors.join('\n'), label).toContain(expected);
+      }
+
+      writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+        schema: 'tier-intake/v1',
+        producer: 'cursor-flow-manager',
+        taskIdentity: stem,
+        kind: 'fresh',
+        priorTier: 'T2',
+        firstRevision: 'r01',
+      }));
+
+      const receiptCases: Array<[string, Record<string, unknown>]> = [
+        ['unknown decision producer', {
+          schema: 'tier-gate-decision/v1',
+          producer: 'unsanctioned-flow-manager',
+          revision: 'r01',
+          tier: 'T2',
+          rubricClasses: ['failure-type:local-behavior'],
+          l4Status: 'clear',
+        }],
+        ['missing decision producer', {
+          schema: 'tier-gate-decision/v1',
+          revision: 'r01',
+          tier: 'T2',
+          rubricClasses: ['failure-type:local-behavior'],
+          l4Status: 'clear',
+        }],
+        ['non-string decision producer', {
+          schema: 'tier-gate-decision/v1',
+          producer: null,
+          revision: 'r01',
+          tier: 'T2',
+          rubricClasses: ['failure-type:local-behavior'],
+          l4Status: 'clear',
+        }],
+      ];
+      for (const [label, receiptRecord] of receiptCases) {
+        writeFileSync(join(revisionDir, 'tier-gate-receipt.json'), JSON.stringify(receiptRecord));
+        const result = checkTierGateGuard(text, { repoRoot: process.cwd(), draftPath: anchor });
+        expect(result.ok, label).toBe(false);
+        expect(result.errors.join('\n'), label).toContain('missing or malformed tier-gate receipt for r01');
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('accepts opencode-flow-manager intake and decision through tier gate', () => {
     const text = draft('T2', 'T2');
     const revisions = [{
