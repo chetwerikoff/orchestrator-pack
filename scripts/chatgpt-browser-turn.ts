@@ -176,6 +176,32 @@ function parallelAdmissionEpochOf(
 }
 
 
+
+const DISPATCH_WITNESS_BOUNDARY_MS = 10_000;
+
+async function awaitDispatchWitnessBoundary(page: any): Promise<void> {
+  await Promise.race([
+    new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const onWebsocket = (ws: { on: (event: string, handler: () => void) => void }) => {
+        ws.on('framereceived', finish);
+        ws.on('socketerror', finish);
+      };
+      page.on?.('websocket', onWebsocket);
+      setTimeout(() => {
+        page.off?.('websocket', onWebsocket);
+        finish();
+      }, DISPATCH_WITNESS_BOUNDARY_MS);
+    }),
+    new Promise<void>((resolve) => { setTimeout(resolve, DISPATCH_WITNESS_BOUNDARY_MS); }),
+  ]);
+}
+
 async function probeLiveBrowserProvenance(cdp: string): Promise<string> {
   const chromium = loadChromium();
   const browser = await chromium.connectOverCDP(cdp);
@@ -516,6 +542,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     incidentId = created.identity;
 
     const result = await sendTurn(turnPage, snapshot.text, config, opened.provisionalId, async () => {
+      await awaitDispatchWitnessBoundary(turnPage);
       if (statusList(profileKey).state === 'profile_blocked') throw new Error('pre_send_profile_blocked');
       if (findProfileWall(profileKey)) throw new Error('pre_send_profile_wall');
       if (parallelAdmission) {
