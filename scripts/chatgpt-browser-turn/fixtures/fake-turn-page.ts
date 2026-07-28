@@ -94,7 +94,7 @@ function messageLocator(
       if (name === 'data-parent-message-id') return parent ?? null;
       return null;
     },
-    locator: () => ({ first: () => ({ getAttribute: async () => null }) }),
+    locator: () => ({ count: async () => 0, first: () => ({ getAttribute: async () => null }) }),
     first: () => emptyLocator(),
     count: async () => 1,
     innerText: async () => currentText(),

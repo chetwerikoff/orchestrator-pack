@@ -1160,8 +1160,12 @@ async function parentServiceId(locator: any, waitSource?: OperationWaitSource): 
   for (const attr of ['data-parent-message-id', 'data-parent-turn-id']) {
     const direct = await readLocatorAttribute(locator, attr, waitSource);
     if (direct && direct.length >= 8) return direct;
-    const nested = await readLocatorAttribute(locator.locator(`[${attr}]`).first(), attr, waitSource);
-    if (nested && nested.length >= 8) return nested;
+    const nestedCandidates = locator.locator(`[${attr}]`);
+    const nestedCount = await boundedLocatorCount(nestedCandidates, resolveOperationWaitMs(waitSource));
+    if (nestedCount > 0) {
+      const nested = await readLocatorAttribute(nestedCandidates.first(), attr, waitSource);
+      if (nested && nested.length >= 8) return nested;
+    }
   }
   return '';
 }
