@@ -7,14 +7,30 @@
   "baseline": {
     "commit_sha": "3291d33e4e6df81f7ba27f22cc2ce2ab91bf9dab",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:bd28dbd328c1ad542cdc8f13c2545cced160817442b2f42c84add9b1b3d60068"
+    "active_scope_hash": "sha256:5f9d697109f704f693a99d453e12dbecb6fa561fbb37f7434f6b7c9c81fd7825"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
     "docs/tiering.md",
     "scripts/lib/tier-gate-core.ts",
+    "scripts/pr-scope-check.ts",
     "scripts/tier-gate-guard.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:bd28dbd328c1ad542cdc8f13c2545cced160817442b2f42c84add9b1b3d60068",
+      "new_active_scope_hash": "sha256:5f9d697109f704f693a99d453e12dbecb6fa561fbb37f7434f6b7c9c81fd7825",
+      "changed": {
+        "added": [
+          "scripts/pr-scope-check.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Include scope-guard normalization required for issue #1093 trailing-slash allowed_roots.",
+      "actor": "local",
+      "timestamp": "2026-07-28T15:46:55.842Z",
+      "applied": true
+    }
+  ]
 }
