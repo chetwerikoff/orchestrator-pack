@@ -11,6 +11,7 @@ export const GRANDFATHERED_REVIEW_DIR_BASENAMES = new Set([
 ]);
 
 export const COMPETITIVE_WAIVER_FILENAME = 'competitive-stage-waiver.json';
+export const ARCHITECT_LENS_WAIVER_FILENAME = 'architect-lens-stage-waiver.json';
 
 const COUNTED_STAGE_TOKENS = new Set([
   'competitive',
@@ -27,6 +28,14 @@ const COUNTED_STAGE_FILENAME_TOKEN_RE =
 
 const PARSEABLE_WAIVER_REASONS = new Set(['codex-substitution', 'operator-waiver']);
 const CREDITED_COMPETITIVE_WAIVER_REASONS = new Set(['operator-waiver']);
+const PARSEABLE_LENS_WAIVER_REASONS = new Set(['claude-unavailable']);
+const CREDITED_LENS_WAIVER_REASONS = new Set(['claude-unavailable']);
+const CREDITED_LENS_UNAVAILABILITY_KINDS = new Set([
+  'quota',
+  'rate-limit',
+  'provider-unavailable',
+  'cli-unavailable',
+]);
 
 export interface ParsedCapture {
   passIndex: number;
@@ -38,6 +47,13 @@ export interface CompetitiveWaiver {
   reason: string;
   recordedAt: string;
   afterPass: number;
+}
+
+export interface ArchitectLensWaiver {
+  reason: string;
+  recordedAt: string;
+  afterPass: number;
+  unavailability: string;
 }
 
 export interface StageCompletenessGuardOptions {
@@ -52,7 +68,8 @@ export interface StageCompletenessGuardResult {
   receipt: {
     tier: string;
     competitiveAnchor: number;
-    lensMax: number;
+    lensMax: number | null;
+    lensSkipAnchor: number | null;
     terminalPass: number;
   } | null;
 }
@@ -134,6 +151,50 @@ export function parseCompetitiveWaiver(
   };
 }
 
+export function parseArchitectLensWaiver(
+  reviewDir: string,
+): { waiver: ArchitectLensWaiver | null; invalid: boolean } {
+  const waiverPath = join(reviewDir, ARCHITECT_LENS_WAIVER_FILENAME);
+  if (!existsSync(waiverPath)) {
+    return { waiver: null, invalid: false };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(waiverPath, 'utf8'));
+  } catch {
+    return { waiver: null, invalid: true };
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    return { waiver: null, invalid: true };
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const reason = typeof record.reason === 'string' ? record.reason.trim() : '';
+  const recordedAt = typeof record['recorded-at'] === 'string' ? record['recorded-at'].trim() : '';
+  const unavailability =
+    typeof record.unavailability === 'string' ? record.unavailability.trim() : '';
+  if (
+    !PARSEABLE_LENS_WAIVER_REASONS.has(reason) ||
+    !recordedAt ||
+    !isStrictIso8601Timestamp(recordedAt) ||
+    !CREDITED_LENS_UNAVAILABILITY_KINDS.has(unavailability)
+  ) {
+    return { waiver: null, invalid: true };
+  }
+
+  const afterPass = parseAfterPassAnchor(record['after-pass']);
+  if (afterPass === null) {
+    return { waiver: null, invalid: true };
+  }
+
+  return {
+    waiver: { reason, recordedAt, afterPass, unavailability },
+    invalid: false,
+  };
+}
+
 function loadReviewCaptures(reviewDir: string): {
   captures: ParsedCapture[];
   errors: string[];
@@ -189,37 +250,53 @@ function creditedCompetitiveWaiver(waiver: CompetitiveWaiver | null): Competitiv
   return waiver;
 }
 
+function creditedArchitectLensWaiver(waiver: ArchitectLensWaiver | null): ArchitectLensWaiver | null {
+  if (waiver === null || !CREDITED_LENS_WAIVER_REASONS.has(waiver.reason)) {
+    return null;
+  }
+  return waiver;
+}
+
 function resolveTerminalArchitecturalPass(
   captures: ParsedCapture[],
-  lensMax: number | null,
+  preTerminalAnchor: number | null,
+  anchorLabel: 'architect-lens' | 'claude-unavailable-skip',
 ): { terminalPass: number | null; orderingErrors: string[] } {
   const orderingErrors: string[] = [];
-  if (lensMax === null) {
+  if (preTerminalAnchor === null) {
     return { terminalPass: null, orderingErrors };
   }
 
   const architecturalCaptures = captures.filter((capture) => capture.stage === 'architectural');
-  const afterLens = architecturalCaptures.filter((capture) => capture.passIndex > lensMax);
-  const beforeLens = architecturalCaptures.filter((capture) => capture.passIndex < lensMax);
+  const afterAnchor = architecturalCaptures.filter(
+    (capture) => capture.passIndex > preTerminalAnchor,
+  );
+  const beforeAnchor = architecturalCaptures.filter(
+    (capture) => capture.passIndex < preTerminalAnchor,
+  );
 
-  if (afterLens.length === 0) {
-    if (beforeLens.length > 0) {
+  if (afterAnchor.length === 0) {
+    if (beforeAnchor.length > 0) {
       orderingErrors.push(
-        'architectural stage out of order (terminal GPT capture must be strictly after architect-lens)',
+        anchorLabel === 'architect-lens'
+          ? 'architectural stage out of order (terminal GPT capture must be strictly after architect-lens)'
+          : 'architectural stage out of order (terminal GPT capture must be strictly after claude-unavailable skip anchor)',
       );
     }
     orderingErrors.push('missing terminal architectural stage');
     return { terminalPass: null, orderingErrors };
   }
 
-  if (afterLens.length > 1) {
+  if (afterAnchor.length > 1) {
     orderingErrors.push(
-      'terminal architectural stage ceiling exceeded (exactly one pass allowed after lens)',
+      anchorLabel === 'architect-lens'
+        ? 'terminal architectural stage ceiling exceeded (exactly one pass allowed after lens)'
+        : 'terminal architectural stage ceiling exceeded (exactly one pass allowed after claude-unavailable skip anchor)',
     );
     return { terminalPass: null, orderingErrors };
   }
 
-  return { terminalPass: afterLens[0]!.passIndex, orderingErrors };
+  return { terminalPass: afterAnchor[0]!.passIndex, orderingErrors };
 }
 
 export function resolveRepoRootFromDraftPath(draftPath?: string): string {
@@ -267,6 +344,7 @@ export function checkStageCompletenessGuard(
 
   const competitiveMax = maxPassIndex(captures, 'competitive');
   const { waiver, invalid: invalidWaiver } = parseCompetitiveWaiver(capturesDir);
+  const { waiver: lensWaiver, invalid: invalidLensWaiver } = parseArchitectLensWaiver(capturesDir);
 
   const hasCompetitive = competitiveMax !== null;
   const creditedWaiver = creditedCompetitiveWaiver(waiver);
@@ -287,17 +365,43 @@ export function checkStageCompletenessGuard(
   }
 
   const lensMax = maxPassIndex(captures, 'architectural-lens');
+  const creditedLensSkip = creditedArchitectLensWaiver(lensWaiver);
+  const hasCreditedLensSkip = creditedLensSkip !== null;
+
+  if (lensMax !== null && hasCreditedLensSkip) {
+    errors.push(
+      'architect-lens skip record cannot coexist with an architectural-lens capture (skip is not Claude provenance)',
+    );
+  }
+
+  let preTerminalAnchor: number | null = null;
+  let lensSkipAnchor: number | null = null;
+  if (lensMax !== null) {
+    preTerminalAnchor = lensMax;
+    if (competitiveAnchor !== null && lensMax <= competitiveAnchor) {
+      errors.push('architect-lens stage out of order (must be strictly after competitive anchor)');
+    }
+  } else if (hasCreditedLensSkip) {
+    lensSkipAnchor = creditedLensSkip!.afterPass;
+    preTerminalAnchor = lensSkipAnchor;
+    if (competitiveAnchor !== null && lensSkipAnchor <= competitiveAnchor) {
+      errors.push(
+        'claude-unavailable skip anchor out of order (must be strictly after competitive anchor)',
+      );
+    }
+  } else {
+    if (invalidLensWaiver) {
+      errors.push('invalid architect-lens skip record');
+    }
+    errors.push('missing architect-lens stage (no capture and no valid claude-unavailable skip)');
+  }
+
   const { terminalPass, orderingErrors: terminalOrderingErrors } = resolveTerminalArchitecturalPass(
     captures,
-    lensMax,
+    preTerminalAnchor,
+    lensMax !== null ? 'architect-lens' : 'claude-unavailable-skip',
   );
   errors.push(...terminalOrderingErrors);
-
-  if (lensMax === null) {
-    errors.push('missing architect-lens stage');
-  } else if (competitiveAnchor !== null && lensMax <= competitiveAnchor) {
-    errors.push('architect-lens stage out of order (must be strictly after competitive anchor)');
-  }
 
   if (errors.length > 0) {
     return { ok: false, errors, noop: false, receipt: null };
@@ -310,7 +414,8 @@ export function checkStageCompletenessGuard(
     receipt: {
       tier: 'T3',
       competitiveAnchor: competitiveAnchor!,
-      lensMax: lensMax!,
+      lensMax,
+      lensSkipAnchor,
       terminalPass: terminalPass!,
     },
   };
@@ -323,9 +428,11 @@ export function formatStageCompletenessPassMessage(result: StageCompletenessGuar
   if (!result.receipt) {
     return 'stage-completeness guard: PASS (receipt=grandfathered)';
   }
-  const { competitiveAnchor, lensMax, terminalPass } = result.receipt;
+  const { competitiveAnchor, lensMax, lensSkipAnchor, terminalPass } = result.receipt;
+  const lensReceipt =
+    lensMax !== null ? `lens-max=${lensMax}` : `lens-skip-anchor=${lensSkipAnchor}`;
   return [
     'stage-completeness guard: PASS',
-    `(receipt=tier-fence tier=T3 competitive-anchor=${competitiveAnchor} lens-max=${lensMax} terminal-pass=${terminalPass})`,
+    `(receipt=tier-fence tier=T3 competitive-anchor=${competitiveAnchor} ${lensReceipt} terminal-pass=${terminalPass})`,
   ].join(' ');
 }

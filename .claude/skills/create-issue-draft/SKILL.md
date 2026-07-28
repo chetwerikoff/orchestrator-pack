@@ -103,7 +103,8 @@ restart from intake without historical provenance inference.
 2. **Pre-lens** browser-GPT **competitive** stage when selected (≤3 fresh chats).
 3. After pre-lens stages are legally terminal: **`pre-lens`** #975 guard.
 4. Exactly **one** Claude `architectural-lens` (independent Claude Code CLI
-   invocation + producing-run evidence).
+   invocation + producing-run evidence) **or** a valid `claude-unavailable` skip
+   record when Claude is observably unavailable (terminal GPT still mandatory).
 5. Author dispositions/fixes from Claude findings; re-pull.
 6. Exactly **one** terminal independent browser-GPT `architectural` lens (fresh
    chat, never the task chat or a competitive chat).
@@ -327,6 +328,47 @@ T1/T2 **skip** this phase entirely.
 
 Exactly one full lens per cycle segment after the pre-lens guard is green. The
 accepted candidate must be covered by this lens before terminal GPT runs.
+
+The flow-manager **orchestrates** this stage only: prepare inputs and the
+evidence destination, launch one **separate independent Claude Code CLI** invocation,
+wait for terminal completion, and capture its verbatim output/provenance. The
+flow-manager must not reason through, draft, simulate, or adjudicate the Claude lens.
+Browser GPT, Codex, or any other model cannot substitute for the skipped Claude lens.
+
+#### Claude-unavailable skip (T3 stage completeness only)
+
+When a real Claude Code CLI invocation cannot run because Claude is observably
+unavailable — explicit quota, rate-limit, provider-unavailable, or CLI-unavailable
+evidence — record one durable `architect-lens-stage-waiver.json` sidecar in
+`$REVIEW_DIR` and proceed without the Claude lens. Ordinary impatience, an
+ambiguous timeout, or a manager decision to save cost is **not** a valid skip.
+Do not retry in a loop once unavailability is established.
+
+The skip record is audit evidence only. It is not Claude provenance, does not
+create an `architectural-lens` capture, does not satisfy M3 adjudication, and
+grants no `T3→T2` demotion authority. After a valid skip, the terminal browser-GPT
+`architectural` lens remains mandatory.
+
+Minimal producer-facing record (stage-completeness guard accepts only this shape):
+
+```json
+{
+  "reason": "claude-unavailable",
+  "recorded-at": "2026-07-28T12:00:00.000Z",
+  "after-pass": 2,
+  "unavailability": "rate-limit"
+}
+```
+
+- `reason` must be exactly `claude-unavailable`.
+- `recorded-at` must be strict ISO-8601 UTC (same rule as competitive waivers).
+- `unavailability` must be one of `quota`, `rate-limit`, `provider-unavailable`,
+  `cli-unavailable`.
+- `after-pass` is the highest completed pre-Claude pass index in the review
+  episode (competitive and/or pre-lens reviewer passes). The guard requires this
+  skip anchor to be **strictly greater** than the competitive anchor, and the
+  terminal GPT `architectural` capture must be strictly after the skip anchor.
+
 
 The Claude lens is the **pre-terminal independent aggregate cut** authority and the
 **only** sanctioned tier-downgrade point (`T3→T2` only; **no** `T2→T1`). It
@@ -868,6 +910,9 @@ transport scratch for unrelated standalone Codex runs; delete immediately.
 
 ## Don't
 
+- Perform, simulate, or adjudicate the Claude lens in the flow-manager session.
+- Treat a `claude-unavailable` skip as Claude provenance, M3 authority, or demotion authority.
+- Skip the Claude lens for impatience, ambiguous timeout, or cost-saving without observable quota/rate-limit/provider/CLI unavailability.
 - Let the flow-manager author spec content or decide reviewer findings.
 - Mandatory hand-off to architect outside the fixed T3 Claude lens stage.
 - Review in the task chat or reuse terminal/competitive review chats.

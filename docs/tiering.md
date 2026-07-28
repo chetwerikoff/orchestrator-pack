@@ -95,7 +95,7 @@ has no create-flow role.
 |------|-----------------|---------------|---------------|----------------|
 | **T1** | Exactly **one** independent browser-GPT `architectural` lens (not the task chat) → acceptance | **No** | Same GPT lens owns aggregate cut + M5 anchor | **None** |
 | **T2** | Exactly **one** independent browser-GPT `architectural` lens → acceptance. **No** competitive create-flow stage | **No** | Same GPT lens owns aggregate cut + M5 anchor | **None** |
-| **T3** | Selected **pre-lens** stages (e.g. competitive when selected) → **pre-lens #975 guard** → exactly **one** full Claude `architectural-lens` → author dispositions/fixes → exactly **one** terminal independent browser-GPT `architectural` lens → acceptance | **Yes** (after pre-lens stages terminal) | Claude owns **pre-terminal** aggregate cut; terminal GPT owns **final** aggregate cut + M5 anchor | **T3→T2 only**, at Claude lens |
+| **T3** | Selected **pre-lens** stages (e.g. competitive when selected) → **pre-lens #975 guard** → exactly **one** full Claude `architectural-lens` (or valid `claude-unavailable` skip) → author dispositions/fixes → exactly **one** terminal independent browser-GPT `architectural` lens → acceptance | **Yes** (after pre-lens stages terminal) | Claude owns **pre-terminal** aggregate cut; terminal GPT owns **final** aggregate cut + M5 anchor | **T3→T2 only**, at Claude lens |
 
 There is **no** `architectural-final` stage. Historical captures with that name
 are audit-only.
@@ -260,6 +260,20 @@ post-adoption pre-lens stage when needed; do not mint synthetic clean-token pass
 - **`final-acceptance`** — all tiers at acceptance; requires the terminal GPT
   `architectural` M5 anchor, applicable M2/M3 evidence, and current
   revision-bound outcomes.
+
+### T3 Claude lens orchestration and unavailable skip (#1090)
+
+The flow-manager orchestrates the Claude `architectural-lens` but never authors or
+simulates it. A counted Claude lens requires a separate Claude Code CLI invocation
+with co-located producing-run evidence. When Claude is observably unavailable
+(quota, rate-limit, provider-unavailable, or CLI-unavailable), record
+`architect-lens-stage-waiver.json` with `reason: claude-unavailable`, strict ISO
+`recorded-at`, closed `unavailability`, and `after-pass` set to the highest
+completed pre-Claude pass index. The skip is audit-only: it does not create
+`architectural-lens` provenance, M3 authority, or `T3→T2` demotion authority.
+The terminal browser-GPT `architectural` capture remains mandatory after a valid
+skip. Stage-completeness accepts `Claude lens → terminal GPT` or
+`valid claude-unavailable skip → terminal GPT`; missing both fails closed.
 
 ### Claude architectural-lens goals (T3)
 

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   checkStageCompletenessGuard,
   formatStageCompletenessPassMessage,
+  parseArchitectLensWaiver,
   parseCompetitiveWaiver,
 } from './lib/stage-completeness-core.ts';
 import { runCli } from './stage-completeness-guard.ts';
@@ -224,7 +225,7 @@ describe('stage-completeness missing lens', () => {
   it('fails when architect-lens captures are absent', () => {
     const result = check('missing-lens');
     expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/missing architect-lens stage/);
+    expect(result.errors.join(' ')).toMatch(/missing architect-lens stage \(no capture and no valid claude-unavailable skip\)/);
   });
 });
 
@@ -274,6 +275,84 @@ describe('stage-completeness historical architectural-final bytes', () => {
       expect(result.receipt?.terminalPass).toBe(3);
     } finally {
       rmSync(path.join(reviewDir, 'pass-04-architectural-final.capture.txt'));
+    }
+  });
+});
+
+
+describe('stage-completeness claude-unavailable skip', () => {
+  it('passes with the documented producer-facing claude-unavailable waiver shape', () => {
+    const result = check('claude-skip-valid');
+    expect(result.ok).toBe(true);
+    expect(result.receipt?.lensMax).toBeNull();
+    expect(result.receipt?.lensSkipAnchor).toBe(2);
+    expect(result.receipt?.terminalPass).toBe(3);
+    const message = formatStageCompletenessPassMessage(result);
+    expect(message).toMatch(/lens-skip-anchor=2/);
+    expect(message).toMatch(/terminal-pass=3/);
+  });
+
+  it('fails when claude skip record is malformed and no lens capture exists', () => {
+    const result = check('claude-skip-malformed');
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/invalid architect-lens skip record/);
+    expect(result.errors.join(' ')).toMatch(/missing architect-lens stage/);
+  });
+
+  it('fails when a valid skip exists but terminal architectural is missing', () => {
+    const result = check('claude-skip-missing-terminal');
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/missing terminal architectural stage/);
+  });
+
+  it('fails when claude-unavailable skip anchor is not after the competitive anchor', () => {
+    const result = check('claude-skip-ordering');
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/claude-unavailable skip anchor out of order/);
+  });
+
+  it('fails when skip record coexists with an architectural-lens capture', () => {
+    const result = check('claude-skip-coexist-lens');
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/skip is not Claude provenance/);
+  });
+
+  it('rejects lens skip records with loose recorded-at or invalid unavailability kinds', () => {
+    const reviewDir = mkdtempSync(join(tmpdir(), 'stage-completeness-lens-skip-'));
+    const cases = [
+      {
+        label: 'non-ISO recorded-at',
+        body: JSON.stringify({
+          reason: 'claude-unavailable',
+          'recorded-at': '2026-07-06',
+          'after-pass': 1,
+          unavailability: 'quota',
+        }),
+      },
+      {
+        label: 'impatience unavailability',
+        body: JSON.stringify({
+          reason: 'claude-unavailable',
+          'recorded-at': '2026-07-06T00:00:00.000Z',
+          'after-pass': 1,
+          unavailability: 'impatience',
+        }),
+      },
+      {
+        label: 'missing unavailability',
+        body: JSON.stringify({
+          reason: 'claude-unavailable',
+          'recorded-at': '2026-07-06T00:00:00.000Z',
+          'after-pass': 1,
+        }),
+      },
+    ];
+
+    for (const testCase of cases) {
+      writeFileSync(join(reviewDir, 'architect-lens-stage-waiver.json'), testCase.body, 'utf8');
+      const parsed = parseArchitectLensWaiver(reviewDir);
+      expect(parsed.waiver, testCase.label).toBeNull();
+      expect(parsed.invalid, testCase.label).toBe(true);
     }
   });
 });
