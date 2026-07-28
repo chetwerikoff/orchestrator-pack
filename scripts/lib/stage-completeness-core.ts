@@ -189,49 +189,38 @@ function creditedCompetitiveWaiver(waiver: CompetitiveWaiver | null): Competitiv
   return waiver;
 }
 
-function resolveCountedArchitecturalMax(
+function resolveTerminalArchitecturalPass(
   captures: ParsedCapture[],
-  competitiveAnchor: number | null,
   lensMax: number | null,
-): { countedMax: number | null; orderingErrors: string[] } {
+): { countedPass: number | null; orderingErrors: string[] } {
   const orderingErrors: string[] = [];
   const architecturalCaptures = captures.filter((capture) => capture.stage === 'architectural');
 
   if (architecturalCaptures.length === 0) {
-    return { countedMax: null, orderingErrors: ['missing architectural stage'] };
-  }
-
-  if (competitiveAnchor === null) {
-    return { countedMax: null, orderingErrors };
-  }
-
-  const afterCompetitive = architecturalCaptures.filter(
-    (capture) => capture.passIndex > competitiveAnchor,
-  );
-  if (afterCompetitive.length === 0) {
-    orderingErrors.push(
-      'architectural stage out of order (must be strictly after competitive anchor)',
-    );
-    return { countedMax: null, orderingErrors };
+    return { countedPass: null, orderingErrors: ['missing architectural stage'] };
   }
 
   if (lensMax === null) {
-    return {
-      countedMax: Math.max(...afterCompetitive.map((capture) => capture.passIndex)),
-      orderingErrors,
-    };
+    return { countedPass: null, orderingErrors };
   }
 
-  const beforeLens = afterCompetitive.filter((capture) => capture.passIndex < lensMax);
-  if (beforeLens.length === 0) {
+  const afterLens = architecturalCaptures.filter((capture) => capture.passIndex > lensMax);
+  if (afterLens.length === 0) {
     orderingErrors.push(
-      'architectural stage out of order (must be strictly before architect-lens)',
+      'architectural stage out of order (terminal architectural must be strictly after architect-lens)',
     );
-    return { countedMax: null, orderingErrors };
+    return { countedPass: null, orderingErrors };
+  }
+
+  if (afterLens.length > 1) {
+    orderingErrors.push(
+      'architectural stage ceiling exceeded (exactly one terminal pass allowed after architect-lens)',
+    );
+    return { countedPass: null, orderingErrors };
   }
 
   return {
-    countedMax: Math.max(...beforeLens.map((capture) => capture.passIndex)),
+    countedPass: afterLens[0]!.passIndex,
     orderingErrors,
   };
 }
@@ -301,33 +290,15 @@ export function checkStageCompletenessGuard(
   }
 
   const lensMax = maxPassIndex(captures, 'architectural-lens');
-  const { countedMax: architecturalMax, orderingErrors: architecturalOrderingErrors } =
-    resolveCountedArchitecturalMax(captures, competitiveAnchor, lensMax);
-  errors.push(...architecturalOrderingErrors);
-
   if (lensMax === null) {
     errors.push('missing architect-lens stage');
-  } else if (architecturalMax !== null && lensMax <= architecturalMax) {
-    errors.push('architect-lens stage out of order (must be strictly after architectural stage)');
   } else if (competitiveAnchor !== null && lensMax <= competitiveAnchor) {
     errors.push('architect-lens stage out of order (must be strictly after competitive anchor)');
   }
 
-  const finalCaptures = captures.filter((capture) => capture.stage === 'architectural-final');
-  const countedFinals =
-    lensMax === null
-      ? []
-      : finalCaptures.filter((capture) => capture.passIndex > lensMax);
-
-  if (countedFinals.length === 0) {
-    if (finalCaptures.length > 0 && lensMax !== null) {
-      errors.push('final architectural stage out of order (must be strictly after architect-lens)');
-    } else {
-      errors.push('missing final architectural stage');
-    }
-  } else if (countedFinals.length > 1) {
-    errors.push('final architectural stage ceiling exceeded (exactly one pass allowed after lens)');
-  }
+  const { countedPass: terminalArchitecturalPass, orderingErrors: architecturalOrderingErrors } =
+    resolveTerminalArchitecturalPass(captures, lensMax);
+  errors.push(...architecturalOrderingErrors);
 
   if (errors.length > 0) {
     return { ok: false, errors, noop: false, receipt: null };
@@ -341,7 +312,7 @@ export function checkStageCompletenessGuard(
       tier: 'T3',
       competitiveAnchor: competitiveAnchor!,
       lensMax: lensMax!,
-      finalPass: countedFinals[0]!.passIndex,
+      finalPass: terminalArchitecturalPass!,
     },
   };
 }
