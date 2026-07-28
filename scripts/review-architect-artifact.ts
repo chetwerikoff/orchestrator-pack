@@ -134,7 +134,7 @@ export function runArchitectArtifactReview(options: {
     }
   }
 
-  const clean = /(?m)^NO_FINDINGS\s*$/u.test(output);
+  const clean = /^NO_FINDINGS\s*$/mu.test(output);
   if (options.failOnFindings && !clean) return 1;
   return 0;
 }

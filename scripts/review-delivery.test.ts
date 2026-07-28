@@ -389,14 +389,13 @@ describe('review delivery custom lifecycle store path', () => {
 });
 
 describe('review delivery verify guard wiring', () => {
-  it('verify.ps1 runs stdout-first guard outside missing confirmed-delivery gate branch', () => {
+  it('verify.ps1 runs stdout-first guard after AO confirmed-delivery gate retirement (#1039)', () => {
     const text = readFileSync(path.join(repoRoot, 'scripts/verify.ps1'), 'utf8');
-    const gateElse = text.indexOf("Add-Failure 'Missing scripted review confirmed-delivery gate check script (Issue #669)'");
     const guardSection = text.indexOf("Write-Host '== review delivery stdout-first guard (Issue #718) =='");
     const guardCheck = text.indexOf('scripts/check-review-delivery-no-visibility-poll.ps1');
-    expect(gateElse).toBeGreaterThan(-1);
-    expect(guardSection).toBeGreaterThan(gateElse);
+    expect(guardSection).toBeGreaterThan(-1);
     expect(guardCheck).toBeGreaterThan(guardSection);
+    expect(text).not.toContain('check-scripted-review-confirmed-delivery-gate.ps1');
   });
 });
 
