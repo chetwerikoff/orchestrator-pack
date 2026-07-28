@@ -1839,15 +1839,14 @@ describe('issue 1023 operation-level bounds', () => {
     expect(witnessInstallOperationWaitMs(tight)).toBe(500);
   });
 
-  it('openTurnPage focuses an existing tab with bounded goto instead of bringToFront', async () => {
+  it('openTurnPage reuses an existing tab without goto when URL already matches', async () => {
     const target = 'https://chatgpt.com/c/focus-tab-12345678';
     let gotoCalled = false;
     const page = {
       url: () => target,
-      goto: async (url: string, opts: { timeout?: number }) => {
+      goto: async () => {
         gotoCalled = true;
-        expect(url).toBe(target);
-        expect(opts.timeout).toBeGreaterThan(0);
+        throw new Error('goto should not run when URL already matches');
       },
       bringToFront: async () => { throw new Error('bringToFront should not run'); },
     };
@@ -1859,9 +1858,43 @@ describe('issue 1023 operation-level bounds', () => {
       newChat: false,
       timeoutMs: 60_000,
     });
-    expect(gotoCalled).toBe(true);
+    expect(gotoCalled).toBe(false);
     expect(out.page).toBe(page);
     expect(out.owned).toBe(false);
+  });
+
+  it('openTurnPage opens an owned page when no existing tab matches the conversation URL', async () => {
+    const target = 'https://chatgpt.com/c/focus-tab-12345678';
+    let newPageCreated = false;
+    const foreign = {
+      url: () => 'https://chatgpt.com/c/other-tab-12345678',
+      goto: async () => { throw new Error('foreign tab goto should not run'); },
+    };
+    const ctx = {
+      pages: () => [foreign],
+      newPage: async () => {
+        newPageCreated = true;
+        let current = 'about:blank';
+        return {
+          url: () => current,
+          goto: async (url: string, opts: { timeout?: number }) => {
+            expect(url).toBe(target);
+            expect(opts.timeout).toBeGreaterThan(0);
+            current = url;
+          },
+          close: async () => {},
+        };
+      },
+    };
+    const out = await openTurnPage({ contexts: () => [ctx] }, {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: target,
+      newChat: false,
+      timeoutMs: 60_000,
+    });
+    expect(newPageCreated).toBe(true);
+    expect(out.owned).toBe(true);
   });
 
   it('AC6: never-settling page.close does not block terminalization beyond cleanup bound', async () => {
@@ -1872,5 +1905,99 @@ describe('issue 1023 operation-level bounds', () => {
     );
     expect(outcome).toBe('unconfirmed');
     expect(Date.now() - started).toBeLessThan(200);
+  });
+
+  it('AC4: healthy post-dispatch polls may continue beyond 30s until turn deadline', async () => {
+    let clock = 1_000;
+    __testTiming.now = () => clock;
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({ dispatchCandidateIds: [own] });
+    fixture.page.waitForTimeout = async (ms: number) => { clock += ms; };
+    const result = await sendTurn(fixture.page, 'payload', {
+      ...issue1023Config(),
+      timeoutMs: 60_000,
+    }, undefined, undefined, createPreSendSegmentBudget(30_000));
+    expect(result.state).toBe('stream_timeout');
+    expect(result.possibleDelivery).toBe(true);
+    expect(clock - 1_000).toBeGreaterThan(30_000);
+    __testTiming.now = undefined;
+  });
+
+  it('AC11: witness surface reclamps wait between sequential serviceId reads', async () => {
+    const budget = createTurnOperationBudget(80);
+    let attrCalls = 0;
+    const page = {
+      locator: () => ({
+        count: async () => 1,
+        nth: () => ({
+          getAttribute: async (name: string) => {
+            attrCalls++;
+            await new Promise((resolve) => { setTimeout(resolve, 40); });
+            if (name === 'data-message-author-role') return 'assistant';
+            return null;
+          },
+          locator: () => ({ first: () => ({ getAttribute: async () => null }) }),
+        }),
+      }),
+    };
+  await expect(runtimeWitnessSurfaceAvailable(page, budget)).rejects.toThrow('browser_operation_timeout:witness_surface');
+    expect(attrCalls).toBeGreaterThan(1);
+  });
+
+  it('AC6: cleanup-unconfirmed residual tab is re-enumerated on next openTurnPage', async () => {
+    const target = 'https://chatgpt.com/c/residual-tab-12345678';
+    const residual = {
+      url: () => target,
+      close: async () => new Promise<void>(() => {}),
+      goto: async () => {},
+    };
+    let newPageCreated = false;
+    const ctx = {
+      pages: () => [residual],
+      newPage: async () => {
+        newPageCreated = true;
+        return {
+          url: () => 'about:blank',
+          goto: async (url: string) => { residual.url = () => url; },
+          close: async () => {},
+        };
+      },
+    };
+    const browser = { contexts: () => [ctx] };
+    const cleanup = await boundedResourceCleanup(() => residual.close(), 50);
+    expect(cleanup).toBe('unconfirmed');
+    const opened = await openTurnPage(browser, {
+      cdp,
+      profile: join(root, 'profile'),
+      chatUrl: target,
+      newChat: false,
+      timeoutMs: 60_000,
+    });
+    expect(opened.page).toBe(residual);
+    expect(opened.owned).toBe(false);
+    expect(newPageCreated).toBe(false);
+  });
+
+  it('AC8: timeout before terminal reply creates no publication side effect', async () => {
+    const own = 'user-owned-12345678';
+    const fixture = fakeTurnPage({ dispatchCandidateIds: [own] });
+    const result = await sendTurn(fixture.page, 'payload', { ...issue1023Config(), timeoutMs: 1 }, undefined, undefined, createPreSendSegmentBudget(30_000));
+    expect(result.state).toBe('stream_timeout');
+    expect(result.reply).toBeUndefined();
+    expect(result.possibleDelivery).toBe(true);
+  });
+
+  it('AC12: fresh-orphan possible-delivery timeout preserves durable orphan incident shape', async () => {
+    const orphan = writeIncident(profileKey, {
+      kind: 'fresh_orphan',
+      generation: 9,
+      phase: 'possible_delivery',
+      provisional_id: 'prov-orphan-timeout',
+      cause: 'canonical_fresh_conversation_unproven',
+    });
+    const status = statusList(profileKey);
+    expect(status.items?.some((item) => item.kind === 'fresh_orphan' && item.phase === 'possible_delivery')).toBe(true);
+    expect(clearReadable(profileKey, orphan.identity, 8, orphan.record.evidence_token).state).toBe('stale_generation');
+    expect(clearReadable(profileKey, orphan.identity, 9, orphan.record.evidence_token).state).toBe('cleared');
   });
 });

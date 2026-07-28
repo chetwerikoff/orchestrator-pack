@@ -228,6 +228,13 @@ function playwrightTimeout(waitMs: number): { timeout: number } | undefined {
   return waitMs > 0 ? { timeout: waitMs } : undefined;
 }
 
+type OperationWaitSource = number | (() => number);
+
+function resolveOperationWaitMs(source?: OperationWaitSource): number {
+  const ms = typeof source === 'function' ? source() : (source ?? MAX_BROWSER_OPERATION_WAIT_MS);
+  return ms > 0 ? ms : 0;
+}
+
 interface NetworkWitnessState {
   readonly messages: NetworkMessage[];
   readonly dispatchCandidateIds: Set<string>;
@@ -1103,24 +1110,32 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
   return state;
 }
 
-async function serviceId(locator: any, waitMs?: number): Promise<string> {
-  const timeout = playwrightTimeout(waitMs ?? MAX_BROWSER_OPERATION_WAIT_MS);
+async function serviceId(locator: any, waitSource?: OperationWaitSource): Promise<string> {
   for (const attr of ['data-message-id', 'data-turn-id']) {
+    const waitMs = resolveOperationWaitMs(waitSource);
+    if (waitMs <= 0) return '';
+    const timeout = playwrightTimeout(waitMs);
     const direct = await locator.getAttribute(attr, timeout).catch(() => null);
     if (direct && direct.length >= 8) return direct;
     const parent = locator.locator(`[${attr}]`).first();
-    const nested = await parent.getAttribute(attr, timeout).catch(() => null);
+    const nestedWait = resolveOperationWaitMs(waitSource);
+    if (nestedWait <= 0) return '';
+    const nested = await parent.getAttribute(attr, playwrightTimeout(nestedWait)).catch(() => null);
     if (nested && nested.length >= 8) return nested;
   }
   return '';
 }
 
-async function parentServiceId(locator: any, waitMs?: number): Promise<string> {
-  const timeout = playwrightTimeout(waitMs ?? MAX_BROWSER_OPERATION_WAIT_MS);
+async function parentServiceId(locator: any, waitSource?: OperationWaitSource): Promise<string> {
   for (const attr of ['data-parent-message-id', 'data-parent-turn-id']) {
+    const waitMs = resolveOperationWaitMs(waitSource);
+    if (waitMs <= 0) return '';
+    const timeout = playwrightTimeout(waitMs);
     const direct = await locator.getAttribute(attr, timeout).catch(() => null);
     if (direct && direct.length >= 8) return direct;
-    const nested = await locator.locator(`[${attr}]`).first().getAttribute(attr, timeout).catch(() => null);
+    const nestedWait = resolveOperationWaitMs(waitSource);
+    if (nestedWait <= 0) return '';
+    const nested = await locator.locator(`[${attr}]`).first().getAttribute(attr, playwrightTimeout(nestedWait)).catch(() => null);
     if (nested && nested.length >= 8) return nested;
   }
   return '';
@@ -1163,11 +1178,11 @@ export async function runtimeWitnessSurfaceAvailable(
     const locator = messages.nth(index);
     const role = await locator.getAttribute('data-message-author-role', playwrightTimeout(waitMs)).catch(() => null);
     if (role === 'user') {
-      const id = await serviceId(locator, waitMs);
+      const id = await serviceId(locator, clampWitnessWait);
       if (id) userIds.add(id);
     } else if (role === 'assistant') {
-      const id = await serviceId(locator, waitMs);
-      const parent = await parentServiceId(locator, waitMs);
+      const id = await serviceId(locator, clampWitnessWait);
+      const parent = await parentServiceId(locator, clampWitnessWait);
       if (id && parent) assistantParents.push(parent);
     }
   }
@@ -1179,7 +1194,7 @@ export async function runtimeWitnessSurfaceAvailable(
     const role = await locator.getAttribute('data-message-author-role', playwrightTimeout(waitMs)).catch(() => null);
     const nextRole = await next.getAttribute('data-message-author-role', playwrightTimeout(waitMs)).catch(() => null);
     if (role !== 'user' || nextRole !== 'assistant') continue;
-    const userId = await serviceId(locator, waitMs);
+    const userId = await serviceId(locator, clampWitnessWait);
     const turnStart = await next.getAttribute('data-turn-start-message', playwrightTimeout(waitMs)).catch(() => null);
     if (userId && turnStart === 'true') return 'available';
   }
@@ -1369,12 +1384,20 @@ export async function openTurnPage(
     });
     if (matches.length > 1) throw new Error('ui_contract_mismatch:duplicate_tabs');
     if (matches.length === 1) {
+      const reused = matches[0];
+      try {
+        if (normalizeConversationUrl(reused.url()) === target) {
+          return { page: reused, owned: false };
+        }
+      } catch {
+        /* unreadable tab URL — fall through to bounded navigation */
+      }
       const bringWait = segmentOperationWait(segmentBudget, fallbackGotoMs);
       if (segmentBudget && bringWait <= 0) throw new BrowserOperationTimeoutError('open_turn_page');
       await boundedPlaywrightOperation(bringWait, () =>
-        matches[0].goto(target, { waitUntil: 'domcontentloaded', timeout: bringWait }),
+        reused.goto(target, { waitUntil: 'domcontentloaded', timeout: bringWait }),
       );
-      return { page: matches[0], owned: false };
+      return { page: reused, owned: false };
     }
     const page = await adoptNewPageWithBudget(ctx, async (opened, gotoWaitMs) => {
       await opened.goto(target, { waitUntil: 'domcontentloaded', timeout: gotoWaitMs });
@@ -1413,9 +1436,9 @@ export async function sendTurn(
 ): Promise<TurnBrowserResult> {
   const network = attachNetworkWitness(page);
   const composer = page.locator('#prompt-textarea');
-  const readyEndsAt = segmentBudget?.endsAtMs ?? Date.now() + Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
-  while (Date.now() < readyEndsAt) {
-    const waitMs = loopOperationWaitMs(readyEndsAt, Date.now());
+  const readyEndsAt = segmentBudget?.endsAtMs ?? wallClock() + Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
+  while (wallClock() < readyEndsAt) {
+    const waitMs = loopOperationWaitMs(readyEndsAt, wallClock());
     if (waitMs <= 0) break;
     const wall = await boundedPlaywrightOperation(waitMs, () => pageWalls(page, waitMs));
     if (wall.state) return { state: wall.state as TurnBrowserResult['state'], cause: wall.cause!, possibleDelivery: false };
@@ -1423,9 +1446,9 @@ export async function sendTurn(
     if (composerVisible) break;
     await witnessPollDelay(page, Math.min(500, waitMs));
   }
-  const composerReadyWait = loopOperationWaitMs(readyEndsAt, Date.now());
+  const composerReadyWait = loopOperationWaitMs(readyEndsAt, wallClock());
   if (!(await boundedLocatorCount(composer, composerReadyWait))) {
-    if (segmentBudget && Date.now() >= readyEndsAt) {
+    if (segmentBudget && wallClock() >= readyEndsAt) {
       throw new BrowserOperationTimeoutError('composer_readiness');
     }
     return { state: 'ui_contract_mismatch', cause: 'composer_unavailable', possibleDelivery: false };
@@ -1515,7 +1538,7 @@ export async function sendTurn(
   let continuationActive = false;
   let awaitingFreshTerminalAfterContinuation = false;
   let terminalPublishEligible = true;
-  const deadline = Date.now() + config.timeoutMs;
+  const deadline = wallClock() + config.timeoutMs;
   while (wallClock() < deadline) {
     let replyWait = loopOperationWaitMs(deadline, wallClock());
     if (replyWait <= 0) break;
