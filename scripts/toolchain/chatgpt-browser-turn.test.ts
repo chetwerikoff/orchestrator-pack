@@ -360,6 +360,38 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
     await expect(runtimeWitnessSurfaceAvailable(page, createTurnOperationBudget(5_000))).resolves.toBe('absent');
   });
 
+  it('reclamps nested parent count wait after earlier probe consumes segment budget (#1077 review)', async () => {
+    const budget = createTurnOperationBudget(200);
+    let nestedCountWait = -1;
+    const page = {
+      locator: () => ({
+        count: async () => 1,
+        nth: () => ({
+          getAttribute: async (name: string) => {
+            if (name === 'data-message-author-role') return 'assistant';
+            if (name === 'data-message-id') return 'assistant-12345678';
+            if (name === 'data-parent-message-id') {
+              await new Promise((resolve) => { setTimeout(resolve, 150); });
+              return null;
+            }
+            return null;
+          },
+          locator: (selector: string) => ({
+            count: async () => {
+              nestedCountWait = budget.clampOperationWaitMs();
+              return 0;
+            },
+            first: () => ({ getAttribute: async () => null }),
+          }),
+        }),
+      }),
+    };
+    await expect(runtimeWitnessSurfaceAvailable(page, budget)).resolves.toBe('absent');
+    expect(nestedCountWait).toBeGreaterThanOrEqual(0);
+    expect(nestedCountWait).toBeLessThanOrEqual(80);
+    expect(nestedCountWait).toBeLessThan(150);
+  });
+
   it('S1 binds a dispatch candidate only after the same ID is service-visible; historical response IDs are ignored', async () => {
     const own = 'user-owned-12345678';
     const fixture = fakeTurnPage({
