@@ -149,7 +149,7 @@ describe('issue 1065 browser-surface classification', () => {
     } as BrowserConfig)).rejects.toThrow(
       'ui_contract_mismatch:duplicate_tabs:count=2:url=https://chatgpt.com/c/a;url=https://chatgpt.com/c/a',
     );
-    expect(browser.contexts()[0].pages().length).toBe(2);
+    expect(browser.contexts()[0]!.pages().length).toBe(2);
   });
 
   it('AC4: Gate-B characterization control results use gate-b-characterization operation', async () => {
