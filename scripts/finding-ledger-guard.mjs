@@ -746,10 +746,23 @@ function latestEvidenceById(metadata) {
   return result;
 }
 
+function firstReviewerOccurrenceById(metadata) {
+  const result = new Map();
+  metadata.forEach((meta, index) => {
+    if (!REVIEWER_STAGES.has(meta.stage)) return;
+    for (const [id] of parseEvidenceByFindingId(meta.text)) {
+      if (!result.has(id)) result.set(id, { meta, index });
+    }
+  });
+  return result;
+}
+
 function validateM3(metadata, ledger, captureFindings, options, errors) {
   const protectedFindings = captureFindings.filter((finding) => PROTECTED_TYPES.has(finding.type));
   if (protectedFindings.length === 0) return;
   const evidenceById = latestEvidenceById(metadata);
+  const firstOccurrenceById = firstReviewerOccurrenceById(metadata);
+  const latestLensIndex = metadata.map((meta) => meta.stage).lastIndexOf('architectural-lens');
   const currentRevision = typeof options.issueRevision === 'string' ? options.issueRevision.trim() : '';
   const lensStates = foldM3LensState(metadata, currentRevision, errors);
   for (const finding of protectedFindings) {
@@ -793,6 +806,21 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
       if (row.disposition !== 'addressed') errors.push(`review-economics: activated protected nomination ${finding.id} must be disposition addressed`);
       continue;
     }
+
+    const firstOccurrence = firstOccurrenceById.get(finding.id);
+    const terminalOnlyNomination = latestLensIndex < 0
+      || Boolean(firstOccurrence && firstOccurrence.index > latestLensIndex);
+    if (terminalOnlyNomination) {
+      if (row.architectPending) {
+        errors.push(`review-economics: terminal protected nomination ${finding.id} must not remain architect-pending when no future architect stage exists`);
+        continue;
+      }
+      if (validAuthorActivation && row.disposition !== 'addressed') {
+        errors.push(`review-economics: author-activated protected nomination ${finding.id} must be disposition addressed`);
+      }
+      continue;
+    }
+
     if (row.architectPending) {
       errors.push(`review-economics: protected nomination ${finding.id} must clear architect-pending before final acceptance`);
       continue;
@@ -830,9 +858,8 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
 function selectM5Anchor(metadata, phase) {
   if (phase === 'pre-lens') return [...metadata].reverse().find((meta) => PRE_LENS_REVIEWER_STAGES.has(meta.stage)) ?? null;
   const latestLensIndex = metadata.map((meta) => meta.stage).lastIndexOf('architectural-lens');
-  if (latestLensIndex < 0) return null;
-  for (let index = latestLensIndex - 1; index >= 0; index -= 1) {
-    if (PRE_LENS_REVIEWER_STAGES.has(metadata[index].stage)) return metadata[index];
+  for (let index = metadata.length - 1; index > latestLensIndex; index -= 1) {
+    if (metadata[index].stage === 'architectural') return metadata[index];
   }
   return null;
 }
@@ -845,12 +872,13 @@ function validateM5(metadata, ledger, parsedByName, options, errors) {
   }
   const anchor = selectM5Anchor(metadata, options.phase);
   if (!anchor) {
-    errors.push(`review-economics: ${options.phase} cannot resolve a terminal pre-lens M5 anchor`);
+    const anchorKind = options.phase === 'final-acceptance' ? 'terminal GPT' : 'terminal pre-lens';
+    errors.push(`review-economics: ${options.phase} cannot resolve a ${anchorKind} M5 anchor`);
     return;
   }
   if (anchor.timestampMs === null || !Number.isFinite(adoptionTimestampMs)) return;
   if (anchor.timestampMs <= adoptionTimestampMs) {
-    if (options.phase === 'final-acceptance') errors.push('review-economics: pre-adoption M5 anchor cannot satisfy final acceptance; governed post-adoption pre-lens re-entry is required');
+    if (options.phase === 'final-acceptance') errors.push('review-economics: pre-adoption terminal GPT M5 anchor cannot satisfy final acceptance');
     else errors.push('review-economics: pre-lens M5 anchor must be post-adoption');
     return;
   }
