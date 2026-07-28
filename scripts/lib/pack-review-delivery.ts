@@ -16,6 +16,56 @@ import {
 } from './pack-review-run-store.ts';
 
 export const PACK_REVIEW_REQUIRED_STATUS_CONTEXT = 'orchestrator-pack/pack-review';
+const PACK_REVIEW_BOUNDED_FAILURE_REASONS = new Set([
+  'reviewer_process_timeout',
+  'reviewer_process_failed',
+  'stale_head_after_review',
+  'runner_disappeared_stale',
+  'runner_internal_failure',
+  'journaled_delivery_resume_candidate',
+]);
+
+export type PackReviewBoundedFailureCategory =
+  | 'reviewer_process_timeout'
+  | 'reviewer_process_failed'
+  | 'stale_head_after_review'
+  | 'runner_internal_failure'
+  | 'reviewer_output_malformed'
+  | 'journaled_delivery_resume_candidate';
+
+export function classifyPackReviewFailureReason(category: PackReviewBoundedFailureCategory): string {
+  if (category === 'reviewer_output_malformed') {
+    return 'reviewer_output_malformed:invalid_terminal_payload';
+  }
+  if (PACK_REVIEW_BOUNDED_FAILURE_REASONS.has(category)) return category;
+  return 'runner_internal_failure';
+}
+
+export function packReviewPendingRequiredStatusIdempotencyKey(run: PackReviewRunRecord): string {
+  return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:pending`;
+}
+
+export function packReviewStaleRequiredStatusIdempotencyKey(run: PackReviewRunRecord): string {
+  return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:stale-runner-disappeared`;
+}
+
+export function packReviewRequiredStatusStaleReconciliationComplete(run: PackReviewRunRecord): boolean {
+  const outcome = run.deliveryOutcomes?.requiredStatus;
+  const staleKey = packReviewStaleRequiredStatusIdempotencyKey(run);
+  return outcome?.idempotencyKey === staleKey && outcome.state === 'succeeded';
+}
+
+export function packReviewRequiredStatusNeedsStaleReconciliation(run: PackReviewRunRecord): boolean {
+  if (packReviewRequiredStatusStaleReconciliationComplete(run)) return false;
+  const outcome = run.deliveryOutcomes?.requiredStatus;
+  if (!outcome) return false;
+  const pendingKey = packReviewPendingRequiredStatusIdempotencyKey(run);
+  const staleKey = packReviewStaleRequiredStatusIdempotencyKey(run);
+  if (outcome.idempotencyKey === pendingKey && outcome.state === 'succeeded') return true;
+  if (outcome.idempotencyKey === staleKey && outcome.state === 'failed') return true;
+  return false;
+}
+
 const JOURNAL_WRITE_ATTEMPTS = 3;
 const JOURNAL_RETRY_DELAY_MS = 25;
 
@@ -331,7 +381,6 @@ async function journalVerdict(
   try {
     setPackReviewRunTerminal(options.run.id, classification.terminalStatus, {
       exitCode: 0,
-      failureReason: 'journal_write_failed',
       journalOutcome: failed,
     }, storeOptions(options));
   } catch {
@@ -482,6 +531,27 @@ export async function resumePackReviewVerdictDelivery(
   });
 }
 
+
+export async function recordPackReviewStaleRequiredStatus(
+  options: RecordPendingReviewOptions,
+): Promise<PackReviewDeliveryOutcome> {
+  const idempotencyKey = packReviewStaleRequiredStatusIdempotencyKey(options.run);
+  let statusOutcome: PackReviewDeliveryOutcome;
+  try {
+    await options.writeRequiredStatus({
+      state: 'error',
+      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+      description: 'Pack review runner disappeared before completion.',
+      idempotencyKey,
+    });
+    statusOutcome = outcome('succeeded', 'status_stale_runner_disappeared', idempotencyKey, options.clock);
+  } catch (error) {
+    statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
+  }
+  persistChannelOutcome(options.run.id, 'requiredStatus', statusOutcome, options);
+  return statusOutcome;
+}
+
 export async function recordPackReviewPendingStatus(
   options: RecordPendingReviewOptions,
 ): Promise<PackReviewDeliveryOutcome> {
@@ -527,7 +597,7 @@ export async function recordMalformedPackReviewStatus(options: RecordMalformedRe
   try {
     run = setPackReviewRunTerminal(options.run.id, 'failed', {
       exitCode: 0,
-      failureReason: `reviewer_output_malformed:${trim(options.failureReason) || 'invalid_terminal_payload'}`,
+      failureReason: classifyPackReviewFailureReason('reviewer_output_malformed'),
       deliveryOutcomes: { requiredStatus: statusOutcome },
     }, storeOptions(options));
   } catch {

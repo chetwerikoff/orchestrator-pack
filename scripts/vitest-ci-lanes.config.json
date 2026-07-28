@@ -66,6 +66,7 @@
     "scripts/pack-pr-review-contract.test.ts": "light",
     "scripts/pack-review-runner-gpt.test.ts": "light",
     "scripts/pack-review-runner-severity.test.ts": "light",
+    "scripts/pack-review-stale-reconcile.test.ts": "light",
     "scripts/pr-session-binding-cache.test.ts": "light",
     "scripts/pr2-foundation/binding-cache.test.ts": "light",
     "scripts/pr2-foundation/foundation.test.ts": "heavy",

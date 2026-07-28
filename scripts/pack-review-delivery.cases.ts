@@ -41,6 +41,7 @@ function createRun(storeRoot: string) {
     surface: 'pack-review-delivery-test',
     trustedPackRoot: repoRoot,
     sourceRepoRoot: repoRoot,
+    canonicalRepository: 'chetwerikoff/orchestrator-pack',
   }).run;
 }
 
@@ -298,13 +299,14 @@ describe('pack review journal-first delivery (Issue #894)', () => {
     expect(postGithubComment).not.toHaveBeenCalled();
     expect(writeRequiredStatus).not.toHaveBeenCalled();
     expect(notifyWorker).not.toHaveBeenCalled();
-    expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
+    const persistedRun = getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot });
+    expect(persistedRun).toMatchObject({
       status: 'changes_requested',
       exitCode: 0,
-      failureReason: 'journal_write_failed',
       journalOutcome: { state: 'journal_write_failed' },
       deliveryOutcomes: {},
     });
+    expect(persistedRun?.failureReason).toBeUndefined();
 
     const retry = createPackReviewRun({
       projectId: 'orchestrator-pack',
@@ -316,6 +318,7 @@ describe('pack review journal-first delivery (Issue #894)', () => {
       surface: 'pack-review-delivery-test',
       trustedPackRoot: repoRoot,
       sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
     });
     expect(retry).toMatchObject({ created: true, reused: false, reason: 'created' });
     expect(retry.run.id).not.toBe(run.id);
@@ -366,7 +369,7 @@ describe('pack review journal-first delivery (Issue #894)', () => {
     expect(getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })).toMatchObject({
       status: 'failed',
       exitCode: 0,
-      failureReason: 'reviewer_output_malformed:invalid JSON',
+      failureReason: 'reviewer_output_malformed:invalid_terminal_payload',
       findings: [],
       deliveryOutcomes: { requiredStatus: { state: 'succeeded' } },
     });

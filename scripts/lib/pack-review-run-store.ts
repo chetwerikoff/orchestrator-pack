@@ -113,8 +113,11 @@ export interface PackReviewRunRecord {
   findings: unknown[];
   journalOutcome?: PackReviewJournalOutcome;
   deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>;
+  canonicalRepository?: string;
   stale?: boolean;
 }
+
+export const PACK_REVIEW_STALE_FAILURE_REASON = 'runner_disappeared_stale';
 
 export interface PackReviewStoreOptions {
   projectId?: string;
@@ -130,6 +133,7 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   surface?: string;
   trustedPackRoot: string;
   sourceRepoRoot: string;
+  canonicalRepository: string;
 }
 
 interface LockHandle {
@@ -206,6 +210,14 @@ function requiredPositiveInteger(value: unknown, name: string, path = ''): numbe
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid ${name}`);
   }
   return number;
+}
+
+export function normalizePackReviewCanonicalRepository(value: string): string {
+  const slug = String(value ?? '').trim();
+  if (!/^[^/\s]+\/[^/\s]+$/.test(slug)) {
+    throw new Error(`invalid pack review canonical repository '${value}'`);
+  }
+  return slug;
 }
 
 export function normalizePackReviewHeadSha(value: string): string {
@@ -426,9 +438,51 @@ function consumerRow(record: PackReviewRunRecord, now = new Date()): PackReviewR
     ...record,
     status: 'failed',
     latestRunStatus: 'failed',
-    failureReason: 'runner_disappeared_stale',
+    failureReason: PACK_REVIEW_STALE_FAILURE_REASON,
     stale: true,
   };
+}
+
+export function isPackReviewStaleTerminalRun(record: PackReviewRunRecord): boolean {
+  return record.status === 'failed' && record.failureReason === PACK_REVIEW_STALE_FAILURE_REASON;
+}
+
+export function listPackReviewRunRecordsRaw(options: PackReviewStoreOptions = {}): PackReviewRunRecord[] {
+  const storeRoot = resolvePackReviewRunStoreRoot(options);
+  return withStoreLock(storeRoot, () => readRecordsUnlocked(storeRoot)
+    .filter((record) => !options.projectId || record.projectId === options.projectId));
+}
+
+export function terminalizePackReviewStaleRun(
+  runId: string,
+  options: PackReviewStoreOptions = {},
+): { changed: boolean; run: PackReviewRunRecord } {
+  const storeRoot = resolvePackReviewRunStoreRoot(options);
+  const recordPathValue = recordPath(storeRoot, runId);
+  if (!existsSync(recordPathValue)) throw new Error(`pack review run not found: ${runId}`);
+  const existing = parseRecord(JSON.parse(readFileSync(recordPathValue, 'utf8')), recordPathValue);
+  if (isPackReviewStaleTerminalRun(existing)) {
+    return { changed: false, run: existing };
+  }
+  if (!isPackReviewRunStale(existing, options.now)) {
+    return { changed: false, run: existing };
+  }
+  const run = setPackReviewRunTerminal(runId, 'failed', {
+    failureReason: PACK_REVIEW_STALE_FAILURE_REASON,
+    stale: true,
+    exitCode: 1,
+  }, options);
+  return { changed: true, run };
+}
+
+export function hasNewerPackReviewRunForKey(
+  records: readonly PackReviewRunRecord[],
+  run: PackReviewRunRecord,
+): boolean {
+  const createdAt = Date.parse(run.createdAt);
+  return records.some((candidate) => candidate.key === run.key
+    && candidate.id !== run.id
+    && Date.parse(candidate.createdAt) > createdAt);
 }
 
 function hasPersistedPackReviewVerdict(record: PackReviewRunRecord): boolean {
@@ -501,6 +555,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(completed[0]!), storeRoot };
     }
 
+    const canonicalRepository = normalizePackReviewCanonicalRepository(input.canonicalRepository);
     const now = (input.now ?? new Date()).toISOString();
     const runId = `prr-${randomUUID().replaceAll('-', '')}`;
     const record: PackReviewRunRecord = {
@@ -519,6 +574,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       surface: input.surface?.trim() || 'pack-review-runner',
       trustedPackRoot: resolve(input.trustedPackRoot),
       sourceRepoRoot: resolve(input.sourceRepoRoot),
+      canonicalRepository,
       runnerPid: process.pid,
       createdAt: now,
       updatedAt: now,
@@ -551,6 +607,7 @@ export function updatePackReviewRun(
       prNumber: existing.prNumber,
       targetSha: existing.targetSha,
       headSha: existing.headSha,
+      canonicalRepository: existing.canonicalRepository,
       schemaVersion: 1,
       updatedAt,
       heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(fields.status ?? existing.status))
