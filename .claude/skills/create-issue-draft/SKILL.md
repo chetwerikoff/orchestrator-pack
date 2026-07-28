@@ -130,7 +130,7 @@ substitution** on browser outage.
 | Stream | Chat | Lifetime |
 |--------|------|----------|
 | Authoring, fixes, finding dispositions | one **task chat** | whole flow |
-| Competitive review (T3 / explicit T2 wrapper) | **fresh browser-GPT chat per pass** | one pass |
+| Competitive review (T3 only) | **fresh browser-GPT chat per pass** | one pass |
 | Terminal `architectural` (all tiers) | **fresh independent browser-GPT chat** | one terminal lens |
 | Claude `architectural-lens` (T3) | no browser review chat | one lens per cycle segment |
 

@@ -478,9 +478,10 @@ If a later review materially changes the artifact, log
 
 Standalone runs: the artifact continues on its normal path (architect review,
 then publish when asked). Brief-only creation runs stay
-inside `create-issue-draft` **before acceptance** — captures land as
-`pass-NN-competitive.capture.txt` in the task's review workdir, and accepted
-findings are relayed to the task chat so the Issue is updated. Task-chat turns
+inside `create-issue-draft` **before acceptance** — they follow the fixed T2
+topology (one terminal `architectural` capture only; no competitive
+create-flow stage). Accepted findings are relayed to the task chat so the Issue
+is updated. Task-chat turns
 and reviewer lens turns are normal `create-issue-draft` stages, not
 the standalone adversarial loop. No GPT pass replaces the T3 Claude `architectural-lens` or skips the fixed per-tier topology.
 
