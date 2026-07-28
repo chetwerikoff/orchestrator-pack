@@ -43,6 +43,7 @@ import {
   quarantineOpaque,
   statusList,
   __testWriteCapability,
+  listReadableIncidents,
   writeIncident,
 } from '../chatgpt-browser-turn/state.ts';
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
@@ -1940,7 +1941,7 @@ describe('issue 1023 operation-level bounds', () => {
         }),
       }),
     };
-  await expect(runtimeWitnessSurfaceAvailable(page, budget)).rejects.toThrow('browser_operation_timeout:witness_surface');
+    await expect(runtimeWitnessSurfaceAvailable(page, budget)).rejects.toThrow('browser_operation_timeout:witness_surface');
     expect(attrCalls).toBeGreaterThan(1);
   });
 
@@ -1987,17 +1988,49 @@ describe('issue 1023 operation-level bounds', () => {
     expect(result.possibleDelivery).toBe(true);
   });
 
-  it('AC12: fresh-orphan possible-delivery timeout preserves durable orphan incident shape', async () => {
+  it('AC5: conversation possible-delivery incident survives restart and blocks premature clear', () => {
+    const conv = 'https://chatgpt.com/c/example';
+    const incident = writeIncident(profileKey, {
+      kind: 'conversation_incident',
+      generation: 12,
+      phase: 'possible_delivery',
+      conversation_id: conv,
+      cause: 'stream_timeout',
+    });
+    const afterRestart = statusList(profileKey);
+    expect(afterRestart.items?.some((item) => item.identity === incident.identity)).toBe(true);
+    const readable = listReadableIncidents(profileKey);
+    expect(readable.some((row) => row.record.conversation_id === conv && row.record.phase === 'possible_delivery')).toBe(true);
+    expect(clearReadable(profileKey, incident.identity, 11, incident.record.evidence_token).state).toBe('stale_generation');
+    expect(clearReadable(profileKey, incident.identity, 12, incident.record.evidence_token).state).toBe('cleared');
+  });
+
+  it('AC8: committed publication remains exactly-once after cleanup-unconfirmed', async () => {
+    const output = resolve(join(root, 'ac8-committed-once.txt'));
+    const destination = destinationIdentityForPath(output);
+    const published = publishReply(profileKey, 'ac8-once', output, destination.identity, 'committed reply');
+    expect(published.state).toBe('committed_ok');
+    expect(readFileSync(output, 'utf8')).toBe('committed reply');
+    const cleanup = await boundedResourceCleanup(() => new Promise<void>(() => {}), 50);
+    expect(cleanup).toBe('unconfirmed');
+    const recovered = publicationStatus(profileKey, 'ac8-once');
+    expect(recovered.state).toBe('committed_ok');
+    expect(readFileSync(output, 'utf8')).toBe('committed reply');
+    expect(existsSync(output)).toBe(true);
+  });
+
+  it('AC12: fresh-orphan possible-delivery block survives simulated restart', () => {
     const orphan = writeIncident(profileKey, {
       kind: 'fresh_orphan',
-      generation: 9,
+      generation: 10,
       phase: 'possible_delivery',
-      provisional_id: 'prov-orphan-timeout',
+      provisional_id: 'prov-orphan-restart',
       cause: 'canonical_fresh_conversation_unproven',
     });
-    const status = statusList(profileKey);
-    expect(status.items?.some((item) => item.kind === 'fresh_orphan' && item.phase === 'possible_delivery')).toBe(true);
-    expect(clearReadable(profileKey, orphan.identity, 8, orphan.record.evidence_token).state).toBe('stale_generation');
-    expect(clearReadable(profileKey, orphan.identity, 9, orphan.record.evidence_token).state).toBe('cleared');
+    const relisted = statusList(profileKey);
+    expect(relisted.items?.some((item) => item.kind === 'fresh_orphan' && item.identity === orphan.identity)).toBe(true);
+    expect(listReadableIncidents(profileKey).some((row) => row.record.kind === 'fresh_orphan' && row.record.phase === 'possible_delivery')).toBe(true);
+    expect(clearReadable(profileKey, orphan.identity, 9, orphan.record.evidence_token).state).toBe('stale_generation');
+    expect(clearReadable(profileKey, orphan.identity, 10, orphan.record.evidence_token).state).toBe('cleared');
   });
 });

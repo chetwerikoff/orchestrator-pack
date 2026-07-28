@@ -1390,14 +1390,8 @@ export async function openTurnPage(
           return { page: reused, owned: false };
         }
       } catch {
-        /* unreadable tab URL — fall through to bounded navigation */
+        /* unreadable tab URL — do not goto a foreign shared handle */
       }
-      const bringWait = segmentOperationWait(segmentBudget, fallbackGotoMs);
-      if (segmentBudget && bringWait <= 0) throw new BrowserOperationTimeoutError('open_turn_page');
-      await boundedPlaywrightOperation(bringWait, () =>
-        reused.goto(target, { waitUntil: 'domcontentloaded', timeout: bringWait }),
-      );
-      return { page: reused, owned: false };
     }
     const page = await adoptNewPageWithBudget(ctx, async (opened, gotoWaitMs) => {
       await opened.goto(target, { waitUntil: 'domcontentloaded', timeout: gotoWaitMs });
