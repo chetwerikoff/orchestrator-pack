@@ -663,16 +663,26 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     const message = error instanceof Error ? error.message : 'driver_error';
     if (!possibleDelivery && message.startsWith('pre_send_')) {
       await closeOwnedTurnPage(opened, { retainPage: false });
+      let incidentCleanupFailed = false;
       if (incidentId) {
         try {
           deleteIncident(profileKey, incidentId);
           incidentId = undefined;
         } catch {
-          // Existing durable state remains fail-closed.
+          incidentCleanupFailed = true;
         }
       }
-      safeRelease(scheduleLock);
-      safeReleaseDestination(reservation);
+      if (!incidentCleanupFailed) {
+        safeRelease(scheduleLock);
+        scheduleLock = null;
+        safeReleaseDestination(reservation);
+        reservation = null;
+      }
+      if (incidentCleanupFailed) {
+        return emitTurnAndCode(turnResult('driver_error', 'invocation', 'pre_send_incident_cleanup_failed', invocationId, profileKey, {
+          incident_id: incidentId,
+        }));
+      }
       if (message === 'pre_send_profile_blocked') {
         return emitTurnAndCode(turnResult('incompatible_record', 'profile', 'configured_profile_store_blocked', invocationId, profileKey));
       }

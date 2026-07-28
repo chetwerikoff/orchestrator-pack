@@ -2628,6 +2628,7 @@ async function runTurnWithMocks1060(
     sendResult?: Record<string, unknown>;
     browserProvenance?: string;
     onBeforeSend?: () => void | Promise<void>;
+    deleteIncidentFails?: boolean;
   } = {},
 ): Promise<{ exitCode: number; stdout: string }> {
   vi.resetModules();
@@ -2680,8 +2681,16 @@ async function runTurnWithMocks1060(
     chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
     return true;
   });
+  let deleteIncidentSpy: ReturnType<typeof vi.spyOn> | undefined;
+  if (options.deleteIncidentFails) {
+    const stateMod = await import('../chatgpt-browser-turn/state.ts');
+    deleteIncidentSpy = vi.spyOn(stateMod, 'deleteIncident').mockImplementation(() => {
+      throw new Error('cleanup_failed');
+    });
+  }
   const { runCli } = await import('../chatgpt-browser-turn.ts');
   const exitCode = await runCli(argv);
+  deleteIncidentSpy?.mockRestore();
   vi.spyOn(process.stdout, 'write').mockRestore();
   return { exitCode, stdout: chunks.join('') };
 }
@@ -2888,6 +2897,19 @@ describe('issue 1060 remove profile-wide admission', () => {
     expect(acquireDomainLock(profileKey, siblingKey)).toBeNull();
     recovered!.release();
     sibling!.release();
+  });
+
+
+  it('AC4/AC11b: pre-send witness failure keeps fine lock when incident cleanup fails', async () => {
+    const output = join(root, 'cleanup-fail-out.txt');
+    const { exitCode, stdout } = await runTurnWithMocks1060(turnArgvFor1060(output), {
+      witness: ['available', 'absent'],
+      deleteIncidentFails: true,
+    });
+    expect(exitCode).toBe(13);
+    expect(stdout).toContain('pre_send_incident_cleanup_failed');
+    expect(acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/fixture-conv')).toBeNull();
+    expect(listReadableIncidents(profileKey).some(({ record }) => record.kind === 'active_owner')).toBe(true);
   });
 
   it('AC5/AC11e: same-conversation overlap refuses the turn before duplicate send', async () => {
