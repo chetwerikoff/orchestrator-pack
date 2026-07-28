@@ -1843,6 +1843,19 @@ describe('issue 1024 Half A proven non-delivery', () => {
     expect(result.possibleDelivery).toBe(true);
   });
 
+  it('AC2 blocks proven non-delivery when equal-count user nodes include unreadable service ids', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = issue1024ZeroActivityFixture({
+      preDispatchUserDomIds: ['short'],
+    });
+    const result = await issue1024ExhaustSubmittedTurnWindow(fixture);
+
+    expect(result.state).toBe('recovery_required');
+    expect(result.cause).toBe('submitted_turn_id_unproven');
+    expect(result.possibleDelivery).toBe(true);
+  });
+
   it('AC3 unknown HTTP context coverage performs zero send before dispatch boundary', async () => {
     const fixture = issue1024ZeroActivityFixture({
       dispatchObservation: {
@@ -1969,20 +1982,25 @@ describe('issue 1024 gate-B characterization notes', () => {
   it('persists and reloads Gate-B characterization records per configured profile', async () => {
     const module = await import('../chatgpt-browser-turn/dispatch-observation.ts');
     const profileKey = 'profile-test-gate-b-record';
-    const complete = module.summarizeGateBCharacterization([
-      {
-        probe: 'service-worker-owned-http-on-configured-context',
-        observed: true,
-        detail: 'context_request_observed',
-      },
-      {
-        probe: 'worker-or-secondary-target-websocket-frame-sent',
-        observed: true,
-        detail: 'websocket_frame_sent_observed',
-      },
-    ]);
+    const complete = module.bindGateBCharacterizationRecord(
+      module.summarizeGateBCharacterization([
+        {
+          probe: 'service-worker-owned-http-on-configured-context',
+          observed: true,
+          detail: 'context_request_observed',
+        },
+        {
+          probe: 'worker-or-secondary-target-websocket-frame-sent',
+          observed: true,
+          detail: 'websocket_frame_sent_observed',
+        },
+      ]),
+      profileKey,
+      issue1024Cdp,
+    );
     module.writeGateBCharacterizationRecord(profileKey, complete);
-    expect(module.readGateBCharacterizationRecord(profileKey)?.complete).toBe(true);
+    expect(module.readGateBCharacterizationRecord(profileKey, issue1024Cdp)?.complete).toBe(true);
+    expect(module.readGateBCharacterizationRecord(profileKey, 'http://127.0.0.1:9223')).toBeNull();
   });
 });
 

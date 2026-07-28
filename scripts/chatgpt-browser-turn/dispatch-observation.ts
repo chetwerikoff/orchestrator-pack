@@ -5,6 +5,8 @@ import {
 } from './diagnostics.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { runtimeCapabilityBinding } from './runtime-binding.ts';
+import type { CapabilityBinding } from './state.ts';
 import { atomicJson, profileDirs } from './storage-common.ts';
 
 export type DispatchCoverageStatus = 'complete' | 'incomplete' | 'unknown';
@@ -86,7 +88,9 @@ function attachCdpOutboundWebSocketObserver(
 
 
 
-export const GATE_B_CHARACTERIZATION_VERSION = 'gate-b-characterization/v1';
+export const GATE_B_CHARACTERIZATION_VERSION = 'gate-b-characterization/v2';
+
+export type GateBCharacterizationBinding = CapabilityBinding;
 
 export const GATE_B_PROBE_WINDOW_MS = 60_000;
 
@@ -108,6 +112,7 @@ export interface GateBCharacterizationResult {
   readonly observed_at: string;
   readonly probes: readonly GateBProbeResult[];
   readonly complete: boolean;
+  readonly binding?: GateBCharacterizationBinding;
 }
 
 export function summarizeGateBCharacterization(probes: readonly GateBProbeResult[]): GateBCharacterizationResult {
@@ -290,12 +295,39 @@ export function gateBCharacterizationRecordPath(profileKey: string): string {
   return join(profileDirs(profileKey).root, 'gate-b-characterization.json');
 }
 
-export function readGateBCharacterizationRecord(profileKey: string): GateBCharacterizationResult | null {
+function gateBCharacterizationBindingMatches(
+  binding: GateBCharacterizationBinding | undefined,
+  profileKey: string,
+  cdp: string,
+): binding is GateBCharacterizationBinding {
+  if (!binding) return false;
+  const expected = runtimeCapabilityBinding(profileKey, cdp);
+  return binding.candidate_digest === expected.candidate_digest
+    && binding.build_digest === expected.build_digest
+    && binding.config_digest === expected.config_digest
+    && binding.gate_digest === expected.gate_digest;
+}
+
+export function bindGateBCharacterizationRecord(
+  result: GateBCharacterizationResult,
+  profileKey: string,
+  cdp: string,
+): GateBCharacterizationResult {
+  return {
+    ...result,
+    schema: GATE_B_CHARACTERIZATION_VERSION,
+    binding: runtimeCapabilityBinding(profileKey, cdp),
+  };
+}
+
+export function readGateBCharacterizationRecord(profileKey: string, cdp?: string): GateBCharacterizationResult | null {
   const path = gateBCharacterizationRecordPath(profileKey);
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as GateBCharacterizationResult;
-    return parsed?.schema === GATE_B_CHARACTERIZATION_VERSION ? parsed : null;
+    if (parsed?.schema !== GATE_B_CHARACTERIZATION_VERSION) return null;
+    if (!cdp || !gateBCharacterizationBindingMatches(parsed.binding, profileKey, cdp)) return null;
+    return parsed;
   } catch {
     return null;
   }
@@ -397,6 +429,21 @@ async function sendFlatChildCdpCommand(
   }
 }
 
+async function verifyFlatChildCdpSession(
+  cdp: FlatCdpSessionSend,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    const result = await sendFlatChildCdpCommand(cdp, sessionId, 'Runtime.evaluate', {
+      expression: '1+1',
+      returnByValue: true,
+    }) as { result?: { value?: unknown } };
+    return result?.result?.value === 2;
+  } catch {
+    return false;
+  }
+}
+
 async function sendChildCdpCommand(
   cdp: { send: (method: string, params?: Record<string, unknown>) => Promise<unknown> },
   sessionId: string,
@@ -436,6 +483,7 @@ export async function establishDispatchObservationBoundary(
     userNodeBaselineReliable: boolean;
     urlBaselineReliable: boolean;
     profileKey?: string;
+    cdp?: string;
   },
 ): Promise<DispatchObservationBoundary> {
   const controls = testControls(page);
@@ -544,6 +592,12 @@ export async function establishDispatchObservationBoundary(
       await sendFlatChildCdpCommand(cdp, sessionId, 'Network.enable');
       if (waitingForDebugger && cdpMethods.runIfWaitingForDebugger) {
         await sendFlatChildCdpCommand(cdp, sessionId, 'Runtime.runIfWaitingForDebugger');
+      }
+      if (!(await verifyFlatChildCdpSession(cdp, sessionId))) {
+        failedTargetAttach = true;
+        boundary.markCoverageLost();
+        boundary.websocketTargetsCoverage = 'incomplete';
+        return;
       }
       attachedTargetCount++;
     } catch {
@@ -767,8 +821,8 @@ export async function establishDispatchObservationBoundary(
 
   if (fakePage && controls) {
     boundary.gateBCharacterizationComplete = true;
-  } else if (options.profileKey) {
-    boundary.gateBCharacterizationComplete = readGateBCharacterizationRecord(options.profileKey)?.complete === true;
+  } else if (options.profileKey && options.cdp) {
+    boundary.gateBCharacterizationComplete = readGateBCharacterizationRecord(options.profileKey, options.cdp)?.complete === true;
   }
 
   boundary.dispatchObservationEngaged = fakePage
@@ -826,20 +880,26 @@ export async function evaluateDispatchRequestNotObserved(
       if (userNodeDelta <= 0) {
         const users = page.locator('[data-message-author-role="user"]');
         let newDomUser = false;
+        let domProbeReliable = true;
         try {
           const count = await users.count();
           for (let index = 0; index < count; index++) {
             const id = await readServiceId(users.nth(index));
-            if (id && !baselineIds.has(id)) {
+            if (!id) {
+              domProbeReliable = false;
+              continue;
+            }
+            if (!baselineIds.has(id)) {
               newDomUser = true;
               break;
             }
           }
         } catch {
           newDomUser = true;
+          domProbeReliable = false;
         }
 
-        if (!newDomUser) {
+        if (!newDomUser && domProbeReliable) {
           let urlOk = true;
           if (boundary.newChatMode) {
             if (!boundary.urlBaselineReliable) {

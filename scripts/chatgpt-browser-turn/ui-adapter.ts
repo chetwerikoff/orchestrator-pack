@@ -1308,6 +1308,7 @@ export async function sendTurn(
       userNodeBaselineReliable,
       urlBaselineReliable,
       profileKey: configuredProfileKey(config.profile, config.cdp),
+      cdp: config.cdp,
     });
   } catch (error) {
     if (error instanceof DispatchObservationEstablishmentError) {

@@ -40,6 +40,7 @@ export interface FakeTurnPageOptions {
   readonly dispatchObservation?: DispatchObservationTestControls;
   readonly postArmContextRequests?: readonly { readonly url: string }[];
   readonly postArmWebSocketSent?: readonly { readonly target?: string }[];
+  readonly preDispatchUserDomIds?: readonly string[];
   readonly postArmUserDomIds?: readonly string[];
   readonly newChatUrlAfterArm?: string;
   readonly serviceWorkerHttpAfterArm?: readonly { readonly url: string }[];
@@ -127,6 +128,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   let pageUrl = 'https://chatgpt.com/c/example';
   const observeComplete = Boolean(options.dispatchObservation);
   const dispatchIds = [...(options.dispatchCandidateIds ?? ['user-owned-12345678'])];
+  for (const id of options.preDispatchUserDomIds ?? []) messages.push(messageLocator('user', id));
   const composerPresent = options.composer !== false;
 
 
@@ -335,8 +337,14 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
         const attachedHandlers: Array<(value: any) => unknown> = [];
         const detachedHandlers: Array<(value: any) => unknown> = [];
         const session = {
-          send: async (method: string, params?: { sessionId?: string; message?: string; targetId?: string }) => {
+          send: async (method: string, params?: { sessionId?: string; message?: string; targetId?: string; expression?: string; returnByValue?: boolean }, sessionId?: string) => {
             if (!observeComplete) return {};
+            const flatSessionId = sessionId ?? params?.sessionId;
+            if (flatSessionId && method === 'Runtime.evaluate') {
+              return { result: { value: 2 } };
+            }
+            if (flatSessionId && method === 'Network.enable') return {};
+            if (flatSessionId && method === 'Runtime.runIfWaitingForDebugger') return {};
             if (method === 'Target.getTargets') {
               return {
                 targetInfos: [

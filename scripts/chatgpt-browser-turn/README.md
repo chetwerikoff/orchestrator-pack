@@ -124,7 +124,7 @@ A crash after rename but before result emission is recoverable by `publication-s
 
 ### Operator attestation record
 
-Half A requires a complete `gate-b-characterization.json` for the exact configured profile/CDP binding before proven non-delivery may be minted.
+Half A requires a complete `gate-b-characterization.json` bound to the current runtime capability digests (`candidate_digest`, `build_digest`, `config_digest`, `gate_digest`) for the exact configured profile/CDP pair before proven non-delivery may be minted. Stale or unbound records are ignored.
 
 See command below under Gate B.
 

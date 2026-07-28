@@ -41,6 +41,7 @@ import { configuredProfileKey, sha256 } from './chatgpt-browser-turn/storage-com
 import {
   lastDispatchObservationDiagnostic,
   runGateBCharacterization,
+  bindGateBCharacterizationRecord,
   writeGateBCharacterizationRecord,
 } from './chatgpt-browser-turn/dispatch-observation.ts';
 import { recordSwallowedDriverException } from './chatgpt-browser-turn/diagnostics.ts';
@@ -775,7 +776,11 @@ async function runGateBCharacterizationCommand(args: ParsedArgs): Promise<number
     const chromium = loadChromium();
     browser = await chromium.connectOverCDP(config.cdp);
     const opened = await openGateBCharacterizationPage(browser, chatUrl);
-    const result = await runGateBCharacterization(opened.page);
+    const result = bindGateBCharacterizationRecord(
+      await runGateBCharacterization(opened.page),
+      profileKey,
+      cdp,
+    );
     writeGateBCharacterizationRecord(profileKey, result);
     const control: ControlResultV1 = {
       schema: 'control-result/v1',
