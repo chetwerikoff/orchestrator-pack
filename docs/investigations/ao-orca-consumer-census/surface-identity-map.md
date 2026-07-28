@@ -31,6 +31,23 @@ Revision-bound to census inspected source: `8fabf182f4df0a70e2f08f67899658ee886a
 | `plugin.token-ledger` | Token/cost accounting hook | Plugin writer reading `AO_CHAIN_ID`, `AO_TASK_ID`, `AO_SESSION_INFO_JSON` | — | `plugins/ao-token-chain-ledger/` |
 | `pack.worker-report` | Worker lifecycle report (replaces retired `ao report`) | `pack-worker-report` command | — | `docs/worker-report-store.mjs`; `scripts/pack-worker-report.ps1` |
 
+## Durable store surfaces (axis 4 — AO identity in pack JSON)
+
+Each store ID is a **canonical surface** for zero-consumer evaluation `B(S)` on axis 4. Readers on axes 1–3 may also bind transport surfaces above; axis-4 drain evidence attaches to the store surface ID.
+
+| Canonical ID | Store ID | Persisted AO identity | Primary readers |
+|---|---|---|---|
+| `durable-store.worker-report-store` | `worker-report-store` | `sessionId` per report | `pack-worker-report`, `show-worker-status-report.ps1` |
+| `durable-store.pr-session-binding-cache` | `pr-session-binding-cache` | `sessionId` in bindings | `docs/pr-session-binding-cache.mjs`, review reconcile |
+| `durable-store.worker-status-store` | `worker-status-store` | `sessionId` keyed status | `Get-WorkerStatusDecisionSessions` |
+| `durable-store.worker-message-dispatch-journal` | `worker-message-dispatch-journal` | sender `AO_SESSION_ID` | submit reconcile, dispatch observe |
+| `durable-store.review-run-store` | `review-run-store` | `linkedSessionId` | `pack-review-runner.ts`, `Get-AoReviewRuns` |
+| `durable-store.review-start-claim-namespace` | `review-start-claim-namespace` | claim-holder session / generation | `review-start-claim-store.ts` |
+| `durable-store.worker-nudge-claim-namespace` | `worker-nudge-claim-namespace` | nudge claim-holder session | `Worker-NudgeClaim.ps1` |
+| `durable-store.mechanical-transport` | `mechanical-transport` | target session in payload | `journaled-worker-send.ps1` |
+| `durable-store.dead-worker-reconcile-state` | `dead-worker-reconcile-state` | last known worker `sessionId` | `dead-worker-reconcile.ps1` |
+| `durable-store.orchestrator-escalation-state` | `orchestrator-escalation-state` | orchestrator `sessionId` | `Orchestrator-Escalation.ps1` |
+
 ## Retired / shed surfaces (historical representations)
 
 Recorded so discovery hits classify as **non-live consumers** or **`shed`** bindings, not active AO dependencies.

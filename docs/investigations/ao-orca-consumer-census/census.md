@@ -140,9 +140,9 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 
 | Pass | Method | Coverage argument |
 |---|---|---|
-| **Primary** | `grep -rhoE 'AO_[A-Z0-9_]+'` over tracked corpus (§1.1), excluding wildcard fragments (`grep -vE '_$'`) | Enumerates every distinct name |
-| **Per-token bindings** | For each name: `grep -rl` primary reader in `scripts/**`, `plugins/**`, `docs/**`, config example; record consumer path + canonical surface + `port|shed` | Full axis-2 inventory — no grouped wildcards (`AO_*` families) in place of per-name rows |
-| **Completeness** | **273** distinct `AO_*` tokens at inspected revision (reproduction: [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) header); every token appears in that inventory or §7.2 exclusion |
+| **Primary** | `grep -rhoE 'AO_[A-Z0-9_]+'` over tracked corpus (§1.1), excluding wildcard fragments (`grep -vE '_$'`) and path exclusions (`docs/issues_drafts/**`, `docs/archive/**`, `docs/investigations/**`, `tests/external-output-references/**`) | Enumerates every distinct name in the declared corpus only |
+| **Per-consumer bindings** | For each name: `grep -rl` every reader path after exclusions; emit one row per consumer path × canonical surface (no token-level collapse) | Full axis-2 inventory in [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) |
+| **Completeness** | **273** distinct token names; **918** consumer×surface binding rows at inspected revision (reproduction in inventory header) |
 
 ### Axis 3 — Worker-facing behavioral text
 
@@ -172,9 +172,7 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 
 ## 4. Axis 2 summary — `AO_*` variable taxonomy
 
-**Distinct tracked names:** 273 (full per-token bindings: [`ao-env-token-inventory.md`](./ao-env-token-inventory.md); reproduction command in that file header).
-
-Grouped taxonomy below is a **summary view** only; axis-2 accounting closure uses the per-token inventory (no `AO_*` wildcard rows).
+**Distinct tracked names:** 273 (**918** binding rows — full per-consumer inventory: [`ao-env-token-inventory.md`](./ao-env-token-inventory.md)).
 
 ### 4.1 AO-runtime injected (identity / project context)
 
@@ -283,18 +281,18 @@ Read by production code expecting AO daemon to set values.
 
 **Mandatory class:** `drain` (not `shed`).
 
-| Store ID | Persisted AO identity | Readers / recovery paths | Liveness boundary | Drained condition | Evidence feasibility |
-|---|---|---|---|---|---|
-| `worker-report-store` | `sessionId` per report record | `Get-WorkerStatusSessionsWithReports`, `pack-worker-report`, `WorkerReportStore.ps1` | Record keyed by repo\|session\|pr\|head; overlay until explicitly stale | No supported reader treats record as actionable AO session command target | **Observable:** read store file via `Get-WorkerReportStoreState` / `docs/worker-report-store.mjs` CLI; production path: `scripts/show-worker-status-report.ps1` merges store + session lists |
-| `pr-session-binding-cache` | `sessionId` in session↔PR bindings | `docs/pr-session-binding-cache.mjs`, review reconcile, PR/session resolvers | Binding live while session row exists and PR open | Bindings for terminated sessions removed or marked inert per contract | **Observable:** `AO_PR_SESSION_BINDING_CACHE` file parse via contract CLI |
-| `worker-status-store` | `sessionId` keyed status | `Get-WorkerStatusDecisionSessions`, `show-worker-status-report.ps1` | Entry per worker session | Status rows for non-existent sessions ignored by gating | **Observable:** `scripts/show-worker-status-report.ps1 --json` |
-| `worker-message-dispatch-journal` | Sender `AO_SESSION_ID` in dispatch records | Submit reconcile, dispatch observe | Journal retention per contract | No pending dispatch requiring AO session | **Observable:** journal file via `Get-WorkerMessageDispatchJournalPath` |
-| `review-run-store` | `linkedSessionId` on run rows | `pack-review-runner.ts list`, `Get-AoReviewRuns` | Run terminal states + retention in `docs/review-run-liveness.mjs` | No in-flight runs referencing AO session for action | **Observable:** pack review runner `list` JSON |
-| `review-start-claim-namespace` | Claim holder session / generation | `review-start-claim-store.ts`, review runner | Claim lease TTL + stale reaper | No active claim blocking review start | **Observable:** claim dir listing + contract evaluators |
-| `worker-nudge-claim-namespace` | Nudge claim holder session | `Worker-NudgeClaim.ps1`, nudge gate | Claim stale minutes | No live nudge claim | **Observable:** claim namespace under `AO_BASE_DIR` |
-| `mechanical-transport` | Target session in transport payload files | `journaled-worker-send.ps1`, mechanical reconcile | `AO_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS` | No unconsumed transport files | **Observable:** directory listing + age |
-| `dead-worker-reconcile-state` | Last known worker `sessionId` | `dead-worker-reconcile.ps1` | Reconcile state machine terminal | Reconcile finished or session respawned | **Observable:** state file via resolver |
-| `orchestrator-escalation-state` | Orchestrator `sessionId` in escalation records | `Orchestrator-Escalation.ps1`, escalation router | Escalation terminal states | No open escalation requiring AO orchestrator session | **Partially observable:** state file read; cross-check with `ao session get` — **presently unprovable** for pure file→liveness without operator session pull. **Owner:** PR7 deletion wave. **Zero-consumer blocked** until evaluation-time session liveness proof supplied |
+| Store ID | Canonical surface ID | Persisted AO identity | Readers / recovery paths | Liveness boundary | Drained condition | Evidence feasibility |
+|---|---|---|---|---|---|---|
+| `worker-report-store` | `durable-store.worker-report-store` | `sessionId` per report record | `Get-WorkerStatusSessionsWithReports`, `pack-worker-report`, `WorkerReportStore.ps1` | Record keyed by repo\|session\|pr\|head; overlay until explicitly stale | No supported reader treats record as actionable AO session command target | **Observable:** read store file via `Get-WorkerReportStoreState` / `docs/worker-report-store.mjs` CLI; production path: `scripts/show-worker-status-report.ps1` merges store + session lists |
+| `pr-session-binding-cache` | `durable-store.pr-session-binding-cache` | `sessionId` in session↔PR bindings | `docs/pr-session-binding-cache.mjs`, review reconcile, PR/session resolvers | Binding live while session row exists and PR open | Bindings for terminated sessions removed or marked inert per contract | **Observable:** `AO_PR_SESSION_BINDING_CACHE` file parse via contract CLI |
+| `worker-status-store` | `durable-store.worker-status-store` | `sessionId` keyed status | `Get-WorkerStatusDecisionSessions`, `show-worker-status-report.ps1` | Entry per worker session | Status rows for non-existent sessions ignored by gating | **Observable:** `scripts/show-worker-status-report.ps1 --json` |
+| `worker-message-dispatch-journal` | `durable-store.worker-message-dispatch-journal` | Sender `AO_SESSION_ID` in dispatch records | Submit reconcile, dispatch observe | Journal retention per contract | No pending dispatch requiring AO session | **Observable:** journal file via `Get-WorkerMessageDispatchJournalPath` |
+| `review-run-store` | `durable-store.review-run-store` | `linkedSessionId` on run rows | `pack-review-runner.ts list`, `Get-AoReviewRuns` | Run terminal states + retention in `docs/review-run-liveness.mjs` | No in-flight runs referencing AO session for action | **Observable:** pack review runner `list` JSON |
+| `review-start-claim-namespace` | `durable-store.review-start-claim-namespace` | Claim holder session / generation | `review-start-claim-store.ts`, review runner | Claim lease TTL + stale reaper | No active claim blocking review start | **Observable:** claim dir listing + contract evaluators |
+| `worker-nudge-claim-namespace` | `durable-store.worker-nudge-claim-namespace` | Nudge claim holder session | `Worker-NudgeClaim.ps1`, nudge gate | Claim stale minutes | No live nudge claim | **Observable:** claim namespace under `AO_BASE_DIR` |
+| `mechanical-transport` | `durable-store.mechanical-transport` | Target session in transport payload files | `journaled-worker-send.ps1`, mechanical reconcile | `AO_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS` | No unconsumed transport files | **Observable:** directory listing + age |
+| `dead-worker-reconcile-state` | `durable-store.dead-worker-reconcile-state` | Last known worker `sessionId` | `dead-worker-reconcile.ps1` | Reconcile state machine terminal | Reconcile finished or session respawned | **Observable:** state file via resolver |
+| `orchestrator-escalation-state` | `durable-store.orchestrator-escalation-state` | Orchestrator `sessionId` in escalation records | `Orchestrator-Escalation.ps1`, escalation router | Escalation terminal states | No open escalation requiring AO orchestrator session | **Partially observable:** state file read; cross-check with `ao session get` — **presently unprovable** for pure file→liveness without operator session pull. **Owner:** PR7 deletion wave. **Zero-consumer blocked** until evaluation-time session liveness proof supplied |
 
 **Axis-4 open question (permitted — does not change `drain` class):** For `orchestrator-escalation-state`, whether all records are drained requires proving target orchestrator session is terminated. Production lacks a single automated producer that emits “escalation drained” without `session.get`. Recorded as **presently unprovable**; zero-consumer for surfaces depending on that store remains **blocked**.
 
@@ -341,6 +339,7 @@ Read by production code expecting AO daemon to set values.
 | Discovery | Exclusion reason |
 |---|---|
 | `ao review run/send/execute` in drafts/archive | Not reachable from live roots |
+| `AO_DAEMON_URL` | Mention-only in excluded `docs/issues_drafts/**` (Issue #214 draft); no production reader |
 | `scripts/ao-review.ps1` | Retired path (Issue #839) |
 | `tests/external-output-references/captures/ao-0-10-cli/**` | Test capture fixtures only |
 | Estate-cut `ao-reviews-board` artifacts per `scripts/estate-cut/` | Explicitly removed surfaces |

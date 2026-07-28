@@ -16,7 +16,7 @@ Supporting reference (representation map extracted for checklist reuse):
 | Reference | File |
 |---|---|
 | Canonical AO surface identities + representation map | [`surface-identity-map.md`](./surface-identity-map.md) |
-| Per-token `AO_*` axis-2 bindings (273 rows) | [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) |
+| Per-token `AO_*` axis-2 bindings (273 names / 918 rows) | [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) |
 
 ## Record-only boundary
 
@@ -50,10 +50,11 @@ grep -nE '\bao (status|session|send|spawn|stop|start|events|review|report)\b' ag
 # Axis 1 — direct daemon HTTP paths
 grep -rE '/api/v1/(projects|sessions)' scripts docs --include='*.ps1' --include='*.mjs' --include='*.ts'
 
-# Axis 2 — tracked AO_* names (wildcard-fragment filter)
-grep -rhoE 'AO_[A-Z0-9_]+' scripts plugins docs AGENTS.md CLAUDE.md prompts \
-  .claude .cursor agent-orchestrator.yaml.example package.json .github 2>/dev/null \
-  | grep -vE '_$' | sort -u | tee /tmp/ao-tokens.txt | wc -l
+# Axis 2 — tracked AO_* names (apply §1.2 exclusions on reader pass)
+CORPUS='scripts plugins docs AGENTS.md CLAUDE.md prompts .claude .cursor agent-orchestrator.yaml.example package.json .github tests'
+for p in $CORPUS; do [ -e "$p" ] && grep -rhoE 'AO_[A-Z0-9_]+' "$p" 2>/dev/null; done \
+  | grep -vE '_$' | sort -u | wc -l
+# reader grep must exclude: docs/issues_drafts docs/archive docs/investigations tests/external-output-references
 
 # Axis 3 — worker-facing normative AO text (primary pass)
 grep -lE '\bao (session|spawn|send|stop|start|review|report)\b' AGENTS.md CLAUDE.md prompts/*.md docs/*runbook*.md agent-orchestrator.yaml.example

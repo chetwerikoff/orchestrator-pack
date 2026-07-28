@@ -1,291 +1,938 @@
-# AO_* token inventory (Axis 2 bindings)
+# AO_* binding inventory (Axis 2)
 
 **Issue #1036 · inspected revision `8fabf182f4df0a70e2f08f67899658ee886ab337`**
 
-Reproduction (must match row count):
+**Binding unit:** one consumer path × one canonical surface × axis 2 (per census §5 preamble).
+
+**Distinct token names:** 273  
+**Binding rows:** 918
+
+Reproduction:
 
 ```bash
-grep -rhoE 'AO_[A-Z0-9_]+' scripts plugins docs AGENTS.md CLAUDE.md prompts \
-  .claude .cursor agent-orchestrator.yaml.example package.json .github 2>/dev/null \
+CORPUS='scripts plugins docs AGENTS.md CLAUDE.md prompts .claude .cursor agent-orchestrator.yaml.example package.json .github tests'
+for p in $CORPUS; do [ -e "$p" ] && grep -rhoE 'AO_[A-Z0-9_]+' "$p" 2>/dev/null; done \
   | grep -vE '_$' | sort -u | wc -l
+# readers: grep -rl -- AO_FOO $CORPUS | grep -vE 'docs/issues_drafts/|docs/archive/|docs/investigations/|tests/external-output-references/'
 ```
 
-**Distinct tokens (after wildcard-fragment filter):** 273
-
-Each row is one axis-2 binding: `AO_*` name → primary consumer path → canonical obligation surface → `port|shed` (axis 2 never uses `drain`).
-
-| Token | Primary consumer | Canonical surface | Class | Evidence note |
+| Token | Consumer path | Canonical surface | Class | Note |
 |---|---|---|---|---|
-| `AO_AGENT_ORCHESTRATOR_STATE_DIR` | `scripts/lib/Get-WorkerMessageAdoptionBinding.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Get-WorkerMessageAdoptionBinding.ps1, scripts/worker-message-submit-reconcile.test.ts) |
-| `AO_APP_STATE_PATH` | `scripts/pr2-foundation/worker-notification-target.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/pr2-foundation/worker-notification-target.ts) |
-| `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE` | `docs/issue_queue_index.md` | pack.config | **port** | Pack reader; obligation survives migration (docs/issue_queue_index.md, docs/migration_notes.md) |
-| `AO_AUTONOMOUS_SURFACE_BOOTSTRAP` | `docs/spawn-worktree-grant.mjs` | pack.config | **port** | Pack reader; obligation survives migration (docs/spawn-worktree-grant.mjs) |
-| `AO_BASE` | `scripts/review-start-claim.test.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/review-start-claim.test.ts, scripts/_test-pwsh-helpers.ts, scripts/review-start-claim-run-binding.test.ts, scripts/_test-vitest-harness-env.ts, scripts/vitest-live-store-inventory.json, scripts/lib/Worker-NudgeClaim.ps1) |
-| `AO_BASE_DIR` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-start-claim.test.ts, scripts/_test-pwsh-helpers.ts, scripts/review-start-claim-run-binding.test.ts, scripts/_test-vitest-harness-env.ts, scripts/vitest-live-store-inventory.json, scripts/lib/Worker-NudgeClaim.ps1) |
-| `AO_BINARY` | `scripts/lib/OpkVitestChildProcessEnv.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/OpkVitestChildProcessEnv.ps1, scripts/vitest-live-store-preload.mjs, scripts/run-vitest-with-harness.mjs) |
-| `AO_CHAIN_ID` | `plugins/ao-token-chain-ledger/README.md` | runtime.session-context | **port** | AO-runtime injected (plugins/ao-token-chain-ledger/README.md, plugins/ao-token-chain-ledger/lib/writer.ts, plugins/ao-token-chain-ledger/tests/writer.test.ts, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_CHAIN_TASK_ID` | `plugins/ao-token-chain-ledger/lib/writer.ts` | runtime.session-context | **port** | AO-runtime injected (plugins/ao-token-chain-ledger/lib/writer.ts) |
-| `AO_CHILD_GENERATION` | `scripts/lib/Review-StartClaimLifecycle.ps1` | runtime.session-context | **port** | AO-runtime injected (scripts/lib/Review-StartClaimLifecycle.ps1, scripts/lib/review-start-claim-cli.ts, scripts/lib/Worker-RecoveryClaim.ps1) |
-| `AO_CI_FAILURE_NOTIFICATION_STORE` | `scripts/lib/Ci-Failure-Notification-Common.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Ci-Failure-Notification-Common.ps1, agent-orchestrator.yaml.example) |
-| `AO_CI_FAILURE_PROGRESS_FRESHNESS_MS` | `docs/ci-failure-notification.mjs` | pack.config | **port** | Pack reader; obligation survives migration (docs/ci-failure-notification.mjs, docs/migration_notes.md) |
-| `AO_CI_GREEN_WAKE_RECONCILE_INTERVAL_MINUTES` | `scripts/ci-green-wake-reconcile.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/ci-green-wake-reconcile.ps1, agent-orchestrator.yaml.example) |
-| `AO_CI_GREEN_WAKE_RECONCILE_STATE` | `scripts/ci-green-wake-reconcile.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/ci-green-wake-reconcile.ps1, scripts/review-trigger-reconcile.ps1, scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/pr2a/planning-manifest.json) |
-| `AO_CI_RED_WATCHDOG_INACTIVITY_MS` | `scripts/lib/Ci-Red-Watchdog.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Ci-Red-Watchdog.ps1) |
-| `AO_CI_RED_WATCHDOG_MAX_ATTEMPTS` | `scripts/lib/Ci-Red-Watchdog.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Ci-Red-Watchdog.ps1) |
-| `AO_CI_RED_WATCHDOG_STATE_DIR` | `scripts/ci-red-watchdog-lookup-retention.Tests.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/ci-red-watchdog-lookup-retention.Tests.ps1, scripts/lib/ci-red-watchdog-ledger.mjs, scripts/lib/Ci-Red-Watchdog.ps1) |
-| `AO_CLAIMED_REVIEW_RUN_BYPASS` | `scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1, scripts/lib/Autonomous-ReviewWorktreeGate.ps1, docs/orchestrator-claimed-review-run.mjs) |
-| `AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/README.md` | plugin.tuning | **port** | Plugin/reviewer config (plugins/ao-codex-pr-reviewer/README.md, plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts, plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts, docs/migration_notes.md) |
-| `AO_CODEX_REVIEW_PROMPT_FILE` | `scripts/harness-review-bridge.ts` | plugin.tuning | **port** | Plugin/reviewer config (scripts/harness-review-bridge.ts, scripts/run-pack-review-claude.ps1, plugins/ao-codex-pr-reviewer/lib/prompt.ts, docs/issues_drafts/00-architecture-decisions.md) |
-| `AO_CODEX_REVIEW_SKIP_GH` | `plugins/ao-codex-pr-reviewer/lib/scope_context.ts` | plugin.tuning | **port** | Plugin/reviewer config (plugins/ao-codex-pr-reviewer/lib/scope_context.ts) |
-| `AO_CODEX_REVIEW_SOFT_DEADLINE_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | plugin.tuning | **port** | Plugin/reviewer config (plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts, docs/migration_notes.md) |
-| `AO_CODEX_REVIEW_TEST_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts, plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts, docs/migration_notes.md) |
-| `AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX` | `scripts/pr2-foundation/terminalized/reviewer-failure-evidence-markers.ts` | plugin.tuning | **port** | Plugin/reviewer config (scripts/pr2-foundation/terminalized/reviewer-failure-evidence-markers.ts, plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts, docs/reviewer-failure-evidence-markers.mjs, docs/migration_notes.md) |
-| `AO_COMMAND` | `docs/pr-session-binding-cache.mjs` | runtime.session-context | **port** | AO-runtime injected (docs/pr-session-binding-cache.mjs) |
-| `AO_DAEMON_BASE_URL` | `scripts/lib/Invoke-AoReviewApi.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Invoke-AoReviewApi.ps1, scripts/check-harness-post-submit-pn-live-smoke.ps1, .github/workflows/harness-pn-live-smoke.yml) |
-| `AO_DAEMON_URL` | `docs/issues_drafts/214-ao-reviews-board-runtime-aggregation.md` | pack.config | **port** | Pack reader; obligation survives migration (docs/issues_drafts/214-ao-reviews-board-runtime-aggregation.md) |
-| `AO_DATA` | `.claude/skills/merge-with-local-adoption/SKILL.md` | pack.config | **port** | Pack reader; obligation survives migration (.claude/skills/merge-with-local-adoption/SKILL.md) |
-| `AO_DEAD_WORKER_EFFECTIVE_RUNTIME_POLICY` | `scripts/dead-worker-reconcile.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/dead-worker-reconcile.ps1) |
-| `AO_DEAD_WORKER_GH_CLOSED_RAW_FIXTURE` | `scripts/dead-worker-reconcile.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/dead-worker-reconcile.ps1) |
-| `AO_DEAD_WORKER_GH_MERGED_RAW_FIXTURE` | `scripts/dead-worker-reconcile.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/dead-worker-reconcile.ps1) |
-| `AO_DEAD_WORKER_LIVE_PAYLOAD_FIXTURE` | `scripts/dead-worker-reconcile.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/dead-worker-reconcile.ps1) |
-| `AO_DEAD_WORKER_OPEN_PRS_FIXTURE` | `scripts/dead-worker-reconcile.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/dead-worker-reconcile.ps1) |
-| `AO_DEAD_WORKER_RECONCILE_STATE` | `scripts/clear-dead-worker-reconcile-quarantine.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/clear-dead-worker-reconcile-quarantine.ps1, scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/pr2a/planning-manifest.json, scripts/dead-worker-reconcile.ps1) |
-| `AO_DEAD_WORKER_RESPAWN_POLICY_FIXTURE` | `scripts/dead-worker-reconcile.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/dead-worker-reconcile.ps1) |
-| `AO_DELIVERY_RUN_ID` | `scripts/lib/WorkerReportStore.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/WorkerReportStore.ps1, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_DIRECT_EDIT_REASON` | `scripts/guard-direct-edit.mjs` | plugin.tuning | **port** | Plugin/reviewer config (scripts/guard-direct-edit.mjs, docs/issues_drafts/207-pack-owned-architect-edit-guard-draft-author-gate.md, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_DRAFT_AUTHOR` | `scripts/guard-direct-edit.mjs` | pack.config | **port** | Pack reader; obligation survives migration (scripts/guard-direct-edit.mjs, docs/issues_drafts/207-pack-owned-architect-edit-guard-draft-author-gate.md, docs/migration_notes.md, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_DRAFT_AUTHOR_FALLBACK_REASON` | `scripts/guard-direct-edit.mjs` | plugin.tuning | **port** | Plugin/reviewer config (scripts/guard-direct-edit.mjs, docs/issues_drafts/207-pack-owned-architect-edit-guard-draft-author-gate.md, docs/migration_notes.md, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_ESCALATION_FORCE_HEALTH_FAILURE` | `scripts/lib/Orchestrator-Escalation.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-Escalation.ps1, scripts/orchestrator-escalation.test.ts, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_ESCALATION_FORCE_INBOX_FAILURE` | `scripts/lib/Orchestrator-Escalation.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-Escalation.ps1, scripts/orchestrator-escalation.test.ts, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_ESCALATION_FORCE_SEND_FAILURE` | `scripts/lib/Orchestrator-Escalation.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-Escalation.ps1, scripts/orchestrator-escalation.test.ts, scripts/orchestrator-escalation-router.test.ts, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_ESCALATION_HEALTH_SPOOL` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/_test-pwsh-helpers.ts, scripts/vitest-surviving-store-isolation.ts, scripts/_test-vitest-harness-env.ts, scripts/vitest-live-store-inventory.json, scripts/lib/Orchestrator-Escalation.ps1, scripts/lib/vitest-pre-topology-measurement.mjs) |
-| `AO_FLEET_HYGIENE_ALERT_FILE` | `scripts/lib/Cursor-Agent-TuiShim.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Cursor-Agent-TuiShim.ps1, scripts/lib/Orchestrator-FleetHygiene.ps1, docs/fleet-hygiene-sentinel-runbook.md, docs/migration_notes.md, docs/cursor-agent-tui-shim-runbook.md) |
-| `AO_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Orchestrator-FleetHygiene.ps1) |
-| `AO_FLEET_HYGIENE_DUPLICATE_LOG_STORM_MIN` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-FleetHygiene.ps1, docs/fleet-hygiene-sentinel-runbook.md) |
-| `AO_FLEET_HYGIENE_FORCE_UNSUPPORTED_PLATFORM` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-FleetHygiene.ps1) |
-| `AO_FLEET_HYGIENE_KILL_ENABLE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-FleetHygiene.ps1, docs/examples/fleet-hygiene-sentinel.systemd.timer.example, docs/fleet-hygiene-sentinel-runbook.md, docs/migration_notes.md) |
-| `AO_FLEET_HYGIENE_KILL_LOG_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Orchestrator-FleetHygiene.ps1) |
-| `AO_FLEET_HYGIENE_MAX_PWSH_COUNT` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-FleetHygiene.ps1, docs/fleet-hygiene-sentinel-runbook.md, docs/migration_notes.md) |
-| `AO_FLEET_HYGIENE_MAX_SUPERVISOR_LOG_BYTES` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-FleetHygiene.ps1, docs/fleet-hygiene-sentinel-runbook.md) |
-| `AO_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-FleetHygiene.ps1, docs/fleet-hygiene-sentinel-runbook.md, docs/migration_notes.md) |
-| `AO_FLEET_HYGIENE_MOCK_KILL` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-FleetHygiene.ps1) |
-| `AO_FLEET_HYGIENE_PROCESS_ENV_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Orchestrator-FleetHygiene.ps1) |
-| `AO_FLEET_HYGIENE_PROCESS_RSS_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Orchestrator-FleetHygiene.ps1) |
-| `AO_FLEET_HYGIENE_PWSH_COUNT_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Orchestrator-FleetHygiene.ps1) |
-| `AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Orchestrator-FleetHygiene.ps1) |
-| `AO_FLEET_HYGIENE_SKIP_SINGLETON` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-FleetHygiene.ps1) |
-| `AO_FLEET_HYGIENE_STATUS_EXIT_CODE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-FleetHygiene.ps1) |
-| `AO_GH_COMMAND` | `docs/pr-session-binding-cache.mjs` | pack.config | **port** | Pack reader; obligation survives migration (docs/pr-session-binding-cache.mjs) |
-| `AO_HARNESS_REVIEW_SUBMIT_BIN` | `scripts/harness-review-bridge.ts` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/harness-review-bridge.ts) |
-| `AO_HARNESS_REVIEW_SUBMIT_CAPTURE_FILE` | `scripts/harness-review-bridge.ts` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/harness-review-bridge.ts, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_HEAD_SHA` | `scripts/lib/WorkerReportStore.ps1` | runtime.session-context | **port** | AO-runtime injected (scripts/lib/WorkerReportStore.ps1, scripts/orchestrator-review-start-preflight.ps1, scripts/pack-worker-report.ps1, docs/pr-session-binding-cache.mjs) |
-| `AO_ISSUE_ID` | `scripts/lib/Get-AutoReviewPrContext.ps1` | runtime.session-context | **port** | AO-runtime injected (scripts/lib/Get-AutoReviewPrContext.ps1, plugins/ao-codex-pr-reviewer/lib/scope_context.ts, docs/pr-session-binding-cache.mjs) |
-| `AO_ISSUE_NUMBER` | `scripts/install-git-hooks.ps1` | runtime.session-context | **port** | AO-runtime injected (scripts/install-git-hooks.ps1, scripts/lib/Get-AutoReviewPrContext.ps1, scripts/lib/Review-CycleCap.ps1, plugins/ao-scope-guard/README.md, plugins/ao-scope-guard/bin/scope-check.ts, plugins/ao-scope-guard/hooks/pre-commit.ps1) |
-| `AO_ITERATION_ID` | `plugins/ao-token-chain-ledger/lib/writer.ts` | runtime.session-context | **port** | AO-runtime injected (plugins/ao-token-chain-ledger/lib/writer.ts) |
-| `AO_JOURNALED_SEND_ARGV_CEILING_CHARS` | `scripts/journaled-worker-send.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/journaled-worker-send.ps1) |
-| `AO_JOURNALED_SEND_ASSUME_CONTRACT` | `scripts/journaled-worker-send.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/journaled-worker-send.ps1, scripts/pr2-foundation/worker-notification.ts, scripts/pr2-foundation/review-4750643719-regression.test.ts, scripts/pack-review-worker-notification.cases.ts) |
-| `AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE` | `scripts/lib/Journaled-WorkerSendInternalCapability.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Journaled-WorkerSendInternalCapability.ps1) |
-| `AO_JOURNALED_SEND_INTERNAL` | `scripts/lib/Journaled-WorkerSendInternalCapability.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Journaled-WorkerSendInternalCapability.ps1, scripts/journaled-worker-send.ps1, scripts/worker-message-submit-reconcile.test.ts, docs/worker-nudge-gate.mjs) |
-| `AO_LOG` | `scripts/pack-review-worker-notification.cases.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pack-review-worker-notification.cases.ts) |
-| `AO_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS` | `scripts/lib/MechanicalReconcileNode.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/MechanicalReconcileNode.ps1, scripts/worker-message-submit-reconcile.test.ts) |
-| `AO_MECHANICAL_TRANSPORT_TEMP` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/_test-pwsh-helpers.ts, scripts/_test-vitest-harness-env.ts, scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/MechanicalReconcileNode.ps1, scripts/lib/Set-OpkVitestHarnessEnv.ps1) |
-| `AO_NUDGE_GATE_UNRESOLVED_ESCALATE_COUNT` | `docs/worker-nudge-gate.mjs` | pack.store-address | **port** | Pack-owned durable/capability path (docs/worker-nudge-gate.mjs) |
-| `AO_NUDGE_GATE_UNRESOLVED_ESCALATE_MS` | `docs/worker-nudge-gate.mjs` | pack.store-address | **port** | Pack-owned durable/capability path (docs/worker-nudge-gate.mjs) |
-| `AO_OPERATOR_ESCALATION_INBOX` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/_test-pwsh-helpers.ts, scripts/vitest-surviving-store-isolation.ts, scripts/_test-vitest-harness-env.ts, scripts/vitest-live-store-inventory.json, scripts/lib/Orchestrator-Escalation.ps1, scripts/lib/vitest-pre-topology-measurement.mjs) |
-| `AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL` | `scripts/orchestrator-escalation-router.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/orchestrator-escalation-router.test.ts) |
-| `AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX` | `scripts/orchestrator-escalation-router.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/orchestrator-escalation-router.test.ts) |
-| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/_test-pwsh-helpers.ts, scripts/vitest-surviving-store-isolation.ts, scripts/_test-vitest-harness-env.ts, scripts/vitest-live-store-inventory.json, scripts/lib/Orchestrator-Escalation.ps1, scripts/lib/vitest-pre-topology-measurement.mjs) |
-| `AO_ORCHESTRATOR_SESSION_ID` | `scripts/orchestrator-wake-common.ps1` | runtime.session-context | **port** | AO-runtime injected (scripts/orchestrator-wake-common.ps1, scripts/lib/Orchestrator-Escalation.ps1, scripts/orchestrator-wake-supervisor-test-child.ps1, scripts/orchestrator-worktree-preflight.ps1, scripts/orchestrator-diagnose.ps1, scripts/wait-orchestrator-launch.ps1) |
-| `AO_PARENT_SESSION_ID` | `plugins/ao-token-chain-ledger/lib/writer.ts` | runtime.session-context | **port** | AO-runtime injected (plugins/ao-token-chain-ledger/lib/writer.ts, plugins/ao-token-chain-ledger/tests/writer.test.ts, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_PASTE_CHAR_THRESHOLD` | `scripts/pr2-foundation/terminalized/worker-message-dispatch-observe.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pr2-foundation/terminalized/worker-message-dispatch-observe.ts, scripts/pr2-foundation/worker-dispatch-journal.ts, scripts/worker-message-submit-reconcile.test.ts, docs/worker-message-dispatch-observe.d.mts, docs/worker-message-dispatch-observe.mjs) |
-| `AO_PR856_TEST_LOG` | `docs/vitest-light-lane-isolation-audit-874.md` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_PR856_TEST_MODE` | `docs/vitest-light-lane-isolation-audit-874.md` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_PROJECT` | `scripts/pr-session-binding-cache.test.ts` | runtime.session-context | **port** | AO-runtime injected (scripts/pr-session-binding-cache.test.ts, scripts/review-start-claim-run-binding.test.ts, scripts/lib/reverify-bound-issue-snapshot.ts, scripts/lib/Autonomous-ReviewWorktreeGate.ps1, scripts/lib/WorkerReportStore.ps1, scripts/lib/Autonomous-SpawnWorktreeGate.ps1) |
-| `AO_PROJECT_CONFIG_PATH` | `scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts, docs/ao-0-10-review-api.mjs, docs/ao-0-10-review-api.d.mts) |
-| `AO_PROJECT_ID` | `scripts/pr-session-binding-cache.test.ts` | runtime.session-context | **port** | AO-runtime injected (scripts/pr-session-binding-cache.test.ts, scripts/review-start-claim-run-binding.test.ts, scripts/lib/reverify-bound-issue-snapshot.ts, scripts/lib/Autonomous-ReviewWorktreeGate.ps1, scripts/lib/WorkerReportStore.ps1, scripts/lib/Autonomous-SpawnWorktreeGate.ps1) |
-| `AO_PR_HEAD_SHA` | `scripts/orchestrator-review-start-preflight.ps1` | runtime.session-context | **port** | AO-runtime injected (scripts/orchestrator-review-start-preflight.ps1) |
-| `AO_PR_NUMBER` | `scripts/lib/Get-AutoReviewPrContext.ps1` | runtime.session-context | **port** | AO-runtime injected (scripts/lib/Get-AutoReviewPrContext.ps1, scripts/lib/WorkerReportStore.ps1, scripts/lib/Review-CycleCap.ps1, scripts/run-pack-review-gpt.ts, scripts/orchestrator-review-start-preflight.ps1, scripts/pack-worker-report.ps1) |
-| `AO_PR_SESSION_BINDING_CACHE` | `scripts/pr-session-binding-cache.test.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pr-session-binding-cache.test.ts, scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/lib/WorkerStatusStore.ps1, scripts/pr2a/planning-manifest.json) |
-| `AO_PUBLISH_FALLBACK` | `.claude/skills/publish-issue-draft/SKILL.md` | pack.config | **port** | Pack reader; obligation survives migration (.claude/skills/publish-issue-draft/SKILL.md) |
-| `AO_PWSH_BINARY` | `scripts/_resolve-pwsh.sh` | pack.config | **port** | Pack reader; obligation survives migration (scripts/_resolve-pwsh.sh) |
-| `AO_REAL_BINARY` | `scripts/_test-git-fixture.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/_test-git-fixture.ts, docs/migration_notes.md) |
-| `AO_REPORT_STATE_SEED_FIXTURE_STEP_DELAY_MS` | `scripts/lib/Review-ReadyReportStateSeedProgress.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Review-ReadyReportStateSeedProgress.ps1) |
-| `AO_REPORT_STATE_SEED_GITHUB_REFRESH_SECONDS` | `scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1) |
-| `AO_REPORT_STATE_SEED_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/vitest-live-store-inventory.json, scripts/lib/Record-ReviewReadyReportStateSeed.ps1, scripts/lib/worker-status-store.mjs, scripts/lib/Worker-Recovery.ps1, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/WorkerReportStore.ps1) |
-| `AO_REPO_SLUG` | `scripts/pr-session-binding-cache.test.ts` | runtime.session-context | **port** | AO-runtime injected (scripts/pr-session-binding-cache.test.ts, scripts/lib/worker-status-store.mjs, scripts/lib/WorkerReportStore.ps1, scripts/pack-worker-report.ps1, docs/pr-session-binding-cache.mjs, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_REVIEW_BUDGET_STARTED_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | pack.config | **port** | Pack reader; obligation survives migration (plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts, plugins/ao-codex-pr-reviewer/bin/command-guard/guard-lib.sh, plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts) |
-| `AO_REVIEW_CLAIM_ATTEMPT_CEILING_MS` | `docs/review-start-claim-lifecycle.mjs` | pack.store-address | **port** | Pack-owned durable/capability path (docs/review-start-claim-lifecycle.mjs) |
-| `AO_REVIEW_CLAIM_DIR` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-start-claim.test.ts, scripts/run-review-ready-seed-revalidation-fixture.ps1, scripts/_test-pwsh-helpers.ts, scripts/vitest-live-store-inventory.json, scripts/lib/review-start-claim-cli.ts, scripts/lib/vitest-live-store-harness.mjs) |
-| `AO_REVIEW_CLAIM_HOLD_BUDGET_MS` | `docs/review-start-claim-lifecycle.mjs` | pack.store-address | **port** | Pack-owned durable/capability path (docs/review-start-claim-lifecycle.mjs) |
-| `AO_REVIEW_CLAIM_LAUNCH_PENDING_BUDGET_MS` | `docs/review-start-claim-lifecycle.mjs` | pack.store-address | **port** | Pack-owned durable/capability path (docs/review-start-claim-lifecycle.mjs) |
-| `AO_REVIEW_CLAIM_MUTEX_STALE_SECONDS` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-start-claim.test.ts, scripts/lib/review-start-claim-cli.ts, scripts/lib/review-start-claim-store.ts, scripts/pr2a/final-conformance.test.ts) |
-| `AO_REVIEW_CLAIM_READINESS_ENVELOPE_MS` | `scripts/review-start-claim-lifecycle.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-start-claim-lifecycle.test.ts, docs/migration_notes.md, docs/review-start-claim-lifecycle.mjs, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_REVIEW_CLAIM_REAPER_PERIOD_SECONDS` | `scripts/review-start-claim-lifecycle.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-start-claim-lifecycle.test.ts, docs/review-start-claim-lifecycle.mjs, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_REVIEW_CLAIM_STALE_MINUTES` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-start-claim.test.ts, scripts/lib/review-start-claim-cli.ts, docs/migration_notes.md) |
-| `AO_REVIEW_CLAIM_TERMINAL_COUNT` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-start-claim.test.ts, scripts/lib/review-start-claim-cli.ts) |
-| `AO_REVIEW_CLAIM_TERMINAL_RETENTION` | `scripts/lib/review-start-claim-cli.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/review-start-claim-cli.ts) |
-| `AO_REVIEW_CLAIM_TEST_STALE_BARRIER_DIR` | `scripts/lib/review-start-claim-store.ts` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/review-start-claim-store.ts, scripts/pr2a/final-conformance.test.ts) |
-| `AO_REVIEW_CLAIM_VISIBILITY_BUDGET_MS` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-start-claim.test.ts, docs/review-start-claim-lifecycle.mjs) |
-| `AO_REVIEW_DEGRADED_CI_MAX_ATTEMPTS` | `scripts/pr2-foundation/terminalized/review-head-ready.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pr2-foundation/terminalized/review-head-ready.ts, docs/migration_notes.md, docs/review-head-ready.mjs) |
-| `AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES` | `docs/migration_notes.md` | pack.config | **port** | Pack reader; obligation survives migration (docs/migration_notes.md) |
-| `AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES` | `docs/migration_notes.md` | pack.config | **port** | Pack reader; obligation survives migration (docs/migration_notes.md) |
-| `AO_REVIEW_DELIVERY_CONFIRM_STATE` | `docs/migration_notes.md` | pack.store-address | **port** | Pack-owned durable/capability path (docs/migration_notes.md) |
-| `AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES` | `docs/migration_notes.md` | pack.config | **port** | Pack reader; obligation survives migration (docs/migration_notes.md) |
-| `AO_REVIEW_DELIVERY_TERMINAL_RETENTION_DAYS` | `docs/review-delivery-lifecycle.mjs` | pack.config | **port** | Pack reader; obligation survives migration (docs/review-delivery-lifecycle.mjs) |
-| `AO_REVIEW_EFFECTIVE_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | pack.config | **port** | Pack reader; obligation survives migration (plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts, plugins/ao-codex-pr-reviewer/bin/command-guard/guard-lib.sh, plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts) |
-| `AO_REVIEW_FAILURE_EVIDENCE_DEBUG` | `scripts/invoke-pack-review.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/invoke-pack-review.ps1, docs/migration_notes.md) |
-| `AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT` | `scripts/lib/Review-FailureEvidence.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Review-FailureEvidence.ps1, scripts/review-failure-evidence.Tests.ps1, docs/migration_notes.md, docs/vitest-light-lane-isolation-audit-874.md, docs/reviewer-failure-evidence.mjs) |
-| `AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT` | `docs/migration_notes.md` | pack.config | **port** | Pack reader; obligation survives migration (docs/migration_notes.md, docs/vitest-light-lane-isolation-audit-874.md, docs/reviewer-failure-evidence.mjs) |
-| `AO_REVIEW_FAIL_STALE_PATH` | `docs/review-stuck-run-reaper.d.mts` | pack.config | **port** | Pack reader; obligation survives migration (docs/review-stuck-run-reaper.d.mts) |
-| `AO_REVIEW_FAIL_STALE_SURFACE` | `docs/migration_notes.md` | pack.config | **port** | Pack reader; obligation survives migration (docs/migration_notes.md) |
-| `AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Record-ReviewHandoffWakeAdmission.ps1, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/pr2a/planning-manifest.json, scripts/vitest-live-store-preload.mjs) |
-| `AO_REVIEW_HARD_DEADLINE_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | pack.config | **port** | Pack reader; obligation survives migration (plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts, plugins/ao-codex-pr-reviewer/bin/command-guard/guard-lib.sh, plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts) |
-| `AO_REVIEW_LIST_PATH` | `scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts, docs/ao-0-10-review-api.mjs, docs/ao-0-10-review-api.d.mts) |
-| `AO_REVIEW_LIVENESS_DEBUG` | `scripts/invoke-pack-review.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/invoke-pack-review.ps1) |
-| `AO_REVIEW_READY_STUCK_GRACE_MINUTES` | `scripts/review-ready-stuck-guard.test.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/review-ready-stuck-guard.test.ts, docs/review-ready-stuck-guard.mjs, docs/orchestrator-recovery-runbook.md, docs/migration_notes.md, docs/vitest-light-lane-isolation-audit-874.md, agent-orchestrator.yaml.example) |
-| `AO_REVIEW_RECOVERY_AMBIGUOUS_STALE_MS` | `docs/review-run-liveness.mjs` | pack.config | **port** | Pack reader; obligation survives migration (docs/review-run-liveness.mjs, docs/migration_notes.md) |
-| `AO_REVIEW_RECOVERY_CRASH_GRACE_MS` | `docs/review-run-liveness.mjs` | pack.config | **port** | Pack reader; obligation survives migration (docs/review-run-liveness.mjs, docs/migration_notes.md) |
-| `AO_REVIEW_RECOVERY_MAX_REVIEW_DURATION_MS` | `docs/review-run-liveness.mjs` | pack.config | **port** | Pack reader; obligation survives migration (docs/review-run-liveness.mjs, docs/migration_notes.md) |
-| `AO_REVIEW_RUN_ID` | `scripts/lib/WorkerReportStore.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/WorkerReportStore.ps1, scripts/estate-cut/task-311-tests/task-311-delivery.test-support.ts, scripts/pack-review-runner.ts) |
-| `AO_REVIEW_SEND_RECONCILE_INTERVAL_MINUTES` | `docs/orchestrator-recovery-runbook.md` | pack.store-address | **port** | Pack-owned durable/capability path (docs/orchestrator-recovery-runbook.md) |
-| `AO_REVIEW_SEND_RECONCILE_STATE` | `docs/orchestrator-recovery-runbook.md` | pack.store-address | **port** | Pack-owned durable/capability path (docs/orchestrator-recovery-runbook.md) |
-| `AO_REVIEW_SOFT_DEADLINE_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | pack.config | **port** | Pack reader; obligation survives migration (plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts) |
-| `AO_REVIEW_START_CLAIM_STALE_MINUTES` | `scripts/lib/review-start-claim-cli.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/review-start-claim-cli.ts) |
-| `AO_REVIEW_START_CONSECUTIVE_FAILURE_ESCALATE_THRESHOLD` | `scripts/lib/Review-StartEnvelopeLedger.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Review-StartEnvelopeLedger.ps1) |
-| `AO_REVIEW_START_GH_CALL_COUNT` | `scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1) |
-| `AO_REVIEW_START_GH_SCENARIO` | `scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1) |
-| `AO_REVIEW_START_HEAD_SHA` | `scripts/orchestrator-review-start-preflight.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/orchestrator-review-start-preflight.ps1) |
-| `AO_REVIEW_START_MONOTONIC_NOW_MS` | `scripts/lib/Review-StartEnvelopeExternalIo.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Review-StartEnvelopeExternalIo.ps1, scripts/estate-cut/task-311-tests/task-311-claim.test-support.ts, scripts/estate-cut/task-311-tests/task-311-common.test-support.ts, docs/review-start-envelope-external-io.mjs, docs/migration_notes.md) |
-| `AO_REVIEW_START_PREFLIGHT_SHIELD_CAPTURE_TIMEOUT_MS` | `scripts/lib/Review-StartPreflightShield.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Review-StartPreflightShield.ps1) |
-| `AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS` | `scripts/lib/Review-StartPreflightShield.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Review-StartPreflightShield.ps1) |
-| `AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS` | `scripts/lib/Review-StartPreflightShield.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Review-StartPreflightShield.ps1) |
-| `AO_REVIEW_START_PREFLIGHT_SHIELD_WALL_CLOCK_BUDGET_MS` | `scripts/lib/Review-StartPreflightShield.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Review-StartPreflightShield.ps1) |
-| `AO_REVIEW_START_PR_NUMBER` | `scripts/orchestrator-review-start-preflight.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/orchestrator-review-start-preflight.ps1) |
-| `AO_REVIEW_START_RUN_ID` | `scripts/lib/WorkerReportStore.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/WorkerReportStore.ps1) |
-| `AO_REVIEW_START_SCOPED_GH_COMMAND` | `scripts/_test-pwsh-helpers.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/_test-pwsh-helpers.ts, scripts/lib/Gh-PrChecks.ps1) |
-| `AO_REVIEW_START_SCOPED_GH_FAIL_UNTIL_ATTEMPT` | `scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1) |
-| `AO_REVIEW_START_SCOPED_GH_HEAD_SHA` | `scripts/_test-pwsh-helpers.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/_test-pwsh-helpers.ts, scripts/lib/Review-StartPreflightShield.ps1, scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1) |
-| `AO_REVIEW_START_SCOPED_GH_HEAD_SHA_A` | `scripts/_test-pwsh-helpers.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/_test-pwsh-helpers.ts, scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1) |
-| `AO_REVIEW_START_SCOPED_GH_HEAD_SHA_B` | `scripts/_test-pwsh-helpers.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/_test-pwsh-helpers.ts, scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1) |
-| `AO_REVIEW_START_SCOPED_GH_SCENARIO` | `scripts/_test-pwsh-helpers.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/_test-pwsh-helpers.ts, scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1) |
-| `AO_REVIEW_START_SCOPED_GH_STATE_FILE` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/_test-pwsh-helpers.ts, scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1) |
-| `AO_REVIEW_START_SUPERVISED_GH_COMMAND` | `scripts/lib/Review-StartSupervisedGh.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Review-StartSupervisedGh.ps1, docs/migration_notes.md) |
-| `AO_REVIEW_START_TEST_CHILD_PID_FILE` | `scripts/fixtures/review-start-envelope-external-io/steal-claim-then-hang.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/fixtures/review-start-envelope-external-io/steal-claim-then-hang.ps1) |
-| `AO_REVIEW_START_TEST_CLAIM_PATH` | `scripts/fixtures/review-start-envelope-external-io/steal-claim-then-hang.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/fixtures/review-start-envelope-external-io/steal-claim-then-hang.ps1) |
-| `AO_REVIEW_START_TEST_DELAY_BEFORE_PID_UPDATE_MS` | `scripts/lib/Review-StartSupervisedGh.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Review-StartSupervisedGh.ps1) |
-| `AO_REVIEW_START_WRAPPER_CHILD_PID_FILE` | `scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1) |
-| `AO_REVIEW_SUBCOMMANDS` | `scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts, docs/ao-0-10-review-api.mjs, docs/ao-0-10-review-api.d.mts) |
-| `AO_REVIEW_TEST_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts, plugins/ao-codex-pr-reviewer/bin/command-guard/guard-lib.sh, plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts) |
-| `AO_REVIEW_TRIGGER_PATH` | `scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts, docs/ao-0-10-review-api.mjs, docs/ao-0-10-review-api.d.mts) |
-| `AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES` | `scripts/review-trigger-reconcile.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-trigger-reconcile.ps1, docs/orchestrator-recovery-runbook.md, docs/migration_notes.md, agent-orchestrator.yaml.example) |
-| `AO_REVIEW_TRIGGER_RECONCILE_STATE` | `scripts/review-trigger-reconcile.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-trigger-reconcile.ps1, scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Invoke-ReviewWakeTrigger.ps1, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/pr2a/planning-manifest.json) |
-| `AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/lib/Record-ReviewTriggerReevalWatch.ps1, scripts/pr2a/planning-manifest.json, scripts/vitest-live-store-preload.mjs) |
-| `AO_SANCTIONED_WORKER_KILL_RECORD_PATH` | `scripts/json-producers/sanctioned-worker-kill-record.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/json-producers/sanctioned-worker-kill-record.ts, scripts/lib/Sanctioned-Worker-Kill-Record.ps1) |
-| `AO_SCOPE_GUARD_BYPASS` | `plugins/ao-scope-guard/README.md` | plugin.tuning | **port** | Plugin/reviewer config (plugins/ao-scope-guard/README.md, plugins/ao-scope-guard/hooks/pre-commit.ps1, docs/target_repo_setup.md) |
-| `AO_SCOPE_GUARD_SKIP_GH` | `plugins/ao-scope-guard/lib/denylist.ts` | plugin.tuning | **port** | Plugin/reviewer config (plugins/ao-scope-guard/lib/denylist.ts) |
-| `AO_SCRIPTED_REVIEW_DELIVERY_DEBUG` | `scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1) |
-| `AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS` | `scripts/check-scripted-review-confirmed-delivery-gate.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/check-scripted-review-confirmed-delivery-gate.ps1, scripts/scripted-review-confirmed-delivery-gate.ps1, docs/orchestrator-recovery-runbook.md, docs/scripted-review-confirmed-delivery-gate.mjs) |
-| `AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS` | `scripts/check-scripted-review-confirmed-delivery-gate.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/check-scripted-review-confirmed-delivery-gate.ps1, scripts/scripted-review-confirmed-delivery-gate.ps1, docs/orchestrator-recovery-runbook.md, docs/scripted-review-confirmed-delivery-gate.mjs) |
-| `AO_SCRIPTED_REVIEW_SKIP_POST_SUBMIT_DELIVERY` | `scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1, docs/migration_notes.md) |
-| `AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS` | `docs/scripted-review-post-submit-delivery.mjs` | pack.config | **port** | Pack reader; obligation survives migration (docs/scripted-review-post-submit-delivery.mjs, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_SEND` | `scripts/_ao-send-0102-test-fixture.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/_ao-send-0102-test-fixture.ts, scripts/pr2-foundation/terminalized/worker-message-dispatch-observe.ts, scripts/worker-message-submit-reconcile.test.ts, docs/worker-message-dispatch-observe.d.mts, docs/worker-message-dispatch-observe.mjs) |
-| `AO_SEND_0102_HELP` | `scripts/_ao-send-0102-test-fixture.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/_ao-send-0102-test-fixture.ts, scripts/worker-message-submit-reconcile.test.ts) |
-| `AO_SEND_HELP_EOF` | `scripts/_ao-send-0102-test-fixture.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/_ao-send-0102-test-fixture.ts, scripts/worker-message-submit-reconcile.test.ts) |
-| `AO_SESSION_ID` | `scripts/lib/Orchestrator-AutonomousBoundary.ps1` | runtime.session-context | **port** | AO-runtime injected (scripts/lib/Orchestrator-AutonomousBoundary.ps1, scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1, scripts/lib/Review-StartClaimLifecycle.ps1, scripts/lib/review-start-claim-cli.ts, scripts/lib/Get-AutoReviewPrContext.ps1, scripts/lib/Orchestrator-AutonomousSpawnGate.ps1) |
-| `AO_SESSION_INFO_JSON` | `plugins/ao-token-chain-ledger/README.md` | runtime.session-context | **port** | AO-runtime injected (plugins/ao-token-chain-ledger/README.md, plugins/ao-token-chain-ledger/lib/session_cost.ts, plugins/ao-token-chain-ledger/tests/writer.test.ts, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_SESSION_KEYS` | `scripts/pr2-foundation/mutation-semantic-gates.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pr2-foundation/mutation-semantic-gates.ts, scripts/pr2-foundation/binding.ts) |
-| `AO_SESSION_KIND` | `docs/issues_drafts/222-at-cap-merge-triage-gate-deferred-findings-catalog.md` | pack.config | **port** | Pack reader; obligation survives migration (docs/issues_drafts/222-at-cap-merge-triage-gate-deferred-findings-catalog.md, docs/merge-triage-gate.mjs) |
-| `AO_SHELL` | `scripts/lib/Test-WorkerLaunchFailure.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Test-WorkerLaunchFailure.ps1, docs/issues_drafts/00-architecture-decisions.md, docs/migration_notes.md) |
-| `AO_SIDE_EFFECT_LOCK_MAX_AGE_MINUTES` | `scripts/lib/Orchestrator-SideEffectFence.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-SideEffectFence.ps1, scripts/pr2-foundation/worker-nudge-claim-store.ts, scripts/run-review-ready-seed-liveness-fixture.ps1) |
-| `AO_SIDE_PROCESS_AO_LIVENESS_SHIM_DISABLED` | `scripts/lib/Orchestrator-SideProcessProgress.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-SideProcessProgress.ps1) |
-| `AO_SIDE_PROCESS_CHILD_ID` | `scripts/lib/gh-wrapper.mjs` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/gh-wrapper.mjs, scripts/lib/gh-governor.mjs, scripts/lib/Orchestrator-FleetHygiene.ps1, scripts/lib/Orchestrator-SideProcessProgress.ps1, scripts/kernel/side-process-liveness.ts, scripts/gh) |
-| `AO_SIDE_PROCESS_HEALTH_DEGRADED_THRESHOLD` | `scripts/lib/Orchestrator-SideProcessHealth.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-SideProcessHealth.ps1) |
-| `AO_SIDE_PROCESS_HEALTH_RECOVERY_MAX_ATTEMPTS` | `scripts/lib/Orchestrator-SideProcessHealth.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-SideProcessHealth.ps1) |
-| `AO_SIDE_PROCESS_LIVENESS_ACTIVE` | `scripts/gh` | pack.config | **port** | Pack reader; obligation survives migration (scripts/gh) |
-| `AO_SIDE_PROCESS_LIVENESS_CLI` | `scripts/lib/Orchestrator-SideProcessProgress.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-SideProcessProgress.ps1) |
-| `AO_SIDE_PROCESS_NOW_MS` | `scripts/lib/Orchestrator-SideProcessProgressEvidence.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-SideProcessProgressEvidence.ps1, scripts/lib/Orchestrator-SideProcessProgress.ps1, scripts/run-review-ready-seed-liveness-fixture.ps1, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_SIDE_PROCESS_OWNER_PID` | `scripts/lib/Orchestrator-SideProcessProgress.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Orchestrator-SideProcessProgress.ps1, scripts/kernel/side-process-liveness.ts, scripts/fleet-liveness.cases.ts, scripts/gh) |
-| `AO_SIDE_PROCESS_PRIOR_PROGRESS_JSON` | `scripts/run-review-ready-seed-liveness-fixture.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/run-review-ready-seed-liveness-fixture.ps1) |
-| `AO_SIDE_PROCESS_PROGRESS_DIR` | `scripts/lib/Orchestrator-SideProcessProgress.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessProgress.ps1, scripts/mechanical-json-state.Tests.ps1, scripts/kernel/side-process-liveness.ts, scripts/gh, scripts/worker-message-submit-reconcile.test.ts, scripts/run-review-ready-seed-liveness-fixture.ps1) |
-| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/review-delivery.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-delivery.test.ts, scripts/review-start-claim.test.ts, scripts/_test-vitest-harness-env.ts, scripts/vitest-live-store-inventory.json, scripts/lib/Review-ReadyReportStateSeedProgress.ps1, scripts/lib/ci-red-watchdog-ledger.mjs) |
-| `AO_SIDE_PROCESS_TICK_ID` | `scripts/kernel/side-process-liveness.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/kernel/side-process-liveness.ts) |
-| `AO_SIGNAL_SURFACES` | `scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.ts, scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.d.ts, docs/events-optional-consumer-signal-recovery.mjs, docs/events-optional-consumer-signal-recovery.d.mts) |
-| `AO_SPAWN_DISPLAY_NAME_MAX_LENGTH` | `docs/ao-spawn-shape.d.mts` | pack.config | **port** | Pack reader; obligation survives migration (docs/ao-spawn-shape.d.mts, docs/ao-spawn-shape.mjs, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_SPAWN_FIXTURE_PR_HEAD_OID` | `scripts/lib/Autonomous-SpawnWorktreeGate.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Autonomous-SpawnWorktreeGate.ps1) |
-| `AO_SPAWN_FIXTURE_PR_REF_TOKEN` | `scripts/lib/Autonomous-SpawnWorktreeGate.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Autonomous-SpawnWorktreeGate.ps1) |
-| `AO_SPAWN_WORKTREE_FIXTURE_MODE` | `scripts/lib/Orchestrator-AutonomousSpawnGate.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Orchestrator-AutonomousSpawnGate.ps1, scripts/lib/Autonomous-SpawnWorktreeGate.ps1) |
-| `AO_SPAWN_WORKTREE_GRANT_ID` | `scripts/lib/Autonomous-SpawnWorktreeGate.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Autonomous-SpawnWorktreeGate.ps1, docs/migration_notes.md) |
-| `AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN` | `docs/spawn-worktree-grant.d.mts` | pack.config | **port** | Pack reader; obligation survives migration (docs/spawn-worktree-grant.d.mts, docs/spawn-worktree-grant.mjs) |
-| `AO_TASK_CHAIN_ID` | `plugins/ao-token-chain-ledger/README.md` | pack.config | **port** | Pack reader; obligation survives migration (plugins/ao-token-chain-ledger/README.md, plugins/ao-token-chain-ledger/lib/writer.ts) |
-| `AO_TASK_ID` | `plugins/ao-token-chain-ledger/README.md` | runtime.session-context | **port** | AO-runtime injected (plugins/ao-token-chain-ledger/README.md, plugins/ao-token-chain-ledger/lib/writer.ts, plugins/ao-token-chain-ledger/tests/writer.test.ts, docs/vitest-light-lane-isolation-audit-874.md) |
-| `AO_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` | `scripts/terminal-flood-detect.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/terminal-flood-detect.ps1, docs/orchestrator-recovery-runbook.md, docs/migration_notes.md) |
-| `AO_TERMINAL_FLOOD_WINDOW_SECONDS` | `scripts/terminal-flood-detect.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/terminal-flood-detect.ps1, docs/orchestrator-recovery-runbook.md, docs/migration_notes.md) |
-| `AO_TESTMODE_FLEET_HEARTBEAT_GRACE_SECONDS` | `scripts/lib/TestMode-FleetLease.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/TestMode-FleetLease.ps1) |
-| `AO_TESTMODE_FLEET_LANE_LEASE_ID` | `scripts/run-vitest-heavy-shard.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/run-vitest-heavy-shard.ps1, scripts/invoke-testmode-fleet-reaper.ps1, scripts/lib/TestMode-FleetLease.ps1) |
-| `AO_TESTMODE_FLEET_LEASE_TTL_SECONDS` | `scripts/lib/TestMode-FleetLease.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/TestMode-FleetLease.ps1) |
-| `AO_TESTMODE_FLEET_NO_PROGRESS_SECONDS` | `scripts/lib/TestMode-FleetLease.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/TestMode-FleetLease.ps1) |
-| `AO_TMUX_NAME` | `scripts/_test-git-fixture.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/_test-git-fixture.ts, docs/migration_notes.md, docs/spawn-worktree-grant.mjs) |
-| `AO_TRUSTED_PACK_ROOT` | `scripts/lib/Import-TrustedReverifyBootstrap.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Import-TrustedReverifyBootstrap.ps1, scripts/lib/Invoke-AoReviewApi.ps1, scripts/lib/Resolve-TrustedPackRoot.ps1, scripts/invoke-contract-evidence-reverify.ps1, scripts/run-reviewer-reverify-ao-review-command.ps1, scripts/launch-contract-evidence-reverify.ps1) |
-| `AO_VERSION` | `scripts/pr2-foundation/mutation-behavior-recipes.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pr2-foundation/mutation-behavior-recipes.ts, scripts/pr2-foundation/binding.ts, scripts/pr2-foundation/worker-notification-target.ts) |
-| `AO_WAKE_DEDUP_STATE` | `scripts/orchestrator-wake-common.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/orchestrator-wake-common.ps1, scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/pr2a/planning-manifest.json, scripts/vitest-live-store-preload.mjs) |
-| `AO_WAKE_LISTENER_PROJECT_ID` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-start-claim.test.ts) |
-| `AO_WAKE_LISTENER_SIDE_EFFECT_LOCK` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Invoke-ReviewWakeTrigger.ps1, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/pr2a/planning-manifest.json, scripts/vitest-live-store-preload.mjs) |
-| `AO_WAKE_SUPERVISOR_CRASH_BASE_BACKOFF_SECONDS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1) |
-| `AO_WAKE_SUPERVISOR_CRASH_MAX_BACKOFF_SECONDS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1) |
-| `AO_WAKE_SUPERVISOR_CRASH_MAX_RAPID_EXITS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1) |
-| `AO_WAKE_SUPERVISOR_CRASH_RAPID_EXIT_THRESHOLD_MS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1) |
-| `AO_WAKE_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1) |
-| `AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1, scripts/supervisor-fault-boundary.shared.ts, docs/migration_notes.md) |
-| `AO_WAKE_SUPERVISOR_DEGRADED_DETERMINISTIC_TERMINAL_ATTEMPTS` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1) |
-| `AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1) |
-| `AO_WAKE_SUPERVISOR_DEGRADED_MAX_BACKOFF_SECONDS` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1, docs/migration_notes.md) |
-| `AO_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_THRESHOLD` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1, docs/migration_notes.md) |
-| `AO_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_WINDOW_MS` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1, docs/migration_notes.md) |
-| `AO_WAKE_SUPERVISOR_DEGRADED_STABLE_WORKING_POLLS` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1, docs/migration_notes.md) |
-| `AO_WAKE_SUPERVISOR_FIXTURE` | `scripts/fixtures/orchestrator-wake-supervisor/ao-stub.sh` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/fixtures/orchestrator-wake-supervisor/ao-stub.sh, scripts/fixtures/orchestrator-wake-supervisor/ao-stub.ps1) |
-| `AO_WAKE_SUPERVISOR_ID_DEBOUNCE_POLLS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack-owned durable/capability path (docs/migration_notes.md) |
-| `AO_WAKE_SUPERVISOR_LEASE_GATE_HOLD_MS` | `scripts/lib/Orchestrator-WakeSupervisorLease.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-WakeSupervisorLease.ps1) |
-| `AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` | `scripts/lib/Orchestrator-WakeSupervisorLease.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-WakeSupervisorLease.ps1, docs/migration_notes.md) |
-| `AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS` | `scripts/lib/Orchestrator-WakeSupervisorLease.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-WakeSupervisorLease.ps1, docs/migration_notes.md) |
-| `AO_WAKE_SUPERVISOR_POLL_SECONDS` | `docs/orchestrator-autoloop-go-live.md` | pack.store-address | **port** | Pack-owned durable/capability path (docs/orchestrator-autoloop-go-live.md) |
-| `AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE` | `scripts/lib/Get-ProcessCommandLine.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Get-ProcessCommandLine.ps1) |
-| `AO_WAKE_SUPERVISOR_PROJECT_ID` | `scripts/lib/orchestrator-side-process-observer.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/orchestrator-side-process-observer.ts, scripts/orchestrator-wake-supervisor-test-child.ps1, docs/orchestrator-autoloop-go-live.md) |
-| `AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack-owned durable/capability path (docs/migration_notes.md) |
-| `AO_WAKE_SUPERVISOR_SESSION_GLITCH_POLLS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack-owned durable/capability path (docs/migration_notes.md) |
-| `AO_WAKE_SUPERVISOR_START_HANDOFF_TIMEOUT_SEC` | `scripts/lib/Orchestrator-WakeSupervisorLease.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-WakeSupervisorLease.ps1, docs/migration_notes.md) |
-| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/review-delivery.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-delivery.test.ts, scripts/_test-vitest-harness-env.ts, scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/OpkVitestStoreIsolation.ps1, scripts/lib/Set-OpkVitestHarnessEnv.ps1) |
-| `AO_WAKE_SUPERVISOR_STATUS_FAILURE` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1, scripts/fixtures/orchestrator-wake-supervisor/ao-stub.sh, scripts/fixtures/orchestrator-wake-supervisor/ao-stub.ps1) |
-| `AO_WAKE_SUPERVISOR_TERMINAL_REARM_GRACE_SECONDS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1) |
-| `AO_WAKE_SUPERVISOR_TERMINAL_REARM_MAX_ATTEMPTS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1) |
-| `AO_WAKE_SUPERVISOR_TERMINAL_REARM_TTL_SECONDS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1) |
-| `AO_WAKE_SUPERVISOR_TEST_ERROR_UNTIL_MS` | `scripts/orchestrator-wake-supervisor-test-child.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/orchestrator-wake-supervisor-test-child.ps1) |
-| `AO_WAKE_SUPERVISOR_TEST_FAST_STOP` | `scripts/supervisor-recovery.test-helpers.ts` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/supervisor-recovery.test-helpers.ts) |
-| `AO_WAKE_SUPERVISOR_TEST_MARKER_DIR` | `scripts/lib/Invoke-TestModeFleetReaper.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/lib/Invoke-TestModeFleetReaper.ps1, scripts/lib/Orchestrator-FleetHygiene.ps1, scripts/orchestrator-wake-supervisor-test-child.ps1) |
-| `AO_WAKE_SUPERVISOR_TEST_PROMPT_BLOCK_DELAY_MS` | `scripts/orchestrator-wake-supervisor-test-child.ps1` | n/a (test/harness-only) | **shed** | §7.2 non-consumer exclusion (scripts/orchestrator-wake-supervisor-test-child.ps1) |
-| `AO_WAKE_SUPERVISOR_WAIT_SECONDS` | `docs/orchestrator-autoloop-go-live.md` | pack.store-address | **port** | Pack-owned durable/capability path (docs/orchestrator-autoloop-go-live.md) |
-| `AO_WORKER_ITERATION_BRANCH_PATTERN` | `docs/dead-worker-reconciler.d.mts` | pack.config | **port** | Pack reader; obligation survives migration (docs/dead-worker-reconciler.d.mts, docs/dead-worker-reconciler.mjs) |
-| `AO_WORKER_MESSAGE_ADOPTION_BRANCH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1, scripts/journaled-worker-send.ps1) |
-| `AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1, scripts/lib/Get-WorkerMessageAdoptionBinding.ps1, scripts/journaled-worker-send.ps1, scripts/worker-message-submit-reconcile.test.ts) |
-| `AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1, scripts/journaled-worker-send.ps1) |
-| `AO_WORKER_MESSAGE_ADOPTION_EPOCH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1, scripts/lib/Get-WorkerMessageAdoptionBinding.ps1, scripts/journaled-worker-send.ps1, scripts/worker-message-submit-reconcile.test.ts) |
-| `AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1, scripts/journaled-worker-send.ps1) |
-| `AO_WORKER_MESSAGE_ADOPTION_PROBE` | `scripts/invoke-gated-worker-nudge.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/invoke-gated-worker-nudge.ps1, scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1, scripts/journaled-worker-send.ps1) |
-| `AO_WORKER_MESSAGE_ADOPTION_PROBE_V1` | `scripts/invoke-gated-worker-nudge.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/invoke-gated-worker-nudge.ps1, scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1, scripts/journaled-worker-send.ps1) |
-| `AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1, scripts/journaled-worker-send.ps1) |
-| `AO_WORKER_MESSAGE_ADOPTION_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/pr2a/planning-manifest.json, scripts/vitest-live-store-preload.mjs) |
-| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/review-delivery.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/review-delivery.test.ts, scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Record-WorkerMessageDispatch.ps1, scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1, scripts/lib/Set-OpkVitestHarnessEnv.ps1) |
-| `AO_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS` | `scripts/worker-message-submit-reconcile.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/worker-message-submit-reconcile.ps1, docs/orchestrator-recovery-runbook.md, docs/migration_notes.md) |
-| `AO_WORKER_MESSAGE_SUBMIT_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/vitest-live-store-inventory.json, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/lib/Ci-Red-Watchdog-Worker.ps1, scripts/worker-message-submit-reconcile.ps1, scripts/pr2a/planning-manifest.json) |
-| `AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS` | `scripts/pr2-foundation/worker-notification-compat.test.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/pr2-foundation/worker-notification-compat.test.ts, scripts/pr2-foundation/journal-lock.ts) |
-| `AO_WORKER_NUDGE_CLAIM_DIR` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/_test-pwsh-helpers.ts, scripts/vitest-live-store-inventory.json, scripts/lib/Worker-NudgeClaim.ps1, scripts/lib/vitest-live-store-harness.mjs, scripts/pr2a/planning-manifest.json, scripts/pr2-foundation/worker-nudge-claim-store.ts) |
-| `AO_WORKER_NUDGE_CLAIM_LEASE_MS` | `scripts/lib/Worker-NudgeClaim.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Worker-NudgeClaim.ps1, scripts/pr2-foundation/worker-nudge-claim-store.ts) |
-| `AO_WORKER_NUDGE_CLAIM_STALE_MINUTES` | `scripts/lib/Worker-NudgeClaim.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Worker-NudgeClaim.ps1, scripts/pr2-foundation/worker-nudge-claim-store.ts) |
-| `AO_WORKER_RECOVERY_BRANCH_OBSERVATION_TTL_SECONDS` | `scripts/lib/Worker-RecoveryBranchCleanup.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Worker-RecoveryBranchCleanup.ps1) |
-| `AO_WORKER_RECOVERY_CLAIM_STALE_MINUTES` | `scripts/lib/Worker-RecoveryClaim.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Worker-RecoveryClaim.ps1) |
-| `AO_WORKER_RECOVERY_DIR` | `scripts/lib/Worker-RecoveryClaim.ps1` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/lib/Worker-RecoveryClaim.ps1) |
-| `AO_WORKER_RECOVERY_MUTEX_STALE_SECONDS` | `scripts/lib/Worker-RecoveryClaim.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/lib/Worker-RecoveryClaim.ps1) |
-| `AO_WORKER_REPORT_DEBUG` | `scripts/pack-worker-report.ps1` | pack.config | **port** | Pack reader; obligation survives migration (scripts/pack-worker-report.ps1) |
-| `AO_WORKER_REPORT_STORE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/vitest-live-store-inventory.json, scripts/lib/worker-status-store.mjs, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/WorkerReportStore.ps1, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/lib/WorkerStatusStore.ps1) |
-| `AO_WORKER_SESSION_ID` | `scripts/pr-session-binding-cache.test.ts` | runtime.session-context | **port** | AO-runtime injected (scripts/pr-session-binding-cache.test.ts, scripts/lib/WorkerReportStore.ps1, scripts/estate-cut/task-311-tests/task-311-delivery.test-support.ts, scripts/estate-cut/task-311-tests/task-311-common.test-support.ts, scripts/vitest-live-store-preload.mjs, scripts/pack-worker-report.ps1) |
-| `AO_WORKER_STATUS_STORE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack-owned durable/capability path (scripts/vitest-live-store-inventory.json, scripts/lib/worker-status-store.mjs, scripts/lib/Worker-Recovery.ps1, scripts/lib/vitest-live-store-harness.mjs, scripts/lib/Set-OpkVitestHarnessEnv.ps1, scripts/lib/WorkerStatusStore.ps1) |
-| `AO_WRAPPER_SCRIPT` | `scripts/gh-wrapper.test.ts` | pack.config | **port** | Pack reader; obligation survives migration (scripts/gh-wrapper.test.ts) |
+| `AO_AGENT_ORCHESTRATOR_STATE_DIR` | `scripts/lib/Get-WorkerMessageAdoptionBinding.ps1` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_AGENT_ORCHESTRATOR_STATE_DIR` | `scripts/worker-message-submit-reconcile.test.ts` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_APP_STATE_PATH` | `scripts/pr2-foundation/worker-notification-target.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE` | `docs/issue_queue_index.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_AUTONOMOUS_SURFACE_BOOTSTRAP` | `docs/spawn-worktree-grant.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `docs/review-run-liveness.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/_test-pwsh-helpers.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/_test-vitest-harness-env.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/check-vitest-live-store-isolation.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/Autonomous-ClaimPrResumeGate.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/Autonomous-ReviewWorktreeGate.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/Autonomous-SpawnWorktreeGate.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/Invoke-AoCliJson.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/Journaled-WorkerSendInternalCapability.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/OpkVitestStoreIsolation.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/Orchestrator-ReviewStartAudit.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/review-start-claim-cli.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/vitest-live-store-parent-guard.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/Worker-NudgeAudit.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/Worker-NudgeClaim.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/Worker-Recovery.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/lib/Worker-RecoveryClaim.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/pack-review-runner-gpt.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/pack-review-runner-severity.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/pack-review-worker-notification.cases.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/pr2-foundation/review-4750643719-regression.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/pr2-foundation/worker-notification-compat.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/pr2-foundation/worker-notification-target.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/pr2-foundation/worker-nudge-claim-store.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/pr2a/planning-manifest.json` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/review-start-claim-run-binding.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/review-start-claim.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/vitest-live-store-inventory.json` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE` | `scripts/vitest-live-store-preload.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `docs/review-run-liveness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/_test-vitest-harness-env.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/check-vitest-live-store-isolation.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/Autonomous-ClaimPrResumeGate.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/Autonomous-ReviewWorktreeGate.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/Autonomous-SpawnWorktreeGate.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/Invoke-AoCliJson.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/Journaled-WorkerSendInternalCapability.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/OpkVitestStoreIsolation.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/Orchestrator-ReviewStartAudit.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/review-start-claim-cli.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/Worker-NudgeAudit.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/Worker-NudgeClaim.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/Worker-Recovery.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/lib/Worker-RecoveryClaim.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/pack-review-runner-gpt.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/pack-review-runner-severity.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/pack-review-worker-notification.cases.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/pr2-foundation/review-4750643719-regression.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/pr2-foundation/worker-notification-compat.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/pr2-foundation/worker-notification-target.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/pr2-foundation/worker-nudge-claim-store.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/review-start-claim-run-binding.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BASE_DIR` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BINARY` | `scripts/lib/OpkVitestChildProcessEnv.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BINARY` | `scripts/run-vitest-with-harness.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_BINARY` | `scripts/vitest-live-store-preload.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CHAIN_ID` | `docs/vitest-light-lane-isolation-audit-874.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CHAIN_ID` | `plugins/ao-token-chain-ledger/lib/writer.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CHAIN_ID` | `plugins/ao-token-chain-ledger/README.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CHAIN_ID` | `plugins/ao-token-chain-ledger/tests/writer.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CHAIN_TASK_ID` | `plugins/ao-token-chain-ledger/lib/writer.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CHILD_GENERATION` | `scripts/lib/review-start-claim-cli.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CHILD_GENERATION` | `scripts/lib/Review-StartClaimLifecycle.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CHILD_GENERATION` | `scripts/lib/Worker-RecoveryClaim.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_FAILURE_NOTIFICATION_STORE` | `agent-orchestrator.yaml.example` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_FAILURE_NOTIFICATION_STORE` | `scripts/lib/Ci-Failure-Notification-Common.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_FAILURE_PROGRESS_FRESHNESS_MS` | `docs/ci-failure-notification.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_FAILURE_PROGRESS_FRESHNESS_MS` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_GREEN_WAKE_RECONCILE_INTERVAL_MINUTES` | `agent-orchestrator.yaml.example` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_GREEN_WAKE_RECONCILE_INTERVAL_MINUTES` | `scripts/ci-green-wake-reconcile.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_GREEN_WAKE_RECONCILE_STATE` | `agent-orchestrator.yaml.example` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_GREEN_WAKE_RECONCILE_STATE` | `scripts/ci-green-wake-reconcile.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_GREEN_WAKE_RECONCILE_STATE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_GREEN_WAKE_RECONCILE_STATE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_GREEN_WAKE_RECONCILE_STATE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_GREEN_WAKE_RECONCILE_STATE` | `scripts/review-trigger-reconcile.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_GREEN_WAKE_RECONCILE_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_GREEN_WAKE_RECONCILE_STATE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_RED_WATCHDOG_INACTIVITY_MS` | `scripts/lib/Ci-Red-Watchdog.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_RED_WATCHDOG_MAX_ATTEMPTS` | `scripts/lib/Ci-Red-Watchdog.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_RED_WATCHDOG_STATE_DIR` | `scripts/ci-red-watchdog-lookup-retention.Tests.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_RED_WATCHDOG_STATE_DIR` | `scripts/lib/ci-red-watchdog-ledger.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CI_RED_WATCHDOG_STATE_DIR` | `scripts/lib/Ci-Red-Watchdog.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CLAIMED_REVIEW_RUN_BYPASS` | `docs/orchestrator-claimed-review-run.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CLAIMED_REVIEW_RUN_BYPASS` | `scripts/lib/Autonomous-ReviewWorktreeGate.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CLAIMED_REVIEW_RUN_BYPASS` | `scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS` | `docs/migration_notes.md` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/README.md` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_PROMPT_FILE` | `plugins/ao-codex-pr-reviewer/lib/prompt.ts` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_PROMPT_FILE` | `scripts/harness-review-bridge.ts` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_PROMPT_FILE` | `scripts/run-pack-review-claude.ps1` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_SKIP_GH` | `plugins/ao-codex-pr-reviewer/lib/scope_context.ts` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_SOFT_DEADLINE_MS` | `docs/migration_notes.md` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_SOFT_DEADLINE_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_TEST_BUDGET_MS` | `docs/migration_notes.md` | plugin.tuning | **shed** | §7.2 test/harness-only |
+| `AO_CODEX_REVIEW_TEST_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | plugin.tuning | **shed** | §7.2 test/harness-only |
+| `AO_CODEX_REVIEW_TEST_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts` | plugin.tuning | **shed** | §7.2 test/harness-only |
+| `AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX` | `docs/migration_notes.md` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX` | `docs/reviewer-failure-evidence-markers.mjs` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_CODEX_REVIEW_TIMEOUT_RETRY_MAX` | `scripts/pr2-foundation/terminalized/reviewer-failure-evidence-markers.ts` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_COMMAND` | `docs/pr-session-binding-cache.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DAEMON_BASE_URL` | `.github/workflows/harness-pn-live-smoke.yml` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DAEMON_BASE_URL` | `scripts/check-harness-post-submit-pn-live-smoke.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DAEMON_BASE_URL` | `scripts/lib/Invoke-AoReviewApi.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DAEMON_URL` | `(no reader in corpus)` | n/a | **shed** | §7.1 mention-only / no reader in declared corpus |
+| `AO_DATA` | `.claude/skills/merge-with-local-adoption/SKILL.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DEAD_WORKER_EFFECTIVE_RUNTIME_POLICY` | `scripts/dead-worker-reconcile.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DEAD_WORKER_GH_CLOSED_RAW_FIXTURE` | `scripts/dead-worker-reconcile.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_DEAD_WORKER_GH_MERGED_RAW_FIXTURE` | `scripts/dead-worker-reconcile.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_DEAD_WORKER_LIVE_PAYLOAD_FIXTURE` | `scripts/dead-worker-reconcile.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_DEAD_WORKER_OPEN_PRS_FIXTURE` | `scripts/dead-worker-reconcile.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_DEAD_WORKER_RECONCILE_STATE` | `agent-orchestrator.yaml.example` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DEAD_WORKER_RECONCILE_STATE` | `scripts/clear-dead-worker-reconcile-quarantine.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DEAD_WORKER_RECONCILE_STATE` | `scripts/dead-worker-reconcile.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DEAD_WORKER_RECONCILE_STATE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DEAD_WORKER_RECONCILE_STATE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DEAD_WORKER_RECONCILE_STATE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DEAD_WORKER_RECONCILE_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DEAD_WORKER_RECONCILE_STATE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DEAD_WORKER_RESPAWN_POLICY_FIXTURE` | `scripts/dead-worker-reconcile.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_DELIVERY_RUN_ID` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DELIVERY_RUN_ID` | `scripts/lib/WorkerReportStore.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DIRECT_EDIT_REASON` | `docs/vitest-light-lane-isolation-audit-874.md` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DIRECT_EDIT_REASON` | `scripts/guard-direct-edit.mjs` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DRAFT_AUTHOR` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DRAFT_AUTHOR` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DRAFT_AUTHOR` | `scripts/guard-direct-edit.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DRAFT_AUTHOR_FALLBACK_REASON` | `docs/migration_notes.md` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DRAFT_AUTHOR_FALLBACK_REASON` | `docs/vitest-light-lane-isolation-audit-874.md` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_DRAFT_AUTHOR_FALLBACK_REASON` | `scripts/guard-direct-edit.mjs` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_FORCE_HEALTH_FAILURE` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_FORCE_HEALTH_FAILURE` | `scripts/lib/Orchestrator-Escalation.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_FORCE_HEALTH_FAILURE` | `scripts/orchestrator-escalation.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_FORCE_INBOX_FAILURE` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_FORCE_INBOX_FAILURE` | `scripts/lib/Orchestrator-Escalation.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_FORCE_INBOX_FAILURE` | `scripts/orchestrator-escalation.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_FORCE_SEND_FAILURE` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_FORCE_SEND_FAILURE` | `scripts/lib/Orchestrator-Escalation.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_FORCE_SEND_FAILURE` | `scripts/orchestrator-escalation-router.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_FORCE_SEND_FAILURE` | `scripts/orchestrator-escalation.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_HEALTH_SPOOL` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_HEALTH_SPOOL` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_HEALTH_SPOOL` | `scripts/_test-vitest-harness-env.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_HEALTH_SPOOL` | `scripts/lib/Orchestrator-Escalation.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_HEALTH_SPOOL` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_HEALTH_SPOOL` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_HEALTH_SPOOL` | `scripts/lib/vitest-pre-topology-measurement.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_HEALTH_SPOOL` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_HEALTH_SPOOL` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_HEALTH_SPOOL` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ESCALATION_HEALTH_SPOOL` | `scripts/vitest-surviving-store-isolation.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_ALERT_FILE` | `docs/cursor-agent-tui-shim-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_ALERT_FILE` | `docs/fleet-hygiene-sentinel-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_ALERT_FILE` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_ALERT_FILE` | `scripts/lib/Cursor-Agent-TuiShim.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_ALERT_FILE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_ALIVE_PIDS_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_FLEET_HYGIENE_DUPLICATE_LOG_STORM_MIN` | `docs/fleet-hygiene-sentinel-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_DUPLICATE_LOG_STORM_MIN` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_FORCE_UNSUPPORTED_PLATFORM` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_KILL_ENABLE` | `docs/examples/fleet-hygiene-sentinel.systemd.timer.example` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_KILL_ENABLE` | `docs/fleet-hygiene-sentinel-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_KILL_ENABLE` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_KILL_ENABLE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_KILL_LOG_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_FLEET_HYGIENE_MAX_PWSH_COUNT` | `docs/fleet-hygiene-sentinel-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_MAX_PWSH_COUNT` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_MAX_PWSH_COUNT` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_MAX_SUPERVISOR_LOG_BYTES` | `docs/fleet-hygiene-sentinel-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_MAX_SUPERVISOR_LOG_BYTES` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB` | `docs/fleet-hygiene-sentinel-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_MAX_SUPERVISOR_RSS_KB` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_MOCK_KILL` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_PROCESS_ENV_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_FLEET_HYGIENE_PROCESS_RSS_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_FLEET_HYGIENE_PWSH_COUNT_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_FLEET_HYGIENE_PWSH_PIDS_FIXTURE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_FLEET_HYGIENE_SKIP_SINGLETON` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_FLEET_HYGIENE_STATUS_EXIT_CODE` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_GH_COMMAND` | `docs/pr-session-binding-cache.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_HARNESS_REVIEW_SUBMIT_BIN` | `scripts/harness-review-bridge.ts` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_HARNESS_REVIEW_SUBMIT_CAPTURE_FILE` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_HARNESS_REVIEW_SUBMIT_CAPTURE_FILE` | `scripts/harness-review-bridge.ts` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_HEAD_SHA` | `docs/pr-session-binding-cache.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_HEAD_SHA` | `scripts/lib/WorkerReportStore.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_HEAD_SHA` | `scripts/orchestrator-review-start-preflight.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_HEAD_SHA` | `scripts/pack-worker-report.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_ID` | `docs/pr-session-binding-cache.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_ID` | `plugins/ao-codex-pr-reviewer/lib/scope_context.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_ID` | `scripts/lib/Get-AutoReviewPrContext.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `.claude/skills/direct-fix-checklist/SKILL.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `docs/pr-session-binding-cache.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `docs/target_repo_setup.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `plugins/ao-codex-pr-reviewer/lib/review_cli.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `plugins/ao-codex-pr-reviewer/lib/scope_context.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `plugins/ao-codex-pr-reviewer/README.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `plugins/ao-scope-guard/bin/scope-check.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `plugins/ao-scope-guard/hooks/pre-commit` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `plugins/ao-scope-guard/hooks/pre-commit.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `plugins/ao-scope-guard/README.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `scripts/install-git-hooks.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `scripts/lib/Get-AutoReviewPrContext.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ISSUE_NUMBER` | `scripts/lib/Review-CycleCap.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ITERATION_ID` | `plugins/ao-token-chain-ledger/lib/writer.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_JOURNALED_SEND_ARGV_CEILING_CHARS` | `scripts/journaled-worker-send.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_JOURNALED_SEND_ASSUME_CONTRACT` | `scripts/journaled-worker-send.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_JOURNALED_SEND_ASSUME_CONTRACT` | `scripts/pack-review-worker-notification.cases.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_JOURNALED_SEND_ASSUME_CONTRACT` | `scripts/pr2-foundation/review-4750643719-regression.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_JOURNALED_SEND_ASSUME_CONTRACT` | `scripts/pr2-foundation/worker-notification.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_JOURNALED_SEND_CAPABILITY_TEST_FIXTURE` | `scripts/lib/Journaled-WorkerSendInternalCapability.ps1` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_JOURNALED_SEND_INTERNAL` | `docs/worker-nudge-gate.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_JOURNALED_SEND_INTERNAL` | `scripts/journaled-worker-send.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_JOURNALED_SEND_INTERNAL` | `scripts/lib/Journaled-WorkerSendInternalCapability.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_JOURNALED_SEND_INTERNAL` | `scripts/worker-message-submit-reconcile.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_LOG` | `scripts/pack-review-worker-notification.cases.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS` | `scripts/lib/MechanicalReconcileNode.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS` | `scripts/worker-message-submit-reconcile.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_MECHANICAL_TRANSPORT_TEMP` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_MECHANICAL_TRANSPORT_TEMP` | `scripts/_test-vitest-harness-env.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_MECHANICAL_TRANSPORT_TEMP` | `scripts/lib/MechanicalReconcileNode.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_MECHANICAL_TRANSPORT_TEMP` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_MECHANICAL_TRANSPORT_TEMP` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_MECHANICAL_TRANSPORT_TEMP` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_MECHANICAL_TRANSPORT_TEMP` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_MECHANICAL_TRANSPORT_TEMP` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_MECHANICAL_TRANSPORT_TEMP` | `scripts/worker-message-submit-reconcile.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_NUDGE_GATE_UNRESOLVED_ESCALATE_COUNT` | `docs/worker-nudge-gate.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_NUDGE_GATE_UNRESOLVED_ESCALATE_MS` | `docs/worker-nudge-gate.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_OPERATOR_ESCALATION_INBOX` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_OPERATOR_ESCALATION_INBOX` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_OPERATOR_ESCALATION_INBOX` | `scripts/_test-vitest-harness-env.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_OPERATOR_ESCALATION_INBOX` | `scripts/lib/Orchestrator-Escalation.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_OPERATOR_ESCALATION_INBOX` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_OPERATOR_ESCALATION_INBOX` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_OPERATOR_ESCALATION_INBOX` | `scripts/lib/vitest-pre-topology-measurement.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_OPERATOR_ESCALATION_INBOX` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_OPERATOR_ESCALATION_INBOX` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_OPERATOR_ESCALATION_INBOX` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_OPERATOR_ESCALATION_INBOX` | `scripts/vitest-surviving-store-isolation.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_HEALTH_SPOOL` | `scripts/orchestrator-escalation-router.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_OPERATOR_INBOX` | `scripts/orchestrator-escalation-router.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/_test-vitest-harness-env.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/lib/Orchestrator-Escalation.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/lib/vitest-pre-topology-measurement.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/orchestrator-escalation-router.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/test-harness-escalation-env.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_ESCALATION_STATE` | `scripts/vitest-surviving-store-isolation.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_SESSION_ID` | `.claude/skills/merge-with-local-adoption/SKILL.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_SESSION_ID` | `docs/migration_notes.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_SESSION_ID` | `docs/orchestrator-autoloop-go-live.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_SESSION_ID` | `scripts/lib/Orchestrator-Escalation.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_SESSION_ID` | `scripts/orchestrator-diagnose.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_SESSION_ID` | `scripts/orchestrator-wake-common.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_SESSION_ID` | `scripts/orchestrator-wake-supervisor-test-child.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_SESSION_ID` | `scripts/orchestrator-worktree-preflight.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_ORCHESTRATOR_SESSION_ID` | `scripts/wait-orchestrator-launch.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PARENT_SESSION_ID` | `docs/vitest-light-lane-isolation-audit-874.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PARENT_SESSION_ID` | `plugins/ao-token-chain-ledger/lib/writer.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PARENT_SESSION_ID` | `plugins/ao-token-chain-ledger/tests/writer.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PASTE_CHAR_THRESHOLD` | `docs/worker-message-dispatch-observe.d.mts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PASTE_CHAR_THRESHOLD` | `docs/worker-message-dispatch-observe.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PASTE_CHAR_THRESHOLD` | `scripts/pr2-foundation/terminalized/worker-message-dispatch-observe.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PASTE_CHAR_THRESHOLD` | `scripts/pr2-foundation/worker-dispatch-journal.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PASTE_CHAR_THRESHOLD` | `scripts/worker-message-submit-reconcile.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_HEAD_SHA` | `scripts/orchestrator-review-start-preflight.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_NUMBER` | `docs/migration_notes.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_NUMBER` | `docs/vitest-light-lane-isolation-audit-874.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_NUMBER` | `scripts/lib/Get-AutoReviewPrContext.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_NUMBER` | `scripts/lib/Review-CycleCap.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_NUMBER` | `scripts/lib/WorkerReportStore.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_NUMBER` | `scripts/orchestrator-review-start-preflight.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_NUMBER` | `scripts/pack-review-runner.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_NUMBER` | `scripts/pack-worker-report.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_NUMBER` | `scripts/run-pack-review-gpt.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `docs/pr-session-binding-cache.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `scripts/_test-pr-session-binding-cache-fixture.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `scripts/lib/WorkerStatusStore.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `scripts/pack-review-runner.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `scripts/pr-session-binding-cache.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `scripts/pr2a/planning-manifest.json` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `scripts/session-pr-binding-resolver.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `scripts/vitest-live-store-inventory.json` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `scripts/vitest-live-store-preload.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `tests/issue854-worker-status-binding-cache.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR_SESSION_BINDING_CACHE` | `tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PR856_TEST_LOG` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_PR856_TEST_MODE` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_PROJECT` | `docs/ao-0-10-review-api.d.mts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `docs/ao-0-10-review-api.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `docs/pr-session-binding-cache.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `docs/vitest-light-lane-isolation-audit-874.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `scripts/bound-issue-snapshot-cli.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `scripts/invoke-contract-evidence-reverify.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `scripts/lib/Autonomous-ReviewWorktreeGate.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `scripts/lib/Autonomous-SpawnWorktreeGate.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `scripts/lib/reverify-bound-issue-snapshot.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `scripts/lib/WorkerReportStore.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `scripts/pr-session-binding-cache.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT` | `scripts/review-start-claim-run-binding.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_CONFIG_PATH` | `docs/ao-0-10-review-api.d.mts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_CONFIG_PATH` | `docs/ao-0-10-review-api.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_CONFIG_PATH` | `scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_ID` | `docs/pr-session-binding-cache.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_ID` | `docs/vitest-light-lane-isolation-audit-874.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_ID` | `scripts/bound-issue-snapshot-cli.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_ID` | `scripts/invoke-contract-evidence-reverify.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_ID` | `scripts/lib/Autonomous-ReviewWorktreeGate.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_ID` | `scripts/lib/Autonomous-SpawnWorktreeGate.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_ID` | `scripts/lib/reverify-bound-issue-snapshot.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_ID` | `scripts/lib/WorkerReportStore.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_ID` | `scripts/pr-session-binding-cache.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PROJECT_ID` | `scripts/review-start-claim-run-binding.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PUBLISH_FALLBACK` | `.claude/skills/publish-issue-draft/SKILL.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_PWSH_BINARY` | `scripts/_resolve-pwsh.sh` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REAL_BINARY` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REAL_BINARY` | `scripts/_test-git-fixture.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPO_SLUG` | `docs/pr-session-binding-cache.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPO_SLUG` | `docs/vitest-light-lane-isolation-audit-874.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPO_SLUG` | `scripts/lib/worker-status-store.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPO_SLUG` | `scripts/lib/WorkerReportStore.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPO_SLUG` | `scripts/pack-worker-report.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPO_SLUG` | `scripts/pr-session-binding-cache.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPO_SLUG` | `tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_FIXTURE_STEP_DELAY_MS` | `scripts/lib/Review-ReadyReportStateSeedProgress.ps1` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_REPORT_STATE_SEED_GITHUB_REFRESH_SECONDS` | `scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `docs/pr-session-binding-cache.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `docs/worker-report-store.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/lib/Record-ReviewReadyReportStateSeed.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/lib/Worker-Recovery.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/lib/worker-status-store.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/lib/WorkerReportStore.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/lib/WorkerStatusStore.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/pack-review-runner.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/pr2-foundation/terminalized/worker-report-store.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REPORT_STATE_SEED_STATE` | `tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_BUDGET_STARTED_MS` | `plugins/ao-codex-pr-reviewer/bin/command-guard/guard-lib.sh` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_BUDGET_STARTED_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_BUDGET_STARTED_MS` | `plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_ATTEMPT_CEILING_MS` | `docs/review-start-claim-lifecycle.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `scripts/cutover/issue-928.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `scripts/estate-cut/task-311-tests/task-311-claim.test-support.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `scripts/estate-cut/task-311-tests/task-311-common.test-support.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `scripts/lib/review-start-claim-cli.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `scripts/run-review-ready-seed-revalidation-fixture.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_DIR` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_HOLD_BUDGET_MS` | `docs/review-start-claim-lifecycle.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_LAUNCH_PENDING_BUDGET_MS` | `docs/review-start-claim-lifecycle.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_MUTEX_STALE_SECONDS` | `scripts/lib/review-start-claim-cli.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_MUTEX_STALE_SECONDS` | `scripts/lib/review-start-claim-store.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_MUTEX_STALE_SECONDS` | `scripts/pr2a/final-conformance.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_MUTEX_STALE_SECONDS` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_READINESS_ENVELOPE_MS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_READINESS_ENVELOPE_MS` | `docs/review-start-claim-lifecycle.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_READINESS_ENVELOPE_MS` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_READINESS_ENVELOPE_MS` | `scripts/review-start-claim-lifecycle.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_REAPER_PERIOD_SECONDS` | `docs/review-start-claim-lifecycle.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_REAPER_PERIOD_SECONDS` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_REAPER_PERIOD_SECONDS` | `scripts/review-start-claim-lifecycle.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_STALE_MINUTES` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_STALE_MINUTES` | `scripts/lib/review-start-claim-cli.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_STALE_MINUTES` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_TERMINAL_COUNT` | `scripts/lib/review-start-claim-cli.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_TERMINAL_COUNT` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_TERMINAL_RETENTION` | `scripts/lib/review-start-claim-cli.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_TEST_STALE_BARRIER_DIR` | `scripts/lib/review-start-claim-store.ts` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_REVIEW_CLAIM_TEST_STALE_BARRIER_DIR` | `scripts/pr2a/final-conformance.test.ts` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_REVIEW_CLAIM_VISIBILITY_BUDGET_MS` | `docs/review-start-claim-lifecycle.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_CLAIM_VISIBILITY_BUDGET_MS` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_DEGRADED_CI_MAX_ATTEMPTS` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_DEGRADED_CI_MAX_ATTEMPTS` | `docs/review-head-ready.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_DEGRADED_CI_MAX_ATTEMPTS` | `scripts/pr2-foundation/terminalized/review-head-ready.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_DELIVERY_CONFIRM_INTERVAL_MINUTES` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_DELIVERY_CONFIRM_MAX_REDELIVERIES` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_DELIVERY_CONFIRM_STATE` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_DELIVERY_CONFIRM_WINDOW_MINUTES` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_DELIVERY_TERMINAL_RETENTION_DAYS` | `docs/review-delivery-lifecycle.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_EFFECTIVE_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/bin/command-guard/guard-lib.sh` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_EFFECTIVE_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_EFFECTIVE_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAIL_STALE_PATH` | `docs/review-stuck-run-reaper.d.mts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAIL_STALE_SURFACE` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAILURE_EVIDENCE_DEBUG` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAILURE_EVIDENCE_DEBUG` | `scripts/invoke-pack-review.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT` | `docs/reviewer-failure-evidence.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT` | `scripts/lib/Review-FailureEvidence.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAILURE_EVIDENCE_OUTPUT_TAIL_LIMIT` | `scripts/review-failure-evidence.Tests.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT` | `docs/reviewer-failure-evidence.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_FAILURE_EVIDENCE_SUMMARY_TAIL_LIMIT` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE` | `scripts/lib/Record-ReviewHandoffWakeAdmission.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_HANDOFF_WAKE_ADMISSION_STATE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_HARD_DEADLINE_MS` | `plugins/ao-codex-pr-reviewer/bin/command-guard/guard-lib.sh` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_HARD_DEADLINE_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_HARD_DEADLINE_MS` | `plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_LIST_PATH` | `docs/ao-0-10-review-api.d.mts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_LIST_PATH` | `docs/ao-0-10-review-api.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_LIST_PATH` | `scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_LIVENESS_DEBUG` | `scripts/invoke-pack-review.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_READY_STUCK_GRACE_MINUTES` | `agent-orchestrator.yaml.example` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_READY_STUCK_GRACE_MINUTES` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_READY_STUCK_GRACE_MINUTES` | `docs/orchestrator-recovery-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_READY_STUCK_GRACE_MINUTES` | `docs/review-ready-stuck-guard.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_READY_STUCK_GRACE_MINUTES` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_READY_STUCK_GRACE_MINUTES` | `scripts/review-ready-stuck-guard.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_RECOVERY_AMBIGUOUS_STALE_MS` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_RECOVERY_AMBIGUOUS_STALE_MS` | `docs/review-run-liveness.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_RECOVERY_CRASH_GRACE_MS` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_RECOVERY_CRASH_GRACE_MS` | `docs/review-run-liveness.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_RECOVERY_MAX_REVIEW_DURATION_MS` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_RECOVERY_MAX_REVIEW_DURATION_MS` | `docs/review-run-liveness.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_RUN_ID` | `scripts/estate-cut/task-311-tests/task-311-delivery.test-support.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_RUN_ID` | `scripts/lib/WorkerReportStore.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_RUN_ID` | `scripts/pack-review-runner.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_SEND_RECONCILE_INTERVAL_MINUTES` | `docs/orchestrator-recovery-runbook.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_SEND_RECONCILE_STATE` | `docs/orchestrator-recovery-runbook.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_SOFT_DEADLINE_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_CLAIM_STALE_MINUTES` | `scripts/lib/review-start-claim-cli.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_CONSECUTIVE_FAILURE_ESCALATE_THRESHOLD` | `scripts/lib/Review-StartEnvelopeLedger.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_GH_CALL_COUNT` | `scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_GH_SCENARIO` | `scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_HEAD_SHA` | `scripts/orchestrator-review-start-preflight.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_MONOTONIC_NOW_MS` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_MONOTONIC_NOW_MS` | `docs/review-start-envelope-external-io.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_MONOTONIC_NOW_MS` | `scripts/estate-cut/task-311-tests/task-311-claim.test-support.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_MONOTONIC_NOW_MS` | `scripts/estate-cut/task-311-tests/task-311-common.test-support.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_MONOTONIC_NOW_MS` | `scripts/lib/Review-StartEnvelopeExternalIo.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_PR_NUMBER` | `scripts/orchestrator-review-start-preflight.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_PREFLIGHT_SHIELD_CAPTURE_TIMEOUT_MS` | `scripts/lib/Review-StartPreflightShield.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_PREFLIGHT_SHIELD_JITTER_MS` | `scripts/lib/Review-StartPreflightShield.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_PREFLIGHT_SHIELD_MAX_ATTEMPTS` | `scripts/lib/Review-StartPreflightShield.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_PREFLIGHT_SHIELD_WALL_CLOCK_BUDGET_MS` | `scripts/lib/Review-StartPreflightShield.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_RUN_ID` | `scripts/lib/WorkerReportStore.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_COMMAND` | `scripts/_test-pwsh-helpers.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_COMMAND` | `scripts/lib/Gh-PrChecks.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_FAIL_UNTIL_ATTEMPT` | `scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_HEAD_SHA` | `scripts/_test-pwsh-helpers.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_HEAD_SHA` | `scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_HEAD_SHA` | `scripts/lib/Review-StartPreflightShield.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_HEAD_SHA_A` | `scripts/_test-pwsh-helpers.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_HEAD_SHA_A` | `scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_HEAD_SHA_B` | `scripts/_test-pwsh-helpers.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_HEAD_SHA_B` | `scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_SCENARIO` | `scripts/_test-pwsh-helpers.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_SCENARIO` | `scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_STATE_FILE` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SCOPED_GH_STATE_FILE` | `scripts/fixtures/review-start-scoped-gh-json-capture/fake-gh-scenario.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SUPERVISED_GH_COMMAND` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_SUPERVISED_GH_COMMAND` | `scripts/lib/Review-StartSupervisedGh.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_START_TEST_CHILD_PID_FILE` | `scripts/fixtures/review-start-envelope-external-io/steal-claim-then-hang.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_REVIEW_START_TEST_CLAIM_PATH` | `scripts/fixtures/review-start-envelope-external-io/steal-claim-then-hang.ps1` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_REVIEW_START_TEST_DELAY_BEFORE_PID_UPDATE_MS` | `scripts/lib/Review-StartSupervisedGh.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_REVIEW_START_WRAPPER_CHILD_PID_FILE` | `scripts/fixtures/review-start-envelope-external-io/fake-gh-scenario.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_SUBCOMMANDS` | `docs/ao-0-10-review-api.d.mts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_SUBCOMMANDS` | `docs/ao-0-10-review-api.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_SUBCOMMANDS` | `scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TEST_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/bin/command-guard/guard-lib.sh` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_REVIEW_TEST_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_REVIEW_TEST_BUDGET_MS` | `plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_REVIEW_TRIGGER_PATH` | `docs/ao-0-10-review-api.d.mts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_PATH` | `docs/ao-0-10-review-api.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_PATH` | `scripts/pr2-foundation/terminalized/ao-0-10-review-api.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES` | `agent-orchestrator.yaml.example` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES` | `docs/orchestrator-recovery-runbook.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_INTERVAL_MINUTES` | `scripts/review-trigger-reconcile.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_STATE` | `agent-orchestrator.yaml.example` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_STATE` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_STATE` | `scripts/lib/Invoke-ReviewWakeTrigger.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_STATE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_STATE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_STATE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_STATE` | `scripts/review-trigger-reconcile.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_RECONCILE_STATE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE` | `scripts/lib/Record-ReviewTriggerReevalWatch.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_REVIEW_TRIGGER_REEVAL_WATCH_STATE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SANCTIONED_WORKER_KILL_RECORD_PATH` | `scripts/json-producers/sanctioned-worker-kill-record.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SANCTIONED_WORKER_KILL_RECORD_PATH` | `scripts/lib/Sanctioned-Worker-Kill-Record.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCOPE_GUARD_BYPASS` | `docs/target_repo_setup.md` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCOPE_GUARD_BYPASS` | `plugins/ao-scope-guard/hooks/pre-commit.ps1` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCOPE_GUARD_BYPASS` | `plugins/ao-scope-guard/README.md` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCOPE_GUARD_SKIP_GH` | `plugins/ao-scope-guard/lib/denylist.ts` | plugin.tuning | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_DELIVERY_DEBUG` | `scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS` | `docs/orchestrator-recovery-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS` | `docs/scripted-review-confirmed-delivery-gate.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS` | `scripts/check-scripted-review-confirmed-delivery-gate.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_DELIVERY_POLL_INTERVAL_SECONDS` | `scripts/scripted-review-confirmed-delivery-gate.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS` | `docs/orchestrator-recovery-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS` | `docs/scripted-review-confirmed-delivery-gate.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS` | `scripts/check-scripted-review-confirmed-delivery-gate.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_DELIVERY_POLL_WINDOW_SECONDS` | `scripts/scripted-review-confirmed-delivery-gate.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_SKIP_POST_SUBMIT_DELIVERY` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_SKIP_POST_SUBMIT_DELIVERY` | `scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS` | `docs/scripted-review-post-submit-delivery.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SCRIPTED_REVIEW_SUBMIT_VISIBILITY_SECONDS` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SEND` | `docs/worker-message-dispatch-observe.d.mts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SEND` | `docs/worker-message-dispatch-observe.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SEND` | `scripts/_ao-send-0102-test-fixture.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SEND` | `scripts/pr2-foundation/terminalized/worker-message-dispatch-observe.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SEND` | `scripts/worker-message-submit-reconcile.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SEND_0102_HELP` | `scripts/_ao-send-0102-test-fixture.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SEND_0102_HELP` | `scripts/worker-message-submit-reconcile.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SEND_HELP_EOF` | `scripts/_ao-send-0102-test-fixture.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SEND_HELP_EOF` | `scripts/worker-message-submit-reconcile.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `.claude/skills/direct-fix-checklist/SKILL.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `.claude/skills/publish-issue-draft/opencode-publish.sh` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `.claude/skills/publish-issue-draft/SKILL.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `agent-orchestrator.yaml.example` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `AGENTS.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `docs/autonomous-shared-capabilities.json` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `docs/cursor-agent-tui-shim-runbook.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `docs/issue_queue_index.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `docs/orchestrator-claimed-review-run.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `docs/pr-session-binding-cache.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `docs/spawn-worktree-grant.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `docs/target_repo_setup.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `docs/vitest-light-lane-isolation-audit-874.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `docs/worker-nudge-gate.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-codex-pr-reviewer/lib/scope_context.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-codex-pr-reviewer/tests/review.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-scope-guard/lib/declaration_loader.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-scope-guard/README.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-scope-guard/tests/agent_wrap.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-scope-guard/tests/declaration_loader.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-scope-guard/tests/integration.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-task-declaration/bin/declare.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-task-declaration/lib/iteration.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-task-declaration/tests/iteration.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-token-chain-ledger/lib/writer.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-token-chain-ledger/README.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `plugins/ao-token-chain-ledger/tests/writer.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/_resolve-pwsh.sh` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/_test-git-fixture.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/cursor-agent-tui-shim.sh` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/estate-cut/task-311-tests/task-311-common.test-support.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/estate-cut/task-311-tests/task-311-delivery.test-support.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/lib/Cursor-Agent-TuiShim.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/lib/Get-AutoReviewPrContext.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/lib/gh-governor.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/lib/Orchestrator-AutonomousBoundary.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/lib/Orchestrator-AutonomousReviewStartGate.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/lib/Orchestrator-AutonomousSpawnGate.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/lib/Record-WorkerMessageDispatch.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/lib/review-start-claim-cli.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/lib/Review-StartClaimLifecycle.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/lib/Worker-RecoveryClaim.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/lib/WorkerReportStore.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/pack-review-runner.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/pack-review-worker-notification.cases.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/pack-worker-report.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/pr2-foundation/review-4750643719-regression.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/pr2-foundation/worker-notification.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_ID` | `scripts/vitest-live-store-preload.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_INFO_JSON` | `docs/vitest-light-lane-isolation-audit-874.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_INFO_JSON` | `plugins/ao-token-chain-ledger/lib/session_cost.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_INFO_JSON` | `plugins/ao-token-chain-ledger/README.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_INFO_JSON` | `plugins/ao-token-chain-ledger/tests/writer.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_KEYS` | `scripts/pr2-foundation/binding.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_KEYS` | `scripts/pr2-foundation/mutation-semantic-gates.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SESSION_KIND` | `docs/merge-triage-gate.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SHELL` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SHELL` | `scripts/lib/Test-WorkerLaunchFailure.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_EFFECT_LOCK_MAX_AGE_MINUTES` | `scripts/lib/Orchestrator-SideEffectFence.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_EFFECT_LOCK_MAX_AGE_MINUTES` | `scripts/pr2-foundation/worker-nudge-claim-store.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_EFFECT_LOCK_MAX_AGE_MINUTES` | `scripts/run-review-ready-seed-liveness-fixture.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_AO_LIVENESS_SHIM_DISABLED` | `scripts/lib/Orchestrator-SideProcessProgress.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_CHILD_ID` | `docs/pr-session-binding-cache.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_CHILD_ID` | `scripts/gh` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_CHILD_ID` | `scripts/gh-wrapper.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_CHILD_ID` | `scripts/kernel/side-process-liveness.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_CHILD_ID` | `scripts/lib/gh-governor.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_CHILD_ID` | `scripts/lib/gh-wrapper.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_CHILD_ID` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_CHILD_ID` | `scripts/lib/Orchestrator-SideProcessProgress.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_HEALTH_DEGRADED_THRESHOLD` | `scripts/lib/Orchestrator-SideProcessHealth.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_HEALTH_RECOVERY_MAX_ATTEMPTS` | `scripts/lib/Orchestrator-SideProcessHealth.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_LIVENESS_ACTIVE` | `scripts/gh` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_LIVENESS_CLI` | `scripts/lib/Orchestrator-SideProcessProgress.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_NOW_MS` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_NOW_MS` | `scripts/lib/Orchestrator-SideProcessProgress.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_NOW_MS` | `scripts/lib/Orchestrator-SideProcessProgressEvidence.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_NOW_MS` | `scripts/run-review-ready-seed-liveness-fixture.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_OWNER_PID` | `scripts/fleet-liveness.cases.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_OWNER_PID` | `scripts/gh` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_OWNER_PID` | `scripts/kernel/side-process-liveness.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_OWNER_PID` | `scripts/lib/Orchestrator-SideProcessProgress.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_PRIOR_PROGRESS_JSON` | `scripts/run-review-ready-seed-liveness-fixture.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_PROGRESS_DIR` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_PROGRESS_DIR` | `scripts/gh` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_PROGRESS_DIR` | `scripts/kernel/side-process-liveness.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_PROGRESS_DIR` | `scripts/lib/Orchestrator-SideProcessProgress.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_PROGRESS_DIR` | `scripts/mechanical-json-state.Tests.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_PROGRESS_DIR` | `scripts/run-review-ready-seed-liveness-fixture.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_PROGRESS_DIR` | `scripts/worker-message-submit-reconcile.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_PROGRESS_DIR` | `tests/powershell/Issue748.RefreshConcurrency.Tests.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `docs/examples/fleet-hygiene-sentinel.cron.example` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `docs/examples/fleet-hygiene-sentinel.systemd.timer.example` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `docs/fleet-hygiene-sentinel-runbook.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `docs/phase0-audit-retention.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/_test-vitest-harness-env.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/check-vitest-live-store-isolation.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/github-fleet-cache-test-harness.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/ci-red-watchdog-ledger.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/Ci-Red-Watchdog-Worker.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/Ci-Red-Watchdog.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/Gh-FleetInventoryCache.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/gh-governor.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/gh-wrapper.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/Invoke-TestModeFleetReaper.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/Orchestrator-SideEffectFence.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/Review-ReadyReportStateSeedProgress.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/pr2-foundation/worker-notification-compat.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/pr2-foundation/worker-nudge-claim-store.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/review-delivery.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/review-ready-report-state-seed.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/review-trigger-reeval.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/run-review-ready-seed-liveness-fixture.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/worker-message-submit-reconcile.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `scripts/worker-message-submit-reconcile.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_STATE_DIR` | `tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIDE_PROCESS_TICK_ID` | `scripts/kernel/side-process-liveness.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIGNAL_SURFACES` | `docs/events-optional-consumer-signal-recovery.d.mts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIGNAL_SURFACES` | `docs/events-optional-consumer-signal-recovery.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIGNAL_SURFACES` | `scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.d.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SIGNAL_SURFACES` | `scripts/pr2-foundation/terminalized/events-optional-consumer-signal-recovery.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SPAWN_DISPLAY_NAME_MAX_LENGTH` | `docs/ao-spawn-shape.d.mts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SPAWN_DISPLAY_NAME_MAX_LENGTH` | `docs/ao-spawn-shape.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SPAWN_DISPLAY_NAME_MAX_LENGTH` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SPAWN_FIXTURE_PR_HEAD_OID` | `scripts/lib/Autonomous-SpawnWorktreeGate.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_SPAWN_FIXTURE_PR_REF_TOKEN` | `scripts/lib/Autonomous-SpawnWorktreeGate.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_SPAWN_WORKTREE_FIXTURE_MODE` | `scripts/lib/Autonomous-SpawnWorktreeGate.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_SPAWN_WORKTREE_FIXTURE_MODE` | `scripts/lib/Orchestrator-AutonomousSpawnGate.ps1` | pack.config | **shed** | §7.2 test/harness-only |
+| `AO_SPAWN_WORKTREE_GRANT_ID` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SPAWN_WORKTREE_GRANT_ID` | `scripts/lib/Autonomous-SpawnWorktreeGate.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN` | `docs/spawn-worktree-grant.d.mts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_SPAWN_WORKTREE_SESSION_BASENAME_PATTERN` | `docs/spawn-worktree-grant.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TASK_CHAIN_ID` | `plugins/ao-token-chain-ledger/lib/writer.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TASK_CHAIN_ID` | `plugins/ao-token-chain-ledger/README.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TASK_ID` | `docs/vitest-light-lane-isolation-audit-874.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TASK_ID` | `plugins/ao-token-chain-ledger/lib/writer.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TASK_ID` | `plugins/ao-token-chain-ledger/README.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TASK_ID` | `plugins/ao-token-chain-ledger/tests/writer.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` | `docs/orchestrator-recovery-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TERMINAL_FLOOD_MIN_PAIRED_CYCLES` | `scripts/terminal-flood-detect.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TERMINAL_FLOOD_WINDOW_SECONDS` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TERMINAL_FLOOD_WINDOW_SECONDS` | `docs/orchestrator-recovery-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TERMINAL_FLOOD_WINDOW_SECONDS` | `scripts/terminal-flood-detect.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TESTMODE_FLEET_HEARTBEAT_GRACE_SECONDS` | `scripts/lib/TestMode-FleetLease.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TESTMODE_FLEET_LANE_LEASE_ID` | `scripts/invoke-testmode-fleet-reaper.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TESTMODE_FLEET_LANE_LEASE_ID` | `scripts/lib/TestMode-FleetLease.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TESTMODE_FLEET_LANE_LEASE_ID` | `scripts/run-vitest-heavy-shard.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TESTMODE_FLEET_LEASE_TTL_SECONDS` | `scripts/lib/TestMode-FleetLease.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TESTMODE_FLEET_NO_PROGRESS_SECONDS` | `scripts/lib/TestMode-FleetLease.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TMUX_NAME` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TMUX_NAME` | `docs/spawn-worktree-grant.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TMUX_NAME` | `scripts/_test-git-fixture.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TRUSTED_PACK_ROOT` | `.cursor/rules/harness-review-bridge.mdc` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TRUSTED_PACK_ROOT` | `AGENTS.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TRUSTED_PACK_ROOT` | `prompts/codex_review_prompt.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TRUSTED_PACK_ROOT` | `prompts/harness_reviewer_submit_contract.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TRUSTED_PACK_ROOT` | `scripts/invoke-contract-evidence-reverify.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TRUSTED_PACK_ROOT` | `scripts/launch-contract-evidence-reverify.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TRUSTED_PACK_ROOT` | `scripts/lib/Import-TrustedReverifyBootstrap.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TRUSTED_PACK_ROOT` | `scripts/lib/Invoke-AoReviewApi.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TRUSTED_PACK_ROOT` | `scripts/lib/Resolve-TrustedPackRoot.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TRUSTED_PACK_ROOT` | `scripts/pack-review-runner.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_TRUSTED_PACK_ROOT` | `scripts/run-reviewer-reverify-ao-review-command.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_VERSION` | `scripts/pr2-foundation/binding.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_VERSION` | `scripts/pr2-foundation/mutation-behavior-recipes.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_VERSION` | `scripts/pr2-foundation/worker-notification-target.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_DEDUP_STATE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_DEDUP_STATE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_DEDUP_STATE` | `scripts/orchestrator-wake-common.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_DEDUP_STATE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_DEDUP_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_DEDUP_STATE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_LISTENER_PROJECT_ID` | `scripts/review-start-claim.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_LISTENER_SIDE_EFFECT_LOCK` | `scripts/lib/Invoke-ReviewWakeTrigger.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_LISTENER_SIDE_EFFECT_LOCK` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_LISTENER_SIDE_EFFECT_LOCK` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_LISTENER_SIDE_EFFECT_LOCK` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_LISTENER_SIDE_EFFECT_LOCK` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_LISTENER_SIDE_EFFECT_LOCK` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_CRASH_BASE_BACKOFF_SECONDS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_CRASH_MAX_BACKOFF_SECONDS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_CRASH_MAX_RAPID_EXITS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_CRASH_RAPID_EXIT_THRESHOLD_MS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_CRASH_TERMINAL_RAPID_EXITS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_BASE_BACKOFF_SECONDS` | `scripts/supervisor-fault-boundary.shared.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_DETERMINISTIC_TERMINAL_ATTEMPTS` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_MAX_ATTEMPTS_BEFORE_BACKOFF` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_MAX_BACKOFF_SECONDS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_MAX_BACKOFF_SECONDS` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_THRESHOLD` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_THRESHOLD` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_WINDOW_MS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_REPEATED_REASON_WINDOW_MS` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_STABLE_WORKING_POLLS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_DEGRADED_STABLE_WORKING_POLLS` | `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_FIXTURE` | `scripts/fixtures/orchestrator-wake-supervisor/ao-stub.ps1` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_WAKE_SUPERVISOR_FIXTURE` | `scripts/fixtures/orchestrator-wake-supervisor/ao-stub.sh` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_WAKE_SUPERVISOR_ID_DEBOUNCE_POLLS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_LEASE_GATE_HOLD_MS` | `scripts/lib/Orchestrator-WakeSupervisorLease.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_LEASE_HEARTBEAT_TTL_MS` | `scripts/lib/Orchestrator-WakeSupervisorLease.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_LEASE_STALE_GRACE_MS` | `scripts/lib/Orchestrator-WakeSupervisorLease.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_POLL_SECONDS` | `docs/orchestrator-autoloop-go-live.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_PROCESS_CMDLINE_FIXTURE` | `scripts/lib/Get-ProcessCommandLine.ps1` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_WAKE_SUPERVISOR_PROJECT_ID` | `docs/orchestrator-autoloop-go-live.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_PROJECT_ID` | `scripts/lib/orchestrator-side-process-observer.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_PROJECT_ID` | `scripts/orchestrator-wake-supervisor-test-child.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_RESTART_STAGGER_MS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_SESSION_GLITCH_POLLS` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_START_HANDOFF_TIMEOUT_SEC` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_START_HANDOFF_TIMEOUT_SEC` | `scripts/lib/Orchestrator-WakeSupervisorLease.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `docs/orchestrator-autoloop-go-live.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/_test-vitest-harness-env.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/check-vitest-live-store-isolation.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/lib/OpkVitestStoreIsolation.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/lib/Orchestrator-WakeSupervisorStateRoot.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/pr2-foundation/wake-supervisor-state-root.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/pr2-foundation/worker-notification-compat.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/review-delivery.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATE_DIR` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATUS_FAILURE` | `scripts/fixtures/orchestrator-wake-supervisor/ao-stub.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATUS_FAILURE` | `scripts/fixtures/orchestrator-wake-supervisor/ao-stub.sh` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_STATUS_FAILURE` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_TERMINAL_REARM_GRACE_SECONDS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_TERMINAL_REARM_MAX_ATTEMPTS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_TERMINAL_REARM_TTL_SECONDS` | `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WAKE_SUPERVISOR_TEST_ERROR_UNTIL_MS` | `scripts/orchestrator-wake-supervisor-test-child.ps1` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_WAKE_SUPERVISOR_TEST_FAST_STOP` | `scripts/supervisor-recovery.test-helpers.ts` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_WAKE_SUPERVISOR_TEST_MARKER_DIR` | `scripts/lib/Invoke-TestModeFleetReaper.ps1` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_WAKE_SUPERVISOR_TEST_MARKER_DIR` | `scripts/lib/Orchestrator-FleetHygiene.ps1` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_WAKE_SUPERVISOR_TEST_MARKER_DIR` | `scripts/orchestrator-wake-supervisor-test-child.ps1` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_WAKE_SUPERVISOR_TEST_PROMPT_BLOCK_DELAY_MS` | `scripts/orchestrator-wake-supervisor-test-child.ps1` | pack.store-address | **shed** | §7.2 test/harness-only |
+| `AO_WAKE_SUPERVISOR_WAIT_SECONDS` | `docs/orchestrator-autoloop-go-live.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_ITERATION_BRANCH_PATTERN` | `docs/dead-worker-reconciler.d.mts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_ITERATION_BRANCH_PATTERN` | `docs/dead-worker-reconciler.mjs` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_BRANCH` | `scripts/journaled-worker-send.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_BRANCH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH` | `scripts/journaled-worker-send.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH` | `scripts/lib/Get-WorkerMessageAdoptionBinding.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH` | `scripts/worker-message-submit-reconcile.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH` | `scripts/journaled-worker-send.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_CONFIG_PATH_HASH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_EPOCH` | `scripts/journaled-worker-send.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_EPOCH` | `scripts/lib/Get-WorkerMessageAdoptionBinding.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_EPOCH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_EPOCH` | `scripts/worker-message-submit-reconcile.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH` | `scripts/journaled-worker-send.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_EPOCH_HASH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_PROBE` | `scripts/invoke-gated-worker-nudge.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_PROBE` | `scripts/journaled-worker-send.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_PROBE` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_PROBE_V1` | `scripts/invoke-gated-worker-nudge.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_PROBE_V1` | `scripts/journaled-worker-send.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_PROBE_V1` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH` | `scripts/journaled-worker-send.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_RUN_ID_HASH` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_STATE` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_STATE` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_STATE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_STATE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_STATE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_ADOPTION_STATE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `docs/orchestrator-recovery-runbook.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/lib/Record-WorkerMessageDispatch.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/pack-review-worker-notification.cases.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/pr2-foundation/review-4750643719-regression.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/pr2-foundation/wake-supervisor-state-root.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/review-delivery.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | `scripts/worker-message-submit-reconcile.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS` | `docs/migration_notes.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS` | `docs/orchestrator-recovery-runbook.md` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_INTERVAL_SECONDS` | `scripts/worker-message-submit-reconcile.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_STATE` | `docs/migration_notes.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_STATE` | `docs/orchestrator-recovery-runbook.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_STATE` | `scripts/lib/Ci-Red-Watchdog-Worker.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_STATE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_STATE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_STATE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_STATE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_STATE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_MESSAGE_SUBMIT_STATE` | `scripts/worker-message-submit-reconcile.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS` | `scripts/pr2-foundation/journal-lock.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NOTIFICATION_JOURNAL_LOCK_STALE_MS` | `scripts/pr2-foundation/worker-notification-compat.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_DIR` | `scripts/_test-pwsh-helpers.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_DIR` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_DIR` | `scripts/lib/Worker-NudgeClaim.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_DIR` | `scripts/pr2-foundation/review-4750643719-regression.test.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_DIR` | `scripts/pr2-foundation/worker-nudge-claim-store.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_DIR` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_DIR` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_DIR` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_LEASE_MS` | `scripts/lib/Worker-NudgeClaim.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_LEASE_MS` | `scripts/pr2-foundation/worker-nudge-claim-store.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_STALE_MINUTES` | `scripts/lib/Worker-NudgeClaim.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_NUDGE_CLAIM_STALE_MINUTES` | `scripts/pr2-foundation/worker-nudge-claim-store.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_RECOVERY_BRANCH_OBSERVATION_TTL_SECONDS` | `scripts/lib/Worker-RecoveryBranchCleanup.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_RECOVERY_CLAIM_STALE_MINUTES` | `scripts/lib/Worker-RecoveryClaim.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_RECOVERY_DIR` | `scripts/lib/Worker-RecoveryClaim.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_RECOVERY_MUTEX_STALE_SECONDS` | `scripts/lib/Worker-RecoveryClaim.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_DEBUG` | `scripts/pack-worker-report.ps1` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_STORE` | `docs/vitest-light-lane-isolation-audit-874.md` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_STORE` | `docs/worker-report-store.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_STORE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_STORE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_STORE` | `scripts/lib/worker-status-store.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_STORE` | `scripts/lib/WorkerReportStore.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_STORE` | `scripts/lib/WorkerStatusStore.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_STORE` | `scripts/pr2-foundation/terminalized/worker-report-store.ts` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_STORE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_STORE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_REPORT_STORE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_SESSION_ID` | `docs/pr-session-binding-cache.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_SESSION_ID` | `docs/vitest-light-lane-isolation-audit-874.md` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_SESSION_ID` | `scripts/estate-cut/task-311-tests/task-311-common.test-support.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_SESSION_ID` | `scripts/estate-cut/task-311-tests/task-311-delivery.test-support.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_SESSION_ID` | `scripts/lib/WorkerReportStore.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_SESSION_ID` | `scripts/pack-review-runner.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_SESSION_ID` | `scripts/pack-worker-report.ps1` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_SESSION_ID` | `scripts/pr-session-binding-cache.test.ts` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_SESSION_ID` | `scripts/vitest-live-store-preload.mjs` | runtime.session-context | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_STATUS_STORE` | `scripts/check-vitest-live-store-isolation.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_STATUS_STORE` | `scripts/lib/Set-OpkVitestHarnessEnv.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_STATUS_STORE` | `scripts/lib/vitest-live-store-harness.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_STATUS_STORE` | `scripts/lib/Worker-Recovery.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_STATUS_STORE` | `scripts/lib/worker-status-store.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_STATUS_STORE` | `scripts/lib/WorkerStatusStore.ps1` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_STATUS_STORE` | `scripts/pr2a/planning-manifest.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_STATUS_STORE` | `scripts/vitest-live-store-inventory.json` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WORKER_STATUS_STORE` | `scripts/vitest-live-store-preload.mjs` | pack.store-address | **port** | Pack or runtime reader; obligation survives migration |
+| `AO_WRAPPER_SCRIPT` | `scripts/gh-wrapper.test.ts` | pack.config | **port** | Pack or runtime reader; obligation survives migration |
