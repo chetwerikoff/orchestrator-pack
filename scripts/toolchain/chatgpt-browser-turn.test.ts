@@ -1916,7 +1916,14 @@ describe('issue 996 whole-turn terminal assistant completion', () => {
 
   it('AC10 no-terminal retains deadline failure and continuation merge stays covered', async () => {
     const fixture = fakeTurnPage({ dispatchCandidateIds: ['user-owned-12345678'] });
-    const timeoutResult = await sendTurn(fixture.page, 'payload', { ...baseConfig(), timeoutMs: 50 });
+    const timeoutResult = await sendTurn(
+      fixture.page,
+      'payload',
+      { ...baseConfig(), timeoutMs: 50 },
+      undefined,
+      undefined,
+      createPreSendSegmentBudget(30_000),
+    );
     expect(timeoutResult.state).toBe('stream_timeout');
     expect(timeoutResult.cause).toBe('no_terminal_evidence');
     expect(mergeContinuationSegments(['alpha\nbeta', 'alpha\nbeta\ngamma'])).toBe('alpha\nbeta\ngamma');
