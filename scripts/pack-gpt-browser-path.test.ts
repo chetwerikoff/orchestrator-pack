@@ -1,6 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as subprocess from './kernel/subprocess.ts';
 import {
@@ -8,6 +9,13 @@ import {
   runGptPackReview,
   type GptReviewDependencies,
 } from './lib/pack-gpt-reviewer.ts';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+const harnessBin = join(repoRoot, 'tests/fixtures/bin');
+const smokeRecord = JSON.parse(readFileSync(
+  join(repoRoot, 'tests/external-output-references/pack-gpt-browser-smoke-56875db8.json'),
+  'utf8',
+)) as { headSha: string; replyToken: string };
 
 const originalEnv = { ...process.env };
 
@@ -135,6 +143,28 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
     expect(result.exitCode).toBe(124);
     expect(result.stdout).toBe('');
     expect(result.stderr).toMatch(/timed out/i);
+  });
+
+  it('returns parseable terminal stdout through harness tracked turn without runProcess mocks', async () => {
+    chmodSync(join(harnessBin, 'npm'), 0o755);
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${harnessBin}:${priorPath ?? ''}`;
+    process.env.OPK_VITEST_HARNESS = '1';
+
+    const result = await runGptPackReview({
+      repoRoot: process.cwd(),
+      repoSlug: 'chetwerikoff/orchestrator-pack',
+      prNumber: 1050,
+      headSha: smokeRecord.headSha,
+    }, {}, {
+      PACK_GPT_BROWSER_PROFILE: '/tmp/opk-harness-profile',
+      PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',
+      PACK_GPT_BROWSER_CHAT_URL: 'https://chatgpt.com/c/harness-smoke',
+    });
+
+    process.env.PATH = priorPath;
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ verdict: 'clean', findingCount: 0, findings: [] });
   });
 
   it('returns parseable terminal stdout through default browser turn and adapter chain', async () => {
