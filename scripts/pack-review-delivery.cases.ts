@@ -866,6 +866,86 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
     expect(JSON.parse(readFileSync(repairCapture, 'utf8')).state).toBe('success');
   });
 
+  it('restores terminal required status when newer run finishes during repair pending POST (AC6 active→terminal)', async () => {
+    const storeRoot = tempRoot('opk-1067-repair-active-terminal-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    const repairCapture = path.join(storeRoot, 'repair.json');
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+
+    let newerRunId = '';
+    let releaseAfter: () => void = () => undefined;
+    const pausedAfter = new Promise<void>((resolve) => { releaseAfter = resolve; });
+    let afterEntered = false;
+
+    const reconcilePromise = reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request) => {
+        if (request.state === 'error') {
+          writeFileSync(staleCapture, `${JSON.stringify(request)}\n`);
+          return;
+        }
+        writeFileSync(repairCapture, `${JSON.stringify(request)}\n`);
+      },
+      fixturePauseAfterStaleStatusWrite: async () => {
+        afterEntered = true;
+        const newer = createPackReviewRun({
+          projectId: 'orchestrator-pack',
+          storeRoot,
+          prNumber: 1067,
+          headSha: STALE_HEAD_A,
+          linkedSessionId: 'worker-newer-active',
+          startReason: 'newer-active',
+          surface: 'pack-review-stale-reconcile-test',
+          trustedPackRoot: repoRoot,
+          sourceRepoRoot: repoRoot,
+          canonicalRepository: STALE_REPO_A,
+        });
+        newerRunId = newer.run.id;
+        updatePackReviewRun(newer.run.id, {
+          status: 'running',
+          latestRunStatus: 'running',
+          runnerPid: 42,
+        }, { projectId: 'orchestrator-pack', storeRoot });
+        await pausedAfter;
+      },
+      fixturePauseAfterPendingRestoreWrite: async () => {
+        updatePackReviewRun(newerRunId, {
+          status: 'up_to_date',
+          latestRunStatus: 'up_to_date',
+          reviewVerdict: 'clean',
+          findingCount: 0,
+          findings: [],
+          journalOutcome: {
+            state: 'persisted',
+            recordedAtUtc: '2026-07-28T17:30:00.000Z',
+            reason: 'verdict_persisted',
+            idempotencyKey: `verdict:${newerRunId}:${STALE_HEAD_A}`,
+            attempts: 1,
+          },
+        }, { projectId: 'orchestrator-pack', storeRoot });
+      },
+    });
+
+    while (!afterEntered) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    releaseAfter();
+    const result = await reconcilePromise;
+
+    expect(result.results[0]).toMatchObject({
+      runId: staleRunId,
+      statusReconciled: false,
+      reason: 'newer_run_authoritative',
+    });
+    expect(JSON.parse(readFileSync(repairCapture, 'utf8')).state).toBe('success');
+  });
+
   it('clears stale failureReason when resuming a journaled verdict after stale terminalization', async () => {
     const storeRoot = tempRoot('opk-1067-stale-journaled-resume-');
     harnessStaleEnv(storeRoot, path.join(storeRoot, 'status.json'));

@@ -151,6 +151,10 @@ interface RecordPendingReviewOptions extends PackReviewStoreOptions {
   clock?: () => Date;
 }
 
+interface RestoreAuthoritativeRequiredStatusOptions extends RecordPendingReviewOptions {
+  pauseAfterPendingWrite?: () => void | Promise<void>;
+}
+
 interface RecordStaleRequiredStatusOptions extends RecordPendingReviewOptions {
   authorizeWrite?: () => boolean | Promise<boolean>;
   repairSupersededWrite?: () => void | Promise<void>;
@@ -548,38 +552,67 @@ export async function resumePackReviewVerdictDelivery(
 
 
 
-export async function restorePackReviewAuthoritativeRequiredStatus(
+async function publishPackReviewTerminalRequiredStatus(
+  run: PackReviewRunRecord,
   options: RecordPendingReviewOptions,
 ): Promise<PackReviewDeliveryOutcome | null> {
-  const { run } = options;
-  if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
-    const payload = packReviewJournaledPayload(run);
-    if (!payload) return null;
-    const classification = classifyPackReviewPayload(payload);
-    const idempotencyKey = requiredStatusIdempotencyKey(run);
-    let statusOutcome = outcome(
-      'succeeded',
-      `status_${classification.requiredStatus}_restored`,
+  const payload = packReviewJournaledPayload(run);
+  if (!payload) return null;
+  const classification = classifyPackReviewPayload(payload);
+  const idempotencyKey = requiredStatusIdempotencyKey(run);
+  let statusOutcome = outcome(
+    'succeeded',
+    `status_${classification.requiredStatus}_restored`,
+    idempotencyKey,
+    options.clock,
+  );
+  try {
+    await options.writeRequiredStatus({
+      state: classification.requiredStatus,
+      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+      description: classification.description,
       idempotencyKey,
-      options.clock,
-    );
-    try {
-      await options.writeRequiredStatus({
-        state: classification.requiredStatus,
-        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-        description: classification.description,
-        idempotencyKey,
-      });
-    } catch (error) {
-      statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
-      persistChannelOutcome(run.id, 'requiredStatus', statusOutcome, options);
-      return statusOutcome;
-    }
+    });
+  } catch (error) {
+    statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
     persistChannelOutcome(run.id, 'requiredStatus', statusOutcome, options);
     return statusOutcome;
   }
+  persistChannelOutcome(run.id, 'requiredStatus', statusOutcome, options);
+  return statusOutcome;
+}
+
+export async function restorePackReviewAuthoritativeRequiredStatus(
+  options: RestoreAuthoritativeRequiredStatusOptions,
+): Promise<PackReviewDeliveryOutcome | null> {
+  const storeOpts = storeOptions(options);
+  const reload = () => safeGetPackReviewRun(options.run.id, options) ?? options.run;
+  const run = reload();
+  if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
+    return publishPackReviewTerminalRequiredStatus(run, options);
+  }
   if (PACK_REVIEW_ACTIVE_STATUSES.has(run.status)) {
-    return recordPackReviewPendingStatus(options);
+    const pendingKey = packReviewPendingRequiredStatusIdempotencyKey(run);
+    let pendingOutcome = outcome('succeeded', 'status_pending', pendingKey, options.clock);
+    persistChannelOutcome(run.id, 'requiredStatus', pendingOutcome, options);
+    try {
+      await options.writeRequiredStatus({
+        state: 'pending',
+        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+        description: 'Pack review is running for this exact head.',
+        idempotencyKey: pendingKey,
+      });
+    } catch (error) {
+      pendingOutcome = outcome('failed', describeError(error), pendingKey, options.clock);
+      persistChannelOutcome(run.id, 'requiredStatus', pendingOutcome, options);
+      return pendingOutcome;
+    }
+    if (options.pauseAfterPendingWrite) await options.pauseAfterPendingWrite();
+    const fresh = reload();
+    if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(fresh.status)) {
+      return publishPackReviewTerminalRequiredStatus(fresh, options);
+    }
+    return pendingOutcome;
   }
   return null;
 }

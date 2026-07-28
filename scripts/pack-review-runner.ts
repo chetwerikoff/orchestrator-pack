@@ -107,6 +107,7 @@ export interface ReconcileStalePackReviewRunsInput {
   beforeStaleStatusWrite?: (run: PackReviewRunRecord) => void | Promise<void>;
   fixturePauseBeforeStaleStatusWrite?: () => void | Promise<void>;
   fixturePauseAfterStaleStatusWrite?: () => void | Promise<void>;
+  fixturePauseAfterPendingRestoreWrite?: () => void | Promise<void>;
 }
 
 interface ListInput {
@@ -763,6 +764,7 @@ export async function reconcileStalePackReviewRuns(
         projectId,
         storeRoot,
         writeRequiredStatus: statusWriter,
+        pauseAfterPendingWrite: input.fixturePauseAfterPendingRestoreWrite,
       });
     };
 
