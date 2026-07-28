@@ -1837,8 +1837,13 @@ describe('issue 1023 operation-level bounds', () => {
   it('AC4: witness install wait is capped at 10s within segment remainder', () => {
     const wide = createPreSendSegmentBudget(30_000);
     expect(witnessInstallOperationWaitMs(wide)).toBe(WITNESS_INSTALL_MAX_WAIT_MS);
-    const tight = createTurnOperationBudget(500, Date.now());
-    expect(witnessInstallOperationWaitMs(tight)).toBe(500);
+    const tightBudget = {
+      endsAtMs: 0,
+      remainingMs: () => 500,
+      clampOperationWaitMs: () => 500,
+      canStartOperation: () => true,
+    };
+    expect(witnessInstallOperationWaitMs(tightBudget)).toBe(500);
   });
 
   it('openTurnPage reuses an existing tab without goto when URL already matches', async () => {
