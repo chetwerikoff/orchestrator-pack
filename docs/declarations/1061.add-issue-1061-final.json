@@ -7,17 +7,19 @@
   "baseline": {
     "commit_sha": "7b819080cbc3c05537273658f02dc803c49478e4",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:dcaec291a52b37a59465995a40b5b445167350b69f87ba7ab1daf044c7ee5523"
+    "active_scope_hash": "sha256:ffff625f4501e2ff09e32585529991eab58471320d0a1e934a6a47173bf4a319"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
     "AGENTS.md",
+    "docs/declarations/1061.add-issue-1061-final.json",
     "docs/declarations/1061.add-issue-1061.json",
     "docs/worker-smoke-testing.md",
     "scripts/draft-discipline.d.mts",
     "scripts/draft-discipline.mjs",
     "scripts/gate-runner/goldens/pre-delete-captures.json",
     "scripts/lib/orca-cli.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/lib/worker-smoke-core.ts",
     "scripts/markdown-key-value.d.mts",
     "scripts/pack-worker-report.ps1",
@@ -34,5 +36,21 @@
     "tests/fixtures/worker-smoke/record-only-na-plan.md"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:dcaec291a52b37a59465995a40b5b445167350b69f87ba7ab1daf044c7ee5523",
+      "new_active_scope_hash": "sha256:ffff625f4501e2ff09e32585529991eab58471320d0a1e934a6a47173bf4a319",
+      "changed": {
+        "added": [
+          "docs/declarations/1061.add-issue-1061-final.json",
+          "scripts/lib/vitest-pre-topology-measurement.mjs"
+        ],
+        "removed": []
+      },
+      "reason": "include vitest pre-topology measurement update",
+      "actor": "local",
+      "timestamp": "2026-07-28T06:47:27.382Z",
+      "applied": true
+    }
+  ]
 }
