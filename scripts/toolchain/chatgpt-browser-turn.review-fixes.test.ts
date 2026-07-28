@@ -1366,7 +1366,6 @@ describe('issue 1068 fresh canonical identity retention', () => {
           content: { content_type: 'text', parts: ['payload'] },
         },
       }],
-      postClickRawSseBodies: liveTurnStreamSequence(own, assistantId, { turnId, conversationId: conversationUuid }),
       assistants: [{ id: assistantId, parent: own, text: 'growing', streaming: true, appearOnSend: true }],
     });
     fixture.page.waitForTimeout = async (ms: number) => {
