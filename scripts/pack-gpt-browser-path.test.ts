@@ -12,10 +12,35 @@ import {
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const harnessBin = join(repoRoot, 'tests/fixtures/bin');
-const smokeRecord = JSON.parse(readFileSync(
+const harnessSmokeRecord = JSON.parse(readFileSync(
   join(repoRoot, 'tests/external-output-references/pack-gpt-browser-smoke-56875db8.json'),
   'utf8',
-)) as { headSha: string; replyToken: string };
+)) as { headSha: string; replyToken: string; evidenceKind: string };
+const liveSmokeRecord = JSON.parse(readFileSync(
+  join(repoRoot, 'tests/external-output-references/pack-gpt-browser-smoke-1935fe18.json'),
+  'utf8',
+)) as {
+  headSha: string;
+  evidenceKind: string;
+  githubReviewId: number;
+  liveChatEvidence: string;
+  adapterPromptEvidence: string;
+  harnessIntegrationOnly: string;
+};
+const liveChatRecord = JSON.parse(readFileSync(
+  join(repoRoot, liveSmokeRecord.liveChatEvidence),
+  'utf8',
+)) as { headSha: string; githubReviewId: number };
+const adapterPromptRecord = JSON.parse(readFileSync(
+  join(repoRoot, liveSmokeRecord.adapterPromptEvidence),
+  'utf8',
+)) as {
+  includesPrUrl: boolean;
+  includesHeadSha: boolean;
+  includesCanonicalMarkers: boolean;
+  forbidsDiffPaste: boolean;
+  forbidsGithubMutation: boolean;
+};
 
 const originalEnv = { ...process.env };
 
@@ -25,6 +50,21 @@ afterEach(() => {
 });
 
 describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
+  it('retains operator-live AC3 smoke evidence bound to PR #1050 head', () => {
+    expect(liveSmokeRecord.evidenceKind).toBe('operator-live-tracked-turn');
+    expect(liveSmokeRecord.headSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(liveSmokeRecord.githubReviewId).toBeGreaterThan(0);
+    expect(liveChatRecord.headSha).toBe(liveSmokeRecord.headSha);
+    expect(liveChatRecord.githubReviewId).toBe(liveSmokeRecord.githubReviewId);
+    expect(harnessSmokeRecord.evidenceKind).toBe('harness-integration-only');
+    expect(liveSmokeRecord.harnessIntegrationOnly).toContain('pack-gpt-browser-smoke-56875db8.json');
+    expect(adapterPromptRecord.includesPrUrl).toBe(true);
+    expect(adapterPromptRecord.includesHeadSha).toBe(true);
+    expect(adapterPromptRecord.includesCanonicalMarkers).toBe(true);
+    expect(adapterPromptRecord.forbidsDiffPaste).toBe(true);
+    expect(adapterPromptRecord.forbidsGithubMutation).toBe(true);
+  });
+
   it('defaultRunBrowserTurn invokes npm run chatgpt-browser-turn -- turn with profile, cdp, and chat-url', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'opk-gpt-browser-turn-'));
     const inputPath = join(workDir, 'prompt.txt');
@@ -145,7 +185,7 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
     expect(result.stderr).toMatch(/timed out/i);
   });
 
-  it('returns parseable terminal stdout through harness tracked turn without runProcess mocks', async () => {
+  it('returns parseable terminal stdout through harness integration npm shim without runProcess mocks', async () => {
     chmodSync(join(harnessBin, 'npm'), 0o755);
     const priorPath = process.env.PATH;
     process.env.PATH = `${harnessBin}:${priorPath ?? ''}`;
@@ -155,7 +195,7 @@ describe('GPT browser transport path (Issue #1031 AC3/AC12)', () => {
       repoRoot: process.cwd(),
       repoSlug: 'chetwerikoff/orchestrator-pack',
       prNumber: 1050,
-      headSha: smokeRecord.headSha,
+      headSha: harnessSmokeRecord.headSha,
     }, {}, {
       PACK_GPT_BROWSER_PROFILE: '/tmp/opk-harness-profile',
       PACK_GPT_BROWSER_CDP: 'http://127.0.0.1:9222',

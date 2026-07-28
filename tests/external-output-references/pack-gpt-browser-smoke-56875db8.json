@@ -4,11 +4,11 @@
   "prNumber": 1050,
   "headSha": "56875db8ec7bcb41d6561a1a76739cabc9b901f9",
   "recordedAt": "2026-07-28T00:55:00Z",
-  "evidenceKind": "harness-tracked-turn",
+  "evidenceKind": "harness-integration-only",
   "entrypoint": "npm run chatgpt-browser-turn -- turn",
   "adapter": "scripts/lib/pack-gpt-reviewer.ts#defaultRunBrowserTurn",
   "terminalVerdict": "clean",
   "replyToken": "NO_FINDINGS",
   "testFile": "scripts/pack-gpt-browser-path.test.ts",
-  "notes": "Bounded harness npm shim executes the real defaultRunBrowserTurn subprocess path without vi.mock on runProcess; operator live browser turn remains profile_blocked pending incident adjudication."
+  "notes": "Bounded harness npm shim exercises defaultRunBrowserTurn subprocess argv wiring only. Not AC3 operator-live proof; see pack-gpt-browser-smoke-1935fe18.json."
 }
