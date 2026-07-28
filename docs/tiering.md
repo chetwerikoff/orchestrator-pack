@@ -198,7 +198,7 @@ ceiling.
 |------|--------|
 | **T1** | One light browser-GPT architectural pass in the task's dedicated ordinary-architectural chat; after the final architect lens, one additional fresh-chat browser-GPT final-verification round only when the lens changed content. |
 | **T2** | Browser-GPT architectural review, up to **3** passes in one dedicated ordinary-architectural chat; first `NO_FINDINGS` ends the ordinary stage. After the final architect lens, one additional fresh-chat browser-GPT final-verification round only when the lens changed content. No competitive stage unless separately selected by an explicit wrapper contract. |
-| **T3** | Competitive adversarial browser-GPT review up to **3** fresh-chat passes → browser-GPT architectural review up to **4** passes in one dedicated ordinary-architectural chat → final architect lens → mandatory fresh-chat browser-GPT final-verification round **1**. |
+| **T3** | Competitive adversarial browser-GPT review up to **3** fresh-chat passes → browser-GPT architectural review up to **4** passes in one dedicated ordinary-architectural chat → final architect lens from a **separate Claude Code CLI** invocation (or a durable `claude-unavailable` skip when quota/rate-limit/provider/CLI unavailability is observed) → mandatory fresh-chat browser-GPT final-verification round **1**. |
 
 **T3-critical** (within-T3 graduation): gated by the **L4-condition list recorded
 in Issue #574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md` Decisions**
@@ -323,7 +323,20 @@ matching current id/outcome provenance.
 
 At **pre-lens progression**, genuinely architect-required protected work may be
 recorded as `architect-pending` and proceed only to that lens. At **final
-acceptance**, `architect-pending` never passes. A valid non-zero-signal author
+acceptance**, `architect-pending` never passes.
+
+### T3 Claude lens orchestration and unavailable skip (#1090)
+
+The flow-manager orchestrates the final architect lens but never authors or
+simulates it. A counted Claude lens requires a separate Claude Code CLI
+invocation with co-located producing-run evidence. When Claude is observably
+unavailable (quota, rate-limit, provider-unavailable, or CLI-unavailable), record
+`architect-lens-stage-waiver.json` with `reason: claude-unavailable` and a closed
+`unavailability` kind, then continue. The skip is audit-only: it does not create
+`architectural-lens` provenance, M3 authority, or `T3→T2` demotion authority.
+The terminal browser-GPT `architectural` capture remains mandatory after a valid
+skip. Stage-completeness accepts `Claude lens → terminal GPT` or
+`valid claude-unavailable skip → terminal GPT`; missing both fails closed. A valid non-zero-signal author
 activation needs no architect **authorization**; a separately required newer lens
 is freshness/audit and must not be described as retroactive authorization.
 

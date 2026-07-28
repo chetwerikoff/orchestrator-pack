@@ -116,7 +116,11 @@ rounds is intentional and is the only review-chat continuity in this flow.
    reviewer sequence legally terminal, run the #975 `pre-lens` guard phase.
 7. Mandatory final architect lens, including current M3 adjudication, latest M4
    audit, M5 anchor audit, the four current #972 final-lens goals, sole independent
-   aggregate cuts, and the only sanctioned tier downgrade.
+   aggregate cuts, and the only sanctioned tier downgrade. The flow-manager **orchestrates**
+   this stage only: prepare inputs/evidence destination, launch a **separate independent
+   Claude Code CLI** invocation, wait for it, and capture its output/provenance. The
+   flow-manager must not reason through, draft, simulate, or adjudicate the Claude lens
+   itself.
 8. One fresh-chat browser-GPT final architectural pass after the latest final-lens
    capture when the tier/flow requires it.
 9. Acceptance only over the current Issue revision after the #975
@@ -517,6 +521,27 @@ produce one legally terminal post-adoption result. That new segment supplies the
 anchor. Do not insert a confirmation pass just to mint a token.
 
 ### Final architect lens
+
+The flow-manager **never performs** the architect lens. Every skill reference to
+"run" or "drive" the Claude lens means: prepare inputs and the evidence
+destination, launch one **separate independent Claude Code CLI** invocation,
+wait for terminal completion, and capture its verbatim output/provenance. Manager
+summaries, reconstructions, Browser GPT, Codex, or any other model cannot
+substitute for or simulate the skipped Claude lens.
+
+#### Claude-unavailable skip (T3 stage completeness only)
+
+When a real Claude Code CLI invocation cannot run because Claude is observably
+unavailable — explicit quota, rate-limit, provider-unavailable, or CLI-unavailable
+evidence — record one durable `architect-lens-stage-waiver.json` sidecar in the
+review directory and proceed without the Claude lens. Ordinary impatience, an
+ambiguous timeout, or a manager decision to save cost is **not** a valid skip.
+
+The skip record is audit evidence only. It is not Claude provenance, does not
+create an `architectural-lens` capture, does not satisfy M3 adjudication, and
+grants no `T3→T2` demotion authority. After a valid skip, the terminal
+browser-GPT `architectural` lens remains mandatory. Do not retry in a loop once
+unavailability is established.
 
 Run at every tier after all required pre-final stages and the pre-lens #975 guard
 are green. The accepted candidate must be covered by the latest final lens after
@@ -1276,8 +1301,14 @@ not edit sibling Issues or add workflow/plugin/core machinery.
   resend authorization by itself.
 - Run legacy/scratchpad browser sends while helper-owned unresolved state blocks
   coexistence for the configured profile.
+- Perform, simulate, or adjudicate the final architect lens in the flow-manager
+  session instead of launching a separate Claude Code CLI invocation.
 - Accept or credit a final architect-lens capture without matching producing-run
   evidence from its independent Claude Code CLI invocation.
+- Treat a Claude-unavailable skip record as Claude lens provenance, M3
+  adjudication, or tier-demotion authority.
+- Skip the Claude lens for impatience, ambiguous timeout, or cost-saving without
+  observable Claude quota/rate-limit/provider/CLI unavailability.
 - Trust chat reply without live Issue re-pull and diff.
 - Skip requested GPT/Codex stage, selected browser stage, or mandatory T3-critical
   Codex addition silently.
