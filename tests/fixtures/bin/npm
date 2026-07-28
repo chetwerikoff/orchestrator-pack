@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HARNESS_BIN="$(cd "$(dirname "$0")" && pwd)"
+if [ "${1:-}" = "run" ] && [ "${2:-}" = "chatgpt-browser-turn" ]; then
+  shift 3
+  exec node "${HARNESS_BIN}/../pack-gpt-browser-turn-harness.mjs" "$@"
+fi
+export PATH="${PATH#${HARNESS_BIN}:}"
+exec npm "$@"

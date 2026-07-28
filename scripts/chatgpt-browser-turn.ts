@@ -19,7 +19,14 @@ import {
   type DestinationReservation,
   type DomainLock,
 } from './chatgpt-browser-turn/coordination.ts';
-import { closeOwnedTurnPage, connectCdpBrowser, releaseCdpBrowser, trimExcessCdpPageTargets } from './chatgpt-browser-turn/browser-session.ts';
+import {
+  boundedResourceCleanup,
+  closeOwnedTurnPage,
+  connectCdpBrowser,
+  releaseCdpBrowser,
+  RESOURCE_CLEANUP_BOUND_MS,
+  trimExcessCdpPageTargets,
+} from './chatgpt-browser-turn/browser-session.ts';
 import { probeProfileReady } from './chatgpt-browser-turn/profile-probe.ts';
 import { publicationStatus, publishReply } from './chatgpt-browser-turn/publication.ts';
 import { runtimeCapabilityBinding } from './chatgpt-browser-turn/runtime-binding.ts';
@@ -47,6 +54,10 @@ import {
 import { recordSwallowedDriverException } from './chatgpt-browser-turn/diagnostics.ts';
 import { readStableInput } from './chatgpt-browser-turn/input.ts';
 import {
+  BrowserOperationTimeoutError,
+  browserOperationClassFromError,
+  coerceBrowserOperationTimeout,
+  createPreSendSegmentBudget,
   loadChromium,
   normalizeConversationUrl,
   openGateBCharacterizationPage,
@@ -311,6 +322,22 @@ function browserConfig(args: ParsedArgs): BrowserConfig {
   return { cdp, profile, newChat, timeoutMs, ...(chatUrl ? { chatUrl } : {}), ...(projectUrl ? { projectUrl } : {}) };
 }
 
+
+function canonicalConversationFromOpenedPage(
+  config: BrowserConfig,
+  opened: { page: any } | undefined,
+): string | undefined {
+  if (!config.newChat || !opened?.page || !config.projectUrl) return undefined;
+  try {
+    const normalized = normalizeConversationUrl(opened.page.url());
+    const project = normalizeConversationUrl(config.projectUrl);
+    if (!normalized || normalized === project) return undefined;
+    return normalized;
+  } catch {
+    return undefined;
+  }
+}
+
 function emitTurnAndCode(result: TurnResultV1): number {
   emit(result);
   return turnExitCode(result.state);
@@ -326,9 +353,10 @@ async function runTurn(args: ParsedArgs): Promise<number> {
   let possibleDelivery = false;
   let opened: { page: any; owned: boolean; provisionalId?: string } | undefined;
   let browser: any = null;
+  let config: BrowserConfig | undefined;
 
   try {
-    const config = browserConfig(args);
+    config = browserConfig(args);
     profileKey = configuredProfileKey(config.profile, config.cdp);
     const snapshot = readStableInput(required(args, 'input'));
     const destination = destinationIdentity(required(args, 'output'));
@@ -370,7 +398,8 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       ));
     }
 
-    const verification = await verifyProfile(config);
+    const segmentBudget = createPreSendSegmentBudget(config.timeoutMs);
+    const verification = await verifyProfile(config, segmentBudget);
     if (verification.state !== 'verified') {
       const state: TurnState = verification.state === 'unavailable' ? 'chrome_not_running' : 'profile_mismatch';
       const wall = ensureProfileWall(profileKey, state);
@@ -399,7 +428,17 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     const chromium = loadChromium();
-    browser = await connectCdpBrowser(chromium, config.cdp);
+    const connectWaitMs = segmentBudget.clampOperationWaitMs();
+    if (connectWaitMs <= 0) throw new BrowserOperationTimeoutError('connect_over_cdp');
+    const connectPromise = chromium.connectOverCDP(config.cdp, { timeout: connectWaitMs });
+    try {
+      browser = await connectPromise;
+    } catch (connectError) {
+      connectPromise
+        .then((lateBrowser: unknown) => releaseCdpBrowser(lateBrowser, RESOURCE_CLEANUP_BOUND_MS))
+        .catch(() => {});
+      throw coerceBrowserOperationTimeout(connectError, 'connect_over_cdp');
+    }
     const browserProvenance = String(browser.version?.() ?? 'chromium-cdp');
     if (capability.state === 'ok' && capability.capability?.browser_provenance !== browserProvenance) {
       downgradeCapability(profileKey);
@@ -412,18 +451,21 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         return emitTurnAndCode(turnResult('profile_busy', 'profile', 'browser_provenance_downgrade_fallback_busy', invocationId, profileKey));
       }
     }
-    opened = await openTurnPage(browser, config);
+    opened = await openTurnPage(browser, config, { segmentBudget });
     const turnPage = opened.page;
 
     const freshConversation = config.newChat;
-    let witnessSurfaceProbe: WitnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage);
+    let witnessSurfaceProbe: WitnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget);
     if (capability.state === 'ok' && witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) {
       downgradeCapability(profileKey);
       safeRelease(scheduleLock);
       scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
       capability = capabilityStatus(profileKey, expectedBinding);
       if (!scheduleLock) {
-        if (opened.owned) await opened.page.close().catch(() => {});
+        if (opened?.owned) {
+          const ownedPage = opened.page;
+          await boundedResourceCleanup(() => (ownedPage as { close: () => Promise<void> }).close(), RESOURCE_CLEANUP_BOUND_MS);
+        }
         safeReleaseDestination(reservation);
         reservation = null;
         return emitTurnAndCode(turnResult('profile_busy', 'profile', 'witness_downgrade_fallback_busy', invocationId, profileKey));
@@ -432,7 +474,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     if (capability.state === 'ok') {
       const rechecked = capabilityStatus(profileKey, expectedBinding);
-      witnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage);
+      witnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget);
       if (rechecked.state !== 'ok' || witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) {
         const observedExternalDowngrade = rechecked.state !== 'ok' && !witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation);
         if (witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) downgradeCapability(profileKey);
@@ -440,7 +482,10 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
         capability = capabilityStatus(profileKey, expectedBinding);
         if (!scheduleLock) {
-          if (opened.owned) await opened.page.close().catch(() => {});
+          if (opened?.owned) {
+          const ownedPage = opened.page;
+          await boundedResourceCleanup(() => (ownedPage as { close: () => Promise<void> }).close(), RESOURCE_CLEANUP_BOUND_MS);
+        }
           safeReleaseDestination(reservation);
           reservation = null;
           return emitTurnAndCode(turnResult('profile_busy', 'profile', 'pre_send_parallel_recheck_failed', invocationId, profileKey));
@@ -489,7 +534,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       if (statusList(profileKey).state === 'profile_blocked') throw new Error('pre_send_profile_blocked');
       if (findProfileWall(profileKey)) throw new Error('pre_send_profile_wall');
       if (capability.state === 'ok') {
-        if (witnessSurfaceProbeRequiresDowngrade(await runtimeWitnessSurfaceAvailable(turnPage), freshConversation)) {
+        if (witnessSurfaceProbeRequiresDowngrade(await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget), freshConversation)) {
           downgradeCapability(profileKey);
           capability = capabilityStatus(profileKey, expectedBinding);
           throw new Error('pre_send_witness_unavailable');
@@ -504,7 +549,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       updateIncident(profileKey, incidentId!, { phase: 'possible_delivery' });
       scheduleLock!.updatePhase('possible_delivery');
       reservation!.markPossibleDelivery();
-    });
+    }, segmentBudget);
 
     if (result.cause === 'dispatch_request_not_observed' && lastDispatchObservationDiagnostic) {
       recordSwallowedDriverException(
@@ -701,14 +746,53 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         : 'driver_exception_before_send';
 
     await closeOwnedTurnPage(opened, { retainPage: possibleDelivery });
+    if (possibleDelivery && config?.newChat && incidentId) {
+      const canonicalConversation = canonicalConversationFromOpenedPage(config, opened);
+      const canonicalFreshUnproven = !canonicalConversation;
+      if (canonicalFreshUnproven) {
+        try {
+          const incident = updateIncident(profileKey, incidentId, {
+            kind: 'fresh_orphan',
+            phase: 'possible_delivery',
+            cause: 'canonical_fresh_conversation_unproven',
+            owner: undefined,
+          });
+          safeRelease(scheduleLock);
+          safeReleaseDestination(reservation);
+          const operationClass = browserOperationClassFromError(error);
+          const driverDiagnosticId = recordSwallowedDriverException(
+            profileKey !== 'profile-unresolved' ? profileKey : undefined,
+            profileKey !== 'profile-unresolved' ? invocationId : undefined,
+            cause,
+            error,
+            {
+              invocation_id: invocationId,
+              ...(operationClass ? { operation: 'browser_operation_timeout:' + operationClass } : {}),
+            },
+          );
+          return emitTurnAndCode(turnResult('orphaned_fresh_turn', 'profile', 'canonical_fresh_conversation_unproven', invocationId, profileKey, {
+            ...(opened?.provisionalId ? { provisional_id: opened.provisionalId } : {}),
+            incident_id: incidentId,
+            generation: incident.generation,
+            ...(driverDiagnosticId ? { driver_diagnostic_id: driverDiagnosticId } : {}),
+          }));
+        } catch {
+          // Existing durable state remains fail-closed.
+        }
+      }
+    }
     if (incidentId) {
       if (possibleDelivery) {
         try {
+          const recoveryConversationId = config?.newChat
+            ? canonicalConversationFromOpenedPage(config, opened)
+            : (config?.chatUrl ? normalizeConversationUrl(config.chatUrl) : undefined);
           updateIncident(profileKey, incidentId, {
             kind: 'conversation_incident',
             phase: 'possible_delivery',
             cause,
             owner: undefined,
+            ...(recoveryConversationId ? { conversation_id: recoveryConversationId } : {}),
           });
         } catch {
           // Existing durable state remains fail-closed.
@@ -724,13 +808,17 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
     safeRelease(scheduleLock);
     safeReleaseDestination(reservation);
+    const operationClass = browserOperationClassFromError(error);
     const driverDiagnosticId = (cause === 'driver_exception_before_send' || cause === 'driver_exception_after_possible_delivery')
       ? recordSwallowedDriverException(
         profileKey !== 'profile-unresolved' ? profileKey : undefined,
         profileKey !== 'profile-unresolved' ? invocationId : undefined,
         cause,
         error,
-        { invocation_id: invocationId },
+        {
+          invocation_id: invocationId,
+          ...(operationClass ? { operation: 'browser_operation_timeout:' + operationClass } : {}),
+        },
       )
       : undefined;
     return emitTurnAndCode(turnResult(state, scope, cause, invocationId, profileKey, {
@@ -738,7 +826,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       ...(driverDiagnosticId ? { driver_diagnostic_id: driverDiagnosticId } : {}),
     }));
   } finally {
-    await releaseCdpBrowser(browser);
+    await releaseCdpBrowser(browser, RESOURCE_CLEANUP_BOUND_MS);
   }
 }
 

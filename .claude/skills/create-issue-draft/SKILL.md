@@ -822,37 +822,36 @@ fallback authority to a hands-only executor.
 
 ### Cross-task browser critical section
 
-All task flow-managers in the same operator environment use **one shared local
-lock identity** for browser-turn execution. The logical mutex key is exactly
-`orchestrator-pack:create-issue-draft:browser-turn`; every flow-manager MUST
+For ordinary tracked-helper `turn` calls, **helper admission is authoritative**.
+While current positive capability for the helper's candidate/build/profile/gate binding
+admits parallel work, do not take a caller-side cross-task mutex: managers on
+different existing conversations and independent fresh-chat (`--new-chat`) turns
+may proceed in parallel per helper admission. Same-conversation overlap remains
+serialized or refused by the helper; callers must not clear, restart, or work around it.
+
+Losing positive capability is normal automatic downgrade to configured-profile scope.
+Do not "repair" that downgrade to regain parallelism; the helper contract owns
+re-arm and caller repair can strand records. Helper-source drift from `main` can
+invalidate the capability binding and present as silent serialization, not error.
+
+Ownership/recovery is unchanged: clear only owned state; `possible_delivery` still
+requires independent conversation inspection; wait out a foreign busy profile.
+
+Eligible scratchpad/legacy fallback per `discuss-with-gpt` stays **serialized only**
+and alone may use the existing caller cross-task exclusivity
+(`orchestrator-pack:create-issue-draft:browser-turn`): every flow-manager MUST
 resolve that literal key to the same local mutual-exclusion object in the operator
-environment. The key MUST NOT be derived from Issue number, task identity, chat
-URL, or manager identity. Establish exclusive ownership before the one browser-turn
-operation and release it immediately after that operation. Contention or inability
-to establish exclusivity leaves that browser-turn work pending. Do not put Issue
-pull/edit, ledger work, capture normalization, or other task mechanics under this
-lock. Exact filesystem path, representation, and lock primitive used to realize
-the literal key are planner freedom, but a mapping that can yield different mutexes
-for that same key is non-compliant. This is caller policy only: do not add a second
-browser runtime lock, helper state machine, daemon, lease, or ownership store.
+environment (not derived from Issue, task, chat URL, or manager identity);
+establish before the one fallback browser effect, release immediately after;
+contention leaves fallback pending. Never wrap ordinary tracked-helper turns in
+that mutex or add lock machinery.
 
-Before the first **production** tracked-helper turn on a newly built or
-uncharacterized #964 candidate, complete the Gate-B gate in `discuss-with-gpt`:
-`npm run test:issue-964` green, operator live characterization (`capability` →
-serialized live smoke that self-arms parallel eligibility → post-smoke `capability`
-telemetry), and a
-retained digest-pinned recovery root under
-`~/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`.
-The Gate-B characterization turns themselves are exempt from this production gate.
-Record characterization evidence in task/review artifacts.
+Before the first **production** tracked-helper turn on a new/uncharacterized #964
+candidate, complete Gate B in `discuss-with-gpt` and record characterization evidence.
 
-Interpret only the landed helper contract documented in `discuss-with-gpt`:
-`turn-result/v1` with its closed state/scope/cause and exit mapping;
-`control-result/v1` for `status/list`, `clear`, and capability; and
-`publication-status/v1` for publication recovery. A hard crash may emit no turn
-stdout. A non-`ok` state, timeout, missing stdout, or process-liveness uncertainty
-is never by itself resend or scratchpad-fallback authorization; use the tracked
-status/publication/recovery path first.
+Non-`ok` output, timeout, missing stdout, or process-liveness uncertainty is never
+resend or scratchpad-fallback authorization by itself; use tracked
+status/publication/recovery per `discuss-with-gpt`.
 
 ### Tracked helper long-turn monitoring
 
@@ -904,18 +903,16 @@ a tracked browser turn. Before the flow-manager treats a turn it owns as finishe
 or frees its stage to proceed, the helper process for that owned turn must no
 longer hold the helper's configured-profile serialization state and the helper
 control state for that owned turn must no longer be active or blocking. This is
-the helper-owned profile state observed through `status/list`, not the caller-side
-cross-task mutex `orchestrator-pack:create-issue-draft:browser-turn`; that caller
-mutex still releases immediately after the browser-turn operation, and releasing
-it does not satisfy owned-turn cleanup.
+the helper-owned profile state observed through `status/list`, not caller-side
+fallback exclusivity; releasing fallback exclusivity does not satisfy owned-turn cleanup.
 
 Cleanup authority is ownership-scoped. The flow-manager may `clear` or kill only
 the tracked turn it owns. A record or helper process belonging to another task or
 current manager must never be cleared or killed merely to make the configured
 profile available. If ownership cannot be established from the current task's own
 invocation/control/audit evidence, treat the state as non-owned for mutation
-purposes and leave the browser-turn work pending under the existing cross-task
-contention rule.
+purposes and leave the browser-turn work pending under helper admission or
+fallback contention as applicable.
 
 Where owned cleanup requires `clear`, the clear/resend rules below apply first.
 Cleanup may use only existing supported helper/control operations plus ordinary
@@ -1286,9 +1283,11 @@ not edit sibling Issues or add workflow/plugin/core machinery.
 - Let Codex become default architectural engine, claim substitution without
   recorded browser unavailability, or double-count substitution as independent
   T3-critical Codex addition.
-- Start browser turn without exclusive ownership of common cross-task browser
-  critical-section identity; do not extend lock over Issue/ledger work or add new
-  runtime lock here.
+- Wrap ordinary tracked-helper turns in caller-side cross-task exclusivity when
+  helper admission already governs parallel work; reserve
+  `orchestrator-pack:create-issue-draft:browser-turn` for eligible
+  scratchpad/legacy fallback only. Do not extend exclusivity over Issue/ledger work
+  or add new runtime lock here.
 - Clear or kill a tracked helper turn that is foreign or not provably owned by the
   current flow-manager merely to free the configured profile.
 - Hand-write, pre-create, replace, annotate, or otherwise modify a tracked-helper

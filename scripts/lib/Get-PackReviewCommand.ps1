@@ -18,6 +18,10 @@ function Get-ReviewerFromRunBody {
         return 'claude'
     }
 
+    if (Test-WrapperScriptInRunBody -Basename 'run-pack-review-gpt.ts' -RunBody $RunBody) {
+        return 'gpt'
+    }
+
     if (Test-WrapperScriptInRunBody -Basename 'run-pack-review.ps1' -RunBody $RunBody) {
         return 'codex'
     }
@@ -228,7 +232,7 @@ function Get-PackReviewGateViolations {
     if ($usesSelector -and -not $resolvedReviewer) {
         $violations.Add([pscustomobject]@{
                 Kind    = 'selector-mismatch'
-                Message = 'PACK_REVIEWER (or fixture expectedReviewer) must be claude or codex for reviewer-agnostic REVIEW_COMMAND'
+                Message = 'PACK_REVIEWER (or fixture expectedReviewer) must be gpt, claude, or codex for reviewer-agnostic REVIEW_COMMAND'
                 Run     = $latest
             }) | Out-Null
     }

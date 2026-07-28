@@ -10,6 +10,10 @@ You are reviewing a pull request in an Agent Orchestrator managed repository.
 
 {{BASE_SCOPE_SECTION}}
 
+## Canonical merge-decision contract
+
+{{CANONICAL_CONTRACT}}
+
 ## Bulk diff read via coworker
 
 When the PR diff exceeds the read-delegation floor (>200 lines), delegate
