@@ -38,26 +38,6 @@ function Test-AoCaptureEnvelope {
     return $payload
 }
 
-function Test-AoDaemonReadyForLiveArgvProbes {
-    param([string]$AoPath)
-
-    if (-not $AoPath) { return $false }
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & $AoPath status --json 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0) { return $false }
-        $payload = $raw | ConvertFrom-Json
-        return [string]$payload.state -eq 'ready'
-    }
-    catch {
-        return $false
-    }
-    finally {
-        $ErrorActionPreference = $prevEap
-    }
-}
-
 function Invoke-AoArgvProbe {
     param(
         [string[]]$AoArgs,
@@ -154,29 +134,24 @@ if ($orchLs.data[0].isTerminated -ne $true) {
 }
 Write-Host '[PASS] deterministic AO 0.10 capture envelope checks'
 
-# ao status --json is valid while the daemon is stopped; session/orchestrator probes need a ready daemon.
+# Live argv acceptance probes (no running session required)
 Invoke-AoArgvProbe -AoArgs @('status', '--json') -Label 'ao status --json'
-if (-not (Test-AoDaemonReadyForLiveArgvProbes -AoPath $aoPath)) {
-    Write-Host '[SKIP] live argv acceptance probes: AO daemon not ready (capture envelope tier still enforced)'
+Invoke-AoArgvProbe -AoArgs @('session', 'ls', '--json') -Label 'ao session ls --json'
+Invoke-AoArgvProbe -AoArgs @('session', 'ls', '--json', '-p', 'orchestrator-pack') -Label 'ao session ls --json -p orchestrator-pack'
+Invoke-AoArgvProbe -AoArgs @('session', 'ls', '--json', '--include-terminated') -Label 'ao session ls --json --include-terminated'
+Invoke-AoArgvProbe -AoArgs @('session', 'ls', '--json', '-p', 'orchestrator-pack', '--include-terminated') -Label 'ao session ls --json -p orchestrator-pack --include-terminated'
+Invoke-AoArgvProbe -AoArgs @('orchestrator', 'ls', '--json') -Label 'ao orchestrator ls --json'
+Test-OrchestratorLsRejectsIncludeTerminated
+
+$sampleId = $null
+if ($sessionLs.data -and $sessionLs.data.Count -gt 0) {
+    $sampleId = [string]$sessionLs.data[0].id
+}
+if ($sampleId) {
+    Invoke-AoArgvProbe -AoArgs @('session', 'get', $sampleId, '--json', '-p', 'orchestrator-pack') -Label "ao session get $sampleId --json -p orchestrator-pack"
 }
 else {
-    Invoke-AoArgvProbe -AoArgs @('session', 'ls', '--json') -Label 'ao session ls --json'
-    Invoke-AoArgvProbe -AoArgs @('session', 'ls', '--json', '-p', 'orchestrator-pack') -Label 'ao session ls --json -p orchestrator-pack'
-    Invoke-AoArgvProbe -AoArgs @('session', 'ls', '--json', '--include-terminated') -Label 'ao session ls --json --include-terminated'
-    Invoke-AoArgvProbe -AoArgs @('session', 'ls', '--json', '-p', 'orchestrator-pack', '--include-terminated') -Label 'ao session ls --json -p orchestrator-pack --include-terminated'
-    Invoke-AoArgvProbe -AoArgs @('orchestrator', 'ls', '--json') -Label 'ao orchestrator ls --json'
-    Test-OrchestratorLsRejectsIncludeTerminated
-
-    $sampleId = $null
-    if ($sessionLs.data -and $sessionLs.data.Count -gt 0) {
-        $sampleId = [string]$sessionLs.data[0].id
-    }
-    if ($sampleId) {
-        Invoke-AoArgvProbe -AoArgs @('session', 'get', $sampleId, '--json', '-p', 'orchestrator-pack') -Label "ao session get $sampleId --json -p orchestrator-pack"
-    }
-    else {
-        Write-Host '[SKIP] session get argv probe: no session id in capture'
-    }
+    Write-Host '[SKIP] session get argv probe: no session id in capture'
 }
 
 if ($LiveDoctor) {

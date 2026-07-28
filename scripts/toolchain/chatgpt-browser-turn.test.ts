@@ -340,13 +340,14 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
 
   it('S3 returns stream_timeout after possible delivery when no attributed assistant terminal appears', async () => {
     const fixture = fakeTurnPage({ dispatchCandidateIds: ['user-owned-12345678'] });
+    const segmentBudget = createPreSendSegmentBudget(30_000);
     const result = await sendTurn(fixture.page, 'payload', {
       cdp,
       profile: join(root, 'profile'),
       chatUrl: 'https://chatgpt.com/c/example',
       newChat: false,
       timeoutMs: 1,
-    });
+    }, undefined, undefined, segmentBudget);
     expect(result.state).toBe('stream_timeout');
     expect(result.possibleDelivery).toBe(true);
   });
