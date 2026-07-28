@@ -2,7 +2,7 @@
 
 **Issue:** [#1036](https://github.com/chetwerikoff/orchestrator-pack/issues/1036)  
 **Wave:** PR0 (record-only)  
-**Inspected revision:** `8fabf182f4df0a70e2f08f67899658ee886ab337` (2026-07-28, `main` ancestry via `chetwerikoff/implement-issue-1036`)
+**Inspected revision:** `dcda4ed83ffb9027948607860bcdd5276abb2752` (2026-07-28, PR #1071 head)
 
 This directory holds the two PR0 deliverables:
 
@@ -16,12 +16,13 @@ Supporting reference (representation map extracted for checklist reuse):
 | Reference | File |
 |---|---|
 | Canonical AO surface identities + representation map | [`surface-identity-map.md`](./surface-identity-map.md) |
-| Per-token `AO_*` axis-2 AO consumer bindings (148 rows) | [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) |
+| Per-token `AO_*` axis-2 AO consumer bindings (149 rows) | [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) |
 | Pack-owned / test-only `AO_*` exclusions (255 of 274 tokens) | [`ao-env-exclusions.md`](./ao-env-exclusions.md) |
 | Axis 3 consumer × surface bindings (15 rows) | [`axis3-bindings.md`](./axis3-bindings.md) |
+| Axis 4 store drain bindings (13 rows) | [`axis4-drain-bindings.md`](./axis4-drain-bindings.md) |
 | Axis 5 consumer × surface bindings (12 rows) | [`axis5-bindings.md`](./axis5-bindings.md) |
 
-**Axis-2 accounting:** 274 distinct `AO_*` names discovered; **148** consumer×surface binding rows for AO-runtime readers; **255** tokens in explicit exclusions ([`ao-env-exclusions.md`](./ao-env-exclusions.md)) — a name may appear in both when reader paths differ by class (production vs test/harness).
+**Axis-2 accounting:** 274 distinct `AO_*` names discovered; **149** consumer×surface binding rows for AO-runtime readers; **255** tokens in explicit exclusions ([`ao-env-exclusions.md`](./ao-env-exclusions.md)).
 
 ## Record-only boundary
 
@@ -40,7 +41,7 @@ PR0 changes **documentation under this subtree only**. It does not modify runtim
 From a clean checkout at the inspected revision:
 
 ```bash
-export REV=8fabf182f4df0a70e2f08f67899658ee886ab337
+export REV=dcda4ed83ffb9027948607860bcdd5276abb2752
 git checkout "$REV"
 
 # Axis 1 — CLI-shaped AO use (production scripts/plugins/docs + config example)

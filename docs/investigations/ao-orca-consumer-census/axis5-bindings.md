@@ -1,6 +1,6 @@
 # Axis 5 — lifecycle and recovery assumption bindings
 
-Inspected revision: `8fabf182f4df0a70e2f08f67899658ee886ab337`
+Inspected revision: `dcda4ed83ffb9027948607860bcdd5276abb2752`
 
 **Unit:** consumer path × canonical surface ID × axis 5. Summary table in [`census.md`](./census.md) §5.5 is derived from this inventory.
 

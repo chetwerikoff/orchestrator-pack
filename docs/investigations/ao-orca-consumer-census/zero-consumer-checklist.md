@@ -90,18 +90,19 @@ For every binding `b ∈ B(S)` with class **drain** (all axis-4 AO-identity stor
 
 ## 4. Blocked surfaces at PR0 baseline (inspected revision)
 
-These canonical surfaces **cannot** yield `zero_consumer = true` today because live `port`/`drain` bindings remain at `8fabf182f4df0a70e2f08f67899658ee886ab337`:
+These canonical surfaces **cannot** yield `zero_consumer = true` today because live `port`/`drain` bindings remain at `dcda4ed83ffb9027948607860bcdd5276abb2752`:
 
 | Surface ID | Blocking reason (summary) |
 |---|---|
 | `daemon.health` | Universal adapter dependency |
 | `session.list.*`, `session.get`, `session.merged-view` | Live worker/supervisor/session tooling |
-| `send.message` | `journaled-worker-send.ps1` |
+| `send.message` | Live messaging + axis-4 drain (`mechanical-transport`, `worker-nudge-claim-namespace`, `orchestrator-escalation-state` — latter unprovable) |
 | `spawn.worker`, `spawn.claim-pr` | Recovery + worker spawn |
-| `review.trigger`, `review.session-list`, `review.runs.aggregate` | Review pipeline |
+| `context.session-id` / `context.worker-handoff` | Widespread runtime injection + axis-4 stores |
+| `review.trigger` / `review.session-list` / `review.runs.aggregate` | Review pipeline |
 | `pack.worker-report` | Active worker handoff |
 | `plugin.declare`, `plugin.scope-guard`, `plugin.review-command`, `plugin.token-ledger` | Plugin hooks |
-| All axis-4 store bindings (`durable-store.*` per [`surface-identity-map.md`](./surface-identity-map.md)) | **drain** not satisfied; escalation store additionally **presently unprovable** |
+| Axis-4 drain bindings on `send.message`, `session.lifecycle`, `review.trigger`, `context.*` (per [`axis4-drain-bindings.md`](./axis4-drain-bindings.md)) | **drain** not satisfied; `mechanical-transport` + `orchestrator-escalation-state` additionally **presently unprovable** |
 
 **Shed surfaces** (`report.worker-state`, `review.project-list`, `review.daemon-cli`) may reach `zero_consumer = true` **only after** §3.3 confirms no live normative text or code references remain (several **shed** doc-debt bindings still mention them — see census §5.3).
 
@@ -158,7 +159,11 @@ PR0 adds **no** runtime enforcement, CI gate, or attestation persistence. The ce
 | `mechanical-transport` | Transport dir listing + max age | no |
 | `dead-worker-reconcile-state` | State file via `Get-DeadWorkerStatePath` | no |
 | `review-handoff-wake-admission` | `docs/review-handoff-wake-admission.mjs` CLI + `Get-ReviewHandoffWakeAdmissionStatePath` | no |
-| `orchestrator-escalation-state` | File read only; session termination requires `session.get` | **yes** — owner: PR7 wave |
+| `worker-nudge-claim-namespace` | `node docs/worker-nudge-gate.mjs` stdin JSON CLI | no |
+| `mechanical-transport` | — | **yes** — owner: PR7 wave |
+| `dead-worker-reconcile-state` | `node docs/dead-worker-reconciler.mjs` stdin JSON CLI | no |
+| `review-handoff-wake-admission` | `node docs/review-handoff-wake-admission.mjs` contract CLI | no |
+| `orchestrator-escalation-state` | — | **yes** — owner: PR7 wave |
 
 Until unprovable bindings gain a production-supported producer, **any surface whose deletion requires that drain proof remains blocked**.
 

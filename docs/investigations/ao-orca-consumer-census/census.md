@@ -1,7 +1,7 @@
 # Closed-world AO consumer census
 
 **Issue #1036 · PR0 · record-only**  
-**Inspected source identity:** git commit `8fabf182f4df0a70e2f08f67899658ee886ab337` (2026-07-28T04:00:59Z, `chore(ci): refresh vitest runtime-history from measured heavy-shard reports (#1059)`)
+**Inspected source identity:** git commit `dcda4ed83ffb9027948607860bcdd5276abb2752` (2026-07-28, PR #1071 head after rebase onto `51c3dc2141fa99cd9638f7946e6fdb3fde5266a2`)
 
 **Canonical surface map:** [`surface-identity-map.md`](./surface-identity-map.md)
 
@@ -142,7 +142,7 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 |---|---|---|
 | **Primary** | `grep -rhoE 'AO_[A-Z0-9_]+'` over tracked corpus (§1.1), excluding wildcard fragments (`grep -vE '_$'`) and path exclusions (`docs/issues_drafts/**`, `docs/archive/**`, `docs/investigations/**`, `tests/external-output-references/**`) | Enumerates every distinct name in the declared corpus only |
 | **Per-consumer bindings** | AO-runtime tokens only: map each reader to a canonical surface from [`surface-identity-map.md`](./surface-identity-map.md); pack-owned names → [`ao-env-exclusions.md`](./ao-env-exclusions.md) §7.3 | No invented `env.*` pseudo-surfaces |
-| **Completeness** | **274** distinct token names; **148** AO consumer binding rows; **255** excluded tokens (reproduction commands in inventory headers) |
+| **Completeness** | **274** distinct token names; **149** AO consumer binding rows; **255** excluded tokens (reproduction commands in inventory headers) |
 
 ### Axis 3 — Worker-facing behavioral text
 
@@ -174,7 +174,7 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 
 ## 4. Axis 2 summary — `AO_*` variable taxonomy
 
-**Distinct tracked names:** 274 — **148** AO consumer bindings ([`ao-env-token-inventory.md`](./ao-env-token-inventory.md)) + **255** explicit exclusions ([`ao-env-exclusions.md`](./ao-env-exclusions.md)).
+**Distinct tracked names:** 274 — **149** AO consumer bindings ([`ao-env-token-inventory.md`](./ao-env-token-inventory.md)) + **255** explicit exclusions ([`ao-env-exclusions.md`](./ao-env-exclusions.md)).
 
 §4.1–4.3 below summarize runtime vs pack-owned vs plugin-tuning **accounting**; only §4.1 names enter `B(S)` as axis-2 bindings. Pack-owned and plugin-tuning `AO_*` names are §7.3 exclusions.
 
@@ -184,7 +184,7 @@ Read by production code expecting AO daemon to set values.
 
 | Variable | Example consumers | Class |
 |---|---|---|
-| `AO_SESSION_ID` | `AGENTS.md`, `pack-worker-report.ps1`, plugins, nudge gates | **port** |
+| `AO_SESSION_ID` / `AO_WORKER_SESSION_ID` | Injected worker session identity — **`context.session-id`** (not `session.get` unless file calls `Get-AoSessionGetJson` / `ao session get`) | **port** |
 | `AO_WORKER_SESSION_ID` | Binding cache, vitest harness, pack-worker-report | **port** |
 | `AO_ORCHESTRATOR_SESSION_ID` | `wait-orchestrator-launch.ps1`, wake supervisor | **port** |
 | `AO_PROJECT_ID`, `AO_PROJECT` | Review reconcile, spawn gates | **port** |
@@ -224,7 +224,6 @@ Read by production code expecting AO daemon to set values.
 | `scripts/lib/Worker-Recovery.ps1` | `spawn.worker` | `ao spawn` argv | Dead worker recovery | **port** |
 | `scripts/set-pack-reviewer.ps1` | `daemon.lifecycle` | `ao stop` / `ao start` | Operator reviewer switch | **port** |
 | `scripts/orchestrator-diagnose.ps1` | `daemon.health`, `review.runs.aggregate`, `events.list` | Adapter calls | Read-only diagnostics | **port** |
-| `scripts/terminal-flood-detect.ps1` | `events.list` | `ao events list` | Terminal flood detection obligation | **port** (behavior survives; must migrate off retired CLI to pack-store/degraded telemetry — not axis-4 `drain`) |
 | `agent-orchestrator.yaml.example` | `send.message` | `ao send` in orchestratorRules / heartbeat | Orchestrator nudge transport | **port** |
 | `agent-orchestrator.yaml.example` | `session.merged-view` | `ao status --json --reports full` | Worker/orchestrator session + report snapshot | **port** |
 | `agent-orchestrator.yaml.example` | `events.list` | `ao events list --json` | Event-silence / ping dedup evidence | **port** |
@@ -233,7 +232,6 @@ Read by production code expecting AO daemon to set values.
 | `agent-orchestrator.yaml.example` | `daemon.lifecycle` | `ao stop` / `ao start` | Operator rules adoption | **port** |
 | `agent-orchestrator.yaml.example` | `report.worker-state` | `ao report` (legacy ack text) | Retired worker ack path | **shed** |
 | `scripts/review-trigger-reconcile.ps1` | `review.runs.aggregate`, `review.trigger` | `Get-AoReviewRuns` + runner | Automatic review starts | **port** |
-| `scripts/harness-post-submit-pn-reconcile.ps1` | `review.fail-stale` | HTTP POST fail-stale | Harness PN recovery | **port** (gated on `AO_REVIEW_FAIL_STALE_SURFACE`) |
 | `scripts/pack-worker-report.ps1` | `pack.worker-report` | Pack CLI | Replaces `report.worker-state` | **port** |
 | `plugins/ao-task-declaration/bin/declare.ts` | `plugin.declare` | Plugin bin | Declaration hook | **port** |
 | `plugins/ao-scope-guard/bin/scope-check.ts` | `plugin.scope-guard` | Plugin bin | Scope enforcement | **port** |
@@ -252,7 +250,6 @@ Read by production code expecting AO daemon to set values.
 |---|---|---|---|
 | `Invoke-AoReviewApi.ps1` | `project.config.read` | `GET /api/v1/projects/{id}` | **port** |
 | `Invoke-AoReviewApi.ps1` | `project.config.write` | `PUT /api/v1/projects/{id}/config` | **port** |
-| `harness-post-submit-pn-reconcile.ps1` | `review.fail-stale` | `POST …/reviews/runs/{runId}/fail-stale` | **port** |
 | `docs/ao-0-10-review-api.mjs` | `review.session-list`, `review.trigger` | Contract paths (see surface map) | **port** (contract, not caller) |
 
 ### 5.3 Axis 3 — worker-facing behavioral text
@@ -279,23 +276,23 @@ Full binding inventory (consumer × canonical surface × axis): [`axis3-bindings
 
 ### 5.4 Axis 4 — durable stores with AO session identity
 
-**Mandatory class:** `drain` (not `shed`).
+**Mandatory class:** `drain` (not `shed`). **Store ID = axis-4 consumer; canonical surface = semantic AO capability** (not `durable-store.*`). Full inventory: [`axis4-drain-bindings.md`](./axis4-drain-bindings.md) (**13 rows** across 11 stores).
 
-| Store ID | Canonical surface ID | Persisted AO identity | Readers / recovery paths | Liveness boundary | Drained condition | Evidence feasibility |
-|---|---|---|---|---|---|---|
-| `worker-report-store` | `durable-store.worker-report-store` | `sessionId` per report record | `Get-WorkerStatusSessionsWithReports`, `pack-worker-report`, `WorkerReportStore.ps1` | Record keyed by repo\|session\|pr\|head; overlay until explicitly stale | No supported reader treats record as actionable AO session command target | **Observable:** read store file via `Get-WorkerReportStoreState` / `docs/worker-report-store.mjs` CLI; production path: `scripts/show-worker-status-report.ps1` merges store + session lists |
-| `pr-session-binding-cache` | `durable-store.pr-session-binding-cache` | `sessionId` in session↔PR bindings | `docs/pr-session-binding-cache.mjs`, review reconcile, PR/session resolvers | Binding live while session row exists and PR open | Bindings for terminated sessions removed or marked inert per contract | **Observable:** `AO_PR_SESSION_BINDING_CACHE` file parse via contract CLI |
-| `worker-status-store` | `durable-store.worker-status-store` | `sessionId` keyed status | `Get-WorkerStatusDecisionSessions`, `show-worker-status-report.ps1` | Entry per worker session | Status rows for non-existent sessions ignored by gating | **Observable:** `scripts/show-worker-status-report.ps1 --json` |
-| `worker-message-dispatch-journal` | `durable-store.worker-message-dispatch-journal` | Sender `AO_SESSION_ID` in dispatch records | Submit reconcile, dispatch observe | Journal retention per contract | No pending dispatch requiring AO session | **Observable:** journal file via `Get-WorkerMessageDispatchJournalPath` |
-| `review-run-store` | `durable-store.review-run-store` | `linkedSessionId` on run rows | `pack-review-runner.ts list`, `Get-AoReviewRuns` | Run terminal states + retention in `docs/review-run-liveness.mjs` | No in-flight runs referencing AO session for action | **Observable:** pack review runner `list` JSON |
-| `review-start-claim-namespace` | `durable-store.review-start-claim-namespace` | Claim holder session / generation | `review-start-claim-store.ts`, review runner | Claim lease TTL + stale reaper | No active claim blocking review start | **Observable:** claim dir listing + contract evaluators |
-| `worker-nudge-claim-namespace` | `durable-store.worker-nudge-claim-namespace` | Nudge claim holder session | `Worker-NudgeClaim.ps1`, nudge gate | Claim stale minutes | No live nudge claim | **Observable:** claim namespace under `AO_BASE_DIR` |
-| `mechanical-transport` | `durable-store.mechanical-transport` | Target session in transport payload files | `journaled-worker-send.ps1`, mechanical reconcile | `AO_MECHANICAL_TRANSPORT_MAX_AGE_SECONDS` | No unconsumed transport files | **Observable:** directory listing + age |
-| `dead-worker-reconcile-state` | `durable-store.dead-worker-reconcile-state` | Last known worker `sessionId` | `dead-worker-reconcile.ps1` | Reconcile state machine terminal | Reconcile finished or session respawned | **Observable:** state file via resolver |
-| `orchestrator-escalation-state` | `durable-store.orchestrator-escalation-state` | Orchestrator `sessionId` in escalation records | `Orchestrator-Escalation.ps1`, escalation router | Escalation terminal states | No open escalation requiring AO orchestrator session | **Partially observable:** state file read; cross-check with `ao session get` — **presently unprovable** for pure file→liveness without operator session pull. **Owner:** PR7 deletion wave. **Zero-consumer blocked** until evaluation-time session liveness proof supplied |
-| `review-handoff-wake-admission` | `durable-store.review-handoff-wake-admission` | `sessionId` in handoff wake admission audit rows | `Record-ReviewHandoffWakeAdmission.ps1`, `docs/review-handoff-wake-admission.mjs`, review wake filters | Admission row keyed by session\|pr\|head; retained per contract TTL | No supported reader treats admission row as actionable AO session target | **Observable:** `docs/review-handoff-wake-admission.mjs` CLI + state file via `Get-ReviewHandoffWakeAdmissionStatePath` |
+| Store (consumer) | Canonical AO surface (drain binds here) | Persisted identity | Observation surface (when provable) |
+|---|---|---|---|
+| `worker-report-store` | `context.worker-handoff`, `context.session-id` | `sessionId` per report | `node docs/worker-report-store.mjs` |
+| `pr-session-binding-cache` | `context.session-id` | `sessionId` in bindings | `node docs/pr-session-binding-cache.mjs` |
+| `worker-status-store` | `context.session-id` | `sessionId` keyed status | `scripts/show-worker-status-report.ps1 --json` |
+| `worker-message-dispatch-journal` | `send.message` | sender `AO_SESSION_ID` | `node docs/worker-message-dispatch-observe.mjs` |
+| `review-run-store` | `review.session-list` | `linkedSessionId` | `pack-review-runner.ts list` |
+| `review-start-claim-namespace` | `review.trigger` | claim-holder session / generation | `node docs/review-start-claim-lifecycle.mjs` |
+| `worker-nudge-claim-namespace` | `send.message` | nudge claim-holder session | `node docs/worker-nudge-gate.mjs` |
+| `mechanical-transport` | `send.message` | target session in payload | **presently unprovable** |
+| `dead-worker-reconcile-state` | `session.lifecycle` | last known worker `sessionId` | `node docs/dead-worker-reconciler.mjs` |
+| `orchestrator-escalation-state` | `send.message` | orchestrator `sessionId` | **presently unprovable** |
+| `review-handoff-wake-admission` | `review.trigger` | `sessionId` in admission rows | `node docs/review-handoff-wake-admission.mjs` |
 
-**Axis-4 open question (permitted — does not change `drain` class):** For `orchestrator-escalation-state`, whether all records are drained requires proving target orchestrator session is terminated. Production lacks a single automated producer that emits “escalation drained” without `session.get`. Recorded as **presently unprovable**; zero-consumer for surfaces depending on that store remains **blocked**.
+**Axis-4 open questions (permitted — do not change `drain` class):** `mechanical-transport` and `orchestrator-escalation-state` lack a production-supported producer for the drained-state fact at inspected revision. Zero-consumer for `send.message` remains **blocked** until PR7 supplies evaluation-time evidence. See [`axis4-drain-bindings.md`](./axis4-drain-bindings.md).
 
 ### 5.5 Axis 5 — lifecycle and recovery assumptions
 
@@ -324,18 +321,19 @@ Full binding inventory: [`axis5-bindings.md`](./axis5-bindings.md) (**12 rows**)
 |---|---|---|---|---|
 | `daemon.health` | ✓ | | | Required for any transport adapter |
 | `session.list.*` / `session.get` / `session.merged-view` | ✓ | | | Core session port |
+| `context.*` (runtime injection) | ✓ | | | Distinct from transport ops — see surface map |
 | `send.message` | ✓ | | | Orca messaging adapter |
 | `spawn.*` | ✓ | | | Worker spawn port |
 | `session.lifecycle` / `daemon.lifecycle` | ✓ | | | Operator recovery port |
 | `project.config.*` | ✓ | | | Reviewer harness |
 | `review.trigger` / `review.session-list` / `review.runs.aggregate` | ✓ | | | Pack runner + HTTP |
-| `review.fail-stale` | ✓ | | | Upstream-gated |
+| `review.fail-stale` | | ✓ | | No live caller after PR #1039 dead-cut |
 | `pack.worker-report` | ✓ | | | Already pack-owned |
 | `plugin.*` | ✓ | | | Hook ports |
 | `report.worker-state` / `report.status-embed` | | ✓ | | Retired |
 | `review.project-list` / `review.daemon-cli` | | ✓ | | Retired |
-| `events.list` | ✓ | ✓ | | CLI representation shed on some builds; live consumers **port** to alternate telemetry |
-| Axis-4 stores (all) | | | ✓ | Drain before deletion |
+| `events.list` | ✓ | ✓ | | CLI representation shed on some builds; yaml example **port** |
+| Axis-4 store consumers (all) | | | ✓ | Drain binds to semantic surfaces per [`axis4-drain-bindings.md`](./axis4-drain-bindings.md) |
 
 ---
 
@@ -348,6 +346,7 @@ Full binding inventory: [`axis5-bindings.md`](./axis5-bindings.md) (**12 rows**)
 | `ao review run/send/execute` in drafts/archive | Not reachable from live roots |
 | `AO_DAEMON_URL` | Mention-only in excluded `docs/issues_drafts/**` (Issue #214 draft); no production reader |
 | `scripts/ao-review.ps1` | Retired path (Issue #839) |
+| `scripts/terminal-flood-detect.ps1`, `scripts/harness-post-submit-pn-reconcile.ps1` | Removed from live tree by PR #1039 dead-cut (#1039); not reachable from supported roots at inspected revision |
 | `tests/external-output-references/captures/ao-0-10-cli/**` | Test capture fixtures only |
 | Estate-cut `ao-reviews-board` artifacts per `scripts/estate-cut/` | Explicitly removed surfaces |
 
@@ -388,11 +387,11 @@ Every raw discovery from §3 methods is accounted as:
 
 To re-validate this census from source:
 
-1. Checkout `8fabf182f4df0a70e2f08f67899658ee886ab337`.
+1. Checkout `dcda4ed83ffb9027948607860bcdd5276abb2752` (or current PR #1071 head).
 2. Run reproduction commands in [`README.md`](./README.md).
 3. Verify live root inventory matches §2 (vitest inventory JSON parse).
-4. Verify axis-1 HTTP paths appear in `Invoke-AoReviewApi.ps1` / `harness-post-submit-pn-reconcile.ps1`.
-5. Verify axis-4 store count = 30 from inventory.
+4. Verify axis-1 HTTP paths appear in `Invoke-AoReviewApi.ps1` (fail-stale caller removed with PR #1039).
+5. Verify axis-4 store count = 30 from inventory; drain bindings in [`axis4-drain-bindings.md`](./axis4-drain-bindings.md).
 6. Cross-check axis 3 skills discrepancy: `switch-pack-reviewer` retired `ao review list` reference.
 
 No classification-determinative question remains open except axis-4 **presently unprovable** drain witness noted in §5.4 (escalation liveness), which does not change `drain` classification.
