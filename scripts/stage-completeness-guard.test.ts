@@ -281,7 +281,7 @@ describe('stage-completeness historical architectural-final bytes', () => {
 
 
 describe('stage-completeness claude-unavailable skip', () => {
-  it('passes with a valid claude-unavailable skip and terminal architectural after the skip anchor', () => {
+  it('passes with the documented producer-facing claude-unavailable waiver shape', () => {
     const result = check('claude-skip-valid');
     expect(result.ok).toBe(true);
     expect(result.receipt?.lensMax).toBeNull();

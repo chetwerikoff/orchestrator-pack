@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use when accepting a GPT-chat-authored task for `orchestrator-pack` — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: one Cursor flow-manager opens the GPT task chat and GPT authors the Issue). The flow-manager owns operational tier/stage mechanics, captures, ledger bookkeeping, chat topology, and browser turns; browser GPT owns spec content and finding dispositions; ordinary architectural rounds reuse one dedicated GPT review chat; the architect appears only for optional pre-task consultation plus the mandatory final lens; competitive/final review chats stay fresh. Covers Issue-only live task state, mixed-engine Codex additions/substitutions, T3-critical L4 classification and safety floors, tracked `chatgpt-browser-turn` mechanics, issue-body guards, and the finding-disposition ledger. The Issue is the only live task artifact; audit artifacts live in an out-of-repo workdir. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from `docs/tiering.md`. Do not invoke when that skip line applies.
+description: Use when accepting a GPT-chat-authored task for orchestrator-pack — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: one Cursor flow-manager opens the GPT task chat and GPT authors the Issue). The flow-manager drives the full fixed per-tier cycle through acceptance or a bounded blocked outcome; browser GPT is the only review engine. T1/T2: one terminal GPT architectural lens. T3: pre-lens stages → pre-lens #975 guard → one Claude architectural-lens → author fixes → one terminal GPT architectural lens. Covers Issue-only live task state, T3-critical L4 floors, tracked chatgpt-browser-turn mechanics, issue-body guards, and the finding-disposition ledger. No Codex create-flow role. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from docs/tiering.md.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -8,9 +8,9 @@ description: Use when accepting a GPT-chat-authored task for `orchestrator-pack`
 Tasks are authored by the operator's **browser GPT** in the custom ChatGPT
 project «orchestrator-pack». GPT creates the GitHub Issue, edits it directly
 throughout the flow, and owns every content fix and finding disposition. One
-current **Cursor flow-manager** owns the operational cycle. The architect is
-outside that per-round cycle and appears only for optional pre-task consultation
-plus the mandatory final architect lens.
+current **Cursor flow-manager** owns the operational cycle **through acceptance**
+or a bounded blocked outcome. There is no mandatory stop-and-hand-off to an
+architect outside the fixed per-tier stages in `docs/tiering.md`.
 
 The **GitHub Issue is the only live task artifact and queue entry**. Pulled
 revisions, captures, chat URLs, manager handoffs, the finding ledger, #975
@@ -18,38 +18,38 @@ adoption evidence, and author replies live in an out-of-repo workdir and are nev
 committed. `docs/issues_drafts/**` and `docs/issue_queue_index.md` are read-only
 prior art for this flow.
 
-Issue #972 owns the flow-manager/author/architect role split and browser-chat
-topology. The #975 M1–M5 economics below are independent of that ownership split
-and must be preserved without reverting #972. Issue #973 remains the owner of
-tier-demotion records and rubric applicability.
+Issue #972 owns the flow-manager/author/reviewer chat topology. The #975 M1–M5
+economics below are independent of that ownership split and must be preserved
+without reverting #972. Issue #973 remains the owner of tier-demotion records
+and rubric applicability. Issue #1027 owns the fixed GPT-only per-tier topology.
 
 ## Inputs and routing
 
 Supported intake forms are:
 
 1. **Existing Issue + task-chat reference.** Hand both directly to the current
-   Cursor flow-manager; no architect intake step is required.
+   Cursor flow-manager.
 2. **Brief-only direct entry.** Operator brief → flow-manager → one new
    browser-GPT task chat. That chat becomes the task chat; GPT authors the spec
    against the floors below and creates the Issue. The first body line becomes
-   `GitHub Issue: #N` once known. The flow-manager then continues the normal
-   cycle. Browser-authoring unavailability leaves authoring pending; it does not
-   create an architect-as-author exception.
-3. **Optional architect-first consultation.** Only when selected by the operator
-   or task origin, the architect may prepare/critique the initial brief. Record
-   that consultation, hand the brief to a new flow-manager, and then the
-   architect leaves the cycle until the mandatory final lens.
+   `GitHub Issue: #N` once known. Browser-authoring unavailability leaves
+   authoring pending; required GPT work stays incomplete — no engine substitution.
+3. **Optional architect-first consultation (pre-task only).** When selected by
+   the operator, the architect may prepare/critique the initial brief before a
+   flow-manager opens the task chat. Record the consultation; it is not a review
+   stage and does not replace any lens in the fixed topology.
 
 For brief-only entry, the self-contained brief carries problem/goal, advisory
 tier prior, constraints, out-of-scope, and verified grounding pointers. The
 flow-manager opens exactly one new browser-GPT task chat and records its URL.
 
-Explicit wrapper routing is preserved:
+Explicit wrapper routing:
 
-- brief-only `discuss-with-gpt` floors the effective tier at T2 and requires the
-  requested browser-GPT competitive stage before acceptance;
-- brief-only `adversarial-draft-review` floors the effective tier at T2 and
-  requires the requested Codex loop before the final lens and acceptance.
+- brief-only `discuss-with-gpt` floors the effective tier at **T2** and routes into
+  this flow; it does **not** add a competitive create-flow stage beyond the single
+  terminal GPT `architectural` lens;
+- `adversarial-draft-review` is **standalone Codex only** — it does not add an
+  in-flow stage to create-issue-draft.
 
 Apply the canonical **Below the ladder — no tier** rule from `docs/tiering.md`.
 When that rule applies, skip this authoring ceremony; otherwise continue here.
@@ -59,10 +59,9 @@ When that rule applies, skip this authoring ceremony; otherwise continue here.
 | Party | Owns | Must not do |
 |-------|------|-------------|
 | GPT author in task chat | Spec content, every content fix, direct Issue edits, every finding disposition, M3 author activation, M4 mechanism inventory | Review its own spec |
-| Cursor flow-manager | Live Issue pulls, tier/stage selection through existing rubric/guards, stage order, T3-critical classification, body/mechanical floors, immutable captures, ledger bookkeeping, pass counting, chat references/topology, browser-turn execution, #975 adoption evidence, pre-lens/final-acceptance guard mechanics | Author spec content, decide reviewer findings, perform the architect lens, invent new helper/runtime semantics |
-| Architect | Optional pre-task consultation when selected; mandatory final architect lens including M3 contest/adjudication required by the active contract, the sole independent aggregate cut decision, and the only sanctioned tier downgrade | Operate routine browser turns, maintain ledger, ratify ordinary per-round dispositions, own ordinary stage ordering or intake/mid-cycle tier selection, author normal content fixes |
-| Reviewer GPT chats | Competitive critique in a fresh chat per pass; ordinary architectural critique in one dedicated reusable review chat; final verification in a fresh chat | Edit the Issue, share the task chat, or self-activate protected authority |
-| Codex | T3-critical independent addition; recorded browser-outage substitution; explicit requested adversarial loop | Become the default architectural engine or be credited for a stage it did not run |
+| Cursor flow-manager | Live Issue pulls, fixed per-tier stage order, tier/T3-critical classification, body/mechanical floors, immutable captures, ledger bookkeeping, pass counting, chat references/topology, browser-turn execution, #975 adoption evidence, economics-guard mechanics, driving the cycle to acceptance or bounded blocked outcome | Author spec content, decide reviewer findings, perform the Claude lens, invent new helper/runtime semantics, mandatory hand-off to architect |
+| Claude architectural-lens (T3 only) | Exactly one `architectural-lens` per cycle segment: pre-terminal M3 when required, pre-terminal independent aggregate cut, sole sanctioned `T3→T2` demotion | Routine browser turns, ledger bookkeeping, post-terminal-GPT work, `T2→T1`, GPT stages |
+| Reviewer GPT chats | Independent review only: competitive (fresh chat per pass when selected), terminal `architectural` (fresh independent chat on every tier) | Edit the Issue, share the task chat, authorize #973 demotion, self-activate protected authority |
 
 ### Flow-manager authority transfer
 
@@ -76,62 +75,68 @@ missing required evidence under the existing stage/cap rules rather than
 inventing it. Do not add a lease, heartbeat, ownership service, or new state
 store for this role boundary.
 
+## Fixed per-tier pipeline
+
+See `docs/tiering.md` for the rubric. Stage order is fixed; in-flight cycles
+restart from intake without historical provenance inference.
+
+### T1
+
+1. Intake, workdir, #973 intake prior, #975 adoption boundary, tier gate.
+2. Exactly **one** independent browser-GPT `architectural` lens (fresh review
+   chat, not the task chat).
+3. Author dispositions/fixes from that lens.
+4. **`final-acceptance`** #975 guard and acceptance. **No** pre-lens #975 phase.
+   Terminal GPT `architectural` is the M5 anchor and owns aggregate cut.
+
+### T2
+
+1. Intake through tier gate (same as T1).
+2. Exactly **one** terminal independent browser-GPT `architectural` lens.
+3. Author dispositions/fixes.
+4. **`final-acceptance`** and acceptance. **No** pre-lens #975 phase. **No**
+   competitive create-flow stage. **No** tier downgrade path.
+
+### T3
+
+1. Intake through tier gate.
+2. **Pre-lens** browser-GPT **competitive** stage when selected (≤3 fresh chats).
+3. After pre-lens stages are legally terminal: **`pre-lens`** #975 guard.
+4. Exactly **one** Claude `architectural-lens` (independent Claude Code CLI
+   invocation + producing-run evidence) **or** a valid `claude-unavailable` skip
+   record when Claude is observably unavailable (terminal GPT still mandatory).
+5. Author dispositions/fixes from Claude findings; re-pull.
+6. Exactly **one** terminal independent browser-GPT `architectural` lens (fresh
+   chat, never the task chat or a competitive chat).
+7. Author dispositions/fixes from terminal GPT findings when needed.
+8. **`final-acceptance`** and acceptance. Terminal GPT `architectural` is the M5
+   anchor and owns **final** aggregate cut. Claude already exercised pre-terminal
+   aggregate cut authority.
+
+**No `architectural-final` stage.** **No Codex** review role. **No engine
+substitution** on browser outage.
+
+**Staleness / review-episode binding.**
+
+- Claude `architectural-lens` captures bind to the **source Issue revision**
+  reviewed; post-Claude author fixes are the normal T3 path and do not invalidate
+  that capture or force a second Claude lens. Post-Claude fixes proceed to
+  **terminal GPT `architectural` only**.
+- Terminal GPT `architectural` remains the **review-episode M5 anchor** after
+  accepted terminal-GPT fixes; the resulting current body still owes all existing
+  mechanical/body/tier/ledger acceptance checks — no second GPT lens.
+
 ## Chat topology
 
 | Stream | Chat | Lifetime |
 |--------|------|----------|
 | Authoring, fixes, finding dispositions | one **task chat** | whole flow |
-| Competitive review | **fresh browser-GPT chat per pass** | one pass |
-| Ordinary architectural review | one **dedicated browser-GPT review chat** | reused across that task's ordinary architectural rounds only |
-| Final architectural verification | **fresh browser-GPT chat** | one pass |
-| Codex additions/substitutions | no browser chat | one cold invocation per pass |
-| Architect | no browser review chat | optional pre-task consultation + mandatory final lens only |
+| Competitive review (T3 only) | **fresh browser-GPT chat per pass** | one pass |
+| Terminal `architectural` (all tiers) | **fresh independent browser-GPT chat** | one terminal lens |
+| Claude `architectural-lens` (T3) | no browser review chat | one lens per cycle segment |
 
-Never review in the task chat or relay content fixes/dispositions anywhere except
-the task chat. Never reuse a competitive or final-verification chat. Never reuse
-the dedicated ordinary-architectural chat for a competitive/final stage or for a
-different task. Reusing that one dedicated chat across ordinary architectural
-rounds is intentional and is the only review-chat continuity in this flow.
-
-## Pipeline
-
-1. Intake: current flow-manager pulls title/body, creates/reconstructs workdir,
-   records any manager handoff, the #973 intake prior before the first tier-gate
-   decision, the independent #975 adoption boundary, recomputes tier/T3-critical
-   stage selection, and runs body floors.
-2. When the task began with optional architect consultation, preserve its brief
-   evidence; otherwise no architect stage runs here.
-3. Browser-GPT competitive stage when selected or explicitly requested, ≤3
-   fresh-chat passes; findings return to the task chat for author disposition and
-   the author updates M4 after each reviewer round.
-4. Browser-GPT ordinary architectural review in one dedicated review chat, using
-   the per-tier ceiling; findings return to the task chat for author disposition
-   and M4 update.
-5. Additional explicit Codex wrapper loop when requested; mandatory independent
-   Codex addition for T3-critical tasks; recorded Codex substitution only for
-   browser outage. Raw Codex #975 economics are validated before transcription.
-   Before the final lens, the flow-manager recomputes tier/stage selection and
-   completes any newly required stage.
-6. After existing stage/convergence authority declares the applicable pre-lens
-   reviewer sequence legally terminal, run the #975 `pre-lens` guard phase.
-7. Mandatory final architect lens, including current M3 adjudication, latest M4
-   audit, M5 anchor audit, the four current #972 final-lens goals, sole independent
-   aggregate cuts, and the only sanctioned tier downgrade. The flow-manager **orchestrates**
-   this stage only: prepare inputs/evidence destination, launch a **separate independent
-   Claude Code CLI** invocation, wait for it, and capture its output/provenance. The
-   flow-manager must not reason through, draft, simulate, or adjudicate the Claude lens
-   itself.
-8. One fresh-chat browser-GPT final architectural pass after the latest final-lens
-   capture when the tier/flow requires it.
-9. Acceptance only over the current Issue revision after the #975
-   `final-acceptance` guard phase, the full tier gate, all existing floors are
-   green, and a final lens covers that exact accepted revision.
-
-Ordinary architectural review ends early on a valid raw result containing exact
-`NO_FINDINGS`. `SIMPLIFICATION_CLEAN` is an additional M5 terminal token, not a
-new pass or stage. Competitive and explicit adversarial loops preserve their
-existing convergence rules and pass ceilings. A capped exit is allowed only when
-the cap applies and unresolved questions are recorded in the ledger/final report.
+Never review in the task chat. Never reuse a competitive or terminal `architectural`
+chat. Reviewer GPT chats are always distinct from the GPT author task chat.
 
 ## Step 1 — Intake, workdir, and #975 adoption boundary
 
@@ -168,17 +173,16 @@ cp "$WORKDIR/rNN/<N>-<slug>.md" "$ANCHOR"
 ```
 
 Pull the title every time because the tier prefix lives in it. Record the task
-chat, the one dedicated ordinary-architectural chat URL, every fresh competitive
-and final-verification chat URL, every manager handoff, and any active-cycle #975
-adoption timestamp in `$REVIEW_DIR/chats.md`. Record Codex invocations separately;
-they have no browser-chat URL.
+chat, every
+fresh competitive chat URL, every terminal `architectural` chat URL, every manager
+handoff, and any active-cycle #975 adoption timestamp in `$REVIEW_DIR/chats.md`.
 
 At intake, after every material Issue/scope change, and immediately before the
-final architect lens, the flow-manager applies the existing tier rubric,
-stage-selection rules, and T3-critical/L4 classification. Ambiguous or
-unparseable classification follows existing fail-up behavior. If the pre-final
-recompute makes the task T3-critical, the mandatory independent Codex addition
-must complete before the final lens.
+next fixed stage in the per-tier topology (Claude lens or terminal GPT
+`architectural` as applicable), the flow-manager applies the existing tier
+rubric, fixed stage-selection rules, and T3-critical/L4 classification. Ambiguous
+or unparseable classification follows existing fail-up behavior. T3-critical adds
+only rollback/migration and crash/race/stale-state floors — no Codex stage.
 
 ### #973 tier provenance records
 
@@ -232,94 +236,60 @@ blast radius and failure type, not from keyword matches in Issue prose.
 ## Step 2 — Task-chat disposition/fix round
 ### Independent review-economics adoption boundary
 
-Reviewer output never chooses its own #975 cutover.
-
-- **Cycle not already active when #975 lands:** use the #975 implementation
-  landing timestamp from trusted repository history as `ADOPTION_TS`.
-- **Cycle already active at that landing:** the operator or current flow-manager
-  records the independently established ISO-8601 timestamp once in the existing
-  audit file:
-
-  `review-economics-adopted-at: <ISO-8601>`
-
-  Reuse that exact value as `ADOPTION_TS`; do not infer it from a later reviewer
-  marker or rewrite old captures.
-
-Capture chronology is immutable-by-procedure audit evidence under the same-user
-trust model as the existing review workdir. Missing/ambiguous adoption chronology
-fails closed. Pre-adoption reviewer captures remain unchanged; M2 only starts
-after the boundary. Current M3 applies to every still-active acceptance attempt
-regardless of ledger age.
-
 ## Step 2 — Task-chat disposition/fix round + M4
-
 
 For every reviewer finding, the flow-manager relays the finding to the one task
 chat as a proposal. GPT author decides the defect disposition, chooses the remedy,
 edits the GitHub Issue for every accepted/partial content fix, and returns a
-change summary plus dispositions. Remedy advice is non-binding: a valid defect
-may be closed with a cheaper sufficient correction. Protected nominations follow
-M3 below.
+change summary plus dispositions. Remedy advice is non-binding.
 
 After **every reviewer round**, the author reply updates one running inventory of
 material mechanisms/ceremony introduced by that round. Each item is classified
-exactly once as `keep`, `simplify`, `defer`, or `cut`. Keep the inventory in the
-existing `round-NN-author-reply.md` evidence; do not create another tracked or
-out-of-repo store. `defer` creates no automatic follow-up Issue. The latest
-inventory is passed to every final lens.
+exactly once as `keep`, `simplify`, `defer`, or `cut`. Keep the inventory in
+`round-NN-author-reply.md`; do not create another store. The latest inventory is
+passed to every lens.
 
-Save the reply verbatim as `round-NN-author-reply.md`, re-pull title/body into a
-new immutable revision when the Issue changed, and diff it. A content-fix reply
-without an Issue edit is unfinished. Run body-only floors on the refreshed
-anchor. Findings flow:
+Save the reply verbatim as `round-NN-author-reply.md`, re-pull when the Issue
+changed, and diff it. A content-fix reply without an Issue edit is unfinished.
+Run body-only floors on the refreshed anchor.
 
 ```text
 reviewer -> flow-manager relay -> task chat author disposition/fix -> Issue edit -> re-pull
 ```
 
-## Shared browser-review contract — M1/M2 + applicable M5 raw evidence
+### Independent review-economics adoption boundary
 
-Every post-adoption browser-GPT **competitive, architectural, and final
-architectural** pass uses a self-contained prompt applying the same review
-contract. Conversation freshness follows the topology above: competitive and
-final passes use new chats; ordinary architectural rounds continue the one
-dedicated architectural chat. Every round carries the current Issue revision
-explicitly; chat history is not a substitute for current task state.
+Reviewer output never chooses its own #975 cutover.
 
-The prompt must:
+- **Cycle not already active when #975 lands:** use the #975 implementation
+  landing timestamp from trusted repository history as `ADOPTION_TS`.
+- **Cycle already active at that landing:** record once in the audit file:
+  `review-economics-adopted-at: <ISO-8601>` and reuse as `ADOPTION_TS`.
+
+Pre-adoption captures remain unchanged; M2 starts after the boundary. Current M3
+applies to every still-active acceptance attempt regardless of ledger age.
+
+## Shared lens contract — M1/M2 + M5 raw evidence
+
+Every browser-GPT lens and the Claude `architectural-lens` use the same contract
+from `prompts/codex_draft_review_prompt.md` (rubric source only):
 
 - wrap the current Issue body as UNTRUSTED DATA between nonce markers;
-- request an alternative decomposition where relevant;
 - require exact review-level `review-economics-contract: v1`;
-- require every material finding to carry stable `id`, canonical plain `type`
-  (`security|scope-violation|spec|quality|test|ci`), severity, separate raw
-  `evidence:` defect facts, non-binding `recommendation:`, and
-  `persistent-machinery: yes|no`;
-- for every `persistent-machinery: yes`, require
-  `cheapest-sufficient-alternative`, `stakes-price`, and `trade-in`; use exact
-  `stakes-undeclared` when no explicit failure-impact statement exists and exact
-  `net-add` when nothing is traded out;
-- require the four-question simplification lens from
-  `prompts/codex_draft_review_prompt.md`: what can be simplified, what must not be
-  simplified, what is excess, and what is missing;
-- permit a material cut candidate only with exact raw
-  `simplification-cut-candidate: yes`; no other value or inferred flag;
-- for pre-lens `competitive` / `architectural` outputs, require exact
-  `SIMPLIFICATION_CLEAN` when that raw result has no tokened cut candidate; if the
-  result is genuinely clean, also require exact `NO_FINDINGS`;
-- keep post-lens `architectural-final` M2-governed, but do **not** require
-  `SIMPLIFICATION_CLEAN` merely because it is clean or follows a lens.
+- require every material finding to carry stable `id`, canonical `type`
+  (`security|scope-violation|spec|quality|test|ci`), severity, raw `evidence:`,
+  non-binding `recommendation:`, and `persistent-machinery: yes|no`;
+- for every `persistent-machinery: yes`, require `cheapest-sufficient-alternative`,
+  `stakes-price`, and `trade-in` (or exact `stakes-undeclared` / `net-add`);
+- require the four-question simplification lens;
+- permit M5 cut candidate only with exact raw `simplification-cut-candidate: yes`;
+- for pre-lens `competitive` outputs on T3, require exact
+  `SIMPLIFICATION_CLEAN` when no tokened cut candidate; if genuinely clean, also
+  exact `NO_FINDINGS`;
+- for **terminal** GPT `architectural` (M5 anchor on all tiers), require the same
+  M5 token rules as the final acceptance anchor.
 
-Save the validated response verbatim before normalization. A malformed persistent
-`yes` proposal missing a price field does not erase its defect. Normalize the
-defect normally; the author may decline only that remedy with row-local
-`proposalOutcome: "declined"` and exact `proposalReason: "malformed-proposal"`.
-
-The latest **governed marked** occurrence of a stable defect id is authoritative
-for current machinery classification/price/proposal economics. Pre-adoption and
-earlier governed captures stay immutable. `yes -> no` and `no -> yes` are valid
-when latest governed raw/ledger agree; M4 continues to account for machinery
-actually introduced earlier.
+Save every response verbatim before normalization.
 
 ### Normalized #975 ledger facts
 
@@ -328,462 +298,192 @@ Keep the existing stable row and add only row-local facts needed by the guard:
 - `persistent-machinery`, plus the three price values when applicable;
 - `proposalOutcome` / `proposalReason` only for a declined malformed proposal;
 - `simplificationCutCandidate: true|false` matching the latest governed marked raw
-  occurrence and, for M5, the terminal anchor;
+  occurrence;
 - `protectedActivation: { authority: "author", signal: "...", whyNow: "..." }`
   when the author activates a protected nomination;
-- `architectPending: true` only while current M3 genuinely requires a lens;
-- `architectRequired: true` only when another existing rule independently
-  requires architect adjudication.
+- `architectPending: true` only under **T3 pre-Claude** M3 when genuinely required;
+- `architectRequired: true` only when another existing rule independently requires
+  Claude adjudication.
 
-Field organization is audit-only, not a new ledger/store schema service. The
-existing defect-level `disposition` stays `addressed|rejected`.
+## Step 3 — Competitive review (T3 only)
 
-## Step 3 — Competitive review
+Run when T3 selects competitive as a pre-lens stage. **T1 and T2 never run
+competitive.**
 
-Run when selected by the effective tier or forced by an explicit
-`discuss-with-gpt` wrapper. T3 always runs it; T2 runs it only when an explicit
-wrapper/contract selects it. Human/flow-manager rubric judgment may escalate the
-task to T3 rather than creating an under-tier path. Only a direct operator decision may waive an
-otherwise selected non-critical competitive stage, and the waiver is recorded.
+Each pass: fresh `--new-chat`, shared contract, save as `pass-NN-competitive.capture.txt`,
+normalize, relay to task chat, update M4, re-pull, rerun body floors when changed.
+Cap 3 passes. Browser unavailability blocks the stage — no substitution.
 
-Each pass:
+## Step 4 — Pre-lens #975 guard (T3 only)
 
-1. open a **fresh** browser-GPT chat with `--new-chat`;
-2. apply the shared #975 browser-review contract to the current Issue;
-3. save verbatim as `pass-NN-competitive.capture.txt`;
-4. normalize findings/economics, relay them through the flow-manager to the task
-   chat for author disposition/fix, update M4, re-pull, and rerun body floors when
-   content changed.
-
-Stop on the existing legal no-accepted-finding terminal state or at cap 3 with
-open questions recorded. If browser unavailability qualifies for substitution,
-a cold Codex pass may use the exact `competitive` capture identity.
-
-## Step 4 — Browser-GPT architectural review
-
-Ordinary architectural review uses **one dedicated browser-GPT review chat per
-task**. Open it once with `--new-chat` for the first ordinary architectural round,
-record its returned conversation URL, and continue that exact chat with
-`--chat-url` for later ordinary architectural rounds. The current Issue revision
-and self-contained #975 prompt remain the review input on every round.
-
-Each ordinary architectural pass:
-
-1. first round: open the dedicated review chat with `--new-chat`; later rounds:
-   target the recorded dedicated chat with its exact `--chat-url`;
-2. apply the shared M1/M2 + pre-lens M5 contract;
-3. save verbatim as `pass-NN-architectural.capture.txt`;
-4. normalize the defect + economics facts, relay author fixes, update M4, re-pull
-   changed Issue content, and rerun body floors.
-
-Per-tier ceiling: T1 one light pass, T2 ≤3, T3 ≤4. A valid raw result carrying
-`NO_FINDINGS` ends the ordinary stage early; capped exits preserve open questions.
-Competitive/final chats are never reused here, and the dedicated ordinary chat
-is never reused outside this task/stage.
-
-### Browser-outage substitution
-
-Only when the browser is unavailable and the operator cannot restore it may a
-fresh cold Codex invocation replace a browser-GPT review pass. Use
-[`adversarial-draft-review`](../adversarial-draft-review/SKILL.md), preserve the
-replaced stage name (`competitive`, `architectural`, or `architectural-final`) in
-the plain capture, store raw JSON alongside it, and record the substitution.
-
-**Before transcription**, validate governed raw Codex JSON against the #975
-contract in that skill. The plain capture copies raw economics/candidate facts
-1:1 and may never synthesize missing fields. A substitution is credited only to
-the browser stage it replaces and never satisfies the independent T3-critical
-Codex addition. When browser GPT resumes, competitive/final stages use fresh
-chats; ordinary architectural review resumes the already-recorded dedicated chat
-or opens that single dedicated chat if none existed yet.
-
-### Explicit Codex wrapper
-
-When brief-only `adversarial-draft-review` was explicitly requested, run its
-additional cold challenge loop after ordinary browser-GPT architectural review
-and **before** the final lens. The explicit wrapper never replaces GPT competitive
-or architectural review. Relay findings to the task chat for GPT author
-disposition, apply accepted fixes there, update M4, and rerun body floors. Cap:
-three passes under that skill's convergence rule. Raw-before-transcription #975
-economics are mandatory.
-
-### T3-critical classification and mandatory floors
-
-Classify a task as **T3-critical** whenever it matches any L4 condition in Issue
-#574 / `docs/issues_drafts/187-task-complexity-tier-rubric.md`. The declared tier
-is only a prior. The flow-manager classifies at intake, after material Issue/scope
-change, and immediately before the final lens. While an L4 condition remains, the
-task cannot be downgraded below T3.
-
-T3-critical means **GPT and Codex together**:
-
-- the normal T3 browser-GPT competitive, architectural, and final stages run;
-- an independent cold Codex challenge loop also runs after ordinary browser-GPT
-  architectural review and before the final lens, under the
-  `adversarial-draft-review` convergence rule (cap 3);
-- this mandatory addition is independent of any explicitly requested Codex loop;
-- a Codex outage substitution does not satisfy the mandatory independent Codex
-  addition and never satisfies the GPT half.
-
-T3-critical also adds two non-waivable Issue-body floors:
-
-- an explicit rollback or migration note appropriate to the change, including
-  safe reversal/transition boundary and operator action when applicable;
-- realistic acceptance criteria and matching verification for every material
-  crash, race, or stale-state failure class.
-
-The flow-manager checks L4 classification and both floors before the final lens.
-Missing classification evidence, rollback/migration coverage, realistic
-failure-mode verification, qualifying GPT participation, or the independent
-Codex addition blocks progression to the final lens/acceptance.
-
-### Codex availability
-
-Availability is fail-closed:
-
-- the T3-critical independent Codex addition is mandatory and cannot be waived;
-- an additional explicit non-T3-critical wrapper blocks until Codex is restored
-  or the operator directly waives only that extra wrapper stage; record the
-  waiver in ledger notes and final report;
-- when Codex is selected as a browser-outage substitute and is unavailable, the
-  replaced browser stage remains blocked.
-
-Never call an unavailable or skipped required stage complete.
-
-## M3 — protected nomination handling
-
-Reviewer `type: security` or `type: scope-violation` is a **nomination**. It is
-never silently dropped, but its type is not self-activating addressed-only
-authority.
-
-For every still-active cycle evaluated under #975:
-
-1. find the nomination's raw `evidence:` only; do not scan `type`,
-   `recommendation`, M2 prices, or other remedy prose for finding-scoped
-   zero-signal;
-2. author activation is valid only when raw evidence contains a real canonical
-   protected signal and the author record includes both that signal and why
-   closure belongs in this task now;
-3. valid non-zero-signal author activation is addressed-only and independently
-   authoritative while no current architect contest/other architect-required
-   condition applies;
-4. zero-signal, absent/invalid activation, current/unknown/stale contest, or
-   another architect-required condition is recorded `architectPending: true`
-   until the architect acts;
-5. architect `activate` makes addressed-only apply; `non-activate` returns the
-   underlying defect to ordinary M1 disposition.
-
-Only a final architect-lens capture may create/withdraw a contest. Record one
-machine-readable line for each touched protected id:
-
-`m3-protected: id=<id> | revision=<exact-rNN> | contest=none|contested|contest-withdrawn | outcome=none|activate|non-activate | evidence=<real architect evidence when activating> | why-now=<why closure belongs now when activating>`
-
-The line binds architect outcome/contest to the exact revision. Stale, unknown,
-malformed, or ambiguous state fails closed. Architect activation needs current
-real canonical protected evidence + why-now. A valid author activation does not
-need architect authorization; a required later lens is freshness/audit only.
-
-## Step 5 — Pre-lens progression and final architect lens
-
-Run only after **existing** stage/convergence authority says the applicable
-pre-lens reviewer sequence is legally terminal. Do not use #975 to invent a new
-terminal state.
-
-First run the bounded pre-lens economics phase:
+Run only after pre-lens reviewer stages are legally terminal:
 
 ```bash
-node scripts/finding-ledger-guard.mjs \
-  --ledger "$REVIEW_DIR/finding-disposition-ledger.json" \
-  --captures-dir "$REVIEW_DIR" \
-  --draft-path "$ANCHOR" \
-  --phase pre-lens \
-  --adoption-timestamp "$ADOPTION_TS" \
-  --stage-terminal
+node scripts/finding-ledger-guard.mjs   --ledger "$REVIEW_DIR/finding-disposition-ledger.json"   --captures-dir "$REVIEW_DIR"   --draft-path "$ANCHOR"   --phase pre-lens   --adoption-timestamp "$ADOPTION_TS"   --stage-terminal
 ```
 
-This phase requires every post-adoption reviewer capture to be M2-marked,
-validates latest raw/ledger proposal economics, validates terminal M5 shape, and
-permits genuinely architect-required protected work only as
-`architectPending: true`. It **never** certifies acceptance.
+T1/T2 **skip** this phase entirely.
 
-### M5 terminal anchor
+## Step 5 — Claude architectural-lens (T3 only)
 
-For the first lens in a contiguous lens/final episode, the legally terminal
-post-adoption pre-lens reviewer result is the M5 anchor. No raw
-`simplification-cut-candidate: yes` → exact `SIMPLIFICATION_CLEAN` required
-(`NO_FINDINGS` too only when genuinely clean). Tokened candidate(s) → no
-retroactive clean token; each must match its ledger flag and be dispositioned or
-legitimately architect-pending.
+Exactly one full lens per cycle segment after the pre-lens guard is green. The
+accepted candidate must be covered by this lens before terminal GPT runs.
 
-If the selected anchor predates `ADOPTION_TS`, stop. Preserve it, re-enter one
-existing governed pre-lens reviewer stage, and let existing convergence authority
-produce one legally terminal post-adoption result. That new segment supplies the
-anchor. Do not insert a confirmation pass just to mint a token.
-
-### Final architect lens
-
-The flow-manager **never performs** the architect lens. Every skill reference to
-"run" or "drive" the Claude lens means: prepare inputs and the evidence
-destination, launch one **separate independent Claude Code CLI** invocation,
-wait for terminal completion, and capture its verbatim output/provenance. Manager
-summaries, reconstructions, Browser GPT, Codex, or any other model cannot
-substitute for or simulate the skipped Claude lens.
+The flow-manager **orchestrates** this stage only: prepare inputs and the
+evidence destination, launch one **separate independent Claude Code CLI** invocation,
+wait for terminal completion, and capture its verbatim output/provenance. The
+flow-manager must not reason through, draft, simulate, or adjudicate the Claude lens.
+Browser GPT, Codex, or any other model cannot substitute for the skipped Claude lens.
 
 #### Claude-unavailable skip (T3 stage completeness only)
 
 When a real Claude Code CLI invocation cannot run because Claude is observably
 unavailable — explicit quota, rate-limit, provider-unavailable, or CLI-unavailable
-evidence — record one durable `architect-lens-stage-waiver.json` sidecar in the
-review directory and proceed without the Claude lens. Ordinary impatience, an
+evidence — record one durable `architect-lens-stage-waiver.json` sidecar in
+`$REVIEW_DIR` and proceed without the Claude lens. Ordinary impatience, an
 ambiguous timeout, or a manager decision to save cost is **not** a valid skip.
+Do not retry in a loop once unavailability is established.
 
 The skip record is audit evidence only. It is not Claude provenance, does not
 create an `architectural-lens` capture, does not satisfy M3 adjudication, and
-grants no `T3→T2` demotion authority. After a valid skip, the terminal
-browser-GPT `architectural` lens remains mandatory. Do not retry in a loop once
-unavailability is established.
+grants no `T3→T2` demotion authority. After a valid skip, the terminal browser-GPT
+`architectural` lens remains mandatory.
 
-Run at every tier after all required pre-final stages and the pre-lens #975 guard
-are green. The accepted candidate must be covered by the latest final lens after
-the last Issue content change.
+Minimal producer-facing record (stage-completeness guard accepts only this shape):
 
-The final lens is the sole **independent aggregate** cut authority for
-review-added machinery and the **only** sanctioned tier-downgrade point. It
-consumes current Issue body, the T3 reject partition where applicable, current M3
-protected state, latest M4 inventory, and applicable M5 anchor. Ordinary author
-handling of reviewer-originated simplification remains an M1 fix, not an
-aggregate lens decision.
-
-It has four mandatory goals, in this exact order:
-
-1. **Contradiction check.** Verify the task's conditions do not contradict each
-   other. Any contradiction found is **fixed via the normal task-chat fix path**,
-   not merely recorded.
-2. **Feasibility check.** Verify the task is actually buildable as written, using
-   live probes over assumptions wherever the claim can be probed.
-3. **Cut ALL overengineering — PRIMARY goal.** Re-evaluate every major mechanism
-   against explicit stakes, cost/risk, and cheapest sufficient alternative.
-   Explicitly answer **“which mechanism would be cut if one had to be?”** and
-   resolve that answer as a real cut through the task-chat fix path or a recorded
-   keep-justification explaining why it is necessary. As part of the same goal,
-   explicitly reconsider whether the task still needs its current complexity tier;
-   apply the final-lens downgrade path when higher-tier drivers are gone, otherwise
-   record why the tier remains required. Applicable L4 floors and #973 demotion
-   mechanics still bind. “Traces to a finding” alone is not a keep-justification.
-   A verdict without both forced-cut answer and explicit tier reconsideration is
-   invalid.
-4. **Find what was missed.** Identify gaps, unverified evidence, and unsettled
-   conditionals and route required corrections through the normal task-chat fix
-   path.
-
-For T3, record an explicit **keep** or **cut** verdict for each major mechanism.
-Repackaging or splitting an over-built mechanism across sibling tasks is not, by
-itself, a cut: record a substantive reduction or explicitly keep the total
-mechanism. The lens also performs whatever protected adjudication the active
-protected-finding contract requires.
-
-Recompute against the final body only inside this lens for any downgrade. A new
-demotion may move only one adjacent step (`T3→T2` or `T2→T1`) and the task
-lifecycle may consume this authority only once. Marker and L4 floors still bind.
-The source is the immutable preceding high-watermark decision and its recorded
-driver set.
-
-When a downstep is justified, the original guard-recognized architect-lens capture
-contains exactly one fenced JSON event of this shape (field order is irrelevant):
-
-```tier-demotion-event
+```json
 {
-  "schema": "tier-demotion-event/v1",
-  "eventId": "<stable-id>",
-  "kind": "new",
-  "role": "architect",
-  "stage": "final-architect-lens",
-  "sourceRevision": "rNN",
-  "beforeTier": "T3",
-  "afterTier": "T2",
-  "drivers": [
-    { "kind": "rubric", "id": "<exact-source-driver>", "rationale": "<why it no longer applies>" }
-  ]
+  "reason": "claude-unavailable",
+  "recorded-at": "2026-07-28T12:00:00.000Z",
+  "after-pass": 2,
+  "unavailability": "rate-limit"
 }
 ```
 
-`drivers` must disposition **exactly** the source receipt's rubric
-classes: no omission, extra row, or substitute. Rationales remain human-audited
-architect prose; the guard checks set equality and exact source binding. Author
-Issue prose, signer strings, intake records, or fence metadata cannot substitute
-for this event.
+- `reason` must be exactly `claude-unavailable`.
+- `recorded-at` must be strict ISO-8601 UTC (same rule as competitive waivers).
+- `unavailability` must be one of `quota`, `rate-limit`, `provider-unavailable`,
+  `cli-unavailable`.
+- `after-pass` is the highest completed pre-Claude pass index in the review
+  episode (competitive and/or pre-lens reviewer passes). The guard requires this
+  skip anchor to be **strictly greater** than the competitive anchor, and the
+  terminal GPT `architectural` capture must be strictly after the skip anchor.
 
-The task chat then applies exactly the authorized tier/title/fence-reference
-change. The complexity-tier fence retains the intake `advisory-prior` mirror and
-adds both `demotion-from: <before-tier>` and `demotion-event: <stable-id>`. The
-flow-manager re-pulls that Issue edit as the next immutable revision and records
-its tier-gate decision receipt. At this point the **full tier gate must be red**:
-current-candidate revalidation does not exist yet. A crash here stays red on retry.
 
-Run a newer final-lens delta over that exact post-edit immutable revision. Its
-architect-lens capture includes:
+The Claude lens is the **pre-terminal independent aggregate cut** authority and the
+**only** sanctioned tier-downgrade point (`T3→T2` only; **no** `T2→T1`). It
+consumes current Issue body, T3 reject partition where applicable, current M3
+protected state, latest M4 inventory, and applicable pre-lens economics.
 
-```tier-demotion-revalidation
-{
-  "schema": "tier-demotion-revalidation/v1",
-  "eventId": "<same-stable-id>",
-  "role": "architect",
-  "stage": "final-architect-lens",
-  "candidateRevision": "rNN",
-  "beforeTier": "T3",
-  "afterTier": "T2",
-  "l4Status": "clear"
-}
-```
+Four mandatory goals, in order:
 
-Only then rerun the full tier gate. Exactly one matching current-candidate
-revalidation may authorize the lower tier. Same-event revalidation may repeat
-after later same-tier content fixes and does not consume another demotion. Any
-later upward recomputation remains mandatory and allowed but closes event reuse;
-a later downstep is a forbidden second lifecycle demotion. Keep the stable event
-reference in the Issue fence even after later up-escalation; removing it cannot
-reset history.
+1. **Contradiction check** — fix via task-chat path.
+2. **Feasibility check** — live probes where possible.
+3. **Cut ALL overengineering — PRIMARY goal** — forced-cut answer, explicit tier
+   reconsideration, `T3→T2` demotion only when justified under #973.
+4. **Find what was missed** — route corrections via task-chat path.
 
-For a frozen-list legacy identity, `kind: compatibility` is allowed only when
-immutable before/after revisions plus existing architect final-lens evidence prove
-the already-sanitized historical downstep and its source drivers can be
-mechanically reconstructed. The compatibility event additionally names
-`historicalAfterRevision` and `historicalLensCapture`. It imports that one old
-demotion into the same audit shape and consumes the same lifecycle allowance; it
-cannot authorize a new downstep. The production compatibility set and historical-
-demotion population are both empty at #973 cutover, so this path is dormant outside
-explicit test fixtures.
+For T3, record explicit **keep** or **cut** for each major mechanism.
 
-Save every architect result as `pass-NN-architectural-lens.capture.txt`, with
-detailed analysis in `presync-architect-lens.md`. A fix-required result returns to
-the task chat; the flow-manager re-pulls the changed Issue and this lens then
-reruns as a new capture. Any Issue content change after a lens invalidates that
-lens for acceptance. Prior captures and ledger rows remain valid and are never
-waived.
+### Producing-run evidence
 
-#### Producing-run evidence
+Save as `pass-NN-architectural-lens.capture.txt` with detailed analysis in
+`presync-architect-lens.md`. Co-located producing-run evidence from the
+independent **Claude Code CLI** invocation is mandatory. Absence fails closed.
 
-A final architect-lens capture is acceptance-valid only when evidence from the
-independent **Claude Code CLI** invocation that produced that lens is retained
-beside the capture in the same review-artifact area. Before the architect
-invocation begins, the flow-manager establishes the destination for that evidence.
-The evidence may be written by the producing architect run itself, or it may be
-that same invocation's raw output, log, or receipt captured verbatim by the
-flow-manager while the invocation executes. A later manager-authored summary,
-reconstruction, or assertion that the run happened is not producing-run evidence.
+Fix-required results return to the task chat; re-pull and **do not** rerun Claude
+until a new cycle segment is required. Post-Claude fixes go to **terminal GPT
+architectural only**.
 
-The producing-run evidence must be sufficient to associate the invocation with
-the architect-lens role, the exact Issue revision it evaluated, the corresponding
-lens capture, and the run's terminal lens outcome. Exact filename, encoding, and
-additional fields remain planner freedom. Absence, mismatch, ambiguity, or
-evidence that the flow-manager itself performed the lens fails closed: the capture
-cannot satisfy the final architect-lens acceptance floor.
+### #973 demotion (`T3→T2` only)
 
-If producer/provenance evidence invalidates a lens, the audit trail must stop
-crediting that capture as an acceptance-bearing architect result. Historical raw
-artifacts may remain explicitly invalid. Producer/provenance validity is distinct
-from Issue-content staleness: invalid provenance removes acceptance credit but
-does not waive findings, dispositions, or ledger rows already produced or
-recorded; separately, a later Issue content change still stales an otherwise
-producer-valid lens under the existing rule.
+When justified, the lens capture contains exactly one fenced `tier-demotion-event/v1`
+JSON record (`role: architect`, `stage: architectural-lens`, exact source revision,
+`beforeTier: T3`, `afterTier: T2`, drivers matching source rubric labels).
 
-This evidence is same-user provenance, not cryptographic attestation. It does not
-prevent a deliberately violating agent from fabricating plausible evidence; it
-makes missing or false producer attribution an explicit audit failure instead of
-silently crediting a lens with no producing-run evidence.
+After the task chat applies the authorized fence/title change and the flow-manager
+re-pulls:
 
-## Step 6 — Final architectural verification
+1. record **narrow revalidation evidence** (`tier-demotion-revalidation/v1` — not a
+   full second Claude lens);
+2. run **terminal GPT `architectural`** on the post-demotion candidate;
+3. proceed toward acceptance when guards are green.
 
-T3 always runs one; T1/T2 run one only when the final lens changed content under
-the current tier flow. Run it in a **fresh browser-GPT chat with `--new-chat`**,
-apply the same #975 reviewer contract, and save verbatim as
-`pass-NN-architectural-final.capture.txt`. `architectural-final` remains
-M2-governed but does **not** owe M5 merely because it follows a lens.
+**No Claude after terminal GPT.**
 
-If browser is unavailable and the operator cannot restore it, a cold Codex
-substitution may use the same capture identity with raw JSON provenance; for
-T3-critical it does not satisfy the GPT half or independent Codex addition.
+## Step 6 — Terminal GPT architectural lens (all tiers)
 
-If the final pass finds ordinary issues:
+Exactly **one** terminal independent browser-GPT `architectural` lens per acceptance
+attempt segment. Always a **fresh** review chat (`--new-chat`), never the task chat
+or a competitive review chat.
 
-```text
-final finding -> flow-manager relay -> task-chat author fix -> re-pull -> newer final lens -> one new final pass
-```
+Apply the shared lens contract. Save verbatim as `pass-NN-architectural.capture.txt`
+using the terminal capture identity recognized by stage-completeness guards.
 
-Preserve failed final capture and ledger evidence. Never place two final captures
-after the same latest lens. After the newer lens exactly one newer final may exist,
-matching the existing stage-completeness contract.
+- **T1/T2:** sole reviewer stage; owns **aggregate cut** and **M5 anchor**.
+- **T3:** owns **final aggregate cut** and **M5 anchor** after Claude and author
+  fixes. GPT cannot emit #973 demotion authority.
 
-### Protected nomination first discovered in final verification
+Relay findings to task chat, update M4, re-pull. Post-terminal-GPT accepted fixes
+do **not** trigger a second GPT lens; ledger/guards decide acceptance.
 
-The older lens cannot adjudicate a nomination it predates.
+### M3 by tier
 
-1. preserve/normalize raw final capture;
-2. apply M3 immediately: valid non-zero-signal, uncontested author activation is
-   authoritative; otherwise record architect-pending;
-3. run the **newer final lens** required by the existing final-finding loop. If no
-   Issue content change is required, it may review unchanged current `rNN`;
-4. for valid author activation, lens records freshness/audit (`contest=none` or
-   withdrawal) without pretending it authorized earlier author decision;
-5. for architect-pending it records required contest closure/adjudication;
-6. run exactly one fresh `architectural-final` after latest lens.
+| Tier / stage | Protected nomination rule |
+|--------------|---------------------------|
+| T1/T2 (terminal GPT) | No architect contest. Valid non-zero-signal author activation is authoritative. Absent/invalid activation → ordinary M1, **not** `architectPending`. |
+| T3 pre-Claude | Zero-signal, absent activation, or contest → `architectPending` until Claude lens adjudicates. Only Claude lens may create/withdraw contest. |
+| Protected nomination first emitted in terminal GPT | No post-GPT architect path. Valid author activation authoritative; else ordinary M1. |
 
-No synthetic Issue edit, extra reviewer stage, or confirmation M5 pass is added.
+Record `m3-protected:` lines per protected id when Claude adjudicates on T3.
 
 ## Step 7 — Acceptance
 
-Acceptance requires all pre-existing floors plus current M2/M3/M5 evidence. Run
-stage completeness/body floors as usual, then the full economics phase over exact
-current immutable revision identity (`rNN`):
-
-## Step 7 — Acceptance
-
-Acceptance requires all pre-existing floors plus current M2/M3/M5 evidence. Run
-stage completeness/body floors as usual, then the full economics phase over exact
-current immutable revision identity (`rNN`):
+Run stage completeness/body floors, then economics guard:
 
 ```bash
-node scripts/finding-ledger-guard.mjs \
-  --ledger "$REVIEW_DIR/finding-disposition-ledger.json" \
-  --captures-dir "$REVIEW_DIR" \
-  --draft-path "$ANCHOR" \
-  --phase final-acceptance \
-  --adoption-timestamp "$ADOPTION_TS" \
-  --issue-revision "rNN"
+node scripts/finding-ledger-guard.mjs   --ledger "$REVIEW_DIR/finding-disposition-ledger.json"   --captures-dir "$REVIEW_DIR"   --draft-path "$ANCHOR"   --phase final-acceptance   --adoption-timestamp "$ADOPTION_TS"   --issue-revision "rNN"
 ```
+
+T1/T2 skip `pre-lens` phase; T3 requires it green before Claude ran and
+`final-acceptance` green now.
 
 Final acceptance requires:
 
-1. latest final architect lens covers exact Issue revision being accepted, has
-   valid co-located producing-run evidence from its independent Claude Code CLI
-   invocation, and the normal latest-lens/latest-final relationship holds;
-2. the full `checkTierGateGuard` is green on that exact current anchor, including
-   intake/history/demotion/current-revalidation and applicable L4 floors when applicable;
-3. clean final pass over that exact revision when required;
-4. body floors, stage completeness, and full finding-ledger guard green;
-5. every typed finding normalized and remedy outcome separate from defect
-   disposition; unresolved protected work resolved/adjudicated under the active
-   protected contract; capped risks recorded;
-6. governed reviewer evidence after independent adoption boundary;
-7. a legally terminal **post-adoption** M5 anchor; no grandfather exemption;
-8. valid author M3 authority only with real-signal + why-now and current contest
-   unambiguously absent/withdrawn, or current architect adjudication when required;
-9. no architect-pending protected state;
-10. live Issue title prefix matches final tier and all existing T3-critical floors
-    are satisfied;
-11. no selected browser-GPT stage skipped except through permitted recorded outage
-    substitution; every mandatory T3-critical Codex addition complete and every
-    explicit wrapper complete or explicitly waived only where allowed;
-12. final report includes Issue URL, tier/pass counts, task/review chat URLs,
-    current manager handoff, workdir, transport fallbacks, substitutions/waivers,
-    T3-critical result, #973 cutover/provenance state when applicable, M4 summary,
-    and residual risks.
+1. terminal GPT `architectural` is the M5 anchor for the review episode; accepted
+   terminal-GPT fixes do not require a second GPT lens — guards validate the
+   resulting current body;
+2. on T3, Claude `architectural-lens` covers the **source revision** it judged
+   and has valid producing-run evidence when Claude ran in this segment;
+3. full `checkTierGateGuard` green on the current anchor, including #973 demotion
+   narrow revalidation when applicable;
+4. body floors, stage completeness, and finding-ledger guard green;
+5. every typed finding normalized; protected work resolved under tier-appropriate M3;
+6. governed reviewer evidence after adoption boundary;
+7. live Issue title prefix matches final tier; T3-critical L4 floors when applicable;
+8. no required browser-GPT stage skipped; browser outage leaves work blocked;
+9. final report includes Issue URL, tier/pass counts, chat URLs, manager handoff,
+   workdir, T3-critical result, #973 state when applicable, M4 summary, residual risks.
 
-Two non-converging `fix -> newer lens -> final` cycles escalate to the operator.
+Two non-converging fix cycles on the same segment escalate to the operator.
 
 ## Mechanical parity edits
 
-Only mechanical format defects such as fence syntax or header shape may be fixed
+Only mechanical format defects may be fixed by the flow-manager in the workdir
+anchor. Content fixes belong to the GPT author in the task chat.
+
+Run the sync helper from the **trusted repository root** with an **absolute** anchor:
+
+```bash
+REPO_ROOT=/abs/path/to/trusted/orchestrator-pack
+ANCHOR="$WORKDIR/docs/issues_drafts/<N>-<slug>.md"
+cd "$REPO_ROOT"
+node scripts/publish-issue-body-sync.ts edit   --draft-path "$ANCHOR"   --issue-number <N>   --repo chetwerikoff/orchestrator-pack
+node scripts/publish-issue-body-sync.ts verify   --draft-path "$ANCHOR"   --issue-number <N>   --repo chetwerikoff/orchestrator-pack
+```
+
+Re-pull after every parity edit.
+
 by the flow-manager in the workdir anchor. Content fixes belong to the GPT author
 in the task chat.
 
@@ -826,9 +526,7 @@ Destination mode follows chat topology:
 - **brief-only task creation:** fresh conversation with
   `--new-chat --project-url <configured-project-url>`;
 - **competitive review:** fresh conversation with `--new-chat` for every pass;
-- **ordinary architectural review:** first round creates one dedicated chat with
-  `--new-chat`; later ordinary rounds use that returned exact `--chat-url`;
-- **final architectural verification:** fresh conversation with `--new-chat`.
+- **terminal architectural lens:** fresh conversation with `--new-chat` (never the task chat or a competitive review chat).
 
 The flow-manager prepares the exact argv plus absolute input/output paths and owns
 the browser-turn execution. It may use the sanctioned execution channel defined
@@ -991,7 +689,7 @@ contract permits, but it never proves non-delivery and never authorizes resend b
 itself. No resend is permitted until an existing supported control/publication/
 recovery state proves a new send safe and no blocking state remains.
 
-A fresh-chat stage, including final architectural verification, is invalidated as
+A fresh-chat stage, including terminal GPT `architectural`, is invalidated as
 a clean fresh turn if an identical prompt is dispatched into the same conversation
 while the first copy is already present or being answered. The polluted reply is
 not usable as that stage's capture; rerun that stage in a new fresh conversation
@@ -1069,58 +767,22 @@ redirect those duties to the generic helper.
 Every review/amendment prompt remains self-contained, carries current Issue body
 as UNTRUSTED DATA between nonce markers, and requests one outer `~~~markdown`
 fence so inner backtick fences survive. Write prepared prompt to helper input file
-and save successful reply verbatim before interpretation. For #975-governed
-reviewer turns, saved raw reply must satisfy M1/M2 and applicable M5 before
-normalization; transport never invents or repairs missing economics.
 
-A Codex browser-outage substitution is a separate review-engine rule, not a
-transport fallback. It is permitted only after recorded browser unavailability
-when operator cannot restore it; preserve replaced stage capture name, raw JSON
-provenance, 1:1 economics transcription, and substitution record.
+## T3-critical classification and mandatory floors
 
-## Tier gate
+Classify **T3-critical** when any L4 condition in Issue #574 /
+`docs/issues_drafts/187-task-complexity-tier-rubric.md` matches. The declared tier
+is only a prior. Classify at intake, after material Issue/scope change, and before
+terminal GPT on T3.
 
-Run at intake, after material Issue/scope changes as required by the rubric,
-before the final lens, and on the final revision from trusted repository root with
-an absolute anchor path:
+T3-critical adds **only** these non-waivable Issue-body floors:
 
-```bash
-node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
-```
+- explicit rollback or migration note appropriate to the change; and
+- realistic acceptance criteria and matching verification for every material
+  crash, race, or stale-state failure class.
 
-Tier-gate floors remain fail-closed for malformed fences, never-skipped safety
-floors, intake/high-watermark/demotion provenance, and applicable L4 requirements.
-Downward movement occurs only at final lens and never erases evidence. #973 owns
-auditable demotion and rubric rules.
-
-Tier stages/ceilings remain unchanged by #975:
-
-- T1: no competitive stage; one light architectural pass in dedicated ordinary
-  chat; light final lens; fresh final verification only when current flow requires.
-- T2: no competitive unless explicitly selected; architectural ≤3 in dedicated
-  ordinary chat; light final lens; fresh final verification under current flow.
-- T3: competitive ≤3 fresh chats; architectural ≤4 in dedicated ordinary chat;
-  full final lens; exactly one fresh final pass after latest lens.
-- T3-critical: full T3 GPT flow + independent Codex addition + rollback/migration
-  and realistic crash/race/stale-state floors.
-
-Explicit adversarial wrappers floor effective tier at T2 and preserve requested
-stage. Upward recompute runs skipped stages.
-
-### T3-critical floor details
-
-The L4 classification is independent of literal `complexity-tier` fence. At
-intake and every required pre-final recompute, cite matched L4 condition(s) in
-flow-manager record. An L4 task is not acceptance-ready unless live Issue contains:
-
-1. rollback/migration note describing safe rollback or migration boundary,
-   data/state compatibility, and required operator action; and
-2. numbered acceptance criteria plus matching verification exercising every
-   material crash, race, and stale-state class with realistic inputs.
-
-These are additive to all worker-safety, behavior-kind, contract-evidence,
-stage-completeness, finding-ledger, qualifying GPT, and independent Codex floors.
-They are not satisfied by generic risk prose, happy-path test, or waiver.
+There is **no** mandatory Codex addition and **no** Codex outage substitution in
+create-issue-draft. While L4 remains active, the task cannot be downgraded below T3.
 
 ## Mandatory Issue-body floors
 
@@ -1195,36 +857,29 @@ the canonical below-ladder skip-line form from `docs/tiering.md`.
 ## Mechanical floor commands
 
 Run from trusted repository root with absolute `$ANCHOR`:
+
 ```bash
 node scripts/tier-gate-guard.ts --text-file "$ANCHOR" --draft-path "$ANCHOR"
 node scripts/draft-discipline.mjs positive-outcome --draft "$ANCHOR"
 node scripts/draft-discipline.mjs parked-root --draft "$ANCHOR"
 node scripts/draft-discipline.mjs contract-evidence --draft "$ANCHOR"
 node scripts/draft-discipline.mjs smoke-test-plan --draft "$ANCHOR"
-node scripts/stage-completeness-guard.ts \
-  --text-file "$ANCHOR" --draft-path "$ANCHOR" --repo-root "$WORKDIR"
+node scripts/stage-completeness-guard.ts   --text-file "$ANCHOR" --draft-path "$ANCHOR" --repo-root "$WORKDIR"
 ```
 
-Run body-only guards after every Issue revision. Stage completeness runs at its
-existing points. #975 finding-ledger invocations are the explicit `pre-lens` and
-`final-acceptance` commands above; do not substitute old one-phase call for active
-#975 acceptance. Legacy/non-#975 consumers may continue calling
-`finding-ledger-guard.mjs` without `--phase` and retain old protected behavior.
+Run body-only guards after every Issue revision. #975 finding-ledger invocations
+are explicit `pre-lens` (T3 only) and `final-acceptance` commands above.
 
 ## Finding ledger details
 
 Every reviewer capture is immutable evidence. The ledger records stable id,
 summary, canonical type, defect disposition, rejection reason when applicable,
-plus bounded #975 row-local economics/authority facts above.
+plus bounded #975 row-local economics/authority facts.
 
 - Defect `evidence` and remedy `recommendation` stay separate.
-- A malformed/disproportionate remedy never erases a valid defect.
-- Protected types are nominations; current M3 decides author/architect authority.
+- Protected types are nominations; tier-appropriate M3 decides authority.
 - Raw `evidence:` is the only input to finding-scoped zero-signal.
-- Latest governed marked stable-id occurrence controls M2 proposal economics.
-- M4 inventories machinery actually introduced even if later proposals become
-  cheaper.
-- Exact raw cut-candidate token and ledger flag must agree for M5.
+- Terminal GPT `architectural` is the M5 anchor at final acceptance for all tiers.
 - `NO_FINDINGS` never erases prior findings.
 - Capped exits preserve unresolved questions in ledger/final report.
 
@@ -1233,92 +888,43 @@ plus bounded #975 row-local economics/authority facts above.
 All durable audit artifacts remain outside repository:
 
 ```text
-chats.md                                  # manager handoffs; active-cycle adoption timestamp when needed
-round-NN-author-reply.md                  # running M4 inventory
+chats.md
+round-NN-author-reply.md
 pass-NN-competitive.capture.txt
-pass-NN-architectural.capture.txt
-pass-NN-architectural.codex.json          # only when a Codex role runs
-pass-NN-architectural-lens.capture.txt    # M3 contest/outcome evidence lives here
-<co-located lens producing-run evidence> # independent Claude Code invocation evidence; exact representation is planner freedom
-pass-NN-architectural-final.capture.txt
-pass-NN-architectural-final.codex.json    # only when Codex substitutes
+pass-NN-architectural.capture.txt          # terminal GPT lens (all tiers)
+pass-NN-architectural-lens.capture.txt     # Claude T3 only
+<co-located lens producing-run evidence>
 presync-architect-lens.md
 finding-disposition-ledger.json
+rNN/tier-gate-receipt.json
 ```
 
-Optional pre-task architect consultation may be referenced in `chats.md` or
-existing handoff/audit record; it does not add a mandatory artifact class. Pass
-numbers form one chronological sequence. Guard-recognized stages remain
-`competitive`, `architectural`, `architectural-lens`, and `architectural-final`.
-Capture every reviewer response before editing. Raw Codex JSON remains provenance
-and is validated before 1:1 plain capture transcription.
+Guard-recognized stages: `competitive`, `architectural`, `architectural-lens`.
+`architectural-final` is historical/audit only — do not create new captures.
 
 ## Repository-write boundary
 
-This flow creates no tracked draft mirror, queue-index row, capture, ledger,
-adoption record, inventory, or workdir file. The only permitted temporary in-repo
-write remains untracked `.review-challenge/**` transport copy when a Codex role
-requires `--scope working-tree`; delete it immediately and never commit it.
-
-Cross-Issue role/topology or demotion changes stay owned by #972/#973. #975 does
-not edit sibling Issues or add workflow/plugin/core machinery.
+This flow creates no tracked draft mirror, queue-index row, or in-repo audit file.
+The only permitted temporary in-repo write is untracked `.review-challenge/**`
+transport scratch for unrelated standalone Codex runs; delete immediately.
 
 ## Don't
 
+- Perform, simulate, or adjudicate the Claude lens in the flow-manager session.
+- Treat a `claude-unavailable` skip as Claude provenance, M3 authority, or demotion authority.
+- Skip the Claude lens for impatience, ambiguous timeout, or cost-saving without observable quota/rate-limit/provider/CLI unavailability.
 - Let the flow-manager author spec content or decide reviewer findings.
-- Let the architect operate routine browser turns, ledger bookkeeping, ordinary
-  stage ordering, per-round disposition ratification, or intake/mid-cycle tier
-  selection.
-- Review in the task chat.
-- Reuse any competitive or final browser-GPT review chat; conversely, do not open
-  a new ordinary architectural browser chat for each round after the dedicated
-  chat exists.
-- Let #975 silently alter #972-owned browser-chat topology.
-- Let reviewer `type: security|scope-violation` self-activate protected authority.
-- Scan recommendation/economics prose to manufacture M3 zero-signal evidence.
-- Infer or synthesize missing raw Codex/browser economics during transcription.
-- Let a later reviewer marker move the independent M2 adoption boundary.
-- Rewrite immutable pre-adoption captures to add M2/M5 tokens.
-- Add a confirmation reviewer pass solely to mint `SIMPLIFICATION_CLEAN`.
-- Treat `architectural-final` as M5 merely because it follows a lens.
-- Accept a pre-adoption M5 anchor without the existing governed post-adoption
-  pre-lens re-entry/new segment.
-- Create a contest registry, proposal ledger, adoption service, receipt/signing
-  system, or other new persistence plane for #975.
-- Let Codex become default architectural engine, claim substitution without
-  recorded browser unavailability, or double-count substitution as independent
-  T3-critical Codex addition.
-- Wrap ordinary tracked-helper turns in caller-side cross-task exclusivity or use
-  scratchpad/legacy browser sending as a tracked-helper fallback. Do not add new runtime
-  lock machinery here.
-- Clear or kill a tracked helper turn that is foreign or not provably owned by the
-  current flow-manager merely to free the configured profile.
-- Hand-write, pre-create, replace, annotate, or otherwise modify a tracked-helper
-  destination capture outside the helper/documented recovery path.
-- Treat `clear`, unresolved conversation identity, or process liveness as proof of
-  non-delivery or resend authorization.
-- Treat tracked-helper non-`ok`, timeout, missing stdout, or unresolved status as
-  resend authorization by itself.
-- Run legacy/scratchpad browser sends while helper-owned unresolved state blocks
-  coexistence for the configured profile.
-- Perform, simulate, or adjudicate the final architect lens in the flow-manager
-  session instead of launching a separate Claude Code CLI invocation.
-- Accept or credit a final architect-lens capture without matching producing-run
-  evidence from its independent Claude Code CLI invocation.
-- Treat a Claude-unavailable skip record as Claude lens provenance, M3
-  adjudication, or tier-demotion authority.
-- Skip the Claude lens for impatience, ambiguous timeout, or cost-saving without
-  observable Claude quota/rate-limit/provider/CLI unavailability.
-- Trust chat reply without live Issue re-pull and diff.
-- Skip requested GPT/Codex stage, selected browser stage, or mandatory T3-critical
-  Codex addition silently.
-- Let a T3-critical Codex substitution satisfy GPT half.
-- Miss Issue #574 L4 classification or waive/dilute rollback/migration and
-  crash/race/stale-state floors.
-- Retry final pass without newer final-lens capture required by existing loop.
+- Mandatory hand-off to architect outside the fixed T3 Claude lens stage.
+- Review in the task chat or reuse terminal/competitive review chats.
+- Run pre-lens #975 on T1/T2.
+- Run `architectural-final` or credit Codex as a create-flow reviewer.
+- Substitute Codex or any engine when browser GPT is unavailable.
+- Authorize `T2→T1` or GPT-side #973 demotion.
+- Run a second Claude lens after post-Claude fixes.
+- Run a second terminal GPT lens after accepted terminal-GPT fixes.
+- Treat any capture before the terminal GPT `architectural` lens as the M5 anchor.
+- Skip required GPT stage silently.
 - Accept with stale captures/title, red floors, incomplete ledger, red #975 phase,
-  unknown/stale M3 contest state, or architect-pending protected work.
-- Use raw `gh issue edit`; use sanctioned body-sync helper for parity only.
-- Commit workdir or `.review-challenge/**` artifacts.
+  or unresolved tier-inappropriate protected work.
+- Commit workdir artifacts.
 - Hand-edit `.cursor/skills/**`; regenerate only when canonical frontmatter changes.
-- Over-specify implementation details that belong to the planner.
