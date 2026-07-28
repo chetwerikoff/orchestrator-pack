@@ -24,7 +24,7 @@ import {
 } from './coordination.ts';
 import { recordSwallowedDriverException } from './diagnostics.ts';
 import { discardUncommittedPublication, publicationRecordCompatible } from './publication.ts';
-import { atomicJson, fsyncDirectory, profileDirs, sha256 } from './storage-common.ts';
+import { atomicJson, fsyncDirectory, legacyProfileKeyAmbiguous, profileDirs, profileNamespaceExists, profileStatePaths, profileStoreRoot, resolveConfiguredProfile, sha256 } from './storage-common.ts';
 
 const INCIDENT_KINDS = new Set([
   'conversation_incident',
@@ -262,6 +262,121 @@ function quarantineStatusItem(path: string, identity: string, generation: number
     evidence_token: digest,
     cause: expectedDigest && digest !== expectedDigest ? 'quarantine_bytes_changed' : undefined,
     opaque: true,
+  };
+}
+
+function lockOwnerAlive(record: { pid: number }): boolean {
+  try {
+    process.kill(record.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function namespaceHasLiveLock(profileKey: string): boolean {
+  const locks = profileStatePaths(profileKey).locks;
+  if (!existsSync(locks)) return false;
+  for (const entry of readdirSync(locks, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const ownerPath = join(locks, entry.name, 'owner.json');
+    if (!existsSync(ownerPath)) return true;
+    try {
+      const parsed = JSON.parse(readFileSync(ownerPath, 'utf8')) as { pid?: number; phase?: string };
+      if (!Number.isInteger(parsed.pid) || parsed.pid! <= 0) return true;
+      if (parsed.phase === 'possible_delivery') return true;
+      if (lockOwnerAlive({ pid: parsed.pid! })) return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+function namespaceHasSafetyBearingState(profileKey: string): boolean {
+  if (!profileNamespaceExists(profileKey)) return false;
+  const paths = profileStatePaths(profileKey);
+  if (existsSync(paths.records)) {
+    for (const name of readdirSync(paths.records)) {
+      if (!name.endsWith('.json')) continue;
+      try {
+        const record = readKnownRecord(join(paths.records, name), profileKey);
+        if (INCIDENT_KINDS.has(record.kind)) return true;
+      } catch {
+        return true;
+      }
+    }
+  }
+  if (namespaceHasLiveLock(profileKey)) return true;
+  if (existsSync(paths.tombstones)) {
+    for (const name of readdirSync(paths.tombstones)) {
+      if (!name.endsWith('.json')) continue;
+      try {
+        readTombstone(join(paths.tombstones, name), profileKey);
+        return true;
+      } catch {
+        return true;
+      }
+    }
+  }
+  if (existsSync(paths.quarantine) && readdirSync(paths.quarantine).length > 0) return true;
+  if (existsSync(paths.publications)) {
+    for (const name of readdirSync(paths.publications)) {
+      if (!name.endsWith('.json')) continue;
+      const pubPath = join(paths.publications, name);
+      if (!publicationRecordCompatible(pubPath, profileKey)) return true;
+      try {
+        const parsed = JSON.parse(readFileSync(pubPath, 'utf8')) as { state?: string };
+        if (parsed.state !== 'committed') return true;
+      } catch {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function profileStartupCompatibility(profile: string, cdp: string): ControlResultV1 | null {
+  const resolved = resolveConfiguredProfile(profile, cdp);
+  if (!resolved.keysDiffer) return null;
+  if (!namespaceHasSafetyBearingState(resolved.legacyProfileKey)) return null;
+  if (legacyProfileKeyAmbiguous(profile)) {
+    return {
+      ...control('status/list', 'profile_blocked', resolved.profileKey, 'legacy_profile_key_ambiguous'),
+      legacy_configured_profile_key: resolved.legacyProfileKey,
+      legacy_namespace_root: profileStoreRoot(resolved.legacyProfileKey),
+      complete: false,
+    };
+  }
+  return {
+    ...control('status/list', 'profile_blocked', resolved.profileKey, 'legacy_profile_namespace_active'),
+    legacy_configured_profile_key: resolved.legacyProfileKey,
+    legacy_namespace_root: profileStoreRoot(resolved.legacyProfileKey),
+    complete: false,
+  };
+}
+
+export function statusListForConfiguredProfile(profile: string, cdp: string): ControlResultV1 {
+  const resolved = resolveConfiguredProfile(profile, cdp);
+  const current = statusList(resolved.profileKey);
+  if (!resolved.keysDiffer || !profileNamespaceExists(resolved.legacyProfileKey)) {
+    return current;
+  }
+  const legacy = statusList(resolved.legacyProfileKey, { ensureDirectories: false, includeSafetyLocks: true });
+  const mergedItems = [...(legacy.items ?? []), ...(current.items ?? [])];
+  const legacySafety = namespaceHasSafetyBearingState(resolved.legacyProfileKey);
+  const ambiguous = legacySafety && legacyProfileKeyAmbiguous(profile);
+  const blocked = current.state === 'profile_blocked'
+    || legacy.state === 'profile_blocked'
+    || legacySafety;
+  return {
+    ...current,
+    state: blocked ? 'profile_blocked' : (mergedItems.length > 0 ? 'ok' : 'none'),
+    complete: current.complete !== false && legacy.complete !== false && !blocked,
+    items: mergedItems,
+    legacy_configured_profile_key: resolved.legacyProfileKey,
+    legacy_namespace_root: profileStoreRoot(resolved.legacyProfileKey),
+    ...(ambiguous ? { cause: 'legacy_profile_key_ambiguous' } : {}),
   };
 }
 
@@ -807,13 +922,18 @@ export async function mutateCapabilityAdmissionPolicy(
   }
 }
 
-export function statusList(profileKey: string): ControlResultV1 {
-  const d = profileDirs(profileKey);
+export function statusList(
+  profileKey: string,
+  options: { ensureDirectories?: boolean; includeSafetyLocks?: boolean } = {},
+): ControlResultV1 {
+  const d = options.ensureDirectories === false ? profileStatePaths(profileKey) : profileDirs(profileKey);
   const items: StatusItemV1[] = [];
   const referencedQuarantine = new Set<string>();
   let blocked = false;
 
-  for (const name of readdirSync(d.records).sort()) {
+  const names = (path: string): string[] => existsSync(path) ? readdirSync(path).sort() : [];
+
+  for (const name of names(d.records)) {
     if (!name.endsWith('.json')) continue;
     const path = join(d.records, name);
     try {
@@ -840,7 +960,7 @@ export function statusList(profileKey: string): ControlResultV1 {
     }
   }
 
-  for (const name of readdirSync(d.tombstones).sort()) {
+  for (const name of names(d.tombstones)) {
     try {
       const tombstone = readTombstone(join(d.tombstones, name), profileKey);
       if (admissionBlockingOpaqueArea(tombstone.source_area)) blocked = true;
@@ -883,7 +1003,7 @@ export function statusList(profileKey: string): ControlResultV1 {
     }
   }
 
-  for (const name of readdirSync(d.quarantine).sort()) {
+  for (const name of names(d.quarantine)) {
     if (referencedQuarantine.has(name)) continue;
     let orphanBlocks = true;
     if (name.endsWith('.opaque')) {
@@ -934,10 +1054,48 @@ export function statusList(profileKey: string): ControlResultV1 {
     }
   }
 
-  for (const name of readdirSync(d.publications).sort()) {
+  for (const name of options.includeSafetyLocks ? names(d.locks) : []) {
+    const ownerPath = join(d.locks, name, 'owner.json');
+    if (!existsSync(ownerPath)) {
+      blocked = true;
+      items.push({ identity: `lock:${encodeName(name)}:unreadable`, kind: 'opaque_record', generation: 0, evidence_token: 'unreadable', cause: 'lock_owner_missing', opaque: true });
+      continue;
+    }
+    try {
+      const bytes = regularBytes(ownerPath);
+      const owner = JSON.parse(bytes.toString('utf8')) as { generation?: number; phase?: string; pid?: number };
+      const safetyBearing = owner.phase === 'possible_delivery'
+        || !Number.isInteger(owner.pid)
+        || owner.pid! <= 0
+        || lockOwnerAlive({ pid: owner.pid! });
+      if (!safetyBearing) continue;
+      blocked = true;
+      items.push({
+        identity: `lock:${encodeName(name)}`,
+        kind: 'opaque_record',
+        generation: Number.isInteger(owner.generation) ? owner.generation! : 0,
+        phase: owner.phase === 'possible_delivery' ? 'possible_delivery' : undefined,
+        evidence_token: sha256(bytes),
+        cause: 'active_or_unreconciled_lock',
+        opaque: true,
+      });
+    } catch {
+      blocked = true;
+      items.push({ identity: `lock:${encodeName(name)}:unreadable`, kind: 'opaque_record', generation: 0, evidence_token: 'unreadable', cause: 'lock_owner_unreadable', opaque: true });
+    }
+  }
+
+  for (const name of names(d.publications)) {
     if (!name.endsWith('.json')) continue;
     const path = join(d.publications, name);
-    if (publicationRecordCompatible(path, profileKey)) continue;
+    if (publicationRecordCompatible(path, profileKey)) {
+      try {
+        const parsed = JSON.parse(readFileSync(path, 'utf8')) as { state?: string };
+        if (parsed.state === 'committed') continue;
+      } catch {
+        // The compatible read above raced or changed; surface it as opaque below.
+      }
+    }
     blocked = true;
     try {
       items.push(opaqueStatusItem(profileKey, 'publications', name));
@@ -952,7 +1110,7 @@ export function statusList(profileKey: string): ControlResultV1 {
     state: blocked ? 'profile_blocked' : (items.length > 0 ? 'ok' : 'none'),
     configured_profile_key: profileKey,
     complete: !blocked,
-    items,
+    items: items.map((item) => ({ ...item, configured_profile_key: profileKey })),
   };
 }
 

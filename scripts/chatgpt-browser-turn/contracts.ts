@@ -100,6 +100,8 @@ export interface TurnResultV1 {
   cause: string;
   invocation_id: string;
   configured_profile_key: string;
+  legacy_configured_profile_key?: string;
+  legacy_namespace_root?: string;
   conversation_id?: string;
   provisional_id?: string;
   incident_id?: string;
@@ -119,6 +121,7 @@ export interface StatusItemV1 {
   provisional_id?: string;
   cause?: string;
   opaque?: boolean;
+  configured_profile_key?: string;
 }
 
 export interface ControlResultV1 {
@@ -126,6 +129,8 @@ export interface ControlResultV1 {
   operation: 'status/list' | 'clear' | 'capability';
   state: string;
   configured_profile_key: string;
+  legacy_configured_profile_key?: string;
+  legacy_namespace_root?: string;
   complete?: boolean;
   items?: StatusItemV1[];
   cause?: string;
@@ -136,6 +141,8 @@ export interface PublicationStatusV1 {
   schema: 'publication-status/v1';
   state: (typeof PUBLICATION_STATES)[number];
   configured_profile_key: string;
+  legacy_configured_profile_key?: string;
+  legacy_namespace_root?: string;
   invocation_id: string;
   output_path?: string;
   output_bytes?: number;

@@ -7,10 +7,11 @@
 
 import { execFileSync } from 'node:child_process';
 import { runProcess } from '../../../scripts/kernel/subprocess.ts';
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { configuredProfileIdentity } from '../../../scripts/chatgpt-browser-turn/storage-common.ts';
 
 export const __testOwnerProbe = {
   stallExecFile: false,
@@ -23,23 +24,9 @@ export function parseCdpPort(cdpUrl) {
   return u.protocol === 'https:' ? '443' : '80';
 }
 
-function toWslPath(p) {
-  let s = String(p).trim().replace(/\\/g, '/');
-  if (/^[A-Za-z]:/.test(s)) {
-    return `/mnt/${s[0].toLowerCase()}${s.slice(2)}`;
-  }
-  return s;
-}
-
 export function normalizeProfilePath(p) {
   if (!p) return '';
-  const wsl = toWslPath(p);
-  try {
-    if (existsSync(wsl)) {
-      return realpathSync.native(wsl).replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
-    }
-  } catch { /* ignore */ }
-  return wsl.toLowerCase().replace(/\/+$/, '');
+  return configuredProfileIdentity(p);
 }
 
 function extractUserDataDir(cmdline) {

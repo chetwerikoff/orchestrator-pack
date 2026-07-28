@@ -2656,3 +2656,26 @@ See `scripts/graphify/README.md` for build/refresh/query usage once bootstrapped
 6. **AC12 headed-Chrome parallel smoke** is operator-run on the configured CDP profile; see `scripts/chatgpt-browser-turn/fixtures/issue-1060-ac12-parallel-smoke.md`.
 
 No operator adoption required for AO yaml, daemon restart, or profile topology changes.
+
+## Tracked browser helper: durable fresh identity and filesystem profile keys (Issue #1068)
+
+**Operator adoption** — after merge:
+
+1. **Upgrade quiescence (required).** Before the first post-change configured-profile key is used on a host, stop every browser-turn helper process for that profile/CDP pair. Mixed old-binary/new-binary concurrent operation is unsafe and out of scope.
+2. **Profile-key identity is filesystem-semantic.** Native Linux case-sensitive paths preserve case in the configured-profile key; two directories that differ only by case are distinct identities and distinct state roots. Windows and WSL spellings of the same physical profile (`C:\...` versus `/mnt/<drive>/...`, ordinary case variants) remain one identity.
+3. **Legacy lowercase-derived key compatibility is fail-closed.** The pre-change lowercase path derivation is the legacy key. When the new derivation differs, safety-bearing state under the legacy namespace for the same physical profile blocks startup: the helper refuses to start, prints the legacy namespace path, and requires resolution through existing `status/list`, exact `clear`, opaque quarantine/adjudication, and `publication-status` — not by adopting an empty new namespace.
+4. **Control surfaces enumerate both keys.** `status/list`, `clear`, and `publication-status` surface safety-bearing records under the current derived key and the legacy lowercase-derived key for the same configured profile. Ambiguous legacy ownership from case-collision lowercasing remains blocked until existing recovery/operator adjudication resolves it.
+5. **No state purge to “make the new key work”.** Do not bulk-delete, rename, merge, or rewrite incidents, locks, walls, quarantine/tombstones, or publication records merely to adopt the new derivation. Non-safety diagnostic-only legacy bytes may remain under the legacy key without becoming admission blockers after #1060.
+6. **Fresh canonical conversation identity retention.** A fresh-chat turn that has already observed an authoritative canonical conversation identity correlated to its submitted exchange retains that normalized identity across later page teardown or process exceptions; unresolved recovery still occupies the same same-conversation/no-resend domain as the canonical existing-chat URL.
+
+### Safe rollback boundary
+
+Before reverting this change, quiesce new browser-turn starts for the affected configured profile and ensure either:
+
+1. there is no active/unresolved safety-bearing state that exists only under a post-change key; **or**
+2. the retained compatible recovery binary/control path can enumerate and resolve every relevant legacy and post-change safety record without resend.
+
+Only then is code rollback safe. Reverting restores the old lowercase-derived key behavior and is **unsafe** while a case-distinct native-Linux profile or unresolved post-change safety state would be hidden by that mapping. After rollback, re-run `status/list` and `publication-status` before any new send. If visibility is ambiguous, remain blocked; do not delete the new namespace to “fix” rollback.
+
+No operator adoption required for AO yaml, daemon restart, or profile topology changes beyond the quiescence and recovery rules above.
+
