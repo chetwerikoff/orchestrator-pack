@@ -769,12 +769,14 @@ function serializeBarrierLockReclaimable(profileKey: string): (lockKey: string) 
   return (lockKey: string) => !protectedKeys.has(lockKey);
 }
 
-export function mutateCapabilityAdmissionPolicy(
+export type BrowserProvenanceSource = string | (() => string | Promise<string>);
+
+export async function mutateCapabilityAdmissionPolicy(
   profileKey: string,
   policy: AdmissionPolicy,
   expected?: CapabilityBinding,
-  browserProvenance?: string,
-): CapabilityStatusResult & { mutation?: CapabilityPolicyMutationOutcome } {
+  browserProvenance?: BrowserProvenanceSource,
+): Promise<CapabilityStatusResult & { mutation?: CapabilityPolicyMutationOutcome }> {
   if (policy !== 'parallel' && policy !== 'serialized') {
     return {
       ...control('capability', 'driver_error', profileKey, 'invalid_policy'),
@@ -837,9 +839,17 @@ export function mutateCapabilityAdmissionPolicy(
         mutation: { applied: false, reason: 'binding_mismatch' },
       };
     }
+    let resolvedBrowserProvenance: string | undefined;
+    if (policy === 'parallel') {
+      if (typeof browserProvenance === 'function') {
+        resolvedBrowserProvenance = await browserProvenance();
+      } else {
+        resolvedBrowserProvenance = browserProvenance;
+      }
+    }
     if (policy === 'parallel' && (
-      !browserProvenance
-      || capability.browser_provenance !== browserProvenance
+      !resolvedBrowserProvenance
+      || capability.browser_provenance !== resolvedBrowserProvenance
     )) {
       return {
         ...control('capability', 'downgraded', profileKey, 'capability_binding_mismatch'),

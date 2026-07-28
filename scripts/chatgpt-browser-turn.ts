@@ -784,20 +784,20 @@ async function runCapability(args: ParsedArgs): Promise<number> {
     if (policyArg !== 'parallel' && policyArg !== 'serialized') {
       return emitControlAndCode(controlResult('capability', 'driver_error', profileKey, 'argument_invalid'));
     }
-    let browserProvenance: string | undefined;
-    if (policyArg === 'parallel') {
-      try {
-        browserProvenance = await probeLiveBrowserProvenance(cdp);
-      } catch {
-        return emitControlAndCode(controlResult('capability', 'driver_error', profileKey, 'cdp_unavailable'));
-      }
+    const browserProvenance = policyArg === 'parallel'
+      ? () => probeLiveBrowserProvenance(cdp)
+      : undefined;
+    let result;
+    try {
+      result = await mutateCapabilityAdmissionPolicy(
+        profileKey,
+        policyArg,
+        expectedBinding,
+        browserProvenance,
+      );
+    } catch {
+      return emitControlAndCode(controlResult('capability', 'driver_error', profileKey, 'cdp_unavailable'));
     }
-    const result = mutateCapabilityAdmissionPolicy(
-      profileKey,
-      policyArg,
-      expectedBinding,
-      browserProvenance,
-    );
     emit({ ...result, expected_binding: expectedBinding });
     return controlExitCode(result.state);
   }

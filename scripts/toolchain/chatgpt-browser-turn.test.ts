@@ -813,12 +813,12 @@ function legacyCapabilityFixture(
 }
 
 describe('issue 964 capability policy', () => {
-  it('binds parallel operator policy to exact candidate/build/config/gate and serializes visibly', () => {
+  it('binds parallel operator policy to exact candidate/build/config/gate and serializes visibly', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     expect(capabilityStatus(profileKey, binding).state).toBe('ok');
     expect(capabilityStatus(profileKey, { ...binding, gate_digest: sha256('different-gate') }).state).toBe('downgraded');
-    mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     const downgraded = capabilityStatus(profileKey, binding);
     expect(downgraded.state).toBe('downgraded');
     expect(downgraded.capability?.admission_policy).toBe('serialized');
@@ -867,35 +867,35 @@ describe('issue 1028 admission policy separation', () => {
     expect(status.characterization?.characterized).toBe(true);
   });
 
-  it('requires deliberate operator arm for parallel admission after characterization', () => {
+  it('requires deliberate operator arm for parallel admission after characterization', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'arm-prereq'));
-    const armed = mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
+    const armed = await mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
     expect(armed.mutation?.applied).toBe(true);
     expect(capabilityStatus(profileKey, binding).state).toBe('ok');
 
-    const serialized = mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    const serialized = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     expect(serialized.mutation?.applied).toBe(true);
     expect(serialized.capability?.admission_policy).toBe('serialized');
     expect(serialized.capability?.admission_epoch).toBe(1);
 
-    const serializedAgain = mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    const serializedAgain = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     expect(serializedAgain.mutation?.applied).toBe(true);
     expect(serializedAgain.capability?.admission_epoch).toBe(2);
 
-    const rearmed = mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
+    const rearmed = await mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
     expect(rearmed.mutation?.applied).toBe(true);
     expect(rearmed.capability?.admission_policy).toBe('parallel');
     expect(rearmed.capability?.admission_epoch).toBe(2);
   });
 
-  it('fails serialize busy without mutating policy when a fine scheduling lock is active', () => {
+  it('fails serialize busy without mutating policy when a fine scheduling lock is active', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const fineLock = acquireDomainLock(profileKey, 'conversation:https://chatgpt.com/c/active');
     expect(fineLock).not.toBeNull();
     try {
-      const outcome = mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+      const outcome = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
       expect(outcome.mutation).toMatchObject({ applied: false, reason: 'barrier_busy' });
       const unchanged = capabilityStatus(profileKey, binding);
       expect(unchanged.capability?.admission_policy).toBe('parallel');
@@ -905,14 +905,14 @@ describe('issue 1028 admission policy separation', () => {
     }
   });
 
-  it('refuses parallel arm without live browser provenance verification', () => {
+  it('refuses parallel arm without live browser provenance verification', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
-    const armed = mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding);
+    const armed = await mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding);
     expect(armed.mutation).toEqual({ applied: false, reason: 'binding_mismatch' });
   });
 
-  it('does not reclaim a stale pre_send lock when a readable incident is already possible_delivery', () => {
+  it('does not reclaim a stale pre_send lock when a readable incident is already possible_delivery', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const lockKey = 'conversation:https://chatgpt.com/c/crash-window';
@@ -925,12 +925,12 @@ describe('issue 1028 admission policy separation', () => {
       invocation_id: randomUUID(),
       owner: { pid: 999999, started_at: new Date().toISOString(), nonce: randomUUID() },
     });
-    const outcome = mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    const outcome = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     expect(outcome.mutation).toMatchObject({ applied: false, reason: 'barrier_busy' });
     expect(existsSync(join(profileDirs(profileKey).locks, sha256(lockKey), 'owner.json'))).toBe(true);
   });
 
-  it('does not reclaim a stale pre_send lock when a readable active_owner is still pre_send', () => {
+  it('does not reclaim a stale pre_send lock when a readable active_owner is still pre_send', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const lockKey = 'conversation:https://chatgpt.com/c/active-pre-send';
@@ -943,23 +943,35 @@ describe('issue 1028 admission policy separation', () => {
       invocation_id: randomUUID(),
       owner: { pid: 999999, started_at: new Date().toISOString(), nonce: randomUUID() },
     });
-    const outcome = mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    const outcome = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     expect(outcome.mutation).toMatchObject({ applied: false, reason: 'barrier_busy' });
     expect(existsSync(join(profileDirs(profileKey).locks, sha256(lockKey), 'owner.json'))).toBe(true);
   });
 
-  it('reclaims a dead orphan fine lock before committing serialized policy', () => {
+  it('reclaims a dead orphan fine lock before committing serialized policy', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     deadOwnerRecord(`fresh:orphan-${randomUUID()}`, 'pre_send');
-    const outcome = mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    const outcome = await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     expect(outcome.mutation?.applied).toBe(true);
     expect(outcome.capability?.admission_policy).toBe('serialized');
   });
 
-  it('refuses parallel arm without prior characterization', () => {
+  it('resolves browser provenance through commit-time resolver for parallel arm', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const armed = mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
+    applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'commit-provenance'));
+    let probeCount = 0;
+    const armed = await mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, () => {
+      probeCount += 1;
+      return 'Chromium test';
+    });
+    expect(probeCount).toBe(1);
+    expect(armed.mutation?.applied).toBe(true);
+  });
+
+  it('refuses parallel arm without prior characterization', async () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    const armed = await mutateCapabilityAdmissionPolicy(profileKey, 'parallel', binding, 'Chromium test');
     expect(armed.mutation).toEqual({ applied: false, reason: 'not_characterized' });
   });
 
@@ -977,12 +989,12 @@ describe('issue 1028 admission policy separation', () => {
     expect(after.capability?.evidence_digest).toBe(sha256('refresh-only'));
   });
 
-  it('rejects stale-epoch completion after operator serialize', () => {
+  it('rejects stale-epoch completion after operator serialize', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
     const admitted = capabilityStatus(profileKey, binding);
     expect(admitted.state).toBe('ok');
-    mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'stale-after-serialize'));
     expect(outcome.applied).toBe(false);
     expect(outcome.reason).toBe('not_eligible');
@@ -1012,10 +1024,10 @@ describe('issue 1028 admission policy separation', () => {
     }
   });
 
-  it('characterizes a new browser provenance under serialized policy without self-arming', () => {
+  it('characterizes a new browser provenance under serialized policy without self-arming', async () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding, { browser_provenance: 'old-browser' }));
-    mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    await mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
     const outcome = applyCapabilityAfterSuccessfulTurn(
       profileKey,
       completion(binding, 'new-provenance-characterize', 'new-browser'),
