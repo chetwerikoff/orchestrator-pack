@@ -29,8 +29,8 @@ echo**; the tracked helper uses its own causal-witness/result/publication
 contract. Treat either path according to its own validation contract.
 
 Issue-body floors, ledger normalization, tier gate, decision logging, chat-role
-separation, and acceptance stay owned by `create-issue-draft`'s current Cursor
-flow-manager; browser GPT owns content/finding dispositions. Claude runs only the
+separation, and acceptance stay owned by `create-issue-draft`'s current
+flow-manager (OpenCode default; Cursor sanctioned alternative); browser GPT owns content/finding dispositions. Claude runs only the
 T3 `architectural-lens` stage defined there — not a universal final architect lens.
 
 ## When to invoke
@@ -204,7 +204,8 @@ npm run chatgpt-browser-turn -- turn \
   --project-url <configured-project-url>
 ```
 
-The current Cursor flow-manager prepares the exact argv and absolute input/output
+The current flow-manager (OpenCode default; Cursor when explicitly selected)
+prepares the exact argv and absolute input/output
 paths and owns the browser-turn invocation. A hands-only execution channel, when
 used, executes that exact command and returns stdout/reply state verbatim; it must
 not write browser code, change prompt/argv, interpret findings, or invent a

@@ -67,6 +67,7 @@ function createRun(storeRoot: string): PackReviewRunRecord {
     surface: 'pack-review-worker-notification-test',
     trustedPackRoot: repoRoot,
     sourceRepoRoot: repoRoot,
+    canonicalRepository: 'chetwerikoff/orchestrator-pack',
   }).run;
 }
 

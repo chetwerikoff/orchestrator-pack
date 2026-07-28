@@ -26,6 +26,24 @@ export const PRE_973_CUTOVER_WORKDIR_IDENTITIES = Object.freeze([] as string[]);
 /** Historical sanctioned demotions at #973 cutover: none. */
 export const PRE_973_HISTORICAL_DEMOTIONS = Object.freeze([] as string[]);
 
+/**
+ * Exact producer identifiers recognized by tier-provenance parsers (#1093).
+ * Runtime code must never discover, infer, append, or otherwise extend this set.
+ */
+export const TIER_PROVENANCE_PRODUCER_ALLOWLIST = Object.freeze([
+  'cursor-flow-manager',
+  'opencode-flow-manager',
+] as const);
+
+export type TierProvenanceProducer = (typeof TIER_PROVENANCE_PRODUCER_ALLOWLIST)[number];
+
+const TIER_PROVENANCE_PRODUCER_SET = new Set<string>(TIER_PROVENANCE_PRODUCER_ALLOWLIST);
+
+function asRecognizedProducer(value: unknown): TierProvenanceProducer | null {
+  if (typeof value !== 'string') return null;
+  return TIER_PROVENANCE_PRODUCER_SET.has(value) ? (value as TierProvenanceProducer) : null;
+}
+
 export const TIER_RUBRIC_CLASSES = new Set([
   'failure-type:text-cosmetics',
   'failure-type:local-behavior',
@@ -57,7 +75,7 @@ export type ComplexityTierFence =
 
 export interface TierDecisionReceiptRecord {
   schema: 'tier-gate-decision/v1';
-  producer: 'cursor-flow-manager';
+  producer: TierProvenanceProducer;
   revision: string;
   tier: Tier;
   /** Legacy audit field; no longer produced or enforced (#1029). */
@@ -68,7 +86,7 @@ export interface TierDecisionReceiptRecord {
 
 export interface TierIntakeRecord {
   schema: 'tier-intake/v1';
-  producer: 'cursor-flow-manager';
+  producer: TierProvenanceProducer;
   taskIdentity: string;
   kind: 'fresh' | 'compatibility';
   priorTier: Tier;
@@ -285,13 +303,14 @@ function parseStringArray(value: unknown): string[] | null {
   return new Set(items).size === items.length ? items : null;
 }
 
-function parseIntakeRecord(value: unknown): TierIntakeRecord | null {
+export function parseIntakeRecord(value: unknown): TierIntakeRecord | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   const priorTier = asTier(record.priorTier);
+  const producer = asRecognizedProducer(record.producer);
   if (
     record.schema !== 'tier-intake/v1'
-    || record.producer !== 'cursor-flow-manager'
+    || !producer
     || typeof record.taskIdentity !== 'string'
     || record.taskIdentity.trim() === ''
     || (record.kind !== 'fresh' && record.kind !== 'compatibility')
@@ -303,7 +322,7 @@ function parseIntakeRecord(value: unknown): TierIntakeRecord | null {
   }
   return {
     schema: 'tier-intake/v1',
-    producer: 'cursor-flow-manager',
+    producer,
     taskIdentity: record.taskIdentity,
     kind: record.kind,
     priorTier,
@@ -311,7 +330,7 @@ function parseIntakeRecord(value: unknown): TierIntakeRecord | null {
   };
 }
 
-function parseDecisionReceipt(value: unknown): TierDecisionReceiptRecord | null {
+export function parseDecisionReceipt(value: unknown): TierDecisionReceiptRecord | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   const tier = asTier(record.tier);
@@ -319,9 +338,10 @@ function parseDecisionReceipt(value: unknown): TierDecisionReceiptRecord | null 
   const legacyMarkerRows = record.markerRows === undefined
     ? undefined
     : parseStringArray(record.markerRows) ?? undefined;
+  const producer = asRecognizedProducer(record.producer);
   if (
     record.schema !== 'tier-gate-decision/v1'
-    || record.producer !== 'cursor-flow-manager'
+    || !producer
     || typeof record.revision !== 'string'
     || !REVISION_RE.test(record.revision)
     || !tier
@@ -334,7 +354,7 @@ function parseDecisionReceipt(value: unknown): TierDecisionReceiptRecord | null 
   }
   return {
     schema: 'tier-gate-decision/v1',
-    producer: 'cursor-flow-manager',
+    producer,
     revision: record.revision,
     tier,
     markerRows: legacyMarkerRows,
