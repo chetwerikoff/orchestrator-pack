@@ -377,7 +377,8 @@ Every raw discovery from §3 methods is accounted as:
 1. A binding row in §5 (axes 1, 3, 4, 5), or
 2. A per-consumer axis-2 row in [`ao-env-token-inventory.md`](./ao-env-token-inventory.md), or
 3. An explicit axis-2 exclusion in [`ao-env-exclusions.md`](./ao-env-exclusions.md) / §7, or
-4. A §7.4 durable-store exclusion (no AO session identity persisted).
+4. An axis-4 drain row in [`axis4-drain-bindings.md`](./axis4-drain-bindings.md), or
+5. A §7.4 durable-store exclusion (no AO session identity persisted).
 
 **Unaccounted discoveries at inspected revision:** none.
 
