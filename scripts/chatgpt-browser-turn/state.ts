@@ -763,14 +763,7 @@ function serializeBarrierLockReclaimable(profileKey: string): (lockKey: string) 
   }
   const protectedKeys = new Set(
     incidents
-      .filter(({ record }) => {
-        if (!record.lock_key) return false;
-        if (record.kind === 'fresh_orphan') return true;
-        return record.phase === 'possible_delivery'
-          || record.phase === 'reply_complete'
-          || record.phase === 'publication_prepared'
-          || record.phase === 'committed';
-      })
+      .filter(({ record }) => Boolean(record.lock_key))
       .map(({ record }) => record.lock_key as string),
   );
   return (lockKey: string) => !protectedKeys.has(lockKey);

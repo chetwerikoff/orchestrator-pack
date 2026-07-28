@@ -930,6 +930,24 @@ describe('issue 1028 admission policy separation', () => {
     expect(existsSync(join(profileDirs(profileKey).locks, sha256(lockKey), 'owner.json'))).toBe(true);
   });
 
+  it('does not reclaim a stale pre_send lock when a readable active_owner is still pre_send', () => {
+    const binding = runtimeCapabilityBinding(profileKey, cdp);
+    __testWriteCapability(profileKey, capabilityFixture(binding));
+    const lockKey = 'conversation:https://chatgpt.com/c/active-pre-send';
+    deadOwnerRecord(lockKey, 'pre_send');
+    writeIncident(profileKey, {
+      kind: 'active_owner',
+      generation: 1,
+      phase: 'pre_send',
+      lock_key: lockKey,
+      invocation_id: randomUUID(),
+      owner: { pid: 999999, started_at: new Date().toISOString(), nonce: randomUUID() },
+    });
+    const outcome = mutateCapabilityAdmissionPolicy(profileKey, 'serialized', binding);
+    expect(outcome.mutation).toMatchObject({ applied: false, reason: 'barrier_busy' });
+    expect(existsSync(join(profileDirs(profileKey).locks, sha256(lockKey), 'owner.json'))).toBe(true);
+  });
+
   it('reclaims a dead orphan fine lock before committing serialized policy', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
     __testWriteCapability(profileKey, capabilityFixture(binding));
