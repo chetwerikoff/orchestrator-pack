@@ -98,7 +98,7 @@ AO auto-review runs on **worker** PRs only. For architect-direct PRs, run the
 pack reviewer wrapper locally after the PR exists (or against the branch diff).
 
 **Not for issue drafts:** architect spec review uses `codex review` or
-`scripts/review-architect-artifact.ps1` — see `create-issue-draft` skill.
+`scripts/review-architect-artifact.ts` — see `create-issue-draft` skill.
 `codex exec review` is the worker **PR code** path only.
 
 ```powershell

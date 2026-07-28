@@ -22,7 +22,7 @@ import {
 
 export const READ_DELEGATION_STOP_WRAPPER = 'scripts/invoke-read-delegation-audit-stop.ts';
 export const READ_DELEGATION_STOP_COMMAND_SHAPE =
-  'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/json-producers/read-delegation-audit-stop.ts [--artifact-path <redacted>] [--repo-root <repo>]';
+  'node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/invoke-read-delegation-audit-stop.ts [--artifact-path <redacted>] [--repo-root <repo>]';
 
 function asObject(value: JsonValue): JsonObject {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return {};

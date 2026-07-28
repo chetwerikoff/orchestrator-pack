@@ -334,15 +334,16 @@ Not a merge gate. After drafting the memo, you may run Codex CLI on the memo tex
 (max **3** iterations).
 
 **Command discipline:** `codex review` or
-`scripts/review-architect-artifact.ps1 -Kind rca-memo` only — never `codex exec`.
+`scripts/review-architect-artifact.ts --kind rca-memo` only — never `codex exec`.
 Do not pipe stdout through `tail` or `head`.
 
-**Preferred (Linux / WSL2 / pwsh 7+):**
+**Preferred (Node 22 / Linux / WSL2):**
 
-```powershell
-pwsh -NoProfile -File scripts/review-architect-artifact.ps1 `
-  -ArtifactPath $env:TEMP/orchestrator-pack-rca-memo.md `
-  -Kind rca-memo
+```bash
+node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts \
+  --script scripts/review-architect-artifact.ts -- \
+  --artifact-path "$TMP/orchestrator-pack-rca-memo.md" \
+  --kind rca-memo
 ```
 
 **Manual equivalent (pwsh string composition — no stdin `<` redirect):**
