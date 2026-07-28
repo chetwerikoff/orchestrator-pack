@@ -7,13 +7,39 @@
   "baseline": {
     "commit_sha": "018471caed4bdfd04d95c36b443f92e9c296fe5c",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:780ad237a19ee92085c194ab28f91146a1db91a80192f728ba668ce220d873e3"
+    "active_scope_hash": "sha256:d4decb1726892c55b8afee74b58631df944bc61cf598d6d6d777a2f8fc5cdabf"
   },
   "declared_paths": [
-    "scripts/",
-    "docs/",
-    ".claude/skills/"
+    "scripts/lib/tier-gate-core.ts",
+    "scripts/tier-gate-guard.test.ts",
+    "docs/tiering.md",
+    ".claude/skills/create-issue-draft/SKILL.md"
   ],
-  "declared_globs": [],
-  "amendments": []
+  "declared_globs": [
+    "docs/declarations/**"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:780ad237a19ee92085c194ab28f91146a1db91a80192f728ba668ce220d873e3",
+      "new_active_scope_hash": "sha256:d4decb1726892c55b8afee74b58631df944bc61cf598d6d6d777a2f8fc5cdabf",
+      "changed": {
+        "added": [
+          ".claude/skills/create-issue-draft/SKILL.md",
+          "docs/declarations/**",
+          "docs/tiering.md",
+          "scripts/lib/tier-gate-core.ts",
+          "scripts/tier-gate-guard.test.ts"
+        ],
+        "removed": [
+          ".claude/skills/",
+          "docs/",
+          "scripts/"
+        ]
+      },
+      "reason": "Align declared scope with updated issue allowed_roots fence",
+      "actor": "local",
+      "timestamp": "2026-07-28T16:30:45.345Z",
+      "applied": true
+    }
+  ]
 }
