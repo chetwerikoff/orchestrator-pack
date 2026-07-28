@@ -14,6 +14,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { Worker } from 'node:worker_threads';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -3138,3 +3139,130 @@ describe('issue 1060 remove profile-wide admission', () => {
   });
 });
 
+
+describe('issue 1089 bounded scheduling-admission retry', () => {
+  const coordinationModuleUrl = pathToFileURL(
+    join(repoRoot, 'scripts/chatgpt-browser-turn/coordination.ts'),
+  ).href;
+
+  function acquireDomainLockInWorker(
+    profileKeyArg: string,
+    key: string,
+  ): Promise<{ ok: boolean; elapsedMs: number }> {
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(`
+        const { parentPort, workerData } = require('node:worker_threads');
+        (async () => {
+          const { acquireDomainLock } = await import(workerData.coordinationModuleUrl);
+          const started = Date.now();
+          const lock = acquireDomainLock(workerData.profileKey, workerData.key);
+          parentPort.postMessage({ ok: lock !== null, elapsedMs: Date.now() - started });
+          lock?.release();
+        })().catch((error) => parentPort.postMessage({ error: String(error) }));
+      `, {
+        eval: true,
+        execArgv: ['--experimental-strip-types'],
+        env: {
+          ...process.env,
+          CHATGPT_BROWSER_TURN_STATE_DIR: process.env.CHATGPT_BROWSER_TURN_STATE_DIR!,
+        },
+        workerData: {
+          profileKey: profileKeyArg,
+          key,
+          coordinationModuleUrl,
+        },
+      });
+      worker.on('message', (message: { ok?: boolean; elapsedMs?: number; error?: string }) => {
+        worker.terminate().catch(() => {});
+        if (message.error) {
+          reject(new Error(message.error));
+          return;
+        }
+        resolve({ ok: message.ok === true, elapsedMs: message.elapsedMs ?? 0 });
+      });
+      worker.on('error', reject);
+    });
+  }
+
+  it('AC2/AC3: disjoint conversation domains succeed after admission-only contention', async () => {
+    const admissionKey = `scheduling-admission:${profileKey}`;
+    const gate = acquireDomainLock(profileKey, admissionKey);
+    expect(gate).not.toBeNull();
+
+    const contender = acquireDomainLockInWorker(
+      profileKey,
+      'conversation:https://chatgpt.com/c/admission-contender',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    gate!.release();
+
+    const result = await contender;
+    expect(result.ok).toBe(true);
+    expect(result.elapsedMs).toBeLessThan(2_000);
+  });
+
+  it('AC3: disjoint fresh domains succeed after admission-only contention', async () => {
+    const admissionKey = `scheduling-admission:${profileKey}`;
+    const gate = acquireDomainLock(profileKey, admissionKey);
+    expect(gate).not.toBeNull();
+
+    const contender = acquireDomainLockInWorker(profileKey, `fresh:${randomUUID()}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    gate!.release();
+
+    const result = await contender;
+    expect(result.ok).toBe(true);
+    expect(result.elapsedMs).toBeLessThan(2_000);
+  });
+
+  it('AC4: observed same-conversation conflict is terminal without admission retry wait', () => {
+    const key = 'conversation:https://chatgpt.com/c/terminal-conflict';
+    const owner = acquireDomainLock(profileKey, key);
+    expect(owner).not.toBeNull();
+
+    const started = Date.now();
+    const contender = acquireDomainLock(profileKey, key);
+    const elapsed = Date.now() - started;
+
+    expect(contender).toBeNull();
+    expect(elapsed).toBeLessThan(250);
+    owner!.release();
+    const afterRelease = acquireDomainLock(profileKey, key);
+    expect(afterRelease).not.toBeNull();
+    afterRelease!.release();
+  });
+
+  it('AC4: observed same fresh-domain conflict is terminal without admission retry wait', () => {
+    const key = `fresh:${randomUUID()}`;
+    const owner = acquireDomainLock(profileKey, key);
+    expect(owner).not.toBeNull();
+
+    const started = Date.now();
+    const contender = acquireDomainLock(profileKey, key);
+    const elapsed = Date.now() - started;
+
+    expect(contender).toBeNull();
+    expect(elapsed).toBeLessThan(250);
+    owner!.release();
+  });
+
+  it('AC5: admission retry stops at the 2,000 ms ceiling when the gate stays busy', async () => {
+    const admissionKey = `scheduling-admission:${profileKey}`;
+    const gate = acquireDomainLock(profileKey, admissionKey);
+    expect(gate).not.toBeNull();
+
+    const started = Date.now();
+    const contender = acquireDomainLockInWorker(
+      profileKey,
+      'conversation:https://chatgpt.com/c/ceiling-contender',
+    );
+    const result = await contender;
+    const elapsed = Date.now() - started;
+
+    expect(result.ok).toBe(false);
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(1_900);
+    expect(result.elapsedMs).toBeLessThanOrEqual(2_100);
+    expect(elapsed).toBeLessThanOrEqual(2_100);
+    gate!.release();
+  });
+});
