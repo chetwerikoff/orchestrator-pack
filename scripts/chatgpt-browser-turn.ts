@@ -947,7 +947,8 @@ async function runPublicationStatus(args: ParsedArgs): Promise<number> {
     emit(result);
     return publicationExitCode(result.state);
   }
-  if (result.state === 'not_committed' && statusList(profileKey).state === 'profile_blocked') {
+  const configuredProfileStatus = statusListForConfiguredProfile(profile, cdp);
+  if (result.state === 'not_committed' && configuredProfileStatus.state === 'profile_blocked') {
     const blocked: PublicationStatusV1 = {
       schema: 'publication-status/v1',
       state: 'profile_blocked',

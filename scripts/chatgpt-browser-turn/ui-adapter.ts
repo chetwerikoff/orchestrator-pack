@@ -165,10 +165,6 @@ export function observeFreshConversationUrl(
     );
     if (prefixes.size > 1) {
       retention.canonicalConversationId = undefined;
-      return;
-    }
-    if (prefixes.size === 1) {
-      retainCanonicalFreshConversation(retention, normalized);
     }
   } catch {
     // unreadable URLs remain fail-closed

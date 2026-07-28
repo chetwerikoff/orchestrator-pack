@@ -144,7 +144,14 @@ export function legacyProfileKeyAmbiguous(profile: string): boolean {
   if (process.platform === 'win32') return false;
   const { absolute } = resolveConfiguredProfileAbsolute(profile);
   if (usesCaseInsensitiveProfileIdentity(absolute)) return false;
-  return nativeLinuxCaseDistinctSiblingExists(profile);
+  let current = absolute;
+  for (;;) {
+    if (nativeLinuxCaseDistinctSiblingExists(current)) return true;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return false;
 }
 
 function storeRoot(): string {

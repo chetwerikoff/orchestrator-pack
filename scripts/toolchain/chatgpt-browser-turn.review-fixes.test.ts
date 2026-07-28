@@ -1141,6 +1141,43 @@ describe('issue 1068 profile identity and legacy keys', () => {
     expect(profileStartupCompatibility(upper, cdp)?.cause).toBe('legacy_profile_key_ambiguous');
   });
 
+
+  it('marks ambiguous when case collisions exist in ancestor path components', () => {
+    if (process.platform === 'win32') return;
+    const parent = join(issue1068Root, 'TenantParent');
+    const upper = join(parent, 'Tenant', 'Profile');
+    const lower = join(parent, 'tenant', 'Profile');
+    mkdirSync(upper, { recursive: true });
+    mkdirSync(lower, { recursive: true });
+    expect(legacyProfileKeyAmbiguous(upper)).toBe(true);
+  });
+
+  it('AC9: publication-status surfaces legacy profile blocks on the new key', async () => {
+    const profile = join(issue1068Root, 'Profile');
+    mkdirSync(profile, { recursive: true });
+    const resolved = resolveConfiguredProfile(profile, cdp);
+    if (!resolved.keysDiffer) return;
+    writeIncident(resolved.legacyProfileKey, {
+      kind: 'conversation_incident',
+      generation: 1,
+      phase: 'possible_delivery',
+      conversation_id: 'https://chatgpt.com/c/legacy-possible',
+      cause: 'stream_timeout',
+    });
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    let stdout = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    const exitCode = await runCli(['publication-status', '--profile', profile, '--cdp', cdp, '--invocation', randomUUID()]);
+    process.stdout.write = originalStdout;
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(exitCode).toBe(21);
+    expect(body.state).toBe('profile_blocked');
+  });
+
   it('resolves symlink aliases to the same configured profile key', () => {
     const actual = join(issue1068Root, 'Profile-Actual');
     const alias = join(issue1068Root, 'profile-alias');
