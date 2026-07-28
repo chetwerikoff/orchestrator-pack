@@ -386,6 +386,7 @@ export function smokeReportCoversPlan(report: SmokeReport, plan: SmokeTestPlan):
   for (const [index, required] of plan.scenarios.entries()) {
     const match = report.scenarios.find((scenario) => (
       scenario.action.trim() === required.action.trim()
+      && scenario.expected.trim() === required.expected.trim()
       && scenario.outcome === 'pass'
     ));
     if (!match) {
@@ -443,7 +444,6 @@ export interface WorkerSmokeGateInput {
   headSha: string;
   prComments: readonly { body?: string }[];
   ciGreen: boolean;
-  reviewAcceptable: boolean;
   orcaWorktreeOk: boolean;
   ownedTerminalClosed: boolean;
 }
@@ -471,10 +471,6 @@ export function evaluateWorkerSmokeGate(input: WorkerSmokeGateInput): WorkerSmok
 
   if (!input.orcaWorktreeOk) {
     return { allowed: false, reason: 'orca_worktree_unresolved', smokeRequired: true };
-  }
-
-  if (!input.reviewAcceptable) {
-    return { allowed: false, reason: 'current_head_review_not_acceptable', smokeRequired: true };
   }
 
   const latest = findLatestSmokeReportForHead(
@@ -532,9 +528,23 @@ export function evaluateReadyForReviewCombinations(input: {
   return input.smokePass && input.ciGreen;
 }
 
+export function trackedPorcelainPaths(lines: readonly string[]): string[] {
+  return lines
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line.length > 3 && !line.startsWith('??'))
+    .map((line) => line.slice(3).trim())
+    .filter(Boolean);
+}
+
+export function hasPreexistingTrackedDirtiness(lines: readonly string[]): boolean {
+  return trackedPorcelainPaths(lines).length > 0;
+}
+
 export function detectTrackedImplementationMutation(
   before: readonly string[],
   after: readonly string[],
+  beforeHashes?: Readonly<Record<string, string>>,
+  afterHashes?: Readonly<Record<string, string>>,
 ): boolean {
   const normalize = (lines: readonly string[]) => new Set(
     lines
@@ -549,6 +559,16 @@ export function detectTrackedImplementationMutation(
   for (const line of afterSet) {
     if (!beforeSet.has(line)) {
       return true;
+    }
+  }
+  if (beforeHashes && afterHashes) {
+    const paths = new Set([...trackedPorcelainPaths(before), ...trackedPorcelainPaths(after)]);
+    for (const path of paths) {
+      const beforeHash = beforeHashes[path];
+      const afterHash = afterHashes[path];
+      if (beforeHash && afterHash && beforeHash !== afterHash) {
+        return true;
+      }
     }
   }
   return false;

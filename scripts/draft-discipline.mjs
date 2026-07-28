@@ -209,6 +209,9 @@ export function resolveSmokeRequirement(markdown) {
   }
   const parsed = parseSmokeTestPlan(trimmed);
   if (parsed) {
+    if (parsed.requirement === 'not-applicable' && !String(parsed.reason ?? '').trim()) {
+      return { requirement: 'required', scenarios: [], reason: 'missing_not_applicable_reason' };
+    }
     return parsed;
   }
   if (isSmokePlanGrandfathered(trimmed)) {

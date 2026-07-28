@@ -11,6 +11,8 @@ import {
 import {
   buildSmokeAgentPrompt,
   detectTrackedImplementationMutation,
+  hasPreexistingTrackedDirtiness,
+  trackedPorcelainPaths,
   evaluateReadyForReviewCombinations,
   evaluateWorkerSmokeGate,
   extractSmokeReportsFromComments,
@@ -30,7 +32,6 @@ const headB = 'b'.repeat(40);
 
 const gateBase = {
   issueNumber: 1061,
-  reviewAcceptable: true,
 } as const;
 
 const planPassScenarios = [
@@ -193,17 +194,6 @@ describe('ready_for_review smoke and CI orthogonality', () => {
       ownedTerminalClosed: true,
     }).allowed).toBe(false);
 
-    expect(evaluateWorkerSmokeGate({
-      ...gateBase,
-      reviewAcceptable: false,
-      issueBody,
-      prNumber: 7,
-      headSha: headA,
-      prComments: [{ body: passComment }],
-      ciGreen: true,
-      orcaWorktreeOk: true,
-      ownedTerminalClosed: true,
-    }).reason).toBe('current_head_review_not_acceptable');
 
     expect(findCurrentHeadSmokePass([{ body: passComment }], 7, headB)).toBeNull();
   });
@@ -230,6 +220,14 @@ describe('orca cleanup and role boundaries', () => {
 
   it('detects tracked implementation mutations and forbids implementation/review actions in the smoke prompt', () => {
     expect(detectTrackedImplementationMutation([' M scripts/a.ts'], [' M scripts/a.ts', ' M scripts/b.ts'])).toBe(true);
+    expect(detectTrackedImplementationMutation(
+      [' M scripts/a.ts'],
+      [' M scripts/a.ts'],
+      { 'scripts/a.ts': 'aaa' },
+      { 'scripts/a.ts': 'bbb' },
+    )).toBe(true);
+    expect(hasPreexistingTrackedDirtiness([' M scripts/a.ts'])).toBe(true);
+    expect(hasPreexistingTrackedDirtiness(['?? scripts/new.ts'])).toBe(false);
     const prompt = buildSmokeAgentPrompt({
       issueNumber: 1,
       issueBody: 'body',
@@ -399,6 +397,21 @@ describe('review finding regressions', () => {
       ownedTerminalClosed: true,
     }).reason).toBe('smoke_plan_not_fully_covered');
 
+    const changedExpected = formatSmokeReportComment({
+      result: 'PASS',
+      issueNumber: 1061,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: planPassScenarios.map((scenario, index) => (
+        index === 0 ? { ...scenario, expected: 'wrong expected' } : scenario
+      )),
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+    });
+    expect(smokeReportCoversPlan(extractSmokeReportsFromComments([{ body: changedExpected }])[0]!, plan)).toBe(false);
+
     const failingOutcome = formatSmokeReportComment({
       result: 'PASS',
       issueNumber: 1061,
@@ -447,6 +460,18 @@ describe('review finding regressions', () => {
       orcaHeadSha: headA,
       gitHeadSha: headA,
     })).toEqual({ ok: true });
+  });
+
+  it('rejects unreasoned not-applicable smoke plans at runtime', () => {
+    const markdown = [
+      '```behavior-kind',
+      'record-only',
+      '```',
+      '```smoke-test-plan',
+      'not-applicable: true',
+      '```',
+    ].join('\n');
+    expect(resolveSmokeRequirement(markdown).reason).toBe('missing_not_applicable_reason');
   });
 
   it('requires explicit grandfather marker for legacy-exempt omission', () => {

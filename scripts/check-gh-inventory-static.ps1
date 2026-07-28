@@ -35,7 +35,8 @@ function Invoke-GhInventoryGuard {
 $reconcileRoots = @(
     (Join-Path $Root 'scripts/lib/Gh-PrChecks.ps1'),
     (Join-Path $Root 'scripts/pr-scope-check.ps1'),
-    (Join-Path $Root 'scripts/lib/Get-AutoReviewPrContext.ps1')
+    (Join-Path $Root 'scripts/lib/Get-AutoReviewPrContext.ps1'),
+    (Join-Path $Root 'scripts/worker-smoke-run.ts')
 )
 
 $ruleSurfaceRoots = @(

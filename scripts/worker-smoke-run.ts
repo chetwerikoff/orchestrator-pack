@@ -19,6 +19,8 @@ import {
   buildSmokeAgentPrompt,
   checkSmokeTestPlan,
   detectTrackedImplementationMutation,
+  hasPreexistingTrackedDirtiness,
+  trackedPorcelainPaths,
   evaluateWorkerSmokeGate,
   formatSmokeReportComment,
   normalizeSmokeReport,
@@ -133,8 +135,24 @@ function gitPorcelain(cwd: string): string[] {
   return output.split(/\r?\n/u).filter(Boolean);
 }
 
+
+function hashTrackedPaths(cwd: string, paths: readonly string[]): Record<string, string> {
+  const hashes: Record<string, string> = {};
+  for (const path of paths) {
+    const result = runProcessSync({
+      command: 'git',
+      args: ['hash-object', path],
+      cwd,
+    });
+    if (result.ok) {
+      hashes[path] = result.stdout.trim();
+    }
+  }
+  return hashes;
+}
+
 function fetchPrComments(prNumber: number, repoRoot: string): { body?: string }[] {
-  const output = requireProcessOutput('gh api pr comments', runProcessSync({
+  const output = requireProcessOutput('pr-issue-comments', runProcessSync({
     command: 'gh',
     args: ['api', `repos/{owner}/{repo}/issues/${prNumber}/comments`, '--paginate'],
     cwd: repoRoot,
@@ -167,39 +185,10 @@ function resolveGitHead(cwd: string): string {
   })).trim().toLowerCase();
 }
 
-function resolveReviewAcceptable(prNumber: number, headSha: string, repoRoot: string): boolean {
-  const output = requireProcessOutput('gh api pr reviews', runProcessSync({
-    command: 'gh',
-    args: ['api', `repos/{owner}/{repo}/pulls/${prNumber}/reviews`],
-    cwd: repoRoot,
-  }));
-  const reviews = JSON.parse(output) as { commit_id?: string; state?: string; body?: string }[];
-  if (!Array.isArray(reviews) || reviews.length === 0) {
-    return false;
-  }
-  const normalizedHead = headSha.trim().toLowerCase();
-  const forHead = reviews.filter((review) => (review.commit_id ?? '').trim().toLowerCase() === normalizedHead);
-  if (forHead.length === 0) {
-    return false;
-  }
-  const latest = forHead[forHead.length - 1]!;
-  const body = String(latest.body ?? '');
-  if (/BLOCK\s*\/\s*FINDINGS|changes required|P1/i.test(body)) {
-    return false;
-  }
-  if (latest.state === 'APPROVED') {
-    return true;
-  }
-  if (latest.state === 'COMMENTED' && /NO_FINDINGS|clean review|no material findings/i.test(body)) {
-    return true;
-  }
-  return latest.state !== 'CHANGES_REQUESTED';
-}
-
 function resolveCiGreen(prNumber: number, headSha: string, repoRoot: string): boolean {
-  const output = requireProcessOutput('gh pr checks', runProcessSync({
+  const output = requireProcessOutput('required-ci-checks', runProcessSync({
     command: 'gh',
-    args: ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket'],
+    args: ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'],
     cwd: repoRoot,
   }));
   const checks = JSON.parse(output) as { name?: string; state?: string; bucket?: string }[];
@@ -237,9 +226,6 @@ function runGateCheck(options: CliOptions): number {
     headSha: options.headSha,
     prComments: comments,
     ciGreen: options.prNumber > 0 ? resolveCiGreen(options.prNumber, options.headSha, options.repoRoot) : false,
-    reviewAcceptable: options.prNumber > 0
-      ? resolveReviewAcceptable(options.prNumber, options.headSha, options.repoRoot)
-      : false,
     orcaWorktreeOk: worktree.ok,
     ownedTerminalClosed: options.prNumber > 0
       ? ownedSmokeTerminalClosedFromReports(comments, options.prNumber, options.headSha, options.issueNumber)
@@ -355,61 +341,34 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     return 1;
   }
 
-  if (!resolveCiGreen(options.prNumber, options.headSha, options.repoRoot)) {
-    const blocked: Partial<SmokeReport> = {
-      result: 'BLOCKED',
-      scenarios: [{
-        action: 'wait for required CI green',
-        expected: 'current-head required CI is green',
-        observed: 'required_ci_not_green',
-        outcome: 'blocked',
-      }],
-      trackedFilesUnmodified: true,
-      terminalCleanup: 'not_started',
-      limitations: [],
-      environmentNotes: ['smoke deferred until CI green'],
-    };
-    const normalized = normalizeSmokeReport(blocked, {
-      issueNumber: options.issueNumber,
-      prNumber: options.prNumber,
-      headSha: options.headSha,
-    });
-    if (!normalized.ok) {
-      fail(normalized.reason);
-    }
-    publishSmokeReport(normalized.report, options);
-    emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
-    return 1;
-  }
-
-  if (!resolveReviewAcceptable(options.prNumber, options.headSha, options.repoRoot)) {
-    const blocked: Partial<SmokeReport> = {
-      result: 'BLOCKED',
-      scenarios: [{
-        action: 'wait for acceptable current-head pack review',
-        expected: 'current-head review is clean or approved',
-        observed: 'current_head_review_not_acceptable',
-        outcome: 'blocked',
-      }],
-      trackedFilesUnmodified: true,
-      terminalCleanup: 'not_started',
-      limitations: [],
-      environmentNotes: ['smoke deferred until review convergence'],
-    };
-    const normalized = normalizeSmokeReport(blocked, {
-      issueNumber: options.issueNumber,
-      prNumber: options.prNumber,
-      headSha: options.headSha,
-    });
-    if (!normalized.ok) {
-      fail(normalized.reason);
-    }
-    publishSmokeReport(normalized.report, options);
-    emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
-    return 1;
-  }
-
   const beforeStatus = gitPorcelain(options.cwd);
+  if (hasPreexistingTrackedDirtiness(beforeStatus)) {
+    const blocked: Partial<SmokeReport> = {
+      result: 'BLOCKED',
+      scenarios: [{
+        action: 'verify clean tracked worktree before smoke',
+        expected: 'no pre-existing tracked modifications',
+        observed: trackedPorcelainPaths(beforeStatus).join(', ') || 'tracked_dirty',
+        outcome: 'blocked',
+      }],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'not_started',
+      limitations: [],
+      environmentNotes: ['tracked worktree dirty before smoke launch'],
+    };
+    const normalized = normalizeSmokeReport(blocked, {
+      issueNumber: options.issueNumber,
+      prNumber: options.prNumber,
+      headSha: options.headSha,
+    });
+    if (!normalized.ok) {
+      fail(normalized.reason);
+    }
+    publishSmokeReport(normalized.report, options);
+    emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
+    return 1;
+  }
+  const beforeHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(beforeStatus));
   const created = createOrcaTerminal({
     cwd: options.cwd,
     title: `smoke-${options.issueNumber}`,
@@ -464,10 +423,24 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     }
 
     const readResult = readOrcaTerminal(handle, { cwd: options.cwd, limit: 2000 });
+    if (!readResult.ok) {
+      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
+      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
+      const report = buildOperationalSmokeReport('BLOCKED', options, {
+        action: 'read Orca terminal output',
+        expected: 'terminal read succeeds',
+        observed: readResult.error?.message ?? readResult.error?.code ?? 'terminal_read_failed',
+        terminalCleanup,
+      });
+      publishSmokeReport(report, options);
+      emit({ ok: false, report, published: !options.dryRun }, options.json);
+      return 1;
+    }
     const output = scrubSmokeOutput((readResult.result?.lines ?? []).join('\n'));
     const partial = parseSmokeAgentReport(output);
     const afterStatus = gitPorcelain(options.cwd);
-    const mutated = detectTrackedImplementationMutation(beforeStatus, afterStatus);
+    const afterHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(afterStatus));
+    const mutated = detectTrackedImplementationMutation(beforeStatus, afterStatus, beforeHashes, afterHashes);
 
     if (!partial) {
       const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
