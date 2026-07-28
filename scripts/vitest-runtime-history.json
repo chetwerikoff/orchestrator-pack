@@ -1,7 +1,7 @@
 {
   "issue": 556,
   "source": "ci-measured",
-  "dataChangedAt": "2026-07-28T03:44:28.154Z",
+  "dataChangedAt": "2026-07-28T03:59:05.948Z",
   "smoothingRule": "median-of-last-5-samples",
   "files": {
     "plugins/_shared/tests/declaration_schema.test.ts": 45000,
@@ -9,12 +9,12 @@
     "plugins/_shared/tests/issue_parser.test.ts": 45000,
     "plugins/_shared/tests/normalize.test.ts": 45000,
     "plugins/ao-codex-pr-reviewer/tests/review.test.ts": 45000,
-    "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts": 414,
+    "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts": 437,
     "plugins/ao-scope-guard/tests/agent_wrap.test.ts": 110,
     "plugins/ao-scope-guard/tests/check.test.ts": 45000,
     "plugins/ao-scope-guard/tests/declaration_loader.test.ts": 45000,
     "plugins/ao-scope-guard/tests/denylist.test.ts": 4,
-    "plugins/ao-scope-guard/tests/integration.test.ts": 399,
+    "plugins/ao-scope-guard/tests/integration.test.ts": 413,
     "plugins/ao-scope-guard/tests/normalize_edge.test.ts": 45000,
     "plugins/ao-task-declaration/tests/amendment.test.ts": 45000,
     "plugins/ao-task-declaration/tests/baseline.test.ts": 45000,
@@ -49,10 +49,10 @@
     "scripts/ci-failure-notification.test.ts": 45000,
     "scripts/ci-failure-progress-freshness.test.ts": 45000,
     "scripts/ci-failure-progress-stale.test.ts": 45000,
-    "scripts/ci-green-wake-reconcile.test.ts": 209,
+    "scripts/ci-green-wake-reconcile.test.ts": 207,
     "scripts/codex-reviewer-timeout-retry.test.ts": 45000,
     "scripts/command-runtime-bootstrap.test.ts": 45000,
-    "scripts/contract-evidence-legacy-list-guard.test.ts": 526,
+    "scripts/contract-evidence-legacy-list-guard.test.ts": 636,
     "scripts/contract-evidence-reverify.test.ts": 50000,
     "scripts/contract-evidence.test.ts": 45000,
     "scripts/cursor-agent-tui-shim.test.ts": 80000,
@@ -68,7 +68,7 @@
     "scripts/gh-pr-checks-empty-openprs.test.ts": 45000,
     "scripts/gh-pr-checks-open-pr-list-node-limit.test.ts": 45000,
     "scripts/gh-repo-resolve.test.ts": 45000,
-    "scripts/gh-wrapper.test.ts": 4764,
+    "scripts/gh-wrapper.test.ts": 4862,
     "scripts/github-fleet-cache-bypass-guard.test.ts": 45000,
     "scripts/github-fleet-cache-bypass.test.ts": 45000,
     "scripts/github-fleet-cache-coalesce.test.ts": 45000,
@@ -111,11 +111,11 @@
     "scripts/review-cycle-cap.test.ts": 45000,
     "scripts/review-delivery.test.ts": 45000,
     "scripts/review-finding-delivery-confirm.test.ts": 45000,
-    "scripts/review-finding-delivery-submit.test.ts": 116,
+    "scripts/review-finding-delivery-submit.test.ts": 142,
     "scripts/review-handoff-admission-records-lifecycle.test.ts": 60000,
     "scripts/review-handoff-wake-trigger.test.ts": 45000,
     "scripts/review-head-ready.test.ts": 24,
-    "scripts/review-orchestrator-loop.test.ts": 7,
+    "scripts/review-orchestrator-loop.test.ts": 8,
     "scripts/review-pipeline-spawn-budget.test.ts": 45000,
     "scripts/review-producer-contract-mapping.test.ts": 45000,
     "scripts/review-producer-contract.test.ts": 45000,
@@ -125,10 +125,10 @@
     "scripts/review-ready-stuck-guard.test.ts": 45000,
     "scripts/review-run-recovery.test.ts": 45000,
     "scripts/review-send-reconcile.test.ts": 45000,
-    "scripts/review-start-claim-budget-semantics.test.ts": 2575,
+    "scripts/review-start-claim-budget-semantics.test.ts": 2593,
     "scripts/review-start-claim-lifecycle.test.ts": 45000,
-    "scripts/review-start-claim-run-binding.test.ts": 2870,
-    "scripts/review-start-claim.test.ts": 47085,
+    "scripts/review-start-claim-run-binding.test.ts": 3177,
+    "scripts/review-start-claim.test.ts": 51257,
     "scripts/review-start-envelope-external-io.test.ts": 45000,
     "scripts/review-start-envelope-ledger.test.ts": 45000,
     "scripts/review-start-preflight-shield-classifier.test.ts": 45000,
@@ -141,9 +141,9 @@
     "scripts/review-start-supervised-gh-pid.test.ts": 45000,
     "scripts/review-status-consumer.test.ts": 45000,
     "scripts/review-stuck-run-reaper.test.ts": 45000,
-    "scripts/review-trigger-reconcile.test.ts": 2996,
-    "scripts/review-trigger-reeval.test.ts": 114,
-    "scripts/review-wake-trigger.test.ts": 156,
+    "scripts/review-trigger-reconcile.test.ts": 3380,
+    "scripts/review-trigger-reeval.test.ts": 122,
+    "scripts/review-wake-trigger.test.ts": 185,
     "scripts/reviewer-contract-mapping.test.ts": 45000,
     "scripts/reviewer-failure-evidence.test.ts": 45000,
     "scripts/run-vitest-heavy-shard.test.ts": 8000,
@@ -151,7 +151,7 @@
     "scripts/scripted-review-confirmed-delivery-gate.test.ts": 45000,
     "scripts/seed-snapshot-failure-bounded-read-economy.test.ts": 45000,
     "scripts/session-pr-binding-resolver.test.ts": 120000,
-    "scripts/session-runtime-liveness.test.ts": 11,
+    "scripts/session-runtime-liveness.test.ts": 13,
     "scripts/side-process-launch-contract.test.ts": 45000,
     "scripts/spawn-worktree-branch-operand-binding.test.ts": 45000,
     "scripts/spawn-worktree-grant-finalization.test.ts": 45000,
@@ -178,7 +178,7 @@
     "scripts/tier-gate-guard.test.ts": 45000,
     "scripts/trust-ao-worktree.test.ts": 45000,
     "scripts/worker-iteration-cycle.test.ts": 45000,
-    "scripts/worker-message-submit-reconcile.test.ts": 65516,
+    "scripts/worker-message-submit-reconcile.test.ts": 77486,
     "scripts/worker-nudge-gate.test.ts": 80000,
     "scripts/worker-nudge-issue-owner-bootstrap.test.ts": 45000,
     "scripts/worker-nudge-task-continuation-pr-facet.test.ts": 45000,
@@ -193,10 +193,10 @@
     "tests/agents-md-size-budget.test.ts": 45000,
     "scripts/orchestrator-wake-supervisor-pr-lane-static.test.ts": 5000,
     "scripts/pr-session-binding-cache.test.ts": 120000,
-    "scripts/kernel/subprocess.test.ts": 1953,
-    "scripts/pr2-foundation/mutation-external-ci.test.ts": 474,
-    "scripts/pr2-foundation/foundation.test.ts": 58,
-    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 41875
+    "scripts/kernel/subprocess.test.ts": 1981,
+    "scripts/pr2-foundation/mutation-external-ci.test.ts": 487,
+    "scripts/pr2-foundation/foundation.test.ts": 59,
+    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 43580
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -395,198 +395,198 @@
   },
   "recentSamples": {
     "scripts/contract-evidence-legacy-list-guard.test.ts": [
-      414,
       344,
       646,
       636,
-      526
+      526,
+      644
     ],
     "plugins/ao-scope-guard/tests/agent_wrap.test.ts": [
-      155,
       70,
       118,
       110,
-      100
+      100,
+      115
     ],
     "plugins/ao-scope-guard/tests/integration.test.ts": [
-      276,
       413,
       386,
       559,
-      399
+      399,
+      445
     ],
     "plugins/ao-token-chain-ledger/tests/integration.test.ts": [
-      12,
       10,
       9,
       13,
-      12
+      12,
+      13
     ],
     "scripts/review-finding-delivery-submit.test.ts": [
-      89,
       93,
       144,
       142,
-      116
+      116,
+      144
     ],
     "scripts/review-orchestrator-loop.test.ts": [
-      7,
       8,
       5,
       8,
-      7
+      7,
+      8
     ],
     "scripts/kernel/subprocess.test.ts": [
-      1923,
       1896,
       1988,
       1953,
-      1985
+      1985,
+      1981
     ],
     "scripts/pr2-foundation/mutation-external-ci.test.ts": [
-      372,
       410,
       492,
       487,
-      474
+      474,
+      492
     ],
     "scripts/review-start-claim-run-binding.test.ts": [
-      2350,
       2168,
       3395,
       3177,
-      2870
+      2870,
+      3242
     ],
     "scripts/review-start-claim.test.ts": [
-      41923,
       45526,
       53229,
       51257,
-      47085
+      47085,
+      52381
     ],
     "scripts/review-trigger-reeval.test.ts": [
-      83,
       72,
       123,
       122,
-      114
+      114,
+      122
     ],
     "scripts/session-runtime-liveness.test.ts": [
-      10,
       8,
       14,
       13,
-      11
+      11,
+      13
     ],
     "scripts/ci-green-wake-reconcile.test.ts": [
-      233,
       207,
       221,
       209,
-      180
+      180,
+      207
     ],
     "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts": [
-      348,
       314,
       483,
       437,
-      414
+      414,
+      458
     ],
     "plugins/ao-scope-guard/tests/denylist.test.ts": [
-      3,
       4,
       2,
       4,
-      5
+      5,
+      4
     ],
     "plugins/ao-task-declaration/tests/declare.test.ts": [
-      190,
       172,
       238,
       234,
-      235
+      235,
+      233
     ],
     "scripts/gh-wrapper.test.ts": [
-      3709,
       3455,
       4969,
       4764,
-      5921
+      5921,
+      4862
     ],
     "scripts/review-head-ready.test.ts": [
-      27,
       20,
       18,
       27,
-      24
+      24,
+      28
     ],
     "scripts/pr2-foundation/foundation.test.ts": [
-      57,
       75,
       59,
       58,
-      46
+      46,
+      59
     ],
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": [
-      37226,
       41875,
       44338,
       43580,
-      39806
+      39806,
+      44836
     ],
     "scripts/review-start-claim-budget-semantics.test.ts": [
-      2098,
       2575,
       2728,
       2593,
-      2350
+      2350,
+      2734
     ],
     "scripts/review-trigger-reconcile.test.ts": [
-      2377,
       2424,
       3402,
       3506,
-      2996
+      2996,
+      3380
     ],
     "scripts/review-wake-trigger.test.ts": [
-      118,
       102,
       200,
       186,
-      156
+      156,
+      185
     ],
     "scripts/worker-message-submit-reconcile.test.ts": [
-      53081,
       50796,
       80047,
       77486,
-      65516
+      65516,
+      78446
     ]
   },
   "fileChangedAt": {
-    "scripts/contract-evidence-legacy-list-guard.test.ts": "2026-07-28T03:44:28.154Z",
+    "scripts/contract-evidence-legacy-list-guard.test.ts": "2026-07-28T03:59:05.948Z",
     "plugins/ao-scope-guard/tests/agent_wrap.test.ts": "2026-07-28T03:31:02.438Z",
-    "plugins/ao-scope-guard/tests/integration.test.ts": "2026-07-28T03:44:28.154Z",
+    "plugins/ao-scope-guard/tests/integration.test.ts": "2026-07-28T03:59:05.948Z",
     "plugins/ao-token-chain-ledger/tests/integration.test.ts": "2026-07-27T14:39:53.943Z",
-    "scripts/review-finding-delivery-submit.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/review-orchestrator-loop.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/kernel/subprocess.test.ts": "2026-07-28T03:31:02.439Z",
-    "scripts/pr2-foundation/mutation-external-ci.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/review-start-claim-run-binding.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/review-start-claim.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/review-trigger-reeval.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/session-runtime-liveness.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/ci-green-wake-reconcile.test.ts": "2026-07-28T03:44:28.154Z",
-    "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts": "2026-07-28T03:44:28.153Z",
+    "scripts/review-finding-delivery-submit.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/review-orchestrator-loop.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/kernel/subprocess.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/pr2-foundation/mutation-external-ci.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/review-start-claim-run-binding.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/review-start-claim.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/review-trigger-reeval.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/session-runtime-liveness.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/ci-green-wake-reconcile.test.ts": "2026-07-28T03:59:05.948Z",
+    "plugins/ao-codex-pr-reviewer/tests/reviewer-budget.test.ts": "2026-07-28T03:59:05.948Z",
     "plugins/ao-scope-guard/tests/denylist.test.ts": "2026-07-28T03:13:25.348Z",
     "plugins/ao-task-declaration/tests/declare.test.ts": "2026-07-27T14:51:55.325Z",
-    "scripts/gh-wrapper.test.ts": "2026-07-28T03:31:02.439Z",
+    "scripts/gh-wrapper.test.ts": "2026-07-28T03:59:05.948Z",
     "scripts/review-head-ready.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/pr2-foundation/foundation.test.ts": "2026-07-28T03:31:02.439Z",
-    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/review-start-claim-budget-semantics.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/review-trigger-reconcile.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/review-wake-trigger.test.ts": "2026-07-28T03:44:28.154Z",
-    "scripts/worker-message-submit-reconcile.test.ts": "2026-07-28T03:44:28.154Z"
+    "scripts/pr2-foundation/foundation.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/review-start-claim-budget-semantics.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/review-trigger-reconcile.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/review-wake-trigger.test.ts": "2026-07-28T03:59:05.948Z",
+    "scripts/worker-message-submit-reconcile.test.ts": "2026-07-28T03:59:05.948Z"
   }
 }
