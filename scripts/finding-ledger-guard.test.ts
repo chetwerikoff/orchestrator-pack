@@ -712,6 +712,25 @@ describe('finding ledger review economics #975', () => {
       expect(ordinaryM1.ok, ordinaryM1.errors.join('\n')).toBe(true);
     });
 
+    it('does not treat a historical architectural-final nomination as terminal GPT', () => {
+      const historicalNomination = markedFinding('PF3', {
+        type: 'scope-violation',
+        evidence: 'The proposed file relationship is unclear.',
+        recommendation: 'Do not bypass the architect requirement from historical final bytes.',
+      });
+      const result = finalRun(
+        [
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'initial lens'),
+          cap('pass-03-architectural-final.capture.txt', 1_250, historicalNomination),
+          cap('pass-04-architectural.capture.txt', 1_300, markedClean()),
+        ],
+        [row('PF3', { type: 'scope-violation', disposition: 'rejected', rejectReason: 'historical-only nomination' })],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toMatch(/unknown\/stale architect contest state|requires current architect adjudication/);
+    });
+
     it('does not permit stale architectPending to survive on a terminal-only nomination', () => {
       const nomination = markedFinding('PF1', {
         type: 'scope-violation',
