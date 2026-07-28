@@ -17,7 +17,12 @@ import {
   type ControlResultV1,
   type StatusItemV1,
 } from './contracts.ts';
-import { acquireDomainLock, clearDomainLock, type DomainLock } from './coordination.ts';
+import {
+  acquireDomainLock,
+  clearDomainLock,
+  reconcileAbandonedSchedulingConflicts,
+  type DomainLock,
+} from './coordination.ts';
 import { recordSwallowedDriverException } from './diagnostics.ts';
 import { discardUncommittedPublication, publicationRecordCompatible } from './publication.ts';
 import { atomicJson, fsyncDirectory, profileDirs, sha256 } from './storage-common.ts';
@@ -272,7 +277,24 @@ function control(
   };
 }
 
-export interface CapabilityRecordV1 {
+export type AdmissionPolicy = 'parallel' | 'serialized';
+
+export interface CapabilityRecordV2 {
+  readonly schema: 'chatgpt-browser-turn-capability/v2';
+  readonly version: 2;
+  readonly configured_profile_key: string;
+  readonly candidate_digest: string;
+  readonly build_digest: string;
+  readonly browser_provenance: string;
+  readonly config_digest: string;
+  readonly gate_digest: string;
+  readonly evidence_digest: string;
+  readonly characterized_at: string;
+  readonly admission_policy: AdmissionPolicy;
+  readonly admission_epoch: number;
+}
+
+interface LegacyCapabilityRecordV1 {
   readonly schema: 'chatgpt-browser-turn-capability/v1';
   readonly version: 1;
   readonly configured_profile_key: string;
@@ -288,22 +310,72 @@ export interface CapabilityRecordV1 {
   readonly parallel_eligible: boolean;
 }
 
-function compatibleCapability(value: unknown, profileKey: string): value is CapabilityRecordV1 {
+function validCapabilityDigests(record: {
+  readonly candidate_digest: string;
+  readonly build_digest: string;
+  readonly config_digest: string;
+  readonly gate_digest: string;
+  readonly evidence_digest: string;
+}): boolean {
+  return [record.candidate_digest, record.build_digest, record.config_digest, record.gate_digest, record.evidence_digest]
+    .every((digest) => typeof digest === 'string' && /^[0-9a-f]{64}$/.test(digest));
+}
+
+function compatibleLegacyCapabilityV1(value: unknown, profileKey: string): value is LegacyCapabilityRecordV1 {
   if (!value || typeof value !== 'object') return false;
-  const record = value as CapabilityRecordV1;
+  const record = value as LegacyCapabilityRecordV1;
   return record.schema === 'chatgpt-browser-turn-capability/v1'
     && record.version === 1
     && record.configured_profile_key === profileKey
-    && [record.candidate_digest, record.build_digest, record.config_digest, record.gate_digest, record.evidence_digest]
-      .every((digest) => typeof digest === 'string' && /^[0-9a-f]{64}$/.test(digest))
+    && validCapabilityDigests(record)
     && typeof record.browser_provenance === 'string'
     && record.browser_provenance.length > 0
     && Number.isInteger(record.downgrade_generation)
     && record.downgrade_generation >= 0
-    && typeof record.parallel_eligible === 'boolean';
+    && typeof record.parallel_eligible === 'boolean'
+    && typeof record.observed_at === 'string'
+    && typeof record.expires_at === 'string';
 }
 
-const CAPABILITY_LEASE_TTL_MS = 4 * 60 * 60 * 1000;
+function compatibleCapabilityV2(value: unknown, profileKey: string): value is CapabilityRecordV2 {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as CapabilityRecordV2;
+  return record.schema === 'chatgpt-browser-turn-capability/v2'
+    && record.version === 2
+    && record.configured_profile_key === profileKey
+    && validCapabilityDigests(record)
+    && typeof record.browser_provenance === 'string'
+    && record.browser_provenance.length > 0
+    && typeof record.characterized_at === 'string'
+    && Number.isFinite(Date.parse(record.characterized_at))
+    && (record.admission_policy === 'parallel' || record.admission_policy === 'serialized')
+    && Number.isInteger(record.admission_epoch)
+    && record.admission_epoch >= 0;
+}
+
+function migrateLegacyCapabilityV1(record: LegacyCapabilityRecordV1): CapabilityRecordV2 {
+  return {
+    schema: 'chatgpt-browser-turn-capability/v2',
+    version: 2,
+    configured_profile_key: record.configured_profile_key,
+    candidate_digest: record.candidate_digest,
+    build_digest: record.build_digest,
+    browser_provenance: record.browser_provenance,
+    config_digest: record.config_digest,
+    gate_digest: record.gate_digest,
+    evidence_digest: record.evidence_digest,
+    characterized_at: record.observed_at,
+    admission_policy: 'serialized',
+    admission_epoch: record.downgrade_generation,
+  };
+}
+
+function normalizeCapabilityRecord(value: unknown, profileKey: string): CapabilityRecordV2 | null {
+  if (compatibleCapabilityV2(value, profileKey)) return value;
+  if (compatibleLegacyCapabilityV1(value, profileKey)) return migrateLegacyCapabilityV1(value);
+  return null;
+}
+
 const CAPABILITY_MUTATION_LOCK_STALE_MS = 5_000;
 const CAPABILITY_MUTATION_LOCK_WAIT_MS = 10_000;
 const CAPABILITY_MUTATION_LOCK_RETRY_MS = 10;
@@ -327,13 +399,17 @@ export type CapabilityMutationOutcome =
   | { applied: true; reason?: undefined; error?: undefined }
   | { applied: false; reason: 'not_witnessed' | 'not_eligible' | 'write_failed'; error?: unknown };
 
+export type CapabilityPolicyMutationOutcome =
+  | { applied: true }
+  | { applied: false; reason: 'not_characterized' | 'binding_mismatch' | 'barrier_busy' | 'profile_blocked' | 'invalid_policy' | 'write_failed'; error?: unknown };
+
 interface CapabilityAdmissionSnapshot {
   readonly state: string;
-  readonly downgradeGeneration: number | null;
+  readonly admissionEpoch: number | null;
 }
 
 const capabilityAdmissions = new Map<string, CapabilityAdmissionSnapshot>();
-const selfDowngradeGenerations = new Map<string, number>();
+const serializedTransitionEpochs = new Map<string, number>();
 
 function capabilityMutationLockKey(profileKey: string): string {
   return `capability-mutation:${profileKey}`;
@@ -359,30 +435,66 @@ function acquireCapabilityMutationLock(profileKey: string): DomainLock {
 
 function writeCapabilityRaw(
   profileKey: string,
-  record: Omit<CapabilityRecordV1, 'schema' | 'version' | 'configured_profile_key'>,
+  record: Omit<CapabilityRecordV2, 'schema' | 'version' | 'configured_profile_key'>,
 ): void {
-  const observed = Date.parse(record.observed_at);
-  const expires = Date.parse(record.expires_at);
-  if (!Number.isFinite(observed)
-    || !Number.isFinite(expires)
-    || expires <= observed
-    || expires - observed > 24 * 60 * 60 * 1000
-    || ![record.candidate_digest, record.build_digest, record.config_digest, record.gate_digest, record.evidence_digest]
-      .every((digest) => /^[0-9a-f]{64}$/.test(digest))) {
+  const characterized = Date.parse(record.characterized_at);
+  if (!Number.isFinite(characterized)
+    || !validCapabilityDigests(record)
+    || (record.admission_policy !== 'parallel' && record.admission_policy !== 'serialized')
+    || !Number.isInteger(record.admission_epoch)
+    || record.admission_epoch < 0) {
     throw new Error('invalid_capability');
   }
   atomicJson(profileDirs(profileKey).capability, {
-    schema: 'chatgpt-browser-turn-capability/v1',
-    version: 1,
+    schema: 'chatgpt-browser-turn-capability/v2',
+    version: 2,
     configured_profile_key: profileKey,
     ...record,
   });
 }
 
-/** Test fixture only — production mutations use applyCapabilityAfterSuccessfulTurn / downgradeCapability. */
+function writeCapabilityRecord(profileKey: string, capability: CapabilityRecordV2): void {
+  writeCapabilityRaw(profileKey, {
+    candidate_digest: capability.candidate_digest,
+    build_digest: capability.build_digest,
+    browser_provenance: capability.browser_provenance,
+    config_digest: capability.config_digest,
+    gate_digest: capability.gate_digest,
+    evidence_digest: capability.evidence_digest,
+    characterized_at: capability.characterized_at,
+    admission_policy: capability.admission_policy,
+    admission_epoch: capability.admission_epoch,
+  });
+}
+
+function migrateLegacyCapabilityOnRead(
+  profileKey: string,
+  parsed: LegacyCapabilityRecordV1,
+  mutationLockHeld: boolean,
+): CapabilityRecordV2 {
+  if (mutationLockHeld) {
+    const migrated = migrateLegacyCapabilityV1(parsed);
+    writeCapabilityRecord(profileKey, migrated);
+    return migrated;
+  }
+
+  const lock = acquireCapabilityMutationLock(profileKey);
+  try {
+    const latest: unknown = JSON.parse(readFileSync(profileDirs(profileKey).capability, 'utf8'));
+    if (compatibleCapabilityV2(latest, profileKey)) return latest;
+    if (!compatibleLegacyCapabilityV1(latest, profileKey)) throw new Error('capability_incompatible');
+    const migrated = migrateLegacyCapabilityV1(latest);
+    writeCapabilityRecord(profileKey, migrated);
+    return migrated;
+  } finally {
+    lock.release();
+  }
+}
+
+/** Test fixture only — production mutations use applyCapabilityAfterSuccessfulTurn / mutateCapabilityAdmissionPolicy. */
 export function __testWriteCapability(
   profileKey: string,
-  record: Omit<CapabilityRecordV1, 'schema' | 'version' | 'configured_profile_key'>,
+  record: Omit<CapabilityRecordV2, 'schema' | 'version' | 'configured_profile_key'>,
 ): void {
   const lock = acquireCapabilityMutationLock(profileKey);
   try {
@@ -392,67 +504,91 @@ export function __testWriteCapability(
   }
 }
 
+type CapabilityStatusResult = ControlResultV1 & {
+  capability?: CapabilityRecordV2;
+  characterization?: { characterized: boolean; characterized_at?: string; evidence_digest?: string };
+  admission?: { policy: AdmissionPolicy; epoch: number };
+};
+
+function capabilityPresentation(capability: CapabilityRecordV2) {
+  return {
+    characterization: {
+      characterized: true,
+      characterized_at: capability.characterized_at,
+      evidence_digest: capability.evidence_digest,
+    },
+    admission: {
+      policy: capability.admission_policy,
+      epoch: capability.admission_epoch,
+    },
+  };
+}
+
 function readCapabilityStatus(
   profileKey: string,
   expected?: CapabilityBinding,
-): ControlResultV1 & { capability?: CapabilityRecordV1 } {
+  mutationLockHeld = false,
+): CapabilityStatusResult {
   const listed = statusList(profileKey);
   if (listed.state === 'profile_blocked') {
     return { ...control('capability', 'profile_blocked', profileKey), complete: false };
   }
-  const path = profileDirs(profileKey).capability;
-  if (!existsSync(path)) return control('capability', 'no_evidence', profileKey);
-  let capability: CapabilityRecordV1;
+  const capabilityPath = profileDirs(profileKey).capability;
+  if (!existsSync(capabilityPath)) return control('capability', 'no_evidence', profileKey);
+  let capability: CapabilityRecordV2;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    if (!compatibleCapability(parsed, profileKey)) return control('capability', 'profile_blocked', profileKey, 'capability_incompatible');
-    capability = parsed;
+    const parsed: unknown = JSON.parse(readFileSync(capabilityPath, 'utf8'));
+    const normalized = normalizeCapabilityRecord(parsed, profileKey);
+    if (!normalized) return control('capability', 'profile_blocked', profileKey, 'capability_incompatible');
+    capability = compatibleLegacyCapabilityV1(parsed, profileKey)
+      ? migrateLegacyCapabilityOnRead(profileKey, parsed, mutationLockHeld)
+      : normalized;
   } catch {
     return control('capability', 'profile_blocked', profileKey, 'capability_unreadable');
   }
 
-  const observed = Date.parse(capability.observed_at);
-  const expires = Date.parse(capability.expires_at);
-  if (!Number.isFinite(observed)
-    || !Number.isFinite(expires)
-    || expires <= observed
-    || expires - observed > 24 * 60 * 60 * 1000
-    || Date.now() > expires) {
-    return { ...control('capability', 'expired', profileKey), capability };
-  }
+  const presentation = capabilityPresentation(capability);
   if (expected && (
     capability.candidate_digest !== expected.candidate_digest
     || capability.build_digest !== expected.build_digest
     || capability.config_digest !== expected.config_digest
     || capability.gate_digest !== expected.gate_digest
   )) {
-    return { ...control('capability', 'downgraded', profileKey, 'capability_binding_mismatch'), capability };
+    return {
+      ...control('capability', 'downgraded', profileKey, 'capability_binding_mismatch'),
+      capability,
+      ...presentation,
+    };
   }
-  if (!capability.parallel_eligible) {
-    return { ...control('capability', 'downgraded', profileKey), capability };
+  if (capability.admission_policy !== 'parallel') {
+    return {
+      ...control('capability', 'downgraded', profileKey),
+      capability,
+      ...presentation,
+    };
   }
-  return { ...control('capability', 'ok', profileKey), capability };
+  return {
+    ...control('capability', 'ok', profileKey),
+    capability,
+    ...presentation,
+  };
 }
 
-function generationOf(
-  current: ControlResultV1 & { capability?: CapabilityRecordV1 },
-): number | null {
-  return current.capability?.downgrade_generation ?? null;
+function admissionEpochOf(current: CapabilityStatusResult): number | null {
+  return current.capability?.admission_epoch ?? null;
 }
 
-function snapshotAdmission(
-  current: ControlResultV1 & { capability?: CapabilityRecordV1 },
-): CapabilityAdmissionSnapshot {
+function snapshotAdmission(current: CapabilityStatusResult): CapabilityAdmissionSnapshot {
   return {
     state: current.state,
-    downgradeGeneration: generationOf(current),
+    admissionEpoch: admissionEpochOf(current),
   };
 }
 
 export function capabilityStatus(
   profileKey: string,
   expected?: CapabilityBinding,
-): ControlResultV1 & { capability?: CapabilityRecordV1 } {
+): CapabilityStatusResult {
   const result = readCapabilityStatus(profileKey, expected);
   if (!capabilityAdmissions.has(profileKey)) {
     capabilityAdmissions.set(profileKey, snapshotAdmission(result));
@@ -461,7 +597,7 @@ export function capabilityStatus(
 }
 
 function completionMatchesCapability(
-  capability: CapabilityRecordV1,
+  capability: CapabilityRecordV2,
   completion: CapabilityTurnCompletion,
 ): boolean {
   return capability.candidate_digest === completion.expectedBinding.candidate_digest
@@ -472,24 +608,17 @@ function completionMatchesCapability(
 }
 
 export function planCapabilityAfterSuccessfulTurn(
-  current: ControlResultV1 & { capability?: CapabilityRecordV1 },
+  current: CapabilityStatusResult,
   completion: CapabilityTurnCompletion,
-): Omit<CapabilityRecordV1, 'schema' | 'version' | 'configured_profile_key'> {
+): Omit<CapabilityRecordV2, 'schema' | 'version' | 'configured_profile_key'> {
   if (!completion.witnessed || current.state === 'profile_blocked') {
     throw new Error('capability_not_eligible');
   }
 
-  const observedAt = new Date();
-  const observedIso = observedAt.toISOString();
-  const proposedExpires = new Date(observedAt.getTime() + CAPABILITY_LEASE_TTL_MS).toISOString();
+  const observedIso = new Date().toISOString();
   const existing = current.capability;
 
-  if (existing?.parallel_eligible && completionMatchesCapability(existing, completion)) {
-    const existingExpires = Date.parse(existing.expires_at);
-    const proposedExpiresMs = Date.parse(proposedExpires);
-    const expiresAt = Number.isFinite(existingExpires) && existingExpires > proposedExpiresMs
-      ? existing.expires_at
-      : proposedExpires;
+  if (existing && completionMatchesCapability(existing, completion)) {
     return {
       candidate_digest: existing.candidate_digest,
       build_digest: existing.build_digest,
@@ -497,29 +626,25 @@ export function planCapabilityAfterSuccessfulTurn(
       config_digest: existing.config_digest,
       gate_digest: existing.gate_digest,
       evidence_digest: completion.evidenceDigest,
-      observed_at: observedIso,
-      expires_at: expiresAt,
-      downgrade_generation: existing.downgrade_generation,
-      parallel_eligible: true,
+      characterized_at: observedIso,
+      admission_policy: existing.admission_policy,
+      admission_epoch: existing.admission_epoch,
     };
   }
-
-  if (current.state === 'ok') throw new Error('capability_not_eligible');
 
   return {
     ...completion.expectedBinding,
     browser_provenance: completion.browserProvenance,
     evidence_digest: completion.evidenceDigest,
-    observed_at: observedIso,
-    expires_at: proposedExpires,
-    downgrade_generation: (existing?.downgrade_generation ?? 0) + 1,
-    parallel_eligible: true,
+    characterized_at: observedIso,
+    admission_policy: 'serialized',
+    admission_epoch: (existing?.admission_epoch ?? 0) + (existing ? 1 : 0),
   };
 }
 
 function commitCapabilityAfterSuccessfulTurn(
   profileKey: string,
-  currentAtWrite: ControlResultV1 & { capability?: CapabilityRecordV1 },
+  currentAtWrite: CapabilityStatusResult,
   completion: CapabilityTurnCompletion,
 ): CapabilityMutationOutcome {
   if (!completion.witnessed || currentAtWrite.state === 'profile_blocked') {
@@ -536,23 +661,43 @@ function commitCapabilityAfterSuccessfulTurn(
   }
 }
 
+function bindingMatchesCapability(
+  capability: CapabilityRecordV2,
+  completion: CapabilityTurnCompletion,
+): boolean {
+  return capability.candidate_digest === completion.expectedBinding.candidate_digest
+    && capability.build_digest === completion.expectedBinding.build_digest
+    && capability.config_digest === completion.expectedBinding.config_digest
+    && capability.gate_digest === completion.expectedBinding.gate_digest;
+}
+
 function productionCompletionStillEligible(
   profileKey: string,
-  current: ControlResultV1 & { capability?: CapabilityRecordV1 },
+  current: CapabilityStatusResult,
   completion: CapabilityTurnCompletion,
 ): boolean {
   if (current.state === 'profile_blocked') return false;
 
   const admission = capabilityAdmissions.get(profileKey) ?? snapshotAdmission(current);
-  const selfDowngradeGeneration = selfDowngradeGenerations.get(profileKey);
-  const ranSerialized = admission.state !== 'ok' || selfDowngradeGeneration !== undefined;
-  const admittedGeneration = selfDowngradeGeneration ?? admission.downgradeGeneration;
+  const invocationEpoch = serializedTransitionEpochs.get(profileKey);
+  const startedParallel = admission.state === 'ok';
+  const admittedEpoch = invocationEpoch ?? admission.admissionEpoch;
+  const currentEpoch = admissionEpochOf(current);
 
-  if (generationOf(current) !== admittedGeneration) return false;
-  if (ranSerialized) return true;
+  if (startedParallel
+    && admittedEpoch !== null
+    && currentEpoch !== null
+    && currentEpoch > admittedEpoch) {
+    return false;
+  }
+  if (admittedEpoch !== null && currentEpoch !== null && currentEpoch < admittedEpoch) {
+    return false;
+  }
 
-  return current.capability?.parallel_eligible === true
-    && completionMatchesCapability(current.capability, completion);
+  if (!current.capability) return true;
+  if (completionMatchesCapability(current.capability, completion)) return true;
+  if (bindingMatchesCapability(current.capability, completion)) return true;
+  return !startedParallel;
 }
 
 export function applyCapabilityAfterSuccessfulTurn(
@@ -570,7 +715,7 @@ export function applyCapabilityAfterSuccessfulTurn(
 
   let outcome: CapabilityMutationOutcome;
   try {
-    const current = readCapabilityStatus(profileKey, completion.expectedBinding);
+    const current = readCapabilityStatus(profileKey, completion.expectedBinding, true);
     if (!productionCompletionStillEligible(profileKey, current, completion)) {
       outcome = { applied: false, reason: 'not_eligible' };
     } else {
@@ -580,7 +725,7 @@ export function applyCapabilityAfterSuccessfulTurn(
     outcome = { applied: false, reason: 'write_failed', error };
   } finally {
     capabilityAdmissions.delete(profileKey);
-    selfDowngradeGenerations.delete(profileKey);
+    serializedTransitionEpochs.delete(profileKey);
     try {
       lock.release();
     } catch (error) {
@@ -600,37 +745,152 @@ export function applyCapabilityAfterSuccessfulTurn(
 
 export function recordSerializedTransitionAnchor(
   profileKey: string,
-  observed: ControlResultV1 & { capability?: CapabilityRecordV1 },
+  observed: CapabilityStatusResult,
 ): void {
-  const generation = generationOf(observed);
-  if (generation !== null) {
-    selfDowngradeGenerations.set(profileKey, generation);
+  const epoch = admissionEpochOf(observed);
+  if (epoch !== null) {
+    serializedTransitionEpochs.set(profileKey, epoch);
   }
 }
 
-export function downgradeCapability(profileKey: string): void {
-  const lock = acquireCapabilityMutationLock(profileKey);
-  try {
-    const current = readCapabilityStatus(profileKey);
-    const capability = current.capability;
-    if (!capability || current.state === 'profile_blocked') return;
 
-    const nextGeneration = capability.downgrade_generation + 1;
-    writeCapabilityRaw(profileKey, {
-      candidate_digest: capability.candidate_digest,
-      build_digest: capability.build_digest,
-      browser_provenance: capability.browser_provenance,
-      config_digest: capability.config_digest,
-      gate_digest: capability.gate_digest,
-      evidence_digest: capability.evidence_digest,
-      observed_at: capability.observed_at,
-      expires_at: capability.expires_at,
-      downgrade_generation: nextGeneration,
-      parallel_eligible: false,
-    });
-    selfDowngradeGenerations.set(profileKey, nextGeneration);
+function serializeBarrierLockReclaimable(profileKey: string): (lockKey: string) => boolean {
+  let incidents: ReturnType<typeof listReadableIncidents>;
+  try {
+    incidents = listReadableIncidents(profileKey);
+  } catch {
+    return () => false;
+  }
+  const protectedKeys = new Set(
+    incidents
+      .filter(({ record }) => Boolean(record.lock_key))
+      .map(({ record }) => record.lock_key as string),
+  );
+  return (lockKey: string) => !protectedKeys.has(lockKey);
+}
+
+export type BrowserProvenanceSource = string | (() => string | Promise<string>);
+
+export async function mutateCapabilityAdmissionPolicy(
+  profileKey: string,
+  policy: AdmissionPolicy,
+  expected?: CapabilityBinding,
+  browserProvenance?: BrowserProvenanceSource,
+): Promise<CapabilityStatusResult & { mutation?: CapabilityPolicyMutationOutcome }> {
+  if (policy !== 'parallel' && policy !== 'serialized') {
+    return {
+      ...control('capability', 'driver_error', profileKey, 'invalid_policy'),
+      mutation: { applied: false, reason: 'invalid_policy' },
+    };
+  }
+
+  let barrier: DomainLock | null = null;
+  if (policy === 'serialized') {
+    const profileBarrierKey = `profile:${profileKey}`;
+    barrier = acquireDomainLock(profileKey, profileBarrierKey);
+    if (!barrier && reconcileAbandonedSchedulingConflicts(profileKey, profileBarrierKey, 120_000, serializeBarrierLockReclaimable(profileKey))) {
+      barrier = acquireDomainLock(profileKey, profileBarrierKey);
+    }
+    if (!barrier) {
+      return {
+        ...control('capability', 'profile_busy', profileKey, 'serialize_barrier_busy'),
+        mutation: { applied: false, reason: 'barrier_busy' },
+      };
+    }
+  }
+
+  let lock: DomainLock;
+  try {
+    lock = acquireCapabilityMutationLock(profileKey);
+  } catch (error) {
+    if (barrier) barrier.release();
+    return {
+      ...control('capability', 'driver_error', profileKey, 'capability_mutation_failed'),
+      mutation: { applied: false, reason: 'write_failed', error },
+    };
+  }
+
+  let resolvedBrowserProvenance: string | undefined;
+  if (policy === 'parallel') {
+    try {
+      resolvedBrowserProvenance = typeof browserProvenance === 'function'
+        ? await browserProvenance()
+        : browserProvenance;
+    } catch (error) {
+      try { lock.release(); } catch { /* fail-closed */ }
+      if (barrier) {
+        try { barrier.release(); } catch { /* fail-closed */ }
+      }
+      throw error;
+    }
+  }
+
+  try {
+    const current = readCapabilityStatus(profileKey, expected, true);
+    if (current.state === 'profile_blocked') {
+      return {
+        ...current,
+        mutation: { applied: false, reason: 'profile_blocked' },
+      };
+    }
+    const capability = current.capability;
+    if (!capability || !current.characterization?.characterized) {
+      return {
+        ...control('capability', 'downgraded', profileKey, 'not_characterized'),
+        mutation: { applied: false, reason: 'not_characterized' },
+      };
+    }
+    if (expected && (
+      capability.candidate_digest !== expected.candidate_digest
+      || capability.build_digest !== expected.build_digest
+      || capability.config_digest !== expected.config_digest
+      || capability.gate_digest !== expected.gate_digest
+    )) {
+      return {
+        ...control('capability', 'downgraded', profileKey, 'capability_binding_mismatch'),
+        capability,
+        characterization: current.characterization,
+        admission: current.admission,
+        mutation: { applied: false, reason: 'binding_mismatch' },
+      };
+    }
+    if (policy === 'parallel' && (
+      !resolvedBrowserProvenance
+      || capability.browser_provenance !== resolvedBrowserProvenance
+    )) {
+      return {
+        ...control('capability', 'downgraded', profileKey, 'capability_binding_mismatch'),
+        capability,
+        characterization: current.characterization,
+        admission: current.admission,
+        mutation: { applied: false, reason: 'binding_mismatch' },
+      };
+    }
+
+    const nextEpoch = policy === 'serialized'
+      ? capability.admission_epoch + 1
+      : capability.admission_epoch;
+    const nextPolicy = policy;
+    if (nextPolicy === capability.admission_policy && nextEpoch === capability.admission_epoch) {
+      return {
+        ...current,
+        mutation: { applied: true },
+      };
+    }
+
+    writeCapabilityRecord(profileKey, { ...capability, admission_policy: nextPolicy, admission_epoch: nextEpoch });
+    const refreshed = readCapabilityStatus(profileKey, expected, true);
+    return { ...refreshed, mutation: { applied: true } };
+  } catch (error) {
+    return {
+      ...control('capability', 'driver_error', profileKey, 'capability_mutation_failed'),
+      mutation: { applied: false, reason: 'write_failed', error },
+    };
   } finally {
-    lock.release();
+    try { lock.release(); } catch { /* fail-closed */ }
+    if (barrier) {
+      try { barrier.release(); } catch { /* fail-closed */ }
+    }
   }
 }
 
@@ -731,7 +991,7 @@ export function statusList(profileKey: string): ControlResultV1 {
   if (existsSync(d.capability)) {
     try {
       const parsed: unknown = JSON.parse(readFileSync(d.capability, 'utf8'));
-      if (!compatibleCapability(parsed, profileKey)) throw new Error('incompatible');
+      if (!normalizeCapabilityRecord(parsed, profileKey)) throw new Error('incompatible');
     } catch {
       blocked = true;
       try {

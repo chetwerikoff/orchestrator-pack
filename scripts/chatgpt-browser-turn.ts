@@ -36,7 +36,7 @@ import {
   clearReadable,
   deleteIncident,
   applyCapabilityAfterSuccessfulTurn,
-  downgradeCapability,
+  mutateCapabilityAdmissionPolicy,
   recordSerializedTransitionAnchor,
   listReadableIncidents,
   quarantineOpaque,
@@ -184,6 +184,33 @@ function safeReleaseDestination(reservation: DestinationReservation | null | und
   } catch {
     // Durable state remains authoritative when cleanup cannot prove ownership.
   }
+}
+
+
+function parallelAdmissionEpochOf(
+  status: ReturnType<typeof capabilityStatus>,
+): number | null {
+  return status.capability?.admission_epoch ?? null;
+}
+
+
+
+async function probeLiveBrowserProvenance(cdp: string): Promise<string> {
+  const chromium = loadChromium();
+  const browser = await chromium.connectOverCDP(cdp);
+  try {
+    return String(browser.version?.() ?? 'chromium-cdp');
+  } finally {
+    await releaseCdpBrowser(browser);
+  }
+}
+
+async function releaseFineLockForProfileFallback(
+  scheduleLock: DomainLock | null,
+  profileKey: string,
+): Promise<DomainLock | null> {
+  safeRelease(scheduleLock);
+  return acquireDomainLock(profileKey, `profile:${profileKey}`);
 }
 
 function stalePreSendOwner(record: ReturnType<typeof listReadableIncidents>[number]['record']): boolean {
@@ -413,14 +440,17 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     const expectedBinding = runtimeCapabilityBinding(profileKey, config.cdp);
     let capability = capabilityStatus(profileKey, expectedBinding);
-    const lockKey = capability.state === 'ok'
+    let parallelAdmission = capability.state === 'ok';
+    let admittedAdmissionEpoch = parallelAdmission ? parallelAdmissionEpochOf(capability) : null;
+    let profileScopeFallbackCause: string | null = null;
+    const lockKey = parallelAdmission
       ? (conversationId ? `conversation:${conversationId}` : `fresh:${randomUUID()}`)
       : `profile:${profileKey}`;
     scheduleLock = acquireDomainLock(profileKey, lockKey);
     if (!scheduleLock) {
       safeReleaseDestination(reservation);
       reservation = null;
-      const state: TurnState = capability.state === 'ok' && conversationId ? 'conversation_busy' : 'profile_busy';
+      const state: TurnState = parallelAdmission && conversationId ? 'conversation_busy' : 'profile_busy';
       const scope: FailureScope = state === 'conversation_busy' ? 'conversation' : 'profile';
       return emitTurnAndCode(turnResult(state, scope, 'scheduling_lock_busy', invocationId, profileKey, {
         ...(conversationId ? { conversation_id: conversationId } : {}),
@@ -440,10 +470,11 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       throw coerceBrowserOperationTimeout(connectError, 'connect_over_cdp');
     }
     const browserProvenance = String(browser.version?.() ?? 'chromium-cdp');
-    if (capability.state === 'ok' && capability.capability?.browser_provenance !== browserProvenance) {
-      downgradeCapability(profileKey);
-      safeRelease(scheduleLock);
-      scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
+    if (parallelAdmission && capability.capability?.browser_provenance !== browserProvenance) {
+      scheduleLock = await releaseFineLockForProfileFallback(scheduleLock, profileKey);
+      parallelAdmission = false;
+      admittedAdmissionEpoch = null;
+      profileScopeFallbackCause ??= 'browser_provenance_downgrade_profile_fallback';
       capability = capabilityStatus(profileKey, expectedBinding);
       if (!scheduleLock) {
         safeReleaseDestination(reservation);
@@ -456,10 +487,11 @@ async function runTurn(args: ParsedArgs): Promise<number> {
 
     const freshConversation = config.newChat;
     let witnessSurfaceProbe: WitnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget);
-    if (capability.state === 'ok' && witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) {
-      downgradeCapability(profileKey);
-      safeRelease(scheduleLock);
-      scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
+    if (parallelAdmission && witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) {
+      scheduleLock = await releaseFineLockForProfileFallback(scheduleLock, profileKey);
+      parallelAdmission = false;
+      admittedAdmissionEpoch = null;
+      profileScopeFallbackCause ??= 'witness_downgrade_profile_fallback';
       capability = capabilityStatus(profileKey, expectedBinding);
       if (!scheduleLock) {
         if (opened?.owned) {
@@ -472,14 +504,20 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       }
     }
 
-    if (capability.state === 'ok') {
+    if (parallelAdmission) {
       const rechecked = capabilityStatus(profileKey, expectedBinding);
       witnessSurfaceProbe = await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget);
-      if (rechecked.state !== 'ok' || witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) {
-        const observedExternalDowngrade = rechecked.state !== 'ok' && !witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation);
-        if (witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation)) downgradeCapability(profileKey);
-        safeRelease(scheduleLock);
-        scheduleLock = acquireDomainLock(profileKey, `profile:${profileKey}`);
+      const witnessUnavailable = witnessSurfaceProbeRequiresDowngrade(witnessSurfaceProbe, freshConversation);
+      const policyEpochDrift = rechecked.state !== 'ok'
+        || parallelAdmissionEpochOf(rechecked) !== admittedAdmissionEpoch;
+      if (policyEpochDrift || witnessUnavailable) {
+        const observedExternalDowngrade = policyEpochDrift && !witnessUnavailable;
+        scheduleLock = await releaseFineLockForProfileFallback(scheduleLock, profileKey);
+        parallelAdmission = false;
+        admittedAdmissionEpoch = null;
+        if (witnessUnavailable) {
+          profileScopeFallbackCause ??= 'witness_downgrade_profile_fallback';
+        }
         capability = capabilityStatus(profileKey, expectedBinding);
         if (!scheduleLock) {
           if (opened?.owned) {
@@ -533,14 +571,13 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     const result = await sendTurn(turnPage, snapshot.text, config, opened.provisionalId, async () => {
       if (statusList(profileKey).state === 'profile_blocked') throw new Error('pre_send_profile_blocked');
       if (findProfileWall(profileKey)) throw new Error('pre_send_profile_wall');
-      if (capability.state === 'ok') {
+      if (parallelAdmission) {
         if (witnessSurfaceProbeRequiresDowngrade(await runtimeWitnessSurfaceAvailable(turnPage, segmentBudget), freshConversation)) {
-          downgradeCapability(profileKey);
-          capability = capabilityStatus(profileKey, expectedBinding);
           throw new Error('pre_send_witness_unavailable');
         }
         const currentCapability = capabilityStatus(profileKey, expectedBinding);
-        if (currentCapability.state !== 'ok') {
+        if (currentCapability.state !== 'ok'
+          || parallelAdmissionEpochOf(currentCapability) !== admittedAdmissionEpoch) {
           capability = currentCapability;
           throw new Error('pre_send_capability_changed');
         }
@@ -683,7 +720,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       );
     }
 
-    return emitTurnAndCode(turnResult('ok', 'none', 'completed', invocationId, profileKey, {
+    return emitTurnAndCode(turnResult('ok', 'none', profileScopeFallbackCause ?? 'completed', invocationId, profileKey, {
       conversation_id: canonicalConversation,
       ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
       output: {
@@ -887,9 +924,31 @@ async function runGateBCharacterizationCommand(args: ParsedArgs): Promise<number
 }
 
 async function runCapability(args: ParsedArgs): Promise<number> {
-  assertAllowedOptions(args, ['profile', 'cdp']);
+  assertAllowedOptions(args, ['profile', 'cdp', 'admission-policy']);
   const { profileKey, cdp } = profileArgs(args);
   const expectedBinding = runtimeCapabilityBinding(profileKey, cdp);
+  const policyArg = option(args, 'admission-policy');
+  if (policyArg) {
+    if (policyArg !== 'parallel' && policyArg !== 'serialized') {
+      return emitControlAndCode(controlResult('capability', 'driver_error', profileKey, 'argument_invalid'));
+    }
+    const browserProvenance = policyArg === 'parallel'
+      ? () => probeLiveBrowserProvenance(cdp)
+      : undefined;
+    let result;
+    try {
+      result = await mutateCapabilityAdmissionPolicy(
+        profileKey,
+        policyArg,
+        expectedBinding,
+        browserProvenance,
+      );
+    } catch {
+      return emitControlAndCode(controlResult('capability', 'driver_error', profileKey, 'cdp_unavailable'));
+    }
+    emit({ ...result, expected_binding: expectedBinding });
+    return controlExitCode(result.state);
+  }
   const result = capabilityStatus(profileKey, expectedBinding);
   emit({ ...result, expected_binding: expectedBinding });
   return controlExitCode(result.state);

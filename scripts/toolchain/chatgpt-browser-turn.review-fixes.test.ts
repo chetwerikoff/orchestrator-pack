@@ -19,8 +19,7 @@ import {
   adjudicateTombstone,
   applyCapabilityAfterSuccessfulTurn,
   capabilityStatus,
-  downgradeCapability,
-  recordSerializedTransitionAnchor,
+  mutateCapabilityAdmissionPolicy,
   quarantineOpaque,
   statusList,
   __testWriteCapability,
@@ -308,7 +307,7 @@ describe('pack review 4774405996 adjudication crash recovery', () => {
   });
 });
 
-describe('issue 1008 capability self-arm race safety', () => {
+describe('issue 1028 capability policy race safety', () => {
   function completion(binding: ReturnType<typeof runtimeCapabilityBinding>, evidence: string, browser = 'Chromium test') {
     return {
       expectedBinding: binding,
@@ -318,7 +317,29 @@ describe('issue 1008 capability self-arm race safety', () => {
     };
   }
 
-  it('ignores a stale operator gate export while a serialized no-evidence turn self-arms', () => {
+  function capabilityFixture(
+    binding: ReturnType<typeof runtimeCapabilityBinding>,
+    overrides: Partial<{
+      browser_provenance: string;
+      evidence_digest: string;
+      characterized_at: string;
+      admission_policy: 'parallel' | 'serialized';
+      admission_epoch: number;
+    }> = {},
+  ) {
+    const now = Date.now();
+    return {
+      ...binding,
+      browser_provenance: 'Chromium test',
+      evidence_digest: sha256('capability-fixture'),
+      characterized_at: new Date(now - 1_000).toISOString(),
+      admission_policy: 'parallel' as const,
+      admission_epoch: 0,
+      ...overrides,
+    };
+  }
+
+  it('ignores stale gate export while a serialized no-evidence turn characterizes only', () => {
     const staleGateEnv = ['CHATGPT', 'BROWSER', 'TURN', 'GATE', 'B', 'DIGEST'].join('_');
     process.env[staleGateEnv] = 'definitely-wrong';
     try {
@@ -326,36 +347,23 @@ describe('issue 1008 capability self-arm race safety', () => {
       expect(capabilityStatus(profileKey, binding).state).toBe('no_evidence');
       const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, completion(binding, 'wrong-export-ignored'));
       expect(outcome.applied).toBe(true);
-      expect(capabilityStatus(profileKey, binding).state).toBe('ok');
+      expect(capabilityStatus(profileKey, binding).state).toBe('downgraded');
     } finally {
       delete process.env[staleGateEnv];
     }
   });
 
-  it('does not let a parallel completion resurrect a newer downgrade', () => {
+  it('does not let a stale parallel completion overwrite a newer serialized epoch', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const now = Date.now();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('parallel-admission'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: new Date(now + 60_000).toISOString(),
-      downgrade_generation: 0,
-      parallel_eligible: true,
-    });
+    __testWriteCapability(profileKey, capabilityFixture(binding));
     const admitted = capabilityStatus(profileKey, binding);
     expect(admitted.state).toBe('ok');
 
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('newer-downgrade'),
-      observed_at: admitted.capability!.observed_at,
-      expires_at: admitted.capability!.expires_at,
-      downgrade_generation: 1,
-      parallel_eligible: false,
-    });
+    __testWriteCapability(profileKey, capabilityFixture(binding, {
+      admission_policy: 'serialized',
+      admission_epoch: 1,
+      evidence_digest: sha256('newer-serialize'),
+    }));
 
     const outcome = applyCapabilityAfterSuccessfulTurn(
       profileKey,
@@ -364,141 +372,62 @@ describe('issue 1008 capability self-arm race safety', () => {
     expect(outcome.applied).toBe(false);
     expect(outcome.reason).toBe('not_eligible');
     const current = capabilityStatus(profileKey, binding);
-    expect(current.state).toBe('downgraded');
-    expect(current.capability?.downgrade_generation).toBe(1);
+    expect(current.capability?.admission_epoch).toBe(1);
+    expect(current.capability?.admission_policy).toBe('serialized');
   });
 
-  it('arms after parallel admission observes external downgrade and transitions to serialized scope', () => {
+  it('refuses capability mutation when witnessed is false even with parallel policy', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const now = Date.now();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('parallel-admission'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: new Date(now + 60_000).toISOString(),
-      downgrade_generation: 0,
-      parallel_eligible: true,
-    });
-    const admitted = capabilityStatus(profileKey, binding);
-    expect(admitted.state).toBe('ok');
-
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('external-downgrade'),
-      observed_at: admitted.capability!.observed_at,
-      expires_at: admitted.capability!.expires_at,
-      downgrade_generation: 1,
-      parallel_eligible: false,
-    });
-
-    const postTransition = capabilityStatus(profileKey, binding);
-    expect(postTransition.state).toBe('downgraded');
-    recordSerializedTransitionAnchor(profileKey, postTransition);
-
-    const outcome = applyCapabilityAfterSuccessfulTurn(
-      profileKey,
-      completion(binding, 'serialized-warm-up-after-external-downgrade'),
-    );
-    expect(outcome.applied).toBe(true);
-    const armed = capabilityStatus(profileKey, binding);
-    expect(armed.state).toBe('ok');
-    expect(armed.capability?.downgrade_generation).toBe(2);
-    expect(armed.capability?.parallel_eligible).toBe(true);
-  });
-
-
-  it('arms from a witnessed fresh-conversation completion independent of pre-send probe state', () => {
-    const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const now = Date.now();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('downgraded-before-fresh-chat'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: new Date(now + 60_000).toISOString(),
-      downgrade_generation: 3,
-      parallel_eligible: false,
-    });
-    expect(capabilityStatus(profileKey, binding).state).toBe('downgraded');
-
-    const outcome = applyCapabilityAfterSuccessfulTurn(
-      profileKey,
-      completion(binding, 'fresh-chat-service-witness'),
-    );
-    expect(outcome.applied).toBe(true);
-    const armed = capabilityStatus(profileKey, binding);
-    expect(armed.state).toBe('ok');
-    expect(armed.capability?.parallel_eligible).toBe(true);
-    expect(armed.capability?.downgrade_generation).toBe(4);
-  });
-
-  it('refuses capability mutation when witnessed is false even with an ok lease record', () => {
-    const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const now = Date.now();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'Chromium test',
-      evidence_digest: sha256('ok-but-unwitnessed'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: new Date(now + 60_000).toISOString(),
-      downgrade_generation: 0,
-      parallel_eligible: true,
-    });
+    __testWriteCapability(profileKey, capabilityFixture(binding));
     const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, {
       ...completion(binding, 'stale-pre-send-probe'),
       witnessed: false,
     });
     expect(outcome.applied).toBe(false);
     expect(outcome.reason).toBe('not_witnessed');
-    expect(capabilityStatus(profileKey, binding).capability?.downgrade_generation).toBe(0);
+    expect(capabilityStatus(profileKey, binding).capability?.admission_epoch).toBe(0);
   });
 
-  it('arms exactly once after this invocation downgrades and switches to serialized scope', () => {
+  it('keeps repeated keeper-free witness failures invocation-local without policy mutation', () => {
     const binding = runtimeCapabilityBinding(profileKey, cdp);
-    const now = Date.now();
-    __testWriteCapability(profileKey, {
-      ...binding,
-      browser_provenance: 'old-browser',
-      evidence_digest: sha256('old-browser-evidence'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: new Date(now + 60_000).toISOString(),
-      downgrade_generation: 0,
-      parallel_eligible: true,
+    const initial = capabilityFixture(binding, {
+      evidence_digest: sha256('stable-operator-policy'),
+      admission_epoch: 7,
     });
-    expect(capabilityStatus(profileKey, binding).state).toBe('ok');
-    downgradeCapability(profileKey);
-    expect(capabilityStatus(profileKey, binding).state).toBe('downgraded');
+    __testWriteCapability(profileKey, initial);
 
-    const outcome = applyCapabilityAfterSuccessfulTurn(
-      profileKey,
-      completion(binding, 'serialized-new-browser', 'new-browser'),
-    );
-    expect(outcome.applied).toBe(true);
-    const armed = capabilityStatus(profileKey, binding);
-    expect(armed.state).toBe('ok');
-    expect(armed.capability?.browser_provenance).toBe('new-browser');
-    expect(armed.capability?.downgrade_generation).toBe(2);
-    expect(armed.capability?.parallel_eligible).toBe(true);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      expect(witnessSurfaceProbeRequiresDowngrade('absent', false)).toBe(true);
+      const outcome = applyCapabilityAfterSuccessfulTurn(profileKey, {
+        ...completion(binding, `unwitnessed-${attempt}`),
+        witnessed: false,
+      });
+      expect(outcome).toMatchObject({ applied: false, reason: 'not_witnessed' });
+    }
+
+    const current = capabilityStatus(profileKey, binding);
+    expect(current.state).toBe('ok');
+    expect(current.capability?.admission_policy).toBe('parallel');
+    expect(current.capability?.admission_epoch).toBe(7);
+    expect(current.capability?.evidence_digest).toBe(initial.evidence_digest);
   });
 });
 
-describe('issue 1008 witness surface probe caller', () => {
-  it('does not downgrade when the caller declares a fresh conversation with zero nodes', () => {
+describe('issue 1028 invocation-local witness surface fallback', () => {
+  it('does not request fallback when a fresh conversation has zero nodes', () => {
     expect(witnessSurfaceProbeRequiresDowngrade('empty', true)).toBe(false);
   });
 
-  it('downgrades an existing conversation that reports zero nodes', () => {
+  it('requests fallback for an existing conversation that reports zero nodes', () => {
     expect(witnessSurfaceProbeRequiresDowngrade('empty', false)).toBe(true);
   });
 
-  it('downgrades when the probe query throws', () => {
+  it('requests fallback when the probe query throws', () => {
     expect(witnessSurfaceProbeRequiresDowngrade('absent', false)).toBe(true);
     expect(witnessSurfaceProbeRequiresDowngrade('absent', true)).toBe(true);
   });
 
-  it('still downgrades when a populated conversation probe finds no causal relation', () => {
+  it('requests fallback when a populated conversation probe finds no causal relation', () => {
     expect(witnessSurfaceProbeRequiresDowngrade('absent', false)).toBe(true);
     expect(witnessSurfaceProbeRequiresDowngrade('available', false)).toBe(false);
     expect(witnessSurfaceProbeRequiresDowngrade('available', true)).toBe(false);
@@ -512,10 +441,9 @@ describe('issue 1008 witness surface probe caller', () => {
       ...binding,
       browser_provenance: 'Chromium test',
       evidence_digest: sha256('lock-release-seed'),
-      observed_at: new Date(now - 1_000).toISOString(),
-      expires_at: new Date(now + 60_000).toISOString(),
-      downgrade_generation: 0,
-      parallel_eligible: true,
+      characterized_at: new Date(now - 1_000).toISOString(),
+      admission_policy: 'parallel',
+      admission_epoch: 0,
     });
     const originalAcquire = coordination.acquireDomainLock;
     vi.spyOn(coordination, 'acquireDomainLock').mockImplementation((profileKeyArg, key, staleMs) => {
