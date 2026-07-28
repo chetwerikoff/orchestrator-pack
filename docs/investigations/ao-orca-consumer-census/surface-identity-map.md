@@ -32,17 +32,6 @@ Revision-bound to census inspected source: `8fabf182f4df0a70e2f08f67899658ee886a
 | `pack.worker-report` | Worker lifecycle report (replaces retired `ao report`) | `pack-worker-report` command | — | `docs/worker-report-store.mjs`; `scripts/pack-worker-report.ps1` |
 | `project.config.read` (CLI) | Read project configuration via CLI | `ao project get <name> --json` | Same semantic boundary as HTTP `project.config.read` | `.claude/skills/merge-with-local-adoption/SKILL.md`; `.claude/skills/change-orchestrator-runtime/SKILL.md`; `docs/ao-0-10-review-harness-adoption.md` |
 
-## Axis-2 environment obligation surfaces
-
-Canonical IDs for `AO_*` bindings (axis 2). These are **not** AO transport surfaces; they denote pack/runtime configuration obligations referenced by env-var consumers.
-
-| Canonical ID | Semantics | Example tokens / consumers |
-|---|---|---|
-| `env.runtime.session-context` | AO-injected session/project/issue identity at process start | `AO_SESSION_ID`, `AO_PROJECT_ID`, `AO_ISSUE_NUMBER` → `plugins/**`, `AGENTS.md` |
-| `env.pack.store-path` | Pack-owned durable/capability JSON path override | `AO_WORKER_REPORT_STORE`, `AO_PR_SESSION_BINDING_CACHE`, `AO_*_STATE` resolvers |
-| `env.pack.config` | Pack tuning / harness / feature flags without durable AO identity | `AO_CI_*`, `AO_AUTONOMOUS_*`, resolver toggles in `docs/*.mjs` |
-| `env.plugin.tuning` | Reviewer/scope plugin subprocess configuration | `AO_CODEX_REVIEW_*`, `AO_SCOPE_GUARD_*` |
-
 ## Durable store surfaces (axis 4 — AO identity in pack JSON)
 
 Each store ID is a **canonical surface** for zero-consumer evaluation `B(S)` on axis 4. Readers on axes 1–3 may also bind transport surfaces above; axis-4 drain evidence attaches to the store surface ID.

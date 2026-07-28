@@ -16,7 +16,12 @@ Supporting reference (representation map extracted for checklist reuse):
 | Reference | File |
 |---|---|
 | Canonical AO surface identities + representation map | [`surface-identity-map.md`](./surface-identity-map.md) |
-| Per-token `AO_*` axis-2 bindings (273 names / 918 rows) | [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) |
+| Per-token `AO_*` axis-2 AO consumer bindings (148 rows) | [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) |
+| Pack-owned / test-only `AO_*` exclusions (255 of 274 tokens) | [`ao-env-exclusions.md`](./ao-env-exclusions.md) |
+| Axis 3 consumer × surface bindings (15 rows) | [`axis3-bindings.md`](./axis3-bindings.md) |
+| Axis 5 consumer × surface bindings (12 rows) | [`axis5-bindings.md`](./axis5-bindings.md) |
+
+**Axis-2 accounting:** 274 distinct `AO_*` names discovered; **148** consumer×surface binding rows for AO-runtime readers; **255** tokens in explicit exclusions ([`ao-env-exclusions.md`](./ao-env-exclusions.md)) — a name may appear in both when reader paths differ by class (production vs test/harness).
 
 ## Record-only boundary
 
@@ -65,8 +70,8 @@ grep -lE '\bao (session|spawn|send|stop|start|review|report)\b' .claude/skills/*
 # Axis 4 — durable stores (authoritative inventory)
 node -e "console.log(require('./scripts/vitest-live-store-inventory.json').stores.map(s=>s.id).join('\n'))"
 
-# Axis 4 — independent cross-check (sessionId persistence in contracts)
-grep -l 'sessionId' docs/worker-report-store.mjs docs/pr-session-binding-cache.mjs docs/worker-status-store.mjs 2>/dev/null
+# Axis 4 — independent cross-check (sessionId persistence in contracts + admission writers)
+grep -lE 'sessionId|linkedSessionId' docs/*.mjs scripts/lib/*.ps1 scripts/lib/Record-*.ps1 2>/dev/null
 
 # Axis 5 — lifecycle assumptions (primary)
 grep -lE 'ao (stop|start|restart)|daemon.*health|session (kill|restore)' docs/orchestrator-recovery-runbook.md AGENTS.md

@@ -157,6 +157,7 @@ PR0 adds **no** runtime enforcement, CI gate, or attestation persistence. The ce
 | `worker-nudge-claim-namespace` | Claim namespace listing | no |
 | `mechanical-transport` | Transport dir listing + max age | no |
 | `dead-worker-reconcile-state` | State file via `Get-DeadWorkerStatePath` | no |
+| `review-handoff-wake-admission` | `docs/review-handoff-wake-admission.mjs` CLI + `Get-ReviewHandoffWakeAdmissionStatePath` | no |
 | `orchestrator-escalation-state` | File read only; session termination requires `session.get` | **yes** — owner: PR7 wave |
 
 Until unprovable bindings gain a production-supported producer, **any surface whose deletion requires that drain proof remains blocked**.

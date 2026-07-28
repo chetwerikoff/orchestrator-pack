@@ -141,8 +141,8 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 | Pass | Method | Coverage argument |
 |---|---|---|
 | **Primary** | `grep -rhoE 'AO_[A-Z0-9_]+'` over tracked corpus (§1.1), excluding wildcard fragments (`grep -vE '_$'`) and path exclusions (`docs/issues_drafts/**`, `docs/archive/**`, `docs/investigations/**`, `tests/external-output-references/**`) | Enumerates every distinct name in the declared corpus only |
-| **Per-consumer bindings** | For each name: `grep -rl` every reader path after exclusions; emit one row per consumer path × canonical surface (no token-level collapse) | Full axis-2 inventory in [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) |
-| **Completeness** | **273** distinct token names; **919** consumer×surface binding rows at inspected revision (reproduction in inventory header) |
+| **Per-consumer bindings** | AO-runtime tokens only: map each reader to a canonical surface from [`surface-identity-map.md`](./surface-identity-map.md); pack-owned names → [`ao-env-exclusions.md`](./ao-env-exclusions.md) §7.3 | No invented `env.*` pseudo-surfaces |
+| **Completeness** | **274** distinct token names; **148** AO consumer binding rows; **255** excluded tokens (reproduction commands in inventory headers) |
 
 ### Axis 3 — Worker-facing behavioral text
 
@@ -150,15 +150,16 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 |---|---|---|
 | **Primary** | Grep `ao ` instructions in `AGENTS.md`, `CLAUDE.md`, `prompts/**`, `docs/*runbook*.md`, `plugins/**/README.md`, `agent-orchestrator.yaml.example` | Normative worker/operator surfaces including orchestratorRules example |
 | **Independent cross-check** | Grep same pattern in `.claude/skills/**/SKILL.md`, `.cursor/skills/**/SKILL.md` | Different root set (skills not in primary grep path) |
-| **Discrepancy accounting** | `switch-pack-reviewer` skill still mentions `ao review list` — recorded as **shed** doc-debt binding on `review.project-list` in §5.3 | No silent drop |
+| **Discrepancy accounting** | `switch-pack-reviewer` skill still mentions `ao review list` — recorded as **shed** doc-debt binding on `review.project-list` in §5.3 / [`axis3-bindings.md`](./axis3-bindings.md) | No silent drop |
+| **Completeness** | **15** consumer×surface rows in [`axis3-bindings.md`](./axis3-bindings.md) |
 
 ### Axis 4 — AO-generated identity in durable records
 
 | Pass | Method | Coverage argument |
 |---|---|---|
-| **Primary** | `scripts/vitest-live-store-inventory.json` store registry + contract docs `docs/worker-report-store.mjs`, `docs/pr-session-binding-cache.mjs` | Authoritative store list |
-| **Independent cross-check** | `grep -l 'sessionId' docs/*.mjs scripts/lib/*Store*.ps1` | Finds session-keyed persistence outside inventory IDs |
-| **Completeness** | All stores with `sessionId` / `linkedSessionId` / claim holder session fields enumerated in §5.4 |
+| **Primary** | `scripts/vitest-live-store-inventory.json` → for each `stores[]` entry read `sourceFiles` / resolver + contract `docs/*.mjs` when present; classify persisted `sessionId` / `linkedSessionId` / claim-holder session fields | Registry-complete (all 30 stores) |
+| **Independent cross-check** | `grep -lE 'sessionId|linkedSessionId' docs/*.mjs scripts/lib/*.ps1 scripts/lib/Record-*.ps1` | Catches admission/reconcile writers without `Store` in filename (e.g. `Record-ReviewHandoffWakeAdmission.ps1`) |
+| **Completeness** | Every registry store with AO-identity fields is either a §5.4 **drain** binding or an explicit reproducible exclusion; non-identity stores (e.g. `ci-green-wake-state`) documented in §7.4 |
 
 ### Axis 5 — Lifecycle and recovery assumptions
 
@@ -166,13 +167,16 @@ At inspected revision `rows` is empty (generated placeholder); argv coverage is 
 |---|---|---|
 | **Primary** | `docs/orchestrator-recovery-runbook.md`, `AGENTS.md` managed-session constraints, `scripts/wait-orchestrator-launch.ps1` | Normative lifecycle |
 | **Independent cross-check** | `grep -lE 'Get-AoDaemonHealthJson|ao stop|ao start|session kill|session restore' scripts/lib/*.ps1 scripts/*.ps1` | Implementation-enforced assumptions |
-| **Discrepancy accounting** | Runbook still documents retired `ao status --reports` / `ao review list` — bound as **shed** historical text (§5.5) |
+| **Discrepancy accounting** | Runbook still documents retired `ao status --reports` / `ao review list` — bound as **shed** historical text (§5.5 / [`axis5-bindings.md`](./axis5-bindings.md)) |
+| **Completeness** | **12** consumer×surface rows in [`axis5-bindings.md`](./axis5-bindings.md) |
 
 ---
 
 ## 4. Axis 2 summary — `AO_*` variable taxonomy
 
-**Distinct tracked names:** 273 (**919** binding rows — full per-consumer inventory: [`ao-env-token-inventory.md`](./ao-env-token-inventory.md)).
+**Distinct tracked names:** 274 — **148** AO consumer bindings ([`ao-env-token-inventory.md`](./ao-env-token-inventory.md)) + **255** explicit exclusions ([`ao-env-exclusions.md`](./ao-env-exclusions.md)).
+
+§4.1–4.3 below summarize runtime vs pack-owned vs plugin-tuning **accounting**; only §4.1 names enter `B(S)` as axis-2 bindings. Pack-owned and plugin-tuning `AO_*` names are §7.3 exclusions.
 
 ### 4.1 AO-runtime injected (identity / project context)
 
@@ -192,25 +196,11 @@ Read by production code expecting AO daemon to set values.
 
 ### 4.2 Pack-owned store / capability addresses (AO-flavoured name, pack semantics)
 
-| Variable | Store / capability | Class |
-|---|---|---|
-| `AO_WAKE_SUPERVISOR_STATE_DIR` / `ORCHESTRATOR_PACK_WAKE_SUPERVISOR_STATE_DIR` | Wake supervisor + majority of pack JSON stores | **port** (path obligation survives; name may shed) |
-| `AO_WORKER_REPORT_STORE` | `worker-report-store` | **port** |
-| `AO_PR_SESSION_BINDING_CACHE` | `pr-session-binding-cache` | **port** |
-| `AO_WORKER_STATUS_STORE` | `worker-status-store` | **port** |
-| `AO_WORKER_MESSAGE_DISPATCH_JOURNAL` | Dispatch journal | **port** |
-| `AO_WORKER_MESSAGE_SUBMIT_STATE` | Submit reconcile | **port** |
-| `AO_BASE_DIR` | AO project dir mirror for claims/reviews | **port** |
-| `AO_MECHANICAL_TRANSPORT_TEMP` | Large-message send transport dir | **port** |
-| `AO_ORCHESTRATOR_ESCALATION_STATE`, `AO_OPERATOR_ESCALATION_INBOX`, `AO_ESCALATION_HEALTH_SPOOL` | Escalation router | **port** |
-| `AO_*_RECONCILE_STATE`, `AO_WAKE_DEDUP_STATE`, `AO_REVIEW_*_STATE` (mechanical) | Side-process reconciler state files | **port** |
-| `AO_REVIEW_CLAIM_DIR`, `AO_WORKER_NUDGE_CLAIM_DIR` | Claim namespaces under `AO_BASE_DIR` | **port** |
-| `AO_TRUSTED_PACK_ROOT` / `OPK_TRUSTED_PACK_ROOT` | Trusted pack checkout for review runner | **port** |
-| `AO_JOURNALED_SEND_INTERNAL` | Internal send capability token | **port** |
+**Not AO consumer bindings.** Accounted as explicit non-consumer exclusions in [`ao-env-exclusions.md`](./ao-env-exclusions.md) §7.3 (path/tuning obligations may **port** at the pack-store seam without being AO transport consumers).
 
 ### 4.3 Plugin / reviewer tuning (pack subprocess)
 
-`AO_SCOPE_GUARD_*`, `AO_CODEX_REVIEW_*`, `AO_REVIEW_*_BUDGET_*`, `AO_DIRECT_EDIT_REASON`, `AO_DRAFT_AUTHOR_*` → **port** (review/scope obligations survive AO retirement via Orca seam).
+**Not AO consumer bindings.** `AO_SCOPE_GUARD_*`, `AO_CODEX_REVIEW_*`, `AO_REVIEW_*_BUDGET_*`, `AO_DIRECT_EDIT_*`, `AO_DRAFT_AUTHOR_*` → [`ao-env-exclusions.md`](./ao-env-exclusions.md) §7.3.
 
 ### 4.4 Test / harness-only (`AO_*_FIXTURE`, `AO_*_TEST_*`, `AO_PR856_*`, vitest supervisor test hooks)
 
@@ -267,18 +257,25 @@ Read by production code expecting AO daemon to set values.
 
 ### 5.3 Axis 3 — worker-facing behavioral text
 
-| Surface / topic | Normative locations | Class | Notes |
+Full binding inventory (consumer × canonical surface × axis): [`axis3-bindings.md`](./axis3-bindings.md) (**15 rows**).
+
+| Consumer path | Canonical surface ID | Class | Notes |
 |---|---|---|---|
-| First-action `ao session get` | `AGENTS.md` | **port** | Worker session verification |
-| Forbid `ao stop/start/restart` in managed workers | `AGENTS.md` | **port** | Lifecycle policy |
-| `pack-worker-report` handoff | `AGENTS.md` | **port** | Replaces AO report |
-| `REVIEW_COMMAND` / pack review path | `AGENTS.md`, `plugins/ao-codex-pr-reviewer/README.md` | **port** | Review pipeline |
-| Orchestrator recovery (`session kill`/`restore`, daemon health) | `docs/orchestrator-recovery-runbook.md` | **port** | Operator recovery |
-| Merge adoption session recycle | `.claude/skills/merge-with-local-adoption/SKILL.md` | **port** | Post-merge lifecycle |
-| Change orchestrator runtime (AO restart) | `.claude/skills/change-orchestrator-runtime/SKILL.md` | **port** | Operator |
-| Retired `ao review list` in skill/runbook | `.claude/skills/switch-pack-reviewer/SKILL.md`, recovery runbook sections | **shed** | Normative text on retired surface; remove or mark historical before zero-consumer on `review.project-list` |
-| Retired `ao report` / `ao status --reports` in prompts | `prompts/investigate_root_cause.md`, `agent-orchestrator.yaml.example` (legacy ack lines) | **shed** | No durable AO identity; historical instruction bytes only |
-| Architect `ao spawn` delegation | `CLAUDE.md` | **port** | Architect spawns workers via AO today |
+| `AGENTS.md` | `session.get` | **port** | First-action session verification |
+| `AGENTS.md` | `daemon.lifecycle` | **port** | Forbid daemon restart in managed workers |
+| `AGENTS.md` | `pack.worker-report` | **port** | Replaces AO report |
+| `AGENTS.md` | `plugin.review-command` | **port** | Review pipeline |
+| `plugins/ao-codex-pr-reviewer/README.md` | `plugin.review-command` | **port** | Review subprocess |
+| `docs/orchestrator-recovery-runbook.md` | `session.lifecycle` | **port** | Recovery kill/restore |
+| `docs/orchestrator-recovery-runbook.md` | `daemon.health` | **port** | Daemon assumptions |
+| `.claude/skills/merge-with-local-adoption/SKILL.md` | `session.lifecycle` | **port** | Post-merge recycle |
+| `.claude/skills/change-orchestrator-runtime/SKILL.md` | `daemon.lifecycle` | **port** | Operator restart |
+| `.claude/skills/switch-pack-reviewer/SKILL.md` | `review.project-list` | **shed** | Retired `ao review list` |
+| `docs/orchestrator-recovery-runbook.md` | `review.project-list` | **shed** | Retired review list text |
+| `prompts/investigate_root_cause.md` | `report.status-embed` | **shed** | Retired status --reports |
+| `prompts/investigate_root_cause.md` | `report.worker-state` | **shed** | Retired ao report |
+| `agent-orchestrator.yaml.example` | `report.worker-state` | **shed** | Legacy ack lines |
+| `CLAUDE.md` | `spawn.worker` | **port** | Architect spawn delegation |
 
 ### 5.4 Axis 4 — durable stores with AO session identity
 
@@ -302,16 +299,22 @@ Read by production code expecting AO daemon to set values.
 
 ### 5.5 Axis 5 — lifecycle and recovery assumptions
 
-| Assumption | Evidence locations | Class |
+Full binding inventory: [`axis5-bindings.md`](./axis5-bindings.md) (**12 rows**).
+
+| Consumer path | Canonical surface ID | Class |
 |---|---|---|
-| Daemon must be running for side-process ticks (health via `daemon.health`) | `Orchestrator-SideProcessHealth.ps1`, `Invoke-AoCliJson.ps1` | **port** |
-| Workers verify session within 60s of start | `AGENTS.md` | **port** |
-| Managed workers must not restart daemon | `AGENTS.md` | **port** |
-| Orchestrator recovery prefers `session kill` + `restore` over full daemon cycle | `docs/orchestrator-recovery-runbook.md`, `wait-orchestrator-launch.ps1` | **port** |
-| Operator may `ao stop`/`start` for reviewer/yaml adoption | `set-pack-reviewer.ps1`, skills | **port** |
-| Session recycle after runtime-sensitive merge | `merge-with-local-adoption` skill | **port** |
-| Worker ack via AO embedded reports | Retired `ao status --reports`, `ao report` in runbook | **shed** (live ack is `pack.worker-report`) |
-| Review board via project-wide `ao review list` | Runbook / draft references | **shed** |
+| `scripts/lib/Orchestrator-SideProcessHealth.ps1` | `daemon.health` | **port** |
+| `scripts/lib/Invoke-AoCliJson.ps1` | `daemon.health` | **port** |
+| `AGENTS.md` | `session.get` | **port** |
+| `AGENTS.md` | `daemon.lifecycle` | **port** |
+| `docs/orchestrator-recovery-runbook.md` | `session.lifecycle` | **port** |
+| `scripts/wait-orchestrator-launch.ps1` | `session.get` | **port** |
+| `scripts/set-pack-reviewer.ps1` | `daemon.lifecycle` | **port** |
+| `.claude/skills/change-orchestrator-runtime/SKILL.md` | `daemon.lifecycle` | **port** |
+| `.claude/skills/merge-with-local-adoption/SKILL.md` | `session.lifecycle` | **port** |
+| `docs/orchestrator-recovery-runbook.md` | `report.status-embed` | **shed** |
+| `docs/orchestrator-recovery-runbook.md` | `report.worker-state` | **shed** |
+| `docs/orchestrator-recovery-runbook.md` | `review.project-list` | **shed** |
 
 ---
 
@@ -352,7 +355,17 @@ Read by production code expecting AO daemon to set values.
 
 All variables matching `*_FIXTURE`, `*_TEST_*`, `AO_WAKE_SUPERVISOR_TEST_*`, `AO_PR856_*`, `AO_AGENT_ORCHESTRATOR_STATE_DIR` (harness-only) — excluded from production consumer census; they do not appear on supported live roots.
 
-### 7.3 Deny-list mention-only
+### 7.3 Pack-owned `AO_*` names (not axis-2 AO consumers)
+
+Pack store paths, reviewer tuning, reconcile state filenames, and other AO-flavoured configuration tokens are **not** AO transport consumer bindings. Full per-token exclusion inventory: [`ao-env-exclusions.md`](./ao-env-exclusions.md) (**255** tokens). Obligations may **port** at the pack-store seam without entering `B(S)`.
+
+### 7.4 Durable stores without persisted AO session identity
+
+Registry stores in §2.1 that do **not** persist `sessionId` / `linkedSessionId` / claim-holder session fields — outside axis-4 **drain** scope (no zero-consumer drain proof required for AO session identity retirement):
+
+`orchestrator-operator-inbox`, `orchestrator-escalation-health-spool`, `wake-supervisor-runtime-state`, `worker-message-submit-state`, `worker-message-submit-state-root-anchor`, `review-delivery-lifecycle`, `review-ready-report-state-seed`, `review-trigger-reeval-watch`, `ci-green-wake-state`, `review-trigger-reconcile-state`, `orchestrator-wake-dedup-state`, `review-wake-side-effect-lock`, `worker-message-adoption-state`, `journaled-worker-send-dryrun`, `worker-message-adoption-dryrun`, `autonomous-claim-pr-resume-namespace`, `orchestrator-review-start-audit`, `worker-nudge-gate-audit`, `orchestrator-side-effect-locks`
+
+### 7.5 Deny-list mention-only
 
 Files under census deny-list (`vendor/**`, etc.) may mention AO in comments; excluded because outside pack implementation scope.
 
@@ -363,8 +376,9 @@ Files under census deny-list (`vendor/**`, etc.) may mention AO in comments; exc
 Every raw discovery from §3 methods is accounted as:
 
 1. A binding row in §5 (axes 1, 3, 4, 5), or
-2. A per-token axis-2 row in [`ao-env-token-inventory.md`](./ao-env-token-inventory.md) (or §4 summary for grouped reference only), or
-3. An explicit exclusion in §7.
+2. A per-consumer axis-2 row in [`ao-env-token-inventory.md`](./ao-env-token-inventory.md), or
+3. An explicit axis-2 exclusion in [`ao-env-exclusions.md`](./ao-env-exclusions.md) / §7, or
+4. A §7.4 durable-store exclusion (no AO session identity persisted).
 
 **Unaccounted discoveries at inspected revision:** none.
 
