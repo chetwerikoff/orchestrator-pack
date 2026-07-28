@@ -1031,21 +1031,11 @@ machine writer, journal lock/service, identity registry, deduplication history,
 rollup, central upload, recurrence threshold, review cadence, notification, or
 automatic follow-up as part of this flow.
 
-The former untracked one-shot scratchpad is **not** a managed tracked-helper fallback.
-It may be used only
-when either (a) the tracked executable or sanctioned flow-manager execution
-channel is proven unavailable before any tracked-helper/browser effect, or (b) a
-complete compatible #964 control/publication result proves no possible delivery
-and no blocking state. Record every fallback in task/review artifacts and final
-status; never report it as a successful tracked-helper run. It stays serialized
-and does not create a second parallel-use policy.
-
-Preserve #964 coexistence and rollback safety: while helper-owned unresolved
-conversation/provisional/publication state, a profile wall/block, opaque
-quarantine, or blocking tombstone remains for the configured profile, do not run
-legacy-driver or scratchpad sends against it. Reverting to the old scratchpad
-mandate requires a complete compatible #964 status/incident check proving no
-blockers; without that proof the prohibition remains until exact clearance.
+The former untracked one-shot scratchpad and legacy driver are not fallback
+transports for this flow. Tracked transport unavailability is handled only by the
+selected stage's existing pending/outage/substitution rules and is recorded in
+task/review artifacts and final status. Helper failures, missing output, or clean
+control state never authorize an alternate browser send.
 
 `driver.mjs` keeps its standalone `discuss-with-gpt` adversarial duties, including
 prompt construction and PASS_ID/SHA/verdict validation; this flow does not

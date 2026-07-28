@@ -21,7 +21,7 @@ Two roles under the GPT-chat authoring flow
   fresh task/competitive/final turns use `--new-chat --project-url`; ordinary
   architectural review opens one dedicated chat once and reuses its exact
   `--chat-url` across ordinary architectural rounds. The old untracked scratchpad
-  bootstrap is fallback-only under the fail-closed rule below, not the normal path.
+  is not a fallback transport for this flow.
 
 **Trust model differs from Codex.** Codex returns process-level JSON. This path
 drives a mutable browser UI + ChatGPT product + custom GPT + prose output. The
@@ -159,7 +159,8 @@ Characterization records bounded diagnostic evidence; it does not self-arm paral
 admission or govern turn concurrency. Do not reuse characterization telemetry after any
 candidate, verifier, runtime-build, or Gate-B test-source change.
 
-The live smoke minimum (serialized, on the dedicated automation profile) must
+The live smoke minimum (using normal fine-grained scheduling on the dedicated
+automation profile) must
 demonstrate:
 
 1. one existing-chat success with service-issued user-to-assistant causal witness
@@ -247,33 +248,18 @@ invocation identity is available, `publication-status` first. The helper's
 normal long-turn timeout is at least 1,800,000 ms; a timeout, non-`ok` turn,
 missing stdout, or process-liveness uncertainty is not fallback authorization.
 
-### Scratchpad fallback and coexistence
+### Transport outage and invocation-local send safety
 
-The former untracked one-shot scratchpad is eligible only when one of these is
-proven and recorded **before fallback use**:
+The former untracked one-shot scratchpad and `driver.mjs` are not surrogate
+transports for tracked `create-issue-draft` turns. If the tracked executable or
+sanctioned execution channel is unavailable, record the outage and apply only the
+selected stage's existing pending/outage/substitution rules.
 
-1. the tracked executable or sanctioned flow-manager execution channel is proven
-   unavailable before any tracked-helper or browser effect; or
-2. a complete compatible #964 control/publication result proves no possible
-   delivery and no blocking state.
-
-Helper failure states, timeouts, and missing process output do not qualify. If
-possible delivery cannot be excluded or status is incomplete/incompatible, stay
-on the tracked helper's status/publication/recovery path. Do not run the
-scratchpad or `driver.mjs` as a surrogate transport and do not resend.
-
-Record every scratchpad fallback in the owning task/review artifacts and final
-status, including why it was eligible; never report it as a successful tracked
-helper run. Fallback is serialized only and creates no second parallel-use
-policy.
-
-While any helper conversation/provisional/publication incident, unreadable-record
-profile block, profile wall, opaque quarantine, or blocking tombstone remains
-unresolved for the configured profile, no legacy-driver or scratchpad browser
-send may run against it. This survives rollback. Reverting the skills to the old
-scratchpad mandate requires a complete compatible #964 status/incident check
-proving no blockers; without that proof the no-legacy/scratchpad prohibition
-remains until exact clearance.
+Helper failure states, timeouts, missing process output, clean control state, and
+capability diagnostics do not authorize an alternate send. If possible delivery
+cannot be excluded, stay on the tracked helper's status/publication/recovery path.
+Before the send boundary, witness loss fails only the current invocation; it does
+not downgrade scheduling or block a sibling conversation.
 
 `driver.mjs` keeps its standalone adversarial prompt construction,
 PASS_ID/SHA/verdict validation, durable behavior, and supported standalone modes.
