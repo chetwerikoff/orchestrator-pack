@@ -227,7 +227,13 @@ function acquireSchedulingAdmissionGate(
   while (Date.now() < deadline) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
-    sleepSync(Math.min(remaining, SCHEDULING_ADMISSION_RETRY_POLL_MS));
+    if (remaining <= SCHEDULING_ADMISSION_RETRY_POLL_MS) {
+      gate = acquireDomainLock(profileKey, schedulingAdmissionKey(profileKey), staleMs);
+      if (gate) return gate;
+      break;
+    }
+    sleepSync(SCHEDULING_ADMISSION_RETRY_POLL_MS);
+    if (Date.now() >= deadline) break;
     gate = acquireDomainLock(profileKey, schedulingAdmissionKey(profileKey), staleMs);
     if (gate) return gate;
   }
