@@ -36,6 +36,8 @@ export interface FakeTurnPageOptions {
   readonly postClickServiceFrames?: readonly Record<string, unknown>[];
   readonly postClickRawSseBodies?: readonly string[];
   readonly turnExchangeId?: string;
+  readonly hideSendButton?: boolean;
+  readonly composerPressDelayMs?: number;
 }
 
 function emptyLocator(): any {
@@ -108,7 +110,7 @@ function defaultTerminalFrames(userId: string, assistantId: string, parent: stri
   }];
 }
 
-export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; getSendClicks: () => number } {
+export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; getSendClicks: () => number; getEnterPresses: () => number } {
   const handlers = new Map<string, Array<(event: any) => unknown>>();
   const wsHandlers: Array<(event: { response?: { payloadData?: string } }) => unknown> = [];
   const frameListeners: Array<(frame: { payload: string }) => unknown> = [];
@@ -150,12 +152,10 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
       }]
       : [];
 
-  const send = {
-    ...emptyLocator(),
-    count: async () => 1,
-    click: async () => {
-      sendClicks++;
-      sent = true;
+  let enterPresses = 0;
+  const runDispatch = async () => {
+    sendClicks++;
+    sent = true;
       for (const req of options.preClickRequests ?? []) {
         await emit('request', {
           url: () => 'https://chatgpt.com/backend-api/f/conversation',
@@ -217,7 +217,12 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
           text: async () => body,
         });
       }
-    },
+    };
+
+  const send = {
+    ...emptyLocator(),
+    count: async () => options.hideSendButton ? 0 : 1,
+    click: runDispatch,
   };
 
   const selectMessages = (role: 'user' | 'assistant') => {
@@ -305,7 +310,32 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     },
     url: () => 'https://chatgpt.com/c/example',
     locator: (selector: string) => {
-      if (selector === '#prompt-textarea') return { ...emptyLocator(), count: async () => composerPresent ? 1 : 0, click: async () => {} };
+      if (selector === '#prompt-textarea') {
+        return {
+          ...emptyLocator(),
+          count: async () => composerPresent ? 1 : 0,
+          click: async () => {},
+          fill: async () => {},
+          press: async (key: string, pressOptions?: { timeout?: number }) => {
+            if (key !== 'Enter') return;
+            enterPresses++;
+            const timeoutMs = pressOptions?.timeout ?? 30_000;
+            const delayMs = options.composerPressDelayMs ?? 0;
+            if (delayMs > 0) {
+              await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(() => {
+                  reject(Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' }));
+                }, timeoutMs);
+                setTimeout(() => {
+                  clearTimeout(timer);
+                  resolve();
+                }, delayMs);
+              });
+            }
+            await runDispatch();
+          },
+        };
+      }
       if (selector === '[data-testid="send-button"]') return send;
       if (selector === '[data-testid="stop-button"]') return emptyLocator();
       if (selector === '[data-message-author-role]') return { count: async () => messages.length, nth: (index: number) => messages[index] ?? emptyLocator() };
@@ -347,7 +377,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
   };
 
   (page as { __fakeTurnPage?: boolean }).__fakeTurnPage = true;
-  return { page, getSendClicks: () => sendClicks };
+  return { page, getSendClicks: () => sendClicks, getEnterPresses: () => enterPresses };
 }
 
 export { emptyLocator, messageLocator };
