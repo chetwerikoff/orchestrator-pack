@@ -138,6 +138,10 @@ function decodeName(value: string): string | null {
 
 type OpaqueArea = 'records' | 'publications' | 'capability';
 
+function admissionBlockingOpaqueArea(area: OpaqueArea): boolean {
+  return area !== 'capability';
+}
+
 function opaquePath(profileKey: string, area: OpaqueArea, name: string): string | null {
   const d = profileDirs(profileKey);
   if (basename(name) !== name) return null;
@@ -837,9 +841,9 @@ export function statusList(profileKey: string): ControlResultV1 {
   }
 
   for (const name of readdirSync(d.tombstones).sort()) {
-    blocked = true;
     try {
       const tombstone = readTombstone(join(d.tombstones, name), profileKey);
+      if (admissionBlockingOpaqueArea(tombstone.source_area)) blocked = true;
       referencedQuarantine.add(tombstone.quarantine_name);
       const resolutionPath = join(d.resolved, `${tombstone.identity}.json`);
       const resolutionPending = tombstone.state === 'active' && existsSync(resolutionPath);
@@ -874,13 +878,27 @@ export function statusList(profileKey: string): ControlResultV1 {
         });
       }
     } catch {
+      blocked = true;
       items.push({ identity: `tombstone:${name}:unreadable`, kind: 'blocking_tombstone', generation: 0, evidence_token: 'unreadable', opaque: true });
     }
   }
 
   for (const name of readdirSync(d.quarantine).sort()) {
     if (referencedQuarantine.has(name)) continue;
-    blocked = true;
+    let orphanBlocks = true;
+    if (name.endsWith('.opaque')) {
+      const tombstoneIdentity = name.slice(0, -'.opaque'.length);
+      const tombstonePath = join(d.tombstones, `${tombstoneIdentity}.json`);
+      if (existsSync(tombstonePath)) {
+        try {
+          const tombstone = readTombstone(tombstonePath, profileKey);
+          orphanBlocks = admissionBlockingOpaqueArea(tombstone.source_area);
+        } catch {
+          orphanBlocks = true;
+        }
+      }
+    }
+    if (orphanBlocks) blocked = true;
     const path = join(d.quarantine, name);
     try {
       const item = quarantineStatusItem(path, `opaque-quarantine:${encodeName(name)}`, generationForOpaque(path));

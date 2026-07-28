@@ -2652,5 +2652,7 @@ See `scripts/graphify/README.md` for build/refresh/query usage once bootstrapped
 4. **Rollback** intentionally restores prior profile-scope admission semantics from
    pre-#1060 helper code; #964 possible-delivery, publication, and recovery records
    remain authoritative in either direction.
+5. **Capability quarantine/tombstones are diagnostic-only** after #1060: `clear --quarantine` on incompatible `capability.json` no longer sets `status/list.state=profile_blocked`; delivery-relevant records/publications quarantine remains fail-closed.
+6. **AC12 headed-Chrome parallel smoke** is operator-run on the configured CDP profile; see `scripts/chatgpt-browser-turn/fixtures/issue-1060-ac12-parallel-smoke.md`.
 
 No operator adoption required for AO yaml, daemon restart, or profile topology changes.

@@ -16,6 +16,7 @@
     "docs/migration_notes.md",
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/fixtures/issue-1060-ac12-parallel-smoke.md",
     "scripts/chatgpt-browser-turn/state.ts"
   ],
   "declared_globs": [

@@ -41,7 +41,7 @@ npm run chatgpt-browser-turn -- clear \
   --identity <identity> --generation <n> --evidence-token <sha256>
 ```
 
-Unknown/incompatible durable bytes block the entire configured profile. They may be moved to opaque quarantine only by exact identity and generation:
+Unknown/incompatible durable bytes in delivery-relevant areas (`records`, `publications`) block the entire configured profile. Incompatible `capability.json` bytes are diagnostic-only and do not block turns. Opaque quarantine applies by exact identity and generation:
 
 ```bash
 npm run chatgpt-browser-turn -- clear \
@@ -49,7 +49,7 @@ npm run chatgpt-browser-turn -- clear \
   --identity <opaque-identity> --generation <n> --quarantine
 ```
 
-Quarantine does not unblock the profile. It creates a blocking tombstone and preserves the original bytes. If the process is interrupted while that tombstone is still `preparing`, `status/list` exposes that blocking tombstone; repeating `clear --quarantine` with its exact current tombstone identity and generation resumes the recorded move instead of creating a second tombstone. Final adjudication requires an operator-supplied evidence file and its expected SHA-256:
+Quarantine for delivery-relevant opaque bytes does not unblock the profile: it creates a blocking tombstone and preserves the original bytes. Capability quarantine/tombstones remain non-blocking telemetry/recovery artifacts only. If the process is interrupted while that tombstone is still `preparing`, `status/list` exposes that blocking tombstone; repeating `clear --quarantine` with its exact current tombstone identity and generation resumes the recorded move instead of creating a second tombstone. Final adjudication requires an operator-supplied evidence file and its expected SHA-256:
 
 ```bash
 npm run chatgpt-browser-turn -- clear \
