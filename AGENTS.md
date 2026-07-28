@@ -362,7 +362,7 @@ Trust reviewer terminal JSON, the current-head GitHub review, and dispatch journ
 #### Review-cycle cap (Issue #646)
 
 Automated review starts consult `docs/review-cycle-cap.mjs` via `Review-CycleCap.ps1` on
-reconcile/reeval/wake/turn surfaces; uses #611 pre-fetched runs only. Tier caps T1=2/T2=4/T3=8
+reconcile/reeval/wake/turn surfaces; uses #611 pre-fetched runs only. Tier caps T1=1/T2=2/T3=4
 (default T2): first clean head → `clean_early_stop`; at cap with findings → `at_cap_open_findings`
 (Brief B triage).
 

@@ -17,7 +17,12 @@ import { readStdinJson, runStdinJsonCli } from './review-mechanical-cli.mjs';
 
 export const REVIEW_CYCLE_CAP_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_CYCLE_TIER = 'T2';
-export const TIER_CAP_BY_TIER = Object.freeze({ T1: 2, T2: 4, T3: 8 });
+export const TIER_CAP_BY_TIER = Object.freeze({ T1: 1, T2: 2, T3: 4 });
+/**
+ * Adoption boundary (Issue #1063): new cycles read caps from TIER_CAP_BY_TIER at open/freeze.
+ * Persisted prState.cap from an already-open cycle is authoritative across restart — an in-flight
+ * cycle opened under the prior 2/4/8 mapping keeps its frozen cap until reset/close semantics apply.
+ */
 export const VALID_REVIEW_CYCLE_TIERS = new Set(Object.keys(TIER_CAP_BY_TIER));
 
 export const TERMINAL_CLEAN_EARLY_STOP = 'clean_early_stop';

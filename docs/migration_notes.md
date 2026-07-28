@@ -1,5 +1,33 @@
 
 
+## 2026-07-28 — Reduce per-tier PR review-cycle caps (Issue #1063)
+
+### What changed
+
+- Binding review-cycle caps lowered from **T1=2 / T2=4 / T3=8** to **T1=1 / T2=2 / T3=4** in
+  `docs/review-cycle-cap.mjs` (single source of truth for reconcile/reeval/wake/turn surfaces).
+- Operator-facing text updated in `AGENTS.md` and `agent-orchestrator.yaml.example`
+  (`orchestratorRules` review-cycle clause).
+- First-clean early stop, distinct-head accounting, and `at_cap_open_findings` terminals are unchanged.
+
+### Adoption boundary
+
+- **New cycles** opened after merge read `1/2/4` from `TIER_CAP_BY_TIER` at cycle open/freeze.
+- **In-flight cycles** keep the persisted `prState.cap` frozen at cycle open (including cycles opened
+  under the prior `2/4/8` mapping). Restart does not retier or rebudget an open cycle.
+
+### Operator adoption after merge
+
+1. Pull merged pack on the operator checkout (and AO orchestrator runtime worktree if separate).
+2. Recycle wake-supervisor / orchestrator sessions that must load the new pack revision (standard
+   pack upgrade — no `ao stop` / `ao start` required solely for cap enforcement; caps are read from
+   tracked `docs/review-cycle-cap.mjs` on reconcile surfaces).
+3. If live gitignored `agent-orchestrator.yaml` still documents the old tier-cap sentence in
+   `orchestratorRules`, port the updated **Tier caps: T1 = 1, T2 = 2, T3 = 4** clause from
+   `agent-orchestrator.yaml.example`.
+4. Expect in-flight PR review cycles to finish under their frozen pre-merge cap until reset/close;
+   only newly opened cycles use `1/2/4`.
+
 ## 2026-07-26 — ChatGPT browser-turn capability self-arm (Issue #1008)
 
 - Removed the operator-facing gate-digest environment variable for browser-turn capability arming. A stale export in the shell has no effect.

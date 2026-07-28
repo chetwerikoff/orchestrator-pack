@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,28 +40,28 @@ describe('stage-completeness missing competitive', () => {
 });
 
 describe('stage-completeness missing architectural', () => {
-  it('fails when competitive, lens, and final exist but architectural is absent', () => {
+  it('fails when competitive and lens exist but terminal architectural is absent', () => {
     const result = check('missing-architectural');
     expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/missing architectural stage/);
+    expect(result.errors.join(' ')).toMatch(/missing terminal architectural stage/);
   });
 });
 
 describe('stage-completeness architectural ordering', () => {
-  it('fails when architectural capture is not strictly before architect-lens', () => {
+  it('fails when only pre-lens architectural exists and no terminal GPT capture follows lens', () => {
     const result = check('architectural-ordering');
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(
-      /architectural stage out of order \(must be strictly before architect-lens\)/,
+      /terminal GPT capture must be strictly after architect-lens|missing terminal architectural stage/,
     );
   });
 });
 
-describe('stage-completeness missing final', () => {
-  it('fails when no architectural-final capture exists', () => {
+describe('stage-completeness missing terminal architectural', () => {
+  it('fails when no terminal architectural capture exists after lens', () => {
     const result = check('missing-final');
     expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/missing final architectural stage/);
+    expect(result.errors.join(' ')).toMatch(/missing terminal architectural stage/);
   });
 });
 
@@ -79,11 +79,13 @@ describe('stage-completeness lens ordering', () => {
   });
 });
 
-describe('stage-completeness final ordering', () => {
-  it('fails when final architectural pass index is not after lens maximum', () => {
+describe('stage-completeness terminal ordering', () => {
+  it('fails when terminal architectural pass index is not after lens maximum', () => {
     const result = check('final-ordering');
     expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/final architectural stage out of order/);
+    expect(result.errors.join(' ')).toMatch(
+      /terminal GPT capture must be strictly after architect-lens|missing terminal architectural stage/,
+    );
   });
 });
 
@@ -112,8 +114,8 @@ describe('stage-completeness waiver path', () => {
     const result = check('waiver-valid');
     expect(result.ok).toBe(true);
     expect(result.receipt?.competitiveAnchor).toBe(0);
-    expect(result.receipt?.lensMax).toBe(2);
-    expect(result.receipt?.finalPass).toBe(3);
+    expect(result.receipt?.lensMax).toBe(1);
+    expect(result.receipt?.terminalPass).toBe(2);
   });
 
   it('rejects codex-substitution waiver for missing competitive stage credit', () => {
@@ -214,7 +216,7 @@ describe('stage-completeness empty capture', () => {
   it('tolerates malformed plain architectural capture filenames when a valid architectural pass exists', () => {
     const result = check('tolerated-architectural-filename');
     expect(result.ok).toBe(true);
-    expect(result.receipt?.finalPass).toBe(4);
+    expect(result.receipt?.terminalPass).toBe(3);
   });
 });
 
@@ -226,11 +228,11 @@ describe('stage-completeness missing lens', () => {
   });
 });
 
-describe('stage-completeness final ceiling', () => {
-  it('fails when more than one final architectural pass exceeds the lens maximum', () => {
+describe('stage-completeness terminal ceiling', () => {
+  it('fails when more than one terminal architectural pass exceeds the lens maximum', () => {
     const result = check('final-ceiling');
     expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/final architectural stage ceiling exceeded/);
+    expect(result.errors.join(' ')).toMatch(/terminal architectural stage ceiling exceeded/);
   });
 });
 
@@ -241,8 +243,8 @@ describe('stage-completeness success receipt', () => {
     const message = formatStageCompletenessPassMessage(result);
     expect(message).toMatch(/tier=T3/);
     expect(message).toMatch(/competitive-anchor=1/);
-    expect(message).toMatch(/lens-max=3/);
-    expect(message).toMatch(/final-pass=4/);
+    expect(message).toMatch(/lens-max=2/);
+    expect(message).toMatch(/terminal-pass=3/);
     expect(
       runCli([
         'node',
@@ -255,6 +257,24 @@ describe('stage-completeness success receipt', () => {
         repoRoot,
       ]),
     ).toBe(0);
+  });
+});
+
+describe('stage-completeness historical architectural-final bytes', () => {
+  it('passes when historical architectural-final captures are present but not required', () => {
+    const reviewDir = path.join(draftsDir, '.review/conforming');
+    writeFileSync(
+      path.join(reviewDir, 'pass-04-architectural-final.capture.txt'),
+      'historical final bytes\n',
+      'utf8',
+    );
+    try {
+      const result = check('conforming');
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+      expect(result.receipt?.terminalPass).toBe(3);
+    } finally {
+      rmSync(path.join(reviewDir, 'pass-04-architectural-final.capture.txt'));
+    }
   });
 });
 
