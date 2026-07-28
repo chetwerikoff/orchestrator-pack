@@ -3,7 +3,7 @@ export const REVIEW_CYCLE_CAP_T2_ISSUE_BODY = '```complexity-tier\ntier: T2\n```
 
 export function buildReviewCycleCapPriorHeadRuns(
   prNumber: number,
-  priorPrefixes: string[] = ['a1', 'a2'],
+  priorPrefixes: string[] = ['a1'],
 ) {
   return priorPrefixes.map((prefix, idx) => ({
     prNumber,
