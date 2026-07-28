@@ -195,7 +195,7 @@ attestation, registry, lease, journal, or pending-state machine.
 Before the first tier-gate decision for a fresh workdir, the **flow-manager**
 records `$REVIEW_DIR/tier-intake.json` as `tier-intake/v1` with:
 
-- `producer: cursor-flow-manager`;
+- `producer` set to a tracked exact allowlist identifier (`cursor-flow-manager` or `opencode-flow-manager`);
 - exact task identity;
 - `kind: fresh`;
 - the intake prior produced by the existing rubric/guard application;

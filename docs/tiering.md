@@ -144,7 +144,8 @@ historical provenance to skip stages.
 The first authoritative tier floor is not author-controlled Issue metadata. For
 a fresh Issue-only workdir, before the first tier-gate decision the current Cursor
 flow-manager records one `tier-intake/v1` record in the existing review directory
-with `producer: cursor-flow-manager`, task identity, `kind: fresh`, the rubric/guard
+with `producer` set to a tracked exact allowlist identifier (`cursor-flow-manager`
+or `opencode-flow-manager`), task identity, `kind: fresh`, the rubric/guard
 intake prior, and the first immutable `rNN` revision. The Issue
 `advisory-prior` is a mirror and must match this record. Missing, malformed, or
 mismatched intake evidence fails closed.
