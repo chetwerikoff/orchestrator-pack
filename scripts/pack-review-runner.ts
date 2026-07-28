@@ -52,6 +52,7 @@ import {
   recordMalformedPackReviewStatus,
   recordPackReviewPendingStatus,
   recordPackReviewStaleRequiredStatus,
+  restorePackReviewAuthoritativeRequiredStatus,
   resumePackReviewVerdictDelivery,
   sendPackReviewWorkerNotification,
   type PackReviewJournalWriter,
@@ -105,6 +106,7 @@ export interface ReconcileStalePackReviewRunsInput {
   resolveRepositorySlug?: (repoRoot: string) => Promise<string>;
   beforeStaleStatusWrite?: (run: PackReviewRunRecord) => void | Promise<void>;
   fixturePauseBeforeStaleStatusWrite?: () => void | Promise<void>;
+  fixturePauseAfterStaleStatusWrite?: () => void | Promise<void>;
 }
 
 interface ListInput {
@@ -756,7 +758,7 @@ export async function reconcileStalePackReviewRuns(
           && Date.parse(candidate.createdAt) > Date.parse(run.createdAt))
         .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
       if (!newerRun) return;
-      await recordPackReviewPendingStatus({
+      await restorePackReviewAuthoritativeRequiredStatus({
         run: newerRun,
         projectId,
         storeRoot,
@@ -772,6 +774,7 @@ export async function reconcileStalePackReviewRuns(
       authorizeWrite: authorizeStaleWrite,
       repairSupersededWrite: repairSupersededStaleWrite,
       pauseBeforeWrite: input.fixturePauseBeforeStaleStatusWrite,
+      pauseAfterWrite: input.fixturePauseAfterStaleStatusWrite,
     });
 
     results.push({

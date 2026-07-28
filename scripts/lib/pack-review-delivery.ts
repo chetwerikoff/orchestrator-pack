@@ -11,6 +11,7 @@ import {
   type PackReviewDeliveryOutcome,
   type PackReviewJournalOutcome,
   isPackReviewStaleTerminalRun,
+  PACK_REVIEW_ACTIVE_STATUSES,
   type PackReviewRunRecord,
   type PackReviewRunStatus,
   type PackReviewStoreOptions,
@@ -154,7 +155,14 @@ interface RecordStaleRequiredStatusOptions extends RecordPendingReviewOptions {
   authorizeWrite?: () => boolean | Promise<boolean>;
   repairSupersededWrite?: () => void | Promise<void>;
   pauseBeforeWrite?: () => void | Promise<void>;
+  pauseAfterWrite?: () => void | Promise<void>;
 }
+
+const PACK_REVIEW_VERDICT_TERMINAL_STATUSES = new Set<PackReviewRunStatus>([
+  'up_to_date',
+  'commented',
+  'changes_requested',
+]);
 
 interface RecordMalformedReviewOptions extends PackReviewStoreOptions {
   run: PackReviewRunRecord;
@@ -539,6 +547,43 @@ export async function resumePackReviewVerdictDelivery(
 }
 
 
+
+export async function restorePackReviewAuthoritativeRequiredStatus(
+  options: RecordPendingReviewOptions,
+): Promise<PackReviewDeliveryOutcome | null> {
+  const { run } = options;
+  if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
+    const payload = packReviewJournaledPayload(run);
+    if (!payload) return null;
+    const classification = classifyPackReviewPayload(payload);
+    const idempotencyKey = requiredStatusIdempotencyKey(run);
+    let statusOutcome = outcome(
+      'succeeded',
+      `status_${classification.requiredStatus}_restored`,
+      idempotencyKey,
+      options.clock,
+    );
+    try {
+      await options.writeRequiredStatus({
+        state: classification.requiredStatus,
+        context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+        description: classification.description,
+        idempotencyKey,
+      });
+    } catch (error) {
+      statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
+      persistChannelOutcome(run.id, 'requiredStatus', statusOutcome, options);
+      return statusOutcome;
+    }
+    persistChannelOutcome(run.id, 'requiredStatus', statusOutcome, options);
+    return statusOutcome;
+  }
+  if (PACK_REVIEW_ACTIVE_STATUSES.has(run.status)) {
+    return recordPackReviewPendingStatus(options);
+  }
+  return null;
+}
+
 export async function recordPackReviewStaleRequiredStatus(
   options: RecordStaleRequiredStatusOptions,
 ): Promise<PackReviewDeliveryOutcome> {
@@ -559,6 +604,7 @@ export async function recordPackReviewStaleRequiredStatus(
   } catch (error) {
     statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
   }
+  if (options.pauseAfterWrite) await options.pauseAfterWrite();
   if (options.authorizeWrite && !(await options.authorizeWrite())) {
     if (options.repairSupersededWrite) await options.repairSupersededWrite();
     return outcome('failed', 'newer_run_authoritative', idempotencyKey, options.clock);
