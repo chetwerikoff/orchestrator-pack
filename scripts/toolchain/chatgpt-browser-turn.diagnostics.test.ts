@@ -97,13 +97,15 @@ async function importRunCliWithUiAdapterMock(throwMessage: string): Promise<type
 }
 
 async function importRunCliWithStatusListThrow(): Promise<typeof import('../chatgpt-browser-turn.ts')> {
+  const throwStatus = () => {
+    throw new Error('fixture control command_failed');
+  };
   vi.doMock('../chatgpt-browser-turn/state.ts', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../chatgpt-browser-turn/state.ts')>();
     return {
       ...actual,
-      statusList: vi.fn(() => {
-        throw new Error('fixture control command_failed');
-      }),
+      statusList: vi.fn(throwStatus),
+      statusListForConfiguredProfile: vi.fn(throwStatus),
     };
   });
   return import('../chatgpt-browser-turn.ts');
