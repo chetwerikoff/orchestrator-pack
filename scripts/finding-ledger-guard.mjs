@@ -746,6 +746,20 @@ function latestEvidenceById(metadata) {
   return result;
 }
 
+
+function protectedFindingOriginatedBeforeLatestLens(metadata, findingId) {
+  const latestLensIndex = metadata.map((meta) => meta.stage).lastIndexOf('architectural-lens');
+  if (latestLensIndex < 0) return false;
+  for (let index = 0; index < latestLensIndex; index += 1) {
+    const meta = metadata[index];
+    if (!REVIEWER_STAGES.has(meta.stage)) continue;
+    for (const [id] of parseEvidenceByFindingId(meta.text)) {
+      if (id === findingId) return true;
+    }
+  }
+  return false;
+}
+
 function validateM3(metadata, ledger, captureFindings, options, errors) {
   const protectedFindings = captureFindings.filter((finding) => PROTECTED_TYPES.has(finding.type));
   if (protectedFindings.length === 0) return;
@@ -802,6 +816,11 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
       continue;
     }
     if (!lensCurrent) {
+      const terminalOnlyNomination = !protectedFindingOriginatedBeforeLatestLens(metadata, finding.id);
+      if (!terminalOnlyNomination) {
+        errors.push(`review-economics: protected nomination ${finding.id} has unknown/stale architect contest state for revision ${currentRevision}`);
+        continue;
+      }
       if (row.architectRequired) {
         errors.push(`review-economics: protected nomination ${finding.id} requires current architect adjudication`);
         continue;

@@ -762,15 +762,36 @@ describe('finding ledger review economics #975', () => {
       expect(result.ok, result.errors.join('\n')).toBe(true);
     });
 
-    it('keeps pre-existing architectRequired binding at final acceptance without a post-terminal lens record', () => {
+
+    it('rejects final acceptance when a pre-lens protected nomination lacks a current lens record', () => {
+      const preLens = markedFinding('S1', {
+        type: 'scope-violation',
+        evidence: 'The proposed file is out of scope under allowed_roots.',
+        recommendation: 'Keep the implementation in the declared path.',
+      });
       const result = finalRun(
         [
-          cap('pass-01-architectural.capture.txt', 1_100, markedFinding('S1', {
-            type: 'scope-violation',
-            evidence: 'The proposed file is out of scope under allowed_roots.',
-          })),
-          cap('pass-02-architectural-lens.capture.txt', 1_200, 'initial lens'),
+          cap('pass-01-architectural.capture.txt', 1_100, preLens),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'initial lens without S1 record'),
           cap('pass-03-architectural.capture.txt', 1_300, markedClean()),
+        ],
+        [row('S1', { type: 'scope-violation', disposition: 'addressed' })],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.join('\n')).toContain('unknown/stale architect contest state');
+    });
+
+    it('keeps architectRequired binding for terminal-only nominations without a post-terminal lens record', () => {
+      const terminalNomination = markedFinding('S1', {
+        type: 'scope-violation',
+        evidence: 'The proposed file is out of scope under allowed_roots.',
+        recommendation: 'Keep the implementation in the declared path.',
+      });
+      const result = finalRun(
+        [
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, 'initial lens'),
+          cap('pass-03-architectural.capture.txt', 1_300, terminalNomination),
         ],
         [row('S1', { type: 'scope-violation', architectRequired: true })],
       );
