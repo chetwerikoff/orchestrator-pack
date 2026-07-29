@@ -1490,6 +1490,13 @@ describe('issue 1065 browser-surface classification', () => {
       'unclassified_blocking_dialog:modal-unknown-product-wall',
     );
 
+    const textlessBlocking = productStatusPage([
+      { role: 'dialog', testId: 'modal-empty-product-wall', text: '' },
+    ], false);
+    expect(observePreDispatchBlockerHint(await productStatusText(textlessBlocking))).toBe(
+      'unclassified_blocking_dialog:modal-empty-product-wall',
+    );
+
     const nonBlocking = productStatusPage([
       { role: 'alert', text: 'benign product notice' },
     ], true);
@@ -1503,6 +1510,34 @@ describe('issue 1065 browser-surface classification', () => {
     const longCause = observePreDispatchBlockerHint(await productStatusText(longBlocking));
     expect(longCause?.startsWith('unclassified_blocking_dialog:digest:')).toBe(true);
     expect(longCause!.length).toBeLessThanOrEqual('unclassified_blocking_dialog:digest:'.length + 16);
+  });
+
+  it('AC7: post-dispatch product status scan does not read data-testid', async () => {
+    let getAttributeCalls = 0;
+    const page = {
+      locator: (selector: string) => {
+        if (selector === '#prompt-textarea') return { count: async () => 1 };
+        if (selector === '[role="dialog"]') {
+          return {
+            count: async () => 1,
+            nth: () => ({
+              innerText: async () => 'You have reached the usage limit',
+              getAttribute: async (name: string) => {
+                if (name === 'data-testid') getAttributeCalls++;
+                return 'modal-quota';
+              },
+            }),
+          };
+        }
+        return { count: async () => 0, nth: () => ({ innerText: async () => '', getAttribute: async () => null }) };
+      },
+    };
+    await productStatusText(page, undefined, { collectElementIdentity: false });
+    expect(getAttributeCalls).toBe(0);
+    expect(classifyProductWall(await productStatusText(page, undefined, { collectElementIdentity: false }))).toEqual({
+      state: 'quota',
+      cause: 'quota_detected',
+    });
   });
 
   it('AC2: unknown blocking dialog through readiness deadline prefers blocker cause over composer_readiness timeout', async () => {
@@ -1534,6 +1569,39 @@ describe('issue 1065 browser-surface classification', () => {
     expect(result).toMatchObject({
       state: 'ui_contract_mismatch',
       cause: 'unclassified_blocking_dialog:modal-unknown-product-wall',
+    });
+    vi.useRealTimers();
+  });
+
+  it('AC2: textless blocking dialog through readiness deadline records unclassified cause', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const page = productStatusPage([
+      { role: 'dialog', testId: 'modal-empty-product-wall', text: '' },
+    ], false) as any;
+    page.on = () => page;
+    page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(
+      page,
+      'payload',
+      {
+        cdp: 'http://127.0.0.1:9222',
+        profile: join(root, 'profile-1065-textless'),
+        chatUrl: 'https://chatgpt.com/c/textless',
+        newChat: false,
+        timeoutMs: 5_000,
+      },
+      undefined,
+      undefined,
+      createPreSendSegmentBudget(200),
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    const result = await turn;
+    expect(result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'unclassified_blocking_dialog:modal-empty-product-wall',
     });
     vi.useRealTimers();
   });

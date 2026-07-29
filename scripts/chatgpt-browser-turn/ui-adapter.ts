@@ -1462,7 +1462,15 @@ function isConversationHistoryQuotaElement(element: ProductStatusElement): boole
     || /conversation history/i.test(element.text);
 }
 
-export async function productStatusText(page: any, waitSource?: OperationWaitSource): Promise<ProductStatusSurface> {
+export interface ProductStatusScanOptions {
+  readonly collectElementIdentity?: boolean;
+}
+
+export async function productStatusText(
+  page: any,
+  waitSource?: OperationWaitSource,
+  options?: ProductStatusScanOptions,
+): Promise<ProductStatusSurface> {
   const composer = (await boundedLocatorCount(
     page.locator('#prompt-textarea'),
     requireOperationWait(waitSource, 'product_status'),
@@ -1479,6 +1487,7 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
     'a[href*="/auth/login"]',
     'a[href*="/auth/signup"]',
   ];
+  const collectElementIdentity = options?.collectElementIdentity ?? true;
   const parts: string[] = [];
   const elements: ProductStatusElement[] = [];
   for (const selector of selectors) {
@@ -1489,14 +1498,17 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
       const textWait = requireOperationWait(waitSource, 'product_status');
       const itemLocator = locator.nth(index);
       const text = await boundedPlaywrightOperation(textWait, () => itemLocator.innerText(playwrightTimeout(textWait)!));
-      if (!text) continue;
-      const normalizedText = String(text);
-      parts.push(normalizedText);
-      const attributeWait = requireOperationWait(waitSource, 'product_status');
-      const testId = await boundedPlaywrightOperation(attributeWait, async () => {
-        if (typeof itemLocator.getAttribute !== 'function') return null;
-        return await itemLocator.getAttribute('data-testid', playwrightTimeout(attributeWait)!);
-      });
+      const normalizedText = text ? String(text) : '';
+      let testId: string | null = null;
+      if (collectElementIdentity) {
+        const attributeWait = requireOperationWait(waitSource, 'product_status');
+        testId = await boundedPlaywrightOperation(attributeWait, async () => {
+          if (typeof itemLocator.getAttribute !== 'function') return null;
+          return await itemLocator.getAttribute('data-testid', playwrightTimeout(attributeWait)!);
+        });
+      }
+      if (!normalizedText && !testId) continue;
+      if (normalizedText) parts.push(normalizedText);
       elements.push({
         text: normalizedText,
         ...(testId ? { testId: String(testId) } : {}),
@@ -1545,7 +1557,7 @@ async function pagePreDispatchWalls(page: any, waitSource?: OperationWaitSource)
 }
 
 async function pagePostDispatchWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
-  return classifyProductWall(await productStatusText(page, waitSource));
+  return classifyProductWall(await productStatusText(page, waitSource, { collectElementIdentity: false }));
 }
 
 async function semanticNodes(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<SemanticNode[]> {
@@ -2268,7 +2280,7 @@ export async function sendTurn(
   const finalStatusSource = () => loopOperationWaitMs(deadline, wallClock());
   if (resolveOperationWaitMs(finalStatusSource) > 0) {
     try {
-      const statusText = (await productStatusText(page, finalStatusSource)).text;
+      const statusText = (await productStatusText(page, finalStatusSource, { collectElementIdentity: false })).text;
       if (/error generating|something went wrong|unable to generate/i.test(statusText)) {
         return { state: 'no_reply', cause: 'terminal_no_reply_evidence', possibleDelivery: true, userMessageId: userId };
       }
