@@ -11,10 +11,13 @@
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
+    ".claude/skills/discuss-with-gpt/SKILL.md",
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
     ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/reviewer-switch-runbook.md",
     "docs/tiering.md",
     "package.json",
+    "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/finding-ledger-guard.mjs",
