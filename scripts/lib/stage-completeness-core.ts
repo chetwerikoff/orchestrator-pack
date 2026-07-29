@@ -75,6 +75,11 @@ export interface StageCompletenessGuardResult {
   } | null;
 }
 
+export interface ActiveAcceptanceSegment {
+  boundaryPass: number;
+  captures: ParsedCapture[];
+}
+
 const ISO_8601_TIMESTAMP_RE =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -180,6 +185,34 @@ function capturesFor(captures: readonly ParsedCapture[], stage: string): ParsedC
   return captures.filter((capture) => capture.stage === stage);
 }
 
+/**
+ * Immutable review captures from earlier acceptance attempts stay in one review
+ * directory. A later segment is observable once a new competitive pass appears
+ * after a terminal GPT capture. The latest such terminal is therefore the audit
+ * boundary; only later captures participate in the current segment's ceilings.
+ */
+export function resolveActiveAcceptanceSegment(
+  captures: readonly ParsedCapture[],
+): ActiveAcceptanceSegment {
+  const ordered = [...captures].sort((a, b) => (
+    a.passIndex - b.passIndex || a.fileName.localeCompare(b.fileName)
+  ));
+  const competitivePasses = ordered
+    .filter((capture) => capture.stage === 'competitive')
+    .map((capture) => capture.passIndex);
+  const terminalBoundaries = ordered.filter((capture) => (
+    capture.stage === 'architectural'
+    && competitivePasses.some((passIndex) => passIndex > capture.passIndex)
+  ));
+  const boundaryPass = terminalBoundaries.length > 0
+    ? Math.max(...terminalBoundaries.map((capture) => capture.passIndex))
+    : 0;
+  return {
+    boundaryPass,
+    captures: ordered.filter((capture) => capture.passIndex > boundaryPass),
+  };
+}
+
 function singlePass(
   captures: readonly ParsedCapture[],
   stage: string,
@@ -233,7 +266,8 @@ export function checkStageCompletenessGuard(
   const errors: string[] = [];
   const loaded = loadReviewCaptures(capturesDir);
   errors.push(...loaded.errors);
-  const captures = loaded.captures;
+  const activeSegment = resolveActiveAcceptanceSegment(loaded.captures);
+  const captures = activeSegment.captures;
 
   const competitive = capturesFor(captures, 'competitive');
   if (competitive.length === 0) errors.push('missing competitive stage');
@@ -261,7 +295,10 @@ export function checkStageCompletenessGuard(
   }
 
   const lensCaptures = capturesFor(captures, 'architectural-lens');
-  const { waiver: lensWaiver, invalid: invalidLensWaiver } = parseArchitectLensWaiver(capturesDir);
+  const { waiver: parsedLensWaiver, invalid: invalidLensWaiver } = parseArchitectLensWaiver(capturesDir);
+  const lensWaiver = parsedLensWaiver && parsedLensWaiver.afterPass > activeSegment.boundaryPass
+    ? parsedLensWaiver
+    : null;
   if (lensCaptures.length > 1) {
     errors.push('architect-lens stage ceiling exceeded (exactly one Claude lens allowed)');
   }
