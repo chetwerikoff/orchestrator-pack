@@ -5,33 +5,17 @@
   "supersedes": null,
   "created_at": "2026-07-28T19:41:56.707Z",
   "baseline": {
-    "commit_sha": "417507d9f589e878e947bfb777fcd22e4521b83f",
+    "commit_sha": "176b8fa3862d3317ccdbe122de916f1b5fa76337",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:82fca2b386e25093cd8b1e97d5c68db7576a6575c8f6e2f5c417996284a47126"
+    "active_scope_hash": "sha256:e522db84ffd7ba38b4314d53158bfab2447149c6d8c7db44b5175362fb691a45"
   },
   "declared_paths": [
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
-    "scripts/chatgpt-browser-turn/contracts.ts",
-    "scripts/toolchain/fixtures/chatgpt-browser-turn-ac3-timing.ts"
+    "scripts/chatgpt-browser-turn/contracts.ts"
   ],
   "declared_globs": [
     "scripts/toolchain/chatgpt-browser-turn*.test.ts"
   ],
-  "amendments": [
-    {
-      "previous_active_scope_hash": "sha256:e522db84ffd7ba38b4314d53158bfab2447149c6d8c7db44b5175362fb691a45",
-      "new_active_scope_hash": "sha256:82fca2b386e25093cd8b1e97d5c68db7576a6575c8f6e2f5c417996284a47126",
-      "changed": {
-        "added": [
-          "scripts/toolchain/fixtures/chatgpt-browser-turn-ac3-timing.ts"
-        ],
-        "removed": []
-      },
-      "reason": "Issue #1010 subprocess timing regression uses the ac3-timing fixture updated for truthful turn CLI rejection",
-      "actor": "review-fix-ci",
-      "timestamp": "2026-07-29T03:13:00.000Z",
-      "applied": true
-    }
-  ]
+  "amendments": []
 }

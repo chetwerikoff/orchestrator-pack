@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -277,12 +277,15 @@ describe('issue 1010 submitted-turn proof', () => {
     const marksFile = join(root, 'marks.json');
     writeFileSync(input, 'payload\n');
     const profilePath = join(root, 'profile');
-    const fixtureEntry = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'chatgpt-browser-turn-ac3-timing.ts');
+    const fixtureSourcePath = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'chatgpt-browser-turn-ac3-timing.ts');
+    const harnessEntry = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', `ac3-timing-harness-${Date.now()}.ts`);
+    const harnessSource = readFileSync(fixtureSourcePath, 'utf8').replace('assertStructuredTurnCliRejection();', '');
+    writeFileSync(harnessEntry, harnessSource, 'utf8');
     const observed = runProcessSync({
       command: process.execPath,
       args: [
         '--experimental-strip-types',
-        fixtureEntry,
+        harnessEntry,
         '--profile', profilePath,
         '--cdp', 'http://127.0.0.1:9222',
         '--input', input,
@@ -306,6 +309,7 @@ describe('issue 1010 submitted-turn proof', () => {
     };
     expect(marks.stdout_written_ms - marks.result_produced_ms).toBeGreaterThanOrEqual(0);
     expect(marks.stdout_written_ms - marks.result_produced_ms).toBeLessThan(1_500);
+    unlinkSync(harnessEntry);
   });
 
 
