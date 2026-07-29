@@ -5,22 +5,21 @@ const mocks = vi.hoisted(() => ({
   cleanupOutcome: 'confirmed' as 'confirmed' | 'unconfirmed',
   journalThrows: false,
   nowMs: 10_000,
+  outputConflict: false,
   verifyProfile: vi.fn(async () => ({ state: 'verified' })),
-  publishReply: vi.fn((
-    _profileKey: string,
-    _invocationId: string,
-    _outputPath: string,
-    _outputIdentity: string,
-    _reply: string,
-  ) => ({
-    schema: 'publication-status/v1',
-    state: 'committed_ok',
-    configured_profile_key: 'profile-key',
-    invocation_id: 'invocation',
-    output_path: '/tmp/reply.txt',
-    output_bytes: 5,
-    output_sha256: 'sha256-reply',
-  })),
+  legacyPublishReply: vi.fn(() => {
+    throw new Error('legacy publication state unavailable');
+  }),
+  openSync: vi.fn(() => 42),
+  writeFileSync: vi.fn((_fd: number, _reply: string, _encoding: string) => undefined),
+  fsyncSync: vi.fn((_fd: number) => undefined),
+  closeSync: vi.fn((_fd: number) => undefined),
+  linkSync: vi.fn((_from: string, _to: string) => {
+    if (mocks.outputConflict) {
+      throw Object.assign(new Error('output exists'), { code: 'EEXIST' });
+    }
+  }),
+  unlinkSync: vi.fn((_path: string) => undefined),
   releaseBrowser: vi.fn(async () => undefined),
 }));
 
@@ -32,6 +31,12 @@ vi.mock('node:fs', async (importOriginal) => {
     appendFileSync: vi.fn(() => {
       if (mocks.journalThrows) throw new Error('journal unavailable');
     }),
+    openSync: mocks.openSync,
+    writeFileSync: mocks.writeFileSync,
+    fsyncSync: mocks.fsyncSync,
+    closeSync: mocks.closeSync,
+    linkSync: mocks.linkSync,
+    unlinkSync: mocks.unlinkSync,
   };
 });
 
@@ -61,10 +66,18 @@ vi.mock('./input.ts', () => ({
   })),
 }));
 
-vi.mock('./publication.ts', () => ({ publishReply: mocks.publishReply }));
+// A failure in the retired publication-state store must be irrelevant to the
+// canonical state-light path. If that path imports/calls publishReply again,
+// lifecycle success tests below fail immediately.
+vi.mock('./publication.ts', () => ({ publishReply: mocks.legacyPublishReply }));
 vi.mock('./storage-common.ts', () => ({ configuredProfileKey: vi.fn(() => 'profile-key') }));
 vi.mock('./ui-adapter.ts', () => ({
-  classifyProductWall: vi.fn(() => ({})),
+  classifyProductWall: vi.fn((text: string) => {
+    if (/quota/i.test(text)) return { state: 'quota', cause: 'quota_detected' };
+    if (/challenge/i.test(text)) return { state: 'challenge', cause: 'challenge_detected' };
+    if (/login/i.test(text)) return { state: 'login', cause: 'login_detected' };
+    return {};
+  }),
   loadChromium: vi.fn(() => ({
     connectOverCDP: vi.fn(async () => {
       const browser = mocks.browserQueue.shift();
@@ -73,7 +86,7 @@ vi.mock('./ui-adapter.ts', () => ({
     }),
   })),
   normalizeConversationUrl: vi.fn((value: string) => value),
-  productStatusText: vi.fn(async () => ''),
+  productStatusText: vi.fn(async (page: any) => String(page.__productStatusText?.() ?? '')),
   verifyProfile: mocks.verifyProfile,
 }));
 
@@ -151,7 +164,12 @@ function collectionLocator(messages: Message[], generating = false) {
 
 function makePage(
   snapshots: Snapshot[],
-  options: { throwAfterSend?: boolean; sendButton?: boolean } = {},
+  options: {
+    throwAfterSend?: boolean;
+    sendButton?: boolean;
+    wallText?: string;
+    wallAfterPoll?: number;
+  } = {},
 ) {
   let sent = false;
   let filled = '';
@@ -179,6 +197,11 @@ function makePage(
 
   const page: any = {
     __fakeBrowserGptPage: true,
+    __productStatusText: () => {
+      if (!sent || !options.wallText) return '';
+      const threshold = options.wallAfterPoll ?? 1;
+      return metrics.polls >= threshold ? options.wallText : '';
+    },
     goto: vi.fn(async () => undefined),
     url: vi.fn(() => 'https://chatgpt.com/c/fake-owned-turn'),
     waitForTimeout: vi.fn(async (ms: number) => {
@@ -287,17 +310,16 @@ beforeEach(() => {
   mocks.cleanupOutcome = 'confirmed';
   mocks.journalThrows = false;
   mocks.nowMs = 10_000;
+  mocks.outputConflict = false;
   vi.spyOn(Date, 'now').mockImplementation(() => mocks.nowMs);
   mocks.verifyProfile.mockReset().mockResolvedValue({ state: 'verified' });
-  mocks.publishReply.mockReset().mockReturnValue({
-    schema: 'publication-status/v1',
-    state: 'committed_ok',
-    configured_profile_key: 'profile-key',
-    invocation_id: 'invocation',
-    output_path: '/tmp/reply.txt',
-    output_bytes: 5,
-    output_sha256: 'sha256-reply',
-  });
+  mocks.legacyPublishReply.mockClear();
+  mocks.openSync.mockClear();
+  mocks.writeFileSync.mockClear();
+  mocks.fsyncSync.mockClear();
+  mocks.closeSync.mockClear();
+  mocks.linkSync.mockClear();
+  mocks.unlinkSync.mockClear();
   mocks.releaseBrowser.mockClear();
 });
 
@@ -323,7 +345,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(fake.metrics.polls).toBeGreaterThanOrEqual(3);
     expect(fake.metrics.closes).toBe(1);
     expect(outcome.context.newPage).toHaveBeenCalledTimes(1);
-    expect(mocks.publishReply).toHaveBeenCalledTimes(1);
+    expect(mocks.linkSync).toHaveBeenCalledTimes(1);
   });
 
   it('runs three overlapping invocations on independent owned tabs', async () => {
@@ -373,6 +395,39 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(fake.metrics.closes).toBe(1);
   });
 
+  it('does not depend on the retired publication state store for a page-complete reply', async () => {
+    const fake = makePage(readySnapshots('FINAL'));
+    const outcome = await runAndCapture(fake.page);
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result.state).toBe('ok');
+    expect(mocks.legacyPublishReply).not.toHaveBeenCalled();
+    expect(mocks.linkSync).toHaveBeenCalledTimes(1);
+    expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
+  });
+
+  it('returns a post-send product blocker after observing the owned prompt', async () => {
+    const working: Snapshot = {
+      messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+      generating: true,
+    };
+    const fake = makePage([working, working], { wallText: 'quota wall', wallAfterPoll: 2 });
+    const outcome = await runAndCapture(fake.page);
+
+    expect(outcome.result).toMatchObject({
+      state: 'quota',
+      scope: 'invocation',
+      cause: 'quota_detected',
+      send_count: 1,
+      cleanup: 'confirmed',
+    });
+    expect(outcome.result.incidents).toContain('invocation_blocker');
+    expect(fake.metrics.polls).toBeGreaterThanOrEqual(2);
+    expect(fake.metrics.sends).toBe(1);
+    expect(fake.metrics.closes).toBe(1);
+    expect(mocks.linkSync).not.toHaveBeenCalled();
+  });
+
   it('does not publish a stable intermediate node while page-level tool activity is still in progress', async () => {
     const progress: Message = { role: 'assistant', text: 'PROGRESS', inProgress: true };
     const final: Message = { role: 'assistant', text: 'FINAL', finalAction: true };
@@ -388,8 +443,8 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(outcome.result.state).toBe('ok');
     expect(fake.metrics.polls).toBeGreaterThanOrEqual(4);
     expect(fake.metrics.sends).toBe(1);
-    expect(mocks.publishReply).toHaveBeenCalledTimes(1);
-    expect(mocks.publishReply.mock.calls[0]?.[4]).toBe('FINAL');
+    expect(mocks.linkSync).toHaveBeenCalledTimes(1);
+    expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
   });
 
   it('keeps foreign activity invocation-local and still closes only its owned tab', async () => {
@@ -413,7 +468,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     });
     expect(fake.metrics.sends).toBe(1);
     expect(fake.metrics.closes).toBe(1);
-    expect(mocks.publishReply).not.toHaveBeenCalled();
+    expect(mocks.linkSync).not.toHaveBeenCalled();
   });
 
   it('reports page loss after send without sending a replacement request', async () => {
