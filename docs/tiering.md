@@ -89,7 +89,8 @@ Policy acceptance does not require re-syncing the stale #1030 Issue body.
 The flow-manager drives the full cycle through acceptance or a bounded blocked
 outcome. There is no mandatory stop-and-hand-off to an architect outside the
 stages below. Browser GPT is the only review engine in create-issue-draft; Codex
-has no create-flow role.
+may be the operator-selected flow-manager but is not a create-flow reviewer or
+review-engine substitute.
 
 | Tier | Review sequence | Pre-lens #975 | Terminal lens | Tier downgrade |
 |------|-----------------|---------------|---------------|----------------|
@@ -114,16 +115,16 @@ the same four simplification questions and review-economics contract from
 - **Browser GPT author.** One task chat owns authoring, every content fix, direct
   edits to the live GitHub Issue, every finding disposition, M3 author activation,
   and the M4 mechanism inventory. Reviewer findings are proposals to this author.
-- **Flow-manager (OpenCode default; Cursor sanctioned alternative).** One current
+- **Flow-manager (OpenCode default when no runtime is selected; capable operator-selected runtime such as Cursor or Codex allowed).** One current
   flow-manager per task owns the operational
   cycle end-to-end: live Issue pulls, rubric/guard application, fixed per-tier
   stage order, mechanical/body floors, immutable captures, finding-ledger
   bookkeeping, pass accounting, chat references/topology, browser-turn execution,
   #975 adoption evidence, and economics-guard execution. It records author
-  dispositions but does not author spec content or judge findings. A successor may
-  act only after the latest explicit predecessor/operator handoff recorded in an
-  existing audit/chat surface; that handoff immediately ends the predecessor's
-  manager authority.
+  dispositions but does not author spec content or judge findings. Runtime names
+  are not a tracked admission allowlist. A successor may act only after the latest
+  explicit predecessor/operator handoff recorded in an existing audit/chat surface;
+  that handoff immediately ends the predecessor's manager authority.
 - **Claude architectural-lens (T3 only).** Exactly one full `architectural-lens`
   capture per cycle segment, produced by an independent Claude Code CLI invocation
   with co-located producing-run evidence. Owns pre-terminal M3 contest/adjudication
@@ -143,18 +144,17 @@ historical provenance to skip stages.
 
 The first authoritative tier floor is not author-controlled Issue metadata. For
 a fresh Issue-only workdir, before the first tier-gate decision the current
-flow-manager (OpenCode default; Cursor when explicitly selected) records one
-`tier-intake/v1` record in the existing review directory
-with `producer` set to a tracked exact allowlist identifier (`cursor-flow-manager`
-or `opencode-flow-manager`), task identity, `kind: fresh`, the rubric/guard
-intake prior, and the first immutable `rNN` revision. The Issue
-`advisory-prior` is a mirror and must match this record. Missing, malformed, or
-mismatched intake evidence fails closed.
+flow-manager records one `tier-intake/v1` record in the existing review directory
+with `producer` set to the manager's exact non-empty audit label, task identity,
+`kind: fresh`, the rubric/guard intake prior, and the first immutable `rNN`
+revision. The producer label is preserved verbatim but is **not** checked against a
+finite runtime-name allowlist and is not authentication or authorization. The Issue
+`advisory-prior` is a mirror and must match this record. Missing, blank, malformed,
+or mismatched intake evidence fails closed.
 
-An **OpenCode flow-manager** does not read `.claude/skills/**` natively. The
-operator or orchestrator must explicitly hand or load
-`.claude/skills/create-issue-draft/SKILL.md` as the canonical create-issue-draft
-procedure.
+A flow-manager runtime that does not read `.claude/skills/**` natively must be
+explicitly handed or load `.claude/skills/create-issue-draft/SKILL.md` as the
+canonical create-issue-draft procedure.
 
 After every immutable pull, the flow-manager records the applied tier decision in
 that `rNN` directory as `tier-gate-decision/v1`: producer, revision, tier, fired
@@ -362,7 +362,9 @@ excess / is missing.
 - **`discuss-with-gpt` brief-only wrapper** — routes into `create-issue-draft` and
   floors effective tier at **T2**; it does **not** add a competitive create-flow
   stage beyond the single terminal GPT `architectural` lens.
-- **`adversarial-draft-review`** — standalone Codex only; **not** in create-flow.
+- **`adversarial-draft-review`** — standalone Codex challenge only; **not** a
+  create-flow review stage. An explicit Codex flow-manager selection still routes
+  through `create-issue-draft`.
 
 If a low/contained-stakes artifact exits adversarial review with approximately
 100% of findings `addressed`, record that as a **proportionality smell** in the

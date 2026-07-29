@@ -1,6 +1,6 @@
 ---
 name: adversarial-draft-review
-description: Use when the user asks to adversarially challenge a draft/spec artifact with Codex — triggers «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «создай задачу с кодексом», «придирчиво», «оспорь подход», "draft with codex", "adversarial draft", "challenge the approach". Runs a standalone Codex challenge loop (≤3 cold passes, evaluate-don't-obey) over a local markdown artifact. Codex has no role in create-issue-draft; for GPT-authored task specs use create-issue-draft. Skip plain "создай драфт" with no «с кодексом»/adversarial marker.
+description: Use when the user asks to adversarially challenge a draft/spec artifact with Codex — triggers «с кодексом», «обсуди с кодексом», «посоветуйся с кодексом», «выясни с кодексом», «драфт с кодексом», «придирчиво», «оспорь подход», "draft with codex", "adversarial draft", "challenge the approach". Runs a standalone Codex challenge loop (≤3 cold passes, evaluate-don't-obey) over a local markdown artifact. Codex is not a create-issue-draft reviewer or outage substitute; an explicit request to create/manage a task with Codex routes to create-issue-draft with Codex as the flow-manager instead. Skip plain "создай драфт" with no «с кодексом»/adversarial marker.
 ---
 
 # adversarial-draft-review
@@ -8,11 +8,13 @@ description: Use when the user asks to adversarially challenge a draft/spec arti
 Runs a **standalone adversarial Codex challenge loop** over a draft/spec artifact.
 Codex CLI twin of [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md).
 
-**Out of create-issue-draft.** Codex is not a reviewer engine, outage substitute,
-or mandatory addition in the GPT-only `create-issue-draft` flow. When browser
-GPT is unavailable during task-spec authoring, required GPT work stays
-incomplete — no engine substitution. This skill serves only explicit standalone
-«с кодексом» / adversarial requests over a local artifact.
+**Out of create-issue-draft review topology.** Codex is not a reviewer engine,
+outage substitute, or mandatory addition in the GPT-only `create-issue-draft`
+review flow. This does not prohibit Codex from acting as the operator-selected
+**flow-manager** for `create-issue-draft`. When browser GPT is unavailable during
+task-spec authoring, required GPT work stays incomplete — no engine substitution.
+This skill serves only explicit standalone «с кодексом» / adversarial challenge
+requests over a local artifact.
 
 Worker **PR-code** review (`PACK_REVIEWER`, `prompts/codex_review_prompt.md`) is
 unchanged.
@@ -21,16 +23,17 @@ unchanged.
 
 | Trigger | Route |
 |---------|-------|
-| «с кодексом» / «придирчиво» / «оспорь подход» / "draft with codex" | this skill |
+| «с кодексом» / «придирчиво» / «оспорь подход» / "draft with codex" when the requested action is challenge/review | this skill |
+| explicit «создай задачу с кодексом» / manage the create flow with Codex | `create-issue-draft` with Codex as flow-manager |
 | «с gpt» / «с гпт» | [`discuss-with-gpt`](../discuss-with-gpt/SKILL.md) |
 | GPT-authored Issue + task-chat link | `create-issue-draft` |
 | plain «создай драфт» | `create-issue-draft` |
 | bug/root-cause consult | `investigate-root-cause` / `codex:rescue` |
 
 **Brief-only task creation.** Route through `create-issue-draft` for Issue
-authoring. An explicit «создай задачу с кодексом» brief does **not** add an
-in-flow Codex stage to that flow — run this skill **standalone** on the artifact
-only when the operator wants a separate Codex challenge before or beside
+authoring. An explicit «создай задачу с кодексом» selects Codex as flow-manager;
+it does **not** add an in-flow Codex review stage. Run this skill **standalone**
+only when the operator separately asks for a Codex challenge before or beside
 create-issue-draft, and record that choice outside the create-flow stage ledger.
 
 ## Availability is a gate

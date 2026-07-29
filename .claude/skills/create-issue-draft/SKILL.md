@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use when accepting a GPT-chat-authored task for orchestrator-pack — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: one OpenCode flow-manager — Cursor is a sanctioned alternative — opens the GPT task chat and GPT authors the Issue). The flow-manager drives the full fixed per-tier cycle through acceptance or a bounded blocked outcome; browser GPT is the only review engine. T1/T2: one terminal GPT architectural lens. T3: pre-lens stages → pre-lens #975 guard → one Claude architectural-lens → author fixes → one terminal GPT architectural lens. Covers Issue-only live task state, T3-critical L4 floors, tracked chatgpt-browser-turn mechanics, issue-body guards, and the finding-disposition ledger. No Codex create-flow role. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from docs/tiering.md.
+description: Use when accepting a GPT-chat-authored task for orchestrator-pack — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: one flow-manager opens the GPT task chat and GPT authors the Issue). OpenCode is the default manager when no runtime is explicitly selected; a capable operator-selected runtime such as Cursor or Codex is permitted without a tracked manager-name allowlist. The flow-manager drives the full fixed per-tier cycle through acceptance or a bounded blocked outcome; browser GPT is the only review engine. T1/T2: one terminal GPT architectural lens. T3: pre-lens stages → pre-lens #975 guard → one Claude architectural-lens → author fixes → one terminal GPT architectural lens. Covers Issue-only live task state, T3-critical L4 floors, tracked chatgpt-browser-turn mechanics, issue-body guards, and the finding-disposition ledger. Codex may manage the flow when selected but cannot substitute for required browser-GPT/Claude review stages. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from docs/tiering.md.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -8,10 +8,12 @@ description: Use when accepting a GPT-chat-authored task for orchestrator-pack �
 Tasks are authored by the operator's **browser GPT** in the custom ChatGPT
 project «orchestrator-pack». GPT creates the GitHub Issue, edits it directly
 throughout the flow, and owns every content fix and finding disposition. One
-current **OpenCode flow-manager** (Cursor remains a sanctioned, non-deprecated
-alternative) owns the operational cycle **through acceptance** or a bounded
-blocked outcome. There is no mandatory stop-and-hand-off to an
-architect outside the fixed per-tier stages in `docs/tiering.md`.
+current **flow-manager** owns the operational cycle **through acceptance** or a
+bounded blocked outcome. **OpenCode** is the default when no manager runtime is
+explicitly selected; the operator may select another capable runtime, including
+**Cursor or Codex**, without adding its name to a tracked allowlist. There is no
+mandatory stop-and-hand-off to an architect outside the fixed per-tier stages in
+`docs/tiering.md`.
 
 The **GitHub Issue is the only live task artifact and queue entry**. Pulled
 revisions, captures, chat URLs, manager handoffs, the finding ledger, #975
@@ -49,26 +51,27 @@ Explicit wrapper routing:
 - brief-only `discuss-with-gpt` floors the effective tier at **T2** and routes into
   this flow; it does **not** add a competitive create-flow stage beyond the single
   terminal GPT `architectural` lens;
-- `adversarial-draft-review` is **standalone Codex only** — it does not add an
-  in-flow stage to create-issue-draft.
+- `adversarial-draft-review` is **standalone Codex challenge only** — it does not
+  add an in-flow review stage to create-issue-draft. An explicit request to create
+  or manage a task with Codex instead selects Codex as this flow's manager.
 
 Apply the canonical **Below the ladder — no tier** rule from `docs/tiering.md`.
 When that rule applies, skip this authoring ceremony; otherwise continue here.
 
 ## Roles
 
-**Flow-manager runtime default.** **OpenCode** is the default flow-manager
-runtime; **Cursor** remains a sanctioned, non-deprecated alternative when
-explicitly selected by operator policy or handoff. Allowlist membership does not
-grant runtime permission. An **OpenCode flow-manager** does not read
-`.claude/skills/**` natively — the operator or orchestrator must explicitly hand
-or load **this file** (`.claude/skills/create-issue-draft/SKILL.md`) as the
-canonical create-issue-draft procedure.
+**Flow-manager runtime default.** **OpenCode** is the default flow-manager when no
+runtime is explicitly selected. Runtime selection is **not** a tracked allowlist:
+the operator may select another capable runtime, including **Cursor or Codex**.
+The tier-provenance `producer` label records the selected manager for audit but
+does not grant or deny runtime permission. A flow-manager runtime that does not
+read `.claude/skills/**` natively must explicitly be handed or load **this file**
+(`.claude/skills/create-issue-draft/SKILL.md`) as the canonical procedure.
 
 | Party | Owns | Must not do |
 |-------|------|-------------|
 | GPT author in task chat | Spec content, every content fix, direct Issue edits, every finding disposition, M3 author activation, M4 mechanism inventory | Review its own spec |
-| Flow-manager (OpenCode default; Cursor sanctioned alternative) | Live Issue pulls, fixed per-tier stage order, tier/T3-critical classification, body/mechanical floors, immutable captures, ledger bookkeeping, pass counting, chat references/topology, browser-turn execution, #975 adoption evidence, economics-guard mechanics, driving the cycle to acceptance or bounded blocked outcome | Author spec content, decide reviewer findings, perform the Claude lens, invent new helper/runtime semantics, mandatory hand-off to architect |
+| Flow-manager (OpenCode default; capable operator-selected Cursor/Codex allowed) | Live Issue pulls, fixed per-tier stage order, tier/T3-critical classification, body/mechanical floors, immutable captures, ledger bookkeeping, pass counting, chat references/topology, browser-turn execution, #975 adoption evidence, economics-guard mechanics, driving the cycle to acceptance or bounded blocked outcome | Author spec content, decide reviewer findings, perform the Claude lens, invent new helper/runtime semantics, mandatory hand-off to architect |
 | Claude architectural-lens (T3 only) | Exactly one `architectural-lens` per cycle segment: pre-terminal M3 when required, pre-terminal independent aggregate cut, adjacent `T3→T2` authority | Routine browser turns, ledger bookkeeping, post-terminal-GPT work, `T2→T1`, GPT stages |
 | Reviewer GPT chats | Independent review only: competitive (fresh chat per pass when selected), terminal `architectural` (fresh independent chat on every tier) with full current-revision M3 and one adjacent `T3→T2` or `T2→T1` downstep | Edit the Issue, share the task chat, overwrite author-owned M4, direct `T3→T1`, or emit two downsteps from one capture |
 
@@ -208,7 +211,9 @@ attestation, registry, lease, journal, or pending-state machine.
 Before the first tier-gate decision for a fresh workdir, the **flow-manager**
 records `$REVIEW_DIR/tier-intake.json` as `tier-intake/v1` with:
 
-- `producer` set to a tracked exact allowlist identifier (`cursor-flow-manager` or `opencode-flow-manager`);
+- `producer` set to the selected manager's exact non-empty audit label; the label is
+  preserved verbatim but is not checked against a finite runtime-name allowlist and
+  is not authentication or authorization;
 - exact task identity;
 - `kind: fresh`;
 - the intake prior produced by the existing rubric/guard application;
@@ -216,8 +221,8 @@ records `$REVIEW_DIR/tier-intake.json` as `tier-intake/v1` with:
 
 The Issue `advisory-prior` mirrors this record and must match it. Browser GPT does
 not write the intake record, and no architect attribution is required for existing
-Issue + task-chat entry or direct brief-only entry. Missing, malformed, partial,
-or mismatched intake evidence fails closed.
+Issue + task-chat entry or direct brief-only entry. Missing, blank, malformed,
+partial, or mismatched intake evidence fails closed.
 
 The implementation owns exactly one **static frozen** production compatibility
 set, deliberately empty at #973 cutover. Every production identity therefore

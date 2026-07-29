@@ -50,6 +50,30 @@ Structured `worker-smoke-run` JSON distinguishes at least:
 
 Top-level `PASS | FAIL | BLOCKED` semantics are unchanged.
 
+## Owned-handle supervision
+
+When a worker supervises a child agent in an Orca terminal, binding discipline is behavioral —
+pack scripts take the owned handle from `orca terminal create`, but a supervisor that re-binds to
+its own terminal after runtime restart can poll forever (2026-07-29 incident).
+
+- **Handle binding.** Record the owned handle from `orca terminal create` **immediately** and use
+  **only** that handle for send, read, and close on the supervised child.
+- **No re-derivation.** **MUST NOT** replace a lost or missing owned handle by searching
+  `orca terminal list` (or equivalent) by title, workspace, position, recency, or any other
+  heuristic — including after `runtime_unavailable`, Orca restart, or handle rotation.
+- **Self-monitoring is a binding error.** If the supervised handle equals your own terminal,
+  treat it as **failed binding**, not as "child still running". **Fail closed** and report; do
+  not keep polling.
+- **Stale handle = lost run.** If the handle is invalid or unreadable, the supervised run is
+  **lost**. Stop, report what is known, and do not guess a replacement or attach to an unrelated
+  terminal.
+- **Terminal text is not completion.** Visible TUI output may inform liveness only as a
+  **secondary** hint. It is **not** a completion signal: the PTY channel is unsigned (every
+  agent TUI looks alike), has no reliable negative state (absence of a marker means working, wrong
+  output, or dead), and is lossy (Orca may drop PTY bytes when the window is collapsed).
+  **Completion** requires a **durable artifact** the child produces (e.g. the `worker-smoke-report`
+  block).
+
 ## Orca contract evidence
 
 `scripts/lib/orca-cli.ts` consumes concrete Orca JSON fields (`result.worktree.*`, `result.terminal.handle`, `result.lines`). Capture-backed producer evidence lives under `tests/external-output-references/captures/orca-worker-smoke/` (grounding commit `89968a10614d0e5f5a6b7805c81dccc3a1b5110b` per Issue #1061).
