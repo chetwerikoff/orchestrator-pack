@@ -26,6 +26,7 @@ import {
   findCurrentHeadSmokePass,
   SMOKE_GH_AUTH_ENV_KEYS,
   SMOKE_REPORT_PRODUCER,
+  smokeAgentTerminalActivityBeyondSentPrompt,
   smokeAgentTerminalDeltaActivity,
   smokeAgentTerminalFullActivity,
   scrubForwardedGhSecrets,
@@ -780,18 +781,52 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
 });
 
 describe('worker smoke agent start-aware wait (#1101)', () => {
-  it('detects positive terminal activity on full snapshots and cursor deltas', () => {
-    expect(smokeAgentTerminalFullActivity('idle prompt', 'idle prompt')).toBe(false);
-    expect(smokeAgentTerminalFullActivity('idle prompt\nagent started', 'idle prompt')).toBe(false);
-    expect(smokeAgentTerminalFullActivity('worker-smoke-agent-started', '')).toBe(true);
-    expect(smokeAgentTerminalDeltaActivity('')).toBe(false);
-    expect(smokeAgentTerminalDeltaActivity('new output')).toBe(false);
-    expect(smokeAgentTerminalDeltaActivity('worker-smoke-agent-started')).toBe(true);
+  it('detects positive terminal activity beyond echoed prompt only', () => {
+    const sentPrompt = 'run smoke now';
+    expect(smokeAgentTerminalFullActivity('idle', 'idle', sentPrompt)).toBe(false);
+    expect(smokeAgentTerminalFullActivity(`idle${sentPrompt}`, 'idle', sentPrompt)).toBe(false);
+    expect(smokeAgentTerminalFullActivity(`idle${sentPrompt}\nagent output`, 'idle', sentPrompt)).toBe(true);
+    expect(smokeAgentTerminalDeltaActivity('', sentPrompt)).toBe(false);
+    expect(smokeAgentTerminalDeltaActivity(sentPrompt, sentPrompt)).toBe(false);
+    expect(smokeAgentTerminalDeltaActivity(`${sentPrompt}\nagent output`, sentPrompt)).toBe(true);
+    expect(smokeAgentTerminalActivityBeyondSentPrompt(`${sentPrompt}\nscenario output`, sentPrompt)).toBe(true);
+  });
+
+  it('does not treat echoed prompt text as agent activity', () => {
+    let now = 0;
+    const sentPrompt = 'run smoke now';
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal read')) {
+        return {
+          stdout: JSON.stringify({ ok: true, result: { lines: [sentPrompt], nextCursor: 2 } }),
+          stderr: '',
+          status: 0,
+        };
+      }
+      return { stdout: JSON.stringify({ ok: false, error: { message: 'unexpected' } }), stderr: '', status: 1 };
+    });
+
+    const result = waitForSmokeAgentCompletion('term_prompt_echo', {
+      runner: runner as never,
+      now: () => now,
+      deadlineMs: 600,
+      preSendBaselineText: 'idle',
+      preSendCursor: 1,
+      sentPrompt,
+      sleepMs: (ms) => {
+        now += ms;
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.agentActivityObserved).toBe(false);
+    expect(result.error?.code).toBe('smoke_agent_never_started');
   });
 
   it('does not complete during initial idle before delayed first output', () => {
     let now = 0;
     let readCalls = 0;
+    const sentPrompt = 'run smoke now';
     const runner = vi.fn((executable: string, args: string[]) => {
       const joined = args.join(' ');
       if (joined.includes('terminal read')) {
@@ -800,7 +835,7 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
           return { stdout: JSON.stringify({ ok: true, result: { lines: [], nextCursor: 1 } }), stderr: '', status: 0 };
         }
         return {
-          stdout: JSON.stringify({ ok: true, result: { lines: ['worker-smoke-agent-started'], nextCursor: 2 } }),
+          stdout: JSON.stringify({ ok: true, result: { lines: ['agent scenario output'], nextCursor: 2 } }),
           stderr: '',
           status: 0,
         };
@@ -817,6 +852,7 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
       deadlineMs: 5_000,
       preSendBaselineText: 'idle',
       preSendCursor: 1,
+      sentPrompt,
       sleepMs: (ms) => {
         now += ms;
       },
@@ -829,14 +865,15 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
   it('classifies started-without-report as missing_agent_report after idle', () => {
     let now = 0;
     let readCalls = 0;
+    const sentPrompt = 'run smoke now';
     const runner = vi.fn((executable: string, args: string[]) => {
       const joined = args.join(' ');
       if (joined.includes('terminal read')) {
         readCalls += 1;
         if (readCalls === 1) {
-          return { stdout: JSON.stringify({ ok: true, result: { lines: ['worker-smoke-agent-started'], nextCursor: 2 } }), stderr: '', status: 0 };
+          return { stdout: JSON.stringify({ ok: true, result: { lines: ['scenario output only'], nextCursor: 2 } }), stderr: '', status: 0 };
         }
-        return { stdout: JSON.stringify({ ok: true, result: { lines: ['scenario output only'], nextCursor: 3 } }), stderr: '', status: 0 };
+        return { stdout: JSON.stringify({ ok: true, result: { lines: ['more scenario output'], nextCursor: 3 } }), stderr: '', status: 0 };
       }
       if (joined.includes('terminal wait') && joined.includes('tui-idle')) {
         return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
@@ -850,6 +887,7 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
       deadlineMs: 5_000,
       preSendBaselineText: 'idle',
       preSendCursor: 1,
+      sentPrompt,
       sleepMs: (ms) => {
         now += ms;
       },
@@ -865,6 +903,7 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
 
   it('terminates at the shared deadline when the agent never starts', () => {
     let now = 0;
+    const sentPrompt = 'run smoke now';
     const runner = vi.fn((executable: string, args: string[]) => {
       const joined = args.join(' ');
       if (joined.includes('terminal read')) {
@@ -879,6 +918,7 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
       deadlineMs: 600,
       preSendBaselineText: 'idle',
       preSendCursor: 1,
+      sentPrompt,
       sleepMs: (ms) => {
         now += ms;
       },

@@ -76,10 +76,6 @@ export function buildSmokeAgentPrompt(input: {
     'You are an independent smoke verifier for orchestrator-pack.',
     'Execute only the smoke scenarios below against the current worktree.',
     'Do not edit tracked implementation files, commit, push, merge, alter the Issue, invoke pack review, or call pack-worker-report.',
-    'When you begin executing scenarios, emit exactly one line:',
-    '',
-    'worker-smoke-agent-started',
-    '',
     'When finished, emit exactly one fenced block:',
     '',
     '```worker-smoke-report',
@@ -712,19 +708,44 @@ export function classifyDeclaredScenarioNonPassCause(input: {
   });
 }
 
-export const SMOKE_AGENT_START_WITNESS = 'worker-smoke-agent-started';
-
-export function smokeAgentTerminalStartWitness(text: string): boolean {
-  return text.includes(SMOKE_AGENT_START_WITNESS);
+export function smokeAgentTerminalActivityBeyondSentPrompt(
+  observedText: string,
+  sentPrompt: string,
+): boolean {
+  const observed = observedText.trim();
+  if (!observed) {
+    return false;
+  }
+  const prompt = sentPrompt.trim();
+  if (!prompt) {
+    return observed.length > 0;
+  }
+  if (observed === prompt) {
+    return false;
+  }
+  if (observed.startsWith(prompt)) {
+    return observed.slice(prompt.length).trim().length > 0;
+  }
+  return observed.length > prompt.length;
 }
 
-export function smokeAgentTerminalDeltaActivity(deltaText: string): boolean {
-  return smokeAgentTerminalStartWitness(deltaText);
+export function smokeAgentTerminalDeltaActivity(
+  deltaText: string,
+  sentPrompt = '',
+): boolean {
+  return smokeAgentTerminalActivityBeyondSentPrompt(deltaText, sentPrompt);
 }
 
-export function smokeAgentTerminalFullActivity(currentFullText: string, baselineFullText: string): boolean {
-  return smokeAgentTerminalStartWitness(currentFullText)
-    && !smokeAgentTerminalStartWitness(baselineFullText);
+export function smokeAgentTerminalFullActivity(
+  currentFullText: string,
+  baselineFullText: string,
+  sentPrompt = '',
+): boolean {
+  const baseline = baselineFullText ?? '';
+  const observedSinceBaseline = currentFullText.startsWith(baseline)
+    ? currentFullText.slice(baseline.length)
+    : currentFullText;
+  return smokeAgentTerminalActivityBeyondSentPrompt(observedSinceBaseline, sentPrompt);
 }
 
 /** @deprecated Use delta/full helpers explicitly at the Orca read boundary. */

@@ -31,6 +31,7 @@ import {
   normalizeSmokeReport,
   ownedSmokeTerminalClosedFromReports,
   parseSmokeAgentReport,
+  smokeAgentTerminalActivityBeyondSentPrompt,
   smokeAgentTerminalDeltaActivity,
   smokeAgentTerminalFullActivity,
   scrubForwardedGhSecrets,
@@ -158,6 +159,7 @@ export function waitForSmokeAgentCompletion(
     readonly deadlineMs?: number;
     readonly preSendBaselineText?: string;
     readonly preSendCursor?: number;
+    readonly sentPrompt?: string;
     readonly runner?: Parameters<typeof waitOrcaTerminal>[1]['runner'];
     readonly now?: () => number;
     readonly sleepMs?: (milliseconds: number) => void;
@@ -183,6 +185,7 @@ export function waitForSmokeAgentCompletion(
 
   let agentActivityObserved = false;
   const baselineText = options.preSendBaselineText ?? '';
+  const sentPrompt = options.sentPrompt ?? '';
   let observedSinceBaseline = '';
   let cursor = options.preSendCursor;
 
@@ -195,15 +198,15 @@ export function waitForSmokeAgentCompletion(
   if (initialRead.ok) {
     const initialText = (initialRead.result?.lines ?? []).join('\n');
     if (cursor === undefined) {
-      if (smokeAgentTerminalFullActivity(initialText, baselineText)) {
+      if (smokeAgentTerminalFullActivity(initialText, baselineText, sentPrompt)) {
         agentActivityObserved = true;
       }
     } else {
-      if (smokeAgentTerminalDeltaActivity(initialText)) {
+      if (smokeAgentTerminalDeltaActivity(initialText, sentPrompt)) {
         agentActivityObserved = true;
         observedSinceBaseline += initialText;
       }
-      if (smokeAgentTerminalFullActivity(`${baselineText}${observedSinceBaseline}`, baselineText)) {
+      if (smokeAgentTerminalActivityBeyondSentPrompt(observedSinceBaseline, sentPrompt)) {
         agentActivityObserved = true;
       }
     }
@@ -227,15 +230,15 @@ export function waitForSmokeAgentCompletion(
     if (read.ok) {
       const deltaText = (read.result?.lines ?? []).join('\n');
       if (cursor === undefined) {
-        if (smokeAgentTerminalFullActivity(deltaText, baselineText)) {
+        if (smokeAgentTerminalFullActivity(deltaText, baselineText, sentPrompt)) {
           agentActivityObserved = true;
         }
       } else {
-        if (smokeAgentTerminalDeltaActivity(deltaText)) {
+        if (smokeAgentTerminalDeltaActivity(deltaText, sentPrompt)) {
           agentActivityObserved = true;
           observedSinceBaseline += deltaText;
         }
-        if (smokeAgentTerminalFullActivity(`${baselineText}${observedSinceBaseline}`, baselineText)) {
+        if (smokeAgentTerminalActivityBeyondSentPrompt(observedSinceBaseline, sentPrompt)) {
           agentActivityObserved = true;
         }
       }
@@ -676,6 +679,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       cwd: options.cwd,
       preSendBaselineText,
       preSendCursor,
+      sentPrompt: prompt,
     });
     const agentActivityObserved = waitResult.agentActivityObserved;
     if (!waitResult.ok) {
