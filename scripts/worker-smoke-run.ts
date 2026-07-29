@@ -205,7 +205,7 @@ export function establishSmokePromptDelivery(
     readonly prompt: string;
     readonly preSendBaselineText?: string;
     readonly preSendCursor?: number;
-    readonly runner?: Parameters<typeof sendOrcaTerminal>[2]['runner'];
+    readonly runner?: NonNullable<Parameters<typeof sendOrcaTerminal>[2]>['runner'];
     readonly now?: () => number;
     readonly sleepMs?: (milliseconds: number) => void;
     readonly allowDefiniteNondeliveryRetry?: boolean;
@@ -269,7 +269,7 @@ export function waitForSmokeChildCompletion(
     readonly runBinding: import('./lib/worker-smoke-core.ts').SmokeRunBinding;
     readonly ownedChildHandle: string;
     readonly supervisorHandle?: string;
-    readonly runner?: Parameters<typeof readOrcaTerminal>[1]['runner'];
+    readonly runner?: NonNullable<Parameters<typeof readOrcaTerminal>[1]>['runner'];
     readonly now?: () => number;
     readonly sleepMs?: (milliseconds: number) => void;
     readonly childStateWitness?: () => import('./lib/worker-smoke-core.ts').SmokeChildStateWitness;
@@ -398,7 +398,7 @@ export function waitForSmokeAgentCompletion(
     readonly preSendBaselineText?: string;
     readonly preSendCursor?: number;
     readonly sentPrompt?: string;
-    readonly runner?: Parameters<typeof waitOrcaTerminal>[1]['runner'];
+    readonly runner?: NonNullable<Parameters<typeof waitOrcaTerminal>[1]>['runner'];
     readonly now?: () => number;
     readonly sleepMs?: (milliseconds: number) => void;
     readonly runBinding?: import('./lib/worker-smoke-core.ts').SmokeRunBinding;
