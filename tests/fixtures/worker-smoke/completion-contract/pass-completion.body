@@ -1,0 +1,6 @@
+```worker-smoke-report
+result: PASS
+tracked-files-unmodified: true
+scenarios:
+  - action: run scenario | expected: pass | observed: pass | outcome: pass
+```

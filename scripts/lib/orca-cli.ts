@@ -191,6 +191,16 @@ export function sendOrcaTerminal(
   );
 }
 
+export function submitOrcaTerminalComposer(
+  handle: string,
+  options: { readonly cwd?: string; readonly executable?: string; readonly runner?: typeof spawnSync } = {},
+): OrcaJsonResponse {
+  return runOrcaJson(
+    ['terminal', 'send', '--terminal', handle, '--enter'],
+    options,
+  );
+}
+
 export function readOrcaTerminal(
   handle: string,
   options: {

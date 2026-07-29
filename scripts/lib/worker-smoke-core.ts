@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseKeyValueBlock } from '../markdown-key-value.mjs';
 import {
@@ -61,16 +62,74 @@ const FORBIDDEN_SMOKE_AGENT_ACTIONS = [
   /\bedit(?:ing)?\s+(?:the\s+)?(?:issue|task spec)\b/i,
 ] as const;
 
+export interface SmokeRunBinding {
+  runId: string;
+  artifactDir: string;
+}
+
+export const SMOKE_RUN_ARTIFACT_ROOT = '.orca-worker-smoke/runs';
+
+export function createSmokeRunIdentity(): string {
+  return randomUUID();
+}
+
+export function resolveSmokeRunArtifactDir(repoRoot: string, runId: string): string {
+  return join(repoRoot, SMOKE_RUN_ARTIFACT_ROOT, runId);
+}
+
+export function smokeDeliverySealedPath(artifactDir: string): string {
+  return join(artifactDir, 'delivery.sealed.json');
+}
+
+export function smokeCompletionPendingBodyPath(artifactDir: string): string {
+  return join(artifactDir, 'completion.pending.body');
+}
+
+const COMPLETION_SEAL_DIGEST_PATTERN = /^completion-([0-9a-f]{64})\.sealed\.json$/u;
+
+export function smokeCompletionBodyPath(artifactDir: string, bodySha256: string): string {
+  return join(artifactDir, `completion-${bodySha256}.body`);
+}
+
+export function smokeCompletionSealPath(artifactDir: string, bodySha256: string): string {
+  return join(artifactDir, `completion-${bodySha256}.sealed.json`);
+}
+
+export function ensureSmokeRunArtifactDir(artifactDir: string): void {
+  mkdirSync(artifactDir, { recursive: true });
+}
+
 export function buildSmokeAgentPrompt(input: {
   issueNumber: number;
   issueBody: string;
   prNumber: number;
   headSha: string;
   plan: SmokeTestPlan;
+  runBinding?: SmokeRunBinding;
 }): string {
   const scenarioLines = input.plan.scenarios
     .map((scenario, index) => `${index + 1}. action: ${scenario.action}\n   expected: ${scenario.expected}`)
     .join('\n');
+
+  const durableLines = input.runBinding
+    ? [
+      '',
+      'Durable smoke-run binding (authoritative for delivery and completion):',
+      `run-id: ${input.runBinding.runId}`,
+      `artifact-dir: ${input.runBinding.artifactDir}`,
+      'After you accept this prompt, write delivery evidence:',
+      `  ${smokeDeliverySealedPath(input.runBinding.artifactDir)}`,
+      '  contents: {"runId":"<run-id>"}',
+      'Completion is accepted only after publish-complete sealing:',
+      `  1. optional in-progress bytes may go only to ${smokeCompletionPendingBodyPath(input.runBinding.artifactDir)}`,
+      '  2. compute sha256 hex of the final fenced report body',
+      '  3. create-only write completion-<sha256>.body (never overwrite an existing completion-*.body)',
+      '  4. create-only write completion-<sha256>.sealed.json with {"runId":"<run-id>","bodySha256":"<sha256>"}',
+      'Each new terminalization must use new content and therefore new completion-<sha256> filenames.',
+      'Never delete or overwrite any completion-* artifact in the run directory.',
+      'Terminal scrollback is not completion evidence; only the sealed artifact counts.',
+    ]
+    : [];
 
   return [
     'You are an independent smoke verifier for orchestrator-pack.',
@@ -86,6 +145,7 @@ export function buildSmokeAgentPrompt(input: {
     'scenarios:',
     '  - action: <what you ran> | expected: <from plan> | observed: <what happened> | outcome: pass|fail|skipped|blocked',
     '```',
+    ...durableLines,
     '',
     `Issue: #${input.issueNumber}`,
     `PR: #${input.prNumber}`,
@@ -307,6 +367,14 @@ function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
     orcaExecutable: String(fields['orca-executable'] ?? fields['orca-cli'] ?? '').trim() || undefined,
     terminalHandle: String(fields['terminal-handle'] ?? '').trim() || undefined,
   };
+}
+
+export function parseSealedSmokeAgentReport(text: string): Partial<SmokeReport> | null {
+  const fenced = text.match(SMOKE_REPORT_BLOCK);
+  if (!fenced) {
+    return null;
+  }
+  return parseSmokeAgentReportBody(fenced[1]);
 }
 
 export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null {
@@ -751,10 +819,354 @@ export function buildSmokeGhChildEnv(parentEnv: NodeJS.ProcessEnv = process.env)
   return forwarded;
 }
 
+
+export type SmokeChildWaitNonPassCause =
+  | 'prompt_delivery_unconfirmed'
+  | 'agent_report_unfenced'
+  | 'agent_report_timeout'
+  | 'agent_exited_without_report'
+  | 'agent_idle_without_report'
+  | 'agent_report_duplicate'
+  | 'agent_wait_self_handle'
+  | 'agent_wait_unowned_handle';
+
+export type SmokeControlPlaneCause =
+  | 'channel_stale_handle'
+  | 'channel_lookup_empty'
+  | 'channel_control_unavailable'
+  | 'channel_control_overwritten';
+
+export type SmokeChannelBindingCause = SmokeChildWaitNonPassCause | SmokeControlPlaneCause;
+
+export function isSmokeControlPlaneCause(value: string): value is SmokeControlPlaneCause {
+  return value === 'channel_stale_handle'
+    || value === 'channel_lookup_empty'
+    || value === 'channel_control_unavailable'
+    || value === 'channel_control_overwritten';
+}
+
+export interface SmokeSealRecord {
+  runId: string;
+  generation?: number;
+}
+
+export interface SmokeCompletionSealRecord extends SmokeSealRecord {
+  bodySha256: string;
+}
+
+export function computeSmokeCompletionBodyDigest(body: string): string {
+  return createHash('sha256').update(body, 'utf8').digest('hex');
+}
+
+export type SmokeCompletionPublicationState =
+  | 'none'
+  | 'partial'
+  | 'publish_complete_single'
+  | 'publish_complete_duplicate'
+  | 'publish_complete_unfenced';
+
+export interface SmokeCompletionEvidenceObservation {
+  publicationState: SmokeCompletionPublicationState;
+  sealedRunId?: string;
+  reportBody?: string;
+  parsedReport?: Partial<SmokeReport> | null;
+  wrongRunBinding: boolean;
+}
+
+export interface SmokeChildStateWitness {
+  exited?: boolean;
+  idle?: boolean;
+}
+
+export interface SmokeChannelBindingInput {
+  supervisedHandle: string;
+  ownedChildHandle: string;
+  supervisorHandle?: string;
+}
+
+export function classifySmokeChannelBinding(
+  input: SmokeChannelBindingInput,
+): SmokeChildWaitNonPassCause | undefined {
+  const supervised = input.supervisedHandle.trim();
+  const owned = input.ownedChildHandle.trim();
+  const supervisor = input.supervisorHandle?.trim();
+  if (supervisor && supervised === supervisor) {
+    return 'agent_wait_self_handle';
+  }
+  if (supervised !== owned) {
+    return 'agent_wait_unowned_handle';
+  }
+  return undefined;
+}
+
+function readJsonFile(path: string): unknown | undefined {
+  if (!existsSync(path)) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+function parseSmokeSealRecord(raw: unknown): SmokeSealRecord | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const runId = String((raw as { runId?: unknown }).runId ?? '').trim();
+  if (!runId) {
+    return undefined;
+  }
+  const generationRaw = (raw as { generation?: unknown }).generation;
+  const generation = typeof generationRaw === 'number' && Number.isFinite(generationRaw)
+    ? generationRaw
+    : undefined;
+  return { runId, generation };
+}
+
+function parseSmokeCompletionSealRecord(raw: unknown): SmokeCompletionSealRecord | undefined {
+  const base = parseSmokeSealRecord(raw);
+  const bodySha256 = String((raw as { bodySha256?: unknown })?.bodySha256 ?? '').trim().toLowerCase();
+  if (!base || !/^[0-9a-f]{64}$/.test(bodySha256)) {
+    return undefined;
+  }
+  return { ...base, bodySha256 };
+}
+
+function listCompletionSealDigests(artifactDir: string): string[] {
+  if (!existsSync(artifactDir)) {
+    return [];
+  }
+  const digests: string[] = [];
+  for (const entry of readdirSync(artifactDir)) {
+    const match = COMPLETION_SEAL_DIGEST_PATTERN.exec(entry);
+    if (match) {
+      digests.push(match[1]);
+    }
+  }
+  return digests.sort();
+}
+
+export function observeSmokeDeliveryEstablished(
+  runBinding: SmokeRunBinding,
+): boolean {
+  const sealed = parseSmokeSealRecord(readJsonFile(smokeDeliverySealedPath(runBinding.artifactDir)));
+  return sealed?.runId === runBinding.runId;
+}
+
+export function observeSmokeUnsubmittedComposerPaste(lines: readonly string[]): boolean {
+  return lines.some((line) => {
+    const trimmed = line.trim();
+    return /^\[Pasted text\b/u.test(trimmed)
+      || /^→\s*\[Pasted text\b/u.test(trimmed);
+  });
+}
+
+export interface SmokeCompletionObservationState {
+  sealedBodyDigests: Map<string, string>;
+}
+
+export function createSmokeCompletionObservationState(): SmokeCompletionObservationState {
+  return { sealedBodyDigests: new Map() };
+}
+
+interface EvaluatedCompletionTerminalization {
+  bodySha256: string;
+  reportBody: string;
+  parsedReport: Partial<SmokeReport> | null;
+}
+
+function evaluateCompletionTerminalization(
+  runBinding: SmokeRunBinding,
+  bodySha256: string,
+): EvaluatedCompletionTerminalization | 'in_progress' | 'inadmissible_wrong_run' {
+  const seal = parseSmokeCompletionSealRecord(
+    readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, bodySha256)),
+  );
+  if (!seal || seal.bodySha256 !== bodySha256) {
+    return 'in_progress';
+  }
+  if (seal.runId !== runBinding.runId) {
+    return 'inadmissible_wrong_run';
+  }
+  const bodyPath = smokeCompletionBodyPath(runBinding.artifactDir, bodySha256);
+  if (!existsSync(bodyPath)) {
+    return 'in_progress';
+  }
+  const reportBody = readFileSync(bodyPath, 'utf8');
+  if (computeSmokeCompletionBodyDigest(reportBody) !== bodySha256) {
+    return 'in_progress';
+  }
+  return {
+    bodySha256,
+    reportBody,
+    parsedReport: parseSealedSmokeAgentReport(reportBody),
+  };
+}
+
+export function observeSmokeCompletionEvidence(
+  runBinding: SmokeRunBinding,
+  priorState: SmokeCompletionObservationState = createSmokeCompletionObservationState(),
+): {
+  observation: SmokeCompletionEvidenceObservation;
+  state: SmokeCompletionObservationState;
+} {
+  const pendingPath = smokeCompletionPendingBodyPath(runBinding.artifactDir);
+  const pendingExists = existsSync(pendingPath);
+  const nextState: SmokeCompletionObservationState = {
+    sealedBodyDigests: new Map(priorState.sealedBodyDigests),
+  };
+
+  const sealDigests = listCompletionSealDigests(runBinding.artifactDir);
+  const publishComplete: EvaluatedCompletionTerminalization[] = [];
+  let hasInProgress = pendingExists;
+  let wrongRunBinding = false;
+  let replacementDetected = false;
+
+  for (const bodySha256 of sealDigests) {
+    const seal = parseSmokeCompletionSealRecord(
+      readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, bodySha256)),
+    );
+    if (seal && seal.runId === runBinding.runId) {
+      const priorDigest = nextState.sealedBodyDigests.get(bodySha256);
+      if (priorDigest && priorDigest !== seal.bodySha256) {
+        replacementDetected = true;
+      }
+      nextState.sealedBodyDigests.set(bodySha256, seal.bodySha256);
+    }
+
+    const evaluated = evaluateCompletionTerminalization(runBinding, bodySha256);
+    if (evaluated === 'in_progress') {
+      const bodyPath = smokeCompletionBodyPath(runBinding.artifactDir, bodySha256);
+      if (existsSync(smokeCompletionSealPath(runBinding.artifactDir, bodySha256))
+        || existsSync(bodyPath)) {
+        hasInProgress = true;
+      }
+      continue;
+    }
+    if (evaluated === 'inadmissible_wrong_run') {
+      wrongRunBinding = true;
+      continue;
+    }
+    publishComplete.push(evaluated);
+  }
+
+  const buildPartial = (): {
+    observation: SmokeCompletionEvidenceObservation;
+    state: SmokeCompletionObservationState;
+  } => ({
+    observation: {
+      publicationState: hasInProgress ? 'partial' : (wrongRunBinding ? 'none' : 'none'),
+      wrongRunBinding,
+      reportBody: pendingExists ? readFileSync(pendingPath, 'utf8') : undefined,
+    },
+    state: nextState,
+  });
+
+  if (replacementDetected || publishComplete.length > 1) {
+    return {
+      observation: {
+        publicationState: 'publish_complete_duplicate',
+        wrongRunBinding,
+      },
+      state: nextState,
+    };
+  }
+
+  if (publishComplete.length === 1) {
+    const terminalization = publishComplete[0]!;
+    if (!terminalization.parsedReport) {
+      return {
+        observation: {
+          publicationState: 'publish_complete_unfenced',
+          sealedRunId: runBinding.runId,
+          reportBody: terminalization.reportBody,
+          parsedReport: null,
+          wrongRunBinding,
+        },
+        state: nextState,
+      };
+    }
+    return {
+      observation: {
+        publicationState: 'publish_complete_single',
+        sealedRunId: runBinding.runId,
+        reportBody: terminalization.reportBody,
+        parsedReport: terminalization.parsedReport,
+        wrongRunBinding,
+      },
+      state: nextState,
+    };
+  }
+
+  return buildPartial();
+}
+
+export type SmokeChildWaitOutcome =
+  | { status: 'pending' }
+  | { status: 'completed'; partial: Partial<SmokeReport> }
+  | { status: 'non_pass'; cause: SmokeChildWaitNonPassCause }
+  | { status: 'control_plane'; cause: SmokeControlPlaneCause };
+
+export function classifySmokeChildWaitObservation(input: {
+  completion: SmokeCompletionEvidenceObservation;
+  childState?: SmokeChildStateWitness;
+  deadlineReached: boolean;
+}): SmokeChildWaitOutcome {
+  const { completion, childState, deadlineReached } = input;
+  if (completion.publicationState === 'partial' || completion.publicationState === 'none') {
+    if (childState?.exited) {
+      return { status: 'non_pass', cause: 'agent_exited_without_report' };
+    }
+    if (childState?.idle) {
+      return { status: 'non_pass', cause: 'agent_idle_without_report' };
+    }
+    if (deadlineReached) {
+      return { status: 'non_pass', cause: 'agent_report_timeout' };
+    }
+    return { status: 'pending' };
+  }
+  if (completion.publicationState === 'publish_complete_duplicate') {
+    return { status: 'non_pass', cause: 'agent_report_duplicate' };
+  }
+  if (completion.publicationState === 'publish_complete_unfenced') {
+    return { status: 'non_pass', cause: 'agent_report_unfenced' };
+  }
+  if (completion.publicationState === 'publish_complete_single' && completion.parsedReport) {
+    return { status: 'completed', partial: completion.parsedReport };
+  }
+  if (deadlineReached) {
+    return { status: 'non_pass', cause: 'agent_report_timeout' };
+  }
+  return { status: 'pending' };
+}
+
+
+export const SMOKE_DEFINITE_PROMPT_NON_DELIVERY_CODES = [
+  'terminal_send_rejected',
+  'prompt_not_accepted',
+] as const;
+
+export function isDefinitePromptNonDelivery(code: string | undefined): boolean {
+  const normalized = String(code ?? '').trim();
+  return (SMOKE_DEFINITE_PROMPT_NON_DELIVERY_CODES as readonly string[]).includes(normalized);
+}
+
+export function preserveSmokeControlPlaneCause(
+  code: string | undefined,
+): SmokeControlPlaneCause | undefined {
+  const normalized = String(code ?? '').trim();
+  return isSmokeControlPlaneCause(normalized) ? normalized : undefined;
+}
+
+
 export type SmokeNonPassCause =
   | 'zero_parsed_scenarios'
   | 'missing_agent_report'
-  | 'executed_scenario_failure';
+  | 'executed_scenario_failure'
+  | SmokeChildWaitNonPassCause
+  | SmokeControlPlaneCause;
 
 export const SMOKE_HARNESS_TERMINAL_CLOSE_ACTION = 'close owned Orca terminal handle';
 

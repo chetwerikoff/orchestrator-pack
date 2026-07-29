@@ -13,6 +13,7 @@ import {
   readOrcaTerminal,
   resolveOrcaExecutable,
   sendOrcaTerminal,
+  submitOrcaTerminalComposer,
   waitOrcaTerminal,
 } from './lib/orca-cli.ts';
 import {
@@ -20,7 +21,21 @@ import {
   buildSmokeGhChildEnv,
   checkSmokeTestPlan,
   classifyDeclaredScenarioNonPassCause,
+  classifySmokeChannelBinding,
+  classifySmokeChildWaitObservation,
   classifySmokeNonPassCause,
+  createSmokeRunIdentity,
+  ensureSmokeRunArtifactDir,
+  isSmokeControlPlaneCause,
+  isDefinitePromptNonDelivery,
+  preserveSmokeControlPlaneCause,
+  createSmokeCompletionObservationState,
+  observeSmokeCompletionEvidence,
+  observeSmokeDeliveryEstablished,
+  observeSmokeUnsubmittedComposerPaste,
+  resolveSmokeRunArtifactDir,
+  type SmokeChildWaitNonPassCause,
+  type SmokeControlPlaneCause,
   SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
   detectTrackedImplementationMutation,
   hasPreexistingTrackedDirtiness,
@@ -170,6 +185,249 @@ function smokeAgentTerminalHasReport(
   return parseSmokeAgentReport(remainder) !== null;
 }
 
+export interface SmokePromptDeliveryResult {
+  ok: boolean;
+  cause?: SmokeChildWaitNonPassCause;
+  controlPlaneCause?: SmokeControlPlaneCause;
+  resendCount: number;
+  composerSubmitCount: number;
+}
+
+export interface SmokeChildCompletionResult {
+  ok: boolean;
+  partial?: Partial<import('./lib/worker-smoke-core.ts').SmokeReport> | null;
+  agentActivityObserved: boolean;
+  nonPassCause?: SmokeChildWaitNonPassCause | SmokeControlPlaneCause;
+  error?: { code: string; message: string };
+}
+
+export function establishSmokePromptDelivery(
+  handle: string,
+  input: {
+    readonly cwd?: string;
+    readonly deadlineMs: number;
+    readonly runBinding: import('./lib/worker-smoke-core.ts').SmokeRunBinding;
+    readonly prompt: string;
+    readonly preSendBaselineText?: string;
+    readonly preSendCursor?: number;
+    readonly runner?: NonNullable<Parameters<typeof sendOrcaTerminal>[2]>['runner'];
+    readonly now?: () => number;
+    readonly sleepMs?: (milliseconds: number) => void;
+    readonly allowDefiniteNondeliveryRetry?: boolean;
+  },
+): SmokePromptDeliveryResult {
+  const now = input.now ?? (() => Date.now());
+  const deadline = now() + input.deadlineMs;
+  const sleepMs = input.sleepMs ?? ((milliseconds: number) => {
+    if (milliseconds <= 0) {
+      return;
+    }
+    runProcessSync({
+      command: process.platform === 'win32' ? 'powershell' : 'sleep',
+      args: process.platform === 'win32'
+        ? ['-NoProfile', '-Command', `Start-Sleep -Milliseconds ${milliseconds}`]
+        : [String(Math.max(1, Math.ceil(milliseconds / 1000)))],
+    });
+  });
+
+  let resendCount = 0;
+  const attemptSend = (): ReturnType<typeof sendOrcaTerminal> => {
+    return sendOrcaTerminal(handle, input.prompt, { cwd: input.cwd, runner: input.runner });
+  };
+
+  let sendResult = attemptSend();
+  if (!sendResult.ok) {
+    const controlPlane = preserveSmokeControlPlaneCause(sendResult.error?.code);
+    if (controlPlane) {
+      return { ok: false, controlPlaneCause: controlPlane, resendCount, composerSubmitCount: 0 };
+    }
+    if (input.allowDefiniteNondeliveryRetry && isDefinitePromptNonDelivery(sendResult.error?.code)) {
+      resendCount += 1;
+      sendResult = attemptSend();
+      if (!sendResult.ok) {
+        return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount, composerSubmitCount: 0 };
+      }
+    } else {
+      return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount, composerSubmitCount: 0 };
+    }
+  }
+
+  let composerSubmitCount = 0;
+  while (now() < deadline) {
+    if (observeSmokeDeliveryEstablished(input.runBinding)) {
+      return { ok: true, resendCount, composerSubmitCount };
+    }
+
+    const read = readOrcaTerminal(handle, {
+      cwd: input.cwd,
+      limit: 200,
+      runner: input.runner,
+    });
+    if (!read.ok) {
+      const controlPlane = preserveSmokeControlPlaneCause(read.error?.code);
+      if (controlPlane) {
+        return { ok: false, controlPlaneCause: controlPlane, resendCount, composerSubmitCount };
+      }
+    } else {
+      const lines = orcaTerminalReadLines(read.result);
+      if (
+        !observeSmokeDeliveryEstablished(input.runBinding)
+        && observeSmokeUnsubmittedComposerPaste(lines)
+      ) {
+        const submit = submitOrcaTerminalComposer(handle, { cwd: input.cwd, runner: input.runner });
+        composerSubmitCount += 1;
+        if (!submit.ok) {
+          const controlPlane = preserveSmokeControlPlaneCause(submit.error?.code);
+          if (controlPlane) {
+            return { ok: false, controlPlaneCause: controlPlane, resendCount, composerSubmitCount };
+          }
+        }
+        if (observeSmokeDeliveryEstablished(input.runBinding)) {
+          return { ok: true, resendCount, composerSubmitCount };
+        }
+      }
+    }
+
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      break;
+    }
+    sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
+  }
+
+  return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount, composerSubmitCount };
+}
+
+export function waitForSmokeChildCompletion(
+  handle: string,
+  input: {
+    readonly cwd?: string;
+    readonly deadlineMs: number;
+    readonly runBinding: import('./lib/worker-smoke-core.ts').SmokeRunBinding;
+    readonly ownedChildHandle: string;
+    readonly supervisorHandle?: string;
+    readonly runner?: NonNullable<Parameters<typeof readOrcaTerminal>[1]>['runner'];
+    readonly now?: () => number;
+    readonly sleepMs?: (milliseconds: number) => void;
+    readonly childStateWitness?: () => import('./lib/worker-smoke-core.ts').SmokeChildStateWitness;
+    readonly suppressPtyReads?: boolean;
+  },
+): SmokeChildCompletionResult {
+  const channelCause = classifySmokeChannelBinding({
+    supervisedHandle: handle,
+    ownedChildHandle: input.ownedChildHandle,
+    supervisorHandle: input.supervisorHandle,
+  });
+  if (channelCause) {
+    return {
+      ok: false,
+      agentActivityObserved: false,
+      nonPassCause: channelCause,
+      error: { code: channelCause, message: channelCause },
+    };
+  }
+
+  const now = input.now ?? (() => Date.now());
+  const deadline = now() + input.deadlineMs;
+  const sleepMs = input.sleepMs ?? ((milliseconds: number) => {
+    if (milliseconds <= 0) {
+      return;
+    }
+    runProcessSync({
+      command: process.platform === 'win32' ? 'powershell' : 'sleep',
+      args: process.platform === 'win32'
+        ? ['-NoProfile', '-Command', `Start-Sleep -Milliseconds ${milliseconds}`]
+        : [String(Math.max(1, Math.ceil(milliseconds / 1000)))],
+    });
+  });
+
+  let agentActivityObserved = false;
+  let completionState = createSmokeCompletionObservationState();
+  while (now() < deadline) {
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      break;
+    }
+
+    const read = readOrcaTerminal(handle, {
+      cwd: input.cwd,
+      limit: input.suppressPtyReads ? 0 : 200,
+      runner: input.runner,
+    });
+    if (!read.ok) {
+      const controlPlane = preserveSmokeControlPlaneCause(read.error?.code);
+      if (controlPlane) {
+        return {
+          ok: false,
+          agentActivityObserved,
+          nonPassCause: controlPlane,
+          error: { code: controlPlane, message: read.error?.message ?? controlPlane },
+        };
+      }
+    } else if (!input.suppressPtyReads) {
+      const deltaText = orcaTerminalReadLines(read.result).join('\n');
+      if (deltaText.trim()) {
+        agentActivityObserved = true;
+      }
+    }
+
+    const observed = observeSmokeCompletionEvidence(input.runBinding, completionState);
+    completionState = observed.state;
+    const outcome = classifySmokeChildWaitObservation({
+      completion: observed.observation,
+      childState: input.childStateWitness?.(),
+      deadlineReached: false,
+    });
+    if (outcome.status === 'completed') {
+      return { ok: true, partial: outcome.partial, agentActivityObserved: true };
+    }
+    if (outcome.status === 'non_pass') {
+      return {
+        ok: false,
+        agentActivityObserved,
+        nonPassCause: outcome.cause,
+        error: { code: outcome.cause, message: outcome.cause },
+      };
+    }
+    if (outcome.status === 'control_plane') {
+      return {
+        ok: false,
+        agentActivityObserved,
+        nonPassCause: outcome.cause,
+        error: { code: outcome.cause, message: outcome.cause },
+      };
+    }
+
+    sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
+  }
+
+  const observed = observeSmokeCompletionEvidence(input.runBinding, completionState);
+  completionState = observed.state;
+  const outcome = classifySmokeChildWaitObservation({
+    completion: observed.observation,
+    childState: input.childStateWitness?.(),
+    deadlineReached: true,
+  });
+  if (outcome.status === 'completed') {
+    return { ok: true, partial: outcome.partial, agentActivityObserved: true };
+  }
+  if (outcome.status === 'non_pass') {
+    return {
+      ok: false,
+      agentActivityObserved,
+      nonPassCause: outcome.cause,
+      error: { code: outcome.cause, message: outcome.cause },
+    };
+  }
+  return {
+    ok: false,
+    agentActivityObserved,
+    nonPassCause: 'agent_report_timeout',
+    error: { code: 'agent_report_timeout', message: 'agent_report_timeout' },
+  };
+}
+
+/** @deprecated PTY completion authority removed in #1115; retained for transitional imports. */
 export function waitForSmokeAgentCompletion(
   handle: string,
   options: {
@@ -178,15 +436,36 @@ export function waitForSmokeAgentCompletion(
     readonly preSendBaselineText?: string;
     readonly preSendCursor?: number;
     readonly sentPrompt?: string;
-    readonly runner?: Parameters<typeof waitOrcaTerminal>[1]['runner'];
+    readonly runner?: NonNullable<Parameters<typeof waitOrcaTerminal>[1]>['runner'];
     readonly now?: () => number;
     readonly sleepMs?: (milliseconds: number) => void;
+    readonly runBinding?: import('./lib/worker-smoke-core.ts').SmokeRunBinding;
+    readonly ownedChildHandle?: string;
   } = {},
 ): {
   ok: boolean;
   agentActivityObserved: boolean;
+  partial?: Partial<import('./lib/worker-smoke-core.ts').SmokeReport> | null;
   error?: { code: string; message: string };
 } {
+  if (options.runBinding && options.ownedChildHandle) {
+    const result = waitForSmokeChildCompletion(handle, {
+      cwd: options.cwd,
+      deadlineMs: options.deadlineMs ?? SMOKE_AGENT_WAIT_BUDGET_MS,
+      runBinding: options.runBinding,
+      ownedChildHandle: options.ownedChildHandle,
+      runner: options.runner,
+      now: options.now,
+      sleepMs: options.sleepMs,
+    });
+    return {
+      ok: result.ok,
+      agentActivityObserved: result.agentActivityObserved,
+      partial: result.partial,
+      error: result.error,
+    };
+  }
+
   const now = options.now ?? (() => Date.now());
   const deadline = now() + (options.deadlineMs ?? SMOKE_AGENT_WAIT_BUDGET_MS);
   const sleepMs = options.sleepMs ?? ((milliseconds: number) => {
@@ -265,47 +544,7 @@ export function waitForSmokeAgentCompletion(
       }
     }
 
-    if (agentActivityObserved) {
-      if (smokeAgentTerminalHasReport(observedSinceBaseline, sentPrompt)) {
-        return { ok: true, agentActivityObserved: true };
-      }
-      const fullRead = readOrcaTerminal(handle, {
-        cwd: options.cwd,
-        limit: 2000,
-        runner: options.runner,
-      });
-      if (fullRead.ok) {
-        const fullText = orcaTerminalReadLines(fullRead.result).join('\n');
-        if (smokeAgentTerminalHasReport(fullText, sentPrompt, baselineText)) {
-          return { ok: true, agentActivityObserved: true };
-        }
-      }
-      const wait = waitOrcaTerminal(handle, {
-        for: 'tui-idle',
-        timeoutMs: Math.min(SMOKE_AGENT_POLL_MS, remaining),
-        cwd: options.cwd,
-        runner: options.runner,
-      });
-      if (!wait.ok) {
-        const waitMessage = wait.error?.message ?? 'terminal_wait_failed';
-        if (!/timeout/i.test(waitMessage) && wait.error?.code !== 'timeout') {
-          return {
-            ok: false,
-            agentActivityObserved: true,
-            error: {
-              code: 'smoke_agent_wait_timeout',
-              message: waitMessage,
-            },
-          };
-        }
-      }
-    }
-
     sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
-  }
-
-  if (agentActivityObserved) {
-    return { ok: true, agentActivityObserved: true };
   }
 
   return {
@@ -314,7 +553,7 @@ export function waitForSmokeAgentCompletion(
     error: {
       code: agentActivityObserved ? 'smoke_agent_wait_timeout' : 'smoke_agent_never_started',
       message: agentActivityObserved
-        ? 'smoke agent did not reach idle before deadline'
+        ? 'smoke agent did not reach durable completion before deadline'
         : 'smoke agent produced no observable terminal activity before deadline',
     },
   };
@@ -669,6 +908,10 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
   }
 
   const handle = created.terminal.handle;
+  const runId = createSmokeRunIdentity();
+  const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
+  ensureSmokeRunArtifactDir(artifactDir);
+  const terminalPhaseStartedAt = Date.now();
   let terminalCleanup = 'pending';
   try {
     const prompt = buildSmokeAgentPrompt({
@@ -677,60 +920,36 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       prNumber: options.prNumber,
       headSha: options.headSha,
       plan,
+      runBinding: { runId, artifactDir },
     });
-    const preSendRead = readOrcaTerminal(handle, { cwd: options.cwd, limit: 2000 });
-    if (!preSendRead.ok) {
-      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const report = buildOperationalSmokeReport('BLOCKED', options, {
-        action: 'capture pre-send terminal baseline',
-        expected: 'terminal read succeeds before smoke prompt send',
-        observed: preSendRead.error?.message ?? preSendRead.error?.code ?? 'terminal_read_failed',
-        terminalCleanup,
-      });
-      publishSmokeReport(report, options);
-      emit({ ok: false, report, published: !options.dryRun }, options.json);
-      return 1;
-    }
-    const preSendBaselineText = orcaTerminalReadLines(preSendRead.result).join('\n');
-    const preSendCursor = orcaTerminalReadNextCursor(preSendRead.result);
-
-    const sendResult = sendOrcaTerminal(handle, prompt, { cwd: options.cwd });
-    if (!sendResult.ok) {
-      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const report = buildOperationalSmokeReport('BLOCKED', options, {
-        action: 'send smoke prompt to Orca terminal',
-        expected: 'terminal send succeeds',
-        observed: sendResult.error?.message ?? 'terminal_send_failed',
-        terminalCleanup,
-      });
-      publishSmokeReport(report, options);
-      emit({ ok: false, report, published: !options.dryRun }, options.json);
-      return 1;
-    }
-
-    const waitResult = waitForSmokeAgentCompletion(handle, {
+    const remainingTerminalBudgetMs = Math.max(
+      0,
+      SMOKE_AGENT_WAIT_BUDGET_MS - (Date.now() - terminalPhaseStartedAt),
+    );
+    const deliveryResult = establishSmokePromptDelivery(handle, {
       cwd: options.cwd,
-      preSendBaselineText,
-      preSendCursor,
-      sentPrompt: prompt,
+      deadlineMs: remainingTerminalBudgetMs,
+      runBinding: { runId, artifactDir },
+      prompt,
     });
-    const agentActivityObserved = waitResult.agentActivityObserved;
-    if (!waitResult.ok) {
+    if (!deliveryResult.ok) {
       const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
       terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const report = buildOperationalSmokeReport('BLOCKED', options, {
-        action: 'wait for smoke agent completion',
-        expected: 'terminal wait succeeds after positive agent activity',
-        observed: scrubGhFailureMessage(waitResult.error?.message ?? 'terminal_wait_failed'),
-        terminalCleanup,
-      });
-      const nonPassCause = classifySmokeNonPassCause({
-        partial: null,
-        agentActivityObserved,
-        agentCompleted: false,
-      });
+      const observed = deliveryResult.controlPlaneCause
+        ?? deliveryResult.cause
+        ?? 'prompt_delivery_unconfirmed';
+      const report = buildOperationalSmokeReport(
+        deliveryResult.controlPlaneCause ? 'BLOCKED' : 'FAIL',
+        options,
+        {
+          action: 'establish smoke prompt delivery',
+          expected: 'publish-complete durable delivery evidence for current run',
+          observed,
+          terminalCleanup,
+          environmentNotes: ['completion wait was not started'],
+        },
+      );
+      const nonPassCause = deliveryResult.controlPlaneCause ?? deliveryResult.cause;
       if (nonPassCause) {
         report.nonPassCause = nonPassCause;
       }
@@ -744,54 +963,62 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       return 1;
     }
 
-    const readResult = readOrcaTerminal(handle, { cwd: options.cwd, limit: 2000 });
-    if (!readResult.ok) {
+    const completionBudgetMs = Math.max(
+      0,
+      SMOKE_AGENT_WAIT_BUDGET_MS - (Date.now() - terminalPhaseStartedAt),
+    );
+    const waitResult = waitForSmokeChildCompletion(handle, {
+      cwd: options.cwd,
+      deadlineMs: completionBudgetMs,
+      runBinding: { runId, artifactDir },
+      ownedChildHandle: handle,
+    });
+    const agentActivityObserved = waitResult.agentActivityObserved;
+    if (!waitResult.ok) {
+      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
+      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
+      const observed = waitResult.nonPassCause
+        ?? scrubGhFailureMessage(waitResult.error?.message ?? 'child_wait_failed');
+      const report = buildOperationalSmokeReport(
+        waitResult.nonPassCause && isSmokeControlPlaneCause(waitResult.nonPassCause) ? 'BLOCKED' : 'FAIL',
+        options,
+        {
+          action: 'wait for publish-complete smoke child completion',
+          expected: 'one sealed durable completion artifact for current run',
+          observed,
+          terminalCleanup,
+        },
+      );
+      if (waitResult.nonPassCause) {
+        report.nonPassCause = waitResult.nonPassCause;
+      }
+      publishSmokeReport(report, options);
+      emit({
+        ok: false,
+        report,
+        published: !options.dryRun,
+        ...(waitResult.nonPassCause ? { nonPassCause: waitResult.nonPassCause } : {}),
+      }, options.json);
+      return 1;
+    }
+
+    const partial = waitResult.partial;
+    if (!partial) {
       const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
       terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
       const report = buildOperationalSmokeReport('BLOCKED', options, {
-        action: 'read Orca terminal output',
-        expected: 'terminal read succeeds',
-        observed: readResult.error?.message ?? readResult.error?.code ?? 'terminal_read_failed',
+        action: 'consume publish-complete smoke child completion',
+        expected: 'durable completion artifact with parseable fenced report',
+        observed: 'missing_completion_partial',
         terminalCleanup,
       });
       publishSmokeReport(report, options);
       emit({ ok: false, report, published: !options.dryRun }, options.json);
       return 1;
     }
-    const output = scrubSmokeOutput(orcaTerminalReadLines(readResult.result).join('\n'));
-    const observedAfterBaseline = output.startsWith(preSendBaselineText)
-      ? output.slice(preSendBaselineText.length)
-      : output;
-    const partial = parseSmokeAgentReport(stripLeadingSmokeAgentPrompt(observedAfterBaseline, prompt));
     const afterStatus = gitPorcelain(options.cwd);
     const afterHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(afterStatus));
     const mutated = detectTrackedImplementationMutation(beforeStatus, afterStatus, beforeHashes, afterHashes);
-
-    if (!partial) {
-      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const report = {
-        ...buildOperationalSmokeReport('FAIL', options, {
-          action: 'parse smoke agent report',
-          expected: 'worker-smoke-report block present',
-          observed: 'missing worker-smoke-report block',
-          terminalCleanup,
-        }),
-        nonPassCause: 'missing_agent_report' as const,
-      };
-      publishSmokeReport(report, options);
-      emit({
-        ok: false,
-        report,
-        published: !options.dryRun,
-        nonPassCause: classifySmokeNonPassCause({
-          partial: null,
-          agentActivityObserved: waitResult.agentActivityObserved,
-          agentCompleted: true,
-        }) ?? 'missing_agent_report',
-      }, options.json);
-      return 1;
-    }
 
     if (mutated) {
       partial.result = 'FAIL';
