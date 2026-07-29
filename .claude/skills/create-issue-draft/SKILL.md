@@ -391,6 +391,7 @@ Minimal producer-facing record (stage-completeness guard accepts only this shape
   skip anchor to be **strictly greater** than the competitive anchor, and the
   terminal GPT `architectural` capture must be strictly after the skip anchor.
 
+
 The Claude lens is the **pre-terminal independent aggregate cut** authority and
 may authorize one adjacent `T3→T2` downstep. It
 consumes current Issue body, T3 reject partition where applicable, current M3
@@ -627,9 +628,11 @@ not tracked-helper success.
    cleanup obligations below are complete**. Backgrounding the shell does not
    transfer ownership; ending the manager session while the turn is non-terminal
    or still owns blocking helper state is non-compliant.
+
 2. **No process-liveness inference.** A running Node PID, background job, or elapsed
    time does not prove GPT is still generating. Only helper control plane
    (`status/list`, `publication-status`) and terminal `turn-result` count.
+
 3. **Poll cadence.** While a tracked `turn` is outstanding, the flow-manager MUST
    query `status/list` at least every **10–15 minutes** (sooner after 30 minutes or
    on user ping). When an `invocation_id` is available from a supported surface
@@ -637,6 +640,7 @@ not tracked-helper success.
    flow-manager recorded it before backgrounding), also query `publication-status`
    for that invocation. Do not treat `provisional_id` as an invocation ID —
    `status/list` items expose `provisional_id` but not `invocation_id`.
+
 4. **Phase → action table** (minimum rows):
 
 | Helper signal | Required flow-manager action |
@@ -653,6 +657,7 @@ Helper phase alone cannot distinguish a healthy in-flight turn from a stalled on
    as a final handoff. User-visible status updates may note in-progress work, but
    the manager remains responsible until terminal state or explicit blocked/recovery
    outcome is recorded in `$REVIEW_DIR/chats.md` or the task audit surface.
+
 6. **Explicit contrast with standalone driver.** Standalone `driver.mjs` long turns
    poll the **page** every 5–10 minutes; tracked `chatgpt-browser-turn` long turns
    poll **`status/list`** and, when invocation identity is available,
@@ -978,3 +983,7 @@ transport scratch for unrelated standalone Codex runs; delete immediately.
 - Run a second terminal GPT lens after accepted terminal-GPT fixes.
 - Treat any capture before the terminal GPT `architectural` lens as the M5 anchor.
 - Skip required GPT stage silently.
+- Accept with stale captures/title, red floors, incomplete ledger, red #975 phase,
+  or unresolved tier-inappropriate protected work.
+- Commit workdir artifacts.
+- Hand-edit `.cursor/skills/**`; regenerate only when canonical frontmatter changes.
