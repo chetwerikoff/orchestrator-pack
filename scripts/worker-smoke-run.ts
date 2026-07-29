@@ -19,7 +19,9 @@ import {
   buildSmokeAgentPrompt,
   buildSmokeGhChildEnv,
   checkSmokeTestPlan,
+  classifyDeclaredScenarioNonPassCause,
   classifySmokeNonPassCause,
+  SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
   detectTrackedImplementationMutation,
   hasPreexistingTrackedDirtiness,
   trackedPorcelainPaths,
@@ -659,16 +661,20 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
         observed: scrubGhFailureMessage(waitResult.error?.message ?? 'terminal_wait_failed'),
         terminalCleanup,
       });
+      const nonPassCause = classifySmokeNonPassCause({
+        partial: null,
+        agentActivityObserved,
+        agentCompleted: false,
+      });
+      if (nonPassCause) {
+        report.nonPassCause = nonPassCause;
+      }
       publishSmokeReport(report, options);
       emit({
         ok: false,
         report,
         published: !options.dryRun,
-        nonPassCause: classifySmokeNonPassCause({
-          partial: null,
-          agentActivityObserved,
-          agentCompleted: false,
-        }),
+        ...(nonPassCause ? { nonPassCause } : {}),
       }, options.json);
       return 1;
     }
@@ -771,32 +777,32 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     if (report.result === 'PASS' && terminalCleanup !== 'closed_owned_handle') {
       report.result = 'FAIL';
       report.scenarios.push({
-        action: 'close owned Orca terminal handle',
+        action: SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
         expected: 'terminal close succeeds',
         observed: terminalCleanup,
         outcome: 'fail',
       });
     }
 
-    publishSmokeReport(report, options);
-
-    const nonPassCause = report.result === 'PASS'
-      ? undefined
-      : classifySmokeNonPassCause({
-          partial: report,
-          agentActivityObserved: waitResult.agentActivityObserved,
-          agentCompleted: true,
-        });
-    if (nonPassCause) {
-      report.nonPassCause = nonPassCause;
+    if (report.result !== 'PASS') {
+      const nonPassCause = classifyDeclaredScenarioNonPassCause({
+        partial: report,
+        agentActivityObserved: waitResult.agentActivityObserved,
+        agentCompleted: true,
+      });
+      if (nonPassCause) {
+        report.nonPassCause = nonPassCause;
+      }
     }
+
+    publishSmokeReport(report, options);
     emit({
       ok: report.result === 'PASS',
       report,
       published: !options.dryRun,
       orcaExecutable: resolveOrcaExecutable(),
       terminalHandle: handle,
-      ...(nonPassCause ? { nonPassCause } : {}),
+      ...(report.nonPassCause ? { nonPassCause: report.nonPassCause } : {}),
     }, options.json);
     return report.result === 'PASS' ? 0 : 1;
   } finally {

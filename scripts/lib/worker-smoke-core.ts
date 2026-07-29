@@ -658,6 +658,14 @@ export type SmokeNonPassCause =
   | 'missing_agent_report'
   | 'executed_scenario_failure';
 
+export const SMOKE_HARNESS_TERMINAL_CLOSE_ACTION = 'close owned Orca terminal handle';
+
+export function declaredSmokeScenarios(
+  partial: Partial<SmokeReport> | null | undefined,
+): SmokeScenario[] {
+  return (partial?.scenarios ?? []).filter((scenario) => scenario.action !== SMOKE_HARNESS_TERMINAL_CLOSE_ACTION);
+}
+
 export function classifySmokeNonPassCause(input: {
   zeroParsedScenarios?: boolean;
   partial: Partial<SmokeReport> | null;
@@ -678,6 +686,24 @@ export function classifySmokeNonPassCause(input: {
     return 'executed_scenario_failure';
   }
   return undefined;
+}
+
+export function classifyDeclaredScenarioNonPassCause(input: {
+  zeroParsedScenarios?: boolean;
+  partial: Partial<SmokeReport> | null;
+  agentActivityObserved: boolean;
+  agentCompleted?: boolean;
+}): SmokeNonPassCause | undefined {
+  if (!input.partial) {
+    return classifySmokeNonPassCause(input);
+  }
+  return classifySmokeNonPassCause({
+    ...input,
+    partial: {
+      ...input.partial,
+      scenarios: declaredSmokeScenarios(input.partial),
+    },
+  });
 }
 
 export function smokeAgentTerminalDeltaActivity(deltaText: string): boolean {

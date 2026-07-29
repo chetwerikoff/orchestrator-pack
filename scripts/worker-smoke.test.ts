@@ -14,7 +14,9 @@ import {
 import {
   buildSmokeAgentPrompt,
   buildSmokeGhChildEnv,
+  classifyDeclaredScenarioNonPassCause,
   classifySmokeNonPassCause,
+  SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
   detectTrackedImplementationMutation,
   hasPreexistingTrackedDirtiness,
   trackedPorcelainPaths,
@@ -758,6 +760,33 @@ describe('worker smoke non-pass cause classification (#1101)', () => {
       agentActivityObserved: true,
       agentCompleted: true,
     })).toBeUndefined();
+    expect(classifyDeclaredScenarioNonPassCause({
+      partial: {
+        result: 'FAIL',
+        scenarios: [
+          { action: 'declared scenario', expected: 'pass', observed: 'pass', outcome: 'pass' },
+          { action: SMOKE_HARNESS_TERMINAL_CLOSE_ACTION, expected: 'terminal close succeeds', observed: 'close_failed:unknown', outcome: 'fail' },
+        ],
+      },
+      agentActivityObserved: true,
+      agentCompleted: true,
+    })).toBeUndefined();
+  });
+
+  it('includes nonPassCause in published machine block before emission', () => {
+    const comment = formatSmokeReportComment({
+      result: 'FAIL',
+      issueNumber: 1101,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: [{ action: 'run scenario', expected: 'ok', observed: 'bad', outcome: 'fail' }],
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+      nonPassCause: 'executed_scenario_failure',
+    });
+    expect(comment).toContain('non-pass-cause: executed_scenario_failure');
   });
 
   it('parses numbered prose to zero scenarios and blocks gate-check without implying execution', () => {
