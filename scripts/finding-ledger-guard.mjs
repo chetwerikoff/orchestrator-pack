@@ -18,15 +18,15 @@ export const PROTECTED_TYPES = new Set(['security', 'scope-violation']);
 const REVIEW_ECONOMICS_MARKER = 'review-economics-contract: v1';
 const M5_CLEAN_TOKEN = 'SIMPLIFICATION_CLEAN';
 const NO_FINDINGS_TOKEN = 'NO_FINDINGS';
-const REVIEWER_STAGES = new Set(['competitive', 'architectural', 'architectural-final']);
-const PRE_LENS_REVIEWER_STAGES = new Set(['competitive', 'architectural']);
+const REVIEWER_STAGES = new Set(['competitive', 'architectural-review', 'architectural', 'architectural-final']);
+const PRE_LENS_REVIEWER_STAGES = new Set(['competitive', 'architectural-review', 'architectural']);
 const ANY_TYPE_PATTERN = /(?<!binding-)\btype:\s*([a-z][a-z0-9-]*)\b/gi;
 const FINDING_ID_PATTERN = /(?<!binding-)\bid:\s*([A-Za-z0-9._-]+)\b/gi;
 const FINDING_ID_EXTRACT = /(?<!binding-)\bid:\s*([A-Za-z0-9._-]+)\b/i;
 const UNTYPED_FINDING_LINE = /^(?:\s*)(?:\[(P[0-3])\]|(P[0-3]))\s*[-–—:]\s*(.+)$/;
 const ECHOED_ARTIFACT_MARKER = /^--- ARTIFACT\s/m;
 const ECHOED_DRAFT_REVIEW_PROMPT = /^#\s+Codex draft\/spec review prompt/m;
-const REVIEW_CAPTURE_NAME = /^pass-(\d+)-(competitive|architectural|architectural-lens|architectural-final)\.capture\.txt$/;
+const REVIEW_CAPTURE_NAME = /^pass-(\d+)-(competitive|architectural-review|architectural|architectural-lens|architectural-final)\.capture\.txt$/;
 const RAW_CODEX_NAME = /^pass-(\d+)-(competitive|architectural|architectural-final)\.codex\.json$/;
 const FIELD_LINE = /^(id|type|severity|title|evidence|recommendation|persistent-machinery|cheapest-sufficient-alternative|stakes-price|trade-in|simplification-cut-candidate):\s*(.*)$/i;
 const M3_LENS_LINE = /^m3-protected:\s*id=([A-Za-z0-9._-]+)\s*\|\s*revision=([^|]+?)\s*\|\s*contest=(none|contested|contest-withdrawn)\s*\|\s*outcome=(none|activate|non-activate)(?:\s*\|\s*evidence=([^|]*?))?(?:\s*\|\s*why-now=(.*))?\s*$/i;
@@ -753,7 +753,6 @@ function latestEvidenceById(metadata) {
   }
   return result;
 }
-
 
 function protectedFindingOriginatedBeforeLatestLens(metadata, findingId) {
   const latestLensIndex = metadata.map((meta) => meta.stage).lastIndexOf('architectural-lens');
