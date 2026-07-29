@@ -792,6 +792,13 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
     expect(smokeAgentTerminalActivityBeyondSentPrompt(`${sentPrompt}\nscenario output`, sentPrompt)).toBe(true);
   });
 
+  it('detects short agent output after a long prompt via cursor accumulation', () => {
+    const sentPrompt = 'x'.repeat(5000);
+    expect(smokeAgentTerminalActivityBeyondSentPrompt('ok', sentPrompt)).toBe(true);
+    expect(smokeAgentTerminalActivityBeyondSentPrompt(sentPrompt.slice(0, 40), sentPrompt)).toBe(false);
+    expect(smokeAgentTerminalActivityBeyondSentPrompt(`${sentPrompt}\nok`, sentPrompt)).toBe(true);
+  });
+
   it('does not treat echoed prompt text as agent activity', () => {
     let now = 0;
     const sentPrompt = 'run smoke now';
@@ -821,6 +828,44 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
     expect(result.ok).toBe(false);
     expect(result.agentActivityObserved).toBe(false);
     expect(result.error?.code).toBe('smoke_agent_never_started');
+  });
+
+  it('accumulates short cursor deltas under a long prompt envelope', () => {
+    let now = 0;
+    let readCalls = 0;
+    const sentPrompt = 'x'.repeat(5000);
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal read')) {
+        readCalls += 1;
+        if (readCalls < 3) {
+          return { stdout: JSON.stringify({ ok: true, result: { lines: [sentPrompt.slice(0, 1000)], nextCursor: readCalls } }), stderr: '', status: 0 };
+        }
+        return {
+          stdout: JSON.stringify({ ok: true, result: { lines: ['ok'], nextCursor: 99 } }),
+          stderr: '',
+          status: 0,
+        };
+      }
+      if (joined.includes('terminal wait') && joined.includes('tui-idle')) {
+        return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+      }
+      return { stdout: JSON.stringify({ ok: false, error: { message: 'unexpected' } }), stderr: '', status: 1 };
+    });
+
+    const result = waitForSmokeAgentCompletion('term_long_prompt_short_output', {
+      runner: runner as never,
+      now: () => now,
+      deadlineMs: 5_000,
+      preSendBaselineText: 'idle',
+      preSendCursor: 1,
+      sentPrompt,
+      sleepMs: (ms) => {
+        now += ms;
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.agentActivityObserved).toBe(true);
   });
 
   it('does not complete during initial idle before delayed first output', () => {

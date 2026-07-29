@@ -202,8 +202,7 @@ export function waitForSmokeAgentCompletion(
         agentActivityObserved = true;
       }
     } else {
-      if (smokeAgentTerminalDeltaActivity(initialText, sentPrompt)) {
-        agentActivityObserved = true;
+      if (initialText) {
         observedSinceBaseline += initialText;
       }
       if (smokeAgentTerminalActivityBeyondSentPrompt(observedSinceBaseline, sentPrompt)) {
@@ -234,8 +233,7 @@ export function waitForSmokeAgentCompletion(
           agentActivityObserved = true;
         }
       } else {
-        if (smokeAgentTerminalDeltaActivity(deltaText, sentPrompt)) {
-          agentActivityObserved = true;
+        if (deltaText) {
           observedSinceBaseline += deltaText;
         }
         if (smokeAgentTerminalActivityBeyondSentPrompt(observedSinceBaseline, sentPrompt)) {

@@ -712,21 +712,22 @@ export function smokeAgentTerminalActivityBeyondSentPrompt(
   observedText: string,
   sentPrompt: string,
 ): boolean {
-  const observed = observedText.trim();
-  if (!observed) {
+  const observed = observedText;
+  if (!observed.trim()) {
     return false;
   }
   const prompt = sentPrompt.trim();
   if (!prompt) {
-    return observed.length > 0;
+    return observed.trim().length > 0;
   }
-  if (observed === prompt) {
+  if (prompt.startsWith(observed.trim())) {
     return false;
   }
-  if (observed.startsWith(prompt)) {
-    return observed.slice(prompt.length).trim().length > 0;
+  let remainder = observed;
+  while (remainder.startsWith(prompt)) {
+    remainder = remainder.slice(prompt.length);
   }
-  return observed.length > prompt.length;
+  return remainder.trim().length > 0;
 }
 
 export function smokeAgentTerminalDeltaActivity(
