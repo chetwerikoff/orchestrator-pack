@@ -975,6 +975,34 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
   });
 });
 
+describe('worker smoke malformed PASS normalization (#1101)', () => {
+  it('does not classify harness normalization failures as executed_scenario_failure', () => {
+    const agentPartial = {
+      result: 'PASS' as const,
+      scenarios: [{ action: 'run scenario', expected: 'pass', observed: 'pass', outcome: 'pass' as const }],
+    };
+    const harnessFailureReport = {
+      result: 'FAIL' as const,
+      scenarios: [{
+        action: 'normalize smoke agent report',
+        expected: 'valid PASS evidence',
+        observed: 'missing producer evidence',
+        outcome: 'fail' as const,
+      }],
+    };
+    expect(classifyDeclaredScenarioNonPassCause({
+      partial: harnessFailureReport,
+      agentActivityObserved: true,
+      agentCompleted: true,
+    })).toBe('executed_scenario_failure');
+    expect(classifyDeclaredScenarioNonPassCause({
+      partial: agentPartial,
+      agentActivityObserved: true,
+      agentCompleted: true,
+    })).toBeUndefined();
+  });
+});
+
 describe('worker smoke non-pass cause classification (#1101)', () => {
   it('distinguishes zero-parsed-scenarios, missing-agent-report, and executed-scenario-failure', () => {
     expect(classifySmokeNonPassCause({ zeroParsedScenarios: true, partial: null, agentActivityObserved: false }))

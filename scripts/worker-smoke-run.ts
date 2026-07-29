@@ -781,7 +781,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
         terminalCleanup,
       }), { terminalHandle: handle });
       const nonPassCause = classifyDeclaredScenarioNonPassCause({
-        partial: report,
+        partial,
         agentActivityObserved: waitResult.agentActivityObserved,
         agentCompleted: true,
       });
