@@ -64,6 +64,8 @@
     "scripts/pack-gpt-browser-path.test.ts": "light",
     "scripts/pack-gpt-reviewer.test.ts": "light",
     "scripts/pack-pr-review-contract.test.ts": "light",
+    "scripts/pack-review-launcher-detached.test.ts": "light",
+    "scripts/pack-review-launcher.test.ts": "light",
     "scripts/pack-review-runner-gpt.test.ts": "light",
     "scripts/pack-review-runner-severity.test.ts": "light",
     "scripts/pr-session-binding-cache.test.ts": "light",

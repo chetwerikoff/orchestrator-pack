@@ -154,7 +154,7 @@ config. `ao` control, `git diff`, and `gh pr checks` stay verbatim per §R passt
 
 Architecture: §R.7 in [`docs/issues_drafts/00-architecture-decisions.md`](docs/issues_drafts/00-architecture-decisions.md).
 
-**Codebase structure graph:** [`scripts/graphify/`](scripts/graphify/README.md) is a code-only, no-LLM structural graph (hubs/clusters/cycles), not CI-gated; checking it for "how does X relate to Y" questions and refreshing after a material change is **recommended, not required** -- fall back to grepping when it's missing, stale, or unneeded.
+**Codebase structure graph:** [`scripts/graphify/`](scripts/graphify/README.md) is optional; grep when missing or stale.
 
 ## Verification
 
@@ -301,11 +301,7 @@ AO-injected `orchestratorRules`.
   verdict JSON — see the behavior table in `plugins/ao-codex-pr-reviewer/README.md`. Zero-length
   stdout on exit 0 is not a valid success signal; when stdout parses as `verdict: clean`, treat the
   review as terminal success and do not re-invoke on the same PR head.
-- **Browser-GPT worker start (issue #1111):** Workers start a detached pack-review Browser-GPT
-  turn with one command: `node --experimental-strip-types scripts/start-pack-review-chat.ts <pr-number>`.
-  Do not hand-build `mktemp` / prompt / `nohup` / `&` / PID-file chains. A non-zero exit or missing
-  stdout is **not** resend permission — re-invoke the same command to adopt/recover, or complete the
-  producer-grounded proven-non-delivery remediation before retry.
+- **Browser-GPT worker start (#1111):** `scripts/start-pack-review-chat.ts <pr>`; see `docs/reviewer-switch-runbook.md`.
 
 **Orchestrator escalation ack (issue #641):** invoke `scripts/lib/Orchestrator-Escalation.ps1` with
 validated tokens from the wake JSON.

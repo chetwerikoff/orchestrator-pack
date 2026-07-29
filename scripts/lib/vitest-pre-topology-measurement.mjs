@@ -19,6 +19,8 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/pack-gpt-browser-path.test.ts': 120,
   'scripts/pack-pr-review-contract.test.ts': 120,
   'scripts/pack-review-runner-gpt.test.ts': 120,
+  'scripts/pack-review-launcher.test.ts': 120,
+  'scripts/pack-review-launcher-detached.test.ts': 30,
   'scripts/lib/protected-signal-receipt.test.ts': 120,
   'scripts/worker-smoke.test.ts': 120,
 });

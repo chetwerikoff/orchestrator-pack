@@ -1,0 +1,23 @@
+{
+  "issue_number": 1111,
+  "iteration_id": "canonical-pr",
+  "iteration_id_source": "ao_session",
+  "supersedes": null,
+  "created_at": "2026-07-29T08:47:28.892Z",
+  "baseline": {
+    "commit_sha": "8e4582deb0124e32fdb1d5e94b8b265a861550a0",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:25a754b59f59e06177320a6d6b87176b4a9e505f6bf655422d9468273d962f1a"
+  },
+  "declared_paths": [
+    "AGENTS.md",
+    "docs/migration_notes.md",
+    "docs/reviewer-switch-runbook.md"
+  ],
+  "declared_globs": [
+    "scripts/*pack*review*.ts",
+    "scripts/lib/*pack*review*.ts",
+    "scripts/lib/*review*claim*.ts"
+  ],
+  "amendments": []
+}
