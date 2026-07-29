@@ -121,10 +121,13 @@ export function buildSmokeAgentPrompt(input: {
       `  ${smokeDeliverySealedPath(input.runBinding.artifactDir)}`,
       '  contents: {"runId":"<run-id>"}',
       'Completion is accepted only after publish-complete sealing:',
-      `  1. write final report text to ${smokeCompletionBodyPath(input.runBinding.artifactDir, 1)} (optional in-progress bytes may go to ${smokeCompletionPendingBodyPath(input.runBinding.artifactDir)} only)`,
-      `  2. write seal to ${smokeCompletionSealPath(input.runBinding.artifactDir)}`,
-      '  seal contents: {"runId":"<run-id>","generation":1,"bodySha256":"<sha256-hex-of-completion.body>"}',
-      'Do not seal until the report body is final. A second seal is a duplicate terminalization.',
+      `  1. optional in-progress bytes may go only to ${smokeCompletionPendingBodyPath(input.runBinding.artifactDir)}`,
+      `  2. write final generation-1 report text to ${smokeCompletionBodyPath(input.runBinding.artifactDir, 1)}`,
+      `  3. create-only seal at ${smokeCompletionSealPath(input.runBinding.artifactDir, 1)} (never overwrite an existing seal)`,
+      '  seal contents: {"runId":"<run-id>","generation":1,"bodySha256":"<sha256-hex-of-completion-1.body>"}',
+      'If generation-1 is already sealed, a later terminalization must use generation-2 paths:',
+      `    ${smokeCompletionBodyPath(input.runBinding.artifactDir, 2)} + ${smokeCompletionSealPath(input.runBinding.artifactDir, 2)}`,
+      'Never overwrite a sealed generation body or seal file. Competing terminalizations must use the next generation.',
       'Terminal scrollback is not completion evidence; only the sealed artifact counts.',
     ]
     : [];
@@ -957,89 +960,144 @@ export function observeSmokeDeliveryEstablished(
   return sealed?.runId === runBinding.runId;
 }
 
-export function observeSmokeCompletionEvidence(
+export interface SmokeCompletionObservationState {
+  sealedBodyDigestsByGeneration: Map<number, string>;
+}
+
+export function createSmokeCompletionObservationState(): SmokeCompletionObservationState {
+  return { sealedBodyDigestsByGeneration: new Map() };
+}
+
+interface EvaluatedCompletionTerminalization {
+  generation: number;
+  reportBody: string;
+  parsedReport: Partial<SmokeReport> | null;
+}
+
+function evaluateCompletionTerminalization(
   runBinding: SmokeRunBinding,
-): SmokeCompletionEvidenceObservation {
-  const pendingPath = smokeCompletionPendingBodyPath(runBinding.artifactDir);
-  const pendingExists = existsSync(pendingPath);
-  const sealGenerations = listCompletionSealGenerations(runBinding.artifactDir);
-
-  if (sealGenerations.length > 1) {
-    return {
-      publicationState: 'publish_complete_duplicate',
-      wrongRunBinding: false,
-      reportBody: pendingExists ? readFileSync(pendingPath, 'utf8') : undefined,
-    };
-  }
-
-  if (sealGenerations.length === 0) {
-    const partialBody = pendingExists ? readFileSync(pendingPath, 'utf8') : undefined;
-    return {
-      publicationState: partialBody ? 'partial' : 'none',
-      wrongRunBinding: false,
-      reportBody: partialBody,
-    };
-  }
-
-  const generation = sealGenerations[0]!;
-  const seal = parseSmokeCompletionSealRecord(readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, generation)));
-  const generationBodyPath = smokeCompletionBodyPath(runBinding.artifactDir, generation);
-  const generationBodyExists = existsSync(generationBodyPath);
+  generation: number,
+): EvaluatedCompletionTerminalization | 'in_progress' | 'inadmissible_wrong_run' {
+  const seal = parseSmokeCompletionSealRecord(
+    readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, generation)),
+  );
   if (!seal) {
-    return {
-      publicationState: (pendingExists || generationBodyExists) ? 'partial' : 'none',
-      wrongRunBinding: false,
-      reportBody: pendingExists
-        ? readFileSync(pendingPath, 'utf8')
-        : (generationBodyExists ? readFileSync(generationBodyPath, 'utf8') : undefined),
-    };
+    return 'in_progress';
   }
   if (seal.runId !== runBinding.runId) {
-    return {
-      publicationState: 'none',
-      sealedRunId: seal.runId,
-      wrongRunBinding: true,
-    };
+    return 'inadmissible_wrong_run';
   }
-
-  const bodyPath = generationBodyPath;
+  const bodyPath = smokeCompletionBodyPath(runBinding.artifactDir, generation);
   if (!existsSync(bodyPath)) {
-    return {
-      publicationState: 'partial',
-      sealedRunId: seal.runId,
-      wrongRunBinding: false,
-      reportBody: pendingExists ? readFileSync(pendingPath, 'utf8') : undefined,
-    };
+    return 'in_progress';
   }
-
   const reportBody = readFileSync(bodyPath, 'utf8');
-  const bodyDigest = computeSmokeCompletionBodyDigest(reportBody);
-  if (bodyDigest !== seal.bodySha256) {
-    return {
-      publicationState: 'partial',
-      sealedRunId: seal.runId,
-      reportBody,
-      wrongRunBinding: false,
-    };
-  }
-
-  const parsedReport = parseSealedSmokeAgentReport(reportBody);
-  if (!parsedReport) {
-    return {
-      publicationState: 'publish_complete_unfenced',
-      sealedRunId: seal.runId,
-      reportBody,
-      parsedReport: null,
-      wrongRunBinding: false,
-    };
+  if (computeSmokeCompletionBodyDigest(reportBody) !== seal.bodySha256) {
+    return 'in_progress';
   }
   return {
-    publicationState: 'publish_complete_single',
-    sealedRunId: seal.runId,
+    generation,
     reportBody,
-    parsedReport,
-    wrongRunBinding: false,
+    parsedReport: parseSealedSmokeAgentReport(reportBody),
   };
+}
+
+export function observeSmokeCompletionEvidence(
+  runBinding: SmokeRunBinding,
+  priorState: SmokeCompletionObservationState = createSmokeCompletionObservationState(),
+): {
+  observation: SmokeCompletionEvidenceObservation;
+  state: SmokeCompletionObservationState;
+} {
+  const pendingPath = smokeCompletionPendingBodyPath(runBinding.artifactDir);
+  const pendingExists = existsSync(pendingPath);
+  const nextState: SmokeCompletionObservationState = {
+    sealedBodyDigestsByGeneration: new Map(priorState.sealedBodyDigestsByGeneration),
+  };
+
+  const sealGenerations = listCompletionSealGenerations(runBinding.artifactDir);
+  const publishComplete: EvaluatedCompletionTerminalization[] = [];
+  let hasInProgress = pendingExists;
+  let wrongRunBinding = false;
+  let replacementDetected = false;
+
+  for (const generation of sealGenerations) {
+    const seal = parseSmokeCompletionSealRecord(
+      readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, generation)),
+    );
+    if (seal && seal.runId === runBinding.runId) {
+      const priorDigest = nextState.sealedBodyDigestsByGeneration.get(generation);
+      if (priorDigest && priorDigest !== seal.bodySha256) {
+        replacementDetected = true;
+      }
+      nextState.sealedBodyDigestsByGeneration.set(generation, seal.bodySha256);
+    }
+
+    const evaluated = evaluateCompletionTerminalization(runBinding, generation);
+    if (evaluated === 'in_progress') {
+      const bodyPath = smokeCompletionBodyPath(runBinding.artifactDir, generation);
+      if (existsSync(smokeCompletionSealPath(runBinding.artifactDir, generation))
+        || existsSync(bodyPath)) {
+        hasInProgress = true;
+      }
+      continue;
+    }
+    if (evaluated === 'inadmissible_wrong_run') {
+      wrongRunBinding = true;
+      continue;
+    }
+    publishComplete.push(evaluated);
+  }
+
+  const buildPartial = (): {
+    observation: SmokeCompletionEvidenceObservation;
+    state: SmokeCompletionObservationState;
+  } => ({
+    observation: {
+      publicationState: hasInProgress ? 'partial' : (wrongRunBinding ? 'none' : 'none'),
+      wrongRunBinding,
+      reportBody: pendingExists ? readFileSync(pendingPath, 'utf8') : undefined,
+    },
+    state: nextState,
+  });
+
+  if (replacementDetected || publishComplete.length > 1) {
+    return {
+      observation: {
+        publicationState: 'publish_complete_duplicate',
+        wrongRunBinding,
+      },
+      state: nextState,
+    };
+  }
+
+  if (publishComplete.length === 1) {
+    const terminalization = publishComplete[0]!;
+    if (!terminalization.parsedReport) {
+      return {
+        observation: {
+          publicationState: 'publish_complete_unfenced',
+          sealedRunId: runBinding.runId,
+          reportBody: terminalization.reportBody,
+          parsedReport: null,
+          wrongRunBinding,
+        },
+        state: nextState,
+      };
+    }
+    return {
+      observation: {
+        publicationState: 'publish_complete_single',
+        sealedRunId: runBinding.runId,
+        reportBody: terminalization.reportBody,
+        parsedReport: terminalization.parsedReport,
+        wrongRunBinding,
+      },
+      state: nextState,
+    };
+  }
+
+  return buildPartial();
 }
 
 export type SmokeChildWaitOutcome =

@@ -19,6 +19,7 @@ import {
   classifySmokeChildWaitObservation,
   createSmokeRunIdentity,
   ensureSmokeRunArtifactDir,
+  createSmokeCompletionObservationState,
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
   resolveSmokeRunArtifactDir,
@@ -1166,6 +1167,10 @@ function writeDeliverySealed(binding: { runId: string; artifactDir: string }) {
   writeFileSync(smokeDeliverySealedPath(binding.artifactDir), JSON.stringify({ runId: binding.runId }), 'utf8');
 }
 
+function observeCompletion(binding: { runId: string; artifactDir: string }, state?: import('./lib/worker-smoke-core.ts').SmokeCompletionObservationState) {
+  return observeSmokeCompletionEvidence(binding, state).observation;
+}
+
 function writePassCompletion(binding: { runId: string; artifactDir: string }, generation = 1) {
   const body = [
     '```worker-smoke-report',
@@ -1226,6 +1231,40 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+
+  it('partial second seal file stays pending rather than duplicate', () => {
+    const root = mkdtempSync(join(tmpdir(), 'smoke-completion-partial-seal2-'));
+    const binding = makeRunBinding(root);
+    writePassCompletion(binding, 1);
+    writeFileSync(smokeCompletionSealPath(binding.artifactDir, 2), '{"runId":', 'utf8');
+    expect(observeCompletion(binding).publicationState).toBe('publish_complete_single');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('wrong-run extra seal is inadmissible and does not synthesize duplicate', () => {
+    const root = mkdtempSync(join(tmpdir(), 'smoke-completion-wrong-run-extra-'));
+    const binding = makeRunBinding(root);
+    writePassCompletion(binding, 1);
+    const foreign = [
+      '```worker-smoke-report',
+      'result: FAIL',
+      'tracked-files-unmodified: true',
+      'scenarios:',
+      '  - action: run scenario | expected: pass | observed: fail | outcome: fail',
+      '```',
+    ].join('\n');
+    writeFileSync(smokeCompletionBodyPath(binding.artifactDir, 2), foreign, 'utf8');
+    writeFileSync(
+      smokeCompletionSealPath(binding.artifactDir, 2),
+      JSON.stringify({ runId: 'foreign-run', generation: 2, bodySha256: computeSmokeCompletionBodyDigest(foreign) }),
+      'utf8',
+    );
+    const observation = observeCompletion(binding);
+    expect(observation.publicationState).toBe('publish_complete_single');
+    expect(observation.wrongRunBinding).toBe(true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it('completion publication straddle stays pending until body digest matches seal', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-completion-straddle-'));
     const binding = makeRunBinding(root);
@@ -1243,9 +1282,9 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
       JSON.stringify({ runId: binding.runId, generation: 1, bodySha256: computeSmokeCompletionBodyDigest(finalBody) }),
       'utf8',
     );
-    expect(observeSmokeCompletionEvidence(binding).publicationState).toBe('partial');
+    expect(observeCompletion(binding).publicationState).toBe('partial');
     writeFileSync(smokeCompletionBodyPath(binding.artifactDir, 1), finalBody, 'utf8');
-    expect(observeSmokeCompletionEvidence(binding).publicationState).toBe('publish_complete_single');
+    expect(observeCompletion(binding).publicationState).toBe('publish_complete_single');
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -1253,6 +1292,10 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-completion-overwrite-'));
     const binding = makeRunBinding(root);
     writePassCompletion(binding, 1);
+    let state = createSmokeCompletionObservationState();
+    const first = observeSmokeCompletionEvidence(binding, state);
+    state = first.state;
+    expect(first.observation.publicationState).toBe('publish_complete_single');
     const replacement = [
       '```worker-smoke-report',
       'result: FAIL',
@@ -1262,14 +1305,12 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
       '```',
     ].join('\n');
     writeFileSync(smokeCompletionBodyPath(binding.artifactDir, 1), replacement, 'utf8');
-    expect(observeSmokeCompletionEvidence(binding).publicationState).toBe('partial');
-    writeFileSync(smokeCompletionBodyPath(binding.artifactDir, 2), replacement, 'utf8');
     writeFileSync(
-      smokeCompletionSealPath(binding.artifactDir, 2),
-      JSON.stringify({ runId: binding.runId, generation: 2, bodySha256: computeSmokeCompletionBodyDigest(replacement) }),
+      smokeCompletionSealPath(binding.artifactDir, 1),
+      JSON.stringify({ runId: binding.runId, generation: 1, bodySha256: computeSmokeCompletionBodyDigest(replacement) }),
       'utf8',
     );
-    expect(observeSmokeCompletionEvidence(binding).publicationState).toBe('publish_complete_duplicate');
+    expect(observeSmokeCompletionEvidence(binding, state).observation.publicationState).toBe('publish_complete_duplicate');
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -1308,41 +1349,80 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
 
   it('PTY metamorphic property holds across reachable evidence branches', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-pty-matrix-'));
-    const branches: Array<{ setup: (dir: { runId: string; artifactDir: string }) => void; cause?: string; ok?: boolean }> = [
-      { setup: () => {}, cause: 'agent_report_timeout' },
-      { setup: (dir) => writeFileSync(smokeCompletionPendingBodyPath(dir.artifactDir), 'partial', 'utf8') },
-      { setup: (dir) => writePassCompletion(dir, 1), ok: true },
-    ];
-    for (const branch of branches) {
+
+    const assertPtyInvariant = (
+      setup: (dir: { runId: string; artifactDir: string }) => {
+        deadlineMs?: number;
+        childState?: () => import('./lib/worker-smoke-core.ts').SmokeChildStateWitness;
+        supervisedHandle?: string;
+        supervisorHandle?: string;
+        runner?: ReturnType<typeof vi.fn>;
+      },
+      expected: { ok: boolean; cause?: string },
+    ) => {
       const dir = makeRunBinding(root, createSmokeRunIdentity());
-      branch.setup(dir);
+      const cfg = setup(dir);
       let now = 0;
-      const withPty = waitForSmokeChildCompletion('child', {
+      const base = {
         cwd: root,
-        deadlineMs: branch.ok ? 1_000 : 50,
+        deadlineMs: cfg.deadlineMs ?? 200,
         runBinding: dir,
         ownedChildHandle: 'child',
-        runner: vi.fn(() => ({ stdout: JSON.stringify({ ok: true, result: { lines: ['pty-noise'] } }), stderr: '', status: 0 })) as never,
+        supervisedHandle: cfg.supervisedHandle,
+        supervisorHandle: cfg.supervisorHandle,
+        childStateWitness: cfg.childState,
         now: () => now,
-        sleepMs: (ms) => { now += ms; },
+        sleepMs: (ms: number) => { now += ms; },
+        runner: cfg.runner,
+      };
+      const withPty = waitForSmokeChildCompletion(cfg.supervisedHandle ?? 'child', {
+        ...base,
+        runner: (cfg.runner ?? vi.fn(() => ({ stdout: JSON.stringify({ ok: true, result: { lines: ['pty-noise'] } }), stderr: '', status: 0 }))) as never,
       });
       now = 0;
-      const withoutPty = waitForSmokeChildCompletion('child', {
-        cwd: root,
-        deadlineMs: branch.ok ? 1_000 : 50,
-        runBinding: dir,
-        ownedChildHandle: 'child',
+      const withoutPty = waitForSmokeChildCompletion(cfg.supervisedHandle ?? 'child', {
+        ...base,
         suppressPtyReads: true,
-        now: () => now,
-        sleepMs: (ms) => { now += ms; },
       });
-      expect(withPty.ok).toBe(withoutPty.ok);
-      if (branch.cause) {
-        expect(withPty.nonPassCause).toBe(branch.cause);
-        expect(withoutPty.nonPassCause).toBe(branch.cause);
+      expect(withPty.ok).toBe(expected.ok);
+      expect(withoutPty.ok).toBe(expected.ok);
+      if (expected.cause) {
+        expect(withPty.nonPassCause).toBe(expected.cause);
+        expect(withoutPty.nonPassCause).toBe(expected.cause);
       }
       rmSync(dir.artifactDir, { recursive: true, force: true });
-    }
+    };
+
+    assertPtyInvariant(() => ({ deadlineMs: 50 }), { ok: false, cause: 'agent_report_timeout' });
+    assertPtyInvariant((dir) => {
+      writeFileSync(smokeCompletionPendingBodyPath(dir.artifactDir), 'partial', 'utf8');
+      return {};
+    }, { ok: false, cause: 'agent_report_timeout' });
+    assertPtyInvariant((dir) => {
+      writePassCompletion(dir, 1);
+      return { deadlineMs: 1_000 };
+    }, { ok: true });
+    assertPtyInvariant((dir) => {
+      writePassCompletion(dir, 1);
+      const second = '```worker-smoke-report\nresult: FAIL\ntracked-files-unmodified: true\nscenarios:\n  - action: x | expected: y | observed: z | outcome: fail\n```';
+      writeFileSync(smokeCompletionBodyPath(dir.artifactDir, 2), second, 'utf8');
+      writeFileSync(smokeCompletionSealPath(dir.artifactDir, 2), JSON.stringify({ runId: dir.runId, generation: 2, bodySha256: computeSmokeCompletionBodyDigest(second) }), 'utf8');
+      return {};
+    }, { ok: false, cause: 'agent_report_duplicate' });
+    assertPtyInvariant((dir) => {
+      const unfenced = 'result: PASS\ntracked-files-unmodified: true\nscenarios:\n  - action: x | expected: y | observed: z | outcome: pass';
+      writeFileSync(smokeCompletionBodyPath(dir.artifactDir, 1), unfenced, 'utf8');
+      writeFileSync(smokeCompletionSealPath(dir.artifactDir, 1), JSON.stringify({ runId: dir.runId, generation: 1, bodySha256: computeSmokeCompletionBodyDigest(unfenced) }), 'utf8');
+      return {};
+    }, { ok: false, cause: 'agent_report_unfenced' });
+    assertPtyInvariant(() => ({ childState: () => ({ exited: true }), deadlineMs: 200 }), { ok: false, cause: 'agent_exited_without_report' });
+    assertPtyInvariant(() => ({ childState: () => ({ idle: true }), deadlineMs: 200 }), { ok: false, cause: 'agent_idle_without_report' });
+    assertPtyInvariant(() => ({ supervisedHandle: 'supervisor', supervisorHandle: 'supervisor' }), { ok: false, cause: 'agent_wait_self_handle' });
+    assertPtyInvariant(() => ({ supervisedHandle: 'other' }), { ok: false, cause: 'agent_wait_unowned_handle' });
+    assertPtyInvariant((dir) => ({
+      runner: vi.fn(() => ({ stdout: JSON.stringify({ ok: false, error: { code: 'channel_control_unavailable', message: 'x' } }), stderr: '', status: 1 })),
+    }), { ok: false, cause: 'channel_control_unavailable' });
+
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -1417,7 +1497,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-completion-stale-'));
     const binding = makeRunBinding(root);
     writePassCompletion({ ...binding, runId: 'stale-run-id' });
-    const observation = observeSmokeCompletionEvidence(binding);
+    const observation = observeCompletion(binding);
     expect(observation.wrongRunBinding).toBe(true);
     expect(observation.publicationState).toBe('none');
     rmSync(root, { recursive: true, force: true });
@@ -1428,12 +1508,12 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     const binding = makeRunBinding(root);
     writeFileSync(smokeCompletionPendingBodyPath(binding.artifactDir), 'result: PASS', 'utf8');
     const pending = classifySmokeChildWaitObservation({
-      completion: observeSmokeCompletionEvidence(binding),
+      completion: observeCompletion(binding),
       deadlineReached: false,
     });
     expect(pending.status).toBe('pending');
     const atDeadline = classifySmokeChildWaitObservation({
-      completion: observeSmokeCompletionEvidence(binding),
+      completion: observeCompletion(binding),
       deadlineReached: true,
     });
     expect(atDeadline.status).toBe('non_pass');
@@ -1448,7 +1528,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     const body = '```worker-smoke-report\nresult: PASS\ntracked-files-unmodified: true\nscenarios:\n  - action: x | expected: y | observed: z | outcome: pass\n```';
     writeFileSync(smokeCompletionBodyPath(binding.artifactDir, 1), body, 'utf8');
     writeFileSync(smokeCompletionSealPath(binding.artifactDir, 1), JSON.stringify({ runId: binding.runId, generation: 1 }), 'utf8');
-    expect(observeSmokeCompletionEvidence(binding).publicationState).toBe('partial');
+    expect(observeCompletion(binding).publicationState).toBe('partial');
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -1457,7 +1537,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     const binding = makeRunBinding(root);
     writePassCompletion(binding);
     writeFileSync(smokeCompletionBodyPath(binding.artifactDir), 'mutated body', 'utf8');
-    expect(observeSmokeCompletionEvidence(binding).publicationState).toBe('partial');
+    expect(observeCompletion(binding).publicationState).toBe('partial');
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -1468,7 +1548,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     writeFileSync(smokeCompletionBodyPath(binding.artifactDir), unfencedBody, 'utf8');
     writeFileSync(smokeCompletionSealPath(binding.artifactDir), JSON.stringify({ runId: binding.runId, generation: 1, bodySha256: computeSmokeCompletionBodyDigest(unfencedBody) }), 'utf8');
     const outcome = classifySmokeChildWaitObservation({
-      completion: observeSmokeCompletionEvidence(binding),
+      completion: observeCompletion(binding),
       deadlineReached: false,
     });
     expect(outcome.status).toBe('non_pass');
@@ -1495,7 +1575,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
       'utf8',
     );
     const outcome = classifySmokeChildWaitObservation({
-      completion: observeSmokeCompletionEvidence(binding),
+      completion: observeCompletion(binding),
       deadlineReached: false,
     });
     expect(outcome.status).toBe('non_pass');
@@ -1507,7 +1587,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-completion-timeout-'));
     const binding = makeRunBinding(root);
     const outcome = classifySmokeChildWaitObservation({
-      completion: observeSmokeCompletionEvidence(binding),
+      completion: observeCompletion(binding),
       deadlineReached: true,
     });
     expect(outcome.status).toBe('non_pass');
@@ -1519,7 +1599,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-completion-exit-'));
     const binding = makeRunBinding(root);
     const outcome = classifySmokeChildWaitObservation({
-      completion: observeSmokeCompletionEvidence(binding),
+      completion: observeCompletion(binding),
       childState: { exited: true },
       deadlineReached: false,
     });
@@ -1635,7 +1715,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     const current = makeRunBinding(root, 'current-run');
     const other = makeRunBinding(root, 'other-run');
     writePassCompletion(other);
-    const observation = observeSmokeCompletionEvidence(current);
+    const observation = observeCompletion(current);
     expect(observation.publicationState).toBe('none');
     rmSync(root, { recursive: true, force: true });
   });
@@ -1658,7 +1738,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
       JSON.stringify({ runId: binding.runId, generation: 2, bodySha256: computeSmokeCompletionBodyDigest(secondBody) }),
       'utf8',
     );
-    expect(observeSmokeCompletionEvidence(binding).publicationState).toBe('publish_complete_duplicate');
+    expect(observeCompletion(binding).publicationState).toBe('publish_complete_duplicate');
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -1666,7 +1746,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-completion-idle-'));
     const binding = makeRunBinding(root);
     const outcome = classifySmokeChildWaitObservation({
-      completion: observeSmokeCompletionEvidence(binding),
+      completion: observeCompletion(binding),
       childState: { idle: true },
       deadlineReached: false,
     });

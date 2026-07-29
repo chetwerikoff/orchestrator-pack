@@ -28,6 +28,7 @@ import {
   isSmokeControlPlaneCause,
   isDefinitePromptNonDelivery,
   preserveSmokeControlPlaneCause,
+  createSmokeCompletionObservationState,
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
   resolveSmokeRunArtifactDir,
@@ -306,39 +307,39 @@ export function waitForSmokeChildCompletion(
   });
 
   let agentActivityObserved = false;
+  let completionState = createSmokeCompletionObservationState();
   while (now() < deadline) {
     const remaining = deadline - now();
     if (remaining <= 0) {
       break;
     }
 
-    if (!input.suppressPtyReads) {
-      const read = readOrcaTerminal(handle, {
-        cwd: input.cwd,
-        limit: 200,
-        runner: input.runner,
-      });
-      if (!read.ok) {
-        const controlPlane = preserveSmokeControlPlaneCause(read.error?.code);
-        if (controlPlane) {
-          return {
-            ok: false,
-            agentActivityObserved,
-            nonPassCause: controlPlane,
-            error: { code: controlPlane, message: read.error?.message ?? controlPlane },
-          };
-        }
-      } else {
-        const deltaText = orcaTerminalReadLines(read.result).join('\n');
-        if (deltaText.trim()) {
-          agentActivityObserved = true;
-        }
+    const read = readOrcaTerminal(handle, {
+      cwd: input.cwd,
+      limit: input.suppressPtyReads ? 0 : 200,
+      runner: input.runner,
+    });
+    if (!read.ok) {
+      const controlPlane = preserveSmokeControlPlaneCause(read.error?.code);
+      if (controlPlane) {
+        return {
+          ok: false,
+          agentActivityObserved,
+          nonPassCause: controlPlane,
+          error: { code: controlPlane, message: read.error?.message ?? controlPlane },
+        };
+      }
+    } else if (!input.suppressPtyReads) {
+      const deltaText = orcaTerminalReadLines(read.result).join('\n');
+      if (deltaText.trim()) {
+        agentActivityObserved = true;
       }
     }
 
-    const completion = observeSmokeCompletionEvidence(input.runBinding);
+    const observed = observeSmokeCompletionEvidence(input.runBinding, completionState);
+    completionState = observed.state;
     const outcome = classifySmokeChildWaitObservation({
-      completion,
+      completion: observed.observation,
       childState: input.childStateWitness?.(),
       deadlineReached: false,
     });
@@ -365,9 +366,10 @@ export function waitForSmokeChildCompletion(
     sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
   }
 
-  const completion = observeSmokeCompletionEvidence(input.runBinding);
+  const observed = observeSmokeCompletionEvidence(input.runBinding, completionState);
+  completionState = observed.state;
   const outcome = classifySmokeChildWaitObservation({
-    completion,
+    completion: observed.observation,
     childState: input.childStateWitness?.(),
     deadlineReached: true,
   });
