@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import './chatgpt-browser-turn/state-light-turn.test-support.ts';
+import { normalizeConversationUrl } from './chatgpt-browser-turn/ui-adapter.ts';
 import { checkFindingLedgerGuard } from './finding-ledger-guard.mjs';
 import {
   checkStageCompletenessGuard,
@@ -11,6 +12,8 @@ import {
   parseCompetitiveWaiver,
 } from './lib/stage-completeness-core.ts';
 import { runCli } from './stage-completeness-guard.ts';
+
+vi.mocked(normalizeConversationUrl).mockReturnValue('https://chatgpt.com/c/fake-owned-turn');
 
 const T3_DRAFT = `# T3 fixture
 
