@@ -745,6 +745,29 @@ describe('Issue #1104 GPT demotion authority', () => {
     expect(result.errors.join('\n')).toContain('unrelated material body change');
   });
 
+  it('rejects GPT narrow revalidation when unrelated prose changes outside authorized demotion zones', () => {
+    const source = draft('T2', 'T2');
+    const tampered = draft('T1', 'T2', {
+      from: 'T2',
+      eventId: 'gpt-demotion-1',
+    }).replace('Run focused tests.', 'Run unrelated verification scope outside demotion correction.');
+    const result = run(tampered, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: tampered, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      priorTier: 'T2',
+      events: [{ record: gptEvent(), captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal gpt lens' }],
+      revalidations: [{
+        record: gptRevalidation('r02'),
+        captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt',
+        captureText: 'narrow revalidation only',
+      }],
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('unrelated material body change');
+  });
+
   it('accepts GPT narrow revalidation when only authorized body correction changes', () => {
     const source = draft('T2', 'T2', { body: 'Describe one local behavior.' });
     const corrected = draft('T1', 'T2', {

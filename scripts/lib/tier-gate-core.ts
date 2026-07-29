@@ -213,20 +213,16 @@ function stripComplexityTierFence(text: string): string {
   return text.replace(FENCE_RE, '');
 }
 
-const ISSUE_BINDING_FENCE_RES = [
-  /```behavior-kind\s*\n([\s\S]*?)```/i,
-  /```denylist\s*\n([\s\S]*?)```/i,
-  /```allowed-roots\s*\n([\s\S]*?)```/i,
-  /```contract-evidence\s*\n([\s\S]*?)```/i,
-] as const;
+const DEMOTION_GOAL_SECTION_RE = /^## Goal\b[\s\S]*?(?=\n```|\n## )/im;
+const DEMOTION_ACCEPTANCE_SECTION_RE =
+  /^## Acceptance criteria\b[\s\S]*?(?=\n## |\n```|$)/im;
 
-function extractIssueBindingFenceSnapshot(text: string): string {
-  const parts: string[] = [];
-  for (const pattern of ISSUE_BINDING_FENCE_RES) {
-    const match = text.match(pattern);
-    parts.push(match ? match[0].trim() : '<missing-binding-fence>');
-  }
-  return parts.join('\n---\n');
+function stripAuthorizedDemotionCorrectionZones(text: string): string {
+  let snapshot = stripComplexityTierFence(text);
+  snapshot = snapshot.replace(/^#\s+.+$/m, '# <demotion-title-zone>');
+  snapshot = snapshot.replace(DEMOTION_GOAL_SECTION_RE, '## <demotion-goal-zone>\n');
+  snapshot = snapshot.replace(DEMOTION_ACCEPTANCE_SECTION_RE, '## <demotion-acceptance-zone>\n');
+  return snapshot.replace(/\s+/g, ' ').trim();
 }
 
 export interface StageSelectionInput {
@@ -921,8 +917,8 @@ function validateFreshDemotionChain(
       && source
       && candidate
       && candidateIndex === sourceIndex + 1
-      && extractIssueBindingFenceSnapshot(source.text)
-        !== extractIssueBindingFenceSnapshot(candidate.text)
+      && stripAuthorizedDemotionCorrectionZones(source.text)
+        !== stripAuthorizedDemotionCorrectionZones(candidate.text)
     ) {
       errors.push('tier demotion: narrow revalidation candidate contains unrelated material body change');
     }
