@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { classifyPageObservation } from './chatgpt-browser-turn/state-light-turn.ts';
+import './chatgpt-browser-turn/state-light-turn.test-support.ts';
 import { checkFindingLedgerGuard } from './finding-ledger-guard.mjs';
 import {
   checkStageCompletenessGuard,
@@ -239,7 +239,8 @@ describe('Issue #1120 state-light Browser-GPT turn', () => {
     'utf8',
   );
 
-  it('accepts page-only final output, but not generating or foreign activity', () => {
+  it('accepts page-only final output, but not generating or foreign activity', async () => {
+    const { classifyPageObservation } = await import('./chatgpt-browser-turn/state-light-turn.ts');
     expect(classifyPageObservation([
       { role: 'user', text: 'old prompt' },
       { role: 'assistant', text: 'old answer' },
@@ -264,7 +265,8 @@ describe('Issue #1120 state-light Browser-GPT turn', () => {
     });
   });
 
-  it('does not claim an unattributed assistant node before its own prompt appears', () => {
+  it('does not claim an unattributed assistant node before its own prompt appears', async () => {
+    const { classifyPageObservation } = await import('./chatgpt-browser-turn/state-light-turn.ts');
     expect(classifyPageObservation([
       { role: 'user', text: 'old prompt' },
       { role: 'assistant', text: 'old answer' },
