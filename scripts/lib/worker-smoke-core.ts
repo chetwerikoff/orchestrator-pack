@@ -119,7 +119,10 @@ function applyScenarioField(scenario: SmokeScenario, key: string, value: string)
   } else if (normalized === 'observed') {
     scenario.observed = trimmed;
   } else if (normalized === 'outcome') {
-    scenario.outcome = trimmed.toLowerCase() as SmokeScenario['outcome'];
+    const outcome = trimmed.toLowerCase().match(/^(pass|fail|skipped|blocked)\b/u)?.[1];
+    if (outcome) {
+      scenario.outcome = outcome as SmokeScenario['outcome'];
+    }
   } else if (normalized === 'skip-reason') {
     scenario.skipReason = trimmed;
   }
@@ -187,6 +190,39 @@ export function stripLeadingSmokeAgentPrompt(text: string, sentPrompt: string): 
   return remainder;
 }
 
+
+function trimOrcaTerminalUiTail(body: string): string {
+  const markers = ['\n→ ', '\nComposer 2.', '\nRun Everything', '\n~/'];
+  let end = body.length;
+  for (const marker of markers) {
+    const index = body.indexOf(marker);
+    if (index >= 0) {
+      end = Math.min(end, index);
+    }
+  }
+  return body.slice(0, end);
+}
+
+function normalizeOrcaWrappedSmokeReportBody(body: string): string {
+  const lines = body.split(/\r?\n/u);
+  const out: string[] = [];
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trimStart();
+    if (!trimmed) {
+      continue;
+    }
+    const isTopLevelField = /^(result|tracked-files-unmodified|environment-notes|limitations|scenarios|producer|orca-executable|terminal-handle|terminal-cleanup|non-pass-cause):/iu
+      .test(trimmed);
+    const isScenario = /^-\s/.test(trimmed);
+    if (out.length === 0 || isTopLevelField || isScenario) {
+      out.push(trimmed);
+      continue;
+    }
+    out[out.length - 1] = `${out[out.length - 1]} ${trimmed}`;
+  }
+  return out.join('\n');
+}
+
 function findUnfencedSmokeReportBody(text: string): string | null {
   const lines = text.split(/\r?\n/u);
   let lastStart = -1;
@@ -204,7 +240,13 @@ function findUnfencedSmokeReportBody(text: string): string | null {
   const bodyLines: string[] = [];
   for (let index = lastStart; index < lines.length; index += 1) {
     const line = lines[index] ?? '';
-    if (/^→ Add a follow-up/.test(line) || /^Composer 2\.\d/.test(line)) {
+    if (
+      /^→/.test(line)
+      || /^Composer 2\.\d/.test(line)
+      || /^Run Everything/.test(line)
+      || /^~\//.test(line)
+      || /^\[Pasted text/.test(line)
+    ) {
       break;
     }
     if (index > lastStart && /^```/.test(line)) {
@@ -212,7 +254,7 @@ function findUnfencedSmokeReportBody(text: string): string | null {
     }
     bodyLines.push(line);
   }
-  const body = bodyLines.map((line) => line.trimStart()).join('\n');
+  const body = trimOrcaTerminalUiTail(normalizeOrcaWrappedSmokeReportBody(bodyLines.map((line) => line.trimStart()).join('\n')));
   if (!/tracked-files-unmodified:/iu.test(body) || !/scenarios:/iu.test(body)) {
     return null;
   }
