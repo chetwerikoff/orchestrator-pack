@@ -42,10 +42,10 @@ function assertStructuredTurnCliRejection(): void {
   }
   if (
     body.schema !== 'control-result/v1'
-    || body.operation !== 'status/list'
+    || body.operation !== 'turn'
     || body.state !== 'driver_error'
     || body.configured_profile_key !== 'profile-unresolved'
-    || body.cause !== 'command_failed'
+    || body.cause !== 'argument_unknown:unsupported-option'
   ) {
     throw new Error('cli_rejection_protocol_mismatch:unexpected_result');
   }

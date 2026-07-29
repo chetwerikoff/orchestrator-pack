@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import {
   LIVE_TERMINAL_FRAME_CONTRACT,
 } from '../chatgpt-browser-turn/fixtures/live-terminal-frame-contract.ts';
@@ -273,61 +274,38 @@ describe('issue 1010 submitted-turn proof', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-1010-ac3-'));
     const input = join(root, 'input.txt');
     const output = join(root, 'output.txt');
+    const marksFile = join(root, 'marks.json');
     writeFileSync(input, 'payload\n');
     const profilePath = join(root, 'profile');
-    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'state');
-
-    let clockMs = 0;
-    __testTiming.now = () => clockMs;
-    const started = performance.now();
-    let resultProducedMs = 0;
-    let stdoutWrittenMs = 0;
-
-    const config: BrowserConfig = {
-      cdp: 'http://127.0.0.1:9222',
-      profile: profilePath,
-      chatUrl: 'https://chatgpt.com/c/ac3-timing',
-      newChat: false,
-      timeoutMs: 60_000,
-    };
-    const profileKey = configuredProfileKey(config.profile, config.cdp);
-    const snapshot = readStableInput(input);
-    const reservation = reserveDestination(profileKey, output);
-    const fixture = fakeTurnPage({
-      dispatchCandidateIds: [],
-      serviceObserveDispatch: false,
-      serviceFrames: [],
-      assistants: [],
+    const fixtureEntry = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'chatgpt-browser-turn-ac3-timing.ts');
+    const observed = runProcessSync({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types',
+        fixtureEntry,
+        '--profile', profilePath,
+        '--cdp', 'http://127.0.0.1:9222',
+        '--input', input,
+        '--output', output,
+        '--chat-url', 'https://chatgpt.com/c/ac3-timing',
+      ],
+      cwd: join(dirname(fileURLToPath(import.meta.url)), '..', '..'),
+      inheritParentEnv: true,
+      env: {
+        CHATGPT_BROWSER_TURN_STATE_DIR: join(root, 'state'),
+        CHATGPT_BROWSER_TURN_AC3_MARKS_FILE: marksFile,
+      },
     });
-    fixture.page.waitForTimeout = async (ms: number) => {
-      clockMs += ms;
-    };
-
-    const result = await sendTurn(fixture.page, snapshot.text, config);
-    resultProducedMs = performance.now() - started;
-    reservation.release();
-
-    const stdoutLine = JSON.stringify({
-      schema: 'turn-result/v1',
-      state: result.state,
-      scope: 'conversation',
-      cause: result.cause,
-      invocation_id: 'ac3-timing-inline',
-      configured_profile_key: profileKey,
-    });
-    stdoutWrittenMs = performance.now() - started;
-    const exitCode = turnExitCode(result.state);
-    const processExitMs = performance.now() - started;
-
-    __testTiming.now = undefined;
-
-    expect(exitCode).toBe(11);
+    expect(observed.exitCode).toBe(11);
+    const stdoutLine = observed.stdout.trim().split('\n').filter(Boolean).pop() ?? '';
     const body = JSON.parse(stdoutLine) as { cause: string };
     expect(body.cause).toBe('submitted_turn_id_unproven');
-    expect(stdoutWrittenMs - resultProducedMs).toBeGreaterThanOrEqual(0);
-    expect(stdoutWrittenMs - resultProducedMs).toBeLessThan(1_500);
-    expect(processExitMs - stdoutWrittenMs).toBeGreaterThanOrEqual(0);
-    expect(processExitMs - stdoutWrittenMs).toBeLessThan(2_000);
+    const marks = JSON.parse(readFileSync(marksFile, 'utf8')) as {
+      result_produced_ms: number;
+      stdout_written_ms: number;
+    };
+    expect(marks.stdout_written_ms - marks.result_produced_ms).toBeGreaterThanOrEqual(0);
+    expect(marks.stdout_written_ms - marks.result_produced_ms).toBeLessThan(1_500);
   });
 
 

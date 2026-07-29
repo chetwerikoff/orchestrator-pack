@@ -110,13 +110,13 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     const token = argv[index];
     if (!token?.startsWith('--') || token.length <= 2) throw new Error('argument_invalid');
     const key = token.slice(2);
-    if (options.has(key)) throw new Error('argument_duplicate');
+    if (options.has(key)) throw new Error(`argument_duplicate:${key}`);
     if (BOOLEAN_OPTIONS.has(key)) {
       options.set(key, true);
       continue;
     }
     const value = argv[index + 1];
-    if (value === undefined || value.startsWith('--')) throw new Error('argument_value_missing');
+    if (value === undefined || value.startsWith('--')) throw new Error(`argument_value_missing:${key}`);
     options.set(key, value);
     index++;
   }
@@ -722,6 +722,14 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       },
     }));
   } catch (error) {
+    const validationCause = resolveControlCommandCause(error);
+    if (isArgumentValidationCause(validationCause)) {
+      emitCliUsage();
+      safeRelease(scheduleLock);
+      safeReleaseDestination(reservation);
+      await closeOwnedTurnPage(opened, { retainPage: false });
+      return emitTurnAndCode(turnResult('driver_error', 'invocation', validationCause, invocationId, profileKey));
+    }
     const message = error instanceof Error ? error.message : 'driver_error';
     if (!possibleDelivery && message.startsWith('pre_send_')) {
       await closeOwnedTurnPage(opened, { retainPage: false });
@@ -1060,13 +1068,28 @@ async function runClear(args: ParsedArgs): Promise<number> {
   return emitControlAndCode(clearReadable(profileKey, identity, generation, evidenceToken));
 }
 
+const CONTROL_OPERATIONS = new Set<ControlResultV1['operation']>([
+  'turn',
+  'status/list',
+  'clear',
+  'capability',
+  'gate-b-characterization',
+  'publication-status',
+]);
+
 function controlOperation(args: ParsedArgs): ControlResultV1['operation'] {
-  if (args.command === 'clear') return 'clear';
-  if (args.command === 'gate-b-characterization') return 'gate-b-characterization';
-  if (args.command === 'capability') return 'capability';
-  if (args.command === 'publication-status') return 'publication-status';
-  if (args.command === 'status/list') return 'status/list';
-  return 'status/list';
+  if (CONTROL_OPERATIONS.has(args.command as ControlResultV1['operation'])) {
+    return args.command as ControlResultV1['operation'];
+  }
+  return args.command as ControlResultV1['operation'];
+}
+
+function controlOperationFromArgv(argv: readonly string[]): ControlResultV1['operation'] {
+  const command = argv[0] ?? '';
+  if (CONTROL_OPERATIONS.has(command as ControlResultV1['operation'])) {
+    return command as ControlResultV1['operation'];
+  }
+  return command as ControlResultV1['operation'];
 }
 
 function resolvedControlProfileKey(args: ParsedArgs): string {
@@ -1081,8 +1104,16 @@ export async function runCli(argv: readonly string[]): Promise<number> {
   let args: ParsedArgs;
   try {
     args = parseArgs(argv);
-  } catch {
-    emit({ schema: 'control-result/v1', operation: 'status/list', state: 'driver_error', configured_profile_key: 'profile-unresolved', cause: 'argument_invalid' });
+  } catch (error) {
+    const cause = resolveControlCommandCause(error);
+    if (isArgumentValidationCause(cause)) emitCliUsage();
+    emit({
+      schema: 'control-result/v1',
+      operation: controlOperationFromArgv(argv),
+      state: 'driver_error',
+      configured_profile_key: 'profile-unresolved',
+      cause,
+    });
     return 22;
   }
   try {
@@ -1092,7 +1123,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     if (args.command === 'capability') return await runCapability(args);
     if (args.command === 'gate-b-characterization') return await runGateBCharacterizationCommand(args);
     if (args.command === 'publication-status') return await runPublicationStatus(args);
-    emit({ schema: 'control-result/v1', operation: 'status/list', state: 'driver_error', configured_profile_key: 'profile-unresolved', cause: 'command_invalid' });
+    emit({ schema: 'control-result/v1', operation: controlOperation(args), state: 'driver_error', configured_profile_key: 'profile-unresolved', cause: 'command_invalid' });
     return 22;
   } catch (error) {
     const operation = controlOperation(args);

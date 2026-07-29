@@ -1508,8 +1508,22 @@ export function classifyPreDispatchProductWall(surface: ProductStatusSurface): {
   return {};
 }
 
-async function pageWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
+export function observePreDispatchBlockerHint(surface: ProductStatusSurface): string | undefined {
+  if (surface.elements.length === 0 || !surface.composer) return undefined;
+  for (const element of surface.elements) {
+    if (isConversationHistoryQuotaElement(element)) return undefined;
+  }
+  if (classifyProductWall(surface).state) return undefined;
+  const testId = surface.elements.find((element) => element.testId)?.testId;
+  return testId ? `unclassified_blocking_dialog:${testId}` : 'unclassified_blocking_dialog';
+}
+
+async function pagePreDispatchWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
   return classifyPreDispatchProductWall(await productStatusText(page, waitSource));
+}
+
+async function pagePostDispatchWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
+  return classifyProductWall(await productStatusText(page, waitSource));
 }
 
 async function semanticNodes(locator: any, waitMs = MAX_BROWSER_OPERATION_WAIT_MS): Promise<SemanticNode[]> {
@@ -1709,7 +1723,7 @@ export async function openTurnPage(
     if (matches.length > 1) {
       const descriptors = matches.map((page: any, index: number) => {
         try {
-          return `url=${normalizeConversationUrl(page.url())}`;
+          return `index=${index};url=${page.url()}`;
         } catch {
           return `index=${index}`;
         }
@@ -1771,13 +1785,17 @@ export async function sendTurn(
     });
   }
   const composer = page.locator('#prompt-textarea');
+  let preDispatchBlockerCause: string | undefined;
   const readyEndsAt = segmentBudget?.endsAtMs ?? wallClock() + Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
   while (wallClock() < readyEndsAt) {
     const waitMs = loopOperationWaitMs(readyEndsAt, wallClock());
     if (waitMs <= 0) break;
-    const wall = await boundedPlaywrightOperation(waitMs, () => pageWalls(page, () => segmentOperationWait(segmentBudget, waitMs)));
+    const wall = await boundedPlaywrightOperation(waitMs, () => pagePreDispatchWalls(page, () => segmentOperationWait(segmentBudget, waitMs)));
     if (wall.state) return { state: wall.state as TurnBrowserResult['state'], cause: wall.cause!, possibleDelivery: false };
     const composerVisible = await boundedLocatorCount(composer, waitMs);
+    const surface = await boundedPlaywrightOperation(waitMs, () => productStatusText(page, () => segmentOperationWait(segmentBudget, waitMs)));
+    const blockerHint = observePreDispatchBlockerHint(surface);
+    if (blockerHint) preDispatchBlockerCause = blockerHint;
     if (composerVisible) break;
     await witnessPollDelay(page, Math.min(500, waitMs));
   }
@@ -1850,6 +1868,9 @@ export async function sendTurn(
     if (segmentBudget && mutationWait <= 0) throw new BrowserOperationTimeoutError('pre_send_mutation');
     await composer.fill(text, playwrightTimeout(mutationWait)!);
   } catch (error) {
+    if (preDispatchBlockerCause) {
+      return { state: 'ui_contract_mismatch', cause: preDispatchBlockerCause, possibleDelivery: false };
+    }
     throw coerceBrowserOperationTimeout(error, 'pre_send_mutation');
   }
   const send = page.locator('[data-testid="send-button"]');
@@ -1953,7 +1974,7 @@ export async function sendTurn(
     if (replyWait <= 0) break;
     const wallWait = Math.min(replyWait, loopOperationWaitMs(deadline, wallClock()));
     if (wallWait <= 0) break;
-    const wall = await boundedPlaywrightOperation(wallWait, () => pageWalls(page, () => wallWait));
+    const wall = await boundedPlaywrightOperation(wallWait, () => pagePostDispatchWalls(page, () => wallWait));
     const canonicalUserIdEarly = canonicalSubmittedUserId(network, baselineIds);
     if (!canonicalUserIdEarly && boundDispatchCandidateIds(network).size > 1) {
       return { state: 'foreign_activity', cause: 'submitted_turn_ambiguous', possibleDelivery: true, userMessageId: userId };

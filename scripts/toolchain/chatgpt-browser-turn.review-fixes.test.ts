@@ -1514,7 +1514,7 @@ describe('issue 1065 browser-surface classification', () => {
       newChat: false,
       timeoutMs: 100,
     })).rejects.toThrow(
-      'ui_contract_mismatch:duplicate_tabs:count=2:url=https://chatgpt.com/c/a;url=https://chatgpt.com/c/a',
+      'ui_contract_mismatch:duplicate_tabs:count=2:index=0;url=https://chatgpt.com/c/a;index=1;url=https://chatgpt.com/c/a',
     );
     expect(browser.contexts()[0]!.pages().length).toBe(2);
   });
@@ -1522,7 +1522,78 @@ describe('issue 1065 browser-surface classification', () => {
   it('AC4: Gate-B characterization control results use gate-b-characterization operation', () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../chatgpt-browser-turn.ts'), 'utf8');
     expect(source).toContain("operation: 'gate-b-characterization'");
-    expect(source).toContain("if (args.command === 'gate-b-characterization') return 'gate-b-characterization';");
+    expect(source).toContain("'gate-b-characterization'");
+    expect(source).toContain("'turn',");
+    expect(source).toContain('CONTROL_OPERATIONS');
+  });
+
+
+  it('AC6: missing option value preserves argument cause and emits Usage', async () => {
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    const profile = join(root, 'profile-1065-cli-missing');
+    let stdout = '';
+    let stderr = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    const originalStderr = process.stderr.write.bind(process.stderr);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr += String(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    const exitCode = await runCli([
+      'turn',
+      '--profile', profile,
+      '--cdp', cdp,
+      '--input', join(root, 'missing-value-input.txt'),
+      '--output', join(root, 'missing-value-output.txt'),
+      '--new-chat',
+      '--project-url', 'https://chatgpt.com/g/test',
+      '--timeout-ms',
+    ]);
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+    expect(exitCode).toBe(22);
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(body.operation).toBe('turn');
+    expect(body.cause).toBe('argument_value_missing:timeout-ms');
+    expect(stderr).toContain('Usage: npm run chatgpt-browser-turn');
+  });
+
+  it('AC6: turn mode/required argument failures preserve cause and Usage', async () => {
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    const profile = join(root, 'profile-1065-cli-mode');
+    let stdout = '';
+    let stderr = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    const originalStderr = process.stderr.write.bind(process.stderr);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr += String(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    const exitCode = await runCli([
+      'turn',
+      '--profile', profile,
+      '--cdp', cdp,
+      '--input', join(root, 'mode-input.txt'),
+      '--output', join(root, 'mode-output.txt'),
+      '--chat-url', 'https://chatgpt.com/c/mode',
+      '--new-chat',
+      '--project-url', 'https://chatgpt.com/g/test',
+    ]);
+    process.stdout.write = originalStdout;
+    process.stderr.write = originalStderr;
+    expect(exitCode).toBe(13);
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(body.schema).toBe('turn-result/v1');
+    expect(body.cause).toBe('argument_mode_invalid');
+    expect(stderr).toContain('Usage: npm run chatgpt-browser-turn');
   });
 
   it('AC5: bounded connectOverCDP degradation maps to cdp_degraded with diagnostics retained', () => {

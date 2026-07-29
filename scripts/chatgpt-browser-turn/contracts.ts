@@ -126,7 +126,7 @@ export interface StatusItemV1 {
 
 export interface ControlResultV1 {
   schema: 'control-result/v1';
-  operation: 'status/list' | 'clear' | 'capability' | 'gate-b-characterization' | 'publication-status';
+  operation: 'turn' | 'status/list' | 'clear' | 'capability' | 'gate-b-characterization' | 'publication-status';
   state: string;
   configured_profile_key: string;
   legacy_configured_profile_key?: string;
