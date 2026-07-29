@@ -955,6 +955,14 @@ export function observeSmokeDeliveryEstablished(
   return sealed?.runId === runBinding.runId;
 }
 
+export function observeSmokeUnsubmittedComposerPaste(lines: readonly string[]): boolean {
+  return lines.some((line) => {
+    const trimmed = line.trim();
+    return /^\[Pasted text\b/u.test(trimmed)
+      || /^→\s*\[Pasted text\b/u.test(trimmed);
+  });
+}
+
 export interface SmokeCompletionObservationState {
   sealedBodyDigests: Map<string, string>;
 }

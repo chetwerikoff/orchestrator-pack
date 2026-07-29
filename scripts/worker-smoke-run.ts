@@ -13,6 +13,7 @@ import {
   readOrcaTerminal,
   resolveOrcaExecutable,
   sendOrcaTerminal,
+  submitOrcaTerminalComposer,
   waitOrcaTerminal,
 } from './lib/orca-cli.ts';
 import {
@@ -31,6 +32,7 @@ import {
   createSmokeCompletionObservationState,
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
+  observeSmokeUnsubmittedComposerPaste,
   resolveSmokeRunArtifactDir,
   type SmokeChildWaitNonPassCause,
   type SmokeControlPlaneCause,
@@ -188,6 +190,7 @@ export interface SmokePromptDeliveryResult {
   cause?: SmokeChildWaitNonPassCause;
   controlPlaneCause?: SmokeControlPlaneCause;
   resendCount: number;
+  composerSubmitCount: number;
 }
 
 export interface SmokeChildCompletionResult {
@@ -236,23 +239,55 @@ export function establishSmokePromptDelivery(
   if (!sendResult.ok) {
     const controlPlane = preserveSmokeControlPlaneCause(sendResult.error?.code);
     if (controlPlane) {
-      return { ok: false, controlPlaneCause: controlPlane, resendCount };
+      return { ok: false, controlPlaneCause: controlPlane, resendCount, composerSubmitCount: 0 };
     }
     if (input.allowDefiniteNondeliveryRetry && isDefinitePromptNonDelivery(sendResult.error?.code)) {
       resendCount += 1;
       sendResult = attemptSend();
       if (!sendResult.ok) {
-        return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount };
+        return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount, composerSubmitCount: 0 };
       }
     } else {
-      return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount };
+      return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount, composerSubmitCount: 0 };
     }
   }
 
+  let composerSubmitCount = 0;
   while (now() < deadline) {
     if (observeSmokeDeliveryEstablished(input.runBinding)) {
-      return { ok: true, resendCount };
+      return { ok: true, resendCount, composerSubmitCount };
     }
+
+    const read = readOrcaTerminal(handle, {
+      cwd: input.cwd,
+      limit: 200,
+      runner: input.runner,
+    });
+    if (!read.ok) {
+      const controlPlane = preserveSmokeControlPlaneCause(read.error?.code);
+      if (controlPlane) {
+        return { ok: false, controlPlaneCause: controlPlane, resendCount, composerSubmitCount };
+      }
+    } else {
+      const lines = orcaTerminalReadLines(read.result);
+      if (
+        !observeSmokeDeliveryEstablished(input.runBinding)
+        && observeSmokeUnsubmittedComposerPaste(lines)
+      ) {
+        const submit = submitOrcaTerminalComposer(handle, { cwd: input.cwd, runner: input.runner });
+        composerSubmitCount += 1;
+        if (!submit.ok) {
+          const controlPlane = preserveSmokeControlPlaneCause(submit.error?.code);
+          if (controlPlane) {
+            return { ok: false, controlPlaneCause: controlPlane, resendCount, composerSubmitCount };
+          }
+        }
+        if (observeSmokeDeliveryEstablished(input.runBinding)) {
+          return { ok: true, resendCount, composerSubmitCount };
+        }
+      }
+    }
+
     const remaining = deadline - now();
     if (remaining <= 0) {
       break;
@@ -260,7 +295,7 @@ export function establishSmokePromptDelivery(
     sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
   }
 
-  return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount };
+  return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount, composerSubmitCount };
 }
 
 export function waitForSmokeChildCompletion(

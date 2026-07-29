@@ -22,6 +22,7 @@ import {
   createSmokeCompletionObservationState,
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
+  observeSmokeUnsubmittedComposerPaste,
   resolveSmokeRunArtifactDir,
   smokeCompletionBodyPath,
   smokeCompletionSealPath,
@@ -1706,6 +1707,128 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     expect(delivery.ok).toBe(false);
     expect(sendCalls).toBe(1);
     rmSync(root, { recursive: true, force: true });
+  });
+
+
+  it('delivery-bracketed-paste-stuck nudges composer submit until sealed delivery', () => {
+    const root = mkdtempSync(join(tmpdir(), 'smoke-delivery-paste-stuck-'));
+    const binding = makeRunBinding(root);
+    let fullSendCount = 0;
+    let composerSubmitCount = 0;
+    let now = 0;
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal send')) {
+        if (args.includes('--text')) {
+          fullSendCount += 1;
+          return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+        }
+        composerSubmitCount += 1;
+        if (composerSubmitCount >= 2) {
+          writeDeliverySealed(binding);
+        }
+        return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+      }
+      if (joined.includes('terminal read')) {
+        const lines = observeSmokeDeliveryEstablished(binding)
+          ? []
+          : ['→ [Pasted text #1 +349 lines]'];
+        return { stdout: JSON.stringify({ ok: true, result: { lines } }), stderr: '', status: 0 };
+      }
+      return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+    });
+    const delivery = establishSmokePromptDelivery('child', {
+      cwd: root,
+      deadlineMs: 5_000,
+      runBinding: binding,
+      prompt: 'smoke prompt',
+      runner: runner as never,
+      now: () => now,
+      sleepMs: (ms) => { now += ms; },
+    });
+    expect(delivery.ok).toBe(true);
+    expect(fullSendCount).toBe(1);
+    expect(composerSubmitCount).toBeGreaterThanOrEqual(1);
+    expect(delivery.composerSubmitCount).toBe(composerSubmitCount);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('delivery-bracketed-paste-stuck does not re-send full prompt text', () => {
+    const root = mkdtempSync(join(tmpdir(), 'smoke-delivery-paste-no-resend-'));
+    const binding = makeRunBinding(root);
+    let fullSendCount = 0;
+    let now = 0;
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal send') && args.includes('--text')) {
+        fullSendCount += 1;
+        return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+      }
+      if (joined.includes('terminal send')) {
+        writeDeliverySealed(binding);
+        return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+      }
+      if (joined.includes('terminal read')) {
+        return {
+          stdout: JSON.stringify({ ok: true, result: { lines: ['→ [Pasted text #1 +120 lines]'] } }),
+          stderr: '',
+          status: 0,
+        };
+      }
+      return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+    });
+    const delivery = establishSmokePromptDelivery('child', {
+      cwd: root,
+      deadlineMs: 2_000,
+      runBinding: binding,
+      prompt: 'smoke prompt',
+      runner: runner as never,
+      now: () => now,
+      sleepMs: (ms) => { now += ms; },
+    });
+    expect(delivery.ok).toBe(true);
+    expect(fullSendCount).toBe(1);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('delivery-bracketed-paste-stuck skips composer nudge once delivery seal exists', () => {
+    const root = mkdtempSync(join(tmpdir(), 'smoke-delivery-paste-sealed-'));
+    const binding = makeRunBinding(root);
+    writeDeliverySealed(binding);
+    let composerSubmitCount = 0;
+    let now = 0;
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal send') && !args.includes('--text')) {
+        composerSubmitCount += 1;
+      }
+      if (joined.includes('terminal read')) {
+        return {
+          stdout: JSON.stringify({ ok: true, result: { lines: ['→ [Pasted text #1 +349 lines]'] } }),
+          stderr: '',
+          status: 0,
+        };
+      }
+      return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+    });
+    const delivery = establishSmokePromptDelivery('child', {
+      cwd: root,
+      deadlineMs: 500,
+      runBinding: binding,
+      prompt: 'smoke prompt',
+      runner: runner as never,
+      now: () => now,
+      sleepMs: (ms) => { now += ms; },
+    });
+    expect(delivery.ok).toBe(true);
+    expect(composerSubmitCount).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('observeSmokeUnsubmittedComposerPaste recognizes bracketed paste affordance lines', () => {
+    expect(observeSmokeUnsubmittedComposerPaste(['→ [Pasted text #1 +349 lines]'])).toBe(true);
+    expect(observeSmokeUnsubmittedComposerPaste(['[Pasted text #2 +12 lines]'])).toBe(true);
+    expect(observeSmokeUnsubmittedComposerPaste(['Composer 2.5 · 48.7%'])).toBe(false);
   });
 
   it('completion-wrong-run ignores artifacts outside the current run directory', () => {
