@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use when accepting a GPT-chat-authored task for orchestrator-pack — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: one flow-manager opens the GPT task chat and GPT authors the Issue). OpenCode is the default manager when no runtime is explicitly selected; a capable operator-selected runtime such as Cursor or Codex is permitted without a tracked manager-name allowlist. The flow-manager drives the fixed per-tier cycle through acceptance or a bounded blocked outcome; browser GPT is the only review engine. T1/T2: one terminal GPT architectural lens. T3: competitive → architectural-review → Claude architectural-lens (or valid unavailable waiver) → terminal GPT architectural. Browser-GPT turns use the state-light send-once page-polling helper; stale legacy admission/recovery state is non-authoritative. Covers Issue-only live task state, T3-critical L4 floors, issue-body guards, and the finding-disposition ledger. No Codex create-flow role. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from docs/tiering.md.
+description: Use when accepting a GPT-chat-authored task for orchestrator-pack — the user hands over a GitHub Issue link plus the browser-GPT task-chat link (or only a brief: one flow-manager opens the GPT task chat and GPT authors the Issue). OpenCode is the default manager when no runtime is explicitly selected; a capable operator-selected runtime such as Cursor or Codex is permitted without a tracked manager-name allowlist. The flow-manager drives the fixed per-tier cycle through acceptance or a bounded blocked outcome; browser GPT is the only review engine. T1/T2: one terminal GPT architectural lens. T3: competitive → architectural-review → Claude architectural-lens (or valid unavailable waiver) → terminal GPT architectural. Browser-GPT turns use the state-light send-once page-polling helper; stale legacy admission/recovery state is non-authoritative. Covers Issue-only live task state, T3-critical L4 floors, issue-body guards, and the finding-disposition ledger. Codex may manage the flow when selected but cannot substitute for required browser-GPT/Claude review stages. Invoke for on-ladder GPT-authored tasks; use the canonical below-ladder skip line from docs/tiering.md.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -187,7 +187,7 @@ competitive → architectural-review → Claude lens → GPT lens
 9. Run `final-acceptance`. Terminal GPT `architectural` is the sole M5 anchor and
    owns final aggregate cut.
 
-**No `architectural-final` stage. No Codex create-flow review role. No engine
+**No `architectural-final` stage.** Codex may manage the flow when selected but cannot substitute for required browser-GPT/Claude review stages. **No engine
 substitution on browser outage.**
 
 **Staleness / review-episode binding.** Claude captures bind to the source Issue
@@ -355,8 +355,8 @@ T3-critical adds **only**:
 - realistic acceptance criteria and matching verification for every material
   crash, race, or stale-state failure class.
 
-There is no mandatory Codex review addition or Codex outage substitution. While L4
-remains active, the task cannot be downgraded below T3.
+There is **no** mandatory Codex addition and **no** Codex outage substitution in
+this flow. While L4 remains active, the task cannot be downgraded below T3.
 
 ## Mechanical floor commands
 
@@ -469,7 +469,8 @@ Exactly one full lens per cycle segment after the pre-lens guard is green. The
 flow-manager only orchestrates: prepare inputs/evidence destination, launch one
 separate Claude Code CLI invocation, wait for terminal completion, and capture its
 verbatim output/provenance. The flow-manager must not simulate or adjudicate the
-Claude lens. Browser GPT/Codex cannot substitute.
+Claude lens. Browser GPT, Codex, or any other model cannot substitute for the
+skipped Claude lens.
 
 ### Claude-unavailable skip
 

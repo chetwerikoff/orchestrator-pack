@@ -69,7 +69,7 @@ export async function verifyProfile(
     const mod = await loadCdpOwnerModule();
     if (segmentBudget) {
       const ownerWaitMs = segmentBudget.clampOperationWaitMs();
-      if (ownerWaitMs <= 0) throw new BrowserOperationTimeoutError('profile_segment_exhausted');
+      if (ownerWaitMs <= 0) throw new BrowserOperationTimeoutError('owner_probe');
       const bounded = mod.verifyCdpProfileBounded;
       if (!bounded) throw new BrowserOperationTimeoutError('owner_probe', 'bounded_mode_missing');
       const result = await bounded({ cdp: config.cdp, profile: config.profile, timeoutMs: ownerWaitMs });
