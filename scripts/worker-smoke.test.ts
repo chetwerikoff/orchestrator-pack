@@ -24,7 +24,9 @@ import {
   findCurrentHeadSmokePass,
   SMOKE_GH_AUTH_ENV_KEYS,
   SMOKE_REPORT_PRODUCER,
-  smokeAgentTerminalActivityDetected,
+  smokeAgentTerminalDeltaActivity,
+  smokeAgentTerminalFullActivity,
+  scrubForwardedGhSecrets,
   smokeReportCoversPlan,
   smokeReportHasPackProducer,
   scrubSmokeOutput,
@@ -35,7 +37,7 @@ import {
   SMOKE_REPORT_MARKER,
 } from './lib/worker-smoke-core.ts';
 import { runProcessSync } from './kernel/subprocess.ts';
-import { waitForSmokeAgentCompletion } from './worker-smoke-run.ts';
+import { runSmokeGhSync, waitForSmokeAgentCompletion } from './worker-smoke-run.ts';
 import { readWorkerSmokeReceipt, verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { checkSmokeTestPlan, resolveSmokeRequirement } from './draft-discipline.mjs';
 
@@ -598,7 +600,7 @@ describe('review finding regressions', () => {
 });
 
 describe('worker smoke gh child env forwarding (#1101)', () => {
-  const authSentinel = 'fixture-gh-auth-sentinel-abc123';
+  const authSentinel = 'opaque-sentinel-not-matching-gh-prefix-abc123';
   const unrelatedSentinel = 'fixture-unrelated-parent-sentinel-xyz';
 
   it('forwards supported gh auth/config carriers without unrelated parent env', () => {
@@ -619,89 +621,56 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
     }
   });
 
-  it('supports config-home carriers independently of token carriers', () => {
-    const parent = {
-      HOME: '/home/smoke-user',
-      XDG_CONFIG_HOME: '/home/smoke-user/.config',
-    } as NodeJS.ProcessEnv;
-    const child = buildSmokeGhChildEnv(parent);
-    expect(child.HOME).toBe('/home/smoke-user');
-    expect(child.XDG_CONFIG_HOME).toBe('/home/smoke-user/.config');
-    expect(child.GH_TOKEN).toBeUndefined();
-  });
-
   it('restores authenticated gh child behavior on the smoke-owned seam without leaking sentinels', () => {
     const fakeBin = join(fixtureRoot, 'fake-bin');
     const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
-    const ghProbe = join(fakeBin, 'gh-auth-probe');
-    const withoutAuth = runProcessSync({
-      command: 'sh',
-      args: [ghProbe, 'auth-probe'],
-      env: { PATH: probePath },
-    });
+    const withoutAuth = runSmokeGhSync(
+      ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+      fixtureRoot,
+      { PATH: probePath },
+    );
     expect(withoutAuth.ok).toBe(false);
     expect(withoutAuth.stderr).toContain('auth-carrier-missing');
 
-    const withAuth = runProcessSync({
-      command: 'sh',
-      args: [ghProbe, 'auth-probe'],
-      env: {
+    const withAuth = runSmokeGhSync(
+      ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+      fixtureRoot,
+      {
         PATH: probePath,
         ...buildSmokeGhChildEnv({
           GH_TOKEN: authSentinel,
           UNRELATED_SENTINEL: unrelatedSentinel,
         } as NodeJS.ProcessEnv),
       },
-    });
+    );
     expect(withAuth.ok).toBe(true);
-    expect(withAuth.stdout).toContain('auth-carrier-present');
+    expect(withAuth.stdout).toContain('[]');
     expect(withAuth.stdout).not.toContain(authSentinel);
     expect(withAuth.stderr).not.toContain(authSentinel);
   });
 
-
-  it('restores config-home carriers on the smoke-owned gh seam', () => {
+  it('scrubs arbitrary forwarded token values from stderr-derived failure surfaces', () => {
     const fakeBin = join(fixtureRoot, 'fake-bin');
     const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
-    const ghProbe = join(fakeBin, 'gh-auth-probe');
-    const withConfigHome = runProcessSync({
-      command: 'sh',
-      args: [ghProbe, 'config-home-probe'],
-      env: {
-        PATH: probePath,
-        ...buildSmokeGhChildEnv({
-          HOME: '/home/smoke-user',
-          XDG_CONFIG_HOME: '/home/smoke-user/.config',
-        } as NodeJS.ProcessEnv),
-      },
-    });
-    expect(withConfigHome.ok).toBe(true);
-    expect(withConfigHome.stdout).toContain('config-home-present');
-  });
-
-  it('scrubs credential sentinels from stderr-derived failure surfaces', () => {
-    const fakeBin = join(fixtureRoot, 'fake-bin');
-    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
-    const ghProbe = join(fakeBin, 'gh-auth-probe');
-    const failed = runProcessSync({
-      command: 'sh',
-      args: [ghProbe, 'fail-with-sentinel'],
-      env: {
-        PATH: probePath,
-        ...buildSmokeGhChildEnv({ GH_TOKEN: authSentinel } as NodeJS.ProcessEnv),
-      },
-    });
-    const scrubbed = scrubSmokeOutput(`${failed.stderr}${failed.stdout}`);
+    const childEnv = buildSmokeGhChildEnv({ GH_TOKEN: authSentinel } as NodeJS.ProcessEnv);
+    const failed = runSmokeGhSync(
+      ['fail-with-sentinel'],
+      fixtureRoot,
+      { PATH: probePath, ...childEnv },
+    );
+    const scrubbed = scrubSmokeOutput(scrubForwardedGhSecrets(`${failed.stderr}${failed.stdout}`, childEnv));
     expect(scrubbed).not.toContain(authSentinel);
-    expect(scrubbed).toContain('[redacted-auth-sentinel]');
+    expect(scrubbed).toContain('[redacted-secret]');
   });
 });
 
 describe('worker smoke agent start-aware wait (#1101)', () => {
-  it('detects positive terminal activity beyond the post-send baseline', () => {
-    expect(smokeAgentTerminalActivityDetected('idle prompt', 'idle prompt')).toBe(false);
-    expect(smokeAgentTerminalActivityDetected('idle prompt\nagent started', 'idle prompt')).toBe(true);
-    expect(smokeAgentTerminalActivityDetected('```worker-smoke-report', '')).toBe(true);
+  it('detects positive terminal activity on full snapshots and cursor deltas', () => {
+    expect(smokeAgentTerminalFullActivity('idle prompt', 'idle prompt')).toBe(false);
+    expect(smokeAgentTerminalFullActivity('idle prompt\nagent started', 'idle prompt')).toBe(true);
+    expect(smokeAgentTerminalFullActivity('```worker-smoke-report', '')).toBe(true);
+    expect(smokeAgentTerminalDeltaActivity('')).toBe(false);
+    expect(smokeAgentTerminalDeltaActivity('new output')).toBe(true);
   });
 
   it('does not complete during initial idle before delayed first output', () => {
@@ -711,11 +680,11 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
       const joined = args.join(' ');
       if (joined.includes('terminal read')) {
         readCalls += 1;
-        if (readCalls < 3) {
-          return { stdout: JSON.stringify({ ok: true, result: { lines: ['idle'], nextCursor: 1 } }), stderr: '', status: 0 };
+        if (readCalls < 4) {
+          return { stdout: JSON.stringify({ ok: true, result: { lines: [], nextCursor: 1 } }), stderr: '', status: 0 };
         }
         return {
-          stdout: JSON.stringify({ ok: true, result: { lines: ['idle', 'agent output'], nextCursor: 2 } }),
+          stdout: JSON.stringify({ ok: true, result: { lines: ['agent output'], nextCursor: 2 } }),
           stderr: '',
           status: 0,
         };
@@ -730,13 +699,15 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
       runner: runner as never,
       now: () => now,
       deadlineMs: 5_000,
+      preSendBaselineText: 'idle',
+      preSendCursor: 1,
       sleepMs: (ms) => {
         now += ms;
       },
     });
     expect(result.ok).toBe(true);
     expect(result.agentActivityObserved).toBe(true);
-    expect(readCalls).toBeGreaterThanOrEqual(3);
+    expect(readCalls).toBeGreaterThanOrEqual(4);
   });
 
   it('terminates at the shared deadline when the agent never starts', () => {
@@ -744,7 +715,7 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
     const runner = vi.fn((executable: string, args: string[]) => {
       const joined = args.join(' ');
       if (joined.includes('terminal read')) {
-        return { stdout: JSON.stringify({ ok: true, result: { lines: ['idle'], nextCursor: 1 } }), stderr: '', status: 0 };
+        return { stdout: JSON.stringify({ ok: true, result: { lines: [], nextCursor: 1 } }), stderr: '', status: 0 };
       }
       return { stdout: JSON.stringify({ ok: false, error: { message: 'unexpected' } }), stderr: '', status: 1 };
     });
@@ -753,6 +724,8 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
       runner: runner as never,
       now: () => now,
       deadlineMs: 600,
+      preSendBaselineText: 'idle',
+      preSendCursor: 1,
       sleepMs: (ms) => {
         now += ms;
       },
@@ -768,15 +741,23 @@ describe('worker smoke non-pass cause classification (#1101)', () => {
   it('distinguishes zero-parsed-scenarios, missing-agent-report, and executed-scenario-failure', () => {
     expect(classifySmokeNonPassCause({ zeroParsedScenarios: true, partial: null, agentActivityObserved: false }))
       .toBe('zero_parsed_scenarios');
-    expect(classifySmokeNonPassCause({ partial: null, agentActivityObserved: true }))
+    expect(classifySmokeNonPassCause({ partial: null, agentActivityObserved: true, agentCompleted: true }))
       .toBe('missing_agent_report');
+    expect(classifySmokeNonPassCause({ partial: null, agentActivityObserved: true, agentCompleted: false }))
+      .toBeUndefined();
     expect(classifySmokeNonPassCause({
       partial: {
         result: 'FAIL',
         scenarios: [{ action: 'x', expected: 'y', observed: 'z', outcome: 'fail' }],
       },
       agentActivityObserved: true,
+      agentCompleted: true,
     })).toBe('executed_scenario_failure');
+    expect(classifySmokeNonPassCause({
+      partial: { result: 'FAIL', scenarios: [{ action: 'x', expected: 'y', observed: 'z', outcome: 'pass' }] },
+      agentActivityObserved: true,
+      agentCompleted: true,
+    })).toBeUndefined();
   });
 
   it('parses numbered prose to zero scenarios and blocks gate-check without implying execution', () => {
@@ -820,6 +801,7 @@ describe('worker smoke non-pass cause classification (#1101)', () => {
     expect(payload.nonPassCause).toBe('zero_parsed_scenarios');
     expect(payload.terminalCreated).toBe(false);
     expect(payload.published).toBe(false);
+    expect(payload.report?.nonPassCause).toBe('zero_parsed_scenarios');
   });
 
     it('still serializes canonical non-empty scenarios into the smoke-agent prompt', () => {

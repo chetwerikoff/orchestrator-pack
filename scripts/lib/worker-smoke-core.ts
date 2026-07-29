@@ -38,6 +38,7 @@ export interface SmokeReport {
   producer?: string;
   orcaExecutable?: string;
   terminalHandle?: string;
+  nonPassCause?: SmokeNonPassCause;
 }
 
 export const SMOKE_REPORT_MARKER = 'pack-worker-smoke-report/v1';
@@ -326,6 +327,9 @@ export function formatSmokeReportComment(report: SmokeReport): string {
     `terminal-handle: ${report.terminalHandle ?? ''}`,
     `tracked-files-unmodified: ${report.trackedFilesUnmodified ? 'true' : 'false'}`,
     `terminal-cleanup: ${report.terminalCleanup}`,
+    'nonPassCause' in report && report.nonPassCause
+      ? `non-pass-cause: ${String(report.nonPassCause)}`
+      : '',
     report.environmentNotes.length > 0 ? `environment-notes: ${report.environmentNotes.join('; ')}` : '',
     report.limitations.length > 0 ? `limitations: ${report.limitations.join('; ')}` : '',
     'scenarios:',
@@ -630,6 +634,14 @@ export const SMOKE_GH_AUTH_ENV_KEYS = [
 
 export type SmokeGhAuthEnvKey = (typeof SMOKE_GH_AUTH_ENV_KEYS)[number];
 
+export const SMOKE_GH_SECRET_ENV_KEYS = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+  'GHE_TOKEN',
+] as const;
+
 export function buildSmokeGhChildEnv(parentEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const forwarded: NodeJS.ProcessEnv = {};
   for (const key of SMOKE_GH_AUTH_ENV_KEYS) {
@@ -650,38 +662,65 @@ export function classifySmokeNonPassCause(input: {
   zeroParsedScenarios?: boolean;
   partial: Partial<SmokeReport> | null;
   agentActivityObserved: boolean;
+  agentCompleted?: boolean;
 }): SmokeNonPassCause | undefined {
   if (input.zeroParsedScenarios) {
     return 'zero_parsed_scenarios';
   }
   if (!input.partial) {
-    return input.agentActivityObserved ? 'missing_agent_report' : undefined;
+    if (input.agentCompleted && input.agentActivityObserved) {
+      return 'missing_agent_report';
+    }
+    return undefined;
   }
-  const scenarios = input.partial.scenarios ?? [];
-  const hasFailedScenario = scenarios.some((scenario) => scenario.outcome === 'fail');
-  if (input.partial.result === 'FAIL' || hasFailedScenario) {
+  const hasFailedScenario = (input.partial.scenarios ?? []).some((scenario) => scenario.outcome === 'fail');
+  if (hasFailedScenario) {
     return 'executed_scenario_failure';
   }
   return undefined;
 }
 
-export function smokeAgentTerminalActivityDetected(currentText: string, baselineText: string): boolean {
-  if (currentText.length > baselineText.length) {
+export function smokeAgentTerminalDeltaActivity(deltaText: string): boolean {
+  return deltaText.trim().length > 0;
+}
+
+export function smokeAgentTerminalFullActivity(currentFullText: string, baselineFullText: string): boolean {
+  if (currentFullText.length > baselineFullText.length) {
     return true;
   }
-  if (currentText !== baselineText) {
+  if (currentFullText !== baselineFullText) {
     return true;
   }
-  if (currentText.includes('worker-smoke-report') && !baselineText.includes('worker-smoke-report')) {
+  if (currentFullText.includes('worker-smoke-report') && !baselineFullText.includes('worker-smoke-report')) {
     return true;
   }
   return false;
 }
 
-export function scrubSmokeOutput(text: string): string {
-  return text
+/** @deprecated Use delta/full helpers explicitly at the Orca read boundary. */
+export function smokeAgentTerminalActivityDetected(currentText: string, baselineText: string): boolean {
+  return smokeAgentTerminalFullActivity(currentText, baselineText);
+}
+
+export function scrubForwardedGhSecrets(
+  text: string,
+  childEnv: Readonly<NodeJS.ProcessEnv> = buildSmokeGhChildEnv(),
+): string {
+  let scrubbed = text;
+  for (const key of SMOKE_GH_SECRET_ENV_KEYS) {
+    const value = childEnv[key];
+    if (!value || value.length < 4) {
+      continue;
+    }
+    scrubbed = scrubbed.split(value).join('[redacted-secret]');
+  }
+  return scrubbed;
+}
+
+export function scrubSmokeOutput(text: string, childEnv?: Readonly<NodeJS.ProcessEnv>): string {
+  const withSecrets = childEnv ? scrubForwardedGhSecrets(text, childEnv) : text;
+  return withSecrets
     .replace(/(?:ghp_|github_pat_)[A-Za-z0-9_]+/g, '[redacted-token]')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted]')
-    .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, '[redacted-secret]')
-    .replace(/fixture-gh-auth-sentinel-[A-Za-z0-9_-]+/g, '[redacted-auth-sentinel]');
+    .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, '[redacted-secret]');
 }
