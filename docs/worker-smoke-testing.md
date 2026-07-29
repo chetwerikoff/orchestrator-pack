@@ -88,6 +88,8 @@ the parent issues `submitOrcaTerminalComposer` — `orca terminal send --enter` 
 
 r01 ambiguity rules are unchanged: without the paste+no-seal pair, the parent does not nudge; ambiguous send failures still do not authorize full-prompt resend.
 
+**PTY visibility limit.** Paste detection and Enter-nudge use only **visible PTY bytes** from `orca terminal read`. If Orca drops or withholds scrollback (for example when the host window is minimized — see **Owned-handle supervision** below), the parent cannot see the paste affordance, nudges do not fire, and the attempt still consumes the terminal-phase budget until **`prompt_delivery_unconfirmed`**. The failure class is unchanged from the pre-automation case; only recovery is PTY-dependent, and operator manual submit remains the fallback in that slice.
+
 **Grounded example (2026-07-29, PR #1132 head `447a908b`)**
 
 Run `5dc077c7-6bec-4f0d-b0dd-11986a7f0d74`, terminal `term_a8bcd171-5162-4fc1-8b91-b2606b2f9216`:
