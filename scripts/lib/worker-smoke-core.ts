@@ -708,21 +708,19 @@ export function classifyDeclaredScenarioNonPassCause(input: {
   });
 }
 
+export const SMOKE_AGENT_START_WITNESS = 'worker-smoke-report';
+
+export function smokeAgentTerminalStartWitness(text: string): boolean {
+  return text.includes(SMOKE_AGENT_START_WITNESS);
+}
+
 export function smokeAgentTerminalDeltaActivity(deltaText: string): boolean {
-  return deltaText.trim().length > 0;
+  return smokeAgentTerminalStartWitness(deltaText);
 }
 
 export function smokeAgentTerminalFullActivity(currentFullText: string, baselineFullText: string): boolean {
-  if (currentFullText.length > baselineFullText.length) {
-    return true;
-  }
-  if (currentFullText !== baselineFullText) {
-    return true;
-  }
-  if (currentFullText.includes('worker-smoke-report') && !baselineFullText.includes('worker-smoke-report')) {
-    return true;
-  }
-  return false;
+  return smokeAgentTerminalStartWitness(currentFullText)
+    && !smokeAgentTerminalStartWitness(baselineFullText);
 }
 
 /** @deprecated Use delta/full helpers explicitly at the Orca read boundary. */
@@ -730,24 +728,38 @@ export function smokeAgentTerminalActivityDetected(currentText: string, baseline
   return smokeAgentTerminalFullActivity(currentText, baselineText);
 }
 
+function collectGhConfigHomeSecretValues(configDir: string): string[] {
+  const secrets: string[] = [];
+  for (const fileName of ['hosts.yml', 'config.yml']) {
+    const filePath = join(configDir, fileName);
+    if (!existsSync(filePath)) {
+      continue;
+    }
+    try {
+      const content = readFileSync(filePath, 'utf8');
+      for (const match of content.matchAll(/(?:oauth_token|password|git_protocol_token):\s*(\S+)/g)) {
+        const value = match[1]?.trim();
+        if (value && value.length >= 4) {
+          secrets.push(value);
+        }
+      }
+    } catch {
+      // ignore unreadable config-home files
+    }
+  }
+  return secrets;
+}
+
 function scrubConfigHomeCredentialValues(text: string, childEnv: Readonly<NodeJS.ProcessEnv>): string {
   const configDir = childEnv.GH_CONFIG_DIR;
   if (!configDir) {
     return text;
   }
-  const marker = join(configDir, '.smoke-config-credential');
-  if (!existsSync(marker)) {
-    return text;
+  let scrubbed = text;
+  for (const credential of collectGhConfigHomeSecretValues(configDir)) {
+    scrubbed = scrubbed.split(credential).join('[redacted-secret]');
   }
-  try {
-    const credential = readFileSync(marker, 'utf8').trim();
-    if (credential.length >= 4) {
-      return text.split(credential).join('[redacted-secret]');
-    }
-  } catch {
-    // ignore unreadable fixture marker
-  }
-  return text;
+  return scrubbed;
 }
 
 export function scrubForwardedGhSecrets(

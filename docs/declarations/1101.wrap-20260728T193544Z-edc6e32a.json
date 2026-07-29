@@ -7,15 +7,16 @@
   "baseline": {
     "commit_sha": "e4560abaf5319d8f7002245d091dda322be4e368",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:844e7688101b9d6fc9ec8e7a309de2d823b7812251a0e5a83ac87c01daf041f8"
+    "active_scope_hash": "sha256:d661e789c3e9f81a3debf6eff094d5a76afaf8c9b6b6ef99d3399ef8afe16712"
   },
   "declared_paths": [
-    "scripts/worker-smoke-run.ts",
-    "scripts/lib/worker-smoke-core.ts",
-    "scripts/worker-smoke.test.ts",
     "docs/worker-smoke-testing.md",
-    "tests/fixtures/worker-smoke/fake-bin/gh-auth-probe",
+    "scripts/kernel/subprocess.ts",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts",
     "tests/fixtures/worker-smoke/fake-bin/gh",
+    "tests/fixtures/worker-smoke/fake-bin/gh-auth-probe",
     "tests/fixtures/worker-smoke/zero-scenario-numbered-prose.md"
   ],
   "declared_globs": [],
@@ -32,6 +33,20 @@
       "reason": "Add fake-bin/gh fixture for runSmokeGhSync AC1 seam tests",
       "actor": "local",
       "timestamp": "2026-07-29T02:47:54.537Z",
+      "applied": true
+    },
+    {
+      "previous_active_scope_hash": "sha256:844e7688101b9d6fc9ec8e7a309de2d823b7812251a0e5a83ac87c01daf041f8",
+      "new_active_scope_hash": "sha256:d661e789c3e9f81a3debf6eff094d5a76afaf8c9b6b6ef99d3399ef8afe16712",
+      "changed": {
+        "added": [
+          "scripts/kernel/subprocess.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Revert merged main minimalEnvironment widening to preserve #1101 caller-scoped subprocess contract",
+      "actor": "local",
+      "timestamp": "2026-07-29T09:21:00Z",
       "applied": true
     }
   ]

@@ -641,8 +641,21 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       plan,
     });
     const preSendRead = readOrcaTerminal(handle, { cwd: options.cwd, limit: 2000 });
-    const preSendBaselineText = preSendRead.ok ? (preSendRead.result?.lines ?? []).join('\n') : '';
-    const preSendCursor = preSendRead.ok ? preSendRead.result?.nextCursor : undefined;
+    if (!preSendRead.ok) {
+      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
+      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
+      const report = buildOperationalSmokeReport('BLOCKED', options, {
+        action: 'capture pre-send terminal baseline',
+        expected: 'terminal read succeeds before smoke prompt send',
+        observed: preSendRead.error?.message ?? preSendRead.error?.code ?? 'terminal_read_failed',
+        terminalCleanup,
+      });
+      publishSmokeReport(report, options);
+      emit({ ok: false, report, published: !options.dryRun }, options.json);
+      return 1;
+    }
+    const preSendBaselineText = (preSendRead.result?.lines ?? []).join('\n');
+    const preSendCursor = preSendRead.result?.nextCursor;
 
     const sendResult = sendOrcaTerminal(handle, prompt, { cwd: options.cwd });
     if (!sendResult.ok) {

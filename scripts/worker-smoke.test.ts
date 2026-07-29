@@ -661,8 +661,8 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
     const fakeBin = join(fixtureRoot, 'fake-bin');
     const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
     const configHomeDir = mkdtempSync(join(tmpdir(), 'smoke-gh-config-only-'));
-    const configCredential = 'config-home-credential-sentinel-1101';
-    writeFileSync(join(configHomeDir, '.smoke-config-credential'), configCredential, 'utf8');
+    const configCredential = 'gho_confighomecredential1101abcdef';
+    writeFileSync(join(configHomeDir, 'hosts.yml'), 'github.com:\n    oauth_token: ' + configCredential + '\n', 'utf8');
     const stripTokenCarriers = {
       GH_TOKEN: '',
       GITHUB_TOKEN: '',
@@ -718,8 +718,8 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
     const fakeBin = join(fixtureRoot, 'fake-bin');
     const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
     const configHomeDir = mkdtempSync(join(tmpdir(), 'smoke-gh-config-scrub-'));
-    const configCredential = 'config-home-credential-scrub-1101';
-    writeFileSync(join(configHomeDir, '.smoke-config-credential'), configCredential, 'utf8');
+    const configCredential = 'gho_confighomescrub1101abcdef';
+    writeFileSync(join(configHomeDir, 'hosts.yml'), 'github.com:\n    oauth_token: ' + configCredential + '\n', 'utf8');
     const childEnv = buildSmokeGhChildEnv({ GH_CONFIG_DIR: configHomeDir } as NodeJS.ProcessEnv);
     try {
       const failed = runSmokeGhSync(
@@ -753,10 +753,11 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
 describe('worker smoke agent start-aware wait (#1101)', () => {
   it('detects positive terminal activity on full snapshots and cursor deltas', () => {
     expect(smokeAgentTerminalFullActivity('idle prompt', 'idle prompt')).toBe(false);
-    expect(smokeAgentTerminalFullActivity('idle prompt\nagent started', 'idle prompt')).toBe(true);
+    expect(smokeAgentTerminalFullActivity('idle prompt\nagent started', 'idle prompt')).toBe(false);
     expect(smokeAgentTerminalFullActivity('```worker-smoke-report', '')).toBe(true);
     expect(smokeAgentTerminalDeltaActivity('')).toBe(false);
-    expect(smokeAgentTerminalDeltaActivity('new output')).toBe(true);
+    expect(smokeAgentTerminalDeltaActivity('new output')).toBe(false);
+    expect(smokeAgentTerminalDeltaActivity('```worker-smoke-report')).toBe(true);
   });
 
   it('does not complete during initial idle before delayed first output', () => {
@@ -770,7 +771,7 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
           return { stdout: JSON.stringify({ ok: true, result: { lines: [], nextCursor: 1 } }), stderr: '', status: 0 };
         }
         return {
-          stdout: JSON.stringify({ ok: true, result: { lines: ['agent output'], nextCursor: 2 } }),
+          stdout: JSON.stringify({ ok: true, result: { lines: ['```worker-smoke-report\nresult: PASS'], nextCursor: 2 } }),
           stderr: '',
           status: 0,
         };
