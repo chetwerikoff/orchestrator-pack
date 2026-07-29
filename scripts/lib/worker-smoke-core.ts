@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseKeyValueBlock } from '../markdown-key-value.mjs';
 import {
   checkSmokeTestPlan,
@@ -625,7 +627,6 @@ export const SMOKE_GH_AUTH_ENV_KEYS = [
   'GITHUB_ENTERPRISE_TOKEN',
   'GHE_TOKEN',
   'GH_HOST',
-  'GH_REPO',
   'GH_CONFIG_DIR',
   'XDG_CONFIG_HOME',
   'HOME',
@@ -681,8 +682,9 @@ export function classifySmokeNonPassCause(input: {
     }
     return undefined;
   }
-  const hasFailedScenario = (input.partial.scenarios ?? []).some((scenario) => scenario.outcome === 'fail');
-  if (hasFailedScenario) {
+  const hasFailedDeclaredScenario = declaredSmokeScenarios(input.partial)
+    .some((scenario) => scenario.outcome === 'fail');
+  if (hasFailedDeclaredScenario) {
     return 'executed_scenario_failure';
   }
   return undefined;
@@ -728,11 +730,31 @@ export function smokeAgentTerminalActivityDetected(currentText: string, baseline
   return smokeAgentTerminalFullActivity(currentText, baselineText);
 }
 
+function scrubConfigHomeCredentialValues(text: string, childEnv: Readonly<NodeJS.ProcessEnv>): string {
+  const configDir = childEnv.GH_CONFIG_DIR;
+  if (!configDir) {
+    return text;
+  }
+  const marker = join(configDir, '.smoke-config-credential');
+  if (!existsSync(marker)) {
+    return text;
+  }
+  try {
+    const credential = readFileSync(marker, 'utf8').trim();
+    if (credential.length >= 4) {
+      return text.split(credential).join('[redacted-secret]');
+    }
+  } catch {
+    // ignore unreadable fixture marker
+  }
+  return text;
+}
+
 export function scrubForwardedGhSecrets(
   text: string,
   childEnv: Readonly<NodeJS.ProcessEnv> = buildSmokeGhChildEnv(),
 ): string {
-  let scrubbed = text;
+  let scrubbed = scrubConfigHomeCredentialValues(text, childEnv);
   for (const key of SMOKE_GH_SECRET_ENV_KEYS) {
     const value = childEnv[key];
     if (!value || value.length < 4) {

@@ -2,15 +2,30 @@
 set -eu
 case "${1:-}" in
   api|pr)
-    if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ] || [ -n "${GH_CONFIG_DIR:-}" ]; then
+    if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
       printf '%s\n' '[]'
       exit 0
+    fi
+    if [ -n "${GH_CONFIG_DIR:-}" ] && [ -f "${GH_CONFIG_DIR}/.smoke-config-credential" ]; then
+      printf '%s\n' '[]'
+      exit 0
+    fi
+    if [ -n "${GH_CONFIG_DIR:-}" ]; then
+      printf '%s\n' 'config-credential-missing' >&2
+      exit 1
     fi
     printf '%s\n' 'auth-carrier-missing' >&2
     exit 1
     ;;
   fail-with-sentinel)
     exec "$(dirname "$0")/gh-auth-probe" fail-with-sentinel
+    ;;
+  fail-with-config-sentinel)
+    if [ -n "${GH_CONFIG_DIR:-}" ] && [ -f "${GH_CONFIG_DIR}/.smoke-config-credential" ]; then
+      cat "${GH_CONFIG_DIR}/.smoke-config-credential" >&2
+    fi
+    printf '%s\n' 'config-auth-failed' >&2
+    exit 1
     ;;
   *)
     printf '%s\n' 'unsupported-gh-fixture-invocation' >&2

@@ -183,6 +183,7 @@ export function waitForSmokeAgentCompletion(
 
   let agentActivityObserved = false;
   const baselineText = options.preSendBaselineText ?? '';
+  let observedSinceBaseline = '';
   let cursor = options.preSendCursor;
 
   const initialRead = readOrcaTerminal(handle, {
@@ -197,8 +198,14 @@ export function waitForSmokeAgentCompletion(
       if (smokeAgentTerminalFullActivity(initialText, baselineText)) {
         agentActivityObserved = true;
       }
-    } else if (smokeAgentTerminalDeltaActivity(initialText)) {
-      agentActivityObserved = true;
+    } else {
+      if (smokeAgentTerminalDeltaActivity(initialText)) {
+        agentActivityObserved = true;
+        observedSinceBaseline += initialText;
+      }
+      if (smokeAgentTerminalFullActivity(`${baselineText}${observedSinceBaseline}`, baselineText)) {
+        agentActivityObserved = true;
+      }
     }
     if (initialRead.result?.nextCursor !== undefined) {
       cursor = initialRead.result.nextCursor;
@@ -223,8 +230,14 @@ export function waitForSmokeAgentCompletion(
         if (smokeAgentTerminalFullActivity(deltaText, baselineText)) {
           agentActivityObserved = true;
         }
-      } else if (smokeAgentTerminalDeltaActivity(deltaText)) {
-        agentActivityObserved = true;
+      } else {
+        if (smokeAgentTerminalDeltaActivity(deltaText)) {
+          agentActivityObserved = true;
+          observedSinceBaseline += deltaText;
+        }
+        if (smokeAgentTerminalFullActivity(`${baselineText}${observedSinceBaseline}`, baselineText)) {
+          agentActivityObserved = true;
+        }
       }
       if (read.result?.nextCursor !== undefined) {
         cursor = read.result.nextCursor;
@@ -752,6 +765,14 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
         observed: normalized.reason,
         terminalCleanup,
       }), { terminalHandle: handle });
+      const nonPassCause = classifyDeclaredScenarioNonPassCause({
+        partial: report,
+        agentActivityObserved: waitResult.agentActivityObserved,
+        agentCompleted: true,
+      });
+      if (nonPassCause) {
+        report.nonPassCause = nonPassCause;
+      }
       publishSmokeReport(report, options);
       emit({ ok: false, report, published: !options.dryRun }, options.json);
       return 1;

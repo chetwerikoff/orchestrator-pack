@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -652,10 +652,17 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
   });
 
 
+  it('does not forward GH_REPO as an auth/config carrier', () => {
+    const child = buildSmokeGhChildEnv({ GH_REPO: 'other/repo' } as NodeJS.ProcessEnv);
+    expect(child.GH_REPO).toBeUndefined();
+  });
+
   it('restores authenticated gh child behavior via GH_CONFIG_DIR without token carriers', () => {
     const fakeBin = join(fixtureRoot, 'fake-bin');
     const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
-    const configHomeSentinel = '/tmp/smoke-gh-config-only-fixture';
+    const configHomeDir = mkdtempSync(join(tmpdir(), 'smoke-gh-config-only-'));
+    const configCredential = 'config-home-credential-sentinel-1101';
+    writeFileSync(join(configHomeDir, '.smoke-config-credential'), configCredential, 'utf8');
     const stripTokenCarriers = {
       GH_TOKEN: '',
       GITHUB_TOKEN: '',
@@ -664,30 +671,68 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
       GHE_TOKEN: '',
     } as NodeJS.ProcessEnv;
 
-    const withoutConfigHome = runSmokeGhSync(
-      ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
-      fixtureRoot,
-      {
-        PATH: probePath,
-        ...stripTokenCarriers,
-        GH_CONFIG_DIR: '',
-      },
-    );
-    expect(withoutConfigHome.ok).toBe(false);
-    expect(withoutConfigHome.stderr).toContain('auth-carrier-missing');
+    try {
+      const dirOnlyNoCredential = mkdtempSync(join(tmpdir(), 'smoke-gh-config-empty-'));
+      const withoutCredential = runSmokeGhSync(
+        ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+        fixtureRoot,
+        {
+          PATH: probePath,
+          ...stripTokenCarriers,
+          ...buildSmokeGhChildEnv({ GH_CONFIG_DIR: dirOnlyNoCredential } as NodeJS.ProcessEnv),
+        },
+      );
+      expect(withoutCredential.ok).toBe(false);
+      expect(withoutCredential.stderr).toContain('config-credential-missing');
 
-    const withConfigHome = runSmokeGhSync(
-      ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
-      fixtureRoot,
-      {
-        PATH: probePath,
-        ...stripTokenCarriers,
-        ...buildSmokeGhChildEnv({ GH_CONFIG_DIR: configHomeSentinel } as NodeJS.ProcessEnv),
-      },
-    );
-    expect(withConfigHome.ok).toBe(true);
-    expect(withConfigHome.stdout).toContain('[]');
-    expect(withConfigHome.stderr).not.toContain(configHomeSentinel);
+      const withoutConfigHome = runSmokeGhSync(
+        ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+        fixtureRoot,
+        {
+          PATH: probePath,
+          ...stripTokenCarriers,
+          GH_CONFIG_DIR: '',
+        },
+      );
+      expect(withoutConfigHome.ok).toBe(false);
+      expect(withoutConfigHome.stderr).toContain('auth-carrier-missing');
+
+      const withConfigHome = runSmokeGhSync(
+        ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+        fixtureRoot,
+        {
+          PATH: probePath,
+          ...stripTokenCarriers,
+          ...buildSmokeGhChildEnv({ GH_CONFIG_DIR: configHomeDir } as NodeJS.ProcessEnv),
+        },
+      );
+      expect(withConfigHome.ok).toBe(true);
+      expect(withConfigHome.stdout).toContain('[]');
+      expect(withConfigHome.stderr).not.toContain(configCredential);
+    } finally {
+      rmSync(configHomeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('scrubs config-home credential values from stderr-derived failure surfaces', () => {
+    const fakeBin = join(fixtureRoot, 'fake-bin');
+    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
+    const configHomeDir = mkdtempSync(join(tmpdir(), 'smoke-gh-config-scrub-'));
+    const configCredential = 'config-home-credential-scrub-1101';
+    writeFileSync(join(configHomeDir, '.smoke-config-credential'), configCredential, 'utf8');
+    const childEnv = buildSmokeGhChildEnv({ GH_CONFIG_DIR: configHomeDir } as NodeJS.ProcessEnv);
+    try {
+      const failed = runSmokeGhSync(
+        ['fail-with-config-sentinel'],
+        fixtureRoot,
+        { PATH: probePath, ...childEnv },
+      );
+      const scrubbed = scrubSmokeOutput(scrubForwardedGhSecrets(`${failed.stderr}${failed.stdout}`, childEnv));
+      expect(scrubbed).not.toContain(configCredential);
+      expect(scrubbed).toContain('[redacted-secret]');
+    } finally {
+      rmSync(configHomeDir, { recursive: true, force: true });
+    }
   });
 
   it('scrubs arbitrary forwarded token values from stderr-derived failure surfaces', () => {
