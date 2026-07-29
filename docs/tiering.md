@@ -92,14 +92,8 @@ Issue body.
 
 The flow-manager drives the full cycle through acceptance or a bounded blocked
 outcome. There is no mandatory stop-and-hand-off to an architect outside the
-<<<<<<< HEAD
-stages below. Browser GPT is the only review engine in create-issue-draft; Codex
-may be the operator-selected flow-manager but is not a create-flow reviewer or
-review-engine substitute.
-=======
-stages below. Browser GPT is the only GPT review engine in create-issue-draft;
+stages below. Browser GPT is the only review engine in create-issue-draft;
 Codex has no create-flow reviewer role.
->>>>>>> fc5f1f73 (docs(create-flow): sync canonical T3 Browser-GPT topology)
 
 | Tier | Review sequence | Pre-lens #975 | Terminal lens | Tier downgrade |
 |------|-----------------|---------------|---------------|----------------|
@@ -135,10 +129,11 @@ invoked as a create-flow reviewer).
 
 ### Roles
 
-<<<<<<< HEAD
-- **Browser GPT author.** One task chat owns authoring, every content fix, direct
-  edits to the live GitHub Issue, every finding disposition, M3 author activation,
-  and the M4 mechanism inventory. Reviewer findings are proposals to this author.
+- **Browser GPT author.** The current author chat owns authoring, every content
+  fix, direct edits to the live GitHub Issue, every finding disposition, M3 author
+  activation, and the M4 mechanism inventory. Reviewer findings are proposals to
+  this author. The current author chat may be a fresh continuation reconstructed
+  from the live Issue when historical chat state is unavailable.
 - **Flow-manager (OpenCode default when no runtime is selected; capable operator-selected runtime such as Cursor or Codex allowed).** One current
   flow-manager per task owns the operational
   cycle end-to-end: live Issue pulls, rubric/guard application, fixed per-tier
@@ -149,22 +144,6 @@ invoked as a create-flow reviewer).
   are not a tracked admission allowlist. A successor may act only after the latest
   explicit predecessor/operator handoff recorded in an existing audit/chat surface;
   that handoff immediately ends the predecessor's manager authority.
-=======
-- **Browser GPT author.** The current author chat owns authoring, every content
-  fix, direct edits to the live GitHub Issue, every finding disposition, M3 author
-  activation, and the M4 mechanism inventory. Reviewer findings are proposals to
-  this author. The current author chat may be a fresh continuation reconstructed
-  from the live Issue when historical chat state is unavailable.
-- **Flow-manager (OpenCode default; Cursor sanctioned alternative).** One current
-  flow-manager per task owns the operational cycle end-to-end: live Issue pulls,
-  rubric/guard application, fixed per-tier stage order, mechanical/body floors,
-  immutable captures, finding-ledger bookkeeping, pass accounting, chat
-  references/topology, browser-turn execution, #975 adoption evidence, and
-  economics-guard execution. It records author dispositions but does not author
-  spec content or judge findings. A successor may act only after the latest
-  explicit predecessor/operator handoff recorded in an existing audit/chat
-  surface; that handoff immediately ends the predecessor's manager authority.
->>>>>>> fc5f1f73 (docs(create-flow): sync canonical T3 Browser-GPT topology)
 - **Claude architectural-lens (T3 only).** Exactly one full `architectural-lens`
   capture per cycle segment, produced by an independent Claude Code CLI invocation
   with co-located producing-run evidence. Owns pre-terminal M3 contest/adjudication
@@ -413,18 +392,13 @@ excess / is missing.
 ### Explicit wrappers
 
 - **`discuss-with-gpt` brief-only wrapper** — routes into `create-issue-draft` and
-<<<<<<< HEAD
-  floors effective tier at **T2**; it does **not** add a competitive create-flow
-  stage beyond the single terminal GPT `architectural` lens.
-- **`adversarial-draft-review`** — standalone Codex challenge only; **not** a
-  create-flow review stage. An explicit Codex flow-manager selection still routes
-  through `create-issue-draft`.
-=======
+- **`discuss-with-gpt` brief-only wrapper** — routes into `create-issue-draft` and
   floors effective tier at **T2**; it does **not** add a competitive or
   `architectural-review` create-flow stage beyond the single terminal GPT
   `architectural` lens.
-- **`adversarial-draft-review`** — standalone Codex only; **not** in create-flow.
->>>>>>> fc5f1f73 (docs(create-flow): sync canonical T3 Browser-GPT topology)
+- **`adversarial-draft-review`** — standalone Codex challenge only; **not** a
+  create-flow review stage. An explicit Codex flow-manager selection still routes
+  through `create-issue-draft`.
 
 If a low/contained-stakes artifact exits adversarial review with approximately
 100% of findings `addressed`, record that as a **proportionality smell** in the
