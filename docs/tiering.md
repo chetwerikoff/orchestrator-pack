@@ -239,8 +239,8 @@ not restate). T3-critical adds **only** these non-waivable Issue-body floors:
 - realistic acceptance criteria and matching verification for every material
   crash, race, or stale-state failure class.
 
-There is **no** mandatory independent Codex addition. Codex outage substitution
-does not apply to create-issue-draft.
+There is **no** mandatory independent Codex review addition. Codex outage
+substitution does not apply to create-issue-draft.
 
 ### Review economics (M1–M5) — #975
 
