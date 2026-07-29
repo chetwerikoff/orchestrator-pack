@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseKeyValueBlock } from '../markdown-key-value.mjs';
 import {
@@ -61,16 +62,68 @@ const FORBIDDEN_SMOKE_AGENT_ACTIONS = [
   /\bedit(?:ing)?\s+(?:the\s+)?(?:issue|task spec)\b/i,
 ] as const;
 
+export interface SmokeRunBinding {
+  runId: string;
+  artifactDir: string;
+}
+
+export const SMOKE_RUN_ARTIFACT_ROOT = '.orca-worker-smoke/runs';
+
+export function createSmokeRunIdentity(): string {
+  return randomUUID();
+}
+
+export function resolveSmokeRunArtifactDir(repoRoot: string, runId: string): string {
+  return join(repoRoot, SMOKE_RUN_ARTIFACT_ROOT, runId);
+}
+
+export function smokeDeliverySealedPath(artifactDir: string): string {
+  return join(artifactDir, 'delivery.sealed.json');
+}
+
+export function smokeCompletionBodyPath(artifactDir: string): string {
+  return join(artifactDir, 'completion.body');
+}
+
+export function smokeCompletionSealPath(artifactDir: string, generation = 1): string {
+  return generation <= 1
+    ? join(artifactDir, 'completion.sealed.json')
+    : join(artifactDir, `completion.sealed-${generation}.json`);
+}
+
+export function ensureSmokeRunArtifactDir(artifactDir: string): void {
+  mkdirSync(artifactDir, { recursive: true });
+}
+
 export function buildSmokeAgentPrompt(input: {
   issueNumber: number;
   issueBody: string;
   prNumber: number;
   headSha: string;
   plan: SmokeTestPlan;
+  runBinding?: SmokeRunBinding;
 }): string {
   const scenarioLines = input.plan.scenarios
     .map((scenario, index) => `${index + 1}. action: ${scenario.action}\n   expected: ${scenario.expected}`)
     .join('\n');
+
+  const durableLines = input.runBinding
+    ? [
+      '',
+      'Durable smoke-run binding (authoritative for delivery and completion):',
+      `run-id: ${input.runBinding.runId}`,
+      `artifact-dir: ${input.runBinding.artifactDir}`,
+      'After you accept this prompt, write delivery evidence:',
+      `  ${smokeDeliverySealedPath(input.runBinding.artifactDir)}`,
+      '  contents: {"runId":"<run-id>"}',
+      'Completion is accepted only after publish-complete sealing:',
+      `  1. write report text to ${smokeCompletionBodyPath(input.runBinding.artifactDir)}`,
+      `  2. write seal to ${smokeCompletionSealPath(input.runBinding.artifactDir)}`,
+      '  seal contents: {"runId":"<run-id>","generation":1}',
+      'Do not seal until the report body is final. A second seal is a duplicate terminalization.',
+      'Terminal scrollback is not completion evidence; only the sealed artifact counts.',
+    ]
+    : [];
 
   return [
     'You are an independent smoke verifier for orchestrator-pack.',
@@ -86,6 +139,7 @@ export function buildSmokeAgentPrompt(input: {
     'scenarios:',
     '  - action: <what you ran> | expected: <from plan> | observed: <what happened> | outcome: pass|fail|skipped|blocked',
     '```',
+    ...durableLines,
     '',
     `Issue: #${input.issueNumber}`,
     `PR: #${input.prNumber}`,
@@ -751,10 +805,243 @@ export function buildSmokeGhChildEnv(parentEnv: NodeJS.ProcessEnv = process.env)
   return forwarded;
 }
 
+
+export type SmokeChildWaitNonPassCause =
+  | 'prompt_delivery_unconfirmed'
+  | 'agent_report_unfenced'
+  | 'agent_report_timeout'
+  | 'agent_exited_without_report'
+  | 'agent_idle_without_report'
+  | 'agent_report_duplicate'
+  | 'agent_wait_self_handle'
+  | 'agent_wait_unowned_handle';
+
+export type SmokeControlPlaneCause =
+  | 'channel_stale_handle'
+  | 'channel_lookup_empty'
+  | 'channel_control_unavailable'
+  | 'channel_control_overwritten';
+
+export type SmokeChannelBindingCause = SmokeChildWaitNonPassCause | SmokeControlPlaneCause;
+
+export function isSmokeControlPlaneCause(value: string): value is SmokeControlPlaneCause {
+  return value === 'channel_stale_handle'
+    || value === 'channel_lookup_empty'
+    || value === 'channel_control_unavailable'
+    || value === 'channel_control_overwritten';
+}
+
+export interface SmokeSealRecord {
+  runId: string;
+  generation?: number;
+}
+
+export type SmokeCompletionPublicationState =
+  | 'none'
+  | 'partial'
+  | 'publish_complete_single'
+  | 'publish_complete_duplicate'
+  | 'publish_complete_unfenced';
+
+export interface SmokeCompletionEvidenceObservation {
+  publicationState: SmokeCompletionPublicationState;
+  sealedRunId?: string;
+  reportBody?: string;
+  parsedReport?: Partial<SmokeReport> | null;
+  wrongRunBinding: boolean;
+}
+
+export interface SmokeChildStateWitness {
+  exited?: boolean;
+  idle?: boolean;
+}
+
+export interface SmokeChannelBindingInput {
+  supervisedHandle: string;
+  ownedChildHandle: string;
+  supervisorHandle?: string;
+}
+
+export function classifySmokeChannelBinding(
+  input: SmokeChannelBindingInput,
+): SmokeChildWaitNonPassCause | undefined {
+  const supervised = input.supervisedHandle.trim();
+  const owned = input.ownedChildHandle.trim();
+  const supervisor = input.supervisorHandle?.trim();
+  if (supervisor && supervised === supervisor) {
+    return 'agent_wait_self_handle';
+  }
+  if (supervised !== owned) {
+    return 'agent_wait_unowned_handle';
+  }
+  return undefined;
+}
+
+function readJsonFile(path: string): unknown | undefined {
+  if (!existsSync(path)) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+function parseSmokeSealRecord(raw: unknown): SmokeSealRecord | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const runId = String((raw as { runId?: unknown }).runId ?? '').trim();
+  if (!runId) {
+    return undefined;
+  }
+  const generationRaw = (raw as { generation?: unknown }).generation;
+  const generation = typeof generationRaw === 'number' && Number.isFinite(generationRaw)
+    ? generationRaw
+    : undefined;
+  return { runId, generation };
+}
+
+function listCompletionSealGenerations(artifactDir: string): number[] {
+  if (!existsSync(artifactDir)) {
+    return [];
+  }
+  const generations: number[] = [];
+  for (const entry of readdirSync(artifactDir)) {
+    if (entry === 'completion.sealed.json') {
+      generations.push(1);
+      continue;
+    }
+    const match = /^completion\.sealed-(\d+)\.json$/u.exec(entry);
+    if (match) {
+      generations.push(Number(match[1]));
+    }
+  }
+  return generations.sort((left, right) => left - right);
+}
+
+export function observeSmokeDeliveryEstablished(
+  runBinding: SmokeRunBinding,
+): boolean {
+  const sealed = parseSmokeSealRecord(readJsonFile(smokeDeliverySealedPath(runBinding.artifactDir)));
+  return sealed?.runId === runBinding.runId;
+}
+
+export function observeSmokeCompletionEvidence(
+  runBinding: SmokeRunBinding,
+): SmokeCompletionEvidenceObservation {
+  const bodyPath = smokeCompletionBodyPath(runBinding.artifactDir);
+  const bodyExists = existsSync(bodyPath);
+  const sealGenerations = listCompletionSealGenerations(runBinding.artifactDir);
+  if (sealGenerations.length === 0) {
+    return {
+      publicationState: bodyExists ? 'partial' : 'none',
+      wrongRunBinding: false,
+    };
+  }
+  if (sealGenerations.length > 1) {
+    return {
+      publicationState: 'publish_complete_duplicate',
+      wrongRunBinding: false,
+    };
+  }
+  const generation = sealGenerations[0]!;
+  const seal = parseSmokeSealRecord(readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, generation)));
+  const wrongRunBinding = Boolean(seal && seal.runId !== runBinding.runId);
+  if (wrongRunBinding) {
+    return {
+      publicationState: 'none',
+      sealedRunId: seal?.runId,
+      wrongRunBinding: true,
+    };
+  }
+  const reportBody = bodyExists ? readFileSync(bodyPath, 'utf8') : '';
+  const parsedReport = reportBody ? parseSmokeAgentReport(reportBody) : null;
+  if (!parsedReport) {
+    return {
+      publicationState: 'publish_complete_unfenced',
+      sealedRunId: seal?.runId,
+      reportBody,
+      parsedReport: null,
+      wrongRunBinding: false,
+    };
+  }
+  return {
+    publicationState: 'publish_complete_single',
+    sealedRunId: seal?.runId,
+    reportBody,
+    parsedReport,
+    wrongRunBinding: false,
+  };
+}
+
+export type SmokeChildWaitOutcome =
+  | { status: 'pending' }
+  | { status: 'completed'; partial: Partial<SmokeReport> }
+  | { status: 'non_pass'; cause: SmokeChildWaitNonPassCause }
+  | { status: 'control_plane'; cause: SmokeControlPlaneCause };
+
+export function classifySmokeChildWaitObservation(input: {
+  completion: SmokeCompletionEvidenceObservation;
+  childState?: SmokeChildStateWitness;
+  deadlineReached: boolean;
+}): SmokeChildWaitOutcome {
+  const { completion, childState, deadlineReached } = input;
+  if (completion.publicationState === 'partial' || completion.publicationState === 'none') {
+    if (childState?.exited) {
+      return { status: 'non_pass', cause: 'agent_exited_without_report' };
+    }
+    if (childState?.idle) {
+      return { status: 'non_pass', cause: 'agent_idle_without_report' };
+    }
+    if (deadlineReached) {
+      return { status: 'non_pass', cause: 'agent_report_timeout' };
+    }
+    return { status: 'pending' };
+  }
+  if (completion.publicationState === 'publish_complete_duplicate') {
+    return { status: 'non_pass', cause: 'agent_report_duplicate' };
+  }
+  if (completion.publicationState === 'publish_complete_unfenced') {
+    return { status: 'non_pass', cause: 'agent_report_unfenced' };
+  }
+  if (completion.publicationState === 'publish_complete_single' && completion.parsedReport) {
+    return { status: 'completed', partial: completion.parsedReport };
+  }
+  if (deadlineReached) {
+    return { status: 'non_pass', cause: 'agent_report_timeout' };
+  }
+  return { status: 'pending' };
+}
+
+export function mapOrcaErrorToControlPlaneCause(
+  code: string | undefined,
+  message: string | undefined,
+): SmokeControlPlaneCause | undefined {
+  const haystack = `${code ?? ''} ${message ?? ''}`.toLowerCase();
+  if (haystack.includes('stale') && haystack.includes('handle')) {
+    return 'channel_stale_handle';
+  }
+  if (haystack.includes('lookup') && (haystack.includes('empty') || haystack.includes('not found'))) {
+    return 'channel_lookup_empty';
+  }
+  if (haystack.includes('control') && haystack.includes('overwritten')) {
+    return 'channel_control_overwritten';
+  }
+  if (haystack.includes('runtime_unavailable') || haystack.includes('control_unavailable') || haystack.includes('orca unavailable')) {
+    return 'channel_control_unavailable';
+  }
+  return undefined;
+}
+
+
 export type SmokeNonPassCause =
   | 'zero_parsed_scenarios'
   | 'missing_agent_report'
-  | 'executed_scenario_failure';
+  | 'executed_scenario_failure'
+  | SmokeChildWaitNonPassCause
+  | SmokeControlPlaneCause;
 
 export const SMOKE_HARNESS_TERMINAL_CLOSE_ACTION = 'close owned Orca terminal handle';
 

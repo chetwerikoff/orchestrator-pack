@@ -50,6 +50,20 @@ Structured `worker-smoke-run` JSON distinguishes at least:
 
 Top-level `PASS | FAIL | BLOCKED` semantics are unchanged.
 
+
+
+## Child-wait delivery and completion
+
+Issue #1115 owns the parent wait contract from prompt delivery through publish-complete child completion.
+
+- Each smoke attempt creates one ephemeral **run identity** before send. Delivery and completion evidence must bind to that same run.
+- **Delivery** requires publish-complete durable evidence (for example `delivery.sealed.json` under the run artifact directory). `orca terminal send` success alone is not delivery proof. Ambiguous prior delivery never authorizes resend; optional resend is allowed only on definite non-delivery. Exhaustion yields `prompt_delivery_unconfirmed`, owned-terminal cleanup, and no completion wait.
+- **Completion** is accepted only from a **publish-complete** durable artifact for the current run (body + seal). Partial bytes before the seal remain pending and are not classified as PASS, unfenced, or duplicate. One valid seal consumes `PASS | FAIL | BLOCKED`; duplicate same-run terminalizations yield `agent_report_duplicate`; malformed sealed bodies yield `agent_report_unfenced`; no sealed completion at the shared deadline yields `agent_report_timeout`.
+- Grounded child exit/idle witnesses may yield `agent_exited_without_report` or `agent_idle_without_report` only when capture-backed on the production path; otherwise the timeout fallback applies.
+- Self/unowned handle binding is refused locally (`agent_wait_self_handle`, `agent_wait_unowned_handle`). Known untrustworthy control-plane channels preserve upstream causes without handle re-derivation or smoke verdict synthesis.
+- `orca terminal read` is secondary liveness/diagnostic only; suppressing PTY bytes must not change the terminal class when durable artifact evidence is unchanged.
+- Delivery, completion publication/consumption, negative-terminal checks, and bounded polling share one terminal-phase budget (<= 30 minutes) started at owned-terminal creation.
+
 ## Owned-handle supervision
 
 When a worker supervises a child agent in an Orca terminal, binding discipline is behavioral —
