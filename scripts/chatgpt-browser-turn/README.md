@@ -49,8 +49,9 @@ One invocation owns one Browser-GPT exchange:
    refers to an existing conversation;
 4. navigate to the requested conversation/project;
 5. snapshot and submit the exact caller prompt **once**;
-6. observe/poll only that owned tab until a final assistant node is stable and no
-   longer generating, advancing continuation UI when needed;
+6. observe/poll only that owned tab until the final assistant node has page-level
+   completion UI, no visible generation/tool/continuation activity, and stable
+   final text across bounded reads, advancing continuation UI when needed;
 7. atomically publish the captured final reply;
 8. close only the invocation-owned tab and release the CDP client connection.
 
@@ -60,13 +61,16 @@ publication primitives are reused; they do not become workflow admission state.
 ### Page completion is sufficient
 
 The canonical path no longer requires service-terminal/network-witness evidence
-when the page already shows one attributable, final, non-generating assistant
-reply. The helper requires its own exact user prompt to appear after the page
-baseline, then returns only the final eligible assistant node for that turn.
+when the page already shows one attributable, final assistant reply. The helper
+requires its own exact user prompt to appear after the page baseline and requires
+page-level completion UI on the last assistant node while generation/tool/
+continuation activity is absent, then returns only that final eligible assistant
+node for the turn.
 
-Intermediate/progress assistant nodes are not concatenated into the result.
-A continuation button may be clicked because it continues the same assistant
-response; it is not a second user-prompt send.
+Intermediate/progress assistant nodes are not concatenated into the result and a
+stable non-empty intermediate node is not sufficient by itself. A continuation
+button may be clicked because it continues the same assistant response; it is not
+a second user-prompt send.
 
 If another/interleaved user turn appears after the invocation baseline, attribution
 is ambiguous and only that invocation fails/degrades as `foreign_activity`.
@@ -76,8 +80,15 @@ Sibling Browser-GPT tabs remain independent.
 
 Inside one live invocation there is exactly one user-message send attempt. After
 the send boundary the helper only observes the same page. Slow generation,
-missing historical witness state, timeout, or process-liveness uncertainty never
-authorizes a second send inside that invocation.
+missing historical witness state, an elapsed observation threshold, or process-
+liveness uncertainty never authorizes a second send inside that invocation.
+
+`--timeout-ms` is a **soft post-send observation threshold**. If the helper still
+owns a reachable page after it elapses, the same invocation keeps polling that
+page at the configured low-frequency cadence; elapsed time alone neither closes
+the tab nor returns fresh-resend authorization. A fresh replacement is legal only
+when the process/page/chat is genuinely lost or another real local failure makes
+the owned turn unavailable.
 
 A genuinely lost/crashed process, tab, or chat may be replaced by a fresh
 invocation in a fresh chat. A rare duplicate recoverable GPT text request is an
@@ -113,8 +124,12 @@ Typical state-light outcomes include:
 - `ok`;
 - `input_invalid` / `output_conflict`;
 - `login` / `quota` / `challenge` / `chrome_not_running` / `profile_mismatch`;
-- `send_failed` / `stream_timeout`;
+- `send_failed`;
 - `ui_contract_mismatch` / `foreign_activity` / `driver_error`.
+
+`stream_timeout` remains part of the shared legacy turn-state contract, but the
+state-light post-send path does not manufacture it merely because
+`--timeout-ms` elapsed while its owned page is still reachable.
 
 The final reply bytes are written through the existing atomic no-clobber
 publication primitive. Publication conflict is invocation-local; it does not
@@ -126,8 +141,10 @@ Every canonical turn creates a dedicated owned tab. This removes the old shared-
 tab cleanup ambiguity.
 
 - success closes that owned tab;
-- pre-send and post-send failures close that owned tab when the process still has
+- real pre-send/post-send failures close that owned tab when the process still has
   it;
+- an elapsed soft observation threshold while the owned page remains reachable is
+  not a failure/cleanup boundary and does not close the tab;
 - close failure is a direct incident and is reported, but a reply already captured
   successfully is not discarded because cleanup could not be confirmed;
 - sibling/foreign tabs are never helper cleanup targets;
@@ -141,7 +158,8 @@ tabs.
 
 Initial dispatch observation may poll more frequently; after that, page reads are
 bounded and low-frequency. Repeated normal `waiting`/`generating` observations are
-not incident-journal rows.
+not incident-journal rows. Crossing `--timeout-ms` with a still-reachable owned
+page simply continues this low-frequency polling; it is not a resend signal.
 
 PID, log growth, helper stdout timing, or a background shell job prove neither
 that ChatGPT is still generating nor that it has completed. Issue #1120 does not
@@ -201,12 +219,15 @@ healthy new invocation.
 
 Focused Issue #1120 tests cover:
 
-- page-only final reply completion;
-- multi-node progress with final-node capture;
-- generating intermediate state;
+- page-only final reply completion with page-level final/in-progress discrimination;
+- a stable intermediate/tool-progress node surviving multiple reads before the
+  later final node, with only the final node published;
+- generating/continuation intermediate state;
 - foreign/interleaved activity;
 - mandatory own-prompt attribution after baseline;
 - dedicated-tab creation and one send mutation branch;
+- a reachable owned page continuing past the soft timeout without resend or
+  timeout-triggered close;
 - absence of old admission/recovery calls from the state-light module;
 - append-only/non-authoritative recurrence journal behavior;
 - absence of a second inspector/watchdog.
