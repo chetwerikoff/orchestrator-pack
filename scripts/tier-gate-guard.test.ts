@@ -722,6 +722,55 @@ describe('Issue #1104 GPT demotion authority', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('rejects GPT narrow revalidation when candidate adds unrelated material body change', () => {
+    const source = draft('T2', 'T2');
+    const tampered = draft('T1', 'T2', {
+      from: 'T2',
+      eventId: 'gpt-demotion-1',
+      body: 'Unrelated material rewrite outside the authorized demotion correction.',
+    });
+    const result = run(tampered, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: tampered, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      priorTier: 'T2',
+      events: [{ record: gptEvent(), captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal gpt lens' }],
+      revalidations: [{
+        record: gptRevalidation('r02'),
+        captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt',
+        captureText: 'narrow revalidation only',
+      }],
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('unrelated material body change');
+  });
+
+  it('rejects Claude authority outside its existing T3→T2 edge', () => {
+    const source = draft('T2', 'T2');
+    const current = draft('T1', 'T2', { from: 'T2', eventId: 'claude-invalid' });
+    const result = run(current, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: current, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      priorTier: 'T2',
+      events: [{
+        record: event({
+          eventId: 'claude-invalid', beforeTier: 'T2', afterTier: 'T1',
+          drivers: [{ kind: 'rubric', id: 'failure-type:local-behavior', rationale: 'Not Claude authority.' }],
+        }),
+        captureName: 'pass-01-architectural-lens.capture.txt', captureText: 'invalid Claude edge',
+      }],
+      revalidations: [{
+        record: revalidation('r02', {
+          eventId: 'claude-invalid', beforeTier: 'T2', afterTier: 'T1',
+        }),
+        captureName: 'pass-02-architectural-lens.capture.txt', captureText: 'invalid',
+      }],
+    }));
+    expect(result.errors.join('\n')).toContain('role is not authorized');
+  });
+
   it('rejects GPT narrow revalidation on a mismatched pass index', () => {
     const source = draft('T2', 'T2');
     const current = draft('T1', 'T2', { from: 'T2', eventId: 'gpt-demotion-1' });

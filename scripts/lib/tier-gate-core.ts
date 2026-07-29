@@ -209,6 +209,10 @@ export function parseComplexityTierFence(draftText: string): ComplexityTierFence
   };
 }
 
+function stripComplexityTierFence(text: string): string {
+  return text.replace(FENCE_RE, '');
+}
+
 export interface StageSelectionInput {
   tier: string | null;
   skipLine: boolean;
@@ -404,6 +408,13 @@ function isValidDemotionRevalidationRoleStage(role: string, stage: string): bool
   );
 }
 
+function isAuthorizedDemotionTransition(role: string, beforeTier: Tier, afterTier: Tier): boolean {
+  if (role === CLAUDE_DEMOTION_ROLE) return beforeTier === 'T3' && afterTier === 'T2';
+  return role === GPT_DEMOTION_ROLE
+    && ((beforeTier === 'T3' && afterTier === 'T2')
+      || (beforeTier === 'T2' && afterTier === 'T1'));
+}
+
 function parseDemotionEvent(value: unknown): TierDemotionEventRecord | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
@@ -444,10 +455,13 @@ function parseDemotionEvent(value: unknown): TierDemotionEventRecord | null {
   if (record.historicalLensCapture != null && typeof record.historicalLensCapture !== 'string') {
     return null;
   }
-  if (tierRank(beforeTier) - tierRank(afterTier) !== 1) {
+  const role = typeof record.role === 'string' ? record.role : '';
+  if (
+    tierRank(beforeTier) - tierRank(afterTier) !== 1
+    || !isAuthorizedDemotionTransition(role, beforeTier, afterTier)
+  ) {
     return null;
   }
-  const role = typeof record.role === 'string' ? record.role : '';
   const stage = typeof record.stage === 'string' ? record.stage : '';
   return {
     schema: 'tier-demotion-event/v1',
@@ -487,6 +501,7 @@ function parseDemotionRevalidation(value: unknown): TierDemotionRevalidationReco
   }
   const role = typeof record.role === 'string' ? record.role : '';
   const stage = typeof record.stage === 'string' ? record.stage : '';
+  if (!isAuthorizedDemotionTransition(role, beforeTier, afterTier)) return null;
   return {
     schema: 'tier-demotion-revalidation/v1',
     eventId: record.eventId,
@@ -694,6 +709,9 @@ function validateDemotionEventCaptureBinding(
   errors: string[],
 ): number | null {
   const event = eventEntry.record;
+  if (!isAuthorizedDemotionTransition(event.role, event.beforeTier, event.afterTier)) {
+    errors.push('tier demotion: role is not authorized for the requested adjacent transition');
+  }
   if (event.role === CLAUDE_DEMOTION_ROLE) {
     const pass = architectLensPassIndex(eventEntry.captureName);
     if (pass === null) {
@@ -881,6 +899,15 @@ function validateFreshDemotionChain(
     }
     if (event.role === GPT_DEMOTION_ROLE && candidateIndex !== sourceIndex + 1) {
       errors.push('tier demotion: GPT narrow revalidation must bind the immediate post-event revision');
+    }
+    if (
+      event.role === GPT_DEMOTION_ROLE
+      && source
+      && candidate
+      && candidateIndex === sourceIndex + 1
+      && stripComplexityTierFence(source.text) !== stripComplexityTierFence(candidate.text)
+    ) {
+      errors.push('tier demotion: narrow revalidation candidate contains unrelated material body change');
     }
     validated.push({ eventEntry, sourceIndex, candidateIndex });
   }
