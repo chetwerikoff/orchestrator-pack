@@ -26,7 +26,8 @@ economics below are independent of that ownership split and must be preserved
 without reverting #972. Issue #973 remains the owner of tier-demotion records
 and rubric applicability. Issue #1027 owns the GPT-only per-tier topology; Issue
 #1120 changes the T3 stage sequence and Browser-GPT transport mechanics without
-reintroducing Codex review stages.
+reintroducing Codex review stages. Issue #1117 / landed PR #1119 owns the
+runtime-agnostic flow-manager producer contract retained here.
 
 ## Inputs and routing
 
@@ -248,10 +249,12 @@ unparseable classification follows existing fail-up behavior.
 
 Before the first tier-gate decision for a fresh workdir, the flow-manager records
 `$REVIEW_DIR/tier-intake.json` as `tier-intake/v1` with exact task identity,
-`kind: fresh`, intake prior, `firstRevision`, and a producer accepted by the
-currently landed producer-policy contract. The Issue `advisory-prior` mirrors this
-record and must match it. Missing, malformed, partial, or mismatched evidence fails
-closed. Producer-allowlist expansion is owned by #1117/#1119, not #1120.
+`kind: fresh`, intake prior, `firstRevision`, and `producer` set to the selected
+manager's exact non-empty audit label. The producer label is preserved verbatim
+but is **not** checked against a finite runtime-name allowlist and is not
+authentication or authorization. The Issue `advisory-prior` mirrors this record
+and must match it. Missing, blank, malformed, partial, or mismatched evidence
+fails closed.
 
 Before the first tier-gate decision for a fresh workdir, the **flow-manager**
 records `$REVIEW_DIR/tier-intake.json` as `tier-intake/v1` with:
@@ -352,7 +355,7 @@ T3-critical adds **only**:
 - realistic acceptance criteria and matching verification for every material
   crash, race, or stale-state failure class.
 
-There is no mandatory Codex addition or Codex outage substitution. While L4
+There is no mandatory Codex review addition or Codex outage substitution. While L4
 remains active, the task cannot be downgraded below T3.
 
 ## Mechanical floor commands
