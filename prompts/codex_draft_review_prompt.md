@@ -35,8 +35,9 @@ is activated. Do not treat your own type tag as self-activating authority.
 
 ## Simplification lens (mandatory)
 
-On every governed reviewer output (pre-lens `competitive` when selected, terminal
-`architectural`), also apply this lens and emit findings when material:
+On every governed reviewer output (pre-lens `competitive` when selected, Claude
+`architectural-lens`, terminal `architectural`), also apply this lens and emit
+findings when material:
 
 1. **What can be simplified** without losing the contract?
 2. **What must not be simplified** (safety, upgrade-safety, provenance)?
@@ -99,7 +100,12 @@ is never the architect's aggregate cut decision.
 For pre-lens `competitive` reviewer outputs (T3 only when selected), emit exact
 `SIMPLIFICATION_CLEAN` on its own line when the current output has **no** finding
 carrying that discriminator. When one or more findings do carry it, do not emit
-`SIMPLIFICATION_CLEAN` for that output.
+`SIMPLIFICATION_CLEAN` for that output. If there are no material findings at all,
+emit both exact lines:
+
+`NO_FINDINGS`
+
+`SIMPLIFICATION_CLEAN`
 
 For the create-flow **terminal** browser-GPT `architectural` lens — the M5 anchor
 on every tier — apply the same `SIMPLIFICATION_CLEAN` rule to that output. If
