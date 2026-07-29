@@ -26,7 +26,7 @@ import {
   createSmokeRunIdentity,
   ensureSmokeRunArtifactDir,
   isSmokeControlPlaneCause,
-  mapOrcaErrorToControlPlaneCause,
+  preserveSmokeControlPlaneCause,
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
   resolveSmokeRunArtifactDir,
@@ -232,7 +232,7 @@ export function establishSmokePromptDelivery(
 
   let sendResult = attemptSend();
   if (!sendResult.ok) {
-    const controlPlane = mapOrcaErrorToControlPlaneCause(sendResult.error?.code, sendResult.error?.message);
+    const controlPlane = preserveSmokeControlPlaneCause(sendResult.error?.code);
     if (controlPlane) {
       return { ok: false, controlPlaneCause: controlPlane, resendCount };
     }
@@ -318,7 +318,7 @@ export function waitForSmokeChildCompletion(
         runner: input.runner,
       });
       if (!read.ok) {
-        const controlPlane = mapOrcaErrorToControlPlaneCause(read.error?.code, read.error?.message);
+        const controlPlane = preserveSmokeControlPlaneCause(read.error?.code);
         if (controlPlane) {
           return {
             ok: false,
@@ -901,42 +901,36 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     const preSendBaselineText = orcaTerminalReadLines(preSendRead.result).join('\n');
     const preSendCursor = orcaTerminalReadNextCursor(preSendRead.result);
 
-    const sendResult = sendOrcaTerminal(handle, prompt, { cwd: options.cwd });
-    if (!sendResult.ok) {
-      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const report = buildOperationalSmokeReport('BLOCKED', options, {
-        action: 'send smoke prompt to Orca terminal',
-        expected: 'terminal send succeeds',
-        observed: sendResult.error?.message ?? 'terminal_send_failed',
-        terminalCleanup,
-      });
-      publishSmokeReport(report, options);
-      emit({ ok: false, report, published: !options.dryRun }, options.json);
-      return 1;
-    }
-
-    const waitResult = waitForSmokeAgentCompletion(handle, {
+    const remainingTerminalBudgetMs = Math.max(
+      0,
+      SMOKE_AGENT_WAIT_BUDGET_MS - (Date.now() - terminalPhaseStartedAt),
+    );
+    const deliveryResult = establishSmokePromptDelivery(handle, {
       cwd: options.cwd,
+      deadlineMs: remainingTerminalBudgetMs,
+      runBinding: { runId, artifactDir },
+      prompt,
       preSendBaselineText,
       preSendCursor,
-      sentPrompt: prompt,
     });
-    const agentActivityObserved = waitResult.agentActivityObserved;
-    if (!waitResult.ok) {
+    if (!deliveryResult.ok) {
       const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
       terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const report = buildOperationalSmokeReport('BLOCKED', options, {
-        action: 'wait for smoke agent completion',
-        expected: 'terminal wait succeeds after positive agent activity',
-        observed: scrubGhFailureMessage(waitResult.error?.message ?? 'terminal_wait_failed'),
-        terminalCleanup,
-      });
-      const nonPassCause = classifySmokeNonPassCause({
-        partial: null,
-        agentActivityObserved,
-        agentCompleted: false,
-      });
+      const observed = deliveryResult.controlPlaneCause
+        ?? deliveryResult.cause
+        ?? 'prompt_delivery_unconfirmed';
+      const report = buildOperationalSmokeReport(
+        deliveryResult.controlPlaneCause ? 'BLOCKED' : 'FAIL',
+        options,
+        {
+          action: 'establish smoke prompt delivery',
+          expected: 'publish-complete durable delivery evidence for current run',
+          observed,
+          terminalCleanup,
+          environmentNotes: ['completion wait was not started'],
+        },
+      );
+      const nonPassCause = deliveryResult.controlPlaneCause ?? deliveryResult.cause;
       if (nonPassCause) {
         report.nonPassCause = nonPassCause;
       }
@@ -950,54 +944,62 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       return 1;
     }
 
-    const readResult = readOrcaTerminal(handle, { cwd: options.cwd, limit: 2000 });
-    if (!readResult.ok) {
+    const completionBudgetMs = Math.max(
+      0,
+      SMOKE_AGENT_WAIT_BUDGET_MS - (Date.now() - terminalPhaseStartedAt),
+    );
+    const waitResult = waitForSmokeChildCompletion(handle, {
+      cwd: options.cwd,
+      deadlineMs: completionBudgetMs,
+      runBinding: { runId, artifactDir },
+      ownedChildHandle: handle,
+    });
+    const agentActivityObserved = waitResult.agentActivityObserved;
+    if (!waitResult.ok) {
+      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
+      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
+      const observed = waitResult.nonPassCause
+        ?? scrubGhFailureMessage(waitResult.error?.message ?? 'child_wait_failed');
+      const report = buildOperationalSmokeReport(
+        waitResult.nonPassCause && isSmokeControlPlaneCause(waitResult.nonPassCause) ? 'BLOCKED' : 'FAIL',
+        options,
+        {
+          action: 'wait for publish-complete smoke child completion',
+          expected: 'one sealed durable completion artifact for current run',
+          observed,
+          terminalCleanup,
+        },
+      );
+      if (waitResult.nonPassCause) {
+        report.nonPassCause = waitResult.nonPassCause;
+      }
+      publishSmokeReport(report, options);
+      emit({
+        ok: false,
+        report,
+        published: !options.dryRun,
+        ...(waitResult.nonPassCause ? { nonPassCause: waitResult.nonPassCause } : {}),
+      }, options.json);
+      return 1;
+    }
+
+    const partial = waitResult.partial;
+    if (!partial) {
       const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
       terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
       const report = buildOperationalSmokeReport('BLOCKED', options, {
-        action: 'read Orca terminal output',
-        expected: 'terminal read succeeds',
-        observed: readResult.error?.message ?? readResult.error?.code ?? 'terminal_read_failed',
+        action: 'consume publish-complete smoke child completion',
+        expected: 'durable completion artifact with parseable fenced report',
+        observed: 'missing_completion_partial',
         terminalCleanup,
       });
       publishSmokeReport(report, options);
       emit({ ok: false, report, published: !options.dryRun }, options.json);
       return 1;
     }
-    const output = scrubSmokeOutput(orcaTerminalReadLines(readResult.result).join('\n'));
-    const observedAfterBaseline = output.startsWith(preSendBaselineText)
-      ? output.slice(preSendBaselineText.length)
-      : output;
-    const partial = parseSmokeAgentReport(stripLeadingSmokeAgentPrompt(observedAfterBaseline, prompt));
     const afterStatus = gitPorcelain(options.cwd);
     const afterHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(afterStatus));
     const mutated = detectTrackedImplementationMutation(beforeStatus, afterStatus, beforeHashes, afterHashes);
-
-    if (!partial) {
-      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const report = {
-        ...buildOperationalSmokeReport('FAIL', options, {
-          action: 'parse smoke agent report',
-          expected: 'worker-smoke-report block present',
-          observed: 'missing worker-smoke-report block',
-          terminalCleanup,
-        }),
-        nonPassCause: 'missing_agent_report' as const,
-      };
-      publishSmokeReport(report, options);
-      emit({
-        ok: false,
-        report,
-        published: !options.dryRun,
-        nonPassCause: classifySmokeNonPassCause({
-          partial: null,
-          agentActivityObserved: waitResult.agentActivityObserved,
-          agentCompleted: true,
-        }) ?? 'missing_agent_report',
-      }, options.json);
-      return 1;
-    }
 
     if (mutated) {
       partial.result = 'FAIL';

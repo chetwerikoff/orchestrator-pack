@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseKeyValueBlock } from '../markdown-key-value.mjs';
@@ -119,7 +119,7 @@ export function buildSmokeAgentPrompt(input: {
       'Completion is accepted only after publish-complete sealing:',
       `  1. write report text to ${smokeCompletionBodyPath(input.runBinding.artifactDir)}`,
       `  2. write seal to ${smokeCompletionSealPath(input.runBinding.artifactDir)}`,
-      '  seal contents: {"runId":"<run-id>","generation":1}',
+      '  seal contents: {"runId":"<run-id>","generation":1,"bodySha256":"<sha256-hex-of-completion.body>"}',
       'Do not seal until the report body is final. A second seal is a duplicate terminalization.',
       'Terminal scrollback is not completion evidence; only the sealed artifact counts.',
     ]
@@ -361,6 +361,14 @@ function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
     orcaExecutable: String(fields['orca-executable'] ?? fields['orca-cli'] ?? '').trim() || undefined,
     terminalHandle: String(fields['terminal-handle'] ?? '').trim() || undefined,
   };
+}
+
+export function parseSealedSmokeAgentReport(text: string): Partial<SmokeReport> | null {
+  const fenced = text.match(SMOKE_REPORT_BLOCK);
+  if (!fenced) {
+    return null;
+  }
+  return parseSmokeAgentReportBody(fenced[1]);
 }
 
 export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null {
@@ -836,6 +844,14 @@ export interface SmokeSealRecord {
   generation?: number;
 }
 
+export interface SmokeCompletionSealRecord extends SmokeSealRecord {
+  bodySha256: string;
+}
+
+export function computeSmokeCompletionBodyDigest(body: string): string {
+  return createHash('sha256').update(body, 'utf8').digest('hex');
+}
+
 export type SmokeCompletionPublicationState =
   | 'none'
   | 'partial'
@@ -903,6 +919,15 @@ function parseSmokeSealRecord(raw: unknown): SmokeSealRecord | undefined {
   return { runId, generation };
 }
 
+function parseSmokeCompletionSealRecord(raw: unknown): SmokeCompletionSealRecord | undefined {
+  const base = parseSmokeSealRecord(raw);
+  const bodySha256 = String((raw as { bodySha256?: unknown })?.bodySha256 ?? '').trim().toLowerCase();
+  if (!base || !/^[0-9a-f]{64}$/.test(bodySha256)) {
+    return undefined;
+  }
+  return { ...base, bodySha256 };
+}
+
 function listCompletionSealGenerations(artifactDir: string): number[] {
   if (!existsSync(artifactDir)) {
     return [];
@@ -933,35 +958,60 @@ export function observeSmokeCompletionEvidence(
 ): SmokeCompletionEvidenceObservation {
   const bodyPath = smokeCompletionBodyPath(runBinding.artifactDir);
   const bodyExists = existsSync(bodyPath);
+  const reportBody = bodyExists ? readFileSync(bodyPath, 'utf8') : '';
   const sealGenerations = listCompletionSealGenerations(runBinding.artifactDir);
   if (sealGenerations.length === 0) {
     return {
       publicationState: bodyExists ? 'partial' : 'none',
       wrongRunBinding: false,
+      reportBody: bodyExists ? reportBody : undefined,
     };
   }
   if (sealGenerations.length > 1) {
     return {
       publicationState: 'publish_complete_duplicate',
       wrongRunBinding: false,
+      reportBody: bodyExists ? reportBody : undefined,
     };
   }
   const generation = sealGenerations[0]!;
-  const seal = parseSmokeSealRecord(readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, generation)));
-  const wrongRunBinding = Boolean(seal && seal.runId !== runBinding.runId);
-  if (wrongRunBinding) {
+  const seal = parseSmokeCompletionSealRecord(readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, generation)));
+  if (!seal) {
     return {
-      publicationState: 'none',
-      sealedRunId: seal?.runId,
-      wrongRunBinding: true,
+      publicationState: bodyExists ? 'partial' : 'none',
+      wrongRunBinding: false,
+      reportBody: bodyExists ? reportBody : undefined,
     };
   }
-  const reportBody = bodyExists ? readFileSync(bodyPath, 'utf8') : '';
-  const parsedReport = reportBody ? parseSmokeAgentReport(reportBody) : null;
+  if (seal.runId !== runBinding.runId) {
+    return {
+      publicationState: 'none',
+      sealedRunId: seal.runId,
+      wrongRunBinding: true,
+      reportBody: bodyExists ? reportBody : undefined,
+    };
+  }
+  if (!bodyExists) {
+    return {
+      publicationState: 'partial',
+      sealedRunId: seal.runId,
+      wrongRunBinding: false,
+    };
+  }
+  const bodyDigest = computeSmokeCompletionBodyDigest(reportBody);
+  if (bodyDigest !== seal.bodySha256) {
+    return {
+      publicationState: 'publish_complete_duplicate',
+      sealedRunId: seal.runId,
+      reportBody,
+      wrongRunBinding: false,
+    };
+  }
+  const parsedReport = parseSealedSmokeAgentReport(reportBody);
   if (!parsedReport) {
     return {
       publicationState: 'publish_complete_unfenced',
-      sealedRunId: seal?.runId,
+      sealedRunId: seal.runId,
       reportBody,
       parsedReport: null,
       wrongRunBinding: false,
@@ -969,7 +1019,7 @@ export function observeSmokeCompletionEvidence(
   }
   return {
     publicationState: 'publish_complete_single',
-    sealedRunId: seal?.runId,
+    sealedRunId: seal.runId,
     reportBody,
     parsedReport,
     wrongRunBinding: false,
@@ -1015,24 +1065,11 @@ export function classifySmokeChildWaitObservation(input: {
   return { status: 'pending' };
 }
 
-export function mapOrcaErrorToControlPlaneCause(
+export function preserveSmokeControlPlaneCause(
   code: string | undefined,
-  message: string | undefined,
 ): SmokeControlPlaneCause | undefined {
-  const haystack = `${code ?? ''} ${message ?? ''}`.toLowerCase();
-  if (haystack.includes('stale') && haystack.includes('handle')) {
-    return 'channel_stale_handle';
-  }
-  if (haystack.includes('lookup') && (haystack.includes('empty') || haystack.includes('not found'))) {
-    return 'channel_lookup_empty';
-  }
-  if (haystack.includes('control') && haystack.includes('overwritten')) {
-    return 'channel_control_overwritten';
-  }
-  if (haystack.includes('runtime_unavailable') || haystack.includes('control_unavailable') || haystack.includes('orca unavailable')) {
-    return 'channel_control_unavailable';
-  }
-  return undefined;
+  const normalized = String(code ?? '').trim();
+  return isSmokeControlPlaneCause(normalized) ? normalized : undefined;
 }
 
 
