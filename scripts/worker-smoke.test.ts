@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,10 @@ import {
 } from './lib/orca-cli.ts';
 import {
   buildSmokeAgentPrompt,
+  buildSmokeGhChildEnv,
+  classifyDeclaredScenarioNonPassCause,
+  classifySmokeNonPassCause,
+  SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
   detectTrackedImplementationMutation,
   hasPreexistingTrackedDirtiness,
   trackedPorcelainPaths,
@@ -20,15 +24,26 @@ import {
   evaluateWorkerSmokeGate,
   extractSmokeReportsFromComments,
   findCurrentHeadSmokePass,
+  SMOKE_GH_AUTH_ENV_KEYS,
   SMOKE_REPORT_PRODUCER,
+  smokeAgentTerminalActivityBeyondSentPrompt,
+  smokeAgentTerminalDeltaActivity,
+  smokeAgentTerminalFullActivity,
+  scrubForwardedGhSecrets,
   smokeReportCoversPlan,
   smokeReportHasPackProducer,
+  scrubSmokeOutput,
+  resolveSmokeGhConfigDirs,
+  orcaTerminalReadLines,
+  orcaTerminalReadNextCursor,
   verifySmokeHeadBinding,
   formatSmokeReportComment,
   normalizeSmokeReport,
   parseSmokeAgentReport,
   SMOKE_REPORT_MARKER,
 } from './lib/worker-smoke-core.ts';
+import { runProcessSync } from './kernel/subprocess.ts';
+import { runSmokeGhSync, waitForSmokeAgentCompletion } from './worker-smoke-run.ts';
 import { readWorkerSmokeReceipt, verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 import { checkSmokeTestPlan, resolveSmokeRequirement } from './draft-discipline.mjs';
 
@@ -165,6 +180,33 @@ describe('smoke report publication and parsing', () => {
     expect(comment).toContain(headA);
     expect(comment).toContain('result: **PASS**');
     expect(comment).toContain('tracked-implementation-files-unmodified: yes');
+  });
+
+  it('parses unfenced agent smoke reports after prompt template lines', () => {
+    const body = [
+      '```worker-smoke-report',
+      'result: PASS|FAIL|BLOCKED',
+      '```',
+      '',
+      'result: PASS',
+      'tracked-files-unmodified: true',
+      'scenarios:',
+      '  - action: run check | expected: ok | observed: ok | outcome: pass',
+    ].join('\n');
+    const partial = parseSmokeAgentReport(body);
+    expect(partial?.result).toBe('PASS');
+    expect(partial?.trackedFilesUnmodified).toBe(true);
+    expect(partial?.scenarios).toHaveLength(1);
+  });
+
+  it('parses unfenced reports with Orca-indented lines', () => {
+    const body = [
+      '  result: PASS',
+      '  tracked-files-unmodified: true',
+      '  scenarios:',
+      '    - action: run check | expected: ok | observed: ok | outcome: pass',
+    ].join('\n');
+    expect(parseSmokeAgentReport(body)?.result).toBe('PASS');
   });
 
   it('rejects malformed PASS output that omits required fields', () => {
@@ -589,3 +631,533 @@ describe('review finding regressions', () => {
     expect(resolveSmokeRequirement(withoutFence).requirement).toBe('required');
   });
 });
+
+describe('worker smoke gh child env forwarding (#1101)', () => {
+  const authSentinel = 'opaque-sentinel-not-matching-gh-prefix-abc123';
+  const unrelatedSentinel = 'fixture-unrelated-parent-sentinel-xyz';
+
+  it('forwards supported gh auth/config carriers without unrelated parent env', () => {
+    const parent = {
+      PATH: '/bin',
+      GH_TOKEN: authSentinel,
+      GH_CONFIG_DIR: '/tmp/gh-config',
+      UNRELATED_SENTINEL: unrelatedSentinel,
+    } as NodeJS.ProcessEnv;
+    const child = buildSmokeGhChildEnv(parent);
+    expect(child.GH_TOKEN).toBe(authSentinel);
+    expect(child.GH_CONFIG_DIR).toBe('/tmp/gh-config');
+    expect(child.UNRELATED_SENTINEL).toBeUndefined();
+    for (const key of SMOKE_GH_AUTH_ENV_KEYS) {
+      if (parent[key] !== undefined) {
+        expect(child[key]).toBe(parent[key]);
+      }
+    }
+  });
+
+  it('restores authenticated gh child behavior on the smoke-owned seam without leaking sentinels', () => {
+    const fakeBin = join(fixtureRoot, 'fake-bin');
+    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
+    const isolatedHome = mkdtempSync(join(tmpdir(), 'smoke-gh-noauth-'));
+    const withoutAuth = runSmokeGhSync(
+      ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+      fixtureRoot,
+      { PATH: probePath, HOME: isolatedHome, XDG_CONFIG_HOME: isolatedHome },
+    );
+    expect(withoutAuth.ok).toBe(false);
+    expect(withoutAuth.stderr).toContain('config-credential-missing');
+
+    const withAuth = runSmokeGhSync(
+      ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+      fixtureRoot,
+      {
+        PATH: probePath,
+        ...buildSmokeGhChildEnv({
+          GH_TOKEN: authSentinel,
+          UNRELATED_SENTINEL: unrelatedSentinel,
+        } as NodeJS.ProcessEnv),
+      },
+    );
+    expect(withAuth.ok).toBe(true);
+    expect(withAuth.stdout).toContain('[]');
+    expect(withAuth.stdout).not.toContain(authSentinel);
+    expect(withAuth.stderr).not.toContain(authSentinel);
+  });
+
+
+  it('does not forward GH_REPO as an auth/config carrier', () => {
+    const child = buildSmokeGhChildEnv({ GH_REPO: 'other/repo' } as NodeJS.ProcessEnv);
+    expect(child.GH_REPO).toBeUndefined();
+  });
+
+  it('restores authenticated gh child behavior via GH_CONFIG_DIR without token carriers', () => {
+    const fakeBin = join(fixtureRoot, 'fake-bin');
+    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
+    const configHomeDir = mkdtempSync(join(tmpdir(), 'smoke-gh-config-only-'));
+    const configCredential = 'gho_confighomecredential1101abcdef';
+    writeFileSync(join(configHomeDir, 'hosts.yml'), 'github.com:\n    oauth_token: ' + configCredential + '\n', 'utf8');
+    const stripTokenCarriers = {
+      GH_TOKEN: '',
+      GITHUB_TOKEN: '',
+      GH_ENTERPRISE_TOKEN: '',
+      GITHUB_ENTERPRISE_TOKEN: '',
+      GHE_TOKEN: '',
+    } as NodeJS.ProcessEnv;
+
+    try {
+      const dirOnlyNoCredential = mkdtempSync(join(tmpdir(), 'smoke-gh-config-empty-'));
+      const withoutCredential = runSmokeGhSync(
+        ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+        fixtureRoot,
+        {
+          PATH: probePath,
+          ...stripTokenCarriers,
+          ...buildSmokeGhChildEnv({ GH_CONFIG_DIR: dirOnlyNoCredential } as NodeJS.ProcessEnv),
+        },
+      );
+      expect(withoutCredential.ok).toBe(false);
+      expect(withoutCredential.stderr).toContain('config-credential-missing');
+
+      const isolatedHome = mkdtempSync(join(tmpdir(), 'smoke-gh-noconfig-'));
+      const withoutConfigHome = runSmokeGhSync(
+        ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+        fixtureRoot,
+        {
+          PATH: probePath,
+          ...stripTokenCarriers,
+          GH_CONFIG_DIR: '',
+          HOME: isolatedHome,
+          XDG_CONFIG_HOME: isolatedHome,
+        },
+      );
+      expect(withoutConfigHome.ok).toBe(false);
+      expect(withoutConfigHome.stderr).toContain('config-credential-missing');
+
+      const withConfigHome = runSmokeGhSync(
+        ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+        fixtureRoot,
+        {
+          PATH: probePath,
+          ...stripTokenCarriers,
+          ...buildSmokeGhChildEnv({ GH_CONFIG_DIR: configHomeDir } as NodeJS.ProcessEnv),
+        },
+      );
+      expect(withConfigHome.ok).toBe(true);
+      expect(withConfigHome.stdout).toContain('[]');
+      expect(withConfigHome.stderr).not.toContain(configCredential);
+    } finally {
+      rmSync(configHomeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('scrubs config-home credentials resolved via XDG_CONFIG_HOME without GH_CONFIG_DIR', () => {
+    const fakeBin = join(fixtureRoot, 'fake-bin');
+    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
+    const xdgRoot = mkdtempSync(join(tmpdir(), 'smoke-xdg-config-'));
+    const configHomeDir = join(xdgRoot, 'gh');
+    mkdirSync(configHomeDir, { recursive: true });
+    const configCredential = 'gho_xdgconfigscrub1101abcdef';
+    writeFileSync(join(configHomeDir, 'hosts.yml'), 'github.com:\n    oauth_token: ' + configCredential + '\n', 'utf8');
+    const childEnv = buildSmokeGhChildEnv({ XDG_CONFIG_HOME: xdgRoot } as NodeJS.ProcessEnv);
+    try {
+      expect(resolveSmokeGhConfigDirs(childEnv)).toContain(configHomeDir);
+      const failed = runSmokeGhSync(
+        ['fail-with-config-sentinel'],
+        fixtureRoot,
+        { PATH: probePath, ...childEnv },
+      );
+      const scrubbed = scrubSmokeOutput(scrubForwardedGhSecrets(`${failed.stderr}${failed.stdout}`, childEnv));
+      expect(scrubbed).not.toContain(configCredential);
+      expect(scrubbed).toContain('[redacted-secret]');
+    } finally {
+      rmSync(xdgRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('scrubs config-home credential values from stderr-derived failure surfaces', () => {
+    const fakeBin = join(fixtureRoot, 'fake-bin');
+    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
+    const configHomeDir = mkdtempSync(join(tmpdir(), 'smoke-gh-config-scrub-'));
+    const configCredential = 'gho_confighomescrub1101abcdef';
+    writeFileSync(join(configHomeDir, 'hosts.yml'), 'github.com:\n    oauth_token: ' + configCredential + '\n', 'utf8');
+    const childEnv = buildSmokeGhChildEnv({ GH_CONFIG_DIR: configHomeDir } as NodeJS.ProcessEnv);
+    try {
+      const failed = runSmokeGhSync(
+        ['fail-with-config-sentinel'],
+        fixtureRoot,
+        { PATH: probePath, ...childEnv },
+      );
+      const scrubbed = scrubSmokeOutput(scrubForwardedGhSecrets(`${failed.stderr}${failed.stdout}`, childEnv));
+      expect(scrubbed).not.toContain(configCredential);
+      expect(scrubbed).toContain('[redacted-secret]');
+    } finally {
+      rmSync(configHomeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('scrubs arbitrary forwarded token values from stderr-derived failure surfaces', () => {
+    const fakeBin = join(fixtureRoot, 'fake-bin');
+    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
+    const childEnv = buildSmokeGhChildEnv({ GH_TOKEN: authSentinel } as NodeJS.ProcessEnv);
+    const failed = runSmokeGhSync(
+      ['fail-with-sentinel'],
+      fixtureRoot,
+      { PATH: probePath, ...childEnv },
+    );
+    const scrubbed = scrubSmokeOutput(scrubForwardedGhSecrets(`${failed.stderr}${failed.stdout}`, childEnv));
+    expect(scrubbed).not.toContain(authSentinel);
+    expect(scrubbed).toContain('[redacted-secret]');
+  });
+});
+
+describe('worker smoke agent start-aware wait (#1101)', () => {
+  it('detects positive terminal activity beyond echoed prompt only', () => {
+    const sentPrompt = 'run smoke now';
+    expect(smokeAgentTerminalFullActivity('idle', 'idle', sentPrompt)).toBe(false);
+    expect(smokeAgentTerminalFullActivity(`idle${sentPrompt}`, 'idle', sentPrompt)).toBe(false);
+    expect(smokeAgentTerminalFullActivity(`idle${sentPrompt}\nagent output`, 'idle', sentPrompt)).toBe(true);
+    expect(smokeAgentTerminalDeltaActivity('', sentPrompt)).toBe(false);
+    expect(smokeAgentTerminalDeltaActivity(sentPrompt, sentPrompt)).toBe(false);
+    expect(smokeAgentTerminalDeltaActivity(`${sentPrompt}\nagent output`, sentPrompt)).toBe(true);
+    expect(smokeAgentTerminalActivityBeyondSentPrompt(`${sentPrompt}\nscenario output`, sentPrompt)).toBe(true);
+  });
+
+  it('detects short agent output after a long prompt via cursor accumulation', () => {
+    const sentPrompt = 'x'.repeat(5000);
+    expect(smokeAgentTerminalActivityBeyondSentPrompt('ok', sentPrompt)).toBe(true);
+    expect(smokeAgentTerminalActivityBeyondSentPrompt(sentPrompt.slice(0, 40), sentPrompt)).toBe(false);
+    expect(smokeAgentTerminalActivityBeyondSentPrompt(`${sentPrompt}\nok`, sentPrompt)).toBe(true);
+  });
+
+  it('does not treat echoed prompt text as agent activity', () => {
+    let now = 0;
+    const sentPrompt = 'run smoke now';
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal read')) {
+        return {
+          stdout: JSON.stringify({ ok: true, result: { lines: [sentPrompt], nextCursor: 2 } }),
+          stderr: '',
+          status: 0,
+        };
+      }
+      return { stdout: JSON.stringify({ ok: false, error: { message: 'unexpected' } }), stderr: '', status: 1 };
+    });
+
+    const result = waitForSmokeAgentCompletion('term_prompt_echo', {
+      runner: runner as never,
+      now: () => now,
+      deadlineMs: 600,
+      preSendBaselineText: 'idle',
+      preSendCursor: 1,
+      sentPrompt,
+      sleepMs: (ms) => {
+        now += ms;
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.agentActivityObserved).toBe(false);
+    expect(result.error?.code).toBe('smoke_agent_never_started');
+  });
+
+  it('accumulates short cursor deltas under a long prompt envelope', () => {
+    let now = 0;
+    let readCalls = 0;
+    const sentPrompt = 'x'.repeat(5000);
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal read')) {
+        readCalls += 1;
+        if (readCalls < 3) {
+          return { stdout: JSON.stringify({ ok: true, result: { lines: [sentPrompt.slice(0, 1000)], nextCursor: readCalls } }), stderr: '', status: 0 };
+        }
+        return {
+          stdout: JSON.stringify({ ok: true, result: { lines: ['ok'], nextCursor: 99 } }),
+          stderr: '',
+          status: 0,
+        };
+      }
+      if (joined.includes('terminal wait') && joined.includes('tui-idle')) {
+        return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+      }
+      return { stdout: JSON.stringify({ ok: false, error: { message: 'unexpected' } }), stderr: '', status: 1 };
+    });
+
+    const result = waitForSmokeAgentCompletion('term_long_prompt_short_output', {
+      runner: runner as never,
+      now: () => now,
+      deadlineMs: 5_000,
+      preSendBaselineText: 'idle',
+      preSendCursor: 1,
+      sentPrompt,
+      sleepMs: (ms) => {
+        now += ms;
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.agentActivityObserved).toBe(true);
+  });
+
+  it('does not complete during initial idle before delayed first output', () => {
+    let now = 0;
+    let readCalls = 0;
+    const sentPrompt = 'run smoke now';
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal read')) {
+        readCalls += 1;
+        if (readCalls < 4) {
+          return { stdout: JSON.stringify({ ok: true, result: { lines: [], nextCursor: 1 } }), stderr: '', status: 0 };
+        }
+        return {
+          stdout: JSON.stringify({ ok: true, result: { lines: ['agent scenario output', '```worker-smoke-report', 'result: PASS', '```'], nextCursor: 2 } }),
+          stderr: '',
+          status: 0,
+        };
+      }
+      if (joined.includes('terminal wait') && joined.includes('tui-idle')) {
+        return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+      }
+      return { stdout: JSON.stringify({ ok: false, error: { message: 'unexpected' } }), stderr: '', status: 1 };
+    });
+
+    const result = waitForSmokeAgentCompletion('term_delayed', {
+      runner: runner as never,
+      now: () => now,
+      deadlineMs: 5_000,
+      preSendBaselineText: 'idle',
+      preSendCursor: 1,
+      sentPrompt,
+      sleepMs: (ms) => {
+        now += ms;
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.agentActivityObserved).toBe(true);
+    expect(readCalls).toBeGreaterThanOrEqual(4);
+  });
+
+  it('classifies started-without-report as missing_agent_report after idle', () => {
+    let now = 0;
+    let readCalls = 0;
+    const sentPrompt = 'run smoke now';
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal read')) {
+        readCalls += 1;
+        if (readCalls === 1) {
+          return { stdout: JSON.stringify({ ok: true, result: { lines: ['scenario output only'], nextCursor: 2 } }), stderr: '', status: 0 };
+        }
+        return { stdout: JSON.stringify({ ok: true, result: { lines: ['more scenario output'], nextCursor: 3 } }), stderr: '', status: 0 };
+      }
+      if (joined.includes('terminal wait') && joined.includes('tui-idle')) {
+        return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+      }
+      return { stdout: JSON.stringify({ ok: false, error: { message: 'unexpected' } }), stderr: '', status: 1 };
+    });
+
+    const waitResult = waitForSmokeAgentCompletion('term_started_no_report', {
+      runner: runner as never,
+      now: () => now,
+      deadlineMs: 5_000,
+      preSendBaselineText: 'idle',
+      preSendCursor: 1,
+      sentPrompt,
+      sleepMs: (ms) => {
+        now += ms;
+      },
+    });
+    expect(waitResult.ok).toBe(true);
+    expect(waitResult.agentActivityObserved).toBe(true);
+    expect(classifySmokeNonPassCause({
+      partial: null,
+      agentActivityObserved: waitResult.agentActivityObserved,
+      agentCompleted: true,
+    })).toBe('missing_agent_report');
+  });
+
+  it('terminates at the shared deadline when the agent never starts', () => {
+    let now = 0;
+    const sentPrompt = 'run smoke now';
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal read')) {
+        return { stdout: JSON.stringify({ ok: true, result: { lines: [], nextCursor: 1 } }), stderr: '', status: 0 };
+      }
+      return { stdout: JSON.stringify({ ok: false, error: { message: 'unexpected' } }), stderr: '', status: 1 };
+    });
+
+    const result = waitForSmokeAgentCompletion('term_never', {
+      runner: runner as never,
+      now: () => now,
+      deadlineMs: 600,
+      preSendBaselineText: 'idle',
+      preSendCursor: 1,
+      sentPrompt,
+      sleepMs: (ms) => {
+        now += ms;
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.agentActivityObserved).toBe(false);
+    expect(result.error?.code).toBe('smoke_agent_never_started');
+    expect(now).toBeLessThanOrEqual(600);
+  });
+});
+
+describe('orca terminal read normalization (#1101)', () => {
+  it('accepts live Orca terminal.tail payloads and string cursors', () => {
+    const live = {
+      terminal: {
+        tail: ['prompt echo', 'agent output'],
+        nextCursor: '315',
+      },
+    };
+    expect(orcaTerminalReadLines(live)).toEqual(['prompt echo', 'agent output']);
+    expect(orcaTerminalReadNextCursor(live)).toBe(315);
+  });
+
+  it('accepts capture-backed result.lines payloads', () => {
+    const capture = { lines: ['```worker-smoke-report', 'result: PASS'], nextCursor: 7 };
+    expect(orcaTerminalReadLines(capture)).toEqual(['```worker-smoke-report', 'result: PASS']);
+    expect(orcaTerminalReadNextCursor(capture)).toBe(7);
+  });
+});
+
+describe('worker smoke malformed PASS normalization (#1101)', () => {
+  it('does not classify harness normalization failures as executed_scenario_failure', () => {
+    const agentPartial = {
+      result: 'PASS' as const,
+      scenarios: [{ action: 'run scenario', expected: 'pass', observed: 'pass', outcome: 'pass' as const }],
+    };
+    const harnessFailureReport = {
+      result: 'FAIL' as const,
+      scenarios: [{
+        action: 'normalize smoke agent report',
+        expected: 'valid PASS evidence',
+        observed: 'missing producer evidence',
+        outcome: 'fail' as const,
+      }],
+    };
+    expect(classifyDeclaredScenarioNonPassCause({
+      partial: harnessFailureReport,
+      agentActivityObserved: true,
+      agentCompleted: true,
+    })).toBe('executed_scenario_failure');
+    expect(classifyDeclaredScenarioNonPassCause({
+      partial: agentPartial,
+      agentActivityObserved: true,
+      agentCompleted: true,
+    })).toBeUndefined();
+  });
+});
+
+describe('worker smoke non-pass cause classification (#1101)', () => {
+  it('distinguishes zero-parsed-scenarios, missing-agent-report, and executed-scenario-failure', () => {
+    expect(classifySmokeNonPassCause({ zeroParsedScenarios: true, partial: null, agentActivityObserved: false }))
+      .toBe('zero_parsed_scenarios');
+    expect(classifySmokeNonPassCause({ partial: null, agentActivityObserved: true, agentCompleted: true }))
+      .toBe('missing_agent_report');
+    expect(classifySmokeNonPassCause({ partial: null, agentActivityObserved: true, agentCompleted: false }))
+      .toBeUndefined();
+    expect(classifySmokeNonPassCause({
+      partial: {
+        result: 'FAIL',
+        scenarios: [{ action: 'x', expected: 'y', observed: 'z', outcome: 'fail' }],
+      },
+      agentActivityObserved: true,
+      agentCompleted: true,
+    })).toBe('executed_scenario_failure');
+    expect(classifySmokeNonPassCause({
+      partial: { result: 'FAIL', scenarios: [{ action: 'x', expected: 'y', observed: 'z', outcome: 'pass' }] },
+      agentActivityObserved: true,
+      agentCompleted: true,
+    })).toBeUndefined();
+    expect(classifyDeclaredScenarioNonPassCause({
+      partial: {
+        result: 'FAIL',
+        scenarios: [
+          { action: 'declared scenario', expected: 'pass', observed: 'pass', outcome: 'pass' },
+          { action: SMOKE_HARNESS_TERMINAL_CLOSE_ACTION, expected: 'terminal close succeeds', observed: 'close_failed:unknown', outcome: 'fail' },
+        ],
+      },
+      agentActivityObserved: true,
+      agentCompleted: true,
+    })).toBeUndefined();
+  });
+
+  it('includes nonPassCause in published machine block before emission', () => {
+    const comment = formatSmokeReportComment({
+      result: 'FAIL',
+      issueNumber: 1101,
+      prNumber: 7,
+      headSha: headA,
+      scenarios: [{ action: 'run scenario', expected: 'ok', observed: 'bad', outcome: 'fail' }],
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'closed_owned_handle',
+      environmentNotes: [],
+      nonPassCause: 'executed_scenario_failure',
+    });
+    expect(comment).toContain('non-pass-cause: executed_scenario_failure');
+  });
+
+  it('parses numbered prose to zero scenarios and blocks gate-check without implying execution', () => {
+    const markdown = readFixture('zero-scenario-numbered-prose.md');
+    const plan = resolveSmokeRequirement(markdown);
+    expect(plan.requirement).toBe('required');
+    expect(plan.scenarios).toHaveLength(0);
+    const decision = evaluateWorkerSmokeGate({
+      ...gateBase,
+      issueBody: markdown,
+      prNumber: 7,
+      headSha: headA,
+      prComments: [],
+      ciGreen: true,
+      orcaWorktreeOk: true,
+      ownedTerminalClosed: true,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe('missing_smoke_plan');
+  });
+
+  it('run emits zero_parsed_scenarios before terminal creation for numbered-prose plans', () => {
+    const bodyFile = join(fixtureRoot, 'zero-scenario-numbered-prose.md');
+    const result = runProcessSync({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types',
+        join(import.meta.dirname, 'worker-smoke-run.ts'),
+        'run',
+        '--issue', '1101',
+        '--pr', '1',
+        '--head-sha', headA,
+        '--issue-body-file', bodyFile,
+        '--dry-run',
+        '--json',
+      ],
+      inheritParentEnv: true,
+    });
+    expect(result.ok).toBe(false);
+    const payload = JSON.parse(result.stdout.trim());
+    expect(payload.nonPassCause).toBe('zero_parsed_scenarios');
+    expect(payload.terminalCreated).toBe(false);
+    expect(payload.published).toBe(false);
+    expect(payload.report?.nonPassCause).toBe('zero_parsed_scenarios');
+  });
+
+    it('still serializes canonical non-empty scenarios into the smoke-agent prompt', () => {
+    const markdown = readFixture('action-producing-with-plan.md');
+    const plan = resolveSmokeRequirement(markdown);
+    expect(plan.scenarios.length).toBeGreaterThan(0);
+    const prompt = buildSmokeAgentPrompt({
+      issueNumber: 1101,
+      issueBody: markdown,
+      prNumber: 1,
+      headSha: headA,
+      plan,
+    });
+    expect(prompt).toContain(plan.scenarios[0]?.action ?? '');
+    expect(prompt).not.toContain('(none — report BLOCKED');
+  });
+});
+

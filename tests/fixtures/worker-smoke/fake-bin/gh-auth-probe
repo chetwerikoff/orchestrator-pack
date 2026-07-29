@@ -1,0 +1,24 @@
+#!/bin/sh
+# Smoke fixture: proves auth carriers reach gh children without echoing secret values.
+set -eu
+if [ "${1:-}" = "auth-probe" ]; then
+  if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ] || [ -n "${GH_CONFIG_DIR:-}" ]; then
+    printf '%s\n' 'auth-carrier-present'
+    exit 0
+  fi
+  printf '%s\n' 'auth-carrier-missing' >&2
+  exit 1
+fi
+if [ "${1:-}" = "config-home-probe" ]; then
+  if [ -n "${HOME:-}" ] || [ -n "${XDG_CONFIG_HOME:-}" ]; then
+    printf '%s\n' 'config-home-present'
+    exit 0
+  fi
+  printf '%s\n' 'config-home-missing' >&2
+  exit 1
+fi
+if [ "${1:-}" = "fail-with-sentinel" ]; then
+  printf '%s\n' "error: fixture-gh-auth-sentinel-${GH_TOKEN:-missing}" >&2
+  exit 1
+fi
+printf '%s\n' '[]'

@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseKeyValueBlock } from '../markdown-key-value.mjs';
 import {
   checkSmokeTestPlan,
@@ -38,6 +40,7 @@ export interface SmokeReport {
   producer?: string;
   orcaExecutable?: string;
   terminalHandle?: string;
+  nonPassCause?: SmokeNonPassCause;
 }
 
 export const SMOKE_REPORT_MARKER = 'pack-worker-smoke-report/v1';
@@ -116,7 +119,10 @@ function applyScenarioField(scenario: SmokeScenario, key: string, value: string)
   } else if (normalized === 'observed') {
     scenario.observed = trimmed;
   } else if (normalized === 'outcome') {
-    scenario.outcome = trimmed.toLowerCase() as SmokeScenario['outcome'];
+    const outcome = trimmed.toLowerCase().match(/^(pass|fail|skipped|blocked)\b/u)?.[1];
+    if (outcome) {
+      scenario.outcome = outcome as SmokeScenario['outcome'];
+    }
   } else if (normalized === 'skip-reason') {
     scenario.skipReason = trimmed;
   }
@@ -172,20 +178,99 @@ function parseSmokeScenarioBlock(block: string): SmokeScenario[] {
   return scenarios;
 }
 
-export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null {
-  const match = text.match(SMOKE_REPORT_BLOCK);
-  if (!match) {
+export function stripLeadingSmokeAgentPrompt(text: string, sentPrompt: string): string {
+  let remainder = text;
+  const prompt = sentPrompt.trim();
+  while (prompt && remainder.startsWith(prompt)) {
+    remainder = remainder.slice(prompt.length);
+  }
+  if (prompt && prompt.startsWith(remainder.trim())) {
+    return '';
+  }
+  return remainder;
+}
+
+
+function trimOrcaTerminalUiTail(body: string): string {
+  const markers = ['\n→ ', '\nComposer 2.', '\nRun Everything', '\n~/'];
+  let end = body.length;
+  for (const marker of markers) {
+    const index = body.indexOf(marker);
+    if (index >= 0) {
+      end = Math.min(end, index);
+    }
+  }
+  return body.slice(0, end);
+}
+
+function normalizeOrcaWrappedSmokeReportBody(body: string): string {
+  const lines = body.split(/\r?\n/u);
+  const out: string[] = [];
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trimStart();
+    if (!trimmed) {
+      continue;
+    }
+    const isTopLevelField = /^(result|tracked-files-unmodified|environment-notes|limitations|scenarios|producer|orca-executable|terminal-handle|terminal-cleanup|non-pass-cause):/iu
+      .test(trimmed);
+    const isScenario = /^-\s/.test(trimmed);
+    if (out.length === 0 || isTopLevelField || isScenario) {
+      out.push(trimmed);
+      continue;
+    }
+    out[out.length - 1] = `${out[out.length - 1]} ${trimmed}`;
+  }
+  return out.join('\n');
+}
+
+function findUnfencedSmokeReportBody(text: string): string | null {
+  const lines = text.split(/\r?\n/u);
+  let lastStart = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index]?.trim().match(/^result:\s*(PASS|FAIL|BLOCKED)\s*$/iu);
+    if (!match || match[1]?.includes('|')) {
+      continue;
+    }
+    lastStart = index;
+  }
+  if (lastStart < 0) {
     return null;
   }
-  const fields = parseKeyValueBlock(match[1]);
+
+  const bodyLines: string[] = [];
+  for (let index = lastStart; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    if (
+      /^→/.test(line)
+      || /^Composer 2\.\d/.test(line)
+      || /^Run Everything/.test(line)
+      || /^~\//.test(line)
+      || /^\[Pasted text/.test(line)
+    ) {
+      break;
+    }
+    if (index > lastStart && /^```/.test(line)) {
+      break;
+    }
+    bodyLines.push(line);
+  }
+  const body = trimOrcaTerminalUiTail(normalizeOrcaWrappedSmokeReportBody(bodyLines.map((line) => line.trimStart()).join('\n')));
+  if (!/tracked-files-unmodified:/iu.test(body) || !/scenarios:/iu.test(body)) {
+    return null;
+  }
+  return body;
+}
+
+function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
+  const fields = parseKeyValueBlock(body);
   const result = String(fields.result ?? '').trim().toUpperCase();
   if (result !== 'PASS' && result !== 'FAIL' && result !== 'BLOCKED') {
     return null;
   }
 
-  const scenarios = parseSmokeScenarioBlock(match[1]);
+  const scenarios = parseSmokeScenarioBlock(body);
   if (scenarios.length === 0) {
-    for (const line of match[1].split(/\r?\n/u)) {
+    for (const line of body.split(/\r?\n/u)) {
       const trimmed = line.trim();
       if (!trimmed.startsWith('-')) {
         continue;
@@ -222,6 +307,21 @@ export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null
     orcaExecutable: String(fields['orca-executable'] ?? fields['orca-cli'] ?? '').trim() || undefined,
     terminalHandle: String(fields['terminal-handle'] ?? '').trim() || undefined,
   };
+}
+
+export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null {
+  const fenced = text.match(SMOKE_REPORT_BLOCK);
+  if (fenced) {
+    const parsed = parseSmokeAgentReportBody(fenced[1]);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  const unfenced = findUnfencedSmokeReportBody(text);
+  if (unfenced) {
+    return parseSmokeAgentReportBody(unfenced);
+  }
+  return null;
 }
 
 export function normalizeSmokeReport(
@@ -326,6 +426,9 @@ export function formatSmokeReportComment(report: SmokeReport): string {
     `terminal-handle: ${report.terminalHandle ?? ''}`,
     `tracked-files-unmodified: ${report.trackedFilesUnmodified ? 'true' : 'false'}`,
     `terminal-cleanup: ${report.terminalCleanup}`,
+    'nonPassCause' in report && report.nonPassCause
+      ? `non-pass-cause: ${String(report.nonPassCause)}`
+      : '',
     report.environmentNotes.length > 0 ? `environment-notes: ${report.environmentNotes.join('; ')}` : '',
     report.limitations.length > 0 ? `limitations: ${report.limitations.join('; ')}` : '',
     'scenarios:',
@@ -613,8 +716,264 @@ export function detectTrackedImplementationMutation(
   return false;
 }
 
-export function scrubSmokeOutput(text: string): string {
-  return text
+/** Parent env carriers forwarded only to smoke-owned `gh` children (not full parent inheritance). */
+export const SMOKE_GH_AUTH_ENV_KEYS = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+  'GHE_TOKEN',
+  'GH_HOST',
+  'GH_CONFIG_DIR',
+  'XDG_CONFIG_HOME',
+  'HOME',
+  'USERPROFILE',
+] as const;
+
+export type SmokeGhAuthEnvKey = (typeof SMOKE_GH_AUTH_ENV_KEYS)[number];
+
+export const SMOKE_GH_SECRET_ENV_KEYS = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+  'GHE_TOKEN',
+] as const;
+
+export function buildSmokeGhChildEnv(parentEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const forwarded: NodeJS.ProcessEnv = {};
+  for (const key of SMOKE_GH_AUTH_ENV_KEYS) {
+    const value = parentEnv[key];
+    if (value !== undefined && value !== '') {
+      forwarded[key] = value;
+    }
+  }
+  return forwarded;
+}
+
+export type SmokeNonPassCause =
+  | 'zero_parsed_scenarios'
+  | 'missing_agent_report'
+  | 'executed_scenario_failure';
+
+export const SMOKE_HARNESS_TERMINAL_CLOSE_ACTION = 'close owned Orca terminal handle';
+
+export function declaredSmokeScenarios(
+  partial: Partial<SmokeReport> | null | undefined,
+): SmokeScenario[] {
+  return (partial?.scenarios ?? []).filter((scenario) => scenario.action !== SMOKE_HARNESS_TERMINAL_CLOSE_ACTION);
+}
+
+export function classifySmokeNonPassCause(input: {
+  zeroParsedScenarios?: boolean;
+  partial: Partial<SmokeReport> | null;
+  agentActivityObserved: boolean;
+  agentCompleted?: boolean;
+}): SmokeNonPassCause | undefined {
+  if (input.zeroParsedScenarios) {
+    return 'zero_parsed_scenarios';
+  }
+  if (!input.partial) {
+    if (input.agentCompleted && input.agentActivityObserved) {
+      return 'missing_agent_report';
+    }
+    return undefined;
+  }
+  const hasFailedDeclaredScenario = declaredSmokeScenarios(input.partial)
+    .some((scenario) => scenario.outcome === 'fail');
+  if (hasFailedDeclaredScenario) {
+    return 'executed_scenario_failure';
+  }
+  return undefined;
+}
+
+export function classifyDeclaredScenarioNonPassCause(input: {
+  zeroParsedScenarios?: boolean;
+  partial: Partial<SmokeReport> | null;
+  agentActivityObserved: boolean;
+  agentCompleted?: boolean;
+}): SmokeNonPassCause | undefined {
+  if (!input.partial) {
+    return classifySmokeNonPassCause(input);
+  }
+  return classifySmokeNonPassCause({
+    ...input,
+    partial: {
+      ...input.partial,
+      scenarios: declaredSmokeScenarios(input.partial),
+    },
+  });
+}
+
+
+export function orcaTerminalReadLines(result: unknown): string[] {
+  if (!result || typeof result !== 'object') {
+    return [];
+  }
+  const record = result as Record<string, unknown>;
+  if (Array.isArray(record.lines)) {
+    return record.lines.filter((line): line is string => typeof line === 'string');
+  }
+  const terminal = record.terminal;
+  if (terminal && typeof terminal === 'object') {
+    const tail = (terminal as { tail?: unknown }).tail;
+    if (Array.isArray(tail)) {
+      return tail.filter((line): line is string => typeof line === 'string');
+    }
+  }
+  return [];
+}
+
+export function orcaTerminalReadNextCursor(result: unknown): number | undefined {
+  if (!result || typeof result !== 'object') {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  const direct = record.nextCursor;
+  if (typeof direct === 'number' && Number.isFinite(direct)) {
+    return direct;
+  }
+  if (typeof direct === 'string' && direct.trim() !== '') {
+    const parsed = Number(direct);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  const terminal = record.terminal;
+  if (terminal && typeof terminal === 'object') {
+    const nested = (terminal as { nextCursor?: unknown }).nextCursor;
+    if (typeof nested === 'number' && Number.isFinite(nested)) {
+      return nested;
+    }
+    if (typeof nested === 'string' && nested.trim() !== '') {
+      const parsed = Number(nested);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+  }
+  return undefined;
+}
+
+export function smokeAgentTerminalActivityBeyondSentPrompt(
+  observedText: string,
+  sentPrompt: string,
+): boolean {
+  const observed = observedText;
+  if (!observed.trim()) {
+    return false;
+  }
+  const prompt = sentPrompt.trim();
+  if (!prompt) {
+    return observed.trim().length > 0;
+  }
+  if (prompt.startsWith(observed.trim())) {
+    return false;
+  }
+  let remainder = observed;
+  while (remainder.startsWith(prompt)) {
+    remainder = remainder.slice(prompt.length);
+  }
+  return remainder.trim().length > 0;
+}
+
+export function smokeAgentTerminalDeltaActivity(
+  deltaText: string,
+  sentPrompt = '',
+): boolean {
+  return smokeAgentTerminalActivityBeyondSentPrompt(deltaText, sentPrompt);
+}
+
+export function smokeAgentTerminalFullActivity(
+  currentFullText: string,
+  baselineFullText: string,
+  sentPrompt = '',
+): boolean {
+  const baseline = baselineFullText ?? '';
+  const observedSinceBaseline = currentFullText.startsWith(baseline)
+    ? currentFullText.slice(baseline.length)
+    : currentFullText;
+  return smokeAgentTerminalActivityBeyondSentPrompt(observedSinceBaseline, sentPrompt);
+}
+
+/** @deprecated Use delta/full helpers explicitly at the Orca read boundary. */
+export function smokeAgentTerminalActivityDetected(currentText: string, baselineText: string): boolean {
+  return smokeAgentTerminalFullActivity(currentText, baselineText);
+}
+
+function collectGhConfigHomeSecretValues(configDir: string): string[] {
+  const secrets: string[] = [];
+  for (const fileName of ['hosts.yml', 'config.yml']) {
+    const filePath = join(configDir, fileName);
+    if (!existsSync(filePath)) {
+      continue;
+    }
+    try {
+      const content = readFileSync(filePath, 'utf8');
+      for (const match of content.matchAll(/(?:oauth_token|password|git_protocol_token):\s*(\S+)/g)) {
+        const value = match[1]?.trim();
+        if (value && value.length >= 4) {
+          secrets.push(value);
+        }
+      }
+    } catch {
+      // ignore unreadable config-home files
+    }
+  }
+  return secrets;
+}
+
+export function resolveSmokeGhConfigDirs(childEnv: Readonly<NodeJS.ProcessEnv>): string[] {
+  const explicit = childEnv.GH_CONFIG_DIR?.trim();
+  if (explicit) {
+    return [explicit];
+  }
+
+  const candidates: string[] = [];
+  const xdgConfigHome = childEnv.XDG_CONFIG_HOME?.trim();
+  if (xdgConfigHome) {
+    candidates.push(join(xdgConfigHome, 'gh'));
+  }
+  const home = childEnv.HOME?.trim();
+  if (home) {
+    candidates.push(join(home, '.config', 'gh'));
+  }
+  const userProfile = childEnv.USERPROFILE?.trim();
+  if (userProfile) {
+    candidates.push(join(userProfile, '.config', 'gh'));
+    candidates.push(join(userProfile, 'AppData', 'Local', 'GitHub CLI'));
+  }
+  return [...new Set(candidates)];
+}
+
+function scrubConfigHomeCredentialValues(text: string, childEnv: Readonly<NodeJS.ProcessEnv>): string {
+  const configDirs = resolveSmokeGhConfigDirs(childEnv);
+  if (configDirs.length === 0) {
+    return text;
+  }
+  let scrubbed = text;
+  for (const configDir of configDirs) {
+    for (const credential of collectGhConfigHomeSecretValues(configDir)) {
+      scrubbed = scrubbed.split(credential).join('[redacted-secret]');
+    }
+  }
+  return scrubbed;
+}
+
+export function scrubForwardedGhSecrets(
+  text: string,
+  childEnv: Readonly<NodeJS.ProcessEnv> = buildSmokeGhChildEnv(),
+): string {
+  let scrubbed = scrubConfigHomeCredentialValues(text, childEnv);
+  for (const key of SMOKE_GH_SECRET_ENV_KEYS) {
+    const value = childEnv[key];
+    if (!value || value.length < 4) {
+      continue;
+    }
+    scrubbed = scrubbed.split(value).join('[redacted-secret]');
+  }
+  return scrubbed;
+}
+
+export function scrubSmokeOutput(text: string, childEnv?: Readonly<NodeJS.ProcessEnv>): string {
+  const withSecrets = childEnv ? scrubForwardedGhSecrets(text, childEnv) : text;
+  return withSecrets
     .replace(/(?:ghp_|github_pat_)[A-Za-z0-9_]+/g, '[redacted-token]')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted]')
     .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, '[redacted-secret]');

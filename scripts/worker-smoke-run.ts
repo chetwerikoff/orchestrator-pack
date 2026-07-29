@@ -17,7 +17,11 @@ import {
 } from './lib/orca-cli.ts';
 import {
   buildSmokeAgentPrompt,
+  buildSmokeGhChildEnv,
   checkSmokeTestPlan,
+  classifyDeclaredScenarioNonPassCause,
+  classifySmokeNonPassCause,
+  SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
   detectTrackedImplementationMutation,
   hasPreexistingTrackedDirtiness,
   trackedPorcelainPaths,
@@ -25,13 +29,21 @@ import {
   findCurrentHeadSmokePass,
   formatSmokeReportComment,
   normalizeSmokeReport,
+  orcaTerminalReadLines,
+  orcaTerminalReadNextCursor,
   ownedSmokeTerminalClosedFromReports,
   parseSmokeAgentReport,
+  smokeAgentTerminalActivityBeyondSentPrompt,
+  smokeAgentTerminalDeltaActivity,
+  smokeAgentTerminalFullActivity,
+  scrubForwardedGhSecrets,
   smokeReportHasPackProducer,
   SMOKE_REPORT_PRODUCER,
   verifySmokeHeadBinding,
   resolveSmokeRequirement,
   scrubSmokeOutput,
+  stripLeadingSmokeAgentPrompt,
+  type SmokeNonPassCause,
   type SmokeReport,
 } from './lib/worker-smoke-core.ts';
 import { verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
@@ -123,9 +135,195 @@ function readIssueBody(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
+const SMOKE_AGENT_WAIT_BUDGET_MS = 30 * 60 * 1000;
+const SMOKE_AGENT_POLL_MS = 250;
+
+export function runSmokeGhSync(
+  args: readonly string[],
+  cwd: string,
+  extraEnv: Readonly<NodeJS.ProcessEnv> = {},
+): ReturnType<typeof runProcessSync> {
+  return runProcessSync({
+    command: 'gh',
+    args: [...args],
+    cwd,
+    env: { ...buildSmokeGhChildEnv(), ...extraEnv },
+  });
+}
+
+function scrubGhFailureMessage(message: string): string {
+  return scrubSmokeOutput(scrubForwardedGhSecrets(message, buildSmokeGhChildEnv()));
+}
+
+function smokeAgentTerminalHasReport(
+  terminalText: string,
+  sentPrompt: string,
+  baselineText = '',
+): boolean {
+  const observedSinceBaseline = terminalText.startsWith(baselineText)
+    ? terminalText.slice(baselineText.length)
+    : terminalText;
+  const remainder = stripLeadingSmokeAgentPrompt(observedSinceBaseline, sentPrompt);
+  if (!remainder.trim()) {
+    return false;
+  }
+  return parseSmokeAgentReport(remainder) !== null;
+}
+
+export function waitForSmokeAgentCompletion(
+  handle: string,
+  options: {
+    readonly cwd?: string;
+    readonly deadlineMs?: number;
+    readonly preSendBaselineText?: string;
+    readonly preSendCursor?: number;
+    readonly sentPrompt?: string;
+    readonly runner?: Parameters<typeof waitOrcaTerminal>[1]['runner'];
+    readonly now?: () => number;
+    readonly sleepMs?: (milliseconds: number) => void;
+  } = {},
+): {
+  ok: boolean;
+  agentActivityObserved: boolean;
+  error?: { code: string; message: string };
+} {
+  const now = options.now ?? (() => Date.now());
+  const deadline = now() + (options.deadlineMs ?? SMOKE_AGENT_WAIT_BUDGET_MS);
+  const sleepMs = options.sleepMs ?? ((milliseconds: number) => {
+    if (milliseconds <= 0) {
+      return;
+    }
+    runProcessSync({
+      command: process.platform === 'win32' ? 'powershell' : 'sleep',
+      args: process.platform === 'win32'
+        ? ['-NoProfile', '-Command', `Start-Sleep -Milliseconds ${milliseconds}`]
+        : [String(Math.max(1, Math.ceil(milliseconds / 1000)))],
+    });
+  });
+
+  let agentActivityObserved = false;
+  const baselineText = options.preSendBaselineText ?? '';
+  const sentPrompt = options.sentPrompt ?? '';
+  let observedSinceBaseline = '';
+  let cursor = options.preSendCursor;
+
+  const initialRead = readOrcaTerminal(handle, {
+    cwd: options.cwd,
+    cursor,
+    limit: 2000,
+    runner: options.runner,
+  });
+  if (initialRead.ok) {
+    const initialText = orcaTerminalReadLines(initialRead.result).join('\n');
+    if (cursor === undefined) {
+      if (smokeAgentTerminalFullActivity(initialText, baselineText, sentPrompt)) {
+        agentActivityObserved = true;
+      }
+    } else {
+      if (initialText) {
+        observedSinceBaseline += initialText;
+      }
+      if (smokeAgentTerminalActivityBeyondSentPrompt(observedSinceBaseline, sentPrompt)) {
+        agentActivityObserved = true;
+      }
+    }
+    const initialNextCursor = orcaTerminalReadNextCursor(initialRead.result);
+    if (initialNextCursor !== undefined) {
+      cursor = initialNextCursor;
+    }
+  }
+
+  while (now() < deadline) {
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      break;
+    }
+
+    const read = readOrcaTerminal(handle, {
+      cwd: options.cwd,
+      cursor,
+      limit: 2000,
+      runner: options.runner,
+    });
+    if (read.ok) {
+      const deltaText = orcaTerminalReadLines(read.result).join('\n');
+      if (cursor === undefined) {
+        if (smokeAgentTerminalFullActivity(deltaText, baselineText, sentPrompt)) {
+          agentActivityObserved = true;
+        }
+      } else {
+        if (deltaText) {
+          observedSinceBaseline += deltaText;
+        }
+        if (smokeAgentTerminalActivityBeyondSentPrompt(observedSinceBaseline, sentPrompt)) {
+          agentActivityObserved = true;
+        }
+      }
+      const readNextCursor = orcaTerminalReadNextCursor(read.result);
+      if (readNextCursor !== undefined) {
+        cursor = readNextCursor;
+      }
+    }
+
+    if (agentActivityObserved) {
+      if (smokeAgentTerminalHasReport(observedSinceBaseline, sentPrompt)) {
+        return { ok: true, agentActivityObserved: true };
+      }
+      const fullRead = readOrcaTerminal(handle, {
+        cwd: options.cwd,
+        limit: 2000,
+        runner: options.runner,
+      });
+      if (fullRead.ok) {
+        const fullText = orcaTerminalReadLines(fullRead.result).join('\n');
+        if (smokeAgentTerminalHasReport(fullText, sentPrompt, baselineText)) {
+          return { ok: true, agentActivityObserved: true };
+        }
+      }
+      const wait = waitOrcaTerminal(handle, {
+        for: 'tui-idle',
+        timeoutMs: Math.min(SMOKE_AGENT_POLL_MS, remaining),
+        cwd: options.cwd,
+        runner: options.runner,
+      });
+      if (!wait.ok) {
+        const waitMessage = wait.error?.message ?? 'terminal_wait_failed';
+        if (!/timeout/i.test(waitMessage) && wait.error?.code !== 'timeout') {
+          return {
+            ok: false,
+            agentActivityObserved: true,
+            error: {
+              code: 'smoke_agent_wait_timeout',
+              message: waitMessage,
+            },
+          };
+        }
+      }
+    }
+
+    sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
+  }
+
+  if (agentActivityObserved) {
+    return { ok: true, agentActivityObserved: true };
+  }
+
+  return {
+    ok: false,
+    agentActivityObserved,
+    error: {
+      code: agentActivityObserved ? 'smoke_agent_wait_timeout' : 'smoke_agent_never_started',
+      message: agentActivityObserved
+        ? 'smoke agent did not reach idle before deadline'
+        : 'smoke agent produced no observable terminal activity before deadline',
+    },
+  };
+}
+
 function requireProcessOutput(label: string, result: ReturnType<typeof runProcessSync>): string {
   if (!result.ok) {
-    fail(`${label}: ${result.stderr || result.error || 'non-zero exit'}`);
+    const detail = scrubGhFailureMessage(result.stderr || result.error || 'non-zero exit');
+    fail(`${label}: ${detail}`);
   }
   return result.stdout;
 }
@@ -156,11 +354,10 @@ function hashTrackedPaths(cwd: string, paths: readonly string[]): Record<string,
 }
 
 function fetchPrComments(prNumber: number, repoRoot: string): { body?: string }[] {
-  const output = requireProcessOutput('pr-issue-comments', runProcessSync({
-    command: 'gh',
-    args: ['api', `repos/{owner}/{repo}/issues/${prNumber}/comments`, '--paginate'],
-    cwd: repoRoot,
-  }));
+  const output = requireProcessOutput('pr-issue-comments', runSmokeGhSync(
+    ['api', `repos/{owner}/{repo}/issues/${prNumber}/comments`, '--paginate'],
+    repoRoot,
+  ));
   const parsed = JSON.parse(output);
   return Array.isArray(parsed) ? parsed : [];
 }
@@ -170,11 +367,10 @@ function publishPrComment(prNumber: number, body: string, repoRoot: string): voi
   const bodyFile = join(tempDir, 'body.md');
   try {
     writeFileSync(bodyFile, body, 'utf8');
-    requireProcessOutput('gh pr comment', runProcessSync({
-      command: 'gh',
-      args: ['pr', 'comment', String(prNumber), '--body-file', bodyFile],
-      cwd: repoRoot,
-    }));
+    requireProcessOutput('gh pr comment', runSmokeGhSync(
+      ['pr', 'comment', String(prNumber), '--body-file', bodyFile],
+      repoRoot,
+    ));
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -190,30 +386,27 @@ function resolveGitHead(cwd: string): string {
 }
 
 function resolveCiGreen(prNumber: number, headSha: string, repoRoot: string): boolean {
-  const prMetaRaw = requireProcessOutput('pr-view-head-base', runProcessSync({
-    command: 'gh',
-    args: ['pr', 'view', String(prNumber), '--json', 'headRefOid,baseRefName'],
-    cwd: repoRoot,
-  }));
+  const prMetaRaw = requireProcessOutput('pr-view-head-base', runSmokeGhSync(
+    ['pr', 'view', String(prNumber), '--json', 'headRefOid,baseRefName'],
+    repoRoot,
+  ));
   const prMeta = JSON.parse(prMetaRaw) as { headRefOid?: string; baseRefName?: string };
   const normalizedHead = headSha.trim().toLowerCase();
   if ((prMeta.headRefOid ?? '').trim().toLowerCase() !== normalizedHead) {
     return false;
   }
-  const checksRaw = requireProcessOutput('required-ci-checks', runProcessSync({
-    command: 'gh',
-    args: ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'],
-    cwd: repoRoot,
-  }));
+  const checksRaw = requireProcessOutput('required-ci-checks', runSmokeGhSync(
+    ['pr', 'checks', String(prNumber), '--json', 'name,state,bucket,link,startedAt,completedAt,workflow,description'],
+    repoRoot,
+  ));
   const checks = JSON.parse(checksRaw) as { name?: string; state?: string; bucket?: string }[];
   let requiredCheckNames: string[] = [];
   let requiredCheckLookupFailed = false;
   const baseRef = String(prMeta.baseRefName ?? 'main').trim() || 'main';
-  const protection = runProcessSync({
-    command: 'gh',
-    args: ['api', `repos/{owner}/{repo}/branches/${baseRef}/protection/required_status_checks`],
-    cwd: repoRoot,
-  });
+  const protection = runSmokeGhSync(
+    ['api', `repos/{owner}/{repo}/branches/${baseRef}/protection/required_status_checks`],
+    repoRoot,
+  );
   if (protection.ok) {
     try {
       const parsed = JSON.parse(protection.stdout) as { contexts?: string[] };
@@ -327,6 +520,36 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
   if (plan.requirement !== 'required') {
     emit({ ok: true, skipped: true, reason: plan.requirement }, options.json);
     return 0;
+  }
+
+  if (plan.scenarios.length === 0) {
+    const report: SmokeReport = {
+      result: 'FAIL',
+      issueNumber: options.issueNumber,
+      prNumber: options.prNumber,
+      headSha: options.headSha,
+      scenarios: [{
+        action: 'parse smoke-test-plan',
+        expected: 'at least one executable scenario',
+        observed: 'zero_parsed_scenarios',
+        outcome: 'fail',
+      }],
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'not_started',
+      environmentNotes: ['smoke agent was not launched'],
+      nonPassCause: 'zero_parsed_scenarios',
+    };
+    publishSmokeReport(report, options);
+    emit({
+      ok: false,
+      nonPassCause: 'zero_parsed_scenarios' satisfies SmokeNonPassCause,
+      reason: 'zero_parsed_scenarios',
+      terminalCreated: false,
+      published: !options.dryRun,
+      report,
+    }, options.json);
+    return 1;
   }
 
   const worktree = probeOrcaWorktree(options.cwd);
@@ -455,6 +678,23 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       headSha: options.headSha,
       plan,
     });
+    const preSendRead = readOrcaTerminal(handle, { cwd: options.cwd, limit: 2000 });
+    if (!preSendRead.ok) {
+      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
+      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
+      const report = buildOperationalSmokeReport('BLOCKED', options, {
+        action: 'capture pre-send terminal baseline',
+        expected: 'terminal read succeeds before smoke prompt send',
+        observed: preSendRead.error?.message ?? preSendRead.error?.code ?? 'terminal_read_failed',
+        terminalCleanup,
+      });
+      publishSmokeReport(report, options);
+      emit({ ok: false, report, published: !options.dryRun }, options.json);
+      return 1;
+    }
+    const preSendBaselineText = orcaTerminalReadLines(preSendRead.result).join('\n');
+    const preSendCursor = orcaTerminalReadNextCursor(preSendRead.result);
+
     const sendResult = sendOrcaTerminal(handle, prompt, { cwd: options.cwd });
     if (!sendResult.ok) {
       const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
@@ -470,22 +710,37 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       return 1;
     }
 
-    const waitResult = waitOrcaTerminal(handle, {
-      for: 'tui-idle',
-      timeoutMs: 30 * 60 * 1000,
+    const waitResult = waitForSmokeAgentCompletion(handle, {
       cwd: options.cwd,
+      preSendBaselineText,
+      preSendCursor,
+      sentPrompt: prompt,
     });
+    const agentActivityObserved = waitResult.agentActivityObserved;
     if (!waitResult.ok) {
       const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
       terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
       const report = buildOperationalSmokeReport('BLOCKED', options, {
         action: 'wait for smoke agent completion',
-        expected: 'terminal wait succeeds',
-        observed: waitResult.error?.message ?? 'terminal_wait_failed',
+        expected: 'terminal wait succeeds after positive agent activity',
+        observed: scrubGhFailureMessage(waitResult.error?.message ?? 'terminal_wait_failed'),
         terminalCleanup,
       });
+      const nonPassCause = classifySmokeNonPassCause({
+        partial: null,
+        agentActivityObserved,
+        agentCompleted: false,
+      });
+      if (nonPassCause) {
+        report.nonPassCause = nonPassCause;
+      }
       publishSmokeReport(report, options);
-      emit({ ok: false, report, published: !options.dryRun }, options.json);
+      emit({
+        ok: false,
+        report,
+        published: !options.dryRun,
+        ...(nonPassCause ? { nonPassCause } : {}),
+      }, options.json);
       return 1;
     }
 
@@ -503,8 +758,11 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       emit({ ok: false, report, published: !options.dryRun }, options.json);
       return 1;
     }
-    const output = scrubSmokeOutput((readResult.result?.lines ?? []).join('\n'));
-    const partial = parseSmokeAgentReport(output);
+    const output = scrubSmokeOutput(orcaTerminalReadLines(readResult.result).join('\n'));
+    const observedAfterBaseline = output.startsWith(preSendBaselineText)
+      ? output.slice(preSendBaselineText.length)
+      : output;
+    const partial = parseSmokeAgentReport(stripLeadingSmokeAgentPrompt(observedAfterBaseline, prompt));
     const afterStatus = gitPorcelain(options.cwd);
     const afterHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(afterStatus));
     const mutated = detectTrackedImplementationMutation(beforeStatus, afterStatus, beforeHashes, afterHashes);
@@ -512,14 +770,26 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     if (!partial) {
       const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
       terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const report = buildOperationalSmokeReport('FAIL', options, {
-        action: 'parse smoke agent report',
-        expected: 'worker-smoke-report block present',
-        observed: 'missing worker-smoke-report block',
-        terminalCleanup,
-      });
+      const report = {
+        ...buildOperationalSmokeReport('FAIL', options, {
+          action: 'parse smoke agent report',
+          expected: 'worker-smoke-report block present',
+          observed: 'missing worker-smoke-report block',
+          terminalCleanup,
+        }),
+        nonPassCause: 'missing_agent_report' as const,
+      };
       publishSmokeReport(report, options);
-      emit({ ok: false, report, published: !options.dryRun }, options.json);
+      emit({
+        ok: false,
+        report,
+        published: !options.dryRun,
+        nonPassCause: classifySmokeNonPassCause({
+          partial: null,
+          agentActivityObserved: waitResult.agentActivityObserved,
+          agentCompleted: true,
+        }) ?? 'missing_agent_report',
+      }, options.json);
       return 1;
     }
 
@@ -550,6 +820,14 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
         observed: normalized.reason,
         terminalCleanup,
       }), { terminalHandle: handle });
+      const nonPassCause = classifyDeclaredScenarioNonPassCause({
+        partial,
+        agentActivityObserved: waitResult.agentActivityObserved,
+        agentCompleted: true,
+      });
+      if (nonPassCause) {
+        report.nonPassCause = nonPassCause;
+      }
       publishSmokeReport(report, options);
       emit({ ok: false, report, published: !options.dryRun }, options.json);
       return 1;
@@ -575,21 +853,32 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     if (report.result === 'PASS' && terminalCleanup !== 'closed_owned_handle') {
       report.result = 'FAIL';
       report.scenarios.push({
-        action: 'close owned Orca terminal handle',
+        action: SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
         expected: 'terminal close succeeds',
         observed: terminalCleanup,
         outcome: 'fail',
       });
     }
 
-    publishSmokeReport(report, options);
+    if (report.result !== 'PASS') {
+      const nonPassCause = classifyDeclaredScenarioNonPassCause({
+        partial: report,
+        agentActivityObserved: waitResult.agentActivityObserved,
+        agentCompleted: true,
+      });
+      if (nonPassCause) {
+        report.nonPassCause = nonPassCause;
+      }
+    }
 
+    publishSmokeReport(report, options);
     emit({
       ok: report.result === 'PASS',
       report,
       published: !options.dryRun,
       orcaExecutable: resolveOrcaExecutable(),
       terminalHandle: handle,
+      ...(report.nonPassCause ? { nonPassCause: report.nonPassCause } : {}),
     }, options.json);
     return report.result === 'PASS' ? 0 : 1;
   } finally {
