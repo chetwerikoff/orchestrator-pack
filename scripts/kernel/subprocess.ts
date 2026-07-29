@@ -59,7 +59,7 @@ const FINAL_CLOSE_GRACE_MS = 1_000;
 
 function minimalEnvironment(overrides: Readonly<NodeJS.ProcessEnv> | undefined): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = {};
-  for (const key of ['PATH', 'SystemRoot', 'COMSPEC', 'PATHEXT']) {
+  for (const key of ['PATH', 'SystemRoot', 'COMSPEC', 'PATHEXT', 'HOME', 'USER', 'GH_TOKEN', 'XDG_CONFIG_HOME']) {
     const value = process.env[key];
     if (value !== undefined) base[key] = value;
   }
