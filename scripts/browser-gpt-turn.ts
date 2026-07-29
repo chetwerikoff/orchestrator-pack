@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -82,48 +82,45 @@ interface TurnRunOutcome {
   readonly browser?: any;
 }
 
-const BOOLEAN_OPTIONS = new Set(['new-chat']);
-
 function parseArgs(argv: readonly string[]): ParsedArgs {
-  const command = argv[0] ?? '';
+  const [command = '', ...tail] = argv;
   const options = new Map<string, string | true>();
-  for (let index = 1; index < argv.length; index++) {
-    const token = argv[index];
-    if (!token?.startsWith('--') || token.length <= 2) throw new Error('argument_invalid');
-    const key = token.slice(2);
+  let cursor = 0;
+  while (cursor < tail.length) {
+    const raw = tail[cursor++];
+    if (!raw?.startsWith('--') || raw === '--') throw new Error('argument_invalid');
+    const key = raw.slice(2);
     if (options.has(key)) throw new Error('argument_duplicate');
-    if (BOOLEAN_OPTIONS.has(key)) {
+    if (key === 'new-chat') {
       options.set(key, true);
       continue;
     }
-    const value = argv[index + 1];
-    if (value === undefined || value.startsWith('--')) throw new Error('argument_value_missing');
+    const value = tail[cursor++];
+    if (!value || value.startsWith('--')) throw new Error('argument_value_missing');
     options.set(key, value);
-    index++;
   }
   return { command, options };
 }
 
-function option(args: ParsedArgs, key: string): string | undefined {
+function stringOption(args: ParsedArgs, key: string): string | undefined {
   const value = args.options.get(key);
   return typeof value === 'string' ? value : undefined;
 }
 
-function required(args: ParsedArgs, key: string): string {
-  const value = option(args, key);
-  if (!value) throw new Error(`argument_required:${key}`);
+function requireOption(args: ParsedArgs, key: string): string {
+  const value = stringOption(args, key);
+  if (value === undefined || value.length === 0) throw new Error(`argument_required:${key}`);
   return value;
 }
 
-function flag(args: ParsedArgs, key: string): boolean {
+function hasFlag(args: ParsedArgs, key: string): boolean {
   return args.options.get(key) === true;
 }
 
-function assertAllowedOptions(args: ParsedArgs, allowed: readonly string[]): void {
-  const set = new Set(allowed);
-  for (const key of args.options.keys()) {
-    if (!set.has(key)) throw new Error(`argument_unknown:${key}`);
-  }
+function rejectUnknownOptions(args: ParsedArgs, allowed: readonly string[]): void {
+  const accepted = new Set(allowed);
+  const unknown = [...args.options.keys()].find((key) => !accepted.has(key));
+  if (unknown) throw new Error(`argument_unknown:${unknown}`);
 }
 
 function parseInteger(value: string, minimum = 0): number {
@@ -171,15 +168,19 @@ export function classifyPageObservation(
 }
 
 function browserConfig(args: ParsedArgs): BrowserConfig & { pollMs: number } {
-  const cdp = required(args, 'cdp');
-  const profile = required(args, 'profile');
-  const newChat = flag(args, 'new-chat');
-  const chatUrl = option(args, 'chat-url');
-  const projectUrl = option(args, 'project-url');
+  const cdp = requireOption(args, 'cdp');
+  const profile = requireOption(args, 'profile');
+  const newChat = hasFlag(args, 'new-chat');
+  const chatUrl = stringOption(args, 'chat-url');
+  const projectUrl = stringOption(args, 'project-url');
   if (newChat === Boolean(chatUrl)) throw new Error('argument_mode_invalid');
   if (newChat && !projectUrl) throw new Error('argument_required:project-url');
-  const timeoutMs = option(args, 'timeout-ms') ? parseInteger(required(args, 'timeout-ms'), 1) : DEFAULT_TIMEOUT_MS;
-  const pollMs = option(args, 'poll-ms') ? parseInteger(required(args, 'poll-ms'), 1) : DEFAULT_POLL_MS;
+  const timeoutMs = stringOption(args, 'timeout-ms')
+    ? parseInteger(requireOption(args, 'timeout-ms'), 1)
+    : DEFAULT_TIMEOUT_MS;
+  const pollMs = stringOption(args, 'poll-ms')
+    ? parseInteger(requireOption(args, 'poll-ms'), 1)
+    : DEFAULT_POLL_MS;
   return {
     cdp,
     profile,
@@ -346,10 +347,13 @@ async function waitForComposer(page: any, deadline: number): Promise<{ state: 'r
   return { state: 'ui_contract_mismatch', cause: 'composer_unavailable' };
 }
 
-async function openDedicatedTurnPage(browser: any, config: BrowserConfig): Promise<any> {
+async function createDedicatedTurnPage(browser: any): Promise<any> {
   const contexts = browser.contexts();
   if (contexts.length !== 1) throw new Error('ui_contract_mismatch:context_count');
-  const page = await contexts[0].newPage();
+  return contexts[0].newPage();
+}
+
+async function navigateOwnedTurnPage(page: any, config: BrowserConfig): Promise<void> {
   const target = config.newChat ? config.projectUrl : config.chatUrl;
   if (!target) throw new Error('ui_contract_mismatch:target_required');
   await page.goto(target, {
@@ -359,7 +363,6 @@ async function openDedicatedTurnPage(browser: any, config: BrowserConfig): Promi
   if (!config.newChat && normalizeConversationUrl(page.url()) !== normalizeConversationUrl(target)) {
     throw new Error('ui_contract_mismatch:conversation_redirect');
   }
-  return page;
 }
 
 function pageConversationUrl(page: any): string | undefined {
@@ -372,7 +375,7 @@ function pageConversationUrl(page: any): string | undefined {
 }
 
 async function runTurn(args: ParsedArgs): Promise<TurnRunOutcome> {
-  assertAllowedOptions(args, [
+  rejectUnknownOptions(args, [
     'profile', 'cdp', 'input', 'output', 'chat-url', 'new-chat', 'project-url', 'timeout-ms', 'poll-ms',
   ]);
   const invocationId = randomUUID();
@@ -393,8 +396,8 @@ async function runTurn(args: ParsedArgs): Promise<TurnRunOutcome> {
   try {
     const config = browserConfig(args);
     profileKey = configuredProfileKey(config.profile, config.cdp);
-    const snapshot = readStableInput(required(args, 'input'));
-    const destination = destinationIdentity(required(args, 'output'));
+    const snapshot = readStableInput(requireOption(args, 'input'));
+    const destination = destinationIdentity(requireOption(args, 'output'));
 
     const profile = await verifyProfile(config);
     if (profile.state !== 'verified') {
@@ -407,7 +410,8 @@ async function runTurn(args: ParsedArgs): Promise<TurnRunOutcome> {
 
     const chromium = loadChromium();
     browser = await chromium.connectOverCDP(config.cdp, { timeout: Math.min(30_000, config.timeoutMs) });
-    page = await openDedicatedTurnPage(browser, config);
+    page = await createDedicatedTurnPage(browser);
+    await navigateOwnedTurnPage(page, config);
 
     const composerDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
     const composerState = await waitForComposer(page, composerDeadline);
@@ -654,11 +658,11 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
 }
 
 function advisoryControl(args: ParsedArgs): number {
-  const profile = required(args, 'profile');
-  const cdp = required(args, 'cdp');
+  const profile = requireOption(args, 'profile');
+  const cdp = requireOption(args, 'cdp');
   const profileKey = configuredProfileKey(profile, cdp);
   if (args.command === 'publication-status') {
-    const invocation = required(args, 'invocation');
+    const invocation = requireOption(args, 'invocation');
     const status: PublicationStatusV1 = publicationStatus(profileKey, invocation);
     emit(status);
     return publicationExitCode(status.state);
