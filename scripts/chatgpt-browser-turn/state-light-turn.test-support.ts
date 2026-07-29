@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   legacyPublishReply: vi.fn(() => {
     throw new Error('legacy publication state unavailable');
   }),
+  appendFileSync: vi.fn(() => {
+    if (mocks.journalThrows) throw new Error('journal unavailable');
+  }),
   openSync: vi.fn(() => 42),
   writeFileSync: vi.fn((_fd: number, _reply: string, _encoding: string) => undefined),
   fsyncSync: vi.fn((_fd: number) => undefined),
@@ -28,9 +31,7 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...actual,
     mkdirSync: vi.fn(),
-    appendFileSync: vi.fn(() => {
-      if (mocks.journalThrows) throw new Error('journal unavailable');
-    }),
+    appendFileSync: mocks.appendFileSync,
     openSync: mocks.openSync,
     writeFileSync: mocks.writeFileSync,
     fsyncSync: mocks.fsyncSync,
@@ -166,6 +167,7 @@ function makePage(
   snapshots: Snapshot[],
   options: {
     throwAfterSend?: boolean;
+    transientStatusErrors?: number;
     sendButton?: boolean;
     wallText?: string;
     wallAfterPoll?: number;
@@ -176,6 +178,8 @@ function makePage(
   let observationIndex = 0;
   let activeSnapshot: Snapshot = { messages: BASELINE, generating: false };
   let continuationDismissed = false;
+  let closed = false;
+  let transientStatusErrors = options.transientStatusErrors ?? 0;
   const metrics = { sends: 0, closes: 0, polls: 0, waitedMs: 0 };
 
   const composer = scalarLocator({
@@ -198,17 +202,25 @@ function makePage(
   const page: any = {
     __fakeBrowserGptPage: true,
     __productStatusText: () => {
+      if (sent && transientStatusErrors > 0) {
+        transientStatusErrors--;
+        throw new Error('transient product status read');
+      }
       if (!sent || !options.wallText) return '';
       const threshold = options.wallAfterPoll ?? 1;
       return metrics.polls >= threshold ? options.wallText : '';
     },
     goto: vi.fn(async () => undefined),
     url: vi.fn(() => 'https://chatgpt.com/c/fake-owned-turn'),
+    isClosed: vi.fn(() => closed),
     waitForTimeout: vi.fn(async (ms: number) => {
       metrics.waitedMs += ms;
       mocks.nowMs += ms;
     }),
-    close: vi.fn(async () => { metrics.closes++; }),
+    close: vi.fn(async () => {
+      closed = true;
+      metrics.closes++;
+    }),
     getByText: vi.fn((pattern: RegExp | string) => {
       const text = 'Continue generating';
       const matches = typeof pattern === 'string' ? text.includes(pattern) : pattern.test(text);
@@ -222,7 +234,10 @@ function makePage(
       if (selector === '#prompt-textarea') return composer;
       if (selector === '[data-testid="send-button"]') return sendButton;
       if (selector === '[data-message-author-role]') {
-        if (sent && options.throwAfterSend) throw new Error('simulated page loss');
+        if (sent && options.throwAfterSend) {
+          closed = true;
+          throw new Error('simulated page loss');
+        }
         if (!sent) {
           activeSnapshot = { messages: BASELINE, generating: false };
           return collectionLocator(activeSnapshot.messages);
@@ -251,6 +266,7 @@ function browserFor(page: any) {
   return {
     browser: {
       contexts: vi.fn(() => [context]),
+      isConnected: vi.fn(() => true),
       close: vi.fn(async () => undefined),
     },
     context,
@@ -314,6 +330,7 @@ beforeEach(() => {
   vi.spyOn(Date, 'now').mockImplementation(() => mocks.nowMs);
   mocks.verifyProfile.mockReset().mockResolvedValue({ state: 'verified' });
   mocks.legacyPublishReply.mockClear();
+  mocks.appendFileSync.mockClear();
   mocks.openSync.mockClear();
   mocks.writeFileSync.mockClear();
   mocks.fsyncSync.mockClear();
@@ -471,6 +488,26 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(mocks.linkSync).not.toHaveBeenCalled();
   });
 
+  it('keeps polling the same owned page after a transient post-send observation error', async () => {
+    const fake = makePage(readySnapshots(), { transientStatusErrors: 1 });
+    const outcome = await runAndCapture(fake.page);
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      cause: 'completed_page_only',
+      send_count: 1,
+      cleanup: 'confirmed',
+    });
+    expect(outcome.result.incidents).toContain('post_send_observation_error');
+    expect(fake.metrics.sends).toBe(1);
+    expect(fake.metrics.closes).toBe(1);
+    expect(mocks.linkSync).toHaveBeenCalledTimes(1);
+    const journal = mocks.appendFileSync.mock.calls.map((call) => String(call[1])).join('\n');
+    expect(journal).toContain('continue_polling_owned_page');
+    expect(journal).not.toContain('caller_may_open_fresh_chat');
+  });
+
   it('reports page loss after send without sending a replacement request', async () => {
     const fake = makePage([], { throwAfterSend: true });
     const outcome = await runAndCapture(fake.page);
@@ -478,7 +515,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(outcome.result).toMatchObject({
       state: 'driver_error',
       scope: 'invocation',
-      cause: 'helper_or_page_error_after_send',
+      cause: 'page_or_browser_lost_after_send',
       send_count: 1,
       cleanup: 'confirmed',
     });
