@@ -213,6 +213,22 @@ function stripComplexityTierFence(text: string): string {
   return text.replace(FENCE_RE, '');
 }
 
+const ISSUE_BINDING_FENCE_RES = [
+  /```behavior-kind\s*\n([\s\S]*?)```/i,
+  /```denylist\s*\n([\s\S]*?)```/i,
+  /```allowed-roots\s*\n([\s\S]*?)```/i,
+  /```contract-evidence\s*\n([\s\S]*?)```/i,
+] as const;
+
+function extractIssueBindingFenceSnapshot(text: string): string {
+  const parts: string[] = [];
+  for (const pattern of ISSUE_BINDING_FENCE_RES) {
+    const match = text.match(pattern);
+    parts.push(match ? match[0].trim() : '<missing-binding-fence>');
+  }
+  return parts.join('\n---\n');
+}
+
 export interface StageSelectionInput {
   tier: string | null;
   skipLine: boolean;
@@ -905,7 +921,8 @@ function validateFreshDemotionChain(
       && source
       && candidate
       && candidateIndex === sourceIndex + 1
-      && stripComplexityTierFence(source.text) !== stripComplexityTierFence(candidate.text)
+      && extractIssueBindingFenceSnapshot(source.text)
+        !== extractIssueBindingFenceSnapshot(candidate.text)
     ) {
       errors.push('tier demotion: narrow revalidation candidate contains unrelated material body change');
     }

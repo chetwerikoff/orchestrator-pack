@@ -185,7 +185,7 @@ non-empty rationale for every source receipt rubric driver. Existing frozen
 compatibility/historical identities retain the pre-#973 single-consumed-event
 semantics; fresh-chain rules do not reinterpret their evidence.
 
-After the task chat applies the authorized title/fence change and the flow-manager
+After the task chat applies the authorized tier/title/fence/body correction and the flow-manager
 re-pulls it as a new immutable revision:
 
 1. bind one `tier-demotion-revalidation/v1` to the event, exact candidate

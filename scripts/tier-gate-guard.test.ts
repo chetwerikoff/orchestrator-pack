@@ -722,13 +722,12 @@ describe('Issue #1104 GPT demotion authority', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('rejects GPT narrow revalidation when candidate adds unrelated material body change', () => {
+  it('rejects GPT narrow revalidation when candidate changes binding scope fences', () => {
     const source = draft('T2', 'T2');
     const tampered = draft('T1', 'T2', {
       from: 'T2',
       eventId: 'gpt-demotion-1',
-      body: 'Unrelated material rewrite outside the authorized demotion correction.',
-    });
+    }).replace('vendor/**', 'plugins/**');
     const result = run(tampered, evidence([
       { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
       { revision: 'r02', text: tampered, tier: 'T1', receipt: receipt('r02', 'T1') },
@@ -744,6 +743,29 @@ describe('Issue #1104 GPT demotion authority', () => {
     }));
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('unrelated material body change');
+  });
+
+  it('accepts GPT narrow revalidation when only authorized body correction changes', () => {
+    const source = draft('T2', 'T2', { body: 'Describe one local behavior.' });
+    const corrected = draft('T1', 'T2', {
+      from: 'T2',
+      eventId: 'gpt-demotion-1',
+      body: 'Describe one smaller local behavior after demotion.',
+    });
+    const result = run(corrected, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: corrected, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      priorTier: 'T2',
+      events: [{ record: gptEvent(), captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal gpt lens' }],
+      revalidations: [{
+        record: gptRevalidation('r02'),
+        captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt',
+        captureText: 'narrow revalidation only',
+      }],
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
   });
 
   it('rejects Claude authority outside its existing T3→T2 edge', () => {
