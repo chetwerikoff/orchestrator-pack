@@ -1508,15 +1508,15 @@ describe('issue 1065 browser-surface classification', () => {
   it('AC2: unknown blocking dialog through readiness deadline prefers blocker cause over composer_readiness timeout', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     __testTiming.now = () => Date.now();
-    const fixture = fakeTurnPage({
-      composer: false,
-      blockingDialog: { testId: 'modal-unknown-product-wall', text: 'Unexpected product blocker' },
-    });
-    fixture.page.waitForTimeout = async (ms: number) => {
+    const page = productStatusPage([
+      { role: 'dialog', testId: 'modal-unknown-product-wall', text: 'Unexpected product blocker' },
+    ], false) as any;
+    page.on = () => page;
+    page.waitForTimeout = async (ms: number) => {
       await vi.advanceTimersByTimeAsync(ms);
     };
     const turn = sendTurn(
-      fixture.page,
+      page,
       'payload',
       {
         cdp: 'http://127.0.0.1:9222',
