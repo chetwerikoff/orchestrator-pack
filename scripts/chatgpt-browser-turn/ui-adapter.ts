@@ -1498,18 +1498,11 @@ export function classifyPreDispatchProductWall(surface: ProductStatusSurface): {
   }
   const wall = classifyProductWall(surface);
   if (wall.state) return wall;
-  if (surface.elements.length > 0 && !surface.composer) {
-    const testId = surface.elements.find((element) => element.testId)?.testId;
-    return {
-      state: 'ui_contract_mismatch',
-      cause: testId ? `unclassified_blocking_dialog:${testId}` : 'unclassified_blocking_dialog',
-    };
-  }
   return {};
 }
 
 export function observePreDispatchBlockerHint(surface: ProductStatusSurface): string | undefined {
-  if (surface.elements.length === 0 || !surface.composer) return undefined;
+  if (surface.elements.length === 0) return undefined;
   for (const element of surface.elements) {
     if (isConversationHistoryQuotaElement(element)) return undefined;
   }
@@ -1803,6 +1796,9 @@ export async function sendTurn(
   if (!(await boundedLocatorCount(composer, composerReadyWait))) {
     if (segmentBudget && wallClock() >= readyEndsAt) {
       throw new BrowserOperationTimeoutError('composer_readiness');
+    }
+    if (preDispatchBlockerCause) {
+      return { state: 'ui_contract_mismatch', cause: preDispatchBlockerCause, possibleDelivery: false };
     }
     return { state: 'ui_contract_mismatch', cause: 'composer_unavailable', possibleDelivery: false };
   }

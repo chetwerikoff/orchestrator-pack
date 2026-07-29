@@ -27,7 +27,7 @@ import {
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import * as coordination from '../chatgpt-browser-turn/coordination.ts';
 import { readDriverDiagnostic } from '../chatgpt-browser-turn/diagnostics.ts';
-import { classifyPreDispatchProductWall, classifyProductWall, openTurnPage, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { classifyPreDispatchProductWall, classifyProductWall, observePreDispatchBlockerHint, openTurnPage, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
 import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import { liveTurnStreamSequence } from '../chatgpt-browser-turn/fixtures/live-turn-stream-contract.ts';
 
@@ -1485,10 +1485,10 @@ describe('issue 1065 browser-surface classification', () => {
     const blocking = productStatusPage([
       { role: 'dialog', testId: 'modal-unknown-product-wall', text: 'Unexpected product blocker' },
     ], false);
-    expect(classifyPreDispatchProductWall(await productStatusText(blocking))).toEqual({
-      state: 'ui_contract_mismatch',
-      cause: 'unclassified_blocking_dialog:modal-unknown-product-wall',
-    });
+    expect(classifyPreDispatchProductWall(await productStatusText(blocking))).toEqual({});
+    expect(observePreDispatchBlockerHint(await productStatusText(blocking))).toBe(
+      'unclassified_blocking_dialog:modal-unknown-product-wall',
+    );
 
     const nonBlocking = productStatusPage([
       { role: 'alert', text: 'benign product notice' },
@@ -1527,6 +1527,22 @@ describe('issue 1065 browser-surface classification', () => {
     expect(source).toContain('CONTROL_OPERATIONS');
   });
 
+
+  it('AC4: invalid commands omit operation from control-result', async () => {
+    const { runCli } = await import('../chatgpt-browser-turn.ts');
+    let stdout = '';
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout += String(chunk);
+      return true;
+    }) as typeof process.stdout.write;
+    const exitCode = await runCli(['bogus']);
+    process.stdout.write = originalStdout;
+    expect(exitCode).toBe(22);
+    const body = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(body.cause).toBe('command_invalid');
+    expect(body.operation).toBeUndefined();
+  });
 
   it('AC6: missing option value preserves argument cause and emits Usage', async () => {
     const { runCli } = await import('../chatgpt-browser-turn.ts');

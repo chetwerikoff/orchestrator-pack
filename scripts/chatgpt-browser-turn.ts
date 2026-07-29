@@ -1077,19 +1077,26 @@ const CONTROL_OPERATIONS = new Set<ControlResultV1['operation']>([
   'publication-status',
 ]);
 
-function controlOperation(args: ParsedArgs): ControlResultV1['operation'] {
-  if (CONTROL_OPERATIONS.has(args.command as ControlResultV1['operation'])) {
-    return args.command as ControlResultV1['operation'];
-  }
-  return args.command as ControlResultV1['operation'];
-}
-
-function controlOperationFromArgv(argv: readonly string[]): ControlResultV1['operation'] {
-  const command = argv[0] ?? '';
+function resolveControlOperation(command: string): ControlResultV1['operation'] | undefined {
   if (CONTROL_OPERATIONS.has(command as ControlResultV1['operation'])) {
     return command as ControlResultV1['operation'];
   }
-  return command as ControlResultV1['operation'];
+  return undefined;
+}
+
+function controlOperation(args: ParsedArgs): ControlResultV1['operation'] | undefined {
+  return resolveControlOperation(args.command);
+}
+
+function controlOperationFromArgv(argv: readonly string[]): ControlResultV1['operation'] | undefined {
+  return resolveControlOperation(argv[0] ?? '');
+}
+
+function controlResultPayload(
+  operation: ControlResultV1['operation'] | undefined,
+  payload: Omit<ControlResultV1, 'operation'> & { operation?: ControlResultV1['operation'] },
+): ControlResultV1 {
+  return operation ? { ...payload, operation } : payload as ControlResultV1;
 }
 
 function resolvedControlProfileKey(args: ParsedArgs): string {
@@ -1107,13 +1114,12 @@ export async function runCli(argv: readonly string[]): Promise<number> {
   } catch (error) {
     const cause = resolveControlCommandCause(error);
     if (isArgumentValidationCause(cause)) emitCliUsage();
-    emit({
+    emit(controlResultPayload(controlOperationFromArgv(argv), {
       schema: 'control-result/v1',
-      operation: controlOperationFromArgv(argv),
       state: 'driver_error',
       configured_profile_key: 'profile-unresolved',
       cause,
-    });
+    }));
     return 22;
   }
   try {
@@ -1123,7 +1129,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     if (args.command === 'capability') return await runCapability(args);
     if (args.command === 'gate-b-characterization') return await runGateBCharacterizationCommand(args);
     if (args.command === 'publication-status') return await runPublicationStatus(args);
-    emit({ schema: 'control-result/v1', operation: controlOperation(args), state: 'driver_error', configured_profile_key: 'profile-unresolved', cause: 'command_invalid' });
+    emit({ schema: 'control-result/v1', state: 'driver_error', configured_profile_key: 'profile-unresolved', cause: 'command_invalid' });
     return 22;
   } catch (error) {
     const operation = controlOperation(args);
@@ -1138,14 +1144,13 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       { operation },
     );
     if (isArgumentValidationCause(cause)) emitCliUsage();
-    emit({
+    emit(controlResultPayload(operation, {
       schema: 'control-result/v1',
-      operation,
       state: 'driver_error',
       configured_profile_key: 'profile-unresolved',
       cause,
       ...(driverDiagnosticId ? { driver_diagnostic_id: driverDiagnosticId } : {}),
-    });
+    }));
     return 22;
   }
 }
