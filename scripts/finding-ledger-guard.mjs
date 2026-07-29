@@ -19,7 +19,8 @@ const REVIEW_ECONOMICS_MARKER = 'review-economics-contract: v1';
 const M5_CLEAN_TOKEN = 'SIMPLIFICATION_CLEAN';
 const NO_FINDINGS_TOKEN = 'NO_FINDINGS';
 const REVIEWER_STAGES = new Set(['competitive', 'architectural-review', 'architectural', 'architectural-final']);
-const PRE_LENS_REVIEWER_STAGES = new Set(['competitive', 'architectural-review', 'architectural']);
+const PRE_LENS_REVIEWER_STAGES = new Set(['competitive', 'architectural-review']);
+const LEGACY_PRE_LENS_ECONOMICS_STAGES = new Set(['competitive', 'architectural-review', 'architectural']);
 const ANY_TYPE_PATTERN = /(?<!binding-)\btype:\s*([a-z][a-z0-9-]*)\b/gi;
 const FINDING_ID_PATTERN = /(?<!binding-)\bid:\s*([A-Za-z0-9._-]+)\b/gi;
 const FINDING_ID_EXTRACT = /(?<!binding-)\bid:\s*([A-Za-z0-9._-]+)\b/i;
@@ -416,6 +417,20 @@ function parseCaptureMetadata(captures, options, errors) {
   });
 }
 
+function metadataForActiveAcceptanceSegment(metadata) {
+  const staged = metadata.filter((meta) => Number.isInteger(meta.pass) && meta.stage);
+  const competitivePasses = staged
+    .filter((meta) => meta.stage === 'competitive')
+    .map((meta) => meta.pass);
+  const terminalBoundaries = staged.filter((meta) => (
+    meta.stage === 'architectural'
+    && competitivePasses.some((pass) => pass > meta.pass)
+  ));
+  if (terminalBoundaries.length === 0) return metadata;
+  const boundaryPass = Math.max(...terminalBoundaries.map((meta) => meta.pass));
+  return metadata.filter((meta) => meta.pass === null || meta.pass > boundaryPass);
+}
+
 function parseFindingBlocks(text) {
   const lines = text.split(/\r?\n/);
   const idIndexes = [];
@@ -686,7 +701,7 @@ function validateRawCodexEconomics(rawResults, errors) {
     if (findings.length === 0 && !hasNoFindings) {
       errors.push(`review-economics: clean ${source} missing ${NO_FINDINGS_TOKEN} before transcription`);
     }
-    if (PRE_LENS_REVIEWER_STAGES.has(stage)) {
+    if (LEGACY_PRE_LENS_ECONOMICS_STAGES.has(stage)) {
       if (hasCutCandidate && hasSimplificationClean) {
         errors.push(`review-economics: pre-lens ${source} cannot claim ${M5_CLEAN_TOKEN} while cut candidates are present`);
       }
@@ -864,8 +879,43 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
   }
 }
 
-function selectM5Anchor(metadata, phase) {
-  if (phase === 'pre-lens') return [...metadata].reverse().find((meta) => PRE_LENS_REVIEWER_STAGES.has(meta.stage)) ?? null;
+function validateT3PreLensTopology(metadata, errors) {
+  const segment = metadataForActiveAcceptanceSegment(metadata);
+  const competitive = segment.filter((meta) => meta.stage === 'competitive');
+  const architecturalReviews = segment.filter((meta) => meta.stage === 'architectural-review');
+  const claude = segment.filter((meta) => meta.stage === 'architectural-lens');
+  const terminal = segment.filter((meta) => meta.stage === 'architectural');
+
+  if (competitive.length === 0) {
+    errors.push('review-economics: pre-lens progression requires a current-segment competitive capture');
+  } else if (competitive.length > 3) {
+    errors.push('review-economics: pre-lens current-segment competitive ceiling exceeded (maximum three passes allowed)');
+  }
+  if (architecturalReviews.length === 0) {
+    errors.push('review-economics: pre-lens progression requires exactly one current-segment architectural-review capture');
+  } else if (architecturalReviews.length > 1) {
+    errors.push('review-economics: pre-lens current-segment architectural-review ceiling exceeded (exactly one pass allowed)');
+  }
+  if (competitive.length > 0 && architecturalReviews.length === 1) {
+    const competitiveAnchor = Math.max(...competitive.map((meta) => meta.pass));
+    if (architecturalReviews[0].pass <= competitiveAnchor) {
+      errors.push('review-economics: pre-lens architectural-review must be strictly after the current-segment competitive anchor');
+    }
+  }
+  if (claude.length > 0) {
+    errors.push('review-economics: pre-lens progression must run before the current-segment Claude architectural-lens');
+  }
+  if (terminal.length > 0) {
+    errors.push('review-economics: terminal architectural cannot satisfy pre-lens authority before Claude');
+  }
+  return segment;
+}
+
+function selectM5Anchor(metadata, phase, strictT3PreLens = false) {
+  if (phase === 'pre-lens') {
+    if (strictT3PreLens) return [...metadata].reverse().find((meta) => meta.stage === 'architectural-review') ?? null;
+    return [...metadata].reverse().find((meta) => LEGACY_PRE_LENS_ECONOMICS_STAGES.has(meta.stage)) ?? null;
+  }
   const latestLensIndex = metadata.map((meta) => meta.stage).lastIndexOf('architectural-lens');
   if (latestLensIndex >= 0) {
     for (let index = metadata.length - 1; index > latestLensIndex; index -= 1) {
@@ -882,7 +932,9 @@ function validateM5(metadata, ledger, parsedByName, options, errors) {
     errors.push('review-economics: pre-lens progression requires existing stage authority to confirm a legal terminal reviewer state');
     return;
   }
-  const anchor = selectM5Anchor(metadata, options.phase);
+  const strictT3PreLens = options.phase === 'pre-lens' && options.enforceT3PreLensTopology === true;
+  const anchorMetadata = strictT3PreLens ? validateT3PreLensTopology(metadata, errors) : metadata;
+  const anchor = selectM5Anchor(anchorMetadata, options.phase, strictT3PreLens);
   if (!anchor) {
     if (options.phase === 'final-acceptance') {
       errors.push('review-economics: final-acceptance cannot resolve a terminal architectural M5 anchor');
@@ -1073,6 +1125,13 @@ export function runCli(argv) {
     if (adoptionFlag < 0 || adoptionTimestampMs === null) {
       process.stderr.write('finding-ledger guard: --phase requires a valid --adoption-timestamp <ISO-8601>\n');
       return 2;
+    }
+    if (options.phase === 'pre-lens') {
+      if (!options.draftPath) {
+        process.stderr.write('finding-ledger guard: pre-lens phase requires --draft-path for T3 topology binding\n');
+        return 2;
+      }
+      options.enforceT3PreLensTopology = true;
     }
     if (capturesDirFlag >= 0) {
       const captureTimestamps = new Map(options.captureMetadata.map((item) => [item.name, item.timestampMs]));
