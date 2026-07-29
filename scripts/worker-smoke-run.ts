@@ -29,6 +29,8 @@ import {
   findCurrentHeadSmokePass,
   formatSmokeReportComment,
   normalizeSmokeReport,
+  orcaTerminalReadLines,
+  orcaTerminalReadNextCursor,
   ownedSmokeTerminalClosedFromReports,
   parseSmokeAgentReport,
   smokeAgentTerminalActivityBeyondSentPrompt,
@@ -196,7 +198,7 @@ export function waitForSmokeAgentCompletion(
     runner: options.runner,
   });
   if (initialRead.ok) {
-    const initialText = (initialRead.result?.lines ?? []).join('\n');
+    const initialText = orcaTerminalReadLines(initialRead.result).join('\n');
     if (cursor === undefined) {
       if (smokeAgentTerminalFullActivity(initialText, baselineText, sentPrompt)) {
         agentActivityObserved = true;
@@ -209,8 +211,9 @@ export function waitForSmokeAgentCompletion(
         agentActivityObserved = true;
       }
     }
-    if (initialRead.result?.nextCursor !== undefined) {
-      cursor = initialRead.result.nextCursor;
+    const initialNextCursor = orcaTerminalReadNextCursor(initialRead.result);
+    if (initialNextCursor !== undefined) {
+      cursor = initialNextCursor;
     }
   }
 
@@ -227,7 +230,7 @@ export function waitForSmokeAgentCompletion(
       runner: options.runner,
     });
     if (read.ok) {
-      const deltaText = (read.result?.lines ?? []).join('\n');
+      const deltaText = orcaTerminalReadLines(read.result).join('\n');
       if (cursor === undefined) {
         if (smokeAgentTerminalFullActivity(deltaText, baselineText, sentPrompt)) {
           agentActivityObserved = true;
@@ -240,8 +243,9 @@ export function waitForSmokeAgentCompletion(
           agentActivityObserved = true;
         }
       }
-      if (read.result?.nextCursor !== undefined) {
-        cursor = read.result.nextCursor;
+      const readNextCursor = orcaTerminalReadNextCursor(read.result);
+      if (readNextCursor !== undefined) {
+        cursor = readNextCursor;
       }
     }
 
@@ -655,8 +659,8 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       emit({ ok: false, report, published: !options.dryRun }, options.json);
       return 1;
     }
-    const preSendBaselineText = (preSendRead.result?.lines ?? []).join('\n');
-    const preSendCursor = preSendRead.result?.nextCursor;
+    const preSendBaselineText = orcaTerminalReadLines(preSendRead.result).join('\n');
+    const preSendCursor = orcaTerminalReadNextCursor(preSendRead.result);
 
     const sendResult = sendOrcaTerminal(handle, prompt, { cwd: options.cwd });
     if (!sendResult.ok) {
@@ -721,7 +725,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       emit({ ok: false, report, published: !options.dryRun }, options.json);
       return 1;
     }
-    const output = scrubSmokeOutput((readResult.result?.lines ?? []).join('\n'));
+    const output = scrubSmokeOutput(orcaTerminalReadLines(readResult.result).join('\n'));
     const partial = parseSmokeAgentReport(output);
     const afterStatus = gitPorcelain(options.cwd);
     const afterHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(afterStatus));

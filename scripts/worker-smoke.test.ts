@@ -34,6 +34,8 @@ import {
   smokeReportHasPackProducer,
   scrubSmokeOutput,
   resolveSmokeGhConfigDirs,
+  orcaTerminalReadLines,
+  orcaTerminalReadNextCursor,
   verifySmokeHeadBinding,
   formatSmokeReportComment,
   normalizeSmokeReport,
@@ -972,6 +974,25 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
     expect(result.agentActivityObserved).toBe(false);
     expect(result.error?.code).toBe('smoke_agent_never_started');
     expect(now).toBeLessThanOrEqual(600);
+  });
+});
+
+describe('orca terminal read normalization (#1101)', () => {
+  it('accepts live Orca terminal.tail payloads and string cursors', () => {
+    const live = {
+      terminal: {
+        tail: ['prompt echo', 'agent output'],
+        nextCursor: '315',
+      },
+    };
+    expect(orcaTerminalReadLines(live)).toEqual(['prompt echo', 'agent output']);
+    expect(orcaTerminalReadNextCursor(live)).toBe(315);
+  });
+
+  it('accepts capture-backed result.lines payloads', () => {
+    const capture = { lines: ['```worker-smoke-report', 'result: PASS'], nextCursor: 7 };
+    expect(orcaTerminalReadLines(capture)).toEqual(['```worker-smoke-report', 'result: PASS']);
+    expect(orcaTerminalReadNextCursor(capture)).toBe(7);
   });
 });
 

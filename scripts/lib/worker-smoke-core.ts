@@ -708,6 +708,52 @@ export function classifyDeclaredScenarioNonPassCause(input: {
   });
 }
 
+
+export function orcaTerminalReadLines(result: unknown): string[] {
+  if (!result || typeof result !== 'object') {
+    return [];
+  }
+  const record = result as Record<string, unknown>;
+  if (Array.isArray(record.lines)) {
+    return record.lines.filter((line): line is string => typeof line === 'string');
+  }
+  const terminal = record.terminal;
+  if (terminal && typeof terminal === 'object') {
+    const tail = (terminal as { tail?: unknown }).tail;
+    if (Array.isArray(tail)) {
+      return tail.filter((line): line is string => typeof line === 'string');
+    }
+  }
+  return [];
+}
+
+export function orcaTerminalReadNextCursor(result: unknown): number | undefined {
+  if (!result || typeof result !== 'object') {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  const direct = record.nextCursor;
+  if (typeof direct === 'number' && Number.isFinite(direct)) {
+    return direct;
+  }
+  if (typeof direct === 'string' && direct.trim() !== '') {
+    const parsed = Number(direct);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  const terminal = record.terminal;
+  if (terminal && typeof terminal === 'object') {
+    const nested = (terminal as { nextCursor?: unknown }).nextCursor;
+    if (typeof nested === 'number' && Number.isFinite(nested)) {
+      return nested;
+    }
+    if (typeof nested === 'string' && nested.trim() !== '') {
+      const parsed = Number(nested);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+  }
+  return undefined;
+}
+
 export function smokeAgentTerminalActivityBeyondSentPrompt(
   observedText: string,
   sentPrompt: string,
