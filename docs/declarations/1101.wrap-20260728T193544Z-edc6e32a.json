@@ -23,30 +23,17 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:cf24a5640ef0efd6721574cb0960ac7878ca5d3d5bdea51f64677a9206dc241b",
-      "new_active_scope_hash": "sha256:844e7688101b9d6fc9ec8e7a309de2d823b7812251a0e5a83ac87c01daf041f8",
+      "new_active_scope_hash": "sha256:d661e789c3e9f81a3debf6eff094d5a76afaf8c9b6b6ef99d3399ef8afe16712",
       "changed": {
         "added": [
+          "scripts/kernel/subprocess.ts",
           "tests/fixtures/worker-smoke/fake-bin/gh"
         ],
         "removed": []
       },
-      "reason": "Add fake-bin/gh fixture for runSmokeGhSync AC1 seam tests",
+      "reason": "Add fake-bin/gh fixture for runSmokeGhSync AC1 seam tests and revert merged minimalEnvironment widening under caller-scoped subprocess contract",
       "actor": "local",
-      "timestamp": "2026-07-29T02:47:54.537Z",
-      "applied": true
-    },
-    {
-      "previous_active_scope_hash": "sha256:844e7688101b9d6fc9ec8e7a309de2d823b7812251a0e5a83ac87c01daf041f8",
-      "new_active_scope_hash": "sha256:d661e789c3e9f81a3debf6eff094d5a76afaf8c9b6b6ef99d3399ef8afe16712",
-      "changed": {
-        "added": [
-          "scripts/kernel/subprocess.ts"
-        ],
-        "removed": []
-      },
-      "reason": "Revert merged main minimalEnvironment widening to preserve #1101 caller-scoped subprocess contract",
-      "actor": "local",
-      "timestamp": "2026-07-29T09:21:00Z",
+      "timestamp": "2026-07-29T09:25:00.000Z",
       "applied": true
     }
   ]
