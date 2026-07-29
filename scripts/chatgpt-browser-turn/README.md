@@ -184,6 +184,19 @@ Do not copy old Gate-B, possible-delivery, profile-wall, claim/lock, or clear-be
 retry procedures into create/review skills or call sites. Their continued presence
 on disk is not live authority.
 
+### Historical Gate-B diagnostics (non-authoritative)
+
+The pre-#1120 implementation and its regression suite retain the original
+`gate-b-characterization` diagnostic vocabulary and probe artifacts. In
+particular, historical characterization covered **service-worker-owned HTTP** and
+**worker/secondary-target outbound WebSocket** observations and used
+`dispatch_request_not_issued` as one legacy non-delivery outcome.
+
+Those probes remain useful for regression/forensics and for rollback compatibility.
+They do **not** gate the canonical state-light `turn`, do not grant resend
+authority, and must not be consulted by create-issue-draft or pack-review before a
+healthy new invocation.
+
 ## Verification
 
 Focused Issue #1120 tests cover:
