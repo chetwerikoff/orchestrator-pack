@@ -45,10 +45,12 @@ chat; not the task chat) — sole reviewer stage, M5 anchor, and aggregate cut
 authority. No competitive create-flow stage on T2; no Claude lens.
 
 **T3:** selected pre-lens stages (e.g. competitive when selected, fresh chat per
-pass) → pre-lens #975 guard → exactly one Claude `architectural-lens` → author
-dispositions/fixes → exactly one terminal independent browser-GPT `architectural`
-lens. Claude owns pre-terminal aggregate cut and the only sanctioned tier
-downgrade (`T3→T2` only). Terminal GPT owns final aggregate cut and M5 anchor.
+pass) → pre-lens #975 guard → exactly one Claude `architectural-lens` (or a valid
+`claude-unavailable` skip) → author dispositions/fixes → exactly one terminal
+independent browser-GPT `architectural` lens. Claude owns pre-terminal aggregate
+cut and the only sanctioned tier downgrade (`T3→T2` only) when the lens runs;
+terminal GPT remains mandatory after a valid skip. Terminal GPT owns final
+aggregate cut and M5 anchor.
 
 There is **no** create-flow `architectural-final` stage and **no** Codex
 create-flow engine or substitution role. Standalone `adversarial-draft-review`
