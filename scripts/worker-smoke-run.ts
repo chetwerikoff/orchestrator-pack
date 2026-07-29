@@ -26,6 +26,7 @@ import {
   createSmokeRunIdentity,
   ensureSmokeRunArtifactDir,
   isSmokeControlPlaneCause,
+  isDefinitePromptNonDelivery,
   preserveSmokeControlPlaneCause,
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
@@ -236,7 +237,7 @@ export function establishSmokePromptDelivery(
     if (controlPlane) {
       return { ok: false, controlPlaneCause: controlPlane, resendCount };
     }
-    if (input.allowDefiniteNondeliveryRetry) {
+    if (input.allowDefiniteNondeliveryRetry && isDefinitePromptNonDelivery(sendResult.error?.code)) {
       resendCount += 1;
       sendResult = attemptSend();
       if (!sendResult.ok) {
@@ -884,23 +885,6 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       plan,
       runBinding: { runId, artifactDir },
     });
-    const preSendRead = readOrcaTerminal(handle, { cwd: options.cwd, limit: 2000 });
-    if (!preSendRead.ok) {
-      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const report = buildOperationalSmokeReport('BLOCKED', options, {
-        action: 'capture pre-send terminal baseline',
-        expected: 'terminal read succeeds before smoke prompt send',
-        observed: preSendRead.error?.message ?? preSendRead.error?.code ?? 'terminal_read_failed',
-        terminalCleanup,
-      });
-      publishSmokeReport(report, options);
-      emit({ ok: false, report, published: !options.dryRun }, options.json);
-      return 1;
-    }
-    const preSendBaselineText = orcaTerminalReadLines(preSendRead.result).join('\n');
-    const preSendCursor = orcaTerminalReadNextCursor(preSendRead.result);
-
     const remainingTerminalBudgetMs = Math.max(
       0,
       SMOKE_AGENT_WAIT_BUDGET_MS - (Date.now() - terminalPhaseStartedAt),
@@ -910,8 +894,6 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       deadlineMs: remainingTerminalBudgetMs,
       runBinding: { runId, artifactDir },
       prompt,
-      preSendBaselineText,
-      preSendCursor,
     });
     if (!deliveryResult.ok) {
       const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });

@@ -81,8 +81,12 @@ export function smokeDeliverySealedPath(artifactDir: string): string {
   return join(artifactDir, 'delivery.sealed.json');
 }
 
-export function smokeCompletionBodyPath(artifactDir: string): string {
-  return join(artifactDir, 'completion.body');
+export function smokeCompletionPendingBodyPath(artifactDir: string): string {
+  return join(artifactDir, 'completion.pending.body');
+}
+
+export function smokeCompletionBodyPath(artifactDir: string, generation = 1): string {
+  return join(artifactDir, generation <= 1 ? 'completion-1.body' : `completion-${generation}.body`);
 }
 
 export function smokeCompletionSealPath(artifactDir: string, generation = 1): string {
@@ -117,7 +121,7 @@ export function buildSmokeAgentPrompt(input: {
       `  ${smokeDeliverySealedPath(input.runBinding.artifactDir)}`,
       '  contents: {"runId":"<run-id>"}',
       'Completion is accepted only after publish-complete sealing:',
-      `  1. write report text to ${smokeCompletionBodyPath(input.runBinding.artifactDir)}`,
+      `  1. write final report text to ${smokeCompletionBodyPath(input.runBinding.artifactDir, 1)} (optional in-progress bytes may go to ${smokeCompletionPendingBodyPath(input.runBinding.artifactDir)} only)`,
       `  2. write seal to ${smokeCompletionSealPath(input.runBinding.artifactDir)}`,
       '  seal contents: {"runId":"<run-id>","generation":1,"bodySha256":"<sha256-hex-of-completion.body>"}',
       'Do not seal until the report body is final. A second seal is a duplicate terminalization.',
@@ -956,31 +960,38 @@ export function observeSmokeDeliveryEstablished(
 export function observeSmokeCompletionEvidence(
   runBinding: SmokeRunBinding,
 ): SmokeCompletionEvidenceObservation {
-  const bodyPath = smokeCompletionBodyPath(runBinding.artifactDir);
-  const bodyExists = existsSync(bodyPath);
-  const reportBody = bodyExists ? readFileSync(bodyPath, 'utf8') : '';
+  const pendingPath = smokeCompletionPendingBodyPath(runBinding.artifactDir);
+  const pendingExists = existsSync(pendingPath);
   const sealGenerations = listCompletionSealGenerations(runBinding.artifactDir);
-  if (sealGenerations.length === 0) {
-    return {
-      publicationState: bodyExists ? 'partial' : 'none',
-      wrongRunBinding: false,
-      reportBody: bodyExists ? reportBody : undefined,
-    };
-  }
+
   if (sealGenerations.length > 1) {
     return {
       publicationState: 'publish_complete_duplicate',
       wrongRunBinding: false,
-      reportBody: bodyExists ? reportBody : undefined,
+      reportBody: pendingExists ? readFileSync(pendingPath, 'utf8') : undefined,
     };
   }
+
+  if (sealGenerations.length === 0) {
+    const partialBody = pendingExists ? readFileSync(pendingPath, 'utf8') : undefined;
+    return {
+      publicationState: partialBody ? 'partial' : 'none',
+      wrongRunBinding: false,
+      reportBody: partialBody,
+    };
+  }
+
   const generation = sealGenerations[0]!;
   const seal = parseSmokeCompletionSealRecord(readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, generation)));
+  const generationBodyPath = smokeCompletionBodyPath(runBinding.artifactDir, generation);
+  const generationBodyExists = existsSync(generationBodyPath);
   if (!seal) {
     return {
-      publicationState: bodyExists ? 'partial' : 'none',
+      publicationState: (pendingExists || generationBodyExists) ? 'partial' : 'none',
       wrongRunBinding: false,
-      reportBody: bodyExists ? reportBody : undefined,
+      reportBody: pendingExists
+        ? readFileSync(pendingPath, 'utf8')
+        : (generationBodyExists ? readFileSync(generationBodyPath, 'utf8') : undefined),
     };
   }
   if (seal.runId !== runBinding.runId) {
@@ -988,25 +999,30 @@ export function observeSmokeCompletionEvidence(
       publicationState: 'none',
       sealedRunId: seal.runId,
       wrongRunBinding: true,
-      reportBody: bodyExists ? reportBody : undefined,
     };
   }
-  if (!bodyExists) {
+
+  const bodyPath = generationBodyPath;
+  if (!existsSync(bodyPath)) {
     return {
       publicationState: 'partial',
       sealedRunId: seal.runId,
       wrongRunBinding: false,
+      reportBody: pendingExists ? readFileSync(pendingPath, 'utf8') : undefined,
     };
   }
+
+  const reportBody = readFileSync(bodyPath, 'utf8');
   const bodyDigest = computeSmokeCompletionBodyDigest(reportBody);
   if (bodyDigest !== seal.bodySha256) {
     return {
-      publicationState: 'publish_complete_duplicate',
+      publicationState: 'partial',
       sealedRunId: seal.runId,
       reportBody,
       wrongRunBinding: false,
     };
   }
+
   const parsedReport = parseSealedSmokeAgentReport(reportBody);
   if (!parsedReport) {
     return {
@@ -1063,6 +1079,17 @@ export function classifySmokeChildWaitObservation(input: {
     return { status: 'non_pass', cause: 'agent_report_timeout' };
   }
   return { status: 'pending' };
+}
+
+
+export const SMOKE_DEFINITE_PROMPT_NON_DELIVERY_CODES = [
+  'terminal_send_rejected',
+  'prompt_not_accepted',
+] as const;
+
+export function isDefinitePromptNonDelivery(code: string | undefined): boolean {
+  const normalized = String(code ?? '').trim();
+  return (SMOKE_DEFINITE_PROMPT_NON_DELIVERY_CODES as readonly string[]).includes(normalized);
 }
 
 export function preserveSmokeControlPlaneCause(
