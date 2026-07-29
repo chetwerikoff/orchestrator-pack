@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   legacyPublishReply: vi.fn(() => {
     throw new Error('legacy publication state unavailable');
   }),
-  appendFileSync: vi.fn(() => {
+  appendFileSync: vi.fn((_path: string, _data: string, _encoding: string) => {
     if (mocks.journalThrows) throw new Error('journal unavailable');
   }),
   openSync: vi.fn(() => 42),
