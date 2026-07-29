@@ -20,7 +20,7 @@
     "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
     "scripts/finding-ledger-guard.mjs",
     "scripts/lib/stage-completeness-core.ts",
     "scripts/stage-completeness-guard.test.ts"
