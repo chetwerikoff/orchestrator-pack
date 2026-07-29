@@ -15,7 +15,8 @@
     ".cursor/skills/create-issue-draft/SKILL.md",
     "docs/tiering.md",
     "package.json",
-    "scripts/browser-gpt-turn.ts",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/finding-ledger-guard.mjs",
     "scripts/lib/stage-completeness-core.ts",
     "scripts/stage-completeness-guard.test.ts"
