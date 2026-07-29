@@ -1466,9 +1466,10 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
       if (!text) continue;
       const normalizedText = String(text);
       parts.push(normalizedText);
-      const testId = await boundedPlaywrightOperation(textWait, async () => {
+      const attributeWait = requireOperationWait(waitSource, 'product_status');
+      const testId = await boundedPlaywrightOperation(attributeWait, async () => {
         if (typeof itemLocator.getAttribute !== 'function') return null;
-        return await itemLocator.getAttribute('data-testid', playwrightTimeout(textWait)!);
+        return await itemLocator.getAttribute('data-testid', playwrightTimeout(attributeWait)!);
       });
       elements.push({
         text: normalizedText,
@@ -1716,7 +1717,7 @@ export async function openTurnPage(
     if (matches.length > 1) {
       const descriptors = matches.map((page: any, index: number) => {
         try {
-          return `index=${index};url=${page.url()}`;
+          return `index=${index};url=${normalizeConversationUrl(page.url())}`;
         } catch {
           return `index=${index}`;
         }
@@ -1783,12 +1784,12 @@ export async function sendTurn(
   while (wallClock() < readyEndsAt) {
     const waitMs = loopOperationWaitMs(readyEndsAt, wallClock());
     if (waitMs <= 0) break;
-    const wall = await boundedPlaywrightOperation(waitMs, () => pagePreDispatchWalls(page, () => segmentOperationWait(segmentBudget, waitMs)));
-    if (wall.state) return { state: wall.state as TurnBrowserResult['state'], cause: wall.cause!, possibleDelivery: false };
-    const composerVisible = await boundedLocatorCount(composer, waitMs);
     const surface = await boundedPlaywrightOperation(waitMs, () => productStatusText(page, () => segmentOperationWait(segmentBudget, waitMs)));
+    const wall = classifyPreDispatchProductWall(surface);
+    if (wall.state) return { state: wall.state as TurnBrowserResult['state'], cause: wall.cause!, possibleDelivery: false };
     const blockerHint = observePreDispatchBlockerHint(surface);
     if (blockerHint) preDispatchBlockerCause = blockerHint;
+    const composerVisible = await boundedLocatorCount(composer, waitMs);
     if (composerVisible) break;
     await witnessPollDelay(page, Math.min(500, waitMs));
   }

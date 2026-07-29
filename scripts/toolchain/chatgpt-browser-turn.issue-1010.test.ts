@@ -1,9 +1,9 @@
-import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { runProcess } from '../kernel/subprocess.ts';
 import {
   LIVE_TERMINAL_FRAME_CONTRACT,
 } from '../chatgpt-browser-turn/fixtures/live-terminal-frame-contract.ts';
@@ -284,32 +284,30 @@ describe('issue 1010 submitted-turn proof', () => {
     const started = performance.now();
     let callerStdoutMs = 0;
     let stdout = '';
-    const child = spawn(process.execPath, [
-      '--experimental-strip-types',
-      harnessEntry,
-      '--profile', profilePath,
-      '--cdp', 'http://127.0.0.1:9222',
-      '--input', input,
-      '--output', output,
-      '--chat-url', 'https://chatgpt.com/c/ac3-timing',
-    ], {
+    const observed = await runProcess({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types',
+        harnessEntry,
+        '--profile', profilePath,
+        '--cdp', 'http://127.0.0.1:9222',
+        '--input', input,
+        '--output', output,
+        '--chat-url', 'https://chatgpt.com/c/ac3-timing',
+      ],
       cwd: join(dirname(fileURLToPath(import.meta.url)), '..', '..'),
+      inheritParentEnv: true,
       env: {
-        ...process.env,
         CHATGPT_BROWSER_TURN_STATE_DIR: join(root, 'state'),
         CHATGPT_BROWSER_TURN_AC3_MARKS_FILE: marksFile,
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    child.stdout.on('data', (chunk: Buffer | string) => {
-      stdout += String(chunk);
-      if (!callerStdoutMs) callerStdoutMs = performance.now() - started;
-    });
-    const exitCode = await new Promise<number>((resolve) => {
-      child.on('close', (code) => resolve(code ?? 1));
+      onStdoutChunk: (chunk: string) => {
+        stdout += chunk;
+        if (!callerStdoutMs) callerStdoutMs = performance.now() - started;
+      },
     });
     const processExitMs = performance.now() - started;
-    expect(exitCode).toBe(11);
+    expect(observed.exitCode).toBe(11);
     const stdoutLine = stdout.trim().split('\n').filter(Boolean).pop() ?? '';
     const body = JSON.parse(stdoutLine) as { cause: string };
     expect(body.cause).toBe('submitted_turn_id_unproven');
