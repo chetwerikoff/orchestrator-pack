@@ -154,8 +154,16 @@ function scrubGhFailureMessage(message: string): string {
   return scrubSmokeOutput(scrubForwardedGhSecrets(message, buildSmokeGhChildEnv()));
 }
 
-function smokeAgentTerminalHasReport(text: string): boolean {
-  return /```worker-smoke-report/i.test(text);
+function smokeAgentTerminalHasReport(observedSinceBaseline: string, sentPrompt: string): boolean {
+  let remainder = observedSinceBaseline;
+  const prompt = sentPrompt.trim();
+  while (prompt && remainder.startsWith(prompt)) {
+    remainder = remainder.slice(prompt.length);
+  }
+  if (prompt && prompt.startsWith(remainder.trim())) {
+    return false;
+  }
+  return parseSmokeAgentReport(remainder) !== null;
 }
 
 export function waitForSmokeAgentCompletion(
@@ -254,7 +262,7 @@ export function waitForSmokeAgentCompletion(
     }
 
     if (agentActivityObserved) {
-      if (smokeAgentTerminalHasReport(observedSinceBaseline)) {
+      if (smokeAgentTerminalHasReport(observedSinceBaseline, sentPrompt)) {
         return { ok: true, agentActivityObserved: true };
       }
       const wait = waitOrcaTerminal(handle, {
