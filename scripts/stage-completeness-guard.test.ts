@@ -154,9 +154,12 @@ describe('Issue #1120 T3 four-stage completeness', () => {
     expect(outcome.result.receipt?.lensSkipAnchor).toBe(3);
   });
 
-  it('rejects stale stage identities and ordering while leaving T1/T2 untouched', () => {
-    const revived = check({ ...CONFORMING, 'pass-05-architectural-final.capture.txt': 'obsolete' });
-    expect(revived.errors.join(' ')).toMatch(/unparseable capture filename: pass-05-architectural-final/);
+  it('keeps historical architectural-final captures audit-only while rejecting bad current ordering', () => {
+    const baseline = check(CONFORMING);
+    const historical = check({ ...CONFORMING, 'pass-05-architectural-final.capture.txt': 'obsolete audit evidence' });
+    expect(baseline.ok, baseline.errors.join('\n')).toBe(true);
+    expect(historical.ok, historical.errors.join('\n')).toBe(true);
+    expect(historical.receipt).toEqual(baseline.receipt);
 
     const lensEarly = check({
       'pass-01-competitive.capture.txt': 'competitive',
