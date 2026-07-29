@@ -82,6 +82,29 @@ describe('Issue #1120 T3 four-stage completeness', () => {
     expect(message).toMatch(/terminal-pass=4/);
   });
 
+  it('counts stage ceilings only inside the active acceptance-attempt segment', () => {
+    const result = check({
+      'pass-01-competitive.capture.txt': 'historical competitive',
+      'pass-02-architectural-review.capture.txt': 'historical architectural review',
+      'pass-03-architectural-lens.capture.txt': 'historical claude lens',
+      'pass-04-architectural.capture.txt': 'historical terminal gpt lens',
+      'pass-05-competitive.capture.txt': 'current competitive',
+      'pass-06-architectural-review.capture.txt': 'current architectural review',
+      'pass-07-architectural-lens.capture.txt': 'current claude lens',
+      'pass-08-architectural.capture.txt': 'current terminal gpt lens',
+    });
+
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.receipt).toEqual({
+      tier: 'T3',
+      competitiveAnchor: 5,
+      architecturalReviewPass: 6,
+      lensMax: 7,
+      lensSkipAnchor: null,
+      terminalPass: 8,
+    });
+  });
+
   it('fails closed when architectural-review is missing, duplicated, or out of order', () => {
     const missing = check({
       'pass-01-competitive.capture.txt': 'competitive',
@@ -210,6 +233,7 @@ describe('Issue #1120 architectural-review economics', () => {
     reviewEconomics: true,
     stageTerminalConfirmed: true,
     adoptionTimestampMs: 1,
+    enforceT3PreLensTopology: true,
   } as const;
 
   it('treats architectural-review as the governed pre-lens reviewer anchor', () => {
@@ -221,6 +245,53 @@ describe('Issue #1120 architectural-review economics', () => {
       ],
     });
     expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('uses only the current acceptance-attempt segment for the pre-lens topology', () => {
+    const captures = [
+      ECONOMICS_CLEAN,
+      ECONOMICS_CLEAN,
+      'historical claude',
+      ECONOMICS_CLEAN,
+      ECONOMICS_CLEAN,
+      ECONOMICS_CLEAN,
+    ];
+    const result = checkFindingLedgerGuard(captures, emptyLedger, {
+      ...baseOptions,
+      captureMetadata: [
+        { name: 'pass-01-competitive.capture.txt', timestampMs: 2 },
+        { name: 'pass-02-architectural-review.capture.txt', timestampMs: 3 },
+        { name: 'pass-03-architectural-lens.capture.txt', timestampMs: 4 },
+        { name: 'pass-04-architectural.capture.txt', timestampMs: 5 },
+        { name: 'pass-05-competitive.capture.txt', timestampMs: 6 },
+        { name: 'pass-06-architectural-review.capture.txt', timestampMs: 7 },
+      ],
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('rejects pre-lens progression without architectural-review', () => {
+    const result = checkFindingLedgerGuard([ECONOMICS_CLEAN], emptyLedger, {
+      ...baseOptions,
+      captureMetadata: [
+        { name: 'pass-01-competitive.capture.txt', timestampMs: 2 },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/requires exactly one current-segment architectural-review capture/);
+  });
+
+  it('rejects terminal architectural as pre-lens authority before Claude', () => {
+    const result = checkFindingLedgerGuard([ECONOMICS_CLEAN, ECONOMICS_CLEAN], emptyLedger, {
+      ...baseOptions,
+      captureMetadata: [
+        { name: 'pass-01-competitive.capture.txt', timestampMs: 2 },
+        { name: 'pass-02-architectural.capture.txt', timestampMs: 3 },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/terminal architectural cannot satisfy pre-lens authority before Claude/);
+    expect(result.errors.join(' ')).toMatch(/requires exactly one current-segment architectural-review capture/);
   });
 
   it('fails when architectural-review omits the economics marker', () => {
