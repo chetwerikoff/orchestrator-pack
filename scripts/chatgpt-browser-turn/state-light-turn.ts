@@ -33,6 +33,18 @@ const INITIAL_POLL_MS = 500;
 const DISPATCH_OBSERVATION_MS = 30_000;
 const STABILITY_READ_DELAY_MS = 1_000;
 const MAX_LOCAL_READ_WAIT_MS = 5_000;
+const FINAL_ASSISTANT_ACTION_SELECTOR = [
+  '[data-testid="copy-turn-action-button"]',
+  '[data-testid="good-response-turn-action-button"]',
+  '[data-testid="bad-response-turn-action-button"]',
+].join(', ');
+const ASSISTANT_IN_PROGRESS_SELECTOR = [
+  '[aria-busy="true"]',
+  '[data-is-streaming="true"]',
+  '[data-testid*="tool"][aria-busy="true"]',
+  '[data-testid*="tool"][data-state="running"]',
+  '[data-testid*="tool"][data-state="loading"]',
+].join(', ');
 
 export const BROWSER_TURN_RECURRENCE_PATH = join(
   homedir(),
@@ -136,7 +148,7 @@ export function classifyPageObservation(
   messages: readonly PageMessage[],
   baselineCount: number,
   prompt: string,
-  generating: boolean,
+  inProgress: boolean,
 ): PageObservationDecision {
   const novel = messages.slice(Math.max(0, baselineCount));
   const promptText = normalizeVisibleText(prompt);
@@ -155,7 +167,7 @@ export function classifyPageObservation(
   }
 
   const assistants = afterOwnUser.filter((message) => message.role === 'assistant');
-  if (generating || assistants.length === 0) return { state: 'waiting' };
+  if (inProgress || assistants.length === 0) return { state: 'waiting' };
   const finalReply = normalizeVisibleText(assistants.at(-1)?.text ?? '');
   return finalReply ? { state: 'ready', reply: finalReply } : { state: 'waiting' };
 }
@@ -318,6 +330,20 @@ async function pageGenerating(page: any): Promise<boolean> {
   }
 }
 
+async function pageCompletionReady(page: any): Promise<boolean> {
+  if (await pageGenerating(page)) return false;
+  const assistants = page.locator('[data-message-author-role="assistant"]');
+  const count = await locatorCount(assistants);
+  if (count === 0) return false;
+  const last = assistants.nth(count - 1);
+  try {
+    if (await locatorCount(last.locator(ASSISTANT_IN_PROGRESS_SELECTOR)) > 0) return false;
+    return await locatorCount(last.locator(FINAL_ASSISTANT_ACTION_SELECTOR)) > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function maybeContinueGeneration(page: any): Promise<boolean> {
   try {
     const continuation = page.getByText(/continue generating/i);
@@ -467,16 +493,19 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     afterSend = true;
 
     const startedAt = Date.now();
-    const deadline = startedAt + config.timeoutMs;
+    const softDeadline = startedAt + config.timeoutMs;
     const dispatchDeadline = startedAt + Math.min(DISPATCH_OBSERVATION_MS, config.timeoutMs);
     let lastReadyReply = '';
     let stableReads = 0;
 
-    while (Date.now() < deadline) {
+    // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
+    // landed and this invocation still owns a reachable page, #1120 requires us
+    // to keep that page rather than manufacture lost-chat/resend eligibility.
+    while (true) {
       pollCount++;
       const messages = await readPageMessages(page);
-      const generating = await pageGenerating(page);
-      const decision = classifyPageObservation(messages, baselineCount, snapshot.text, generating);
+      const completionReady = await pageCompletionReady(page);
+      const decision = classifyPageObservation(messages, baselineCount, snapshot.text, !completionReady);
 
       if (decision.state === 'foreign_activity') {
         incident('foreign_activity', decision.cause ?? 'foreign_activity', 'return_local_degraded');
@@ -555,14 +584,14 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             ),
           };
         }
-        await sleep(page, Math.min(STABILITY_READ_DELAY_MS, Math.max(1, deadline - Date.now())));
+        await sleep(page, STABILITY_READ_DELAY_MS);
         continue;
       }
 
       stableReads = 0;
       lastReadyReply = '';
       if (await maybeContinueGeneration(page)) {
-        await sleep(page, Math.min(INITIAL_POLL_MS, Math.max(1, deadline - Date.now())));
+        await sleep(page, INITIAL_POLL_MS);
         continue;
       }
 
@@ -591,26 +620,11 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
       const elapsed = Date.now() - startedAt;
       const delay = elapsed < DISPATCH_OBSERVATION_MS ? INITIAL_POLL_MS : config.pollMs;
-      await sleep(page, Math.min(delay, Math.max(1, deadline - Date.now())));
+      const beforeSoftDeadline = Date.now() < softDeadline;
+      await sleep(page, beforeSoftDeadline
+        ? Math.min(delay, Math.max(1, softDeadline - Date.now()))
+        : config.pollMs);
     }
-
-    incident('turn_timeout', 'page_reply_not_complete_before_timeout', 'caller_may_open_fresh_chat');
-    return {
-      page,
-      browser,
-      result: compactResult(
-        'stream_timeout',
-        'invocation',
-        'page_reply_not_complete_before_timeout',
-        invocationId,
-        profileKey,
-        sendCount,
-        pollCount,
-        incidents,
-        { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
-        journalWriteFailed,
-      ),
-    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const isInput = message.startsWith('input_invalid:');
