@@ -7,12 +7,14 @@
   "baseline": {
     "commit_sha": "f8a780b07ebf75608b6f09f730c2d3d1e8ed8cb4",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:bcf06533a66c2e3e9cc4d2585f59c90cb2f93636733d33b4ea68fe04bcf27895"
+    "active_scope_hash": "sha256:32e149dbf93b7f131ad4caef94e3b718c92e6f2e69956ec0f93ca8df5cb48e05"
   },
   "declared_paths": [
+    ".claude/skills/adversarial-draft-review/SKILL.md",
     ".claude/skills/create-issue-draft/SKILL.md",
     ".claude/skills/discuss-with-gpt/SKILL.md",
     ".cursor/rules/draft-author-relocation.mdc",
+    ".cursor/skills/adversarial-draft-review/SKILL.md",
     ".cursor/skills/create-issue-draft/SKILL.md",
     "AGENTS.md",
     "docs/architecture.md",
@@ -23,5 +25,21 @@
   "declared_globs": [
     "docs/declarations/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:bcf06533a66c2e3e9cc4d2585f59c90cb2f93636733d33b4ea68fe04bcf27895",
+      "new_active_scope_hash": "sha256:32e149dbf93b7f131ad4caef94e3b718c92e6f2e69956ec0f93ca8df5cb48e05",
+      "changed": {
+        "added": [
+          ".claude/skills/adversarial-draft-review/SKILL.md",
+          ".cursor/skills/adversarial-draft-review/SKILL.md"
+        ],
+        "removed": []
+      },
+      "reason": "The existing adversarial-draft-review router claims explicit Codex task-creation requests, so runtime-agnostic manager selection must narrow that routing while preserving Codex as a non-reviewer in create-issue-draft.",
+      "actor": "chatgpt-github-worker",
+      "timestamp": "2026-07-29T06:27:30.000Z",
+      "applied": true
+    }
+  ]
 }
