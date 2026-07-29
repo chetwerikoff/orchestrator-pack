@@ -85,14 +85,14 @@ export function smokeCompletionPendingBodyPath(artifactDir: string): string {
   return join(artifactDir, 'completion.pending.body');
 }
 
-export function smokeCompletionBodyPath(artifactDir: string, generation = 1): string {
-  return join(artifactDir, generation <= 1 ? 'completion-1.body' : `completion-${generation}.body`);
+const COMPLETION_SEAL_DIGEST_PATTERN = /^completion-([0-9a-f]{64})\.sealed\.json$/u;
+
+export function smokeCompletionBodyPath(artifactDir: string, bodySha256: string): string {
+  return join(artifactDir, `completion-${bodySha256}.body`);
 }
 
-export function smokeCompletionSealPath(artifactDir: string, generation = 1): string {
-  return generation <= 1
-    ? join(artifactDir, 'completion.sealed.json')
-    : join(artifactDir, `completion.sealed-${generation}.json`);
+export function smokeCompletionSealPath(artifactDir: string, bodySha256: string): string {
+  return join(artifactDir, `completion-${bodySha256}.sealed.json`);
 }
 
 export function ensureSmokeRunArtifactDir(artifactDir: string): void {
@@ -122,12 +122,11 @@ export function buildSmokeAgentPrompt(input: {
       '  contents: {"runId":"<run-id>"}',
       'Completion is accepted only after publish-complete sealing:',
       `  1. optional in-progress bytes may go only to ${smokeCompletionPendingBodyPath(input.runBinding.artifactDir)}`,
-      `  2. write final generation-1 report text to ${smokeCompletionBodyPath(input.runBinding.artifactDir, 1)}`,
-      `  3. create-only seal at ${smokeCompletionSealPath(input.runBinding.artifactDir, 1)} (never overwrite an existing seal)`,
-      '  seal contents: {"runId":"<run-id>","generation":1,"bodySha256":"<sha256-hex-of-completion-1.body>"}',
-      'If generation-1 is already sealed, a later terminalization must use generation-2 paths:',
-      `    ${smokeCompletionBodyPath(input.runBinding.artifactDir, 2)} + ${smokeCompletionSealPath(input.runBinding.artifactDir, 2)}`,
-      'Never overwrite a sealed generation body or seal file. Competing terminalizations must use the next generation.',
+      '  2. compute sha256 hex of the final fenced report body',
+      '  3. create-only write completion-<sha256>.body (never overwrite an existing completion-*.body)',
+      '  4. create-only write completion-<sha256>.sealed.json with {"runId":"<run-id>","bodySha256":"<sha256>"}',
+      'Each new terminalization must use new content and therefore new completion-<sha256> filenames.',
+      'Never delete or overwrite any completion-* artifact in the run directory.',
       'Terminal scrollback is not completion evidence; only the sealed artifact counts.',
     ]
     : [];
@@ -935,22 +934,18 @@ function parseSmokeCompletionSealRecord(raw: unknown): SmokeCompletionSealRecord
   return { ...base, bodySha256 };
 }
 
-function listCompletionSealGenerations(artifactDir: string): number[] {
+function listCompletionSealDigests(artifactDir: string): string[] {
   if (!existsSync(artifactDir)) {
     return [];
   }
-  const generations: number[] = [];
+  const digests: string[] = [];
   for (const entry of readdirSync(artifactDir)) {
-    if (entry === 'completion.sealed.json') {
-      generations.push(1);
-      continue;
-    }
-    const match = /^completion\.sealed-(\d+)\.json$/u.exec(entry);
+    const match = COMPLETION_SEAL_DIGEST_PATTERN.exec(entry);
     if (match) {
-      generations.push(Number(match[1]));
+      digests.push(match[1]);
     }
   }
-  return generations.sort((left, right) => left - right);
+  return digests.sort();
 }
 
 export function observeSmokeDeliveryEstablished(
@@ -961,42 +956,42 @@ export function observeSmokeDeliveryEstablished(
 }
 
 export interface SmokeCompletionObservationState {
-  sealedBodyDigestsByGeneration: Map<number, string>;
+  sealedBodyDigests: Map<string, string>;
 }
 
 export function createSmokeCompletionObservationState(): SmokeCompletionObservationState {
-  return { sealedBodyDigestsByGeneration: new Map() };
+  return { sealedBodyDigests: new Map() };
 }
 
 interface EvaluatedCompletionTerminalization {
-  generation: number;
+  bodySha256: string;
   reportBody: string;
   parsedReport: Partial<SmokeReport> | null;
 }
 
 function evaluateCompletionTerminalization(
   runBinding: SmokeRunBinding,
-  generation: number,
+  bodySha256: string,
 ): EvaluatedCompletionTerminalization | 'in_progress' | 'inadmissible_wrong_run' {
   const seal = parseSmokeCompletionSealRecord(
-    readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, generation)),
+    readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, bodySha256)),
   );
-  if (!seal) {
+  if (!seal || seal.bodySha256 !== bodySha256) {
     return 'in_progress';
   }
   if (seal.runId !== runBinding.runId) {
     return 'inadmissible_wrong_run';
   }
-  const bodyPath = smokeCompletionBodyPath(runBinding.artifactDir, generation);
+  const bodyPath = smokeCompletionBodyPath(runBinding.artifactDir, bodySha256);
   if (!existsSync(bodyPath)) {
     return 'in_progress';
   }
   const reportBody = readFileSync(bodyPath, 'utf8');
-  if (computeSmokeCompletionBodyDigest(reportBody) !== seal.bodySha256) {
+  if (computeSmokeCompletionBodyDigest(reportBody) !== bodySha256) {
     return 'in_progress';
   }
   return {
-    generation,
+    bodySha256,
     reportBody,
     parsedReport: parseSealedSmokeAgentReport(reportBody),
   };
@@ -1012,31 +1007,31 @@ export function observeSmokeCompletionEvidence(
   const pendingPath = smokeCompletionPendingBodyPath(runBinding.artifactDir);
   const pendingExists = existsSync(pendingPath);
   const nextState: SmokeCompletionObservationState = {
-    sealedBodyDigestsByGeneration: new Map(priorState.sealedBodyDigestsByGeneration),
+    sealedBodyDigests: new Map(priorState.sealedBodyDigests),
   };
 
-  const sealGenerations = listCompletionSealGenerations(runBinding.artifactDir);
+  const sealDigests = listCompletionSealDigests(runBinding.artifactDir);
   const publishComplete: EvaluatedCompletionTerminalization[] = [];
   let hasInProgress = pendingExists;
   let wrongRunBinding = false;
   let replacementDetected = false;
 
-  for (const generation of sealGenerations) {
+  for (const bodySha256 of sealDigests) {
     const seal = parseSmokeCompletionSealRecord(
-      readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, generation)),
+      readJsonFile(smokeCompletionSealPath(runBinding.artifactDir, bodySha256)),
     );
     if (seal && seal.runId === runBinding.runId) {
-      const priorDigest = nextState.sealedBodyDigestsByGeneration.get(generation);
+      const priorDigest = nextState.sealedBodyDigests.get(bodySha256);
       if (priorDigest && priorDigest !== seal.bodySha256) {
         replacementDetected = true;
       }
-      nextState.sealedBodyDigestsByGeneration.set(generation, seal.bodySha256);
+      nextState.sealedBodyDigests.set(bodySha256, seal.bodySha256);
     }
 
-    const evaluated = evaluateCompletionTerminalization(runBinding, generation);
+    const evaluated = evaluateCompletionTerminalization(runBinding, bodySha256);
     if (evaluated === 'in_progress') {
-      const bodyPath = smokeCompletionBodyPath(runBinding.artifactDir, generation);
-      if (existsSync(smokeCompletionSealPath(runBinding.artifactDir, generation))
+      const bodyPath = smokeCompletionBodyPath(runBinding.artifactDir, bodySha256);
+      if (existsSync(smokeCompletionSealPath(runBinding.artifactDir, bodySha256))
         || existsSync(bodyPath)) {
         hasInProgress = true;
       }
