@@ -199,6 +199,16 @@ describe('smoke report publication and parsing', () => {
     expect(partial?.scenarios).toHaveLength(1);
   });
 
+  it('parses unfenced reports with Orca-indented lines', () => {
+    const body = [
+      '  result: PASS',
+      '  tracked-files-unmodified: true',
+      '  scenarios:',
+      '    - action: run check | expected: ok | observed: ok | outcome: pass',
+    ].join('\n');
+    expect(parseSmokeAgentReport(body)?.result).toBe('PASS');
+  });
+
   it('rejects malformed PASS output that omits required fields', () => {
     const partial = parseSmokeAgentReport('```worker-smoke-report\nresult: PASS\n```');
     expect(normalizeSmokeReport(partial ?? {}, {

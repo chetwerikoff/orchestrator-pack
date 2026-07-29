@@ -191,7 +191,7 @@ function findUnfencedSmokeReportBody(text: string): string | null {
   const lines = text.split(/\r?\n/u);
   let lastStart = -1;
   for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index]?.match(/^result:\s*(PASS|FAIL|BLOCKED)\s*$/iu);
+    const match = lines[index]?.trim().match(/^result:\s*(PASS|FAIL|BLOCKED)\s*$/iu);
     if (!match || match[1]?.includes('|')) {
       continue;
     }
@@ -212,7 +212,7 @@ function findUnfencedSmokeReportBody(text: string): string | null {
     }
     bodyLines.push(line);
   }
-  const body = bodyLines.join('\n');
+  const body = bodyLines.map((line) => line.trimStart()).join('\n');
   if (!/tracked-files-unmodified:/iu.test(body) || !/scenarios:/iu.test(body)) {
     return null;
   }
