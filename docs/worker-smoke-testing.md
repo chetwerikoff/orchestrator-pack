@@ -64,46 +64,48 @@ Issue #1115 owns the parent wait contract from prompt delivery through publish-c
 - `orca terminal read` is secondary liveness/diagnostic only; suppressing PTY bytes must not change the terminal class when durable artifact evidence is unchanged.
 - Delivery, completion publication/consumption, negative-terminal checks, and bounded polling share one terminal-phase budget (<= 30 minutes) started at owned-terminal creation.
 
-### Slow composer accept (ambiguous wait window)
+### Unsubmitted composer paste (delivery stall)
 
-Recurring Cursor/TUI state when `worker-smoke-run` delivers a large smoke prompt through `orca terminal send --text … --enter` (`scripts/lib/orca-cli.ts`): Orca reports send success, the composer shows the prompt as an unsubmitted bracketed paste, and there is **no visible agent activity for many minutes** — even though the run is still alive and may eventually converge.
+Recurring Cursor/TUI defect when `worker-smoke-run` delivers a large smoke prompt through `orca terminal send --text … --enter` (`scripts/lib/orca-cli.ts`): Orca reports send success, but the composer keeps the prompt as an **unsubmitted** bracketed paste and the turn does not start. The trailing `--enter` is absorbed by bracketed-paste mode instead of submitting the line. The parent does **not** recover from this state on its own.
 
-**Symptom — visually indistinguishable from a dead agent**
+**Symptom**
 
-- PTY/composer shows `→ [Pasted text #1 +NNN lines]` (full prompt inserted, line not yet submitted).
-- No spinner, no `Run Everything` progress, no tool output — looks like nothing is happening.
-- The smoke parent process is still running and polling; the owned terminal handle is still valid.
-- `.orca-worker-smoke/runs/<runId>/` may stay **empty for a long time** before the child writes `delivery.sealed.json`.
+- PTY/composer shows `→ [Pasted text #1 +NNN lines]` — full prompt visible, not submitted.
+- No spinner, no `Run Everything` progress, no tool output.
+- `.orca-worker-smoke/runs/<runId>/` stays **empty** (no `delivery.sealed.json`, no completion seals).
+- Smoke parent is still running and polling; owned handle is still open — but **this state does not clear by itself**.
 
-Observed duration: on the order of **ten minutes** from owned-terminal create to delivery seal is normal for this window, not proof of failure.
+This has recurred across multiple Cursor smoke sessions; it is not a short benign boot delay.
 
-Grounded example (2026-07-29, PR #1132 head `447a908b`): run `5dc077c7-6bec-4f0d-b0dd-11986a7f0d74`, terminal `term_a8bcd171-5162-4fc1-8b91-b2606b2f9216` — terminal created **17:33:30 UTC**, paste line visible with no spinner/output for ~**10½ minutes**, then `delivery.sealed.json` at **17:44:06**, completion seal at **17:46:17**, **PASS** published, handle **closed**. The idle-looking window was slow accept, not non-delivery.
+**Grounded example (2026-07-29, PR #1132 head `447a908b`)**
 
-**Why this is ambiguity — not grounds for resend or manual Enter**
+Run `5dc077c7-6bec-4f0d-b0dd-11986a7f0d74`, terminal `term_a8bcd171-5162-4fc1-8b91-b2606b2f9216`:
 
-r01 forbids duplicate delivery on ambiguity. While the composer still shows an unsubmitted paste and durable delivery evidence is absent, the parent **cannot know** whether:
-
-- the prompt is still being accepted (slow bracketed-paste path), or
-- delivery truly failed.
-
-That is exactly the ambiguity class: `terminal send` succeeded, but positive delivery is not yet sealed. **Do not** treat the paste line alone as definite non-delivery. **Do not** press Enter in the composer during this window — a manual submit while the automated send is still being accepted risks a **second delivery** and violates the fail-closed resend rule. Optional r01 resend remains limited to Orca codes `terminal_send_rejected` / `prompt_not_accepted`, not operator guesswork from PTY appearance.
-
-**What actually distinguishes a live run from a dead one**
-
-| Unreliable (do not use for decisions) | Authoritative |
+| Time (UTC) | Event |
 |---|---|
-| Composer paste line, spinner presence, PTY scrollback | `delivery.sealed.json` then completion seals under `.orca-worker-smoke/runs/<runId>/` with matching `runId` |
-| “It looks stuck” | Smoke parent still running; owned handle still open and bound to the run |
-| Visual idle time | Terminal-phase budget not yet exhausted; eventual `prompt_delivery_unconfirmed` or `agent_report_timeout` only after durable evidence rules say so |
+| 17:33:30 | Owned terminal created; `terminal send` returned success |
+| 17:33:30 – 17:44:06 | Paste line visible, no spinner/output, run directory empty (~10½ minutes) |
+| 17:44:06 | `delivery.sealed.json` appeared **only after the operator manually pressed Enter** in that tab |
+| 17:46:17 | Completion seal written; **PASS** published to #1132; owned handle closed |
 
-PTY bytes and composer chrome are diagnostic curiosity only; they must not override the durable-artifact contract (#1115 AC12 / metamorphic property).
+The published **PASS is not a clean unattended smoke run** — delivery was **manually unblocked**. Without that Enter, the attempt would have remained in this stall until the shared terminal-phase budget expired.
 
-**Operator playbook**
+**Forecast without operator intervention**
 
-1. **Wait** within the shared terminal-phase budget (<= 30 minutes from owned-terminal create).
-2. **Watch artifacts**, not the terminal UI: poll `.orca-worker-smoke/runs/<runId>/` for `delivery.sealed.json`, then completion seals — not for spinner or paste-line disappearance.
-3. **Do not interact** with the smoke terminal (no extra Enter, no re-paste, no click-submit) while the parent run is in flight.
-4. If the budget exhausts with no delivery seal, the parent emits `prompt_delivery_unconfirmed` and closes the owned handle — that is the fail-closed outcome, not operator intervention mid-wait.
+The parent keeps polling for `delivery.sealed.json` and consumes the **shared terminal-phase budget** (<= 30 minutes from owned-terminal create). With the run directory still empty, exhaustion yields **`prompt_delivery_unconfirmed`**, owned-terminal cleanup, and **no completion wait**.
+
+**Contract gap (r01 today)**
+
+From the PTY, the state is **observably unsubmitted** — not “maybe still accepting.” r01 would allow automated resend only on definite non-delivery (`terminal_send_rejected`, `prompt_not_accepted`), but Orca does not emit those codes for this bracketed-paste stall and `establishSmokePromptDelivery` does not detect the paste line. Until behavioral follow-up lands (operator decision pending), recovery is manual.
+
+**Operator playbook (no automation yet)**
+
+1. **Recognize the stall** — both must hold: unsubmitted paste visible in the composer **and** no `delivery.sealed.json` under `.orca-worker-smoke/runs/<runId>/`.
+2. **Press Enter once** in that smoke terminal tab to submit the composer line. Do not re-paste or send a second prompt.
+3. **If `delivery.sealed.json` already exists**, do **not** touch the terminal — delivery is established; wait on completion artifacts only.
+4. **Do not assume** the stall will resolve on its own; without Enter (or future automated resend), the run will time out to `prompt_delivery_unconfirmed`.
+
+Durable artifacts remain authoritative for delivery/completion classification; PTY appearance is the operator’s cue for this known gap, not an input to the automated parent today.
 
 ## Owned-handle supervision
 
