@@ -76,6 +76,10 @@ export function buildSmokeAgentPrompt(input: {
     'You are an independent smoke verifier for orchestrator-pack.',
     'Execute only the smoke scenarios below against the current worktree.',
     'Do not edit tracked implementation files, commit, push, merge, alter the Issue, invoke pack review, or call pack-worker-report.',
+    'When you begin executing scenarios, emit exactly one line:',
+    '',
+    'worker-smoke-agent-started',
+    '',
     'When finished, emit exactly one fenced block:',
     '',
     '```worker-smoke-report',
@@ -708,7 +712,7 @@ export function classifyDeclaredScenarioNonPassCause(input: {
   });
 }
 
-export const SMOKE_AGENT_START_WITNESS = 'worker-smoke-report';
+export const SMOKE_AGENT_START_WITNESS = 'worker-smoke-agent-started';
 
 export function smokeAgentTerminalStartWitness(text: string): boolean {
   return text.includes(SMOKE_AGENT_START_WITNESS);
@@ -750,14 +754,39 @@ function collectGhConfigHomeSecretValues(configDir: string): string[] {
   return secrets;
 }
 
+export function resolveSmokeGhConfigDirs(childEnv: Readonly<NodeJS.ProcessEnv>): string[] {
+  const explicit = childEnv.GH_CONFIG_DIR?.trim();
+  if (explicit) {
+    return [explicit];
+  }
+
+  const candidates: string[] = [];
+  const xdgConfigHome = childEnv.XDG_CONFIG_HOME?.trim();
+  if (xdgConfigHome) {
+    candidates.push(join(xdgConfigHome, 'gh'));
+  }
+  const home = childEnv.HOME?.trim();
+  if (home) {
+    candidates.push(join(home, '.config', 'gh'));
+  }
+  const userProfile = childEnv.USERPROFILE?.trim();
+  if (userProfile) {
+    candidates.push(join(userProfile, '.config', 'gh'));
+    candidates.push(join(userProfile, 'AppData', 'Local', 'GitHub CLI'));
+  }
+  return [...new Set(candidates)];
+}
+
 function scrubConfigHomeCredentialValues(text: string, childEnv: Readonly<NodeJS.ProcessEnv>): string {
-  const configDir = childEnv.GH_CONFIG_DIR;
-  if (!configDir) {
+  const configDirs = resolveSmokeGhConfigDirs(childEnv);
+  if (configDirs.length === 0) {
     return text;
   }
   let scrubbed = text;
-  for (const credential of collectGhConfigHomeSecretValues(configDir)) {
-    scrubbed = scrubbed.split(credential).join('[redacted-secret]');
+  for (const configDir of configDirs) {
+    for (const credential of collectGhConfigHomeSecretValues(configDir)) {
+      scrubbed = scrubbed.split(credential).join('[redacted-secret]');
+    }
   }
   return scrubbed;
 }

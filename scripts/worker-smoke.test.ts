@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -32,6 +32,7 @@ import {
   smokeReportCoversPlan,
   smokeReportHasPackProducer,
   scrubSmokeOutput,
+  resolveSmokeGhConfigDirs,
   verifySmokeHeadBinding,
   formatSmokeReportComment,
   normalizeSmokeReport,
@@ -626,13 +627,14 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
   it('restores authenticated gh child behavior on the smoke-owned seam without leaking sentinels', () => {
     const fakeBin = join(fixtureRoot, 'fake-bin');
     const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
+    const isolatedHome = mkdtempSync(join(tmpdir(), 'smoke-gh-noauth-'));
     const withoutAuth = runSmokeGhSync(
       ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
       fixtureRoot,
-      { PATH: probePath },
+      { PATH: probePath, HOME: isolatedHome, XDG_CONFIG_HOME: isolatedHome },
     );
     expect(withoutAuth.ok).toBe(false);
-    expect(withoutAuth.stderr).toContain('auth-carrier-missing');
+    expect(withoutAuth.stderr).toContain('config-credential-missing');
 
     const withAuth = runSmokeGhSync(
       ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
@@ -685,6 +687,7 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
       expect(withoutCredential.ok).toBe(false);
       expect(withoutCredential.stderr).toContain('config-credential-missing');
 
+      const isolatedHome = mkdtempSync(join(tmpdir(), 'smoke-gh-noconfig-'));
       const withoutConfigHome = runSmokeGhSync(
         ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
         fixtureRoot,
@@ -692,10 +695,12 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
           PATH: probePath,
           ...stripTokenCarriers,
           GH_CONFIG_DIR: '',
+          HOME: isolatedHome,
+          XDG_CONFIG_HOME: isolatedHome,
         },
       );
       expect(withoutConfigHome.ok).toBe(false);
-      expect(withoutConfigHome.stderr).toContain('auth-carrier-missing');
+      expect(withoutConfigHome.stderr).toContain('config-credential-missing');
 
       const withConfigHome = runSmokeGhSync(
         ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
@@ -711,6 +716,30 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
       expect(withConfigHome.stderr).not.toContain(configCredential);
     } finally {
       rmSync(configHomeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('scrubs config-home credentials resolved via XDG_CONFIG_HOME without GH_CONFIG_DIR', () => {
+    const fakeBin = join(fixtureRoot, 'fake-bin');
+    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
+    const xdgRoot = mkdtempSync(join(tmpdir(), 'smoke-xdg-config-'));
+    const configHomeDir = join(xdgRoot, 'gh');
+    mkdirSync(configHomeDir, { recursive: true });
+    const configCredential = 'gho_xdgconfigscrub1101abcdef';
+    writeFileSync(join(configHomeDir, 'hosts.yml'), 'github.com:\n    oauth_token: ' + configCredential + '\n', 'utf8');
+    const childEnv = buildSmokeGhChildEnv({ XDG_CONFIG_HOME: xdgRoot } as NodeJS.ProcessEnv);
+    try {
+      expect(resolveSmokeGhConfigDirs(childEnv)).toContain(configHomeDir);
+      const failed = runSmokeGhSync(
+        ['fail-with-config-sentinel'],
+        fixtureRoot,
+        { PATH: probePath, ...childEnv },
+      );
+      const scrubbed = scrubSmokeOutput(scrubForwardedGhSecrets(`${failed.stderr}${failed.stdout}`, childEnv));
+      expect(scrubbed).not.toContain(configCredential);
+      expect(scrubbed).toContain('[redacted-secret]');
+    } finally {
+      rmSync(xdgRoot, { recursive: true, force: true });
     }
   });
 
@@ -754,10 +783,10 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
   it('detects positive terminal activity on full snapshots and cursor deltas', () => {
     expect(smokeAgentTerminalFullActivity('idle prompt', 'idle prompt')).toBe(false);
     expect(smokeAgentTerminalFullActivity('idle prompt\nagent started', 'idle prompt')).toBe(false);
-    expect(smokeAgentTerminalFullActivity('```worker-smoke-report', '')).toBe(true);
+    expect(smokeAgentTerminalFullActivity('worker-smoke-agent-started', '')).toBe(true);
     expect(smokeAgentTerminalDeltaActivity('')).toBe(false);
     expect(smokeAgentTerminalDeltaActivity('new output')).toBe(false);
-    expect(smokeAgentTerminalDeltaActivity('```worker-smoke-report')).toBe(true);
+    expect(smokeAgentTerminalDeltaActivity('worker-smoke-agent-started')).toBe(true);
   });
 
   it('does not complete during initial idle before delayed first output', () => {
@@ -771,7 +800,7 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
           return { stdout: JSON.stringify({ ok: true, result: { lines: [], nextCursor: 1 } }), stderr: '', status: 0 };
         }
         return {
-          stdout: JSON.stringify({ ok: true, result: { lines: ['```worker-smoke-report\nresult: PASS'], nextCursor: 2 } }),
+          stdout: JSON.stringify({ ok: true, result: { lines: ['worker-smoke-agent-started'], nextCursor: 2 } }),
           stderr: '',
           status: 0,
         };
@@ -795,6 +824,43 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
     expect(result.ok).toBe(true);
     expect(result.agentActivityObserved).toBe(true);
     expect(readCalls).toBeGreaterThanOrEqual(4);
+  });
+
+  it('classifies started-without-report as missing_agent_report after idle', () => {
+    let now = 0;
+    let readCalls = 0;
+    const runner = vi.fn((executable: string, args: string[]) => {
+      const joined = args.join(' ');
+      if (joined.includes('terminal read')) {
+        readCalls += 1;
+        if (readCalls === 1) {
+          return { stdout: JSON.stringify({ ok: true, result: { lines: ['worker-smoke-agent-started'], nextCursor: 2 } }), stderr: '', status: 0 };
+        }
+        return { stdout: JSON.stringify({ ok: true, result: { lines: ['scenario output only'], nextCursor: 3 } }), stderr: '', status: 0 };
+      }
+      if (joined.includes('terminal wait') && joined.includes('tui-idle')) {
+        return { stdout: JSON.stringify({ ok: true, result: {} }), stderr: '', status: 0 };
+      }
+      return { stdout: JSON.stringify({ ok: false, error: { message: 'unexpected' } }), stderr: '', status: 1 };
+    });
+
+    const waitResult = waitForSmokeAgentCompletion('term_started_no_report', {
+      runner: runner as never,
+      now: () => now,
+      deadlineMs: 5_000,
+      preSendBaselineText: 'idle',
+      preSendCursor: 1,
+      sleepMs: (ms) => {
+        now += ms;
+      },
+    });
+    expect(waitResult.ok).toBe(true);
+    expect(waitResult.agentActivityObserved).toBe(true);
+    expect(classifySmokeNonPassCause({
+      partial: null,
+      agentActivityObserved: waitResult.agentActivityObserved,
+      agentCompleted: true,
+    })).toBe('missing_agent_report');
   });
 
   it('terminates at the shared deadline when the agent never starts', () => {

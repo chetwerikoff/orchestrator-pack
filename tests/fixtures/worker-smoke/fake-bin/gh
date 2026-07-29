@@ -1,20 +1,55 @@
 #!/bin/sh
 set -eu
+
+resolve_config_dir() {
+  if [ -n "${GH_CONFIG_DIR:-}" ]; then
+    printf '%s\n' "${GH_CONFIG_DIR}"
+    return 0
+  fi
+  if [ -n "${XDG_CONFIG_HOME:-}" ]; then
+    printf '%s\n' "${XDG_CONFIG_HOME}/gh"
+    return 0
+  fi
+  if [ -n "${HOME:-}" ]; then
+    printf '%s\n' "${HOME}/.config/gh"
+    return 0
+  fi
+  if [ -n "${USERPROFILE:-}" ]; then
+    if [ -f "${USERPROFILE}/.config/gh/hosts.yml" ]; then
+      printf '%s\n' "${USERPROFILE}/.config/gh"
+      return 0
+    fi
+    if [ -f "${USERPROFILE}/AppData/Local/GitHub CLI/hosts.yml" ]; then
+      printf '%s\n' "${USERPROFILE}/AppData/Local/GitHub CLI"
+      return 0
+    fi
+    printf '%s\n' "${USERPROFILE}/.config/gh"
+    return 0
+  fi
+  return 1
+}
+
+config_hosts_file() {
+  config_dir="$(resolve_config_dir)" || return 1
+  printf '%s\n' "${config_dir}/hosts.yml"
+}
+
 case "${1:-}" in
   api|pr)
     if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
       printf '%s\n' '[]'
       exit 0
     fi
-    if [ -n "${GH_CONFIG_DIR:-}" ] && [ -f "${GH_CONFIG_DIR}/hosts.yml" ]; then
-      if grep -q 'oauth_token:' "${GH_CONFIG_DIR}/hosts.yml"; then
+    hosts_file="$(config_hosts_file)" || hosts_file=''
+    if [ -n "${hosts_file}" ] && [ -f "${hosts_file}" ]; then
+      if grep -q 'oauth_token:' "${hosts_file}"; then
         printf '%s\n' '[]'
         exit 0
       fi
       printf '%s\n' 'config-credential-missing' >&2
       exit 1
     fi
-    if [ -n "${GH_CONFIG_DIR:-}" ]; then
+    if [ -n "${GH_CONFIG_DIR:-}" ] || [ -n "${XDG_CONFIG_HOME:-}" ] || [ -n "${HOME:-}" ] || [ -n "${USERPROFILE:-}" ]; then
       printf '%s\n' 'config-credential-missing' >&2
       exit 1
     fi
@@ -25,8 +60,9 @@ case "${1:-}" in
     exec "$(dirname "$0")/gh-auth-probe" fail-with-sentinel
     ;;
   fail-with-config-sentinel)
-    if [ -n "${GH_CONFIG_DIR:-}" ] && [ -f "${GH_CONFIG_DIR}/hosts.yml" ]; then
-      grep 'oauth_token:' "${GH_CONFIG_DIR}/hosts.yml" >&2 || true
+    hosts_file="$(config_hosts_file)" || hosts_file=''
+    if [ -n "${hosts_file}" ] && [ -f "${hosts_file}" ]; then
+      grep 'oauth_token:' "${hosts_file}" >&2 || true
     fi
     printf '%s\n' 'config-auth-failed' >&2
     exit 1
