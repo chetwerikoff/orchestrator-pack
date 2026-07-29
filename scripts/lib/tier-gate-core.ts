@@ -27,21 +27,15 @@ export const PRE_973_CUTOVER_WORKDIR_IDENTITIES = Object.freeze([] as string[]);
 export const PRE_973_HISTORICAL_DEMOTIONS = Object.freeze([] as string[]);
 
 /**
- * Exact producer identifiers recognized by tier-provenance parsers (#1093).
- * Runtime code must never discover, infer, append, or otherwise extend this set.
+ * Tier provenance records retain the flow-manager's exact audit label (#1117).
+ * The label is required and non-empty, but it is not a runtime admission allowlist
+ * or an authentication/authorization boundary.
  */
-export const TIER_PROVENANCE_PRODUCER_ALLOWLIST = Object.freeze([
-  'cursor-flow-manager',
-  'opencode-flow-manager',
-] as const);
-
-export type TierProvenanceProducer = (typeof TIER_PROVENANCE_PRODUCER_ALLOWLIST)[number];
-
-const TIER_PROVENANCE_PRODUCER_SET = new Set<string>(TIER_PROVENANCE_PRODUCER_ALLOWLIST);
+export type TierProvenanceProducer = string;
 
 function asRecognizedProducer(value: unknown): TierProvenanceProducer | null {
-  if (typeof value !== 'string') return null;
-  return TIER_PROVENANCE_PRODUCER_SET.has(value) ? (value as TierProvenanceProducer) : null;
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  return value;
 }
 
 export const TIER_RUBRIC_CLASSES = new Set([
