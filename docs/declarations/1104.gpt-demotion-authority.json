@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "1a09e7dae0cb19a8c650f5224f96a69bdac66e5b",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ecf4c97f5bfebd89c56876ea3aefdb619b60d1e6d5007e8b2d9f93791a0ebda9"
+    "active_scope_hash": "sha256:dce99c7e9379153cf9e52a3be439265cc3a9562f5d6f7edaa20ceb2a591f0b14"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -18,10 +18,26 @@
     "scripts/tier-gate-guard.test.ts",
     "scripts/finding-ledger-guard.mjs",
     "scripts/finding-ledger-guard.test.ts",
-    "scripts/stage-completeness-guard.ts"
+    "scripts/stage-completeness-guard.ts",
+    "scripts/kernel/subprocess.ts"
   ],
   "declared_globs": [
     "tests/fixtures/finding-ledger/**"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:ecf4c97f5bfebd89c56876ea3aefdb619b60d1e6d5007e8b2d9f93791a0ebda9",
+      "new_active_scope_hash": "sha256:dce99c7e9379153cf9e52a3be439265cc3a9562f5d6f7edaa20ceb2a591f0b14",
+      "changed": {
+        "added": [
+          "scripts/kernel/subprocess.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Add subprocess.ts for worker smoke gh auth (#1104)",
+      "actor": "local",
+      "timestamp": "2026-07-29T04:44:38.264Z",
+      "applied": true
+    }
+  ]
 }
