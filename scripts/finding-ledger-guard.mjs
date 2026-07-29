@@ -574,6 +574,12 @@ function foldM3LensState(metadata, currentRevision, errors) {
 
   const states = new Map();
   for (const [id, history] of histories) {
+    const terminalCurrent = history.filter(
+      ({ record, meta }) => meta.stage === 'architectural' && record.revision === currentRevision,
+    );
+    if (terminalCurrent.length > 1) {
+      errors.push(`review-economics: duplicate-conflicting terminal m3-protected state for ${id} at revision ${currentRevision}`);
+    }
     const latest = history.at(-1);
     if (!latest || !currentRevision || latest.record.revision !== currentRevision) {
       states.set(id, { record: latest?.record ?? null, current: false, contestOpen: false });
@@ -818,6 +824,10 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
       continue;
     }
     if (!lensCurrent) {
+      if (lensState?.record) {
+        errors.push(`review-economics: protected nomination ${finding.id} has unknown/stale architect contest state for revision ${currentRevision}`);
+        continue;
+      }
       const terminalOnlyNomination = !protectedFindingOriginatedBeforeLatestLens(metadata, finding.id);
       if (!terminalOnlyNomination) {
         errors.push(`review-economics: protected nomination ${finding.id} has unknown/stale architect contest state for revision ${currentRevision}`);

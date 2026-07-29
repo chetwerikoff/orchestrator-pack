@@ -21,7 +21,7 @@ const COUNTED_STAGE_TOKENS = new Set([
 ]);
 
 const CAPTURE_FILENAME_RE =
-  /^pass-(\d+)-(competitive|architectural-lens|architectural-final|architectural|architectural-demotion-narrow-revalidation)\.capture\.txt$/i;
+  /^pass-(\d+)-(competitive|architectural-lens|architectural-final|architectural)\.capture\.txt$/i;
 
 const COUNTED_STAGE_FILENAME_TOKEN_RE =
   /competitive|architectural-lens|architectural-final/i;

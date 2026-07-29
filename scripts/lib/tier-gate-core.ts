@@ -682,14 +682,6 @@ function isArchitectLensCaptureName(name: string): boolean {
   return architectLensPassIndex(name) !== null;
 }
 
-function isArchitecturalCaptureName(name: string): boolean {
-  return architecturalPassIndex(name) !== null;
-}
-
-function isGptNarrowRevalidationCaptureName(name: string): boolean {
-  return gptNarrowRevalidationPassIndex(name) !== null;
-}
-
 function usesLegacySingleDemotionSemantics(
   evidence: TierTransitionEvidence,
   historicalDemotions: Set<string>,
@@ -724,6 +716,9 @@ function validateDemotionRevalidationCaptureBinding(
 ): void {
   const event = eventEntry.record;
   const revalidation = revalidationEntry.record;
+  if (revalidation.role !== event.role) {
+    errors.push('tier demotion: revalidation role does not match originating event');
+  }
   if (revalidation.role === CLAUDE_DEMOTION_ROLE) {
     const revalidationPass = architectLensPassIndex(revalidationEntry.captureName);
     if (revalidationPass === null) {
@@ -741,29 +736,80 @@ function validateDemotionRevalidationCaptureBinding(
   if (eventPass !== null && narrowPass !== eventPass) {
     errors.push('tier demotion: GPT narrow revalidation must share the originating architectural pass index');
   }
-  if (DEMOTION_EVENT_RE.test(revalidationEntry.captureText)) {
+  const eventBlocks = parseFencedJsonRecords(
+    revalidationEntry.captureText,
+    DEMOTION_EVENT_RE,
+    parseDemotionEvent,
+  );
+  const revalidationBlocks = parseFencedJsonRecords(
+    revalidationEntry.captureText,
+    DEMOTION_REVALIDATION_RE,
+    parseDemotionRevalidation,
+  );
+  if (eventBlocks.records.length > 0 || eventBlocks.malformed) {
     errors.push('tier demotion: GPT narrow revalidation capture cannot contain a demotion event');
+  }
+  if (revalidationBlocks.records.length > 0) {
+    DEMOTION_REVALIDATION_RE.lastIndex = 0;
+    const remainder = revalidationEntry.captureText.replace(DEMOTION_REVALIDATION_RE, '').trim();
+    if (revalidationBlocks.records.length !== 1 || revalidationBlocks.malformed || remainder !== '') {
+      errors.push('tier demotion: GPT narrow revalidation capture must contain only one revalidation JSON block');
+    }
   }
 }
 
 function validateFreshDemotionChain(
-  events: TierTransitionEvidence['events'],
+  evidence: TierTransitionEvidence,
   errors: string[],
-): void {
-  const newEvents = events.filter((entry) => entry.record.kind === 'new');
-  if (newEvents.length <= 1) return;
+): Array<{
+  eventEntry: TierTransitionEvidence['events'][number];
+  sourceIndex: number;
+  candidateIndex: number;
+}> {
+  if (evidence.events.some((entry) => entry.record.kind !== 'new')) {
+    errors.push('tier demotion: fresh lifecycle cannot contain compatibility demotion evidence');
+  }
+  const newEvents = evidence.events.filter((entry) => entry.record.kind === 'new');
 
   const sorted = [...newEvents].sort(
     (left, right) => revisionNumber(left.record.sourceRevision) - revisionNumber(right.record.sourceRevision),
   );
   const edges = new Set<string>();
+  const eventIds = new Set<string>();
+  const sourceRevisions = new Set<string>();
+  const captureCounts = new Map<string, number>();
+  for (const entry of sorted) {
+    captureCounts.set(entry.captureName, (captureCounts.get(entry.captureName) ?? 0) + 1);
+  }
+  if ([...captureCounts.values()].some((count) => count > 1)) {
+    errors.push('tier demotion: one authoritative lens capture may authorize at most one downstep');
+  }
+  const declaredEventIds = new Set(sorted.map((entry) => entry.record.eventId));
+  if (evidence.revalidations.some((entry) => !declaredEventIds.has(entry.record.eventId))) {
+    errors.push('tier demotion: orphan revalidation does not bind a fresh-chain event');
+  }
+
+  const validated: Array<{
+    eventEntry: TierTransitionEvidence['events'][number];
+    sourceIndex: number;
+    candidateIndex: number;
+  }> = [];
   for (let index = 0; index < sorted.length; index += 1) {
-    const event = sorted[index].record;
+    const eventEntry = sorted[index];
+    const event = eventEntry.record;
     const edge = `${event.beforeTier}->${event.afterTier}`;
+    if (eventIds.has(event.eventId)) {
+      errors.push('tier demotion: duplicate demotion event id in fresh chain');
+    }
+    eventIds.add(event.eventId);
     if (edges.has(edge)) {
       errors.push('tier demotion: duplicate adjacent demotion edge in fresh chain');
     }
     edges.add(edge);
+    if (sourceRevisions.has(event.sourceRevision)) {
+      errors.push('tier demotion: multiple downsteps cannot share one source revision');
+    }
+    sourceRevisions.add(event.sourceRevision);
     if (index > 0) {
       const previous = sorted[index - 1].record;
       if (previous.afterTier !== event.beforeTier) {
@@ -774,9 +820,77 @@ function validateFreshDemotionChain(
       }
     }
     if (tierRank(event.beforeTier) - tierRank(event.afterTier) !== 1) {
-      errors.push('tier demotion: demotion chain contains a non-adjacent transition');
+      errors.push('tier demotion: only one adjacent tier downstep is allowed per authoritative capture');
+    }
+
+    const eventPass = validateDemotionEventCaptureBinding(eventEntry, errors);
+    const sourceIndex = evidence.revisions.findIndex(
+      (revision) => revision.revision === event.sourceRevision,
+    );
+    const source = sourceIndex >= 0 ? evidence.revisions[sourceIndex] : null;
+    if (!source || source.tier !== event.beforeTier) {
+      errors.push('tier demotion: event source revision tier does not match event beforeTier');
+    } else {
+      validateDecisionReceipt(source, errors);
+      if (source.receipt) {
+        const expectedDrivers = source.receipt.rubricClasses.map((id) => driverKey('rubric', id));
+        const actualDrivers = event.drivers
+          .filter((driver) => driver.kind === 'rubric')
+          .map((driver) => driverKey(driver.kind, driver.id));
+        if (!sameStringSet(expectedDrivers, actualDrivers)) {
+          errors.push('tier demotion: event driver dispositions must exactly match source trigger set');
+        }
+      }
+    }
+
+    const matchingRevalidations = evidence.revalidations.filter(
+      (entry) => entry.record.eventId === event.eventId,
+    );
+    if (matchingRevalidations.length !== 1) {
+      errors.push(`tier demotion: current candidate requires exactly one matching demotion revalidation (event ${event.eventId})`);
+      validated.push({ eventEntry, sourceIndex, candidateIndex: -1 });
+      continue;
+    }
+    const revalidationEntry = matchingRevalidations[0];
+    const revalidation = revalidationEntry.record;
+    validateDemotionRevalidationCaptureBinding(eventEntry, revalidationEntry, eventPass, errors);
+    if (
+      revalidation.beforeTier !== event.beforeTier
+      || revalidation.afterTier !== event.afterTier
+    ) {
+      errors.push('tier demotion: revalidation transition does not match original event');
+    }
+    if (revalidation.l4Status !== 'clear') {
+      errors.push(`tier demotion: revalidation L4 evidence must be clear (${revalidation.l4Status})`);
+    }
+    const candidateIndex = evidence.revisions.findIndex(
+      (revision) => revision.revision === revalidation.candidateRevision,
+    );
+    const candidate = candidateIndex >= 0 ? evidence.revisions[candidateIndex] : null;
+    if (
+      !candidate
+      || candidateIndex <= sourceIndex
+      || candidate.tier !== event.afterTier
+    ) {
+      errors.push('tier demotion: revalidation candidate revision does not prove the event transition');
+    } else {
+      validateDecisionReceipt(candidate, errors);
+      if (candidate.receipt?.l4Status !== 'clear') {
+        errors.push('tier demotion: revalidated candidate requires a clear bound tier receipt');
+      }
+    }
+    if (event.role === GPT_DEMOTION_ROLE && candidateIndex !== sourceIndex + 1) {
+      errors.push('tier demotion: GPT narrow revalidation must bind the immediate post-event revision');
+    }
+    validated.push({ eventEntry, sourceIndex, candidateIndex });
+  }
+
+  for (let index = 1; index < validated.length; index += 1) {
+    if (validated[index - 1].candidateIndex !== validated[index].sourceIndex) {
+      errors.push('tier demotion: each fresh-chain step must start from the preceding revalidated candidate');
     }
   }
+  return validated;
 }
 
 function validateDecisionReceipt(
@@ -920,123 +1034,107 @@ function validateTierTransition(
     errors.push('tier demotion: observed downstep requires demotion-from and demotion-event fence fields');
     return;
   }
-  if (highRank - tierRank(currentTier) !== 1 && !usesLegacySingleDemotionSemantics(evidence, historicalDemotions)) {
-    const chainEvents = evidence.events.filter((entry) => entry.record.kind === 'new');
-  if (chainEvents.length > 0) {
-      const latestChainTier = chainEvents
-        .map((entry) => entry.record.afterTier)
-        .sort((left, right) => tierRank(right) - tierRank(left))[0];
-      if (latestChainTier && tierRank(latestChainTier) - tierRank(currentTier) !== 1) {
-        errors.push('tier demotion: only one adjacent tier downstep is allowed');
-      }
-    } else {
+  const legacySemantics = usesLegacySingleDemotionSemantics(evidence, historicalDemotions);
+  if (legacySemantics) {
+    if (highRank - tierRank(currentTier) !== 1) {
       errors.push('tier demotion: only one adjacent tier downstep is allowed');
     }
-  } else if (highRank - tierRank(currentTier) !== 1) {
-    errors.push('tier demotion: only one adjacent tier downstep is allowed');
-  }
-
-  const legacySemantics = usesLegacySingleDemotionSemantics(evidence, historicalDemotions);
-  if (!legacySemantics) {
-    validateFreshDemotionChain(evidence.events, errors);
-  }
-
-  const distinctEventIds = new Set(evidence.events.map((entry) => entry.record.eventId));
-  if (legacySemantics && distinctEventIds.size > 1) {
-    errors.push('tier demotion: lifecycle already contains conflicting/second demotion event');
-  }
-
-  const matchingEvents = evidence.events.filter((entry) => entry.record.eventId === fence.demotionEvent);
-  if (matchingEvents.length !== 1) {
-    errors.push('tier demotion: exactly one demotion event is required for the fence demotion-event id');
-    return;
-  }
-  const eventEntry = matchingEvents[0];
-  const eventPass = validateDemotionEventCaptureBinding(eventEntry, errors);
-  const event = eventEntry.record;
-
-  const sourceFromEvent = evidence.revisions.find((item) => item.revision === event.sourceRevision);
-  if (!sourceFromEvent?.tier || sourceFromEvent.tier !== event.beforeTier) {
-    errors.push('tier demotion: event source revision tier does not match event beforeTier');
-  }
-
-  if (legacySemantics) {
+    const distinctEventIds = new Set(evidence.events.map((entry) => entry.record.eventId));
+    if (distinctEventIds.size > 1) {
+      errors.push('tier demotion: lifecycle already contains conflicting/second demotion event');
+    }
+    const matchingEvents = evidence.events.filter(
+      (entry) => entry.record.eventId === fence.demotionEvent,
+    );
+    if (matchingEvents.length !== 1) {
+      errors.push('tier demotion: exactly one demotion event is required for the fence demotion-event id');
+      return;
+    }
+    const eventEntry = matchingEvents[0];
+    const event = eventEntry.record;
+    const eventPass = validateDemotionEventCaptureBinding(eventEntry, errors);
     if (fence.demotionFrom !== highTier) {
       errors.push('tier demotion: demotion-from does not match immutable high-watermark');
     }
-  } else if (fence.demotionFrom !== event.beforeTier) {
-    errors.push('tier demotion: demotion-from does not match the latest adjacent downstep source tier');
-  }
-
-  if (
-    event.sourceRevision !== source?.revision
-    || event.beforeTier !== (legacySemantics ? highTier : event.beforeTier)
-    || event.afterTier !== currentTier
-  ) {
     if (
-      event.sourceRevision !== sourceFromEvent?.revision
-      || event.beforeTier !== sourceFromEvent?.tier
+      event.sourceRevision !== source.revision
+      || event.beforeTier !== highTier
       || event.afterTier !== currentTier
     ) {
       errors.push('tier demotion: event source/candidate transition binding mismatch');
     }
-  }
-
-  if (event.kind === 'compatibility') {
-    if (!isLegacyListed) {
-      errors.push('tier demotion: compatibility event requires frozen cutover membership');
+    if (event.kind !== 'compatibility') {
+      errors.push('tier demotion: frozen historical identity must use compatibility evidence');
+    } else {
+      if (!isLegacyListed) {
+        errors.push('tier demotion: compatibility event requires frozen cutover membership');
+      }
+      if (!historicalDemotions.has(evidence.taskIdentity)) {
+        errors.push('tier demotion: compatibility event is absent from frozen historical-demotion census');
+      }
+      validateCompatibilityEvent(eventEntry, evidence, errors);
     }
-    if (!historicalDemotions.has(evidence.taskIdentity)) {
-      errors.push('tier demotion: compatibility event is absent from frozen historical-demotion census');
+    const expectedDrivers = source.receipt.rubricClasses.map((id) => driverKey('rubric', id));
+    const actualDrivers = event.drivers
+      .filter((driver) => driver.kind === 'rubric')
+      .map((driver) => driverKey(driver.kind, driver.id));
+    if (!sameStringSet(expectedDrivers, actualDrivers)) {
+      errors.push('tier demotion: event driver dispositions must exactly match source trigger set');
     }
-    validateCompatibilityEvent(eventEntry, evidence, errors);
-  }
-
-  const driverSource = sourceFromEvent?.receipt ?? source?.receipt;
-  if (!driverSource) {
-    errors.push('tier demotion: source decision receipt is unavailable for driver validation');
-    return;
-  }
-  validateDecisionReceipt(sourceFromEvent!, errors);
-  const expectedDrivers = driverSource.rubricClasses.map((id) => driverKey('rubric', id));
-  const actualDrivers = event.drivers
-    .filter((driver) => driver.kind === 'rubric')
-    .map((driver) => driverKey(driver.kind, driver.id));
-  if (!sameStringSet(expectedDrivers, actualDrivers)) {
-    errors.push('tier demotion: event driver dispositions must exactly match source trigger set');
-  }
-
-  const matchingRevalidations = evidence.revalidations.filter(
-    (entry) => entry.record.eventId === event.eventId
-      && entry.record.candidateRevision === evidence.currentRevision,
-  );
-  if (matchingRevalidations.length !== 1) {
-    errors.push('tier demotion: current candidate requires exactly one matching demotion revalidation');
-    return;
-  }
-  const revalidationEntry = matchingRevalidations[0];
-  validateDemotionRevalidationCaptureBinding(eventEntry, revalidationEntry, eventPass, errors);
-  const revalidation = revalidationEntry.record;
-  if (
-    revalidation.beforeTier !== event.beforeTier
-    || revalidation.afterTier !== event.afterTier
-  ) {
-    errors.push('tier demotion: revalidation transition does not match original event');
-  }
-  if (revalidation.l4Status !== 'clear') {
-    errors.push(`tier demotion: revalidation L4 evidence must be clear (${revalidation.l4Status})`);
-  }
-
-  const laterThanSource = evidence.revisions.slice(
-    evidence.revisions.findIndex((item) => item.revision === event.sourceRevision) + 1,
-    currentIndex,
-  );
-  if (laterThanSource.some((item) => item.tier && tierRank(item.tier) > tierRank(event.afterTier))) {
-    errors.push('tier demotion: later up-escalation closes reuse of the consumed demotion event');
-  }
-
-  if (event.kind === 'new' && historicalDemotions.has(evidence.taskIdentity) && legacySemantics) {
-    errors.push('tier demotion: cutover historical demotion already consumed lifecycle allowance');
+    const matchingRevalidations = evidence.revalidations.filter(
+      (entry) => entry.record.eventId === event.eventId
+        && entry.record.candidateRevision === evidence.currentRevision,
+    );
+    if (matchingRevalidations.length !== 1) {
+      errors.push('tier demotion: current candidate requires exactly one matching demotion revalidation');
+      return;
+    }
+    const revalidationEntry = matchingRevalidations[0];
+    validateDemotionRevalidationCaptureBinding(eventEntry, revalidationEntry, eventPass, errors);
+    const revalidation = revalidationEntry.record;
+    if (
+      revalidation.beforeTier !== event.beforeTier
+      || revalidation.afterTier !== event.afterTier
+    ) {
+      errors.push('tier demotion: revalidation transition does not match original event');
+    }
+    if (revalidation.l4Status !== 'clear') {
+      errors.push(`tier demotion: revalidation L4 evidence must be clear (${revalidation.l4Status})`);
+    }
+  } else {
+    const chain = validateFreshDemotionChain(evidence, errors);
+    if (chain.length === 0) {
+      errors.push('tier demotion: observed downstep requires a fresh adjacent demotion chain');
+      return;
+    }
+    const firstStep = chain[0];
+    const latestStep = chain.at(-1)!;
+    const firstEvent = firstStep.eventEntry.record;
+    const latestEvent = latestStep.eventEntry.record;
+    if (firstEvent.beforeTier !== highTier) {
+      errors.push('tier demotion: fresh chain must start from the immutable preceding high tier');
+    }
+    if (latestEvent.eventId !== fence.demotionEvent) {
+      errors.push('tier demotion: fence must reference the latest event in the fresh chain');
+    }
+    if (fence.demotionFrom !== latestEvent.beforeTier) {
+      errors.push('tier demotion: demotion-from does not match the latest adjacent downstep source tier');
+    }
+    if (latestEvent.afterTier !== currentTier || latestStep.candidateIndex !== currentIndex) {
+      errors.push('tier demotion: latest event/revalidation does not bind the current candidate');
+    }
+    if (chain.length !== highRank - tierRank(currentTier)) {
+      errors.push('tier demotion: fresh chain does not cover each adjacent tier edge exactly once');
+    }
+    const firstSourceIndex = firstStep.sourceIndex;
+    for (let index = Math.max(firstSourceIndex + 1, 1); index <= currentIndex; index += 1) {
+      const previousTier = evidence.revisions[index - 1].tier;
+      const nextTier = evidence.revisions[index].tier;
+      if (previousTier && nextTier && tierRank(nextTier) > tierRank(previousTier)) {
+        errors.push('tier demotion: intervening upstep invalidates the fresh demotion chain');
+        break;
+      }
+    }
   }
 
   // Ensure the current candidate text is the same text being guarded.

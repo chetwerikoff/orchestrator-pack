@@ -7,6 +7,7 @@ import {
   checkStageCompletenessGuard,
   formatStageCompletenessPassMessage,
   parseArchitectLensWaiver,
+  parseCaptureFileName,
   parseCompetitiveWaiver,
 } from './lib/stage-completeness-core.ts';
 import { runCli } from './stage-completeness-guard.ts';
@@ -33,6 +34,16 @@ function check(name: string) {
 }
 
 describe('stage-completeness missing competitive', () => {
+  it('recognizes the bounded GPT demotion revalidation evidence identity without counting it as terminal M5', () => {
+    expect(parseCaptureFileName(
+      'pass-03-architectural-demotion-narrow-revalidation.capture.txt',
+    )).toEqual({
+      passIndex: 3,
+      stage: 'architectural-demotion-narrow-revalidation',
+      fileName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt',
+    });
+  });
+
   it('fails when competitive captures and waiver are both absent', () => {
     const result = check('missing-competitive');
     expect(result.ok).toBe(false);

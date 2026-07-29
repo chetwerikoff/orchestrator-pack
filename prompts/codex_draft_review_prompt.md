@@ -54,6 +54,20 @@ Record an explicit reviewer verdict `keep` or `cut` for every major mechanism.
 Competitive review keeps the shared simplification/economics rubric only; it does
 **not** perform this full architectural sequence.
 
+The architectural-stage input bundle must identify the exact current Issue
+revision and supply the applicable reject partition, current protected M3 state,
+latest author-owned M4 mechanism inventory, and applicable review-economics
+state. Treat a missing or stale required input as an unverified gap; do not infer
+it from an older capture. M4 remains author-owned: reviewer `keep|cut` verdicts
+are advice and never overwrite the author's `keep|simplify|defer|cut` inventory.
+
+At terminal `architectural`, `m3-protected:` records are authoritative for the
+exact reviewed revision under the same evidence and why-now rules as
+`architectural-lens`. They may activate, non-activate, contest, or withdraw
+contest state, including for a protected nomination first emitted in the
+terminal capture. A later valid terminal record supersedes earlier Claude state
+for the same protected id and revision; never adjudicate a different revision.
+
 ## Simplification lens (mandatory)
 
 On every competitive and architectural pass, also apply this lens and emit

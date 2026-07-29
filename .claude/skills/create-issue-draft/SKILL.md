@@ -69,8 +69,8 @@ canonical create-issue-draft procedure.
 |-------|------|-------------|
 | GPT author in task chat | Spec content, every content fix, direct Issue edits, every finding disposition, M3 author activation, M4 mechanism inventory | Review its own spec |
 | Flow-manager (OpenCode default; Cursor sanctioned alternative) | Live Issue pulls, fixed per-tier stage order, tier/T3-critical classification, body/mechanical floors, immutable captures, ledger bookkeeping, pass counting, chat references/topology, browser-turn execution, #975 adoption evidence, economics-guard mechanics, driving the cycle to acceptance or bounded blocked outcome | Author spec content, decide reviewer findings, perform the Claude lens, invent new helper/runtime semantics, mandatory hand-off to architect |
-| Claude architectural-lens (T3 only) | Exactly one `architectural-lens` per cycle segment: pre-terminal M3 when required, pre-terminal independent aggregate cut, sole sanctioned `T3→T2` demotion | Routine browser turns, ledger bookkeeping, post-terminal-GPT work, `T2→T1`, GPT stages |
-| Reviewer GPT chats | Independent review only: competitive (fresh chat per pass when selected), terminal `architectural` (fresh independent chat on every tier) | Edit the Issue, share the task chat, self-activate protected authority without lens adjudication |
+| Claude architectural-lens (T3 only) | Exactly one `architectural-lens` per cycle segment: pre-terminal M3 when required, pre-terminal independent aggregate cut, adjacent `T3→T2` authority | Routine browser turns, ledger bookkeeping, post-terminal-GPT work, `T2→T1`, GPT stages |
+| Reviewer GPT chats | Independent review only: competitive (fresh chat per pass when selected), terminal `architectural` (fresh independent chat on every tier) with full current-revision M3 and one adjacent `T3→T2` or `T2→T1` downstep | Edit the Issue, share the task chat, overwrite author-owned M4, direct `T3→T1`, or emit two downsteps from one capture |
 
 ### Flow-manager authority transfer
 
@@ -103,8 +103,10 @@ restart from intake without historical provenance inference.
 1. Intake through tier gate (same as T1).
 2. Exactly **one** terminal independent browser-GPT `architectural` lens.
 3. Author dispositions/fixes.
-4. **`final-acceptance`** and acceptance. **No** pre-lens #975 phase. **No**
-   competitive create-flow stage. **No** tier downgrade path.
+4. If GPT authorizes `T2→T1`, apply only the authorized correction and perform
+   the bounded same-chat narrow revalidation below.
+5. **`final-acceptance`** and acceptance. **No** pre-lens #975 phase and no
+   competitive create-flow stage.
 
 ### T3
 
@@ -133,7 +135,9 @@ substitution** on browser outage.
   **terminal GPT `architectural` only**.
 - Terminal GPT `architectural` remains the **review-episode M5 anchor** after
   accepted terminal-GPT fixes; the resulting current body still owes all existing
-  mechanical/body/tier/ledger acceptance checks — no second GPT lens.
+  mechanical/body/tier/ledger acceptance checks — no second GPT lens. A bounded
+  same-chat demotion revalidation is a distinct capture identity and does not
+  replace or move that M5 anchor.
 
 ## Chat topology
 
@@ -291,6 +295,10 @@ from `prompts/codex_draft_review_prompt.md` (rubric source only):
 - for every `persistent-machinery: yes`, require `cheapest-sufficient-alternative`,
   `stakes-price`, and `trade-in` (or exact `stakes-undeclared` / `net-add`);
 - require the four-question simplification lens;
+- for `architectural-lens` and `architectural`, require in order: contradiction,
+  feasibility with live probes where possible, primary forced-cut review, and
+  missed-gap search; record `keep|cut` for every major mechanism and justify
+  `keep` from a surviving contract/risk/acceptance need;
 - permit M5 cut candidate only with exact raw `simplification-cut-candidate: yes`;
 - for pre-lens `competitive` outputs on T3, require exact
   `SIMPLIFICATION_CLEAN` when no tokened cut candidate; if genuinely clean, also
@@ -379,8 +387,8 @@ Minimal producer-facing record (stage-completeness guard accepts only this shape
   terminal GPT `architectural` capture must be strictly after the skip anchor.
 
 
-The Claude lens is the **pre-terminal independent aggregate cut** authority and the
-**only** sanctioned tier-downgrade point (`T3→T2` only; **no** `T2→T1`). It
+The Claude lens is the **pre-terminal independent aggregate cut** authority and
+may authorize one adjacent `T3→T2` downstep. It
 consumes current Issue body, T3 reject partition where applicable, current M3
 protected state, latest M4 inventory, and applicable pre-lens economics.
 
@@ -407,14 +415,16 @@ architectural only**.
 ### Tier demotion (#973 + #1104)
 
 When justified, the lens capture contains exactly one fenced `tier-demotion-event/v1`
-JSON record (`role: architect`, `stage: architectural-lens`, exact source revision,
+JSON record (`role: architect`, embedded `stage: final-architect-lens`, exact source revision,
 `beforeTier: T3`, `afterTier: T2`, drivers matching source rubric labels).
 
 After the task chat applies the authorized fence/title change and the flow-manager
 re-pulls:
 
 1. record **narrow revalidation evidence** (`tier-demotion-revalidation/v1` — not a
-   full second Claude lens);
+   full second Claude lens) with `role: architect`, embedded
+   `stage: final-architect-lens`, and a later canonical
+   `pass-NN-architectural-lens.capture.txt`;
 2. run **terminal GPT `architectural`** on the post-demotion candidate;
 3. proceed toward acceptance when guards are green.
 
@@ -429,9 +439,37 @@ or a competitive review chat.
 Apply the shared lens contract. Save verbatim as `pass-NN-architectural.capture.txt`
 using the terminal capture identity recognized by stage-completeness guards.
 
+Supply the exact reviewed Issue revision, applicable reject partition, current
+M3 state, latest author-owned M4 inventory, and applicable economics state.
+Terminal GPT performs the same ordered contradiction → feasibility → primary
+forced-cut → missed-gap goals as Claude, with explicit `keep|cut` for every major
+mechanism. Reviewer verdicts remain advisory; the task-chat author still records
+each M4 mechanism exactly once as `keep|simplify|defer|cut`.
+
 - **T1/T2:** sole reviewer stage; owns **aggregate cut** and **M5 anchor**.
 - **T3:** owns **final aggregate cut** and **M5 anchor** after Claude and author
-  fixes. Terminal GPT may authorize one adjacent downstep (`T3→T2` or `T2→T1`) per capture with narrow same-chat revalidation; Claude retains `T3→T2` authority.
+  fixes.
+
+Terminal GPT may emit one `tier-demotion-event/v1` with `role: reviewer` and
+embedded `stage: final-architectural`, authorizing exactly one adjacent
+`T3→T2` or `T2→T1` edge from the exact source revision it reviewed. A fresh
+`T3→T2→T1` chain requires two captures/events on distinct source revisions; the
+second event uses the revalidated T2 receipt and exact T2 rubric drivers. Reject
+direct/skipped transitions, duplicate edge/id, branching, shared-source events,
+or reuse after an intervening upstep. The final Issue fence names only the latest
+event and `demotion-from` names that event's immediate source tier.
+
+After the author applies only the authorized tier/title/fence/body correction and
+the manager re-pulls the immediate candidate revision, reuse the **same terminal
+GPT chat** for exactly one narrow turn. Save only one fenced
+`tier-demotion-revalidation/v1` in
+`pass-NN-architectural-demotion-narrow-revalidation.capture.txt`, with
+`role: reviewer`, embedded
+`stage: final-architectural-narrow-revalidation`, the originating event id, exact
+candidate revision and transition, and current clear L4/receipt binding. It may
+emit no findings, M3, M5, `NO_FINDINGS`, or other review state. Missing, stale,
+mismatched, non-bounded, or materially changed candidate evidence fails closed.
+The original `pass-NN-architectural.capture.txt` remains the M5 anchor.
 
 Relay findings to task chat, update M4, re-pull. Post-terminal-GPT accepted fixes
 do **not** trigger a second GPT lens; ledger/guards decide acceptance.
@@ -440,11 +478,16 @@ do **not** trigger a second GPT lens; ledger/guards decide acceptance.
 
 | Tier / stage | Protected nomination rule |
 |--------------|---------------------------|
-| T1/T2 (terminal GPT) | No architect contest. Valid non-zero-signal author activation is authoritative. Absent/invalid activation → ordinary M1, **not** `architectPending`. |
+| T1/T2 (terminal GPT) | Terminal GPT has full current-revision `m3-protected:` authority: activate/non-activate and create/withdraw contest under the existing evidence + why-now rules. |
 | T3 pre-Claude | Zero-signal, absent activation, or contest → `architectPending` until Claude lens adjudicates. Only Claude lens may create/withdraw contest. |
-| Protected nomination first emitted in terminal GPT | No post-GPT architect path. Valid author activation authoritative; else ordinary M1. |
+| T3 terminal GPT | Full current-revision authority may supersede the earlier Claude record; no later Claude pass is required. |
+| Protected nomination first emitted in terminal GPT | Terminal GPT may adjudicate it in the same authoritative capture; no post-GPT Claude path is required. |
 
-Record `m3-protected:` lines per protected id when Claude adjudicates on T3.
+Record `m3-protected:` lines per protected id when either authoritative lens
+adjudicates. Fold current-revision records in capture/pass chronology across
+Claude and GPT; later terminal GPT may confirm, replace, contest, or withdraw the
+earlier Claude state. Stale/malformed/duplicate-conflicting state or an unresolved
+final contest fails closed.
 
 ## Step 7 — Acceptance
 
@@ -902,13 +945,15 @@ round-NN-author-reply.md
 pass-NN-competitive.capture.txt
 pass-NN-architectural.capture.txt          # terminal GPT lens (all tiers)
 pass-NN-architectural-lens.capture.txt     # Claude T3 only
+pass-NN-architectural-demotion-narrow-revalidation.capture.txt # bounded GPT same-chat evidence
 <co-located lens producing-run evidence>
 presync-architect-lens.md
 finding-disposition-ledger.json
 rNN/tier-gate-receipt.json
 ```
 
-Guard-recognized stages: `competitive`, `architectural`, `architectural-lens`.
+Guard-recognized stages: `competitive`, `architectural`, `architectural-lens`,
+and the non-M5 evidence identity `architectural-demotion-narrow-revalidation`.
 `architectural-final` is historical/audit only — do not create new captures.
 
 ## Repository-write boundary

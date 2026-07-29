@@ -127,9 +127,9 @@ the same four simplification questions and review-economics contract from
 - **Claude architectural-lens (T3 only).** Exactly one full `architectural-lens`
   capture per cycle segment, produced by an independent Claude Code CLI invocation
   with co-located producing-run evidence. Owns pre-terminal M3 contest/adjudication
-  when required, the **pre-terminal independent aggregate cut**, and the **only
-  sanctioned tier downgrade** (`T3→T2` only). Never runs after the terminal GPT
-  lens. Never operates routine browser turns or maintains the ledger.
+  when required, the **pre-terminal independent aggregate cut**, and one
+  sanctioned adjacent `T3→T2` downstep. Never runs after the terminal GPT lens.
+  Never operates routine browser turns or maintains the ledger.
 - **Browser GPT reviewer lenses.** Independent review chats only. Terminal
   `architectural` owns final aggregate cut for acceptance on every tier and is
   the M5 anchor at final acceptance. Terminal GPT may authorize one adjacent downstep (`T3→T2` or `T2→T1`) per authoritative capture; sequential `T3→T2→T1` requires two separately authorized adjacent steps on distinct source revisions.
@@ -161,22 +161,46 @@ that `rNN` directory as `tier-gate-decision/v1`: producer, revision, tier, fired
 applicable rubric labels, and the current L4 result
 (`clear|active|ambiguous|missing|stale`).
 
-A valid downstep is **exactly `T3→T2`**, occurs only at the Claude
-`architectural-lens`, and may happen at most once in the task lifecycle. There is
-**`T2→T1` only** via terminal GPT `architectural` on the T2 source revision (Issue #1104).
+A fresh lifecycle may consume one adjacent ladder edge per authoritative lens
+capture: Claude `architectural-lens` may authorize `T3→T2`; terminal GPT
+`architectural` may authorize `T3→T2` or `T2→T1`. Direct `T3→T1`, an upstep,
+`T1→below-ladder`, two downsteps in one capture, duplicate edges, branching, and
+reuse after an intervening upstep fail closed. `T3→T2→T1` is valid only as two
+events on distinct source revisions whose edges form one ordered contiguous
+chain. The second event uses the revalidated T2 revision's receipt and exact
+rubric-driver set, never the original T3 receipt. The current fence names the
+latest event and its `demotion-from` is the immediately preceding tier segment,
+not the lifetime high watermark.
 
-The original Claude lens capture contains one fenced `tier-demotion-event/v1` JSON
-record with an event id, `role: architect`, `stage: architectural-lens`, exact
-source revision, before/after tiers, and one non-empty prose rationale for every
-source driver. The driver set must equal the source decision's rubric labels
-exactly.
+Both engines reuse `tier-demotion-event/v1`. Capture identity and embedded stage
+are deliberately distinct:
+
+- Claude event: `role: architect`, `stage: final-architect-lens`, in
+  `pass-NN-architectural-lens.capture.txt`;
+- GPT event: `role: reviewer`, `stage: final-architectural`, in
+  `pass-NN-architectural.capture.txt`.
+
+Each event binds its exact source revision, adjacent before/after tiers, and one
+non-empty rationale for every source receipt rubric driver. Existing frozen
+compatibility/historical identities retain the pre-#973 single-consumed-event
+semantics; fresh-chain rules do not reinterpret their evidence.
 
 After the task chat applies the authorized title/fence change and the flow-manager
 re-pulls it as a new immutable revision:
 
-1. record **narrow revalidation evidence** (not a full second Claude lens);
-2. run the terminal GPT `architectural` lens on the post-demotion candidate;
-3. proceed to acceptance when guards are green.
+1. bind one `tier-demotion-revalidation/v1` to the event, exact candidate
+   revision, transition, current receipt/driver decision, and clear L4 result;
+   Claude uses `role: architect`, embedded `stage: final-architect-lens`, and a
+   later `pass-NN-architectural-lens.capture.txt`;
+2. after Claude demotion, run terminal GPT `architectural` on the revalidated T2
+   candidate; after GPT demotion, use the **same GPT chat** for one bounded narrow
+   revalidation turn saved as
+   `pass-NN-architectural-demotion-narrow-revalidation.capture.txt` with
+   `role: reviewer`, `stage: final-architectural-narrow-revalidation`;
+3. permit that GPT narrow capture to contain only the revalidation JSON: it emits
+   no findings, M3, M5, or synthetic clean state, and the original
+   `pass-NN-architectural.capture.txt` remains the terminal M5 anchor;
+4. proceed to acceptance when guards are green.
 
 **No Claude after terminal GPT.** Cancel any historical
 gate-red → GPT → Claude revalidation ordering.
@@ -282,18 +306,23 @@ The terminal browser-GPT `architectural` capture remains mandatory after a valid
 skip. Stage-completeness accepts `Claude lens → terminal GPT` or
 `valid claude-unavailable skip → terminal GPT`; missing both fails closed.
 
-### Claude architectural-lens goals (T3)
+### Architectural-stage goals (Claude T3 lens and terminal GPT)
 
-The Claude lens has four mandatory goals, in this exact order:
+Both `architectural-lens` and `architectural` have four mandatory goals, in this
+exact order:
 
 1. **Contradiction check** — fix contradictions via the task-chat fix path.
 2. **Feasibility check** — verify buildability with live probes where possible.
-3. **Cut ALL overengineering — PRIMARY goal** — forced-cut answer, explicit tier
-   reconsideration, and `T3→T2` demotion only when justified under #973.
+3. **Cut ALL overengineering — PRIMARY goal** — a forced `keep|cut` verdict for
+   every major mechanism; `keep` must cite a surviving contract, risk, or
+   acceptance need rather than circularly citing an earlier finding.
 4. **Find what was missed** — route required corrections through the task-chat fix
    path.
 
-For T3, record explicit **keep** or **cut** for each major mechanism.
+Each architectural-stage lens receives the exact current Issue revision,
+applicable reject partition, current M3 state, latest author-owned M4 inventory,
+and applicable economics state. Competitive review retains only the shared
+four-question simplification/economics rubric.
 
 **Staleness / review-episode binding.** A Claude `architectural-lens` capture is
 bound to the **source Issue revision** it reviewed and remains valid pre-terminal
@@ -313,6 +342,14 @@ lens is the sole reviewer stage and owns aggregate cut + M5. On **T3** it owns
 **final** aggregate cut + M5 after Claude and author fixes.
 
 Terminal GPT may authorize bounded adjacent tier downsteps (`T3→T2` or `T2→T1`) with narrow same-chat revalidation; Claude retains `T3→T2` authority.
+
+Terminal GPT also has full current-revision M3 authority. Authoritative
+`m3-protected:` records fold in capture/pass chronology across Claude and GPT, so
+a later valid terminal record may confirm, replace, contest, or withdraw the
+earlier Claude state for the same protected id/revision, including a nomination
+first emitted by terminal GPT. Stale/malformed/conflicting state and unresolved
+current-revision contest fail final acceptance; no post-GPT Claude pass is
+required.
 
 ### Simplification lens
 
