@@ -651,6 +651,45 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
     expect(withAuth.stderr).not.toContain(authSentinel);
   });
 
+
+  it('restores authenticated gh child behavior via GH_CONFIG_DIR without token carriers', () => {
+    const fakeBin = join(fixtureRoot, 'fake-bin');
+    const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
+    const configHomeSentinel = '/tmp/smoke-gh-config-only-fixture';
+    const stripTokenCarriers = {
+      GH_TOKEN: '',
+      GITHUB_TOKEN: '',
+      GH_ENTERPRISE_TOKEN: '',
+      GITHUB_ENTERPRISE_TOKEN: '',
+      GHE_TOKEN: '',
+    } as NodeJS.ProcessEnv;
+
+    const withoutConfigHome = runSmokeGhSync(
+      ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+      fixtureRoot,
+      {
+        PATH: probePath,
+        ...stripTokenCarriers,
+        GH_CONFIG_DIR: '',
+      },
+    );
+    expect(withoutConfigHome.ok).toBe(false);
+    expect(withoutConfigHome.stderr).toContain('auth-carrier-missing');
+
+    const withConfigHome = runSmokeGhSync(
+      ['api', 'repos/{owner}/{repo}/issues/1/comments', '--paginate'],
+      fixtureRoot,
+      {
+        PATH: probePath,
+        ...stripTokenCarriers,
+        ...buildSmokeGhChildEnv({ GH_CONFIG_DIR: configHomeSentinel } as NodeJS.ProcessEnv),
+      },
+    );
+    expect(withConfigHome.ok).toBe(true);
+    expect(withConfigHome.stdout).toContain('[]');
+    expect(withConfigHome.stderr).not.toContain(configHomeSentinel);
+  });
+
   it('scrubs arbitrary forwarded token values from stderr-derived failure surfaces', () => {
     const fakeBin = join(fixtureRoot, 'fake-bin');
     const probePath = `${fakeBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`;
