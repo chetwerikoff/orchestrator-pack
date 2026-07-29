@@ -882,7 +882,7 @@ describe('worker smoke agent start-aware wait (#1101)', () => {
           return { stdout: JSON.stringify({ ok: true, result: { lines: [], nextCursor: 1 } }), stderr: '', status: 0 };
         }
         return {
-          stdout: JSON.stringify({ ok: true, result: { lines: ['agent scenario output'], nextCursor: 2 } }),
+          stdout: JSON.stringify({ ok: true, result: { lines: ['agent scenario output', '```worker-smoke-report', 'result: PASS', '```'], nextCursor: 2 } }),
           stderr: '',
           status: 0,
         };

@@ -154,6 +154,10 @@ function scrubGhFailureMessage(message: string): string {
   return scrubSmokeOutput(scrubForwardedGhSecrets(message, buildSmokeGhChildEnv()));
 }
 
+function smokeAgentTerminalHasReport(text: string): boolean {
+  return /```worker-smoke-report/i.test(text);
+}
+
 export function waitForSmokeAgentCompletion(
   handle: string,
   options: {
@@ -250,29 +254,35 @@ export function waitForSmokeAgentCompletion(
     }
 
     if (agentActivityObserved) {
+      if (smokeAgentTerminalHasReport(observedSinceBaseline)) {
+        return { ok: true, agentActivityObserved: true };
+      }
       const wait = waitOrcaTerminal(handle, {
         for: 'tui-idle',
-        timeoutMs: remaining,
+        timeoutMs: Math.min(SMOKE_AGENT_POLL_MS, remaining),
         cwd: options.cwd,
         runner: options.runner,
       });
-      if (wait.ok) {
-        return { ok: true, agentActivityObserved: true };
-      }
-      const waitMessage = wait.error?.message ?? 'terminal_wait_failed';
-      if (/timeout/i.test(waitMessage) || wait.error?.code === 'timeout') {
-        return {
-          ok: false,
-          agentActivityObserved: true,
-          error: {
-            code: 'smoke_agent_wait_timeout',
-            message: waitMessage,
-          },
-        };
+      if (!wait.ok) {
+        const waitMessage = wait.error?.message ?? 'terminal_wait_failed';
+        if (!/timeout/i.test(waitMessage) && wait.error?.code !== 'timeout') {
+          return {
+            ok: false,
+            agentActivityObserved: true,
+            error: {
+              code: 'smoke_agent_wait_timeout',
+              message: waitMessage,
+            },
+          };
+        }
       }
     }
 
     sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
+  }
+
+  if (agentActivityObserved) {
+    return { ok: true, agentActivityObserved: true };
   }
 
   return {
