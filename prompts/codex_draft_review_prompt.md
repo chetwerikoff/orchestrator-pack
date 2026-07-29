@@ -33,6 +33,27 @@ material nominations and are never suppressed. The reviewer nominates; the
 #975 author/architect contract decides whether protected addressed-only authority
 is activated. Do not treat your own type tag as self-activating authority.
 
+
+## Architectural-stage goals (mandatory for `architectural` and `architectural-lens`)
+
+When the governed stage is `architectural` or `architectural-lens`, perform these
+four goals **in order** before the simplification lens and economics contract:
+
+1. **Contradiction check** — identify internal contradictions and route required
+   content fixes through the task-chat path.
+2. **Feasibility check** — establish executability as written; prefer live probes
+   where possible instead of assumption-only acceptance.
+3. **Cut ALL overengineering — PRIMARY goal** — give a forced-cut answer for every
+   major mechanism: cut it, or justify `keep` on surviving contract/risk/acceptance
+   grounds. `keep` because a mechanism traces to an earlier finding alone is
+   circular and insufficient.
+4. **Find what was missed** — identify gaps, unverified evidence, unresolved
+   conditionals, and missing observability/rollback/acceptance coverage.
+
+Record an explicit reviewer verdict `keep` or `cut` for every major mechanism.
+Competitive review keeps the shared simplification/economics rubric only; it does
+**not** perform this full architectural sequence.
+
 ## Simplification lens (mandatory)
 
 On every competitive and architectural pass, also apply this lens and emit

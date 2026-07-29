@@ -99,12 +99,24 @@ export interface TierDriverDisposition {
   rationale: string;
 }
 
+export const CLAUDE_DEMOTION_ROLE = 'architect';
+export const CLAUDE_DEMOTION_STAGE = 'final-architect-lens';
+export const GPT_DEMOTION_ROLE = 'reviewer';
+export const GPT_DEMOTION_STAGE = 'final-architectural';
+export const GPT_NARROW_REVALIDATION_STAGE = 'final-architectural-narrow-revalidation';
+
+export type TierDemotionRole = typeof CLAUDE_DEMOTION_ROLE | typeof GPT_DEMOTION_ROLE;
+export type TierDemotionEventStage = typeof CLAUDE_DEMOTION_STAGE | typeof GPT_DEMOTION_STAGE;
+export type TierDemotionRevalidationStage =
+  | typeof CLAUDE_DEMOTION_STAGE
+  | typeof GPT_NARROW_REVALIDATION_STAGE;
+
 export interface TierDemotionEventRecord {
   schema: 'tier-demotion-event/v1';
   eventId: string;
   kind: 'new' | 'compatibility';
-  role: 'architect';
-  stage: 'final-architect-lens';
+  role: TierDemotionRole;
+  stage: TierDemotionEventStage;
   sourceRevision: string;
   beforeTier: Tier;
   afterTier: Tier;
@@ -116,8 +128,8 @@ export interface TierDemotionEventRecord {
 export interface TierDemotionRevalidationRecord {
   schema: 'tier-demotion-revalidation/v1';
   eventId: string;
-  role: 'architect';
-  stage: 'final-architect-lens';
+  role: TierDemotionRole;
+  stage: TierDemotionRevalidationStage;
   candidateRevision: string;
   beforeTier: Tier;
   afterTier: Tier;
@@ -378,6 +390,20 @@ function parseDriverDisposition(value: unknown): TierDriverDisposition | null {
   return { kind: record.kind, id: record.id, rationale: record.rationale };
 }
 
+function isValidDemotionEventRoleStage(role: string, stage: string): boolean {
+  return (
+    (role === CLAUDE_DEMOTION_ROLE && stage === CLAUDE_DEMOTION_STAGE)
+    || (role === GPT_DEMOTION_ROLE && stage === GPT_DEMOTION_STAGE)
+  );
+}
+
+function isValidDemotionRevalidationRoleStage(role: string, stage: string): boolean {
+  return (
+    (role === CLAUDE_DEMOTION_ROLE && stage === CLAUDE_DEMOTION_STAGE)
+    || (role === GPT_DEMOTION_ROLE && stage === GPT_NARROW_REVALIDATION_STAGE)
+  );
+}
+
 function parseDemotionEvent(value: unknown): TierDemotionEventRecord | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
@@ -391,8 +417,10 @@ function parseDemotionEvent(value: unknown): TierDemotionEventRecord | null {
     || typeof record.eventId !== 'string'
     || record.eventId.trim() === ''
     || (record.kind !== 'new' && record.kind !== 'compatibility')
-    || record.role !== 'architect'
-    || record.stage !== 'final-architect-lens'
+    || !isValidDemotionEventRoleStage(
+      typeof record.role === 'string' ? record.role : '',
+      typeof record.stage === 'string' ? record.stage : '',
+    )
     || typeof record.sourceRevision !== 'string'
     || !REVISION_RE.test(record.sourceRevision)
     || !beforeTier
@@ -416,12 +444,17 @@ function parseDemotionEvent(value: unknown): TierDemotionEventRecord | null {
   if (record.historicalLensCapture != null && typeof record.historicalLensCapture !== 'string') {
     return null;
   }
+  if (tierRank(beforeTier) - tierRank(afterTier) !== 1) {
+    return null;
+  }
+  const role = typeof record.role === 'string' ? record.role : '';
+  const stage = typeof record.stage === 'string' ? record.stage : '';
   return {
     schema: 'tier-demotion-event/v1',
     eventId: record.eventId,
     kind: record.kind,
-    role: 'architect',
-    stage: 'final-architect-lens',
+    role: role as TierDemotionRole,
+    stage: stage as TierDemotionEventStage,
     sourceRevision: record.sourceRevision,
     beforeTier,
     afterTier,
@@ -440,8 +473,10 @@ function parseDemotionRevalidation(value: unknown): TierDemotionRevalidationReco
     record.schema !== 'tier-demotion-revalidation/v1'
     || typeof record.eventId !== 'string'
     || record.eventId.trim() === ''
-    || record.role !== 'architect'
-    || record.stage !== 'final-architect-lens'
+    || !isValidDemotionRevalidationRoleStage(
+      typeof record.role === 'string' ? record.role : '',
+      typeof record.stage === 'string' ? record.stage : '',
+    )
     || typeof record.candidateRevision !== 'string'
     || !REVISION_RE.test(record.candidateRevision)
     || !beforeTier
@@ -450,11 +485,13 @@ function parseDemotionRevalidation(value: unknown): TierDemotionRevalidationReco
   ) {
     return null;
   }
+  const role = typeof record.role === 'string' ? record.role : '';
+  const stage = typeof record.stage === 'string' ? record.stage : '';
   return {
     schema: 'tier-demotion-revalidation/v1',
     eventId: record.eventId,
-    role: 'architect',
-    stage: 'final-architect-lens',
+    role: role as TierDemotionRole,
+    stage: stage as TierDemotionRevalidationStage,
     candidateRevision: record.candidateRevision,
     beforeTier,
     afterTier,
@@ -617,15 +654,129 @@ function driverKey(kind: 'marker' | 'rubric', id: string): string {
   return `${kind}:${id}`;
 }
 
-function architectLensPassIndex(name: string): number | null {
-  const match = name.match(/^pass-(\d+)-architectural-lens\.capture\.txt$/i);
+function capturePassIndex(name: string, pattern: RegExp): number | null {
+  const match = name.match(pattern);
   if (!match?.[1]) return null;
   const value = Number.parseInt(match[1], 10);
   return Number.isInteger(value) ? value : null;
 }
 
+const ARCHITECTURAL_LENS_CAPTURE_RE = /^pass-(\d+)-architectural-lens\.capture\.txt$/i;
+const ARCHITECTURAL_CAPTURE_RE = /^pass-(\d+)-architectural\.capture\.txt$/i;
+const GPT_NARROW_REVALIDATION_CAPTURE_RE =
+  /^pass-(\d+)-architectural-demotion-narrow-revalidation\.capture\.txt$/i;
+
+function architectLensPassIndex(name: string): number | null {
+  return capturePassIndex(name, ARCHITECTURAL_LENS_CAPTURE_RE);
+}
+
+function architecturalPassIndex(name: string): number | null {
+  return capturePassIndex(name, ARCHITECTURAL_CAPTURE_RE);
+}
+
+function gptNarrowRevalidationPassIndex(name: string): number | null {
+  return capturePassIndex(name, GPT_NARROW_REVALIDATION_CAPTURE_RE);
+}
+
 function isArchitectLensCaptureName(name: string): boolean {
   return architectLensPassIndex(name) !== null;
+}
+
+function isArchitecturalCaptureName(name: string): boolean {
+  return architecturalPassIndex(name) !== null;
+}
+
+function isGptNarrowRevalidationCaptureName(name: string): boolean {
+  return gptNarrowRevalidationPassIndex(name) !== null;
+}
+
+function usesLegacySingleDemotionSemantics(
+  evidence: TierTransitionEvidence,
+  historicalDemotions: Set<string>,
+): boolean {
+  return evidence.intake?.kind === 'compatibility' || historicalDemotions.has(evidence.taskIdentity);
+}
+
+function validateDemotionEventCaptureBinding(
+  eventEntry: TierTransitionEvidence['events'][number],
+  errors: string[],
+): number | null {
+  const event = eventEntry.record;
+  if (event.role === CLAUDE_DEMOTION_ROLE) {
+    const pass = architectLensPassIndex(eventEntry.captureName);
+    if (pass === null) {
+      errors.push('tier demotion: Claude event must come from a canonical architect-lens capture');
+    }
+    return pass;
+  }
+  const pass = architecturalPassIndex(eventEntry.captureName);
+  if (pass === null) {
+    errors.push('tier demotion: GPT event must come from a canonical architectural capture');
+  }
+  return pass;
+}
+
+function validateDemotionRevalidationCaptureBinding(
+  eventEntry: TierTransitionEvidence['events'][number],
+  revalidationEntry: TierTransitionEvidence['revalidations'][number],
+  eventPass: number | null,
+  errors: string[],
+): void {
+  const event = eventEntry.record;
+  const revalidation = revalidationEntry.record;
+  if (revalidation.role === CLAUDE_DEMOTION_ROLE) {
+    const revalidationPass = architectLensPassIndex(revalidationEntry.captureName);
+    if (revalidationPass === null) {
+      errors.push('tier demotion: Claude revalidation must come from a canonical architect-lens capture');
+    } else if (eventPass !== null && revalidationPass <= eventPass) {
+      errors.push('tier demotion: current-candidate revalidation must be newer than demotion event');
+    }
+    return;
+  }
+  const narrowPass = gptNarrowRevalidationPassIndex(revalidationEntry.captureName);
+  if (narrowPass === null) {
+    errors.push('tier demotion: GPT revalidation must come from a canonical narrow-revalidation capture');
+    return;
+  }
+  if (eventPass !== null && narrowPass !== eventPass) {
+    errors.push('tier demotion: GPT narrow revalidation must share the originating architectural pass index');
+  }
+  if (DEMOTION_EVENT_RE.test(revalidationEntry.captureText)) {
+    errors.push('tier demotion: GPT narrow revalidation capture cannot contain a demotion event');
+  }
+}
+
+function validateFreshDemotionChain(
+  events: TierTransitionEvidence['events'],
+  errors: string[],
+): void {
+  const newEvents = events.filter((entry) => entry.record.kind === 'new');
+  if (newEvents.length <= 1) return;
+
+  const sorted = [...newEvents].sort(
+    (left, right) => revisionNumber(left.record.sourceRevision) - revisionNumber(right.record.sourceRevision),
+  );
+  const edges = new Set<string>();
+  for (let index = 0; index < sorted.length; index += 1) {
+    const event = sorted[index].record;
+    const edge = `${event.beforeTier}->${event.afterTier}`;
+    if (edges.has(edge)) {
+      errors.push('tier demotion: duplicate adjacent demotion edge in fresh chain');
+    }
+    edges.add(edge);
+    if (index > 0) {
+      const previous = sorted[index - 1].record;
+      if (previous.afterTier !== event.beforeTier) {
+        errors.push('tier demotion: demotion chain is not contiguous');
+      }
+      if (revisionNumber(previous.sourceRevision) >= revisionNumber(event.sourceRevision)) {
+        errors.push('tier demotion: demotion chain source revisions are out of order');
+      }
+    }
+    if (tierRank(event.beforeTier) - tierRank(event.afterTier) !== 1) {
+      errors.push('tier demotion: demotion chain contains a non-adjacent transition');
+    }
+  }
 }
 
 function validateDecisionReceipt(
@@ -769,35 +920,68 @@ function validateTierTransition(
     errors.push('tier demotion: observed downstep requires demotion-from and demotion-event fence fields');
     return;
   }
-  if (fence.demotionFrom !== highTier) {
-    errors.push('tier demotion: demotion-from does not match immutable high-watermark');
-  }
-  if (highRank - tierRank(currentTier) !== 1) {
+  if (highRank - tierRank(currentTier) !== 1 && !usesLegacySingleDemotionSemantics(evidence, historicalDemotions)) {
+    const chainEvents = evidence.events.filter((entry) => entry.record.kind === 'new');
+  if (chainEvents.length > 0) {
+      const latestChainTier = chainEvents
+        .map((entry) => entry.record.afterTier)
+        .sort((left, right) => tierRank(right) - tierRank(left))[0];
+      if (latestChainTier && tierRank(latestChainTier) - tierRank(currentTier) !== 1) {
+        errors.push('tier demotion: only one adjacent tier downstep is allowed');
+      }
+    } else {
+      errors.push('tier demotion: only one adjacent tier downstep is allowed');
+    }
+  } else if (highRank - tierRank(currentTier) !== 1) {
     errors.push('tier demotion: only one adjacent tier downstep is allowed');
   }
 
+  const legacySemantics = usesLegacySingleDemotionSemantics(evidence, historicalDemotions);
+  if (!legacySemantics) {
+    validateFreshDemotionChain(evidence.events, errors);
+  }
+
   const distinctEventIds = new Set(evidence.events.map((entry) => entry.record.eventId));
-  if (distinctEventIds.size > 1) {
+  if (legacySemantics && distinctEventIds.size > 1) {
     errors.push('tier demotion: lifecycle already contains conflicting/second demotion event');
   }
+
   const matchingEvents = evidence.events.filter((entry) => entry.record.eventId === fence.demotionEvent);
   if (matchingEvents.length !== 1) {
-    errors.push('tier demotion: exactly one architect-attributed demotion event is required');
+    errors.push('tier demotion: exactly one demotion event is required for the fence demotion-event id');
     return;
   }
   const eventEntry = matchingEvents[0];
-  const eventPass = architectLensPassIndex(eventEntry.captureName);
-  if (eventPass === null) {
-    errors.push('tier demotion: event must come from a canonical architect-lens capture');
-  }
+  const eventPass = validateDemotionEventCaptureBinding(eventEntry, errors);
   const event = eventEntry.record;
+
+  const sourceFromEvent = evidence.revisions.find((item) => item.revision === event.sourceRevision);
+  if (!sourceFromEvent?.tier || sourceFromEvent.tier !== event.beforeTier) {
+    errors.push('tier demotion: event source revision tier does not match event beforeTier');
+  }
+
+  if (legacySemantics) {
+    if (fence.demotionFrom !== highTier) {
+      errors.push('tier demotion: demotion-from does not match immutable high-watermark');
+    }
+  } else if (fence.demotionFrom !== event.beforeTier) {
+    errors.push('tier demotion: demotion-from does not match the latest adjacent downstep source tier');
+  }
+
   if (
-    event.sourceRevision !== source.revision
-    || event.beforeTier !== highTier
+    event.sourceRevision !== source?.revision
+    || event.beforeTier !== (legacySemantics ? highTier : event.beforeTier)
     || event.afterTier !== currentTier
   ) {
-    errors.push('tier demotion: event source/candidate transition binding mismatch');
+    if (
+      event.sourceRevision !== sourceFromEvent?.revision
+      || event.beforeTier !== sourceFromEvent?.tier
+      || event.afterTier !== currentTier
+    ) {
+      errors.push('tier demotion: event source/candidate transition binding mismatch');
+    }
   }
+
   if (event.kind === 'compatibility') {
     if (!isLegacyListed) {
       errors.push('tier demotion: compatibility event requires frozen cutover membership');
@@ -808,7 +992,13 @@ function validateTierTransition(
     validateCompatibilityEvent(eventEntry, evidence, errors);
   }
 
-  const expectedDrivers = source.receipt.rubricClasses.map((id) => driverKey('rubric', id));
+  const driverSource = sourceFromEvent?.receipt ?? source?.receipt;
+  if (!driverSource) {
+    errors.push('tier demotion: source decision receipt is unavailable for driver validation');
+    return;
+  }
+  validateDecisionReceipt(sourceFromEvent!, errors);
+  const expectedDrivers = driverSource.rubricClasses.map((id) => driverKey('rubric', id));
   const actualDrivers = event.drivers
     .filter((driver) => driver.kind === 'rubric')
     .map((driver) => driverKey(driver.kind, driver.id));
@@ -821,16 +1011,11 @@ function validateTierTransition(
       && entry.record.candidateRevision === evidence.currentRevision,
   );
   if (matchingRevalidations.length !== 1) {
-    errors.push('tier demotion: current candidate requires exactly one matching final-lens revalidation');
+    errors.push('tier demotion: current candidate requires exactly one matching demotion revalidation');
     return;
   }
   const revalidationEntry = matchingRevalidations[0];
-  const revalidationPass = architectLensPassIndex(revalidationEntry.captureName);
-  if (revalidationPass === null) {
-    errors.push('tier demotion: revalidation must come from a canonical architect-lens capture');
-  } else if (eventPass !== null && revalidationPass <= eventPass) {
-    errors.push('tier demotion: current-candidate revalidation must be newer than demotion event');
-  }
+  validateDemotionRevalidationCaptureBinding(eventEntry, revalidationEntry, eventPass, errors);
   const revalidation = revalidationEntry.record;
   if (
     revalidation.beforeTier !== event.beforeTier
@@ -843,14 +1028,14 @@ function validateTierTransition(
   }
 
   const laterThanSource = evidence.revisions.slice(
-    evidence.revisions.findIndex((item) => item.revision === source.revision) + 1,
+    evidence.revisions.findIndex((item) => item.revision === event.sourceRevision) + 1,
     currentIndex,
   );
   if (laterThanSource.some((item) => item.tier && tierRank(item.tier) > tierRank(event.afterTier))) {
     errors.push('tier demotion: later up-escalation closes reuse of the consumed demotion event');
   }
 
-  if (event.kind === 'new' && historicalDemotions.has(evidence.taskIdentity)) {
+  if (event.kind === 'new' && historicalDemotions.has(evidence.taskIdentity) && legacySemantics) {
     errors.push('tier demotion: cutover historical demotion already consumed lifecycle allowance');
   }
 

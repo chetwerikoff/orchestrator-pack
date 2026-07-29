@@ -466,7 +466,7 @@ describe('Issue #973 tier provenance', () => {
     const valid = validDemotion();
     expect(run(valid.current, valid.evidence).ok).toBe(true);
     expect(run(valid.current, { ...valid.evidence, revalidations: [] }).errors.join('\n'))
-      .toContain('current candidate requires exactly one matching final-lens revalidation');
+      .toContain('current candidate requires exactly one matching demotion revalidation');
     valid.evidence.events[0].captureName = 'pass-02-architectural-lens.capture.txt';
     valid.evidence.revalidations[0].captureName = 'pass-01-architectural-lens.capture.txt';
     expect(run(valid.current, valid.evidence).errors.join('\n'))
@@ -488,7 +488,7 @@ describe('Issue #973 tier provenance', () => {
     expect(run(t1, multi).errors.join('\n')).toContain('only one adjacent tier downstep is allowed');
     const second = validDemotion();
     second.evidence.events.push({ record: event({ eventId: 'demotion-2' }), captureName: 'pass-03-architectural-lens.capture.txt', captureText: 'architect final lens' });
-    expect(run(second.current, second.evidence).errors.join('\n')).toContain('conflicting/second demotion event');
+    expect(run(second.current, second.evidence).errors.join('\n')).toContain('duplicate adjacent demotion edge in fresh chain');
   });
 
   it('rejects reuse after later up-escalation', () => {
@@ -570,3 +570,111 @@ describe('Issue #1029 lexical marker retirement', () => {
     expect(run(valid.current, valid.evidence).ok).toBe(true);
   });
 });
+describe('Issue #1104 GPT demotion authority', () => {
+  function gptEvent(overrides: Partial<TierDemotionEventRecord> = {}): TierDemotionEventRecord {
+    return {
+      schema: 'tier-demotion-event/v1',
+      eventId: 'gpt-demotion-1',
+      kind: 'new',
+      role: 'reviewer',
+      stage: 'final-architectural',
+      sourceRevision: 'r01',
+      beforeTier: 'T2',
+      afterTier: 'T1',
+      drivers: [{
+        kind: 'rubric',
+        id: 'failure-type:local-behavior',
+        rationale: 'The task is smaller than the T2 ceremony floor.',
+      }],
+      ...overrides,
+    };
+  }
+
+  function gptRevalidation(candidateRevision: string, overrides: Partial<TierDemotionRevalidationRecord> = {}): TierDemotionRevalidationRecord {
+    return {
+      schema: 'tier-demotion-revalidation/v1',
+      eventId: 'gpt-demotion-1',
+      role: 'reviewer',
+      stage: 'final-architectural-narrow-revalidation',
+      candidateRevision,
+      beforeTier: 'T2',
+      afterTier: 'T1',
+      l4Status: 'clear',
+      ...overrides,
+    };
+  }
+
+  it('accepts GPT T2→T1 with narrow revalidation in the same architectural pass', () => {
+    const source = draft('T2', 'T2');
+    const current = draft('T1', 'T2', { from: 'T2', eventId: 'gpt-demotion-1' });
+    const result = run(current, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: current, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      priorTier: 'T2',
+      firstRevision: 'r01',
+      events: [{ record: gptEvent(), captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal gpt lens' }],
+      revalidations: [{ record: gptRevalidation('r02'), captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt', captureText: 'narrow revalidation only' }],
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('accepts Claude T3→T2 followed by GPT T2→T1 as a contiguous fresh chain', () => {
+    const r01 = draft('T3', 'T3');
+    const r02 = draft('T2', 'T3', { from: 'T3', eventId: 'claude-demotion' });
+    const r03 = draft('T1', 'T3', { from: 'T2', eventId: 'gpt-demotion-1' });
+    const claudeEvent = event({ eventId: 'claude-demotion' });
+    const gptEvt = gptEvent({ sourceRevision: 'r02', eventId: 'gpt-demotion-1' });
+    const result = run(r03, evidence([
+      { revision: 'r01', text: r01, tier: 'T3', receipt: receipt('r01', 'T3') },
+      { revision: 'r02', text: r02, tier: 'T2', receipt: receipt('r02', 'T2') },
+      { revision: 'r03', text: r03, tier: 'T1', receipt: receipt('r03', 'T1') },
+    ], {
+      currentRevision: 'r03',
+      events: [
+        { record: claudeEvent, captureName: 'pass-01-architectural-lens.capture.txt', captureText: 'claude lens' },
+        { record: gptEvt, captureName: 'pass-04-architectural.capture.txt', captureText: 'terminal gpt lens' },
+      ],
+      revalidations: [
+        { record: revalidation('r02'), captureName: 'pass-02-architectural-lens.capture.txt', captureText: 'claude revalidation' },
+        { record: gptRevalidation('r03'), captureName: 'pass-04-architectural-demotion-narrow-revalidation.capture.txt', captureText: 'gpt narrow' },
+      ],
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('rejects direct T3→T1 in one GPT capture', () => {
+    const source = draft('T3', 'T3');
+    const current = draft('T1', 'T3', { from: 'T3', eventId: 'gpt-demotion-1' });
+    const badEvent = gptEvent({
+      sourceRevision: 'r01',
+      beforeTier: 'T3',
+      afterTier: 'T1',
+      drivers: [{ kind: 'rubric', id: 'failure-type:subsystem-or-system-guarantee', rationale: 'Too large jump.' }],
+    });
+    const result = run(current, evidence([
+      { revision: 'r01', text: source, tier: 'T3', receipt: receipt('r01', 'T3') },
+      { revision: 'r02', text: current, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      events: [{ record: badEvent, captureName: 'pass-03-architectural.capture.txt', captureText: 'bad gpt lens' }],
+    }));
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects GPT narrow revalidation on a mismatched pass index', () => {
+    const source = draft('T2', 'T2');
+    const current = draft('T1', 'T2', { from: 'T2', eventId: 'gpt-demotion-1' });
+    const result = run(current, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: current, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      events: [{ record: gptEvent(), captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal gpt lens' }],
+      revalidations: [{ record: gptRevalidation('r02'), captureName: 'pass-04-architectural-demotion-narrow-revalidation.capture.txt', captureText: 'wrong pass' }],
+    }));
+    expect(result.errors.join('\n')).toContain('share the originating architectural pass index');
+  });
+});
+

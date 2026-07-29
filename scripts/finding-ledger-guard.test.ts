@@ -818,6 +818,26 @@ describe('finding ledger review economics #975', () => {
       expect(result.errors.join('\n')).toContain('requires current architect adjudication');
     });
 
+
+    it('accepts authoritative GPT architectural M3 adjudication superseding Claude on the same revision', () => {
+      const nomination = markedFinding('S1', {
+        type: 'scope-violation',
+        evidence: 'The proposed file is out of scope under allowed_roots.',
+        recommendation: 'Keep the implementation in the declared path.',
+      });
+      const result = finalRun(
+        [
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1', { contest: 'contested' })),
+          cap('pass-03-architectural.capture.txt', 1_300, `${nomination}
+${currentLens('S1', { contest: 'none', outcome: 'non-activate' })}`),
+        ],
+        [row('S1', { type: 'scope-violation', disposition: 'rejected', rejectReason: 'not material' })],
+        { issueRevision: 'r3' },
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    });
+
     it('rejects final acceptance when terminal architectural is stale relative to the latest lens', () => {
       const result = finalRun(
         [

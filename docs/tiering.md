@@ -132,8 +132,7 @@ the same four simplification questions and review-economics contract from
   lens. Never operates routine browser turns or maintains the ledger.
 - **Browser GPT reviewer lenses.** Independent review chats only. Terminal
   `architectural` owns final aggregate cut for acceptance on every tier and is
-  the M5 anchor at final acceptance. GPT cannot emit architect-only #973
-  downgrade authority.
+  the M5 anchor at final acceptance. Terminal GPT may authorize one adjacent downstep (`T3→T2` or `T2→T1`) per authoritative capture; sequential `T3→T2→T1` requires two separately authorized adjacent steps on distinct source revisions.
 
 **Browser outage.** Required GPT work stays incomplete. No engine substitution.
 
@@ -164,7 +163,7 @@ applicable rubric labels, and the current L4 result
 
 A valid downstep is **exactly `T3→T2`**, occurs only at the Claude
 `architectural-lens`, and may happen at most once in the task lifecycle. There is
-**no** `T2→T1` path.
+**`T2→T1` only** via terminal GPT `architectural` on the T2 source revision (Issue #1104).
 
 The original Claude lens capture contains one fenced `tier-demotion-event/v1` JSON
 record with an event id, `role: architect`, `stage: architectural-lens`, exact
@@ -313,7 +312,7 @@ the shared four-question rubric and review-economics contract. On **T1/T2** this
 lens is the sole reviewer stage and owns aggregate cut + M5. On **T3** it owns
 **final** aggregate cut + M5 after Claude and author fixes.
 
-GPT cannot authorize #973 demotion.
+Terminal GPT may authorize bounded adjacent tier downsteps (`T3→T2` or `T2→T1`) with narrow same-chat revalidation; Claude retains `T3→T2` authority.
 
 ### Simplification lens
 

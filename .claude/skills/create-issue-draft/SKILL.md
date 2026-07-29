@@ -70,7 +70,7 @@ canonical create-issue-draft procedure.
 | GPT author in task chat | Spec content, every content fix, direct Issue edits, every finding disposition, M3 author activation, M4 mechanism inventory | Review its own spec |
 | Flow-manager (OpenCode default; Cursor sanctioned alternative) | Live Issue pulls, fixed per-tier stage order, tier/T3-critical classification, body/mechanical floors, immutable captures, ledger bookkeeping, pass counting, chat references/topology, browser-turn execution, #975 adoption evidence, economics-guard mechanics, driving the cycle to acceptance or bounded blocked outcome | Author spec content, decide reviewer findings, perform the Claude lens, invent new helper/runtime semantics, mandatory hand-off to architect |
 | Claude architectural-lens (T3 only) | Exactly one `architectural-lens` per cycle segment: pre-terminal M3 when required, pre-terminal independent aggregate cut, sole sanctioned `T3→T2` demotion | Routine browser turns, ledger bookkeeping, post-terminal-GPT work, `T2→T1`, GPT stages |
-| Reviewer GPT chats | Independent review only: competitive (fresh chat per pass when selected), terminal `architectural` (fresh independent chat on every tier) | Edit the Issue, share the task chat, authorize #973 demotion, self-activate protected authority |
+| Reviewer GPT chats | Independent review only: competitive (fresh chat per pass when selected), terminal `architectural` (fresh independent chat on every tier) | Edit the Issue, share the task chat, self-activate protected authority without lens adjudication |
 
 ### Flow-manager authority transfer
 
@@ -404,7 +404,7 @@ Fix-required results return to the task chat; re-pull and **do not** rerun Claud
 until a new cycle segment is required. Post-Claude fixes go to **terminal GPT
 architectural only**.
 
-### #973 demotion (`T3→T2` only)
+### Tier demotion (#973 + #1104)
 
 When justified, the lens capture contains exactly one fenced `tier-demotion-event/v1`
 JSON record (`role: architect`, `stage: architectural-lens`, exact source revision,
@@ -431,7 +431,7 @@ using the terminal capture identity recognized by stage-completeness guards.
 
 - **T1/T2:** sole reviewer stage; owns **aggregate cut** and **M5 anchor**.
 - **T3:** owns **final aggregate cut** and **M5 anchor** after Claude and author
-  fixes. GPT cannot emit #973 demotion authority.
+  fixes. Terminal GPT may authorize one adjacent downstep (`T3→T2` or `T2→T1`) per capture with narrow same-chat revalidation; Claude retains `T3→T2` authority.
 
 Relay findings to task chat, update M4, re-pull. Post-terminal-GPT accepted fixes
 do **not** trigger a second GPT lens; ledger/guards decide acceptance.
@@ -928,7 +928,7 @@ transport scratch for unrelated standalone Codex runs; delete immediately.
 - Run pre-lens #975 on T1/T2.
 - Run `architectural-final` or credit Codex as a create-flow reviewer.
 - Substitute Codex or any engine when browser GPT is unavailable.
-- Authorize `T2→T1` or GPT-side #973 demotion.
+- Authorize direct `T3→T1`, two downsteps in one capture, or GPT demotion without narrow revalidation evidence.
 - Run a second Claude lens after post-Claude fixes.
 - Run a second terminal GPT lens after accepted terminal-GPT fixes.
 - Treat any capture before the terminal GPT `architectural` lens as the M5 anchor.

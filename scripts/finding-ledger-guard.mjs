@@ -559,10 +559,12 @@ function parseM3LensLines(text, errors, sourceName) {
   return records;
 }
 
+const M3_AUTHORITATIVE_STAGES = new Set(['architectural-lens', 'architectural']);
+
 function foldM3LensState(metadata, currentRevision, errors) {
   const histories = new Map();
   for (const meta of metadata) {
-    if (meta.stage !== 'architectural-lens') continue;
+    if (!M3_AUTHORITATIVE_STAGES.has(meta.stage)) continue;
     for (const record of parseM3LensLines(meta.text, errors, meta.name)) {
       const history = histories.get(record.id) ?? [];
       history.push({ record, meta });
