@@ -12,6 +12,7 @@ import {
 import { parseCodexOutput } from '../../plugins/ao-codex-pr-reviewer/lib/parse_output.ts';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { buildGptReviewPrompt, resolvePackRepoRoot } from './pack-pr-review-contract.ts';
+import { consultPackReviewStageBeforeBrowserSend } from './pack-review-launcher.ts';
 
 const GPT_BROWSER_SOURCE = 'gpt-browser';
 const VALID_GPT_SEVERITIES = new Set(['blocking', 'non-blocking']);
@@ -205,6 +206,32 @@ export async function runGptPackReview(
   }
 
   const browserConfig = merged.resolveBrowserConfig(env);
+  if (browserConfig.newChat || browserConfig.projectUrl) {
+    const skipStageClaim = trim(env.PACK_GPT_SKIP_STAGE_CLAIM) === '1' || trim(env.OPK_VITEST_HARNESS) === '1';
+    if (!skipStageClaim) {
+      const gate = await consultPackReviewStageBeforeBrowserSend({
+        prNumber: request.prNumber,
+        headSha: request.headSha,
+      });
+      if (!gate.allowSend) {
+        const detail = gate.result.disposition;
+        if (gate.result.replyPath && gate.result.disposition === 'consumed') {
+          try {
+            const reply = readFileSync(gate.result.replyPath, 'utf8');
+            const stdout = mapGptReplyToTerminalStdout(reply);
+            return { stdout, stderr: '', exitCode: 0 };
+          } catch {
+            return { stdout: '', stderr: `pack-review stage claim consumed but reply missing: ${detail}`, exitCode: 1 };
+          }
+        }
+        return {
+          stdout: '',
+          stderr: `pack-review stage claim blocked fresh send (${detail})`,
+          exitCode: 1,
+        };
+      }
+    }
+  }
   const workDir = mkdtempSync(join(tmpdir(), 'opk-gpt-review-'));
   const inputPath = join(workDir, 'prompt.txt');
   const outputPath = join(workDir, 'reply.txt');

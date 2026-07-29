@@ -2690,3 +2690,21 @@ Record positive evidence in the PR or operator log before merge when available:
 
 Until those live checks are recorded, treat AC5 as operator-pending; do not substitute additional unit fixtures.
 
+
+
+## Issue #1111 — Canonical Browser-GPT pack-review launcher
+
+### Rollout
+
+1. Workers use `node --experimental-strip-types scripts/start-pack-review-chat.ts <pr-number>` instead of hand-built shell dispatch for Browser-GPT pack review starts.
+2. Stage-qualified claims live under `{review-start-claims}/stage-pack-review/` and do not collide with the runner's unqualified `pr-<N>-<head>` lifecycle claim.
+3. Existing helper turns and `possible_delivery` records remain authoritative; the launcher adopts rather than replaces when evidence correlates.
+4. Independent `(PR,head)` identities and parallel fan-out remain unconstrained — no profile-wide caller mutex was added.
+
+### Rollback
+
+1. Stop issuing new canonical-launcher starts.
+2. Do **not** delete unresolved `stage-pack-review` claims to “restore” the old workflow.
+3. Complete or recover any live / `possible_delivery` turn first; claim deletion is never proof of non-delivery.
+4. After terminal consumption or validated proven-non-delivery remediation, the prior synchronous `run-pack-review-gpt.ts` path may be used deliberately.
+5. No daemon shutdown, reaper pass, or helper downgrade is required.

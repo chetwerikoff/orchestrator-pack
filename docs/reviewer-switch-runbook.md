@@ -62,6 +62,29 @@ Before merge or declaring review clean, run `.\scripts\orchestrator-diagnose.ps1
    `terminationReason` should reference `run-pack-review-gpt.ts`. GPT failure does
    **not** auto-failover to Codex.
 
+### Canonical Browser-GPT worker start (Issue #1111)
+
+Workers start a detached Browser-GPT pack review with **one PR-number command**:
+
+```bash
+node --experimental-strip-types scripts/start-pack-review-chat.ts <pr-number> [--json]
+```
+
+The command resolves the open PR and current head, atomically claims the
+`stage=pack-review` identity, and either starts exactly one new review or adopts/recovers
+the existing same-head turn. Machine-readable JSON is written to stdout.
+
+**Do not** hand-build `mktemp` → prompt → `nohup ... --new-chat` → PID-file chains.
+
+**Ambiguous failure is not resend authority.** A launch error, shell exit, timeout,
+backgrounded caller, or missing stdout does not authorize a replacement chat. Re-run the
+canonical command to adopt/recover; only producer-grounded proven-non-delivery plus the
+required remediation may allow a new send. Query `npm run chatgpt-browser-turn -- status/list`
+for helper evidence before manual retry.
+
+`REVIEW_COMMAND` / `scripts/run-pack-review-gpt.ts` remain the synchronous terminal-verdict
+path; GitHub publication stays on `scripts/pack-review-runner.ts`.
+
 ## Switch to Codex
 
 1. **Set** `PACK_REVIEWER=codex` in the environment AO inherits (user profile,
