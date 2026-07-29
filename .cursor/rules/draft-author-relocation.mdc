@@ -8,8 +8,10 @@ alwaysApply: true
 Standalone Cursor sessions do not read `.claude/skills/**` natively — this rule
 surfaces the binding contract for the default (Cursor) **draft-author** engine
 when Issue #579 relocation is active. **Flow-manager runtime default is OpenCode**
-(Cursor remains a sanctioned, non-deprecated alternative); an OpenCode flow-manager
-must be explicitly handed or load
+when no runtime is explicitly selected; another capable runtime, including Cursor
+or Codex, may be selected by the operator without a tracked manager allowlist.
+Any flow-manager runtime that does not read `.claude/skills/**` natively must be
+explicitly handed or load
 [`.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md)
 as the canonical create-issue-draft procedure.
 
