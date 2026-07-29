@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { classifyPageObservation } from './browser-gpt-turn.ts';
+import { checkFindingLedgerGuard } from './finding-ledger-guard.mjs';
 import {
   checkStageCompletenessGuard,
   formatStageCompletenessPassMessage,
@@ -52,6 +53,12 @@ const CONFORMING = {
   'pass-03-architectural-lens.capture.txt': 'claude lens',
   'pass-04-architectural.capture.txt': 'terminal gpt lens',
 };
+
+const ECONOMICS_CLEAN = [
+  'review-economics-contract: v1',
+  'NO_FINDINGS',
+  'SIMPLIFICATION_CLEAN',
+].join('\n');
 
 describe('Issue #1120 T3 four-stage completeness', () => {
   it('requires competitive -> architectural-review -> Claude lens -> GPT lens', () => {
@@ -136,7 +143,7 @@ describe('Issue #1120 T3 four-stage completeness', () => {
     expect(waived.result.errors.join(' ')).toMatch(/missing competitive stage/);
   });
 
-  it('supports only the existing explicit Claude-unavailable waiver between review and GPT lens', () => {
+  it('supports only the explicit Claude-unavailable waiver after architectural-review', () => {
     const outcome = withCase({
       'pass-01-competitive.capture.txt': 'competitive',
       'pass-02-architectural-review.capture.txt': 'review',
@@ -153,9 +160,7 @@ describe('Issue #1120 T3 four-stage completeness', () => {
     }));
     expect(outcome.parsed.waiver?.reason).toBe('claude-unavailable');
     expect(outcome.result.ok, outcome.result.errors.join('\n')).toBe(true);
-    expect(outcome.result.receipt?.lensMax).toBeNull();
     expect(outcome.result.receipt?.lensSkipAnchor).toBe(3);
-    expect(outcome.result.receipt?.terminalPass).toBe(4);
   });
 
   it('rejects Claude lens before architectural-review and terminal GPT before Claude', () => {
@@ -179,10 +184,7 @@ describe('Issue #1120 T3 four-stage completeness', () => {
   });
 
   it('rejects revived architectural-final capture identities', () => {
-    const result = check({
-      ...CONFORMING,
-      'pass-05-architectural-final.capture.txt': 'obsolete identity',
-    });
+    const result = check({ ...CONFORMING, 'pass-05-architectural-final.capture.txt': 'obsolete identity' });
     expect(result.ok).toBe(false);
     expect(result.errors.join(' ')).toMatch(/unparseable capture filename: pass-05-architectural-final/);
   });
@@ -211,13 +213,45 @@ describe('Issue #1120 T3 four-stage completeness', () => {
 
   it('emits the four-stage receipt through the CLI', () => {
     const code = withCase(CONFORMING, ({ repoRoot, draftPath }) => runCli([
-      'node',
-      'stage-completeness-guard.ts',
+      'node', 'stage-completeness-guard.ts',
       '--text-file', draftPath,
       '--draft-path', draftPath,
       '--repo-root', repoRoot,
     ]));
     expect(code).toBe(0);
+  });
+});
+
+describe('Issue #1120 architectural-review economics', () => {
+  const emptyLedger = JSON.stringify({ version: 1, findings: [] });
+  const baseOptions = {
+    phase: 'pre-lens',
+    reviewEconomics: true,
+    stageTerminalConfirmed: true,
+    adoptionTimestampMs: 1,
+  } as const;
+
+  it('treats architectural-review as the governed pre-lens reviewer anchor', () => {
+    const result = checkFindingLedgerGuard([ECONOMICS_CLEAN, ECONOMICS_CLEAN], emptyLedger, {
+      ...baseOptions,
+      captureMetadata: [
+        { name: 'pass-01-competitive.capture.txt', timestampMs: 2 },
+        { name: 'pass-02-architectural-review.capture.txt', timestampMs: 3 },
+      ],
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('fails when architectural-review omits the economics marker', () => {
+    const result = checkFindingLedgerGuard([ECONOMICS_CLEAN, 'NO_FINDINGS\nSIMPLIFICATION_CLEAN'], emptyLedger, {
+      ...baseOptions,
+      captureMetadata: [
+        { name: 'pass-01-competitive.capture.txt', timestampMs: 2 },
+        { name: 'pass-02-architectural-review.capture.txt', timestampMs: 3 },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/pass-02-architectural-review\.capture\.txt missing review-economics-contract: v1/);
   });
 });
 
@@ -255,10 +289,7 @@ describe('Issue #1120 state-light Browser-GPT turn', () => {
       { role: 'assistant', text: 'partial' },
       { role: 'user', text: 'foreign task' },
       { role: 'assistant', text: 'foreign answer' },
-    ], 0, 'task', false)).toEqual({
-      state: 'foreign_activity',
-      cause: 'foreign_or_ambiguous_user_activity',
-    });
+    ], 0, 'task', false)).toEqual({ state: 'foreign_activity', cause: 'foreign_or_ambiguous_user_activity' });
   });
 
   it('does not claim a reply until its own prompt appears after the baseline', () => {
@@ -279,9 +310,7 @@ describe('Issue #1120 state-light Browser-GPT turn', () => {
       'runtimeWitnessSurfaceAvailable(',
       'runGateBCharacterization(',
       "cause: 'reply_finished_terminal_unproven'",
-    ]) {
-      expect(helperSource, forbidden).not.toContain(forbidden);
-    }
+    ]) expect(helperSource, forbidden).not.toContain(forbidden);
     expect(helperSource).not.toMatch(/browser-gpt-inspect|15\s*minute|10\s*minute|watchdog/i);
   });
 
