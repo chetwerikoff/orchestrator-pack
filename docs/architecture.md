@@ -29,37 +29,35 @@ remains readable legacy history and prior art. The sanctioned
 batch-publish those pre-existing artifacts. Newly authored tasks do not create,
 update, synchronize, or identify themselves through that corpus.
 
-### Mirrorless GPT-chat task authoring (2026-07-23; topology revised by Issue #972)
+### Mirrorless GPT-chat task authoring (2026-07-23; topology aligned by Issues #1027 / #1088)
 
-Browser GPT remains the default task-spec author and normal review engine. One
-persistent task chat owns spec content, every content fix, direct Issue edits,
-and finding dispositions. One current Cursor flow-manager owns the operational
-cycle — Issue pulls, tier/stage mechanics, captures, ledger bookkeeping, pass
-accounting, chat topology, and browser-turn execution — but does not author or
-judge the spec. Flow-manager authority transfers only by an explicit recorded
-predecessor/operator handoff; no lease or new ownership service is introduced.
+Browser GPT is the default task-spec author and the **only** review engine in
+create-issue-draft. One persistent task chat owns spec content, every content fix,
+direct Issue edits, and finding dispositions. The flow-manager drives the full
+fixed per-tier cycle through acceptance or a bounded blocked outcome — Issue
+pulls, tier/stage mechanics, captures, ledger bookkeeping, pass accounting, chat
+topology, and browser-turn execution — but does not author or judge the spec.
+Flow-manager authority transfers only by an explicit recorded predecessor/operator
+handoff; no lease or new ownership service is introduced.
 
-Competitive browser-GPT review still uses a fresh chat per pass. Ordinary
-architectural review instead uses one dedicated browser-GPT review chat reused
-across that task's ordinary architectural rounds. Post-lens final verification
-remains fresh. Review chats never edit the Issue. The architect is outside the
-per-round cycle and appears only for optional pre-task consultation plus the
-mandatory final architect lens. That final lens remains the only sanctioned
-tier-downgrade point and is the sole independent aggregate cut authority for
-review-added machinery; it checks contradictions, feasibility, overengineering
-as the primary goal (including a forced-cut answer and explicit reconsideration
-of whether simplification makes a lower complexity tier valid under the existing
-rubric and applicable L4 floors), and missed gaps on the exact candidate accepted.
+**T1/T2:** exactly one independent terminal browser-GPT `architectural` lens (fresh
+chat; not the task chat) — sole reviewer stage, M5 anchor, and aggregate cut
+authority. No competitive create-flow stage on T2; no Claude lens.
 
-Codex remains limited to the mandatory independent addition for T3-critical
-tasks, a recorded browser-outage substitution for one browser-GPT review stage,
-and an explicitly user-requested standalone adversarial loop. A substitution is
-credited only to the replaced browser stage and never double-counts as the
-mandatory T3-critical addition. The caller-side shared cross-task browser critical
-section is role/topology policy only and does not change #964/#971 helper runtime,
-state, recovery, or fallback behavior. The durable tier, accounting, and role
-contract lives in [`tiering.md`](tiering.md); exact browser mechanics, workdir
-layout, captures, ledger operations, and execution sequence remain owned by
+**T3:** selected pre-lens stages (e.g. competitive when selected, fresh chat per
+pass) → pre-lens #975 guard → exactly one Claude `architectural-lens` (or a valid
+`claude-unavailable` skip) → author dispositions/fixes → exactly one terminal
+independent browser-GPT `architectural` lens. Claude owns pre-terminal aggregate
+cut and the only sanctioned tier downgrade (`T3→T2` only) when the lens runs;
+terminal GPT remains mandatory after a valid skip. Terminal GPT owns final
+aggregate cut and M5 anchor.
+
+There is **no** create-flow `architectural-final` stage and **no** Codex
+create-flow engine or substitution role. Standalone `adversarial-draft-review`
+and worker **PACK_REVIEWER** Codex PR review are unchanged. The durable tier,
+accounting, and role contract lives in [`tiering.md`](tiering.md); exact browser
+mechanics, workdir layout, captures, ledger operations, and execution sequence
+remain owned by
 [the `create-issue-draft` skill](../.claude/skills/create-issue-draft/SKILL.md).
 
 Local Codex PR review **is active** and **pack-owned**: it is launched by pack

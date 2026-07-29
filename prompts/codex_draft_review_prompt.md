@@ -33,9 +33,45 @@ material nominations and are never suppressed. The reviewer nominates; the
 #975 author/architect contract decides whether protected addressed-only authority
 is activated. Do not treat your own type tag as self-activating authority.
 
+
+## Architectural-stage goals (mandatory for `architectural` and `architectural-lens`)
+
+When the governed stage is `architectural` or `architectural-lens`, perform these
+four goals **in order** before the simplification lens and economics contract:
+
+1. **Contradiction check** — identify internal contradictions and route required
+   content fixes through the task-chat path.
+2. **Feasibility check** — establish executability as written; prefer live probes
+   where possible instead of assumption-only acceptance.
+3. **Cut ALL overengineering — PRIMARY goal** — give a forced-cut answer for every
+   major mechanism: cut it, or justify `keep` on surviving contract/risk/acceptance
+   grounds. `keep` because a mechanism traces to an earlier finding alone is
+   circular and insufficient.
+4. **Find what was missed** — identify gaps, unverified evidence, unresolved
+   conditionals, and missing observability/rollback/acceptance coverage.
+
+Record an explicit reviewer verdict `keep` or `cut` for every major mechanism.
+Competitive review keeps the shared simplification/economics rubric only; it does
+**not** perform this full architectural sequence.
+
+The architectural-stage input bundle must identify the exact current Issue
+revision and supply the applicable reject partition, current protected M3 state,
+latest author-owned M4 mechanism inventory, and applicable review-economics
+state. Treat a missing or stale required input as an unverified gap; do not infer
+it from an older capture. M4 remains author-owned: reviewer `keep|cut` verdicts
+are advice and never overwrite the author's `keep|simplify|defer|cut` inventory.
+
+At terminal `architectural`, `m3-protected:` records are authoritative for the
+exact reviewed revision under the same evidence and why-now rules as
+`architectural-lens`. They may activate, non-activate, contest, or withdraw
+contest state, including for a protected nomination first emitted in the
+terminal capture. A later valid terminal record supersedes earlier Claude state
+for the same protected id and revision; never adjudicate a different revision.
+
 ## Simplification lens (mandatory)
 
-On every competitive and architectural pass, also apply this lens and emit
+On every governed reviewer output (pre-lens `competitive` when selected, Claude
+`architectural-lens`, terminal `architectural`), also apply this lens and emit
 findings when material:
 
 1. **What can be simplified** without losing the contract?
@@ -96,21 +132,28 @@ or simplified. Do not emit another value, duplicate the line, or infer the flag
 from words such as “simplify”. A reviewer candidate is still only a finding; it
 is never the architect's aggregate cut decision.
 
-For pre-lens `competitive` / `architectural` reviewer outputs, emit exact
+For pre-lens `competitive` reviewer outputs (T3 only when selected), emit exact
 `SIMPLIFICATION_CLEAN` on its own line when the current output has **no** finding
 carrying that discriminator. When one or more findings do carry it, do not emit
 `SIMPLIFICATION_CLEAN` for that output. If there are no material findings at all,
-emit both exact terminal lines:
+emit both exact lines:
+
+`NO_FINDINGS`
+
+`SIMPLIFICATION_CLEAN`
+
+For the create-flow **terminal** browser-GPT `architectural` lens — the M5 anchor
+on every tier — apply the same `SIMPLIFICATION_CLEAN` rule to that output. If
+there are no material findings at all, emit both exact terminal lines:
 
 `NO_FINDINGS`
 
 `SIMPLIFICATION_CLEAN`
 
 Do not fabricate `NO_FINDINGS` for a non-clean terminal state allowed by the
-owning flow. `SIMPLIFICATION_CLEAN` only says this raw pre-lens output contains no
-M5 cut candidate; the owning flow decides which legally terminal pre-lens output
-is the M5 anchor. Post-lens `architectural-final` remains M2-governed but does
-**not** owe `SIMPLIFICATION_CLEAN` merely because it is clean or follows a lens.
+owning flow. `SIMPLIFICATION_CLEAN` only says this raw output contains no M5 cut
+candidate; it is never the aggregate-cut decision. The create-flow
+`architectural-final` stage is retired; do not treat it as a current requirement.
 
 ## Typed findings (mandatory)
 

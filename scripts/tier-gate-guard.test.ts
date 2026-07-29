@@ -466,7 +466,7 @@ describe('Issue #973 tier provenance', () => {
     const valid = validDemotion();
     expect(run(valid.current, valid.evidence).ok).toBe(true);
     expect(run(valid.current, { ...valid.evidence, revalidations: [] }).errors.join('\n'))
-      .toContain('current candidate requires exactly one matching final-lens revalidation');
+      .toContain('current candidate requires exactly one matching demotion revalidation');
     valid.evidence.events[0].captureName = 'pass-02-architectural-lens.capture.txt';
     valid.evidence.revalidations[0].captureName = 'pass-01-architectural-lens.capture.txt';
     expect(run(valid.current, valid.evidence).errors.join('\n'))
@@ -488,7 +488,7 @@ describe('Issue #973 tier provenance', () => {
     expect(run(t1, multi).errors.join('\n')).toContain('only one adjacent tier downstep is allowed');
     const second = validDemotion();
     second.evidence.events.push({ record: event({ eventId: 'demotion-2' }), captureName: 'pass-03-architectural-lens.capture.txt', captureText: 'architect final lens' });
-    expect(run(second.current, second.evidence).errors.join('\n')).toContain('conflicting/second demotion event');
+    expect(run(second.current, second.evidence).errors.join('\n')).toContain('duplicate adjacent demotion edge in fresh chain');
   });
 
   it('rejects reuse after later up-escalation', () => {
@@ -568,5 +568,354 @@ describe('Issue #1029 lexical marker retirement', () => {
       { kind: 'rubric', id: 'failure-type:subsystem-or-system-guarantee', rationale: 'Still applies.' },
     ];
     expect(run(valid.current, valid.evidence).ok).toBe(true);
+  });
+});
+describe('Issue #1104 GPT demotion authority', () => {
+  function gptEvent(overrides: Partial<TierDemotionEventRecord> = {}): TierDemotionEventRecord {
+    return {
+      schema: 'tier-demotion-event/v1',
+      eventId: 'gpt-demotion-1',
+      kind: 'new',
+      role: 'reviewer',
+      stage: 'final-architectural',
+      sourceRevision: 'r01',
+      beforeTier: 'T2',
+      afterTier: 'T1',
+      drivers: [{
+        kind: 'rubric',
+        id: 'failure-type:local-behavior',
+        rationale: 'The task is smaller than the T2 ceremony floor.',
+      }],
+      ...overrides,
+    };
+  }
+
+  function gptRevalidation(candidateRevision: string, overrides: Partial<TierDemotionRevalidationRecord> = {}): TierDemotionRevalidationRecord {
+    return {
+      schema: 'tier-demotion-revalidation/v1',
+      eventId: 'gpt-demotion-1',
+      role: 'reviewer',
+      stage: 'final-architectural-narrow-revalidation',
+      candidateRevision,
+      beforeTier: 'T2',
+      afterTier: 'T1',
+      l4Status: 'clear',
+      ...overrides,
+    };
+  }
+
+  it('accepts GPT T2→T1 with narrow revalidation in the same architectural pass', () => {
+    const source = draft('T2', 'T2');
+    const current = draft('T1', 'T2', { from: 'T2', eventId: 'gpt-demotion-1' });
+    const result = run(current, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: current, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      priorTier: 'T2',
+      firstRevision: 'r01',
+      events: [{ record: gptEvent(), captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal gpt lens' }],
+      revalidations: [{ record: gptRevalidation('r02'), captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt', captureText: 'narrow revalidation only' }],
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('accepts GPT T3→T2 and parses the canonical event/revalidation capture identities from disk', () => {
+    const source = draft('T3', 'T3');
+    const current = draft('T2', 'T3', { from: 'T3', eventId: 'gpt-demotion-1' });
+    const gptT3Event = gptEvent({
+      beforeTier: 'T3',
+      afterTier: 'T2',
+      drivers: [{
+        kind: 'rubric',
+        id: 'failure-type:subsystem-or-system-guarantee',
+        rationale: 'The reviewed contract is now local.',
+      }],
+    });
+    const gptT3Revalidation = gptRevalidation('r02', {
+      beforeTier: 'T3',
+      afterTier: 'T2',
+    });
+    const direct = run(current, evidence([
+      { revision: 'r01', text: source, tier: 'T3', receipt: receipt('r01', 'T3') },
+      { revision: 'r02', text: current, tier: 'T2', receipt: receipt('r02', 'T2') },
+    ], {
+      currentRevision: 'r02',
+      events: [{ record: gptT3Event, captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal GPT' }],
+      revalidations: [{ record: gptT3Revalidation, captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt', captureText: 'narrow' }],
+    }));
+    expect(direct.ok, direct.errors.join('\n')).toBe(true);
+
+    const root = mkdtempSync(join(tmpdir(), 'opk-1104-'));
+    try {
+      const stem = '1104-gpt-parser-fixture';
+      const anchorDir = join(root, 'docs', 'issues_drafts');
+      const reviewDir = join(anchorDir, '.review', stem);
+      mkdirSync(reviewDir, { recursive: true });
+      for (const [revision, text, tier] of [['r01', source, 'T3'], ['r02', current, 'T2']] as const) {
+        const revisionDir = join(root, revision);
+        mkdirSync(revisionDir, { recursive: true });
+        writeFileSync(join(revisionDir, `${stem}.md`), text);
+        writeFileSync(join(revisionDir, 'tier-gate-receipt.json'), JSON.stringify(receipt(revision, tier)));
+      }
+      const anchor = join(anchorDir, `${stem}.md`);
+      writeFileSync(anchor, current);
+      writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+        schema: 'tier-intake/v1', producer: 'cursor-flow-manager', taskIdentity: stem,
+        kind: 'fresh', priorTier: 'T3', firstRevision: 'r01',
+      }));
+      writeFileSync(
+        join(reviewDir, 'pass-03-architectural.capture.txt'),
+        `\`\`\`tier-demotion-event\n${JSON.stringify(gptT3Event)}\n\`\`\``,
+      );
+      writeFileSync(
+        join(reviewDir, 'pass-03-architectural-demotion-narrow-revalidation.capture.txt'),
+        `\`\`\`tier-demotion-revalidation\n${JSON.stringify(gptT3Revalidation)}\n\`\`\``,
+      );
+      const loaded = checkTierGateGuard(current, { repoRoot: process.cwd(), draftPath: anchor });
+      expect(loaded.ok, loaded.errors.join('\n')).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts Claude T3→T2 followed by GPT T2→T1 as a contiguous fresh chain', () => {
+    const r01 = draft('T3', 'T3');
+    const r02 = draft('T2', 'T3', { from: 'T3', eventId: 'claude-demotion' });
+    const r03 = draft('T1', 'T3', { from: 'T2', eventId: 'gpt-demotion-1' });
+    const claudeEvent = event({ eventId: 'claude-demotion' });
+    const gptEvt = gptEvent({ sourceRevision: 'r02', eventId: 'gpt-demotion-1' });
+    const result = run(r03, evidence([
+      { revision: 'r01', text: r01, tier: 'T3', receipt: receipt('r01', 'T3') },
+      { revision: 'r02', text: r02, tier: 'T2', receipt: receipt('r02', 'T2') },
+      { revision: 'r03', text: r03, tier: 'T1', receipt: receipt('r03', 'T1') },
+    ], {
+      currentRevision: 'r03',
+      events: [
+        { record: claudeEvent, captureName: 'pass-01-architectural-lens.capture.txt', captureText: 'claude lens' },
+        { record: gptEvt, captureName: 'pass-04-architectural.capture.txt', captureText: 'terminal gpt lens' },
+      ],
+      revalidations: [
+        { record: revalidation('r02', { eventId: 'claude-demotion' }), captureName: 'pass-02-architectural-lens.capture.txt', captureText: 'claude revalidation' },
+        { record: gptRevalidation('r03'), captureName: 'pass-04-architectural-demotion-narrow-revalidation.capture.txt', captureText: 'gpt narrow' },
+      ],
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('rejects direct T3→T1 in one GPT capture', () => {
+    const source = draft('T3', 'T3');
+    const current = draft('T1', 'T3', { from: 'T3', eventId: 'gpt-demotion-1' });
+    const badEvent = gptEvent({
+      sourceRevision: 'r01',
+      beforeTier: 'T3',
+      afterTier: 'T1',
+      drivers: [{ kind: 'rubric', id: 'failure-type:subsystem-or-system-guarantee', rationale: 'Too large jump.' }],
+    });
+    const result = run(current, evidence([
+      { revision: 'r01', text: source, tier: 'T3', receipt: receipt('r01', 'T3') },
+      { revision: 'r02', text: current, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      events: [{ record: badEvent, captureName: 'pass-03-architectural.capture.txt', captureText: 'bad gpt lens' }],
+    }));
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects GPT narrow revalidation when candidate changes binding scope fences', () => {
+    const source = draft('T2', 'T2');
+    const tampered = draft('T1', 'T2', {
+      from: 'T2',
+      eventId: 'gpt-demotion-1',
+    }).replace('vendor/**', 'plugins/**');
+    const result = run(tampered, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: tampered, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      priorTier: 'T2',
+      events: [{ record: gptEvent(), captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal gpt lens' }],
+      revalidations: [{
+        record: gptRevalidation('r02'),
+        captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt',
+        captureText: 'narrow revalidation only',
+      }],
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('unrelated material body change');
+  });
+
+  it('rejects GPT narrow revalidation when unrelated prose changes outside authorized demotion zones', () => {
+    const source = draft('T2', 'T2');
+    const tampered = draft('T1', 'T2', {
+      from: 'T2',
+      eventId: 'gpt-demotion-1',
+    }).replace('Run focused tests.', 'Run unrelated verification scope outside demotion correction.');
+    const result = run(tampered, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: tampered, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      priorTier: 'T2',
+      events: [{ record: gptEvent(), captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal gpt lens' }],
+      revalidations: [{
+        record: gptRevalidation('r02'),
+        captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt',
+        captureText: 'narrow revalidation only',
+      }],
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('unrelated material body change');
+  });
+
+  it('accepts GPT narrow revalidation when only authorized body correction changes', () => {
+    const source = draft('T2', 'T2', { body: 'Describe one local behavior.' });
+    const corrected = draft('T1', 'T2', {
+      from: 'T2',
+      eventId: 'gpt-demotion-1',
+      body: 'Describe one smaller local behavior after demotion.',
+    });
+    const result = run(corrected, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: corrected, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      priorTier: 'T2',
+      events: [{ record: gptEvent(), captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal gpt lens' }],
+      revalidations: [{
+        record: gptRevalidation('r02'),
+        captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt',
+        captureText: 'narrow revalidation only',
+      }],
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('rejects Claude authority outside its existing T3→T2 edge', () => {
+    const source = draft('T2', 'T2');
+    const current = draft('T1', 'T2', { from: 'T2', eventId: 'claude-invalid' });
+    const result = run(current, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: current, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      priorTier: 'T2',
+      events: [{
+        record: event({
+          eventId: 'claude-invalid', beforeTier: 'T2', afterTier: 'T1',
+          drivers: [{ kind: 'rubric', id: 'failure-type:local-behavior', rationale: 'Not Claude authority.' }],
+        }),
+        captureName: 'pass-01-architectural-lens.capture.txt', captureText: 'invalid Claude edge',
+      }],
+      revalidations: [{
+        record: revalidation('r02', {
+          eventId: 'claude-invalid', beforeTier: 'T2', afterTier: 'T1',
+        }),
+        captureName: 'pass-02-architectural-lens.capture.txt', captureText: 'invalid',
+      }],
+    }));
+    expect(result.errors.join('\n')).toContain('role is not authorized');
+  });
+
+  it('rejects GPT narrow revalidation on a mismatched pass index', () => {
+    const source = draft('T2', 'T2');
+    const current = draft('T1', 'T2', { from: 'T2', eventId: 'gpt-demotion-1' });
+    const result = run(current, evidence([
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: current, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ], {
+      currentRevision: 'r02',
+      events: [{ record: gptEvent(), captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal gpt lens' }],
+      revalidations: [{ record: gptRevalidation('r02'), captureName: 'pass-04-architectural-demotion-narrow-revalidation.capture.txt', captureText: 'wrong pass' }],
+    }));
+    expect(result.errors.join('\n')).toContain('share the originating architectural pass index');
+  });
+
+  it('rejects missing, stale, mismatched, or non-bounded GPT revalidation', () => {
+    const source = draft('T2', 'T2');
+    const current = draft('T1', 'T2', { from: 'T2', eventId: 'gpt-demotion-1' });
+    const revisions: TierTransitionEvidence['revisions'] = [
+      { revision: 'r01', text: source, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: current, tier: 'T1', receipt: receipt('r02', 'T1') },
+    ];
+    const eventEntry = { record: gptEvent(), captureName: 'pass-03-architectural.capture.txt', captureText: 'terminal' };
+    expect(run(current, evidence(revisions, { priorTier: 'T2', events: [eventEntry] })).errors.join('\n'))
+      .toContain('requires exactly one matching demotion revalidation');
+
+    const stale = gptRevalidation('r01');
+    expect(run(current, evidence(revisions, {
+      priorTier: 'T2', events: [eventEntry],
+      revalidations: [{ record: stale, captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt', captureText: 'stale' }],
+    })).errors.join('\n')).toContain('does not prove the event transition');
+
+    const wrongTransition = gptRevalidation('r02', { beforeTier: 'T3' });
+    expect(run(current, evidence(revisions, {
+      priorTier: 'T2', events: [eventEntry],
+      revalidations: [{ record: wrongTransition, captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt', captureText: 'wrong' }],
+    })).errors.join('\n')).toContain('transition does not match original event');
+
+    const bounded = gptRevalidation('r02');
+    const fenced = `\`\`\`tier-demotion-revalidation\n${JSON.stringify(bounded)}\n\`\`\`\nid: forbidden-finding`;
+    expect(run(current, evidence(revisions, {
+      priorTier: 'T2', events: [eventEntry],
+      revalidations: [{ record: bounded, captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt', captureText: fenced }],
+    })).errors.join('\n')).toContain('must contain only one revalidation JSON block');
+  });
+
+  it('rejects duplicate/branching chains, shared captures, wrong step-2 drivers, and intervening upsteps', () => {
+    const r01 = draft('T3', 'T3');
+    const r02 = draft('T2', 'T3', { from: 'T3', eventId: 'claude-demotion' });
+    const r03 = draft('T1', 'T3', { from: 'T2', eventId: 'gpt-demotion-1' });
+    const revisions: TierTransitionEvidence['revisions'] = [
+      { revision: 'r01', text: r01, tier: 'T3', receipt: receipt('r01', 'T3') },
+      { revision: 'r02', text: r02, tier: 'T2', receipt: receipt('r02', 'T2') },
+      { revision: 'r03', text: r03, tier: 'T1', receipt: receipt('r03', 'T1') },
+    ];
+    const claude = { record: event({ eventId: 'claude-demotion' }), captureName: 'pass-01-architectural-lens.capture.txt', captureText: 'claude' };
+    const gpt = { record: gptEvent({ sourceRevision: 'r02' }), captureName: 'pass-03-architectural.capture.txt', captureText: 'gpt' };
+    const revalidations = [
+      { record: revalidation('r02', { eventId: 'claude-demotion' }), captureName: 'pass-02-architectural-lens.capture.txt', captureText: 'claude revalidation' },
+      { record: gptRevalidation('r03'), captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt', captureText: 'gpt revalidation' },
+    ];
+
+    const duplicate = { ...gpt, record: gptEvent({ eventId: 'duplicate', sourceRevision: 'r02' }) };
+    expect(run(r03, evidence(revisions, { events: [claude, gpt, duplicate], revalidations })).errors.join('\n'))
+      .toContain('duplicate adjacent demotion edge');
+
+    const orphanRevalidation = {
+      record: gptRevalidation('r03', { eventId: 'orphan' }),
+      captureName: 'pass-04-architectural-demotion-narrow-revalidation.capture.txt',
+      captureText: 'orphan',
+    };
+    expect(run(r03, evidence(revisions, {
+      events: [claude, gpt], revalidations: [...revalidations, orphanRevalidation],
+    })).errors.join('\n')).toContain('orphan revalidation');
+
+    const sharedCapture = { ...gpt, captureName: claude.captureName };
+    expect(run(r03, evidence(revisions, { events: [claude, sharedCapture], revalidations })).errors.join('\n'))
+      .toContain('one authoritative lens capture may authorize at most one downstep');
+
+    const branching = { ...gpt, record: gptEvent({ sourceRevision: 'r02', beforeTier: 'T3', afterTier: 'T2' }) };
+    expect(run(r03, evidence(revisions, { events: [claude, branching], revalidations })).errors.join('\n'))
+      .toContain('demotion chain is not contiguous');
+
+    const wrongDrivers = { ...gpt, record: gptEvent({
+      sourceRevision: 'r02',
+      drivers: [{ kind: 'rubric', id: 'failure-type:subsystem-or-system-guarantee', rationale: 'Wrong receipt.' }],
+    }) };
+    expect(run(r03, evidence(revisions, { events: [claude, wrongDrivers], revalidations })).errors.join('\n'))
+      .toContain('exactly match source trigger set');
+
+    const raised = draft('T3', 'T3');
+    const afterRaise = draft('T1', 'T3', { from: 'T2', eventId: 'gpt-demotion-1' });
+    const raisedRevisions = [
+      ...revisions.slice(0, 2),
+      { revision: 'r03', text: raised, tier: 'T3' as const, receipt: receipt('r03', 'T3') },
+      { revision: 'r04', text: afterRaise, tier: 'T1' as const, receipt: receipt('r04', 'T1') },
+    ];
+    const gptAfterRaise = { ...gpt, record: gptEvent({ sourceRevision: 'r03', beforeTier: 'T3', afterTier: 'T2' }) };
+    expect(run(afterRaise, evidence(raisedRevisions, {
+      currentRevision: 'r04', events: [claude, gptAfterRaise],
+      revalidations: [revalidations[0], { record: gptRevalidation('r04', { beforeTier: 'T3', afterTier: 'T2' }), captureName: 'pass-03-architectural-demotion-narrow-revalidation.capture.txt', captureText: 'gpt' }],
+    })).errors.join('\n')).toMatch(/not contiguous|intervening upstep/);
   });
 });

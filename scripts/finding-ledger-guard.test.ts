@@ -818,6 +818,121 @@ describe('finding ledger review economics #975', () => {
       expect(result.errors.join('\n')).toContain('requires current architect adjudication');
     });
 
+
+    it('accepts authoritative GPT architectural M3 adjudication superseding Claude on the same revision', () => {
+      const nomination = markedFinding('S1', {
+        type: 'scope-violation',
+        evidence: 'The proposed file is out of scope under allowed_roots.',
+        recommendation: 'Keep the implementation in the declared path.',
+      });
+      const result = finalRun(
+        [
+          cap('pass-01-competitive.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural-lens.capture.txt', 1_200, currentLens('S1', { contest: 'contested' })),
+          cap('pass-03-architectural.capture.txt', 1_300, `${nomination}
+${currentLens('S1', { contest: 'none', outcome: 'non-activate' })}`),
+        ],
+        [row('S1', { type: 'scope-violation', disposition: 'rejected', rejectReason: 'not material' })],
+        { issueRevision: 'r3' },
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    });
+
+    it('accepts GPT adjudication for a protected nomination first emitted in terminal architectural', () => {
+      const nomination = markedFinding('GT1', {
+        type: 'security',
+        evidence: 'The proposed unauthenticated endpoint is a security issue.',
+      });
+      const result = finalRun(
+        [
+          cap('pass-01-architectural-lens.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural.capture.txt', 1_200, `${nomination}\n${currentLens('GT1', {
+            outcome: 'activate',
+            evidence: 'The unauthenticated endpoint is a security issue.',
+            whyNow: 'It is introduced by the current revision.',
+          })}`),
+        ],
+        [row('GT1', { type: 'security', disposition: 'addressed' })],
+      );
+      expect(result.ok, result.errors.join('\n')).toBe(true);
+    });
+
+    it('fails closed on stale or malformed terminal GPT M3 state', () => {
+      const nomination = markedFinding('GT2', {
+        type: 'scope-violation',
+        evidence: 'The proposed file is out of scope under allowed_roots.',
+      });
+      const stale = finalRun(
+        [
+          cap('pass-01-architectural-lens.capture.txt', 1_100, currentLens('GT2', { outcome: 'non-activate' })),
+          cap('pass-02-architectural.capture.txt', 1_200, `${nomination}\n${currentLens('GT2', {
+            revision: 'r2',
+            outcome: 'non-activate',
+          })}`),
+        ],
+        [row('GT2', { type: 'scope-violation', disposition: 'rejected', rejectReason: 'not material' })],
+      );
+      expect(stale.errors.join('\n')).toContain('unknown/stale architect contest state');
+
+      const malformed = finalRun(
+        [
+          cap('pass-01-architectural-lens.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural.capture.txt', 1_200, `${nomination}\nm3-protected: id=GT2 | revision=r3 | contest=invalid | outcome=none`),
+        ],
+        [row('GT2', { type: 'scope-violation' })],
+      );
+      expect(malformed.errors.join('\n')).toContain('malformed m3-protected record for GT2');
+    });
+
+    it('rejects duplicate-conflicting, invalid activation, and unresolved GPT contest state', () => {
+      const nomination = markedFinding('GT3', {
+        type: 'security',
+        evidence: 'The unauthenticated endpoint is a security issue.',
+      });
+      const duplicate = finalRun(
+        [
+          cap('pass-01-architectural-lens.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural.capture.txt', 1_200, `${nomination}\n${currentLens('GT3', { outcome: 'non-activate' })}\n${currentLens('GT3', { outcome: 'activate', evidence: 'security issue', whyNow: 'now' })}`),
+        ],
+        [row('GT3', { type: 'security' })],
+      );
+      expect(duplicate.errors.join('\n')).toContain('duplicate m3-protected records for GT3');
+
+      const conflictingCaptures = finalRun(
+        [
+          cap('pass-01-architectural-lens.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural.capture.txt', 1_200, `${nomination}\n${currentLens('GT3', { outcome: 'non-activate' })}`),
+          cap('pass-03-architectural.capture.txt', 1_300, currentLens('GT3', {
+            outcome: 'activate', evidence: 'security issue', whyNow: 'Current revision.',
+          })),
+        ],
+        [row('GT3', { type: 'security' })],
+      );
+      expect(conflictingCaptures.errors.join('\n')).toContain('duplicate-conflicting terminal m3-protected state');
+
+      const invalidActivation = finalRun(
+        [
+          cap('pass-01-architectural-lens.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural.capture.txt', 1_200, `${nomination}\n${currentLens('GT3', {
+            outcome: 'activate',
+            evidence: 'No protected evidence here.',
+            whyNow: 'Current revision.',
+          })}`),
+        ],
+        [row('GT3', { type: 'security' })],
+      );
+      expect(invalidActivation.errors.join('\n')).toContain('lacks current real protected evidence + why-now provenance');
+
+      const contested = finalRun(
+        [
+          cap('pass-01-architectural-lens.capture.txt', 1_100, markedClean()),
+          cap('pass-02-architectural.capture.txt', 1_200, `${nomination}\n${currentLens('GT3', { contest: 'contested' })}`),
+        ],
+        [row('GT3', { type: 'security' })],
+      );
+      expect(contested.errors.join('\n')).toContain('under current contest');
+    });
+
     it('rejects final acceptance when terminal architectural is stale relative to the latest lens', () => {
       const result = finalRun(
         [
