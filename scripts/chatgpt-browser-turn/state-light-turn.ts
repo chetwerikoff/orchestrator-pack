@@ -1,7 +1,16 @@
-import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  appendFileSync,
+  closeSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   boundedResourceCleanup,
   releaseCdpBrowser,
@@ -16,7 +25,6 @@ import {
   type TurnState,
 } from './contracts.ts';
 import { readStableInput } from './input.ts';
-import { publishReply } from './publication.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import {
   classifyProductWall,
@@ -89,6 +97,13 @@ interface TurnRunOutcome {
   readonly browser?: any;
 }
 
+interface StateLightPublicationResult {
+  readonly state: 'committed_ok' | 'conflict' | 'error';
+  readonly cause?: string;
+  readonly output_bytes?: number;
+  readonly output_sha256?: string;
+}
+
 function parseTurnArgs(argv: readonly string[]): ParsedTurnArgs {
   const options = new Map<string, string | true>();
   let cursor = 0;
@@ -142,6 +157,63 @@ function emit(value: unknown): void {
 
 function normalizeVisibleText(value: string): string {
   return value.replace(/\r\n?/g, '\n').replace(/[\t ]+/g, ' ').trim();
+}
+
+function errnoCode(error: unknown): string | undefined {
+  return error instanceof Error && 'code' in error
+    ? String((error as NodeJS.ErrnoException).code ?? '') || undefined
+    : undefined;
+}
+
+function bestEffortUnlink(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // A temp cleanup miss is not completion authority once the final path is safe.
+  }
+}
+
+function publishStateLightReply(
+  outputPath: string,
+  invocationId: string,
+  reply: string,
+): StateLightPublicationResult {
+  const finalPath = resolve(outputPath);
+  const parent = dirname(finalPath);
+  const tempPath = join(parent, `.${basename(finalPath)}.${invocationId}.${randomUUID()}.tmp`);
+  let fd = -1;
+
+  try {
+    fd = openSync(tempPath, 'wx', 0o600);
+    writeFileSync(fd, reply, 'utf8');
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = -1;
+
+    // Atomic hard-link creation is the no-clobber commit boundary: it fails when
+    // the caller-selected final path already exists and needs no legacy durable
+    // publication record, witness, or recovery state.
+    linkSync(tempPath, finalPath);
+
+    const outputBytes = Buffer.byteLength(reply, 'utf8');
+    const outputSha256 = createHash('sha256').update(reply, 'utf8').digest('hex');
+    bestEffortUnlink(tempPath);
+    return {
+      state: 'committed_ok',
+      output_bytes: outputBytes,
+      output_sha256: outputSha256,
+    };
+  } catch (error) {
+    if (fd >= 0) {
+      try { closeSync(fd); } catch { /* best effort */ }
+    }
+    bestEffortUnlink(tempPath);
+    if (errnoCode(error) === 'EEXIST') {
+      return { state: 'conflict', cause: 'output_exists' };
+    }
+    const detail = errnoCode(error) ?? (error instanceof Error ? error.message : String(error));
+    return { state: 'error', cause: `output_write_failed:${detail}` };
+  }
 }
 
 export function classifyPageObservation(
@@ -504,6 +576,28 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     while (true) {
       pollCount++;
       const messages = await readPageMessages(page);
+      const wall = classifyProductWall(await productStatusText(page, MAX_LOCAL_READ_WAIT_MS));
+      if (wall.state) {
+        const cause = wall.cause ?? `${wall.state}_detected`;
+        incident('invocation_blocker', cause, 'return_local_error');
+        return {
+          page,
+          browser,
+          result: compactResult(
+            wall.state,
+            'invocation',
+            cause,
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            incidents,
+            { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+            journalWriteFailed,
+          ),
+        };
+      }
+
       const completionReady = await pageCompletionReady(page);
       const decision = classifyPageObservation(messages, baselineCount, snapshot.text, !completionReady);
 
@@ -534,11 +628,9 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           stableReads = 1;
         }
         if (stableReads >= 2) {
-          const publication = publishReply(
-            profileKey,
-            invocationId,
+          const publication = publishStateLightReply(
             destination.finalPath,
-            destination.identity,
+            invocationId,
             decision.reply,
           );
           if (publication.state !== 'committed_ok') {
