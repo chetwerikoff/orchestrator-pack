@@ -95,6 +95,7 @@ interface TurnRunOutcome {
   readonly result: Omit<CompactTurnResult, 'cleanup'>;
   readonly page?: any;
   readonly browser?: any;
+  readonly preserveOwnedPage?: boolean;
 }
 
 interface StateLightPublicationResult {
@@ -416,6 +417,17 @@ async function pageCompletionReady(page: any): Promise<boolean> {
   }
 }
 
+async function readPostSendObservation(page: any): Promise<{
+  readonly messages: PageMessage[];
+  readonly wall: ReturnType<typeof classifyProductWall>;
+  readonly completionReady: boolean;
+}> {
+  const messages = await readPageMessages(page);
+  const wall = classifyProductWall(await productStatusText(page, MAX_LOCAL_READ_WAIT_MS));
+  const completionReady = await pageCompletionReady(page);
+  return { messages, wall, completionReady };
+}
+
 async function maybeContinueGeneration(page: any): Promise<boolean> {
   try {
     const continuation = page.getByText(/continue generating/i);
@@ -468,6 +480,21 @@ function pageConversationUrl(page: any): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function browserOrPageDefinitelyLost(page: any, browser: any): boolean {
+  if (!page) return true;
+  try {
+    if (typeof page.isClosed === 'function' && page.isClosed() === true) return true;
+  } catch {
+    // Probe failure is not proof of loss.
+  }
+  try {
+    if (browser && typeof browser.isConnected === 'function' && browser.isConnected() === false) return true;
+  } catch {
+    // Probe failure is not proof of loss.
+  }
+  return false;
 }
 
 async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
@@ -575,8 +602,20 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     // to keep that page rather than manufacture lost-chat/resend eligibility.
     while (true) {
       pollCount++;
-      const messages = await readPageMessages(page);
-      const wall = classifyProductWall(await productStatusText(page, MAX_LOCAL_READ_WAIT_MS));
+      let observation: Awaited<ReturnType<typeof readPostSendObservation>>;
+      try {
+        observation = await readPostSendObservation(page);
+      } catch (error) {
+        if (browserOrPageDefinitelyLost(page, browser)) throw error;
+        const symptom = error instanceof Error ? error.message : String(error);
+        incident('post_send_observation_error', symptom, 'continue_polling_owned_page');
+        stableReads = 0;
+        lastReadyReply = '';
+        await sleep(page, INITIAL_POLL_MS);
+        continue;
+      }
+
+      const { messages, wall, completionReady } = observation;
       if (wall.state) {
         const cause = wall.cause ?? `${wall.state}_detected`;
         incident('invocation_blocker', cause, 'return_local_error');
@@ -598,7 +637,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         };
       }
 
-      const completionReady = await pageCompletionReady(page);
       const decision = classifyPageObservation(messages, baselineCount, snapshot.text, !completionReady);
 
       if (decision.state === 'foreign_activity') {
@@ -729,17 +767,27 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         : isUi
           ? 'ui_contract_mismatch'
           : 'driver_error';
-    const cause = afterSend ? 'helper_or_page_error_after_send' : message;
+    const lostAfterSend = afterSend && browserOrPageDefinitelyLost(page, browser);
+    const cause = afterSend
+      ? lostAfterSend
+        ? 'page_or_browser_lost_after_send'
+        : 'helper_error_after_send_page_retained'
+      : message;
     if (!isInput && !isOutput) {
       incident(
         afterSend ? 'helper_failure_after_send' : 'helper_failure_before_send',
         cause,
-        afterSend ? 'caller_may_open_fresh_chat' : 'return_local_error',
+        afterSend
+          ? lostAfterSend
+            ? 'caller_may_open_fresh_chat'
+            : 'retain_owned_page_no_resend'
+          : 'return_local_error',
       );
     }
     return {
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
+      ...(afterSend && !lostAfterSend ? { preserveOwnedPage: true } : {}),
       result: compactResult(
         state,
         'invocation',
@@ -760,7 +808,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let cleanup: ResourceCleanupOutcome = 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   const incidents = [...outcome.result.incidents];
-  if (outcome.page) {
+  if (outcome.page && !outcome.preserveOwnedPage) {
     cleanup = await boundedResourceCleanup(
       () => outcome.page.close(),
       RESOURCE_CLEANUP_BOUND_MS,
@@ -775,7 +823,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
     }
   }
-  await releaseCdpBrowser(outcome.browser);
+  if (!outcome.preserveOwnedPage) await releaseCdpBrowser(outcome.browser);
   return {
     ...outcome.result,
     cleanup,
