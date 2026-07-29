@@ -6,7 +6,13 @@ const mocks = vi.hoisted(() => ({
   journalThrows: false,
   nowMs: 10_000,
   verifyProfile: vi.fn(async () => ({ state: 'verified' })),
-  publishReply: vi.fn(() => ({
+  publishReply: vi.fn((
+    _profileKey: string,
+    _invocationId: string,
+    _outputPath: string,
+    _outputIdentity: string,
+    _reply: string,
+  ) => ({
     schema: 'publication-status/v1',
     state: 'committed_ok',
     configured_profile_key: 'profile-key',
