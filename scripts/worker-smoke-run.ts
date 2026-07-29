@@ -42,6 +42,7 @@ import {
   verifySmokeHeadBinding,
   resolveSmokeRequirement,
   scrubSmokeOutput,
+  stripLeadingSmokeAgentPrompt,
   type SmokeNonPassCause,
   type SmokeReport,
 } from './lib/worker-smoke-core.ts';
@@ -154,13 +155,16 @@ function scrubGhFailureMessage(message: string): string {
   return scrubSmokeOutput(scrubForwardedGhSecrets(message, buildSmokeGhChildEnv()));
 }
 
-function smokeAgentTerminalHasReport(observedSinceBaseline: string, sentPrompt: string): boolean {
-  let remainder = observedSinceBaseline;
-  const prompt = sentPrompt.trim();
-  while (prompt && remainder.startsWith(prompt)) {
-    remainder = remainder.slice(prompt.length);
-  }
-  if (prompt && prompt.startsWith(remainder.trim())) {
+function smokeAgentTerminalHasReport(
+  terminalText: string,
+  sentPrompt: string,
+  baselineText = '',
+): boolean {
+  const observedSinceBaseline = terminalText.startsWith(baselineText)
+    ? terminalText.slice(baselineText.length)
+    : terminalText;
+  const remainder = stripLeadingSmokeAgentPrompt(observedSinceBaseline, sentPrompt);
+  if (!remainder.trim()) {
     return false;
   }
   return parseSmokeAgentReport(remainder) !== null;
@@ -264,6 +268,17 @@ export function waitForSmokeAgentCompletion(
     if (agentActivityObserved) {
       if (smokeAgentTerminalHasReport(observedSinceBaseline, sentPrompt)) {
         return { ok: true, agentActivityObserved: true };
+      }
+      const fullRead = readOrcaTerminal(handle, {
+        cwd: options.cwd,
+        limit: 2000,
+        runner: options.runner,
+      });
+      if (fullRead.ok) {
+        const fullText = orcaTerminalReadLines(fullRead.result).join('\n');
+        if (smokeAgentTerminalHasReport(fullText, sentPrompt, baselineText)) {
+          return { ok: true, agentActivityObserved: true };
+        }
       }
       const wait = waitOrcaTerminal(handle, {
         for: 'tui-idle',
@@ -744,7 +759,10 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       return 1;
     }
     const output = scrubSmokeOutput(orcaTerminalReadLines(readResult.result).join('\n'));
-    const partial = parseSmokeAgentReport(output);
+    const observedAfterBaseline = output.startsWith(preSendBaselineText)
+      ? output.slice(preSendBaselineText.length)
+      : output;
+    const partial = parseSmokeAgentReport(stripLeadingSmokeAgentPrompt(observedAfterBaseline, prompt));
     const afterStatus = gitPorcelain(options.cwd);
     const afterHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(afterStatus));
     const mutated = detectTrackedImplementationMutation(beforeStatus, afterStatus, beforeHashes, afterHashes);

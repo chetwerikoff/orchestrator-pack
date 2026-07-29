@@ -182,6 +182,23 @@ describe('smoke report publication and parsing', () => {
     expect(comment).toContain('tracked-implementation-files-unmodified: yes');
   });
 
+  it('parses unfenced agent smoke reports after prompt template lines', () => {
+    const body = [
+      '```worker-smoke-report',
+      'result: PASS|FAIL|BLOCKED',
+      '```',
+      '',
+      'result: PASS',
+      'tracked-files-unmodified: true',
+      'scenarios:',
+      '  - action: run check | expected: ok | observed: ok | outcome: pass',
+    ].join('\n');
+    const partial = parseSmokeAgentReport(body);
+    expect(partial?.result).toBe('PASS');
+    expect(partial?.trackedFilesUnmodified).toBe(true);
+    expect(partial?.scenarios).toHaveLength(1);
+  });
+
   it('rejects malformed PASS output that omits required fields', () => {
     const partial = parseSmokeAgentReport('```worker-smoke-report\nresult: PASS\n```');
     expect(normalizeSmokeReport(partial ?? {}, {

@@ -175,20 +175,60 @@ function parseSmokeScenarioBlock(block: string): SmokeScenario[] {
   return scenarios;
 }
 
-export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null {
-  const match = text.match(SMOKE_REPORT_BLOCK);
-  if (!match) {
+export function stripLeadingSmokeAgentPrompt(text: string, sentPrompt: string): string {
+  let remainder = text;
+  const prompt = sentPrompt.trim();
+  while (prompt && remainder.startsWith(prompt)) {
+    remainder = remainder.slice(prompt.length);
+  }
+  if (prompt && prompt.startsWith(remainder.trim())) {
+    return '';
+  }
+  return remainder;
+}
+
+function findUnfencedSmokeReportBody(text: string): string | null {
+  const lines = text.split(/\r?\n/u);
+  let lastStart = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index]?.match(/^result:\s*(PASS|FAIL|BLOCKED)\s*$/iu);
+    if (!match || match[1]?.includes('|')) {
+      continue;
+    }
+    lastStart = index;
+  }
+  if (lastStart < 0) {
     return null;
   }
-  const fields = parseKeyValueBlock(match[1]);
+
+  const bodyLines: string[] = [];
+  for (let index = lastStart; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    if (/^→ Add a follow-up/.test(line) || /^Composer 2\.\d/.test(line)) {
+      break;
+    }
+    if (index > lastStart && /^```/.test(line)) {
+      break;
+    }
+    bodyLines.push(line);
+  }
+  const body = bodyLines.join('\n');
+  if (!/tracked-files-unmodified:/iu.test(body) || !/scenarios:/iu.test(body)) {
+    return null;
+  }
+  return body;
+}
+
+function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
+  const fields = parseKeyValueBlock(body);
   const result = String(fields.result ?? '').trim().toUpperCase();
   if (result !== 'PASS' && result !== 'FAIL' && result !== 'BLOCKED') {
     return null;
   }
 
-  const scenarios = parseSmokeScenarioBlock(match[1]);
+  const scenarios = parseSmokeScenarioBlock(body);
   if (scenarios.length === 0) {
-    for (const line of match[1].split(/\r?\n/u)) {
+    for (const line of body.split(/\r?\n/u)) {
       const trimmed = line.trim();
       if (!trimmed.startsWith('-')) {
         continue;
@@ -225,6 +265,21 @@ export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null
     orcaExecutable: String(fields['orca-executable'] ?? fields['orca-cli'] ?? '').trim() || undefined,
     terminalHandle: String(fields['terminal-handle'] ?? '').trim() || undefined,
   };
+}
+
+export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null {
+  const fenced = text.match(SMOKE_REPORT_BLOCK);
+  if (fenced) {
+    const parsed = parseSmokeAgentReportBody(fenced[1]);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  const unfenced = findUnfencedSmokeReportBody(text);
+  if (unfenced) {
+    return parseSmokeAgentReportBody(unfenced);
+  }
+  return null;
 }
 
 export function normalizeSmokeReport(
