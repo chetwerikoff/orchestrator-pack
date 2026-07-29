@@ -37,8 +37,12 @@ direct Issue edits, and finding dispositions. The flow-manager drives the full
 fixed per-tier cycle through acceptance or a bounded blocked outcome — Issue
 pulls, tier/stage mechanics, captures, ledger bookkeeping, pass accounting, chat
 topology, and browser-turn execution — but does not author or judge the spec.
-Flow-manager authority transfers only by an explicit recorded predecessor/operator
-handoff; no lease or new ownership service is introduced.
+OpenCode is the default flow-manager when no runtime is explicitly selected; the
+operator may select another capable runtime, including Cursor or Codex, without a
+tracked manager-name allowlist. The tier-provenance `producer` value is a required
+non-empty audit label, not runtime authentication or admission. Flow-manager
+authority transfers only by an explicit recorded predecessor/operator handoff; no
+lease or new ownership service is introduced.
 
 **T1/T2:** exactly one independent terminal browser-GPT `architectural` lens (fresh
 chat; not the task chat) — sole reviewer stage, M5 anchor, and aggregate cut
@@ -53,11 +57,11 @@ terminal GPT remains mandatory after a valid skip. Terminal GPT owns final
 aggregate cut and M5 anchor.
 
 There is **no** create-flow `architectural-final` stage and **no** Codex
-create-flow engine or substitution role. Standalone `adversarial-draft-review`
-and worker **PACK_REVIEWER** Codex PR review are unchanged. The durable tier,
-accounting, and role contract lives in [`tiering.md`](tiering.md); exact browser
-mechanics, workdir layout, captures, ledger operations, and execution sequence
-remain owned by
+create-flow reviewer or substitution role. Codex may be the operator-selected
+flow-manager; standalone `adversarial-draft-review` and worker **PACK_REVIEWER**
+Codex PR review are unchanged. The durable tier, accounting, and role contract
+lives in [`tiering.md`](tiering.md); exact browser mechanics, workdir layout,
+captures, ledger operations, and execution sequence remain owned by
 [the `create-issue-draft` skill](../.claude/skills/create-issue-draft/SKILL.md).
 
 Local Codex PR review **is active** and **pack-owned**: it is launched by pack
