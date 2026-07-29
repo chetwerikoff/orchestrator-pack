@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -115,6 +116,31 @@ export function normalizeConversationUrl(value: string): string {
   url.search = '';
   url.pathname = url.pathname.replace(/\/+$/, '');
   return url.toString().replace(/\/$/, '');
+}
+
+
+const MAX_BOUNDED_DIAGNOSTIC_ID_CHARS = 64;
+const BOUNDED_DIGEST_HEX_CHARS = 16;
+
+function boundedBodyFreeDigest(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex').slice(0, BOUNDED_DIGEST_HEX_CHARS);
+}
+
+function boundedDialogTestIdIdentifier(testId: string): string {
+  const trimmed = testId.trim();
+  if (!trimmed) return '';
+  if (trimmed.length <= MAX_BOUNDED_DIAGNOSTIC_ID_CHARS) return trimmed;
+  return `digest:${boundedBodyFreeDigest(trimmed)}`;
+}
+
+function duplicateTabPageDescriptor(page: any, index: number): string {
+  try {
+    const rawUrl = String(page.url());
+    if (rawUrl) return `index=${index};id=${boundedBodyFreeDigest(rawUrl)}`;
+  } catch { /* unreadable tab URL */ }
+  const guid = typeof page?._guid === 'string' ? page._guid : '';
+  if (guid) return `index=${index};id=${boundedBodyFreeDigest(guid)}`;
+  return `index=${index}`;
 }
 
 const SERVICE_CONVERSATION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1509,7 +1535,9 @@ export function observePreDispatchBlockerHint(surface: ProductStatusSurface): st
   }
   if (classifyProductWall(surface).state) return undefined;
   const testId = surface.elements.find((element) => element.testId)?.testId;
-  return testId ? `unclassified_blocking_dialog:${testId}` : 'unclassified_blocking_dialog';
+  if (!testId) return 'unclassified_blocking_dialog';
+  const bounded = boundedDialogTestIdIdentifier(testId);
+  return bounded ? `unclassified_blocking_dialog:${bounded}` : 'unclassified_blocking_dialog';
 }
 
 async function pagePreDispatchWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
@@ -1715,13 +1743,7 @@ export async function openTurnPage(
       try { return normalizeConversationUrl(page.url()) === target; } catch { return false; }
     });
     if (matches.length > 1) {
-      const descriptors = matches.map((page: any, index: number) => {
-        try {
-          return `index=${index};url=${normalizeConversationUrl(page.url())}`;
-        } catch {
-          return `index=${index}`;
-        }
-      });
+      const descriptors = matches.map((page: any, index: number) => duplicateTabPageDescriptor(page, index));
       throw new Error(`ui_contract_mismatch:duplicate_tabs:count=${matches.length}:${descriptors.join(';')}`);
     }
     if (matches.length === 1) {
@@ -1795,11 +1817,11 @@ export async function sendTurn(
   }
   const composerReadyWait = loopOperationWaitMs(readyEndsAt, wallClock());
   if (!(await boundedLocatorCount(composer, composerReadyWait))) {
-    if (segmentBudget && wallClock() >= readyEndsAt) {
-      throw new BrowserOperationTimeoutError('composer_readiness');
-    }
     if (preDispatchBlockerCause) {
       return { state: 'ui_contract_mismatch', cause: preDispatchBlockerCause, possibleDelivery: false };
+    }
+    if (segmentBudget && wallClock() >= readyEndsAt) {
+      throw new BrowserOperationTimeoutError('composer_readiness');
     }
     return { state: 'ui_contract_mismatch', cause: 'composer_unavailable', possibleDelivery: false };
   }

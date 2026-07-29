@@ -30,6 +30,7 @@ export interface FakeTurnPageOptions {
   readonly bodyText?: string;
   readonly alertText?: string;
   readonly alertAfterSend?: string;
+  readonly blockingDialog?: { readonly testId?: string; readonly text?: string };
   readonly composer?: boolean;
   readonly serviceObserveDispatch?: boolean;
   readonly preDispatchServiceFrames?: readonly Record<string, unknown>[];
@@ -462,6 +463,18 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
         const text = sent && options.alertAfterSend ? options.alertAfterSend : options.alertText;
         if (!text) return emptyLocator();
         return { count: async () => 1, nth: () => ({ ...emptyLocator(), innerText: async () => text }) };
+      }
+      if (selector === '[role="dialog"]' && options.blockingDialog) {
+        const dialogText = options.blockingDialog.text ?? '';
+        const dialogTestId = options.blockingDialog.testId;
+        return {
+          count: async () => 1,
+          nth: () => ({
+            ...emptyLocator(),
+            innerText: async () => dialogText,
+            getAttribute: async (name: string) => name === 'data-testid' ? dialogTestId ?? null : null,
+          }),
+        };
       }
       if (selector === 'body') return { ...emptyLocator(), innerText: async () => options.bodyText ?? '' };
       return emptyLocator();

@@ -27,7 +27,7 @@ import {
 import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgpt-browser-turn/storage-common.ts';
 import * as coordination from '../chatgpt-browser-turn/coordination.ts';
 import { readDriverDiagnostic } from '../chatgpt-browser-turn/diagnostics.ts';
-import { classifyPreDispatchProductWall, classifyProductWall, observePreDispatchBlockerHint, openTurnPage, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { classifyPreDispatchProductWall, classifyProductWall, observePreDispatchBlockerHint, openTurnPage, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, createPreSendSegmentBudget, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
 import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import { liveTurnStreamSequence } from '../chatgpt-browser-turn/fixtures/live-turn-stream-contract.ts';
 
@@ -1495,6 +1495,47 @@ describe('issue 1065 browser-surface classification', () => {
     ], true);
     expect(classifyPreDispatchProductWall(await productStatusText(nonBlocking))).toEqual({});
     expect(classifyProductWall(await productStatusText(nonBlocking))).toEqual({});
+
+    const longTestId = 'modal-' + 'x'.repeat(120);
+    const longBlocking = productStatusPage([
+      { role: 'dialog', testId: longTestId, text: 'long test id wall' },
+    ], false);
+    const longCause = observePreDispatchBlockerHint(await productStatusText(longBlocking));
+    expect(longCause?.startsWith('unclassified_blocking_dialog:digest:')).toBe(true);
+    expect(longCause!.length).toBeLessThanOrEqual('unclassified_blocking_dialog:digest:'.length + 16);
+  });
+
+  it('AC2: unknown blocking dialog through readiness deadline prefers blocker cause over composer_readiness timeout', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    __testTiming.now = () => Date.now();
+    const fixture = fakeTurnPage({
+      composer: false,
+      blockingDialog: { testId: 'modal-unknown-product-wall', text: 'Unexpected product blocker' },
+    });
+    fixture.page.waitForTimeout = async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+    const turn = sendTurn(
+      fixture.page,
+      'payload',
+      {
+        cdp: 'http://127.0.0.1:9222',
+        profile: join(root, 'profile-1065-readiness'),
+        chatUrl: 'https://chatgpt.com/c/readiness',
+        newChat: false,
+        timeoutMs: 5_000,
+      },
+      undefined,
+      undefined,
+      createPreSendSegmentBudget(200),
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    const result = await turn;
+    expect(result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'unclassified_blocking_dialog:modal-unknown-product-wall',
+    });
+    vi.useRealTimers();
   });
 
   it('AC3: duplicate tabs expose bounded match diagnostics without auto-closing tabs', async () => {
@@ -1502,8 +1543,8 @@ describe('issue 1065 browser-surface classification', () => {
     const browser = {
       contexts: () => [{
         pages: () => [
-          page('https://chatgpt.com/c/a'),
-          page('https://chatgpt.com/c/a'),
+          page('https://chatgpt.com/c/a?tab=0'),
+          page('https://chatgpt.com/c/a?tab=1'),
         ],
       }],
     };
@@ -1514,7 +1555,7 @@ describe('issue 1065 browser-surface classification', () => {
       newChat: false,
       timeoutMs: 100,
     })).rejects.toThrow(
-      'ui_contract_mismatch:duplicate_tabs:count=2:index=0;url=https://chatgpt.com/c/a;index=1;url=https://chatgpt.com/c/a',
+      'ui_contract_mismatch:duplicate_tabs:count=2:index=0;id=7f5bbb6cee59bae5;index=1;id=6f7c899363c969c0',
     );
     expect(browser.contexts()[0]!.pages().length).toBe(2);
   });
