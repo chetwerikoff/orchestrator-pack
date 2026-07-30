@@ -1,6 +1,13 @@
 import type { TurnResultV1 } from './contracts.ts';
 import { vi } from 'vitest';
 
+import {
+  ASSISTANT_TURN_ANCESTOR_XPATH,
+  matchesAssistantTurnActionSelector,
+  matchesAssistantTurnInProgressSelector,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+} from './product-page-selectors.ts';
+
 export function scalarLocator(overrides: Record<string, unknown> = {}) {
   const turnActionButtons = overrides.turnActionButtons === true;
   const locator: Record<string, any> = {
@@ -8,11 +15,7 @@ export function scalarLocator(overrides: Record<string, unknown> = {}) {
     first: vi.fn(function first() { return locator; }),
     nth: vi.fn(() => locator),
     locator: vi.fn((selector: string) => {
-      if (turnActionButtons && (
-        selector.includes('copy-turn-action-button')
-        || selector.includes('good-response-turn-action-button')
-        || selector.includes('bad-response-turn-action-button')
-      )) {
+      if (turnActionButtons && matchesAssistantTurnActionSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 1) });
       }
       return scalarLocator();
@@ -47,25 +50,21 @@ export function messageLocator(message: StateLightTestMessage, generating = fals
   return scalarLocator({
     count: vi.fn(async () => 1),
     getAttribute: vi.fn(async (name: string) => {
-      if (name === 'data-message-author-role') return message.role;
+      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role;
       if (name === 'data-is-streaming') return generating ? 'true' : null;
       if (name === 'aria-busy') return null;
       return null;
     }),
     locator: vi.fn((selector: string) => {
-      if (selector.startsWith('xpath=') || selector.includes('conversation-turn-')) {
+      if (selector.startsWith('xpath=') || selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.includes('conversation-turn-')) {
         if (!message.finalActionInTurnContainer) return scalarLocator({ count: vi.fn(async () => 0) });
         return scalarLocator({ turnActionButtons: true, count: vi.fn(async () => 1) });
       }
       if (message.role !== 'assistant') return scalarLocator();
-      if (message.finalAction && !message.finalActionInTurnContainer && selector.includes('copy-turn-action-button')) {
+      if (message.finalAction && !message.finalActionInTurnContainer && matchesAssistantTurnActionSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 1) });
       }
-      if (message.inProgress && (
-        selector.includes('[aria-busy="true"]')
-        || selector.includes('[data-is-streaming="true"]')
-        || selector.includes('[data-testid*="tool"]')
-      )) {
+      if (message.inProgress && matchesAssistantTurnInProgressSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 1) });
       }
       return scalarLocator();

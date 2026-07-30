@@ -93,6 +93,15 @@ import {
   type StateLightTestMessage,
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
+import {
+  ASSISTANT_TURN_ANCESTOR_XPATH,
+  COMPOSER_SELECTOR,
+  CONTINUE_GENERATING_BUTTON_NAME,
+  MESSAGE_NODE_SELECTOR,
+  ASSISTANT_MESSAGE_SELECTOR,
+  SEND_BUTTON_SELECTOR,
+  matchesStopButtonSelector,
+} from './product-page-selectors.ts';
 import { runStateLightTurn } from './state-light-turn.ts';
 
 const BASELINE: StateLightTestMessage[] = [
@@ -163,8 +172,8 @@ function makePage(
       const name = options?.name;
       const label = 'Continue generating';
       const matches = name instanceof RegExp
-        ? name.test(label)
-        : typeof name === 'string' && new RegExp(name, 'i').test(label);
+        ? CONTINUE_GENERATING_BUTTON_NAME.test(label)
+        : typeof name === 'string' && CONTINUE_GENERATING_BUTTON_NAME.test(name);
       const visible = Boolean(activeSnapshot.continuation) && !continuationDismissed && matches;
       return scalarLocator({
         count: vi.fn(async () => visible ? 1 : 0),
@@ -176,7 +185,7 @@ function makePage(
     }),
     getByText: vi.fn((pattern: RegExp | string) => {
       const text = 'Continue generating';
-      const matches = typeof pattern === 'string' ? text.includes(pattern) : pattern.test(text);
+      const matches = typeof pattern === 'string' ? CONTINUE_GENERATING_BUTTON_NAME.test(text) : pattern.test(text);
       const visible = Boolean(activeSnapshot.continuation) && !continuationDismissed && matches;
       return scalarLocator({
         count: vi.fn(async () => visible ? 1 : 0),
@@ -184,9 +193,9 @@ function makePage(
       });
     }),
     locator: vi.fn((selector: string) => {
-      if (selector === '#prompt-textarea') return composer;
-      if (selector === '[data-testid="send-button"]') return sendButton;
-      if (selector === '[data-message-author-role]') {
+      if (selector === COMPOSER_SELECTOR) return composer;
+      if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+      if (selector === MESSAGE_NODE_SELECTOR) {
         if (sent && options.throwAfterSend) {
           closed = true;
           throw new Error('simulated page loss');
@@ -202,17 +211,17 @@ function makePage(
         metrics.polls++;
         return collectionLocator(activeSnapshot.messages);
       }
-      if (selector.startsWith('xpath=ancestor-or-self::section[starts-with(@data-testid, "conversation-turn-")]')) {
+      if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
         const assistants = activeSnapshot.messages.filter((message) => message.role === 'assistant');
         const last = assistants.at(-1);
         if (!last?.finalActionInTurnContainer) return scalarLocator({ count: vi.fn(async () => 0) });
         return messageLocator(last, activeSnapshot.generating);
       }
-      if (selector === '[data-message-author-role="assistant"]') {
+      if (selector === ASSISTANT_MESSAGE_SELECTOR) {
         const assistants = activeSnapshot.messages.filter((message) => message.role === 'assistant');
         return collectionLocator(assistants, activeSnapshot.generating);
       }
-      if (selector.includes('stop-button')) return scalarLocator();
+      if (matchesStopButtonSelector(selector)) return scalarLocator();
       return scalarLocator();
     }),
   };
@@ -434,9 +443,9 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       }),
       getByText: vi.fn(() => scalarLocator()),
       locator: vi.fn((selector: string) => {
-        if (selector === '#prompt-textarea') return composer;
-        if (selector === '[data-testid="send-button"]') return sendButton;
-        if (selector === '[data-message-author-role]') {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) return collectionLocator(BASELINE);
           polls++;
           metrics.polls = polls;
@@ -450,10 +459,10 @@ describe('Issue #1120 state-light turn lifecycle', () => {
         if (selector.startsWith('xpath=ancestor-or-self::section')) {
           return scalarLocator({ count: vi.fn(async () => 0) });
         }
-        if (selector === '[data-message-author-role="assistant"]') {
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
           return collectionLocator([{ role: 'assistant', text: 'working' }], true);
         }
-        if (selector.includes('stop-button')) return scalarLocator();
+        if (matchesStopButtonSelector(selector)) return scalarLocator();
         return scalarLocator();
       }),
     };

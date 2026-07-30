@@ -4,6 +4,11 @@ import {
   readAssistantTurnCompletionReady,
   readAssistantTurnGenerating,
 } from './ui-adapter.ts';
+import {
+  ASSISTANT_MESSAGE_SELECTOR,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+  matchesStopButtonSelector,
+} from './product-page-selectors.ts';
 import { scalarLocator } from './state-light-turn.test-fixtures.ts';
 import {
   buildForeignActivityDiagnostics,
@@ -23,7 +28,7 @@ function makeTurnContainerPage(options: {
   const assistant = scalarLocator({
     count: vi.fn(async () => 1),
     getAttribute: vi.fn(async (name: string) => {
-      if (name === 'data-message-author-role') return 'assistant';
+      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return 'assistant';
       if (name === 'data-is-streaming') return options.generating ? 'true' : null;
       return null;
     }),
@@ -43,8 +48,8 @@ function makeTurnContainerPage(options: {
   });
   return {
     locator: vi.fn((selector: string) => {
-      if (selector === '[data-message-author-role="assistant"]') return assistants;
-      if (selector.includes('stop-button')) return scalarLocator();
+      if (selector === ASSISTANT_MESSAGE_SELECTOR) return assistants;
+      if (matchesStopButtonSelector(selector)) return scalarLocator();
       return scalarLocator();
     }),
     getByText: vi.fn(() => scalarLocator()),

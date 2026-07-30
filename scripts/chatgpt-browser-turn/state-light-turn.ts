@@ -42,11 +42,16 @@ import {
 import { configuredProfileKey } from './storage-common.ts';
 import {
   classifyProductWall,
+  COMPOSER_SELECTOR,
   loadChromium,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_NODE_SELECTOR,
   normalizeConversationUrl,
   productStatusText,
   locateContinueGeneratingControl,
   readAssistantTurnCompletionReady,
+  SEND_BUTTON_SELECTOR,
+  stripUiCollapseAffixes,
   verifyProfile,
   type BrowserConfig,
 } from './ui-adapter.ts';
@@ -187,8 +192,6 @@ function emit(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-const UI_COLLAPSE_AFFIX_RE = /(?:\s*(?:show more|read more|see more|view more|continue reading)\s*)+$/iu;
-
 function normalizeVisibleText(value: string): string {
   return value.replace(/\r\n?/g, '\n').replace(/[\t ]+/g, ' ').trim();
 }
@@ -198,19 +201,6 @@ function normalizeEchoComparisonText(value: string): string {
     .replace(/\u200b/g, '')
     .replace(/[\r\n\t\f\v ]+/g, ' ')
     .trim();
-}
-
-function stripUiCollapseAffixes(value: string): string {
-  let result = value;
-  for (let pass = 0; pass < 3; pass++) {
-    const next = result
-      .replace(UI_COLLAPSE_AFFIX_RE, '')
-      .replace(/[.…]+\s*$/u, '')
-      .trim();
-    if (next === result) break;
-    result = next;
-  }
-  return result;
 }
 
 function boundedDiagnosticHead(value: string, maxChars = FOREIGN_DIAGNOSTIC_HEAD_CHARS): string {
@@ -728,14 +718,14 @@ async function locatorText(locator: any): Promise<string> {
 }
 
 async function readPageMessages(page: any): Promise<PageMessage[]> {
-  const nodes = page.locator('[data-message-author-role]');
+  const nodes = page.locator(MESSAGE_NODE_SELECTOR);
   const count = await locatorCount(nodes);
   const messages: PageMessage[] = [];
   for (let index = 0; index < count; index++) {
     const node = nodes.nth(index);
     let role = '';
     try {
-      role = String(await node.getAttribute('data-message-author-role', { timeout: MAX_LOCAL_READ_WAIT_MS }) ?? '');
+      role = String(await node.getAttribute(MESSAGE_AUTHOR_ROLE_ATTR, { timeout: MAX_LOCAL_READ_WAIT_MS }) ?? '');
     } catch {
       continue;
     }
@@ -760,7 +750,7 @@ export async function classifySendLandingEvidence(
   if (messages.some((message) => message.role === 'user' && normalizeVisibleText(message.text) === normalizedPrompt)) {
     return 'landed';
   }
-  const composer = page.locator('#prompt-textarea');
+  const composer = page.locator(COMPOSER_SELECTOR);
   if (await locatorCount(composer) > 0) {
     const composerText = normalizeVisibleText(await locatorText(composer));
     if (composerText === normalizedPrompt) return 'not_landed';
@@ -805,7 +795,7 @@ async function waitForComposer(
   page: any,
   deadline: number,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
-  const composer = page.locator('#prompt-textarea');
+  const composer = page.locator(COMPOSER_SELECTOR);
   while (Date.now() < deadline) {
     const wall = classifyProductWall(
       await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadline - Date.now()))),
@@ -952,10 +942,10 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let ownedConversationUrl: string | undefined;
 
     const sendOwnedPrompt = async (): Promise<void> => {
-      const composer = page.locator('#prompt-textarea');
+      const composer = page.locator(COMPOSER_SELECTOR);
       await composer.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
       await composer.fill(snapshot.text, { timeout: MAX_LOCAL_READ_WAIT_MS });
-      const sendButton = page.locator('[data-testid="send-button"]');
+      const sendButton = page.locator(SEND_BUTTON_SELECTOR);
       if (await locatorCount(sendButton) > 0) {
         await sendButton.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
       } else {

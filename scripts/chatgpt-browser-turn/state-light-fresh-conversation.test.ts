@@ -75,6 +75,15 @@ import {
 import { classifyPageObservation, classifySendLandingEvidence, runStateLightTurn } from './state-light-turn.ts';
 import * as uiAdapter from './ui-adapter.ts';
 import {
+  ASSISTANT_MESSAGE_SELECTOR,
+  ASSISTANT_TURN_ANCESTOR_XPATH,
+  COMPOSER_SELECTOR,
+  matchesNewChatControlSelector,
+  MESSAGE_NODE_SELECTOR,
+  SEND_BUTTON_SELECTOR,
+  STOP_BUTTON_TESTID,
+} from './product-page-selectors.ts';
+import {
   acquireStateLightNewChatSendSlot,
   newChatSendSlotEnabled,
   isBlankProjectSurfaceUrl,
@@ -155,29 +164,29 @@ function makeLoserPage(prompt: string, reply: string) {
     getByText: vi.fn(() => scalarLocator()),
     getByRole: vi.fn(() => scalarLocator()),
     locator: vi.fn((selector: string) => {
-      if (selector === '#prompt-textarea') return composer;
-      if (selector === '[data-testid="send-button"]') return sendButton;
-      if (selector.includes('create-new-chat-button') || selector.includes('New chat')) {
+      if (selector === COMPOSER_SELECTOR) return composer;
+      if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+      if (matchesNewChatControlSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 0) });
       }
-      if (selector === '[data-message-author-role]') {
+      if (selector === MESSAGE_NODE_SELECTOR) {
         if (!sent) return collectionLocator([]);
         activeSnapshot = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
         observationIndex++;
         return collectionLocator(activeSnapshot.messages, activeSnapshot.generating);
       }
-      if (selector.startsWith('xpath=ancestor-or-self::section')) {
+      if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
         const last = activeSnapshot.messages.at(-1);
         if (last?.finalActionInTurnContainer) return messageLocator(last);
         return scalarLocator({ count: vi.fn(async () => 0) });
       }
-      if (selector === '[data-message-author-role="assistant"]') {
+      if (selector === ASSISTANT_MESSAGE_SELECTOR) {
         return collectionLocator(
           activeSnapshot.messages.filter((message: StateLightTestMessage) => message.role === 'assistant'),
           activeSnapshot.generating,
         );
       }
-      if (selector.includes('stop-button')) return scalarLocator();
+      if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
       return scalarLocator();
     }),
   };
@@ -380,31 +389,31 @@ describe('state-light fresh conversation collision recovery', () => {
       getByText: vi.fn(() => scalarLocator()),
       getByRole: vi.fn(() => scalarLocator()),
       locator: vi.fn((selector: string) => {
-        if (selector === '#prompt-textarea') return composer;
-        if (selector === '[data-testid="send-button"]') return sendButton;
-        if (selector.includes('create-new-chat-button') || selector.includes('New chat')) {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) {
           return scalarLocator({ count: vi.fn(async () => 0) });
         }
-        if (selector === '[data-message-author-role]') {
+        if (selector === MESSAGE_NODE_SELECTOR) {
           if (!sent) return collectionLocator([]);
           const frame = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
           observationIndex++;
           return collectionLocator(frame.messages, frame.generating);
         }
-        if (selector.startsWith('xpath=ancestor-or-self::section')) {
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
           const frame = snapshotFrames[Math.min(observationIndex - 1, snapshotFrames.length - 1)]!;
           const last = frame.messages.at(-1);
           if (last?.finalActionInTurnContainer) return messageLocator(last);
           return scalarLocator({ count: vi.fn(async () => 0) });
         }
-        if (selector === '[data-message-author-role="assistant"]') {
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
           const frame = snapshotFrames[Math.min(observationIndex - 1, snapshotFrames.length - 1)]!;
           return collectionLocator(
             frame.messages.filter((message: StateLightTestMessage) => message.role === 'assistant'),
             frame.generating,
           );
         }
-        if (selector.includes('stop-button')) return scalarLocator();
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
         return scalarLocator();
       }),
     };
@@ -427,14 +436,14 @@ describe('state-light fresh conversation collision recovery', () => {
       url: vi.fn(() => PROJECT_URL),
       getByRole: vi.fn(() => scalarLocator()),
       locator: vi.fn((selector: string) => {
-        if (selector === '#prompt-textarea') {
+        if (selector === COMPOSER_SELECTOR) {
           return scalarLocator({
             count: vi.fn(async () => 1),
             innerText: vi.fn(async () => prompt),
             textContent: vi.fn(async () => prompt),
           });
         }
-        if (selector === '[data-message-author-role]') return collectionLocator([]);
+        if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator([]);
         return scalarLocator();
       }),
     };

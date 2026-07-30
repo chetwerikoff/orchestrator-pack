@@ -29,6 +29,26 @@ import {
   resolveWholeTurnTerminal,
   type TerminalWitnessState,
 } from './terminal-witness.ts';
+import {
+  ASSISTANT_MESSAGE_SELECTOR,
+  ASSISTANT_TURN_ACTION_SELECTOR,
+  ASSISTANT_TURN_ANCESTOR_XPATH,
+  ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+  COMPOSER_SELECTOR,
+  CONTINUE_GENERATING_BUTTON_NAME,
+  CONTINUE_GENERATING_TESTID_SELECTOR,
+  CONVERSATION_TURN_ID_PREFIX,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_NODE_SELECTOR,
+  NEW_CHAT_CONTROL_SELECTORS,
+  PRODUCT_STATUS_PROBE_SELECTORS,
+  SEND_BUTTON_SELECTOR,
+  STOP_BUTTON_SELECTOR,
+  TURN_START_MESSAGE_ATTR,
+  USER_MESSAGE_SELECTOR,
+} from './product-page-selectors.ts';
+
+export * from './product-page-selectors.ts';
 
 const require = createRequire(import.meta.url);
 
@@ -644,7 +664,7 @@ interface StreamTurnContext {
 
 function streamTurnIdFromTopic(topicId: string | undefined): string | undefined {
   if (!topicId) return undefined;
-  const prefix = 'conversation-turn-';
+  const prefix = CONVERSATION_TURN_ID_PREFIX;
   return topicId.startsWith(prefix) ? topicId.slice(prefix.length) : undefined;
 }
 
@@ -666,7 +686,7 @@ function mergeStreamTurnContext(
   if (!resolvedTurnId && !topicId) return inherited;
   return {
     turnId: resolvedTurnId,
-    topicId: topicId ?? (resolvedTurnId ? `conversation-turn-${resolvedTurnId}` : undefined),
+    topicId: topicId ?? (resolvedTurnId ? `${CONVERSATION_TURN_ID_PREFIX}${resolvedTurnId}` : undefined),
   };
 }
 
@@ -735,7 +755,7 @@ function bufferPendingStreamPatch(
 function flushPendingStreamTurnEvidence(state: NetworkWitnessState, turnId: string): void {
   const turnContext: StreamTurnContext = {
     turnId,
-    topicId: `conversation-turn-${turnId}`,
+    topicId: `${CONVERSATION_TURN_ID_PREFIX}${turnId}`,
   };
   const marker = state.pendingStreamMarkersByTurnId.get(turnId);
   if (marker) bindTurnScopedTerminalTarget(state, marker, turnContext);
@@ -1377,7 +1397,7 @@ export async function runtimeWitnessSurfaceAvailable(
     return waitMs;
   };
   let waitMs = clampWitnessWait();
-  const messages = page.locator('[data-message-author-role]');
+  const messages = page.locator(MESSAGE_NODE_SELECTOR);
   let count: number;
   try {
     count = await boundedLocatorCount(messages, waitMs);
@@ -1391,7 +1411,7 @@ export async function runtimeWitnessSurfaceAvailable(
   for (let index = Math.max(0, count - 8); index < count; index++) {
     waitMs = clampWitnessWait();
     const locator = messages.nth(index);
-    const role = await readWitnessAttribute(locator, 'data-message-author-role', clampWitnessWait);
+    const role = await readWitnessAttribute(locator, MESSAGE_AUTHOR_ROLE_ATTR, clampWitnessWait);
     if (role === 'user') {
       const id = await serviceId(locator, clampWitnessWait);
       if (id) userIds.add(id);
@@ -1406,15 +1426,16 @@ export async function runtimeWitnessSurfaceAvailable(
     waitMs = clampWitnessWait();
     const locator = messages.nth(index);
     const next = messages.nth(index + 1);
-    const role = await readWitnessAttribute(locator, 'data-message-author-role', clampWitnessWait);
-    const nextRole = await readWitnessAttribute(next, 'data-message-author-role', clampWitnessWait);
+    const role = await readWitnessAttribute(locator, MESSAGE_AUTHOR_ROLE_ATTR, clampWitnessWait);
+    const nextRole = await readWitnessAttribute(next, MESSAGE_AUTHOR_ROLE_ATTR, clampWitnessWait);
     if (role !== 'user' || nextRole !== 'assistant') continue;
     const userId = await serviceId(locator, clampWitnessWait);
-    const turnStart = await readWitnessAttribute(next, 'data-turn-start-message', clampWitnessWait);
+    const turnStart = await readWitnessAttribute(next, TURN_START_MESSAGE_ATTR, clampWitnessWait);
     if (userId && turnStart === 'true') return 'available';
   }
   return 'absent';
 }
+
 
 export interface ProductStatusSurface {
   readonly text: string;
@@ -1423,23 +1444,11 @@ export interface ProductStatusSurface {
 
 export async function productStatusText(page: any, waitSource?: OperationWaitSource): Promise<ProductStatusSurface> {
   const composer = (await boundedLocatorCount(
-    page.locator('#prompt-textarea'),
+    page.locator(COMPOSER_SELECTOR),
     requireOperationWait(waitSource, 'product_status'),
   )) > 0;
-  const selectors = [
-    '[role="alert"]',
-    '[role="dialog"]',
-    '[data-testid*="quota"]',
-    '[data-testid*="limit"]',
-    '[data-testid*="challenge"]',
-    '[data-testid*="login"]',
-    '[data-testid*="auth"]',
-    '[data-testid*="error"]',
-    'a[href*="/auth/login"]',
-    'a[href*="/auth/signup"]',
-  ];
   const parts: string[] = [];
-  for (const selector of selectors) {
+  for (const selector of PRODUCT_STATUS_PROBE_SELECTORS) {
     const locator = page.locator(selector);
     const countWait = requireOperationWait(waitSource, 'product_status');
     const count = Math.min(await boundedLocatorCount(locator, countWait), 8);
@@ -1468,38 +1477,23 @@ export function classifyProductWall(surface: ProductStatusSurface): { state?: 'q
   return {};
 }
 
-export const ASSISTANT_TURN_ACTION_SELECTOR = [
-  '[data-testid="copy-turn-action-button"]',
-  '[data-testid="good-response-turn-action-button"]',
-  '[data-testid="bad-response-turn-action-button"]',
-].join(', ');
-
-export const ASSISTANT_TURN_IN_PROGRESS_SELECTOR = [
-  '[aria-busy="true"]',
-  '[data-is-streaming="true"]',
-  '[data-testid*="tool"][aria-busy="true"]',
-  '[data-testid*="tool"][data-state="running"]',
-  '[data-testid*="tool"][data-state="loading"]',
-].join(', ');
-
-const CONVERSATION_TURN_SECTION_SELECTOR = 'section[data-testid^="conversation-turn-"]';
 export async function locateLastAssistantTurnContainer(
   page: any,
   waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
 ): Promise<any | null> {
-  const assistants = page.locator('[data-message-author-role="assistant"]');
+  const assistants = page.locator(ASSISTANT_MESSAGE_SELECTOR);
   const count = await boundedLocatorCount(assistants, waitMs);
   if (count === 0) return null;
   const last = assistants.nth(count - 1);
-  const turn = last.locator('xpath=ancestor-or-self::section[starts-with(@data-testid, "conversation-turn-")][1]');
+  const turn = last.locator(ASSISTANT_TURN_ANCESTOR_XPATH);
   if (await boundedLocatorCount(turn, waitMs) > 0) return turn.first();
   return last;
 }
 
 
 export function locateContinueGeneratingControl(page: any): any {
-  const button = page.getByRole('button', { name: /continue generating/i });
-  const testId = page.locator('[data-testid*="continue-generating"], [data-testid*="continue_generating"]');
+  const button = page.getByRole('button', { name: CONTINUE_GENERATING_BUTTON_NAME });
+  const testId = page.locator(CONTINUE_GENERATING_TESTID_SELECTOR);
   return button.or(testId);
 }
 
@@ -1508,7 +1502,7 @@ export async function readAssistantTurnGenerating(
   waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
 ): Promise<boolean> {
   try {
-    if (await boundedLocatorCount(page.locator('[data-testid="stop-button"], button[aria-label*="Stop"]').first(), waitMs) > 0) {
+    if (await boundedLocatorCount(page.locator(STOP_BUTTON_SELECTOR).first(), waitMs) > 0) {
       return true;
     }
   } catch {
@@ -1599,7 +1593,7 @@ async function assistantIsActivelyGenerating(page: any, locator: any, waitSource
   const waitMs = resolveOperationWaitMs(waitSource);
   if (waitMs <= 0) return true;
   try {
-    const pageStop = page.locator('[data-testid="stop-button"], button[aria-label*="Stop"]').first();
+    const pageStop = page.locator(STOP_BUTTON_SELECTOR).first();
     if (typeof pageStop?.count === 'function' && (await boundedLocatorCount(pageStop, waitMs)) > 0) {
       return true;
     }
@@ -1611,7 +1605,7 @@ async function assistantIsActivelyGenerating(page: any, locator: any, waitSource
   const busy = await readLocatorAttribute(locator, 'aria-busy', waitSource);
   if (busy === 'true') return true;
   try {
-    const stopButton = locator.locator('[data-testid="stop-button"], button[aria-label*="Stop"]').first();
+    const stopButton = locator.locator(STOP_BUTTON_SELECTOR).first();
     if (typeof stopButton?.count === 'function') {
       return (await boundedLocatorCount(stopButton, waitMs)) > 0;
     }
@@ -1633,7 +1627,7 @@ async function observedDispatchUserIds(
   const observed = new Set<string>();
   const candidates = boundDispatchCandidateIds(network);
   if (candidates.size === 0) return observed;
-  const users = page.locator('[data-message-author-role="user"]');
+  const users = page.locator(USER_MESSAGE_SELECTOR);
   const countWait = resolveOperationWaitMs(waitSource);
   if (countWait <= 0) return observed;
   const count = await boundedLocatorCount(users, countWait);
@@ -1792,7 +1786,7 @@ export async function sendTurn(
       } catch { /* unreadable page URL */ }
     });
   }
-  const composer = page.locator('#prompt-textarea');
+  const composer = page.locator(COMPOSER_SELECTOR);
   const readyEndsAt = segmentBudget?.endsAtMs ?? wallClock() + Math.min(config.timeoutMs, MAX_BROWSER_OPERATION_WAIT_MS);
   while (wallClock() < readyEndsAt) {
     const waitMs = loopOperationWaitMs(readyEndsAt, wallClock());
@@ -1811,8 +1805,7 @@ export async function sendTurn(
     return { state: 'ui_contract_mismatch', cause: 'composer_unavailable', possibleDelivery: false };
   }
 
-  const role = '[data-message-author-role]';
-  const baseline = page.locator(role);
+  const baseline = page.locator(MESSAGE_NODE_SELECTOR);
   const baselineIds = new Set<string>();
   let baselineWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
   if (segmentBudget && baselineWait <= 0) throw new BrowserOperationTimeoutError('pre_send_baseline');
@@ -1824,7 +1817,7 @@ export async function sendTurn(
     if (id) baselineIds.add(id);
   }
 
-  const usersBeforeDispatch = page.locator('[data-message-author-role="user"]');
+  const usersBeforeDispatch = page.locator(USER_MESSAGE_SELECTOR);
   let preDispatchUserNodeCount = 0;
   let userNodeBaselineReliable = true;
   try {
@@ -1874,7 +1867,7 @@ export async function sendTurn(
   } catch (error) {
     throw coerceBrowserOperationTimeout(error, 'pre_send_mutation');
   }
-  const send = page.locator('[data-testid="send-button"]');
+  const send = page.locator(SEND_BUTTON_SELECTOR);
   mutationWait = segmentBudget?.clampOperationWaitMs() ?? MAX_BROWSER_OPERATION_WAIT_MS;
   const sendAvailable = (await boundedLocatorCount(send, mutationWait)) > 0;
   revalidateProcessDestinationReservations();
@@ -1908,7 +1901,7 @@ export async function sendTurn(
     network.ingestingDispatchServiceFrames = true;
     if (sendAvailable) await boundedPlaywrightOperation(dispatchWait, () => send.click(dispatchTimeout));
     else {
-      const composer = page.locator('#prompt-textarea');
+      const composer = page.locator(COMPOSER_SELECTOR);
       if ((await boundedLocatorCount(composer, dispatchWait)) <= 0) throw new BrowserOperationTimeoutError('dispatch');
       await boundedPlaywrightOperation(dispatchWait, () => composer.press('Enter', { timeout: dispatchWait }));
     }
@@ -1994,7 +1987,7 @@ export async function sendTurn(
 
     replyWait = loopOperationWaitMs(deadline, wallClock());
     if (replyWait <= 0) break;
-    const users = page.locator('[data-message-author-role="user"]');
+    const users = page.locator(USER_MESSAGE_SELECTOR);
     const newUserIds = new Set<string>();
     const userCount = await boundedLocatorCount(users, replyWait);
     for (let index = 0; index < userCount; index++) {
@@ -2009,7 +2002,7 @@ export async function sendTurn(
 
     replyWait = loopOperationWaitMs(deadline, wallClock());
     if (replyWait <= 0) break;
-    const assistants = page.locator('[data-message-author-role="assistant"]');
+    const assistants = page.locator(ASSISTANT_MESSAGE_SELECTOR);
     const assistantLocators = new Map<string, any>();
     const assistantCount = await boundedLocatorCount(assistants, replyWait);
     for (let index = 0; index < assistantCount; index++) {
@@ -2044,7 +2037,7 @@ export async function sendTurn(
 
     replyWait = loopOperationWaitMs(deadline, wallClock());
     if (replyWait <= 0) break;
-    const cont = page.getByText(/continue generating/i);
+    const cont = page.getByText(CONTINUE_GENERATING_BUTTON_NAME);
     if (await boundedLocatorCount(cont, replyWait)) {
       let continuationLocator: any = null;
       if (boundAssistantId) {
