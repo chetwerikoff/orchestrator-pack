@@ -166,6 +166,47 @@ describe('state-light prompt attribution classification', () => {
     expect(promptEchoSharedOverlap(foreign, prompt)).toBeLessThan(16);
     expect(performance.now() - started).toBeLessThan(500);
   });
+  it('accepts long markdown prompt rendered without syntax chars as owned', () => {
+    const body = Array.from({ length: 420 }, () => 'detail').join(' ')
+    const longPrompt = `# Issue #1120 pulse\n\n## OUTPUT CONSTRAINTS\n- Keep answer under 500 words\n- Use \`backticks\` sparingly\n\n${body}`;
+    const renderedVisible = `Issue #1120 pulse OUTPUT CONSTRAINTS Keep answer under 500 words Use backticks sparingly ${body.slice(0, 512)}`;
+
+    expect(promptEchoSharedOverlap(renderedVisible, longPrompt)).toBeGreaterThanOrEqual(230);
+    expect(ownedPromptEchoMatches(renderedVisible, longPrompt)).toBe(true);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: renderedVisible }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      longPrompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+  });
+
+  it('reproduces live e286c4fd overlap ratio without classifying own long prompt as foreign', () => {
+    const sharedPrefix = `Issue #1120 post-fix live pulse-check HARD fresh-chat stress cell. ${'context '.repeat(80)}`;
+    const longPrompt = `${sharedPrefix}\n\n## Required\n- item one\n- item two\n\n${'detail '.repeat(200)}`;
+    const renderedVisible = `${sharedPrefix} Required item one item two ${'detail '.repeat(120)}`.slice(0, 2800);
+    const overlap = promptEchoSharedOverlap(renderedVisible, longPrompt);
+
+    expect(overlap).toBeGreaterThanOrEqual(493);
+    expect(ownedPromptEchoMatches(renderedVisible, longPrompt)).toBe(true);
+  });
+
+  it('still classifies genuinely foreign long markdown-adjacent text as foreign', () => {
+    const prompt = `# Owned\n\n${'owned detail '.repeat(300)}`;
+    const foreign = `FOREIGN INTERLOPER ${'noise '.repeat(300)}`;
+
+    expect(ownedPromptEchoMatches(foreign, prompt)).toBe(false);
+    expect(promptEchoSharedOverlap(foreign, prompt)).toBeLessThan(24);
+  });
+
+  it('keeps short prompt echo thresholds unchanged', () => {
+    const prompt = 'PROMPT-SHORT owned echo baseline';
+    const visible = 'PROMPT-SHORT owned echo baseline';
+
+    expect(ownedPromptEchoMatches(visible, prompt)).toBe(true);
+    expect(promptEchoSharedOverlap(visible, prompt)).toBe(prompt.length);
+  });
+
   it('keeps genuinely unrelated text foreign', () => {
     const prompt = `owned ${'detail '.repeat(80)}`;
     expect(ownedPromptEchoMatches('FOREIGN INTERLOPER TEXT', prompt)).toBe(false);

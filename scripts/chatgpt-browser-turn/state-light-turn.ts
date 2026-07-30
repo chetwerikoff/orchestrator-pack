@@ -203,6 +203,29 @@ function normalizeEchoComparisonText(value: string): string {
     .trim();
 }
 
+function normalizeMarkdownEchoText(value: string): string {
+  return value
+    .replace(/`+/g, '')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeOwnedEchoText(value: string): string {
+  return normalizeMarkdownEchoText(
+    stripUiCollapseAffixes(normalizeEchoComparisonText(value)),
+  );
+}
+
+function ownedEchoComparisonBound(visibleLength: number, promptLength: number): number {
+  const maxSampleChars = Math.min(visibleLength, MAX_ECHO_COMPARE_CHARS);
+  const maxHaystackChars = Math.min(promptLength, MAX_ECHO_PROMPT_COMPARE_CHARS);
+  return Math.min(maxSampleChars, maxHaystackChars, visibleLength, promptLength);
+}
+
 function boundedDiagnosticHead(value: string, maxChars = FOREIGN_DIAGNOSTIC_HEAD_CHARS): string {
   const normalized = normalizeEchoComparisonText(value);
   if (normalized.length <= maxChars) return normalized;
@@ -261,8 +284,8 @@ function visibleContainedInPrompt(visible: string, prompt: string): boolean {
 }
 
 export function promptEchoSharedOverlap(visibleText: string, promptText: string): number {
-  const visible = stripUiCollapseAffixes(normalizeEchoComparisonText(visibleText));
-  const prompt = normalizeEchoComparisonText(promptText);
+  const visible = normalizeOwnedEchoText(visibleText);
+  const prompt = normalizeOwnedEchoText(promptText);
   if (!visible || !prompt) return 0;
   if (visible === prompt) return visible.length;
 
@@ -275,17 +298,18 @@ export function promptEchoSharedOverlap(visibleText: string, promptText: string)
   return best;
 }
 
-function minimumOwnedEchoOverlap(promptLength: number, visibleLength: number): number {
-  return Math.max(24, Math.floor(Math.min(promptLength, visibleLength) * 0.45));
+function minimumOwnedEchoOverlap(visibleLength: number, promptLength: number): number {
+  const compared = ownedEchoComparisonBound(visibleLength, promptLength);
+  return Math.max(24, Math.floor(compared * 0.45));
 }
 
 export function ownedPromptEchoMatches(visibleText: string, promptText: string): boolean {
-  const visible = stripUiCollapseAffixes(normalizeEchoComparisonText(visibleText));
-  const prompt = normalizeEchoComparisonText(promptText);
+  const visible = normalizeOwnedEchoText(visibleText);
+  const prompt = normalizeOwnedEchoText(promptText);
   if (!visible || !prompt) return false;
   if (visible === prompt) return true;
 
-  const minOverlap = minimumOwnedEchoOverlap(prompt.length, visible.length);
+  const minOverlap = minimumOwnedEchoOverlap(visible.length, prompt.length);
   const shared = promptEchoSharedOverlap(visibleText, promptText);
   if (shared >= minOverlap) return true;
   if (visible.length >= 16 && visibleContainedInPrompt(visible, prompt)) return true;
