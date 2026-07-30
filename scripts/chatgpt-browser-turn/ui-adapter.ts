@@ -1533,6 +1533,41 @@ export async function readAssistantTurnCompletionReady(
   }
 }
 
+export async function readAssistantNodeCompletionReady(
+  node: any,
+  waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
+): Promise<boolean> {
+  let role = '';
+  try {
+    role = String(await node.getAttribute(MESSAGE_AUTHOR_ROLE_ATTR, { timeout: waitMs }) ?? '');
+  } catch {
+    return false;
+  }
+  if (role !== 'assistant') return false;
+  const turn = node.locator(ASSISTANT_TURN_ANCESTOR_XPATH);
+  const turnContainer = await boundedLocatorCount(turn, waitMs) > 0 ? turn.first() : node;
+  try {
+    if (await boundedLocatorCount(turnContainer.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR), waitMs) > 0) {
+      return false;
+    }
+    return await boundedLocatorCount(turnContainer.locator(ASSISTANT_TURN_ACTION_SELECTOR), waitMs) > 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function readAssistantMessageCompletionReady(
+  page: any,
+  messageIndex: number,
+  waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
+): Promise<boolean> {
+  if (messageIndex < 0) return false;
+  const messages = page.locator(MESSAGE_NODE_SELECTOR);
+  const count = await boundedLocatorCount(messages, waitMs);
+  if (messageIndex >= count) return false;
+  return readAssistantNodeCompletionReady(messages.nth(messageIndex), waitMs);
+}
+
 async function pageWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
   return classifyProductWall(await productStatusText(page, waitSource));
 }

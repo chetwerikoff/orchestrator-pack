@@ -150,6 +150,25 @@ describe('state-light prompt attribution classification', () => {
     });
   });
 
+  it('never publishes a partial owned reply when a later foreign turn completed', () => {
+    expect(classifyPageObservation(
+      [
+        ...baseline,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'PARTIAL' },
+        { role: 'user', text: 'FOREIGN' },
+        { role: 'assistant', text: 'FOREIGN COMPLETE' },
+      ],
+      baseline.length,
+      'PROMPT',
+      true,
+    )).toEqual({
+      state: 'uncertain',
+      cause: 'foreign_user_after_owned_send',
+      observedUserHeads: ['FOREIGN'],
+    });
+  });
+
   it('matches owned text when markdown and line breaking normalize to the same string', () => {
     const longPrompt = `Problem:\nFlow-manager misclassifies.\n\nGoal:\nFix echo matching.\n${'detail '.repeat(80)}`;
     const rendered = `Problem: Flow-manager misclassifies. Goal: Fix echo matching. ${'detail '.repeat(80)}`.trim();

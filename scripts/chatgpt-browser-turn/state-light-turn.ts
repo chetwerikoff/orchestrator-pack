@@ -49,6 +49,7 @@ import {
   normalizeConversationUrl,
   productStatusText,
   locateContinueGeneratingControl,
+  readAssistantNodeCompletionReady,
   readAssistantTurnCompletionReady,
   SEND_BUTTON_SELECTOR,
   stripUiCollapseAffixes,
@@ -329,7 +330,6 @@ function maybeReturnObservationUncertain(
   return {
     page,
     browser,
-    preserveOwnedPage: true,
     result: compactResult(
       'observation_uncertain',
       'invocation',
@@ -462,21 +462,30 @@ function publishStateLightReply(
   }
 }
 
-export function classifyPageObservation(
+export function resolveOwnedReplyWindow(
   messages: readonly PageMessage[],
   baselineCount: number,
   prompt: string,
-  inProgress: boolean,
-): PageObservationDecision {
+): {
+  readonly replyWindow: readonly PageMessage[];
+  readonly uncertainCause?: string;
+  readonly observedUserHeads?: readonly string[];
+  readonly lastOwnedAssistantMessageIndex: number | null;
+} {
   const novel = messages.slice(Math.max(0, baselineCount));
+  const baseOffset = Math.max(0, baselineCount);
   const users = novel
     .map((message, index) => ({ message, index }))
     .filter(({ message }) => message.role === 'user');
 
-  if (users.length === 0) return { state: 'waiting' };
+  if (users.length === 0) {
+    return { replyWindow: [], lastOwnedAssistantMessageIndex: null };
+  }
 
   const ownedUsers = users.filter(({ message }) => ownedPromptMatches(message.text, prompt));
-  if (ownedUsers.length === 0) return { state: 'waiting' };
+  if (ownedUsers.length === 0) {
+    return { replyWindow: [], lastOwnedAssistantMessageIndex: null };
+  }
 
   const lastOwned = ownedUsers[ownedUsers.length - 1]!;
   const afterOwned = novel.slice(lastOwned.index + 1);
@@ -495,18 +504,60 @@ export function classifyPageObservation(
     observedUserHeads = [boundedDiagnosticHead(firstForeignUser.text)];
   }
 
-  const assistants = replyWindow.filter((message) => message.role === 'assistant');
-  if (!inProgress && assistants.length > 0) {
-    const finalReply = normalizeVisibleText(assistants.at(-1)?.text ?? '');
-    if (finalReply) return { state: 'ready', reply: finalReply };
+  let lastOwnedAssistantMessageIndex: number | null = null;
+  for (let index = replyWindow.length - 1; index >= 0; index--) {
+    if (replyWindow[index]!.role === 'assistant') {
+      lastOwnedAssistantMessageIndex = baseOffset + lastOwned.index + 1 + index;
+      break;
+    }
   }
 
+  return {
+    replyWindow,
+    ...(uncertainCause ? { uncertainCause } : {}),
+    ...(observedUserHeads ? { observedUserHeads } : {}),
+    lastOwnedAssistantMessageIndex,
+  };
+}
+
+export function classifyPageObservation(
+  messages: readonly PageMessage[],
+  baselineCount: number,
+  prompt: string,
+  inProgress: boolean,
+): PageObservationDecision {
+  const novel = messages.slice(Math.max(0, baselineCount));
+  const users = novel.filter((message) => message.role === 'user');
+  if (users.length === 0) return { state: 'waiting' };
+  if (!users.some((message) => ownedPromptMatches(message.text, prompt))) return { state: 'waiting' };
+
+  const { replyWindow, uncertainCause, observedUserHeads } = resolveOwnedReplyWindow(
+    messages,
+    baselineCount,
+    prompt,
+  );
+  const assistants = replyWindow.filter((message) => message.role === 'assistant');
+
   if (uncertainCause) {
+    if (inProgress || assistants.length === 0) {
+      return {
+        state: 'uncertain',
+        cause: uncertainCause,
+        ...(observedUserHeads ? { observedUserHeads } : {}),
+      };
+    }
+    const finalReply = normalizeVisibleText(assistants.at(-1)?.text ?? '');
+    if (finalReply) return { state: 'ready', reply: finalReply };
     return {
       state: 'uncertain',
       cause: uncertainCause,
       ...(observedUserHeads ? { observedUserHeads } : {}),
     };
+  }
+
+  if (!inProgress && assistants.length > 0) {
+    const finalReply = normalizeVisibleText(assistants.at(-1)?.text ?? '');
+    if (finalReply) return { state: 'ready', reply: finalReply };
   }
 
   return { state: 'waiting' };
@@ -642,9 +693,21 @@ async function locatorText(locator: any): Promise<string> {
 }
 
 async function readPageMessages(page: any): Promise<PageMessage[]> {
+  return (await readPageObservation(page)).messages;
+}
+
+async function readPageObservation(
+  page: any,
+  prompt?: string,
+  baselineCount?: number,
+): Promise<{
+  readonly messages: PageMessage[];
+  readonly ownedWindowCompletionReady: boolean;
+}> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
   const count = await locatorCount(nodes);
   const messages: PageMessage[] = [];
+  const domIndices: number[] = [];
   for (let index = 0; index < count; index++) {
     const node = nodes.nth(index);
     let role = '';
@@ -655,8 +718,26 @@ async function readPageMessages(page: any): Promise<PageMessage[]> {
     }
     if (role !== 'user' && role !== 'assistant') continue;
     messages.push({ role, text: await locatorText(node) });
+    domIndices.push(index);
   }
-  return messages;
+
+  let ownedWindowCompletionReady = false;
+  if (prompt !== undefined && baselineCount !== undefined) {
+    const { lastOwnedAssistantMessageIndex } = resolveOwnedReplyWindow(messages, baselineCount, prompt);
+    const ownedAssistantDomIndex = lastOwnedAssistantMessageIndex === null
+      ? null
+      : domIndices[lastOwnedAssistantMessageIndex] ?? null;
+    if (ownedAssistantDomIndex !== null) {
+      ownedWindowCompletionReady = await readAssistantNodeCompletionReady(
+        nodes.nth(ownedAssistantDomIndex),
+        MAX_LOCAL_READ_WAIT_MS,
+      );
+    } else {
+      ownedWindowCompletionReady = await readAssistantTurnCompletionReady(page, MAX_LOCAL_READ_WAIT_MS);
+    }
+  }
+
+  return { messages, ownedWindowCompletionReady };
 }
 
 export type SendLandingEvidence = 'landed' | 'not_landed' | 'ambiguous';
@@ -693,15 +774,18 @@ function recordProductWallAdvisory(
   }
 }
 
-async function readPostSendObservation(page: any): Promise<{
+async function readPostSendObservation(
+  page: any,
+  prompt: string,
+  baselineCount: number,
+): Promise<{
   readonly messages: PageMessage[];
   readonly wall: ReturnType<typeof classifyProductWall>;
-  readonly completionReady: boolean;
+  readonly ownedWindowCompletionReady: boolean;
 }> {
-  const messages = await readPageMessages(page);
+  const { messages, ownedWindowCompletionReady } = await readPageObservation(page, prompt, baselineCount);
   const wall = classifyProductWall(await productStatusText(page, MAX_LOCAL_READ_WAIT_MS));
-  const completionReady = await readAssistantTurnCompletionReady(page, MAX_LOCAL_READ_WAIT_MS);
-  return { messages, wall, completionReady };
+  return { messages, wall, ownedWindowCompletionReady };
 }
 
 async function maybeContinueGeneration(page: any): Promise<boolean> {
@@ -1207,7 +1291,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       pollCount++;
       let observation: Awaited<ReturnType<typeof readPostSendObservation>>;
       try {
-        observation = await readPostSendObservation(page);
+        observation = await readPostSendObservation(page, snapshot.text, baselineCount);
       } catch (error) {
         if (browserOrPageDefinitelyLost(page, browser)) throw error;
         const symptom = error instanceof Error ? error.message : String(error);
@@ -1239,8 +1323,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         continue;
       }
 
-      const { messages, wall, completionReady } = observation;
-      if (completionReady) completionReadySeen = true;
+      const { messages, wall, ownedWindowCompletionReady } = observation;
+      if (ownedWindowCompletionReady) completionReadySeen = true;
       if (wall.state) {
         const cause = wall.cause ?? `${wall.state}_detected`;
         recordProductWallAdvisory(profileKey, wall.state, cause, invocationId);
@@ -1262,7 +1346,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         };
       }
 
-      const decision = classifyPageObservation(messages, baselineCount, snapshot.text, !completionReady);
+      const decision = classifyPageObservation(messages, baselineCount, snapshot.text, !ownedWindowCompletionReady);
 
       const novelMessages = messages.slice(Math.max(0, baselineCount));
       if (novelMessages.some((message) => message.role === 'user' && ownedPromptMatches(message.text, snapshot.text))) {

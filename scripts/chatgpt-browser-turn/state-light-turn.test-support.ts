@@ -504,7 +504,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       state: 'observation_uncertain',
       cause: 'owned_prompt_not_observed',
     });
-    expect(metrics.closes).toBe(0);
+    expect(metrics.closes).toBe(1);
     expect(metrics.polls).toBeGreaterThanOrEqual(3);
   });
 
@@ -568,6 +568,50 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(fake.metrics.closes).toBe(1);
   });
 
+
+  it('never publishes partial owned reply when a later foreign turn completed', async () => {
+    const snapshot: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'PARTIAL' },
+        { role: 'user', text: 'FOREIGN' },
+        { role: 'assistant', text: 'FOREIGN COMPLETE', finalAction: true },
+      ],
+      generating: false,
+    };
+    const fake = makePage(Array.from({ length: 30 }, () => snapshot));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
+
+    expect(outcome.result.state).toBe('observation_uncertain');
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result.cause).toBe('foreign_user_after_owned_send');
+    expect(mocks.linkSync).not.toHaveBeenCalled();
+    expect(fake.metrics.closes).toBe(1);
+  });
+
+  it('closes the owned tab on observation_uncertain without touching sibling tabs', async () => {
+    const foreignSnapshot: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'FOREIGN' },
+        { role: 'assistant', text: 'FOREIGN ANSWER', finalAction: true },
+      ],
+      generating: true,
+    };
+    const fake = makePage(Array.from({ length: 30 }, () => foreignSnapshot));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
+
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain',
+      cleanup: 'confirmed',
+      send_count: 1,
+    });
+    expect(fake.metrics.closes).toBe(1);
+    expect(outcome.result.conversation_id).toBe('https://chatgpt.com/c/fake-owned-turn');
+  });
+
   it('returns observation_uncertain at the hard deadline for interleaved foreign activity', async () => {
     const foreignSnapshot: StateLightTestSnapshot = {
       messages: [
@@ -586,7 +630,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       scope: 'invocation',
       cause: 'foreign_user_after_owned_send',
       send_count: 1,
-      cleanup: 'skipped',
+      cleanup: 'confirmed',
       observation_uncertainty_diagnostics: {
         cause: 'foreign_user_after_owned_send',
         send_count: 1,
@@ -595,7 +639,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       },
     });
     expect(fake.metrics.sends).toBe(1);
-    expect(fake.metrics.closes).toBe(0);
+    expect(fake.metrics.closes).toBe(1);
     expect(mocks.linkSync).not.toHaveBeenCalled();
     const journal = mocks.appendFileSync.mock.calls.map((call) => String(call[1])).join('\n');
     expect(journal).toContain('interleaved_user_activity');
@@ -854,7 +898,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
         owned_prompt_seen: true,
       },
     });
-    expect(fake.metrics.closes).toBe(0);
+    expect(fake.metrics.closes).toBe(1);
   });
 
   it('stabilizes a long reply when successive reads differ only by render artifacts', async () => {
