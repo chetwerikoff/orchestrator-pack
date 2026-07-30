@@ -531,7 +531,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       } else {
         await composer.press('Enter', { timeout: MAX_LOCAL_READ_WAIT_MS });
       }
-      sendCount = 1;
+      sendCount += 1;
       afterSend = true;
     };
 

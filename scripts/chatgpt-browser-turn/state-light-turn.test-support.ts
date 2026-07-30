@@ -41,21 +41,8 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
-vi.mock('./browser-session.ts', () => ({
-  RESOURCE_CLEANUP_BOUND_MS: 5_000,
-  boundedResourceCleanup: vi.fn(async (cleanup: () => Promise<void>) => {
-    if (mocks.cleanupOutcome === 'confirmed') await cleanup();
-    return mocks.cleanupOutcome;
-  }),
-  releaseCdpBrowser: mocks.releaseBrowser,
-}));
-
-vi.mock('./coordination.ts', () => ({
-  destinationIdentity: vi.fn((path: string) => ({
-    identity: `identity:${path}`,
-    finalPath: path,
-  })),
-}));
+vi.mock('./browser-session.ts', () => createBrowserSessionModuleMock(mocks));
+vi.mock('./coordination.ts', () => createCoordinationModuleMock());
 
 vi.mock('./input.ts', () => ({
   readStableInput: vi.fn(() => ({
@@ -95,69 +82,25 @@ vi.mock('./ui-adapter.ts', async (importOriginal) => {
   };
 });
 
-import { scalarLocator } from './state-light-turn.test-fixtures.ts';
+import {
+  browserFor,
+  collectionLocator,
+  createBrowserSessionModuleMock,
+  createCoordinationModuleMock,
+  messageLocator,
+  scalarLocator,
+  type StateLightTestMessage,
+  type StateLightTestSnapshot,
+} from './state-light-turn.test-fixtures.ts';
 import { runStateLightTurn } from './state-light-turn.ts';
 
-type Message = {
-  role: 'user' | 'assistant';
-  text: string;
-  finalAction?: boolean;
-  finalActionInTurnContainer?: boolean;
-  inProgress?: boolean;
-};
-type Snapshot = {
-  messages: Message[];
-  generating: boolean;
-  continuation?: boolean;
-};
-
-const BASELINE: Message[] = [
+const BASELINE: StateLightTestMessage[] = [
   { role: 'user', text: 'OLD' },
   { role: 'assistant', text: 'OLD ANSWER', finalAction: true },
 ];
 
-function messageLocator(message: Message, generating = false) {
-  return scalarLocator({
-    count: vi.fn(async () => 1),
-    getAttribute: vi.fn(async (name: string) => {
-      if (name === 'data-message-author-role') return message.role;
-      if (name === 'data-is-streaming') return generating ? 'true' : null;
-      if (name === 'aria-busy') return null;
-      return null;
-    }),
-    locator: vi.fn((selector: string) => {
-      if (selector.startsWith('xpath=') || selector.includes('conversation-turn-')) {
-        if (!message.finalActionInTurnContainer) return scalarLocator({ count: vi.fn(async () => 0) });
-        return scalarLocator({ turnActionButtons: true, count: vi.fn(async () => 1) });
-      }
-      if (message.role !== 'assistant') return scalarLocator();
-      if (message.finalAction && !message.finalActionInTurnContainer && selector.includes('copy-turn-action-button')) {
-        return scalarLocator({ count: vi.fn(async () => 1) });
-      }
-      if (message.inProgress && (
-        selector.includes('[aria-busy="true"]')
-        || selector.includes('[data-is-streaming="true"]')
-        || selector.includes('[data-testid*="tool"]')
-      )) {
-        return scalarLocator({ count: vi.fn(async () => 1) });
-      }
-      return scalarLocator();
-    }),
-    innerText: vi.fn(async () => message.text),
-    textContent: vi.fn(async () => message.text),
-  });
-}
-
-function collectionLocator(messages: Message[], generating = false) {
-  const locator = scalarLocator({
-    count: vi.fn(async () => messages.length),
-    nth: vi.fn((index: number) => messageLocator(messages[index]!, generating && index === messages.length - 1)),
-  });
-  return locator;
-}
-
 function makePage(
-  snapshots: Snapshot[],
+  snapshots: StateLightTestSnapshot[],
   options: {
     throwAfterSend?: boolean;
     transientStatusErrors?: number;
@@ -169,7 +112,7 @@ function makePage(
   let sent = false;
   let filled = '';
   let observationIndex = 0;
-  let activeSnapshot: Snapshot = { messages: BASELINE, generating: false };
+  let activeSnapshot: StateLightTestSnapshot = { messages: BASELINE, generating: false };
   let continuationDismissed = false;
   let closed = false;
   let transientStatusErrors = options.transientStatusErrors ?? 0;
@@ -260,19 +203,7 @@ function makePage(
   return { page, metrics };
 }
 
-function browserFor(page: any) {
-  const context = { newPage: vi.fn(async () => page) };
-  return {
-    browser: {
-      contexts: vi.fn(() => [context]),
-      isConnected: vi.fn(() => true),
-      close: vi.fn(async () => undefined),
-    },
-    context,
-  };
-}
-
-function readySnapshots(reply = 'FINAL'): Snapshot[] {
+function readySnapshots(reply = 'FINAL'): StateLightTestSnapshot[] {
   return [
     {
       messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
@@ -546,7 +477,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
 
 
   it('detects completion when turn action buttons live in the conversation-turn container', async () => {
-    const snapshots: Snapshot[] = [
+    const snapshots: StateLightTestSnapshot[] = [
       {
         messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
         generating: true,

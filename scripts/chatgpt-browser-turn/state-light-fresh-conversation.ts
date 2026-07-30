@@ -5,7 +5,7 @@ import {
   openSync,
   readFileSync,
   rmSync,
-  writeSync,
+  writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { normalizeConversationUrl, type BrowserConfig } from './ui-adapter.ts';
@@ -136,7 +136,7 @@ export function tryClaimStateLightFreshConversation(
   try {
     const fd = openSync(claimPath, 'wx', 0o600);
     try {
-      writeSync(fd, `${JSON.stringify(record)}\n`, 'utf8');
+      writeFileSync(fd, `${JSON.stringify(record)}\n`, 'utf8');
     } finally {
       closeSync(fd);
     }
@@ -190,7 +190,7 @@ export async function acquireStateLightNewChatSendSlot(
     try {
       const fd = openSync(slotPath, 'wx', 0o600);
       try {
-        writeSync(fd, `${JSON.stringify(record)}\n`, 'utf8');
+        writeFileSync(fd, `${JSON.stringify(record)}\n`, 'utf8');
       } finally {
         closeSync(fd);
       }

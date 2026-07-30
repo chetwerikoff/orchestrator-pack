@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   browserQueue: [] as any[],
   cleanupOutcome: 'confirmed' as 'confirmed' | 'unconfirmed',
-  journalThrows: false,
   verifyProfile: vi.fn(async () => ({ state: 'verified' })),
   legacyPublishReply: vi.fn(() => {
     throw new Error('legacy publication state unavailable');
@@ -33,21 +32,8 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
-vi.mock('./browser-session.ts', () => ({
-  RESOURCE_CLEANUP_BOUND_MS: 5_000,
-  boundedResourceCleanup: vi.fn(async (cleanup: () => Promise<void>) => {
-    if (mocks.cleanupOutcome === 'confirmed') await cleanup();
-    return mocks.cleanupOutcome;
-  }),
-  releaseCdpBrowser: mocks.releaseBrowser,
-}));
-
-vi.mock('./coordination.ts', () => ({
-  destinationIdentity: vi.fn((path: string) => ({
-    identity: `identity:${path}`,
-    finalPath: path,
-  })),
-}));
+vi.mock('./browser-session.ts', () => createBrowserSessionModuleMock(mocks));
+vi.mock('./coordination.ts', () => createCoordinationModuleMock());
 
 vi.mock('./input.ts', () => ({
   readStableInput: mocks.readStableInput,
@@ -80,10 +66,22 @@ vi.mock('./ui-adapter.ts', async (importOriginal) => {
   };
 });
 
-import { scalarLocator } from './state-light-turn.test-fixtures.ts';
+import {
+  browserFor,
+  collectionLocator,
+  createBrowserSessionModuleMock,
+  createCoordinationModuleMock,
+  messageLocator,
+  readyTurnObservationFrames,
+  scalarLocator,
+  stableTurnInput,
+  type StateLightTestMessage,
+} from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, runStateLightTurn } from './state-light-turn.ts';
 import {
+  acquireStateLightNewChatSendSlot,
   releaseStateLightFreshConversationClaim,
+  releaseStateLightNewChatSendSlot,
   tryClaimStateLightFreshConversation,
 } from './state-light-fresh-conversation.ts';
 
@@ -91,75 +89,12 @@ const PROJECT_URL = 'https://chatgpt.com/g/g-p-test/project';
 const SHARED_CONV = `${PROJECT_URL}/c/11111111-1111-4111-8111-111111111111`;
 const LOSER_CONV = `${PROJECT_URL}/c/22222222-2222-4222-8222-222222222222`;
 
-type Message = {
-  role: 'user' | 'assistant';
-  text: string;
-  finalAction?: boolean;
-  finalActionInTurnContainer?: boolean;
-};
-
-function readySnapshots(prompt: string, reply: string): Message[][] {
-  const working = [
-    { role: 'user' as const, text: prompt },
-    { role: 'assistant' as const, text: 'working' },
-  ];
-  const final = [
-    { role: 'user' as const, text: prompt },
-    {
-      role: 'assistant' as const,
-      text: reply,
-      finalAction: true,
-      finalActionInTurnContainer: true,
-    },
-  ];
-  return [working, working, final, final];
-}
-
-function messageLocator(message: Message, generating = false) {
-  return scalarLocator({
-    count: vi.fn(async () => 1),
-    getAttribute: vi.fn(async (name: string) => {
-      if (name === 'data-message-author-role') return message.role;
-      if (name === 'data-is-streaming') return generating ? 'true' : null;
-      if (name === 'aria-busy') return null;
-      return null;
-    }),
-    locator: vi.fn((selector: string) => {
-      if (selector.startsWith('xpath=') || selector.includes('conversation-turn-')) {
-        if (!message.finalActionInTurnContainer) return scalarLocator({ count: vi.fn(async () => 0) });
-        return scalarLocator({ turnActionButtons: true, count: vi.fn(async () => 1) });
-      }
-      if (message.role !== 'assistant') return scalarLocator();
-      if (message.finalAction && !message.finalActionInTurnContainer && selector.includes('copy-turn-action-button')) {
-        return scalarLocator({ count: vi.fn(async () => 1) });
-      }
-      if (message.inProgress && (
-        selector.includes('[aria-busy="true"]')
-        || selector.includes('[data-is-streaming="true"]')
-        || selector.includes('[data-testid*="tool"]')
-      )) {
-        return scalarLocator({ count: vi.fn(async () => 1) });
-      }
-      return scalarLocator();
-    }),
-    innerText: vi.fn(async () => message.text),
-    textContent: vi.fn(async () => message.text),
-  });
-}
-
-function collectionLocator(messages: Message[], generating = false) {
-  return scalarLocator({
-    count: vi.fn(async () => messages.length),
-    nth: vi.fn((index: number) => messageLocator(messages[index]!, generating && index === messages.length - 1)),
-  });
-}
-
 function makeLoserPage(prompt: string, reply: string) {
   let sends = 0;
   let sent = false;
   let url = PROJECT_URL;
   let observationIndex = 0;
-  const snapshotFrames = readySnapshots(prompt, reply).map((messages, index) => ({
+  const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
     messages,
     generating: index < 2,
   }));
@@ -215,7 +150,10 @@ function makeLoserPage(prompt: string, reply: string) {
         return scalarLocator({ count: vi.fn(async () => 0) });
       }
       if (selector === '[data-message-author-role="assistant"]') {
-        return collectionLocator(activeSnapshot.messages.filter((message) => message.role === 'assistant'), activeSnapshot.generating);
+        return collectionLocator(
+          activeSnapshot.messages.filter((message: StateLightTestMessage) => message.role === 'assistant'),
+          activeSnapshot.generating,
+        );
       }
       if (selector.includes('stop-button')) return scalarLocator();
       return scalarLocator();
@@ -225,29 +163,12 @@ function makeLoserPage(prompt: string, reply: string) {
   return { page, getSends: () => sends };
 }
 
-function browserFor(page: any) {
-  const context = { newPage: vi.fn(async () => page) };
-  return {
-    browser: {
-      contexts: vi.fn(() => [context]),
-      isConnected: vi.fn(() => true),
-      close: vi.fn(async () => undefined),
-    },
-    context,
-  };
-}
-
-function stableInput(prompt: string) {
-  return {
-    text: prompt,
-    bytes: new Uint8Array([...prompt].map((char) => char.charCodeAt(0))),
-    byteLength: prompt.length,
-    dev: 1n,
-    ino: 1n,
-  };
-}
-
-async function runNewChatTurn(page: any, outputPath: string) {
+async function runNewChatTurn(page: any, outputPath: string, options: { disableSendSlot?: boolean } = {}) {
+  if (options.disableSendSlot === false) {
+    delete process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT;
+  } else {
+    process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT = '1';
+  }
   const { browser } = browserFor(page);
   mocks.browserQueue.push(browser);
   const writes: string[] = [];
@@ -302,6 +223,27 @@ describe('state-light fresh conversation collision recovery', () => {
     releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'loser');
   });
 
+  it('blocks a second new-chat invocation while the profile send slot is held', async () => {
+    delete process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT;
+    const profileKey = 'collision-profile';
+
+    await acquireStateLightNewChatSendSlot(profileKey, 'winner-invocation', 5_000);
+
+    let loserAcquired = false;
+    const loserAcquire = acquireStateLightNewChatSendSlot(profileKey, 'loser-invocation', 5_000).then(() => {
+      loserAcquired = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(loserAcquired).toBe(false);
+
+    releaseStateLightNewChatSendSlot(profileKey, 'winner-invocation');
+    await loserAcquire;
+    expect(loserAcquired).toBe(true);
+
+    releaseStateLightNewChatSendSlot(profileKey, 'loser-invocation');
+  });
+
   it('recovers the contended invocation onto an isolated surface without sibling refusal', async () => {
     const profileKey = 'collision-profile';
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'winner-invocation')).toBe('claimed');
@@ -316,7 +258,7 @@ describe('state-light fresh conversation collision recovery', () => {
       false,
     )).toMatchObject({ state: 'ready', reply: 'WINNER-OK' });
 
-    mocks.readStableInput.mockImplementationOnce(() => stableInput('PROMPT-LOSER'));
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LOSER'));
     const loser = makeLoserPage('PROMPT-LOSER', 'LOSER-OK');
     const loserOutcome = await runNewChatTurn(loser.page, '/tmp/loser.txt');
 
@@ -324,7 +266,7 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(loserOutcome.result).toMatchObject({
       state: 'ok',
       cause: 'completed_page_only',
-      send_count: 1,
+      send_count: 2,
       conversation_id: LOSER_CONV,
     });
     expect(loserOutcome.result.state).not.toBe('foreign_activity');
@@ -335,9 +277,9 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
   it('still rejects real foreign human activity after the owned prompt', () => {
-    const baseline = [
-      { role: 'user' as const, text: 'OLD' },
-      { role: 'assistant' as const, text: 'OLD ANSWER' },
+    const baseline: StateLightTestMessage[] = [
+      { role: 'user', text: 'OLD' },
+      { role: 'assistant', text: 'OLD ANSWER' },
     ];
     const decision = classifyPageObservation(
       [

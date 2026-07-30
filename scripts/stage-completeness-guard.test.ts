@@ -363,7 +363,7 @@ describe('Issue #1120 state-light Browser-GPT turn', () => {
     expect(helperSource).toContain('contexts[0].newPage()');
     expect(helperSource.match(/sendButton\.click\(/g) ?? []).toHaveLength(1);
     expect(helperSource.match(/composer\.press\('Enter'/g) ?? []).toHaveLength(1);
-    expect(helperSource).toContain('sendCount = 1');
+    expect(helperSource).toContain('sendCount += 1');
     expect(helperSource).toContain('appendFileSync(BROWSER_TURN_RECURRENCE_PATH');
     expect(helperSource).not.toMatch(/readFileSync\(BROWSER_TURN_RECURRENCE_PATH/);
     expect(helperSource).not.toMatch(/acquire.*journal|journal.*lock/i);
