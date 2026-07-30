@@ -107,7 +107,7 @@ import {
   SEND_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { runStateLightTurn } from './state-light-turn.ts';
+import { POST_SEND_OBSERVATION_POLL_MS, runStateLightTurn } from './state-light-turn.ts';
 import type { ProfileVerification } from './ui-adapter.ts';
 
 import journalSymptoms from './fixtures/browser-turn-recurrence-journal-symptoms.json' with { type: 'json' };
@@ -263,6 +263,20 @@ function readySnapshots(reply = 'FINAL'): StateLightTestSnapshot[] {
   ];
 }
 
+const DISPATCH_OBSERVATION_MS = 30_000;
+
+function delayedReadySnapshots(waitingPolls: number, reply = 'FINAL'): StateLightTestSnapshot[] {
+  const waiting: StateLightTestSnapshot = {
+    messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+    generating: true,
+  };
+  const ready: StateLightTestSnapshot = {
+    messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: reply, finalAction: true }],
+    generating: false,
+  };
+  return [...Array.from({ length: waitingPolls }, () => waiting), ready, ready];
+}
+
 async function runAndCapture(
   page: any,
   options: { timeoutMs?: string; pollMs?: string } = {},
@@ -324,6 +338,21 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(fake.metrics.closes).toBe(1);
     expect(outcome.context.newPage).toHaveBeenCalledTimes(1);
     expect(mocks.linkSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses post-send observation cadence instead of --poll-ms after the dispatch window', async () => {
+    const fake = makePage(delayedReadySnapshots(65));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '120000', pollMs: '300000' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      cause: 'completed_page_only',
+      send_count: 1,
+    });
+    const maxExpectedWait = DISPATCH_OBSERVATION_MS + POST_SEND_OBSERVATION_POLL_MS * 4 + 5_000;
+    expect(fake.metrics.waitedMs).toBeLessThan(maxExpectedWait);
+    expect(fake.metrics.waitedMs).toBeGreaterThan(DISPATCH_OBSERVATION_MS);
   });
 
   it('runs three overlapping invocations on independent owned tabs', async () => {

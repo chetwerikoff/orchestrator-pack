@@ -208,10 +208,13 @@ not the pre-#1120 durable fail-closed blocker machinery.
 
 ## Polling and long turns
 
-Initial dispatch observation may poll more frequently; after that, page reads are
-bounded and low-frequency. Repeated normal `waiting`/`generating` observations are
-not incident-journal rows. Crossing `--timeout-ms` with a still-reachable owned
-page simply continues this low-frequency polling; it is not a resend signal.
+Initial dispatch observation polls every ~500ms for up to 30 seconds. After
+that, post-send page observation polls every ~15 seconds — local CDP DOM reads only,
+decoupled from send/navigation anti-rate-limit pacing (`--poll-ms` no longer slows
+observation). Completion-sighting confirm reads stay at ~1s. Repeated normal
+`waiting`/`generating` observations are not incident-journal rows. Crossing
+`--timeout-ms` with a still-reachable owned page continues observation polling; it
+is not a resend signal.
 
 PID, log growth, helper stdout timing, or a background shell job prove neither
 that ChatGPT is still generating nor that it has completed. Issue #1120 does not

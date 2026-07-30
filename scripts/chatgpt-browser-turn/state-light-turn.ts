@@ -58,7 +58,9 @@ import {
 } from './ui-adapter.ts';
 
 const DEFAULT_TIMEOUT_MS = 1_800_000;
-const DEFAULT_POLL_MS = 300_000;
+/** Local CDP DOM reads after dispatch; not send/navigation pacing. */
+export const POST_SEND_OBSERVATION_POLL_MS = 15_000;
+const DEFAULT_POLL_MS = POST_SEND_OBSERVATION_POLL_MS;
 const INITIAL_POLL_MS = 500;
 const DISPATCH_OBSERVATION_MS = 30_000;
 const STABILITY_READ_DELAY_MS = 1_000;
@@ -1571,7 +1573,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         ? COMPLETION_CONFIRM_POLL_MS
         : elapsed < DISPATCH_OBSERVATION_MS
           ? INITIAL_POLL_MS
-          : config.pollMs;
+          : POST_SEND_OBSERVATION_POLL_MS;
       const beforeSoftDeadline = Date.now() < softDeadline;
       await sleep(page, beforeSoftDeadline
         ? Math.min(delay, Math.max(1, softDeadline - Date.now()))
