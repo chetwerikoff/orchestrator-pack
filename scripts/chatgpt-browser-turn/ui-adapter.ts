@@ -69,7 +69,7 @@ export async function verifyProfile(
     const mod = await loadCdpOwnerModule();
     if (segmentBudget) {
       const ownerWaitMs = segmentBudget.clampOperationWaitMs();
-      if (ownerWaitMs <= 0) throw new BrowserOperationTimeoutError('profile_segment_exhausted');
+      if (ownerWaitMs <= 0) throw new BrowserOperationTimeoutError('owner_probe');
       const bounded = mod.verifyCdpProfileBounded;
       if (!bounded) throw new BrowserOperationTimeoutError('owner_probe', 'bounded_mode_missing');
       const result = await bounded({ cdp: config.cdp, profile: config.profile, timeoutMs: ownerWaitMs });
@@ -1452,15 +1452,84 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
   return { text: parts.join('\n'), composer };
 }
 
-export function classifyProductWall(surface: ProductStatusSurface): { state?: 'quota'|'challenge'|'login'; cause?: string } {
+const PRODUCT_RATE_LIMIT_WALL_RE = /too many requests|(?:making |sending )?requests too quickly|you(?:'|’)re (?:making requests|sending messages) too quickly|temporarily limited(?:\s+access)?(?:\s+to your conversations)?|(?:please )?wait(?: a)? few minutes before trying again|try again in a few minutes|you(?:'|’)re going too fast|rate limit exceeded/i;
+
+export function classifyProductWall(surface: ProductStatusSurface): { state?: 'quota'|'rate_limit'|'challenge'|'login'; cause?: string } {
   if (/verify you are human|checking your browser|just a moment|unusual activity/i.test(surface.text)) {
     return { state: 'challenge', cause: 'challenge_detected' };
   }
-  if (/you(?:'|’)ve reached|usage limit|message limit|reached the current usage|please try again later/i.test(surface.text)) {
+  if (/you(?:'|’)ve reached|usage limit|message limit|reached the current usage|reached your usage limit|please try again later/i.test(surface.text)) {
     return { state: 'quota', cause: 'quota_detected' };
+  }
+  if (PRODUCT_RATE_LIMIT_WALL_RE.test(surface.text)) {
+    return { state: 'rate_limit', cause: 'rate_limit_detected' };
   }
   if (!surface.composer && /log in|sign in/i.test(surface.text)) return { state: 'login', cause: 'login_required' };
   return {};
+}
+
+export const ASSISTANT_TURN_ACTION_SELECTOR = [
+  '[data-testid="copy-turn-action-button"]',
+  '[data-testid="good-response-turn-action-button"]',
+  '[data-testid="bad-response-turn-action-button"]',
+].join(', ');
+
+export const ASSISTANT_TURN_IN_PROGRESS_SELECTOR = [
+  '[aria-busy="true"]',
+  '[data-is-streaming="true"]',
+  '[data-testid*="tool"][aria-busy="true"]',
+  '[data-testid*="tool"][data-state="running"]',
+  '[data-testid*="tool"][data-state="loading"]',
+].join(', ');
+
+const CONVERSATION_TURN_SECTION_SELECTOR = 'section[data-testid^="conversation-turn-"]';
+export async function locateLastAssistantTurnContainer(
+  page: any,
+  waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
+): Promise<any | null> {
+  const assistants = page.locator('[data-message-author-role="assistant"]');
+  const count = await boundedLocatorCount(assistants, waitMs);
+  if (count === 0) return null;
+  const last = assistants.nth(count - 1);
+  const turn = last.locator('xpath=ancestor-or-self::section[starts-with(@data-testid, "conversation-turn-")][1]');
+  if (await boundedLocatorCount(turn, waitMs) > 0) return turn.first();
+  return last;
+}
+
+export async function readAssistantTurnGenerating(
+  page: any,
+  waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
+): Promise<boolean> {
+  try {
+    if (await boundedLocatorCount(page.locator('[data-testid="stop-button"], button[aria-label*="Stop"]').first(), waitMs) > 0) {
+      return true;
+    }
+  } catch {
+    // Fall through to turn-scoped signals.
+  }
+  const turn = await locateLastAssistantTurnContainer(page, waitMs);
+  if (!turn) return false;
+  try {
+    if (await boundedLocatorCount(turn.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR), waitMs) > 0) return true;
+    if (await boundedLocatorCount(page.getByText(/continue generating/i), waitMs) > 0) return true;
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+export async function readAssistantTurnCompletionReady(
+  page: any,
+  waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
+): Promise<boolean> {
+  if (await readAssistantTurnGenerating(page, waitMs)) return false;
+  const turn = await locateLastAssistantTurnContainer(page, waitMs);
+  if (!turn) return false;
+  try {
+    return await boundedLocatorCount(turn.locator(ASSISTANT_TURN_ACTION_SELECTOR), waitMs) > 0;
+  } catch {
+    return false;
+  }
 }
 
 async function pageWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
@@ -1587,7 +1656,7 @@ function withRetainedFreshConversationId(
 }
 
 export interface TurnBrowserResult {
-  state: 'ok'|'quota'|'challenge'|'login'|'stream_timeout'|'send_failed'|'no_reply'|'ui_contract_mismatch'|'foreign_activity'|'recovery_required'|'orphaned_fresh_turn'|'output_conflict';
+  state: 'ok'|'quota'|'rate_limit'|'challenge'|'login'|'stream_timeout'|'send_failed'|'no_reply'|'ui_contract_mismatch'|'foreign_activity'|'recovery_required'|'orphaned_fresh_turn'|'output_conflict';
   cause: string;
   conversationId?: string;
   userMessageId?: string;

@@ -573,7 +573,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         }));
       }
 
-      if (result.state === 'quota' || result.state === 'challenge' || result.state === 'login') {
+      if (result.state === 'quota' || result.state === 'rate_limit' || result.state === 'challenge' || result.state === 'login') {
         const wall = ensureProfileWall(profileKey, result.state);
         return emitTurnAndCode(turnResult(result.state, 'profile', result.cause, invocationId, profileKey, {
           incident_id: wall.identity,
@@ -605,7 +605,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     }
 
     if (result.state !== 'ok' || !result.reply || !result.userMessageId || !result.assistantMessageId) {
-      const wallMatch = /^profile_wall:(quota|challenge|login)$/.exec(result.cause);
+      const wallMatch = /^profile_wall:(quota|rate_limit|challenge|login)$/.exec(result.cause);
       if (wallMatch) ensureProfileWall(profileKey, wallMatch[1] as TurnState);
       const incident = updateIncident(profileKey, incidentId, {
         kind: 'conversation_incident',

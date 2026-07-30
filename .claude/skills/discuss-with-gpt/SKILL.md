@@ -1,88 +1,57 @@
 ---
 name: discuss-with-gpt
-description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". With only a brief and no artifact, route through create-issue-draft's brief-only entry; that wrapper floors tier at T2 and routes into create-issue-draft without adding a competitive create-flow stage. Otherwise run the standalone GPT adversarial loop (≤3 fresh-chat passes, evaluate-don't-obey) over a local markdown artifact. Also the canonical tracked browser-turn mechanics home for create-issue-draft; its one-shot turns use `npm run chatgpt-browser-turn`, while `driver.mjs` retains standalone adversarial duties. Browser-GPT twin of adversarial-draft-review; for «с кодексом» use that skill. Skip plain "создай драфт" with no «с gpt» marker.
+description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". Brief-only creation routes through create-issue-draft. Standalone artifact challenge keeps driver.mjs. Tracked create/review turns use the state-light send-once Browser-GPT helper from Issue #1120: dedicated owned tab, page polling, no legacy status/clear/capability/recovery admission authority. OpenCode is the default flow-manager when no runtime is selected; a capable operator-selected runtime such as Cursor or Codex may manage create-issue-draft without becoming a reviewer-engine substitute.
 ---
 
 # discuss-with-gpt
 
-Runs a **GPT adversarial challenge loop** over a local draft/artifact against
-a **custom GPT in automation Chrome** (Playwright driver). Twin of
-[`adversarial-draft-review`](../adversarial-draft-review/SKILL.md) (Codex CLI).
+Runs GPT browser work against the custom ChatGPT project. There are two distinct
+roles and their contracts must not be mixed:
 
-Two roles under the GPT-chat authoring flow
-([`create-issue-draft`](../create-issue-draft/SKILL.md)):
+- **Standalone adversarial review** — challenges an existing local artifact on
+  explicit user request. It continues to use `driver.mjs`, PASS_ID/SHA validation,
+  and standalone durable pass states.
+- **Tracked create/review transport** — `create-issue-draft` author/reviewer turns
+  use the repository package entrypoint `npm run chatgpt-browser-turn -- ...` and
+  the state-light Issue #1120 transport contract. It is not the standalone driver
+  and does not inherit its retry/validation state machine.
 
-- **Standalone** — challenge a local artifact (a draft not yet a GPT-authored
-  Issue, a proposal, a `study-external-source` adoption) on user request. This
-  role keeps using `driver.mjs` and its prompt/validation contract.
-- **Mechanics home** — `create-issue-draft` one-shot task/review turns use the
-  tracked Issue #964 helper `scripts/chatgpt-browser-turn.ts` through
-  `npm run chatgpt-browser-turn -- ...`: task-chat turns use exact `--chat-url`;
-  fresh task/competitive/terminal-architectural turns use `--new-chat --project-url`;
-  The old untracked scratchpad
-  is not a fallback transport for this flow.
+Issue-body floors, tiering, finding-ledger normalization, chat-role separation,
+and acceptance remain owned by `create-issue-draft`. Claude runs only the T3
+`architectural-lens` stage defined there. Flow-manager runtime selection follows
+that canonical skill: **OpenCode** is the default only when no runtime is selected;
+a capable operator-selected runtime such as **Cursor or Codex** may manage the flow.
+Codex manager selection does not let Codex replace Browser-GPT reviewer stages or
+the required T3 Claude lens.
 
-**Trust model differs from Codex.** Codex returns process-level JSON. This path
-drives a mutable browser UI + ChatGPT product + custom GPT + prose output. The
-standalone driver hardens its passes with **per-pass `PASS_ID` + draft `SHA256`
-echo**; the tracked helper uses its own causal-witness/result/publication
-contract. Treat either path according to its own validation contract.
+## Routing
 
-Issue-body floors, ledger normalization, tier gate, decision logging, chat-role
-separation, and acceptance stay owned by `create-issue-draft`'s current
-flow-manager (OpenCode default when no runtime is selected; a capable operator-selected runtime such as Cursor or Codex is allowed); browser GPT owns content/finding dispositions. Claude runs only the
-T3 `architectural-lens` stage defined there — not a universal final architect lens.
-
-## When to invoke
-
-| Trigger | Skill |
+| Trigger | Route |
 |---------|-------|
-| «с gpt» / «с гпт» / «обсуди с gpt» / «драфт с gpt» / "draft with gpt" | **this skill** |
-| «с кодексом» / "with codex" | [`adversarial-draft-review`](../adversarial-draft-review/SKILL.md) |
-| GPT-authored Issue task (Issue + task-chat links) | `create-issue-draft` — this skill supplies tracked task-chat, fresh competitive when selected, and fresh terminal architectural browser mechanics |
-| plain «создай драфт» (no marker) | `create-issue-draft` directly |
-| bug/root-cause consult («почему упал…») | `investigate-root-cause` / `codex:rescue` |
+| «с gpt» / «с гпт» / «обсуди с gpt» / "discuss with gpt" over an existing local artifact | standalone `driver.mjs` flow in this skill |
+| «создай задачу с gpt» / brief-only "draft with gpt" | `create-issue-draft` brief-only entry; effective tier floor T2 |
+| GPT-authored Issue task, with or without historical task-chat URL | `create-issue-draft`; this skill supplies tracked Browser-GPT mechanics |
+| «с кодексом» / "with codex" over an existing artifact for challenge/review | `adversarial-draft-review` |
+| explicit request to create or manage a task with Codex | `create-issue-draft` with Codex selected as flow-manager |
+| bug/root-cause consult | `investigate-root-cause` / `codex:rescue` |
 
-**Brief-only GPT creation route.** For «создай задачу с gpt» / "draft with
-gpt" with no existing local artifact or Issue, do **not** start the standalone
-driver. Route immediately to `create-issue-draft`'s brief-only entry and record
-that this wrapper was explicitly requested. That flow creates the Issue and
-runs the fixed T2 topology (one terminal GPT architectural lens only); accepted findings
-are relayed through the task chat and therefore change the Issue itself.
+Do not impose the standalone adversarial loop on normal create-issue-draft stages.
 
-Do not impose the standalone loop by default — it spends ChatGPT quota and
-browser time. Normal `create-issue-draft` browser stages are selected by that
-skill's tier/topology contract, not by this standalone trigger table.
+## Browser preconditions
 
-## Browser preconditions — check BEFORE the first pass
-
-The tracked helper and standalone driver are **connect-only**: they attach to
-already-running automation Chrome with a **logged-in** custom-GPT session. Never
-type credentials.
-
-**One command to bring Chrome up:**
+Both paths connect to an already-running automation Chrome with a logged-in
+ChatGPT session. Never type credentials.
 
 ```bash
 bash .claude/skills/discuss-with-gpt/launch-chrome.sh
 ```
 
-- Idempotent; exit 0 = ready, non-zero = real blocker in stderr.
-- **Do NOT wrap in `timeout`** — the script bounds its own wait; `timeout` yields
-  false exit 143.
-- **Do NOT run parallel diagnostics** (hand-rolled `curl` loops, hunting
-  `powershell.exe`, launching `chrome.exe` yourself). The script handles WSL/Windows.
+- Exit 0 means the launcher found/started the configured automation browser.
+- Do not wrap the launcher in `timeout`; it owns its bounded startup wait.
+- Do not launch parallel hand-rolled diagnostics or a second Chrome owner.
+- Automation Chrome uses the dedicated configured profile and loopback CDP port.
 
-Requirements:
-
-- Automation Chrome on `--remote-debugging-port=9222` (loopback), **dedicated
-  minimal profile** (never the user's main profile).
-- `curl -s http://localhost:9222/json/version` is a fast pre-check only. The
-  tracked helper has its own profile/UI/witness checks; the standalone driver's
-  preflight remains authoritative for standalone runs.
-
-### Operator configuration (required)
-
-No personal URLs or profile paths ship in git. Configure before first run:
+Operator configuration remains local/gitignored:
 
 | Setting | Env var | `local.config.json` key |
 |---------|---------|---------------------------|
@@ -90,101 +59,14 @@ No personal URLs or profile paths ship in git. Configure before first run:
 | Chrome user-data-dir | `DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR` | `chromeUserDataDir` |
 | Chrome executable (optional) | `DISCUSS_WITH_GPT_CHROME_PATH` | `chromePath` |
 
-Copy `local.config.example.json` → `local.config.json` (gitignored) **or** export
-env vars. Env wins over file. First launch: log into ChatGPT once in the
-automation profile; subsequent launches reuse the session.
+## Tracked helper for create/review — Issue #1120
 
-Missing config → `CONFIG_ERROR` / `STATE=config_missing` for the standalone
-driver; tracked-helper invocations receive explicit `--profile`, `--cdp`, and
-fresh-chat `--project-url` values.
+Use the package entrypoint so the Node-major guard runs first.
 
-## Tracked one-shot helper for `create-issue-draft`
-
-### Gate B and first live use (mandatory before any real `turn`)
-
-Do **not** use the tracked helper for production `create-issue-draft`
-turns on a newly built or otherwise uncharacterized #964 candidate until **all**
-prerequisites below are complete and recorded in task/review artifacts. The
-serialized **Gate-B live characterization turns in step 3 are exempt** from this
-production gate — they exist to complete characterization, not to satisfy it.
-Full operator detail lives in `scripts/chatgpt-browser-turn/README.md` (§ Gate B
-and first live use, § Retained recovery copy and rollback); this section is the
-skill gate.
-
-**1. Deterministic Gate-B tests green for the current candidate**
+Existing conversation:
 
 ```bash
-npm run test:issue-964
-```
-
-Re-run after any candidate, verifier, runtime-build, or Gate-B test-source change.
-
-**2. Retained recovery root pinned to `candidate_digest`**
-
-Before the first browser effect, choose an absolute recovery root **outside** the
-working tree. Canonical layout:
-
-```bash
-RECOVERY_ROOT="$(realpath "$HOME")/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>"
-```
-
-Populate it with digest-pinned copies per the README retained-recovery list
-(`scripts/chatgpt-browser-turn.ts`, the complete `scripts/chatgpt-browser-turn/`
-directory, `scripts/kernel/subprocess.ts`,
-`.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs`, exact Node 22 runtime
-reference, and Playwright package location/version reference). Record SHA-256
-digests for every retained first-party file and the printed absolute
-`RECOVERY_ROOT` path alongside live-characterization evidence. Keep the copy
-until `status/list` is clear and every relevant `publication-status` is terminal
-with no opaque quarantine or blocking tombstone.
-
-**3. Operator Gate-B live characterization on the exact profile/CDP**
-
-For the exact automation `--profile` and `--cdp` that will be used in production:
-
-```bash
-npm run chatgpt-browser-turn -- capability   --profile /absolute/path/to/automation-profile   --cdp http://127.0.0.1:9222
-```
-
-Record `expected_binding.candidate_digest`, `build_digest`, `config_digest`, and
-`gate_digest`. Run the serialized live characterization turn with the normal helper
-command — no gate-digest environment variable is required:
-
-```bash
-npm run chatgpt-browser-turn -- turn ...characterization argv...
-```
-
-Characterization records bounded diagnostic evidence; it does not self-arm parallel
-admission or govern turn concurrency. Do not reuse characterization telemetry after any
-candidate, verifier, runtime-build, or Gate-B test-source change.
-
-The live smoke minimum (using normal fine-grained scheduling on the dedicated
-automation profile) must
-demonstrate:
-
-1. one existing-chat success with service-issued user-to-assistant causal witness
-   and byte-verified publication;
-2. one fresh-chat success with canonical conversation identity;
-3. same-chat overlap serialized/refused without duplicate send;
-4. destination collision leaves external bytes untouched and yields the correct
-   pre-send or post-delivery state;
-5. `status/list`, exact `clear`, opaque quarantine/tombstone, and
-   `publication-status` remain usable after a forced interrupted run.
-
-Query `capability` again after characterization. Record capability before/after
-(`state`, browser provenance, evidence digest, characterized_at, admission policy/epoch
-when present). Capability output is diagnostic; invocation-local live witness and send
-safety remain authoritative. Do not mint positive capability from synthetic tests alone.
-
-Only after steps 1–3 are complete may **production** `create-issue-draft`
-one-shot turns use the tracked helper on that candidate/profile/CDP binding (the
-step-3 characterization turns themselves are not blocked by this sentence).
-
-Use the repository package entrypoint so the Node-major guard runs first.
-Existing-chat mode:
-
-```bash
-npm run chatgpt-browser-turn -- turn \
+npm run chatgpt-browser-turn -- \
   --profile /absolute/path/to/automation-profile \
   --cdp http://127.0.0.1:9222 \
   --input /absolute/path/to/message.txt \
@@ -192,10 +74,10 @@ npm run chatgpt-browser-turn -- turn \
   --chat-url https://chatgpt.com/c/<conversation-id>
 ```
 
-Fresh-chat mode uses the landed alternative destination shape:
+Fresh conversation:
 
 ```bash
-npm run chatgpt-browser-turn -- turn \
+npm run chatgpt-browser-turn -- \
   --profile /absolute/path/to/automation-profile \
   --cdp http://127.0.0.1:9222 \
   --input /absolute/path/to/message.txt \
@@ -204,318 +86,142 @@ npm run chatgpt-browser-turn -- turn \
   --project-url <configured-project-url>
 ```
 
-The current flow-manager (OpenCode default when no runtime is selected; a capable operator-selected runtime such as Cursor or Codex is allowed)
-prepares the exact argv and absolute input/output
-paths and owns the browser-turn invocation. A hands-only execution channel, when
-used, executes that exact command and returns stdout/reply state verbatim; it must
-not write browser code, change prompt/argv, interpret findings, or invent a
-fallback. Caller-side cross-task serialization policy is defined by
-`create-issue-draft`; it does not modify the helper's own state machine.
+The current flow-manager prepares exact argv plus absolute input/output paths.
+The helper is a **single-invocation fast path**, not admission/recovery authority:
 
-The helper sends the caller's snapshotted input content-neutral. `turn` emits one
-`turn-result/v1` JSON line on an ordinary terminal path. The exact closed turn
-states are:
+1. verify the local browser/profile/UI preconditions needed for this invocation;
+2. open one dedicated owned tab, even when `--chat-url` names an existing chat;
+3. navigate, snapshot input, and submit the user prompt once;
+4. observe only that owned tab until one final assistant node is stable and no
+   longer generating, advancing continuation UI when applicable;
+5. publish the captured final reply and close only the owned tab;
+6. emit one compact `turn-result/v1` result plus direct incident information.
 
-`ok`, `input_invalid`, `quota`, `challenge`, `login`, `stream_timeout`,
-`send_failed`, `no_reply`, `chrome_not_running`, `driver_error`,
-`profile_mismatch`, `recovery_required`, `orphaned_fresh_turn`,
-`ui_contract_mismatch`, `foreign_activity`, `output_conflict`,
-`conversation_busy`, `profile_busy`, `incompatible_record`.
+### Completion and attribution
 
-Each turn result carries `scope` (`none|invocation|conversation|profile|machine|blocking_domain`)
-and `cause`. Exit mapping is exact: `ok` → 0;
-`input_invalid|send_failed|ui_contract_mismatch|output_conflict` → 10;
-`stream_timeout|no_reply|recovery_required|foreign_activity|conversation_busy` → 11;
-`quota|challenge|login|chrome_not_running|profile_mismatch|orphaned_fresh_turn|profile_busy` → 12;
-`driver_error` → 13; `incompatible_record` → 14.
+- Page/DOM completion is sufficient. Do not require service-terminal/network
+  witness or capability/Gate-B evidence after the final assistant reply is stable.
+- Progress/intermediate assistant nodes are not concatenated into the final result.
+- The invocation must observe its own exact user prompt after the page baseline.
+  Additional/interleaved user activity makes only that invocation
+  `foreign_activity`/degraded; it never blocks a sibling tab.
+- A normal generating/wait poll is not an incident.
+- Login, quota, challenge, unusable composer, redirect/UI mismatch, or publication
+  conflict are local invocation results.
 
-The body-free control/publication plane is also closed:
+### Send-once and lost-state policy
 
-- `status/list`: `ok|none|profile_blocked|profile_mismatch|driver_error`;
-- `clear`: `cleared|quarantined|refused_active|stale_generation|evidence_changed|not_found|profile_blocked|profile_mismatch|driver_error`;
-- capability: `ok|no_evidence|expired|downgraded|profile_blocked|profile_mismatch|driver_error`;
-- `publication-status`: `committed_ok|not_committed|in_progress|recovery_required|conflict|profile_blocked|profile_mismatch|driver_error`.
+The live invocation has exactly one user-message send boundary. After that the
+helper only polls/reads the same tab. It never silently re-sends because of a
+slow reply, timeout, missing old witness, or ambiguous local process state.
 
-`status/list`, `clear`, and capability emit `control-result/v1`; publication
-queries emit `publication-status/v1`. Evaluated control outcomes exit 0,
-profile block/mismatch 21, driver error 22. Publication
-`committed_ok|not_committed` exits 0; `in_progress|recovery_required|conflict` 20;
-profile block/mismatch 21; driver error 22.
+When a process/page/chat is genuinely lost and cheap continuation is unavailable,
+the flow-manager may start a **fresh invocation in a fresh chat and send again**.
+A duplicate recoverable GPT text request is an accepted residual risk. Do not
+query or clear legacy helper state to authorize the replacement.
 
-A hard crash may emit no turn stdout. Never resend after possible delivery merely
-because the caller missed a terminal result: query `status/list` and, when the
-invocation identity is available, `publication-status` first. The helper's
-normal long-turn timeout is at least 1,800,000 ms; a timeout, non-`ok` turn,
-missing stdout, or process-liveness uncertainty is not fallback authorization.
+### Legacy control/recovery state is non-authoritative
 
-### Transport outage and invocation-local send safety
+Tracked create/review progression must not wait for or clear:
 
-The former untracked one-shot scratchpad and `driver.mjs` are not surrogate
-transports for tracked `create-issue-draft` turns. If the tracked executable or
-sanctioned execution channel is unavailable, record the outage and apply only the
-selected stage's existing pending/outage/substitution rules.
+- `status/list`, `clear`, capability, Gate-B characterization;
+- `publication-status` as delivery/admission authority;
+- `possible_delivery`, `profile_wall`, tombstone/orphan recovery state;
+- profile/conversation/task/Issue/PR mutexes, claims, queues, leases, or adoption
+  records.
 
-Helper failure states, timeouts, missing process output, clean control state, and
-capability diagnostics do not authorize an alternate send. If possible delivery
-cannot be excluded, stay on the tracked helper's status/publication/recovery path.
-Before the send boundary, witness loss fails only the current invocation; it does
-not downgrade scheduling or block a sibling conversation.
+Old files/control commands may remain for historical compatibility or diagnosis,
+but they are not live create/review gates. Do not copy the old retained-recovery
+root or require candidate/gate digests before a normal turn.
 
-`driver.mjs` keeps its standalone adversarial prompt construction,
-PASS_ID/SHA/verdict validation, durable behavior, and supported standalone modes.
-The tracked helper does not replace or redesign those duties.
+### Incident journal and reporting
 
-## Standalone driver pass states — record in decision log + final status
+Direct unexpected helper events append best-effort to:
 
-These states belong to `driver.mjs`, not to the tracked `turn-result/v1` contract
-above. Every standalone driver invocation resolves to exactly one state. The
-driver writes a record under
-`~/.local/state/discuss-with-gpt/<slug>/…-<state>.md` and prints `STATE=<state>`.
+```text
+~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl
+```
+
+The journal is append-only retrospective analytics. Never scan it before a turn,
+never lock/dedupe it, and never let historical rows or append failure grant/veto
+browser work. Carry the same directly observed incident class into the current
+flow-manager report. Cleanup failure after a captured reply is an incident but
+must not invalidate the captured reply or close foreign tabs.
+
+### No second tracked monitor in #1120
+
+Do not add or run a parallel direct-CDP inspector/watchdog for tracked turns, and
+do not infer "GPT is still generating" from PID/log/background-job liveness. The
+dedicated direct-agent fallback/supervision policy is a separate follow-up task.
+
+## create-issue-draft chat topology
+
+- authoring/fixes: current author chat; when unavailable it may be reconstructed
+  from the live Issue in a fresh dedicated tab;
+- T3 competitive: fresh chat for each of 1–3 passes;
+- T3 `architectural-review`: exactly one fresh chat after competitive;
+- T3 Claude `architectural-lens`: independent Claude Code CLI, no browser review chat;
+- terminal GPT `architectural`: exactly one fresh chat, distinct from author,
+  competitive, and `architectural-review`; it remains the final M5 anchor.
+
+The canonical T3 business order is:
+
+```text
+competitive → architectural-review → Claude lens → GPT lens
+```
+
+## Standalone adversarial driver
+
+Standalone `driver.mjs` remains separate from the tracked helper. It keeps prompt
+construction, PASS_ID/DRAFT_SHA256 echo validation, durable pass artifacts, and
+its own supported modes.
+
+### Standalone pass states
 
 | State | Meaning |
 |-------|---------|
-| `completed_valid` | `VALIDATION=ok`: PASS_ID+SHA echoed, packet parses. Includes clean `VERDICT=APPROVE` with no findings. **`PARSED approve_empty=true`** — confirm it was a genuine review, not lazy; downgrade to `low_quality` if it reads empty. |
-| `low_quality` | Manual downgrade of `completed_valid` — findings generic/non-specific |
-| `invalid` | `echo-missing` / `hash-mismatch` / `truncated` / `malformed` |
-| `chrome_not_running` / `login_required` / `quota_limit` / `challenge` / `wrong_project` / `cdp_profile_mismatch` | Preflight blockers — fix and retry |
-| `stream_timeout` / `no_reply` | Generation incomplete — retry once |
-| `send_failed` | Prompt never landed as a user message — the turn was not submitted; resend, do not wait |
-| `driver_error` | Unexpected Playwright/UI exception — inspect artifact, fix, retry |
-| `skipped` | Browser unavailable and user absent |
-| `fallback_codex` | Ran `adversarial-draft-review` instead |
+| `completed_valid` | PASS_ID+SHA validated and packet parses; clean APPROVE still needs a genuine-review quality check |
+| `low_quality` | syntactically valid but generic/non-specific review |
+| `invalid` | echo missing, hash mismatch, truncation, or malformed packet |
+| `chrome_not_running` / `login_required` / `quota_limit` / `challenge` / `wrong_project` / `cdp_profile_mismatch` | preflight blocker |
+| `stream_timeout` / `no_reply` | generation incomplete; standalone retry policy applies |
+| `send_failed` | prompt did not land as a user message |
+| `driver_error` | unexpected Playwright/UI failure |
+| `skipped` | browser unavailable and user absent |
+| `fallback_codex` | standalone adversarial flow used its explicit Codex fallback |
 
-**Fail loud.** If `skipped` / `invalid` / `fallback_codex`, say so plainly. Do
-not let a standalone state masquerade as a tracked-helper state or vice versa.
+Fail loud on `skipped`, `invalid`, or `fallback_codex`; never represent a
+standalone state as a tracked-helper result.
 
-Standalone exit-code hints: `chrome_not_running`(3) / `login_required`(4) /
-`stream_timeout`(5) / `no_reply`(6) / `invalid`(7) / `quota_limit`(8) /
-`challenge`(9) / `send_failed`(14).
+### Standalone long turns
 
-## Standalone driver long turns: poll the page, never infer from the process
+The standalone driver retains its own long timeout and page-observation rules.
+A running local process proves nothing about ChatGPT state. When operator
+observation is needed, inspect the standalone chat page rather than claiming
+liveness from PID/log state. Hand-copied page text cannot become
+`completed_valid` because it lacks PASS_ID/SHA validation and the durable driver
+record.
 
-GPT routinely thinks **10–15+ minutes** on a large spec. The driver's `--timeout`
-therefore defaults to **900000 ms**; never lower it below that for a real draft —
-a shorter deadline discards a genuine reply as `stream_timeout`.
+These standalone rules do **not** create a second monitor for tracked
+create-issue-draft turns.
 
-**A running process proves nothing.** `pgrep` only shows that the local Node
-process has not exited. It looks identical whether GPT is generating, the answer
-arrived and the completion detector stuck, the tab errored, or the message never
-landed. Never report "GPT is still thinking" on process liveness alone.
+### Standalone tabs
 
-**Poll the page itself every 5–10 minutes** while a standalone driver turn is
-outstanding. Connect read-only over CDP and read three signals from the chat tab:
-
-| Signal | Meaning |
-|--------|---------|
-| `[data-testid="stop-button"]` present | generation genuinely in progress |
-| stop-button absent + last assistant message ends mid-sentence | stalled — retry |
-| stop-button absent + message complete | **done** — take the text from the page |
-
-**Never hand-copy a reply off the page.** Text scraped by hand carries no
-`PASS_ID`/`DRAFT_SHA256` echo check, no parsed packet, no durable state record —
-so it can never be a `completed_valid` pass, and treating it as one breaks the
-validation contract in step 3. If the page shows a finished answer while the
-driver is still waiting, that is a **driver defect**: kill the run, record it as
-`driver_error`, fix the detector, and re-run so the reply is validated on the
-normal path. The two known causes are already fixed — a mid-render message count
-taken before the history settled, and duplicate tabs of one chat (below).
-
-**Delivery is verified by the standalone driver, not by you.** After sending it
-confirms the prompt appeared as a user message and exits `send_failed`(14) if it
-did not. This does not override the tracked helper's stricter possible-delivery
-and recovery rules above.
-
-**Tracked `create-issue-draft` turns** use the monitoring contract in
-[`create-issue-draft`](../create-issue-draft/SKILL.md) § **Tracked helper long-turn
-monitoring** — poll `status/list` and, when invocation identity is available,
-`publication-status`, not the page. Do not apply the standalone page-poll rule to
-tracked helper turns.
-
-## Tabs and chat identities: reuse one, never merge streams
-
-For tracked `create-issue-draft` turns, `--chat-url <url>` targets an exact
-existing task or competitive review conversation, while
-`--new-chat --project-url <url>` creates a fresh destination. The helper owns page
-selection/coordination; do not use a legacy send to work around helper
-busy/recovery state.
-
-For the standalone driver, when a **chat URL** is supplied, pass
-`--chat-url <url>`: the driver converses inside that conversation, reuses the tab
-already showing it, and foregrounds it. With `--new-chat`, it opens a new page on
-the project URL.
-
-`create-issue-draft` topology is:
-
-- task chat: its own stable `--chat-url`;
-- competitive: a fresh `--new-chat` per pass, never reused;
-- terminal GPT architectural lens: a fresh `--new-chat`, never the task chat,
-  competitive review chat, or any prior review URL.
-
-A successful standalone review turn's durable `ARTIFACT` may provide its exact
-chat URL for audit recording, but that URL is not an input to a later standalone
-review pass.
-
-Accumulated duplicate tabs are an active standalone-driver failure source:
-different tabs of one conversation can render different message counts, causing
-false liveness or `send_failed` states.
-
-Standalone driver rules:
-
-- pass `--chat-url` for a persistent conversation only when that standalone mode
-  intentionally targets it;
-- use `--new-chat` for every standalone adversarial review pass;
-- close stale ChatGPT tabs when a turn ends;
-- never use one chat URL for two standalone streams or two standalone review passes;
-- tab reuse prevents duplicates of the *same persistent conversation*; it never
-  relaxes standalone review-context isolation.
+When standalone mode intentionally targets a persistent conversation, pass its
+`--chat-url`; fresh adversarial passes use `--new-chat`. Never merge two
+standalone review streams into one chat. Close standalone tabs according to the
+standalone driver contract without touching tabs owned by tracked helper
+invocations or other agents.
 
 ## Standalone flow
 
-### 1. Obtain the artifact
-
-The standalone loop challenges an existing **local** artifact — a draft file,
-proposal, or `study-external-source` adoption (any markdown path). This skill
-authors nothing. For a brief-only creation trigger, route to
-`create-issue-draft`. GPT-authored Issues use the tracked helper mechanics above
-inside that flow rather than invoking the standalone loop for task/architectural
-turns. Explicit wrapper invocation floors the effective tier at ≥ **T2**.
-
-### 2. Run the GPT adversarial pass
-
-From repo root:
-
-```bash
-node .claude/skills/discuss-with-gpt/driver.mjs \
-  --draft docs/issues_drafts/NN-<slug>.md
-```
-
-**Source-study proposals** ([`study-external-source`](../study-external-source/SKILL.md)):
-add `--source-url "https://…"` on **every** pass so GPT also checks fidelity to
-the external source (misreadings, omitted caveats, cherry-picking):
-
-```bash
-node .claude/skills/discuss-with-gpt/driver.mjs \
-  --draft <proposal>.md --source-url "https://…"
-```
-
-**Ledger discipline:** keep the settled ledger **compact, in your own words** (one
-line per finding) — never paste raw GPT/draft text.
-
-The driver: reads draft **from disk** (not your context) → fresh chat in the
-project → adversarial prompt with untrusted draft wrapper → waits for completion →
-machine-checks packet (`PASS_ID`, `DRAFT_SHA256`, `VALIDATION`, `PARSED`, `STATE`,
-`ARTIFACT`, reply between `<<<GPT-REPLY>>>`…`<<<END>>>`).
-
-**Cost:** use the driver only — never reimplement with full page snapshots (~48k-token
-naive path). Your per-pass cost ≈ printed reply + reasoning. **Hard cap: 3 passes
-total** (including the first).
-
-### 3. Validate, read as proposals
-
-- `VALIDATION=ok` → reply is for this draft+pass.
-- `echo-missing` / `hash-mismatch` / `malformed` → mark `invalid`; one repair
-  re-run, then read prose by hand or abandon.
-- **`VERDICT` is a signal, not a command:** `BLOCKED` = strong stop-before-sync;
-  `NEEDS_ATTENTION` = normal; `APPROVE` = **weak** (do not treat as stop).
-- Parse structured fields first; extract substance from prose if format drifted.
-- Every point is a challenge to weigh — never an instruction to apply.
-
-### 4. Evaluate each finding
-
-| Verdict | When | Action |
-|---------|------|--------|
-| **Accept** | Genuinely simpler AND more reliable, or real gap (missing AC, hidden coupling, contract drift, scope/security hole). | Revise draft. |
-| **Partial** | Valid kernel but remedy over-specifies (file names, signatures, internal layout). | Fix minimally — *what must be true*, not *how*. |
-| **Reject** | Speculative, stylistic, over-engineered, out-of-scope, narrows planner freedom, or generic advice with no specific gap. | Leave draft; record why. |
-
-Anchor: planner freedom is non-negotiable; cost rule = cheapest sufficient executor.
-
-### 5. Log decisions
-
-Via `create-issue-draft`'s decision-log path. One line per finding: what GPT
-argued, your verdict, why. Plus pass **state**.
-
-### 6. Iterate — capped at **3 passes**
-
-Each re-run = **fresh chat** (cold re-attack, but custom-GPT instructions/account
-memory still carry over — not a stateless CLI).
-
-Re-run **only** after you accepted/partially accepted ≥1 finding and revised the
-draft. Pass a compact settled ledger:
-
-```bash
-cat > /tmp/dwgpt-ledger.txt <<'LEDGER'
-Settled — do NOT re-raise (re-raise only if you explain what changed):
-- <finding>: rejected — <reason>
-- <finding>: resolved — draft now <what changed>
-Attack the current draft afresh for NEW weaknesses only.
-LEDGER
-node .claude/skills/discuss-with-gpt/driver.mjs \
-  --draft docs/issues_drafts/NN-<slug>.md --extra-file /tmp/dwgpt-ledger.txt
-# source-study? carry --source-url on this pass too
-```
-
-**Stop rule — non-negotiable.** Stop ONLY when:
-
-- the **last** valid pass produced **no finding you accepted/partially accepted**
-  (real convergence — **not** "GPT approved"), or
-- **3 passes done** — record still-open findings as explicit risks/open questions.
-
-**Violation:** stopping after a pass where you accepted ≥1 finding without running
-at least one more pass. "One pass was enough" / cost / time are **not** valid stop
-reasons.
-
-**Mandatory audit line** (decision log, verbatim shape):
-
-```
-GPT loop: <N> passes; stopped because <no-accepted-finding-in-last-pass | cap-3>; last-pass accepted=<k>; final STATE=<state> VALIDATION=<v> pass=<PASS_ID> sha=<DRAFT_SHA256>
-```
-
-Clean stop requires final pass `STATE=completed_valid` with `last-pass accepted=0`.
-If a later review materially changes the artifact, log
-`post-GPT change not re-reviewed` or re-run GPT.
-
-### 7. Hand back
-
-Standalone runs: the artifact continues on its normal path (architect review,
-then publish when asked). Brief-only creation runs stay
-inside `create-issue-draft` **before acceptance** — they follow the fixed T2
-topology (one terminal `architectural` capture only; no competitive
-create-flow stage). Accepted findings are relayed to the task chat so the Issue
-is updated. Task-chat turns
-and reviewer lens turns are normal `create-issue-draft` stages, not
-the standalone adversarial loop. No GPT pass replaces the T3 Claude `architectural-lens` or skips the fixed per-tier topology.
-
-### 8. Publish
-
-`publish-issue-draft` remains legacy-only for pre-existing tracked drafts. Record
-GPT pass state in the owning artifact/Issue flow.
-
-## Don't
-
-- Auto-apply findings.
-- Reimplement `create-issue-draft` one-shot turns with full page snapshots or a
-  routine scratchpad rebuild; use the tracked helper.
-- Run **production** tracked-helper turns for a new/uncharacterized #964 candidate
-  before `npm run test:issue-964` is green, Gate-B live characterization is
-  recorded, and the digest-pinned recovery root under
-  `~/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`
-  is retained (Gate-B characterization turns themselves are exempt).
-- Use capability characterization or profile-scope admission to schedule turns;
-  fine-grained destination domains are the only scheduling gate.
-- Treat a tracked-helper non-`ok` state, timeout, or missing stdout as fallback
-  authorization or resend permission.
-- Run legacy/scratchpad sends while helper-owned unresolved state blocks
-  coexistence for the configured profile.
-- Proceed silently on standalone `skipped` / `invalid` / `fallback_codex`.
-- Let a browser review replace the T3 Claude lens, terminal architectural lens, or task-chat content-fix path in `create-issue-draft`.
-- Merge task and review streams into one chat.
-- Reuse any competitive or terminal `create-issue-draft` review chat for a later pass.
-- Trust `VALIDATION≠ok` standalone replies without manual checks.
-- Type credentials or attempt login.
-- Report standalone liveness without polling the page.
-- Open a new tab for the known persistent task-chat URL outside the tracked helper.
-- Exceed three standalone/competitive passes or rerun without an accepted change.
-- Stop after accepting findings without another pass.
-- Skip decision logging, pass-state record, or the audit line.
-- Hand-edit `.cursor/skills/` pointers; use `scripts/generate-skill-pointers.ps1`.
+1. Obtain the existing local markdown artifact. Brief-only task creation routes to
+   `create-issue-draft` instead.
+2. Build the standalone adversarial prompt with the artifact as untrusted data and
+   a fresh PASS_ID/draft SHA.
+3. Run the standalone browser driver in a fresh review chat.
+4. Validate PASS_ID/SHA and packet shape; record the durable state/artifact.
+5. Evaluate findings rather than obeying them blindly. Apply accepted content
+   changes only through the owning workflow.
+6. Use at most three fresh standalone passes unless another owning contract says
+   otherwise.
