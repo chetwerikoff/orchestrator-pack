@@ -132,8 +132,9 @@ existing closed turn-state/exit-code contract where applicable and adds compact
 operational fields such as send count, poll count, navigation count, cleanup
 outcome, incident classes, and journal-write failure.
 
-`navigation_count` counts `page.goto` calls plus successful "New chat" activations
-during the invocation. Retrospective incident journal rows may include the same
+`navigation_count` remains the sum of `goto_count` (`page.goto` calls) and
+`new_chat_click_count` (successful "New chat" activations) during the invocation.
+The split fields are emitted alongside `navigation_count` for compatibility. Retrospective incident journal rows may include the same
 counter when known.
 
 Typical state-light outcomes include:

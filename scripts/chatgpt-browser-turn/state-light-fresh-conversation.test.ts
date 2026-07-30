@@ -77,7 +77,11 @@ import * as uiAdapter from './ui-adapter.ts';
 import {
   acquireStateLightNewChatSendSlot,
   newChatSendSlotEnabled,
+  isBlankProjectSurfaceUrl,
   openBlankProjectChatSurface,
+  prepareStateLightFreshConversation,
+  projectConversationPrefix,
+  projectSurfaceUrlsEquivalent,
   readStateLightAdvisoryWall,
   recordStateLightAdvisoryWall,
   releaseStateLightFreshConversationClaim,
@@ -292,6 +296,8 @@ describe('state-light fresh conversation collision recovery', () => {
       state: 'rate_limit',
       cause: 'rate_limit_detected',
       send_count: 0,
+      goto_count: 0,
+      new_chat_click_count: 0,
       navigation_count: 0,
     });
     expect(loser.page.goto).not.toHaveBeenCalled();
@@ -303,14 +309,18 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightAdvisoryWall(profileKey, STATE_LIGHT_ADVISORY_WALL_TTL_MS + 1)).toBeNull();
   });
 
-  it('records navigation_count for new-chat turns', async () => {
+  it('uses exactly one goto on the happy-path fresh turn', async () => {
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-SOLO'));
     const solo = makeLoserPage('PROMPT-SOLO', 'SOLO-OK');
     const outcome = await runNewChatTurn(solo.page, '/tmp/solo.txt');
 
     expect(outcome.code).toBe(0);
-    expect(outcome.result.navigation_count).toBeGreaterThan(0);
+    expect(outcome.result.goto_count).toBe(1);
+    expect(outcome.result.navigation_count).toBe(
+      outcome.result.goto_count + outcome.result.new_chat_click_count,
+    );
     expect(outcome.result.navigation_count).toBeLessThanOrEqual(STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION);
+    expect(solo.page.goto).toHaveBeenCalledTimes(1);
   });
 
   it('returns rate_limit from prepare without additional navigation rounds', async () => {
@@ -376,13 +386,73 @@ describe('state-light fresh conversation collision recovery', () => {
     });
   });
 
-  it('enforces the per-invocation navigation budget', async () => {
-    const navigation = new StateLightNavigationCounter(1);
+  it('treats equivalent project URL variants as the same blank surface', () => {
+    const canonical = PROJECT_URL;
+    expect(projectSurfaceUrlsEquivalent(`${canonical}/`, canonical)).toBe(true);
+    expect(projectSurfaceUrlsEquivalent(`${canonical}?ref=home`, canonical)).toBe(true);
+    expect(projectSurfaceUrlsEquivalent(`${canonical}#composer`, canonical)).toBe(true);
+    expect(isBlankProjectSurfaceUrl(canonical, canonical)).toBe(true);
+    expect(projectSurfaceUrlsEquivalent(SHARED_CONV, canonical)).toBe(false);
+  });
+
+  it('reloads the project surface when the current URL still carries a conversation id', async () => {
+    const navigation = new StateLightNavigationCounter();
+    let url = SHARED_CONV;
+    const page = {
+      goto: vi.fn(async (target: string) => {
+        url = target;
+      }),
+      url: vi.fn(() => url),
+      locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
+    };
+
+    await openBlankProjectChatSurface(page, PROJECT_URL, 5_000, navigation);
+
+    expect(page.goto).toHaveBeenCalledTimes(1);
+    expect(page.goto).toHaveBeenCalledWith(projectConversationPrefix(PROJECT_URL), expect.any(Object));
+    expect(navigation.snapshotGoto()).toBe(1);
+  });
+
+  it('prepareStateLightFreshConversation skips a second goto when already on a blank project surface', async () => {
+    const navigation = new StateLightNavigationCounter();
     const page = {
       goto: vi.fn(async () => undefined),
+      url: vi.fn(() => `${PROJECT_URL}/?ref=home`),
+      locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
+    };
+
+    const prepared = await prepareStateLightFreshConversation(
+      page,
+      {
+        cdp: 'http://127.0.0.1:9222',
+        profile: '/tmp/profile',
+        newChat: true,
+        projectUrl: PROJECT_URL,
+        timeoutMs: 5_000,
+        pollMs: 1,
+      },
+      'collision-profile',
+      'prepare-invocation',
+      navigation,
+    );
+
+    expect(prepared).toEqual({ state: 'ready' });
+    expect(page.goto).not.toHaveBeenCalled();
+    expect(navigation.snapshotGoto()).toBe(0);
+  });
+
+  it('enforces the per-invocation navigation budget', async () => {
+    const navigation = new StateLightNavigationCounter(1);
+    let url = SHARED_CONV;
+    const page = {
+      goto: vi.fn(async (target: string) => {
+        url = target;
+      }),
+      url: vi.fn(() => url),
       locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
     };
     await openBlankProjectChatSurface(page, PROJECT_URL, 5_000, navigation);
+    url = SHARED_CONV;
     await expect(openBlankProjectChatSurface(page, PROJECT_URL, 5_000, navigation)).rejects.toThrow(
       'state_light_navigation_budget_exhausted',
     );

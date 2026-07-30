@@ -66,7 +66,8 @@ export type StateLightFreshPrepareResult =
   | { state: 'wall'; wallState: TurnState; cause: string };
 
 export class StateLightNavigationCounter {
-  readonly count = { value: 0 };
+  readonly gotoCount = { value: 0 };
+  readonly newChatClickCount = { value: 0 };
   readonly max: number;
 
   constructor(max = STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION) {
@@ -74,21 +75,31 @@ export class StateLightNavigationCounter {
   }
 
   recordGoto(): void {
-    this.count.value += 1;
-    if (this.count.value > this.max) {
-      throw new Error('state_light_navigation_budget_exhausted');
-    }
+    this.gotoCount.value += 1;
+    this.assertWithinBudget();
   }
 
   recordNewChatActivation(): void {
-    this.count.value += 1;
-    if (this.count.value > this.max) {
-      throw new Error('state_light_navigation_budget_exhausted');
-    }
+    this.newChatClickCount.value += 1;
+    this.assertWithinBudget();
+  }
+
+  snapshotGoto(): number {
+    return this.gotoCount.value;
+  }
+
+  snapshotNewChatClick(): number {
+    return this.newChatClickCount.value;
   }
 
   snapshot(): number {
-    return this.count.value;
+    return this.gotoCount.value + this.newChatClickCount.value;
+  }
+
+  private assertWithinBudget(): void {
+    if (this.snapshot() > this.max) {
+      throw new Error('state_light_navigation_budget_exhausted');
+    }
   }
 }
 
@@ -107,8 +118,40 @@ function claimPidProvablyDead(pid: number): boolean {
   }
 }
 
-function projectConversationPrefix(projectUrl: string): string {
+export function projectConversationPrefix(projectUrl: string): string {
   return normalizeConversationUrl(projectUrl).replace(/\/+$/, '');
+}
+
+function projectGptIdFromUrl(url: string): string | undefined {
+  const match = /\/g\/(g-p-[^/]+)/i.exec(normalizeConversationUrl(url));
+  return match?.[1]?.toLowerCase();
+}
+
+export function projectSurfaceUrlsEquivalent(observedUrl: string, projectUrl: string): boolean {
+  if (conversationUuidFromUrl(observedUrl)) return false;
+  const observed = normalizeConversationUrl(observedUrl);
+  const project = projectConversationPrefix(projectUrl);
+  if (observed === project) return true;
+  try {
+    const observedParsed = new URL(observed);
+    const projectParsed = new URL(project);
+    if (observedParsed.origin !== projectParsed.origin) return false;
+    const observedPath = observedParsed.pathname.replace(/\/+$/, '');
+    const projectPath = projectParsed.pathname.replace(/\/+$/, '');
+    if (observedPath === projectPath) return true;
+    const observedId = projectGptIdFromUrl(observed);
+    const projectId = projectGptIdFromUrl(project);
+    return observedId !== undefined
+      && observedId === projectId
+      && !/\/c\//i.test(observedPath);
+  } catch {
+    return false;
+  }
+}
+
+export function isBlankProjectSurfaceUrl(observedUrl: string, projectUrl: string): boolean {
+  if (!observedUrl.trim()) return false;
+  return projectSurfaceUrlsEquivalent(observedUrl, projectUrl);
 }
 
 export function conversationUuidFromUrl(value: string): string | undefined {
@@ -343,16 +386,25 @@ async function probeProductWall(page: any): Promise<{ state: TurnState; cause: s
 
 export async function openBlankProjectChatSurface(
   page: any,
-  projectPrefix: string,
+  projectUrl: string,
   timeoutMs: number,
   navigation?: StateLightNavigationCounter,
 ): Promise<void> {
   const waitMs = Math.min(30_000, timeoutMs);
-  navigation?.recordGoto();
-  await page.goto(projectPrefix, {
-    waitUntil: 'domcontentloaded',
-    timeout: waitMs,
-  });
+  const projectPrefix = projectConversationPrefix(projectUrl);
+  let currentUrl = '';
+  try {
+    currentUrl = normalizeConversationUrl(page.url());
+  } catch {
+    currentUrl = '';
+  }
+  if (!isBlankProjectSurfaceUrl(currentUrl, projectUrl)) {
+    navigation?.recordGoto();
+    await page.goto(projectPrefix, {
+      waitUntil: 'domcontentloaded',
+      timeout: waitMs,
+    });
+  }
   const newChatSelectors = [
     '[data-testid="create-new-chat-button"]',
     'a:has-text("New chat")',
@@ -382,7 +434,6 @@ export async function prepareStateLightFreshConversation(
   if (!config.newChat || !config.projectUrl) {
     return { state: 'ui_contract_mismatch', cause: 'project_url_required' };
   }
-  const projectPrefix = projectConversationPrefix(config.projectUrl);
   for (let attempt = 0; attempt < STATE_LIGHT_FRESH_PREPARE_ATTEMPTS; attempt++) {
     if (attempt > 0) {
       await sleepMs(STATE_LIGHT_FRESH_PREPARE_BACKOFF_BASE_MS * (2 ** (attempt - 1)));
@@ -393,11 +444,9 @@ export async function prepareStateLightFreshConversation(
     } catch {
       currentUrl = '';
     }
-    const needsSurface = !currentUrl
-      || currentUrl !== projectPrefix
-      || Boolean(conversationUuidFromUrl(currentUrl));
+    const needsSurface = !currentUrl || !isBlankProjectSurfaceUrl(currentUrl, config.projectUrl);
     if (needsSurface) {
-      await openBlankProjectChatSurface(page, projectPrefix, config.timeoutMs, navigation);
+      await openBlankProjectChatSurface(page, config.projectUrl, config.timeoutMs, navigation);
       const wall = await probeProductWall(page);
       if (wall) return { state: 'wall', wallState: wall.state, cause: wall.cause };
       try {
