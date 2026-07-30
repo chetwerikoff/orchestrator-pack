@@ -25,6 +25,15 @@ import {
   type TurnState,
 } from './contracts.ts';
 import { readStableInput } from './input.ts';
+import {
+  acquireStateLightNewChatSendSlot,
+  prepareStateLightFreshConversation,
+  releaseStateLightFreshConversationClaim,
+  releaseStateLightNewChatSendSlot,
+  STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS,
+  tryClaimStateLightFreshConversation,
+  waitForConversationUrlAfterSend,
+} from './state-light-fresh-conversation.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import {
   classifyProductWall,
@@ -84,6 +93,8 @@ interface TurnRunOutcome {
   readonly page?: any;
   readonly browser?: any;
   readonly preserveOwnedPage?: boolean;
+  readonly ownedConversationUrl?: string;
+  readonly profileKey?: string;
 }
 
 interface StateLightPublicationResult {
@@ -507,40 +518,201 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     await navigateOwnedTurnPage(page, config);
 
     const composerDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
-    const composerState = await waitForComposer(page, composerDeadline);
-    if (composerState.state !== 'ready') {
-      incident('invocation_blocker', composerState.cause, 'return_local_error');
-      return {
-        page,
-        browser,
-        result: compactResult(
-          composerState.state,
-          'invocation',
-          composerState.cause,
-          invocationId,
-          profileKey,
-          sendCount,
-          pollCount,
-          incidents,
-          {},
-          journalWriteFailed,
-        ),
-      };
-    }
+    let baselineCount = 0;
+    let ownedConversationUrl: string | undefined;
 
-    const baselineCount = (await readPageMessages(page)).length;
-    const composer = page.locator('#prompt-textarea');
-    await composer.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
-    await composer.fill(snapshot.text, { timeout: MAX_LOCAL_READ_WAIT_MS });
-    const sendButton = page.locator('[data-testid="send-button"]');
+    const sendOwnedPrompt = async (): Promise<void> => {
+      const composer = page.locator('#prompt-textarea');
+      await composer.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
+      await composer.fill(snapshot.text, { timeout: MAX_LOCAL_READ_WAIT_MS });
+      const sendButton = page.locator('[data-testid="send-button"]');
+      if (await locatorCount(sendButton) > 0) {
+        await sendButton.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
+      } else {
+        await composer.press('Enter', { timeout: MAX_LOCAL_READ_WAIT_MS });
+      }
+      sendCount = 1;
+      afterSend = true;
+    };
 
-    if (await locatorCount(sendButton) > 0) {
-      await sendButton.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
+    if (config.newChat) {
+      await acquireStateLightNewChatSendSlot(profileKey, invocationId, config.timeoutMs);
+      try {
+        const initialPrepare = await prepareStateLightFreshConversation(page, config, profileKey, invocationId);
+        if (initialPrepare.state !== 'ready') {
+          incident('invocation_blocker', initialPrepare.cause, 'return_local_error');
+          return {
+            page,
+            browser,
+            result: compactResult(
+              'ui_contract_mismatch',
+              'invocation',
+              initialPrepare.cause,
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              incidents,
+              {},
+              journalWriteFailed,
+            ),
+          };
+        }
+
+        let composerState = await waitForComposer(page, composerDeadline);
+        if (composerState.state !== 'ready') {
+          incident('invocation_blocker', composerState.cause, 'return_local_error');
+          return {
+            page,
+            browser,
+            result: compactResult(
+              composerState.state,
+              'invocation',
+              composerState.cause,
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              incidents,
+              {},
+              journalWriteFailed,
+            ),
+          };
+        }
+
+        let claimed = false;
+        for (let recovery = 0; recovery < STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS && !claimed; recovery++) {
+          if (recovery > 0) {
+            incident('fresh_conversation_collision', 'shared_fresh_conversation_surface', 'recover_on_isolated_surface');
+            const prepared = await prepareStateLightFreshConversation(page, config, profileKey, invocationId);
+            if (prepared.state !== 'ready') {
+              incident('invocation_blocker', prepared.cause, 'return_local_error');
+              return {
+                page,
+                browser,
+                result: compactResult(
+                  'ui_contract_mismatch',
+                  'invocation',
+                  prepared.cause,
+                  invocationId,
+                  profileKey,
+                  sendCount,
+                  pollCount,
+                  incidents,
+                  {},
+                  journalWriteFailed,
+                ),
+              };
+            }
+            composerState = await waitForComposer(page, composerDeadline);
+            if (composerState.state !== 'ready') {
+              incident('invocation_blocker', composerState.cause, 'return_local_error');
+              return {
+                page,
+                browser,
+                result: compactResult(
+                  composerState.state,
+                  'invocation',
+                  composerState.cause,
+                  invocationId,
+                  profileKey,
+                  sendCount,
+                  pollCount,
+                  incidents,
+                  {},
+                  journalWriteFailed,
+                ),
+              };
+            }
+          }
+
+          baselineCount = (await readPageMessages(page)).length;
+          await sendOwnedPrompt();
+
+          const urlDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
+          const conversationUrl = await waitForConversationUrlAfterSend(
+            page,
+            config.projectUrl!,
+            urlDeadline,
+            sleep,
+            INITIAL_POLL_MS,
+          );
+          if (!conversationUrl) {
+            incident('send_observation_error', 'fresh_conversation_url_not_observed', 'return_local_error');
+            return {
+              page,
+              browser,
+              result: compactResult(
+                'send_failed',
+                'invocation',
+                'fresh_conversation_url_not_observed',
+                invocationId,
+                profileKey,
+                sendCount,
+                pollCount,
+                incidents,
+              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+                journalWriteFailed,
+              ),
+            };
+          }
+
+          const claim = tryClaimStateLightFreshConversation(profileKey, conversationUrl, invocationId);
+          if (claim === 'contended') continue;
+          if (claim === 'claimed' || claim === 'owned') {
+            claimed = true;
+            ownedConversationUrl = conversationUrl;
+            break;
+          }
+        }
+
+        if (!claimed) {
+          incident('fresh_conversation_recovery_exhausted', 'shared_fresh_conversation_surface', 'return_local_error');
+          return {
+            page,
+            browser,
+            result: compactResult(
+              'driver_error',
+              'invocation',
+              'fresh_conversation_recovery_exhausted',
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              incidents,
+              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+              journalWriteFailed,
+            ),
+          };
+        }
+      } finally {
+        releaseStateLightNewChatSendSlot(profileKey, invocationId);
+      }
     } else {
-      await composer.press('Enter', { timeout: MAX_LOCAL_READ_WAIT_MS });
+      const composerState = await waitForComposer(page, composerDeadline);
+      if (composerState.state !== 'ready') {
+        incident('invocation_blocker', composerState.cause, 'return_local_error');
+        return {
+          page,
+          browser,
+          result: compactResult(
+            composerState.state,
+            'invocation',
+            composerState.cause,
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            incidents,
+            {},
+            journalWriteFailed,
+          ),
+        };
+      }
+
+      baselineCount = (await readPageMessages(page)).length;
+      await sendOwnedPrompt();
     }
-    sendCount = 1;
-    afterSend = true;
 
     const startedAt = Date.now();
     const softDeadline = startedAt + config.timeoutMs;
@@ -645,6 +817,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           return {
             page,
             browser,
+            ...(ownedConversationUrl ? { profileKey, ownedConversationUrl } : {}),
             result: compactResult(
               'ok',
               'none',
@@ -777,6 +950,13 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 }
 
 async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult> {
+  if (outcome.profileKey && outcome.ownedConversationUrl) {
+    releaseStateLightFreshConversationClaim(
+      outcome.profileKey,
+      outcome.ownedConversationUrl,
+      outcome.result.invocation_id,
+    );
+  }
   let cleanup: ResourceCleanupOutcome = 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   const incidents = [...outcome.result.incidents];

@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "6e4f292b852507038781251c045ef188a8e5f3d6",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:f8b22fa1c5b087a0e525ded6b5531df2f523c12e2dc1028e9895933bd7662f0b"
+    "active_scope_hash": "sha256:38781b0b95cdf9ab6f82b64c92034449b4d50e6c60d5b5a2275b1d78646e8637"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -19,24 +19,28 @@
     "package.json",
     "scripts/chatgpt-browser-turn/README.md",
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
     "scripts/finding-ledger-guard.mjs",
     "scripts/lib/stage-completeness-core.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/stage-completeness-guard.test.ts",
-    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
-    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
-    "scripts/vitest-ci-lanes.config.json",
-    "scripts/lib/vitest-pre-topology-measurement.mjs"
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:3ced3d53b340ccbeeac333ac34a5e0a2079f7bd34bed7d4a74a9978f35dea9a6",
-      "new_active_scope_hash": "sha256:f8b22fa1c5b087a0e525ded6b5531df2f523c12e2dc1028e9895933bd7662f0b",
+      "new_active_scope_hash": "sha256:38781b0b95cdf9ab6f82b64c92034449b4d50e6c60d5b5a2275b1d78646e8637",
       "changed": {
         "added": [
+          "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+          "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
           "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
           "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
           "scripts/lib/vitest-pre-topology-measurement.mjs",
@@ -44,9 +48,9 @@
         ],
         "removed": []
       },
-      "reason": "add observation test, lane classification, and pre-topology estimate",
+      "reason": "add fresh-conversation collision recovery, observation test, lane classification, and pre-topology estimates",
       "actor": "local",
-      "timestamp": "2026-07-30T02:22:30.139Z",
+      "timestamp": "2026-07-30T02:42:00.000Z",
       "applied": true
     }
   ]
