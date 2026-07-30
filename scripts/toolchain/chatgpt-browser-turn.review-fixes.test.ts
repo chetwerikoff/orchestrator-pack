@@ -231,6 +231,30 @@ describe('pack review 4773714081 product-owned wall detection', () => {
   });
 });
 
+describe('issue 1120 rate-limit product wall detection', () => {
+  const rateLimitCause = { state: 'rate_limit', cause: 'rate_limit_detected' } as const;
+
+  it.each([
+    'Too many requests',
+    "You're making requests too quickly",
+    "We've temporarily limited access to your conversations to protect your data",
+    'Please wait a few minutes before trying again',
+    "Too many requests — You're making requests too quickly. We've temporarily limited access to your conversations to protect your data. Please wait a few minutes before trying again.",
+    "You're sending messages too quickly",
+    'Rate limit exceeded',
+    'temporarily limited access',
+  ])('classifies rate-limit wall copy %j', (copy) => {
+    expect(classifyProductWall({ text: copy, composer: true })).toEqual(rateLimitCause);
+  });
+
+  it('keeps exhausted-usage quota separate from temporary rate limiting', () => {
+    expect(classifyProductWall({ text: "You've reached the current usage limit", composer: true }))
+      .toEqual({ state: 'quota', cause: 'quota_detected' });
+    expect(classifyProductWall({ text: 'please try again later', composer: true }))
+      .toEqual({ state: 'quota', cause: 'quota_detected' });
+  });
+});
+
 describe('pack review 4774405996 publication exclusive commit recovery', () => {
   it('does not treat an external hard link to the prepared temp as the helper rename', () => {
     const output = resolve(join(root, 'hardlink-race.txt'));

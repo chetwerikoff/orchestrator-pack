@@ -123,7 +123,7 @@ Typical state-light outcomes include:
 
 - `ok`;
 - `input_invalid` / `output_conflict`;
-- `login` / `quota` / `challenge` / `chrome_not_running` / `profile_mismatch`;
+- `login` / `quota` / `rate_limit` / `challenge` / `chrome_not_running` / `profile_mismatch`;
 - `send_failed`;
 - `ui_contract_mismatch` / `foreign_activity` / `driver_error`.
 

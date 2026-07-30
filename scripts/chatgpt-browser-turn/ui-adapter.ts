@@ -1452,9 +1452,14 @@ export async function productStatusText(page: any, waitSource?: OperationWaitSou
   return { text: parts.join('\n'), composer };
 }
 
-export function classifyProductWall(surface: ProductStatusSurface): { state?: 'quota'|'challenge'|'login'; cause?: string } {
+const PRODUCT_RATE_LIMIT_WALL_RE = /too many requests|(?:making |sending )?requests too quickly|you(?:'|’)re (?:making requests|sending messages) too quickly|temporarily limited(?:\s+access)?(?:\s+to your conversations)?|(?:please )?wait(?: a)? few minutes before trying again|try again in a few minutes|you(?:'|’)re going too fast|rate limit exceeded/i;
+
+export function classifyProductWall(surface: ProductStatusSurface): { state?: 'quota'|'rate_limit'|'challenge'|'login'; cause?: string } {
   if (/verify you are human|checking your browser|just a moment|unusual activity/i.test(surface.text)) {
     return { state: 'challenge', cause: 'challenge_detected' };
+  }
+  if (PRODUCT_RATE_LIMIT_WALL_RE.test(surface.text)) {
+    return { state: 'rate_limit', cause: 'rate_limit_detected' };
   }
   if (/you(?:'|’)ve reached|usage limit|message limit|reached the current usage|please try again later/i.test(surface.text)) {
     return { state: 'quota', cause: 'quota_detected' };
@@ -1651,7 +1656,7 @@ function withRetainedFreshConversationId(
 }
 
 export interface TurnBrowserResult {
-  state: 'ok'|'quota'|'challenge'|'login'|'stream_timeout'|'send_failed'|'no_reply'|'ui_contract_mismatch'|'foreign_activity'|'recovery_required'|'orphaned_fresh_turn'|'output_conflict';
+  state: 'ok'|'quota'|'rate_limit'|'challenge'|'login'|'stream_timeout'|'send_failed'|'no_reply'|'ui_contract_mismatch'|'foreign_activity'|'recovery_required'|'orphaned_fresh_turn'|'output_conflict';
   cause: string;
   conversationId?: string;
   userMessageId?: string;
