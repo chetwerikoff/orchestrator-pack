@@ -291,9 +291,9 @@ Local Codex PR review **is active**. On AO 0.10 the loop is **workspace-visible 
 **side-process scripts** supervised by `scripts/orchestrator-wake-supervisor.ps1` — not
 AO-injected `orchestratorRules`.
 
-- **Trigger:** manual and automatic starts use `scripts/pack-review-runner.ts`; operational
-  status comes from the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the
-  authoritative verdict.
+- **Trigger:** automatic/common starts use `scripts/pack-review-runner.ts`; manual Browser-GPT
+  review uses `npm run pack-gpt-review -- --pr-number <PR_NUMBER>`. Operational status comes from
+  the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the authoritative verdict.
 - Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on
   AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER**; daemon review HTTP and `ao review submit`
   are not fallback or dual-write paths.
