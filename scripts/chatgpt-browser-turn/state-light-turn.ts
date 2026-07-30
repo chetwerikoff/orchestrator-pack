@@ -421,30 +421,6 @@ function maybeReturnObservationExhausted(
     baselineCount,
     softDeadlineElapsed,
   );
-  if (softDeadlineElapsed && decision.state === 'waiting') {
-    incident('observation_exhausted', 'observation_exhausted_no_resend', 'retain_owned_page_no_resend');
-    return {
-      page,
-      browser,
-      preserveOwnedPage: true,
-      result: compactResult(
-        'no_reply',
-        'invocation',
-        'observation_exhausted_no_resend',
-        invocationId,
-        profileKey,
-        sendCount,
-        pollCount,
-        navigation,
-        incidents,
-        {
-          ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
-          observation_exhausted_diagnostics: diagnostics,
-        },
-        journalWriteFailed,
-      ),
-    };
-  }
   if (now >= hardExhaustionDeadline) {
     incident('observation_exhausted', 'observation_exhausted_no_resend', 'retain_owned_page_no_resend');
     return {
@@ -1315,6 +1291,27 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         stableReads = 0;
         lastReadyReply = '';
         bestReadyReply = '';
+        const readErrorExhausted = maybeReturnObservationExhausted(
+          Date.now(),
+          softDeadline,
+          hardExhaustionDeadline,
+          sendCount,
+          { state: 'waiting' },
+          stableReads,
+          foreignStableReads,
+          pollCount,
+          [],
+          baselineCount,
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+        );
+        if (readErrorExhausted) return readErrorExhausted;
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }

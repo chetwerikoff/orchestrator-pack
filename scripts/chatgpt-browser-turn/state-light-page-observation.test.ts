@@ -167,8 +167,10 @@ describe('state-light prompt attribution classification', () => {
     expect(performance.now() - started).toBeLessThan(500);
   });
   it('accepts long markdown prompt rendered without syntax chars as owned', () => {
-    const body = Array.from({ length: 420 }, () => 'detail').join(' ')
+    const body = Array.from({ length: 520 }, () => 'detail').join(' ');
     const longPrompt = `# Issue #1120 pulse\n\n## OUTPUT CONSTRAINTS\n- Keep answer under 500 words\n- Use \`backticks\` sparingly\n\n${body}`;
+
+    expect(longPrompt.length).toBeGreaterThanOrEqual(3000);
     const renderedVisible = `Issue #1120 pulse OUTPUT CONSTRAINTS Keep answer under 500 words Use backticks sparingly ${body.slice(0, 512)}`;
 
     expect(promptEchoSharedOverlap(renderedVisible, longPrompt)).toBeGreaterThanOrEqual(230);
@@ -193,10 +195,22 @@ describe('state-light prompt attribution classification', () => {
 
   it('still classifies genuinely foreign long markdown-adjacent text as foreign', () => {
     const prompt = `# Owned\n\n${'owned detail '.repeat(300)}`;
-    const foreign = `FOREIGN INTERLOPER ${'noise '.repeat(300)}`;
+    const foreign = `FOREIGN INTERLOPER ${'noise '.repeat(500)}`;
 
+    expect(prompt.length).toBeGreaterThanOrEqual(3000);
+    expect(foreign.length).toBeGreaterThanOrEqual(3000);
     expect(ownedPromptEchoMatches(foreign, prompt)).toBe(false);
     expect(promptEchoSharedOverlap(foreign, prompt)).toBeLessThan(24);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: foreign }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      prompt,
+      true,
+    )).toEqual({
+      state: 'foreign_suspect',
+      cause: 'foreign_or_ambiguous_user_activity',
+      suspectFingerprint: expect.stringMatching(/^FOREIGN INTERLOPER /),
+    });
   });
 
   it('keeps short prompt echo thresholds unchanged', () => {

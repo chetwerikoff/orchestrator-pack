@@ -72,6 +72,7 @@ vi.mock('./ui-adapter.ts', async (importOriginal) => {
     classifyProductWall: (text: string) => {
       if (/quota/i.test(text)) return { state: 'quota', cause: 'quota_detected' };
       if (/challenge/i.test(text)) return { state: 'challenge', cause: 'challenge_detected' };
+      if (/rate.?limit|temporarily limited/i.test(text)) return { state: 'rate_limit', cause: 'rate_limit_detected' };
       if (/login/i.test(text)) return { state: 'login', cause: 'login_detected' };
       return {};
     },
@@ -104,6 +105,9 @@ import {
 } from './product-page-selectors.ts';
 import { runStateLightTurn } from './state-light-turn.ts';
 
+import journalSymptoms from './fixtures/browser-turn-recurrence-journal-symptoms.json';
+import { BROWSER_TURN_RECURRENCE_REPLAY_KINDS } from './fixtures/browser-turn-recurrence-replay-kinds.ts';
+
 const BASELINE: StateLightTestMessage[] = [
   { role: 'user', text: 'OLD' },
   { role: 'assistant', text: 'OLD ANSWER', finalAction: true },
@@ -114,6 +118,7 @@ function makePage(
   options: {
     throwAfterSend?: boolean;
     transientStatusErrors?: number;
+    transientReadErrors?: number | 'always';
     sendButton?: boolean;
     wallText?: string;
     wallAfterPoll?: number;
@@ -196,6 +201,13 @@ function makePage(
       if (selector === COMPOSER_SELECTOR) return composer;
       if (selector === SEND_BUTTON_SELECTOR) return sendButton;
       if (selector === MESSAGE_NODE_SELECTOR) {
+        if (sent && options.transientReadErrors === 'always') {
+          throw new Error('transient page read');
+        }
+        if (sent && typeof options.transientReadErrors === 'number' && options.transientReadErrors > 0) {
+          options.transientReadErrors -= 1;
+          throw new Error('transient page read');
+        }
         if (sent && options.throwAfterSend) {
           closed = true;
           throw new Error('simulated page loss');
@@ -594,13 +606,13 @@ describe('Issue #1120 state-light turn lifecycle', () => {
   });
 
 
-  it('returns observation_exhausted_no_resend when completion never becomes ready before the soft deadline', async () => {
+  it('returns observation_exhausted_no_resend only after the hard exhaustion deadline while waiting', async () => {
     const waiting: StateLightTestSnapshot = {
       messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
       generating: true,
     };
-    const fake = makePage([waiting, waiting, waiting]);
-    const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
+    const fake = makePage(Array.from({ length: 20 }, () => waiting));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
 
     expect(outcome.result).toMatchObject({
       state: 'no_reply',
@@ -609,6 +621,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       send_count: 1,
     });
     expect(outcome.result.incidents).toContain('observation_exhausted');
+    expect(fake.metrics.waitedMs).toBeGreaterThan(20);
     expect(fake.metrics.sends).toBe(1);
     expect(fake.metrics.closes).toBe(0);
     expect(mocks.linkSync).not.toHaveBeenCalled();
@@ -928,6 +941,61 @@ ${body}`;
     expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
   });
 
+  it('does not terminalize waiting at the soft deadline alone', async () => {
+    const waiting: StateLightTestSnapshot = {
+      messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+      generating: true,
+    };
+    const fake = makePage(Array.from({ length: 30 }, () => waiting));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+      send_count: 1,
+    });
+    expect(fake.metrics.waitedMs).toBeGreaterThan(20);
+    expect(fake.metrics.closes).toBe(0);
+  });
+
+  it('exhausts after repeated transient post-send read errors at the hard deadline', async () => {
+    const fake = makePage(readySnapshots(), { transientReadErrors: 'always' });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+      send_count: 1,
+    });
+    expect(outcome.result.incidents).toContain('post_send_observation_error');
+    expect(outcome.result.incidents).toContain('observation_exhausted');
+    expect(outcome.result.poll_count).toBeGreaterThanOrEqual(2);
+    expect(fake.metrics.closes).toBe(0);
+    expect(mocks.linkSync).not.toHaveBeenCalled();
+  });
+
+  it('chat-url defers owned_user_message_not_observed after send without send_failed', async () => {
+    const delayedUser: StateLightTestSnapshot = {
+      messages: [...BASELINE],
+      generating: false,
+    };
+    const ready: StateLightTestSnapshot = {
+      messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+      generating: false,
+    };
+    const fake = makePage([
+      ...Array.from({ length: 8 }, () => delayedUser),
+      ready,
+      ready,
+    ]);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.state).not.toBe('send_failed');
+    expect(outcome.result.incidents).toContain('send_observation_deferred');
+  });
+
   it('does not let cleanup or journal failure veto an already captured reply', async () => {
     mocks.cleanupOutcome = 'unconfirmed';
     mocks.journalThrows = true;
@@ -945,5 +1013,247 @@ ${body}`;
     expect(outcome.result.incidents).toContain('owned_tab_cleanup_failed');
     expect(fake.metrics.sends).toBe(1);
     expect(fake.metrics.closes).toBe(0);
+  });
+});
+
+
+describe('browser-turn recurrence journal fixture coverage', () => {
+  it('maps every recorded journal symptom to a deterministic replay kind', () => {
+    for (const entry of journalSymptoms) {
+      expect(BROWSER_TURN_RECURRENCE_REPLAY_KINDS[entry.id as keyof typeof BROWSER_TURN_RECURRENCE_REPLAY_KINDS]).toBeTruthy();
+    }
+    expect(Object.keys(BROWSER_TURN_RECURRENCE_REPLAY_KINDS)).toHaveLength(journalSymptoms.length);
+  });
+
+  it('replays foreign_activity journal symptoms without resend licensing', async () => {
+    const foreignSnapshot: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'partial' },
+        { role: 'user', text: 'FOREIGN' },
+        { role: 'assistant', text: 'FOREIGN ANSWER', finalAction: true },
+      ],
+      generating: false,
+    };
+    const fake = makePage([foreignSnapshot, foreignSnapshot, foreignSnapshot]);
+    const outcome = await runAndCapture(fake.page);
+    expect(outcome.result.state).toBe('foreign_activity');
+    expect(outcome.result.send_count).toBe(1);
+    expect(outcome.result.state).not.toBe('send_failed');
+  });
+
+  it('replays observation_exhausted journal symptoms at the hard deadline', async () => {
+    const waiting: StateLightTestSnapshot = {
+      messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+      generating: true,
+    };
+    const fake = makePage(Array.from({ length: 20 }, () => waiting));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+      send_count: 1,
+    });
+    expect(outcome.result.incidents).toContain('observation_exhausted');
+  });
+
+  it('replays helper_failure_after_send journal symptoms', async () => {
+    const fake = makePage([], { throwAfterSend: true });
+    const outcome = await runAndCapture(fake.page);
+    expect(outcome.result).toMatchObject({
+      state: 'driver_error',
+      cause: 'page_or_browser_lost_after_send',
+      send_count: 1,
+    });
+    expect(outcome.result.incidents).toContain('helper_failure_after_send');
+  });
+
+  it('replays post-send read-error journal symptoms through hard exhaustion', async () => {
+    const fake = makePage(readySnapshots(), { transientReadErrors: 'always' });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+    expect(outcome.result.incidents).toContain('post_send_observation_error');
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+    });
+  });
+
+  it('replays send_observation_deferred chat-url symptoms without send_failed', async () => {
+    const delayedUser: StateLightTestSnapshot = {
+      messages: [...BASELINE],
+      generating: false,
+    };
+    const ready: StateLightTestSnapshot = {
+      messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+      generating: false,
+    };
+    const fake = makePage([
+      ...Array.from({ length: 8 }, () => delayedUser),
+      ready,
+      ready,
+    ]);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+    expect(outcome.result.state).toBe('ok');
+    expect(outcome.result.incidents).toContain('send_observation_deferred');
+    expect(outcome.result.state).not.toBe('send_failed');
+  });
+
+  it('replays send_count guard symptoms by never emitting send_failed after send', async () => {
+    const waiting: StateLightTestSnapshot = { messages: BASELINE, generating: false };
+    const fake = makePage(Array.from({ length: 20 }, () => waiting));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+    expect(outcome.result.send_count).toBeGreaterThanOrEqual(1);
+    expect(outcome.result.state).not.toBe('send_failed');
+  });
+
+  it('replays chrome_not_running invocation_blocker symptoms', async () => {
+    mocks.verifyProfile.mockResolvedValueOnce({ state: 'unavailable', cause: 'chrome_not_running' });
+    const fake = makePage(readySnapshots());
+    const outcome = await runAndCapture(fake.page);
+    expect(outcome.result).toMatchObject({
+      state: 'chrome_not_running',
+      cause: 'chrome_not_running',
+      send_count: 0,
+    });
+    expect(outcome.result.incidents).toContain('invocation_blocker');
+  });
+
+  it('replays profile_mismatch invocation_blocker symptoms', async () => {
+    mocks.verifyProfile.mockResolvedValueOnce({ state: 'mismatch', cause: 'profile_mismatch' });
+    const fake = makePage(readySnapshots());
+    const outcome = await runAndCapture(fake.page);
+    expect(outcome.result).toMatchObject({
+      state: 'profile_mismatch',
+      cause: 'profile_mismatch',
+      send_count: 0,
+    });
+    expect(outcome.result.incidents).toContain('invocation_blocker');
+  });
+
+  it('replays composer_unavailable invocation_blocker symptoms', async () => {
+    const fake = makePage(readySnapshots());
+    const composer = scalarLocator({ count: vi.fn(async () => 0) });
+    const originalLocator = fake.page.locator;
+    fake.page.locator = vi.fn((selector: string) => {
+      if (selector === COMPOSER_SELECTOR) return composer;
+      return originalLocator(selector);
+    });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '10', pollMs: '1' });
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'composer_unavailable',
+      send_count: 0,
+    });
+    expect(outcome.result.incidents).toContain('invocation_blocker');
+  });
+
+  it('replays conversation_redirect helper_failure_before_send symptoms', async () => {
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async () => {
+        throw new Error('ui_contract_mismatch:conversation_redirect');
+      }),
+      url: vi.fn(() => 'https://chatgpt.com/c/existing'),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: vi.fn(async () => undefined),
+      getByRole: vi.fn(() => scalarLocator()),
+      getByText: vi.fn(() => scalarLocator()),
+      locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
+    };
+    enqueueBrowserForTurn(mocks, page);
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--output', '/tmp/reply.txt',
+      '--chat-url', 'https://chatgpt.com/c/existing',
+      '--timeout-ms', '1000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'ui_contract_mismatch:conversation_redirect',
+      send_count: 0,
+    });
+    expect(outcome.result.incidents).toContain('helper_failure_before_send');
+  });
+
+  it('replays rate_limit invocation_blocker symptoms', async () => {
+    const working: StateLightTestSnapshot = {
+      messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+      generating: true,
+    };
+    const fake = makePage(Array.from({ length: 6 }, () => working), {
+      wallText: 'temporarily limited',
+      wallAfterPoll: 1,
+    });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+    expect(outcome.result).toMatchObject({
+      state: 'rate_limit',
+      cause: 'rate_limit_detected',
+      send_count: 1,
+    });
+    expect(outcome.result.incidents).toContain('invocation_blocker');
+  });
+
+  it('replays helper_failure_before_send argument symptoms', async () => {
+    const captured = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      '--profile', '/tmp/profile',
+      '--cdp', 'http://127.0.0.1:9222',
+      '--input', '/tmp/prompt.txt',
+      '--output', '/tmp/reply.txt',
+      '--chat-url', 'https://chatgpt.com/c/existing',
+      '--timeout-ms', 'not-a-number',
+    ]);
+    expect(captured.result.state).toBe('driver_error');
+    expect(captured.result.incidents).toContain('helper_failure_before_send');
+  });
+
+  it('replays helper_failure_before_send argument_mode_invalid symptoms', async () => {
+    const captured = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      '--profile', '/tmp/profile',
+      '--cdp', 'http://127.0.0.1:9222',
+      '--input', '/tmp/prompt.txt',
+      '--output', '/tmp/reply.txt',
+      '--new-chat',
+      '--chat-url', 'https://chatgpt.com/c/existing',
+      '--project-url', 'https://chatgpt.com/g/project',
+      '--timeout-ms', '1000',
+    ]);
+    expect(captured.result.state).toBe('driver_error');
+    expect(captured.result.cause).toBe('argument_mode_invalid');
+    expect(captured.result.incidents).toContain('helper_failure_before_send');
+  });
+
+  it('replays legacy admission journal symptoms as state-light absence', async () => {
+    const fake = makePage(readySnapshots());
+    const outcome = await runAndCapture(fake.page);
+    const journal = mocks.appendFileSync.mock.calls.map((call) => String(call[1])).join('\n');
+    expect(outcome.result.state).toBe('ok');
+    expect(journal).not.toContain('possible_delivery');
+    expect(journal).not.toContain('profile_busy');
+    expect(journal).not.toMatch(/conversation_busy|claim|slot_busy/);
+  });
+
+  it('links send_observation_deferred fresh URL journal symptoms to the fresh-conversation fixture replay', () => {
+    const freshUrlEntries = journalSymptoms.filter((entry) =>
+      BROWSER_TURN_RECURRENCE_REPLAY_KINDS[entry.id as keyof typeof BROWSER_TURN_RECURRENCE_REPLAY_KINDS]
+        === 'state_light_send_observation_deferred_fresh_url',
+    );
+    expect(freshUrlEntries.map((entry) => entry.observed_symptom)).toEqual(
+      expect.arrayContaining(['fresh_conversation_url_not_observed']),
+    );
+    expect(freshUrlEntries.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('records legacy harness-only journal symptoms outside the state-light turn surface', () => {
+    const legacyKinds = new Set(
+      journalSymptoms
+        .filter((entry) => ['legacy_harness_note', 'legacy_admission_absence'].includes(
+          BROWSER_TURN_RECURRENCE_REPLAY_KINDS[entry.id as keyof typeof BROWSER_TURN_RECURRENCE_REPLAY_KINDS],
+        ))
+        .map((entry) => entry.id),
+    );
+    expect(legacyKinds.size).toBeGreaterThan(0);
   });
 });
