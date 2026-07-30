@@ -55,6 +55,7 @@ const DEFAULT_POLL_MS = 300_000;
 const INITIAL_POLL_MS = 500;
 const DISPATCH_OBSERVATION_MS = 30_000;
 const STABILITY_READ_DELAY_MS = 1_000;
+const FOREIGN_STABILITY_READS = 2;
 const MAX_LOCAL_READ_WAIT_MS = 5_000;
 export const BROWSER_TURN_RECURRENCE_PATH = join(
   homedir(),
@@ -74,7 +75,7 @@ interface PageMessage {
 }
 
 export interface PageObservationDecision {
-  readonly state: 'waiting' | 'ready' | 'foreign_activity';
+  readonly state: 'waiting' | 'ready' | 'foreign_suspect';
   readonly reply?: string;
   readonly cause?: string;
 }
@@ -167,6 +168,23 @@ function normalizeVisibleText(value: string): string {
   return value.replace(/\r\n?/g, '\n').replace(/[\t ]+/g, ' ').trim();
 }
 
+export function ownedPromptEchoMatches(visibleText: string, promptText: string): boolean {
+  const visible = normalizeVisibleText(visibleText);
+  const prompt = normalizeVisibleText(promptText);
+  if (!visible || !prompt) return false;
+  if (visible === prompt) return true;
+
+  const minOverlap = Math.max(24, Math.floor(Math.min(prompt.length, visible.length) * 0.45));
+  const visibleCore = visible.replace(/[.…]+\s*$/u, '').trim();
+  if (visibleCore.length >= minOverlap && prompt.startsWith(visibleCore)) return true;
+  if (visible.length >= minOverlap && prompt.startsWith(visible)) return true;
+
+  let shared = 0;
+  const limit = Math.min(visible.length, prompt.length);
+  while (shared < limit && visible[shared] === prompt[shared]) shared++;
+  return shared >= minOverlap;
+}
+
 function errnoCode(error: unknown): string | undefined {
   return error instanceof Error && 'code' in error
     ? String((error as NodeJS.ErrnoException).code ?? '') || undefined
@@ -231,19 +249,31 @@ export function classifyPageObservation(
   inProgress: boolean,
 ): PageObservationDecision {
   const novel = messages.slice(Math.max(0, baselineCount));
-  const promptText = normalizeVisibleText(prompt);
   const users = novel
     .map((message, index) => ({ message, index }))
     .filter(({ message }) => message.role === 'user');
 
   if (users.length === 0) return { state: 'waiting' };
-  if (users.length !== 1 || normalizeVisibleText(users[0]!.message.text) !== promptText) {
-    return { state: 'foreign_activity', cause: 'foreign_or_ambiguous_user_activity' };
+
+  const ownedUsers = users.filter(({ message }) => ownedPromptEchoMatches(message.text, prompt));
+  const foreignUsers = users.filter(({ message }) => !ownedPromptEchoMatches(message.text, prompt));
+
+  if (foreignUsers.length > 0) {
+    const cause = ownedUsers.length > 0
+      ? 'foreign_user_after_owned_send'
+      : 'foreign_or_ambiguous_user_activity';
+    return { state: 'foreign_suspect', cause };
   }
 
-  const afterOwnUser = novel.slice(users[0]!.index + 1);
-  if (afterOwnUser.some((message) => message.role === 'user')) {
-    return { state: 'foreign_activity', cause: 'foreign_user_after_owned_send' };
+  if (ownedUsers.length === 0) return { state: 'waiting' };
+
+  const lastOwned = ownedUsers[ownedUsers.length - 1]!;
+  const afterOwnUser = novel.slice(lastOwned.index + 1);
+  const extraUsers = afterOwnUser.filter((message) => message.role === 'user');
+  if (extraUsers.length > 0) {
+    if (!extraUsers.every((message) => ownedPromptEchoMatches(message.text, prompt))) {
+      return { state: 'foreign_suspect', cause: 'foreign_user_after_owned_send' };
+    }
   }
 
   const assistants = afterOwnUser.filter((message) => message.role === 'assistant');
@@ -771,6 +801,16 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             INITIAL_POLL_MS,
           );
           if (!conversationUrl) {
+            if (sendCount >= 1) {
+              incident(
+                'send_observation_deferred',
+                'fresh_conversation_url_not_observed',
+                'continue_observing_after_send',
+              );
+              lastAttemptConversationUrl = pageConversationUrl(page) ?? lastAttemptConversationUrl;
+              claimed = true;
+              break;
+            }
             incident('send_observation_error', 'fresh_conversation_url_not_observed', 'return_local_error');
             return {
               page,
@@ -917,6 +957,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     const dispatchDeadline = startedAt + Math.min(DISPATCH_OBSERVATION_MS, config.timeoutMs);
     let lastReadyReply = '';
     let stableReads = 0;
+    let foreignStableReads = 0;
+    let lastForeignCause = '';
 
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
     // landed and this invocation still owns a reachable page, #1120 requires us
@@ -960,24 +1002,39 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
       const decision = classifyPageObservation(messages, baselineCount, snapshot.text, !completionReady);
 
-      if (decision.state === 'foreign_activity') {
-        incident('foreign_activity', decision.cause ?? 'foreign_activity', 'return_local_degraded');
-        return {
-          page,
-          browser,
-          result: compactResult(
-            'foreign_activity',
-            'invocation',
-            decision.cause ?? 'foreign_activity',
-            invocationId,
-            profileKey,
-            sendCount,
-            pollCount, navigation, incidents,
-            { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
-            journalWriteFailed,
-          ),
-        };
+      if (decision.state === 'foreign_suspect') {
+        const foreignCause = decision.cause ?? 'foreign_activity';
+        if (foreignCause === lastForeignCause) foreignStableReads++;
+        else {
+          foreignStableReads = 1;
+          lastForeignCause = foreignCause;
+        }
+        if (foreignStableReads >= FOREIGN_STABILITY_READS) {
+          incident('foreign_activity', foreignCause, 'return_local_degraded');
+          return {
+            page,
+            browser,
+            result: compactResult(
+              'foreign_activity',
+              'invocation',
+              foreignCause,
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount, navigation, incidents,
+              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+              journalWriteFailed,
+            ),
+          };
+        }
+        stableReads = 0;
+        lastReadyReply = '';
+        await sleep(page, STABILITY_READ_DELAY_MS);
+        continue;
       }
+
+      foreignStableReads = 0;
+      lastForeignCause = '';
 
       if (decision.state === 'ready' && decision.reply) {
         if (decision.reply === lastReadyReply) stableReads++;
@@ -1047,22 +1104,30 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       if (Date.now() >= dispatchDeadline) {
         const novel = messages.slice(Math.max(0, baselineCount));
         if (!novel.some((message) => message.role === 'user')) {
-          incident('send_observation_error', 'owned_user_message_not_observed', 'return_local_error');
-          return {
-            page,
-            browser,
-            result: compactResult(
-              'send_failed',
-              'invocation',
+          if (sendCount >= 1) {
+            incident(
+              'send_observation_deferred',
               'owned_user_message_not_observed',
-              invocationId,
-              profileKey,
-              sendCount,
-              pollCount, navigation, incidents,
-              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
-              journalWriteFailed,
-            ),
-          };
+              'continue_observing_after_send',
+            );
+          } else {
+            incident('send_observation_error', 'owned_user_message_not_observed', 'return_local_error');
+            return {
+              page,
+              browser,
+              result: compactResult(
+                'send_failed',
+                'invocation',
+                'owned_user_message_not_observed',
+                invocationId,
+                profileKey,
+                sendCount,
+                pollCount, navigation, incidents,
+                { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+                journalWriteFailed,
+              ),
+            };
+          }
         }
       }
 

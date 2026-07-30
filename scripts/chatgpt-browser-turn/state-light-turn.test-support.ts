@@ -380,7 +380,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
   });
 
   it('keeps foreign activity invocation-local and still closes only its owned tab', async () => {
-    const fake = makePage([{
+    const foreignSnapshot: StateLightTestSnapshot = {
       messages: [
         ...BASELINE,
         { role: 'user', text: 'PROMPT' },
@@ -389,7 +389,8 @@ describe('Issue #1120 state-light turn lifecycle', () => {
         { role: 'assistant', text: 'FOREIGN ANSWER', finalAction: true },
       ],
       generating: false,
-    }]);
+    };
+    const fake = makePage([foreignSnapshot, foreignSnapshot]);
     const outcome = await runAndCapture(fake.page);
 
     expect(outcome.result).toMatchObject({
@@ -496,6 +497,98 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       send_count: 1,
     });
     expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
+  });
+
+  it('does not classify a collapsed long prompt echo as foreign activity', async () => {
+    const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
+    const collapsedEcho = `${'A'.repeat(120)} detail detail detail…`;
+    const snapshots: StateLightTestSnapshot[] = [
+      {
+        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'working' }],
+        generating: true,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+        generating: false,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+        generating: false,
+      },
+    ];
+    const { readStableInput } = await import('./input.ts');
+    vi.mocked(readStableInput).mockImplementationOnce(() => ({
+      text: longPrompt,
+      bytes: new Uint8Array([1]),
+      byteLength: 1,
+      dev: 1n,
+      ino: 1n,
+    }));
+    const fake = makePage(snapshots);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      send_count: 1,
+    });
+    expect(outcome.result.state).not.toBe('foreign_activity');
+    expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
+  });
+
+  it('does not classify a transient duplicate owned user render as foreign activity', async () => {
+    const snapshots: StateLightTestSnapshot[] = [
+      {
+        messages: [
+          ...BASELINE,
+          { role: 'user', text: 'PROMPT' },
+          { role: 'user', text: 'PROMPT' },
+          { role: 'assistant', text: 'working' },
+        ],
+        generating: true,
+      },
+      {
+        messages: [
+          ...BASELINE,
+          { role: 'user', text: 'PROMPT' },
+          { role: 'assistant', text: 'FINAL', finalAction: true },
+        ],
+        generating: false,
+      },
+      {
+        messages: [
+          ...BASELINE,
+          { role: 'user', text: 'PROMPT' },
+          { role: 'assistant', text: 'FINAL', finalAction: true },
+        ],
+        generating: false,
+      },
+    ];
+    const fake = makePage(snapshots);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      send_count: 1,
+    });
+    expect(outcome.result.state).not.toBe('foreign_activity');
+  });
+
+  it('never emits send_failed once send_count is at least one', async () => {
+    const waiting: StateLightTestSnapshot = {
+      messages: BASELINE,
+      generating: false,
+    };
+    const fake = makePage([waiting, waiting, waiting]);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
+
+    expect(outcome.result.send_count).toBeGreaterThanOrEqual(1);
+    expect(outcome.result.state).not.toBe('send_failed');
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+    });
   });
 
   it('does not let cleanup or journal failure veto an already captured reply', async () => {

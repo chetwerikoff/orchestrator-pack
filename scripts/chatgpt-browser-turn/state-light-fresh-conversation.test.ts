@@ -344,6 +344,79 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightAdvisoryWall('collision-profile')).toMatchObject({ state: 'rate_limit' });
   });
 
+  it('continues observing after fresh-conversation URL wait expiry without send_failed', async () => {
+    const prompt = 'PROMPT-SOLO';
+    const reply = 'SOLO-OK';
+    let sent = false;
+    let url = PROJECT_URL;
+    let observationIndex = 0;
+    const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
+      messages,
+      generating: index < 2,
+    }));
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async () => undefined),
+      innerText: vi.fn(async () => (sent ? '' : prompt)),
+      press: vi.fn(async () => { sent = true; }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => { sent = true; }),
+    });
+
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async (target: string) => { url = target; }),
+      url: vi.fn(() => url),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: vi.fn(async () => undefined),
+      getByText: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === '#prompt-textarea') return composer;
+        if (selector === '[data-testid="send-button"]') return sendButton;
+        if (selector.includes('create-new-chat-button') || selector.includes('New chat')) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === '[data-message-author-role]') {
+          if (!sent) return collectionLocator([]);
+          const frame = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
+          observationIndex++;
+          return collectionLocator(frame.messages, frame.generating);
+        }
+        if (selector.startsWith('xpath=ancestor-or-self::section')) {
+          const frame = snapshotFrames[Math.min(observationIndex - 1, snapshotFrames.length - 1)]!;
+          const last = frame.messages.at(-1);
+          if (last?.finalActionInTurnContainer) return messageLocator(last);
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === '[data-message-author-role="assistant"]') {
+          const frame = snapshotFrames[Math.min(observationIndex - 1, snapshotFrames.length - 1)]!;
+          return collectionLocator(
+            frame.messages.filter((message: StateLightTestMessage) => message.role === 'assistant'),
+            frame.generating,
+          );
+        }
+        if (selector.includes('stop-button')) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, '/tmp/url-wait-expiry.txt');
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      send_count: 1,
+    });
+    expect(outcome.result.state).not.toBe('send_failed');
+    expect(outcome.result.incidents).toContain('send_observation_deferred');
+  });
+
   it('classifies send landing evidence from page state', async () => {
     const prompt = 'PROMPT-LOSER';
     const page = {
@@ -382,7 +455,8 @@ describe('state-light fresh conversation collision recovery', () => {
     );
 
     expect(decision).toMatchObject({
-      state: 'foreign_activity',
+      state: 'foreign_suspect',
+      cause: 'foreign_user_after_owned_send',
     });
   });
 

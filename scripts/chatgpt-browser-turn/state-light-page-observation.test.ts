@@ -5,6 +5,10 @@ import {
   readAssistantTurnGenerating,
 } from './ui-adapter.ts';
 import { scalarLocator } from './state-light-turn.test-fixtures.ts';
+import {
+  classifyPageObservation,
+  ownedPromptEchoMatches,
+} from './state-light-turn.ts';
 
 function makeTurnContainerPage(options: {
   assistantText: string;
@@ -60,5 +64,56 @@ describe('state-light page observation driver', () => {
     });
 
     await expect(readAssistantTurnCompletionReady(page)).resolves.toBe(false);
+  });
+});
+
+describe('state-light prompt attribution classification', () => {
+  const baseline = [
+    { role: 'user' as const, text: 'OLD' },
+    { role: 'assistant' as const, text: 'OLD ANSWER' },
+  ];
+
+  it('accepts a collapsed long prompt echo as owned rather than foreign', () => {
+    const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
+    const collapsedEcho = `${'A'.repeat(120)} detail detail detail…`;
+
+    expect(ownedPromptEchoMatches(collapsedEcho, longPrompt)).toBe(true);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      longPrompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+  });
+
+  it('treats a transient duplicate owned user render as waiting, not foreign', () => {
+    expect(classifyPageObservation(
+      [
+        ...baseline,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'working' },
+      ],
+      baseline.length,
+      'PROMPT',
+      true,
+    )).toEqual({ state: 'waiting' });
+  });
+
+  it('flags genuinely foreign user text as foreign_suspect for stable promotion', () => {
+    expect(classifyPageObservation(
+      [
+        ...baseline,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'partial' },
+        { role: 'user', text: 'FOREIGN' },
+      ],
+      baseline.length,
+      'PROMPT',
+      false,
+    )).toEqual({
+      state: 'foreign_suspect',
+      cause: 'foreign_user_after_owned_send',
+    });
   });
 });
