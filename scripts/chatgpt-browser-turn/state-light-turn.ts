@@ -1192,8 +1192,6 @@ export async function runStateLightTurn(argv: readonly string[]): Promise<number
       poll_count: 0,
       goto_count: 0,
       new_chat_click_count: 0,
-      goto_count: 0,
-      new_chat_click_count: 0,
       navigation_count: 0,
       cleanup: 'skipped',
       incidents: [],
