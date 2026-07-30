@@ -124,6 +124,7 @@ function makeLoserPage(prompt: string, reply: string) {
     click: vi.fn(async () => undefined),
     fill: vi.fn(async () => undefined),
     innerText: vi.fn(async () => (sent ? '' : prompt)),
+    textContent: vi.fn(async () => (sent ? '' : prompt)),
     press: vi.fn(async () => {
       sends++;
       sent = true;
@@ -152,6 +153,7 @@ function makeLoserPage(prompt: string, reply: string) {
     }),
     close: vi.fn(async () => undefined),
     getByText: vi.fn(() => scalarLocator()),
+    getByRole: vi.fn(() => scalarLocator()),
     locator: vi.fn((selector: string) => {
       if (selector === '#prompt-textarea') return composer;
       if (selector === '[data-testid="send-button"]') return sendButton;
@@ -360,6 +362,7 @@ describe('state-light fresh conversation collision recovery', () => {
       click: vi.fn(async () => undefined),
       fill: vi.fn(async () => undefined),
       innerText: vi.fn(async () => (sent ? '' : prompt)),
+      textContent: vi.fn(async () => (sent ? '' : prompt)),
       press: vi.fn(async () => { sent = true; }),
     });
     const sendButton = scalarLocator({
@@ -375,6 +378,7 @@ describe('state-light fresh conversation collision recovery', () => {
       waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
       close: vi.fn(async () => undefined),
       getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
       locator: vi.fn((selector: string) => {
         if (selector === '#prompt-textarea') return composer;
         if (selector === '[data-testid="send-button"]') return sendButton;
@@ -421,11 +425,13 @@ describe('state-light fresh conversation collision recovery', () => {
     const prompt = 'PROMPT-LOSER';
     const page = {
       url: vi.fn(() => PROJECT_URL),
+      getByRole: vi.fn(() => scalarLocator()),
       locator: vi.fn((selector: string) => {
         if (selector === '#prompt-textarea') {
           return scalarLocator({
             count: vi.fn(async () => 1),
             innerText: vi.fn(async () => prompt),
+            textContent: vi.fn(async () => prompt),
           });
         }
         if (selector === '[data-message-author-role]') return collectionLocator([]);

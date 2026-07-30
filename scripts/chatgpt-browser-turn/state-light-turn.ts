@@ -715,7 +715,13 @@ async function locatorCount(locator: any): Promise<number> {
 async function locatorText(locator: any): Promise<string> {
   // Prefer textContent for observation reads — avoids Playwright innerText scroll-into-view.
   try {
-    return normalizeVisibleText(String(await locator.textContent({ timeout: MAX_LOCAL_READ_WAIT_MS }) ?? ''));
+    const textContent = normalizeVisibleText(String(await locator.textContent({ timeout: MAX_LOCAL_READ_WAIT_MS }) ?? ''));
+    if (textContent) return textContent;
+  } catch {
+    // Fall through to innerText for fixtures and nodes that only expose rendered text there.
+  }
+  try {
+    return normalizeVisibleText(String(await locator.innerText({ timeout: MAX_LOCAL_READ_WAIT_MS })));
   } catch {
     return '';
   }
