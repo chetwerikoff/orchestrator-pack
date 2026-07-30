@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "6e4f292b852507038781251c045ef188a8e5f3d6",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:1c496f98da6b9f633000fba554214188aec17ff8d3de042bde97674ff206a126"
+    "active_scope_hash": "sha256:f8b22fa1c5b087a0e525ded6b5531df2f523c12e2dc1028e9895933bd7662f0b"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -27,24 +27,26 @@
     "scripts/stage-completeness-guard.test.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/lib/vitest-pre-topology-measurement.mjs"
   ],
   "declared_globs": [],
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:3ced3d53b340ccbeeac333ac34a5e0a2079f7bd34bed7d4a74a9978f35dea9a6",
-      "new_active_scope_hash": "sha256:1c496f98da6b9f633000fba554214188aec17ff8d3de042bde97674ff206a126",
+      "new_active_scope_hash": "sha256:f8b22fa1c5b087a0e525ded6b5531df2f523c12e2dc1028e9895933bd7662f0b",
       "changed": {
         "added": [
           "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
           "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+          "scripts/lib/vitest-pre-topology-measurement.mjs",
           "scripts/vitest-ci-lanes.config.json"
         ],
         "removed": []
       },
-      "reason": "add observation test fixtures and vitest lane classification",
+      "reason": "add observation test, lane classification, and pre-topology estimate",
       "actor": "local",
-      "timestamp": "2026-07-30T02:18:09.155Z",
+      "timestamp": "2026-07-30T02:22:30.139Z",
       "applied": true
     }
   ]

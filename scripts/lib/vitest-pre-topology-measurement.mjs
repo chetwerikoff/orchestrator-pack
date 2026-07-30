@@ -21,6 +21,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/pack-review-runner-gpt.test.ts': 120,
   'scripts/lib/protected-signal-receipt.test.ts': 120,
   'scripts/worker-smoke.test.ts': 120,
+  'scripts/chatgpt-browser-turn/state-light-page-observation.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
