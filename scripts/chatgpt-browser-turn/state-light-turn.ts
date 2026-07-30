@@ -659,7 +659,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         };
 
         const returnComposerBlocker = (
-          composerState: { state: TurnState; cause: string },
+          composerState: { state: 'ready' } | { state: TurnState; cause: string },
         ): TurnRunOutcome | null => {
           if (composerState.state === 'ready') return null;
           recordProductWallAdvisory(profileKey, composerState.state, composerState.cause, invocationId);

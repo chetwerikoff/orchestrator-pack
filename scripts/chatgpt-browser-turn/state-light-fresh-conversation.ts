@@ -67,8 +67,11 @@ export type StateLightFreshPrepareResult =
 
 export class StateLightNavigationCounter {
   readonly count = { value: 0 };
+  readonly max: number;
 
-  constructor(readonly max = STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION) {}
+  constructor(max = STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION) {
+    this.max = max;
+  }
 
   recordGoto(): void {
     this.count.value += 1;

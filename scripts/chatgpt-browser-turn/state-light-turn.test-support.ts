@@ -58,7 +58,13 @@ vi.mock('./input.ts', () => ({
 // canonical state-light path. If that path imports/calls publishReply again,
 // lifecycle success tests below fail immediately.
 vi.mock('./publication.ts', () => ({ publishReply: mocks.legacyPublishReply }));
-vi.mock('./storage-common.ts', () => ({ configuredProfileKey: vi.fn(() => 'profile-key') }));
+vi.mock('./storage-common.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./storage-common.ts')>();
+  return {
+    ...actual,
+    configuredProfileKey: vi.fn(() => 'profile-key'),
+  };
+});
 vi.mock('./ui-adapter.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./ui-adapter.ts')>();
   const { buildUiAdapterTestMock } = await import('./state-light-turn.test-fixtures.ts');
