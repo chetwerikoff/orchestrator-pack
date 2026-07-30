@@ -719,6 +719,105 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     });
   });
 
+
+  it('exhausts ready-unstable observation with diagnostics instead of observing forever', async () => {
+    const unstableSnapshots: StateLightTestSnapshot[] = Array.from({ length: 40 }, (_, index) => ({
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: `PARTIAL-${index}`, finalAction: true },
+      ],
+      generating: false,
+    }));
+    const fake = makePage(unstableSnapshots);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
+
+    expect(outcome.result.send_count).toBe(1);
+    expect(outcome.result.state).toBe('no_reply');
+    expect(outcome.result.state).not.toBe('send_failed');
+    expect(outcome.result).toMatchObject({
+      cause: 'observation_exhausted_no_resend',
+      observation_exhausted_diagnostics: {
+        observation_state: 'ready_unstable',
+        stable_reads: 1,
+        foreign_stable_reads: 0,
+        poll_count: expect.any(Number),
+        soft_deadline_elapsed: true,
+      },
+    });
+    expect(outcome.result.observation_exhausted_diagnostics?.last_assistant_head).toContain('PARTIAL');
+    expect(fake.metrics.closes).toBe(0);
+    expect(mocks.linkSync).not.toHaveBeenCalled();
+  });
+
+  it('exhausts oscillating foreign_suspect with diagnostics instead of observing forever', async () => {
+    const foreignA: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'FOREIGN-A' },
+        { role: 'assistant', text: 'partial' },
+      ],
+      generating: true,
+    };
+    const foreignB: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'FOREIGN-B' },
+        { role: 'assistant', text: 'partial' },
+      ],
+      generating: true,
+    };
+    const oscillating = Array.from({ length: 40 }, (_, index) => (index % 2 === 0 ? foreignA : foreignB));
+    const fake = makePage(oscillating);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
+
+    expect(outcome.result.send_count).toBe(1);
+    expect(outcome.result.state).toBe('no_reply');
+    expect(outcome.result.state).not.toBe('foreign_activity');
+    expect(outcome.result.state).not.toBe('send_failed');
+    expect(outcome.result).toMatchObject({
+      cause: 'observation_exhausted_no_resend',
+      observation_exhausted_diagnostics: {
+        observation_state: 'foreign_suspect',
+        foreign_stable_reads: 1,
+        soft_deadline_elapsed: true,
+      },
+    });
+    expect(fake.metrics.closes).toBe(0);
+  });
+
+  it('stabilizes a long reply when successive reads differ only by render artifacts', async () => {
+    const body = `${'detail '.repeat(60)} Section footer with enough words.`;
+    const renderA = `Intro paragraph.
+
+${body}`;
+    const renderB = `Intro paragraph. ${body} show more`;
+    const snapshots: StateLightTestSnapshot[] = [
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+        generating: true,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: renderA, finalAction: true }],
+        generating: false,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: renderB, finalAction: true }],
+        generating: false,
+      },
+    ];
+    const fake = makePage(snapshots);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    const published = String(mocks.writeFileSync.mock.calls[0]?.[1] ?? '');
+    expect(published).toContain('Section footer with enough words.');
+    expect(published).toContain('Intro paragraph.');
+  });
+
   it('does not let cleanup or journal failure veto an already captured reply', async () => {
     mocks.cleanupOutcome = 'unconfirmed';
     mocks.journalThrows = true;

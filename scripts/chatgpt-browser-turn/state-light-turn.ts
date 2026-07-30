@@ -91,6 +91,15 @@ interface ForeignActivityDiagnostics {
   readonly shared_overlap: number;
 }
 
+export interface ObservationExhaustedDiagnostics {
+  readonly observation_state: string;
+  readonly stable_reads: number;
+  readonly foreign_stable_reads: number;
+  readonly last_assistant_head: string;
+  readonly poll_count: number;
+  readonly soft_deadline_elapsed: boolean;
+}
+
 interface BrowserIncident {
   readonly eventClass: string;
   readonly symptom: string;
@@ -302,6 +311,132 @@ export function buildForeignActivityDiagnostics(
     prompt_head: boundedDiagnosticHead(promptText),
     shared_overlap: promptEchoSharedOverlap(suspectText, promptText),
   };
+}
+
+export function replyStabilityMatches(currentReply: string, previousReply: string): boolean {
+  if (!previousReply) return false;
+  const current = stripUiCollapseAffixes(normalizeEchoComparisonText(currentReply));
+  const previous = stripUiCollapseAffixes(normalizeEchoComparisonText(previousReply));
+  return current.length > 0 && current === previous;
+}
+
+function lastAssistantVisibleText(
+  messages: readonly PageMessage[],
+  baselineCount: number,
+): string {
+  const novel = messages.slice(Math.max(0, baselineCount));
+  const assistants = novel.filter((message) => message.role === 'assistant');
+  return normalizeVisibleText(assistants.at(-1)?.text ?? '');
+}
+
+function classifyObservationLoopState(
+  decision: PageObservationDecision,
+  stableReads: number,
+): string {
+  if (decision.state === 'foreign_suspect') return 'foreign_suspect';
+  if (decision.state === 'ready') return stableReads >= 2 ? 'ready_stable' : 'ready_unstable';
+  return decision.state;
+}
+
+export function buildObservationExhaustedDiagnostics(
+  decision: PageObservationDecision,
+  stableReads: number,
+  foreignStableReads: number,
+  pollCount: number,
+  messages: readonly PageMessage[],
+  baselineCount: number,
+  softDeadlineElapsed: boolean,
+): ObservationExhaustedDiagnostics {
+  return {
+    observation_state: classifyObservationLoopState(decision, stableReads),
+    stable_reads: stableReads,
+    foreign_stable_reads: foreignStableReads,
+    last_assistant_head: boundedDiagnosticHead(lastAssistantVisibleText(messages, baselineCount)),
+    poll_count: pollCount,
+    soft_deadline_elapsed: softDeadlineElapsed,
+  };
+}
+
+function maybeReturnObservationExhausted(
+  now: number,
+  softDeadline: number,
+  hardExhaustionDeadline: number,
+  sendCount: number,
+  decision: PageObservationDecision,
+  stableReads: number,
+  foreignStableReads: number,
+  pollCount: number,
+  messages: readonly PageMessage[],
+  baselineCount: number,
+  page: any,
+  browser: any,
+  invocationId: string,
+  profileKey: string,
+  navigation: StateLightNavigationCounter,
+  incidents: BrowserIncident[],
+  journalWriteFailed: boolean,
+  incident: (eventClass: string, symptom: string, action?: string) => void,
+): TurnRunOutcome | null {
+  if (sendCount < 1) return null;
+  const softDeadlineElapsed = now >= softDeadline;
+  const diagnostics = buildObservationExhaustedDiagnostics(
+    decision,
+    stableReads,
+    foreignStableReads,
+    pollCount,
+    messages,
+    baselineCount,
+    softDeadlineElapsed,
+  );
+  if (softDeadlineElapsed && decision.state === 'waiting') {
+    incident('observation_exhausted', 'observation_exhausted_no_resend', 'retain_owned_page_no_resend');
+    return {
+      page,
+      browser,
+      preserveOwnedPage: true,
+      result: compactResult(
+        'no_reply',
+        'invocation',
+        'observation_exhausted_no_resend',
+        invocationId,
+        profileKey,
+        sendCount,
+        pollCount,
+        navigation,
+        incidents,
+        {
+          ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+          observation_exhausted_diagnostics: diagnostics,
+        },
+        journalWriteFailed,
+      ),
+    };
+  }
+  if (now >= hardExhaustionDeadline) {
+    incident('observation_exhausted', 'observation_exhausted_no_resend', 'retain_owned_page_no_resend');
+    return {
+      page,
+      browser,
+      preserveOwnedPage: true,
+      result: compactResult(
+        'no_reply',
+        'invocation',
+        'observation_exhausted_no_resend',
+        invocationId,
+        profileKey,
+        sendCount,
+        pollCount,
+        navigation,
+        incidents,
+        {
+          ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+          observation_exhausted_diagnostics: diagnostics,
+        },
+        journalWriteFailed,
+      ),
+    };
+  }
+  return null;
 }
 
 function errnoCode(error: unknown): string | undefined {
@@ -1119,6 +1254,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
     const startedAt = Date.now();
     const softDeadline = startedAt + config.timeoutMs;
+    const hardExhaustionDeadline = startedAt + (config.timeoutMs * 2);
     const dispatchDeadline = startedAt + Math.min(DISPATCH_OBSERVATION_MS, config.timeoutMs);
     let lastReadyReply = '';
     let stableReads = 0;
@@ -1219,6 +1355,27 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         }
         stableReads = 0;
         lastReadyReply = '';
+        const foreignExhausted = maybeReturnObservationExhausted(
+          Date.now(),
+          softDeadline,
+          hardExhaustionDeadline,
+          sendCount,
+          decision,
+          stableReads,
+          foreignStableReads,
+          pollCount,
+          messages,
+          baselineCount,
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+        );
+        if (foreignExhausted) return foreignExhausted;
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
@@ -1228,7 +1385,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       lastForeignStableAt = 0;
 
       if (decision.state === 'ready' && decision.reply) {
-        if (decision.reply === lastReadyReply) stableReads++;
+        if (replyStabilityMatches(decision.reply, lastReadyReply)) stableReads++;
         else {
           lastReadyReply = decision.reply;
           stableReads = 1;
@@ -1281,6 +1438,27 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             ),
           };
         }
+        const readyExhausted = maybeReturnObservationExhausted(
+          Date.now(),
+          softDeadline,
+          hardExhaustionDeadline,
+          sendCount,
+          decision,
+          stableReads,
+          foreignStableReads,
+          pollCount,
+          messages,
+          baselineCount,
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+        );
+        if (readyExhausted) return readyExhausted;
         await sleep(page, STABILITY_READ_DELAY_MS);
         continue;
       }
@@ -1322,25 +1500,27 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         }
       }
 
-      if (Date.now() >= softDeadline && decision.state === 'waiting') {
-        incident('observation_exhausted', 'observation_exhausted_no_resend', 'retain_owned_page_no_resend');
-        return {
-          page,
-          browser,
-          preserveOwnedPage: true,
-          result: compactResult(
-            'no_reply',
-            'invocation',
-            'observation_exhausted_no_resend',
-            invocationId,
-            profileKey,
-            sendCount,
-            pollCount, navigation, incidents,
-            { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
-            journalWriteFailed,
-          ),
-        };
-      }
+      const waitingExhausted = maybeReturnObservationExhausted(
+        Date.now(),
+        softDeadline,
+        hardExhaustionDeadline,
+        sendCount,
+        decision,
+        stableReads,
+        foreignStableReads,
+        pollCount,
+        messages,
+        baselineCount,
+        page,
+        browser,
+        invocationId,
+        profileKey,
+        navigation,
+        incidents,
+        journalWriteFailed,
+        incident,
+      );
+      if (waitingExhausted) return waitingExhausted;
 
       const elapsed = Date.now() - startedAt;
       const delay = elapsed < DISPATCH_OBSERVATION_MS ? INITIAL_POLL_MS : config.pollMs;

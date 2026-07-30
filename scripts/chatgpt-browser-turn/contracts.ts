@@ -115,6 +115,14 @@ export interface TurnResultV1 {
     prompt_head: string;
     shared_overlap: number;
   };
+  observation_exhausted_diagnostics?: {
+    observation_state: string;
+    stable_reads: number;
+    foreign_stable_reads: number;
+    last_assistant_head: string;
+    poll_count: number;
+    soft_deadline_elapsed: boolean;
+  };
 }
 
 export interface StatusItemV1 {

@@ -11,6 +11,7 @@ import {
   foreignSuspectEvidenceFingerprint,
   ownedPromptEchoMatches,
   promptEchoSharedOverlap,
+  replyStabilityMatches,
 } from './state-light-turn.ts';
 
 function makeTurnContainerPage(options: {
@@ -186,5 +187,14 @@ describe('state-light prompt attribution classification', () => {
       baseline.length,
       longPrompt,
     )).toBe('');
+  });
+
+  it('treats render-different assistant reads as stable when normalized text matches', () => {
+    const body = `${'detail '.repeat(60)} Section footer with enough words.`;
+    const renderA = `Intro paragraph.\n\n${body}`;
+    const renderB = `Intro paragraph. ${body} show more`;
+
+    expect(replyStabilityMatches(renderB, renderA)).toBe(true);
+    expect(replyStabilityMatches(`${renderA} extra tail`, renderA)).toBe(false);
   });
 });
