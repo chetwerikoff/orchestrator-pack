@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "117c433c30d9efb4575219cc55bbaaf4952a24df",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:6de0e9293a283bf227c0cd77844dcfb9f9d6726047f78c64bcaa22bce0b69e97"
+    "active_scope_hash": "sha256:af29a40569ec53dede6b35178b6fe70206147b59cf2963a56bc5040f359051d9"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -24,6 +24,7 @@
     "scripts/chatgpt-browser-turn/dispatch-observation.ts",
     "scripts/chatgpt-browser-turn/fixtures/browser-turn-recurrence-journal-symptoms.json",
     "scripts/chatgpt-browser-turn/fixtures/browser-turn-recurrence-replay-kinds.ts",
+    "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts",
     "scripts/chatgpt-browser-turn/fixtures/issue-1023-timeout.ts",
     "scripts/chatgpt-browser-turn/product-page-selectors.ts",
     "scripts/chatgpt-browser-turn/profile-probe.ts",
@@ -47,9 +48,11 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:225155d2baf01588e85328bb56d78d94a5f317ed4b91119ebe979796afc2e2f5",
-      "new_active_scope_hash": "sha256:6de0e9293a283bf227c0cd77844dcfb9f9d6726047f78c64bcaa22bce0b69e97",
+      "new_active_scope_hash": "sha256:af29a40569ec53dede6b35178b6fe70206147b59cf2963a56bc5040f359051d9",
       "changed": {
-        "added": [],
+        "added": [
+          "scripts/chatgpt-browser-turn/fixtures/fake-turn-page.ts"
+        ],
         "removed": []
       },
       "reason": "Add browser-turn recurrence journal fixture files to declared scope",
