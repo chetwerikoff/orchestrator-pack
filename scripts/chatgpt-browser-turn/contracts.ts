@@ -110,6 +110,11 @@ export interface TurnResultV1 {
   driver_diagnostic_id?: string;
   output?: { byte_length: number; sha256: string };
   witness?: CausalWitnessV1;
+  foreign_activity_diagnostics?: {
+    suspect_visible_head: string;
+    prompt_head: string;
+    shared_overlap: number;
+  };
 }
 
 export interface StatusItemV1 {

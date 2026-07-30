@@ -56,6 +56,8 @@ const INITIAL_POLL_MS = 500;
 const DISPATCH_OBSERVATION_MS = 30_000;
 const STABILITY_READ_DELAY_MS = 1_000;
 const FOREIGN_STABILITY_READS = 2;
+const FOREIGN_STABILITY_SETTLE_MS = 4_000;
+const FOREIGN_DIAGNOSTIC_HEAD_CHARS = 300;
 const MAX_LOCAL_READ_WAIT_MS = 5_000;
 export const BROWSER_TURN_RECURRENCE_PATH = join(
   homedir(),
@@ -81,10 +83,17 @@ export interface PageObservationDecision {
   readonly suspectFingerprint?: string;
 }
 
+interface ForeignActivityDiagnostics {
+  readonly suspect_visible_head: string;
+  readonly prompt_head: string;
+  readonly shared_overlap: number;
+}
+
 interface BrowserIncident {
   readonly eventClass: string;
   readonly symptom: string;
   readonly action?: string;
+  readonly foreignDiagnostics?: ForeignActivityDiagnostics;
 }
 
 interface CompactTurnResult extends TurnResultV1 {
@@ -165,25 +174,82 @@ function emit(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+const UI_COLLAPSE_AFFIX_RE = /(?:\s*(?:show more|read more|see more|view more|continue reading)\s*)+$/iu;
+
 function normalizeVisibleText(value: string): string {
   return value.replace(/\r\n?/g, '\n').replace(/[\t ]+/g, ' ').trim();
 }
 
+function normalizeEchoComparisonText(value: string): string {
+  return value
+    .replace(/\u200b/g, '')
+    .replace(/[\r\n\t\f\v ]+/g, ' ')
+    .trim();
+}
+
+function stripUiCollapseAffixes(value: string): string {
+  let result = value;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = result
+      .replace(UI_COLLAPSE_AFFIX_RE, '')
+      .replace(/[.…]+\s*$/u, '')
+      .trim();
+    if (next === result) break;
+    result = next;
+  }
+  return result;
+}
+
+function boundedDiagnosticHead(value: string, maxChars = FOREIGN_DIAGNOSTIC_HEAD_CHARS): string {
+  const normalized = normalizeEchoComparisonText(value);
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, maxChars)}…`;
+}
+
+export function promptEchoSharedOverlap(visibleText: string, promptText: string): number {
+  const visible = stripUiCollapseAffixes(normalizeEchoComparisonText(visibleText));
+  const prompt = normalizeEchoComparisonText(promptText);
+  if (!visible || !prompt) return 0;
+  if (visible === prompt) return visible.length;
+
+  let best = 0;
+  for (let start = 0; start < visible.length; start++) {
+    for (let end = start + 1; end <= visible.length; end++) {
+      const slice = visible.slice(start, end);
+      if (prompt.includes(slice) && slice.length > best) best = slice.length;
+    }
+  }
+  return best;
+}
+
+function minimumOwnedEchoOverlap(promptLength: number, visibleLength: number): number {
+  return Math.max(24, Math.floor(Math.min(promptLength, visibleLength) * 0.45));
+}
+
 export function ownedPromptEchoMatches(visibleText: string, promptText: string): boolean {
-  const visible = normalizeVisibleText(visibleText);
-  const prompt = normalizeVisibleText(promptText);
+  const visible = stripUiCollapseAffixes(normalizeEchoComparisonText(visibleText));
+  const prompt = normalizeEchoComparisonText(promptText);
   if (!visible || !prompt) return false;
   if (visible === prompt) return true;
 
-  const minOverlap = Math.max(24, Math.floor(Math.min(prompt.length, visible.length) * 0.45));
-  const visibleCore = visible.replace(/[.…]+\s*$/u, '').trim();
-  if (visibleCore.length >= minOverlap && prompt.startsWith(visibleCore)) return true;
+  const minOverlap = minimumOwnedEchoOverlap(prompt.length, visible.length);
+  const shared = promptEchoSharedOverlap(visibleText, promptText);
+  if (shared >= minOverlap) return true;
+  if (visible.length >= 16 && prompt.includes(visible)) return true;
+  if (prompt.length >= 16 && visible.includes(prompt)) return true;
   if (visible.length >= minOverlap && prompt.startsWith(visible)) return true;
+  return false;
+}
 
-  let shared = 0;
-  const limit = Math.min(visible.length, prompt.length);
-  while (shared < limit && visible[shared] === prompt[shared]) shared++;
-  return shared >= minOverlap;
+export function buildForeignActivityDiagnostics(
+  suspectText: string,
+  promptText: string,
+): ForeignActivityDiagnostics {
+  return {
+    suspect_visible_head: boundedDiagnosticHead(suspectText),
+    prompt_head: boundedDiagnosticHead(promptText),
+    shared_overlap: promptEchoSharedOverlap(suspectText, promptText),
+  };
 }
 
 function errnoCode(error: unknown): string | undefined {
@@ -399,6 +465,11 @@ function appendIncident(
       event_class: incident.eventClass,
       observed_symptom: incident.symptom,
       ...(incident.action ? { action: incident.action } : {}),
+      ...(incident.foreignDiagnostics ? {
+        suspect_visible_head: incident.foreignDiagnostics.suspect_visible_head,
+        prompt_head: incident.foreignDiagnostics.prompt_head,
+        shared_overlap: incident.foreignDiagnostics.shared_overlap,
+      } : {}),
       invocation: invocationId,
       agent_runtime: agent,
     })}\n`, 'utf8');
@@ -1001,6 +1072,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let stableReads = 0;
     let foreignStableReads = 0;
     let lastForeignStableKey = '';
+    let lastForeignStableAt = 0;
 
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
     // landed and this invocation still owns a reachable page, #1120 requires us
@@ -1048,13 +1120,32 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         const foreignCause = decision.cause ?? 'foreign_activity';
         const foreignFingerprint = decision.suspectFingerprint ?? '';
         const foreignStableKey = `${foreignCause}\u0000${foreignFingerprint}`;
-        if (foreignStableKey === lastForeignStableKey) foreignStableReads++;
-        else {
+        if (foreignStableKey !== lastForeignStableKey) {
           foreignStableReads = 1;
           lastForeignStableKey = foreignStableKey;
+          lastForeignStableAt = Date.now();
+        } else {
+          const elapsed = Date.now() - lastForeignStableAt;
+          if (elapsed < FOREIGN_STABILITY_SETTLE_MS) {
+            await sleep(page, FOREIGN_STABILITY_SETTLE_MS - elapsed);
+          }
+          foreignStableReads++;
+          lastForeignStableAt = Date.now();
         }
         if (foreignStableReads >= FOREIGN_STABILITY_READS) {
-          incident('foreign_activity', foreignCause, 'return_local_degraded');
+          const foreignDiagnostics = buildForeignActivityDiagnostics(foreignFingerprint, snapshot.text);
+          const ok = recordIncident(
+            incidents,
+            {
+              eventClass: 'foreign_activity',
+              symptom: foreignCause,
+              action: 'return_local_degraded',
+              foreignDiagnostics,
+            },
+            invocationId,
+            navigation.snapshot(),
+          );
+          if (!ok) journalWriteFailed = true;
           return {
             page,
             browser,
@@ -1066,19 +1157,23 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               profileKey,
               sendCount,
               pollCount, navigation, incidents,
-              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+              {
+                ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+                foreign_activity_diagnostics: foreignDiagnostics,
+              },
               journalWriteFailed,
             ),
           };
         }
         stableReads = 0;
         lastReadyReply = '';
-        await sleep(page, STABILITY_READ_DELAY_MS);
+        await sleep(page, INITIAL_POLL_MS);
         continue;
       }
 
       foreignStableReads = 0;
       lastForeignStableKey = '';
+      lastForeignStableAt = 0;
 
       if (decision.state === 'ready' && decision.reply) {
         if (decision.reply === lastReadyReply) stableReads++;

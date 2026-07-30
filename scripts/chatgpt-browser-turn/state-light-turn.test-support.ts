@@ -454,12 +454,47 @@ describe('Issue #1120 state-light turn lifecycle', () => {
 
     expect(outcome.result.send_count).toBe(1);
     expect(outcome.result.state).not.toBe('foreign_activity');
+    expect(outcome.result.state).not.toBe('send_failed');
     expect(outcome.result).toMatchObject({
       state: 'no_reply',
       cause: 'observation_exhausted_no_resend',
     });
     expect(metrics.closes).toBe(0);
     expect(metrics.polls).toBeGreaterThanOrEqual(3);
+  });
+
+  it('completes a long prompt with different line breaking without false foreign_activity', async () => {
+    const longPrompt = `Problem:\nFlow-manager misclassifies long prompts.\n\nGoal:\nVerify echo tolerance.\n${'detail '.repeat(120)}`;
+    const collapsedEcho = 'Problem: Flow-manager misclassifies long prompts. Goal: Verify echo tolerance. detail detail…';
+    const snapshots: StateLightTestSnapshot[] = [
+      {
+        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'working' }],
+        generating: true,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+        generating: false,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+        generating: false,
+      },
+    ];
+    const { readStableInput } = await import('./input.ts');
+    vi.mocked(readStableInput).mockImplementationOnce(() => ({
+      text: longPrompt,
+      bytes: new Uint8Array([1]),
+      byteLength: 1,
+      dev: 1n,
+      ino: 1n,
+    }));
+    const fake = makePage(snapshots);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.state).not.toBe('foreign_activity');
+    expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
   });
 
   it('keeps foreign activity invocation-local and still closes only its owned tab', async () => {
@@ -473,7 +508,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       ],
       generating: false,
     };
-    const fake = makePage([foreignSnapshot, foreignSnapshot]);
+    const fake = makePage([foreignSnapshot, foreignSnapshot, foreignSnapshot]);
     const outcome = await runAndCapture(fake.page);
 
     expect(outcome.result).toMatchObject({
@@ -481,10 +516,20 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       scope: 'invocation',
       send_count: 1,
       cleanup: 'confirmed',
+      foreign_activity_diagnostics: {
+        suspect_visible_head: 'FOREIGN',
+        prompt_head: 'PROMPT',
+        shared_overlap: expect.any(Number),
+      },
     });
+    expect(outcome.result.foreign_activity_diagnostics?.shared_overlap).toBeLessThan(24);
+    expect(fake.metrics.waitedMs).toBeGreaterThanOrEqual(4000);
     expect(fake.metrics.sends).toBe(1);
     expect(fake.metrics.closes).toBe(1);
     expect(mocks.linkSync).not.toHaveBeenCalled();
+    const journal = mocks.appendFileSync.mock.calls.map((call) => String(call[1])).join('\n');
+    expect(journal).toContain('suspect_visible_head');
+    expect(journal).toContain('shared_overlap');
   });
 
   it('keeps polling the same owned page after a transient post-send observation error', async () => {

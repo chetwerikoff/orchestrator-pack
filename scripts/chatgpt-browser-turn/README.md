@@ -84,10 +84,12 @@ Sibling Browser-GPT tabs remain independent.
 
 Foreign classification requires the foreign signal to remain stable across bounded
 repeated page reads (same discipline as the final-reply stability path), including
-the normalized suspect user evidence fingerprint — not merely a repeated cause code.
-Prompt-echo comparison tolerates legitimate ChatGPT render differences such as truncation or
-UI collapse of the owned prompt; an ambiguous echo keeps observing rather than
-terminally degrading.
+the normalized suspect user evidence fingerprint — not merely a repeated cause code —
+with several seconds of settle spacing between confirming reads. Prompt-echo
+comparison is whitespace-insensitive (including newlines), tolerant to UI collapse
+affixes, and accepts visible windows from any position in the owned prompt. Terminal
+`foreign_activity` results and recurrence-journal rows carry bounded diagnostics
+(suspect/prompt heads and shared-overlap metric).
 
 ## Send-once and retry boundary
 

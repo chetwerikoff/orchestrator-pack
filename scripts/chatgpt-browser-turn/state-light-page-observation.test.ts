@@ -6,9 +6,11 @@ import {
 } from './ui-adapter.ts';
 import { scalarLocator } from './state-light-turn.test-fixtures.ts';
 import {
+  buildForeignActivityDiagnostics,
   classifyPageObservation,
   foreignSuspectEvidenceFingerprint,
   ownedPromptEchoMatches,
+  promptEchoSharedOverlap,
 } from './state-light-turn.ts';
 
 function makeTurnContainerPage(options: {
@@ -119,27 +121,61 @@ describe('state-light prompt attribution classification', () => {
     });
   });
 
-  it('changes suspect fingerprint when the same cause sees different truncated owned renderings', () => {
+  it('matches collapsed render with different line breaking than the source prompt', () => {
+    const longPrompt = `Problem:\nFlow-manager misclassifies.\n\nGoal:\nFix echo matching.\n${'detail '.repeat(80)}`;
+    const collapsedEcho = 'Problem: Flow-manager misclassifies. Goal: Fix echo matching. detail detail…';
+
+    expect(ownedPromptEchoMatches(collapsedEcho, longPrompt)).toBe(true);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      longPrompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+  });
+
+  it('matches a visible window from the middle of the prompt', () => {
+    const longPrompt = `PREFIX ${'alpha '.repeat(100)}MIDDLE ${'beta '.repeat(100)}SUFFIX`;
+    const middleWindow = 'MIDDLE beta beta beta';
+
+    expect(ownedPromptEchoMatches(middleWindow, longPrompt)).toBe(true);
+    expect(promptEchoSharedOverlap(middleWindow, longPrompt)).toBeGreaterThanOrEqual(16);
+  });
+
+  it('matches owned text with a UI collapse affix appended', () => {
+    const prompt = 'Line one.\n\nLine two with enough content to exceed minimum overlap requirements for the matcher.';
+    const visible = 'Line one. Line two with enough content show more';
+
+    expect(ownedPromptEchoMatches(visible, prompt)).toBe(true);
+  });
+
+  it('keeps genuinely unrelated text foreign', () => {
+    const prompt = `owned ${'detail '.repeat(80)}`;
+    expect(ownedPromptEchoMatches('FOREIGN INTERLOPER TEXT', prompt)).toBe(false);
+    expect(buildForeignActivityDiagnostics('FOREIGN INTERLOPER TEXT', prompt).shared_overlap).toBeLessThan(24);
+  });
+
+  it('does not classify owned truncated renderings as foreign_suspect', () => {
     const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
     const truncA = `${'A'.repeat(20)}`;
-    const truncB = `${'A'.repeat(19)}B`;
+    const truncB = `${'A'.repeat(30)}`;
 
-    const messagesA = [...baseline, { role: 'user', text: truncA }, { role: 'assistant', text: 'working' }];
-    const messagesB = [...baseline, { role: 'user', text: truncB }, { role: 'assistant', text: 'working' }];
-
-    const decisionA = classifyPageObservation(messagesA, baseline.length, longPrompt, true);
-    const decisionB = classifyPageObservation(messagesB, baseline.length, longPrompt, true);
-
-    expect(decisionA).toMatchObject({
-      state: 'foreign_suspect',
-      cause: 'foreign_or_ambiguous_user_activity',
-    });
-    expect(decisionB).toMatchObject({
-      state: 'foreign_suspect',
-      cause: 'foreign_or_ambiguous_user_activity',
-    });
-    expect(decisionA.suspectFingerprint).not.toBe(decisionB.suspectFingerprint);
-    expect(foreignSuspectEvidenceFingerprint(messagesA, baseline.length, longPrompt)).toBe(truncA);
-    expect(foreignSuspectEvidenceFingerprint(messagesB, baseline.length, longPrompt)).toBe(truncB);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: truncA }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      longPrompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: truncB }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      longPrompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+    expect(foreignSuspectEvidenceFingerprint(
+      [...baseline, { role: 'user', text: truncA }],
+      baseline.length,
+      longPrompt,
+    )).toBe('');
   });
 });
