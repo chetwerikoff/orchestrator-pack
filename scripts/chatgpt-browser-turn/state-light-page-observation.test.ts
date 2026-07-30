@@ -7,6 +7,7 @@ import {
 import { scalarLocator } from './state-light-turn.test-fixtures.ts';
 import {
   classifyPageObservation,
+  foreignSuspectEvidenceFingerprint,
   ownedPromptEchoMatches,
 } from './state-light-turn.ts';
 
@@ -114,6 +115,31 @@ describe('state-light prompt attribution classification', () => {
     )).toEqual({
       state: 'foreign_suspect',
       cause: 'foreign_user_after_owned_send',
+      suspectFingerprint: 'FOREIGN',
     });
+  });
+
+  it('changes suspect fingerprint when the same cause sees different truncated owned renderings', () => {
+    const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
+    const truncA = `${'A'.repeat(20)}`;
+    const truncB = `${'A'.repeat(19)}B`;
+
+    const messagesA = [...baseline, { role: 'user', text: truncA }, { role: 'assistant', text: 'working' }];
+    const messagesB = [...baseline, { role: 'user', text: truncB }, { role: 'assistant', text: 'working' }];
+
+    const decisionA = classifyPageObservation(messagesA, baseline.length, longPrompt, true);
+    const decisionB = classifyPageObservation(messagesB, baseline.length, longPrompt, true);
+
+    expect(decisionA).toMatchObject({
+      state: 'foreign_suspect',
+      cause: 'foreign_or_ambiguous_user_activity',
+    });
+    expect(decisionB).toMatchObject({
+      state: 'foreign_suspect',
+      cause: 'foreign_or_ambiguous_user_activity',
+    });
+    expect(decisionA.suspectFingerprint).not.toBe(decisionB.suspectFingerprint);
+    expect(foreignSuspectEvidenceFingerprint(messagesA, baseline.length, longPrompt)).toBe(truncA);
+    expect(foreignSuspectEvidenceFingerprint(messagesB, baseline.length, longPrompt)).toBe(truncB);
   });
 });

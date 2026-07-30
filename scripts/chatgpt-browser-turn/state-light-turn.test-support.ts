@@ -379,6 +379,89 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
   });
 
+  it('does not terminally degrade when alternating truncated owned renderings share only the same cause', async () => {
+    const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
+    const truncA = `${'A'.repeat(20)}`;
+    const truncB = `${'A'.repeat(19)}B`;
+    const stableEcho = `${'A'.repeat(120)} detail detail detail…`;
+    let sent = false;
+    let polls = 0;
+    const metrics = { sends: 0, closes: 0, polls: 0, waitedMs: 0 };
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      fill: vi.fn(async () => undefined),
+      press: vi.fn(async () => {
+        sent = true;
+        metrics.sends++;
+      }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => {
+        sent = true;
+        metrics.sends++;
+      }),
+    });
+
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => 'https://chatgpt.com/c/fake-owned-turn'),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => {
+        metrics.waitedMs += ms;
+        mocks.nowMs += ms;
+      }),
+      close: vi.fn(async () => {
+        metrics.closes++;
+      }),
+      getByText: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === '#prompt-textarea') return composer;
+        if (selector === '[data-testid="send-button"]') return sendButton;
+        if (selector === '[data-message-author-role]') {
+          if (!sent) return collectionLocator(BASELINE);
+          polls++;
+          metrics.polls = polls;
+          const echo = polls > 4 ? stableEcho : (polls % 2 === 1 ? truncA : truncB);
+          return collectionLocator([
+            ...BASELINE,
+            { role: 'user', text: echo },
+            { role: 'assistant', text: 'working' },
+          ], polls <= 4);
+        }
+        if (selector.startsWith('xpath=ancestor-or-self::section')) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === '[data-message-author-role="assistant"]') {
+          return collectionLocator([{ role: 'assistant', text: 'working' }], true);
+        }
+        if (selector.includes('stop-button')) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    const { readStableInput } = await import('./input.ts');
+    vi.mocked(readStableInput).mockImplementationOnce(() => ({
+      text: longPrompt,
+      bytes: new Uint8Array([1]),
+      byteLength: 1,
+      dev: 1n,
+      ino: 1n,
+    }));
+    const outcome = await runAndCapture(page, { timeoutMs: '5', pollMs: '1' });
+
+    expect(outcome.result.send_count).toBe(1);
+    expect(outcome.result.state).not.toBe('foreign_activity');
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+    });
+    expect(metrics.closes).toBe(0);
+    expect(metrics.polls).toBeGreaterThanOrEqual(3);
+  });
+
   it('keeps foreign activity invocation-local and still closes only its owned tab', async () => {
     const foreignSnapshot: StateLightTestSnapshot = {
       messages: [

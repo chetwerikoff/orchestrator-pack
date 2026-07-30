@@ -336,6 +336,7 @@ describe('Issue #1120 state-light Browser-GPT turn', () => {
     ], 0, 'task', false)).toEqual({
       state: 'foreign_suspect',
       cause: 'foreign_user_after_owned_send',
+      suspectFingerprint: 'foreign task',
     });
   });
 

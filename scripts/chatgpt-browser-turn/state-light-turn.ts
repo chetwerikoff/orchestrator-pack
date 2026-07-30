@@ -78,6 +78,7 @@ export interface PageObservationDecision {
   readonly state: 'waiting' | 'ready' | 'foreign_suspect';
   readonly reply?: string;
   readonly cause?: string;
+  readonly suspectFingerprint?: string;
 }
 
 interface BrowserIncident {
@@ -242,6 +243,40 @@ function publishStateLightReply(
   }
 }
 
+function foreignSuspectTexts(
+  novel: readonly PageMessage[],
+  prompt: string,
+): readonly string[] {
+  const users = novel
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => message.role === 'user');
+  const ownedUsers = users.filter(({ message }) => ownedPromptEchoMatches(message.text, prompt));
+  const foreignFromRoot = users
+    .filter(({ message }) => !ownedPromptEchoMatches(message.text, prompt))
+    .map(({ message }) => normalizeVisibleText(message.text))
+    .filter((value) => value.length > 0);
+
+  if (foreignFromRoot.length > 0) return foreignFromRoot;
+
+  if (ownedUsers.length === 0) return [];
+
+  const lastOwned = ownedUsers[ownedUsers.length - 1]!;
+  const afterOwnUser = novel.slice(lastOwned.index + 1);
+  return afterOwnUser
+    .filter((message) => message.role === 'user' && !ownedPromptEchoMatches(message.text, prompt))
+    .map((message) => normalizeVisibleText(message.text))
+    .filter((value) => value.length > 0);
+}
+
+export function foreignSuspectEvidenceFingerprint(
+  messages: readonly PageMessage[],
+  baselineCount: number,
+  prompt: string,
+): string {
+  const novel = messages.slice(Math.max(0, baselineCount));
+  return foreignSuspectTexts(novel, prompt).join('\n');
+}
+
 export function classifyPageObservation(
   messages: readonly PageMessage[],
   baselineCount: number,
@@ -262,7 +297,10 @@ export function classifyPageObservation(
     const cause = ownedUsers.length > 0
       ? 'foreign_user_after_owned_send'
       : 'foreign_or_ambiguous_user_activity';
-    return { state: 'foreign_suspect', cause };
+    const suspectFingerprint = foreignUsers
+      .map(({ message }) => normalizeVisibleText(message.text))
+      .join('\n');
+    return { state: 'foreign_suspect', cause, suspectFingerprint };
   }
 
   if (ownedUsers.length === 0) return { state: 'waiting' };
@@ -272,7 +310,11 @@ export function classifyPageObservation(
   const extraUsers = afterOwnUser.filter((message) => message.role === 'user');
   if (extraUsers.length > 0) {
     if (!extraUsers.every((message) => ownedPromptEchoMatches(message.text, prompt))) {
-      return { state: 'foreign_suspect', cause: 'foreign_user_after_owned_send' };
+      const suspectFingerprint = extraUsers
+        .filter((message) => !ownedPromptEchoMatches(message.text, prompt))
+        .map((message) => normalizeVisibleText(message.text))
+        .join('\n');
+      return { state: 'foreign_suspect', cause: 'foreign_user_after_owned_send', suspectFingerprint };
     }
   }
 
@@ -958,7 +1000,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let lastReadyReply = '';
     let stableReads = 0;
     let foreignStableReads = 0;
-    let lastForeignCause = '';
+    let lastForeignStableKey = '';
 
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
     // landed and this invocation still owns a reachable page, #1120 requires us
@@ -1004,10 +1046,12 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
       if (decision.state === 'foreign_suspect') {
         const foreignCause = decision.cause ?? 'foreign_activity';
-        if (foreignCause === lastForeignCause) foreignStableReads++;
+        const foreignFingerprint = decision.suspectFingerprint ?? '';
+        const foreignStableKey = `${foreignCause}\u0000${foreignFingerprint}`;
+        if (foreignStableKey === lastForeignStableKey) foreignStableReads++;
         else {
           foreignStableReads = 1;
-          lastForeignCause = foreignCause;
+          lastForeignStableKey = foreignStableKey;
         }
         if (foreignStableReads >= FOREIGN_STABILITY_READS) {
           incident('foreign_activity', foreignCause, 'return_local_degraded');
@@ -1034,7 +1078,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
 
       foreignStableReads = 0;
-      lastForeignCause = '';
+      lastForeignStableKey = '';
 
       if (decision.state === 'ready' && decision.reply) {
         if (decision.reply === lastReadyReply) stableReads++;
