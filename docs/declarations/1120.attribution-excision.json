@@ -1,0 +1,26 @@
+{
+  "issue_number": 1120,
+  "iteration_id": "attribution-excision",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "chat-executor",
+  "created_at": "2026-07-30T14:13:33.913Z",
+  "baseline": {
+    "commit_sha": "15bb43f0dee7f81fbaff1fa401986580443b7435",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:76dd6073b66bf7efc8ce329fc0aa1d9ebd53a72e7d2b282b2f5ae48b139d8481"
+  },
+  "declared_paths": [
+    ".claude/skills/discuss-with-gpt/SKILL.md",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/fixtures/browser-turn-recurrence-replay-kinds.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/stage-completeness-guard.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
