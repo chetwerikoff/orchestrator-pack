@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "117c433c30d9efb4575219cc55bbaaf4952a24df",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:225155d2baf01588e85328bb56d78d94a5f317ed4b91119ebe979796afc2e2f5"
+    "active_scope_hash": "sha256:6de0e9293a283bf227c0cd77844dcfb9f9d6726047f78c64bcaa22bce0b69e97"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -44,5 +44,18 @@
     "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:225155d2baf01588e85328bb56d78d94a5f317ed4b91119ebe979796afc2e2f5",
+      "new_active_scope_hash": "sha256:6de0e9293a283bf227c0cd77844dcfb9f9d6726047f78c64bcaa22bce0b69e97",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "Add browser-turn recurrence journal fixture files to declared scope",
+      "actor": "local",
+      "timestamp": "2026-07-30T13:36:47.350Z",
+      "applied": true
+    }
+  ]
 }
