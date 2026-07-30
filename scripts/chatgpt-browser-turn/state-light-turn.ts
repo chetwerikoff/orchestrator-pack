@@ -31,6 +31,7 @@ import {
   loadChromium,
   normalizeConversationUrl,
   productStatusText,
+  readAssistantTurnCompletionReady,
   verifyProfile,
   type BrowserConfig,
 } from './ui-adapter.ts';
@@ -41,19 +42,6 @@ const INITIAL_POLL_MS = 500;
 const DISPATCH_OBSERVATION_MS = 30_000;
 const STABILITY_READ_DELAY_MS = 1_000;
 const MAX_LOCAL_READ_WAIT_MS = 5_000;
-const FINAL_ASSISTANT_ACTION_SELECTOR = [
-  '[data-testid="copy-turn-action-button"]',
-  '[data-testid="good-response-turn-action-button"]',
-  '[data-testid="bad-response-turn-action-button"]',
-].join(', ');
-const ASSISTANT_IN_PROGRESS_SELECTOR = [
-  '[aria-busy="true"]',
-  '[data-is-streaming="true"]',
-  '[data-testid*="tool"][aria-busy="true"]',
-  '[data-testid*="tool"][data-state="running"]',
-  '[data-testid*="tool"][data-state="loading"]',
-].join(', ');
-
 export const BROWSER_TURN_RECURRENCE_PATH = join(
   homedir(),
   '.local',
@@ -380,43 +368,6 @@ async function readPageMessages(page: any): Promise<PageMessage[]> {
   return messages;
 }
 
-async function pageGenerating(page: any): Promise<boolean> {
-  try {
-    if (await locatorCount(page.locator('[data-testid="stop-button"], button[aria-label*="Stop"]').first()) > 0) return true;
-  } catch {
-    // Fall through to assistant-local signals.
-  }
-  const assistants = page.locator('[data-message-author-role="assistant"]');
-  const count = await locatorCount(assistants);
-  if (count === 0) return false;
-  const last = assistants.nth(count - 1);
-  try {
-    if ((await last.getAttribute('data-is-streaming', { timeout: MAX_LOCAL_READ_WAIT_MS })) === 'true') return true;
-    if ((await last.getAttribute('aria-busy', { timeout: MAX_LOCAL_READ_WAIT_MS })) === 'true') return true;
-  } catch {
-    return true;
-  }
-  try {
-    return await locatorCount(page.getByText(/continue generating/i)) > 0;
-  } catch {
-    return false;
-  }
-}
-
-async function pageCompletionReady(page: any): Promise<boolean> {
-  if (await pageGenerating(page)) return false;
-  const assistants = page.locator('[data-message-author-role="assistant"]');
-  const count = await locatorCount(assistants);
-  if (count === 0) return false;
-  const last = assistants.nth(count - 1);
-  try {
-    if (await locatorCount(last.locator(ASSISTANT_IN_PROGRESS_SELECTOR)) > 0) return false;
-    return await locatorCount(last.locator(FINAL_ASSISTANT_ACTION_SELECTOR)) > 0;
-  } catch {
-    return false;
-  }
-}
-
 async function readPostSendObservation(page: any): Promise<{
   readonly messages: PageMessage[];
   readonly wall: ReturnType<typeof classifyProductWall>;
@@ -424,7 +375,7 @@ async function readPostSendObservation(page: any): Promise<{
 }> {
   const messages = await readPageMessages(page);
   const wall = classifyProductWall(await productStatusText(page, MAX_LOCAL_READ_WAIT_MS));
-  const completionReady = await pageCompletionReady(page);
+  const completionReady = await readAssistantTurnCompletionReady(page, MAX_LOCAL_READ_WAIT_MS);
   return { messages, wall, completionReady };
 }
 
@@ -746,6 +697,27 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             ),
           };
         }
+      }
+
+      if (Date.now() >= softDeadline && decision.state === 'waiting') {
+        incident('observation_exhausted', 'observation_exhausted_no_resend', 'retain_owned_page_no_resend');
+        return {
+          page,
+          browser,
+          preserveOwnedPage: true,
+          result: compactResult(
+            'no_reply',
+            'invocation',
+            'observation_exhausted_no_resend',
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            incidents,
+            { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+            journalWriteFailed,
+          ),
+        };
       }
 
       const elapsed = Date.now() - startedAt;

@@ -72,24 +72,28 @@ vi.mock('./input.ts', () => ({
 // lifecycle success tests below fail immediately.
 vi.mock('./publication.ts', () => ({ publishReply: mocks.legacyPublishReply }));
 vi.mock('./storage-common.ts', () => ({ configuredProfileKey: vi.fn(() => 'profile-key') }));
-vi.mock('./ui-adapter.ts', () => ({
-  classifyProductWall: vi.fn((text: string) => {
-    if (/quota/i.test(text)) return { state: 'quota', cause: 'quota_detected' };
-    if (/challenge/i.test(text)) return { state: 'challenge', cause: 'challenge_detected' };
-    if (/login/i.test(text)) return { state: 'login', cause: 'login_detected' };
-    return {};
-  }),
-  loadChromium: vi.fn(() => ({
-    connectOverCDP: vi.fn(async () => {
-      const browser = mocks.browserQueue.shift();
-      if (!browser) throw new Error('no fake browser queued');
-      return browser;
+vi.mock('./ui-adapter.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./ui-adapter.ts')>();
+  return {
+    ...actual,
+    classifyProductWall: vi.fn((text: string) => {
+      if (/quota/i.test(text)) return { state: 'quota', cause: 'quota_detected' };
+      if (/challenge/i.test(text)) return { state: 'challenge', cause: 'challenge_detected' };
+      if (/login/i.test(text)) return { state: 'login', cause: 'login_detected' };
+      return {};
     }),
-  })),
-  normalizeConversationUrl: vi.fn((value: string) => value),
-  productStatusText: vi.fn(async (page: any) => String(page.__productStatusText?.() ?? '')),
-  verifyProfile: mocks.verifyProfile,
-}));
+    loadChromium: vi.fn(() => ({
+      connectOverCDP: vi.fn(async () => {
+        const browser = mocks.browserQueue.shift();
+        if (!browser) throw new Error('no fake browser queued');
+        return browser;
+      }),
+    })),
+    normalizeConversationUrl: vi.fn((value: string) => value),
+    productStatusText: vi.fn(async (page: any) => String(page.__productStatusText?.() ?? '')),
+    verifyProfile: mocks.verifyProfile,
+  };
+});
 
 import { runStateLightTurn } from './state-light-turn.ts';
 
@@ -97,6 +101,7 @@ type Message = {
   role: 'user' | 'assistant';
   text: string;
   finalAction?: boolean;
+  finalActionInTurnContainer?: boolean;
   inProgress?: boolean;
 };
 type Snapshot = {
@@ -111,11 +116,21 @@ const BASELINE: Message[] = [
 ];
 
 function scalarLocator(overrides: Record<string, unknown> = {}) {
+  const turnActionButtons = overrides.turnActionButtons === true;
   const locator: Record<string, any> = {
     count: vi.fn(async () => 0),
-    first: vi.fn(() => locator),
+    first: vi.fn(function first() { return locator; }),
     nth: vi.fn(() => locator),
-    locator: vi.fn(() => scalarLocator()),
+    locator: vi.fn((selector: string) => {
+      if (turnActionButtons && (
+        selector.includes('copy-turn-action-button')
+        || selector.includes('good-response-turn-action-button')
+        || selector.includes('bad-response-turn-action-button')
+      )) {
+        return scalarLocator({ count: vi.fn(async () => 1) });
+      }
+      return scalarLocator();
+    }),
     click: vi.fn(async () => undefined),
     fill: vi.fn(async () => undefined),
     press: vi.fn(async () => undefined),
@@ -137,8 +152,12 @@ function messageLocator(message: Message, generating = false) {
       return null;
     }),
     locator: vi.fn((selector: string) => {
+      if (selector.startsWith('xpath=') || selector.includes('conversation-turn-')) {
+        if (!message.finalActionInTurnContainer) return scalarLocator({ count: vi.fn(async () => 0) });
+        return scalarLocator({ turnActionButtons: true, count: vi.fn(async () => 1) });
+      }
       if (message.role !== 'assistant') return scalarLocator();
-      if (message.finalAction && selector.includes('copy-turn-action-button')) {
+      if (message.finalAction && !message.finalActionInTurnContainer && selector.includes('copy-turn-action-button')) {
         return scalarLocator({ count: vi.fn(async () => 1) });
       }
       if (message.inProgress && (
@@ -248,6 +267,12 @@ function makePage(
         observationIndex++;
         metrics.polls++;
         return collectionLocator(activeSnapshot.messages);
+      }
+      if (selector.startsWith('xpath=ancestor-or-self::section[starts-with(@data-testid, "conversation-turn-")]')) {
+        const assistants = activeSnapshot.messages.filter((message) => message.role === 'assistant');
+        const last = assistants.at(-1);
+        if (!last?.finalActionInTurnContainer) return scalarLocator({ count: vi.fn(async () => 0) });
+        return messageLocator(last, activeSnapshot.generating);
       }
       if (selector === '[data-message-author-role="assistant"]') {
         const assistants = activeSnapshot.messages.filter((message) => message.role === 'assistant');
@@ -378,7 +403,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       const argv = [
         '--profile', '/tmp/profile', '--cdp', 'http://127.0.0.1:9222',
         '--input', '/tmp/prompt.txt', '--output', '/tmp/reply.txt',
-        '--chat-url', 'https://chatgpt.com/c/existing', '--timeout-ms', '1000', '--poll-ms', '1',
+        '--chat-url', 'https://chatgpt.com/c/existing', '--timeout-ms', '120000', '--poll-ms', '1',
       ];
       const codes = await Promise.all(fakes.map(() => runStateLightTurn(argv)));
       expect(codes).toEqual([0, 0, 0]);
@@ -522,6 +547,65 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(outcome.result.incidents).toContain('helper_failure_after_send');
     expect(fake.metrics.sends).toBe(1);
     expect(fake.metrics.closes).toBe(1);
+  });
+
+
+  it('returns observation_exhausted_no_resend when completion never becomes ready before the soft deadline', async () => {
+    const waiting: Snapshot = {
+      messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+      generating: true,
+    };
+    const fake = makePage([waiting, waiting, waiting]);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
+
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      scope: 'invocation',
+      cause: 'observation_exhausted_no_resend',
+      send_count: 1,
+    });
+    expect(outcome.result.incidents).toContain('observation_exhausted');
+    expect(fake.metrics.sends).toBe(1);
+    expect(fake.metrics.closes).toBe(0);
+    expect(mocks.linkSync).not.toHaveBeenCalled();
+  });
+
+
+  it('detects completion when turn action buttons live in the conversation-turn container', async () => {
+    const snapshots: Snapshot[] = [
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+        generating: true,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, {
+          role: 'assistant',
+          text: 'FINAL',
+          finalAction: true,
+          finalActionInTurnContainer: true,
+        }],
+        generating: false,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, {
+          role: 'assistant',
+          text: 'FINAL',
+          finalAction: true,
+          finalActionInTurnContainer: true,
+        }],
+        generating: false,
+      },
+    ];
+    const fake = makePage(snapshots);
+    const outcome = await runAndCapture(fake.page);
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      cause: 'completed_page_only',
+      send_count: 1,
+    });
+    expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
   });
 
   it('does not let cleanup or journal failure veto an already captured reply', async () => {

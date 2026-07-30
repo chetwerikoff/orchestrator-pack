@@ -1463,6 +1463,70 @@ export function classifyProductWall(surface: ProductStatusSurface): { state?: 'q
   return {};
 }
 
+export const ASSISTANT_TURN_ACTION_SELECTOR = [
+  '[data-testid="copy-turn-action-button"]',
+  '[data-testid="good-response-turn-action-button"]',
+  '[data-testid="bad-response-turn-action-button"]',
+].join(', ');
+
+export const ASSISTANT_TURN_IN_PROGRESS_SELECTOR = [
+  '[aria-busy="true"]',
+  '[data-is-streaming="true"]',
+  '[data-testid*="tool"][aria-busy="true"]',
+  '[data-testid*="tool"][data-state="running"]',
+  '[data-testid*="tool"][data-state="loading"]',
+].join(', ');
+
+const CONVERSATION_TURN_SECTION_SELECTOR = 'section[data-testid^="conversation-turn-"]';
+export async function locateLastAssistantTurnContainer(
+  page: any,
+  waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
+): Promise<any | null> {
+  const assistants = page.locator('[data-message-author-role="assistant"]');
+  const count = await boundedLocatorCount(assistants, waitMs);
+  if (count === 0) return null;
+  const last = assistants.nth(count - 1);
+  const turn = last.locator('xpath=ancestor-or-self::section[starts-with(@data-testid, "conversation-turn-")][1]');
+  if (await boundedLocatorCount(turn, waitMs) > 0) return turn.first();
+  return last;
+}
+
+export async function readAssistantTurnGenerating(
+  page: any,
+  waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
+): Promise<boolean> {
+  try {
+    if (await boundedLocatorCount(page.locator('[data-testid="stop-button"], button[aria-label*="Stop"]').first(), waitMs) > 0) {
+      return true;
+    }
+  } catch {
+    // Fall through to turn-scoped signals.
+  }
+  const turn = await locateLastAssistantTurnContainer(page, waitMs);
+  if (!turn) return false;
+  try {
+    if (await boundedLocatorCount(turn.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR), waitMs) > 0) return true;
+    if (await boundedLocatorCount(page.getByText(/continue generating/i), waitMs) > 0) return true;
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+export async function readAssistantTurnCompletionReady(
+  page: any,
+  waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
+): Promise<boolean> {
+  if (await readAssistantTurnGenerating(page, waitMs)) return false;
+  const turn = await locateLastAssistantTurnContainer(page, waitMs);
+  if (!turn) return false;
+  try {
+    return await boundedLocatorCount(turn.locator(ASSISTANT_TURN_ACTION_SELECTOR), waitMs) > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function pageWalls(page: any, waitSource?: OperationWaitSource): Promise<{ state?: string; cause?: string }> {
   return classifyProductWall(await productStatusText(page, waitSource));
 }
