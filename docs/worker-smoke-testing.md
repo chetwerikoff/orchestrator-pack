@@ -143,25 +143,36 @@ its own terminal after runtime restart can poll forever (2026-07-29 incident).
 ## Run cancellation and cleanup
 
 Cancellation or abortion of a smoke run (operator stop, supervisor stop, rate-limit stop) is a
-**first-class terminal path** carrying the same cleanup obligations as report publication and
-prompt-delivery exhaustion. Skipping report publication never waives these duties.
+**first-class terminal path** imposing the same cleanup obligations on the supervisor as report
+publication and prompt-delivery exhaustion. Skipping report publication never waives these duties.
+**Note:** Harness-side automatic teardown is not yet implemented; until it lands, the supervising
+worker performs these cleanup steps manually on every cancellation.
 
-- **Cleanup obligations on cancellation.** When a run is cancelled, immediately: close every
-  **owned child terminal** by its recorded handle (same discipline as in **Owned-handle
-  supervision**), terminate in-flight invocations gracefully (allow a live browser turn to reach a
-  terminal outcome; start nothing new), remove or tombstone the run's `live/OPERATOR-ACTION-*.txt`
-  files to prevent stale operator misdirection, and record a **durable cancellation artifact** in
-  the run directory (e.g. the existing `HANDOFF-CANCELLED.txt` pattern).
+- **Cleanup obligations on cancellation.** The supervisor **MUST** perform the following when a
+  run is cancelled: close every **owned child terminal** recorded in the run's registry (same
+  discipline as in **Owned-handle supervision**); terminate in-flight invocations gracefully
+  (allow a live browser turn to reach a terminal outcome; start nothing new); remove or tombstone
+  the run's `live/OPERATOR-ACTION-*.txt` files to prevent stale operator misdirection; and record
+  a **durable cancellation artifact** in the run directory (e.g. the existing `HANDOFF-CANCELLED.txt`
+  pattern). Cleanup is scoped to PIDs and terminal handles recorded in the run's registry — the
+  supervisor **MUST NOT** kill foreign or unattributable live browser-turn processes that may
+  belong to sibling invocations.
 
 - **Registry of spawned children.** The supervisor **MUST** record every spawned child at spawn
-  time as a run artifact: terminal handle, PID when known, and run id. Cleanup on any terminal path
+  time as a run artifact: terminal handle, PID when known, and run id. **Ordering:** The run id
+  and artifact directory (including the registry file itself) **MUST** exist before the child
+  terminal is created; the registry entry for a child **MUST** be written before or atomically
+  with spawn — no window in which a spawned child is unregistered. Cleanup on any terminal path
   (publish, exhaustion, cancellation) iterates that **registry**, not memory or terminal-list
   heuristics (forbidden per **Owned-handle supervision**).
 
 - **Fail-closed start guard.** A new run **MUST NOT** start while any of these conditions hold:
-  live children of prior runs exist (identified by prior registries), live browser-turn processes
-  exist, or stale operator-action files remain under prior run directories. The guard detects and
-  cleans up these artifacts first; if cleanup fails, the run refuses to start.
+  live children recorded in prior run registries exist, or stale operator-action files remain
+  under prior run directories. The guard detects and cleans up these artifacts first (only
+  terminating processes recorded in run registries); if cleanup fails, the run refuses to start.
+  When foreign or unattributable live browser-turn processes are detected, the guard **MUST**
+  fail closed, refuse the run start, and report the finding — such processes may belong to
+  legitimate sibling invocations and **MUST NOT** be killed.
 
 - **Supervisor execution boundary.** The plan is executed only by the harness-spawned child
   process; the supervisor **MUST NOT** execute the plan inline. The supervisor may issue nudges on
