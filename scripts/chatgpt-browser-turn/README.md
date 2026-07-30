@@ -48,6 +48,12 @@ One invocation owns one Browser-GPT exchange:
 3. open a **new dedicated tab owned by this invocation**, even when `--chat-url`
    refers to an existing conversation;
 4. navigate to the requested conversation/project;
+
+**Dedicated-tab trade-off (Issue #1120).** Every canonical turn pays one extra cold
+`page.goto` compared with the pre-cutover shared-tab reuse model: the helper always
+opens a fresh owned tab instead of reusing an operator-visible ChatGPT tab. That
+removes shared-tab cleanup ambiguity at the cost of one additional navigation per
+invocation.
 5. snapshot and submit the exact caller prompt **once**;
 6. observe/poll only that owned tab until the final assistant node has page-level
    completion UI, no visible generation/tool/continuation activity, and stable
@@ -79,7 +85,14 @@ Sibling Browser-GPT tabs remain independent.
 ## Send-once and retry boundary
 
 Inside one live invocation there is exactly one user-message send attempt. After
-the send boundary the helper only observes the same page. Slow generation,
+the send boundary the helper only observes the same page. Fresh-conversation
+collision recovery follows the same discipline: a second send is allowed only on
+positive page-state evidence that the prior send did not land (no user message
+with the sent text, no conversation URL materialized, composer still holding the
+text). Ambiguous evidence or a landed send on a contended surface terminates the
+invocation locally; the caller decides whether to open a fresh chat.
+
+Slow generation,
 missing historical witness state, an elapsed observation threshold, or process-
 liveness uncertainty never authorizes a second send inside that invocation.
 
@@ -116,8 +129,12 @@ healthy new Browser-GPT invocation.
 
 `turn` emits one compact JSON `turn-result/v1` line. The state-light path uses the
 existing closed turn-state/exit-code contract where applicable and adds compact
-operational fields such as send count, poll count, cleanup outcome, incident
-classes, and journal-write failure.
+operational fields such as send count, poll count, navigation count, cleanup
+outcome, incident classes, and journal-write failure.
+
+`navigation_count` counts `page.goto` calls plus successful "New chat" activations
+during the invocation. Retrospective incident journal rows may include the same
+counter when known.
 
 Typical state-light outcomes include:
 
@@ -153,6 +170,28 @@ tab cleanup ambiguity.
 A process crash can of course prevent local cleanup. Later flows may progressively
 clean only tabs they can establish they own; they must not sweep arbitrary ChatGPT
 tabs.
+
+## Fresh-conversation prepare bounds and advisory walls
+
+Fresh `--new-chat` turns serialize the whole prepare+send critical section behind a
+mandatory profile send slot. Disabling that slot requires explicit opt-in plus a
+recorded reason env var; the legacy disable flag alone is not sufficient.
+
+Prepare attempts are capped (`STATE_LIGHT_FRESH_PREPARE_ATTEMPTS`, currently 3) with
+exponential backoff between attempts instead of hot-looping `page.goto`. A product
+wall observed during prepare returns the wall state immediately — no further
+navigation rounds for that invocation.
+
+The per-invocation navigation budget (`STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION`,
+currently 10) is a hard ceiling across the owned-tab goto, prepare surfaces, and
+collision-recovery prepares. Worst-case fresh-chat navigation is therefore
+statically bounded and small.
+
+When an invocation classifies `rate_limit`, `quota`, `challenge`, or `login`, it
+records a short-lived, profile-scoped advisory wall marker (fail-open; corrupted
+or expired markers are ignored). Sibling invocations consult that marker before
+navigating and return the wall state without loading pages. This is advisory only —
+not the pre-#1120 durable fail-closed blocker machinery.
 
 ## Polling and long turns
 

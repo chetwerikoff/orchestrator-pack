@@ -27,9 +27,13 @@ import {
 import { readStableInput } from './input.ts';
 import {
   acquireStateLightNewChatSendSlot,
+  conversationUuidFromUrl,
   prepareStateLightFreshConversation,
+  readStateLightAdvisoryWall,
+  recordStateLightAdvisoryWall,
   releaseStateLightFreshConversationClaim,
   releaseStateLightNewChatSendSlot,
+  StateLightNavigationCounter,
   STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS,
   tryClaimStateLightFreshConversation,
   waitForConversationUrlAfterSend,
@@ -83,6 +87,7 @@ interface BrowserIncident {
 interface CompactTurnResult extends TurnResultV1 {
   readonly send_count: number;
   readonly poll_count: number;
+  readonly navigation_count: number;
   readonly cleanup: ResourceCleanupOutcome;
   readonly incidents: readonly string[];
   readonly journal_write_failed?: boolean;
@@ -277,6 +282,7 @@ function compactResult(
   profileKey: string,
   sendCount: number,
   pollCount: number,
+  navigationCount: number,
   incidents: readonly BrowserIncident[],
   extra: Partial<TurnResultV1> = {},
   journalWriteFailed = false,
@@ -290,6 +296,7 @@ function compactResult(
     configured_profile_key: profileKey,
     send_count: sendCount,
     poll_count: pollCount,
+    navigation_count: navigationCount,
     incidents: incidents.map((incident) => incident.eventClass),
     ...(journalWriteFailed ? { journal_write_failed: true } : {}),
     ...extra,
@@ -300,6 +307,7 @@ function appendIncident(
   incident: BrowserIncident,
   invocationId: string,
   env: NodeJS.ProcessEnv = process.env,
+  navigationCount?: number,
 ): boolean {
   try {
     mkdirSync(dirname(BROWSER_TURN_RECURRENCE_PATH), { recursive: true });
@@ -327,9 +335,10 @@ function recordIncident(
   incidents: BrowserIncident[],
   incident: BrowserIncident,
   invocationId: string,
+  navigationCount?: number,
 ): boolean {
   incidents.push(incident);
-  return appendIncident(incident, invocationId);
+  return appendIncident(incident, invocationId, process.env, navigationCount);
 }
 
 async function sleep(page: any, ms: number): Promise<void> {
@@ -379,6 +388,40 @@ async function readPageMessages(page: any): Promise<PageMessage[]> {
   return messages;
 }
 
+export type SendLandingEvidence = 'landed' | 'not_landed' | 'ambiguous';
+
+export async function classifySendLandingEvidence(
+  page: any,
+  promptText: string,
+  conversationUrl?: string,
+): Promise<SendLandingEvidence> {
+  const normalizedPrompt = normalizeVisibleText(promptText);
+  if (conversationUrl && conversationUuidFromUrl(conversationUrl)) return 'landed';
+  const pageUrl = pageConversationUrl(page);
+  if (pageUrl && conversationUuidFromUrl(pageUrl)) return 'landed';
+  const messages = await readPageMessages(page);
+  if (messages.some((message) => message.role === 'user' && normalizeVisibleText(message.text) === normalizedPrompt)) {
+    return 'landed';
+  }
+  const composer = page.locator('#prompt-textarea');
+  if (await locatorCount(composer) > 0) {
+    const composerText = normalizeVisibleText(await locatorText(composer));
+    if (composerText === normalizedPrompt) return 'not_landed';
+  }
+  return 'ambiguous';
+}
+
+function recordProductWallAdvisory(
+  profileKey: string,
+  wallState: TurnState,
+  cause: string,
+  invocationId: string,
+): void {
+  if (wallState === 'rate_limit' || wallState === 'quota' || wallState === 'challenge' || wallState === 'login') {
+    recordStateLightAdvisoryWall(profileKey, wallState, cause, invocationId);
+  }
+}
+
 async function readPostSendObservation(page: any): Promise<{
   readonly messages: PageMessage[];
   readonly wall: ReturnType<typeof classifyProductWall>;
@@ -423,9 +466,14 @@ async function createDedicatedTurnPage(browser: any): Promise<any> {
   return contexts[0].newPage();
 }
 
-async function navigateOwnedTurnPage(page: any, config: BrowserConfig): Promise<void> {
+async function navigateOwnedTurnPage(
+  page: any,
+  config: BrowserConfig,
+  navigation: StateLightNavigationCounter,
+): Promise<void> {
   const target = config.newChat ? config.projectUrl : config.chatUrl;
   if (!target) throw new Error('ui_contract_mismatch:target_required');
+  navigation.recordGoto();
   await page.goto(target, {
     waitUntil: 'domcontentloaded',
     timeout: Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
@@ -477,12 +525,18 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
   let page: any;
   let sendCount = 0;
   let pollCount = 0;
+  const navigation = new StateLightNavigationCounter();
   let journalWriteFailed = false;
   const incidents: BrowserIncident[] = [];
   let afterSend = false;
 
   const incident = (eventClass: string, symptom: string, action?: string): void => {
-    const ok = recordIncident(incidents, { eventClass, symptom, ...(action ? { action } : {}) }, invocationId);
+    const ok = recordIncident(
+      incidents,
+      { eventClass, symptom, ...(action ? { action } : {}) },
+      invocationId,
+      navigation.snapshot(),
+    );
     if (!ok) journalWriteFailed = true;
   };
 
@@ -505,6 +559,27 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           profileKey,
           sendCount,
           pollCount,
+          navigation.snapshot(),
+          incidents,
+          {},
+          journalWriteFailed,
+        ),
+      };
+    }
+
+    const advisoryWall = readStateLightAdvisoryWall(profileKey);
+    if (advisoryWall) {
+      incident('invocation_blocker', advisoryWall.cause, 'return_local_error');
+      return {
+        result: compactResult(
+          advisoryWall.state,
+          'invocation',
+          advisoryWall.cause,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation.snapshot(),
           incidents,
           {},
           journalWriteFailed,
@@ -515,7 +590,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     const chromium = loadChromium();
     browser = await chromium.connectOverCDP(config.cdp, { timeout: Math.min(30_000, config.timeoutMs) });
     page = await createDedicatedTurnPage(browser);
-    await navigateOwnedTurnPage(page, config);
+    await navigateOwnedTurnPage(page, config, navigation);
 
     const composerDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
     let baselineCount = 0;
@@ -538,29 +613,56 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     if (config.newChat) {
       await acquireStateLightNewChatSendSlot(profileKey, invocationId, config.timeoutMs);
       try {
-        const initialPrepare = await prepareStateLightFreshConversation(page, config, profileKey, invocationId);
-        if (initialPrepare.state !== 'ready') {
-          incident('invocation_blocker', initialPrepare.cause, 'return_local_error');
+        const returnFreshPrepareFailure = (
+          prepared: Awaited<ReturnType<typeof prepareStateLightFreshConversation>>,
+        ): TurnRunOutcome | null => {
+          if (prepared.state === 'ready') return null;
+          if (prepared.state === 'wall') {
+            recordProductWallAdvisory(profileKey, prepared.wallState, prepared.cause, invocationId);
+            incident('invocation_blocker', prepared.cause, 'return_local_error');
+            return {
+              page,
+              browser,
+              result: compactResult(
+                prepared.wallState,
+                'invocation',
+                prepared.cause,
+                invocationId,
+                profileKey,
+                sendCount,
+                pollCount,
+                navigation.snapshot(),
+                incidents,
+                {},
+                journalWriteFailed,
+              ),
+            };
+          }
+          incident('invocation_blocker', prepared.cause, 'return_local_error');
           return {
             page,
             browser,
             result: compactResult(
               'ui_contract_mismatch',
               'invocation',
-              initialPrepare.cause,
+              prepared.cause,
               invocationId,
               profileKey,
               sendCount,
               pollCount,
+              navigation.snapshot(),
               incidents,
               {},
               journalWriteFailed,
             ),
           };
-        }
+        };
 
-        let composerState = await waitForComposer(page, composerDeadline);
-        if (composerState.state !== 'ready') {
+        const returnComposerBlocker = (
+          composerState: { state: TurnState; cause: string },
+        ): TurnRunOutcome | null => {
+          if (composerState.state === 'ready') return null;
+          recordProductWallAdvisory(profileKey, composerState.state, composerState.cause, invocationId);
           incident('invocation_blocker', composerState.cause, 'return_local_error');
           return {
             page,
@@ -573,61 +675,99 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               profileKey,
               sendCount,
               pollCount,
+              navigation.snapshot(),
               incidents,
               {},
               journalWriteFailed,
             ),
           };
-        }
+        };
+
+        const initialPrepare = await prepareStateLightFreshConversation(
+          page,
+          config,
+          profileKey,
+          invocationId,
+          navigation,
+        );
+        const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
+        if (initialPrepareFailure) return initialPrepareFailure;
+
+        let composerState = await waitForComposer(page, composerDeadline);
+        const initialComposerFailure = returnComposerBlocker(composerState);
+        if (initialComposerFailure) return initialComposerFailure;
 
         let claimed = false;
+        let sendAuthorized = true;
+        let lastAttemptConversationUrl: string | undefined;
         for (let recovery = 0; recovery < STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS && !claimed; recovery++) {
           if (recovery > 0) {
+            const landingEvidence = await classifySendLandingEvidence(
+              page,
+              snapshot.text,
+              lastAttemptConversationUrl,
+            );
+            if (landingEvidence === 'landed') {
+              incident('fresh_conversation_collision', 'send_landed_no_resend', 'return_local_error');
+              return {
+                page,
+                browser,
+                result: compactResult(
+                  'driver_error',
+                  'invocation',
+                  'fresh_conversation_collision_send_landed',
+                  invocationId,
+                  profileKey,
+                  sendCount,
+                  pollCount,
+                  navigation.snapshot(),
+                  incidents,
+                  { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+                  journalWriteFailed,
+                ),
+              };
+            }
+            if (landingEvidence === 'ambiguous') {
+              incident('send_observation_error', 'fresh_conversation_send_state_ambiguous', 'return_local_error');
+              return {
+                page,
+                browser,
+                result: compactResult(
+                  'driver_error',
+                  'invocation',
+                  'fresh_conversation_send_state_ambiguous',
+                  invocationId,
+                  profileKey,
+                  sendCount,
+                  pollCount,
+                  navigation.snapshot(),
+                  incidents,
+                  { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+                  journalWriteFailed,
+                ),
+              };
+            }
             incident('fresh_conversation_collision', 'shared_fresh_conversation_surface', 'recover_on_isolated_surface');
-            const prepared = await prepareStateLightFreshConversation(page, config, profileKey, invocationId);
-            if (prepared.state !== 'ready') {
-              incident('invocation_blocker', prepared.cause, 'return_local_error');
-              return {
-                page,
-                browser,
-                result: compactResult(
-                  'ui_contract_mismatch',
-                  'invocation',
-                  prepared.cause,
-                  invocationId,
-                  profileKey,
-                  sendCount,
-                  pollCount,
-                  incidents,
-                  {},
-                  journalWriteFailed,
-                ),
-              };
-            }
+            const prepared = await prepareStateLightFreshConversation(
+              page,
+              config,
+              profileKey,
+              invocationId,
+              navigation,
+            );
+            const preparedFailure = returnFreshPrepareFailure(prepared);
+            if (preparedFailure) return preparedFailure;
             composerState = await waitForComposer(page, composerDeadline);
-            if (composerState.state !== 'ready') {
-              incident('invocation_blocker', composerState.cause, 'return_local_error');
-              return {
-                page,
-                browser,
-                result: compactResult(
-                  composerState.state,
-                  'invocation',
-                  composerState.cause,
-                  invocationId,
-                  profileKey,
-                  sendCount,
-                  pollCount,
-                  incidents,
-                  {},
-                  journalWriteFailed,
-                ),
-              };
-            }
+            const composerFailure = returnComposerBlocker(composerState);
+            if (composerFailure) return composerFailure;
+            sendAuthorized = true;
           }
 
-          baselineCount = (await readPageMessages(page)).length;
-          await sendOwnedPrompt();
+          if (sendAuthorized) {
+            baselineCount = (await readPageMessages(page)).length;
+            await sendOwnedPrompt();
+            sendAuthorized = false;
+          }
 
           const urlDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
           const conversationUrl = await waitForConversationUrlAfterSend(
@@ -650,15 +790,64 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
                 profileKey,
                 sendCount,
                 pollCount,
+                navigation.snapshot(),
                 incidents,
-              { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+                { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
                 journalWriteFailed,
               ),
             };
           }
+          lastAttemptConversationUrl = conversationUrl;
 
           const claim = tryClaimStateLightFreshConversation(profileKey, conversationUrl, invocationId);
-          if (claim === 'contended') continue;
+          if (claim === 'contended') {
+            const landingEvidence = await classifySendLandingEvidence(
+              page,
+              snapshot.text,
+              conversationUrl,
+            );
+            if (landingEvidence === 'landed') {
+              incident('fresh_conversation_collision', 'send_landed_no_resend', 'return_local_error');
+              return {
+                page,
+                browser,
+                result: compactResult(
+                  'driver_error',
+                  'invocation',
+                  'fresh_conversation_collision_send_landed',
+                  invocationId,
+                  profileKey,
+                  sendCount,
+                  pollCount,
+                  navigation.snapshot(),
+                  incidents,
+                  { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+                  journalWriteFailed,
+                ),
+              };
+            }
+            if (landingEvidence === 'ambiguous') {
+              incident('send_observation_error', 'fresh_conversation_send_state_ambiguous', 'return_local_error');
+              return {
+                page,
+                browser,
+                result: compactResult(
+                  'driver_error',
+                  'invocation',
+                  'fresh_conversation_send_state_ambiguous',
+                  invocationId,
+                  profileKey,
+                  sendCount,
+                  pollCount,
+                  navigation.snapshot(),
+                  incidents,
+                  { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+                  journalWriteFailed,
+                ),
+              };
+            }
+            continue;
+          }
           if (claim === 'claimed' || claim === 'owned') {
             claimed = true;
             ownedConversationUrl = conversationUrl;
@@ -667,6 +856,31 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         }
 
         if (!claimed) {
+          const landingEvidence = await classifySendLandingEvidence(
+            page,
+            snapshot.text,
+            lastAttemptConversationUrl,
+          );
+          if (landingEvidence === 'landed') {
+            incident('fresh_conversation_collision', 'send_landed_no_resend', 'return_local_error');
+            return {
+              page,
+              browser,
+              result: compactResult(
+                'driver_error',
+                'invocation',
+                'fresh_conversation_collision_send_landed',
+                invocationId,
+                profileKey,
+                sendCount,
+                pollCount,
+                navigation.snapshot(),
+                incidents,
+                { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+                journalWriteFailed,
+              ),
+            };
+          }
           incident('fresh_conversation_recovery_exhausted', 'shared_fresh_conversation_surface', 'return_local_error');
           return {
             page,
@@ -679,6 +893,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               profileKey,
               sendCount,
               pollCount,
+              navigation.snapshot(),
               incidents,
               { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
               journalWriteFailed,
@@ -691,6 +906,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     } else {
       const composerState = await waitForComposer(page, composerDeadline);
       if (composerState.state !== 'ready') {
+        recordProductWallAdvisory(profileKey, composerState.state, composerState.cause, invocationId);
         incident('invocation_blocker', composerState.cause, 'return_local_error');
         return {
           page,
@@ -703,6 +919,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             profileKey,
             sendCount,
             pollCount,
+            navigation.snapshot(),
             incidents,
             {},
             journalWriteFailed,
@@ -741,6 +958,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       const { messages, wall, completionReady } = observation;
       if (wall.state) {
         const cause = wall.cause ?? `${wall.state}_detected`;
+        recordProductWallAdvisory(profileKey, wall.state, cause, invocationId);
         incident('invocation_blocker', cause, 'return_local_error');
         return {
           page,
@@ -753,6 +971,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             profileKey,
             sendCount,
             pollCount,
+            navigation.snapshot(),
             incidents,
             { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
             journalWriteFailed,
@@ -775,6 +994,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             profileKey,
             sendCount,
             pollCount,
+            navigation.snapshot(),
             incidents,
             { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
             journalWriteFailed,
@@ -808,6 +1028,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
                 profileKey,
                 sendCount,
                 pollCount,
+                navigation.snapshot(),
                 incidents,
                 { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
                 journalWriteFailed,
@@ -826,6 +1047,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               profileKey,
               sendCount,
               pollCount,
+              navigation.snapshot(),
               incidents,
               {
                 ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
@@ -864,6 +1086,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               profileKey,
               sendCount,
               pollCount,
+              navigation.snapshot(),
               incidents,
               { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
               journalWriteFailed,
@@ -886,6 +1109,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             profileKey,
             sendCount,
             pollCount,
+            navigation.snapshot(),
             incidents,
             { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
             journalWriteFailed,
@@ -941,6 +1165,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         profileKey,
         sendCount,
         pollCount,
+        navigation.snapshot(),
         incidents,
         { ...(page && pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
         journalWriteFailed,
@@ -998,6 +1223,7 @@ export async function runStateLightTurn(argv: readonly string[]): Promise<number
       configured_profile_key: 'profile-unresolved',
       send_count: 0,
       poll_count: 0,
+      navigation_count: 0,
       cleanup: 'skipped',
       incidents: [],
     });

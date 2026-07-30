@@ -8,14 +8,28 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { normalizeConversationUrl, type BrowserConfig } from './ui-adapter.ts';
+import {
+  classifyProductWall,
+  normalizeConversationUrl,
+  productStatusText,
+  type BrowserConfig,
+} from './ui-adapter.ts';
+import type { TurnState } from './contracts.ts';
 import { profileDirs, sha256 } from './storage-common.ts';
 
 const STATE_LIGHT_FRESH_CLAIM_SCHEMA = 'state-light-fresh-claim/v1' as const;
 const STATE_LIGHT_NEW_CHAT_SEND_SLOT_SCHEMA = 'state-light-new-chat-send-slot/v1' as const;
-export const STATE_LIGHT_FRESH_PREPARE_ATTEMPTS = 5;
-export const STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS = 3;
+const STATE_LIGHT_ADVISORY_WALL_SCHEMA = 'state-light-advisory-wall/v1' as const;
+const PRODUCT_WALL_PROBE_MS = 5_000;
+
+export const STATE_LIGHT_FRESH_PREPARE_ATTEMPTS = 3;
+export const STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS = 2;
+export const STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION = 10;
+export const STATE_LIGHT_ADVISORY_WALL_TTL_MS = 5 * 60 * 1000;
+export const STATE_LIGHT_FRESH_PREPARE_BACKOFF_BASE_MS = 250;
+
 const SEND_SLOT_POLL_MS = 50;
+const ADVISORY_WALL_STATES = new Set<TurnState>(['rate_limit', 'quota', 'challenge', 'login']);
 
 interface StateLightFreshClaimRecord {
   readonly schema: typeof STATE_LIGHT_FRESH_CLAIM_SCHEMA;
@@ -34,7 +48,46 @@ interface StateLightNewChatSendSlotRecord {
   readonly acquired_at: string;
 }
 
+interface StateLightAdvisoryWallRecord {
+  readonly schema: typeof STATE_LIGHT_ADVISORY_WALL_SCHEMA;
+  readonly version: 1;
+  readonly wall_state: TurnState;
+  readonly cause: string;
+  readonly recorded_at: string;
+  readonly expires_at: string;
+  readonly invocation_id?: string;
+}
+
 export type StateLightFreshConversationClaimResult = 'claimed' | 'owned' | 'contended';
+
+export type StateLightFreshPrepareResult =
+  | { state: 'ready' }
+  | { state: 'ui_contract_mismatch'; cause: string }
+  | { state: 'wall'; wallState: TurnState; cause: string };
+
+export class StateLightNavigationCounter {
+  readonly count = { value: 0 };
+
+  constructor(readonly max = STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION) {}
+
+  recordGoto(): void {
+    this.count.value += 1;
+    if (this.count.value > this.max) {
+      throw new Error('state_light_navigation_budget_exhausted');
+    }
+  }
+
+  recordNewChatActivation(): void {
+    this.count.value += 1;
+    if (this.count.value > this.max) {
+      throw new Error('state_light_navigation_budget_exhausted');
+    }
+  }
+
+  snapshot(): number {
+    return this.count.value;
+  }
+}
 
 function claimErrnoCode(error: unknown): string | undefined {
   return error instanceof Error && 'code' in error
@@ -75,6 +128,10 @@ function stateLightNewChatSendSlotPath(profileKey: string): string {
   return join(profileDirs(profileKey).locks, 'state-light-new-chat-send.slot');
 }
 
+function stateLightAdvisoryWallPath(profileKey: string): string {
+  return join(profileDirs(profileKey).root, 'state-light-advisory-wall.json');
+}
+
 function readStateLightFreshClaimRecord(path: string): StateLightFreshClaimRecord | null {
   try {
     const value = JSON.parse(readFileSync(path, 'utf8')) as StateLightFreshClaimRecord;
@@ -108,8 +165,69 @@ function readStateLightNewChatSendSlotRecord(path: string): StateLightNewChatSen
   }
 }
 
+function readStateLightAdvisoryWallRecord(path: string): StateLightAdvisoryWallRecord | null {
+  try {
+    const value = JSON.parse(readFileSync(path, 'utf8')) as StateLightAdvisoryWallRecord;
+    if (value.schema !== STATE_LIGHT_ADVISORY_WALL_SCHEMA
+      || value.version !== 1
+      || typeof value.wall_state !== 'string'
+      || typeof value.cause !== 'string'
+      || typeof value.recorded_at !== 'string'
+      || typeof value.expires_at !== 'string'
+      || !ADVISORY_WALL_STATES.has(value.wall_state)) {
+      return null;
+    }
+    return value;
+  } catch {
+    return null;
+  }
+}
+
 export function newChatSendSlotEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT !== '1';
+  if (env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT !== '1') return true;
+  if (env.OPK_STATE_LIGHT_ALLOW_SEND_SLOT_DISABLE !== '1') return true;
+  return String(env.OPK_STATE_LIGHT_SEND_SLOT_DISABLE_REASON ?? '').trim().length > 0
+    ? false
+    : true;
+}
+
+export function readStateLightAdvisoryWall(
+  profileKey: string,
+  nowMs = Date.now(),
+): { state: TurnState; cause: string } | null {
+  const path = stateLightAdvisoryWallPath(profileKey);
+  if (!existsSync(path)) return null;
+  const record = readStateLightAdvisoryWallRecord(path);
+  if (!record) return null;
+  const expiresAt = Date.parse(record.expires_at);
+  if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) {
+    try { rmSync(path, { force: true }); } catch { /* fail-open */ }
+    return null;
+  }
+  return { state: record.wall_state, cause: record.cause };
+}
+
+export function recordStateLightAdvisoryWall(
+  profileKey: string,
+  wallState: TurnState,
+  cause: string,
+  invocationId?: string,
+  ttlMs = STATE_LIGHT_ADVISORY_WALL_TTL_MS,
+  nowMs = Date.now(),
+): void {
+  if (!ADVISORY_WALL_STATES.has(wallState)) return;
+  const dir = profileDirs(profileKey).root;
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const record: StateLightAdvisoryWallRecord = {
+    schema: STATE_LIGHT_ADVISORY_WALL_SCHEMA,
+    version: 1,
+    wall_state: wallState,
+    cause,
+    recorded_at: new Date(nowMs).toISOString(),
+    expires_at: new Date(nowMs + ttlMs).toISOString(),
+    ...(invocationId ? { invocation_id: invocationId } : {}),
+  };
+  writeFileSync(stateLightAdvisoryWallPath(profileKey), `${JSON.stringify(record)}\n`, { mode: 0o600 });
 }
 
 export function tryClaimStateLightFreshConversation(
@@ -214,12 +332,20 @@ export function releaseStateLightNewChatSendSlot(
   if (existing?.invocation_id === invocationId) rmSync(slotPath, { force: true });
 }
 
+async function probeProductWall(page: any): Promise<{ state: TurnState; cause: string } | null> {
+  const wall = classifyProductWall(await productStatusText(page, PRODUCT_WALL_PROBE_MS));
+  if (!wall.state) return null;
+  return { state: wall.state, cause: wall.cause ?? `${wall.state}_detected` };
+}
+
 export async function openBlankProjectChatSurface(
   page: any,
   projectPrefix: string,
   timeoutMs: number,
+  navigation?: StateLightNavigationCounter,
 ): Promise<void> {
   const waitMs = Math.min(30_000, timeoutMs);
+  navigation?.recordGoto();
   await page.goto(projectPrefix, {
     waitUntil: 'domcontentloaded',
     timeout: waitMs,
@@ -235,6 +361,7 @@ export async function openBlankProjectChatSurface(
     try {
       if (Number(await control.count()) <= 0) continue;
       await control.click({ timeout: 500 });
+      navigation?.recordNewChatActivation();
       break;
     } catch {
       // try the next selector
@@ -247,20 +374,29 @@ export async function prepareStateLightFreshConversation(
   config: BrowserConfig,
   profileKey: string,
   invocationId: string,
-): Promise<{ state: 'ready' } | { state: 'ui_contract_mismatch'; cause: string }> {
+  navigation?: StateLightNavigationCounter,
+): Promise<StateLightFreshPrepareResult> {
   if (!config.newChat || !config.projectUrl) {
     return { state: 'ui_contract_mismatch', cause: 'project_url_required' };
   }
   const projectPrefix = projectConversationPrefix(config.projectUrl);
   for (let attempt = 0; attempt < STATE_LIGHT_FRESH_PREPARE_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      await sleepMs(STATE_LIGHT_FRESH_PREPARE_BACKOFF_BASE_MS * (2 ** (attempt - 1)));
+    }
     let currentUrl = '';
     try {
       currentUrl = normalizeConversationUrl(page.url());
     } catch {
       currentUrl = '';
     }
-    if (!currentUrl || currentUrl !== projectPrefix) {
-      await openBlankProjectChatSurface(page, projectPrefix, config.timeoutMs);
+    const needsSurface = !currentUrl
+      || currentUrl !== projectPrefix
+      || Boolean(conversationUuidFromUrl(currentUrl));
+    if (needsSurface) {
+      await openBlankProjectChatSurface(page, projectPrefix, config.timeoutMs, navigation);
+      const wall = await probeProductWall(page);
+      if (wall) return { state: 'wall', wallState: wall.state, cause: wall.cause };
       try {
         currentUrl = normalizeConversationUrl(page.url());
       } catch {
@@ -273,10 +409,8 @@ export async function prepareStateLightFreshConversation(
     const existing = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
     if (existing?.invocation_id === invocationId) return { state: 'ready' };
     if (existing && existing.invocation_id !== invocationId && !claimPidProvablyDead(existing.pid)) {
-      await openBlankProjectChatSurface(page, projectPrefix, config.timeoutMs);
       continue;
     }
-    await openBlankProjectChatSurface(page, projectPrefix, config.timeoutMs);
   }
   return { state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable' };
 }

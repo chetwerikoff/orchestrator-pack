@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     dev: 1n,
     ino: 1n,
   })),
+  productStatusText: vi.fn(async () => ''),
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -51,7 +52,11 @@ vi.mock('./storage-common.ts', async (importOriginal) => {
 vi.mock('./ui-adapter.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./ui-adapter.ts')>();
   const { buildUiAdapterTestMock } = await import('./state-light-turn.test-fixtures.ts');
-  return buildUiAdapterTestMock(actual, mocks);
+  const mock = buildUiAdapterTestMock(actual, mocks);
+  return {
+    ...mock,
+    productStatusText: mocks.productStatusText,
+  };
 });
 
 import {
@@ -67,17 +72,37 @@ import {
   STATE_LIGHT_TURN_BASE_ARGV,
   type StateLightTestMessage,
 } from './state-light-turn.test-fixtures.ts';
-import { classifyPageObservation, runStateLightTurn } from './state-light-turn.ts';
+import { classifyPageObservation, classifySendLandingEvidence, runStateLightTurn } from './state-light-turn.ts';
+import * as uiAdapter from './ui-adapter.ts';
 import {
   acquireStateLightNewChatSendSlot,
+  newChatSendSlotEnabled,
+  openBlankProjectChatSurface,
+  readStateLightAdvisoryWall,
+  recordStateLightAdvisoryWall,
   releaseStateLightFreshConversationClaim,
   releaseStateLightNewChatSendSlot,
+  StateLightNavigationCounter,
+  STATE_LIGHT_ADVISORY_WALL_TTL_MS,
+  STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION,
   tryClaimStateLightFreshConversation,
 } from './state-light-fresh-conversation.ts';
 
 const PROJECT_URL = 'https://chatgpt.com/g/g-p-test/project';
 const SHARED_CONV = `${PROJECT_URL}/c/11111111-1111-4111-8111-111111111111`;
 const LOSER_CONV = `${PROJECT_URL}/c/22222222-2222-4222-8222-222222222222`;
+
+function disableSendSlotForTest(): void {
+  process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT = '1';
+  process.env.OPK_STATE_LIGHT_ALLOW_SEND_SLOT_DISABLE = '1';
+  process.env.OPK_STATE_LIGHT_SEND_SLOT_DISABLE_REASON = 'unit-test';
+}
+
+function clearSendSlotDisableEnv(): void {
+  delete process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT;
+  delete process.env.OPK_STATE_LIGHT_ALLOW_SEND_SLOT_DISABLE;
+  delete process.env.OPK_STATE_LIGHT_SEND_SLOT_DISABLE_REASON;
+}
 
 function makeLoserPage(prompt: string, reply: string) {
   let sends = 0;
@@ -94,6 +119,7 @@ function makeLoserPage(prompt: string, reply: string) {
     count: vi.fn(async () => 1),
     click: vi.fn(async () => undefined),
     fill: vi.fn(async () => undefined),
+    innerText: vi.fn(async () => (sent ? '' : prompt)),
     press: vi.fn(async () => {
       sends++;
       sent = true;
@@ -153,12 +179,7 @@ function makeLoserPage(prompt: string, reply: string) {
   return { page, getSends: () => sends };
 }
 
-async function runNewChatTurn(page: any, outputPath: string, options: { disableSendSlot?: boolean } = {}) {
-  if (options.disableSendSlot === false) {
-    delete process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT;
-  } else {
-    process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT = '1';
-  }
+async function runNewChatTurn(page: any, outputPath: string) {
   enqueueBrowserForTurn(mocks, page);
   return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
     ...STATE_LIGHT_TURN_BASE_ARGV,
@@ -176,17 +197,19 @@ describe('state-light fresh conversation collision recovery', () => {
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), 'slt-fresh-'));
     process.env.CHATGPT_BROWSER_TURN_STATE_DIR = stateDir;
-    process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT = '1';
+    disableSendSlotForTest();
     mocks.browserQueue.length = 0;
     mocks.cleanupOutcome = 'confirmed';
     mocks.nowMs = 10_000;
+    mocks.productStatusText.mockReset();
+    mocks.productStatusText.mockResolvedValue({ text: '', composer: true });
     vi.spyOn(Date, 'now').mockImplementation(() => mocks.nowMs);
     mocks.readStableInput.mockReset();
   });
 
   afterEach(() => {
     delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
-    delete process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT;
+    clearSendSlotDisableEnv();
     rmSync(stateDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -201,7 +224,7 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
   it('blocks a second new-chat invocation while the profile send slot is held', async () => {
-    delete process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT;
+    clearSendSlotDisableEnv();
     const profileKey = 'collision-profile';
 
     await acquireStateLightNewChatSendSlot(profileKey, 'winner-invocation', 5_000);
@@ -221,36 +244,114 @@ describe('state-light fresh conversation collision recovery', () => {
     releaseStateLightNewChatSendSlot(profileKey, 'loser-invocation');
   });
 
-  it('recovers the contended invocation onto an isolated surface without sibling refusal', async () => {
+  it('requires explicit opt-in and reason before the send slot can be disabled', () => {
+    clearSendSlotDisableEnv();
+    expect(newChatSendSlotEnabled()).toBe(true);
+
+    process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT = '1';
+    expect(newChatSendSlotEnabled()).toBe(true);
+
+    process.env.OPK_STATE_LIGHT_ALLOW_SEND_SLOT_DISABLE = '1';
+    expect(newChatSendSlotEnabled()).toBe(true);
+
+    process.env.OPK_STATE_LIGHT_SEND_SLOT_DISABLE_REASON = 'unit-test';
+    expect(newChatSendSlotEnabled()).toBe(false);
+  });
+
+  it('terminates contended recovery without a second send when the prompt already landed', async () => {
     const profileKey = 'collision-profile';
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'winner-invocation')).toBe('claimed');
-
-    expect(classifyPageObservation(
-      [
-        { role: 'user', text: 'PROMPT-WINNER' },
-        { role: 'assistant', text: 'WINNER-OK' },
-      ],
-      0,
-      'PROMPT-WINNER',
-      false,
-    )).toMatchObject({ state: 'ready', reply: 'WINNER-OK' });
 
     mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LOSER'));
     const loser = makeLoserPage('PROMPT-LOSER', 'LOSER-OK');
     const loserOutcome = await runNewChatTurn(loser.page, '/tmp/loser.txt');
 
-    expect(loserOutcome.code).toBe(0);
+    expect(loserOutcome.code).toBe(13);
     expect(loserOutcome.result).toMatchObject({
-      state: 'ok',
-      cause: 'completed_page_only',
-      send_count: 2,
-      conversation_id: LOSER_CONV,
+      state: 'driver_error',
+      cause: 'fresh_conversation_collision_send_landed',
+      send_count: 1,
+      navigation_count: expect.any(Number),
     });
-    expect(loserOutcome.result.state).not.toBe('foreign_activity');
     expect(loserOutcome.result.incidents).toContain('fresh_conversation_collision');
-    expect(loser.getSends()).toBe(2);
+    expect(loser.getSends()).toBe(1);
 
     releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'winner-invocation');
+  });
+
+  it('returns advisory wall state without navigating when a fresh marker exists', async () => {
+    const profileKey = 'collision-profile';
+    recordStateLightAdvisoryWall(profileKey, 'rate_limit', 'rate_limit_detected', 'prior-invocation');
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-LOSER'));
+    const loser = makeLoserPage('PROMPT-LOSER', 'LOSER-OK');
+    const outcome = await runNewChatTurn(loser.page, '/tmp/advisory.txt');
+
+    expect(outcome.code).toBe(12);
+    expect(outcome.result).toMatchObject({
+      state: 'rate_limit',
+      cause: 'rate_limit_detected',
+      send_count: 0,
+      navigation_count: 0,
+    });
+    expect(loser.page.goto).not.toHaveBeenCalled();
+  });
+
+  it('ignores expired advisory wall markers fail-open', () => {
+    const profileKey = 'collision-profile';
+    recordStateLightAdvisoryWall(profileKey, 'quota', 'quota_detected', 'prior-invocation', 1_000, 0);
+    expect(readStateLightAdvisoryWall(profileKey, STATE_LIGHT_ADVISORY_WALL_TTL_MS + 1)).toBeNull();
+  });
+
+  it('records navigation_count for new-chat turns', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-SOLO'));
+    const solo = makeLoserPage('PROMPT-SOLO', 'SOLO-OK');
+    const outcome = await runNewChatTurn(solo.page, '/tmp/solo.txt');
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result.navigation_count).toBeGreaterThan(0);
+    expect(outcome.result.navigation_count).toBeLessThanOrEqual(STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION);
+  });
+
+  it('returns rate_limit from prepare without additional navigation rounds', async () => {
+    vi.mocked(uiAdapter.classifyProductWall).mockImplementation((surface) => {
+      const text = typeof surface === 'string' ? surface : surface.text;
+      if (/temporarily limited/i.test(text)) return { state: 'rate_limit', cause: 'rate_limit_detected' };
+      return {};
+    });
+    mocks.productStatusText.mockResolvedValue({ text: 'temporarily limited access', composer: false });
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-SOLO'));
+    const solo = makeLoserPage('PROMPT-SOLO', 'SOLO-OK');
+    const outcome = await runNewChatTurn(solo.page, '/tmp/rate-limit-prepare.txt');
+
+    expect(outcome.code).toBe(12);
+    expect(outcome.result).toMatchObject({
+      state: 'rate_limit',
+      cause: 'rate_limit_detected',
+      send_count: 0,
+    });
+    expect(outcome.result.navigation_count).toBeLessThanOrEqual(3);
+    expect(readStateLightAdvisoryWall('collision-profile')).toMatchObject({ state: 'rate_limit' });
+  });
+
+  it('classifies send landing evidence from page state', async () => {
+    const prompt = 'PROMPT-LOSER';
+    const page = {
+      url: vi.fn(() => PROJECT_URL),
+      locator: vi.fn((selector: string) => {
+        if (selector === '#prompt-textarea') {
+          return scalarLocator({
+            count: vi.fn(async () => 1),
+            innerText: vi.fn(async () => prompt),
+          });
+        }
+        if (selector === '[data-message-author-role]') return collectionLocator([]);
+        return scalarLocator();
+      }),
+    };
+
+    expect(await classifySendLandingEvidence(page, prompt)).toBe('not_landed');
+    expect(await classifySendLandingEvidence(page, prompt, SHARED_CONV)).toBe('landed');
   });
 
   it('still rejects real foreign human activity after the owned prompt', () => {
@@ -273,5 +374,17 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(decision).toMatchObject({
       state: 'foreign_activity',
     });
+  });
+
+  it('enforces the per-invocation navigation budget', async () => {
+    const navigation = new StateLightNavigationCounter(1);
+    const page = {
+      goto: vi.fn(async () => undefined),
+      locator: vi.fn(() => scalarLocator({ count: vi.fn(async () => 0) })),
+    };
+    await openBlankProjectChatSurface(page, PROJECT_URL, 5_000, navigation);
+    await expect(openBlankProjectChatSurface(page, PROJECT_URL, 5_000, navigation)).rejects.toThrow(
+      'state_light_navigation_budget_exhausted',
+    );
   });
 });
