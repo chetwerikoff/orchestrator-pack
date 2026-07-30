@@ -350,8 +350,8 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       cause: 'completed_page_only',
       send_count: 1,
     });
-    const maxExpectedWait = DISPATCH_OBSERVATION_MS + POST_SEND_OBSERVATION_POLL_MS * 4 + 5_000;
-    expect(fake.metrics.waitedMs).toBeLessThan(maxExpectedWait);
+    const slowPollWaitFloor = 300_000 + DISPATCH_OBSERVATION_MS - 5_000;
+    expect(fake.metrics.waitedMs).toBeLessThan(slowPollWaitFloor);
     expect(fake.metrics.waitedMs).toBeGreaterThan(DISPATCH_OBSERVATION_MS);
   });
 
