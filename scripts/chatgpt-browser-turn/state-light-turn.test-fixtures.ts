@@ -35,6 +35,8 @@ export function scalarLocator(overrides: Record<string, unknown> = {}) {
 export type StateLightTestMessage = {
   role: 'user' | 'assistant';
   text: string;
+  /** When set, textContent() returns this while innerText() returns `text` (sr-only delta). */
+  domTextContent?: string;
   finalAction?: boolean;
   finalActionInTurnContainer?: boolean;
   inProgress?: boolean;
@@ -70,7 +72,7 @@ export function messageLocator(message: StateLightTestMessage, generating = fals
       return scalarLocator();
     }),
     innerText: vi.fn(async () => message.text),
-    textContent: vi.fn(async () => message.text),
+    textContent: vi.fn(async () => message.domTextContent ?? message.text),
   });
 }
 

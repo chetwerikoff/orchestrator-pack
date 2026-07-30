@@ -680,15 +680,18 @@ async function locatorCount(locator: any): Promise<number> {
 }
 
 async function locatorText(locator: any): Promise<string> {
-  // Prefer textContent for observation reads — avoids Playwright innerText scroll-into-view.
+  // Prefer innerText for rendered-text semantics (owned-prompt matching). Playwright
+  // innerText is a plain DOM read and does not scroll; scroll hijack was from the
+  // continuation click path (fixed separately). textContent includes hidden/sr-only
+  // subtree text (e.g. "You said:") that strict ownedPromptMatches must not see.
   try {
-    const textContent = normalizeVisibleText(String(await locator.textContent({ timeout: MAX_LOCAL_READ_WAIT_MS }) ?? ''));
-    if (textContent) return textContent;
+    const innerText = normalizeVisibleText(String(await locator.innerText({ timeout: MAX_LOCAL_READ_WAIT_MS }) ?? ''));
+    if (innerText) return innerText;
   } catch {
-    // Fall through to innerText for fixtures and nodes that only expose rendered text there.
+    // Fall through to textContent for fixtures and nodes that only expose DOM text there.
   }
   try {
-    return normalizeVisibleText(String(await locator.innerText({ timeout: MAX_LOCAL_READ_WAIT_MS })));
+    return normalizeVisibleText(String(await locator.textContent({ timeout: MAX_LOCAL_READ_WAIT_MS })));
   } catch {
     return '';
   }

@@ -236,6 +236,21 @@ describe('state-light prompt attribution classification', () => {
     )).toEqual({ state: 'waiting' });
   });
 
+  it('rejects textContent with sr-only prefix while rendered innerText matches', () => {
+    const prompt = 'Issue #1120 strict-matcher smoke cell OUTPUT CONSTRAINTS Keep answer under 500 words';
+    const rendered = prompt;
+    const textContentWithSrOnly = `You said: ${rendered}`;
+
+    expect(ownedPromptMatches(rendered, prompt)).toBe(true);
+    expect(ownedPromptMatches(textContentWithSrOnly, prompt)).toBe(false);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: rendered }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      prompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+  });
+
   it('keeps short prompt strict equality unchanged', () => {
     const prompt = 'PROMPT-SHORT owned echo baseline';
     const visible = 'PROMPT-SHORT owned echo baseline';

@@ -340,6 +340,57 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(mocks.linkSync).toHaveBeenCalledTimes(1);
   });
 
+  it('matches owned prompt when textContent carries sr-only prefix but innerText equals prompt', async () => {
+    const prompt = 'Issue #1120 strict-matcher smoke cell OUTPUT CONSTRAINTS Keep answer under 500 words';
+    const rendered = prompt;
+    const domTextContent = `You said: ${rendered}`;
+    const snapshots: StateLightTestSnapshot[] = [
+      {
+        messages: [
+          ...BASELINE,
+          { role: 'user', text: rendered, domTextContent },
+          { role: 'assistant', text: 'working' },
+        ],
+        generating: true,
+      },
+      {
+        messages: [
+          ...BASELINE,
+          { role: 'user', text: rendered, domTextContent },
+          { role: 'assistant', text: 'FINAL', finalAction: true },
+        ],
+        generating: false,
+      },
+      {
+        messages: [
+          ...BASELINE,
+          { role: 'user', text: rendered, domTextContent },
+          { role: 'assistant', text: 'FINAL', finalAction: true },
+        ],
+        generating: false,
+      },
+    ];
+    const { readStableInput } = await import('./input.ts');
+    vi.mocked(readStableInput).mockImplementationOnce(() => ({
+      text: prompt,
+      bytes: new Uint8Array([1]),
+      byteLength: 1,
+      dev: 1n,
+      ino: 1n,
+    }));
+    const fake = makePage(snapshots);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      cause: 'completed_page_only',
+      send_count: 1,
+      cleanup: 'confirmed',
+    });
+    expect(outcome.result.state).not.toBe('observation_uncertain');
+  });
+
   it('uses post-send observation cadence instead of --poll-ms after the dispatch window', async () => {
     const fake = makePage(delayedReadySnapshots(65));
     const outcome = await runAndCapture(fake.page, { timeoutMs: '120000', pollMs: '300000' });
