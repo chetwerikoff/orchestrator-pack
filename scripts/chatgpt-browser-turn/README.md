@@ -78,18 +78,19 @@ stable non-empty intermediate node is not sufficient by itself. A continuation
 button may be clicked because it continues the same assistant response; it is not
 a second user-prompt send.
 
-If another/interleaved user turn appears after the invocation baseline, attribution
-is ambiguous and only that invocation fails/degrades as `foreign_activity`.
-Sibling Browser-GPT tabs remain independent.
+Reply capture uses a strict publication window: only assistant nodes strictly
+between the owned prompt user node and the next user node (of any origin) may be
+published. Prompt recognition is strict normalized-text equality (markdown syntax
+and whitespace collapsed); a truncated lazy-render miss stays in `waiting` until
+the page catches up. A foreign or interleaved user turn after the owned prompt
+without a capturable reply in that window, or a page that never shows the owned
+prompt before the hard observation deadline, ends the invocation as
+`observation_uncertain` (**exit 11**, no resend). Sibling Browser-GPT tabs
+remain independent.
 
-Foreign classification requires the foreign signal to remain stable across bounded
-repeated page reads (same discipline as the final-reply stability path), including
-the normalized suspect user evidence fingerprint — not merely a repeated cause code —
-with several seconds of settle spacing between confirming reads. Prompt-echo
-comparison is whitespace-insensitive (including newlines), tolerant to UI collapse
-affixes, and accepts visible windows from any position in the owned prompt. Terminal
-`foreign_activity` results and recurrence-journal rows carry bounded diagnostics
-(suspect/prompt heads and shared-overlap metric).
+Recurrence-journal rows for interleaved/ambiguous observation use the
+`interleaved_user_activity` event class with bounded uncertainty diagnostics.
+Unrecognized owned prompts on a readable page never produce journal incidents.
 
 ## Send-once and retry boundary
 
@@ -154,7 +155,7 @@ Typical state-light outcomes include:
 - `input_invalid` / `output_conflict`;
 - `login` / `quota` / `rate_limit` / `challenge` / `chrome_not_running` / `profile_mismatch` (product walls and profile blockers use **exit 12**; `rate_limit` is temporary request throttling, distinct from exhausted `quota`);
 - `send_failed`;
-- `ui_contract_mismatch` / `foreign_activity` (**exit 11**) / `driver_error` (**exit 13**).
+- `ui_contract_mismatch` / `observation_uncertain` (**exit 11**) / `driver_error` (**exit 13**).
 
 `stream_timeout` remains part of the shared legacy turn-state contract, but the
 state-light post-send path does not manufacture it merely because

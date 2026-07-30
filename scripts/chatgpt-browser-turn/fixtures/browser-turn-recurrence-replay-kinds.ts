@@ -30,7 +30,7 @@ export const BROWSER_TURN_RECURRENCE_REPLAY_KINDS = {
   'bd946a513c83': 'legacy_harness_note',
   '26969e56a0c5': 'legacy_admission_absence',
   '1d48d825adc5': 'legacy_harness_note',
-  '595a4552aa9d': 'state_light_foreign_activity',
+  '595a4552aa9d': 'state_light_observation_uncertain',
   '8226c661ebe5': 'legacy_admission_absence',
   '9fe34e05862c': 'legacy_admission_absence',
   '1bee4625bf0c': 'state_light_send_count_guard',
@@ -51,11 +51,11 @@ export const BROWSER_TURN_RECURRENCE_REPLAY_KINDS = {
   '6a0a271a16d7': 'state_light_invocation_blocker_chrome_not_running',
   '40f6897ef0c2': 'state_light_send_count_guard',
   'ea9f10a5b298': 'state_light_send_count_guard',
-  '90c98044ada3': 'state_light_foreign_activity',
+  '90c98044ada3': 'state_light_observation_uncertain',
   '5522c5a9b443': 'state_light_send_count_guard',
   '1edf7e562306': 'state_light_send_observation_deferred_fresh_url',
   '76c31e65fc4c': 'state_light_send_observation_deferred_fresh_url',
-  '4e338698026c': 'state_light_foreign_activity',
+  '4e338698026c': 'state_light_observation_uncertain',
 } as const satisfies Record<string, string>;
 
 export type BrowserTurnRecurrenceReplayKind =

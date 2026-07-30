@@ -542,8 +542,8 @@ describe('state-light fresh conversation collision recovery', () => {
     );
 
     expect(decision).toMatchObject({
-      state: 'foreign_suspect',
-      cause: 'foreign_user_after_owned_send',
+      state: 'ready',
+      reply: 'partial',
     });
   });
 

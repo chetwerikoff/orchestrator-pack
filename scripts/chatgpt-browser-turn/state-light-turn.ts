@@ -62,11 +62,7 @@ const INITIAL_POLL_MS = 500;
 const DISPATCH_OBSERVATION_MS = 30_000;
 const STABILITY_READ_DELAY_MS = 1_000;
 const COMPLETION_CONFIRM_POLL_MS = 1_000;
-const FOREIGN_STABILITY_READS = 2;
-const FOREIGN_STABILITY_SETTLE_MS = 4_000;
-const FOREIGN_DIAGNOSTIC_HEAD_CHARS = 300;
-const MAX_ECHO_COMPARE_CHARS = 512;
-const MAX_ECHO_PROMPT_COMPARE_CHARS = 2_048;
+const DIAGNOSTIC_HEAD_CHARS = 300;
 const MAX_LOCAL_READ_WAIT_MS = 5_000;
 export const BROWSER_TURN_RECURRENCE_PATH = join(
   homedir(),
@@ -86,22 +82,22 @@ interface PageMessage {
 }
 
 export interface PageObservationDecision {
-  readonly state: 'waiting' | 'ready' | 'foreign_suspect';
+  readonly state: 'waiting' | 'ready' | 'uncertain';
   readonly reply?: string;
   readonly cause?: string;
-  readonly suspectFingerprint?: string;
+  readonly observedUserHeads?: readonly string[];
 }
 
-interface ForeignActivityDiagnostics {
-  readonly suspect_visible_head: string;
-  readonly prompt_head: string;
-  readonly shared_overlap: number;
+interface ObservationUncertaintyDiagnostics {
+  readonly cause: string;
+  readonly send_count: number;
+  readonly owned_prompt_seen: boolean;
+  readonly observed_user_heads?: readonly string[];
 }
 
 export interface ObservationExhaustedDiagnostics {
   readonly observation_state: string;
   readonly stable_reads: number;
-  readonly foreign_stable_reads: number;
   readonly last_assistant_head: string;
   readonly poll_count: number;
   readonly soft_deadline_elapsed: boolean;
@@ -111,7 +107,7 @@ interface BrowserIncident {
   readonly eventClass: string;
   readonly symptom: string;
   readonly action?: string;
-  readonly foreignDiagnostics?: ForeignActivityDiagnostics;
+  readonly uncertaintyDiagnostics?: ObservationUncertaintyDiagnostics;
 }
 
 interface CompactTurnResult extends TurnResultV1 {
@@ -205,132 +201,34 @@ function normalizeEchoComparisonText(value: string): string {
 
 function normalizeMarkdownEchoText(value: string): string {
   return value
+    .replace(/\u200b/g, '')
     .replace(/`+/g, '')
     .replace(/^#{1,6}\s*/gm, '')
     .replace(/^\s*[-*+]\s+/gm, '')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/\s+/g, ' ')
+    .replace(/[\r\n\t\f\v ]+/g, ' ')
     .trim();
 }
 
 function normalizeOwnedEchoText(value: string): string {
-  return normalizeMarkdownEchoText(
-    stripUiCollapseAffixes(normalizeEchoComparisonText(value)),
-  );
+  return normalizeMarkdownEchoText(stripUiCollapseAffixes(value));
 }
 
-function ownedEchoComparisonBound(visibleLength: number, promptLength: number): number {
-  const maxSampleChars = Math.min(visibleLength, MAX_ECHO_COMPARE_CHARS);
-  const maxHaystackChars = Math.min(promptLength, MAX_ECHO_PROMPT_COMPARE_CHARS);
-  return Math.min(maxSampleChars, maxHaystackChars, visibleLength, promptLength);
-}
-
-function boundedDiagnosticHead(value: string, maxChars = FOREIGN_DIAGNOSTIC_HEAD_CHARS): string {
+function boundedDiagnosticHead(value: string, maxChars = DIAGNOSTIC_HEAD_CHARS): string {
   const normalized = normalizeEchoComparisonText(value);
   if (normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, maxChars)}…`;
 }
 
-function echoComparisonSamples(value: string, maxChars = MAX_ECHO_COMPARE_CHARS): readonly string[] {
-  if (value.length <= maxChars) return [value];
-  const samples = [value.slice(0, maxChars), value.slice(-maxChars)];
-  if (value.length > maxChars * 2) {
-    const quarter = Math.floor(value.length / 4);
-    samples.push(value.slice(quarter, quarter + maxChars));
-    samples.push(value.slice(value.length - quarter - maxChars, value.length - quarter));
-  }
-  return samples;
-}
-
-function longestCommonSubstringLength(left: string, right: string): number {
-  if (!left || !right) return 0;
-  const row = new Uint16Array(right.length + 1);
-  let best = 0;
-  for (let i = 1; i <= left.length; i++) {
-    let corner = 0;
-    for (let j = 1; j <= right.length; j++) {
-      const upper = row[j]!;
-      const next = left[i - 1] === right[j - 1] ? corner + 1 : 0;
-      corner = upper;
-      row[j] = next;
-      if (next > best) best = next;
-    }
-  }
-  return best;
-}
-
-function promptComparisonHaystacks(prompt: string): readonly string[] {
-  const head = prompt.slice(0, MAX_ECHO_PROMPT_COMPARE_CHARS);
-  if (prompt.length <= MAX_ECHO_PROMPT_COMPARE_CHARS) return [head];
-  const tail = prompt.slice(-MAX_ECHO_PROMPT_COMPARE_CHARS);
-  return head === tail ? [head] : [head, tail];
-}
-
-function visibleContainedInPrompt(visible: string, prompt: string): boolean {
-  if (visible.length <= MAX_ECHO_COMPARE_CHARS) {
-    for (const haystack of promptComparisonHaystacks(prompt)) {
-      if (haystack.includes(visible)) return true;
-    }
-    return false;
-  }
-  for (const sample of echoComparisonSamples(visible)) {
-    if (sample.length < 16) continue;
-    for (const haystack of promptComparisonHaystacks(prompt)) {
-      if (haystack.includes(sample)) return true;
-    }
-  }
-  return false;
-}
-
-export function promptEchoSharedOverlap(visibleText: string, promptText: string): number {
+export function ownedPromptMatches(visibleText: string, promptText: string): boolean {
   const visible = normalizeOwnedEchoText(visibleText);
   const prompt = normalizeOwnedEchoText(promptText);
-  if (!visible || !prompt) return 0;
-  if (visible === prompt) return visible.length;
-
-  let best = 0;
-  for (const sample of echoComparisonSamples(visible)) {
-    for (const haystack of promptComparisonHaystacks(prompt)) {
-      best = Math.max(best, longestCommonSubstringLength(sample, haystack));
-    }
-  }
-  return best;
+  return visible.length > 0 && visible === prompt;
 }
 
-function minimumOwnedEchoOverlap(visibleLength: number, promptLength: number): number {
-  const compared = ownedEchoComparisonBound(visibleLength, promptLength);
-  return Math.max(24, Math.floor(compared * 0.45));
-}
-
-export function ownedPromptEchoMatches(visibleText: string, promptText: string): boolean {
-  const visible = normalizeOwnedEchoText(visibleText);
-  const prompt = normalizeOwnedEchoText(promptText);
-  if (!visible || !prompt) return false;
-  if (visible === prompt) return true;
-
-  const minOverlap = minimumOwnedEchoOverlap(visible.length, prompt.length);
-  const shared = promptEchoSharedOverlap(visibleText, promptText);
-  if (shared >= minOverlap) return true;
-  if (visible.length >= 16 && visibleContainedInPrompt(visible, prompt)) return true;
-  if (prompt.length >= 16 && visible.includes(prompt)) return true;
-  if (visible.length >= minOverlap && prompt.startsWith(visible)) return true;
-  return false;
-}
-
-export function buildForeignActivityDiagnostics(
-  suspectText: string,
-  promptText: string,
-): ForeignActivityDiagnostics {
-  return {
-    suspect_visible_head: boundedDiagnosticHead(suspectText),
-    prompt_head: boundedDiagnosticHead(promptText),
-    shared_overlap: promptEchoSharedOverlap(suspectText, promptText),
-  };
-}
-
-const REPLY_STABILITY_HEAD_CHARS = FOREIGN_DIAGNOSTIC_HEAD_CHARS;
-const REPLY_STABILITY_TAIL_CHARS = FOREIGN_DIAGNOSTIC_HEAD_CHARS;
+const REPLY_STABILITY_HEAD_CHARS = DIAGNOSTIC_HEAD_CHARS;
+const REPLY_STABILITY_TAIL_CHARS = DIAGNOSTIC_HEAD_CHARS;
 
 function normalizeReplyForStability(text: string): string {
   return stripUiCollapseAffixes(normalizeEchoComparisonText(text));
@@ -366,7 +264,7 @@ function classifyObservationLoopState(
   decision: PageObservationDecision,
   stableReads: number,
 ): string {
-  if (decision.state === 'foreign_suspect') return 'foreign_suspect';
+  if (decision.state === 'uncertain') return 'uncertain';
   if (decision.state === 'ready') return stableReads >= 2 ? 'ready_stable' : 'ready_unstable';
   return decision.state;
 }
@@ -374,7 +272,6 @@ function classifyObservationLoopState(
 export function buildObservationExhaustedDiagnostics(
   decision: PageObservationDecision,
   stableReads: number,
-  foreignStableReads: number,
   pollCount: number,
   messages: readonly PageMessage[],
   baselineCount: number,
@@ -383,10 +280,72 @@ export function buildObservationExhaustedDiagnostics(
   return {
     observation_state: classifyObservationLoopState(decision, stableReads),
     stable_reads: stableReads,
-    foreign_stable_reads: foreignStableReads,
     last_assistant_head: boundedDiagnosticHead(lastAssistantVisibleText(messages, baselineCount)),
     poll_count: pollCount,
     soft_deadline_elapsed: softDeadlineElapsed,
+  };
+}
+
+
+function maybeReturnObservationUncertain(
+  now: number,
+  hardExhaustionDeadline: number,
+  sendCount: number,
+  uncertainCause: string,
+  ownedPromptEverSeen: boolean,
+  observedUserHeads: readonly string[] | undefined,
+  page: any,
+  browser: any,
+  invocationId: string,
+  profileKey: string,
+  sendCountForDiagnostics: number,
+  pollCount: number,
+  navigation: StateLightNavigationCounter,
+  incidents: BrowserIncident[],
+  journalWriteFailed: boolean,
+  incident: (eventClass: string, symptom: string, action?: string) => void,
+): TurnRunOutcome | null {
+  if (sendCount < 1 || now < hardExhaustionDeadline) return null;
+  if (ownedPromptEverSeen && uncertainCause.length === 0) return null;
+  const diagnostics: ObservationUncertaintyDiagnostics = {
+    cause: uncertainCause || 'owned_prompt_not_observed',
+    send_count: sendCountForDiagnostics,
+    owned_prompt_seen: ownedPromptEverSeen,
+    ...(observedUserHeads && observedUserHeads.length > 0 ? { observed_user_heads: observedUserHeads } : {}),
+  };
+  const symptom = diagnostics.cause;
+  const ok = recordIncident(
+    incidents,
+    {
+      eventClass: 'interleaved_user_activity',
+      symptom,
+      action: 'return_local_degraded',
+      uncertaintyDiagnostics: diagnostics,
+    },
+    invocationId,
+    navigation.snapshot(),
+  );
+  if (!ok) journalWriteFailed = true;
+  return {
+    page,
+    browser,
+    preserveOwnedPage: true,
+    result: compactResult(
+      'observation_uncertain',
+      'invocation',
+      symptom,
+      invocationId,
+      profileKey,
+      sendCount,
+      pollCount,
+      navigation,
+      incidents,
+      {
+        ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+        observation_uncertainty_diagnostics: diagnostics,
+      },
+      journalWriteFailed,
+    ),
   };
 }
 
@@ -397,7 +356,6 @@ function maybeReturnObservationExhausted(
   sendCount: number,
   decision: PageObservationDecision,
   stableReads: number,
-  foreignStableReads: number,
   pollCount: number,
   messages: readonly PageMessage[],
   baselineCount: number,
@@ -415,7 +373,6 @@ function maybeReturnObservationExhausted(
   const diagnostics = buildObservationExhaustedDiagnostics(
     decision,
     stableReads,
-    foreignStableReads,
     pollCount,
     messages,
     baselineCount,
@@ -505,40 +462,6 @@ function publishStateLightReply(
   }
 }
 
-function foreignSuspectTexts(
-  novel: readonly PageMessage[],
-  prompt: string,
-): readonly string[] {
-  const users = novel
-    .map((message, index) => ({ message, index }))
-    .filter(({ message }) => message.role === 'user');
-  const ownedUsers = users.filter(({ message }) => ownedPromptEchoMatches(message.text, prompt));
-  const foreignFromRoot = users
-    .filter(({ message }) => !ownedPromptEchoMatches(message.text, prompt))
-    .map(({ message }) => normalizeVisibleText(message.text))
-    .filter((value) => value.length > 0);
-
-  if (foreignFromRoot.length > 0) return foreignFromRoot;
-
-  if (ownedUsers.length === 0) return [];
-
-  const lastOwned = ownedUsers[ownedUsers.length - 1]!;
-  const afterOwnUser = novel.slice(lastOwned.index + 1);
-  return afterOwnUser
-    .filter((message) => message.role === 'user' && !ownedPromptEchoMatches(message.text, prompt))
-    .map((message) => normalizeVisibleText(message.text))
-    .filter((value) => value.length > 0);
-}
-
-export function foreignSuspectEvidenceFingerprint(
-  messages: readonly PageMessage[],
-  baselineCount: number,
-  prompt: string,
-): string {
-  const novel = messages.slice(Math.max(0, baselineCount));
-  return foreignSuspectTexts(novel, prompt).join('\n');
-}
-
 export function classifyPageObservation(
   messages: readonly PageMessage[],
   baselineCount: number,
@@ -552,38 +475,41 @@ export function classifyPageObservation(
 
   if (users.length === 0) return { state: 'waiting' };
 
-  const ownedUsers = users.filter(({ message }) => ownedPromptEchoMatches(message.text, prompt));
-  const foreignUsers = users.filter(({ message }) => !ownedPromptEchoMatches(message.text, prompt));
-
-  if (foreignUsers.length > 0) {
-    const cause = ownedUsers.length > 0
-      ? 'foreign_user_after_owned_send'
-      : 'foreign_or_ambiguous_user_activity';
-    const suspectFingerprint = foreignUsers
-      .map(({ message }) => normalizeVisibleText(message.text))
-      .join('\n');
-    return { state: 'foreign_suspect', cause, suspectFingerprint };
-  }
-
+  const ownedUsers = users.filter(({ message }) => ownedPromptMatches(message.text, prompt));
   if (ownedUsers.length === 0) return { state: 'waiting' };
 
   const lastOwned = ownedUsers[ownedUsers.length - 1]!;
-  const afterOwnUser = novel.slice(lastOwned.index + 1);
-  const extraUsers = afterOwnUser.filter((message) => message.role === 'user');
-  if (extraUsers.length > 0) {
-    if (!extraUsers.every((message) => ownedPromptEchoMatches(message.text, prompt))) {
-      const suspectFingerprint = extraUsers
-        .filter((message) => !ownedPromptEchoMatches(message.text, prompt))
-        .map((message) => normalizeVisibleText(message.text))
-        .join('\n');
-      return { state: 'foreign_suspect', cause: 'foreign_user_after_owned_send', suspectFingerprint };
-    }
+  const afterOwned = novel.slice(lastOwned.index + 1);
+
+  let replyWindow = afterOwned;
+  let uncertainCause: string | undefined;
+  let observedUserHeads: string[] | undefined;
+
+  const firstForeignUser = afterOwned.find(
+    (message) => message.role === 'user' && !ownedPromptMatches(message.text, prompt),
+  );
+  if (firstForeignUser) {
+    const foreignIndex = afterOwned.indexOf(firstForeignUser);
+    replyWindow = afterOwned.slice(0, foreignIndex);
+    uncertainCause = 'foreign_user_after_owned_send';
+    observedUserHeads = [boundedDiagnosticHead(firstForeignUser.text)];
   }
 
-  const assistants = afterOwnUser.filter((message) => message.role === 'assistant');
-  if (inProgress || assistants.length === 0) return { state: 'waiting' };
-  const finalReply = normalizeVisibleText(assistants.at(-1)?.text ?? '');
-  return finalReply ? { state: 'ready', reply: finalReply } : { state: 'waiting' };
+  const assistants = replyWindow.filter((message) => message.role === 'assistant');
+  if (!inProgress && assistants.length > 0) {
+    const finalReply = normalizeVisibleText(assistants.at(-1)?.text ?? '');
+    if (finalReply) return { state: 'ready', reply: finalReply };
+  }
+
+  if (uncertainCause) {
+    return {
+      state: 'uncertain',
+      cause: uncertainCause,
+      ...(observedUserHeads ? { observedUserHeads } : {}),
+    };
+  }
+
+  return { state: 'waiting' };
 }
 
 function browserConfig(args: ParsedTurnArgs): BrowserConfig & { pollMs: number } {
@@ -661,10 +587,8 @@ function appendIncident(
       event_class: incident.eventClass,
       observed_symptom: incident.symptom,
       ...(incident.action ? { action: incident.action } : {}),
-      ...(incident.foreignDiagnostics ? {
-        suspect_visible_head: incident.foreignDiagnostics.suspect_visible_head,
-        prompt_head: incident.foreignDiagnostics.prompt_head,
-        shared_overlap: incident.foreignDiagnostics.shared_overlap,
+      ...(incident.uncertaintyDiagnostics ? {
+        observation_uncertainty: incident.uncertaintyDiagnostics,
       } : {}),
       invocation: invocationId,
       agent_runtime: agent,
@@ -1271,9 +1195,9 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let lastReadyReply = '';
     let bestReadyReply = '';
     let stableReads = 0;
-    let foreignStableReads = 0;
-    let lastForeignStableKey = '';
-    let lastForeignStableAt = 0;
+    let uncertainCause = '';
+    let observedUserHeads: string[] | undefined;
+    let ownedPromptEverSeen = false;
     let completionReadySeen = false;
 
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
@@ -1298,7 +1222,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           sendCount,
           { state: 'waiting' },
           stableReads,
-          foreignStableReads,
           pollCount,
           [],
           baselineCount,
@@ -1341,66 +1264,45 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
       const decision = classifyPageObservation(messages, baselineCount, snapshot.text, !completionReady);
 
-      if (decision.state === 'foreign_suspect') {
-        const foreignCause = decision.cause ?? 'foreign_activity';
-        const foreignFingerprint = decision.suspectFingerprint ?? '';
-        const foreignStableKey = `${foreignCause}\u0000${foreignFingerprint}`;
-        if (foreignStableKey !== lastForeignStableKey) {
-          foreignStableReads = 1;
-          lastForeignStableKey = foreignStableKey;
-          lastForeignStableAt = Date.now();
-        } else {
-          const elapsed = Date.now() - lastForeignStableAt;
-          if (elapsed < FOREIGN_STABILITY_SETTLE_MS) {
-            await sleep(page, FOREIGN_STABILITY_SETTLE_MS - elapsed);
-          }
-          foreignStableReads++;
-          lastForeignStableAt = Date.now();
-        }
-        if (foreignStableReads >= FOREIGN_STABILITY_READS) {
-          const foreignDiagnostics = buildForeignActivityDiagnostics(foreignFingerprint, snapshot.text);
-          const ok = recordIncident(
-            incidents,
-            {
-              eventClass: 'foreign_activity',
-              symptom: foreignCause,
-              action: 'return_local_degraded',
-              foreignDiagnostics,
-            },
-            invocationId,
-            navigation.snapshot(),
-          );
-          if (!ok) journalWriteFailed = true;
-          return {
-            page,
-            browser,
-            result: compactResult(
-              'foreign_activity',
-              'invocation',
-              foreignCause,
-              invocationId,
-              profileKey,
-              sendCount,
-              pollCount, navigation, incidents,
-              {
-                ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
-                foreign_activity_diagnostics: foreignDiagnostics,
-              },
-              journalWriteFailed,
-            ),
-          };
-        }
+      const novelMessages = messages.slice(Math.max(0, baselineCount));
+      if (novelMessages.some((message) => message.role === 'user' && ownedPromptMatches(message.text, snapshot.text))) {
+        ownedPromptEverSeen = true;
+      }
+
+      if (decision.state === 'uncertain') {
+        uncertainCause = decision.cause ?? 'interleaved_user_activity';
+        observedUserHeads = decision.observedUserHeads
+          ? [...decision.observedUserHeads]
+          : observedUserHeads;
         stableReads = 0;
         lastReadyReply = '';
         bestReadyReply = '';
-        const foreignExhausted = maybeReturnObservationExhausted(
+        const uncertainExhausted = maybeReturnObservationUncertain(
+          Date.now(),
+          hardExhaustionDeadline,
+          sendCount,
+          uncertainCause,
+          ownedPromptEverSeen,
+          observedUserHeads,
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+        );
+        if (uncertainExhausted) return uncertainExhausted;
+        const uncertainWaitingExhausted = maybeReturnObservationExhausted(
           Date.now(),
           softDeadline,
           hardExhaustionDeadline,
           sendCount,
           decision,
           stableReads,
-          foreignStableReads,
           pollCount,
           messages,
           baselineCount,
@@ -1413,14 +1315,13 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           journalWriteFailed,
           incident,
         );
-        if (foreignExhausted) return foreignExhausted;
+        if (uncertainWaitingExhausted) return uncertainWaitingExhausted;
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
 
-      foreignStableReads = 0;
-      lastForeignStableKey = '';
-      lastForeignStableAt = 0;
+      uncertainCause = '';
+      observedUserHeads = undefined;
 
       if (decision.state === 'ready' && decision.reply) {
         if (decision.reply.length > bestReadyReply.length) bestReadyReply = decision.reply;
@@ -1485,7 +1386,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           sendCount,
           decision,
           stableReads,
-          foreignStableReads,
           pollCount,
           messages,
           baselineCount,
@@ -1541,6 +1441,26 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         }
       }
 
+      const ownedPromptUncertainty = maybeReturnObservationUncertain(
+        Date.now(),
+        hardExhaustionDeadline,
+        sendCount,
+        uncertainCause,
+        ownedPromptEverSeen,
+        observedUserHeads,
+        page,
+        browser,
+        invocationId,
+        profileKey,
+        sendCount,
+        pollCount,
+        navigation,
+        incidents,
+        journalWriteFailed,
+        incident,
+      );
+      if (ownedPromptUncertainty) return ownedPromptUncertainty;
+
       const waitingExhausted = maybeReturnObservationExhausted(
         Date.now(),
         softDeadline,
@@ -1548,7 +1468,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         sendCount,
         decision,
         stableReads,
-        foreignStableReads,
         pollCount,
         messages,
         baselineCount,
