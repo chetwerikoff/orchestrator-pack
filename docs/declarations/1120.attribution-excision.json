@@ -2,7 +2,7 @@
   "issue_number": 1120,
   "iteration_id": "attribution-excision",
   "iteration_id_source": "wrapper_generated",
-  "supersedes": "chat-executor",
+  "supersedes": "chat-executor-selector-consolidation",
   "created_at": "2026-07-30T14:13:33.913Z",
   "baseline": {
     "commit_sha": "15bb43f0dee7f81fbaff1fa401986580443b7435",
