@@ -294,6 +294,10 @@ AO-injected `orchestratorRules`.
 - **Trigger:** manual and automatic starts use `scripts/pack-review-runner.ts`; operational
   status comes from the compatible `Get-AoReviewRuns` pack-store view. GitHub PR review is the
   authoritative verdict.
+- **Manual Browser-GPT:** workers/operators invoke
+  `npm run pack-gpt-review -- --pr-number <PR_NUMBER>`. The PR number is the only required target
+  argument; the command resolves the live `OPEN` PR head, binds GPT for that invocation, remains
+  foregrounded, and leaves publication to the shared pack-review runner.
 - Backstop: `scripts/review-trigger-reconcile.ps1`. `orchestratorRules` is **legacy-import-only** on
   AO 0.10. Use **REVIEW_COMMAND** / **PACK_REVIEWER**; daemon review HTTP and `ao review submit`
   are not fallback or dual-write paths.
