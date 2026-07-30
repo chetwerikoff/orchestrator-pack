@@ -71,6 +71,10 @@ Thumbs.db
 # Not synced to git; kept out of the working tree's tracked diff on purpose.
 .local/
 
+# Worker-smoke forensic artifacts (runs/, live/, seals, result JSON).
+# Local evidence only — never delete to clean the worktree; see docs/worker-smoke-testing.md.
+.orca-worker-smoke/
+
 # Investigation reports and draft-review audit trails are local working
 # artifacts, not committed history.
 docs/investigations/

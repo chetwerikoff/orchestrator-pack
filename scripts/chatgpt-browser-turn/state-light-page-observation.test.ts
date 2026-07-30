@@ -4,29 +4,7 @@ import {
   readAssistantTurnCompletionReady,
   readAssistantTurnGenerating,
 } from './ui-adapter.ts';
-
-function scalarLocator(overrides: Record<string, unknown> = {}) {
-  const turnActionButtons = overrides.turnActionButtons === true;
-  const locator: Record<string, any> = {
-    count: vi.fn(async () => (typeof overrides.count === 'function' ? overrides.count() : 0)),
-    first: vi.fn(function first() { return locator; }),
-    nth: vi.fn(() => locator),
-    locator: vi.fn((selector: string) => {
-      if (turnActionButtons && (
-        selector.includes('copy-turn-action-button')
-        || selector.includes('good-response-turn-action-button')
-        || selector.includes('bad-response-turn-action-button')
-      )) {
-        return scalarLocator({ count: vi.fn(async () => 1) });
-      }
-      return scalarLocator();
-    }),
-    innerText: vi.fn(async () => ''),
-    getAttribute: vi.fn(async () => null),
-    ...overrides,
-  };
-  return locator;
-}
+import { scalarLocator } from './state-light-turn.test-fixtures.ts';
 
 function makeTurnContainerPage(options: {
   assistantText: string;

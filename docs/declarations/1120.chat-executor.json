@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "6e4f292b852507038781251c045ef188a8e5f3d6",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:3ced3d53b340ccbeeac333ac34a5e0a2079f7bd34bed7d4a74a9978f35dea9a6"
+    "active_scope_hash": "sha256:8f5a4aefc4c0a184bf63e931504087de402cebb1c48d85c58cfa07c725f4acfa"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -24,8 +24,26 @@
     "scripts/chatgpt-browser-turn/ui-adapter.ts",
     "scripts/finding-ledger-guard.mjs",
     "scripts/lib/stage-completeness-core.ts",
-    "scripts/stage-completeness-guard.test.ts"
+    "scripts/stage-completeness-guard.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:3ced3d53b340ccbeeac333ac34a5e0a2079f7bd34bed7d4a74a9978f35dea9a6",
+      "new_active_scope_hash": "sha256:8f5a4aefc4c0a184bf63e931504087de402cebb1c48d85c58cfa07c725f4acfa",
+      "changed": {
+        "added": [
+          "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+          "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts"
+        ],
+        "removed": []
+      },
+      "reason": "add page-observation test and shared fixtures",
+      "actor": "local",
+      "timestamp": "2026-07-30T02:10:20.707Z",
+      "applied": true
+    }
+  ]
 }
