@@ -123,9 +123,9 @@ Typical state-light outcomes include:
 
 - `ok`;
 - `input_invalid` / `output_conflict`;
-- `login` / `quota` / `rate_limit` / `challenge` / `chrome_not_running` / `profile_mismatch`;
+- `login` / `quota` / `rate_limit` / `challenge` / `chrome_not_running` / `profile_mismatch` (product walls and profile blockers use **exit 12**; `rate_limit` is temporary request throttling, distinct from exhausted `quota`);
 - `send_failed`;
-- `ui_contract_mismatch` / `foreign_activity` / `driver_error`.
+- `ui_contract_mismatch` / `foreign_activity` (**exit 11**) / `driver_error` (**exit 13**).
 
 `stream_timeout` remains part of the shared legacy turn-state contract, but the
 state-light post-send path does not manufacture it merely because

@@ -28,6 +28,7 @@ import { atomicJson, configuredProfileKey, profileDirs, sha256 } from '../chatgp
 import * as coordination from '../chatgpt-browser-turn/coordination.ts';
 import { readDriverDiagnostic } from '../chatgpt-browser-turn/diagnostics.ts';
 import { classifyProductWall, productStatusText, witnessSurfaceProbeRequiresDowngrade, __testTiming, sendTurn, type BrowserConfig } from '../chatgpt-browser-turn/ui-adapter.ts';
+import { turnExitCode } from '../chatgpt-browser-turn/contracts.ts';
 import { fakeTurnPage } from '../chatgpt-browser-turn/fixtures/fake-turn-page.ts';
 import { liveTurnStreamSequence } from '../chatgpt-browser-turn/fixtures/live-turn-stream-contract.ts';
 
@@ -245,6 +246,17 @@ describe('issue 1120 rate-limit product wall detection', () => {
     'temporarily limited access',
   ])('classifies rate-limit wall copy %j', (copy) => {
     expect(classifyProductWall({ text: copy, composer: true })).toEqual(rateLimitCause);
+  });
+
+  it('classifies mixed quota and rate-limit copy as quota when usage-limit signals are present', () => {
+    expect(classifyProductWall({
+      text: 'Your access is temporarily limited because you have reached your usage limit',
+      composer: true,
+    })).toEqual({ state: 'quota', cause: 'quota_detected' });
+  });
+
+  it('maps rate_limit through the shared turn exit-code contract', () => {
+    expect(turnExitCode('rate_limit')).toBe(12);
   });
 
   it('keeps exhausted-usage quota separate from temporary rate limiting', () => {

@@ -1458,11 +1458,11 @@ export function classifyProductWall(surface: ProductStatusSurface): { state?: 'q
   if (/verify you are human|checking your browser|just a moment|unusual activity/i.test(surface.text)) {
     return { state: 'challenge', cause: 'challenge_detected' };
   }
+  if (/you(?:'|’)ve reached|usage limit|message limit|reached the current usage|reached your usage limit|please try again later/i.test(surface.text)) {
+    return { state: 'quota', cause: 'quota_detected' };
+  }
   if (PRODUCT_RATE_LIMIT_WALL_RE.test(surface.text)) {
     return { state: 'rate_limit', cause: 'rate_limit_detected' };
-  }
-  if (/you(?:'|’)ve reached|usage limit|message limit|reached the current usage|please try again later/i.test(surface.text)) {
-    return { state: 'quota', cause: 'quota_detected' };
   }
   if (!surface.composer && /log in|sign in/i.test(surface.text)) return { state: 'login', cause: 'login_required' };
   return {};
