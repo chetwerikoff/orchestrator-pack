@@ -61,25 +61,17 @@ vi.mock('./publication.ts', () => ({ publishReply: mocks.legacyPublishReply }));
 vi.mock('./storage-common.ts', () => ({ configuredProfileKey: vi.fn(() => 'profile-key') }));
 vi.mock('./ui-adapter.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./ui-adapter.ts')>();
-  return {
-    ...actual,
-    classifyProductWall: vi.fn((text: string) => {
+  const { buildUiAdapterTestMock } = await import('./state-light-turn.test-fixtures.ts');
+  return buildUiAdapterTestMock(actual, mocks, {
+    classifyProductWall: (text: string) => {
       if (/quota/i.test(text)) return { state: 'quota', cause: 'quota_detected' };
       if (/challenge/i.test(text)) return { state: 'challenge', cause: 'challenge_detected' };
       if (/login/i.test(text)) return { state: 'login', cause: 'login_detected' };
       return {};
-    }),
-    loadChromium: vi.fn(() => ({
-      connectOverCDP: vi.fn(async () => {
-        const browser = mocks.browserQueue.shift();
-        if (!browser) throw new Error('no fake browser queued');
-        return browser;
-      }),
-    })),
-    normalizeConversationUrl: vi.fn((value: string) => value),
-    productStatusText: vi.fn(async (page: any) => String(page.__productStatusText?.() ?? '')),
-    verifyProfile: mocks.verifyProfile,
-  };
+    },
+    normalizeConversationUrl: (value: string) => value,
+    productStatusText: async (page: any) => String(page.__productStatusText?.() ?? ''),
+  });
 });
 
 import {
@@ -87,8 +79,11 @@ import {
   collectionLocator,
   createBrowserSessionModuleMock,
   createCoordinationModuleMock,
+  enqueueBrowserForTurn,
   messageLocator,
+  runStateLightTurnWithStdoutCapture,
   scalarLocator,
+  STATE_LIGHT_TURN_BASE_ARGV,
   type StateLightTestMessage,
   type StateLightTestSnapshot,
 } from './state-light-turn.test-fixtures.ts';
@@ -224,31 +219,15 @@ async function runAndCapture(
   page: any,
   options: { timeoutMs?: string; pollMs?: string } = {},
 ) {
-  const { browser, context } = browserFor(page);
-  mocks.browserQueue.push(browser);
-  const writes: string[] = [];
-  const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
-    writes.push(String(chunk));
-    return true;
-  }) as typeof process.stdout.write);
-  try {
-    const code = await runStateLightTurn([
-      '--profile', '/tmp/profile',
-      '--cdp', 'http://127.0.0.1:9222',
-      '--input', '/tmp/prompt.txt',
-      '--output', '/tmp/reply.txt',
-      '--chat-url', 'https://chatgpt.com/c/existing',
-      '--timeout-ms', options.timeoutMs ?? '1000',
-      '--poll-ms', options.pollMs ?? '1',
-    ]);
-    return {
-      code,
-      result: JSON.parse(writes.at(-1) ?? '{}'),
-      context,
-    };
-  } finally {
-    stdout.mockRestore();
-  }
+  const { context } = enqueueBrowserForTurn(mocks, page);
+  const captured = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+    ...STATE_LIGHT_TURN_BASE_ARGV,
+    '--output', '/tmp/reply.txt',
+    '--chat-url', 'https://chatgpt.com/c/existing',
+    '--timeout-ms', options.timeoutMs ?? '1000',
+    '--poll-ms', options.pollMs ?? '1',
+  ]);
+  return { ...captured, context };
 }
 
 beforeEach(() => {
@@ -354,7 +333,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
   });
 
   it('returns a post-send product blocker after observing the owned prompt', async () => {
-    const working: Snapshot = {
+    const working: StateLightTestSnapshot = {
       messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
       generating: true,
     };
@@ -376,8 +355,8 @@ describe('Issue #1120 state-light turn lifecycle', () => {
   });
 
   it('does not publish a stable intermediate node while page-level tool activity is still in progress', async () => {
-    const progress: Message = { role: 'assistant', text: 'PROGRESS', inProgress: true };
-    const final: Message = { role: 'assistant', text: 'FINAL', finalAction: true };
+    const progress: StateLightTestMessage = { role: 'assistant', text: 'PROGRESS', inProgress: true };
+    const final: StateLightTestMessage = { role: 'assistant', text: 'FINAL', finalAction: true };
     const fake = makePage([
       { messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, progress], generating: false },
       { messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, progress], generating: false },
@@ -456,7 +435,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
 
 
   it('returns observation_exhausted_no_resend when completion never becomes ready before the soft deadline', async () => {
-    const waiting: Snapshot = {
+    const waiting: StateLightTestSnapshot = {
       messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
       generating: true,
     };

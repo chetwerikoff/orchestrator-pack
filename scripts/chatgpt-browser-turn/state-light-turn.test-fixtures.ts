@@ -141,3 +141,67 @@ export function createCoordinationModuleMock() {
     })),
   };
 }
+
+
+export type StateLightUiAdapterTestMocks = {
+  browserQueue: any[];
+  verifyProfile: ReturnType<typeof vi.fn>;
+};
+
+export type StateLightUiAdapterTestOptions = {
+  classifyProductWall?: (text: string) => object;
+  normalizeConversationUrl?: (value: string) => string;
+  productStatusText?: (page: any) => Promise<string> | string;
+};
+
+export function buildUiAdapterTestMock(
+  actual: typeof import('./ui-adapter.ts'),
+  mocks: StateLightUiAdapterTestMocks,
+  options: StateLightUiAdapterTestOptions = {},
+) {
+  return {
+    ...actual,
+    classifyProductWall: vi.fn(options.classifyProductWall ?? (() => ({}))),
+    loadChromium: vi.fn(() => ({
+      connectOverCDP: vi.fn(async () => {
+        const browser = mocks.browserQueue.shift();
+        if (!browser) throw new Error('no fake browser queued');
+        return browser;
+      }),
+    })),
+    normalizeConversationUrl: options.normalizeConversationUrl
+      ? vi.fn(options.normalizeConversationUrl)
+      : actual.normalizeConversationUrl,
+    productStatusText: vi.fn(options.productStatusText ?? (async () => '')),
+    verifyProfile: mocks.verifyProfile,
+  };
+}
+
+export function enqueueBrowserForTurn(mocks: { browserQueue: any[] }, page: any) {
+  const harness = browserFor(page);
+  mocks.browserQueue.push(harness.browser);
+  return harness;
+}
+
+export async function runStateLightTurnWithStdoutCapture(
+  runTurn: (args: string[]) => Promise<number>,
+  argv: string[],
+): Promise<{ code: number; result: Record<string, unknown> }> {
+  const writes: string[] = [];
+  const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+    writes.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    const code = await runTurn(argv);
+    return { code, result: JSON.parse(writes.at(-1) ?? '{}') };
+  } finally {
+    stdout.mockRestore();
+  }
+}
+
+export const STATE_LIGHT_TURN_BASE_ARGV = [
+  '--profile', '/tmp/profile',
+  '--cdp', 'http://127.0.0.1:9222',
+  '--input', '/tmp/prompt.txt',
+] as const;

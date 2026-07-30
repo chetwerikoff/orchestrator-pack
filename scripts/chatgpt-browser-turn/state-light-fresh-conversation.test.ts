@@ -50,31 +50,21 @@ vi.mock('./storage-common.ts', async (importOriginal) => {
 
 vi.mock('./ui-adapter.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./ui-adapter.ts')>();
-  return {
-    ...actual,
-    classifyProductWall: vi.fn(() => ({})),
-    loadChromium: vi.fn(() => ({
-      connectOverCDP: vi.fn(async () => {
-        const browser = mocks.browserQueue.shift();
-        if (!browser) throw new Error('no fake browser queued');
-        return browser;
-      }),
-    })),
-    normalizeConversationUrl: actual.normalizeConversationUrl,
-    productStatusText: vi.fn(async () => ''),
-    verifyProfile: mocks.verifyProfile,
-  };
+  const { buildUiAdapterTestMock } = await import('./state-light-turn.test-fixtures.ts');
+  return buildUiAdapterTestMock(actual, mocks);
 });
 
 import {
-  browserFor,
   collectionLocator,
   createBrowserSessionModuleMock,
   createCoordinationModuleMock,
+  enqueueBrowserForTurn,
   messageLocator,
   readyTurnObservationFrames,
+  runStateLightTurnWithStdoutCapture,
   scalarLocator,
   stableTurnInput,
+  STATE_LIGHT_TURN_BASE_ARGV,
   type StateLightTestMessage,
 } from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, runStateLightTurn } from './state-light-turn.ts';
@@ -169,28 +159,15 @@ async function runNewChatTurn(page: any, outputPath: string, options: { disableS
   } else {
     process.env.OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT = '1';
   }
-  const { browser } = browserFor(page);
-  mocks.browserQueue.push(browser);
-  const writes: string[] = [];
-  const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
-    writes.push(String(chunk));
-    return true;
-  }) as typeof process.stdout.write);
-  try {
-    const code = await runStateLightTurn([
-      '--profile', '/tmp/profile',
-      '--cdp', 'http://127.0.0.1:9222',
-      '--input', '/tmp/prompt.txt',
-      '--output', outputPath,
-      '--new-chat',
-      '--project-url', PROJECT_URL,
-      '--timeout-ms', '5000',
-      '--poll-ms', '1',
-    ]);
-    return { code, result: JSON.parse(writes.at(-1) ?? '{}') };
-  } finally {
-    stdout.mockRestore();
-  }
+  enqueueBrowserForTurn(mocks, page);
+  return runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+    ...STATE_LIGHT_TURN_BASE_ARGV,
+    '--output', outputPath,
+    '--new-chat',
+    '--project-url', PROJECT_URL,
+    '--timeout-ms', '5000',
+    '--poll-ms', '1',
+  ]);
 }
 
 describe('state-light fresh conversation collision recovery', () => {
