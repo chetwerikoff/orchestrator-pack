@@ -6,7 +6,11 @@ const mocks = vi.hoisted(() => ({
   journalThrows: false,
   nowMs: 10_000,
   outputConflict: false,
-  verifyProfile: vi.fn(async () => ({ state: 'verified' })),
+  verifyProfile: vi.fn(async (): Promise<ProfileVerification> => ({
+    state: 'verified',
+    cause: 'verified',
+    evidence: 'test',
+  })),
   legacyPublishReply: vi.fn(() => {
     throw new Error('legacy publication state unavailable');
   }),
@@ -104,8 +108,9 @@ import {
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
 import { runStateLightTurn } from './state-light-turn.ts';
+import type { ProfileVerification } from './ui-adapter.ts';
 
-import journalSymptoms from './fixtures/browser-turn-recurrence-journal-symptoms.json';
+import journalSymptoms from './fixtures/browser-turn-recurrence-journal-symptoms.json' with { type: 'json' };
 import { BROWSER_TURN_RECURRENCE_REPLAY_KINDS } from './fixtures/browser-turn-recurrence-replay-kinds.ts';
 
 const BASELINE: StateLightTestMessage[] = [
@@ -280,7 +285,11 @@ beforeEach(() => {
   mocks.nowMs = 10_000;
   mocks.outputConflict = false;
   vi.spyOn(Date, 'now').mockImplementation(() => mocks.nowMs);
-  mocks.verifyProfile.mockReset().mockResolvedValue({ state: 'verified' });
+  mocks.verifyProfile.mockReset().mockResolvedValue({
+    state: 'verified',
+    cause: 'verified',
+    evidence: 'test',
+  });
   mocks.legacyPublishReply.mockClear();
   mocks.appendFileSync.mockClear();
   mocks.openSync.mockClear();
@@ -1108,7 +1117,11 @@ describe('browser-turn recurrence journal fixture coverage', () => {
   });
 
   it('replays chrome_not_running invocation_blocker symptoms', async () => {
-    mocks.verifyProfile.mockResolvedValueOnce({ state: 'unavailable', cause: 'chrome_not_running' });
+    mocks.verifyProfile.mockResolvedValueOnce({
+      state: 'unavailable',
+      cause: 'chrome_not_running',
+      evidence: 'cdp_unreachable',
+    });
     const fake = makePage(readySnapshots());
     const outcome = await runAndCapture(fake.page);
     expect(outcome.result).toMatchObject({
@@ -1120,7 +1133,11 @@ describe('browser-turn recurrence journal fixture coverage', () => {
   });
 
   it('replays profile_mismatch invocation_blocker symptoms', async () => {
-    mocks.verifyProfile.mockResolvedValueOnce({ state: 'mismatch', cause: 'profile_mismatch' });
+    mocks.verifyProfile.mockResolvedValueOnce({
+      state: 'mismatch',
+      cause: 'profile_mismatch',
+      evidence: 'profile mismatch',
+    });
     const fake = makePage(readySnapshots());
     const outcome = await runAndCapture(fake.page);
     expect(outcome.result).toMatchObject({
