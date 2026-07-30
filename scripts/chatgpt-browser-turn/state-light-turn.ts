@@ -58,6 +58,8 @@ const STABILITY_READ_DELAY_MS = 1_000;
 const FOREIGN_STABILITY_READS = 2;
 const FOREIGN_STABILITY_SETTLE_MS = 4_000;
 const FOREIGN_DIAGNOSTIC_HEAD_CHARS = 300;
+const MAX_ECHO_COMPARE_CHARS = 512;
+const MAX_ECHO_PROMPT_COMPARE_CHARS = 2_048;
 const MAX_LOCAL_READ_WAIT_MS = 5_000;
 export const BROWSER_TURN_RECURRENCE_PATH = join(
   homedir(),
@@ -206,6 +208,57 @@ function boundedDiagnosticHead(value: string, maxChars = FOREIGN_DIAGNOSTIC_HEAD
   return `${normalized.slice(0, maxChars)}…`;
 }
 
+function echoComparisonSamples(value: string, maxChars = MAX_ECHO_COMPARE_CHARS): readonly string[] {
+  if (value.length <= maxChars) return [value];
+  const samples = [value.slice(0, maxChars), value.slice(-maxChars)];
+  if (value.length > maxChars * 2) {
+    const quarter = Math.floor(value.length / 4);
+    samples.push(value.slice(quarter, quarter + maxChars));
+    samples.push(value.slice(value.length - quarter - maxChars, value.length - quarter));
+  }
+  return samples;
+}
+
+function longestCommonSubstringLength(left: string, right: string): number {
+  if (!left || !right) return 0;
+  const row = new Uint16Array(right.length + 1);
+  let best = 0;
+  for (let i = 1; i <= left.length; i++) {
+    let corner = 0;
+    for (let j = 1; j <= right.length; j++) {
+      const upper = row[j]!;
+      const next = left[i - 1] === right[j - 1] ? corner + 1 : 0;
+      corner = upper;
+      row[j] = next;
+      if (next > best) best = next;
+    }
+  }
+  return best;
+}
+
+function promptComparisonHaystacks(prompt: string): readonly string[] {
+  const head = prompt.slice(0, MAX_ECHO_PROMPT_COMPARE_CHARS);
+  if (prompt.length <= MAX_ECHO_PROMPT_COMPARE_CHARS) return [head];
+  const tail = prompt.slice(-MAX_ECHO_PROMPT_COMPARE_CHARS);
+  return head === tail ? [head] : [head, tail];
+}
+
+function visibleContainedInPrompt(visible: string, prompt: string): boolean {
+  if (visible.length <= MAX_ECHO_COMPARE_CHARS) {
+    for (const haystack of promptComparisonHaystacks(prompt)) {
+      if (haystack.includes(visible)) return true;
+    }
+    return false;
+  }
+  for (const sample of echoComparisonSamples(visible)) {
+    if (sample.length < 16) continue;
+    for (const haystack of promptComparisonHaystacks(prompt)) {
+      if (haystack.includes(sample)) return true;
+    }
+  }
+  return false;
+}
+
 export function promptEchoSharedOverlap(visibleText: string, promptText: string): number {
   const visible = stripUiCollapseAffixes(normalizeEchoComparisonText(visibleText));
   const prompt = normalizeEchoComparisonText(promptText);
@@ -213,10 +266,9 @@ export function promptEchoSharedOverlap(visibleText: string, promptText: string)
   if (visible === prompt) return visible.length;
 
   let best = 0;
-  for (let start = 0; start < visible.length; start++) {
-    for (let end = start + 1; end <= visible.length; end++) {
-      const slice = visible.slice(start, end);
-      if (prompt.includes(slice) && slice.length > best) best = slice.length;
+  for (const sample of echoComparisonSamples(visible)) {
+    for (const haystack of promptComparisonHaystacks(prompt)) {
+      best = Math.max(best, longestCommonSubstringLength(sample, haystack));
     }
   }
   return best;
@@ -235,7 +287,7 @@ export function ownedPromptEchoMatches(visibleText: string, promptText: string):
   const minOverlap = minimumOwnedEchoOverlap(prompt.length, visible.length);
   const shared = promptEchoSharedOverlap(visibleText, promptText);
   if (shared >= minOverlap) return true;
-  if (visible.length >= 16 && prompt.includes(visible)) return true;
+  if (visible.length >= 16 && visibleContainedInPrompt(visible, prompt)) return true;
   if (prompt.length >= 16 && visible.includes(prompt)) return true;
   if (visible.length >= minOverlap && prompt.startsWith(visible)) return true;
   return false;

@@ -149,6 +149,15 @@ describe('state-light prompt attribution classification', () => {
     expect(ownedPromptEchoMatches(visible, prompt)).toBe(true);
   });
 
+
+  it('returns promptly for long genuinely foreign visible text', () => {
+    const prompt = `owned ${'detail '.repeat(500)}`;
+    const foreign = `FOREIGN ${'noise '.repeat(300)}`;
+    const started = performance.now();
+    expect(ownedPromptEchoMatches(foreign, prompt)).toBe(false);
+    expect(promptEchoSharedOverlap(foreign, prompt)).toBeLessThan(16);
+    expect(performance.now() - started).toBeLessThan(50);
+  });
   it('keeps genuinely unrelated text foreign', () => {
     const prompt = `owned ${'detail '.repeat(80)}`;
     expect(ownedPromptEchoMatches('FOREIGN INTERLOPER TEXT', prompt)).toBe(false);
