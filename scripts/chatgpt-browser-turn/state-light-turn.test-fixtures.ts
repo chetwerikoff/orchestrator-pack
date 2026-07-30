@@ -1,3 +1,4 @@
+import type { TurnResultV1 } from './contracts.ts';
 import { vi } from 'vitest';
 
 export function scalarLocator(overrides: Record<string, unknown> = {}) {
@@ -183,10 +184,21 @@ export function enqueueBrowserForTurn(mocks: { browserQueue: any[] }, page: any)
   return harness;
 }
 
+export type CapturedStateLightTurnResult = TurnResultV1 & {
+  send_count?: number;
+  poll_count?: number;
+  goto_count?: number;
+  new_chat_click_count?: number;
+  navigation_count?: number;
+  cleanup?: string;
+  incidents?: string[];
+  journal_write_failed?: boolean;
+};
+
 export async function runStateLightTurnWithStdoutCapture(
   runTurn: (args: string[]) => Promise<number>,
   argv: string[],
-): Promise<{ code: number; result: Record<string, unknown> }> {
+): Promise<{ code: number; result: CapturedStateLightTurnResult }> {
   const writes: string[] = [];
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
     writes.push(String(chunk));
@@ -194,7 +206,10 @@ export async function runStateLightTurnWithStdoutCapture(
   }) as typeof process.stdout.write);
   try {
     const code = await runTurn(argv);
-    return { code, result: JSON.parse(writes.at(-1) ?? '{}') };
+    return {
+      code,
+      result: JSON.parse(writes.at(-1) ?? '{}') as CapturedStateLightTurnResult,
+    };
   } finally {
     stdout.mockRestore();
   }
