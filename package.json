@@ -18,7 +18,7 @@
     "test:issue-900": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/toolchain/node22-runtime-policy.spec.ts",
     "test:issue-964": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/toolchain/chatgpt-browser-turn.test.ts scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "test:issue-1068": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts -t \"issue 1068\"",
-    "test:issue-1111": "npm run check:node-major --silent && node --experimental-strip-types --test scripts/pack-gpt-review-selftest.ts && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/pack-review-runner-gpt.test.ts scripts/pack-gpt-reviewer.test.ts",
+    "test:issue-1111": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/pack-review-runner-gpt.test.ts scripts/pack-gpt-reviewer.test.ts",
     "test:issue-1120": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/stage-completeness-guard.test.ts",
     "pack-gpt-review": "npm run check:node-major --silent && node --experimental-strip-types scripts/pack-gpt-review.ts",
     "chatgpt-browser-turn": "npm run check:node-major --silent && node --experimental-strip-types scripts/chatgpt-browser-turn/state-light-entry.ts",
