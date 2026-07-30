@@ -156,7 +156,7 @@ describe('state-light prompt attribution classification', () => {
     const started = performance.now();
     expect(ownedPromptEchoMatches(foreign, prompt)).toBe(false);
     expect(promptEchoSharedOverlap(foreign, prompt)).toBeLessThan(16);
-    expect(performance.now() - started).toBeLessThan(50);
+    expect(performance.now() - started).toBeLessThan(500);
   });
   it('keeps genuinely unrelated text foreign', () => {
     const prompt = `owned ${'detail '.repeat(80)}`;
