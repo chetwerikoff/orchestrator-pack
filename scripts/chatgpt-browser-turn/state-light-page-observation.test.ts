@@ -12,6 +12,7 @@ import {
   ownedPromptEchoMatches,
   promptEchoSharedOverlap,
   replyStabilityMatches,
+  replyStabilityFingerprint,
 } from './state-light-turn.ts';
 
 function makeTurnContainerPage(options: {
@@ -47,6 +48,7 @@ function makeTurnContainerPage(options: {
       return scalarLocator();
     }),
     getByText: vi.fn(() => scalarLocator()),
+    getByRole: vi.fn(() => scalarLocator()),
   };
 }
 
@@ -196,5 +198,16 @@ describe('state-light prompt attribution classification', () => {
 
     expect(replyStabilityMatches(renderB, renderA)).toBe(true);
     expect(replyStabilityMatches(`${renderA} extra tail`, renderA)).toBe(false);
+  });
+
+  it('treats large mid-body length swings as stable when head and tail fingerprints match', () => {
+    const head = `INTRO ${'A'.repeat(180)}`;
+    const tail = `${'Z'.repeat(180)} OUTRO`;
+    const longRead = `${head}${'M'.repeat(4500)}${tail}`;
+    const shortRead = `${head}${'M'.repeat(200)}${tail}`;
+
+    expect(replyStabilityFingerprint(longRead)).toBe(replyStabilityFingerprint(shortRead));
+    expect(replyStabilityMatches(longRead, shortRead)).toBe(true);
+    expect(longRead.length - shortRead.length).toBeGreaterThan(1000);
   });
 });

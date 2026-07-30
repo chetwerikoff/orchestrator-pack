@@ -23,6 +23,7 @@ export function scalarLocator(overrides: Record<string, unknown> = {}) {
     innerText: vi.fn(async () => ''),
     textContent: vi.fn(async () => ''),
     getAttribute: vi.fn(async () => null),
+    or: vi.fn(function or() { return locator; }),
     ...overrides,
   };
   return locator;

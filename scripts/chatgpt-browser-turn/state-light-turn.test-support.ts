@@ -117,7 +117,7 @@ function makePage(
   let continuationDismissed = false;
   let closed = false;
   let transientStatusErrors = options.transientStatusErrors ?? 0;
-  const metrics = { sends: 0, closes: 0, polls: 0, waitedMs: 0 };
+  const metrics = { sends: 0, closes: 0, polls: 0, waitedMs: 0, continuationClicks: 0 };
 
   const composer = scalarLocator({
     count: vi.fn(async () => 1),
@@ -157,6 +157,22 @@ function makePage(
     close: vi.fn(async () => {
       closed = true;
       metrics.closes++;
+    }),
+    getByRole: vi.fn((role: string, options?: { name?: RegExp | string }) => {
+      if (role !== 'button') return scalarLocator();
+      const name = options?.name;
+      const label = 'Continue generating';
+      const matches = name instanceof RegExp
+        ? name.test(label)
+        : typeof name === 'string' && new RegExp(name, 'i').test(label);
+      const visible = Boolean(activeSnapshot.continuation) && !continuationDismissed && matches;
+      return scalarLocator({
+        count: vi.fn(async () => visible ? 1 : 0),
+        click: vi.fn(async () => {
+          continuationDismissed = true;
+          metrics.continuationClicks += 1;
+        }),
+      });
     }),
     getByText: vi.fn((pattern: RegExp | string) => {
       const text = 'Continue generating';
@@ -816,6 +832,91 @@ ${body}`;
     const published = String(mocks.writeFileSync.mock.calls[0]?.[1] ?? '');
     expect(published).toContain('Section footer with enough words.');
     expect(published).toContain('Intro paragraph.');
+  });
+
+
+
+  it('captures the fullest read when completion-ready polls differ by a large collapsed mid-body', async () => {
+    const head = `INTRO ${'A'.repeat(180)}`;
+    const tail = `${'Z'.repeat(180)} OUTRO`;
+    const longRead = `${head}${'M'.repeat(4500)}${tail}`;
+    const shortRead = `${head}${'M'.repeat(200)}${tail}`;
+    const snapshots: StateLightTestSnapshot[] = [
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+        generating: true,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: longRead, finalAction: true }],
+        generating: false,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: shortRead, finalAction: true }],
+        generating: false,
+      },
+    ];
+    const fake = makePage(snapshots);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(String(mocks.writeFileSync.mock.calls[0]?.[1] ?? '')).toBe(longRead);
+    expect(String(mocks.writeFileSync.mock.calls[0]?.[1] ?? '').length).toBeGreaterThan(shortRead.length);
+  });
+
+  it('captures ok when reply prose contains continue generating but no control exists', async () => {
+    const body = 'Design note: never treat message prose mentioning continue generating as a control click target.';
+    const snapshots: StateLightTestSnapshot[] = [
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+        generating: true,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: body, finalAction: true }],
+        generating: false,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: body, finalAction: true }],
+        generating: false,
+      },
+    ];
+    const fake = makePage(snapshots);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(fake.metrics.continuationClicks).toBe(0);
+    expect(mocks.writeFileSync.mock.calls[0]?.[1]).toContain('continue generating');
+  });
+
+  it('activates a genuine continue-generating button control when present', async () => {
+    const snapshots: StateLightTestSnapshot[] = [
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'PARTIAL' }],
+        generating: true,
+        continuation: true,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'PARTIAL' }],
+        generating: true,
+        continuation: true,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+        generating: false,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+        generating: false,
+      },
+    ];
+    const fake = makePage(snapshots);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(fake.metrics.continuationClicks).toBeGreaterThanOrEqual(1);
+    expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
   });
 
   it('does not let cleanup or journal failure veto an already captured reply', async () => {

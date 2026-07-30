@@ -1496,6 +1496,13 @@ export async function locateLastAssistantTurnContainer(
   return last;
 }
 
+
+export function locateContinueGeneratingControl(page: any): any {
+  const button = page.getByRole('button', { name: /continue generating/i });
+  const testId = page.locator('[data-testid*="continue-generating"], [data-testid*="continue_generating"]');
+  return button.or(testId);
+}
+
 export async function readAssistantTurnGenerating(
   page: any,
   waitMs = MAX_BROWSER_OPERATION_WAIT_MS,
@@ -1511,7 +1518,7 @@ export async function readAssistantTurnGenerating(
   if (!turn) return false;
   try {
     if (await boundedLocatorCount(turn.locator(ASSISTANT_TURN_IN_PROGRESS_SELECTOR), waitMs) > 0) return true;
-    if (await boundedLocatorCount(page.getByText(/continue generating/i), waitMs) > 0) return true;
+    if (await boundedLocatorCount(locateContinueGeneratingControl(page), waitMs) > 0) return true;
   } catch {
     return true;
   }

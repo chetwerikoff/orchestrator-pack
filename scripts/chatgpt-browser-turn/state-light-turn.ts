@@ -45,6 +45,7 @@ import {
   loadChromium,
   normalizeConversationUrl,
   productStatusText,
+  locateContinueGeneratingControl,
   readAssistantTurnCompletionReady,
   verifyProfile,
   type BrowserConfig,
@@ -55,6 +56,7 @@ const DEFAULT_POLL_MS = 300_000;
 const INITIAL_POLL_MS = 500;
 const DISPATCH_OBSERVATION_MS = 30_000;
 const STABILITY_READ_DELAY_MS = 1_000;
+const COMPLETION_CONFIRM_POLL_MS = 1_000;
 const FOREIGN_STABILITY_READS = 2;
 const FOREIGN_STABILITY_SETTLE_MS = 4_000;
 const FOREIGN_DIAGNOSTIC_HEAD_CHARS = 300;
@@ -313,10 +315,27 @@ export function buildForeignActivityDiagnostics(
   };
 }
 
+const REPLY_STABILITY_HEAD_CHARS = FOREIGN_DIAGNOSTIC_HEAD_CHARS;
+const REPLY_STABILITY_TAIL_CHARS = FOREIGN_DIAGNOSTIC_HEAD_CHARS;
+
+function normalizeReplyForStability(text: string): string {
+  return stripUiCollapseAffixes(normalizeEchoComparisonText(text));
+}
+
+export function replyStabilityFingerprint(text: string): string {
+  const normalized = normalizeReplyForStability(text);
+  if (!normalized) return '';
+  const head = normalized.slice(0, REPLY_STABILITY_HEAD_CHARS);
+  const tail = normalized.length > REPLY_STABILITY_HEAD_CHARS
+    ? normalized.slice(-REPLY_STABILITY_TAIL_CHARS)
+    : normalized;
+  return `${head}\u0000${tail}`;
+}
+
 export function replyStabilityMatches(currentReply: string, previousReply: string): boolean {
   if (!previousReply) return false;
-  const current = stripUiCollapseAffixes(normalizeEchoComparisonText(currentReply));
-  const previous = stripUiCollapseAffixes(normalizeEchoComparisonText(previousReply));
+  const current = replyStabilityFingerprint(currentReply);
+  const previous = replyStabilityFingerprint(previousReply);
   return current.length > 0 && current === previous;
 }
 
@@ -694,14 +713,11 @@ async function locatorCount(locator: any): Promise<number> {
 }
 
 async function locatorText(locator: any): Promise<string> {
+  // Prefer textContent for observation reads — avoids Playwright innerText scroll-into-view.
   try {
-    return normalizeVisibleText(String(await locator.innerText({ timeout: MAX_LOCAL_READ_WAIT_MS })));
+    return normalizeVisibleText(String(await locator.textContent({ timeout: MAX_LOCAL_READ_WAIT_MS }) ?? ''));
   } catch {
-    try {
-      return normalizeVisibleText(String(await locator.textContent({ timeout: MAX_LOCAL_READ_WAIT_MS }) ?? ''));
-    } catch {
-      return '';
-    }
+    return '';
   }
 }
 
@@ -770,7 +786,7 @@ async function readPostSendObservation(page: any): Promise<{
 
 async function maybeContinueGeneration(page: any): Promise<boolean> {
   try {
-    const continuation = page.getByText(/continue generating/i);
+    const continuation = locateContinueGeneratingControl(page);
     if (await locatorCount(continuation) === 0) return false;
     await continuation.first().click({ timeout: MAX_LOCAL_READ_WAIT_MS });
     return true;
@@ -1257,10 +1273,12 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     const hardExhaustionDeadline = startedAt + (config.timeoutMs * 2);
     const dispatchDeadline = startedAt + Math.min(DISPATCH_OBSERVATION_MS, config.timeoutMs);
     let lastReadyReply = '';
+    let bestReadyReply = '';
     let stableReads = 0;
     let foreignStableReads = 0;
     let lastForeignStableKey = '';
     let lastForeignStableAt = 0;
+    let completionReadySeen = false;
 
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
     // landed and this invocation still owns a reachable page, #1120 requires us
@@ -1276,11 +1294,13 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         incident('post_send_observation_error', symptom, 'continue_polling_owned_page');
         stableReads = 0;
         lastReadyReply = '';
+        bestReadyReply = '';
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
 
       const { messages, wall, completionReady } = observation;
+      if (completionReady) completionReadySeen = true;
       if (wall.state) {
         const cause = wall.cause ?? `${wall.state}_detected`;
         recordProductWallAdvisory(profileKey, wall.state, cause, invocationId);
@@ -1355,6 +1375,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         }
         stableReads = 0;
         lastReadyReply = '';
+        bestReadyReply = '';
         const foreignExhausted = maybeReturnObservationExhausted(
           Date.now(),
           softDeadline,
@@ -1385,16 +1406,18 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       lastForeignStableAt = 0;
 
       if (decision.state === 'ready' && decision.reply) {
+        if (decision.reply.length > bestReadyReply.length) bestReadyReply = decision.reply;
         if (replyStabilityMatches(decision.reply, lastReadyReply)) stableReads++;
         else {
           lastReadyReply = decision.reply;
           stableReads = 1;
         }
         if (stableReads >= 2) {
+          const captureReply = bestReadyReply.length >= decision.reply.length ? bestReadyReply : decision.reply;
           const publication = publishStateLightReply(
             destination.finalPath,
             invocationId,
-            decision.reply,
+            captureReply,
           );
           if (publication.state !== 'committed_ok') {
             incident('output_publication_error', publication.cause ?? publication.state, 'return_local_error');
@@ -1465,6 +1488,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
       stableReads = 0;
       lastReadyReply = '';
+      bestReadyReply = '';
       if (await maybeContinueGeneration(page)) {
         await sleep(page, INITIAL_POLL_MS);
         continue;
@@ -1523,11 +1547,15 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       if (waitingExhausted) return waitingExhausted;
 
       const elapsed = Date.now() - startedAt;
-      const delay = elapsed < DISPATCH_OBSERVATION_MS ? INITIAL_POLL_MS : config.pollMs;
+      const delay = completionReadySeen
+        ? COMPLETION_CONFIRM_POLL_MS
+        : elapsed < DISPATCH_OBSERVATION_MS
+          ? INITIAL_POLL_MS
+          : config.pollMs;
       const beforeSoftDeadline = Date.now() < softDeadline;
       await sleep(page, beforeSoftDeadline
         ? Math.min(delay, Math.max(1, softDeadline - Date.now()))
-        : config.pollMs);
+        : delay);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
