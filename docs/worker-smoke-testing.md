@@ -140,6 +140,34 @@ its own terminal after runtime restart can poll forever (2026-07-29 incident).
   **Completion** requires a **durable artifact** the child produces (e.g. the `worker-smoke-report`
   block).
 
+## Run cancellation and cleanup
+
+Cancellation or abortion of a smoke run (operator stop, supervisor stop, rate-limit stop) is a
+**first-class terminal path** carrying the same cleanup obligations as report publication and
+prompt-delivery exhaustion. Skipping report publication never waives these duties.
+
+- **Cleanup obligations on cancellation.** When a run is cancelled, immediately: close every
+  **owned child terminal** by its recorded handle (same discipline as in **Owned-handle
+  supervision**), terminate in-flight invocations gracefully (allow a live browser turn to reach a
+  terminal outcome; start nothing new), remove or tombstone the run's `live/OPERATOR-ACTION-*.txt`
+  files to prevent stale operator misdirection, and record a **durable cancellation artifact** in
+  the run directory (e.g. the existing `HANDOFF-CANCELLED.txt` pattern).
+
+- **Registry of spawned children.** The supervisor **MUST** record every spawned child at spawn
+  time as a run artifact: terminal handle, PID when known, and run id. Cleanup on any terminal path
+  (publish, exhaustion, cancellation) iterates that **registry**, not memory or terminal-list
+  heuristics (forbidden per **Owned-handle supervision**).
+
+- **Fail-closed start guard.** A new run **MUST NOT** start while any of these conditions hold:
+  live children of prior runs exist (identified by prior registries), live browser-turn processes
+  exist, or stale operator-action files remain under prior run directories. The guard detects and
+  cleans up these artifacts first; if cleanup fails, the run refuses to start.
+
+- **Supervisor execution boundary.** The plan is executed only by the harness-spawned child
+  process; the supervisor **MUST NOT** execute the plan inline. The supervisor may issue nudges on
+  the **owned handle** (e.g. composer submit for delivery stalls as in **Unsubmitted composer
+  paste**) or pre-flight probes if the doc's existing flow allows, but never runs the plan itself.
+
 ## Orca contract evidence
 
 `scripts/lib/orca-cli.ts` consumes concrete Orca JSON fields (`result.worktree.*`, `result.terminal.handle`, `result.lines`). Capture-backed producer evidence lives under `tests/external-output-references/captures/orca-worker-smoke/` (grounding commit `89968a10614d0e5f5a6b7805c81dccc3a1b5110b` per Issue #1061).
