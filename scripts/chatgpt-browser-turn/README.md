@@ -1,12 +1,18 @@
 # ChatGPT browser-turn transport
 
-This directory contains the tracked Node 22 one-shot transport for Issue #964. It drives the operator's already-running, headed, dedicated ChatGPT automation Chrome profile over CDP. It does not launch Chrome, modify prompts, add task policy, or replace `.claude/skills/discuss-with-gpt/driver.mjs`.
+This directory contains the tracked Node 22 Browser-GPT transport. Issue #1120
+cuts the canonical create/review `turn` path over to a state-light, send-once
+helper while retaining the pre-cutover implementation files and control commands
+only for diagnostics/rollback compatibility.
 
-Adoption by the authoring skill is intentionally separate and tracked by Issue #971.
+The helper connects to the operator's already-running headed automation Chrome.
+It does not launch Chrome, edit prompts, choose workflow stages, or replace the
+standalone `.claude/skills/discuss-with-gpt/driver.mjs` adversarial driver.
 
 ## Canonical invocation
 
-Use the repository package entrypoint so the Node-major guard runs first:
+Use the repository package entrypoint so the Node-major guard runs first.
+Existing conversation:
 
 ```bash
 npm run chatgpt-browser-turn -- turn \
@@ -17,207 +23,256 @@ npm run chatgpt-browser-turn -- turn \
   --chat-url https://chatgpt.com/c/<conversation-id>
 ```
 
-Fresh-chat mode uses `--new-chat --project-url <url>` instead of `--chat-url`.
-
-The input file is snapshotted once and sent byte-for-byte as decoded UTF-8 text. The helper rejects empty input, BOM, NUL, invalid UTF-8, bare CR, symlinks, non-regular files, and files that change during the snapshot. It never prepends or appends prompt text.
-
-The output path is reserved before browser interaction. A pre-existing or already-reserved destination is an invocation-local `output_conflict`. After possible delivery, any publication collision is `recovery_required`; the helper never overwrites the foreign destination and preserves its complete temporary reply for recovery.
-
-## Control plane
-
-All control commands require the same `--profile` and `--cdp`, which derive the configured-profile key.
-
-Configured-profile identity follows host filesystem semantics: on native case-sensitive Linux, paths that differ only by case are distinct identities and distinct state roots; on Windows/WSL-backed profiles, supported `C:\...` and `/mnt/<drive>/...` spellings and ordinary case variants of the same physical directory remain one identity. `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs` uses the same equivalence rule.
-
-When a post-change derivation would select a different key than the legacy lowercase-derived key, safety-bearing state under the legacy namespace for the same physical profile blocks startup until existing `status/list`, exact `clear`, and `publication-status` recovery resolves it. Control surfaces enumerate safety-bearing records under both the current and legacy keys. Ambiguous legacy ownership from case-collision lowercasing remains fail-closed.
-
-In fresh-chat mode, once the helper observes an authoritative canonical conversation identity correlated to the submitted exchange, that normalized identity is retained across later page teardown or unreadable URLs. Promotion is monotonic and fail-closed when service correlators, observed URL prefixes, or concurrent traffic are ambiguous; unproven fresh turns remain `orphaned_fresh_turn / canonical_fresh_conversation_unproven` per #964.
-
+Fresh conversation:
 
 ```bash
-npm run chatgpt-browser-turn -- status/list --profile <path> --cdp <url>
-npm run chatgpt-browser-turn -- capability --profile <path> --cdp <url>
-npm run chatgpt-browser-turn -- publication-status --profile <path> --cdp <url> --invocation <uuid>
-```
-
-Readable incidents are cleared only with the exact identity, generation, and evidence token returned by `status/list`:
-
-```bash
-npm run chatgpt-browser-turn -- clear \
-  --profile <path> --cdp <url> \
-  --identity <identity> --generation <n> --evidence-token <sha256>
-```
-
-Unknown/incompatible durable bytes in delivery-relevant areas (`records`, `publications`) block the entire configured profile. Incompatible `capability.json` bytes are diagnostic-only and do not block turns. Opaque quarantine applies by exact identity and generation:
-
-```bash
-npm run chatgpt-browser-turn -- clear \
-  --profile <path> --cdp <url> \
-  --identity <opaque-identity> --generation <n> --quarantine
-```
-
-Quarantine for delivery-relevant opaque bytes does not unblock the profile: it creates a blocking tombstone and preserves the original bytes. Capability quarantine/tombstones remain non-blocking telemetry/recovery artifacts only. If the process is interrupted while that tombstone is still `preparing`, `status/list` exposes that blocking tombstone; repeating `clear --quarantine` with its exact current tombstone identity and generation resumes the recorded move instead of creating a second tombstone. Final adjudication requires an operator-supplied evidence file and its expected SHA-256:
-
-```bash
-npm run chatgpt-browser-turn -- clear \
-  --profile <path> --cdp <url> \
-  --identity <tombstone-identity> --generation <n> --adjudicate \
-  --adjudication-evidence-file /absolute/path/to/evidence \
-  --expected-adjudication-sha256 <sha256>
-```
-
-A stale generation, changed evidence, live owner, unreadable lock, or publication that cannot be proven uncommitted remains blocked.
-
-
-## Proven non-delivery (`dispatch_request_not_issued`)
-
-After the submitted-turn observation window exhausts with no service-proven user id, the helper may return `send_failed` with `cause: dispatch_request_not_issued` and `possibleDelivery: false` only when **all** of the following held from dispatch through that exhaustion:
-
-- the dispatch **request observer** was proven ready before click/Enter and remained continuously active through the submitted-id deadline;
-- zero recognized ChatGPT conversation-submission requests (`POST /backend-api/f/conversation`) were observed during that covered window;
-- click/Enter completed without throwing after the possible-delivery boundary.
-
-Completing the WebSocket `witnessInstall` race alone does **not** prove request-observer coverage. Any observed recognized submission request remains possible-delivery even when transport later fails, the service id is unparseable, or the response errors. Pre-dispatch observer establishment failure performs zero send and returns `driver_error` / `driver_exception_before_send`.
-
-Proven non-delivery reuses the existing non-possible-delivery cleanup path: close an invocation-owned page, delete only this invocation's incident, and release schedule/destination locks. A later independent invocation may retry normally.
-
-## Finished reply without service terminal (`reply_finished_terminal_unproven`)
-
-When exactly one assistant reply is service-attributable to the submitted user turn, the UI conservatively shows that reply as finished (not actively generating), and the visible content has remained stable across the bounded dwell, but `resolveWholeTurnTerminal(...)` still cannot resolve a publishable service terminal, the helper exits promptly as `recovery_required` with `cause: reply_finished_terminal_unproven`. It publishes no output, retains possible-delivery blocking recovery state, and carries the ordinary `invocation_id` in `turn-result/v1`.
-
-DOM-visible content, text stability alone, or UI adjacency never creates `ok` or publication. Only service terminal `success` can make a reply publishable.
-
-### Gate-B live characterization (Half A)
-
-On the supported Chromium/Playwright runtime, operators should verify the production path can observe:
-
-1. **service-worker-owned HTTP** on the configured `BrowserContext` request surface; and
-2. **worker/secondary-target outbound WebSocket sends** via target auto-attach and `Network.webSocketFrameSent`.
-
-If either live boundary probe is unavailable or unproven, the helper keeps possible-delivery behavior and does not mint proven non-delivery.
-
-Operator probe entrypoint: `npm run chatgpt-browser-turn -- gate-b-characterization --profile <path> --cdp <url> [--chat-url <url>]`. Persists `gate-b-characterization.json` under the configured profile store; proven non-delivery requires that record to be complete. The probe reloads the selected ChatGPT surface and accepts only `BrowserContext` requests where `request.serviceWorker()` is truthy; page-owned HTTP or CDP-only network events do not satisfy the service-worker probe. The worker/secondary-target WebSocket probe observes only non-probe `BrowserContext` pages via dedicated `newCDPSession` targets; the configured probe page's own WebSocket traffic does not satisfy that row.
-
-## Result and retry rules
-
-`turn` writes exactly one JSON `turn-result/v1` line. `ok` exits 0. Invocation-local validation/send failures use exit family 10, exact recovery/conversation ambiguity 11, profile walls/busy/orphan state 12, machine/driver failure 13, and incompatible durable state 14.
-
-## Page lifetime and process exit
-
-Each `turn` invocation connects to the operator's already-running Chrome over CDP, may create or reuse a ChatGPT tab, and must release what it acquired on every terminal path:
-
-- a page the helper **created** (`owned: true`) is closed before durable incident deletion and lock release on success and on failures that are not possible-delivery;
-- a page the helper **reused** (`owned: false`) is never closed;
-- a failure after **possible delivery** keeps its page open as operator recovery evidence;
-- the CDP client connection is always released in a `finally` block so the one-shot process can exit once the terminal result is emitted.
-
-Releasing the CDP client disconnects Playwright from the operator's Chrome; it does not terminate the browser process. Possible-delivery recovery therefore depends on adopted-context tabs surviving client disconnect — see `fixtures/cdp-page-survival-precondition.md` for the live observation record.
-
-`clear` performs a live profile-wall readiness probe when the target incident is a profile wall; that probe connects over CDP and releases its short-lived connection before returning. `status/list` does not connect to Chrome.
-
-`status/list`, `clear`, and `capability` write `control-result/v1`. `publication-status` writes `publication-status/v1`. These envelopes are body-free: they may contain identifiers, paths, generations, hashes, byte lengths, timestamps, and causes, but never prompt or reply bodies.
-
-Never resend after possible delivery merely because the caller missed the terminal result. Query `publication-status` and `status/list` first. Possible-delivery incidents are not timer-cleared or stale-lock reclaimed.
-
-## Fine-grained scheduling and capability diagnostics
-
-Normal `turn` scheduling is destination-derived, not capability-derived:
-
-- existing chat → `conversation:<normalized conversation>`
-- fresh chat → independent `fresh:<invocation identity>`
-
-Missing, stale, serialized, or binding-mismatched capability does **not** select `profile:<configured profile key>` scheduling and does not return `profile_busy` because another independent turn is active. Capability characterization, `admission.policy`, and `admission.epoch` remain readable for diagnostics and rollback compatibility only.
-
-Every invocation still performs invocation-local send safety before possible delivery:
-
-- live configured profile/CDP verification
-- live service-issued witness surface checks
-- same-conversation overlap remains serialized or refused
-
-Stored capability/browser-provenance drift is recorded as bounded diagnostic evidence when observed; it is not an admission gate. Witness loss before possible delivery fails only the affected invocation locally. Causal success still requires an exact service-issued submitted user-message ID and exactly one assistant-message ID linked as its reply; DOM order/count/timing/text similarity never creates `ok`, and ambiguous user or assistant observations fail closed.
-
-## Publication safety
-
-The helper creates a same-directory `0600` temporary file and durably persists a prepared publication record bound to that empty temp inode before writing any reply body bytes. It then writes and `fsync`s the complete reply and uses an atomic Linux no-clobber rename primitive with copy fallback disabled. The final inode must match the prepared temp inode before `ok` is possible. The parent directory is then `fsync`ed and the final byte length/SHA-256 are recorded. A crash after the prepared record but before or during body write therefore leaves a discoverable publication recovery anchor rather than an untracked body-bearing temporary.
-
-A crash after rename but before result emission is recoverable by `publication-status` from the inode witness. A destination that appears before the no-clobber commit remains untouched and yields `recovery_required` with the complete temp retained.
-
-## Gate B and first live use
-
-### Operator attestation record
-
-Half A requires a complete `gate-b-characterization.json` bound to the current runtime capability digests (`candidate_digest`, `build_digest`, `config_digest`, `gate_digest`) for the exact configured profile/CDP pair before proven non-delivery may be minted. Stale or unbound records are ignored.
-
-See command below under Gate B.
-
-
-Deterministic Gate-B coverage is in `scripts/toolchain/chatgpt-browser-turn.test.ts` and the review-regression companion `scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts`; both are run by the repository Vitest lanes plus:
-
-```bash
-npm run test:issue-964
-```
-
-For the exact candidate/profile/CDP that will be characterized, first query the capability surface and record the emitted `expected_binding` object:
-
-```bash
-npm run chatgpt-browser-turn -- capability \
-  --profile /absolute/path/to/automation-profile \
-  --cdp http://127.0.0.1:9222
-```
-
-The `candidate_digest`, `build_digest`, `config_digest`, and `gate_digest` in `expected_binding` are the Gate-B binding for that exact runtime candidate. `candidate_digest` covers the tracked TypeScript transport plus the reused `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs` verifier; `build_digest` additionally binds the exact Node version, platform, and architecture. `gate_digest` hashes the gate-bound test sources; it is a staleness binding only and is not an operator attestation input.
-
-Run one successful serialized existing-chat characterization turn on the exact profile/CDP. Witnessed `ok` turns establish or refresh **characterization evidence only**; they do not choose admission policy.
-
-After characterization, deliberately arm parallel admission when the exact binding and browser provenance still match:
-
-```bash
-npm run chatgpt-browser-turn -- capability \
+npm run chatgpt-browser-turn -- turn \
   --profile /absolute/path/to/automation-profile \
   --cdp http://127.0.0.1:9222 \
-  --admission-policy parallel
+  --input /absolute/path/to/message.txt \
+  --output /absolute/path/to/reply.txt \
+  --new-chat \
+  --project-url <configured-project-url>
 ```
 
-Query `capability` again and retain `characterization`, `admission.policy`, `admission.epoch`, and browser provenance as Gate-C telemetry. Aggregate `state: ok` means parallel policy plus compatible characterization/binding for telemetry only; it does not authorize profile-scope turn scheduling. Witness health is per-invocation and is not stored as durable policy. `--admission-policy` mutates stored bytes for operator/rollback use only.
+The package entrypoint also accepts the new direct shape without the `turn` word,
+but existing callers do not need to change their argv.
 
-## Driver diagnostics
+## State-light turn contract
 
-When a `turn` fails with `cause: driver_exception_before_send` or `cause: driver_exception_after_possible_delivery`, or a control command fails with `cause: command_failed`, the helper records a durable `driver-diagnostic/v1` JSON file under the configured-profile state area at `<state-root>/<configured_profile_key>/diagnostics/<identity>.json`. Turn failures key the file by `invocation_id`; control failures without a resolved profile key do not create state (stderr mirroring only when enabled). Each record contains the exception name, message, and stack plus `configured_profile_key`, `cause`, and `created_at`. Records may contain exception text and stay local to the operator machine; they are not emitted on stdout.
+One invocation owns one Browser-GPT exchange:
 
-The emitted `turn-result/v1` or `control-result/v1` may include `driver_diagnostic_id`, an identifier only, pointing at that record. Envelopes remain body-free: no prompt text, reply text, or exception text on stdout.
+1. validate the caller's stable input/output arguments and local browser/profile
+   preconditions;
+2. connect to the configured automation Chrome;
+3. open a **new dedicated tab owned by this invocation**, even when `--chat-url`
+   refers to an existing conversation;
+4. navigate to the requested conversation/project;
 
-Set `CHATGPT_BROWSER_TURN_DEBUG=1` to mirror the same diagnostic JSON line to stderr. With the variable unset, stdout and stderr match prior behavior byte-for-byte aside from the optional new result identifier field on stdout.
+**Dedicated-tab trade-off (Issue #1120).** Every canonical turn pays one extra cold
+`page.goto` compared with the pre-cutover shared-tab reuse model: the helper always
+opens a fresh owned tab instead of reusing an operator-visible ChatGPT tab. That
+removes shared-tab cleanup ambiguity at the cost of one additional navigation per
+invocation.
+5. snapshot and submit the exact caller prompt **once**;
+6. observe/poll only that owned tab until the final assistant node has page-level
+   completion UI, no visible generation/tool/continuation activity, and stable
+   final text across bounded reads, advancing continuation UI when needed;
+7. atomically publish the captured final reply;
+8. close only the invocation-owned tab and release the CDP client connection.
 
-Before the first real ChatGPT turn with a newly built candidate, the operator must run a live smoke against the dedicated automation profile. The live smoke must demonstrate at least:
+The input remains content-neutral. Existing stable-input validation and atomic
+publication primitives are reused; they do not become workflow admission state.
 
-1. one existing-chat success with a service-issued user-to-assistant causal witness and byte-verified publication;
-2. one fresh-chat success with canonical conversation identity;
-3. same-chat overlap serialized/refused without duplicate send;
-4. destination collision leaves external bytes untouched and produces the correct pre-send or post-delivery state;
-5. `status/list`, exact `clear`, opaque quarantine/tombstone, and `publication-status` remain usable after a forced interrupted run.
+### Page completion is sufficient
 
-Do not mint positive parallel capability evidence from a synthetic test alone. Characterization proceeds only after the serialized live success above, and every invocation must independently retain current witness availability until dispatch; provenance/binding drift is diagnostic, not an admission downgrade.
+The canonical path no longer requires service-terminal/network-witness evidence
+when the page already shows one attributable, final assistant reply. The helper
+requires its own exact user prompt to appear after the page baseline and requires
+page-level completion UI on the last assistant node while generation/tool/
+continuation activity is absent, then returns only that final eligible assistant
+node for the turn.
 
-## Retained recovery copy and rollback
+Intermediate/progress assistant nodes are not concatenated into the result and a
+stable non-empty intermediate node is not sufficient by itself. A continuation
+button may be clicked because it continues the same assistant response; it is not
+a second user-prompt send.
 
-Before first live use, choose and record an absolute recovery root outside the working tree. The canonical operator-local layout is the resolved home directory plus `.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>`; for example:
+If another/interleaved user turn appears after the invocation baseline, attribution
+is ambiguous and only that invocation fails/degrades as `foreign_activity`.
+Sibling Browser-GPT tabs remain independent.
 
-```bash
-RECOVERY_ROOT="$(realpath "$HOME")/.local/lib/orchestrator-pack/chatgpt-browser-turn-recovery/<candidate_digest>"
-printf '%s\n' "$RECOVERY_ROOT"
+## Send-once and retry boundary
+
+Inside one live invocation there is exactly one user-message send attempt. After
+the send boundary the helper only observes the same page. Fresh-conversation
+collision recovery follows the same discipline: a second send is allowed only on
+positive page-state evidence that the prior send did not land (no user message
+with the sent text, no conversation URL materialized, composer still holding the
+text). Ambiguous evidence or a landed send on a contended surface terminates the
+invocation locally; the caller decides whether to open a fresh chat.
+
+Slow generation,
+missing historical witness state, an elapsed observation threshold, or process-
+liveness uncertainty never authorizes a second send inside that invocation.
+
+`--timeout-ms` is a **soft post-send observation threshold**. If the helper still
+owns a reachable page after it elapses, the same invocation keeps polling that
+page at the configured low-frequency cadence; elapsed time alone neither closes
+the tab nor returns fresh-resend authorization. A fresh replacement is legal only
+when the process/page/chat is genuinely lost or another real local failure makes
+the owned turn unavailable.
+
+A genuinely lost/crashed process, tab, or chat may be replaced by a fresh
+invocation in a fresh chat. A rare duplicate recoverable GPT text request is an
+explicitly accepted Issue #1120 risk; preventing it is not worth a cross-agent
+admission/recovery protocol.
+
+## No create/review admission control plane
+
+The canonical `turn` path does **not** read or wait on:
+
+- `status/list` or `clear`;
+- capability or Gate-B characterization/admission policy;
+- `publication-status` as delivery/admission authority;
+- `possible_delivery`, `profile_wall`, quarantine/tombstone/orphan recovery state;
+- profile/conversation/task/Issue/PR mutexes, claims, queues, leases, or adoption
+  records.
+
+Old files and control verbs may remain reachable through the package entrypoint
+for diagnostics/rollback compatibility. They are not prerequisites, admission
+checks, completion checks, or resend authorization for create/review `turn`.
+Historical incompatible/recovery records therefore cannot block an otherwise
+healthy new Browser-GPT invocation.
+
+## Result and output
+
+`turn` emits one compact JSON `turn-result/v1` line. The state-light path uses the
+existing closed turn-state/exit-code contract where applicable and adds compact
+operational fields such as send count, poll count, navigation count, cleanup
+outcome, incident classes, and journal-write failure.
+
+`navigation_count` remains the sum of `goto_count` (`page.goto` calls) and
+`new_chat_click_count` (successful "New chat" activations) during the invocation.
+The split fields are emitted alongside `navigation_count` for compatibility. Retrospective incident journal rows may include the same
+counter when known.
+
+Typical state-light outcomes include:
+
+- `ok`;
+- `input_invalid` / `output_conflict`;
+- `login` / `quota` / `rate_limit` / `challenge` / `chrome_not_running` / `profile_mismatch` (product walls and profile blockers use **exit 12**; `rate_limit` is temporary request throttling, distinct from exhausted `quota`);
+- `send_failed`;
+- `ui_contract_mismatch` / `foreign_activity` (**exit 11**) / `driver_error` (**exit 13**).
+
+`stream_timeout` remains part of the shared legacy turn-state contract, but the
+state-light post-send path does not manufacture it merely because
+`--timeout-ms` elapsed while its owned page is still reachable.
+
+The final reply bytes are written through the existing atomic no-clobber
+publication primitive. Publication conflict is invocation-local; it does not
+create a profile/browser admission wall.
+
+## Tab lifetime and cleanup
+
+Every canonical turn creates a dedicated owned tab. This removes the old shared-
+tab cleanup ambiguity.
+
+- success closes that owned tab;
+- real pre-send/post-send failures close that owned tab when the process still has
+  it;
+- an elapsed soft observation threshold while the owned page remains reachable is
+  not a failure/cleanup boundary and does not close the tab;
+- close failure is a direct incident and is reported, but a reply already captured
+  successfully is not discarded because cleanup could not be confirmed;
+- sibling/foreign tabs are never helper cleanup targets;
+- disconnecting the Playwright CDP client never terminates the operator's Chrome.
+
+A process crash can of course prevent local cleanup. Later flows may progressively
+clean only tabs they can establish they own; they must not sweep arbitrary ChatGPT
+tabs.
+
+## Fresh-conversation prepare bounds and advisory walls
+
+Fresh `--new-chat` turns serialize the whole prepare+send critical section behind a
+mandatory profile send slot. Disabling that slot requires explicit opt-in plus a
+recorded reason env var; the legacy disable flag alone is not sufficient.
+
+Prepare attempts are capped (`STATE_LIGHT_FRESH_PREPARE_ATTEMPTS`, currently 3) with
+exponential backoff between attempts instead of hot-looping `page.goto`. A product
+wall observed during prepare returns the wall state immediately — no further
+navigation rounds for that invocation.
+
+The per-invocation navigation budget (`STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION`,
+currently 10) is a hard ceiling across the owned-tab goto, prepare surfaces, and
+collision-recovery prepares. Worst-case fresh-chat navigation is therefore
+statically bounded and small.
+
+When an invocation classifies `rate_limit`, `quota`, `challenge`, or `login`, it
+records a short-lived, profile-scoped advisory wall marker (fail-open; corrupted
+or expired markers are ignored). Sibling invocations consult that marker before
+navigating and return the wall state without loading pages. This is advisory only —
+not the pre-#1120 durable fail-closed blocker machinery.
+
+## Polling and long turns
+
+Initial dispatch observation may poll more frequently; after that, page reads are
+bounded and low-frequency. Repeated normal `waiting`/`generating` observations are
+not incident-journal rows. Crossing `--timeout-ms` with a still-reachable owned
+page simply continues this low-frequency polling; it is not a resend signal.
+
+PID, log growth, helper stdout timing, or a background shell job prove neither
+that ChatGPT is still generating nor that it has completed. Issue #1120 does not
+add a second direct-CDP inspector/watchdog. The direct-agent fallback/supervision
+policy is a separate follow-up.
+
+## Retrospective incident journal
+
+Unexpected directly observed Browser-GPT events append best-effort JSONL rows to:
+
+```text
+~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl
 ```
 
-Record the printed absolute path alongside the live characterization evidence. Preserve the same relative layout under that root and include:
+Compact rows may include timestamp, Issue/PR when known, surface, event class,
+observed symptom, action, invocation, and agent/runtime.
 
-- `scripts/chatgpt-browser-turn.ts`;
-- the complete `scripts/chatgpt-browser-turn/` directory;
-- `scripts/kernel/subprocess.ts`;
-- `.claude/skills/discuss-with-gpt/verify-cdp-owner.mjs`;
-- the exact Node 22 runtime used for the live candidate, or an operator-recorded reproducible installation reference;
-- the Playwright/Playwright-core package location and version used by `loadChromium`, or an operator-recorded reproducible installation reference for that exact compatible package.
+The journal is deliberately weak infrastructure:
 
-The verifier bytes are part of `candidate_digest`; changing them invalidates prior positive capability evidence. The external Playwright installation is not stored in helper state, so its resolved package location/version must be retained as operator evidence before live use. `status/list` and publication recovery remain browser-independent, but clearing a profile wall performs a live profile/UI readiness probe and therefore requires the verifier plus a compatible Playwright runtime.
+- append-only;
+- no read-before-turn dependency;
+- no mutex, deduplication, identity protocol, exactly-once guarantee, or recovery
+  state machine;
+- duplicate rows are acceptable;
+- append failure is reportable but cannot veto an already captured result or a
+  sibling invocation.
 
-Record SHA-256 digests for every retained first-party file and keep the recovery copy and runtime references until `status/list` returns no unresolved state and every relevant `publication-status` is terminal with no opaque quarantine or blocking tombstone.
+Normal waits do not create rows. Direct incidents must also be surfaced in the
+current flow-manager/agent report so operators do not need to inspect raw JSONL to
+understand the current run.
 
-On rollback, first quiesce new invocations and stop only exact matching browser-turn processes. Do not delete or timer-clear possible-delivery state. Use the retained digest-pinned copy for `status/list`, `publication-status`, and exact `clear`/adjudication operations until all pre-rollback incidents are resolved. Preserve unreadable records, tombstones, publication receipts, and complete temporary replies until their exact recovery path is finished.
+## Legacy implementation and control commands
+
+`scripts/chatgpt-browser-turn.ts` plus older state/recovery modules remain in the
+repository for compatibility and rollback evidence. The package entrypoint routes
+`turn` to `state-light-turn.ts`; non-turn legacy control verbs may delegate to the
+old CLI implementation.
+
+Do not copy old Gate-B, possible-delivery, profile-wall, claim/lock, or clear-before-
+retry procedures into create/review skills or call sites. Their continued presence
+on disk is not live authority.
+
+### Historical Gate-B diagnostics (non-authoritative)
+
+The pre-#1120 implementation and its regression suite retain the original
+`gate-b-characterization` diagnostic vocabulary and probe artifacts. In
+particular, historical characterization covered **service-worker-owned HTTP** and
+**worker/secondary-target outbound WebSocket** observations and used
+`dispatch_request_not_issued` as one legacy non-delivery outcome.
+
+Those probes remain useful for regression/forensics and for rollback compatibility.
+They do **not** gate the canonical state-light `turn`, do not grant resend
+authority, and must not be consulted by create-issue-draft or pack-review before a
+healthy new invocation.
+
+## Verification
+
+Focused Issue #1120 tests cover:
+
+- page-only final reply completion with page-level final/in-progress discrimination;
+- a stable intermediate/tool-progress node surviving multiple reads before the
+  later final node, with only the final node published;
+- generating/continuation intermediate state;
+- foreign/interleaved activity;
+- mandatory own-prompt attribution after baseline;
+- dedicated-tab creation and one send mutation branch;
+- a reachable owned page continuing past the soft timeout without resend or
+  timeout-triggered close;
+- absence of old admission/recovery calls from the state-light module;
+- append-only/non-authoritative recurrence journal behavior;
+- absence of a second inspector/watchdog.
+
+Repository CI additionally runs Node 22 policy, strict TypeScript, foundation
+Vitest, scope/declaration checks, and current-head review gates. Real automation-
+Chrome smoke remains necessary for browser/UI behavior that cannot be proven by
+unit tests alone.

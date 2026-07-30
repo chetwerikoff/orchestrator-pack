@@ -48,41 +48,41 @@ Before merge or declaring review clean, run `.\scripts\orchestrator-diagnose.ps1
 
 1. **Set** `PACK_REVIEWER=gpt` in the environment AO inherits (user profile,
    service unit, or shell before `ao start`).
-
 2. **Configure browser transport** for the operator machine:
    - `PACK_GPT_BROWSER_PROFILE` — absolute path to the dedicated automation profile
    - `PACK_GPT_BROWSER_CDP` — CDP endpoint (default `http://127.0.0.1:9222`)
    - `PACK_GPT_BROWSER_CHAT_URL` or `PACK_GPT_BROWSER_PROJECT_URL` — target chat or project
-
 3. **Point live YAML** at the reviewer-agnostic entrypoint (`invoke-pack-review.ps1`).
-
 4. **Restart AO** after selector or YAML edits.
-
 5. **Smoke one review** (optional) with `PACK_REVIEWER=gpt`; on failure,
    `terminationReason` should reference `run-pack-review-gpt.ts`. GPT failure does
    **not** auto-failover to Codex.
+
+Browser-GPT pack review now uses the Issue #1120 state-light `turn` path: one
+fresh owned tab per invocation, one user-prompt send, page/DOM completion, and
+invocation-local failure. Do not run `status/list`, `clear`, capability/Gate-B,
+`publication-status`, or possible-delivery recovery before retrying a recoverable
+review turn. If a page/process/chat is genuinely lost, start a fresh invocation;
+a rare duplicate recoverable GPT review prompt is accepted. The helper never
+closes foreign tabs and old control state cannot admission-block a healthy review.
 
 ## Switch to Codex
 
 1. **Set** `PACK_REVIEWER=codex` in the environment AO inherits (user profile,
    service unit, or shell before `ao start`).
-
 2. **Point live YAML** at the reviewer-agnostic entrypoint if still on legacy
    per-wrapper `REVIEW_COMMAND` lines — copy **NAMED REVIEW_COMMAND** from
    `agent-orchestrator.yaml.example` (`invoke-pack-review.ps1` only).
-
 3. **Restart AO** so rules reload:
    ```powershell
    ao stop
    ao start orchestrator-pack
    ```
-
 4. **Preflight Codex**
    - `codex --version` on PATH
    - No active usage limit (`terminationReason` on failed runs)
    - Windows: reviewer sandbox allows shell spawns — see
      [migration_notes.md](migration_notes.md) § Issue #60
-
 5. **Smoke one review** (optional):
    ```powershell
    $env:PACK_REVIEWER = 'codex'
@@ -94,19 +94,14 @@ Before merge or declaring review clean, run `.\scripts\orchestrator-diagnose.ps1
 ## Switch to Claude Sonnet
 
 1. **Set** `PACK_REVIEWER=claude`.
-
 2. **Ensure** live **REVIEW_COMMAND** uses `invoke-pack-review.ps1` (not
    `run-pack-review-claude.ps1` as REVIEW_COMMAND).
-
 3. **Do not** embed `"` or inline `--command …` inside `orchestratorRules:` — see
    [migration_notes.md](migration_notes.md) § Issue #55.
-
 4. **Restart AO** (same as Codex).
-
 5. **Preflight Claude**
    - `claude --version` on PATH
    - Default model in wrapper: `claude-sonnet-4-6`
-
 6. **Smoke one review** — same `--command` as above with `PACK_REVIEWER=claude`;
    `terminationReason` on failure should reference `run-pack-review-claude.ps1`.
 
@@ -132,7 +127,7 @@ not use `.ao/` in **REVIEW_COMMAND**.
 |---------|----------------|--------|
 | Review exits immediately, PACK_REVIEWER message | Selector unset/invalid in all layers | Set User or process `PACK_REVIEWER` to `gpt`, `codex`, or `claude` |
 | Wrong model ran | Selector not set before `ao start` | Fix env, restart AO; check `terminationReason` vs `PACK_REVIEWER` |
-| GPT browser turn blocked/failed | Profile incidents or transport ambiguity | Run `npm run chatgpt-browser-turn -- status/list`; resolve `possible_delivery` before retry |
+| GPT browser turn blocked/failed | Invocation-local browser/UI/quota/attribution failure | Read the compact turn result. Fix the local blocker or start a fresh review invocation when the old page/chat is genuinely lost; do not clear legacy helper state |
 | Strict gate selector-mismatch | Drift or wrong env | Align `PACK_REVIEWER` with wrapper named in `terminationReason` |
 | Codex usage limit | Quota | Set `PACK_REVIEWER=claude` or `gpt` temporarily |
 | Orchestrator never picks new reviewer | No restart | `ao stop` / `ao start` after selector change |

@@ -5,6 +5,7 @@ export const TURN_STATES = [
   'ok',
   'input_invalid',
   'quota',
+  'rate_limit',
   'challenge',
   'login',
   'stream_timeout',
@@ -155,7 +156,7 @@ export function turnExitCode(state: TurnState): number {
   if (state === 'driver_error') return 13;
   if (state === 'incompatible_record') return 14;
   if (['stream_timeout', 'no_reply', 'recovery_required', 'foreign_activity', 'conversation_busy'].includes(state)) return 11;
-  if (['quota', 'challenge', 'login', 'chrome_not_running', 'profile_mismatch', 'orphaned_fresh_turn', 'profile_busy'].includes(state)) return 12;
+  if (['quota', 'rate_limit', 'challenge', 'login', 'chrome_not_running', 'profile_mismatch', 'orphaned_fresh_turn', 'profile_busy'].includes(state)) return 12;
   return 10;
 }
 

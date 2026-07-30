@@ -103,7 +103,9 @@
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.test.ts": "light",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy",
-    "scripts/worker-smoke.test.ts": "light"
+    "scripts/worker-smoke.test.ts": "light",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts": "light",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,

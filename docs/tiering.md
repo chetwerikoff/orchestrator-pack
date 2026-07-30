@@ -72,49 +72,68 @@ captures, chat references, finding-disposition ledger, and related audit state
 remain outside the repository. Pre-existing `docs/issues_drafts/**` and
 `docs/issue_queue_index.md` content is legacy prior art, not the live artifact for
 new work. `.claude/skills/create-issue-draft/SKILL.md` owns the exact procedure and
-out-of-repository layout.
+out-of-repository layout. A historical author/task-chat URL is not required to
+continue an existing Issue: a fresh author continuation chat may be reconstructed
+from the live Issue and prior review context when needed.
 
 ### Guard-alignment prerequisite (#1030 intent)
 
 Issue #1027's ordered #1030 prerequisite is the **guard-alignment** requirement:
 landed `stage-completeness` and `finding-ledger-guard` behavior must match the
 fixed topology below (terminal GPT `architectural` as M5 anchor; T1/T2 with no
-`architectural-lens`; T3 with Claude pre-terminal then terminal GPT). When that
-behavior is present — including via #1062 / PR #1073 — the prerequisite is
-**satisfied** even if live Issue #1030 still describes superseded r03 ordering.
-Policy acceptance does not require re-syncing the stale #1030 Issue body.
+`architectural-lens`; T3 with at least one `competitive`, exactly one later
+`architectural-review`, then Claude pre-terminal and terminal GPT). When that
+behavior is present — including via #1062 / PR #1073 plus the #1120 topology
+cutover — the prerequisite is satisfied even if live Issue #1030 still describes
+superseded ordering. Policy acceptance does not require re-syncing the stale #1030
+Issue body.
 
 ### Per-tier pipeline (ceilings, not quotas)
 
 The flow-manager drives the full cycle through acceptance or a bounded blocked
 outcome. There is no mandatory stop-and-hand-off to an architect outside the
-stages below. Browser GPT is the only review engine in create-issue-draft; Codex
-may be the operator-selected flow-manager but is not a create-flow reviewer or
-review-engine substitute.
+stages below. Browser GPT is the only review engine in create-issue-draft;
+Codex has no create-flow reviewer role.
 
 | Tier | Review sequence | Pre-lens #975 | Terminal lens | Tier downgrade |
 |------|-----------------|---------------|---------------|----------------|
-| **T1** | Exactly **one** independent browser-GPT `architectural` lens (not the task chat) → acceptance | **No** | Same GPT lens owns aggregate cut + M5 anchor | **None** |
-| **T2** | Exactly **one** independent browser-GPT `architectural` lens → acceptance. **No** competitive create-flow stage | **No** | Same GPT lens owns aggregate cut + M5 anchor | **None** |
-| **T3** | Selected **pre-lens** stages (e.g. competitive when selected) → **pre-lens #975 guard** → exactly **one** full Claude `architectural-lens` (or valid `claude-unavailable` skip) → author dispositions/fixes → exactly **one** terminal independent browser-GPT `architectural` lens → acceptance | **Yes** (after pre-lens stages terminal) | Claude owns **pre-terminal** aggregate cut; terminal GPT owns **final** aggregate cut + M5 anchor | **T3→T2 only**, at Claude lens |
+| **T1** | Exactly **one** independent browser-GPT `architectural` lens (not the author chat) → acceptance | **No** | Same GPT lens owns aggregate cut + M5 anchor | **None** |
+| **T2** | Exactly **one** independent browser-GPT `architectural` lens → acceptance. **No** competitive or `architectural-review` create-flow stage | **No** | Same GPT lens owns aggregate cut + M5 anchor | **None** |
+| **T3** | **1–3** fresh `competitive` passes → exactly **one** fresh `architectural-review` → **pre-lens #975 guard** → exactly **one** full Claude `architectural-lens` (or valid `claude-unavailable` skip) → author dispositions/fixes → exactly **one** terminal independent browser-GPT `architectural` lens → acceptance | **Yes** (after competitive + `architectural-review` are terminal) | Claude owns **pre-terminal** aggregate cut; terminal GPT owns **final** aggregate cut + M5 anchor | **T3→T2 only**, at Claude lens |
+
+The canonical T3 business order is therefore:
+
+```text
+competitive → architectural-review → Claude lens → GPT lens
+```
+
+The counted capture-token order is:
+
+```text
+competitive → architectural-review → architectural-lens (or valid Claude-unavailable anchor) → architectural
+```
 
 There is **no** `architectural-final` stage. Historical captures with that name
 are audit-only.
 
-**Reviewer GPT chats are distinct from the GPT author task chat.** Competitive
-passes use a fresh browser chat per pass when selected. The terminal GPT
-`architectural` lens uses its own independent fresh browser chat (never the task
-chat or a competitive review chat).
+**Reviewer GPT chats are distinct from the current GPT author chat.** Competitive
+passes use a fresh browser chat per pass. `architectural-review` uses exactly one
+fresh independent browser chat after competitive. The terminal GPT `architectural`
+lens uses its own independent fresh browser chat (never the author,
+`competitive`, or `architectural-review` chat).
 
-**Shared lens rubric.** Every GPT lens and the Claude `architectural-lens` apply
-the same four simplification questions and review-economics contract from
-`prompts/codex_draft_review_prompt.md` (rubric source only — Codex is not invoked).
+**Shared lens rubric.** Every governed Browser-GPT review and the Claude
+`architectural-lens` apply the review-economics contract and simplification rubric
+from `prompts/codex_draft_review_prompt.md` (rubric source only — Codex is not
+invoked as a create-flow reviewer).
 
 ### Roles
 
-- **Browser GPT author.** One task chat owns authoring, every content fix, direct
-  edits to the live GitHub Issue, every finding disposition, M3 author activation,
-  and the M4 mechanism inventory. Reviewer findings are proposals to this author.
+- **Browser GPT author.** The current author chat owns authoring, every content
+  fix, direct edits to the live GitHub Issue, every finding disposition, M3 author
+  activation, and the M4 mechanism inventory. Reviewer findings are proposals to
+  this author. The current author chat may be a fresh continuation reconstructed
+  from the live Issue when historical chat state is unavailable.
 - **Flow-manager (OpenCode default when no runtime is selected; capable operator-selected runtime such as Cursor or Codex allowed).** One current
   flow-manager per task owns the operational
   cycle end-to-end: live Issue pulls, rubric/guard application, fixed per-tier
@@ -131,9 +150,14 @@ the same four simplification questions and review-economics contract from
   when required, the **pre-terminal independent aggregate cut**, and one
   sanctioned adjacent `T3→T2` downstep. Never runs after the terminal GPT lens.
   Never operates routine browser turns or maintains the ledger.
-- **Browser GPT reviewer lenses.** Independent review chats only. Terminal
+- **Browser GPT reviewer lenses.** Independent review chats only. T3
+  `competitive` and `architectural-review` are pre-Claude reviewer stages;
+  `architectural-review` is not M5 and has no tier-demotion authority. Terminal
   `architectural` owns final aggregate cut for acceptance on every tier and is
-  the M5 anchor at final acceptance. Terminal GPT may authorize one adjacent downstep (`T3→T2` or `T2→T1`) per authoritative capture; sequential `T3→T2→T1` requires two separately authorized adjacent steps on distinct source revisions.
+  the M5 anchor at final acceptance. Terminal GPT may authorize one adjacent
+  downstep (`T3→T2` or `T2→T1`) per authoritative capture; sequential
+  `T3→T2→T1` requires two separately authorized adjacent steps on distinct source
+  revisions.
 
 **Browser outage.** Required GPT work stays incomplete. No engine substitution.
 
@@ -185,8 +209,8 @@ non-empty rationale for every source receipt rubric driver. Existing frozen
 compatibility/historical identities retain the pre-#973 single-consumed-event
 semantics; fresh-chain rules do not reinterpret their evidence.
 
-After the task chat applies the authorized tier/title/fence/body correction and the flow-manager
-re-pulls it as a new immutable revision:
+After the current author chat applies the authorized tier/title/fence/body
+correction and the flow-manager re-pulls it as a new immutable revision:
 
 1. bind one `tier-demotion-revalidation/v1` to the event, exact candidate
    revision, transition, current receipt/driver decision, and clear L4 result;
@@ -215,8 +239,8 @@ not restate). T3-critical adds **only** these non-waivable Issue-body floors:
 - realistic acceptance criteria and matching verification for every material
   crash, race, or stale-state failure class.
 
-There is **no** mandatory independent Codex addition. Codex outage substitution
-does not apply to create-issue-draft.
+There is **no** mandatory independent Codex review addition. Codex outage
+substitution does not apply to create-issue-draft.
 
 ### Review economics (M1–M5) — #975
 
@@ -245,7 +269,7 @@ self-activating addressed-only authority.
 | Context | Rule |
 |---------|------|
 | **T1 / T2** | No architect contest path. Valid non-zero-signal author activation is independently authoritative. Absent or invalid activation uses ordinary M1 disposition — **not** `architectPending`. |
-| **T3 pre-Claude** | Retains Claude M3: zero-signal, absent activation, or contest → `architectPending` until the Claude `architectural-lens` adjudicates. |
+| **T3 pre-Claude** | Includes both `competitive` and `architectural-review`. Retains Claude M3: zero-signal, absent activation, or contest → `architectPending` until the Claude `architectural-lens` adjudicates. |
 | **Protected nomination first emitted in terminal GPT `architectural`** | No post-GPT architect path. Valid author activation is authoritative when uncontested; otherwise ordinary M1 — never `architectPending`. |
 
 Only a Claude `architectural-lens` capture may create/withdraw a contest on T3.
@@ -273,9 +297,10 @@ shapes:
 2. tokened cut candidate(s) → no retroactive `SIMPLIFICATION_CLEAN`; each candidate
    must be ledger-mapped and dispositioned or legitimately resolved under M3.
 
-For **T3**, the pre-lens #975 guard runs only after selected pre-lens stages
-(e.g. competitive) are legally terminal. The terminal GPT `architectural` lens is
-the M5 anchor at final acceptance.
+For **T3**, the pre-lens #975 guard runs only after required `competitive` and
+`architectural-review` stages are legally terminal. `architectural-review` uses
+the same governed economics/finding schema but is **not** the final M5 anchor.
+The terminal GPT `architectural` lens remains the M5 anchor at final acceptance.
 
 Pre-adoption anchors cannot satisfy final acceptance. Re-enter a governed
 post-adoption pre-lens stage when needed; do not mint synthetic clean-token passes.
@@ -286,8 +311,9 @@ post-adoption pre-lens stage when needed; do not mint synthetic clean-token pass
 #975 phase. The #975 flow calls the same guard in two bounded phases:
 
 - **`pre-lens`** — **T3 only.** After existing stage/completion authority declares
-  the pre-lens reviewer sequence legally terminal; enforces post-adoption M2 and
-  pre-terminal M5 shape. Never certifies acceptance.
+  required competitive + `architectural-review` legally terminal; enforces
+  post-adoption M2 and pre-terminal simplification shape. Never certifies
+  acceptance.
 - **`final-acceptance`** — all tiers at acceptance; requires the terminal GPT
   `architectural` M5 anchor, applicable M2/M3 evidence, and current
   revision-bound outcomes.
@@ -299,30 +325,34 @@ simulates it. A counted Claude lens requires a separate Claude Code CLI invocati
 with co-located producing-run evidence. When Claude is observably unavailable
 (quota, rate-limit, provider-unavailable, or CLI-unavailable), record
 `architect-lens-stage-waiver.json` with `reason: claude-unavailable`, strict ISO
-`recorded-at`, closed `unavailability`, and `after-pass` set to the highest
-completed pre-Claude pass index. The skip is audit-only: it does not create
+`recorded-at`, closed `unavailability`, and `after-pass` set strictly after the
+completed `architectural-review` pass. The skip is audit-only: it does not create
 `architectural-lens` provenance, M3 authority, or `T3→T2` demotion authority.
 The terminal browser-GPT `architectural` capture remains mandatory after a valid
 skip. Stage-completeness accepts `Claude lens → terminal GPT` or
 `valid claude-unavailable skip → terminal GPT`; missing both fails closed.
 
-### Architectural-stage goals (Claude T3 lens and terminal GPT)
+### Architectural-stage goals (T3 architectural-review, Claude lens, and terminal GPT)
 
-Both `architectural-lens` and `architectural` have four mandatory goals, in this
-exact order:
+`architectural-review`, `architectural-lens`, and terminal `architectural` use the
+ordered contradiction/feasibility/simplification/missed-gap discipline, with
+stage-specific authority preserved. Claude and terminal GPT have four mandatory
+goals in this exact order:
 
-1. **Contradiction check** — fix contradictions via the task-chat fix path.
+1. **Contradiction check** — fix contradictions via the current author-chat path.
 2. **Feasibility check** — verify buildability with live probes where possible.
 3. **Cut ALL overengineering — PRIMARY goal** — a forced `keep|cut` verdict for
    every major mechanism; `keep` must cite a surviving contract, risk, or
    acceptance need rather than circularly citing an earlier finding.
-4. **Find what was missed** — route required corrections through the task-chat fix
-   path.
+4. **Find what was missed** — route required corrections through the current
+   author-chat fix path.
 
-Each architectural-stage lens receives the exact current Issue revision,
+Each architectural-stage review receives the exact current Issue revision,
 applicable reject partition, current M3 state, latest author-owned M4 inventory,
-and applicable economics state. Competitive review retains only the shared
-four-question simplification/economics rubric.
+and applicable economics state. `architectural-review` remains pre-Claude and has
+neither M5 nor tier-demotion authority. Competitive review retains the shared
+four-question simplification/economics rubric without becoming an architectural
+or terminal authority.
 
 **Staleness / review-episode binding.** A Claude `architectural-lens` capture is
 bound to the **source Issue revision** it reviewed and remains valid pre-terminal
@@ -336,12 +366,14 @@ mechanical/body/tier/ledger acceptance checks — no second GPT lens.
 
 ### Terminal GPT architectural lens (all tiers)
 
-Runs in an **independent fresh browser-GPT chat** (never the task chat). Applies
-the shared four-question rubric and review-economics contract. On **T1/T2** this
-lens is the sole reviewer stage and owns aggregate cut + M5. On **T3** it owns
-**final** aggregate cut + M5 after Claude and author fixes.
+Runs in an **independent fresh browser-GPT chat** (never the current author chat).
+Applies the shared four-question rubric and review-economics contract. On
+**T1/T2** this lens is the sole reviewer stage and owns aggregate cut + M5. On
+**T3** it owns **final** aggregate cut + M5 after `competitive`,
+`architectural-review`, Claude, and author fixes.
 
-Terminal GPT may authorize bounded adjacent tier downsteps (`T3→T2` or `T2→T1`) with narrow same-chat revalidation; Claude retains `T3→T2` authority.
+Terminal GPT may authorize bounded adjacent tier downsteps (`T3→T2` or `T2→T1`)
+with narrow same-chat revalidation; Claude retains `T3→T2` authority.
 
 Terminal GPT also has full current-revision M3 authority. Authoritative
 `m3-protected:` records fold in capture/pass chronology across Claude and GPT, so
@@ -360,8 +392,10 @@ excess / is missing.
 ### Explicit wrappers
 
 - **`discuss-with-gpt` brief-only wrapper** — routes into `create-issue-draft` and
-  floors effective tier at **T2**; it does **not** add a competitive create-flow
-  stage beyond the single terminal GPT `architectural` lens.
+- **`discuss-with-gpt` brief-only wrapper** — routes into `create-issue-draft` and
+  floors effective tier at **T2**; it does **not** add a competitive or
+  `architectural-review` create-flow stage beyond the single terminal GPT
+  `architectural` lens.
 - **`adversarial-draft-review`** — standalone Codex challenge only; **not** a
   create-flow review stage. An explicit Codex flow-manager selection still routes
   through `create-issue-draft`.

@@ -506,6 +506,7 @@ describe('issue 964 normative terminal-state matrix', () => {
     { state: 'ui_contract_mismatch', exit: 10, scope: 'invocation', incident: 'none', unblock: 'compatible-ui-evidence' },
     { state: 'output_conflict', exit: 10, scope: 'invocation', incident: 'none', unblock: 'distinct-destination' },
     { state: 'quota', exit: 12, scope: 'profile', incident: 'wall', unblock: 'positive-ready-probe-plus-clear' },
+    { state: 'rate_limit', exit: 12, scope: 'invocation', incident: 'wall', unblock: 'wait-for-throttle-window' },
     { state: 'challenge', exit: 12, scope: 'profile', incident: 'wall', unblock: 'positive-ready-probe-plus-clear' },
     { state: 'login', exit: 12, scope: 'profile', incident: 'wall', unblock: 'positive-ready-probe-plus-clear' },
     { state: 'chrome_not_running', exit: 12, scope: 'profile', incident: 'wall', unblock: 'positive-profile-verification-plus-clear' },

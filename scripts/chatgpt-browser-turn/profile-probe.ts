@@ -9,7 +9,7 @@ import {
 
 export interface ProfileReadyProbe {
   readonly ready: boolean;
-  readonly state: 'ready' | 'chrome_not_running' | 'profile_mismatch' | 'quota' | 'challenge' | 'login' | 'ui_contract_mismatch' | 'driver_error';
+  readonly state: 'ready' | 'chrome_not_running' | 'profile_mismatch' | 'quota' | 'rate_limit' | 'challenge' | 'login' | 'ui_contract_mismatch' | 'driver_error';
   readonly cause: string;
 }
 

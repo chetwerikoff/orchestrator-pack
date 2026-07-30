@@ -1,0 +1,67 @@
+{
+  "issue_number": 1120,
+  "iteration_id": "chat-executor",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-07-29T11:26:36.000Z",
+  "baseline": {
+    "commit_sha": "6e4f292b852507038781251c045ef188a8e5f3d6",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:9f648f733d78cdb9602be22b0382abf7bde44b1ce046f9ccaed8d8b65300f722"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".claude/skills/discuss-with-gpt/SKILL.md",
+    ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/reviewer-switch-runbook.md",
+    "docs/tiering.md",
+    "package.json",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/profile-probe.ts",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/stage-completeness-guard.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:3ced3d53b340ccbeeac333ac34a5e0a2079f7bd34bed7d4a74a9978f35dea9a6",
+      "new_active_scope_hash": "sha256:9f648f733d78cdb9602be22b0382abf7bde44b1ce046f9ccaed8d8b65300f722",
+      "changed": {
+        "added": [
+          "scripts/chatgpt-browser-turn.ts",
+          "scripts/chatgpt-browser-turn/contracts.ts",
+          "scripts/chatgpt-browser-turn/profile-probe.ts",
+          "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+          "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
+          "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+          "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+          "scripts/lib/vitest-pre-topology-measurement.mjs",
+          "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
+          "scripts/toolchain/chatgpt-browser-turn.test.ts",
+          "scripts/vitest-ci-lanes.config.json"
+        ],
+        "removed": []
+      },
+      "reason": "extend scope for rate-limit wall plumbing and review-fixes tests",
+      "actor": "local",
+      "timestamp": "2026-07-30T02:42:00.000Z",
+      "applied": true
+    }
+  ]
+}
