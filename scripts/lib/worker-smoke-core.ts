@@ -7,10 +7,158 @@ import {
   parseSmokeTestPlan,
   resolveSmokeRequirement,
 } from '../draft-discipline.mjs';
+import {
+  isOrcaSmokeControlPlaneCode,
+  type OrcaLocalOutcomeCategory,
+  type OrcaOperationName,
+  type OrcaSmokeControlPlaneCode,
+} from './orca-cli.ts';
 
 export { checkSmokeTestPlan, parseSmokeTestPlan, resolveSmokeRequirement };
 
 export type SmokeResult = 'PASS' | 'FAIL' | 'BLOCKED';
+
+export type SmokePhaseControlPlaneCause =
+  | 'orca_control_plane_unavailable_preflight'
+  | 'orca_control_plane_lost_mid_smoke';
+
+export interface SmokeControlPlaneDiagnostic {
+  cause: SmokePhaseControlPlaneCause;
+  evidence: string[];
+  remediation: string;
+}
+
+const SMOKE_PREFLIGHT_OPERATIONS = ['worktree_current', 'terminal_create'] as const;
+const SMOKE_MID_OPERATIONS = [
+  'terminal_send',
+  'terminal_read',
+  'terminal_submit',
+  'terminal_close',
+] as const;
+const SMOKE_PREFLIGHT_OUTCOMES = [
+  'process_launch_failed',
+  'empty_stdout',
+  'invalid_json',
+] as const;
+
+export const SMOKE_CONTROL_PLANE_REMEDIATION = {
+  orca_control_plane_unavailable_preflight:
+    'Verify that Orca is running and the CLI is available, then rerun worker smoke manually.',
+  orca_control_plane_lost_mid_smoke:
+    'Restart Orca, then rerun worker smoke manually.',
+} as const satisfies Record<SmokePhaseControlPlaneCause, string>;
+
+export function isSmokePhaseControlPlaneCause(
+  value: string | undefined,
+): value is SmokePhaseControlPlaneCause {
+  return value === 'orca_control_plane_unavailable_preflight'
+    || value === 'orca_control_plane_lost_mid_smoke';
+}
+
+function utf8Bytes(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
+}
+
+export function createSmokeControlPlaneDiagnostic(input: {
+  terminalAcquired: boolean;
+  operation?: OrcaOperationName;
+  outcomeCategory?: OrcaLocalOutcomeCategory;
+  controlPlaneCode?: string;
+}): SmokeControlPlaneDiagnostic | undefined {
+  if (
+    !input.terminalAcquired
+    && input.operation
+    && (SMOKE_PREFLIGHT_OPERATIONS as readonly string[]).includes(input.operation)
+    && input.outcomeCategory
+    && (SMOKE_PREFLIGHT_OUTCOMES as readonly string[]).includes(input.outcomeCategory)
+  ) {
+    return {
+      cause: 'orca_control_plane_unavailable_preflight',
+      evidence: [
+        `operation=${input.operation}`,
+        `outcome=${input.outcomeCategory}`,
+      ],
+      remediation: SMOKE_CONTROL_PLANE_REMEDIATION.orca_control_plane_unavailable_preflight,
+    };
+  }
+
+  if (
+    input.terminalAcquired
+    && input.operation
+    && (SMOKE_MID_OPERATIONS as readonly string[]).includes(input.operation)
+    && input.outcomeCategory === 'recognized_control_plane_code'
+    && isOrcaSmokeControlPlaneCode(input.controlPlaneCode)
+  ) {
+    return {
+      cause: 'orca_control_plane_lost_mid_smoke',
+      evidence: [
+        `operation=${input.operation}`,
+        'outcome=recognized_control_plane_code',
+        `control_plane_code=${input.controlPlaneCode}`,
+      ],
+      remediation: SMOKE_CONTROL_PLANE_REMEDIATION.orca_control_plane_lost_mid_smoke,
+    };
+  }
+  return undefined;
+}
+
+export function normalizeSmokeControlPlaneDiagnostic(
+  input: unknown,
+): { ok: true; diagnostic: SmokeControlPlaneDiagnostic } | { ok: false; reason: string } {
+  if (!input || typeof input !== 'object') {
+    return { ok: false, reason: 'control_plane_diagnostic_not_object' };
+  }
+  const record = input as {
+    cause?: unknown;
+    evidence?: unknown;
+    remediation?: unknown;
+  };
+  const cause = String(record.cause ?? '').trim();
+  const evidence = Array.isArray(record.evidence)
+    ? record.evidence.map((entry) => String(entry))
+    : [];
+  const remediation = String(record.remediation ?? '');
+  if (!isSmokePhaseControlPlaneCause(cause)) {
+    return { ok: false, reason: 'control_plane_diagnostic_cause_invalid' };
+  }
+  if (evidence.length === 0 || evidence.length > 3) {
+    return { ok: false, reason: 'control_plane_diagnostic_evidence_count_invalid' };
+  }
+  if (evidence.some((entry) => utf8Bytes(entry) > 256)) {
+    return { ok: false, reason: 'control_plane_diagnostic_evidence_too_large' };
+  }
+  if (utf8Bytes(remediation) > 256) {
+    return { ok: false, reason: 'control_plane_diagnostic_remediation_too_large' };
+  }
+
+  const parsed = new Map<string, string>();
+  for (const entry of evidence) {
+    const match = entry.match(/^(operation|outcome|control_plane_code)=([a-z_]+)$/u);
+    if (!match || parsed.has(match[1])) {
+      return { ok: false, reason: 'control_plane_diagnostic_evidence_noncanonical' };
+    }
+    parsed.set(match[1], match[2]);
+  }
+
+  const expected = createSmokeControlPlaneDiagnostic({
+    terminalAcquired: cause === 'orca_control_plane_lost_mid_smoke',
+    operation: parsed.get('operation') as OrcaOperationName | undefined,
+    outcomeCategory: parsed.get('outcome') as OrcaLocalOutcomeCategory | undefined,
+    controlPlaneCode: parsed.get('control_plane_code'),
+  });
+  if (!expected) {
+    return { ok: false, reason: 'control_plane_diagnostic_evidence_unsupported' };
+  }
+  if (
+    expected.cause !== cause
+    || expected.remediation !== remediation
+    || expected.evidence.length !== evidence.length
+    || expected.evidence.some((entry, index) => entry !== evidence[index])
+  ) {
+    return { ok: false, reason: 'control_plane_diagnostic_payload_mismatch' };
+  }
+  return { ok: true, diagnostic: expected };
+}
 
 export interface SmokeScenario {
   action: string;
@@ -42,6 +190,7 @@ export interface SmokeReport {
   orcaExecutable?: string;
   terminalHandle?: string;
   nonPassCause?: SmokeNonPassCause;
+  controlPlaneDiagnostic?: SmokeControlPlaneDiagnostic;
 }
 
 export const SMOKE_REPORT_MARKER = 'pack-worker-smoke-report/v1';
@@ -271,7 +420,7 @@ function normalizeOrcaWrappedSmokeReportBody(body: string): string {
     if (!trimmed) {
       continue;
     }
-    const isTopLevelField = /^(result|tracked-files-unmodified|environment-notes|limitations|scenarios|producer|orca-executable|terminal-handle|terminal-cleanup|non-pass-cause):/iu
+    const isTopLevelField = /^(result|tracked-files-unmodified|environment-notes|limitations|scenarios|producer|orca-executable|terminal-handle|terminal-cleanup|non-pass-cause|control-plane-cause|control-plane-evidence|control-plane-remediation):/iu
       .test(trimmed);
     const isScenario = /^-\s/.test(trimmed);
     if (out.length === 0 || isTopLevelField || isScenario) {
@@ -355,6 +504,26 @@ function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
+  const nonPassCauseRaw = String(fields['non-pass-cause'] ?? '').trim();
+
+  const diagnosticCause = String(fields['control-plane-cause'] ?? '').trim();
+  const diagnosticEvidenceRaw = String(fields['control-plane-evidence'] ?? '').trim();
+  const diagnosticRemediation = String(fields['control-plane-remediation'] ?? '');
+  let controlPlaneDiagnostic: SmokeControlPlaneDiagnostic | undefined;
+  if (diagnosticCause || diagnosticEvidenceRaw || diagnosticRemediation) {
+    const normalizedDiagnostic = normalizeSmokeControlPlaneDiagnostic({
+      cause: diagnosticCause,
+      evidence: diagnosticEvidenceRaw
+        .split(';')
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+      remediation: diagnosticRemediation,
+    });
+    if (!normalizedDiagnostic.ok) {
+      return null;
+    }
+    controlPlaneDiagnostic = normalizedDiagnostic.diagnostic;
+  }
 
   return {
     result: result as SmokeResult,
@@ -366,6 +535,8 @@ function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
     producer: String(fields.producer ?? '').trim() || undefined,
     orcaExecutable: String(fields['orca-executable'] ?? fields['orca-cli'] ?? '').trim() || undefined,
     terminalHandle: String(fields['terminal-handle'] ?? '').trim() || undefined,
+    nonPassCause: isSmokeNonPassCause(nonPassCauseRaw) ? nonPassCauseRaw : undefined,
+    controlPlaneDiagnostic,
   };
 }
 
@@ -414,6 +585,33 @@ export function normalizeSmokeReport(
   if (!Array.isArray(partial.scenarios) || partial.scenarios.length === 0) {
     return { ok: false, reason: 'missing_scenarios' };
   }
+
+  let controlPlaneDiagnostic: SmokeControlPlaneDiagnostic | undefined;
+  if (partial.controlPlaneDiagnostic) {
+    const normalizedDiagnostic = normalizeSmokeControlPlaneDiagnostic(partial.controlPlaneDiagnostic);
+    if (!normalizedDiagnostic.ok) {
+      return { ok: false, reason: normalizedDiagnostic.reason };
+    }
+    controlPlaneDiagnostic = normalizedDiagnostic.diagnostic;
+  }
+  if (partial.result === 'PASS' && controlPlaneDiagnostic) {
+    return { ok: false, reason: 'pass_cannot_have_control_plane_diagnostic' };
+  }
+  if (
+    partial.nonPassCause
+    && isSmokePhaseControlPlaneCause(partial.nonPassCause)
+    && !controlPlaneDiagnostic
+  ) {
+    return { ok: false, reason: 'phase_cause_requires_control_plane_diagnostic' };
+  }
+  if (
+    controlPlaneDiagnostic
+    && partial.nonPassCause
+    && partial.nonPassCause !== controlPlaneDiagnostic.cause
+  ) {
+    return { ok: false, reason: 'control_plane_cause_mismatch' };
+  }
+
   if (partial.result === 'PASS') {
     for (const [index, scenario] of partial.scenarios.entries()) {
       if (!scenario.action?.trim() || !scenario.expected?.trim() || !scenario.observed?.trim()) {
@@ -455,6 +653,8 @@ export function normalizeSmokeReport(
       producer: partial.producer,
       orcaExecutable: partial.orcaExecutable,
       terminalHandle: partial.terminalHandle,
+      nonPassCause: controlPlaneDiagnostic?.cause ?? partial.nonPassCause,
+      controlPlaneDiagnostic,
     },
   };
 }
@@ -486,6 +686,7 @@ export function formatSmokeReportComment(report: SmokeReport): string {
     return `  - ${parts.join(' | ')}`;
   });
 
+  const diagnostic = report.controlPlaneDiagnostic;
   const machineBlock = [
     '```worker-smoke-report',
     `result: ${report.result}`,
@@ -494,9 +695,10 @@ export function formatSmokeReportComment(report: SmokeReport): string {
     `terminal-handle: ${report.terminalHandle ?? ''}`,
     `tracked-files-unmodified: ${report.trackedFilesUnmodified ? 'true' : 'false'}`,
     `terminal-cleanup: ${report.terminalCleanup}`,
-    'nonPassCause' in report && report.nonPassCause
-      ? `non-pass-cause: ${String(report.nonPassCause)}`
-      : '',
+    report.nonPassCause ? `non-pass-cause: ${String(report.nonPassCause)}` : '',
+    diagnostic ? `control-plane-cause: ${diagnostic.cause}` : '',
+    diagnostic ? `control-plane-evidence: ${diagnostic.evidence.join(';')}` : '',
+    diagnostic ? `control-plane-remediation: ${diagnostic.remediation}` : '',
     report.environmentNotes.length > 0 ? `environment-notes: ${report.environmentNotes.join('; ')}` : '',
     report.limitations.length > 0 ? `limitations: ${report.limitations.join('; ')}` : '',
     'scenarios:',
@@ -514,6 +716,9 @@ export function formatSmokeReportComment(report: SmokeReport): string {
     `- head-sha: \`${report.headSha}\``,
     `- tracked-implementation-files-unmodified: ${report.trackedFilesUnmodified ? 'yes' : 'no'}`,
     `- orca-terminal-cleanup: ${report.terminalCleanup}`,
+    diagnostic ? `- control-plane-cause: \`${diagnostic.cause}\`` : '',
+    diagnostic ? `- control-plane-evidence: ${diagnostic.evidence.map((entry) => `\`${entry}\``).join(', ')}` : '',
+    diagnostic ? `- remediation: ${diagnostic.remediation}` : '',
     report.environmentNotes.length > 0 ? `- environment-notes: ${report.environmentNotes.join('; ')}` : '',
     report.limitations.length > 0 ? `- limitations/skips: ${report.limitations.join('; ')}` : '',
     '',
@@ -658,6 +863,7 @@ export interface WorkerSmokeGateDecision {
   allowed: boolean;
   reason: string;
   smokeRequired: boolean;
+  controlPlaneDiagnostic?: SmokeControlPlaneDiagnostic;
 }
 
 export function evaluateWorkerSmokeGate(input: WorkerSmokeGateInput): WorkerSmokeGateDecision {
@@ -675,16 +881,29 @@ export function evaluateWorkerSmokeGate(input: WorkerSmokeGateInput): WorkerSmok
     return { allowed: false, reason: 'missing_smoke_plan', smokeRequired: true };
   }
 
-  if (!input.orcaWorktreeOk) {
-    return { allowed: false, reason: 'orca_worktree_unresolved', smokeRequired: true };
-  }
-
   const latest = findLatestSmokeReportForHead(
     input.prComments,
     input.prNumber,
     input.headSha,
     input.issueNumber,
   );
+  if (
+    latest
+    && latest.result !== 'PASS'
+    && latest.controlPlaneDiagnostic
+  ) {
+    return {
+      allowed: false,
+      reason: latest.controlPlaneDiagnostic.cause,
+      smokeRequired: true,
+      controlPlaneDiagnostic: latest.controlPlaneDiagnostic,
+    };
+  }
+
+  if (!input.orcaWorktreeOk) {
+    return { allowed: false, reason: 'orca_worktree_unresolved', smokeRequired: true };
+  }
+
   const ownedTerminalClosed = input.ownedTerminalClosed
     || ownedSmokeTerminalClosedFromReports(
       input.prComments,
@@ -830,19 +1049,12 @@ export type SmokeChildWaitNonPassCause =
   | 'agent_wait_self_handle'
   | 'agent_wait_unowned_handle';
 
-export type SmokeControlPlaneCause =
-  | 'channel_stale_handle'
-  | 'channel_lookup_empty'
-  | 'channel_control_unavailable'
-  | 'channel_control_overwritten';
+export type SmokeControlPlaneCause = OrcaSmokeControlPlaneCode;
 
 export type SmokeChannelBindingCause = SmokeChildWaitNonPassCause | SmokeControlPlaneCause;
 
 export function isSmokeControlPlaneCause(value: string): value is SmokeControlPlaneCause {
-  return value === 'channel_stale_handle'
-    || value === 'channel_lookup_empty'
-    || value === 'channel_control_unavailable'
-    || value === 'channel_control_overwritten';
+  return isOrcaSmokeControlPlaneCode(value);
 }
 
 export interface SmokeSealRecord {
@@ -1166,7 +1378,24 @@ export type SmokeNonPassCause =
   | 'missing_agent_report'
   | 'executed_scenario_failure'
   | SmokeChildWaitNonPassCause
-  | SmokeControlPlaneCause;
+  | SmokeControlPlaneCause
+  | SmokePhaseControlPlaneCause;
+
+export function isSmokeNonPassCause(value: string): value is SmokeNonPassCause {
+  return value === 'zero_parsed_scenarios'
+    || value === 'missing_agent_report'
+    || value === 'executed_scenario_failure'
+    || value === 'prompt_delivery_unconfirmed'
+    || value === 'agent_report_unfenced'
+    || value === 'agent_report_timeout'
+    || value === 'agent_exited_without_report'
+    || value === 'agent_idle_without_report'
+    || value === 'agent_report_duplicate'
+    || value === 'agent_wait_self_handle'
+    || value === 'agent_wait_unowned_handle'
+    || isSmokeControlPlaneCause(value)
+    || isSmokePhaseControlPlaneCause(value);
+}
 
 export const SMOKE_HARNESS_TERMINAL_CLOSE_ACTION = 'close owned Orca terminal handle';
 
