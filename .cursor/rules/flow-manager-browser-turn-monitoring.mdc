@@ -39,14 +39,34 @@ When the helper directly observes foreign/interleaved user activity, page loss, 
 
 A lost/crashed invocation may be retried as a fresh chat with a fresh send. Duplicate recoverable GPT text is an accepted residual risk; do not recreate the old recovery/clear protocol to prevent it.
 
-## Forbidden duplicate monitoring
+## Sanctioned one-shot page probe
 
-- No second direct-CDP/driver/inspector salvage loop beside the helper.
+When direct page diagnosis is genuinely needed, use only the canonical read-only utility:
+
+```bash
+npm run browser-gpt-page-probe -- list --cdp http://127.0.0.1:9222
+npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --target-id <exact-target-id>
+```
+
+An exact normalized ChatGPT conversation URL may replace `--target-id` for inspection only when it resolves to exactly one already-open target. The probe runs once and exits. It never navigates, sends, clicks, focuses, scrolls, reloads, creates, closes, or reorders tabs.
+
+The probe is **diagnostic only**:
+
+- `generation_in_progress: false` is not completion evidence;
+- node counts, hashes, witnesses, and an exported node file do not authorize publication, retry, resend, cleanup, admission, recovery, review capture, or stage progression;
+- use inspection output to select exactly one node representation for optional offline export; never request or construct a transcript dump;
+- exported text may be sensitive. The caller supplies a new path in an existing directory and owns protection and cleanup of the resulting file.
+
+Do not replace this command with raw CDP WebSocket scripts, Playwright snippets, `salvage-*.mjs`, caller-supplied selectors/JavaScript, a watch loop, or a second supported probe.
+
+## Forbidden duplicate monitoring and authority
+
 - No independent 5–10 or 10–15 minute watchdog layered over the helper.
 - No periodic browser-tab sweeper that closes tabs it did not open.
 - No reporting "still running" from shell/PID/log state alone.
+- No probe-driven takeover, helper bypass, resend, or workflow progression.
 
-A direct-agent/CDP fallback for helper failure is deferred follow-up work and is not part of this rule.
+The one-shot page probe diagnoses an already-open page; it is not a fallback state machine or browser-turn owner.
 
 ## Session handoff
 
