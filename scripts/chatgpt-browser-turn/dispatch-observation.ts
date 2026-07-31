@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { runtimeCapabilityBinding } from './runtime-binding.ts';
 import type { CapabilityBinding } from './state.ts';
 import { atomicJson, profileDirs } from './storage-common.ts';
+import { USER_MESSAGE_SELECTOR } from './ui-adapter.ts';
 
 export type DispatchCoverageStatus = 'complete' | 'incomplete' | 'unknown';
 
@@ -887,7 +888,7 @@ export async function evaluateDispatchRequestNotObserved(
     if (Number.isFinite(postDispatchUserNodeCount)) {
       userNodeDelta = postDispatchUserNodeCount - boundary.preDispatchUserNodeCount;
       if (userNodeDelta <= 0) {
-        const users = page.locator('[data-message-author-role="user"]');
+        const users = page.locator(USER_MESSAGE_SELECTOR);
         let newDomUser = false;
         let domProbeReliable = true;
         try {

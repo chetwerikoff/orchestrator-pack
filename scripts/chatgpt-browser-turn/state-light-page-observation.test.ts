@@ -4,7 +4,21 @@ import {
   readAssistantTurnCompletionReady,
   readAssistantTurnGenerating,
 } from './ui-adapter.ts';
+import {
+  ASSISTANT_MESSAGE_SELECTOR,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+  matchesStopButtonSelector,
+} from './product-page-selectors.ts';
 import { scalarLocator } from './state-light-turn.test-fixtures.ts';
+import {
+  buildForeignActivityDiagnostics,
+  classifyPageObservation,
+  foreignSuspectEvidenceFingerprint,
+  ownedPromptEchoMatches,
+  promptEchoSharedOverlap,
+  replyStabilityMatches,
+  replyStabilityFingerprint,
+} from './state-light-turn.ts';
 
 function makeTurnContainerPage(options: {
   assistantText: string;
@@ -14,7 +28,7 @@ function makeTurnContainerPage(options: {
   const assistant = scalarLocator({
     count: vi.fn(async () => 1),
     getAttribute: vi.fn(async (name: string) => {
-      if (name === 'data-message-author-role') return 'assistant';
+      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return 'assistant';
       if (name === 'data-is-streaming') return options.generating ? 'true' : null;
       return null;
     }),
@@ -34,11 +48,12 @@ function makeTurnContainerPage(options: {
   });
   return {
     locator: vi.fn((selector: string) => {
-      if (selector === '[data-message-author-role="assistant"]') return assistants;
-      if (selector.includes('stop-button')) return scalarLocator();
+      if (selector === ASSISTANT_MESSAGE_SELECTOR) return assistants;
+      if (matchesStopButtonSelector(selector)) return scalarLocator();
       return scalarLocator();
     }),
     getByText: vi.fn(() => scalarLocator()),
+    getByRole: vi.fn(() => scalarLocator()),
   };
 }
 
@@ -60,5 +75,199 @@ describe('state-light page observation driver', () => {
     });
 
     await expect(readAssistantTurnCompletionReady(page)).resolves.toBe(false);
+  });
+});
+
+describe('state-light prompt attribution classification', () => {
+  const baseline = [
+    { role: 'user' as const, text: 'OLD' },
+    { role: 'assistant' as const, text: 'OLD ANSWER' },
+  ];
+
+  it('accepts a collapsed long prompt echo as owned rather than foreign', () => {
+    const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
+    const collapsedEcho = `${'A'.repeat(120)} detail detail detail…`;
+
+    expect(ownedPromptEchoMatches(collapsedEcho, longPrompt)).toBe(true);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      longPrompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+  });
+
+  it('treats a transient duplicate owned user render as waiting, not foreign', () => {
+    expect(classifyPageObservation(
+      [
+        ...baseline,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'working' },
+      ],
+      baseline.length,
+      'PROMPT',
+      true,
+    )).toEqual({ state: 'waiting' });
+  });
+
+  it('flags genuinely foreign user text as foreign_suspect for stable promotion', () => {
+    expect(classifyPageObservation(
+      [
+        ...baseline,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'partial' },
+        { role: 'user', text: 'FOREIGN' },
+      ],
+      baseline.length,
+      'PROMPT',
+      false,
+    )).toEqual({
+      state: 'foreign_suspect',
+      cause: 'foreign_user_after_owned_send',
+      suspectFingerprint: 'FOREIGN',
+    });
+  });
+
+  it('matches collapsed render with different line breaking than the source prompt', () => {
+    const longPrompt = `Problem:\nFlow-manager misclassifies.\n\nGoal:\nFix echo matching.\n${'detail '.repeat(80)}`;
+    const collapsedEcho = 'Problem: Flow-manager misclassifies. Goal: Fix echo matching. detail detail…';
+
+    expect(ownedPromptEchoMatches(collapsedEcho, longPrompt)).toBe(true);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      longPrompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+  });
+
+  it('matches a visible window from the middle of the prompt', () => {
+    const longPrompt = `PREFIX ${'alpha '.repeat(100)}MIDDLE ${'beta '.repeat(100)}SUFFIX`;
+    const middleWindow = 'MIDDLE beta beta beta';
+
+    expect(ownedPromptEchoMatches(middleWindow, longPrompt)).toBe(true);
+    expect(promptEchoSharedOverlap(middleWindow, longPrompt)).toBeGreaterThanOrEqual(16);
+  });
+
+  it('matches owned text with a UI collapse affix appended', () => {
+    const prompt = 'Line one.\n\nLine two with enough content to exceed minimum overlap requirements for the matcher.';
+    const visible = 'Line one. Line two with enough content show more';
+
+    expect(ownedPromptEchoMatches(visible, prompt)).toBe(true);
+  });
+
+
+  it('returns promptly for long genuinely foreign visible text', () => {
+    const prompt = `owned ${'detail '.repeat(500)}`;
+    const foreign = `FOREIGN ${'noise '.repeat(300)}`;
+    const started = performance.now();
+    expect(ownedPromptEchoMatches(foreign, prompt)).toBe(false);
+    expect(promptEchoSharedOverlap(foreign, prompt)).toBeLessThan(16);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+  it('accepts long markdown prompt rendered without syntax chars as owned', () => {
+    const body = Array.from({ length: 520 }, () => 'detail').join(' ');
+    const longPrompt = `# Issue #1120 pulse\n\n## OUTPUT CONSTRAINTS\n- Keep answer under 500 words\n- Use \`backticks\` sparingly\n\n${body}`;
+
+    expect(longPrompt.length).toBeGreaterThanOrEqual(3000);
+    const renderedVisible = `Issue #1120 pulse OUTPUT CONSTRAINTS Keep answer under 500 words Use backticks sparingly ${body.slice(0, 512)}`;
+
+    expect(promptEchoSharedOverlap(renderedVisible, longPrompt)).toBeGreaterThanOrEqual(230);
+    expect(ownedPromptEchoMatches(renderedVisible, longPrompt)).toBe(true);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: renderedVisible }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      longPrompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+  });
+
+  it('reproduces live e286c4fd overlap ratio without classifying own long prompt as foreign', () => {
+    const sharedPrefix = `Issue #1120 post-fix live pulse-check HARD fresh-chat stress cell. ${'context '.repeat(80)}`;
+    const longPrompt = `${sharedPrefix}\n\n## Required\n- item one\n- item two\n\n${'detail '.repeat(200)}`;
+    const renderedVisible = `${sharedPrefix} Required item one item two ${'detail '.repeat(120)}`.slice(0, 2800);
+    const overlap = promptEchoSharedOverlap(renderedVisible, longPrompt);
+
+    expect(overlap).toBeGreaterThanOrEqual(493);
+    expect(ownedPromptEchoMatches(renderedVisible, longPrompt)).toBe(true);
+  });
+
+  it('still classifies genuinely foreign long markdown-adjacent text as foreign', () => {
+    const prompt = `# Owned\n\n${'owned detail '.repeat(300)}`;
+    const foreign = `FOREIGN INTERLOPER ${'noise '.repeat(500)}`;
+
+    expect(prompt.length).toBeGreaterThanOrEqual(3000);
+    expect(foreign.length).toBeGreaterThanOrEqual(3000);
+    expect(ownedPromptEchoMatches(foreign, prompt)).toBe(false);
+    expect(promptEchoSharedOverlap(foreign, prompt)).toBeLessThan(24);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: foreign }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      prompt,
+      true,
+    )).toEqual({
+      state: 'foreign_suspect',
+      cause: 'foreign_or_ambiguous_user_activity',
+      suspectFingerprint: expect.stringMatching(/^FOREIGN INTERLOPER /),
+    });
+  });
+
+  it('keeps short prompt echo thresholds unchanged', () => {
+    const prompt = 'PROMPT-SHORT owned echo baseline';
+    const visible = 'PROMPT-SHORT owned echo baseline';
+
+    expect(ownedPromptEchoMatches(visible, prompt)).toBe(true);
+    expect(promptEchoSharedOverlap(visible, prompt)).toBe(prompt.length);
+  });
+
+  it('keeps genuinely unrelated text foreign', () => {
+    const prompt = `owned ${'detail '.repeat(80)}`;
+    expect(ownedPromptEchoMatches('FOREIGN INTERLOPER TEXT', prompt)).toBe(false);
+    expect(buildForeignActivityDiagnostics('FOREIGN INTERLOPER TEXT', prompt).shared_overlap).toBeLessThan(24);
+  });
+
+  it('does not classify owned truncated renderings as foreign_suspect', () => {
+    const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
+    const truncA = `${'A'.repeat(20)}`;
+    const truncB = `${'A'.repeat(30)}`;
+
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: truncA }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      longPrompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: truncB }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      longPrompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+    expect(foreignSuspectEvidenceFingerprint(
+      [...baseline, { role: 'user', text: truncA }],
+      baseline.length,
+      longPrompt,
+    )).toBe('');
+  });
+
+  it('treats render-different assistant reads as stable when normalized text matches', () => {
+    const body = `${'detail '.repeat(60)} Section footer with enough words.`;
+    const renderA = `Intro paragraph.\n\n${body}`;
+    const renderB = `Intro paragraph. ${body} show more`;
+
+    expect(replyStabilityMatches(renderB, renderA)).toBe(true);
+    expect(replyStabilityMatches(`${renderA} extra tail`, renderA)).toBe(false);
+  });
+
+  it('treats large mid-body length swings as stable when head and tail fingerprints match', () => {
+    const head = `INTRO ${'A'.repeat(180)}`;
+    const tail = `${'Z'.repeat(180)} OUTRO`;
+    const longRead = `${head}${'M'.repeat(4500)}${tail}`;
+    const shortRead = `${head}${'M'.repeat(200)}${tail}`;
+
+    expect(replyStabilityFingerprint(longRead)).toBe(replyStabilityFingerprint(shortRead));
+    expect(replyStabilityMatches(longRead, shortRead)).toBe(true);
+    expect(longRead.length - shortRead.length).toBeGreaterThan(1000);
   });
 });

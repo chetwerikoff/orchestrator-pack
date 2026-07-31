@@ -82,6 +82,15 @@ If another/interleaved user turn appears after the invocation baseline, attribut
 is ambiguous and only that invocation fails/degrades as `foreign_activity`.
 Sibling Browser-GPT tabs remain independent.
 
+Foreign classification requires the foreign signal to remain stable across bounded
+repeated page reads (same discipline as the final-reply stability path), including
+the normalized suspect user evidence fingerprint — not merely a repeated cause code —
+with several seconds of settle spacing between confirming reads. Prompt-echo
+comparison is whitespace-insensitive (including newlines), tolerant to UI collapse
+affixes, and accepts visible windows from any position in the owned prompt. Terminal
+`foreign_activity` results and recurrence-journal rows carry bounded diagnostics
+(suspect/prompt heads and shared-overlap metric).
+
 ## Send-once and retry boundary
 
 Inside one live invocation there is exactly one user-message send attempt. After
@@ -95,6 +104,8 @@ invocation locally; the caller decides whether to open a fresh chat.
 Slow generation,
 missing historical witness state, an elapsed observation threshold, or process-
 liveness uncertainty never authorizes a second send inside that invocation.
+Once `send_count >= 1`, observation-window expiry alone never yields `send_failed`
+or any other resend-licensing terminal while the owned page stays reachable.
 
 `--timeout-ms` is a **soft post-send observation threshold**. If the helper still
 owns a reachable page after it elapses, the same invocation keeps polling that
@@ -263,11 +274,13 @@ Focused Issue #1120 tests cover:
 - a stable intermediate/tool-progress node surviving multiple reads before the
   later final node, with only the final node published;
 - generating/continuation intermediate state;
-- foreign/interleaved activity;
+- foreign/interleaved activity with stable-read promotion and render-tolerant
+  owned-prompt echo matching;
 - mandatory own-prompt attribution after baseline;
 - dedicated-tab creation and one send mutation branch;
 - a reachable owned page continuing past the soft timeout without resend or
-  timeout-triggered close;
+  timeout-triggered close, including fresh-conversation URL-wait expiry;
+- `send_count >= 1` never coexisting with `send_failed` in emitted results;
 - absence of old admission/recovery calls from the state-light module;
 - append-only/non-authoritative recurrence journal behavior;
 - absence of a second inspector/watchdog.

@@ -31,6 +31,78 @@ vi.mock('node:fs', async (importOriginal) => {
     appendFileSync: mocks.appendFileSync,
     linkSync: mocks.linkSync,
   };
+  it('replays journal symptom send_observation_deferred/fresh_conversation_url_not_observed', async () => {
+    const prompt = 'PROMPT-JOURNAL-DEFER';
+    const reply = 'JOURNAL-OK';
+    let sent = false;
+    let url = PROJECT_URL;
+    let observationIndex = 0;
+    const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
+      messages,
+      generating: index < 2,
+    }));
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async () => undefined),
+      innerText: vi.fn(async () => (sent ? '' : prompt)),
+      textContent: vi.fn(async () => (sent ? '' : prompt)),
+      press: vi.fn(async () => { sent = true; }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => { sent = true; }),
+    });
+
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async (target: string) => { url = target; }),
+      url: vi.fn(() => url),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: vi.fn(async () => undefined),
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          if (!sent) return collectionLocator([]);
+          const frame = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
+          observationIndex++;
+          return collectionLocator(frame.messages, frame.generating);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          const frame = snapshotFrames[Math.min(observationIndex - 1, snapshotFrames.length - 1)]!;
+          const last = frame.messages.at(-1);
+          if (last?.finalActionInTurnContainer) return messageLocator(last);
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          const frame = snapshotFrames[Math.min(observationIndex - 1, snapshotFrames.length - 1)]!;
+          return collectionLocator(
+            frame.messages.filter((message: StateLightTestMessage) => message.role === 'assistant'),
+            frame.generating,
+          );
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, '/tmp/journal-defer-replay.txt');
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).toContain('send_observation_deferred');
+    expect(outcome.result.state).not.toBe('send_failed');
+  });
+
 });
 
 vi.mock('./browser-session.ts', () => createBrowserSessionModuleMock(mocks));
@@ -74,6 +146,15 @@ import {
 } from './state-light-turn.test-fixtures.ts';
 import { classifyPageObservation, classifySendLandingEvidence, runStateLightTurn } from './state-light-turn.ts';
 import * as uiAdapter from './ui-adapter.ts';
+import {
+  ASSISTANT_MESSAGE_SELECTOR,
+  ASSISTANT_TURN_ANCESTOR_XPATH,
+  COMPOSER_SELECTOR,
+  matchesNewChatControlSelector,
+  MESSAGE_NODE_SELECTOR,
+  SEND_BUTTON_SELECTOR,
+  STOP_BUTTON_TESTID,
+} from './product-page-selectors.ts';
 import {
   acquireStateLightNewChatSendSlot,
   newChatSendSlotEnabled,
@@ -124,6 +205,7 @@ function makeLoserPage(prompt: string, reply: string) {
     click: vi.fn(async () => undefined),
     fill: vi.fn(async () => undefined),
     innerText: vi.fn(async () => (sent ? '' : prompt)),
+    textContent: vi.fn(async () => (sent ? '' : prompt)),
     press: vi.fn(async () => {
       sends++;
       sent = true;
@@ -152,30 +234,31 @@ function makeLoserPage(prompt: string, reply: string) {
     }),
     close: vi.fn(async () => undefined),
     getByText: vi.fn(() => scalarLocator()),
+    getByRole: vi.fn(() => scalarLocator()),
     locator: vi.fn((selector: string) => {
-      if (selector === '#prompt-textarea') return composer;
-      if (selector === '[data-testid="send-button"]') return sendButton;
-      if (selector.includes('create-new-chat-button') || selector.includes('New chat')) {
+      if (selector === COMPOSER_SELECTOR) return composer;
+      if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+      if (matchesNewChatControlSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 0) });
       }
-      if (selector === '[data-message-author-role]') {
+      if (selector === MESSAGE_NODE_SELECTOR) {
         if (!sent) return collectionLocator([]);
         activeSnapshot = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
         observationIndex++;
         return collectionLocator(activeSnapshot.messages, activeSnapshot.generating);
       }
-      if (selector.startsWith('xpath=ancestor-or-self::section')) {
+      if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
         const last = activeSnapshot.messages.at(-1);
         if (last?.finalActionInTurnContainer) return messageLocator(last);
         return scalarLocator({ count: vi.fn(async () => 0) });
       }
-      if (selector === '[data-message-author-role="assistant"]') {
+      if (selector === ASSISTANT_MESSAGE_SELECTOR) {
         return collectionLocator(
           activeSnapshot.messages.filter((message: StateLightTestMessage) => message.role === 'assistant'),
           activeSnapshot.generating,
         );
       }
-      if (selector.includes('stop-button')) return scalarLocator();
+      if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
       return scalarLocator();
     }),
   };
@@ -344,18 +427,95 @@ describe('state-light fresh conversation collision recovery', () => {
     expect(readStateLightAdvisoryWall('collision-profile')).toMatchObject({ state: 'rate_limit' });
   });
 
+  it('continues observing after fresh-conversation URL wait expiry without send_failed', async () => {
+    const prompt = 'PROMPT-SOLO';
+    const reply = 'SOLO-OK';
+    let sent = false;
+    let url = PROJECT_URL;
+    let observationIndex = 0;
+    const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
+      messages,
+      generating: index < 2,
+    }));
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async () => undefined),
+      innerText: vi.fn(async () => (sent ? '' : prompt)),
+      textContent: vi.fn(async () => (sent ? '' : prompt)),
+      press: vi.fn(async () => { sent = true; }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => { sent = true; }),
+    });
+
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async (target: string) => { url = target; }),
+      url: vi.fn(() => url),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: vi.fn(async () => undefined),
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          if (!sent) return collectionLocator([]);
+          const frame = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
+          observationIndex++;
+          return collectionLocator(frame.messages, frame.generating);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          const frame = snapshotFrames[Math.min(observationIndex - 1, snapshotFrames.length - 1)]!;
+          const last = frame.messages.at(-1);
+          if (last?.finalActionInTurnContainer) return messageLocator(last);
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          const frame = snapshotFrames[Math.min(observationIndex - 1, snapshotFrames.length - 1)]!;
+          return collectionLocator(
+            frame.messages.filter((message: StateLightTestMessage) => message.role === 'assistant'),
+            frame.generating,
+          );
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, '/tmp/url-wait-expiry.txt');
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      send_count: 1,
+    });
+    expect(outcome.result.state).not.toBe('send_failed');
+    expect(outcome.result.incidents).toContain('send_observation_deferred');
+  });
+
   it('classifies send landing evidence from page state', async () => {
     const prompt = 'PROMPT-LOSER';
     const page = {
       url: vi.fn(() => PROJECT_URL),
+      getByRole: vi.fn(() => scalarLocator()),
       locator: vi.fn((selector: string) => {
-        if (selector === '#prompt-textarea') {
+        if (selector === COMPOSER_SELECTOR) {
           return scalarLocator({
             count: vi.fn(async () => 1),
             innerText: vi.fn(async () => prompt),
+            textContent: vi.fn(async () => prompt),
           });
         }
-        if (selector === '[data-message-author-role]') return collectionLocator([]);
+        if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator([]);
         return scalarLocator();
       }),
     };
@@ -382,7 +542,8 @@ describe('state-light fresh conversation collision recovery', () => {
     );
 
     expect(decision).toMatchObject({
-      state: 'foreign_activity',
+      state: 'foreign_suspect',
+      cause: 'foreign_user_after_owned_send',
     });
   });
 
@@ -457,4 +618,76 @@ describe('state-light fresh conversation collision recovery', () => {
       'state_light_navigation_budget_exhausted',
     );
   });
+  it('replays journal symptom send_observation_deferred/fresh_conversation_url_not_observed', async () => {
+    const prompt = 'PROMPT-JOURNAL-DEFER';
+    const reply = 'JOURNAL-OK';
+    let sent = false;
+    let url = PROJECT_URL;
+    let observationIndex = 0;
+    const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
+      messages,
+      generating: index < 2,
+    }));
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async () => undefined),
+      innerText: vi.fn(async () => (sent ? '' : prompt)),
+      textContent: vi.fn(async () => (sent ? '' : prompt)),
+      press: vi.fn(async () => { sent = true; }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => { sent = true; }),
+    });
+
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async (target: string) => { url = target; }),
+      url: vi.fn(() => url),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: vi.fn(async () => undefined),
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          if (!sent) return collectionLocator([]);
+          const frame = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
+          observationIndex++;
+          return collectionLocator(frame.messages, frame.generating);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          const frame = snapshotFrames[Math.min(observationIndex - 1, snapshotFrames.length - 1)]!;
+          const last = frame.messages.at(-1);
+          if (last?.finalActionInTurnContainer) return messageLocator(last);
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          const frame = snapshotFrames[Math.min(observationIndex - 1, snapshotFrames.length - 1)]!;
+          return collectionLocator(
+            frame.messages.filter((message: StateLightTestMessage) => message.role === 'assistant'),
+            frame.generating,
+          );
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const outcome = await runNewChatTurn(page, '/tmp/journal-defer-replay.txt');
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).toContain('send_observation_deferred');
+    expect(outcome.result.state).not.toBe('send_failed');
+  });
+
 });

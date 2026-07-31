@@ -1,0 +1,394 @@
+[
+  {
+    "id": "436e532dacc2",
+    "event_class": "",
+    "observed_symptom": "authoring turn attempt1 exit driver_error before send",
+    "action": "",
+    "source": "row-1"
+  },
+  {
+    "id": "db8f518509ad",
+    "event_class": "historical",
+    "observed_symptom": "driver_exception_before_send_dispatch_observation",
+    "action": "",
+    "source": "row-1"
+  },
+  {
+    "id": "efdb45f65a6b",
+    "event_class": "",
+    "observed_symptom": "attempt2 shell still possible_delivery after assistant complete",
+    "action": "",
+    "source": "row-2"
+  },
+  {
+    "id": "f3aafb1fcb43",
+    "event_class": "historical",
+    "observed_symptom": "cdp_salvage_authoring_reply",
+    "action": "",
+    "source": "row-2"
+  },
+  {
+    "id": "c99bc537019d",
+    "event_class": "",
+    "observed_symptom": "Tier-gate relay to existing task-chat failed twice with driver_exception_before_…",
+    "action": "",
+    "source": "row-3"
+  },
+  {
+    "id": "30f7ed972dd5",
+    "event_class": "legacy_harness",
+    "observed_symptom": "clear_fresh_orphans",
+    "action": "parallel brief contour profile wall; unproven fresh chats",
+    "source": "row-4"
+  },
+  {
+    "id": "0ea8e1520691",
+    "event_class": "",
+    "observed_symptom": "Brief-4 authoring attempt1 exit 12 orphaned_fresh_turn in 39s",
+    "action": "",
+    "source": "row-5"
+  },
+  {
+    "id": "194f4e0d274e",
+    "event_class": "",
+    "observed_symptom": "Architectural pass-01 helper turn in-flight; capture salvaged via CDP",
+    "action": "",
+    "source": "row-6"
+  },
+  {
+    "id": "5ed0aa2a9600",
+    "event_class": "legacy_harness",
+    "observed_symptom": "bulk_clear_possible_delivery",
+    "action": "parallel brief contour saturation; all not_committed",
+    "source": "row-7"
+  },
+  {
+    "id": "15ae1fb236de",
+    "event_class": "",
+    "observed_symptom": "competitive relay attempt1+2 failed before send",
+    "action": "",
+    "source": "row-8"
+  },
+  {
+    "id": "d648d99aa930",
+    "event_class": "historical",
+    "observed_symptom": "relay_driver_exception_before_send",
+    "action": "",
+    "source": "row-8"
+  },
+  {
+    "id": "78064ab04beb",
+    "event_class": "legacy_harness",
+    "observed_symptom": "cdp_relay_recovery",
+    "action": "",
+    "source": "row-9"
+  },
+  {
+    "id": "3937c0b73cea",
+    "event_class": "",
+    "observed_symptom": "competitive relay attempt3 driver_exception_before_send",
+    "action": "",
+    "source": "row-10"
+  },
+  {
+    "id": "3dd1b1ce9630",
+    "event_class": "historical",
+    "observed_symptom": "relay_service_attribute_attempt3",
+    "action": "",
+    "source": "row-10"
+  },
+  {
+    "id": "8f22ff62a828",
+    "event_class": "",
+    "observed_symptom": "1068 competitive relay attempts 1-3: browser_operation_timeout:service_attribute on existing task-chat",
+    "action": "",
+    "source": "row-11"
+  },
+  {
+    "id": "4c371fc2beef",
+    "event_class": "",
+    "observed_symptom": "scripts/lib/tier-gate-core.ts:294 and :324 hardcode producer: 'cursor-flow-manag…",
+    "action": "",
+    "source": "row-12"
+  },
+  {
+    "id": "0b270c9a398b",
+    "event_class": "",
+    "observed_symptom": "clear command returns driver_error for owned possible_delivery record",
+    "action": "",
+    "source": "row-13"
+  },
+  {
+    "id": "fc89a61c15a0",
+    "event_class": "historical",
+    "observed_symptom": "clear_driver_error_after_salvage",
+    "action": "",
+    "source": "row-13"
+  },
+  {
+    "id": "a8cac3a27a8b",
+    "event_class": "",
+    "observed_symptom": "clear of owned task-chat possible_delivery returns driver_error; relay blocked by conversation_busy",
+    "action": "",
+    "source": "row-14"
+  },
+  {
+    "id": "d143839876c7",
+    "event_class": "historical",
+    "observed_symptom": "clear_driver_error_task_chat_competitive_relay_blocked",
+    "action": "",
+    "source": "row-14"
+  },
+  {
+    "id": "f6006ac4581f",
+    "event_class": "",
+    "observed_symptom": "conversation_busy on task-chat 6a68b2cf due to owned possible_delivery record-1a…",
+    "action": "",
+    "source": "row-15"
+  },
+  {
+    "id": "6bb9ebba5c81",
+    "event_class": "historical",
+    "observed_symptom": "relay_blocked_possible_delivery_stuck",
+    "action": "",
+    "source": "row-15"
+  },
+  {
+    "id": "27ae25b28646",
+    "event_class": "",
+    "observed_symptom": "Full create-issue-draft flow attempted as OpenCode flow-manager. Two block: (1) …",
+    "action": "",
+    "source": "row-16"
+  },
+  {
+    "id": "e51c32ff645d",
+    "event_class": "",
+    "observed_symptom": "fresh-chat-stale-conversation-collision",
+    "action": "",
+    "source": "row-17"
+  },
+  {
+    "id": "e17a56729c7d",
+    "event_class": "historical",
+    "observed_symptom": "fresh-chat-stale-conversation-collision",
+    "action": "",
+    "source": "row-17"
+  },
+  {
+    "id": "391cf0a4641e",
+    "event_class": "background_job_empty_chat_url",
+    "observed_symptom": "Empty shell variable for --chat-url in background npm job silently invalidates o…",
+    "action": "",
+    "source": "row-18"
+  },
+  {
+    "id": "6f4915c35c15",
+    "event_class": "",
+    "observed_symptom": "PR #1107: два fresh GPT-чата с идентичным пак-ревью промптом за 16 с (6a69658a, 6a69659a); первый ход осиротел",
+    "action": "",
+    "source": "row-19"
+  },
+  {
+    "id": "bd946a513c83",
+    "event_class": "",
+    "observed_symptom": "turn to #1115 task-chat refused instantly: orphaned_fresh_turn / scope=profile /…",
+    "action": "",
+    "source": "row-23"
+  },
+  {
+    "id": "26969e56a0c5",
+    "event_class": "",
+    "observed_symptom": "profile-b845fde8 held 33 possible_delivery records (10 active_owner, 23 conversa…",
+    "action": "",
+    "source": "row-24"
+  },
+  {
+    "id": "1d48d825adc5",
+    "event_class": "",
+    "observed_symptom": "pass-05-architectural.capture.txt for #1115 carried an m3-protected adjudication…",
+    "action": "",
+    "source": "row-25"
+  },
+  {
+    "id": "595a4552aa9d",
+    "event_class": "foreign_activity",
+    "observed_symptom": "foreign_or_ambiguous_user_activity",
+    "action": "return_local_degraded",
+    "source": "row-26"
+  },
+  {
+    "id": "8226c661ebe5",
+    "event_class": "possible_delivery",
+    "observed_symptom": "seeded stale recovery record",
+    "action": "none",
+    "source": "row-29"
+  },
+  {
+    "id": "9fe34e05862c",
+    "event_class": "profile_busy",
+    "observed_symptom": "seeded historical admission row",
+    "action": "none",
+    "source": "row-30"
+  },
+  {
+    "id": "1bee4625bf0c",
+    "event_class": "send_observation_error",
+    "observed_symptom": "owned_user_message_not_observed",
+    "action": "return_local_error",
+    "source": "row-31"
+  },
+  {
+    "id": "5fbd2eb970f9",
+    "event_class": "helper_failure_after_send",
+    "observed_symptom": "page_or_browser_lost_after_send",
+    "action": "caller_may_open_fresh_chat",
+    "source": "row-34"
+  },
+  {
+    "id": "59fbffed1211",
+    "event_class": "possible_delivery",
+    "observed_symptom": "historical busy/recovery row 1",
+    "action": "seed-only",
+    "source": "row-36"
+  },
+  {
+    "id": "fb9532a1fded",
+    "event_class": "possible_delivery",
+    "observed_symptom": "historical busy/recovery row 2",
+    "action": "seed-only",
+    "source": "row-37"
+  },
+  {
+    "id": "7e88f55f810d",
+    "event_class": "observation_exhausted",
+    "observed_symptom": "observation_exhausted_no_resend",
+    "action": "retain_owned_page_no_resend",
+    "source": "row-38"
+  },
+  {
+    "id": "bbdb95d7e83a",
+    "event_class": "invocation_blocker",
+    "observed_symptom": "profile_mismatch",
+    "action": "return_local_error",
+    "source": "row-39"
+  },
+  {
+    "id": "fecf595d0ab9",
+    "event_class": "possible_delivery",
+    "observed_symptom": "seeded historical row",
+    "action": "none",
+    "source": "row-40"
+  },
+  {
+    "id": "08d5f8fee9a7",
+    "event_class": "",
+    "observed_symptom": "smoke_seeded_busy",
+    "action": "",
+    "source": "row-41"
+  },
+  {
+    "id": "cafb350e1d52",
+    "event_class": "helper_failure_before_send",
+    "observed_symptom": "locator_click_timeout",
+    "action": "return_local_error",
+    "source": "row-42"
+  },
+  {
+    "id": "e8e207f8cd30",
+    "event_class": "invocation_blocker",
+    "observed_symptom": "rate_limit_detected",
+    "action": "return_local_error",
+    "source": "row-45"
+  },
+  {
+    "id": "5e04d13a8fa9",
+    "event_class": "helper_failure_before_send",
+    "observed_symptom": "ui_contract_mismatch:conversation_redirect",
+    "action": "return_local_error",
+    "source": "row-54"
+  },
+  {
+    "id": "33bfd9b08671",
+    "event_class": "invocation_blocker",
+    "observed_symptom": "composer_unavailable",
+    "action": "return_local_error",
+    "source": "row-58"
+  },
+  {
+    "id": "e5f99c44982a",
+    "event_class": "helper_failure_before_send",
+    "observed_symptom": "argument_integer_invalid",
+    "action": "return_local_error",
+    "source": "row-61"
+  },
+  {
+    "id": "1b875ba1d9e5",
+    "event_class": "helper_failure_before_send",
+    "observed_symptom": "argument_mode_invalid",
+    "action": "return_local_error",
+    "source": "row-63"
+  },
+  {
+    "id": "85ca47a21e1b",
+    "event_class": "possible_delivery",
+    "observed_symptom": "seed",
+    "action": "non-authoritative",
+    "source": "row-64"
+  },
+  {
+    "id": "6a0a271a16d7",
+    "event_class": "invocation_blocker",
+    "observed_symptom": "chrome_not_running",
+    "action": "return_local_error",
+    "source": "row-65"
+  },
+  {
+    "id": "40f6897ef0c2",
+    "event_class": "send_observation_error",
+    "observed_symptom": "fresh_conversation_url_not_observed",
+    "action": "return_local_error",
+    "source": "row-67"
+  },
+  {
+    "id": "ea9f10a5b298",
+    "event_class": "send_failed",
+    "observed_symptom": "fresh_conversation_url_not_observed",
+    "action": "retry_with_chat_url",
+    "source": "row-69"
+  },
+  {
+    "id": "90c98044ada3",
+    "event_class": "foreign_activity",
+    "observed_symptom": "foreign_or_ambiguous_user_activity",
+    "action": "duplicate_prompt_in_task_chat_no_assistant_reply",
+    "source": "row-70"
+  },
+  {
+    "id": "5522c5a9b443",
+    "event_class": "foreign_activity",
+    "observed_symptom": "foreign_or_ambiguous_user_activity",
+    "action": "send_count_1_not_non_delivery",
+    "source": "row-75"
+  },
+  {
+    "id": "1edf7e562306",
+    "event_class": "send_observation_deferred",
+    "observed_symptom": "fresh_conversation_url_not_observed",
+    "action": "continue_observing_after_send",
+    "source": "row-77"
+  },
+  {
+    "id": "76c31e65fc4c",
+    "event_class": "",
+    "observed_symptom": "fresh_conversation_url_not_observed",
+    "action": "",
+    "source": "row-84-event-0"
+  },
+  {
+    "id": "4e338698026c",
+    "event_class": "",
+    "observed_symptom": "foreign_or_ambiguous_user_activity",
+    "action": "",
+    "source": "row-84-event-1"
+  }
+]

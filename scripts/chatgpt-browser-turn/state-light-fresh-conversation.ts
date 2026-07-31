@@ -10,6 +10,7 @@ import {
 import { join } from 'node:path';
 import {
   classifyProductWall,
+  NEW_CHAT_CONTROL_SELECTORS,
   normalizeConversationUrl,
   productStatusText,
   type BrowserConfig,
@@ -405,13 +406,7 @@ export async function openBlankProjectChatSurface(
       timeout: waitMs,
     });
   }
-  const newChatSelectors = [
-    '[data-testid="create-new-chat-button"]',
-    'a:has-text("New chat")',
-    'button:has-text("New chat")',
-    '[aria-label="New chat"]',
-  ];
-  for (const selector of newChatSelectors) {
+  for (const selector of NEW_CHAT_CONTROL_SELECTORS) {
     const control = page.locator(selector).first();
     try {
       if (Number(await control.count()) <= 0) continue;
