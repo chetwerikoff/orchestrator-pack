@@ -2,13 +2,15 @@ name: Issue 1122 transport recovery
 
 on:
   pull_request:
-    types: [edited]
+    types:
+      - converted_to_draft
 
 permissions:
   contents: write
 
 jobs:
   recover:
+    if: github.event.pull_request.number == 1155
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
