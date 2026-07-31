@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { runProcessSync } from './kernel/subprocess.ts';
 
 export interface CalibrationRow {
   issue: string;
@@ -76,11 +76,12 @@ export function validateCalibration(candidateText: string, baseText?: string): s
 }
 
 function readBaseDocument(ref: string, path: string): string | undefined {
-  try {
-    return execFileSync('git', ['show', `${ref}:${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  } catch {
-    return undefined;
-  }
+  const result = runProcessSync({
+    command: 'git',
+    args: ['show', `${ref}:${path}`],
+    inheritParentEnv: true,
+  });
+  return result.ok ? result.stdout : undefined;
 }
 
 export function runCalibrationCli(argv: readonly string[]): number {
