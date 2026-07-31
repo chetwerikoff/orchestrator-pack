@@ -1,4 +1,5 @@
 name: issue-1142-followup-findings
+# Triggered after the workflow exists on the branch.
 
 on:
   push:
