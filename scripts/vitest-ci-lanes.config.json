@@ -33,6 +33,7 @@
     "plugins/ao-token-chain-ledger/tests/integration.test.ts": "heavy",
     "plugins/ao-token-chain-ledger/tests/session_cost.test.ts": "light",
     "plugins/ao-token-chain-ledger/tests/writer.test.ts": "light",
+    "scripts/browser-gpt-page-probe.test.ts": "light",
     "scripts/ci-green-wake-reconcile.test.ts": "heavy",
     "scripts/contract-evidence-legacy-list-guard.test.ts": "heavy",
     "scripts/cutover/issue-928.test.ts": "light",
