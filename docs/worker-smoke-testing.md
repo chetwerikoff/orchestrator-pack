@@ -50,6 +50,31 @@ Structured `worker-smoke-run` JSON distinguishes at least:
 
 Top-level `PASS | FAIL | BLOCKED` semantics are unchanged.
 
+## Orca control-plane failure classification
+
+Issue #1125 adds two phase-aware, pack-owned causes without changing positive worktree authority:
+
+| Phase | Classified evidence | Stable cause |
+|---|---|---|
+| Before an owned terminal is acquired | `worktree current` or `terminal create` cannot launch, returns empty stdout, or returns invalid JSON | `orca_control_plane_unavailable_preflight` |
+| After an owned terminal is acquired | `terminal send`, `terminal read`, composer submit, or `terminal close` returns one of the existing exact channel codes (`channel_stale_handle`, `channel_lookup_empty`, `channel_control_unavailable`, `channel_control_overwritten`) | `orca_control_plane_lost_mid_smoke` |
+
+The structured diagnostic has one closed shape everywhere it appears: immediate `run --json`, the published `worker-smoke-report`, and current-head `gate-check` output.
+
+```text
+cause: <one stable phase cause>
+evidence: <1..3 ordered canonical key=value entries>
+remediation: <fixed pack-owned operator instruction>
+```
+
+The evidence keys are limited to `operation`, `outcome`, and (only for recognized post-acquisition loss) `control_plane_code`. There are at most three entries; each entry and the remediation are at most 256 UTF-8 bytes. Noncanonical, reordered, duplicated, oversized, or mismatched payloads are rejected rather than truncated. Classified output never embeds Orca stdout/stderr, upstream prose, runtime paths, command lines, socket/process metadata, or token-like values.
+
+Classification is deliberately narrow:
+
+- `orca worktree current` remains the **only** positive authority that the supplied cwd is the Orca-managed worktree. `ORCA_*` environment values cannot authorize, skip, or advance the run.
+- Valid JSON errors outside the exact recognized channel-code set retain their pre-existing operation-specific fallback. They are not promoted into either phase cause.
+- If the initiating send/read/submit operation and cleanup both fail, the initiating phase cause wins the single cause slot. Cleanup stays separately visible through `terminal-cleanup` and remains blocking.
+- The harness does not retry, restart, reconnect, discover sockets/processes, or select another worktree. Recovery is operator-owned: verify Orca/CLI availability for preflight loss; restart Orca and rerun the current-head smoke for mid-smoke loss.
 
 
 ## Child-wait delivery and completion
