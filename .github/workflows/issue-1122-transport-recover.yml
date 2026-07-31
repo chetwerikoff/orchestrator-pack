@@ -34,3 +34,5 @@ jobs:
           git add scripts/browser-gpt-page-probe.ts scripts/browser-gpt-page-probe.test.ts
           git commit -m "fix: restore complete Browser-GPT probe files [assembled]"
           git push origin HEAD:agent/issue-1122-browser-gpt-page-probe
+
+# One-shot transport only; remove after successful assembly.
