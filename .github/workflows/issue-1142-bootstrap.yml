@@ -70,6 +70,16 @@ jobs:
           path.write_text(text)
           PY
           python /tmp/issue1142-bootstrap.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('docs/tiering.md')
+          text = path.read_text()
+          old = '### Binding T3 test (both prongs required)'
+          new = '### Failure-type lens (apply first)\n\nApply the conjunctive T3 test below before any size or ceremony signal.\n\n### Binding T3 test (both prongs required)'
+          if text.count(old) != 1:
+              raise SystemExit('expected one tiering failure-type heading anchor')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - name: Install dependencies
         run: npm ci --include=dev
       - name: Node preflight
