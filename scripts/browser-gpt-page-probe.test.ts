@@ -29,7 +29,7 @@ class FakeNode {
   readonly textContent: string;
   readonly attrs: Record<string, string>;
 
-  constructor(role: 'user' | 'assistant', innerText: string, textContent: string, attrs: Record<string, string> = {}) {
+  constructor(role: string, innerText: string, textContent: string, attrs: Record<string, string> = {}) {
     this.innerText = innerText;
     this.textContent = textContent;
     this.attrs = { 'data-message-author-role': role, ...attrs };
@@ -226,6 +226,48 @@ test('host rejects cross-field inconsistent inspection summary evidence', async 
       ),
       (error: any) => error.status === 'surface_unknown' && error.reason === 'malformed_snapshot',
     );
+  }
+});
+
+test('host accepts ignored unsupported roles before, between, and after observed messages', async () => {
+  const layouts = [
+    {
+      nodes: [
+        new FakeNode('tool', 'Tool', 'Tool'),
+        new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-1' }),
+        new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-1' }),
+      ],
+      documentOrdinals: [1, 2],
+    },
+    {
+      nodes: [
+        new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-1' }),
+        new FakeNode('tool', 'Tool', 'Tool'),
+        new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-1' }),
+      ],
+      documentOrdinals: [0, 2],
+    },
+    {
+      nodes: [
+        new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-1' }),
+        new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-1' }),
+        new FakeNode('tool', 'Tool', 'Tool'),
+      ],
+      documentOrdinals: [0, 1],
+    },
+  ];
+
+  for (const { nodes, documentOrdinals } of layouts) {
+    const result = await runProbe(
+      { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
+      deps({ evaluate: async (_target, expression) => await evaluateExpression(expression, nodes) }),
+    );
+    assert.equal(result.status, 'ok');
+    const snapshot = result.snapshot as any;
+    assert.equal(snapshot.observed_user_nodes, 1);
+    assert.equal(snapshot.observed_assistant_nodes, 1);
+    assert.equal(snapshot.observed_message_nodes, 2);
+    assert.deepEqual(snapshot.nodes.map((node: any) => node.document_ordinal), documentOrdinals);
   }
 });
 
