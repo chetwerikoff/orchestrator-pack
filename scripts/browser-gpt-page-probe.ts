@@ -321,7 +321,6 @@ function validateNodeSummary(value: unknown, snapshot: {
     return malformedSurface();
   }
   if ((value.message_id !== null) !== value.message_id_unique
-    || value.document_ordinal >= snapshot.observed_message_nodes
     || value.ordinal >= (value.role === 'user' ? snapshot.observed_user_nodes : snapshot.observed_assistant_nodes)) {
     return malformedSurface();
   }
@@ -791,7 +790,7 @@ function inspectionExpression(): string {
     if (lastAssistant) {
       const lastInnerText = typeof lastAssistant.node.innerText === 'string' ? lastAssistant.node.innerText : null;
       if (lastInnerText === null) return { status: 'surface_unknown', reason: 'last_assistant_text_unavailable' };
-      lastDigest = await digest(lastInnerText.replace(/\\s+/gu, ' ').trim());
+      lastDigest = await digest(lastInnerText.replace(/\s+/gu, ' ').trim());
     }
     let generating = 'unknown';
     try {
