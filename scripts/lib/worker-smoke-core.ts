@@ -199,6 +199,8 @@ export const SMOKE_REPORT_PRODUCER = 'orchestrator-pack/worker-smoke-run/v1';
 const FENCE_PATTERN = /```([a-z0-9-]+)\s*\r?\n([\s\S]*?)```/gi;
 const SMOKE_REPORT_BLOCK = /```worker-smoke-report\s*\r?\n([\s\S]*?)```/i;
 const SMOKE_REPORT_HEADING = /^## Worker smoke report\b/im;
+const PACK_OWNED_CONTROL_PLANE_REPORT_FIELD =
+  /^\s*(?:control-plane-cause|control-plane-evidence|control-plane-remediation):/im;
 
 const FORBIDDEN_SMOKE_AGENT_ACTIONS = [
   /\bcommit\b/i,
@@ -399,7 +401,6 @@ export function stripLeadingSmokeAgentPrompt(text: string, sentPrompt: string): 
   return remainder;
 }
 
-
 function trimOrcaTerminalUiTail(body: string): string {
   const markers = ['\n→ ', '\nComposer 2.', '\nRun Everything', '\n~/'];
   let end = body.length;
@@ -540,15 +541,7 @@ function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
   };
 }
 
-export function parseSealedSmokeAgentReport(text: string): Partial<SmokeReport> | null {
-  const fenced = text.match(SMOKE_REPORT_BLOCK);
-  if (!fenced) {
-    return null;
-  }
-  return parseSmokeAgentReportBody(fenced[1]);
-}
-
-export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null {
+function parseSmokeReportText(text: string): Partial<SmokeReport> | null {
   const fenced = text.match(SMOKE_REPORT_BLOCK);
   if (fenced) {
     const parsed = parseSmokeAgentReportBody(fenced[1]);
@@ -561,6 +554,24 @@ export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null
     return parseSmokeAgentReportBody(unfenced);
   }
   return null;
+}
+
+export function parseSealedSmokeAgentReport(text: string): Partial<SmokeReport> | null {
+  if (PACK_OWNED_CONTROL_PLANE_REPORT_FIELD.test(text)) {
+    return null;
+  }
+  const fenced = text.match(SMOKE_REPORT_BLOCK);
+  if (!fenced) {
+    return null;
+  }
+  return parseSmokeAgentReportBody(fenced[1]);
+}
+
+export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null {
+  if (PACK_OWNED_CONTROL_PLANE_REPORT_FIELD.test(text)) {
+    return null;
+  }
+  return parseSmokeReportText(text);
 }
 
 export function normalizeSmokeReport(
@@ -738,7 +749,7 @@ export function extractSmokeReportsFromComments(comments: readonly { body?: stri
     if (!SMOKE_REPORT_BLOCK.test(body)) {
       continue;
     }
-    const partial = parseSmokeAgentReport(body);
+    const partial = parseSmokeReportText(body);
     if (!partial?.result) {
       continue;
     }
@@ -754,8 +765,6 @@ export function extractSmokeReportsFromComments(comments: readonly { body?: stri
   }
   return reports;
 }
-
-
 
 export function verifySmokeHeadBinding(input: {
   requestedHeadSha: string;
@@ -834,7 +843,6 @@ export function ownedSmokeTerminalClosedFromReports(
   const latest = findLatestSmokeReportForHead(comments, prNumber, headSha, issueNumber);
   return latest?.terminalCleanup === 'closed_owned_handle';
 }
-
 
 export function smokeTerminalHandleLooksValid(handle: string | undefined): boolean {
   const trimmed = String(handle ?? '').trim();
@@ -1037,7 +1045,6 @@ export function buildSmokeGhChildEnv(parentEnv: NodeJS.ProcessEnv = process.env)
   }
   return forwarded;
 }
-
 
 export type SmokeChildWaitNonPassCause =
   | 'prompt_delivery_unconfirmed'
@@ -1354,7 +1361,6 @@ export function classifySmokeChildWaitObservation(input: {
   return { status: 'pending' };
 }
 
-
 export const SMOKE_DEFINITE_PROMPT_NON_DELIVERY_CODES = [
   'terminal_send_rejected',
   'prompt_not_accepted',
@@ -1371,7 +1377,6 @@ export function preserveSmokeControlPlaneCause(
   const normalized = String(code ?? '').trim();
   return isSmokeControlPlaneCause(normalized) ? normalized : undefined;
 }
-
 
 export type SmokeNonPassCause =
   | 'zero_parsed_scenarios'
@@ -1445,7 +1450,6 @@ export function classifyDeclaredScenarioNonPassCause(input: {
     },
   });
 }
-
 
 export function orcaTerminalReadLines(result: unknown): string[] {
   if (!result || typeof result !== 'object') {
