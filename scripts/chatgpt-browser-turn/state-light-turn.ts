@@ -28,6 +28,7 @@ import { readStableInput } from './input.ts';
 import {
   acquireStateLightNewChatSendSlot,
   conversationUuidFromUrl,
+  ownedConversationIdentityMatches,
   prepareStateLightFreshConversation,
   projectConversationPrefix,
   readStateLightAdvisoryWall,
@@ -37,6 +38,8 @@ import {
   StateLightNavigationCounter,
   STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS,
   tryClaimStateLightFreshConversation,
+  navigateToProjectConversationIfNeeded,
+  readProjectConversationUrl,
   waitForConversationUrlAfterSend,
 } from './state-light-fresh-conversation.ts';
 import { configuredProfileKey } from './storage-common.ts';
@@ -63,10 +66,19 @@ export const POST_SEND_OBSERVATION_POLL_MS = 15_000;
 const DEFAULT_POLL_MS = POST_SEND_OBSERVATION_POLL_MS;
 const INITIAL_POLL_MS = 500;
 const DISPATCH_OBSERVATION_MS = 30_000;
+const FRESH_CONVERSATION_LANDING_MS = DISPATCH_OBSERVATION_MS;
 const STABILITY_READ_DELAY_MS = 1_000;
 const COMPLETION_CONFIRM_POLL_MS = 1_000;
 const DIAGNOSTIC_HEAD_CHARS = 300;
 const MAX_LOCAL_READ_WAIT_MS = 5_000;
+/** Per-node transcript reads use shorter budgets so one hung node cannot block the poll. */
+const MESSAGE_NODE_READ_TIMEOUT_MS = 800;
+const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
+const MESSAGE_NODE_READ_ATTEMPTS = 2;
+/** Post-send wall probes must not block transcript reads or the confirm loop. */
+const POST_SEND_PRODUCT_WALL_PROBE_MS = 800;
+export const OBSERVATION_HEARTBEAT_MS = 30_000;
+const OBSERVATION_HEARTBEAT_POLL_INTERVAL = 2;
 export const BROWSER_TURN_RECURRENCE_PATH = join(
   homedir(),
   '.local',
@@ -104,6 +116,22 @@ export interface ObservationExhaustedDiagnostics {
   readonly last_assistant_head: string;
   readonly poll_count: number;
   readonly soft_deadline_elapsed: boolean;
+}
+
+export interface ObservationHeartbeat {
+  readonly schema: 'observation-heartbeat/v1';
+  readonly poll_count: number;
+  readonly observation_state: string;
+  readonly stable_reads: number;
+  readonly completion_ready: boolean;
+  readonly last_reply_length: number;
+  readonly last_reply_sha256_head: string;
+}
+
+export interface PageObservationResult {
+  readonly messages: PageMessage[];
+  readonly ownedWindowCompletionReady: boolean;
+  readonly transcriptIncomplete: boolean;
 }
 
 interface BrowserIncident {
@@ -191,27 +219,30 @@ function emit(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+const UNICODE_WHITESPACE_PATTERN = /\p{White_Space}+/gu;
+
+function collapseUnicodeWhitespace(value: string): string {
+  return value.replace(UNICODE_WHITESPACE_PATTERN, ' ').trim();
+}
+
 function normalizeVisibleText(value: string): string {
   return value.replace(/\r\n?/g, '\n').replace(/[\t ]+/g, ' ').trim();
 }
 
 function normalizeEchoComparisonText(value: string): string {
-  return value
-    .replace(/\u200b/g, '')
-    .replace(/[\r\n\t\f\v ]+/g, ' ')
-    .trim();
+  return collapseUnicodeWhitespace(value.replace(/\u200b/g, ''));
 }
 
 function normalizeMarkdownEchoText(value: string): string {
-  return value
-    .replace(/\u200b/g, '')
-    .replace(/`+/g, '')
-    .replace(/^#{1,6}\s*/gm, '')
-    .replace(/^\s*[-*+]\s+/gm, '')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/[\r\n\t\f\v ]+/g, ' ')
-    .trim();
+  return collapseUnicodeWhitespace(
+    value
+      .replace(/\u200b/g, '')
+      .replace(/`+/g, '')
+      .replace(/^#{1,6}\s*/gm, '')
+      .replace(/^\s*[-*+]\s+/gm, '')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1'),
+  );
 }
 
 function normalizeOwnedEchoText(value: string): string {
@@ -292,6 +323,51 @@ export function buildObservationExhaustedDiagnostics(
     poll_count: pollCount,
     soft_deadline_elapsed: softDeadlineElapsed,
   };
+}
+
+function replyContentHashHead(text: string): string {
+  if (!text) return '';
+  return createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16);
+}
+
+export function buildObservationHeartbeat(
+  decision: PageObservationDecision,
+  stableReads: number,
+  pollCount: number,
+  completionReadySeen: boolean,
+  lastReply: string,
+): ObservationHeartbeat {
+  return {
+    schema: 'observation-heartbeat/v1',
+    poll_count: pollCount,
+    observation_state: classifyObservationLoopState(decision, stableReads),
+    stable_reads: stableReads,
+    completion_ready: completionReadySeen,
+    last_reply_length: lastReply.length,
+    last_reply_sha256_head: replyContentHashHead(lastReply),
+  };
+}
+
+function maybeEmitObservationHeartbeat(
+  lastHeartbeatAt: number,
+  pollCount: number,
+  decision: PageObservationDecision,
+  stableReads: number,
+  completionReadySeen: boolean,
+  lastReply: string,
+): number {
+  const now = Date.now();
+  const dueByPoll = pollCount > 0 && pollCount % OBSERVATION_HEARTBEAT_POLL_INTERVAL === 0;
+  const dueByTime = now - lastHeartbeatAt >= OBSERVATION_HEARTBEAT_MS;
+  if (!dueByPoll && !dueByTime) return lastHeartbeatAt;
+  emit(buildObservationHeartbeat(
+    decision,
+    stableReads,
+    pollCount,
+    completionReadySeen,
+    lastReply,
+  ));
+  return now;
 }
 
 
@@ -682,50 +758,80 @@ async function locatorCount(locator: any): Promise<number> {
   }
 }
 
-async function locatorText(locator: any): Promise<string> {
+async function locatorText(locator: any, timeoutMs = MAX_LOCAL_READ_WAIT_MS): Promise<string> {
   // Prefer innerText for rendered-text semantics (owned-prompt matching). Playwright
   // innerText is a plain DOM read and does not scroll; scroll hijack was from the
   // continuation click path (fixed separately). textContent includes hidden/sr-only
   // subtree text (e.g. "You said:") that strict ownedPromptMatches must not see.
   try {
-    const innerText = normalizeVisibleText(String(await locator.innerText({ timeout: MAX_LOCAL_READ_WAIT_MS }) ?? ''));
+    const innerText = normalizeVisibleText(String(await locator.innerText({ timeout: timeoutMs }) ?? ''));
     if (innerText) return innerText;
   } catch {
     // Fall through to textContent for fixtures and nodes that only expose DOM text there.
   }
   try {
-    return normalizeVisibleText(String(await locator.textContent({ timeout: MAX_LOCAL_READ_WAIT_MS })));
+    return normalizeVisibleText(String(await locator.textContent({ timeout: timeoutMs })));
   } catch {
     return '';
   }
+}
+
+async function readLocatorAttribute(
+  locator: any,
+  attribute: string,
+  timeouts: readonly number[],
+): Promise<string | null> {
+  for (const timeoutMs of timeouts) {
+    try {
+      return String(await locator.getAttribute(attribute, { timeout: timeoutMs }) ?? '');
+    } catch {
+      // Retry with the next shorter budget.
+    }
+  }
+  return null;
+}
+
+async function readMessageNodeText(locator: any): Promise<{ text: string; readFailed: boolean }> {
+  const timeouts = [
+    MESSAGE_NODE_READ_TIMEOUT_MS,
+    MESSAGE_NODE_READ_RETRY_TIMEOUT_MS,
+  ].slice(0, MESSAGE_NODE_READ_ATTEMPTS);
+  for (const timeoutMs of timeouts) {
+    const text = await locatorText(locator, timeoutMs);
+    if (text) return { text, readFailed: false };
+  }
+  return { text: '', readFailed: true };
 }
 
 async function readPageMessages(page: any): Promise<PageMessage[]> {
   return (await readPageObservation(page)).messages;
 }
 
-async function readPageObservation(
+export async function readPageObservation(
   page: any,
   prompt?: string,
   baselineCount?: number,
-): Promise<{
-  readonly messages: PageMessage[];
-  readonly ownedWindowCompletionReady: boolean;
-}> {
+): Promise<PageObservationResult> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
   const count = await locatorCount(nodes);
   const messages: PageMessage[] = [];
   const domIndices: number[] = [];
+  let transcriptIncomplete = false;
+  const roleTimeouts = [
+    MESSAGE_NODE_READ_TIMEOUT_MS,
+    MESSAGE_NODE_READ_RETRY_TIMEOUT_MS,
+  ].slice(0, MESSAGE_NODE_READ_ATTEMPTS);
   for (let index = 0; index < count; index++) {
     const node = nodes.nth(index);
-    let role = '';
-    try {
-      role = String(await node.getAttribute(MESSAGE_AUTHOR_ROLE_ATTR, { timeout: MAX_LOCAL_READ_WAIT_MS }) ?? '');
-    } catch {
+    const role = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, roleTimeouts);
+    if (role === null) {
+      transcriptIncomplete = true;
       continue;
     }
     if (role !== 'user' && role !== 'assistant') continue;
-    messages.push({ role, text: await locatorText(node) });
+    const { text, readFailed } = await readMessageNodeText(node);
+    if (readFailed) transcriptIncomplete = true;
+    messages.push({ role: role as 'user' | 'assistant', text });
     domIndices.push(index);
   }
 
@@ -738,14 +844,14 @@ async function readPageObservation(
     if (ownedAssistantDomIndex !== null) {
       ownedWindowCompletionReady = await readAssistantNodeCompletionReady(
         nodes.nth(ownedAssistantDomIndex),
-        MAX_LOCAL_READ_WAIT_MS,
+        MESSAGE_NODE_READ_TIMEOUT_MS,
       );
     } else {
-      ownedWindowCompletionReady = await readAssistantTurnCompletionReady(page, MAX_LOCAL_READ_WAIT_MS);
+      ownedWindowCompletionReady = await readAssistantTurnCompletionReady(page, MESSAGE_NODE_READ_TIMEOUT_MS);
     }
   }
 
-  return { messages, ownedWindowCompletionReady };
+  return { messages, ownedWindowCompletionReady, transcriptIncomplete };
 }
 
 export type SendLandingEvidence = 'landed' | 'not_landed' | 'ambiguous';
@@ -790,10 +896,20 @@ async function readPostSendObservation(
   readonly messages: PageMessage[];
   readonly wall: ReturnType<typeof classifyProductWall>;
   readonly ownedWindowCompletionReady: boolean;
+  readonly transcriptIncomplete: boolean;
 }> {
-  const { messages, ownedWindowCompletionReady } = await readPageObservation(page, prompt, baselineCount);
-  const wall = classifyProductWall(await productStatusText(page, MAX_LOCAL_READ_WAIT_MS));
-  return { messages, wall, ownedWindowCompletionReady };
+  const { messages, ownedWindowCompletionReady, transcriptIncomplete } = await readPageObservation(
+    page,
+    prompt,
+    baselineCount,
+  );
+  let wall: ReturnType<typeof classifyProductWall> = {};
+  try {
+    wall = classifyProductWall(await productStatusText(page, POST_SEND_PRODUCT_WALL_PROBE_MS));
+  } catch {
+    // Product-status probes must not block or invalidate transcript reads.
+  }
+  return { messages, wall, ownedWindowCompletionReady, transcriptIncomplete };
 }
 
 async function maybeContinueGeneration(page: any): Promise<boolean> {
@@ -843,9 +959,153 @@ async function navigateOwnedTurnPage(
     waitUntil: 'domcontentloaded',
     timeout: Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
   });
-  if (!config.newChat && normalizeConversationUrl(page.url()) !== target) {
+  if (!config.newChat && !ownedConversationIdentityMatches(page.url(), target)) {
     throw new Error('ui_contract_mismatch:conversation_redirect');
   }
+}
+
+export type OwnedConversationIdentity = {
+  matched: boolean;
+  targetUuid?: string;
+  pageUuid?: string;
+  pageUrl?: string;
+};
+
+export function readOwnedConversationIdentity(page: any, targetChatUrl: string): OwnedConversationIdentity {
+  const targetUuid = conversationUuidFromUrl(targetChatUrl);
+  let pageUrl: string | undefined;
+  try {
+    pageUrl = normalizeConversationUrl(String(page.url()));
+  } catch {
+    return { matched: false, targetUuid, pageUuid: undefined, pageUrl };
+  }
+  const pageUuid = conversationUuidFromUrl(pageUrl);
+  return {
+    matched: ownedConversationIdentityMatches(pageUrl, targetChatUrl),
+    targetUuid,
+    pageUuid,
+    pageUrl,
+  };
+}
+
+function returnOwnedConversationIdentityMismatch(
+  identity: OwnedConversationIdentity,
+  page: any,
+  browser: any,
+  invocationId: string,
+  profileKey: string,
+  sendCount: number,
+  pollCount: number,
+  navigation: StateLightNavigationCounter,
+  incidents: BrowserIncident[],
+  journalWriteFailed: boolean,
+  incident: (eventClass: string, symptom: string, action?: string) => void,
+  afterSend: boolean,
+): TurnRunOutcome {
+  incident(
+    'conversation_identity_mismatch',
+    'owned_conversation_identity_mismatch',
+    afterSend ? 'retain_owned_page_no_resend' : 'return_local_error',
+  );
+  return {
+    page,
+    browser,
+    result: compactResult(
+      'ui_contract_mismatch',
+      'invocation',
+      'owned_conversation_identity_mismatch',
+      invocationId,
+      profileKey,
+      sendCount,
+      pollCount,
+      navigation,
+      incidents,
+      {
+        ...(identity.pageUrl ? { conversation_id: identity.pageUrl } : {}),
+      },
+      journalWriteFailed,
+    ),
+  };
+}
+
+function hasPostSendTranscript(messages: readonly PageMessage[], baselineCount: number): boolean {
+  return messages.length > baselineCount;
+}
+
+function returnOwnedConversationRenderMismatch(
+  page: any,
+  browser: any,
+  invocationId: string,
+  profileKey: string,
+  sendCount: number,
+  pollCount: number,
+  navigation: StateLightNavigationCounter,
+  incidents: BrowserIncident[],
+  journalWriteFailed: boolean,
+  incident: (eventClass: string, symptom: string, action?: string) => void,
+): TurnRunOutcome {
+  incident(
+    'conversation_render_mismatch',
+    'owned_conversation_render_mismatch',
+    'retain_owned_page_no_resend',
+  );
+  return {
+    page,
+    browser,
+    result: compactResult(
+      'ui_contract_mismatch',
+      'invocation',
+      'owned_conversation_render_mismatch',
+      invocationId,
+      profileKey,
+      sendCount,
+      pollCount,
+      navigation,
+      incidents,
+      {
+        ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+      },
+      journalWriteFailed,
+    ),
+  };
+}
+
+function returnFreshConversationLandingMismatch(
+  page: any,
+  browser: any,
+  invocationId: string,
+  profileKey: string,
+  sendCount: number,
+  pollCount: number,
+  navigation: StateLightNavigationCounter,
+  incidents: BrowserIncident[],
+  journalWriteFailed: boolean,
+  incident: (eventClass: string, symptom: string, action?: string) => void,
+): TurnRunOutcome {
+  incident(
+    'conversation_landing_mismatch',
+    'fresh_conversation_landing_mismatch',
+    'retain_owned_page_no_resend',
+  );
+  return {
+    page,
+    browser,
+    result: compactResult(
+      'ui_contract_mismatch',
+      'invocation',
+      'fresh_conversation_landing_mismatch',
+      invocationId,
+      profileKey,
+      sendCount,
+      pollCount,
+      navigation,
+      incidents,
+      {
+        ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+      },
+      journalWriteFailed,
+    ),
+  };
 }
 
 function pageConversationUrl(page: any): string | undefined {
@@ -1255,6 +1515,25 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         releaseStateLightNewChatSendSlot(profileKey, invocationId);
       }
     } else {
+      const chatUrlTarget = normalizeConversationUrl(config.chatUrl ?? '');
+      const preSendIdentity = readOwnedConversationIdentity(page, chatUrlTarget);
+      if (!preSendIdentity.matched) {
+        return returnOwnedConversationIdentityMismatch(
+          preSendIdentity,
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+          false,
+        );
+      }
+
       const composerState = await waitForComposer(page, composerDeadline);
       if (composerState.state !== 'ready') {
         recordProductWallAdvisory(profileKey, composerState.state, composerState.cause, invocationId);
@@ -1280,10 +1559,46 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       await sendOwnedPrompt();
     }
 
+    const targetChatUrl = config.newChat
+      ? undefined
+      : normalizeConversationUrl(config.chatUrl ?? '');
+    if (targetChatUrl) {
+      const landingIdentity = readOwnedConversationIdentity(page, targetChatUrl);
+      if (!landingIdentity.matched) {
+        return returnOwnedConversationIdentityMismatch(
+          landingIdentity,
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+          sendCount >= 1,
+        );
+      }
+    }
+
+    if (config.newChat && ownedConversationUrl) {
+      await navigateToProjectConversationIfNeeded(
+        page,
+        ownedConversationUrl,
+        navigation,
+        Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
+      );
+    }
+
     const startedAt = Date.now();
     const softDeadline = startedAt + config.timeoutMs;
     const hardExhaustionDeadline = startedAt + (config.timeoutMs * 2);
     const dispatchDeadline = startedAt + Math.min(DISPATCH_OBSERVATION_MS, config.timeoutMs);
+    const freshConversationLandingDeadline = startedAt + Math.min(
+      FRESH_CONVERSATION_LANDING_MS,
+      config.timeoutMs,
+    );
     let lastReadyReply = '';
     let bestReadyReply = '';
     let stableReads = 0;
@@ -1292,12 +1607,61 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let ownedPromptEverSeen = false;
     let completionReadySeen = false;
     let sendObservationDeferredLogged = false;
+    let lastHeartbeatAt = startedAt;
+    const emitHeartbeatForPoll = (decision: PageObservationDecision): void => {
+      lastHeartbeatAt = maybeEmitObservationHeartbeat(
+        lastHeartbeatAt,
+        pollCount,
+        decision,
+        stableReads,
+        completionReadySeen,
+        decision.state === 'ready' && decision.reply ? decision.reply : (bestReadyReply || lastReadyReply),
+      );
+    };
 
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
     // landed and this invocation still owns a reachable page, #1120 requires us
     // to keep that page rather than manufacture lost-chat/resend eligibility.
     while (true) {
       pollCount++;
+      if (config.newChat && sendCount >= 1) {
+        const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
+        if (observedConversationUrl) {
+          if (!ownedConversationUrl) ownedConversationUrl = observedConversationUrl;
+          await navigateToProjectConversationIfNeeded(
+            page,
+            observedConversationUrl,
+            navigation,
+            Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
+          );
+        } else if (ownedConversationUrl) {
+          await navigateToProjectConversationIfNeeded(
+            page,
+            ownedConversationUrl,
+            navigation,
+            Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
+          );
+        }
+      }
+      if (targetChatUrl) {
+        const identity = readOwnedConversationIdentity(page, targetChatUrl);
+        if (!identity.matched) {
+          return returnOwnedConversationIdentityMismatch(
+            identity,
+            page,
+            browser,
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            navigation,
+            incidents,
+            journalWriteFailed,
+            incident,
+            true,
+          );
+        }
+      }
       let observation: Awaited<ReturnType<typeof readPostSendObservation>>;
       try {
         observation = await readPostSendObservation(page, snapshot.text, baselineCount);
@@ -1305,9 +1669,11 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         if (browserOrPageDefinitelyLost(page, browser)) throw error;
         const symptom = error instanceof Error ? error.message : String(error);
         incident('post_send_observation_error', symptom, 'continue_polling_owned_page');
-        stableReads = 0;
-        lastReadyReply = '';
-        bestReadyReply = '';
+        if (!(completionReadySeen && bestReadyReply.length > 0)) {
+          stableReads = 0;
+          lastReadyReply = '';
+          bestReadyReply = '';
+        }
         const readErrorExhausted = maybeReturnObservationExhausted(
           Date.now(),
           softDeadline,
@@ -1328,11 +1694,12 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           incident,
         );
         if (readErrorExhausted) return readErrorExhausted;
+        emitHeartbeatForPoll({ state: 'waiting' });
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
 
-      const { messages, wall, ownedWindowCompletionReady } = observation;
+      const { messages, wall, ownedWindowCompletionReady, transcriptIncomplete } = observation;
       if (ownedWindowCompletionReady) completionReadySeen = true;
       if (wall.state) {
         const cause = wall.cause ?? `${wall.state}_detected`;
@@ -1355,7 +1722,35 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         };
       }
 
-      const decision = classifyPageObservation(messages, baselineCount, snapshot.text, !ownedWindowCompletionReady);
+      if (transcriptIncomplete) {
+        incident('post_send_observation_error', 'transcript_read_incomplete', 'continue_polling_owned_page');
+        const incompleteExhausted = maybeReturnObservationExhausted(
+          Date.now(),
+          softDeadline,
+          hardExhaustionDeadline,
+          sendCount,
+          { state: 'waiting' },
+          stableReads,
+          pollCount,
+          messages,
+          baselineCount,
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+        );
+        if (incompleteExhausted) return incompleteExhausted;
+        emitHeartbeatForPoll({ state: 'waiting' });
+        await sleep(page, completionReadySeen ? COMPLETION_CONFIRM_POLL_MS : INITIAL_POLL_MS);
+        continue;
+      }
+
+      const inProgress = !ownedWindowCompletionReady && !completionReadySeen;
+      const decision = classifyPageObservation(messages, baselineCount, snapshot.text, inProgress);
 
       if (hasOwnedUserMessage(messages, snapshot.text)) {
         ownedPromptEverSeen = true;
@@ -1408,6 +1803,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           incident,
         );
         if (uncertainWaitingExhausted) return uncertainWaitingExhausted;
+        emitHeartbeatForPoll(decision);
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
@@ -1491,21 +1887,65 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           incident,
         );
         if (readyExhausted) return readyExhausted;
+        emitHeartbeatForPoll(decision);
         await sleep(page, STABILITY_READ_DELAY_MS);
         continue;
       }
 
-      stableReads = 0;
-      lastReadyReply = '';
-      bestReadyReply = '';
+      if (!(completionReadySeen && bestReadyReply.length > 0)) {
+        stableReads = 0;
+        lastReadyReply = '';
+        bestReadyReply = '';
+      }
       if (await maybeContinueGeneration(page)) {
+        emitHeartbeatForPoll(decision);
         await sleep(page, INITIAL_POLL_MS);
         continue;
+      }
+
+      if (
+        config.newChat
+        && sendCount >= 1
+        && Date.now() >= freshConversationLandingDeadline
+        && !readProjectConversationUrl(page, config.projectUrl ?? '')
+        && !ownedPromptEverSeen
+      ) {
+        return returnFreshConversationLandingMismatch(
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+        );
       }
 
       if (Date.now() >= dispatchDeadline) {
         if (!hasOwnedUserMessage(messages, snapshot.text)) {
           if (sendCount >= 1) {
+            if (
+              (targetChatUrl || config.newChat)
+              && completionReadySeen
+              && !ownedPromptEverSeen
+              && hasPostSendTranscript(messages, baselineCount)
+            ) {
+              return returnOwnedConversationRenderMismatch(
+                page,
+                browser,
+                invocationId,
+                profileKey,
+                sendCount,
+                pollCount,
+                navigation,
+                incidents,
+                journalWriteFailed,
+                incident,
+              );
+            }
             if (!sendObservationDeferredLogged) {
               incident(
                 'send_observation_deferred',
@@ -1575,6 +2015,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         incident,
       );
       if (waitingExhausted) return waitingExhausted;
+
+      emitHeartbeatForPoll(decision);
 
       const elapsed = Date.now() - startedAt;
       const delay = completionReadySeen
@@ -1661,7 +2103,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
     }
   }
-  if (!outcome.preserveOwnedPage) await releaseCdpBrowser(outcome.browser);
+  await releaseCdpBrowser(outcome.browser);
   return {
     ...outcome.result,
     cleanup,

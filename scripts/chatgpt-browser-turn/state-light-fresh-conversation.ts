@@ -160,6 +160,13 @@ export function conversationUuidFromUrl(value: string): string | undefined {
   return match?.[1]?.toLowerCase();
 }
 
+export function ownedConversationIdentityMatches(observedUrl: string, targetChatUrl: string): boolean {
+  const targetUuid = conversationUuidFromUrl(targetChatUrl);
+  const observedUuid = conversationUuidFromUrl(observedUrl);
+  if (targetUuid && observedUuid) return targetUuid === observedUuid;
+  return normalizeConversationUrl(observedUrl) === normalizeConversationUrl(targetChatUrl);
+}
+
 function stateLightFreshClaimsDir(profileKey: string): string {
   const dir = join(profileDirs(profileKey).root, 'state-light-fresh-claims');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -482,4 +489,40 @@ export async function waitForConversationUrlAfterSend(
     await sleep(page, Math.min(pollMs, Math.max(1, deadlineMs - Date.now())));
   }
   return undefined;
+}
+
+
+export function readProjectConversationUrl(page: any, projectUrl: string): string | undefined {
+  try {
+    const projectPrefix = projectConversationPrefix(projectUrl);
+    const currentUrl = normalizeConversationUrl(page.url());
+    if (conversationUuidFromUrl(currentUrl) && currentUrl.startsWith(projectPrefix)) {
+      return currentUrl;
+    }
+  } catch {
+    // keep polling
+  }
+  return undefined;
+}
+
+export async function navigateToProjectConversationIfNeeded(
+  page: any,
+  conversationUrl: string,
+  navigation: StateLightNavigationCounter,
+  gotoTimeoutMs: number,
+): Promise<void> {
+  const target = normalizeConversationUrl(conversationUrl);
+  if (!conversationUuidFromUrl(target)) return;
+  let currentUrl = '';
+  try {
+    currentUrl = normalizeConversationUrl(page.url());
+  } catch {
+    currentUrl = '';
+  }
+  if (ownedConversationIdentityMatches(currentUrl, target)) return;
+  navigation.recordGoto();
+  await page.goto(target, {
+    waitUntil: 'domcontentloaded',
+    timeout: gotoTimeoutMs,
+  });
 }

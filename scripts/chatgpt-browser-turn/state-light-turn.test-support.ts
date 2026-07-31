@@ -108,7 +108,7 @@ import {
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
 import { POST_SEND_OBSERVATION_POLL_MS, runStateLightTurn } from './state-light-turn.ts';
-import type { ProfileVerification } from './ui-adapter.ts';
+import { normalizeConversationUrl, type ProfileVerification } from './ui-adapter.ts';
 
 import journalSymptoms from './fixtures/browser-turn-recurrence-journal-symptoms.json' with { type: 'json' };
 import { BROWSER_TURN_RECURRENCE_REPLAY_KINDS } from './fixtures/browser-turn-recurrence-replay-kinds.ts';
@@ -118,16 +118,42 @@ const BASELINE: StateLightTestMessage[] = [
   { role: 'assistant', text: 'OLD ANSWER', finalAction: true },
 ];
 
+function collectionLocatorWithReadFailures(
+  messages: StateLightTestMessage[],
+  generating: boolean,
+  pollIndex: number,
+  failMessageReadAt?: (messageIndex: number, pollIndex: number) => boolean,
+) {
+  return scalarLocator({
+    count: vi.fn(async () => messages.length),
+    nth: vi.fn((index: number) => {
+      const locator = messageLocator(messages[index]!, generating && index === messages.length - 1);
+      if (!failMessageReadAt?.(index, pollIndex)) return locator;
+      return scalarLocator({
+        count: vi.fn(async () => 1),
+        getAttribute: vi.fn(async () => { throw new Error(`locator.getAttribute: Timeout 5000ms exceeded at node ${index}`); }),
+        innerText: vi.fn(async () => { throw new Error(`locator.innerText: Timeout 5000ms exceeded at node ${index}`); }),
+        textContent: vi.fn(async () => { throw new Error(`locator.textContent: Timeout 5000ms exceeded at node ${index}`); }),
+        locator: locator.locator,
+      });
+    }),
+  });
+}
+
 function makePage(
   snapshots: StateLightTestSnapshot[],
   options: {
     throwAfterSend?: boolean;
     transientStatusErrors?: number;
     transientReadErrors?: number | 'always';
+    failMessageReadAt?: (messageIndex: number, pollIndex: number) => boolean;
+    blockProductStatus?: boolean;
     sendButton?: boolean;
     wallText?: string;
     wallAfterPoll?: number;
     preSendMessages?: StateLightTestMessage[];
+    pageUrl?: string;
+    pageUrlAfterSend?: string;
   } = {},
 ) {
   let sent = false;
@@ -159,6 +185,9 @@ function makePage(
   const page: any = {
     __fakeBrowserGptPage: true,
     __productStatusText: () => {
+      if (sent && options.blockProductStatus) {
+        throw new Error('locator.innerText: Timeout 5000ms exceeded waiting for locator([role=alert]).nth(1)');
+      }
       if (sent && transientStatusErrors > 0) {
         transientStatusErrors--;
         throw new Error('transient product status read');
@@ -168,7 +197,10 @@ function makePage(
       return metrics.polls >= threshold ? options.wallText : '';
     },
     goto: vi.fn(async () => undefined),
-    url: vi.fn(() => 'https://chatgpt.com/c/fake-owned-turn'),
+    url: vi.fn(() => {
+      const value = (sent && options.pageUrlAfterSend) ? options.pageUrlAfterSend : (options.pageUrl ?? 'https://chatgpt.com/c/existing');
+      return value;
+    }),
     isClosed: vi.fn(() => closed),
     waitForTimeout: vi.fn(async (ms: number) => {
       metrics.waitedMs += ms;
@@ -225,9 +257,15 @@ function makePage(
         activeSnapshot = snapshots[Math.min(observationIndex, Math.max(0, snapshots.length - 1))]
           ?? { messages: [...BASELINE, { role: 'user', text: filled }], generating: true };
         continuationDismissed = false;
+        const pollIndex = observationIndex;
         observationIndex++;
         metrics.polls++;
-        return collectionLocator(activeSnapshot.messages);
+        return collectionLocatorWithReadFailures(
+          activeSnapshot.messages,
+          activeSnapshot.generating,
+          pollIndex,
+          options.failMessageReadAt,
+        );
       }
       if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
         const assistants = activeSnapshot.messages.filter((message) => message.role === 'assistant');
@@ -294,6 +332,7 @@ async function runAndCapture(
 }
 
 beforeEach(() => {
+  vi.mocked(normalizeConversationUrl).mockImplementation((value: string) => value);
   mocks.browserQueue.length = 0;
   mocks.cleanupOutcome = 'confirmed';
   mocks.journalThrows = false;
@@ -324,7 +363,6 @@ describe('Issue #1120 state-light turn lifecycle', () => {
   it('executes the real turn path with one send and multiple read-only polls', async () => {
     const fake = makePage(readySnapshots());
     const outcome = await runAndCapture(fake.page);
-
     expect(outcome.code).toBe(0);
     expect(outcome.result).toMatchObject({
       state: 'ok',
@@ -433,7 +471,12 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       expect(fakes[index]!.metrics.closes).toBe(1);
       expect(browserTuples[index]!.context.newPage).toHaveBeenCalledTimes(1);
     }
-    expect(writes).toHaveLength(3);
+    const turnResults = writes
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((row) => row.schema === 'turn-result/v1');
+    expect(turnResults).toHaveLength(3);
   });
 
   it('continues polling a reachable owned page past the soft timeout without resend', async () => {
@@ -534,7 +577,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     const page: any = {
       __fakeBrowserGptPage: true,
       goto: vi.fn(async () => undefined),
-      url: vi.fn(() => 'https://chatgpt.com/c/fake-owned-turn'),
+      url: vi.fn(() => 'https://chatgpt.com/c/existing'),
       isClosed: vi.fn(() => false),
       waitForTimeout: vi.fn(async (ms: number) => {
         metrics.waitedMs += ms;
@@ -690,7 +733,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       send_count: 1,
     });
     expect(fake.metrics.closes).toBe(1);
-    expect(outcome.result.conversation_id).toBe('https://chatgpt.com/c/fake-owned-turn');
+    expect(outcome.result.conversation_id).toBe('https://chatgpt.com/c/existing');
   });
 
   it('returns observation_uncertain at the hard deadline for interleaved foreign activity', async () => {
@@ -728,7 +771,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
   });
 
   it('keeps polling the same owned page after a transient post-send observation error', async () => {
-    const fake = makePage(readySnapshots(), { transientStatusErrors: 1 });
+    const fake = makePage(readySnapshots(), { transientReadErrors: 1 });
     const outcome = await runAndCapture(fake.page);
 
     expect(outcome.code).toBe(0);
@@ -982,6 +1025,55 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(fake.metrics.closes).toBe(1);
   });
 
+  it('emits observation heartbeats during persistent uncertain polling', async () => {
+    const foreignA: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'FOREIGN-A' },
+        { role: 'assistant', text: 'partial' },
+      ],
+      generating: true,
+    };
+    const foreignB: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'FOREIGN-B' },
+        { role: 'assistant', text: 'partial' },
+      ],
+      generating: true,
+    };
+    const oscillating = Array.from({ length: 40 }, (_, index) => (index % 2 === 0 ? foreignA : foreignB));
+    const fake = makePage(oscillating);
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      enqueueBrowserForTurn(mocks, fake.page);
+      const code = await runStateLightTurn([
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--output', '/tmp/reply.txt',
+        '--chat-url', 'https://chatgpt.com/c/existing',
+        '--timeout-ms', '5000',
+        '--poll-ms', '1',
+      ]);
+      expect(code).toBe(11);
+      const heartbeats = writes
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.schema === 'observation-heartbeat/v1');
+      expect(heartbeats.length).toBeGreaterThanOrEqual(2);
+      expect(heartbeats.some((row) => row.observation_state === 'uncertain')).toBe(true);
+      expect(heartbeats.every((row) => row.poll_count >= 2)).toBe(true);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it('stabilizes a long reply when successive reads differ only by render artifacts', async () => {
     const body = `${'detail '.repeat(60)} Section footer with enough words.`;
     const renderA = `Intro paragraph.
@@ -1186,6 +1278,106 @@ ${body}`;
     expect(fake.metrics.polls).toBeGreaterThan(3);
   });
 
+
+  it('finds owned prompt in a long transcript when mid-list node reads intermittently throw', async () => {
+    const history: StateLightTestMessage[] = [
+      { role: 'user', text: 'USER-ONE' },
+      { role: 'assistant', text: 'ANSWER-ONE', finalAction: true },
+      { role: 'user', text: 'USER-TWO' },
+      { role: 'assistant', text: 'ANSWER-TWO', finalAction: true },
+      { role: 'user', text: 'USER-THREE' },
+      { role: 'assistant', text: 'ANSWER-THREE', finalAction: true },
+      { role: 'user', text: 'PROMPT' },
+    ];
+    const ready: StateLightTestSnapshot = {
+      messages: [...history, { role: 'assistant', text: 'FINAL', finalAction: true, finalActionInTurnContainer: true }],
+      generating: false,
+    };
+    const fake = makePage([ready, ready, ready], {
+      preSendMessages: history,
+      failMessageReadAt: (index, poll) => index === 2 && poll % 2 === 0,
+    });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).not.toContain('send_observation_deferred');
+    expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
+  });
+
+  it('captures a static complete reply when confirm reads intermittently throw on the assistant node', async () => {
+    const reply = `STATIC ${'X'.repeat(8000)} END`;
+    const snapshots: StateLightTestSnapshot[] = [
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: reply, finalAction: true, finalActionInTurnContainer: true }],
+        generating: false,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: reply, finalAction: true, finalActionInTurnContainer: true }],
+        generating: false,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: reply, finalAction: true, finalActionInTurnContainer: true }],
+        generating: false,
+      },
+    ];
+    const assistantIndex = 3;
+    const fake = makePage(snapshots, {
+      failMessageReadAt: (index, poll) => index === assistantIndex && poll % 2 === 1,
+    });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(String(mocks.writeFileSync.mock.calls[0]?.[1] ?? '')).toBe(reply);
+  });
+
+  it('emits observation heartbeats during post-send polling', async () => {
+    const fake = makePage(delayedReadySnapshots(4));
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      enqueueBrowserForTurn(mocks, fake.page);
+      const code = await runStateLightTurn([
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--output', '/tmp/reply.txt',
+        '--chat-url', 'https://chatgpt.com/c/existing',
+        '--timeout-ms', '5000',
+        '--poll-ms', '1',
+      ]);
+      expect(code).toBe(0);
+      const heartbeats = writes
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.schema === 'observation-heartbeat/v1');
+      expect(heartbeats.length).toBeGreaterThanOrEqual(1);
+      expect(heartbeats[0]).toMatchObject({
+        schema: 'observation-heartbeat/v1',
+        poll_count: expect.any(Number),
+        observation_state: expect.any(String),
+        stable_reads: expect.any(Number),
+        completion_ready: expect.any(Boolean),
+        last_reply_length: expect.any(Number),
+        last_reply_sha256_head: expect.any(String),
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('does not report owned_prompt_not_observed when product-status probes throw after send', async () => {
+    const fake = makePage(readySnapshots(), { blockProductStatus: true });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).not.toContain('send_observation_deferred');
+  });
+
   it('does not let cleanup or journal failure veto an already captured reply', async () => {
     mocks.cleanupOutcome = 'unconfirmed';
     mocks.journalThrows = true;
@@ -1373,6 +1565,132 @@ describe('browser-turn recurrence journal fixture coverage', () => {
       send_count: 0,
     });
     expect(outcome.result.incidents).toContain('helper_failure_before_send');
+  });
+
+  it('fails chat-url continuation before send when landed conversation uuid mismatches target', async () => {
+    const target = 'https://chatgpt.com/g/g-p-test-project/c/6a6c32b2-51a0-83ec-9fe6-521e171ba785';
+    const landed = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      fill: vi.fn(async () => undefined),
+      press: vi.fn(async () => undefined),
+    });
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => landed),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: vi.fn(async () => undefined),
+      getByRole: vi.fn(() => scalarLocator()),
+      getByText: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: vi.fn(async () => 0) });
+        if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(BASELINE);
+        return scalarLocator();
+      }),
+    };
+    enqueueBrowserForTurn(mocks, page);
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--output', '/tmp/reply.txt',
+      '--chat-url', target,
+      '--timeout-ms', '1000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'ui_contract_mismatch:conversation_redirect',
+      send_count: 0,
+    });
+    expect(outcome.result.incidents).toContain('helper_failure_before_send');
+    expect(composer.press).not.toHaveBeenCalled();
+  });
+
+  it('fails chat-url observation when page conversation uuid drifts away from target', async () => {
+    const target = 'https://chatgpt.com/c/6a6c32b2-51a0-83ec-9fe6-521e171ba785';
+    const drifted = 'https://chatgpt.com/c/22222222-2222-2222-2222-222222222222';
+    let sent = false;
+    const staleWrongRender: StateLightTestSnapshot = {
+      messages: [...BASELINE, { role: 'assistant', text: 'foreign answer', finalAction: true, finalActionInTurnContainer: true }],
+      generating: false,
+    };
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      fill: vi.fn(async () => undefined),
+      press: vi.fn(async () => { sent = true; }),
+    });
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async () => undefined),
+      url: vi.fn(() => (sent ? drifted : target)),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: vi.fn(async () => undefined),
+      getByRole: vi.fn(() => scalarLocator()),
+      getByText: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: vi.fn(async () => 0) });
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          if (!sent) return collectionLocator(BASELINE);
+          return collectionLocatorWithReadFailures(staleWrongRender.messages, staleWrongRender.generating, 0);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          return messageLocator(staleWrongRender.messages.at(-1)!, false);
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          return collectionLocator(staleWrongRender.messages.filter((message) => message.role === 'assistant'));
+        }
+        return scalarLocator();
+      }),
+    };
+    enqueueBrowserForTurn(mocks, page);
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--output', '/tmp/reply.txt',
+      '--chat-url', target,
+      '--timeout-ms', '3000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_conversation_identity_mismatch',
+      send_count: 1,
+    });
+    expect(outcome.result.incidents).toContain('conversation_identity_mismatch');
+    expect(outcome.result.state).not.toBe('no_reply');
+  });
+
+  it('fails chat-url observation when completion is ready but owned prompt never appears on the page', async () => {
+    const target = 'https://chatgpt.com/g/g-p-test-project/c/6a6c32b2-51a0-83ec-9fe6-521e171ba785';
+    const staleWrongRender: StateLightTestSnapshot = {
+      messages: [...BASELINE, { role: 'assistant', text: 'foreign answer', finalAction: true, finalActionInTurnContainer: true }],
+      generating: false,
+    };
+    const fake = makePage(Array.from({ length: 30 }, () => staleWrongRender), {
+      pageUrl: target,
+    });
+    enqueueBrowserForTurn(mocks, fake.page);
+    const outcome = await runStateLightTurnWithStdoutCapture(runStateLightTurn, [
+      ...STATE_LIGHT_TURN_BASE_ARGV,
+      '--output', '/tmp/reply.txt',
+      '--chat-url', target,
+      '--timeout-ms', '3000',
+      '--poll-ms', '1',
+    ]);
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_conversation_render_mismatch',
+      send_count: 1,
+    });
+    expect(outcome.result.incidents).toContain('conversation_render_mismatch');
+    expect(outcome.result.state).not.toBe('no_reply');
+    expect(fake.metrics.polls).toBeLessThan(20);
+    expect(outcome.result.cleanup).toBe('confirmed');
+    expect(mocks.releaseBrowser).toHaveBeenCalled();
+    expect(fake.metrics.closes).toBe(1);
   });
 
   it('replays rate_limit invocation_blocker symptoms', async () => {
