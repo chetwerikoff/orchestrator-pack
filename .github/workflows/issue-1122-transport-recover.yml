@@ -1,19 +1,17 @@
 name: Issue 1122 transport recovery
 
 on:
-  push:
-    branches:
-      - agent/issue-1122-browser-gpt-page-probe
   pull_request:
     branches:
       - main
+    types:
+      - ready_for_review
 
 permissions:
   contents: write
 
 jobs:
   recover:
-    if: ${{ github.event_name == 'pull_request' || !contains(github.event.head_commit.message, '[assembled]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
