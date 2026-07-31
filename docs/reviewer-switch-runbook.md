@@ -75,8 +75,11 @@ From the current canonical repository checkout, use the pack-owned foreground
 command:
 
 ```bash
-npm run pack-gpt-review -- --pr-number <PR_NUMBER>
+npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>
 ```
+
+`--silent` is part of the canonical command: it suppresses npm lifecycle banners
+so terminal stdout remains exactly one machine-readable runner JSON object.
 
 The PR number is the only required task argument. Optional
 `--timeout-seconds <N>` overrides the runner's 45-minute default. Do not supply a
