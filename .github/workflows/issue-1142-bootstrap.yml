@@ -41,10 +41,33 @@ jobs:
           from pathlib import Path
           path = Path('/tmp/issue1142-bootstrap.py')
           text = path.read_text()
-          redundant = "replace_once('.claude/skills/create-issue-draft/SKILL.md', 'tier/T3-critical classification', 'tier/within-T3 L4 classification')\n"
-          if text.count(redundant) != 1:
-              raise SystemExit('expected one redundant skill replacement')
-          path.write_text(text.replace(redundant, '', 1))
+          replacements = [
+              ("replace_once('.claude/skills/create-issue-draft/SKILL.md', 'tier/T3-critical classification', 'tier/within-T3 L4 classification')\n", ''),
+              ("const mutated = mutateRow(committed, '1039', '| 1039 | T3 |  | T2 | DISPUTED |');", "const mutated = mutateRow(committed, '1039', '| 1039 | T3 | T2 | T2 | DISPUTED |');"),
+              ("""  for (const issue of authored) {
+              if (seen.has(issue.number)) {
+                duplicate = true;
+                continue;
+              }
+              seen.add(issue.number);
+              unique.push(issue);
+              if (unique.length === sampleSize) break;
+            }
+          """, """  for (const issue of authored) {
+              if (seen.has(issue.number)) {
+                duplicate = true;
+                continue;
+              }
+              seen.add(issue.number);
+              if (unique.length < sampleSize) unique.push(issue);
+            }
+          """),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one bootstrap replacement: {old[:80]}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
           PY
           python /tmp/issue1142-bootstrap.py
       - name: Install dependencies
