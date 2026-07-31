@@ -1,18 +1,16 @@
 name: issue-1142-followup-findings
-# Triggered after the workflow exists on the branch.
 
 on:
-  push:
-    branches:
-      - agent/issue-1142-tiering-calibration
-    paths:
-      - .github/workflows/issue-1142-followup-findings.yml
+  pull_request:
+    types:
+      - converted_to_draft
 
 permissions:
   contents: write
 
 jobs:
   fix:
+    if: github.event.pull_request.number == 1154
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
