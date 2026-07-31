@@ -267,7 +267,7 @@ test('host accepts ignored unsupported roles before, between, and after observed
     assert.equal(snapshot.observed_user_nodes, 1);
     assert.equal(snapshot.observed_assistant_nodes, 1);
     assert.equal(snapshot.observed_message_nodes, 2);
-    assert.deepEqual(snapshot.nodes.map((node: any) => node.document_ordinal), documentOrdinals);
+    assert.deepEqual(Array.from(snapshot.nodes, (node: any) => node.document_ordinal), documentOrdinals);
   }
 });
 
