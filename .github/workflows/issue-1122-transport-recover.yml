@@ -25,8 +25,11 @@ jobs:
           set -euo pipefail
           cat .issue-1122-transport/source.part{00..06} > scripts/browser-gpt-page-probe.ts
           cat .issue-1122-transport/test.part{00..03} > scripts/browser-gpt-page-probe.test.ts
-          test "$(git hash-object scripts/browser-gpt-page-probe.ts)" = "9122f2610c2d1c87c9d92195acc5214ba0323bed"
-          test "$(git hash-object scripts/browser-gpt-page-probe.test.ts)" = "86a415bb5d71c7f227328decd90f944650054f4e"
+          source_sha="$(git hash-object scripts/browser-gpt-page-probe.ts)"
+          test_sha="$(git hash-object scripts/browser-gpt-page-probe.test.ts)"
+          printf 'assembled source sha=%s\nassembled test sha=%s\n' "$source_sha" "$test_sha"
+          test "$source_sha" = "9122f2610c2d1c87c9d92195acc5214ba0323bed"
+          test "$test_sha" = "86a415bb5d71c7f227328decd90f944650054f4e"
 
       - name: Reconcile current-main CI registrations
         shell: bash
@@ -97,7 +100,11 @@ jobs:
           set -euo pipefail
           npm run test:issue-1122
           npm run typecheck:foundation
-          output="$(npm run --silent browser-gpt-page-probe -- invalid 2>/tmp/issue-1122-probe.stderr || test "$?" -eq 9)"
+          set +e
+          output="$(npm run --silent browser-gpt-page-probe -- invalid 2>/tmp/issue-1122-probe.stderr)"
+          status=$?
+          set -e
+          test "$status" -eq 9
           test "$(printf '%s\n' "$output" | wc -l)" -eq 1
           printf '%s\n' "$output" | node -e 'let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => { const value = JSON.parse(s); if (value.schema !== "browser-gpt-page-probe/v1" || value.status !== "input_invalid") process.exit(1); });'
 
