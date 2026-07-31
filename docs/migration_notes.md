@@ -1,3 +1,18 @@
+## 2026-07-31 — Canonical Browser-GPT PR-number pack review (Issue #1111)
+
+### Rollout:
+
+1. Pull the merged pack into the canonical operator checkout.
+2. Keep the existing Browser-GPT profile, CDP, and chat/project prerequisites from `docs/reviewer-switch-runbook.md`; no persistent `PACK_REVIEWER` change or AO restart is required for one invocation.
+3. Run `npm run pack-gpt-review -- --pr-number <PR_NUMBER>` from the repository root. Do not supply or cache a head SHA; the command resolves and validates the live `OPEN` PR head before Browser-GPT engagement.
+4. Keep the command foregrounded. A newly admitted run emits one stderr start indication with PR, full head, run ID, and timeout, then returns the existing runner’s terminal JSON on stdout.
+5. Treat non-zero `review_not_started` as proof that this invocation did not execute GPT. Inspect `runnerReason`; do not force, clear, or bypass active/terminal same-head reuse or start-claim arbitration.
+6. Trust results only for the head bound by the runner. The existing post-review live-head guard and GitHub publication path remain authoritative.
+
+### Rollback
+
+Revert the Issue #1111 command, runner, focused-test, and documentation changes, then recycle only sessions that must reload tracked files. Do not delete or rewrite pack-review store state, start claims, Browser-GPT transport state, or GitHub review/status history. No daemon shutdown, store migration, or recovery ceremony is required solely for rollback.
+
 
 
 ## 2026-07-28 — Reduce per-tier PR review-cycle caps (Issue #1063)
