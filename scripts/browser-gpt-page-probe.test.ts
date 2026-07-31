@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash, webcrypto } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { mkdtemp, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -254,12 +254,23 @@ test('existing, symlinked, directory, and special output targets are refused wit
   await assert.rejects(publishExactBytes(outputDirectory, Buffer.from('replacement')), (error: any) => error.status === 'unsafe_output');
 
   if (process.platform === 'win32') {
-    t.skip('FIFO fixture requires POSIX mkfifo');
+    t.diagnostic('Unix-domain socket special-target fixture is not available on Windows');
     return;
   }
-  const fifo = join(directory, 'pipe');
-  execFileSync('mkfifo', [fifo]);
-  await assert.rejects(publishExactBytes(fifo, Buffer.from('replacement')), (error: any) => error.status === 'unsafe_output');
+  const socketPath = join(directory, 'socket');
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(socketPath, resolve);
+  });
+  try {
+    await assert.rejects(
+      publishExactBytes(socketPath, Buffer.from('replacement')),
+      (error: any) => error.status === 'unsafe_output',
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test('a post-create write failure removes the incomplete artifact', async () => {
@@ -313,6 +324,7 @@ test('compatible target conversion never exposes websocket URLs in list-facing m
   assert.equal(converted.length, 1);
   assert.equal(converted[0]?.target_id, 'one');
 });
+
 
 test('inspect preserves exact aggregate counts while bounding node summaries', async () => {
   const nodes: FakeNode[] = [];
