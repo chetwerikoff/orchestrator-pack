@@ -1,8 +1,11 @@
+import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -12,6 +15,8 @@ import {
   runPackGptReviewCommand,
 } from './pack-gpt-review.js';
 import { startPackReview } from './pack-review-runner.js';
+import { createPackReviewRun } from './lib/pack-review-run-store.js';
+import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
 
 const repoRoot = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -52,6 +57,45 @@ function canonicalCommandRunner(storeRoot: string, overrides: Record<string, unk
     fixtureEmulateWin32Selector: true,
     ...overrides,
   });
+}
+
+function engagementCount(pathValue: string): number {
+  if (!existsSync(pathValue)) return 0;
+  return readFileSync(pathValue, 'utf8').trim().split('\n').filter(Boolean).length;
+}
+
+function writeClosedPrGhFixture(binRoot: string): void {
+  if (process.platform === 'win32') {
+    writeFileSync(path.join(binRoot, 'gh.cmd'), [
+      '@echo off',
+      'if "%1"=="repo" (',
+      '  echo chetwerikoff/orchestrator-pack',
+      '  exit /b 0',
+      ')',
+      'if "%1"=="pr" (',
+      `  echo ${HEAD_A} CLOSED`,
+      '  exit /b 0',
+      ')',
+      'exit /b 2',
+      '',
+    ].join('\r\n'), 'utf8');
+    return;
+  }
+
+  const fixture = path.join(binRoot, 'gh');
+  writeFileSync(fixture, [
+    '#!/usr/bin/env node',
+    "const args = process.argv.slice(2);",
+    "if (args[0] === 'repo' && args[1] === 'view') {",
+    "  process.stdout.write('chetwerikoff/orchestrator-pack\\n');",
+    "} else if (args[0] === 'pr' && args[1] === 'view') {",
+    `  process.stdout.write('${HEAD_A} CLOSED\\n');`,
+    '} else {',
+    '  process.exitCode = 2;',
+    '}',
+    '',
+  ].join('\n'), 'utf8');
+  chmodSync(fixture, 0o755);
 }
 
 afterEach(() => {
@@ -292,6 +336,38 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     ])).toThrow("unknown argument '--head-sha'");
   });
 
+  it('keeps the documented npm invocation stdout to one JSON object', () => {
+    const fixtureRoot = tempRoot('opk-issue-1111-npm-stdout-');
+    const commandRoot = tempRoot('opk-issue-1111-gh-bin-');
+    writeClosedPrGhFixture(commandRoot);
+    const childEnv = {
+      ...process.env,
+      AO_BASE_DIR: path.join(fixtureRoot, 'ao-base'),
+      PATH: `${commandRoot}${path.delimiter}${process.env.PATH ?? ''}`,
+      npm_config_update_notifier: 'false',
+    };
+    delete childEnv.OPK_VITEST_HARNESS;
+
+    const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+      'run', '--silent', 'pack-gpt-review', '--', '--pr-number', '1111',
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: childEnv,
+    });
+
+    expect(result.status, result.stderr).toBe(1);
+    const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      ok: false,
+      outcome: 'review_target_unavailable',
+      prNumber: 1111,
+    });
+    expect(result.stdout).not.toContain('> orchestrator-pack@');
+    expect(result.stdout).not.toContain('> npm run check:node-major');
+  });
+
   it('resolves a PR-only target, binds GPT above persistent layers, and emits one start indication', async () => {
     const storeRoot = tempRoot('opk-issue-1111-fresh-');
     const capture = path.join(storeRoot, 'github-review.json');
@@ -319,6 +395,44 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     expect(readFileSync(engagement, 'utf8').trim().split('\n')).toHaveLength(1);
     expect(process.env.PACK_REVIEWER).toBe('codex');
     expect(process.env[PACK_REVIEW_BOUND_REVIEWER_ENV]).toBeUndefined();
+  });
+
+  it('maps same-head active reuse to non-zero review_not_started without GPT engagement', async () => {
+    const storeRoot = tempRoot('opk-issue-1111-active-reuse-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    const engagement = path.join(storeRoot, 'gpt-engagements.jsonl');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_REVIEW_RUNNER_GPT_ENGAGEMENT_FILE = engagement;
+    createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1111,
+      headSha: HEAD_A,
+      linkedSessionId: 'fixture-active-run',
+      startReason: 'fixture-active-run',
+      surface: 'fixture-active-run',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+    });
+    const stderr: string[] = [];
+
+    const execution = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: (chunk) => stderr.push(chunk) },
+      startReview: canonicalCommandRunner(storeRoot),
+    });
+
+    expect(execution.exitCode).toBe(1);
+    expect(execution.result).toMatchObject({
+      outcome: 'review_not_started',
+      reason: 'review_not_started',
+      runnerReason: 'active_run_exists',
+      prNumber: 1111,
+      headSha: HEAD_A,
+    });
+    expect(stderr).toHaveLength(0);
+    expect(engagementCount(engagement)).toBe(0);
   });
 
   it('maps same-head terminal reuse to non-zero review_not_started without another GPT send', async () => {
@@ -350,7 +464,42 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
       headSha: HEAD_A,
     });
     expect(secondStderr).toHaveLength(0);
-    expect(readFileSync(engagement, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(engagementCount(engagement)).toBe(1);
+  });
+
+  it('maps start-claim refusal to non-zero review_not_started without GPT engagement', async () => {
+    const storeRoot = tempRoot('opk-issue-1111-claim-refusal-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    const engagement = path.join(storeRoot, 'gpt-engagements.jsonl');
+    harnessEnv(storeRoot, capture);
+    process.env.PACK_REVIEW_RUNNER_GPT_ENGAGEMENT_FILE = engagement;
+    const claim = acquireReviewStartClaim({
+      projectId: 'orchestrator-pack',
+      prNumber: 1111,
+      headSha: HEAD_A,
+      surface: 'fixture-existing-claim',
+      startReason: 'fixture-existing-claim',
+      reviewRuns: [],
+    });
+    expect(claim.acquired, JSON.stringify(claim)).toBe(true);
+    const stderr: string[] = [];
+
+    const execution = await runPackGptReviewCommand({ prNumber: 1111 }, {
+      env: process.env,
+      stderr: { write: (chunk) => stderr.push(chunk) },
+      startReview: canonicalCommandRunner(storeRoot),
+    });
+
+    expect(execution.exitCode).toBe(1);
+    expect(execution.result).toMatchObject({
+      outcome: 'review_not_started',
+      reason: 'review_not_started',
+      runnerReason: 'claimed',
+      prNumber: 1111,
+      headSha: HEAD_A,
+    });
+    expect(stderr).toHaveLength(0);
+    expect(engagementCount(engagement)).toBe(0);
   });
 
   it('fails a closed PR before reviewer engagement and names timeout as non-success', async () => {
