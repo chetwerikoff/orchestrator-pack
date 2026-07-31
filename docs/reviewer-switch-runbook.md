@@ -39,6 +39,9 @@ exits non-zero and runs **no** reviewer (fail-closed; no silent Codex default).
 unset, User wins over Machine for the same name (e.g. User `claude` + Machine
 `codex` resolves `claude`). Non-Windows hosts use process scope only in this
 pack — no persistent-env fallback; unset process scope remains fail-closed.
+The canonical PR-number GPT command below uses the invocation-bound reviewer
+channel, so its temporary `gpt` binding wins without changing Process, User, or
+Machine configuration.
 
 Before merge or declaring review clean, run `.\scripts\orchestrator-diagnose.ps1
 -Strict` (live AO) or rely on CI `scripts/invoke-pack-review-strict-gate.ps1`
@@ -65,6 +68,54 @@ invocation-local failure. Do not run `status/list`, `clear`, capability/Gate-B,
 review turn. If a page/process/chat is genuinely lost, start a fresh invocation;
 a rare duplicate recoverable GPT review prompt is accepted. The helper never
 closes foreign tabs and old control state cannot admission-block a healthy review.
+
+## Run one Browser-GPT review by PR number
+
+From the current canonical repository checkout, use the pack-owned foreground
+command:
+
+```bash
+npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>
+```
+
+`--silent` is part of the canonical command: it suppresses npm lifecycle banners
+so terminal stdout remains exactly one machine-readable runner JSON object.
+
+The PR number is the only required task argument. Optional
+`--timeout-seconds <N>` overrides the runner's 45-minute default. Do not supply a
+head SHA: the command resolves the canonical repository, verifies that the PR is
+`OPEN`, and obtains the live full current head before Browser-GPT can send.
+Repository lookup failure, an absent or closed PR, GitHub read failure, or an
+invalid head exits non-zero before GPT/browser or GitHub publication effects.
+
+This command binds `gpt` through `PACK_REVIEW_BOUND_REVIEWER` for this invocation
+only. It does not mutate persistent `PACK_REVIEWER` configuration, and a
+conflicting Windows User/Machine selector cannot redirect this invocation to
+Codex or Claude.
+
+A fresh run emits one compact start line on stderr containing PR number, bound
+head, run ID, and timeout, then remains foregrounded until the existing runner
+returns a terminal result. Terminal stdout remains one machine-readable runner
+JSON object. The existing runner owns prompt/result composition, the post-review
+live-head check, and GitHub publication; this command does not publish a review
+itself.
+
+A new run is eligible only when the existing generic `(PR, head)` runner state
+and start-claim path allow it. When an active same-head run, a persisted terminal
+same-head run, or a start-claim refusal prevents a new run, the command exits
+non-zero with `outcome: "review_not_started"` and preserves the underlying
+`runnerReason`. That means Browser-GPT did **not** execute for this invocation;
+there is no force/re-run option for an already reviewed same head.
+
+The result is valid only for the bound head. If the PR head moves before
+publication, the existing runner rejects the earlier-head result. Timeout is a
+non-zero terminal failure. `Ctrl-C` interrupts the foreground command and is not
+success; the command does not detach, create a PID contract, or promise that the
+review survives after the caller exits.
+
+The browser prerequisites from **Switch to GPT (browser)** still apply. Unlike a
+persistent reviewer switch, this one invocation does not require changing
+`PACK_REVIEWER` or restarting AO.
 
 ## Switch to Codex
 
@@ -128,6 +179,7 @@ not use `.ao/` in **REVIEW_COMMAND**.
 | Review exits immediately, PACK_REVIEWER message | Selector unset/invalid in all layers | Set User or process `PACK_REVIEWER` to `gpt`, `codex`, or `claude` |
 | Wrong model ran | Selector not set before `ao start` | Fix env, restart AO; check `terminationReason` vs `PACK_REVIEWER` |
 | GPT browser turn blocked/failed | Invocation-local browser/UI/quota/attribution failure | Read the compact turn result. Fix the local blocker or start a fresh review invocation when the old page/chat is genuinely lost; do not clear legacy helper state |
+| PR-number command returns `review_not_started` | Existing active/terminal same-head run or start claim refused a new run | Read `runnerReason`; do not report GPT success or bypass generic runner reuse with force/clear |
 | Strict gate selector-mismatch | Drift or wrong env | Align `PACK_REVIEWER` with wrapper named in `terminationReason` |
 | Codex usage limit | Quota | Set `PACK_REVIEWER=claude` or `gpt` temporarily |
 | Orchestrator never picks new reviewer | No restart | `ao stop` / `ao start` after selector change |

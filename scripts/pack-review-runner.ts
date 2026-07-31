@@ -82,6 +82,14 @@ interface StartInput {
   storeRoot?: string;
   timeoutSeconds?: number;
   claimMode?: 'acquire' | 'preacquired';
+  onRunStarted?: (event: {
+    prNumber: number;
+    headSha: string;
+    runId: string;
+    timeoutSeconds: number;
+  }) => void | Promise<void>;
+  fixtureCurrentPrHeadSha?: string;
+  fixturePrState?: string;
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
@@ -286,12 +294,14 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
   sourceRepoRoot: string;
 }> {
   const sessionId = trim(input.sessionId || input.linkedSessionId);
-  const binding = input.prNumber && input.headSha ? undefined : resolveBindingFromCache(sessionId);
+  const binding = input.prNumber ? undefined : resolveBindingFromCache(sessionId);
   const prNumber = positiveInteger(input.prNumber ?? binding?.prNumber, 'prNumber');
   if (!prNumber) throw new Error('pack review runner could not resolve PR number');
 
   const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trustedPackRoot);
-  const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1' && Boolean(input.prNumber && input.headSha);
+  const fixtureCurrentHead = trim(input.fixtureCurrentPrHeadSha).toLowerCase();
+  const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1'
+    && Boolean(input.prNumber && (input.headSha || fixtureCurrentHead));
   if (!harnessExplicit && !existsSync(join(sourceRepoRoot, '.git')) && !existsSync(join(sourceRepoRoot, 'HEAD'))) {
     throw new Error(`source repository root is not a git checkout: ${sourceRepoRoot}`);
   }
@@ -299,7 +309,12 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
   const repoSlug = harnessExplicit
     ? trim(input.fixtureRepoSlug) || trim(binding?.repoSlug) || 'fixture/orchestrator-pack'
     : trim(binding?.repoSlug) || await resolveRepositorySlug(sourceRepoRoot);
-  const liveHead = harnessExplicit ? requestedHead : await resolveCurrentPrHead(sourceRepoRoot, repoSlug, prNumber);
+  if (harnessExplicit && trim(input.fixturePrState || 'OPEN').toUpperCase() !== 'OPEN') {
+    throw new Error(`PR #${prNumber} is not open`);
+  }
+  const liveHead = harnessExplicit
+    ? fixtureCurrentHead || requestedHead
+    : await resolveCurrentPrHead(sourceRepoRoot, repoSlug, prNumber);
   if (!/^[0-9a-f]{40}$/.test(liveHead)) throw new Error(`review target head is not a full SHA for PR #${prNumber}`);
   if (requestedHead && requestedHead !== liveHead) {
     throw new Error(`review target head changed for PR #${prNumber}: requested ${requestedHead}, live ${liveHead}`);
@@ -836,7 +851,15 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       resumeRunId: resumeCandidate?.id,
     });
     if (!claimLease.acquired) {
-      return { ok: false, created: false, reused: true, reason: claimLease.reason, httpStatus: 200 };
+      return {
+        ok: false,
+        created: false,
+        reused: true,
+        reason: claimLease.reason,
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        httpStatus: 200,
+      };
     }
   }
 
@@ -886,6 +909,8 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         recovered: true,
         reason: 'resumed_journaled_delivery',
         deliveryReason: resumed.reason,
+        prNumber: target.prNumber,
+        headSha: target.headSha,
         runId: resumeCandidate.id,
         status: resumed.status,
         httpStatus: 200,
@@ -910,7 +935,17 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     run = created.run;
     if (created.reused) {
       if (claimLease) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
-      return { ok: true, created: false, reused: true, reason: created.reason, runId: run.id, httpStatus: 200, status: run.status };
+      return {
+        ok: true,
+        created: false,
+        reused: true,
+        reason: created.reason,
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        runId: run.id,
+        httpStatus: 200,
+        status: run.status,
+      };
     }
 
     await recordPackReviewPendingStatus({
@@ -938,6 +973,15 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       worktree = await createReviewWorktree(target.sourceRepoRoot, storeRoot, run.id, target.headSha);
     }
     updatePackReviewRun(run.id, { reviewTargetRoot: worktree }, { projectId, storeRoot });
+
+    if (input.onRunStarted) {
+      await input.onRunStarted({
+        prNumber: target.prNumber,
+        headSha: target.headSha,
+        runId: run.id,
+        timeoutSeconds,
+      });
+    }
 
     const heartbeat = setInterval(() => {
       try { heartbeatPackReviewRun(run!.id, { projectId, storeRoot }); } catch { /* fail closed at terminal write */ }
@@ -1134,6 +1178,7 @@ function usage(): string {
     'Pack-owned review runner (Issue #839)',
     '',
     'Manual trigger:',
+    '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n>',
     '  node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n> --head-sha <40-hex>',
     '  node --experimental-strip-types scripts/pack-review-runner.ts start --session-id <worker-session-id>',
     '',
