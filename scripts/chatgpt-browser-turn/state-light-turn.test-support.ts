@@ -1149,6 +1149,10 @@ ${body}`;
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(outcome.result.state).not.toBe('send_failed');
     expect(outcome.result.incidents).toContain('send_observation_deferred');
+    expect(outcome.result.incidents.filter((entry) => entry === 'send_observation_deferred')).toHaveLength(1);
+    const deferredJournalRows = mocks.appendFileSync.mock.calls.filter((call) => String(call[1]).includes('send_observation_deferred'));
+    expect(deferredJournalRows).toHaveLength(1);
+    expect(fake.metrics.polls).toBeGreaterThan(3);
   });
 
   it('does not let cleanup or journal failure veto an already captured reply', async () => {

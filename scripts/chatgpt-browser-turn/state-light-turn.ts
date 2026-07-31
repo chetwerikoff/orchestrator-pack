@@ -1288,6 +1288,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let observedUserHeads: string[] | undefined;
     let ownedPromptEverSeen = false;
     let completionReadySeen = false;
+    let sendObservationDeferredLogged = false;
 
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
     // landed and this invocation still owns a reachable page, #1120 requires us
@@ -1504,11 +1505,14 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         const novel = messages.slice(Math.max(0, baselineCount));
         if (!novel.some((message) => message.role === 'user')) {
           if (sendCount >= 1) {
-            incident(
-              'send_observation_deferred',
-              'owned_user_message_not_observed',
-              'continue_observing_after_send',
-            );
+            if (!sendObservationDeferredLogged) {
+              incident(
+                'send_observation_deferred',
+                'owned_user_message_not_observed',
+                'continue_observing_after_send',
+              );
+              sendObservationDeferredLogged = true;
+            }
           } else {
             incident('send_observation_error', 'owned_user_message_not_observed', 'return_local_error');
             return {
