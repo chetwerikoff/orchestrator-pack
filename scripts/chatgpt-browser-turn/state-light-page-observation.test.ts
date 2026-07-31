@@ -7,12 +7,15 @@ import {
 import {
   ASSISTANT_MESSAGE_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_NODE_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { scalarLocator } from './state-light-turn.test-fixtures.ts';
+import { messageLocator, scalarLocator } from './state-light-turn.test-fixtures.ts';
 import {
+  buildObservationHeartbeat,
   classifyPageObservation,
   ownedPromptMatches,
+  readPageObservation,
   replyStabilityMatches,
   replyStabilityFingerprint,
 } from './state-light-turn.ts';
@@ -333,5 +336,71 @@ describe('state-light prompt attribution classification', () => {
     expect(replyStabilityFingerprint(longRead)).toBe(replyStabilityFingerprint(shortRead));
     expect(replyStabilityMatches(longRead, shortRead)).toBe(true);
     expect(longRead.length - shortRead.length).toBeGreaterThan(1000);
+  });
+});
+
+describe('observation heartbeat', () => {
+  it('builds a machine-greppable heartbeat payload', () => {
+    const heartbeat = buildObservationHeartbeat(
+      { state: 'ready', reply: 'FINAL' },
+      1,
+      4,
+      true,
+      'FINAL',
+    );
+    expect(heartbeat).toMatchObject({
+      schema: 'observation-heartbeat/v1',
+      poll_count: 4,
+      observation_state: 'ready_unstable',
+      stable_reads: 1,
+      completion_ready: true,
+      last_reply_length: 5,
+    });
+    expect(heartbeat.last_reply_sha256_head).toMatch(/^[a-f0-9]{16}$/);
+  });
+});
+
+describe('readPageObservation transcript reads', () => {
+  it('marks transcript incomplete when a mid-list node read throws but still returns later nodes', async () => {
+    const messages = [
+      { role: 'user' as const, text: 'ONE' },
+      { role: 'assistant' as const, text: 'A1' },
+      { role: 'user' as const, text: 'PROMPT' },
+      { role: 'assistant' as const, text: 'FINAL' },
+    ];
+    let observationPass = 0;
+    const page = {
+      locator: vi.fn((selector: string) => {
+        if (selector !== MESSAGE_NODE_SELECTOR) return scalarLocator();
+        return scalarLocator({
+          count: vi.fn(async () => messages.length),
+          nth: vi.fn((index: number) => {
+            const message = messages[index]!;
+            if (index === 1) {
+              return scalarLocator({
+                count: vi.fn(async () => 1),
+                getAttribute: vi.fn(async (name: string) => {
+                  if (observationPass === 0) throw new Error('locator.getAttribute: Timeout');
+                  if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role;
+                  return null;
+                }),
+                innerText: vi.fn(async () => message.text),
+                textContent: vi.fn(async () => message.text),
+              });
+            }
+            return messageLocator(message);
+          }),
+        });
+      }),
+    };
+
+    const first = await readPageObservation(page);
+    observationPass += 1;
+    expect(first.transcriptIncomplete).toBe(true);
+    expect(first.messages.some((m) => m.role === 'user' && m.text === 'PROMPT')).toBe(true);
+
+    const second = await readPageObservation(page);
+    expect(second.transcriptIncomplete).toBe(false);
+    expect(second.messages).toHaveLength(4);
   });
 });

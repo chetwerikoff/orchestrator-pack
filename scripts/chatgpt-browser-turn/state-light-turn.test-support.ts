@@ -118,12 +118,36 @@ const BASELINE: StateLightTestMessage[] = [
   { role: 'assistant', text: 'OLD ANSWER', finalAction: true },
 ];
 
+function collectionLocatorWithReadFailures(
+  messages: StateLightTestMessage[],
+  generating: boolean,
+  pollIndex: number,
+  failMessageReadAt?: (messageIndex: number, pollIndex: number) => boolean,
+) {
+  return scalarLocator({
+    count: vi.fn(async () => messages.length),
+    nth: vi.fn((index: number) => {
+      const locator = messageLocator(messages[index]!, generating && index === messages.length - 1);
+      if (!failMessageReadAt?.(index, pollIndex)) return locator;
+      return scalarLocator({
+        count: vi.fn(async () => 1),
+        getAttribute: vi.fn(async () => { throw new Error(`locator.getAttribute: Timeout 5000ms exceeded at node ${index}`); }),
+        innerText: vi.fn(async () => { throw new Error(`locator.innerText: Timeout 5000ms exceeded at node ${index}`); }),
+        textContent: vi.fn(async () => { throw new Error(`locator.textContent: Timeout 5000ms exceeded at node ${index}`); }),
+        locator: locator.locator,
+      });
+    }),
+  });
+}
+
 function makePage(
   snapshots: StateLightTestSnapshot[],
   options: {
     throwAfterSend?: boolean;
     transientStatusErrors?: number;
     transientReadErrors?: number | 'always';
+    failMessageReadAt?: (messageIndex: number, pollIndex: number) => boolean;
+    blockProductStatus?: boolean;
     sendButton?: boolean;
     wallText?: string;
     wallAfterPoll?: number;
@@ -159,6 +183,9 @@ function makePage(
   const page: any = {
     __fakeBrowserGptPage: true,
     __productStatusText: () => {
+      if (sent && options.blockProductStatus) {
+        throw new Error('locator.innerText: Timeout 5000ms exceeded waiting for locator([role=alert]).nth(1)');
+      }
       if (sent && transientStatusErrors > 0) {
         transientStatusErrors--;
         throw new Error('transient product status read');
@@ -225,9 +252,15 @@ function makePage(
         activeSnapshot = snapshots[Math.min(observationIndex, Math.max(0, snapshots.length - 1))]
           ?? { messages: [...BASELINE, { role: 'user', text: filled }], generating: true };
         continuationDismissed = false;
+        const pollIndex = observationIndex;
         observationIndex++;
         metrics.polls++;
-        return collectionLocator(activeSnapshot.messages);
+        return collectionLocatorWithReadFailures(
+          activeSnapshot.messages,
+          activeSnapshot.generating,
+          pollIndex,
+          options.failMessageReadAt,
+        );
       }
       if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
         const assistants = activeSnapshot.messages.filter((message) => message.role === 'assistant');
@@ -728,7 +761,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
   });
 
   it('keeps polling the same owned page after a transient post-send observation error', async () => {
-    const fake = makePage(readySnapshots(), { transientStatusErrors: 1 });
+    const fake = makePage(readySnapshots(), { transientReadErrors: 1 });
     const outcome = await runAndCapture(fake.page);
 
     expect(outcome.code).toBe(0);
@@ -1184,6 +1217,106 @@ ${body}`;
     const deferredJournalRows = mocks.appendFileSync.mock.calls.filter((call) => String(call[1]).includes('send_observation_deferred'));
     expect(deferredJournalRows).toHaveLength(1);
     expect(fake.metrics.polls).toBeGreaterThan(3);
+  });
+
+
+  it('finds owned prompt in a long transcript when mid-list node reads intermittently throw', async () => {
+    const history: StateLightTestMessage[] = [
+      { role: 'user', text: 'USER-ONE' },
+      { role: 'assistant', text: 'ANSWER-ONE', finalAction: true },
+      { role: 'user', text: 'USER-TWO' },
+      { role: 'assistant', text: 'ANSWER-TWO', finalAction: true },
+      { role: 'user', text: 'USER-THREE' },
+      { role: 'assistant', text: 'ANSWER-THREE', finalAction: true },
+      { role: 'user', text: 'PROMPT' },
+    ];
+    const ready: StateLightTestSnapshot = {
+      messages: [...history, { role: 'assistant', text: 'FINAL', finalAction: true, finalActionInTurnContainer: true }],
+      generating: false,
+    };
+    const fake = makePage([ready, ready, ready], {
+      preSendMessages: history,
+      failMessageReadAt: (index, poll) => index === 2 && poll % 2 === 0,
+    });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).not.toContain('send_observation_deferred');
+    expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
+  });
+
+  it('captures a static complete reply when confirm reads intermittently throw on the assistant node', async () => {
+    const reply = `STATIC ${'X'.repeat(8000)} END`;
+    const snapshots: StateLightTestSnapshot[] = [
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: reply, finalAction: true, finalActionInTurnContainer: true }],
+        generating: false,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: reply, finalAction: true, finalActionInTurnContainer: true }],
+        generating: false,
+      },
+      {
+        messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: reply, finalAction: true, finalActionInTurnContainer: true }],
+        generating: false,
+      },
+    ];
+    const assistantIndex = 3;
+    const fake = makePage(snapshots, {
+      failMessageReadAt: (index, poll) => index === assistantIndex && poll % 2 === 1,
+    });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(String(mocks.writeFileSync.mock.calls[0]?.[1] ?? '')).toBe(reply);
+  });
+
+  it('emits observation heartbeats during post-send polling', async () => {
+    const fake = makePage(delayedReadySnapshots(4));
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      enqueueBrowserForTurn(mocks, fake.page);
+      const code = await runStateLightTurn([
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--output', '/tmp/reply.txt',
+        '--chat-url', 'https://chatgpt.com/c/existing',
+        '--timeout-ms', '5000',
+        '--poll-ms', '1',
+      ]);
+      expect(code).toBe(0);
+      const heartbeats = writes
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.schema === 'observation-heartbeat/v1');
+      expect(heartbeats.length).toBeGreaterThanOrEqual(1);
+      expect(heartbeats[0]).toMatchObject({
+        schema: 'observation-heartbeat/v1',
+        poll_count: expect.any(Number),
+        observation_state: expect.any(String),
+        stable_reads: expect.any(Number),
+        completion_ready: expect.any(Boolean),
+        last_reply_length: expect.any(Number),
+        last_reply_sha256_head: expect.any(String),
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('does not report owned_prompt_not_observed when product-status probes throw after send', async () => {
+    const fake = makePage(readySnapshots(), { blockProductStatus: true });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).not.toContain('send_observation_deferred');
   });
 
   it('does not let cleanup or journal failure veto an already captured reply', async () => {

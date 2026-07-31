@@ -216,6 +216,27 @@ observation). Completion-sighting confirm reads stay at ~1s. Repeated normal
 `--timeout-ms` with a still-reachable owned page continues observation polling; it
 is not a resend signal.
 
+### Observation heartbeats
+
+During post-send observation the helper emits one machine-greppable JSON line per
+heartbeat to stdout (approximately every 30 seconds wall time or every two polls,
+whichever comes first). Heartbeats use `schema: observation-heartbeat/v1` and carry
+`poll_count`, `observation_state`, `stable_reads`, `completion_ready`,
+`last_reply_length`, and a bounded `last_reply_sha256_head` digest. The terminal
+`turn-result/v1` line remains the only completion authority; heartbeats exist so
+stuck invocations become diagnosable from captured stdout within minutes instead of
+waiting for deadline exhaustion.
+
+### Transcript read resilience
+
+Per-message transcript reads use short bounded per-node timeouts with one retry.
+A failed node read marks the poll `transcriptIncomplete` instead of silently
+dropping that node from the transcript (which could otherwise yield false
+`owned_prompt_not_observed` on long chats or prevent stability convergence during
+confirm reads). Incomplete polls are retried on the next cadence without resetting
+capture stability once completion has been sighted. Post-send product-wall probes use
+a separate short budget and cannot block or invalidate transcript reads.
+
 PID, log growth, helper stdout timing, or a background shell job prove neither
 that ChatGPT is still generating nor that it has completed. Issue #1120 does not
 add a second direct-CDP inspector/watchdog. The direct-agent fallback/supervision

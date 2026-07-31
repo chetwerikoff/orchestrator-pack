@@ -67,6 +67,14 @@ const STABILITY_READ_DELAY_MS = 1_000;
 const COMPLETION_CONFIRM_POLL_MS = 1_000;
 const DIAGNOSTIC_HEAD_CHARS = 300;
 const MAX_LOCAL_READ_WAIT_MS = 5_000;
+/** Per-node transcript reads use shorter budgets so one hung node cannot block the poll. */
+const MESSAGE_NODE_READ_TIMEOUT_MS = 800;
+const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
+const MESSAGE_NODE_READ_ATTEMPTS = 2;
+/** Post-send wall probes must not block transcript reads or the confirm loop. */
+const POST_SEND_PRODUCT_WALL_PROBE_MS = 800;
+export const OBSERVATION_HEARTBEAT_MS = 30_000;
+const OBSERVATION_HEARTBEAT_POLL_INTERVAL = 2;
 export const BROWSER_TURN_RECURRENCE_PATH = join(
   homedir(),
   '.local',
@@ -104,6 +112,22 @@ export interface ObservationExhaustedDiagnostics {
   readonly last_assistant_head: string;
   readonly poll_count: number;
   readonly soft_deadline_elapsed: boolean;
+}
+
+export interface ObservationHeartbeat {
+  readonly schema: 'observation-heartbeat/v1';
+  readonly poll_count: number;
+  readonly observation_state: string;
+  readonly stable_reads: number;
+  readonly completion_ready: boolean;
+  readonly last_reply_length: number;
+  readonly last_reply_sha256_head: string;
+}
+
+export interface PageObservationResult {
+  readonly messages: PageMessage[];
+  readonly ownedWindowCompletionReady: boolean;
+  readonly transcriptIncomplete: boolean;
 }
 
 interface BrowserIncident {
@@ -292,6 +316,51 @@ export function buildObservationExhaustedDiagnostics(
     poll_count: pollCount,
     soft_deadline_elapsed: softDeadlineElapsed,
   };
+}
+
+function replyContentHashHead(text: string): string {
+  if (!text) return '';
+  return createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16);
+}
+
+export function buildObservationHeartbeat(
+  decision: PageObservationDecision,
+  stableReads: number,
+  pollCount: number,
+  completionReadySeen: boolean,
+  lastReply: string,
+): ObservationHeartbeat {
+  return {
+    schema: 'observation-heartbeat/v1',
+    poll_count: pollCount,
+    observation_state: classifyObservationLoopState(decision, stableReads),
+    stable_reads: stableReads,
+    completion_ready: completionReadySeen,
+    last_reply_length: lastReply.length,
+    last_reply_sha256_head: replyContentHashHead(lastReply),
+  };
+}
+
+function maybeEmitObservationHeartbeat(
+  lastHeartbeatAt: number,
+  pollCount: number,
+  decision: PageObservationDecision,
+  stableReads: number,
+  completionReadySeen: boolean,
+  lastReply: string,
+): number {
+  const now = Date.now();
+  const dueByPoll = pollCount > 0 && pollCount % OBSERVATION_HEARTBEAT_POLL_INTERVAL === 0;
+  const dueByTime = now - lastHeartbeatAt >= OBSERVATION_HEARTBEAT_MS;
+  if (!dueByPoll && !dueByTime) return lastHeartbeatAt;
+  emit(buildObservationHeartbeat(
+    decision,
+    stableReads,
+    pollCount,
+    completionReadySeen,
+    lastReply,
+  ));
+  return now;
 }
 
 
@@ -682,50 +751,80 @@ async function locatorCount(locator: any): Promise<number> {
   }
 }
 
-async function locatorText(locator: any): Promise<string> {
+async function locatorText(locator: any, timeoutMs = MAX_LOCAL_READ_WAIT_MS): Promise<string> {
   // Prefer innerText for rendered-text semantics (owned-prompt matching). Playwright
   // innerText is a plain DOM read and does not scroll; scroll hijack was from the
   // continuation click path (fixed separately). textContent includes hidden/sr-only
   // subtree text (e.g. "You said:") that strict ownedPromptMatches must not see.
   try {
-    const innerText = normalizeVisibleText(String(await locator.innerText({ timeout: MAX_LOCAL_READ_WAIT_MS }) ?? ''));
+    const innerText = normalizeVisibleText(String(await locator.innerText({ timeout: timeoutMs }) ?? ''));
     if (innerText) return innerText;
   } catch {
     // Fall through to textContent for fixtures and nodes that only expose DOM text there.
   }
   try {
-    return normalizeVisibleText(String(await locator.textContent({ timeout: MAX_LOCAL_READ_WAIT_MS })));
+    return normalizeVisibleText(String(await locator.textContent({ timeout: timeoutMs })));
   } catch {
     return '';
   }
+}
+
+async function readLocatorAttribute(
+  locator: any,
+  attribute: string,
+  timeouts: readonly number[],
+): Promise<string | null> {
+  for (const timeoutMs of timeouts) {
+    try {
+      return String(await locator.getAttribute(attribute, { timeout: timeoutMs }) ?? '');
+    } catch {
+      // Retry with the next shorter budget.
+    }
+  }
+  return null;
+}
+
+async function readMessageNodeText(locator: any): Promise<{ text: string; readFailed: boolean }> {
+  const timeouts = [
+    MESSAGE_NODE_READ_TIMEOUT_MS,
+    MESSAGE_NODE_READ_RETRY_TIMEOUT_MS,
+  ].slice(0, MESSAGE_NODE_READ_ATTEMPTS);
+  for (const timeoutMs of timeouts) {
+    const text = await locatorText(locator, timeoutMs);
+    if (text) return { text, readFailed: false };
+  }
+  return { text: '', readFailed: true };
 }
 
 async function readPageMessages(page: any): Promise<PageMessage[]> {
   return (await readPageObservation(page)).messages;
 }
 
-async function readPageObservation(
+export async function readPageObservation(
   page: any,
   prompt?: string,
   baselineCount?: number,
-): Promise<{
-  readonly messages: PageMessage[];
-  readonly ownedWindowCompletionReady: boolean;
-}> {
+): Promise<PageObservationResult> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
   const count = await locatorCount(nodes);
   const messages: PageMessage[] = [];
   const domIndices: number[] = [];
+  let transcriptIncomplete = false;
+  const roleTimeouts = [
+    MESSAGE_NODE_READ_TIMEOUT_MS,
+    MESSAGE_NODE_READ_RETRY_TIMEOUT_MS,
+  ].slice(0, MESSAGE_NODE_READ_ATTEMPTS);
   for (let index = 0; index < count; index++) {
     const node = nodes.nth(index);
-    let role = '';
-    try {
-      role = String(await node.getAttribute(MESSAGE_AUTHOR_ROLE_ATTR, { timeout: MAX_LOCAL_READ_WAIT_MS }) ?? '');
-    } catch {
+    const role = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, roleTimeouts);
+    if (role === null) {
+      transcriptIncomplete = true;
       continue;
     }
     if (role !== 'user' && role !== 'assistant') continue;
-    messages.push({ role, text: await locatorText(node) });
+    const { text, readFailed } = await readMessageNodeText(node);
+    if (readFailed) transcriptIncomplete = true;
+    messages.push({ role: role as 'user' | 'assistant', text });
     domIndices.push(index);
   }
 
@@ -738,14 +837,14 @@ async function readPageObservation(
     if (ownedAssistantDomIndex !== null) {
       ownedWindowCompletionReady = await readAssistantNodeCompletionReady(
         nodes.nth(ownedAssistantDomIndex),
-        MAX_LOCAL_READ_WAIT_MS,
+        MESSAGE_NODE_READ_TIMEOUT_MS,
       );
     } else {
-      ownedWindowCompletionReady = await readAssistantTurnCompletionReady(page, MAX_LOCAL_READ_WAIT_MS);
+      ownedWindowCompletionReady = await readAssistantTurnCompletionReady(page, MESSAGE_NODE_READ_TIMEOUT_MS);
     }
   }
 
-  return { messages, ownedWindowCompletionReady };
+  return { messages, ownedWindowCompletionReady, transcriptIncomplete };
 }
 
 export type SendLandingEvidence = 'landed' | 'not_landed' | 'ambiguous';
@@ -790,10 +889,20 @@ async function readPostSendObservation(
   readonly messages: PageMessage[];
   readonly wall: ReturnType<typeof classifyProductWall>;
   readonly ownedWindowCompletionReady: boolean;
+  readonly transcriptIncomplete: boolean;
 }> {
-  const { messages, ownedWindowCompletionReady } = await readPageObservation(page, prompt, baselineCount);
-  const wall = classifyProductWall(await productStatusText(page, MAX_LOCAL_READ_WAIT_MS));
-  return { messages, wall, ownedWindowCompletionReady };
+  const { messages, ownedWindowCompletionReady, transcriptIncomplete } = await readPageObservation(
+    page,
+    prompt,
+    baselineCount,
+  );
+  let wall: ReturnType<typeof classifyProductWall> = {};
+  try {
+    wall = classifyProductWall(await productStatusText(page, POST_SEND_PRODUCT_WALL_PROBE_MS));
+  } catch {
+    // Product-status probes must not block or invalidate transcript reads.
+  }
+  return { messages, wall, ownedWindowCompletionReady, transcriptIncomplete };
 }
 
 async function maybeContinueGeneration(page: any): Promise<boolean> {
@@ -1292,6 +1401,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let ownedPromptEverSeen = false;
     let completionReadySeen = false;
     let sendObservationDeferredLogged = false;
+    let lastHeartbeatAt = startedAt;
 
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
     // landed and this invocation still owns a reachable page, #1120 requires us
@@ -1305,9 +1415,11 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         if (browserOrPageDefinitelyLost(page, browser)) throw error;
         const symptom = error instanceof Error ? error.message : String(error);
         incident('post_send_observation_error', symptom, 'continue_polling_owned_page');
-        stableReads = 0;
-        lastReadyReply = '';
-        bestReadyReply = '';
+        if (!(completionReadySeen && bestReadyReply.length > 0)) {
+          stableReads = 0;
+          lastReadyReply = '';
+          bestReadyReply = '';
+        }
         const readErrorExhausted = maybeReturnObservationExhausted(
           Date.now(),
           softDeadline,
@@ -1332,7 +1444,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         continue;
       }
 
-      const { messages, wall, ownedWindowCompletionReady } = observation;
+      const { messages, wall, ownedWindowCompletionReady, transcriptIncomplete } = observation;
       if (ownedWindowCompletionReady) completionReadySeen = true;
       if (wall.state) {
         const cause = wall.cause ?? `${wall.state}_detected`;
@@ -1355,7 +1467,42 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         };
       }
 
-      const decision = classifyPageObservation(messages, baselineCount, snapshot.text, !ownedWindowCompletionReady);
+      if (transcriptIncomplete) {
+        incident('post_send_observation_error', 'transcript_read_incomplete', 'continue_polling_owned_page');
+        lastHeartbeatAt = maybeEmitObservationHeartbeat(
+          lastHeartbeatAt,
+          pollCount,
+          { state: 'waiting' },
+          stableReads,
+          completionReadySeen,
+          bestReadyReply || lastReadyReply,
+        );
+        const incompleteExhausted = maybeReturnObservationExhausted(
+          Date.now(),
+          softDeadline,
+          hardExhaustionDeadline,
+          sendCount,
+          { state: 'waiting' },
+          stableReads,
+          pollCount,
+          messages,
+          baselineCount,
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+        );
+        if (incompleteExhausted) return incompleteExhausted;
+        await sleep(page, completionReadySeen ? COMPLETION_CONFIRM_POLL_MS : INITIAL_POLL_MS);
+        continue;
+      }
+
+      const inProgress = !ownedWindowCompletionReady && !completionReadySeen;
+      const decision = classifyPageObservation(messages, baselineCount, snapshot.text, inProgress);
 
       if (hasOwnedUserMessage(messages, snapshot.text)) {
         ownedPromptEverSeen = true;
@@ -1495,9 +1642,11 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         continue;
       }
 
-      stableReads = 0;
-      lastReadyReply = '';
-      bestReadyReply = '';
+      if (!(completionReadySeen && bestReadyReply.length > 0)) {
+        stableReads = 0;
+        lastReadyReply = '';
+        bestReadyReply = '';
+      }
       if (await maybeContinueGeneration(page)) {
         await sleep(page, INITIAL_POLL_MS);
         continue;
@@ -1575,6 +1724,15 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         incident,
       );
       if (waitingExhausted) return waitingExhausted;
+
+      lastHeartbeatAt = maybeEmitObservationHeartbeat(
+        lastHeartbeatAt,
+        pollCount,
+        decision,
+        stableReads,
+        completionReadySeen,
+        decision.state === 'ready' && decision.reply ? decision.reply : (bestReadyReply || lastReadyReply),
+      );
 
       const elapsed = Date.now() - startedAt;
       const delay = completionReadySeen
