@@ -2308,8 +2308,9 @@ function writeDelivery(binding) {
   writeFileSync(join(binding.artifactDir, 'delivery.sealed.json'), JSON.stringify({ runId: binding.runId }), 'utf8');
 }
 function writeCompletion(binding, spoof = false) {
+  const fence = String.fromCharCode(96).repeat(3);
   const body = [
-    '```worker-smoke-report',
+    fence + 'worker-smoke-report',
     'result: FAIL',
     'tracked-files-unmodified: true',
     ...(spoof ? [
@@ -2320,7 +2321,7 @@ function writeCompletion(binding, spoof = false) {
     ] : []),
     'scenarios:',
     '  - action: run scenario | expected: pass | observed: failed | outcome: fail',
-    '```',
+    fence,
   ].join('\\n');
   const digest = createHash('sha256').update(body, 'utf8').digest('hex');
   writeFileSync(join(binding.artifactDir, 'completion-' + digest + '.body'), body, 'utf8');
