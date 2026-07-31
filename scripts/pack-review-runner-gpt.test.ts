@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -10,6 +9,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcessSync } from './kernel/subprocess.js';
 import {
   parsePackGptReviewArgs,
   runPackGptReviewCommand,
@@ -348,15 +348,15 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     };
     delete childEnv.OPK_VITEST_HARNESS;
 
-    const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-      'run', '--silent', 'pack-gpt-review', '--', '--pr-number', '1111',
-    ], {
+    const result = runProcessSync({
+      command: process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      args: ['run', '--silent', 'pack-gpt-review', '--', '--pr-number', '1111'],
       cwd: repoRoot,
       encoding: 'utf8',
       env: childEnv,
     });
 
-    expect(result.status, result.stderr).toBe(1);
+    expect(result.exitCode, result.stderr).toBe(1);
     const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0]!)).toMatchObject({
