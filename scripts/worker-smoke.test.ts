@@ -1963,3 +1963,264 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     rmSync(root, { recursive: true, force: true });
   });
 });
+
+describe('worker smoke Orca control-plane classification (#1125)', () => {
+  const exactCodes = [
+    'channel_stale_handle',
+    'channel_lookup_empty',
+    'channel_control_unavailable',
+    'channel_control_overwritten',
+  ] as const;
+  const rawSentinel = 'RAW_UPSTREAM_SENTINEL_TOKEN_1125';
+
+  it('categorizes local CLI outcomes and every exact control-plane code', async () => {
+    const cli = await import('./lib/orca-cli.ts');
+    const launch = cli.runOrcaJson(['worktree', 'current'], {
+      runner: (() => { throw new Error(rawSentinel); }) as never,
+    });
+    expect(launch.outcomeCategory).toBe('process_launch_failed');
+    expect(launch.operation).toBe('worktree_current');
+
+    const empty = cli.runOrcaJson(['terminal', 'create'], {
+      runner: (() => ({ stdout: '', stderr: rawSentinel, status: 1 })) as never,
+    });
+    expect(empty.outcomeCategory).toBe('empty_stdout');
+    expect(empty.operation).toBe('terminal_create');
+
+    const invalid = cli.runOrcaJson(['worktree', 'current'], {
+      runner: (() => ({ stdout: `{${rawSentinel}`, stderr: '', status: 1 })) as never,
+    });
+    expect(invalid.outcomeCategory).toBe('invalid_json');
+
+    const unsupported = cli.runOrcaJson(['terminal', 'read', '--terminal', 'term_owned'], {
+      runner: (() => ({
+        stdout: JSON.stringify({ ok: false, error: { code: 'terminal_busy', message: rawSentinel } }),
+        stderr: '',
+        status: 1,
+      })) as never,
+    });
+    expect(unsupported.outcomeCategory).toBe('supported_operation_failure');
+    expect(unsupported.operation).toBe('terminal_read');
+
+    for (const code of exactCodes) {
+      const response = cli.runOrcaJson(['terminal', 'close', '--terminal', 'term_owned'], {
+        runner: (() => ({
+          stdout: JSON.stringify({ ok: false, error: { code, message: rawSentinel } }),
+          stderr: '',
+          status: 1,
+        })) as never,
+      });
+      expect(response.outcomeCategory).toBe('recognized_control_plane_code');
+      expect(response.operation).toBe('terminal_close');
+    }
+    expect(cli.resolveOrcaOperation(['terminal', 'send', '--terminal', 'x', '--text', 'y'])).toBe('terminal_send');
+    expect(cli.resolveOrcaOperation(['terminal', 'send', '--terminal', 'x', '--enter'])).toBe('terminal_submit');
+  });
+
+  it('maps only the supported phase matrices to stable causes', async () => {
+    const core = await import('./lib/worker-smoke-core.ts');
+    for (const operation of ['worktree_current', 'terminal_create'] as const) {
+      for (const outcomeCategory of ['process_launch_failed', 'empty_stdout', 'invalid_json'] as const) {
+        expect(core.createSmokeControlPlaneDiagnostic({
+          terminalAcquired: false,
+          operation,
+          outcomeCategory,
+        })).toEqual({
+          cause: 'orca_control_plane_unavailable_preflight',
+          evidence: [`operation=${operation}`, `outcome=${outcomeCategory}`],
+          remediation: core.SMOKE_CONTROL_PLANE_REMEDIATION.orca_control_plane_unavailable_preflight,
+        });
+      }
+    }
+
+    for (const operation of ['terminal_send', 'terminal_read', 'terminal_submit', 'terminal_close'] as const) {
+      for (const controlPlaneCode of exactCodes) {
+        expect(core.createSmokeControlPlaneDiagnostic({
+          terminalAcquired: true,
+          operation,
+          outcomeCategory: 'recognized_control_plane_code',
+          controlPlaneCode,
+        })).toEqual({
+          cause: 'orca_control_plane_lost_mid_smoke',
+          evidence: [
+            `operation=${operation}`,
+            'outcome=recognized_control_plane_code',
+            `control_plane_code=${controlPlaneCode}`,
+          ],
+          remediation: core.SMOKE_CONTROL_PLANE_REMEDIATION.orca_control_plane_lost_mid_smoke,
+        });
+      }
+    }
+
+    expect(core.createSmokeControlPlaneDiagnostic({
+      terminalAcquired: false,
+      operation: 'worktree_current',
+      outcomeCategory: 'recognized_control_plane_code',
+      controlPlaneCode: 'channel_stale_handle',
+    })).toBeUndefined();
+    expect(core.createSmokeControlPlaneDiagnostic({
+      terminalAcquired: true,
+      operation: 'terminal_read',
+      outcomeCategory: 'supported_operation_failure',
+      controlPlaneCode: 'terminal_busy',
+    })).toBeUndefined();
+  });
+
+  it('rejects noncanonical, reordered, duplicated, and oversized diagnostics without truncation', async () => {
+    const core = await import('./lib/worker-smoke-core.ts');
+    const valid = core.createSmokeControlPlaneDiagnostic({
+      terminalAcquired: true,
+      operation: 'terminal_read',
+      outcomeCategory: 'recognized_control_plane_code',
+      controlPlaneCode: 'channel_stale_handle',
+    })!;
+    expect(core.normalizeSmokeControlPlaneDiagnostic(valid)).toEqual({ ok: true, diagnostic: valid });
+    expect(valid.evidence).toHaveLength(3);
+    expect(valid.evidence.every((entry) => Buffer.byteLength(entry, 'utf8') <= 256)).toBe(true);
+    expect(Buffer.byteLength(valid.remediation, 'utf8')).toBeLessThanOrEqual(256);
+
+    expect(core.normalizeSmokeControlPlaneDiagnostic({
+      ...valid,
+      evidence: [...valid.evidence, 'operation=terminal_read'],
+    })).toEqual({ ok: false, reason: 'control_plane_diagnostic_evidence_count_invalid' });
+    expect(core.normalizeSmokeControlPlaneDiagnostic({
+      ...valid,
+      evidence: [valid.evidence[1], valid.evidence[0], valid.evidence[2]],
+    })).toEqual({ ok: false, reason: 'control_plane_diagnostic_payload_mismatch' });
+    expect(core.normalizeSmokeControlPlaneDiagnostic({
+      ...valid,
+      evidence: ['operation=terminal_read', 'operation=terminal_read', valid.evidence[2]],
+    })).toEqual({ ok: false, reason: 'control_plane_diagnostic_evidence_noncanonical' });
+    expect(core.normalizeSmokeControlPlaneDiagnostic({
+      ...valid,
+      evidence: [`operation=${'x'.repeat(247)}`],
+    })).not.toEqual({ ok: false, reason: 'control_plane_diagnostic_evidence_too_large' });
+    expect(core.normalizeSmokeControlPlaneDiagnostic({
+      ...valid,
+      evidence: [`operation=${'x'.repeat(248)}`],
+    })).toEqual({ ok: false, reason: 'control_plane_diagnostic_evidence_too_large' });
+    expect(core.normalizeSmokeControlPlaneDiagnostic({
+      ...valid,
+      remediation: `${valid.remediation}${rawSentinel}`,
+    })).toEqual({ ok: false, reason: 'control_plane_diagnostic_payload_mismatch' });
+    expect(core.normalizeSmokeControlPlaneDiagnostic({
+      ...valid,
+      evidence: ['operation=<script>alert_1125</script>'],
+    })).toEqual({ ok: false, reason: 'control_plane_diagnostic_evidence_noncanonical' });
+  });
+
+  it('round-trips one safe payload through report extraction and current-head gate output', async () => {
+    const core = await import('./lib/worker-smoke-core.ts');
+    const diagnostic = core.createSmokeControlPlaneDiagnostic({
+      terminalAcquired: true,
+      operation: 'terminal_send',
+      outcomeCategory: 'recognized_control_plane_code',
+      controlPlaneCode: 'channel_control_unavailable',
+    })!;
+    const report = {
+      result: 'BLOCKED' as const,
+      issueNumber: 1125,
+      prNumber: 1153,
+      headSha: headA,
+      scenarios: [{
+        action: 'establish smoke prompt delivery',
+        expected: 'delivery seal',
+        observed: diagnostic.cause,
+        outcome: 'blocked' as const,
+      }],
+      limitations: [],
+      trackedFilesUnmodified: true,
+      terminalCleanup: 'close_failed:recognized_control_plane_code',
+      environmentNotes: [],
+      nonPassCause: diagnostic.cause,
+      controlPlaneDiagnostic: diagnostic,
+    };
+    const comment = core.formatSmokeReportComment(report);
+    expect(comment).not.toContain(rawSentinel);
+    const extracted = core.extractSmokeReportsFromComments([{ body: comment }]);
+    expect(extracted).toHaveLength(1);
+    expect(extracted[0]?.controlPlaneDiagnostic).toEqual(diagnostic);
+    const decision = core.evaluateWorkerSmokeGate({
+      issueBody: readFixture('action-producing-with-plan.md'),
+      issueNumber: 1125,
+      prNumber: 1153,
+      headSha: headA,
+      prComments: [{ body: comment }],
+      ciGreen: true,
+      orcaWorktreeOk: false,
+      ownedTerminalClosed: false,
+      terminalProvenanceOk: false,
+    });
+    expect(decision).toEqual({
+      allowed: false,
+      reason: 'orca_control_plane_lost_mid_smoke',
+      smokeRequired: true,
+      controlPlaneDiagnostic: diagnostic,
+    });
+  });
+
+  it('preserves operation-specific diagnostics on delivery and child-wait seams', () => {
+    const root = mkdtempSync(join(tmpdir(), 'smoke-control-plane-1125-'));
+    const binding = makeRunBinding(root);
+    let now = 0;
+    const sendFailure = establishSmokePromptDelivery('child', {
+      cwd: root,
+      deadlineMs: 200,
+      runBinding: binding,
+      prompt: 'smoke prompt',
+      runner: vi.fn(() => ({
+        stdout: JSON.stringify({
+          ok: false,
+          error: { code: 'channel_stale_handle', message: rawSentinel },
+        }),
+        stderr: '',
+        status: 1,
+      })) as never,
+      now: () => now,
+      sleepMs: (ms) => { now += ms; },
+    });
+    expect(sendFailure.controlPlaneDiagnostic?.evidence).toEqual([
+      'operation=terminal_send',
+      'outcome=recognized_control_plane_code',
+      'control_plane_code=channel_stale_handle',
+    ]);
+
+    now = 0;
+    const readFailure = waitForSmokeChildCompletion('child', {
+      cwd: root,
+      deadlineMs: 200,
+      runBinding: binding,
+      ownedChildHandle: 'child',
+      runner: vi.fn(() => ({
+        stdout: JSON.stringify({
+          ok: false,
+          error: { code: 'channel_lookup_empty', message: rawSentinel },
+        }),
+        stderr: '',
+        status: 1,
+      })) as never,
+      now: () => now,
+      sleepMs: (ms) => { now += ms; },
+    });
+    expect(readFailure.controlPlaneDiagnostic?.evidence).toEqual([
+      'operation=terminal_read',
+      'outcome=recognized_control_plane_code',
+      'control_plane_code=channel_lookup_empty',
+    ]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('does not let injected ORCA environment values authorize a worktree', () => {
+    vi.stubEnv('ORCA_WORKTREE_PATH', '/tmp/worktree');
+    vi.stubEnv('ORCA_WORKTREE_ID', 'injected-authority');
+    const probe = probeOrcaWorktree('/tmp/worktree', {
+      runner: vi.fn(() => ({ stdout: `{${rawSentinel}`, stderr: '', status: 1 })) as never,
+    });
+    expect(probe.ok).toBe(false);
+    if (!probe.ok) {
+      expect(probe.outcomeCategory).toBe('invalid_json');
+      expect(probe.operation).toBe('worktree_current');
+    }
+    vi.unstubAllEnvs();
+  });
+});
