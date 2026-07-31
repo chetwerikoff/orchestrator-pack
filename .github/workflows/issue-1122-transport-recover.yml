@@ -1,0 +1,35 @@
+name: Issue 1122 transport recovery
+
+on:
+  push:
+    branches:
+      - agent/issue-1122-browser-gpt-page-probe
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    if: ${{ !contains(github.event.head_commit.message, '[assembled]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reassemble exact files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .issue-1122-transport/source.part{00..06} > scripts/browser-gpt-page-probe.ts
+          cat .issue-1122-transport/test.part{00..03} > scripts/browser-gpt-page-probe.test.ts
+          test "$(git hash-object scripts/browser-gpt-page-probe.ts)" = "9122f2610c2d1c87c9d92195acc5214ba0323bed"
+          test "$(git hash-object scripts/browser-gpt-page-probe.test.ts)" = "86a415bb5d71c7f227328decd90f944650054f4e"
+      - name: Publish assembled files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/browser-gpt-page-probe.ts scripts/browser-gpt-page-probe.test.ts
+          git commit -m "fix: restore complete Browser-GPT probe files [assembled]"
+          git push origin HEAD:agent/issue-1122-browser-gpt-page-probe
