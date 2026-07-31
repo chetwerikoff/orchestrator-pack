@@ -1157,7 +1157,7 @@ ${body}`;
       cleanup: 'confirmed',
     });
     expect(outcome.result.state).not.toBe('observation_uncertain');
-    expect(outcome.result.incidents.filter((entry) => entry === 'send_observation_deferred')).toHaveLength(0);
+    expect((outcome.result.incidents ?? []).filter((entry) => entry === 'send_observation_deferred')).toHaveLength(0);
   });
 
   it('chat-url defers owned_user_message_not_observed after send without send_failed', async () => {
@@ -1180,7 +1180,7 @@ ${body}`;
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(outcome.result.state).not.toBe('send_failed');
     expect(outcome.result.incidents).toContain('send_observation_deferred');
-    expect(outcome.result.incidents.filter((entry) => entry === 'send_observation_deferred')).toHaveLength(1);
+    expect((outcome.result.incidents ?? []).filter((entry) => entry === 'send_observation_deferred')).toHaveLength(1);
     const deferredJournalRows = mocks.appendFileSync.mock.calls.filter((call) => String(call[1]).includes('send_observation_deferred'));
     expect(deferredJournalRows).toHaveLength(1);
     expect(fake.metrics.polls).toBeGreaterThan(3);
