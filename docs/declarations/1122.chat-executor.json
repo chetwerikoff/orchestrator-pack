@@ -7,13 +7,14 @@
   "baseline": {
     "commit_sha": "beee221e2958ba590e753987bb889a0bcae1e1ec",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ffa3c5b7e120bde5571066241b3aa4d7964cc2b06b55e6562e6bc541470bab4a"
+    "active_scope_hash": "sha256:49e13e472773d52e635128dab25936d2f85881e29c5f2c0572f14de2be516ab0"
   },
   "declared_paths": [
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
     "package.json",
     "scripts/browser-gpt-page-probe.test.ts",
     "scripts/browser-gpt-page-probe.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
