@@ -23,8 +23,8 @@ prior art for this flow.
 
 Issue #972 owns the flow-manager/author/reviewer chat topology. The #975 M1–M5
 economics below are independent of that ownership split and must be preserved
-without reverting #972. Issue #973 remains the owner of tier-demotion records
-and rubric applicability. Issue #1027 owns the GPT-only per-tier topology; Issue
+without reverting #972. Issue #1142 supersedes active post-review demotion: #973 evidence remains
+historical compatibility only, while rubric applicability stays in `docs/tiering.md`. Issue #1027 owns the GPT-only per-tier topology; Issue
 #1120 changes the T3 stage sequence and Browser-GPT transport mechanics without
 reintroducing Codex review stages. Issue #1117 / landed PR #1119 owns the
 runtime-agnostic flow-manager producer contract retained here.
@@ -67,20 +67,15 @@ When that rule applies, skip this authoring ceremony; otherwise continue here.
 
 ## Roles
 
-**Flow-manager runtime default.** **OpenCode** is the default flow-manager when no
-runtime is explicitly selected. Runtime selection is **not** a tracked allowlist:
-the operator may select another capable runtime, including **Cursor or Codex**.
-The tier-provenance `producer` label records the selected manager for audit but
-does not grant or deny runtime permission. A flow-manager runtime that does not
-read `.claude/skills/**` natively must explicitly be handed or load **this file**
-(`.claude/skills/create-issue-draft/SKILL.md`) as the canonical procedure.
-
 | Party | Owns | Must not do |
 |-------|------|-------------|
-| GPT author in the current author chat | Spec content, every content fix, direct Issue edits, every finding disposition, M3 author activation, M4 mechanism inventory | Review its own spec |
-| Flow-manager (OpenCode default; capable operator-selected Cursor/Codex allowed) | Live Issue pulls, fixed per-tier stage order, tier/T3-critical classification, body/mechanical floors, immutable captures, ledger bookkeeping, pass counting, chat references/topology, Browser-GPT turn execution, #975 adoption evidence, economics-guard mechanics, driving the cycle to acceptance or bounded blocked outcome | Author spec content, decide reviewer findings, perform the Claude lens, invent new helper/runtime semantics, mandatory hand-off to architect |
-| Claude architectural-lens (T3 only) | Exactly one `architectural-lens` per cycle segment: pre-terminal M3 when required, pre-terminal independent aggregate cut, adjacent `T3→T2` authority | Routine browser turns, ledger bookkeeping, post-terminal-GPT work, `T2→T1`, GPT stages |
-| Reviewer GPT chats | Independent review only: T3 `competitive`, T3 `architectural-review`, and terminal `architectural` with their fixed authorities | Edit the Issue, share the author chat, overwrite author-owned M4, direct `T3→T1`, or emit two downsteps from one capture |
+| GPT author in the current author chat | Spec content, every content fix, direct Issue edits, finding dispositions, M3 author activation, M4 mechanism inventory | Review its own spec |
+| Flow-manager (OpenCode default; capable operator-selected Cursor/Codex allowed) | Live Issue pulls, fixed stages, tier/L4 classification, body floors, immutable captures, ledger/pass/chat mechanics, one adjacent pre-capture correction | Author content, decide findings, simulate Claude, reopen correction after capture |
+| Claude architectural-lens (T3 only) | One pre-terminal lens, M3 when required, pre-terminal aggregate cut | Routine browser turns, post-terminal work, or post-capture tier transition |
+| Reviewer GPT chats | Independent T3 pre-terminal reviews and terminal `architectural` M5 | Edit the Issue, share author chat, or authorize post-capture tier transition |
+
+A reviewer may call an Issue over-tiered, but after the first canonical reviewer
+capture that observation is advisory only.
 
 ### Flow-manager authority transfer
 
@@ -136,26 +131,20 @@ but create/review progression must not wait for or clear legacy global state.
 
 ## Fixed per-tier pipeline
 
-See `docs/tiering.md` for the rubric. Stage order is fixed; in-flight cycles
-restart from intake without historical provenance inference.
+See `docs/tiering.md` for the conjunctive rubric. Stage order is fixed. Restarting
+a local cycle never discards Issue-bound captures or reopens intake correction.
 
-### T1
+### T1 and T2
 
-1. Intake, workdir, #973 intake prior, #975 adoption boundary, tier gate.
-2. Exactly **one** independent browser-GPT `architectural` lens in a fresh review
-   chat, not the author chat.
-3. Author dispositions/fixes.
-4. `final-acceptance` #975 guard and acceptance. No pre-lens #975 phase.
+1. Intake, immutable revision, tier receipt, and body floors.
+2. Before any reviewer capture, optionally apply one adjacent receipt correction
+   when the intake prior was over-tiered.
+3. Exactly one terminal independent browser-GPT `architectural` lens.
+4. Author dispositions/fixes and `final-acceptance`. A later over-tier observation
+   is advisory; the tier is already fixed for this Issue.
 
-### T2
-
-1. Intake through tier gate.
-2. Exactly **one** terminal independent browser-GPT `architectural` lens.
-3. Author dispositions/fixes.
-4. If GPT authorizes `T2→T1`, apply only that correction and perform the bounded
-   same-chat narrow revalidation defined below.
-5. `final-acceptance`. No pre-lens #975 phase and no competitive or
-   `architectural-review` stage.
+T1 and T2 use the same review pipeline. T2 may still owe light design analysis;
+that descriptive difference does not add another reviewer stage.
 
 ### T3
 
@@ -165,36 +154,17 @@ Canonical counted sequence:
 competitive → architectural-review → architectural-lens (or valid Claude-unavailable waiver) → architectural
 ```
 
-Business-role sequence:
+1. Intake through tier gate; any adjacent correction must happen before step 2.
+2. Run 1–3 fresh browser-GPT `competitive` passes.
+3. Run exactly one fresh browser-GPT `architectural-review`.
+4. Run the T3-only `pre-lens` #975 guard.
+5. Run exactly one Claude `architectural-lens`, or a valid unavailable waiver.
+6. Apply author dispositions/fixes.
+7. Run exactly one terminal independent browser-GPT `architectural` lens.
+8. Apply author dispositions/fixes and run `final-acceptance`.
 
-```text
-competitive → architectural-review → Claude lens → GPT lens
-```
-
-1. Intake through tier gate.
-2. Run **at least one and at most three** fresh browser-GPT `competitive` passes.
-3. Run exactly **one** fresh browser-GPT `architectural-review` after competitive.
-   It is a full reviewer stage with normal finding/economics machinery, but is not
-   M5 and has no tier-demotion authority.
-4. After both pre-Claude reviewer stages are legally terminal, run the `pre-lens`
-   #975 guard.
-5. Run exactly **one** Claude `architectural-lens` with independent Claude Code CLI
-   producing-run evidence, or a valid `claude-unavailable` skip.
-6. Author dispositions/fixes from Claude; re-pull.
-7. Run exactly **one** terminal browser-GPT `architectural` in a fresh chat distinct
-   from author, competitive, and `architectural-review` chats.
-8. Author dispositions/fixes from terminal GPT when needed.
-9. Run `final-acceptance`. Terminal GPT `architectural` is the sole M5 anchor and
-   owns final aggregate cut.
-
-**No `architectural-final` stage.** Codex may manage the flow when selected but cannot substitute for required browser-GPT/Claude review stages. **No engine
-substitution on browser outage.**
-
-**Staleness / review-episode binding.** Claude captures bind to the source Issue
-revision they reviewed. Post-Claude author fixes are the normal path and do not
-force a second Claude lens. Terminal GPT remains the review-episode M5 anchor after
-accepted terminal-GPT fixes; the current body still owes all mechanical/body/tier/
-ledger checks, but no second GPT lens.
+No reviewer stage has post-capture tier-transition authority. There is no
+`architectural-final`, narrow demotion revalidation, or engine substitution.
 
 ## Chat topology
 
@@ -211,14 +181,22 @@ or terminal `architectural` review chats.
 
 ## Step 1 — Intake, workdir, and #975 adoption boundary
 
-Task identity is `<N>-<slug>`. Create:
+Task identity is the immutable GitHub Issue number `<N>`; the slug is
+display-only and may change without creating another correction boundary. Create:
 
 ```text
-~/.local/state/create-issue-draft/<N>-<slug>/       # $WORKDIR
+~/.local/state/create-issue-draft/<N>/              # $WORKDIR
   docs/issues_drafts/<N>-<slug>.md                  # $ANCHOR
-  docs/issues_drafts/.review/<N>-<slug>/            # $REVIEW_DIR
   r01/ r02/ …                                       # immutable pulled revisions
+~/.local/state/create-issue-draft/.review/<N>/      # $REVIEW_DIR
 ```
+
+The numeric workdir and the review authority outside every workdir form the one
+Issue-bound history. Starting or losing a cycle/workdir does not hide the shared
+intake/capture history. A legacy `<N>-<slug>` workdir is read-compatible for
+already-fixed progression but cannot exercise intake-correction authority;
+continue or migrate through the canonical numeric workdir instead of opening
+another local cycle.
 
 No repository support files are copied into `$WORKDIR`. Repository-owned guards
 and the sync helper run from a trusted checkout root with an **absolute** anchor.
@@ -228,9 +206,10 @@ verbatim.
 Pull every revision through the pack wrapper and preserve an immutable copy:
 
 ```bash
-WORKDIR="$HOME/.local/state/create-issue-draft/<N>-<slug>"
+WORKDIR="$HOME/.local/state/create-issue-draft/<N>"
+REVIEW_DIR="$HOME/.local/state/create-issue-draft/.review/<N>"
 ANCHOR="$WORKDIR/docs/issues_drafts/<N>-<slug>.md"
-mkdir -p "$(dirname "$ANCHOR")" "$WORKDIR/rNN" "$WORKDIR/docs/issues_drafts/.review/<N>-<slug>"
+mkdir -p "$(dirname "$ANCHOR")" "$WORKDIR/rNN" "$REVIEW_DIR"
 scripts/gh api repos/chetwerikoff/orchestrator-pack/issues/<N> \
   --jq '"# " + .title + "\n\n" + .body' > "$WORKDIR/rNN/<N>-<slug>.md"
 cp "$WORKDIR/rNN/<N>-<slug>.md" "$ANCHOR"
@@ -242,58 +221,40 @@ every terminal `architectural` chat URL, manager handoffs, and active-cycle #975
 adoption timestamp in `$REVIEW_DIR/chats.md`.
 
 At intake, after every material Issue/scope change, and immediately before the
-next fixed stage, recompute tier and T3-critical/L4 classification. Ambiguous or
+next fixed stage, recompute tier and within-T3 L4 classification. Ambiguous or
 unparseable classification follows existing fail-up behavior.
 
-### #973 tier provenance records
+### Tier provenance and pre-capture intake correction
 
-Before the first tier-gate decision for a fresh workdir, the flow-manager records
-`$REVIEW_DIR/tier-intake.json` as `tier-intake/v1` with exact task identity,
-`kind: fresh`, intake prior, `firstRevision`, and `producer` set to the selected
-manager's exact non-empty audit label. The producer label is preserved verbatim
-but is **not** checked against a finite runtime-name allowlist and is not
-authentication or authorization. The Issue `advisory-prior` mirrors this record
-and must match it. Missing, blank, malformed, partial, or mismatched evidence
-fails closed.
+Before the first tier decision, record `$REVIEW_DIR/tier-intake.json` as
+`tier-intake/v1` with exact numeric Issue task identity, `kind: fresh`, intake prior,
+`firstRevision`, and the selected manager's exact non-empty `producer`. Producer
+is an audit label, not a runtime allowlist or authorization. The Issue
+`advisory-prior` mirrors the record.
 
-Before the first tier-gate decision for a fresh workdir, the **flow-manager**
-records `$REVIEW_DIR/tier-intake.json` as `tier-intake/v1` with:
+After every immutable pull, record `$WORKDIR/rNN/tier-gate-receipt.json` as
+`tier-gate-decision/v1` with exact producer, revision, resulting tier, applicable
+rubric classes, and L4 status. New T1/T2 receipts emit `not-applicable`; T3 emits
+`clear|active|ambiguous|missing|stale`. Legacy below-T3 `clear` is read-only
+compatibility normalized to `not-applicable`.
 
-- `producer` set to the selected manager's exact non-empty audit label; the label is
-  preserved verbatim but is not checked against a finite runtime-name allowlist and
-  is not authentication or authorization;
-- exact task identity;
-- `kind: fresh`;
-- the intake prior produced by the existing rubric/guard application;
-- `firstRevision`, bound to the first valid immutable `rNN`.
+The correction window is Issue-bound. It opens after intake and closes at the
+first immutable capture for any reviewer stage selected by the canonical stage
+classifier. Before closure only, the manager may apply one adjacent correction
+using the same receipt with `correctedFrom`, a non-empty `reason` such as “r01
+prior was over-tiered,” and resulting below-T3 `l4Status: not-applicable`.
+`T3→T2` and `T2→T1` are allowed; direct `T3→T1`, a second correction, branching,
+reuse after an upstep, or correction after capture fails closed.
 
-The Issue `advisory-prior` mirrors this record and must match it. Browser GPT does
-not write the intake record, and no architect attribution is required for existing
-Issue + task-chat entry or direct brief-only entry. Missing, blank, malformed,
-partial, or mismatched intake evidence fails closed. Producer allowlist ownership is the separate #1117/#1119
-slice and is not changed by #1120.
+Advisory prior and pre-capture high watermark are not a floor. Once a selected
+reviewer capture exists, the tier is fixed for the Issue. A restarted intake,
+new workdir/cycle, revision renumbering, deleted pointer, or replay cannot reopen
+it. Worker pre-flight remains upward-only.
 
-The implementation owns exactly one **static frozen** production compatibility
-set, deliberately empty at #973 cutover. Every production identity therefore
-follows fresh rules. Runtime code never discovers, infers, appends, or extends
-membership. Compatibility semantics may be exercised only with explicitly injected
-test membership; never rewrite historical revisions or infer legacy eligibility
-from workdir shape.
-
-After each immutable pull and tier/L4 recomputation, the flow-manager records
-`$WORKDIR/rNN/tier-gate-receipt.json` as `tier-gate-decision/v1` with the exact
-revision, resulting tier, the applicable rubric classes, and current L4 status
-(`clear|active|ambiguous|missing|stale`). Use only these stable rubric labels:
-
-- `failure-type:text-cosmetics`;
-- `failure-type:local-behavior`;
-- `failure-type:subsystem-or-system-guarantee`;
-- `size:small-obvious-self-contained`;
-- `size:single-component-design-judgment`;
-- `fail-up:doubt`.
-
-After the first valid revision, transition direction comes from the highest tier
-in preceding immutable revisions, not author-editable `advisory-prior`.
+Fresh tasks do not write or consume demotion events/revalidations or demotion
+fence fields. The frozen completed-transition compatibility census is empty at
+Issue #1142 cutover. Its minimum legacy reader is read-old/write-none and accepts
+only an already-complete, already-bound current lower-tier candidate.
 
 ## Mandatory Issue-body floors
 
@@ -344,19 +305,15 @@ with capture-backed provenance. Deferred causes require a complete
 `parked-root-cause` fence with an existing follow-up Issue. Upstream data in
 Binding surface, ACs, or Verification must be grounded in `contract-evidence`.
 
-### T3-critical mandatory floors
+### L4 within-T3 mandatory floors
 
-Classify T3-critical when an L4 condition in Issue #574 /
-`docs/issues_drafts/187-task-complexity-tier-rubric.md` matches. Recompute at
-intake, after material Issue/scope change, and before terminal GPT on T3.
-T3-critical adds **only**:
+Evaluate L4 only after the task independently satisfies T3. Name the applicable
+failure class from the complete list in `docs/tiering.md`. L4 may add rollback or
+migration and material crash/race/stale-state floors within T3; it never
+establishes T3, blocks a valid pre-capture adjacent correction, or applies below
+T3. New T1/T2 receipts use `not-applicable`.
 
-- explicit rollback or migration note appropriate to the change; and
-- realistic acceptance criteria and matching verification for every material
-  crash, race, or stale-state failure class.
-
-There is **no** mandatory Codex addition and **no** Codex outage substitution in
-this flow. While L4 remains active, the task cannot be downgraded below T3.
+There is no mandatory Codex addition and no Codex outage substitution.
 
 ## Mechanical floor commands
 
@@ -417,6 +374,25 @@ reviewer:
 
 Save every response verbatim before normalization. `architectural-review`
 findings use the same finding-disposition ledger; there is no second ledger.
+
+### Canonical capture producer
+
+The flow-manager, not the reviewer, writes the immutable revision binding as the
+first line of every new counted capture. Initialize the destination before
+launching the Browser-GPT or Claude stage:
+
+```bash
+ISSUE_REVISION=rNN
+CAPTURE="$REVIEW_DIR/pass-NN-<stage>.capture.txt"
+node scripts/tier-gate-guard.ts --capture-revision "$ISSUE_REVISION" > "$CAPTURE"
+# Append the exact terminal reviewer/Claude output verbatim to "$CAPTURE".
+```
+
+For Browser-GPT stages, redirect the canonical `chatgpt-browser-turn -- turn`
+stdout with `>> "$CAPTURE"`; for Claude, append the producing CLI's exact stdout.
+Never ask or trust the reviewer to echo `issue_revision`. The producer-owned
+header is deterministic `issue_revision: rNN` evidence used by the tier guard;
+new captures without it are malformed for correction chronology.
 
 ### Normalized #975 ledger facts
 
@@ -480,44 +456,32 @@ Only observable `quota`, `rate-limit`, `provider-unavailable`, or
 completed `architectural-review`. The skip is audit evidence only: no Claude
 provenance, M3 authority, or T3→T2 authority. Terminal GPT remains mandatory.
 
-Claude owns pre-terminal independent aggregate cut and may authorize one adjacent
-`T3→T2`. Its four mandatory goals are contradiction, feasibility, primary
+Claude owns pre-terminal independent aggregate cut and may identify over-tiering as advisory only after capture. Its four mandatory goals are contradiction, feasibility, primary
 forced-cut simplification, and missed-gap search. Save its capture as
 `pass-NN-architectural-lens.capture.txt` with co-located producing-run evidence.
 Post-Claude author fixes go to terminal GPT; do not rerun Claude merely because
 those fixes changed the Issue.
 
-### Tier demotion (#973 + #1104)
+### Post-capture over-tier observations
 
-A Claude demotion event uses `tier-demotion-event/v1`, `role: architect`, embedded
-`stage: final-architect-lens`, exact source revision, `beforeTier: T3`,
-`afterTier: T2`, and drivers matching source rubric labels. After author applies
-that correction, re-pull and record narrow `tier-demotion-revalidation/v1` before
-terminal GPT.
+Claude or terminal GPT may explain that a task appears over-tiered. Because their
+capture itself closes the Issue-bound correction window, the observation is
+advisory only. Do not emit a demotion event/revalidation, edit demotion fence
+fields, run narrow revalidation, or restart intake for the same Issue. A tier
+change now requires a new Issue/task contract.
 
 ## Step 7 — Terminal GPT architectural lens (all tiers)
 
-Exactly one terminal browser-GPT `architectural` lens per acceptance-attempt
-segment, always fresh and independent. Save as
-`pass-NN-architectural.capture.txt`. It receives exact reviewed Issue revision,
-reject partition, current M3 state, latest M4 inventory, and economics state.
+Run exactly one fresh independent browser-GPT `architectural` lens and save it as
+`pass-NN-architectural.capture.txt`. It receives the reviewed Issue revision,
+reject partition, current M3 state, M4 inventory, and economics state.
 
-- T1/T2: sole reviewer stage; aggregate cut + M5 anchor.
-- T3: final aggregate cut + sole M5 anchor after Claude and author fixes.
+- T1/T2: sole reviewer stage, aggregate cut, and M5 anchor.
+- T3: final aggregate cut and M5 after Claude and author fixes.
 
-Terminal GPT may authorize one adjacent `T3→T2` or `T2→T1` event from the exact
-source revision it reviewed. After author applies only that authorized tier/body
-correction and manager re-pulls, reuse the same terminal GPT chat for exactly one
-narrow revalidation capture:
-
-```text
-pass-NN-architectural-demotion-narrow-revalidation.capture.txt
-```
-
-That capture may contain only revalidation evidence — no findings, M3, M5,
-`NO_FINDINGS`, or replacement review state. The original terminal capture remains
-M5. Direct `T3→T1`, branching, duplicate/shared-source events, or two downsteps in
-one capture fail closed. **No Claude after terminal GPT.**
+A post-capture over-tier statement is advisory only. It creates no transition or
+narrow revalidation. The original terminal capture remains the M5 anchor after
+accepted author fixes.
 
 ### M3 by tier
 
@@ -555,14 +519,14 @@ Final acceptance requires:
    exactly one later Claude lens or valid unavailable skip, and exactly one later
    terminal `architectural`;
 3. Claude producing-run evidence is valid when Claude ran;
-4. full tier gate is green, including demotion narrow revalidation when applicable;
+4. full tier gate is green, including Issue-bound intake-correction evidence when applicable;
 5. body floors, stage completeness, and finding-ledger guard are green;
 6. every typed finding is normalized and protected work is resolved under M3;
 7. governed reviewer evidence exists after #975 adoption boundary;
-8. live Issue title matches final tier and T3-critical floors hold when applicable;
+8. live Issue title matches final tier and within-T3 L4 floors hold when applicable;
 9. no required browser-GPT stage was skipped; browser outage leaves work blocked;
 10. final report includes Issue URL, tier/pass counts, active-cycle chat URLs,
-    manager handoff, workdir, T3-critical/#973 state, M4 summary, residual risks,
+    manager handoff, workdir, within-T3 L4/intake-correction state, M4 summary, residual risks,
     and every direct Browser-GPT incident including journal-write failure.
 
 Two non-converging fix cycles on the same segment escalate to the operator.
@@ -605,7 +569,6 @@ pass-NN-competitive.capture.txt
 pass-NN-architectural-review.capture.txt
 pass-NN-architectural-lens.capture.txt
 pass-NN-architectural.capture.txt
-pass-NN-architectural-demotion-narrow-revalidation.capture.txt
 <co-located Claude producing-run evidence>
 presync-architect-lens.md
 finding-disposition-ledger.json
@@ -613,8 +576,7 @@ rNN/tier-gate-receipt.json
 ```
 
 Guard-recognized T3 stage identities are `competitive`, `architectural-review`,
-`architectural-lens`, and terminal `architectural`; the narrow demotion capture is
-non-M5 evidence. `architectural-final` is historical/audit only.
+`architectural-lens`, and terminal `architectural`; there is no narrow demotion capture in fresh progression. `architectural-final` is historical/audit only.
 
 ## Repository-write boundary
 
@@ -625,14 +587,14 @@ state root. Browser recurrence journal is also out-of-repository and advisory.
 ## Don't
 
 - Perform, simulate, or adjudicate the Claude lens in the flow-manager session.
-- Treat a `claude-unavailable` skip as Claude provenance, M3 authority, or demotion authority.
+- Treat a `claude-unavailable` skip as Claude provenance, M3 authority, or tier-correction authority.
 - Skip Claude for impatience, ambiguous timeout, or cost-saving without observable unavailability.
 - Let the flow-manager author spec content or decide reviewer findings.
 - Review in the author chat or reuse reviewer chats.
 - Run pre-lens #975 on T1/T2.
 - Run `architectural-final` or credit Codex as a create-flow reviewer.
 - Substitute another engine when required browser GPT is unavailable.
-- Authorize direct `T3→T1`, two downsteps in one capture, or GPT demotion without narrow revalidation.
+- Reopen the Issue-bound correction window after any canonical reviewer capture.
 - Run a second Claude lens after normal post-Claude fixes.
 - Run a second terminal GPT lens after accepted terminal-GPT fixes.
 - Treat any capture before terminal GPT `architectural` as final M5.

@@ -98,6 +98,8 @@
     "scripts/session-runtime-liveness.test.ts": "heavy",
     "scripts/stage-completeness-guard.test.ts": "light",
     "scripts/tier-gate-guard.test.ts": "light",
+    "scripts/tiering-calibration.test.ts": "light",
+    "scripts/tiering-distribution-report.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.diagnostics.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.issue-1010.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts": "light",

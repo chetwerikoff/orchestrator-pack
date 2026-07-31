@@ -119,6 +119,11 @@ jobs:
       - name: Install npm dependencies
         run: npm ci --include=dev
 
+      - name: Validate committed tier calibration
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: npm run tiering:calibration
+
       - name: Enforce CI pipeline split policy
         shell: pwsh
         env:
