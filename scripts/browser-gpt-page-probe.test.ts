@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import test from 'node:test';
+import { test } from 'vitest';
 import {
   buildExportExpression,
   INSPECTION_EXPRESSION,
@@ -235,7 +235,7 @@ test('successful export writes only one exact selected representation', async ()
   if (process.platform !== 'win32') assert.equal((await stat(destination)).mode & 0o777, 0o600);
 });
 
-test('existing, symlinked, directory, and special output targets are refused without modification', async (t) => {
+test('existing, symlinked, directory, and special output targets are refused without modification', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'probe-unsafe-'));
   const existing = join(directory, 'existing.txt');
   await writeFile(existing, 'original');
@@ -254,7 +254,6 @@ test('existing, symlinked, directory, and special output targets are refused wit
   await assert.rejects(publishExactBytes(outputDirectory, Buffer.from('replacement')), (error: any) => error.status === 'unsafe_output');
 
   if (process.platform === 'win32') {
-    t.diagnostic('Unix-domain socket special-target fixture is not available on Windows');
     return;
   }
   const socketPath = join(directory, 'socket');
@@ -324,7 +323,6 @@ test('compatible target conversion never exposes websocket URLs in list-facing m
   assert.equal(converted.length, 1);
   assert.equal(converted[0]?.target_id, 'one');
 });
-
 
 test('inspect preserves exact aggregate counts while bounding node summaries', async () => {
   const nodes: FakeNode[] = [];
