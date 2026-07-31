@@ -23,7 +23,7 @@
     "test:issue-1122": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/browser-gpt-page-probe.test.ts",
     "pack-gpt-review": "node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pack-gpt-review.ts --",
     "chatgpt-browser-turn": "npm run check:node-major --silent && node --experimental-strip-types scripts/chatgpt-browser-turn/state-light-entry.ts",
-    "browser-gpt-page-probe": "npm run check:node-major --silent -- --quiet && node --experimental-strip-types scripts/browser-gpt-page-probe.ts",
+    "browser-gpt-page-probe": "node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/browser-gpt-page-probe.ts --",
     "gate-runner-selftest": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/gate-runner",
     "gate-census-generate": "npm run check:node-major --silent && node --experimental-strip-types scripts/gate-runner/census-generator.ts",
     "estate-cut:check": "npm run check:node-major --silent && node --experimental-strip-types scripts/estate-cut/manifest-generator.mjs --check",
