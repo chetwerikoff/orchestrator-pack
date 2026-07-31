@@ -11,11 +11,8 @@ import {
 } from './product-page-selectors.ts';
 import { scalarLocator } from './state-light-turn.test-fixtures.ts';
 import {
-  buildForeignActivityDiagnostics,
   classifyPageObservation,
-  foreignSuspectEvidenceFingerprint,
-  ownedPromptEchoMatches,
-  promptEchoSharedOverlap,
+  ownedPromptMatches,
   replyStabilityMatches,
   replyStabilityFingerprint,
 } from './state-light-turn.ts';
@@ -84,20 +81,29 @@ describe('state-light prompt attribution classification', () => {
     { role: 'assistant' as const, text: 'OLD ANSWER' },
   ];
 
-  it('accepts a collapsed long prompt echo as owned rather than foreign', () => {
+  it('waits on truncated lazy-render of the owned prompt until the full echo appears', () => {
     const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
-    const collapsedEcho = `${'A'.repeat(120)} detail detail detail…`;
+    const truncatedEcho = `${'A'.repeat(20)}`;
 
-    expect(ownedPromptEchoMatches(collapsedEcho, longPrompt)).toBe(true);
+    expect(ownedPromptMatches(truncatedEcho, longPrompt)).toBe(false);
     expect(classifyPageObservation(
-      [...baseline, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'working' }],
+      [...baseline, { role: 'user', text: truncatedEcho }, { role: 'assistant', text: 'working' }],
       baseline.length,
       longPrompt,
       true,
     )).toEqual({ state: 'waiting' });
+
+    const fullEcho = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
+    expect(ownedPromptMatches(fullEcho, longPrompt)).toBe(true);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: fullEcho }, { role: 'assistant', text: 'FINAL', }],
+      baseline.length,
+      longPrompt,
+      false,
+    )).toEqual({ state: 'ready', reply: 'FINAL' });
   });
 
-  it('treats a transient duplicate owned user render as waiting, not foreign', () => {
+  it('treats a transient duplicate owned user render as waiting, not uncertain', () => {
     expect(classifyPageObservation(
       [
         ...baseline,
@@ -111,7 +117,41 @@ describe('state-light prompt attribution classification', () => {
     )).toEqual({ state: 'waiting' });
   });
 
-  it('flags genuinely foreign user text as foreign_suspect for stable promotion', () => {
+  it('finds the last owned user node even when baseline count includes it', () => {
+    const continuation = [
+      { role: 'user' as const, text: 'USER-ONE' },
+      { role: 'assistant' as const, text: 'ANSWER-ONE' },
+      { role: 'user' as const, text: 'USER-TWO' },
+      { role: 'assistant' as const, text: 'ANSWER-TWO' },
+      { role: 'user' as const, text: 'PROMPT' },
+      { role: 'assistant' as const, text: 'FINAL' },
+    ];
+    const lateBaselineCount = continuation.length - 1;
+
+    expect(classifyPageObservation(
+      continuation,
+      lateBaselineCount,
+      'PROMPT',
+      false,
+    )).toEqual({ state: 'ready', reply: 'FINAL' });
+  });
+
+  it('captures the owned reply before a later foreign user turn', () => {
+    expect(classifyPageObservation(
+      [
+        ...baseline,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'OWNED ANSWER' },
+        { role: 'user', text: 'FOREIGN' },
+        { role: 'assistant', text: 'FOREIGN ANSWER' },
+      ],
+      baseline.length,
+      'PROMPT',
+      false,
+    )).toEqual({ state: 'ready', reply: 'OWNED ANSWER' });
+  });
+
+  it('flags genuinely foreign user text as uncertain when no owned reply is ready', () => {
     expect(classifyPageObservation(
       [
         ...baseline,
@@ -121,60 +161,77 @@ describe('state-light prompt attribution classification', () => {
       ],
       baseline.length,
       'PROMPT',
-      false,
+      true,
     )).toEqual({
-      state: 'foreign_suspect',
+      state: 'uncertain',
       cause: 'foreign_user_after_owned_send',
-      suspectFingerprint: 'FOREIGN',
+      observedUserHeads: ['FOREIGN'],
     });
   });
 
-  it('matches collapsed render with different line breaking than the source prompt', () => {
-    const longPrompt = `Problem:\nFlow-manager misclassifies.\n\nGoal:\nFix echo matching.\n${'detail '.repeat(80)}`;
-    const collapsedEcho = 'Problem: Flow-manager misclassifies. Goal: Fix echo matching. detail detail…';
-
-    expect(ownedPromptEchoMatches(collapsedEcho, longPrompt)).toBe(true);
+  it('never publishes a partial owned reply when a later foreign turn completed', () => {
     expect(classifyPageObservation(
-      [...baseline, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'working' }],
+      [
+        ...baseline,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'PARTIAL' },
+        { role: 'user', text: 'FOREIGN' },
+        { role: 'assistant', text: 'FOREIGN COMPLETE' },
+      ],
+      baseline.length,
+      'PROMPT',
+      true,
+    )).toEqual({
+      state: 'uncertain',
+      cause: 'foreign_user_after_owned_send',
+      observedUserHeads: ['FOREIGN'],
+    });
+  });
+
+  it('matches owned text when markdown and line breaking normalize to the same string', () => {
+    const longPrompt = `Problem:\nFlow-manager misclassifies.\n\nGoal:\nFix echo matching.\n${'detail '.repeat(80)}`;
+    const rendered = `Problem: Flow-manager misclassifies. Goal: Fix echo matching. ${'detail '.repeat(80)}`.trim();
+
+    expect(ownedPromptMatches(rendered, longPrompt)).toBe(true);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: rendered }, { role: 'assistant', text: 'working' }],
       baseline.length,
       longPrompt,
       true,
     )).toEqual({ state: 'waiting' });
   });
 
-  it('matches a visible window from the middle of the prompt', () => {
+  it('rejects partial windows that are not the full normalized prompt', () => {
     const longPrompt = `PREFIX ${'alpha '.repeat(100)}MIDDLE ${'beta '.repeat(100)}SUFFIX`;
     const middleWindow = 'MIDDLE beta beta beta';
 
-    expect(ownedPromptEchoMatches(middleWindow, longPrompt)).toBe(true);
-    expect(promptEchoSharedOverlap(middleWindow, longPrompt)).toBeGreaterThanOrEqual(16);
+    expect(ownedPromptMatches(middleWindow, longPrompt)).toBe(false);
   });
 
-  it('matches owned text with a UI collapse affix appended', () => {
-    const prompt = 'Line one.\n\nLine two with enough content to exceed minimum overlap requirements for the matcher.';
-    const visible = 'Line one. Line two with enough content show more';
+  it('matches owned text only after UI collapse affixes are stripped', () => {
+    const prompt = 'Line one. Line two with enough content to exceed minimum overlap requirements for the matcher.';
+    const visible = 'Line one. Line two with enough content to exceed minimum overlap requirements for the matcher.';
 
-    expect(ownedPromptEchoMatches(visible, prompt)).toBe(true);
+    expect(ownedPromptMatches(visible, prompt)).toBe(true);
+    expect(ownedPromptMatches('Line one. Line two with enough content show more', prompt)).toBe(false);
   });
-
 
   it('returns promptly for long genuinely foreign visible text', () => {
     const prompt = `owned ${'detail '.repeat(500)}`;
     const foreign = `FOREIGN ${'noise '.repeat(300)}`;
     const started = performance.now();
-    expect(ownedPromptEchoMatches(foreign, prompt)).toBe(false);
-    expect(promptEchoSharedOverlap(foreign, prompt)).toBeLessThan(16);
+    expect(ownedPromptMatches(foreign, prompt)).toBe(false);
     expect(performance.now() - started).toBeLessThan(500);
   });
-  it('accepts long markdown prompt rendered without syntax chars as owned', () => {
+
+  it('accepts a long markdown prompt when the rendered visible text normalizes to the same string', () => {
     const body = Array.from({ length: 520 }, () => 'detail').join(' ');
     const longPrompt = `# Issue #1120 pulse\n\n## OUTPUT CONSTRAINTS\n- Keep answer under 500 words\n- Use \`backticks\` sparingly\n\n${body}`;
+    const renderedVisible = `Issue #1120 pulse OUTPUT CONSTRAINTS Keep answer under 500 words Use backticks sparingly ${body}`;
 
     expect(longPrompt.length).toBeGreaterThanOrEqual(3000);
-    const renderedVisible = `Issue #1120 pulse OUTPUT CONSTRAINTS Keep answer under 500 words Use backticks sparingly ${body.slice(0, 512)}`;
-
-    expect(promptEchoSharedOverlap(renderedVisible, longPrompt)).toBeGreaterThanOrEqual(230);
-    expect(ownedPromptEchoMatches(renderedVisible, longPrompt)).toBe(true);
+    expect(renderedVisible.length).toBeGreaterThanOrEqual(3000);
+    expect(ownedPromptMatches(renderedVisible, longPrompt)).toBe(true);
     expect(classifyPageObservation(
       [...baseline, { role: 'user', text: renderedVisible }, { role: 'assistant', text: 'working' }],
       baseline.length,
@@ -183,51 +240,49 @@ describe('state-light prompt attribution classification', () => {
     )).toEqual({ state: 'waiting' });
   });
 
-  it('reproduces live e286c4fd overlap ratio without classifying own long prompt as foreign', () => {
-    const sharedPrefix = `Issue #1120 post-fix live pulse-check HARD fresh-chat stress cell. ${'context '.repeat(80)}`;
-    const longPrompt = `${sharedPrefix}\n\n## Required\n- item one\n- item two\n\n${'detail '.repeat(200)}`;
-    const renderedVisible = `${sharedPrefix} Required item one item two ${'detail '.repeat(120)}`.slice(0, 2800);
-    const overlap = promptEchoSharedOverlap(renderedVisible, longPrompt);
-
-    expect(overlap).toBeGreaterThanOrEqual(493);
-    expect(ownedPromptEchoMatches(renderedVisible, longPrompt)).toBe(true);
-  });
-
-  it('still classifies genuinely foreign long markdown-adjacent text as foreign', () => {
+  it('does not treat genuinely foreign long markdown-adjacent text as owned', () => {
     const prompt = `# Owned\n\n${'owned detail '.repeat(300)}`;
     const foreign = `FOREIGN INTERLOPER ${'noise '.repeat(500)}`;
 
     expect(prompt.length).toBeGreaterThanOrEqual(3000);
     expect(foreign.length).toBeGreaterThanOrEqual(3000);
-    expect(ownedPromptEchoMatches(foreign, prompt)).toBe(false);
-    expect(promptEchoSharedOverlap(foreign, prompt)).toBeLessThan(24);
+    expect(ownedPromptMatches(foreign, prompt)).toBe(false);
     expect(classifyPageObservation(
       [...baseline, { role: 'user', text: foreign }, { role: 'assistant', text: 'working' }],
       baseline.length,
       prompt,
       true,
-    )).toEqual({
-      state: 'foreign_suspect',
-      cause: 'foreign_or_ambiguous_user_activity',
-      suspectFingerprint: expect.stringMatching(/^FOREIGN INTERLOPER /),
-    });
+    )).toEqual({ state: 'waiting' });
   });
 
-  it('keeps short prompt echo thresholds unchanged', () => {
+  it('rejects textContent with sr-only prefix while rendered innerText matches', () => {
+    const prompt = 'Issue #1120 strict-matcher smoke cell OUTPUT CONSTRAINTS Keep answer under 500 words';
+    const rendered = prompt;
+    const textContentWithSrOnly = `You said: ${rendered}`;
+
+    expect(ownedPromptMatches(rendered, prompt)).toBe(true);
+    expect(ownedPromptMatches(textContentWithSrOnly, prompt)).toBe(false);
+    expect(classifyPageObservation(
+      [...baseline, { role: 'user', text: rendered }, { role: 'assistant', text: 'working' }],
+      baseline.length,
+      prompt,
+      true,
+    )).toEqual({ state: 'waiting' });
+  });
+
+  it('keeps short prompt strict equality unchanged', () => {
     const prompt = 'PROMPT-SHORT owned echo baseline';
     const visible = 'PROMPT-SHORT owned echo baseline';
 
-    expect(ownedPromptEchoMatches(visible, prompt)).toBe(true);
-    expect(promptEchoSharedOverlap(visible, prompt)).toBe(prompt.length);
+    expect(ownedPromptMatches(visible, prompt)).toBe(true);
   });
 
-  it('keeps genuinely unrelated text foreign', () => {
+  it('keeps genuinely unrelated text non-owned', () => {
     const prompt = `owned ${'detail '.repeat(80)}`;
-    expect(ownedPromptEchoMatches('FOREIGN INTERLOPER TEXT', prompt)).toBe(false);
-    expect(buildForeignActivityDiagnostics('FOREIGN INTERLOPER TEXT', prompt).shared_overlap).toBeLessThan(24);
+    expect(ownedPromptMatches('FOREIGN INTERLOPER TEXT', prompt)).toBe(false);
   });
 
-  it('does not classify owned truncated renderings as foreign_suspect', () => {
+  it('does not classify owned truncated renderings as uncertain', () => {
     const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
     const truncA = `${'A'.repeat(20)}`;
     const truncB = `${'A'.repeat(30)}`;
@@ -244,11 +299,20 @@ describe('state-light prompt attribution classification', () => {
       longPrompt,
       true,
     )).toEqual({ state: 'waiting' });
-    expect(foreignSuspectEvidenceFingerprint(
-      [...baseline, { role: 'user', text: truncA }],
+  });
+
+  it('never publishes a foreign answer when the owned prompt is not recognized', () => {
+    expect(classifyPageObservation(
+      [
+        ...baseline,
+        { role: 'user', text: 'PARTIAL-OWNED' },
+        { role: 'user', text: 'FOREIGN' },
+        { role: 'assistant', text: 'FOREIGN ANSWER' },
+      ],
       baseline.length,
-      longPrompt,
-    )).toBe('');
+      'FULL-OWNED-PROMPT',
+      false,
+    )).toEqual({ state: 'waiting' });
   });
 
   it('treats render-different assistant reads as stable when normalized text matches', () => {

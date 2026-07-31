@@ -104,7 +104,7 @@ The helper is a **single-invocation fast path**, not admission/recovery authorit
 - Progress/intermediate assistant nodes are not concatenated into the final result.
 - The invocation must observe its own exact user prompt after the page baseline.
   Additional/interleaved user activity makes only that invocation
-  `foreign_activity`/degraded; it never blocks a sibling tab.
+  `observation_uncertain`/degraded; it never blocks a sibling tab.
 - A normal generating/wait poll is not an incident.
 - Login, quota, challenge, unusable composer, redirect/UI mismatch, or publication
   conflict are local invocation results.

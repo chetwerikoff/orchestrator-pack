@@ -107,7 +107,7 @@ import {
   SEND_BUTTON_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { runStateLightTurn } from './state-light-turn.ts';
+import { POST_SEND_OBSERVATION_POLL_MS, runStateLightTurn } from './state-light-turn.ts';
 import type { ProfileVerification } from './ui-adapter.ts';
 
 import journalSymptoms from './fixtures/browser-turn-recurrence-journal-symptoms.json' with { type: 'json' };
@@ -127,6 +127,7 @@ function makePage(
     sendButton?: boolean;
     wallText?: string;
     wallAfterPoll?: number;
+    preSendMessages?: StateLightTestMessage[];
   } = {},
 ) {
   let sent = false;
@@ -218,7 +219,7 @@ function makePage(
           throw new Error('simulated page loss');
         }
         if (!sent) {
-          activeSnapshot = { messages: BASELINE, generating: false };
+          activeSnapshot = { messages: options.preSendMessages ?? BASELINE, generating: false };
           return collectionLocator(activeSnapshot.messages);
         }
         activeSnapshot = snapshots[Math.min(observationIndex, Math.max(0, snapshots.length - 1))]
@@ -261,6 +262,20 @@ function readySnapshots(reply = 'FINAL'): StateLightTestSnapshot[] {
       generating: false,
     },
   ];
+}
+
+const DISPATCH_OBSERVATION_MS = 30_000;
+
+function delayedReadySnapshots(waitingPolls: number, reply = 'FINAL'): StateLightTestSnapshot[] {
+  const waiting: StateLightTestSnapshot = {
+    messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+    generating: true,
+  };
+  const ready: StateLightTestSnapshot = {
+    messages: [...BASELINE, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: reply, finalAction: true }],
+    generating: false,
+  };
+  return [...Array.from({ length: waitingPolls }, () => waiting), ready, ready];
 }
 
 async function runAndCapture(
@@ -324,6 +339,72 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(fake.metrics.closes).toBe(1);
     expect(outcome.context.newPage).toHaveBeenCalledTimes(1);
     expect(mocks.linkSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('matches owned prompt when textContent carries sr-only prefix but innerText equals prompt', async () => {
+    const prompt = 'Issue #1120 strict-matcher smoke cell OUTPUT CONSTRAINTS Keep answer under 500 words';
+    const rendered = prompt;
+    const domTextContent = `You said: ${rendered}`;
+    const snapshots: StateLightTestSnapshot[] = [
+      {
+        messages: [
+          ...BASELINE,
+          { role: 'user', text: rendered, domTextContent },
+          { role: 'assistant', text: 'working' },
+        ],
+        generating: true,
+      },
+      {
+        messages: [
+          ...BASELINE,
+          { role: 'user', text: rendered, domTextContent },
+          { role: 'assistant', text: 'FINAL', finalAction: true },
+        ],
+        generating: false,
+      },
+      {
+        messages: [
+          ...BASELINE,
+          { role: 'user', text: rendered, domTextContent },
+          { role: 'assistant', text: 'FINAL', finalAction: true },
+        ],
+        generating: false,
+      },
+    ];
+    const { readStableInput } = await import('./input.ts');
+    vi.mocked(readStableInput).mockImplementationOnce(() => ({
+      text: prompt,
+      bytes: new Uint8Array([1]),
+      byteLength: 1,
+      dev: 1n,
+      ino: 1n,
+    }));
+    const fake = makePage(snapshots);
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      cause: 'completed_page_only',
+      send_count: 1,
+      cleanup: 'confirmed',
+    });
+    expect(outcome.result.state).not.toBe('observation_uncertain');
+  });
+
+  it('uses post-send observation cadence instead of --poll-ms after the dispatch window', async () => {
+    const fake = makePage(delayedReadySnapshots(65));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '120000', pollMs: '300000' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      cause: 'completed_page_only',
+      send_count: 1,
+    });
+    const slowPollWaitFloor = 300_000 + DISPATCH_OBSERVATION_MS - 5_000;
+    expect(fake.metrics.waitedMs).toBeLessThan(slowPollWaitFloor);
+    expect(fake.metrics.waitedMs).toBeGreaterThan(DISPATCH_OBSERVATION_MS);
   });
 
   it('runs three overlapping invocations on independent owned tabs', async () => {
@@ -429,7 +510,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
     const truncA = `${'A'.repeat(20)}`;
     const truncB = `${'A'.repeat(19)}B`;
-    const stableEcho = `${'A'.repeat(120)} detail detail detail…`;
+    const stableEcho = `${'A'.repeat(120)} ${'detail '.repeat(40)}`.trim();
     let sent = false;
     let polls = 0;
     const metrics = { sends: 0, closes: 0, polls: 0, waitedMs: 0 };
@@ -499,30 +580,29 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     const outcome = await runAndCapture(page, { timeoutMs: '5', pollMs: '1' });
 
     expect(outcome.result.send_count).toBe(1);
-    expect(outcome.result.state).not.toBe('foreign_activity');
     expect(outcome.result.state).not.toBe('send_failed');
     expect(outcome.result).toMatchObject({
-      state: 'no_reply',
-      cause: 'observation_exhausted_no_resend',
+      state: 'observation_uncertain',
+      cause: 'owned_prompt_not_observed',
     });
-    expect(metrics.closes).toBe(0);
+    expect(metrics.closes).toBe(1);
     expect(metrics.polls).toBeGreaterThanOrEqual(3);
   });
 
   it('completes a long prompt with different line breaking without false foreign_activity', async () => {
     const longPrompt = `Problem:\nFlow-manager misclassifies long prompts.\n\nGoal:\nVerify echo tolerance.\n${'detail '.repeat(120)}`;
-    const collapsedEcho = 'Problem: Flow-manager misclassifies long prompts. Goal: Verify echo tolerance. detail detail…';
+    const renderedEcho = `Problem: Flow-manager misclassifies long prompts. Goal: Verify echo tolerance. ${'detail '.repeat(120)}`.trim();
     const snapshots: StateLightTestSnapshot[] = [
       {
-        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'working' }],
+        messages: [...BASELINE, { role: 'user', text: renderedEcho }, { role: 'assistant', text: 'working' }],
         generating: true,
       },
       {
-        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+        messages: [...BASELINE, { role: 'user', text: renderedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
         generating: false,
       },
       {
-        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+        messages: [...BASELINE, { role: 'user', text: renderedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
         generating: false,
       },
     ];
@@ -539,43 +619,112 @@ describe('Issue #1120 state-light turn lifecycle', () => {
 
     expect(outcome.code).toBe(0);
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
-    expect(outcome.result.state).not.toBe('foreign_activity');
+    expect(outcome.result.state).not.toBe('observation_uncertain');
     expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
   });
 
-  it('keeps foreign activity invocation-local and still closes only its owned tab', async () => {
-    const foreignSnapshot: StateLightTestSnapshot = {
+  it('captures the owned reply window before a later foreign user turn', async () => {
+    const interleavedSnapshot: StateLightTestSnapshot = {
       messages: [
         ...BASELINE,
         { role: 'user', text: 'PROMPT' },
-        { role: 'assistant', text: 'partial' },
+        { role: 'assistant', text: 'OWNED ANSWER', finalAction: true },
         { role: 'user', text: 'FOREIGN' },
         { role: 'assistant', text: 'FOREIGN ANSWER', finalAction: true },
       ],
       generating: false,
     };
-    const fake = makePage([foreignSnapshot, foreignSnapshot, foreignSnapshot]);
+    const fake = makePage([interleavedSnapshot, interleavedSnapshot, interleavedSnapshot]);
     const outcome = await runAndCapture(fake.page);
 
+    expect(outcome.code).toBe(0);
     expect(outcome.result).toMatchObject({
-      state: 'foreign_activity',
-      scope: 'invocation',
+      state: 'ok',
+      scope: 'none',
       send_count: 1,
       cleanup: 'confirmed',
-      foreign_activity_diagnostics: {
-        suspect_visible_head: 'FOREIGN',
-        prompt_head: 'PROMPT',
-        shared_overlap: expect.any(Number),
+    });
+    expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('OWNED ANSWER');
+    expect(fake.metrics.sends).toBe(1);
+    expect(fake.metrics.closes).toBe(1);
+  });
+
+
+  it('never publishes partial owned reply when a later foreign turn completed', async () => {
+    const snapshot: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'PARTIAL' },
+        { role: 'user', text: 'FOREIGN' },
+        { role: 'assistant', text: 'FOREIGN COMPLETE', finalAction: true },
+      ],
+      generating: false,
+    };
+    const fake = makePage(Array.from({ length: 30 }, () => snapshot));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
+
+    expect(outcome.result.state).toBe('observation_uncertain');
+    expect(outcome.result.state).not.toBe('ok');
+    expect(outcome.result.cause).toBe('foreign_user_after_owned_send');
+    expect(mocks.linkSync).not.toHaveBeenCalled();
+    expect(fake.metrics.closes).toBe(1);
+  });
+
+  it('closes the owned tab on observation_uncertain without touching sibling tabs', async () => {
+    const foreignSnapshot: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'FOREIGN' },
+        { role: 'assistant', text: 'FOREIGN ANSWER', finalAction: true },
+      ],
+      generating: true,
+    };
+    const fake = makePage(Array.from({ length: 30 }, () => foreignSnapshot));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
+
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain',
+      cleanup: 'confirmed',
+      send_count: 1,
+    });
+    expect(fake.metrics.closes).toBe(1);
+    expect(outcome.result.conversation_id).toBe('https://chatgpt.com/c/fake-owned-turn');
+  });
+
+  it('returns observation_uncertain at the hard deadline for interleaved foreign activity', async () => {
+    const foreignSnapshot: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'FOREIGN' },
+        { role: 'assistant', text: 'FOREIGN ANSWER', finalAction: true },
+      ],
+      generating: true,
+    };
+    const fake = makePage(Array.from({ length: 30 }, () => foreignSnapshot));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
+
+    expect(outcome.result).toMatchObject({
+      state: 'observation_uncertain',
+      scope: 'invocation',
+      cause: 'foreign_user_after_owned_send',
+      send_count: 1,
+      cleanup: 'confirmed',
+      observation_uncertainty_diagnostics: {
+        cause: 'foreign_user_after_owned_send',
+        send_count: 1,
+        owned_prompt_seen: true,
+        observed_user_heads: ['FOREIGN'],
       },
     });
-    expect(outcome.result.foreign_activity_diagnostics?.shared_overlap).toBeLessThan(24);
-    expect(fake.metrics.waitedMs).toBeGreaterThanOrEqual(4000);
     expect(fake.metrics.sends).toBe(1);
     expect(fake.metrics.closes).toBe(1);
     expect(mocks.linkSync).not.toHaveBeenCalled();
     const journal = mocks.appendFileSync.mock.calls.map((call) => String(call[1])).join('\n');
-    expect(journal).toContain('suspect_visible_head');
-    expect(journal).toContain('shared_overlap');
+    expect(journal).toContain('interleaved_user_activity');
+    expect(journal).toContain('observation_uncertainty');
   });
 
   it('keeps polling the same owned page after a transient post-send observation error', async () => {
@@ -676,18 +825,18 @@ describe('Issue #1120 state-light turn lifecycle', () => {
 
   it('does not classify a collapsed long prompt echo as foreign activity', async () => {
     const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
-    const collapsedEcho = `${'A'.repeat(120)} detail detail detail…`;
+    const renderedEcho = longPrompt;
     const snapshots: StateLightTestSnapshot[] = [
       {
-        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'working' }],
+        messages: [...BASELINE, { role: 'user', text: renderedEcho }, { role: 'assistant', text: 'working' }],
         generating: true,
       },
       {
-        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+        messages: [...BASELINE, { role: 'user', text: renderedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
         generating: false,
       },
       {
-        messages: [...BASELINE, { role: 'user', text: collapsedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
+        messages: [...BASELINE, { role: 'user', text: renderedEcho }, { role: 'assistant', text: 'FINAL', finalAction: true }],
         generating: false,
       },
     ];
@@ -707,7 +856,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       state: 'ok',
       send_count: 1,
     });
-    expect(outcome.result.state).not.toBe('foreign_activity');
+    expect(outcome.result.state).not.toBe('observation_uncertain');
     expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
   });
 
@@ -747,7 +896,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       state: 'ok',
       send_count: 1,
     });
-    expect(outcome.result.state).not.toBe('foreign_activity');
+    expect(outcome.result.state).not.toBe('observation_uncertain');
   });
 
   it('never emits send_failed once send_count is at least one', async () => {
@@ -761,8 +910,8 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(outcome.result.send_count).toBeGreaterThanOrEqual(1);
     expect(outcome.result.state).not.toBe('send_failed');
     expect(outcome.result).toMatchObject({
-      state: 'no_reply',
-      cause: 'observation_exhausted_no_resend',
+      state: 'observation_uncertain',
+      cause: 'owned_prompt_not_observed',
     });
   });
 
@@ -787,7 +936,6 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       observation_exhausted_diagnostics: {
         observation_state: 'ready_unstable',
         stable_reads: 1,
-        foreign_stable_reads: 0,
         poll_count: expect.any(Number),
         soft_deadline_elapsed: true,
       },
@@ -797,7 +945,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(mocks.linkSync).not.toHaveBeenCalled();
   });
 
-  it('exhausts oscillating foreign_suspect with diagnostics instead of observing forever', async () => {
+  it('exhausts oscillating uncertain reads with observation_uncertain at the hard deadline', async () => {
     const foreignA: StateLightTestSnapshot = {
       messages: [
         ...BASELINE,
@@ -821,18 +969,17 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
 
     expect(outcome.result.send_count).toBe(1);
-    expect(outcome.result.state).toBe('no_reply');
-    expect(outcome.result.state).not.toBe('foreign_activity');
+    expect(outcome.result.state).toBe('observation_uncertain');
     expect(outcome.result.state).not.toBe('send_failed');
     expect(outcome.result).toMatchObject({
-      cause: 'observation_exhausted_no_resend',
-      observation_exhausted_diagnostics: {
-        observation_state: 'foreign_suspect',
-        foreign_stable_reads: 1,
-        soft_deadline_elapsed: true,
+      cause: 'foreign_user_after_owned_send',
+      observation_uncertainty_diagnostics: {
+        cause: 'foreign_user_after_owned_send',
+        send_count: 1,
+        owned_prompt_seen: true,
       },
     });
-    expect(fake.metrics.closes).toBe(0);
+    expect(fake.metrics.closes).toBe(1);
   });
 
   it('stabilizes a long reply when successive reads differ only by render artifacts', async () => {
@@ -983,6 +1130,36 @@ ${body}`;
     expect(mocks.linkSync).not.toHaveBeenCalled();
   });
 
+  it('chat-url continuation finds owned prompt inside a late baseline capture', async () => {
+    const continuationPre: StateLightTestMessage[] = [
+      { role: 'user', text: 'USER-ONE' },
+      { role: 'assistant', text: 'ANSWER-ONE', finalAction: true },
+      { role: 'user', text: 'USER-TWO' },
+      { role: 'assistant', text: 'ANSWER-TWO', finalAction: true },
+      { role: 'user', text: 'PROMPT' },
+    ];
+    const ready: StateLightTestSnapshot = {
+      messages: [...continuationPre, { role: 'assistant', text: 'FINAL', finalAction: true }],
+      generating: false,
+    };
+    const fake = makePage([
+      { messages: [...continuationPre, { role: 'assistant', text: 'working' }], generating: true },
+      ready,
+      ready,
+    ], { preSendMessages: continuationPre });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      cause: 'completed_page_only',
+      send_count: 1,
+      cleanup: 'confirmed',
+    });
+    expect(outcome.result.state).not.toBe('observation_uncertain');
+    expect((outcome.result.incidents ?? []).filter((entry) => entry === 'send_observation_deferred')).toHaveLength(0);
+  });
+
   it('chat-url defers owned_user_message_not_observed after send without send_failed', async () => {
     const delayedUser: StateLightTestSnapshot = {
       messages: [...BASELINE],
@@ -1003,6 +1180,10 @@ ${body}`;
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(outcome.result.state).not.toBe('send_failed');
     expect(outcome.result.incidents).toContain('send_observation_deferred');
+    expect((outcome.result.incidents ?? []).filter((entry) => entry === 'send_observation_deferred')).toHaveLength(1);
+    const deferredJournalRows = mocks.appendFileSync.mock.calls.filter((call) => String(call[1]).includes('send_observation_deferred'));
+    expect(deferredJournalRows).toHaveLength(1);
+    expect(fake.metrics.polls).toBeGreaterThan(3);
   });
 
   it('does not let cleanup or journal failure veto an already captured reply', async () => {
@@ -1034,20 +1215,19 @@ describe('browser-turn recurrence journal fixture coverage', () => {
     expect(Object.keys(BROWSER_TURN_RECURRENCE_REPLAY_KINDS)).toHaveLength(journalSymptoms.length);
   });
 
-  it('replays foreign_activity journal symptoms without resend licensing', async () => {
+  it('replays interleaved-user journal symptoms without resend licensing', async () => {
     const foreignSnapshot: StateLightTestSnapshot = {
       messages: [
         ...BASELINE,
         { role: 'user', text: 'PROMPT' },
-        { role: 'assistant', text: 'partial' },
         { role: 'user', text: 'FOREIGN' },
         { role: 'assistant', text: 'FOREIGN ANSWER', finalAction: true },
       ],
-      generating: false,
+      generating: true,
     };
-    const fake = makePage([foreignSnapshot, foreignSnapshot, foreignSnapshot]);
-    const outcome = await runAndCapture(fake.page);
-    expect(outcome.result.state).toBe('foreign_activity');
+    const fake = makePage(Array.from({ length: 30 }, () => foreignSnapshot));
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5', pollMs: '1' });
+    expect(outcome.result.state).toBe('observation_uncertain');
     expect(outcome.result.send_count).toBe(1);
     expect(outcome.result.state).not.toBe('send_failed');
   });
