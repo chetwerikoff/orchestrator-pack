@@ -23,6 +23,11 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/worker-smoke.test.ts': 120,
   'scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts': 120,
   'scripts/chatgpt-browser-turn/state-light-page-observation.test.ts': 120,
+  // Issue #1142 adds two fast, deterministic light-lane contract suites. Fixed
+  // estimates avoid consuming the bounded pre-topology live-measurement budget
+  // before runtime-history refresh records their measured weights.
+  'scripts/tiering-calibration.test.ts': 120,
+  'scripts/tiering-distribution-report.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
