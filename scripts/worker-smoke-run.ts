@@ -15,6 +15,8 @@ import {
   sendOrcaTerminal,
   submitOrcaTerminalComposer,
   waitOrcaTerminal,
+  type OrcaJsonResponse,
+  type OrcaOperationName,
 } from './lib/orca-cli.ts';
 import {
   buildSmokeAgentPrompt,
@@ -24,6 +26,7 @@ import {
   classifySmokeChannelBinding,
   classifySmokeChildWaitObservation,
   classifySmokeNonPassCause,
+  createSmokeControlPlaneDiagnostic,
   createSmokeRunIdentity,
   ensureSmokeRunArtifactDir,
   isSmokeControlPlaneCause,
@@ -36,6 +39,7 @@ import {
   resolveSmokeRunArtifactDir,
   type SmokeChildWaitNonPassCause,
   type SmokeControlPlaneCause,
+  type SmokeControlPlaneDiagnostic,
   SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
   detectTrackedImplementationMutation,
   hasPreexistingTrackedDirtiness,
@@ -185,10 +189,63 @@ function smokeAgentTerminalHasReport(
   return parseSmokeAgentReport(remainder) !== null;
 }
 
+function diagnosticFromResponse(response: OrcaJsonResponse): SmokeControlPlaneDiagnostic | undefined {
+  return createSmokeControlPlaneDiagnostic({
+    terminalAcquired: true,
+    operation: response.operation,
+    outcomeCategory: response.outcomeCategory,
+    controlPlaneCode: response.error?.code,
+  });
+}
+
+function attachControlPlaneDiagnostic(
+  report: SmokeReport,
+  diagnostic: SmokeControlPlaneDiagnostic | undefined,
+): SmokeReport {
+  if (!diagnostic) {
+    return report;
+  }
+  report.nonPassCause = diagnostic.cause;
+  report.controlPlaneDiagnostic = diagnostic;
+  return report;
+}
+
+function buildSmokeRunResult(
+  report: SmokeReport,
+  published: boolean,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ok: report.result === 'PASS',
+    report,
+    published,
+    ...extra,
+    ...(report.nonPassCause ? { nonPassCause: report.nonPassCause } : {}),
+    ...(report.controlPlaneDiagnostic
+      ? { controlPlaneDiagnostic: report.controlPlaneDiagnostic }
+      : {}),
+  };
+}
+
+function closeOwnedSmokeTerminal(handle: string, cwd: string): {
+  terminalCleanup: string;
+  diagnostic?: SmokeControlPlaneDiagnostic;
+} {
+  const closeResult = closeOrcaTerminal(handle, { cwd });
+  if (closeResult.ok) {
+    return { terminalCleanup: 'closed_owned_handle' };
+  }
+  return {
+    terminalCleanup: `close_failed:${closeResult.outcomeCategory ?? 'supported_operation_failure'}`,
+    diagnostic: diagnosticFromResponse(closeResult),
+  };
+}
+
 export interface SmokePromptDeliveryResult {
   ok: boolean;
   cause?: SmokeChildWaitNonPassCause;
   controlPlaneCause?: SmokeControlPlaneCause;
+  controlPlaneDiagnostic?: SmokeControlPlaneDiagnostic;
   resendCount: number;
   composerSubmitCount: number;
 }
@@ -198,6 +255,7 @@ export interface SmokeChildCompletionResult {
   partial?: Partial<import('./lib/worker-smoke-core.ts').SmokeReport> | null;
   agentActivityObserved: boolean;
   nonPassCause?: SmokeChildWaitNonPassCause | SmokeControlPlaneCause;
+  controlPlaneDiagnostic?: SmokeControlPlaneDiagnostic;
   error?: { code: string; message: string };
 }
 
@@ -239,12 +297,28 @@ export function establishSmokePromptDelivery(
   if (!sendResult.ok) {
     const controlPlane = preserveSmokeControlPlaneCause(sendResult.error?.code);
     if (controlPlane) {
-      return { ok: false, controlPlaneCause: controlPlane, resendCount, composerSubmitCount: 0 };
+      return {
+        ok: false,
+        controlPlaneCause: controlPlane,
+        controlPlaneDiagnostic: diagnosticFromResponse(sendResult),
+        resendCount,
+        composerSubmitCount: 0,
+      };
     }
     if (input.allowDefiniteNondeliveryRetry && isDefinitePromptNonDelivery(sendResult.error?.code)) {
       resendCount += 1;
       sendResult = attemptSend();
       if (!sendResult.ok) {
+        const retriedControlPlane = preserveSmokeControlPlaneCause(sendResult.error?.code);
+        if (retriedControlPlane) {
+          return {
+            ok: false,
+            controlPlaneCause: retriedControlPlane,
+            controlPlaneDiagnostic: diagnosticFromResponse(sendResult),
+            resendCount,
+            composerSubmitCount: 0,
+          };
+        }
         return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount, composerSubmitCount: 0 };
       }
     } else {
@@ -266,7 +340,13 @@ export function establishSmokePromptDelivery(
     if (!read.ok) {
       const controlPlane = preserveSmokeControlPlaneCause(read.error?.code);
       if (controlPlane) {
-        return { ok: false, controlPlaneCause: controlPlane, resendCount, composerSubmitCount };
+        return {
+          ok: false,
+          controlPlaneCause: controlPlane,
+          controlPlaneDiagnostic: diagnosticFromResponse(read),
+          resendCount,
+          composerSubmitCount,
+        };
       }
     } else {
       const lines = orcaTerminalReadLines(read.result);
@@ -279,7 +359,13 @@ export function establishSmokePromptDelivery(
         if (!submit.ok) {
           const controlPlane = preserveSmokeControlPlaneCause(submit.error?.code);
           if (controlPlane) {
-            return { ok: false, controlPlaneCause: controlPlane, resendCount, composerSubmitCount };
+            return {
+              ok: false,
+              controlPlaneCause: controlPlane,
+              controlPlaneDiagnostic: diagnosticFromResponse(submit),
+              resendCount,
+              composerSubmitCount,
+            };
           }
         }
         if (observeSmokeDeliveryEstablished(input.runBinding)) {
@@ -361,6 +447,7 @@ export function waitForSmokeChildCompletion(
           ok: false,
           agentActivityObserved,
           nonPassCause: controlPlane,
+          controlPlaneDiagnostic: diagnosticFromResponse(read),
           error: { code: controlPlane, message: read.error?.message ?? controlPlane },
         };
       }
@@ -793,13 +880,26 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
 
   const worktree = probeOrcaWorktree(options.cwd);
   if (!worktree.ok) {
+    const diagnostic = createSmokeControlPlaneDiagnostic({
+      terminalAcquired: false,
+      operation: worktree.operation,
+      outcomeCategory: worktree.outcomeCategory,
+      controlPlaneCode: worktree.errorCode,
+    });
     const blocked: Partial<SmokeReport> = {
       result: 'BLOCKED',
-      scenarios: [{ action: 'resolve orca worktree', expected: 'cwd is Orca-managed', observed: worktree.reason ?? 'blocked', outcome: 'blocked' }],
+      scenarios: [{
+        action: 'resolve orca worktree',
+        expected: 'cwd is Orca-managed',
+        observed: diagnostic?.cause ?? worktree.reason ?? 'blocked',
+        outcome: 'blocked',
+      }],
       trackedFilesUnmodified: true,
       terminalCleanup: 'not_started',
       limitations: [],
-      environmentNotes: ['orca worktree current failed'],
+      environmentNotes: [diagnostic ? 'orca control-plane preflight unavailable' : 'orca worktree current failed'],
+      nonPassCause: diagnostic?.cause,
+      controlPlaneDiagnostic: diagnostic,
     };
     const normalized = normalizeSmokeReport(blocked, {
       issueNumber: options.issueNumber,
@@ -810,7 +910,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       fail(normalized.reason);
     }
     publishSmokeReport(normalized.report, options);
-    emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
+    emit(buildSmokeRunResult(normalized.report, !options.dryRun), options.json);
     return 1;
   }
 
@@ -843,7 +943,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       fail(normalized.reason);
     }
     publishSmokeReport(normalized.report, options);
-    emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
+    emit(buildSmokeRunResult(normalized.report, !options.dryRun), options.json);
     return 1;
   }
 
@@ -871,7 +971,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       fail(normalized.reason);
     }
     publishSmokeReport(normalized.report, options);
-    emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
+    emit(buildSmokeRunResult(normalized.report, !options.dryRun), options.json);
     return 1;
   }
   const beforeHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(beforeStatus));
@@ -881,18 +981,26 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     command: 'cursor-agent',
   });
   if (!created.ok) {
+    const diagnostic = createSmokeControlPlaneDiagnostic({
+      terminalAcquired: false,
+      operation: created.operation,
+      outcomeCategory: created.outcomeCategory,
+      controlPlaneCode: created.errorCode,
+    });
     const blocked: Partial<SmokeReport> = {
       result: 'BLOCKED',
       scenarios: [{
         action: 'create Orca smoke terminal',
         expected: 'terminal create succeeds',
-        observed: created.reason,
+        observed: diagnostic?.cause ?? created.reason,
         outcome: 'blocked',
       }],
       trackedFilesUnmodified: true,
       terminalCleanup: 'not_started',
       limitations: [],
-      environmentNotes: ['orca terminal create failed'],
+      environmentNotes: [diagnostic ? 'orca control-plane preflight unavailable' : 'orca terminal create failed'],
+      nonPassCause: diagnostic?.cause,
+      controlPlaneDiagnostic: diagnostic,
     };
     const normalized = normalizeSmokeReport(blocked, {
       issueNumber: options.issueNumber,
@@ -902,8 +1010,9 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     if (!normalized.ok) {
       fail(normalized.reason);
     }
-    publishSmokeReport(attachPackProducerFields(normalized.report, {}), options);
-    emit({ ok: false, report: normalized.report, published: !options.dryRun }, options.json);
+    const report = attachPackProducerFields(normalized.report, {});
+    publishSmokeReport(report, options);
+    emit(buildSmokeRunResult(report, !options.dryRun), options.json);
     return 1;
   }
 
@@ -933,13 +1042,14 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       prompt,
     });
     if (!deliveryResult.ok) {
-      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const observed = deliveryResult.controlPlaneCause
+      const close = closeOwnedSmokeTerminal(handle, options.cwd);
+      terminalCleanup = close.terminalCleanup;
+      const diagnostic = deliveryResult.controlPlaneDiagnostic ?? close.diagnostic;
+      const observed = diagnostic?.cause
         ?? deliveryResult.cause
         ?? 'prompt_delivery_unconfirmed';
-      const report = buildOperationalSmokeReport(
-        deliveryResult.controlPlaneCause ? 'BLOCKED' : 'FAIL',
+      const report = attachControlPlaneDiagnostic(buildOperationalSmokeReport(
+        diagnostic ? 'BLOCKED' : 'FAIL',
         options,
         {
           action: 'establish smoke prompt delivery',
@@ -948,18 +1058,12 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
           terminalCleanup,
           environmentNotes: ['completion wait was not started'],
         },
-      );
-      const nonPassCause = deliveryResult.controlPlaneCause ?? deliveryResult.cause;
-      if (nonPassCause) {
-        report.nonPassCause = nonPassCause;
+      ), diagnostic);
+      if (!diagnostic && deliveryResult.cause) {
+        report.nonPassCause = deliveryResult.cause;
       }
       publishSmokeReport(report, options);
-      emit({
-        ok: false,
-        report,
-        published: !options.dryRun,
-        ...(nonPassCause ? { nonPassCause } : {}),
-      }, options.json);
+      emit(buildSmokeRunResult(report, !options.dryRun), options.json);
       return 1;
     }
 
@@ -973,14 +1077,15 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       runBinding: { runId, artifactDir },
       ownedChildHandle: handle,
     });
-    const agentActivityObserved = waitResult.agentActivityObserved;
     if (!waitResult.ok) {
-      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const observed = waitResult.nonPassCause
+      const close = closeOwnedSmokeTerminal(handle, options.cwd);
+      terminalCleanup = close.terminalCleanup;
+      const diagnostic = waitResult.controlPlaneDiagnostic ?? close.diagnostic;
+      const observed = diagnostic?.cause
+        ?? waitResult.nonPassCause
         ?? scrubGhFailureMessage(waitResult.error?.message ?? 'child_wait_failed');
-      const report = buildOperationalSmokeReport(
-        waitResult.nonPassCause && isSmokeControlPlaneCause(waitResult.nonPassCause) ? 'BLOCKED' : 'FAIL',
+      const report = attachControlPlaneDiagnostic(buildOperationalSmokeReport(
+        diagnostic ? 'BLOCKED' : 'FAIL',
         options,
         {
           action: 'wait for publish-complete smoke child completion',
@@ -988,32 +1093,27 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
           observed,
           terminalCleanup,
         },
-      );
-      if (waitResult.nonPassCause) {
+      ), diagnostic);
+      if (!diagnostic && waitResult.nonPassCause) {
         report.nonPassCause = waitResult.nonPassCause;
       }
       publishSmokeReport(report, options);
-      emit({
-        ok: false,
-        report,
-        published: !options.dryRun,
-        ...(waitResult.nonPassCause ? { nonPassCause: waitResult.nonPassCause } : {}),
-      }, options.json);
+      emit(buildSmokeRunResult(report, !options.dryRun), options.json);
       return 1;
     }
 
     const partial = waitResult.partial;
     if (!partial) {
-      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const report = buildOperationalSmokeReport('BLOCKED', options, {
+      const close = closeOwnedSmokeTerminal(handle, options.cwd);
+      terminalCleanup = close.terminalCleanup;
+      const report = attachControlPlaneDiagnostic(buildOperationalSmokeReport('BLOCKED', options, {
         action: 'consume publish-complete smoke child completion',
         expected: 'durable completion artifact with parseable fenced report',
-        observed: 'missing_completion_partial',
+        observed: close.diagnostic?.cause ?? 'missing_completion_partial',
         terminalCleanup,
-      });
+      }), close.diagnostic);
       publishSmokeReport(report, options);
-      emit({ ok: false, report, published: !options.dryRun }, options.json);
+      emit(buildSmokeRunResult(report, !options.dryRun), options.json);
       return 1;
     }
     const afterStatus = gitPorcelain(options.cwd);
@@ -1039,24 +1139,28 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       headSha: options.headSha,
     });
     if (!normalized.ok && partial.result !== 'FAIL' && partial.result !== 'BLOCKED') {
-      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
-      const report = attachPackProducerFields(buildOperationalSmokeReport('FAIL', options, {
-        action: 'normalize smoke agent report',
-        expected: 'valid PASS evidence',
-        observed: normalized.reason,
-        terminalCleanup,
-      }), { terminalHandle: handle });
+      const close = closeOwnedSmokeTerminal(handle, options.cwd);
+      terminalCleanup = close.terminalCleanup;
+      const report = attachControlPlaneDiagnostic(attachPackProducerFields(buildOperationalSmokeReport(
+        close.diagnostic ? 'BLOCKED' : 'FAIL',
+        options,
+        {
+          action: 'normalize smoke agent report',
+          expected: 'valid PASS evidence',
+          observed: close.diagnostic?.cause ?? normalized.reason,
+          terminalCleanup,
+        },
+      ), { terminalHandle: handle }), close.diagnostic);
       const nonPassCause = classifyDeclaredScenarioNonPassCause({
         partial,
         agentActivityObserved: waitResult.agentActivityObserved,
         agentCompleted: true,
       });
-      if (nonPassCause) {
+      if (!close.diagnostic && nonPassCause) {
         report.nonPassCause = nonPassCause;
       }
       publishSmokeReport(report, options);
-      emit({ ok: false, report, published: !options.dryRun }, options.json);
+      emit(buildSmokeRunResult(report, !options.dryRun), options.json);
       return 1;
     }
 
@@ -1074,20 +1178,24 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
           environmentNotes: partial.environmentNotes ?? [],
         } as SmokeReport, { terminalHandle: handle });
 
-    const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-    terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
+    const close = closeOwnedSmokeTerminal(handle, options.cwd);
+    terminalCleanup = close.terminalCleanup;
     report.terminalCleanup = terminalCleanup;
-    if (report.result === 'PASS' && terminalCleanup !== 'closed_owned_handle') {
-      report.result = 'FAIL';
+    const establishedDiagnostic = report.controlPlaneDiagnostic ?? close.diagnostic;
+    if (terminalCleanup !== 'closed_owned_handle') {
+      if (report.result === 'PASS' || close.diagnostic) {
+        report.result = close.diagnostic ? 'BLOCKED' : 'FAIL';
+      }
       report.scenarios.push({
         action: SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
         expected: 'terminal close succeeds',
-        observed: terminalCleanup,
+        observed: close.diagnostic?.cause ?? terminalCleanup,
         outcome: 'fail',
       });
     }
+    attachControlPlaneDiagnostic(report, establishedDiagnostic);
 
-    if (report.result !== 'PASS') {
+    if (report.result !== 'PASS' && !report.controlPlaneDiagnostic) {
       const nonPassCause = classifyDeclaredScenarioNonPassCause({
         partial: report,
         agentActivityObserved: waitResult.agentActivityObserved,
@@ -1099,19 +1207,14 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     }
 
     publishSmokeReport(report, options);
-    emit({
-      ok: report.result === 'PASS',
-      report,
-      published: !options.dryRun,
+    emit(buildSmokeRunResult(report, !options.dryRun, {
       orcaExecutable: resolveOrcaExecutable(),
       terminalHandle: handle,
-      ...(report.nonPassCause ? { nonPassCause: report.nonPassCause } : {}),
-    }, options.json);
+    }), options.json);
     return report.result === 'PASS' ? 0 : 1;
   } finally {
     if (terminalCleanup === 'pending') {
-      const closeResult = closeOrcaTerminal(handle, { cwd: options.cwd });
-      terminalCleanup = closeResult.ok ? 'closed_owned_handle' : `close_failed:${closeResult.error?.code ?? 'unknown'}`;
+      terminalCleanup = closeOwnedSmokeTerminal(handle, options.cwd).terminalCleanup;
     }
   }
 }
