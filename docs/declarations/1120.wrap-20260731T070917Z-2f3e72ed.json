@@ -2,19 +2,35 @@
   "issue_number": 1120,
   "iteration_id": "wrap-20260731T070917Z-2f3e72ed",
   "iteration_id_source": "wrapper_generated",
-  "supersedes": "chat-executor",
+  "supersedes": "attribution-excision",
   "created_at": "2026-07-31T07:09:17.490Z",
   "baseline": {
     "commit_sha": "8fe9edb573feb98bb4eefefb10d30b3679fb74cc",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:5a2296426705f77e1040e0f496655b7034f79e74f15dc8666881e59952415b59"
+    "active_scope_hash": "sha256:c5540e0febcdaa98faeaf06d930bb63071218824d3132488de36812b51b48c82"
   },
   "declared_paths": [
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
-    "scripts/chatgpt-browser-turn/README.md"
+    "scripts/chatgpt-browser-turn/README.md",
+    "docs/declarations/1120.wrap-20260731T070917Z-2f3e72ed.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:5a2296426705f77e1040e0f496655b7034f79e74f15dc8666881e59952415b59",
+      "new_active_scope_hash": "sha256:c5540e0febcdaa98faeaf06d930bb63071218824d3132488de36812b51b48c82",
+      "changed": {
+        "added": [
+          "docs/declarations/1120.wrap-20260731T070917Z-2f3e72ed.json"
+        ],
+        "removed": []
+      },
+      "reason": "include declaration snapshot in active scope",
+      "actor": "local",
+      "timestamp": "2026-07-31T07:09:50.072Z",
+      "applied": true
+    }
+  ]
 }
