@@ -236,7 +236,7 @@ function closeOwnedSmokeTerminal(handle: string, cwd: string): {
     return { terminalCleanup: 'closed_owned_handle' };
   }
   return {
-    terminalCleanup: `close_failed:${closeResult.outcomeCategory ?? 'supported_operation_failure'}`,
+    terminalCleanup: `close_failed:${closeResult.error?.code ?? 'unknown'}`,
     diagnostic: diagnosticFromResponse(closeResult),
   };
 }
@@ -663,7 +663,6 @@ function gitPorcelain(cwd: string): string[] {
   return output.split(/\r?\n/u).filter(Boolean);
 }
 
-
 function hashTrackedPaths(cwd: string, paths: readonly string[]): Record<string, string> {
   const hashes: Record<string, string> = {};
   for (const path of paths) {
@@ -701,7 +700,6 @@ function publishPrComment(prNumber: number, body: string, repoRoot: string): voi
     rmSync(tempDir, { recursive: true, force: true });
   }
 }
-
 
 function resolveGitHead(cwd: string): string {
   return requireProcessOutput('git rev-parse HEAD', runProcessSync({
@@ -796,7 +794,6 @@ function runGateCheck(options: CliOptions): number {
   emit({ ok: decision.allowed, ...decision }, options.json);
   return decision.allowed ? 0 : 1;
 }
-
 
 function publishSmokeReport(
   report: SmokeReport,
