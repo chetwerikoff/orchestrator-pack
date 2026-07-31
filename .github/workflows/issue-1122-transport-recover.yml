@@ -28,8 +28,8 @@ jobs:
           source_sha="$(git hash-object scripts/browser-gpt-page-probe.ts)"
           test_sha="$(git hash-object scripts/browser-gpt-page-probe.test.ts)"
           printf 'assembled source sha=%s\nassembled test sha=%s\n' "$source_sha" "$test_sha"
-          test "$source_sha" = "9122f2610c2d1c87c9d92195acc5214ba0323bed"
-          test "$test_sha" = "86a415bb5d71c7f227328decd90f944650054f4e"
+          test "$source_sha" = "326555d06c2bd62299f352efabe9d5209c7bc7c7"
+          test "$test_sha" = "424a8c7d4e4d513e4abe29e78afa65595e928094"
 
       - name: Reconcile current-main CI registrations
         shell: bash
