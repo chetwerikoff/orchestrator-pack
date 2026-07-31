@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/issue-1142-tiering-calibration
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
