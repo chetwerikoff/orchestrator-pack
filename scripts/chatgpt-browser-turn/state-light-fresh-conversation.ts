@@ -490,3 +490,39 @@ export async function waitForConversationUrlAfterSend(
   }
   return undefined;
 }
+
+
+export function readProjectConversationUrl(page: any, projectUrl: string): string | undefined {
+  try {
+    const projectPrefix = projectConversationPrefix(projectUrl);
+    const currentUrl = normalizeConversationUrl(page.url());
+    if (conversationUuidFromUrl(currentUrl) && currentUrl.startsWith(projectPrefix)) {
+      return currentUrl;
+    }
+  } catch {
+    // keep polling
+  }
+  return undefined;
+}
+
+export async function navigateToProjectConversationIfNeeded(
+  page: any,
+  conversationUrl: string,
+  navigation: StateLightNavigationCounter,
+  gotoTimeoutMs: number,
+): Promise<void> {
+  const target = normalizeConversationUrl(conversationUrl);
+  if (!conversationUuidFromUrl(target)) return;
+  let currentUrl = '';
+  try {
+    currentUrl = normalizeConversationUrl(page.url());
+  } catch {
+    currentUrl = '';
+  }
+  if (ownedConversationIdentityMatches(currentUrl, target)) return;
+  navigation.recordGoto();
+  await page.goto(target, {
+    waitUntil: 'domcontentloaded',
+    timeout: gotoTimeoutMs,
+  });
+}

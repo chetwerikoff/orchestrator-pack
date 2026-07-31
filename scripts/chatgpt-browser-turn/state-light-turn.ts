@@ -38,6 +38,8 @@ import {
   StateLightNavigationCounter,
   STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS,
   tryClaimStateLightFreshConversation,
+  navigateToProjectConversationIfNeeded,
+  readProjectConversationUrl,
   waitForConversationUrlAfterSend,
 } from './state-light-fresh-conversation.ts';
 import { configuredProfileKey } from './storage-common.ts';
@@ -64,6 +66,7 @@ export const POST_SEND_OBSERVATION_POLL_MS = 15_000;
 const DEFAULT_POLL_MS = POST_SEND_OBSERVATION_POLL_MS;
 const INITIAL_POLL_MS = 500;
 const DISPATCH_OBSERVATION_MS = 30_000;
+const FRESH_CONVERSATION_LANDING_MS = DISPATCH_OBSERVATION_MS;
 const STABILITY_READ_DELAY_MS = 1_000;
 const COMPLETION_CONFIRM_POLL_MS = 1_000;
 const DIAGNOSTIC_HEAD_CHARS = 300;
@@ -1066,6 +1069,45 @@ function returnOwnedConversationRenderMismatch(
   };
 }
 
+function returnFreshConversationLandingMismatch(
+  page: any,
+  browser: any,
+  invocationId: string,
+  profileKey: string,
+  sendCount: number,
+  pollCount: number,
+  navigation: StateLightNavigationCounter,
+  incidents: BrowserIncident[],
+  journalWriteFailed: boolean,
+  incident: (eventClass: string, symptom: string, action?: string) => void,
+): TurnRunOutcome {
+  incident(
+    'conversation_landing_mismatch',
+    'fresh_conversation_landing_mismatch',
+    'retain_owned_page_no_resend',
+  );
+  return {
+    page,
+    browser,
+    preserveOwnedPage: true,
+    result: compactResult(
+      'ui_contract_mismatch',
+      'invocation',
+      'fresh_conversation_landing_mismatch',
+      invocationId,
+      profileKey,
+      sendCount,
+      pollCount,
+      navigation,
+      incidents,
+      {
+        ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+      },
+      journalWriteFailed,
+    ),
+  };
+}
+
 function pageConversationUrl(page: any): string | undefined {
   try {
     const url = normalizeConversationUrl(String(page.url()));
@@ -1540,10 +1582,23 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
     }
 
+    if (config.newChat && ownedConversationUrl) {
+      await navigateToProjectConversationIfNeeded(
+        page,
+        ownedConversationUrl,
+        navigation,
+        Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
+      );
+    }
+
     const startedAt = Date.now();
     const softDeadline = startedAt + config.timeoutMs;
     const hardExhaustionDeadline = startedAt + (config.timeoutMs * 2);
     const dispatchDeadline = startedAt + Math.min(DISPATCH_OBSERVATION_MS, config.timeoutMs);
+    const freshConversationLandingDeadline = startedAt + Math.min(
+      FRESH_CONVERSATION_LANDING_MS,
+      config.timeoutMs,
+    );
     let lastReadyReply = '';
     let bestReadyReply = '';
     let stableReads = 0;
@@ -1569,6 +1624,25 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     // to keep that page rather than manufacture lost-chat/resend eligibility.
     while (true) {
       pollCount++;
+      if (config.newChat && sendCount >= 1) {
+        const observedConversationUrl = readProjectConversationUrl(page, config.projectUrl ?? '');
+        if (observedConversationUrl) {
+          if (!ownedConversationUrl) ownedConversationUrl = observedConversationUrl;
+          await navigateToProjectConversationIfNeeded(
+            page,
+            observedConversationUrl,
+            navigation,
+            Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
+          );
+        } else if (ownedConversationUrl) {
+          await navigateToProjectConversationIfNeeded(
+            page,
+            ownedConversationUrl,
+            navigation,
+            Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
+          );
+        }
+      }
       if (targetChatUrl) {
         const identity = readOwnedConversationIdentity(page, targetChatUrl);
         if (!identity.matched) {
@@ -1829,11 +1903,32 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         continue;
       }
 
+      if (
+        config.newChat
+        && sendCount >= 1
+        && Date.now() >= freshConversationLandingDeadline
+        && !readProjectConversationUrl(page, config.projectUrl ?? '')
+        && !ownedPromptEverSeen
+      ) {
+        return returnFreshConversationLandingMismatch(
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+        );
+      }
+
       if (Date.now() >= dispatchDeadline) {
         if (!hasOwnedUserMessage(messages, snapshot.text)) {
           if (sendCount >= 1) {
             if (
-              targetChatUrl
+              (targetChatUrl || config.newChat)
               && completionReadySeen
               && !ownedPromptEverSeen
               && hasPostSendTranscript(messages, baselineCount)

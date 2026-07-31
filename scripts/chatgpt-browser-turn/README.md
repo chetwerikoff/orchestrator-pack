@@ -236,6 +236,12 @@ every post-send poll. A page URL whose `/c/<uuid>` does not match `--chat-url` s
 matches but assistant completion is visible without the owned prompt after the dispatch
 window, the helper returns `owned_conversation_render_mismatch`.
 
+`--new-chat` turns poll for a project-scoped `/c/<uuid>` after send, navigate onto
+that conversation when it materializes, and require either the owned prompt or a
+materialized conversation URL before the landing window closes. Past that bound
+without either, the helper returns `fresh_conversation_landing_mismatch` instead of
+polling indefinitely on the blank project surface.
+
 A failed node read marks the poll `transcriptIncomplete` instead of silently
 dropping that node from the transcript (which could otherwise yield false
 `owned_prompt_not_observed` on long chats or prevent stability convergence during
