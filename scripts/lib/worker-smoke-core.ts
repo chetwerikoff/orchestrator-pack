@@ -113,11 +113,11 @@ export function normalizeSmokeControlPlaneDiagnostic(
     evidence?: unknown;
     remediation?: unknown;
   };
-  const cause = String(record.cause ?? '').trim();
+  const cause = typeof record.cause === 'string' ? record.cause : '';
   const evidence = Array.isArray(record.evidence)
-    ? record.evidence.map((entry) => String(entry))
+    ? record.evidence.map((entry) => (typeof entry === 'string' ? entry : ''))
     : [];
-  const remediation = String(record.remediation ?? '');
+  const remediation = typeof record.remediation === 'string' ? record.remediation : '';
   if (!isSmokePhaseControlPlaneCause(cause)) {
     return { ok: false, reason: 'control_plane_diagnostic_cause_invalid' };
   }
@@ -201,6 +201,13 @@ const SMOKE_REPORT_BLOCK = /```worker-smoke-report\s*\r?\n([\s\S]*?)```/i;
 const SMOKE_REPORT_HEADING = /^## Worker smoke report\b/im;
 const PACK_OWNED_CONTROL_PLANE_REPORT_FIELD =
   /^\s*(?:control-plane-cause|control-plane-evidence|control-plane-remediation):/im;
+const EXACT_CONTROL_PLANE_REPORT_FIELDS = [
+  'control-plane-cause',
+  'control-plane-evidence',
+  'control-plane-remediation',
+] as const;
+
+type ExactControlPlaneReportField = (typeof EXACT_CONTROL_PLANE_REPORT_FIELDS)[number];
 
 const FORBIDDEN_SMOKE_AGENT_ACTIONS = [
   /\bcommit\b/i,
@@ -471,7 +478,39 @@ function findUnfencedSmokeReportBody(text: string): string | null {
   return body;
 }
 
+function parseExactControlPlaneReportFields(
+  body: string,
+): {
+  ok: true;
+  values: Partial<Record<ExactControlPlaneReportField, string>>;
+} | { ok: false } {
+  const values = new Map<ExactControlPlaneReportField, string>();
+  for (const rawLine of body.split(/\r?\n/u)) {
+    const candidate = rawLine.trimStart().toLowerCase();
+    const possibleField = EXACT_CONTROL_PLANE_REPORT_FIELDS.find((field) => candidate.startsWith(field));
+    if (!possibleField) {
+      continue;
+    }
+    const match = rawLine.match(
+      /^(control-plane-cause|control-plane-evidence|control-plane-remediation): (.*)$/u,
+    );
+    if (!match) {
+      return { ok: false };
+    }
+    const field = match[1] as ExactControlPlaneReportField;
+    if (values.has(field)) {
+      return { ok: false };
+    }
+    values.set(field, match[2]);
+  }
+  return { ok: true, values: Object.fromEntries(values) };
+}
+
 function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
+  const exactDiagnosticFields = parseExactControlPlaneReportFields(body);
+  if (!exactDiagnosticFields.ok) {
+    return null;
+  }
   const fields = parseKeyValueBlock(body);
   const result = String(fields.result ?? '').trim().toUpperCase();
   if (result !== 'PASS' && result !== 'FAIL' && result !== 'BLOCKED') {
@@ -507,17 +546,18 @@ function parseSmokeAgentReportBody(body: string): Partial<SmokeReport> | null {
     .filter(Boolean);
   const nonPassCauseRaw = String(fields['non-pass-cause'] ?? '').trim();
 
-  const diagnosticCause = String(fields['control-plane-cause'] ?? '').trim();
-  const diagnosticEvidenceRaw = String(fields['control-plane-evidence'] ?? '').trim();
-  const diagnosticRemediation = String(fields['control-plane-remediation'] ?? '');
+  const diagnosticCause = exactDiagnosticFields.values['control-plane-cause'];
+  const diagnosticEvidenceRaw = exactDiagnosticFields.values['control-plane-evidence'];
+  const diagnosticRemediation = exactDiagnosticFields.values['control-plane-remediation'];
   let controlPlaneDiagnostic: SmokeControlPlaneDiagnostic | undefined;
-  if (diagnosticCause || diagnosticEvidenceRaw || diagnosticRemediation) {
+  if (
+    diagnosticCause !== undefined
+    || diagnosticEvidenceRaw !== undefined
+    || diagnosticRemediation !== undefined
+  ) {
     const normalizedDiagnostic = normalizeSmokeControlPlaneDiagnostic({
       cause: diagnosticCause,
-      evidence: diagnosticEvidenceRaw
-        .split(';')
-        .map((entry) => entry.trim())
-        .filter(Boolean),
+      evidence: diagnosticEvidenceRaw?.split(';') ?? [],
       remediation: diagnosticRemediation,
     });
     if (!normalizedDiagnostic.ok) {
@@ -1374,8 +1414,7 @@ export function isDefinitePromptNonDelivery(code: string | undefined): boolean {
 export function preserveSmokeControlPlaneCause(
   code: string | undefined,
 ): SmokeControlPlaneCause | undefined {
-  const normalized = String(code ?? '').trim();
-  return isSmokeControlPlaneCause(normalized) ? normalized : undefined;
+  return code && isSmokeControlPlaneCause(code) ? code : undefined;
 }
 
 export type SmokeNonPassCause =
