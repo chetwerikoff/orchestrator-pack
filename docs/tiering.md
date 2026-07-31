@@ -154,11 +154,6 @@ invoked as a create-flow reviewer).
 **In-flight cycles.** Continue from the canonical Issue-bound capture history;
 restarting a local cycle never reopens intake correction authority.
 
-**Browser outage.** Required GPT work stays incomplete. No engine substitution.
-
-**In-flight cycles.** Restart the fixed per-tier sequence from intake; do not infer
-historical provenance to skip stages.
-
 ### Tier provenance and one free intake correction
 
 Before the first tier decision, the flow-manager records one `tier-intake/v1`
@@ -172,9 +167,15 @@ receipts emit `l4Status: not-applicable`; T3 receipts use
 `clear|active|ambiguous|missing|stale`. Legacy pre-cutover below-T3 `clear` is
 readable only as a normalized synonym for `not-applicable` and creates no floor.
 
-The Issue identity owns one free correction window. It opens after intake and
-closes when the first immutable capture exists for any reviewer stage selected by
-`selectAuthoringReviewStages`. Before closure, the flow-manager may lower the
+The Issue identity owns one free correction window. Its authority is the
+canonical `~/.local/state/create-issue-draft/.review/<N>/` review history and
+`~/.local/state/create-issue-draft/<N>/` immutable revision history, both keyed by
+Issue number rather than a mutable slug. The review authority lives outside every
+cycle/workdir, so starting or losing a workdir cannot hide an earlier capture.
+Legacy slug-keyed workdirs remain readable for already-fixed progression but
+cannot authorize an intake correction. The window opens after intake and closes when the first immutable capture exists for any
+reviewer stage selected by `selectAuthoringReviewStages`. Before closure, the
+flow-manager may lower the
 current tier by exactly one adjacent edge with the existing receipt:
 
 - `correctedFrom: T3` for `T3→T2`, or `correctedFrom: T2` for `T2→T1`;

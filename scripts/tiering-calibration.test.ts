@@ -1,8 +1,11 @@
-import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import {
   FROZEN_BASELINE_DIGEST,
   parseCalibrationRows,
+  runCalibrationCli,
   serializeCalibrationRows,
   validateCalibration,
 } from './tiering-calibration.ts';
@@ -43,5 +46,20 @@ describe('Issue #1142 tiering calibration integrity', () => {
     expect(validateCalibration(append, committed)).toEqual([]);
     const editedBase = mutateRow(append, '1030', '| 1030 | T3 | T3 | T3 | T3 |');
     expect(validateCalibration(editedBase, committed).join('\n')).toContain('exact prefix');
+  });
+
+  it('fails closed when a supplied base ref cannot be resolved', () => {
+    const temp = mkdtempSync(join(tmpdir(), 'tiering-calibration-'));
+    const candidate = join(temp, 'tiering-calibration.md');
+    writeFileSync(candidate, committed);
+    const stderr: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { stderr.push(String(chunk)); return true; }) as typeof process.stderr.write);
+    try {
+      expect(runCalibrationCli(['--file', candidate, '--base-ref', 'refs/heads/definitely-missing-tiering-base'])).toBe(1);
+      expect(stderr.join('')).toContain('unable to resolve supplied base ref');
+    } finally {
+      spy.mockRestore();
+      rmSync(temp, { recursive: true, force: true });
+    }
   });
 });

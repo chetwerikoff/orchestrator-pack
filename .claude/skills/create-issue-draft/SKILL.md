@@ -181,14 +181,22 @@ or terminal `architectural` review chats.
 
 ## Step 1 — Intake, workdir, and #975 adoption boundary
 
-Task identity is `<N>-<slug>`. Create:
+Task identity is the immutable GitHub Issue number `<N>`; the slug is
+display-only and may change without creating another correction boundary. Create:
 
 ```text
-~/.local/state/create-issue-draft/<N>-<slug>/       # $WORKDIR
+~/.local/state/create-issue-draft/<N>/              # $WORKDIR
   docs/issues_drafts/<N>-<slug>.md                  # $ANCHOR
-  docs/issues_drafts/.review/<N>-<slug>/            # $REVIEW_DIR
   r01/ r02/ …                                       # immutable pulled revisions
+~/.local/state/create-issue-draft/.review/<N>/      # $REVIEW_DIR
 ```
+
+The numeric workdir and the review authority outside every workdir form the one
+Issue-bound history. Starting or losing a cycle/workdir does not hide the shared
+intake/capture history. A legacy `<N>-<slug>` workdir is read-compatible for
+already-fixed progression but cannot exercise intake-correction authority;
+continue or migrate through the canonical numeric workdir instead of opening
+another local cycle.
 
 No repository support files are copied into `$WORKDIR`. Repository-owned guards
 and the sync helper run from a trusted checkout root with an **absolute** anchor.
@@ -198,9 +206,10 @@ verbatim.
 Pull every revision through the pack wrapper and preserve an immutable copy:
 
 ```bash
-WORKDIR="$HOME/.local/state/create-issue-draft/<N>-<slug>"
+WORKDIR="$HOME/.local/state/create-issue-draft/<N>"
+REVIEW_DIR="$HOME/.local/state/create-issue-draft/.review/<N>"
 ANCHOR="$WORKDIR/docs/issues_drafts/<N>-<slug>.md"
-mkdir -p "$(dirname "$ANCHOR")" "$WORKDIR/rNN" "$WORKDIR/docs/issues_drafts/.review/<N>-<slug>"
+mkdir -p "$(dirname "$ANCHOR")" "$WORKDIR/rNN" "$REVIEW_DIR"
 scripts/gh api repos/chetwerikoff/orchestrator-pack/issues/<N> \
   --jq '"# " + .title + "\n\n" + .body' > "$WORKDIR/rNN/<N>-<slug>.md"
 cp "$WORKDIR/rNN/<N>-<slug>.md" "$ANCHOR"
@@ -218,7 +227,7 @@ unparseable classification follows existing fail-up behavior.
 ### Tier provenance and pre-capture intake correction
 
 Before the first tier decision, record `$REVIEW_DIR/tier-intake.json` as
-`tier-intake/v1` with exact task identity, `kind: fresh`, intake prior,
+`tier-intake/v1` with exact numeric Issue task identity, `kind: fresh`, intake prior,
 `firstRevision`, and the selected manager's exact non-empty `producer`. Producer
 is an audit label, not a runtime allowlist or authorization. The Issue
 `advisory-prior` mirrors the record.

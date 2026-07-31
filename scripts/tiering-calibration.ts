@@ -75,13 +75,39 @@ export function validateCalibration(candidateText: string, baseText?: string): s
   return errors;
 }
 
+function describeGitFailure(stderr: string, error?: string): string {
+  return stderr.trim() || error || 'unknown git failure';
+}
+
 function readBaseDocument(ref: string, path: string): string | undefined {
-  const result = runProcessSync({
+  const verify = runProcessSync({
+    command: 'git',
+    args: ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`],
+    inheritParentEnv: true,
+  });
+  if (!verify.ok) {
+    throw new Error(`unable to resolve supplied base ref ${ref}: ${describeGitFailure(verify.stderr, verify.error)}`);
+  }
+
+  const listing = runProcessSync({
+    command: 'git',
+    args: ['ls-tree', '--name-only', ref, '--', path],
+    inheritParentEnv: true,
+  });
+  if (!listing.ok) {
+    throw new Error(`unable to inspect ${path} at base ref ${ref}: ${describeGitFailure(listing.stderr, listing.error)}`);
+  }
+  if (listing.stdout.trim() === '') return undefined;
+
+  const content = runProcessSync({
     command: 'git',
     args: ['show', `${ref}:${path}`],
     inheritParentEnv: true,
   });
-  return result.ok ? result.stdout : undefined;
+  if (!content.ok) {
+    throw new Error(`unable to read ${path} at base ref ${ref}: ${describeGitFailure(content.stderr, content.error)}`);
+  }
+  return content.stdout;
 }
 
 export function runCalibrationCli(argv: readonly string[]): number {
@@ -90,7 +116,14 @@ export function runCalibrationCli(argv: readonly string[]): number {
   const candidate = readFileSync(file, 'utf8');
   const baseIndex = argv.indexOf('--base-ref');
   const baseRef = baseIndex >= 0 ? argv[baseIndex + 1] : process.env.PR_BASE_SHA;
-  const base = baseRef ? readBaseDocument(baseRef, 'docs/tiering-calibration.md') : undefined;
+  let base: string | undefined;
+  try {
+    base = baseRef ? readBaseDocument(baseRef, 'docs/tiering-calibration.md') : undefined;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`tiering calibration: ${message}\n`);
+    return 1;
+  }
   const errors = validateCalibration(candidate, base);
   if (errors.length > 0) {
     for (const error of errors) process.stderr.write(`${error}\n`);

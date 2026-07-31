@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import {
   PRE_1142_COMPLETED_DEMOTION_IDENTITIES,
   checkTierGateGuard,
@@ -12,6 +15,7 @@ import {
   type TierDecisionReceiptRecord,
   type TierTransitionEvidence,
 } from './lib/tier-gate-core.ts';
+import { runCli } from './tier-gate-guard.ts';
 
 const identity = '1142-fixture';
 
@@ -141,6 +145,12 @@ describe('Issue #1142 receipt parsing and L4 matrix', () => {
   it('keeps T1 and T2 on the same one-terminal-architectural review pipeline', () => {
     expect(selectAuthoringReviewStages({ tier: 'T1', skipLine: false }).review).toEqual(['architectural']);
     expect(selectAuthoringReviewStages({ tier: 'T2', skipLine: false }).review).toEqual(['architectural']);
+    expect(selectAuthoringReviewStages({ tier: 'T1', skipLine: false, explicitAdversarialWrapper: true })).toMatchObject({
+      effectiveTier: 'T2',
+      review: ['architectural'],
+      wrapperFloorApplied: true,
+    });
+    expect(selectAuthoringReviewStages({ tier: 'T2', skipLine: false, explicitAdversarialWrapper: true }).review).toEqual(['architectural']);
   });
 });
 
@@ -174,6 +184,17 @@ describe('Issue #1142 free pre-capture adjacent correction', () => {
     expect(run(r03, two).errors.join('\n')).toContain('only one intake downstep');
   });
 
+  it('rejects correction fields on the first authoritative receipt', () => {
+    const current = draft('T2', 'T2');
+    const transitionEvidence = evidence([{
+      revision: 'r01',
+      text: current,
+      tier: 'T2',
+      receipt: receipt('r01', 'T2', { correctedFrom: 'T3', reason: 'false first-revision correction' }),
+    }], { priorTier: 'T2' });
+    expect(run(current, transitionEvidence).errors.join('\n')).toContain('first authoritative receipt');
+  });
+
   it('rejects correction after a selected canonical reviewer capture', () => {
     const fixture = correction('T3', 'T2', {
       captures: [{ captureName: 'pass-01-competitive.capture.txt', captureText: 'issue_revision: r01\nNO_FINDINGS' }],
@@ -202,6 +223,107 @@ describe('Issue #1142 free pre-capture adjacent correction', () => {
 
     const upstep = correction('T2', 'T1', { middle: 'T3' });
     expect(run(upstep.current, upstep.transitionEvidence).errors.join('\n')).toContain('intervening upstep');
+  });
+
+  it('fails closed when the same Issue is replayed through a second workdir', () => {
+    const tempHome = mkdtempSync(join(tmpdir(), 'tier-issue-history-'));
+    const previousHome = process.env.HOME;
+    const stateRoot = join(tempHome, '.local', 'state', 'create-issue-draft');
+    const firstWorkdir = join(stateRoot, '1142');
+    const replayWorkdir = join(stateRoot, '1142-replay');
+
+    const writeHistory = (workdir: string, stem: string, revisions: Array<{ revision: string; text: string; receipt: TierDecisionReceiptRecord }>, reviewIdentity: string): string => {
+      const issueDrafts = join(workdir, 'docs', 'issues_drafts');
+      const reviewDir = join(issueDrafts, '.review', reviewIdentity);
+      mkdirSync(reviewDir, { recursive: true });
+      writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({
+        schema: 'tier-intake/v1',
+        producer: 'cursor-flow-manager',
+        taskIdentity: reviewIdentity,
+        kind: 'fresh',
+        priorTier: revisions[0]?.receipt.tier,
+        firstRevision: revisions[0]?.revision,
+      }));
+      for (const revision of revisions) {
+        const revisionDir = join(workdir, revision.revision);
+        mkdirSync(revisionDir, { recursive: true });
+        writeFileSync(join(revisionDir, `${stem}.md`), revision.text);
+        writeFileSync(join(revisionDir, 'tier-gate-receipt.json'), JSON.stringify(revision.receipt));
+      }
+      const anchor = join(issueDrafts, `${stem}.md`);
+      mkdirSync(issueDrafts, { recursive: true });
+      writeFileSync(anchor, revisions.at(-1)?.text ?? '');
+      return anchor;
+    };
+
+    try {
+      process.env.HOME = tempHome;
+      const first = draft('T3', 'T3', { behavior: 'action-producing' });
+      writeHistory(firstWorkdir, '1142-original', [
+        { revision: 'r01', text: first, receipt: receipt('r01', 'T3') },
+      ], '1142');
+      const issueReviewDir = join(stateRoot, '.review', '1142');
+      mkdirSync(issueReviewDir, { recursive: true });
+      writeFileSync(join(issueReviewDir, 'tier-intake.json'), JSON.stringify({ schema: 'tier-intake/v1', producer: 'cursor-flow-manager', taskIdentity: '1142', kind: 'fresh', priorTier: 'T3', firstRevision: 'r01' }));
+      writeFileSync(join(issueReviewDir, 'pass-01-competitive.capture.txt'), 'issue_revision: r01\nNO_FINDINGS');
+
+      const replayFirst = draft('T3', 'T3', { behavior: 'action-producing' });
+      const replayCurrent = draft('T2', 'T3', { behavior: 'action-producing' });
+      const replayAnchor = writeHistory(replayWorkdir, '1142-replay', [
+        { revision: 'r01', text: replayFirst, receipt: receipt('r01', 'T3') },
+        { revision: 'r02', text: replayCurrent, receipt: receipt('r02', 'T2', { correctedFrom: 'T3', reason: 'replay attempt' }) },
+      ], '1142-replay');
+
+      const stderr: string[] = [];
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { stderr.push(String(chunk)); return true; }) as typeof process.stderr.write);
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as typeof process.stdout.write);
+      try {
+        expect(runCli(['node', 'tier-gate-guard.ts', '--text-file', replayAnchor, '--draft-path', replayAnchor])).toBe(1);
+        expect(stderr.join('')).toContain('canonical Issue-number workdir history');
+      } finally {
+        stderrSpy.mockRestore();
+        stdoutSpy.mockRestore();
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('retains capture history when the anchor slug changes inside the canonical Issue workdir', () => {
+    const tempHome = mkdtempSync(join(tmpdir(), 'tier-slug-history-'));
+    const previousHome = process.env.HOME;
+    try {
+      process.env.HOME = tempHome;
+      const workdir = join(tempHome, '.local', 'state', 'create-issue-draft', '1142');
+      const issueDrafts = join(workdir, 'docs', 'issues_drafts');
+      const reviewDir = join(tempHome, '.local', 'state', 'create-issue-draft', '.review', '1142');
+      mkdirSync(reviewDir, { recursive: true });
+      writeFileSync(join(reviewDir, 'tier-intake.json'), JSON.stringify({ schema: 'tier-intake/v1', producer: 'cursor-flow-manager', taskIdentity: '1142', kind: 'fresh', priorTier: 'T3', firstRevision: 'r01' }));
+      writeFileSync(join(reviewDir, 'pass-01-competitive.capture.txt'), 'issue_revision: r01\nNO_FINDINGS');
+
+      const first = draft('T3', 'T3', { behavior: 'action-producing' });
+      const current = draft('T2', 'T3', { behavior: 'action-producing' });
+      for (const [revision, stem, text, decision] of [
+        ['r01', '1142-old-slug', first, receipt('r01', 'T3')],
+        ['r02', '1142-new-slug', current, receipt('r02', 'T2', { correctedFrom: 'T3', reason: 'over-tiered' })],
+      ] as const) {
+        const revisionDir = join(workdir, revision);
+        mkdirSync(revisionDir, { recursive: true });
+        writeFileSync(join(revisionDir, `${stem}.md`), text);
+        writeFileSync(join(revisionDir, 'tier-gate-receipt.json'), JSON.stringify(decision));
+      }
+      const anchor = join(issueDrafts, '1142-new-slug.md');
+      mkdirSync(issueDrafts, { recursive: true });
+      writeFileSync(anchor, current);
+      const result = checkTierGateGuard(current, { repoRoot: process.cwd(), draftPath: anchor });
+      expect(result.errors.join('\n')).toContain('already closed');
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 
   it('rejects retired demotion fence fields for a fresh task', () => {

@@ -6,6 +6,7 @@
  * read-old/write-none census is the only legacy demotion compatibility surface.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { checkNeverSkippedFloors } from './tier-gate-floor.ts';
 
@@ -142,6 +143,8 @@ export interface TierTransitionEvidence {
     captureText: string;
   }>;
   captures?: Array<{ captureName: string; captureText: string }>;
+  /** Filesystem-loaded evidence only: whether the path uses the Issue-number authority. */
+  canonicalIssueWorkdir?: boolean;
 }
 
 export function parseComplexityTierFence(draftText: string): ComplexityTierFence {
@@ -372,7 +375,6 @@ export function selectAuthoringReviewStages(input: StageSelectionInput): StageSe
   } else if (effectiveTier === 'T2') {
     authoring.push('light-design-analysis');
     review.push('architectural');
-    if (input.explicitAdversarialWrapper) review.unshift('competitive-adversarial');
   } else if (effectiveTier === 'T3') {
     authoring.push('full-design-analysis');
     review.push('competitive-adversarial', 'architectural', 'architect-lens', 'final-architectural');
@@ -412,13 +414,40 @@ export interface TierGateGuardResult {
   stages: StageSelectionResult;
 }
 
-function deriveWorkdir(draftPath: string): { workdir: string; stem: string; reviewDir: string } | null {
+interface WorkdirLayout {
+  workdir: string;
+  stem: string;
+  taskIdentity: string;
+  reviewDir: string;
+  canonicalIssueWorkdir: boolean;
+}
+
+function issueNumberFromStem(stem: string): string | null {
+  return stem.match(/^(\d+)(?:-|$)/)?.[1] ?? null;
+}
+
+function canonicalIssueStateRoot(): string {
+  return resolve(process.env.HOME ?? homedir(), '.local', 'state', 'create-issue-draft');
+}
+
+function deriveWorkdir(draftPath: string): WorkdirLayout | null {
   const normalized = resolve(draftPath);
   const stem = basename(normalized, '.md');
+  const taskNumber = issueNumberFromStem(stem);
   const issueDraftsDir = dirname(normalized);
-  if (basename(issueDraftsDir) !== 'issues_drafts' || basename(dirname(issueDraftsDir)) !== 'docs') return null;
+  if (!taskNumber || basename(issueDraftsDir) !== 'issues_drafts' || basename(dirname(issueDraftsDir)) !== 'docs') return null;
   const workdir = dirname(dirname(issueDraftsDir));
-  return { workdir, stem, reviewDir: join(issueDraftsDir, '.review', stem) };
+  const canonicalIssueWorkdir = dirname(workdir) === canonicalIssueStateRoot() && basename(workdir) === taskNumber;
+  const taskIdentity = canonicalIssueWorkdir ? taskNumber : stem;
+  return {
+    workdir,
+    stem,
+    taskIdentity,
+    reviewDir: canonicalIssueWorkdir
+      ? join(canonicalIssueStateRoot(), '.review', taskNumber)
+      : join(issueDraftsDir, '.review', taskIdentity),
+    canonicalIssueWorkdir,
+  };
 }
 
 function readJson(path: string): unknown {
@@ -460,8 +489,24 @@ function loadTransitionEvidenceFromWorkdir(
     : [];
   const revisions: TierTransitionEvidence['revisions'] = [];
   for (const revision of revisionDirs) {
-    const draftFile = join(layout.workdir, revision, `${layout.stem}.md`);
-    if (!existsSync(draftFile)) continue;
+    const revisionDir = join(layout.workdir, revision);
+    const candidates = readdirSync(revisionDir, { withFileTypes: true })
+      .filter((entry) => {
+        if (!entry.isFile() || !/\.md$/i.test(entry.name)) return false;
+        const candidateStem = basename(entry.name, '.md');
+        return layout.canonicalIssueWorkdir
+          ? issueNumberFromStem(candidateStem) === layout.taskIdentity
+          : candidateStem === layout.stem;
+      })
+      .map((entry) => entry.name)
+      .sort();
+    if (candidates.length > 1) {
+      errors.push(`tier provenance: ambiguous immutable Issue revision files for ${revision}`);
+      continue;
+    }
+    const candidate = candidates[0];
+    if (!candidate) continue;
+    const draftFile = join(revisionDir, candidate);
     const text = readFileSync(draftFile, 'utf8');
     const fence = parseComplexityTierFence(text);
     const tier = fence.kind === 'tier-fence' ? asTier(fence.tier) : null;
@@ -492,7 +537,16 @@ function loadTransitionEvidenceFromWorkdir(
   }
 
   return {
-    evidence: { taskIdentity: layout.stem, currentRevision, intake, revisions, events, revalidations, captures },
+    evidence: {
+      taskIdentity: layout.taskIdentity,
+      currentRevision,
+      intake,
+      revisions,
+      events,
+      revalidations,
+      captures,
+      canonicalIssueWorkdir: layout.canonicalIssueWorkdir,
+    },
     errors,
   };
 }
@@ -535,8 +589,14 @@ function canonicalCaptureKind(name: string): CanonicalCaptureKind | null {
 }
 
 function selectedCaptureKinds(tier: Tier): ReadonlySet<CanonicalCaptureKind> {
-  if (tier === 'T3') return new Set(['competitive', 'architectural-review', 'architectural-lens', 'architectural']);
-  return new Set(['architectural']);
+  const selected = new Set<CanonicalCaptureKind>();
+  for (const stage of selectAuthoringReviewStages({ tier, skipLine: false }).review) {
+    if (stage === 'competitive-adversarial') selected.add('competitive');
+    else if (stage === 'architect-lens') selected.add('architectural-lens');
+    else if (stage === 'final-architectural') selected.add('architectural');
+    else if (stage === 'architectural') selected.add(tier === 'T3' ? 'architectural-review' : 'architectural');
+  }
+  return selected;
 }
 
 function captureRevision(text: string): string | null {
@@ -623,6 +683,15 @@ function validateFreshProgression(
     errors.push('tier correction: fresh progression cannot produce or consume retired demotion records');
   }
 
+  const hasCorrectionAttempt = evidence.revisions.slice(0, currentIndex + 1).some((revision, index, revisions) => {
+    if (revision.receipt?.correctedFrom || revision.receipt?.reason !== undefined) return true;
+    const previous = revisions[index - 1];
+    return Boolean(previous?.tier && revision.tier && tierRank(revision.tier) < tierRank(previous.tier));
+  });
+  if (hasCorrectionAttempt && evidence.canonicalIssueWorkdir === false) {
+    errors.push('tier correction: intake correction requires the canonical Issue-number workdir history');
+  }
+
   let corrections = 0;
   let sawUpstep = false;
   for (let index = 1; index <= currentIndex; index += 1) {
@@ -664,6 +733,9 @@ function validateFreshProgression(
   }
 
   const first = evidence.revisions[0];
+  if (first?.receipt?.correctedFrom || first?.receipt?.reason !== undefined) {
+    errors.push('tier correction: first authoritative receipt cannot contain correction fields');
+  }
   if (first?.tier !== intake.priorTier) {
     errors.push('tier provenance: first authoritative candidate must equal the intake prior');
   }
