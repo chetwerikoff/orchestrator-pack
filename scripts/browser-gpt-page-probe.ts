@@ -8,6 +8,7 @@ export const PROBE_SCHEMA = 'browser-gpt-page-probe/v1';
 export const MAX_TARGETS = 50;
 export const MAX_MESSAGE_SUMMARIES = 100;
 export const MAX_TEXT_CODE_POINTS = 160;
+export const MAX_NORMALIZED_URL_CODE_POINTS = 2_048;
 export const CDP_REQUEST_TIMEOUT_MS = 10_000;
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
@@ -23,6 +24,7 @@ const ALLOWLISTED_ATTRIBUTES = [
   'data-is-streaming',
   'data-state',
 ] as const;
+const ALLOWLISTED_ATTRIBUTE_SET = new Set<string>(ALLOWLISTED_ATTRIBUTES);
 
 export type ProbeOperation = 'list' | 'inspect' | 'export';
 export type ProbeStatus =
@@ -236,16 +238,183 @@ function safeTitle(value: unknown): string {
   return boundedCodePoints(typeof value === 'string' ? value : '');
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isBoundedString(value: unknown, maxCodePoints: number): value is string {
+  return typeof value === 'string' && Array.from(value).length <= maxCodePoints;
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === 'string' && SHA256_RE.test(value);
+}
+
+function malformedSurface(reason = 'malformed_snapshot'): never {
+  throw new ProbeError('surface_unknown', reason);
+}
+
+function validateTextSummary(value: unknown): TextSummary {
+  if (!isRecord(value)
+    || !isNonNegativeSafeInteger(value.byte_length)
+    || !isNonNegativeSafeInteger(value.code_point_length)
+    || !isSha256(value.sha256)
+    || !isBoundedString(value.head, MAX_TEXT_CODE_POINTS)
+    || !isBoundedString(value.tail, MAX_TEXT_CODE_POINTS)) {
+    return malformedSurface();
+  }
+  const headLength = Array.from(value.head).length;
+  const tailLength = Array.from(value.tail).length;
+  if (headLength > Math.min(value.code_point_length, MAX_TEXT_CODE_POINTS)
+    || tailLength > Math.min(value.code_point_length, MAX_TEXT_CODE_POINTS)
+    || (value.code_point_length <= MAX_TEXT_CODE_POINTS && value.head !== value.tail)) {
+    return malformedSurface();
+  }
+  return {
+    byte_length: value.byte_length,
+    code_point_length: value.code_point_length,
+    sha256: value.sha256,
+    head: boundedCodePoints(value.head),
+    tail: boundedTailCodePoints(value.tail),
+  };
+}
+
+function validateAttributes(value: unknown): Readonly<Record<string, string>> {
+  if (!isRecord(value)) return malformedSurface();
+  const attributes: Record<string, string> = {};
+  for (const [name, rawValue] of Object.entries(value)) {
+    if (!ALLOWLISTED_ATTRIBUTE_SET.has(name) || !isBoundedString(rawValue, MAX_TEXT_CODE_POINTS)) {
+      return malformedSurface();
+    }
+    attributes[name] = boundedCodePoints(rawValue);
+  }
+  return attributes;
+}
+
+function validateNodeSummary(value: unknown, snapshot: {
+  readonly observed_user_nodes: number;
+  readonly observed_assistant_nodes: number;
+  readonly observed_message_nodes: number;
+}): NodeSummary {
+  if (!isRecord(value)
+    || (value.role !== 'user' && value.role !== 'assistant')
+    || !isNonNegativeSafeInteger(value.ordinal)
+    || !isNonNegativeSafeInteger(value.document_ordinal)
+    || typeof value.message_id_unique !== 'boolean') {
+    return malformedSurface();
+  }
+  if (value.message_id !== null && (typeof value.message_id !== 'string' || !MESSAGE_ID_RE.test(value.message_id))) {
+    return malformedSurface();
+  }
+  if ((value.message_id !== null) !== value.message_id_unique
+    || value.document_ordinal >= snapshot.observed_message_nodes
+    || value.ordinal >= (value.role === 'user' ? snapshot.observed_user_nodes : snapshot.observed_assistant_nodes)) {
+    return malformedSurface();
+  }
+  return {
+    role: value.role,
+    ordinal: value.ordinal,
+    document_ordinal: value.document_ordinal,
+    message_id: value.message_id,
+    message_id_unique: value.message_id_unique,
+    attributes: validateAttributes(value.attributes),
+    innerText: validateTextSummary(value.innerText),
+    textContent: validateTextSummary(value.textContent),
+  };
+}
+
+function validateInspectionSnapshot(
+  value: unknown,
+  target: CompatibleTarget,
+  requireResolvedUrlMatch: boolean,
+): InspectionSnapshot {
+  if (!isRecord(value)) return malformedSurface();
+  if (value.status === 'surface_unknown') {
+    const reason = isBoundedString(value.reason, MAX_TEXT_CODE_POINTS) ? value.reason : 'uninterpretable_surface';
+    throw new ProbeError('surface_unknown', reason);
+  }
+  if (value.status !== 'ok'
+    || !isBoundedString(value.page_url, MAX_NORMALIZED_URL_CODE_POINTS)
+    || !isBoundedString(value.title, MAX_TEXT_CODE_POINTS)
+    || (typeof value.generation_in_progress !== 'boolean' && value.generation_in_progress !== 'unknown')
+    || !isNonNegativeSafeInteger(value.observed_user_nodes)
+    || !isNonNegativeSafeInteger(value.observed_assistant_nodes)
+    || !isNonNegativeSafeInteger(value.observed_message_nodes)
+    || !Array.isArray(value.nodes)
+    || value.nodes.length > MAX_MESSAGE_SUMMARIES
+    || typeof value.nodes_truncated !== 'boolean'
+    || !isNonNegativeSafeInteger(value.last_assistant_text_length)
+    || !isNonNegativeSafeInteger(value.last_assistant_text_byte_length)
+    || !isBoundedString(value.last_assistant_text_head, MAX_TEXT_CODE_POINTS)
+    || (value.last_assistant_sha256 !== null && !isSha256(value.last_assistant_sha256))) {
+    return malformedSurface();
+  }
+  if (value.observed_message_nodes !== value.observed_user_nodes + value.observed_assistant_nodes
+    || (value.nodes_truncated
+      ? value.nodes.length !== MAX_MESSAGE_SUMMARIES || value.observed_message_nodes <= value.nodes.length
+      : value.nodes.length !== value.observed_message_nodes)) {
+    return malformedSurface();
+  }
+  const nodeContext = {
+    observed_user_nodes: value.observed_user_nodes,
+    observed_assistant_nodes: value.observed_assistant_nodes,
+    observed_message_nodes: value.observed_message_nodes,
+  };
+  const nodes = value.nodes.map((node) => validateNodeSummary(node, nodeContext));
+  let previousDocumentOrdinal = -1;
+  const previousRoleOrdinal: Partial<Record<MessageRole, number>> = {};
+  for (const node of nodes) {
+    if (node.document_ordinal <= previousDocumentOrdinal) return malformedSurface();
+    previousDocumentOrdinal = node.document_ordinal;
+    const previous = previousRoleOrdinal[node.role];
+    if (previous !== undefined && node.ordinal !== previous + 1) return malformedSurface();
+    previousRoleOrdinal[node.role] = node.ordinal;
+  }
+  const lastHeadLength = Array.from(value.last_assistant_text_head).length;
+  if (lastHeadLength > Math.min(value.last_assistant_text_length, MAX_TEXT_CODE_POINTS)) return malformedSurface();
+  if (value.observed_assistant_nodes === 0) {
+    if (value.last_assistant_text_length !== 0
+      || value.last_assistant_text_byte_length !== 0
+      || value.last_assistant_text_head !== ''
+      || value.last_assistant_sha256 !== null) return malformedSurface();
+  } else if (value.last_assistant_sha256 === null) {
+    return malformedSurface();
+  }
+  return {
+    page_url: requireActualTargetIdentity(target, value.page_url, requireResolvedUrlMatch),
+    title: boundedCodePoints(value.title),
+    generation_in_progress: value.generation_in_progress,
+    observed_user_nodes: value.observed_user_nodes,
+    observed_assistant_nodes: value.observed_assistant_nodes,
+    observed_message_nodes: value.observed_message_nodes,
+    nodes,
+    nodes_truncated: value.nodes_truncated,
+    last_assistant_text_length: value.last_assistant_text_length,
+    last_assistant_text_byte_length: value.last_assistant_text_byte_length,
+    last_assistant_text_head: boundedCodePoints(value.last_assistant_text_head),
+    last_assistant_sha256: value.last_assistant_sha256,
+  };
+}
+
 export function toCompatibleTargets(targets: readonly CdpTarget[]): CompatibleTarget[] {
   const compatible: CompatibleTarget[] = [];
   for (const target of targets) {
-    if (target.type !== 'page' || !target.id || !target.url || !isCompatibleChatGptUrl(target.url)) continue;
+    if (target.type !== 'page'
+      || !target.id
+      || !TARGET_ID_RE.test(target.id)
+      || !target.url
+      || !isCompatibleChatGptUrl(target.url)) continue;
     let normalized: string;
     try {
       normalized = normalizeConversationUrl(target.url);
     } catch {
       continue;
     }
+    if (Array.from(normalized).length > MAX_NORMALIZED_URL_CODE_POINTS) continue;
     compatible.push({
       target_id: target.id,
       normalized_url: normalized,
@@ -677,7 +846,7 @@ export function buildExportExpression(witness: ExportWitness): string {
       role: candidate.role,
       ordinal: candidate.ordinal,
       document_ordinal: candidate.documentOrdinal,
-      message_id: candidate.messageId,
+      message_id: witness.messageId || null,
       representation: witness.representation,
       byte_length: bytes.byteLength,
       sha256,
@@ -718,6 +887,9 @@ function requireActualTargetIdentity(
     throw new ProbeError('surface_unknown', 'page_url_unavailable');
   }
   const actual = normalizeConversationUrl(rawPageUrl);
+  if (Array.from(actual).length > MAX_NORMALIZED_URL_CODE_POINTS) {
+    throw new ProbeError('surface_unknown', 'page_url_too_long');
+  }
   if (requireResolvedUrlMatch && actual !== target.normalized_url) {
     throw new ProbeError('not_found', 'target_url_changed');
   }
@@ -750,30 +922,7 @@ export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defau
     } catch (error) {
       throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
     }
-    const snapshot = value as InspectionExpressionResult;
-    if (!snapshot || snapshot.status === 'surface_unknown') {
-      throw new ProbeError('surface_unknown', snapshot?.reason ?? 'uninterpretable_surface');
-    }
-    if (snapshot.status !== 'ok' || !Array.isArray(snapshot.nodes)) {
-      throw new ProbeError('surface_unknown', 'malformed_snapshot');
-    }
-    const pageUrl = requireActualTargetIdentity(target, snapshot.page_url, resolvedByUrl);
-    const result: InspectionSnapshot = {
-      page_url: pageUrl,
-      title: safeTitle(snapshot.title),
-      generation_in_progress: typeof snapshot.generation_in_progress === 'boolean' || snapshot.generation_in_progress === 'unknown'
-        ? snapshot.generation_in_progress
-        : 'unknown',
-      observed_user_nodes: snapshot.observed_user_nodes ?? 0,
-      observed_assistant_nodes: snapshot.observed_assistant_nodes ?? 0,
-      observed_message_nodes: snapshot.observed_message_nodes ?? snapshot.nodes.length,
-      nodes: snapshot.nodes,
-      nodes_truncated: Boolean(snapshot.nodes_truncated),
-      last_assistant_text_length: snapshot.last_assistant_text_length ?? 0,
-      last_assistant_text_byte_length: snapshot.last_assistant_text_byte_length ?? 0,
-      last_assistant_text_head: boundedCodePoints(snapshot.last_assistant_text_head ?? ''),
-      last_assistant_sha256: snapshot.last_assistant_sha256 ?? null,
-    };
+    const result = validateInspectionSnapshot(value, target, resolvedByUrl);
     return { ...baseEnvelope('inspect', 'ok'), target_id: target.target_id, snapshot: result };
   }
 
@@ -791,16 +940,33 @@ export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defau
   } catch (error) {
     throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
   }
-  const selected = value as ExportExpressionResult;
-  if (!selected || !selected.status) throw new ProbeError('surface_unknown', 'malformed_export_snapshot');
-  if (selected.status !== 'ok') throw new ProbeError(selected.status, selected.reason ?? 'export_selection_failed');
-  if (typeof selected.text !== 'string' || selected.byte_length === undefined || !selected.sha256) {
+  if (!isRecord(value) || typeof value.status !== 'string') {
     throw new ProbeError('surface_unknown', 'malformed_export_snapshot');
   }
-  const pageUrl = requireActualTargetIdentity(target, selected.page_url, false);
-  const bytes = Buffer.from(selected.text, 'utf8');
-  if (bytes.byteLength !== selected.byte_length || hashBytes(bytes) !== selected.sha256) {
-    throw new ProbeError('stale_node', 'transported_bytes_mismatch');
+  const allowedFailureStatuses = new Set(['not_found', 'ambiguous', 'stale_node', 'surface_unknown']);
+  if (value.status !== 'ok') {
+    if (!allowedFailureStatuses.has(value.status)) {
+      throw new ProbeError('surface_unknown', 'malformed_export_snapshot');
+    }
+    const reason = isBoundedString(value.reason, MAX_TEXT_CODE_POINTS) ? value.reason : 'export_selection_failed';
+    throw new ProbeError(value.status as Extract<ProbeStatus, 'not_found' | 'ambiguous' | 'stale_node' | 'surface_unknown'>, reason);
+  }
+  if (!isBoundedString(value.page_url, MAX_NORMALIZED_URL_CODE_POINTS)
+    || value.role !== args.role
+    || value.ordinal !== args.ordinal
+    || !isNonNegativeSafeInteger(value.document_ordinal)
+    || value.message_id !== (args.messageId ?? null)
+    || value.representation !== args.representation
+    || value.byte_length !== args.expectedByteLength
+    || value.sha256 !== args.expectedSha256
+    || typeof value.text !== 'string') {
+    throw new ProbeError('stale_node', 'inspection_witness_mismatch');
+  }
+  const pageUrl = requireActualTargetIdentity(target, value.page_url, false);
+  const bytes = Buffer.from(value.text, 'utf8');
+  const hostSha256 = hashBytes(bytes);
+  if (bytes.byteLength !== args.expectedByteLength || hostSha256 !== args.expectedSha256) {
+    throw new ProbeError('stale_node', 'inspection_witness_mismatch');
   }
   try {
     await deps.publish(args.output, bytes);
@@ -813,19 +979,19 @@ export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defau
     target_id: target.target_id,
     page_url: pageUrl,
     node: {
-      role: selected.role,
-      ordinal: selected.ordinal,
-      document_ordinal: selected.document_ordinal,
-      message_id: selected.message_id ?? null,
+      role: args.role,
+      ordinal: args.ordinal,
+      document_ordinal: value.document_ordinal,
+      message_id: args.messageId ?? null,
     },
-    representation: selected.representation,
+    representation: args.representation,
     inspection_witness: {
       expected_byte_length: args.expectedByteLength,
       expected_sha256: args.expectedSha256,
     },
     output: args.output,
     byte_length: bytes.byteLength,
-    sha256: hashBytes(bytes),
+    sha256: hostSha256,
     sensitive_caller_owned_output: true,
   };
 }

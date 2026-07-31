@@ -4,11 +4,14 @@ import { createServer } from 'node:net';
 import { mkdtemp, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { test } from 'vitest';
+import { runProcess } from './kernel/subprocess.ts';
 import {
   buildExportExpression,
   INSPECTION_EXPRESSION,
+  MAX_NORMALIZED_URL_CODE_POINTS,
   MAX_TARGETS,
   normalizeConversationUrl,
   parseCliArgs,
@@ -123,6 +126,18 @@ test('target listing is bounded, passive, and excludes unrelated pages', async (
   assert.ok(!(JSON.stringify(result).includes('example.com/private')));
 });
 
+test('target listing rejects oversized target identity and normalized URL metadata', async () => {
+  const result = await runProbe({ operation: 'list', cdp: 'http://127.0.0.1:9222' }, deps({
+    listTargets: async () => [
+      { id: 'x'.repeat(257), type: 'page', url: 'https://chatgpt.com/c/oversized-id', title: 'bad-id' },
+      { id: 'valid-id', type: 'page', url: `https://chatgpt.com/c/${'x'.repeat(MAX_NORMALIZED_URL_CODE_POINTS)}`, title: 'bad-url' },
+      { id: 'valid', type: 'page', url: 'https://chatgpt.com/c/valid', title: 'valid' },
+    ],
+  }));
+  assert.deepEqual(result.targets, [{ target_id: 'valid', normalized_url: 'https://chatgpt.com/c/valid', title: 'valid' }]);
+  assert.equal(result.observed_compatible_targets, 1);
+});
+
 test('URL targeting fails closed on zero and duplicate exact normalized matches', async () => {
   await assert.rejects(
     runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/missing' }, deps()),
@@ -165,6 +180,28 @@ test('missing message structure stays surface_unknown rather than fabricating ze
   const raw = await evaluateExpression(INSPECTION_EXPRESSION, []);
   assert.equal(raw.status, 'surface_unknown');
   assert.equal(raw.reason, 'message_nodes_missing');
+});
+
+test('host rejects malformed successful inspection snapshots instead of fabricating defaults', async () => {
+  await assert.rejects(
+    runProbe(
+      { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
+      deps({ evaluate: async () => ({ status: 'ok', page_url: 'https://chatgpt.com/c/test', title: 'partial', nodes: [] }) }),
+    ),
+    (error: any) => error.status === 'surface_unknown' && error.reason === 'malformed_snapshot',
+  );
+});
+
+test('host rejects over-broad or inconsistent inspection node evidence', async () => {
+  const raw = await evaluateExpression(INSPECTION_EXPRESSION, [new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-1' })]);
+  raw.nodes[0].attributes['data-testid'] = 'x'.repeat(161);
+  await assert.rejects(
+    runProbe(
+      { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
+      deps({ evaluate: async () => raw }),
+    ),
+    (error: any) => error.status === 'surface_unknown' && error.reason === 'malformed_snapshot',
+  );
 });
 
 test('duplicate message IDs are not promoted to exact identities', async () => {
@@ -212,6 +249,42 @@ test('export revalidates exact representation bytes and refuses stale or under-s
   assert.equal(missingId.reason, 'message_id_required');
 });
 
+test('host re-binds exported bytes and identity to the caller inspection witness before publication', async () => {
+  const expected = 'hidden-prefix Visible answer';
+  const different = 'self-consistent but different';
+  let publishCalls = 0;
+  await assert.rejects(
+    runProbe({
+      operation: 'export',
+      cdp: 'http://127.0.0.1:9222',
+      targetId: 'target-1',
+      role: 'assistant',
+      ordinal: 0,
+      messageId: 'a-1',
+      representation: 'textContent',
+      expectedByteLength: Buffer.byteLength(expected),
+      expectedSha256: sha256(expected),
+      output: '/unused/output.txt',
+    }, deps({
+      evaluate: async () => ({
+        status: 'ok',
+        page_url: 'https://chatgpt.com/c/test',
+        role: 'assistant',
+        ordinal: 0,
+        document_ordinal: 1,
+        message_id: 'a-1',
+        representation: 'textContent',
+        byte_length: Buffer.byteLength(different),
+        sha256: sha256(different),
+        text: different,
+      }),
+      publish: async () => { publishCalls++; },
+    })),
+    (error: any) => error.status === 'stale_node' && error.reason === 'inspection_witness_mismatch',
+  );
+  assert.equal(publishCalls, 0);
+});
+
 test('successful export writes only one exact selected representation', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'probe-export-'));
   const destination = join(directory, 'node.txt');
@@ -253,9 +326,7 @@ test('existing, symlinked, directory, and special output targets are refused wit
   await mkdir(outputDirectory);
   await assert.rejects(publishExactBytes(outputDirectory, Buffer.from('replacement')), (error: any) => error.status === 'unsafe_output');
 
-  if (process.platform === 'win32') {
-    return;
-  }
+  if (process.platform === 'win32') return;
   const socketPath = join(directory, 'socket');
   const server = createServer();
   await new Promise<void>((resolve, reject) => {
@@ -367,7 +438,7 @@ test('generation observation degrades to unknown when the fixed marker query can
   const document = {
     title: 'Fixture title',
     querySelectorAll: () => [new FakeNode('assistant', 'Answer', 'Answer')],
-    querySelector: () => { throw new Error('changed surface'); },
+    querySelector : () => { throw new Error('changed surface'); },
   };
   const value = await runInNewContext(INSPECTION_EXPRESSION, {
     document,
@@ -384,6 +455,22 @@ test('generation observation degrades to unknown when the fixed marker query can
   });
   assert.equal(value.status, 'ok');
   assert.equal(value.generation_in_progress, 'unknown');
+});
+
+test('the canonical npm entrypoint emits exactly one JSON result line', async () => {
+  const repoRoot = fileURLToPath(new URL('../', import.meta.url));
+  const result = await runProcess({
+    command: process.platform === 'win32' ? 'npm.cmd' : 'npm',
+    args: ['run', '--silent', 'browser-gpt-page-probe', '--', 'bogus'],
+    cwd: repoRoot,
+    inheritParentEnv: true,
+    timeoutMs: 30_000,
+    allowEmptyStdout: true,
+  });
+  assert.equal(result.exitCode, 9, result.stderr);
+  const lines = result.stdout.trimEnd().split(/\r?\n/u);
+  assert.equal(lines.length, 1, result.stdout);
+  assert.equal(JSON.parse(lines[0]!).status, 'input_invalid');
 });
 
 test('the implementation has no browser mutation, helper lifecycle, state-write, or polling path', async () => {
