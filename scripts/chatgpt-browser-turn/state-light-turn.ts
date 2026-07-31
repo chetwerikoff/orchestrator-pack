@@ -219,27 +219,30 @@ function emit(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+const UNICODE_WHITESPACE_PATTERN = /\p{White_Space}+/gu;
+
+function collapseUnicodeWhitespace(value: string): string {
+  return value.replace(UNICODE_WHITESPACE_PATTERN, ' ').trim();
+}
+
 function normalizeVisibleText(value: string): string {
   return value.replace(/\r\n?/g, '\n').replace(/[\t ]+/g, ' ').trim();
 }
 
 function normalizeEchoComparisonText(value: string): string {
-  return value
-    .replace(/\u200b/g, '')
-    .replace(/[\r\n\t\f\v ]+/g, ' ')
-    .trim();
+  return collapseUnicodeWhitespace(value.replace(/\u200b/g, ''));
 }
 
 function normalizeMarkdownEchoText(value: string): string {
-  return value
-    .replace(/\u200b/g, '')
-    .replace(/`+/g, '')
-    .replace(/^#{1,6}\s*/gm, '')
-    .replace(/^\s*[-*+]\s+/gm, '')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/[\r\n\t\f\v ]+/g, ' ')
-    .trim();
+  return collapseUnicodeWhitespace(
+    value
+      .replace(/\u200b/g, '')
+      .replace(/`+/g, '')
+      .replace(/^#{1,6}\s*/gm, '')
+      .replace(/^\s*[-*+]\s+/gm, '')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1'),
+  );
 }
 
 function normalizeOwnedEchoText(value: string): string {
@@ -1007,7 +1010,6 @@ function returnOwnedConversationIdentityMismatch(
   return {
     page,
     browser,
-    ...(afterSend ? { preserveOwnedPage: true } : {}),
     result: compactResult(
       'ui_contract_mismatch',
       'invocation',
@@ -1050,7 +1052,6 @@ function returnOwnedConversationRenderMismatch(
   return {
     page,
     browser,
-    preserveOwnedPage: true,
     result: compactResult(
       'ui_contract_mismatch',
       'invocation',
@@ -1089,7 +1090,6 @@ function returnFreshConversationLandingMismatch(
   return {
     page,
     browser,
-    preserveOwnedPage: true,
     result: compactResult(
       'ui_contract_mismatch',
       'invocation',
@@ -2103,7 +2103,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
       if (!appendIncident(cleanupIncident, outcome.result.invocation_id)) journalWriteFailed = true;
     }
   }
-  if (!outcome.preserveOwnedPage) await releaseCdpBrowser(outcome.browser);
+  await releaseCdpBrowser(outcome.browser);
   return {
     ...outcome.result,
     cleanup,

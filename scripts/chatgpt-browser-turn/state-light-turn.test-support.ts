@@ -1688,6 +1688,9 @@ describe('browser-turn recurrence journal fixture coverage', () => {
     expect(outcome.result.incidents).toContain('conversation_render_mismatch');
     expect(outcome.result.state).not.toBe('no_reply');
     expect(fake.metrics.polls).toBeLessThan(20);
+    expect(outcome.result.cleanup).toBe('confirmed');
+    expect(mocks.releaseBrowser).toHaveBeenCalled();
+    expect(fake.metrics.closes).toBe(1);
   });
 
   it('replays rate_limit invocation_blocker symptoms', async () => {

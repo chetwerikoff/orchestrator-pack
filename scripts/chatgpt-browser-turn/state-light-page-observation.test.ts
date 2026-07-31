@@ -191,6 +191,18 @@ describe('state-light prompt attribution classification', () => {
     });
   });
 
+  it('matches owned text when visible echo uses Unicode whitespace separators', () => {
+    const prompt = 'helper healthy -> helper-only fast path';
+    const withNbsp = 'helper healthy\n\u00A0-> helper-only fast path';
+    const withIdeographic = 'helper healthy\u3000-> helper-only fast path';
+    const combined = 'helper healthy\n\u00A0\u202F-> helper-only fast path';
+
+    expect(ownedPromptMatches(withNbsp, prompt)).toBe(true);
+    expect(ownedPromptMatches(withIdeographic, prompt)).toBe(true);
+    expect(ownedPromptMatches(combined, prompt)).toBe(true);
+    expect(ownedPromptMatches('helper broken -> other path', prompt)).toBe(false);
+  });
+
   it('matches owned text when markdown and line breaking normalize to the same string', () => {
     const longPrompt = `Problem:\nFlow-manager misclassifies.\n\nGoal:\nFix echo matching.\n${'detail '.repeat(80)}`;
     const rendered = `Problem: Flow-manager misclassifies. Goal: Fix echo matching. ${'detail '.repeat(80)}`.trim();
