@@ -162,6 +162,7 @@ import {
   openBlankProjectChatSurface,
   prepareStateLightFreshConversation,
   projectConversationPrefix,
+  ownedConversationIdentityMatches,
   projectSurfaceUrlsEquivalent,
   readStateLightAdvisoryWall,
   recordStateLightAdvisoryWall,
@@ -545,6 +546,20 @@ describe('state-light fresh conversation collision recovery', () => {
       state: 'ready',
       reply: 'partial',
     });
+  });
+
+  it('matches project-scoped and bare conversation urls with the same uuid', () => {
+    const uuid = '6a6c32b2-51a0-83ec-9fe6-521e171ba785';
+    const project = `https://chatgpt.com/g/g-p-test-project/c/${uuid}`;
+    const bare = `https://chatgpt.com/c/${uuid}`;
+    expect(ownedConversationIdentityMatches(project, bare)).toBe(true);
+    expect(ownedConversationIdentityMatches(bare, project)).toBe(true);
+  });
+
+  it('rejects different conversation uuids', () => {
+    const left = 'https://chatgpt.com/c/6a6c32b2-51a0-83ec-9fe6-521e171ba785';
+    const right = 'https://chatgpt.com/c/11111111-1111-1111-1111-111111111111';
+    expect(ownedConversationIdentityMatches(left, right)).toBe(false);
   });
 
   it('treats equivalent project URL variants as the same blank surface', () => {

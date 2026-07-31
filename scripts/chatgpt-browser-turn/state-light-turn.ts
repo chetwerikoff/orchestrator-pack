@@ -28,6 +28,7 @@ import { readStableInput } from './input.ts';
 import {
   acquireStateLightNewChatSendSlot,
   conversationUuidFromUrl,
+  ownedConversationIdentityMatches,
   prepareStateLightFreshConversation,
   projectConversationPrefix,
   readStateLightAdvisoryWall,
@@ -952,9 +953,117 @@ async function navigateOwnedTurnPage(
     waitUntil: 'domcontentloaded',
     timeout: Math.min(MAX_LOCAL_READ_WAIT_MS * 6, config.timeoutMs),
   });
-  if (!config.newChat && normalizeConversationUrl(page.url()) !== target) {
+  if (!config.newChat && !ownedConversationIdentityMatches(page.url(), target)) {
     throw new Error('ui_contract_mismatch:conversation_redirect');
   }
+}
+
+export type OwnedConversationIdentity = {
+  matched: boolean;
+  targetUuid?: string;
+  pageUuid?: string;
+  pageUrl?: string;
+};
+
+export function readOwnedConversationIdentity(page: any, targetChatUrl: string): OwnedConversationIdentity {
+  const targetUuid = conversationUuidFromUrl(targetChatUrl);
+  let pageUrl: string | undefined;
+  try {
+    pageUrl = normalizeConversationUrl(String(page.url()));
+  } catch {
+    return { matched: false, targetUuid, pageUuid: undefined, pageUrl };
+  }
+  const pageUuid = conversationUuidFromUrl(pageUrl);
+  return {
+    matched: ownedConversationIdentityMatches(pageUrl, targetChatUrl),
+    targetUuid,
+    pageUuid,
+    pageUrl,
+  };
+}
+
+function returnOwnedConversationIdentityMismatch(
+  identity: OwnedConversationIdentity,
+  page: any,
+  browser: any,
+  invocationId: string,
+  profileKey: string,
+  sendCount: number,
+  pollCount: number,
+  navigation: StateLightNavigationCounter,
+  incidents: BrowserIncident[],
+  journalWriteFailed: boolean,
+  incident: (eventClass: string, symptom: string, action?: string) => void,
+  afterSend: boolean,
+): TurnRunOutcome {
+  incident(
+    'conversation_identity_mismatch',
+    'owned_conversation_identity_mismatch',
+    afterSend ? 'retain_owned_page_no_resend' : 'return_local_error',
+  );
+  return {
+    page,
+    browser,
+    ...(afterSend ? { preserveOwnedPage: true } : {}),
+    result: compactResult(
+      'ui_contract_mismatch',
+      'invocation',
+      'owned_conversation_identity_mismatch',
+      invocationId,
+      profileKey,
+      sendCount,
+      pollCount,
+      navigation,
+      incidents,
+      {
+        ...(identity.pageUrl ? { conversation_id: identity.pageUrl } : {}),
+      },
+      journalWriteFailed,
+    ),
+  };
+}
+
+function hasPostSendTranscript(messages: readonly PageMessage[], baselineCount: number): boolean {
+  return messages.length > baselineCount;
+}
+
+function returnOwnedConversationRenderMismatch(
+  page: any,
+  browser: any,
+  invocationId: string,
+  profileKey: string,
+  sendCount: number,
+  pollCount: number,
+  navigation: StateLightNavigationCounter,
+  incidents: BrowserIncident[],
+  journalWriteFailed: boolean,
+  incident: (eventClass: string, symptom: string, action?: string) => void,
+): TurnRunOutcome {
+  incident(
+    'conversation_render_mismatch',
+    'owned_conversation_render_mismatch',
+    'retain_owned_page_no_resend',
+  );
+  return {
+    page,
+    browser,
+    preserveOwnedPage: true,
+    result: compactResult(
+      'ui_contract_mismatch',
+      'invocation',
+      'owned_conversation_render_mismatch',
+      invocationId,
+      profileKey,
+      sendCount,
+      pollCount,
+      navigation,
+      incidents,
+      {
+        ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}),
+      },
+      journalWriteFailed,
+    ),
+  };
 }
 
 function pageConversationUrl(page: any): string | undefined {
@@ -1364,6 +1473,25 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         releaseStateLightNewChatSendSlot(profileKey, invocationId);
       }
     } else {
+      const chatUrlTarget = normalizeConversationUrl(config.chatUrl ?? '');
+      const preSendIdentity = readOwnedConversationIdentity(page, chatUrlTarget);
+      if (!preSendIdentity.matched) {
+        return returnOwnedConversationIdentityMismatch(
+          preSendIdentity,
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+          false,
+        );
+      }
+
       const composerState = await waitForComposer(page, composerDeadline);
       if (composerState.state !== 'ready') {
         recordProductWallAdvisory(profileKey, composerState.state, composerState.cause, invocationId);
@@ -1387,6 +1515,29 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
       baselineCount = (await readPageMessages(page)).length;
       await sendOwnedPrompt();
+    }
+
+    const targetChatUrl = config.newChat
+      ? undefined
+      : normalizeConversationUrl(config.chatUrl ?? '');
+    if (targetChatUrl) {
+      const landingIdentity = readOwnedConversationIdentity(page, targetChatUrl);
+      if (!landingIdentity.matched) {
+        return returnOwnedConversationIdentityMismatch(
+          landingIdentity,
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+          sendCount >= 1,
+        );
+      }
     }
 
     const startedAt = Date.now();
@@ -1418,6 +1569,25 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     // to keep that page rather than manufacture lost-chat/resend eligibility.
     while (true) {
       pollCount++;
+      if (targetChatUrl) {
+        const identity = readOwnedConversationIdentity(page, targetChatUrl);
+        if (!identity.matched) {
+          return returnOwnedConversationIdentityMismatch(
+            identity,
+            page,
+            browser,
+            invocationId,
+            profileKey,
+            sendCount,
+            pollCount,
+            navigation,
+            incidents,
+            journalWriteFailed,
+            incident,
+            true,
+          );
+        }
+      }
       let observation: Awaited<ReturnType<typeof readPostSendObservation>>;
       try {
         observation = await readPostSendObservation(page, snapshot.text, baselineCount);
@@ -1662,6 +1832,25 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       if (Date.now() >= dispatchDeadline) {
         if (!hasOwnedUserMessage(messages, snapshot.text)) {
           if (sendCount >= 1) {
+            if (
+              targetChatUrl
+              && completionReadySeen
+              && !ownedPromptEverSeen
+              && hasPostSendTranscript(messages, baselineCount)
+            ) {
+              return returnOwnedConversationRenderMismatch(
+                page,
+                browser,
+                invocationId,
+                profileKey,
+                sendCount,
+                pollCount,
+                navigation,
+                incidents,
+                journalWriteFailed,
+                incident,
+              );
+            }
             if (!sendObservationDeferredLogged) {
               incident(
                 'send_observation_deferred',

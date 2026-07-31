@@ -160,6 +160,13 @@ export function conversationUuidFromUrl(value: string): string | undefined {
   return match?.[1]?.toLowerCase();
 }
 
+export function ownedConversationIdentityMatches(observedUrl: string, targetChatUrl: string): boolean {
+  const targetUuid = conversationUuidFromUrl(targetChatUrl);
+  const observedUuid = conversationUuidFromUrl(observedUrl);
+  if (targetUuid && observedUuid) return targetUuid === observedUuid;
+  return normalizeConversationUrl(observedUrl) === normalizeConversationUrl(targetChatUrl);
+}
+
 function stateLightFreshClaimsDir(profileKey: string): string {
   const dir = join(profileDirs(profileKey).root, 'state-light-fresh-claims');
   mkdirSync(dir, { recursive: true, mode: 0o700 });

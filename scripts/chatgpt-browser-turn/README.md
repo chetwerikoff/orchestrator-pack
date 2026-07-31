@@ -230,6 +230,12 @@ waiting for deadline exhaustion.
 ### Transcript read resilience
 
 Per-message transcript reads use short bounded per-node timeouts with one retry.
+Chat-url continuations verify conversation identity by UUID after navigation and on
+every post-send poll. A page URL whose `/c/<uuid>` does not match `--chat-url` surfaces
+`owned_conversation_identity_mismatch` instead of polling indefinitely. When the URL still
+matches but assistant completion is visible without the owned prompt after the dispatch
+window, the helper returns `owned_conversation_render_mismatch`.
+
 A failed node read marks the poll `transcriptIncomplete` instead of silently
 dropping that node from the transcript (which could otherwise yield false
 `owned_prompt_not_observed` on long chats or prevent stability convergence during
