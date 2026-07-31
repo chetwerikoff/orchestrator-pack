@@ -204,6 +204,49 @@ test('host rejects over-broad or inconsistent inspection node evidence', async (
   );
 });
 
+test('host rejects cross-field inconsistent inspection summary evidence', async () => {
+  const mutations: Array<(raw: any) => void> = [
+    (raw) => { raw.nodes[0].innerText.byte_length = 0; },
+    (raw) => { raw.nodes[0].innerText.sha256 = '0'.repeat(64); },
+    (raw) => { raw.nodes[0].attributes['data-message-author-role'] = 'user'; },
+    (raw) => { raw.nodes[0].attributes['data-message-id'] = 'other'; },
+    (raw) => { raw.last_assistant_text_byte_length = 0; },
+    (raw) => { raw.last_assistant_sha256 = '0'.repeat(64); },
+  ];
+  for (const mutate of mutations) {
+    const raw = await evaluateExpression(
+      INSPECTION_EXPRESSION,
+      [new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-1' })],
+    );
+    mutate(raw);
+    await assert.rejects(
+      runProbe(
+        { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
+        deps({ evaluate: async () => raw }),
+      ),
+      (error: any) => error.status === 'surface_unknown' && error.reason === 'malformed_snapshot',
+    );
+  }
+});
+
+test('host accepts internally consistent long bounded summary evidence', async () => {
+  const value = `${'😀'.repeat(170)}tail`;
+  const result = await runProbe(
+    { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
+    deps({
+      evaluate: async (_target, expression) => await evaluateExpression(
+        expression,
+        [new FakeNode('assistant', value, value, { 'data-message-id': 'a-1' })],
+      ),
+    }),
+  );
+  assert.equal(result.status, 'ok');
+  const snapshot = result.snapshot as any;
+  assert.equal(snapshot.nodes[0].innerText.code_point_length, 174);
+  assert.equal(Array.from(snapshot.nodes[0].innerText.head).length, 160);
+  assert.equal(Array.from(snapshot.nodes[0].innerText.tail).length, 160);
+});
+
 test('duplicate message IDs are not promoted to exact identities', async () => {
   const raw = await evaluateExpression(INSPECTION_EXPRESSION, [
     new FakeNode('assistant', 'one', 'one', { 'data-message-id': 'dup' }),
