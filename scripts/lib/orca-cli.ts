@@ -95,7 +95,7 @@ function requireStdout(result: ReturnType<typeof runProcessSync>): string {
 export function isOrcaSmokeControlPlaneCode(
   value: string | undefined,
 ): value is OrcaSmokeControlPlaneCode {
-  return (ORCA_SMOKE_CONTROL_PLANE_CODES as readonly string[]).includes(String(value ?? '').trim());
+  return (ORCA_SMOKE_CONTROL_PLANE_CODES as readonly string[]).includes(value ?? '');
 }
 
 export function resolveOrcaOperation(args: readonly string[]): OrcaOperationName | undefined {
@@ -209,7 +209,7 @@ export function runOrcaJson<T>(
     if (parsed.ok) {
       return { ...parsed, operation };
     }
-    const errorCode = parsed.error?.code?.trim();
+    const errorCode = parsed.error?.code;
     return {
       ...parsed,
       operation,
