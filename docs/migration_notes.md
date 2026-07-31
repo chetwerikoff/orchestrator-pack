@@ -4,7 +4,7 @@
 
 1. Pull the merged pack into the canonical operator checkout.
 2. Keep the existing Browser-GPT profile, CDP, and chat/project prerequisites from `docs/reviewer-switch-runbook.md`; no persistent `PACK_REVIEWER` change or AO restart is required for one invocation.
-3. Run `npm run pack-gpt-review -- --pr-number <PR_NUMBER>` from the repository root. Do not supply or cache a head SHA; the command resolves and validates the live `OPEN` PR head before Browser-GPT engagement.
+3. Run `npm run --silent pack-gpt-review -- --pr-number <PR_NUMBER>` from the repository root. The `--silent` flag is required so npm lifecycle banners do not contaminate the runner's single stdout JSON object. Do not supply or cache a head SHA; the command resolves and validates the live `OPEN` PR head before Browser-GPT engagement.
 4. Keep the command foregrounded. A newly admitted run emits one stderr start indication with PR, full head, run ID, and timeout, then returns the existing runner’s terminal JSON on stdout.
 5. Treat non-zero `review_not_started` as proof that this invocation did not execute GPT. Inspect `runnerReason`; do not force, clear, or bypass active/terminal same-head reuse or start-claim arbitration.
 6. Trust results only for the head bound by the runner. The existing post-review live-head guard and GitHub publication path remain authoritative.
@@ -694,8 +694,8 @@ issue-keyed after `prNumber` appears on the same session row.
 Autonomous orchestrator turns must deliver worker nudges only through
 `scripts/invoke-gated-worker-nudge.ps1`, which acquires the same
 `(PR, worker-cycle, intent-class, worker-target)` claim as deterministic reconcile scripts
-(#332 ci-green / review-send). Raw `ao send <worker>` from the autonomous surface is denied at
-the process boundary via `scripts/ao` when `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`.
+(#332 ci-green / review-send). Raw `ao send <worker>` from the autonomous surface is denied
+at the process boundary via `scripts/ao` when `AO_AUTONOMOUS_ORCHESTRATOR_SURFACE=1`.
 Transport uses `scripts/journaled-worker-send.ps1` with a single-use claim token
 (`worker-nudge-gate/v1`).
 
@@ -776,7 +776,7 @@ single-flight mutex) before reaching real AO.
    prose.
 
 Raw worker-send, raw review-run, mutating git, and `ao session kill` prose/process gates are
-unchanged.
+unchanged by this prerequisite.
 
 
 ## AO 0.10.x runnable ao spawn shape (Issue #589)
@@ -1352,7 +1352,9 @@ clears Signature A but then `agent: command not found` (Git Bash does not run
 
 **Mechanism (verified from plugin source).** In `@aoagents/ao-plugin-agent-cursor`
 `dist/index.js` `getLaunchCommand`, the **worker** path inlines the task prompt:
-`"$(cat <systemPromptFile>; printf '\n\n'; printf %s '<prompt>')"`. The
+`"$(cat <systemPromptFile>; printf '
+
+'; printf %s '<prompt>')"`. The
 **orchestrator** (and any session with no separate task prompt) takes the
 **cat-only** path `"$(cat <systemPromptFile>)"`, which survives because `cat` is
 a PowerShell alias for `Get-Content` while `printf` does not exist. So the
@@ -1378,7 +1380,9 @@ file and `cat` it instead of `printf`-inlining it — the exact shape proposed i
 tracked repo change (vendor package outside the repo) and is **lost on plugin
 reinstall/upgrade** (`npm i -g @aoagents/ao@…`). To re-apply after an upgrade:
 in `getLaunchCommand`, guard the `printf` line with `if (isWindows())`, and in the
-Windows branch write the prompt (`"\n\n" + config.prompt`) to
+Windows branch write the prompt (`"
+
+" + config.prompt`) to
 `join(tmpdir(), 'ao-worker-prompt-<sessionId>.txt')` and emit
 `"$(cat <systemPromptFile>; cat <thatFile>)"` (add `writeFileSync`/`tmpdir`
 imports). Verify with `node --check` and that the built command contains no
@@ -1468,7 +1472,7 @@ stays resident.
 
 **Ruled out for the instant-exit signature:** JediTerm env alone, prompt size,
 `unref` on pty-host stdio, cursor-plugin #2074 worker patch (orchestrator uses
-cat-only `$(cat <file>)`).
+cat-only launch).
 
 #### Do not repeat (operator checklist)
 
@@ -1507,10 +1511,10 @@ pwsh -NoProfile -File scripts/orchestrator-worktree-preflight.ps1 -Apply
 ao orchestrator ls --json
 ao session kill <orchestrator-session-id> -p orchestrator-pack
 ao session restore <orchestrator-session-id> -p orchestrator-pack
-pwsh -File scripts/wait-orchestrator-launch.ps1 -OrchestratorSessionId <orchestrator-session-id> -ProjectId orchestrator-pack
+pwsh -File scripts/wait-orchestrator-launch.ps1 -OrchestratorSessionId <id> -ProjectId orchestrator-pack
 ```
 
-**Legacy (native Windows only, retired):** `scripts/unlock-op-orchestrator-worktree.ps1`
+**Legacy (native Windows only, retired):** `scripts/unlock-op-orchestrator-worktree-preflight.ps1`
 was the Windows Handle-based helper — not supported on the Linux-only port; do
 not run it on Ubuntu/WSL2.
 
@@ -2389,12 +2393,12 @@ After merge, no daemon restart is required — supervisor children pick up scrip
 their next respawn. For documentation only:
 
 1. Read [`docs/phase0-audit-retention.md`](phase0-audit-retention.md) for default footprint
-   envelopes, state paths, and optional `GH_WRAPPER_AUDIT_*` / `GH_FLEET_CACHE_AUDIT_*`
-   override env vars.
+envelopes, state paths, and optional `GH_WRAPPER_AUDIT_*` / `GH_FLEET_CACHE_AUDIT_*`
+override env vars.
 2. Existing JSONL history remains readable; rotation only renames the active file to
-   timestamped segments and prunes by age/total footprint.
+timestamped segments and prunes by age/total footprint.
 3. Maintenance failures surface as `*-audit-retention:` or `write_failed` stderr lines and
-   never block wrapped `gh` calls or fleet cache populate paths.
+never block wrapped `gh` calls or fleet cache populate paths.
 
 No operator adoption required for live yaml — bounds are script defaults.
 
@@ -2704,4 +2708,3 @@ Record positive evidence in the PR or operator log before merge when available:
 2. **Production-path canonical `conversation_id`** — run one fresh-chat browser turn on the live profile, then `status/list` and confirm the promoted `conversation_id` matches the normalized URL for that chat and correlates to the submitted exchange.
 
 Until those live checks are recorded, treat AC5 as operator-pending; do not substitute additional unit fixtures.
-
