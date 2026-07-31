@@ -1402,6 +1402,16 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let completionReadySeen = false;
     let sendObservationDeferredLogged = false;
     let lastHeartbeatAt = startedAt;
+    const emitHeartbeatForPoll = (decision: PageObservationDecision): void => {
+      lastHeartbeatAt = maybeEmitObservationHeartbeat(
+        lastHeartbeatAt,
+        pollCount,
+        decision,
+        stableReads,
+        completionReadySeen,
+        decision.state === 'ready' && decision.reply ? decision.reply : (bestReadyReply || lastReadyReply),
+      );
+    };
 
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
     // landed and this invocation still owns a reachable page, #1120 requires us
@@ -1440,6 +1450,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           incident,
         );
         if (readErrorExhausted) return readErrorExhausted;
+        emitHeartbeatForPoll({ state: 'waiting' });
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
@@ -1469,14 +1480,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
       if (transcriptIncomplete) {
         incident('post_send_observation_error', 'transcript_read_incomplete', 'continue_polling_owned_page');
-        lastHeartbeatAt = maybeEmitObservationHeartbeat(
-          lastHeartbeatAt,
-          pollCount,
-          { state: 'waiting' },
-          stableReads,
-          completionReadySeen,
-          bestReadyReply || lastReadyReply,
-        );
         const incompleteExhausted = maybeReturnObservationExhausted(
           Date.now(),
           softDeadline,
@@ -1497,6 +1500,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           incident,
         );
         if (incompleteExhausted) return incompleteExhausted;
+        emitHeartbeatForPoll({ state: 'waiting' });
         await sleep(page, completionReadySeen ? COMPLETION_CONFIRM_POLL_MS : INITIAL_POLL_MS);
         continue;
       }
@@ -1555,6 +1559,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           incident,
         );
         if (uncertainWaitingExhausted) return uncertainWaitingExhausted;
+        emitHeartbeatForPoll(decision);
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
@@ -1638,6 +1643,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           incident,
         );
         if (readyExhausted) return readyExhausted;
+        emitHeartbeatForPoll(decision);
         await sleep(page, STABILITY_READ_DELAY_MS);
         continue;
       }
@@ -1648,6 +1654,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         bestReadyReply = '';
       }
       if (await maybeContinueGeneration(page)) {
+        emitHeartbeatForPoll(decision);
         await sleep(page, INITIAL_POLL_MS);
         continue;
       }
@@ -1725,14 +1732,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       );
       if (waitingExhausted) return waitingExhausted;
 
-      lastHeartbeatAt = maybeEmitObservationHeartbeat(
-        lastHeartbeatAt,
-        pollCount,
-        decision,
-        stableReads,
-        completionReadySeen,
-        decision.state === 'ready' && decision.reply ? decision.reply : (bestReadyReply || lastReadyReply),
-      );
+      emitHeartbeatForPoll(decision);
 
       const elapsed = Date.now() - startedAt;
       const delay = completionReadySeen

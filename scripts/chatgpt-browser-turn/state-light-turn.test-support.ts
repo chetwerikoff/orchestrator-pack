@@ -466,7 +466,12 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       expect(fakes[index]!.metrics.closes).toBe(1);
       expect(browserTuples[index]!.context.newPage).toHaveBeenCalledTimes(1);
     }
-    expect(writes).toHaveLength(3);
+    const turnResults = writes
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((row) => row.schema === 'turn-result/v1');
+    expect(turnResults).toHaveLength(3);
   });
 
   it('continues polling a reachable owned page past the soft timeout without resend', async () => {
@@ -1013,6 +1018,55 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       },
     });
     expect(fake.metrics.closes).toBe(1);
+  });
+
+  it('emits observation heartbeats during persistent uncertain polling', async () => {
+    const foreignA: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'FOREIGN-A' },
+        { role: 'assistant', text: 'partial' },
+      ],
+      generating: true,
+    };
+    const foreignB: StateLightTestSnapshot = {
+      messages: [
+        ...BASELINE,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'FOREIGN-B' },
+        { role: 'assistant', text: 'partial' },
+      ],
+      generating: true,
+    };
+    const oscillating = Array.from({ length: 40 }, (_, index) => (index % 2 === 0 ? foreignA : foreignB));
+    const fake = makePage(oscillating);
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      enqueueBrowserForTurn(mocks, fake.page);
+      const code = await runStateLightTurn([
+        ...STATE_LIGHT_TURN_BASE_ARGV,
+        '--output', '/tmp/reply.txt',
+        '--chat-url', 'https://chatgpt.com/c/existing',
+        '--timeout-ms', '5000',
+        '--poll-ms', '1',
+      ]);
+      expect(code).toBe(11);
+      const heartbeats = writes
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.schema === 'observation-heartbeat/v1');
+      expect(heartbeats.length).toBeGreaterThanOrEqual(2);
+      expect(heartbeats.some((row) => row.observation_state === 'uncertain')).toBe(true);
+      expect(heartbeats.every((row) => row.poll_count >= 2)).toBe(true);
+    } finally {
+      stdout.mockRestore();
+    }
   });
 
   it('stabilizes a long reply when successive reads differ only by render artifacts', async () => {
