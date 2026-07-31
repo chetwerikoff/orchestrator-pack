@@ -2093,11 +2093,11 @@ describe('worker smoke Orca control-plane classification (#1125)', () => {
     })).toEqual({ ok: false, reason: 'control_plane_diagnostic_evidence_noncanonical' });
     expect(core.normalizeSmokeControlPlaneDiagnostic({
       ...valid,
-      evidence: [`operation=${'x'.repeat(247)}`],
+      evidence: [`operation=${'x'.repeat(246)}`],
     })).not.toEqual({ ok: false, reason: 'control_plane_diagnostic_evidence_too_large' });
     expect(core.normalizeSmokeControlPlaneDiagnostic({
       ...valid,
-      evidence: [`operation=${'x'.repeat(248)}`],
+      evidence: [`operation=${'x'.repeat(247)}`],
     })).toEqual({ ok: false, reason: 'control_plane_diagnostic_evidence_too_large' });
     expect(core.normalizeSmokeControlPlaneDiagnostic({
       ...valid,
