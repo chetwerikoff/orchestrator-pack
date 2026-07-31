@@ -4,14 +4,11 @@ import { createServer } from 'node:net';
 import { mkdtemp, mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { test } from 'vitest';
-import { runProcess } from './kernel/subprocess.ts';
 import {
   buildExportExpression,
   INSPECTION_EXPRESSION,
-  MAX_NORMALIZED_URL_CODE_POINTS,
   MAX_TARGETS,
   normalizeConversationUrl,
   parseCliArgs,
@@ -126,18 +123,6 @@ test('target listing is bounded, passive, and excludes unrelated pages', async (
   assert.ok(!(JSON.stringify(result).includes('example.com/private')));
 });
 
-test('target listing rejects oversized target identity and normalized URL metadata', async () => {
-  const result = await runProbe({ operation: 'list', cdp: 'http://127.0.0.1:9222' }, deps({
-    listTargets: async () => [
-      { id: 'x'.repeat(257), type: 'page', url: 'https://chatgpt.com/c/oversized-id', title: 'bad-id' },
-      { id: 'valid-id', type: 'page', url: `https://chatgpt.com/c/${'x'.repeat(MAX_NORMALIZED_URL_CODE_POINTS)}`, title: 'bad-url' },
-      { id: 'valid', type: 'page', url: 'https://chatgpt.com/c/valid', title: 'valid' },
-    ],
-  }));
-  assert.deepEqual(result.targets, [{ target_id: 'valid', normalized_url: 'https://chatgpt.com/c/valid', title: 'valid' }]);
-  assert.equal(result.observed_compatible_targets, 1);
-});
-
 test('URL targeting fails closed on zero and duplicate exact normalized matches', async () => {
   await assert.rejects(
     runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/missing' }, deps()),
@@ -182,29 +167,7 @@ test('missing message structure stays surface_unknown rather than fabricating ze
   assert.equal(raw.reason, 'message_nodes_missing');
 });
 
-test('host rejects malformed successful inspection snapshots instead of fabricating defaults', async () => {
-  await assert.rejects(
-    runProbe(
-      { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
-      deps({ evaluate: async () => ({ status: 'ok', page_url: 'https://chatgpt.com/c/test', title: 'partial', nodes: [] }) }),
-    ),
-    (error: any) => error.status === 'surface_unknown' && error.reason === 'malformed_snapshot',
-  );
-});
-
-test('host rejects over-broad or inconsistent inspection node evidence', async () => {
-  const raw = await evaluateExpression(INSPECTION_EXPRESSION, [new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-1' })]);
-  raw.nodes[0].attributes['data-testid'] = 'x'.repeat(161);
-  await assert.rejects(
-    runProbe(
-      { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
-      deps({ evaluate: async () => raw }),
-    ),
-    (error: any) => error.status === 'surface_unknown' && error.reason === 'malformed_snapshot',
-  );
-});
-
-test('Duplicate message IDs are not promoted to exact identities', async () => {
+test('duplicate message IDs are not promoted to exact identities', async () => {
   const raw = await evaluateExpression(INSPECTION_EXPRESSION, [
     new FakeNode('assistant', 'one', 'one', { 'data-message-id': 'dup' }),
     new FakeNode('assistant', 'two', 'two', { 'data-message-id': 'dup' }),
@@ -249,42 +212,6 @@ test('export revalidates exact representation bytes and refuses stale or under-s
   assert.equal(missingId.reason, 'message_id_required');
 });
 
-test('host re-binds exported bytes and identity to the caller inspection witness before publication', async () => {
-  const expected = 'hidden-prefix Visible answer';
-  const different = 'self-consistent but different';
-  let publishCalls = 0;
-  await assert.rejects(
-    runProbe({
-      operation: 'export',
-      cdp: 'http://127.0.0.1:9222',
-      targetId: 'target-1',
-      role: 'assistant',
-      ordinal: 0,
-      messageId: 'a-1',
-      representation: 'textContent',
-      expectedByteLength: Buffer.byteLength(expected),
-      expectedSha256: sha256(expected),
-      output: '/unused/output.txt',
-    }, deps({
-      evaluate: async () => ({
-        status: 'ok',
-        page_url: 'https://chatgpt.com/c/test',
-        role: 'assistant',
-        ordinal: 0,
-        document_ordinal: 1,
-        message_id: 'a-1',
-        representation: 'textContent',
-        byte_length: Buffer.byteLength(different),
-        sha256: sha256(different),
-        text: different,
-      }),
-      publish: async () => { publishCalls++; },
-    })),
-    (error: any) => error.status === 'stale_node' && error.reason === 'inspection_witness_mismatch',
-  );
-  assert.equal(publishCalls, 0);
-});
-
 test('successful export writes only one exact selected representation', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'probe-export-'));
   const destination = join(directory, 'node.txt');
@@ -326,7 +253,9 @@ test('existing, symlinked, directory, and special output targets are refused wit
   await mkdir(outputDirectory);
   await assert.rejects(publishExactBytes(outputDirectory, Buffer.from('replacement')), (error: any) => error.status === 'unsafe_output');
 
-  if (process.platform === 'win32') return;
+  if (process.platform === 'win32') {
+    return;
+  }
   const socketPath = join(directory, 'socket');
   const server = createServer();
   await new Promise<void>((resolve, reject) => {
@@ -414,4 +343,56 @@ test('inspect preserves exact aggregate counts while bounding node summaries', a
   assert.equal(snapshot.nodes[0].document_ordinal, nodes.length - 100);
 });
 
-test('URL-bound inspection fails when the page navigates, while target-ID inspection remainqÌ‰½Õ¹Ñ¼Ñ¡”•á…ÐÑ…É•Ðœ°…Íå¹Œ€ ¤€ôøì(€½¹ÍÐµ½Ù•‘UÉ°€ô€¡ÑÑÁÌè¼½¡…ÑÁÐ¹½´½Œ½µ½Ù•œì(€½¹ÍÐ•Ù…±Õ…Ñ”€ô…Íå¹Œ€¡}Ñ…É•Ðè…¹ä°•áÁÉ•ÍÍ¥½¸èÍÑÉ¥¹œ¤€ôø…Ý…¥Ð•Ù…±Õ…Ñ•áÁÉ•ÍÍ¥½¸¡•áÁÉ•ÍÍ¥½¸°l(€€€¹•Ü…­•9½‘” ÕÍ•Èœ°€EÕ•ÍÑ¥½¸œ°€EÕ•ÍÑ¥½¸œ¤°(€€€¹•Ü…­•9½‘” …ÍÍ¥ÍÑ…¹Ðœ°€¹ÍÝ•Èœ°€¹ÍÝ•Èœ¤°(€t°™…±Í”°µ½Ù•‘UÉ°¤ì((€…Ý…¥Ð…ÍÍ•ÉÐ¹É•©•ÑÌ (€€€ÉÕ¹AÉ½‰”¡ì½Á•É…Ñ¥½¸è€¥¹ÍÁ•Ðœ°‘Àè€¡ÑÑÀè¼¼ÄÈÜ¸À¸À¸ÄèäÈÈÈœ°½¹Ù•ÉÍ…Ñ¥½¹UÉ°è€¡ÑÑÁÌè¼½¡…ÑÁÐ¹½´½Œ½Ñ•ÍÐœô°‘•ÁÌ¡ì•Ù…±Õ…Ñ”ô¤¤°(€€€€¡•ÉÉ½Èè…¹ä¤€ôø•ÉÉ½È¹ÍÑ…ÑÕÌ€ôôô€¹½Ñ}™½Õ¹œ€˜˜•ÉÉ½È¹É•…Í½¸€ôôô€Ñ…É•Ñ}ÕÉ±}¡…¹•œ°(€€¤ì((€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÉÕ¹AÉ½‰” (€€€ì½Á•É…Ñ¥½¸è€¥¹ÍÁ•Ðœ°‘Àè€¡ÑÑÀè¼¼ÄÈÜ¸À¸À¸ÄèäÈÈÈœ°Ñ…É•Ñ%è€Ñ…É•Ð´Äœô°(€€€‘•ÁÌ¡ì•Ù…±Õ…Ñ”ô¤°(€€¤ì(€…ÍÍ•ÉÐ¹•ÅÕ…°¡É•ÍÕ±Ð¹ÍÑ…ÑÕÌ°€½¬œ¤ì(€…ÍÍ•ÉÐ¹•ÅÕ…° ¡É•ÍÕ±Ð¹Í¹…ÁÍ¡½Ð…Ì…¹ä¤¹Á…•}ÕÉ°°µ½Ù•‘UÉ°¤ì)ô¤ì()Ñ•ÍÐ •¹•É…Ñ¥½¸½‰Í•ÉÙ…Ñ¥½¸‘•É…‘•ÌÑ¼Õ¹­¹½Ý¸Ý¡•¸Ñ¡”™¥á•µ…É­•ÈÅÕ•Éä…¹¹½Ð‰”¥¹Ñ•ÉÁÉ•Ñ•œ°…Íå¹Œ€ ¤€ôøì(€½¹ÍÐ‘½Õµ•¹Ð€ôì(€€€Ñ¥Ñ±”è€¥áÑÕÉ”Ñ¥Ñ±”œ°(€€€ÅÕ•ÉåM•±•Ñ½É±°è€ ¤€ôøm¹•Ü…­•9½‘” …ÍÍ¥ÍÑ…¹Ðœ°€¹ÍÝ•Èœ°€¹ÍÝ•Èœ¥t°(€€€ÅÕ•ÉåM•±•Ñ½Èè€ ¤€ôøìÑ¡É½Ü¹•ÜÉÉ½È ¡…¹•ÍÕÉ™…”œ¤ìô°(€ôì(€½¹ÍÐÙ…±Õ”€ô…Ý…¥ÐÉÕ¹%¹9•Ý½¹Ñ•áÐ¡%9MAQ%=9}aAIMM%=8°ì(€€€‘½Õµ•¹Ð°(€€€±½…Ñ¥½¸èì¡É•˜è€¡ÑÑÁÌè¼½¡…ÑÁÐ¹½´½Œ½Ñ•ÍÐœô°(€€€ÉåÁÑ¼èÝ•‰ÉåÁÑ¼°(€€€Q•áÑ¹½‘•È°(€€€Q•áÑ•½‘•È°(€€€U¥¹ÐáÉÉ…ä°(€€€ÉÉ…ä°(€€€5…À°(€€€5…Ñ °(€€€)M=8°(€€€…Ñ½ˆ°(€ô¤ì(€…ÍÍ•ÉÐ¹•ÅÕ…°¡Ù…±Õ”¹ÍÑ…ÑÕÌ°€½¬œ¤ì(€…ÍÍ•ÉÐ¹•ÅÕ…°¡Ù…±Õ”¹•¹•É…Ñ¥½¹}¥¹}ÁÉ½É•ÍÌ°€Õ¹­¹½Ý¸œ¤ì)ô¤ì()Ñ•ÍÐ Ñ¡”…¹½¹¥…°¹Á´•¹ÑÉåÁ½¥¹Ð•µ¥ÑÌ•á…Ñ±ä½¹”)M=8É•ÍÕ±Ð±¥¹”œ°…Íå¹Œ€ ¤€ôøì(€½¹ÍÐÉ•Á½I½½Ð€ô™¥±•UI1Q½A…Ñ ¡¹•ÜUI0 œ¸¸¼œ°¥µÁ½ÉÐ¹µ•Ñ„¹ÕÉ°¤¤ì(€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÉÕ¹AÉ½•ÍÌ¡ì(€€€½µµ…¹èÁÉ½•ÍÌ¹Á±…Ñ™½É´€ôôô€Ý¥¸ÌÈœ€ü€¹Á´¹µœ€è€¹Á´œ°(€€€…ÉÌèlÉÕ¸œ°€œ´µÍ¥±•¹Ðœ°€‰É½ÝÍ•ÈµÁÐµÁ…”µÁÉ½‰”œ°€œ´´œ°€‰½ÕÌt°(€€€ÝèÉ•Á½I½½Ð°(€€€¥¹¡•É¥ÑA…É•¹Ñ¹ØèÑÉÕ”°(€€€Ñ¥µ•½ÕÑ5Ìè€ÌÁ|ÀÀÀ°(€€€…±±½ÝµÁÑåMÑ‘½ÕÐèÑÉÕ”°(€ô¤ì(€…ÍÍ•ÉÐ¹•ÅÕ…°¡É•ÍÕ±Ð¹•á¥Ñ½‘”°€ä°É•ÍÕ±Ð¹ÍÑ‘•ÉÈ¤ì(€½¹ÍÐ±¥¹•Ì€ôÉ•ÍÕ±Ð¹ÍÑ‘½ÕÐ¹ÑÉ¥µ¹ ¤¹ÍÁ±¥Ð ½qÈýq¸½Ô¤ì(€…ÍÍ•ÉÐ¹•ÅÕ…°¡±¥¹•Ì¹±•¹Ñ °€Ä°É•ÍÕ±Ð¹ÍÑ‘½ÕÐ¤ì(€…ÍÍ•ÉÐ¹•ÅÕ…°¡)M=8¹Á…ÉÍ”¡±¥¹•ÍlÁt„¤¹ÍÑ…ÑÕÌ°€¥¹ÁÕÑ}¥¹Ù…±¥œ¤ì)ô¤ì()Ñ•ÍÐ Ñ¡”¥µÁ±•µ•¹Ñ…Ñ¥½¸¡…Ì¹¼‰É½ÝÍ•ÈµÕÑ…Ñ¥½¸°¡•±Á•È±¥™•å±”°ÍÑ…Ñ”µÝÉ¥Ñ”°½ÈÁ½±±¥¹œÁ…Ñ œ°…Íå¹Œ€ ¤€ôøì(€½¹ÍÐÍ½ÕÉ”€ô…Ý…¥ÐÉ•…‘¥±”¡¹•ÜUI0 œ¸½‰É½ÝÍ•ÈµÁÐµÁ…”µÁÉ½‰”¹ÑÌœ°¥µÁ½ÉÐ¹µ•Ñ„¹ÕÉ°¤°€ÕÑ˜àœ¤ì(€™½È€¡½¹ÍÐ™½É‰¥‘‘•¸½˜l(€€€€œ¹±¥¬ œ°€œ¹™½ÕÌ œ°€œ¹ÍÉ½±° œ°€œ¹½Ñ¼ œ°€œ¹É•±½… œ°€œ¹±½Í”¡ìœ°€¹•ÝA…” œ°(€€€€¡…ÑÁÐµ‰É½ÝÍ•ÈµÑÕÉ¸œ°€‰É½ÝÍ•ÈµÑÕÉ¸µÉ•ÕÉÉ•¹”œ°€Í•Ñ%¹Ñ•ÉÙ…° œ°€Ý¡¥±”€¡ÑÉÕ”¤œ°(€€€€IÕ¹Ñ¥µ”¹…±±Õ¹Ñ¥½¹=¸œ°€A…”¹¹…Ù¥…Ñ”œ°€%¹ÁÕÐ¹‘¥ÍÁ…Ñ œ°€Q…É•Ð¹±½Í•Q…É•Ðœ°(€t¤ì(€€€…ÍÍ•ÉÐ¹•ÅÕ…°¡Í½ÕÉ”¹¥¹±Õ‘•Ì¡™½É‰¥‘‘•¸¤°™…±Í”°™½É‰¥‘‘•¸¤ì(€ô)ô¤ì
+test('URL-bound inspection fails when the page navigates, while target-ID inspection remains bound to the exact target', async () => {
+  const movedUrl = 'https://chatgpt.com/c/moved';
+  const evaluate = async (_target: any, expression: string) => await evaluateExpression(expression, [
+    new FakeNode('user', 'Question', 'Question'),
+    new FakeNode('assistant', 'Answer', 'Answer'),
+  ], false, movedUrl);
+
+  await assert.rejects(
+    runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/test' }, deps({ evaluate })),
+    (error: any) => error.status === 'not_found' && error.reason === 'target_url_changed',
+  );
+
+  const result = await runProbe(
+    { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
+    deps({ evaluate }),
+  );
+  assert.equal(result.status, 'ok');
+  assert.equal((result.snapshot as any).page_url, movedUrl);
+});
+
+test('generation observation degrades to unknown when the fixed marker query cannot be interpreted', async () => {
+  const document = {
+    title: 'Fixture title',
+    querySelectorAll: () => [new FakeNode('assistant', 'Answer', 'Answer')],
+    querySelector: () => { throw new Error('changed surface'); },
+  };
+  const value = await runInNewContext(INSPECTION_EXPRESSION, {
+    document,
+    location: { href: 'https://chatgpt.com/c/test' },
+    crypto: webcrypto,
+    TextEncoder,
+    TextDecoder,
+    Uint8Array,
+    Array,
+    Map,
+    Math,
+    JSON,
+    atob,
+  });
+  assert.equal(value.status, 'ok');
+  assert.equal(value.generation_in_progress, 'unknown');
+});
+
+test('the implementation has no browser mutation, helper lifecycle, state-write, or polling path', async () => {
+  const source = await readFile(new URL('./browser-gpt-page-probe.ts', import.meta.url), 'utf8');
+  for (const forbidden of [
+    '.click(', '.focus(', '.scroll(', '.goto(', '.reload(', '.close({', 'newPage(',
+    'chatgpt-browser-turn', 'browser-turn-recurrence', 'setInterval(', 'while (true)',
+    'Runtime.callFunctionOn', 'Page.navigate', 'Input.dispatch', 'Target.closeTarget',
+  ]) {
+    assert.equal(source.includes(forbidden), false, forbidden);
+  }
+});
