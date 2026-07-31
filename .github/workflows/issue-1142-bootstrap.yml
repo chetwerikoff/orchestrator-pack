@@ -37,6 +37,15 @@ jobs:
           echo 'd0ffe445375db318b78aad76afe43f447abf698c19df1dba47aaf095e1b451c1  /tmp/issue1142-bootstrap.b64' | sha256sum -c -
           base64 -d /tmp/issue1142-bootstrap.b64 | gzip -d > /tmp/issue1142-bootstrap.py
           echo '9ec1a358c3cb49592e5055d9c5fc2cf6f12258a891604f7f262ca397ede56c92  /tmp/issue1142-bootstrap.py' | sha256sum -c -
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('/tmp/issue1142-bootstrap.py')
+          text = path.read_text()
+          redundant = "replace_once('.claude/skills/create-issue-draft/SKILL.md', 'tier/T3-critical classification', 'tier/within-T3 L4 classification')\n"
+          if text.count(redundant) != 1:
+              raise SystemExit('expected one redundant skill replacement')
+          path.write_text(text.replace(redundant, '', 1))
+          PY
           python /tmp/issue1142-bootstrap.py
       - name: Install dependencies
         run: npm ci --include=dev
