@@ -1,0 +1,151 @@
+ionUrl = values.get('--url');
+    if ((targetId ? 1 : 0) + (conversationUrl ? 1 : 0) !== 1) {
+      throw new ProbeError('input_invalid', 'exactly_one_page_selector_required');
+    }
+    if (targetId && !TARGET_ID_RE.test(targetId)) throw new ProbeError('input_invalid', 'invalid_target_id');
+    if (conversationUrl && !isConversationUrl(conversationUrl)) {
+      throw new ProbeError('input_invalid', 'invalid_conversation_url');
+    }
+    return { operation, cdp, ...(targetId ? { targetId } : {}), ...(conversationUrl ? { conversationUrl } : {}) };
+  }
+
+  requireOnly(values, [
+    '--cdp', '--target-id', '--role', '--ordinal', '--message-id', '--representation',
+    '--expected-byte-length', '--expected-sha256', '--output',
+  ]);
+  const targetId = required(values, '--target-id');
+  if (!TARGET_ID_RE.test(targetId)) throw new ProbeError('input_invalid', 'invalid_target_id');
+  const role = required(values, '--role');
+  if (role !== 'user' && role !== 'assistant') throw new ProbeError('input_invalid', 'invalid_role');
+  const representation = required(values, '--representation');
+  if (representation !== 'innerText' && representation !== 'textContent') {
+    throw new ProbeError('input_invalid', 'invalid_representation');
+  }
+  const expectedSha256 = required(values, '--expected-sha256').toLowerCase();
+  if (!SHA256_RE.test(expectedSha256)) throw new ProbeError('input_invalid', 'invalid_expected_sha256');
+  const messageId = values.get('--message-id');
+  if (messageId && !MESSAGE_ID_RE.test(messageId)) throw new ProbeError('input_invalid', 'invalid_message_id');
+  return {
+    operation,
+    cdp,
+    targetId,
+    role,
+    ordinal: parseNonNegativeInteger(required(values, '--ordinal'), '--ordinal'),
+    ...(messageId ? { messageId } : {}),
+    representation,
+    expectedByteLength: parseNonNegativeInteger(required(values, '--expected-byte-length'), '--expected-byte-length'),
+    expectedSha256,
+    output: required(values, '--output'),
+  };
+}
+
+function cdpBase(cdp: string): string {
+  const url = new URL(cdp);
+  url.hash = '';
+  url.search = '';
+  url.pathname = '';
+  return url.toString().replace(/\/$/u, '');
+}
+
+async function defaultListTargets(cdp: string): Promise<readonly CdpTarget[]> {
+  const response = await fetch(`${cdpBase(cdp)}/json/list`, {
+    signal: AbortSignal.timeout(CDP_REQUEST_TIMEOUT_MS),
+    headers: { accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`cdp_list_http_${response.status}`);
+  const value: unknown = await response.json();
+  if (!Array.isArray(value)) throw new Error('cdp_list_not_array');
+  return value as readonly CdpTarget[];
+}
+
+interface WebSocketLike {
+  addEventListener(type: string, listener: (event: { readonly data?: unknown }) => void, options?: { readonly once?: boolean }): void;
+  send(data: string): void;
+  close(): void;
+}
+
+interface WebSocketConstructorLike {
+  new(url: string): WebSocketLike;
+}
+
+async function defaultEvaluate(target: CompatibleTarget, expression: string): Promise<unknown> {
+  if (!target.web_socket_debugger_url) throw new Error('target_websocket_unavailable');
+  const WebSocketCtor = (globalThis as unknown as { WebSocket?: WebSocketConstructorLike }).WebSocket;
+  if (!WebSocketCtor) throw new Error('websocket_unavailable');
+  const socket = new WebSocketCtor(target.web_socket_debugger_url);
+  const commandId = 1;
+  return await new Promise<unknown>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => finishReject(new Error('cdp_evaluate_timeout')), CDP_REQUEST_TIMEOUT_MS);
+    const finishResolve = (value: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.close(); } catch { /* ignore */ }
+      resolve(value);
+    };
+    const finishReject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.close(); } catch { /* ignore */ }
+      reject(error);
+    };
+    socket.addEventListener('open', () => {
+      try {
+        socket.send(JSON.stringify({
+          id: commandId,
+          method: 'Runtime.evaluate',
+          params: {
+            expression,
+            returnByValue: true,
+            awaitPromise: true,
+            userGesture: false,
+          },
+        }));
+      } catch (error) {
+        finishReject(error instanceof Error ? error : new Error(String(error)));
+      }
+    }, { once: true });
+    socket.addEventListener('error', () => finishReject(new Error('cdp_websocket_error')), { once: true });
+    socket.addEventListener('close', () => {
+      if (!settled) finishReject(new Error('cdp_websocket_closed'));
+    }, { once: true });
+    socket.addEventListener('message', (event) => {
+      try {
+        const payload = JSON.parse(String(event.data)) as {
+          readonly id?: number;
+          readonly error?: { readonly message?: string };
+          readonly result?: {
+            readonly exceptionDetails?: { readonly text?: string };
+            readonly result?: { readonly value?: unknown };
+          };
+        };
+        if (payload.id !== commandId) return;
+        if (payload.error) return finishReject(new Error(payload.error.message ?? 'cdp_evaluate_error'));
+        if (payload.result?.exceptionDetails) {
+          return finishReject(new Error(payload.result.exceptionDetails.text ?? 'cdp_expression_exception'));
+        }
+        finishResolve(payload.result?.result?.value);
+      } catch (error) {
+        finishReject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  });
+}
+
+export interface PublishOperations {
+  readonly lstat: typeof lstat;
+  readonly open: typeof open;
+  readonly unlink: typeof unlink;
+}
+
+export const defaultPublishOperations: PublishOperations = { lstat, open, unlink };
+
+export async function publishExactBytes(
+  destination: string,
+  bytes: Uint8Array,
+  ops: PublishOperations = defaultPublishOperations,
+): Promise<void> {
+  const parent = dirname(destination);
+  let parentStat;

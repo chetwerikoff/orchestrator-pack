@@ -1,0 +1,152 @@
+t_assistant_text_byte_length)
+    || !isBoundedString(value.last_assistant_text_head, MAX_TEXT_CODE_POINTS)
+    || (value.last_assistant_sha256 !== null && !isSha256(value.last_assistant_sha256))) {
+    return malformedSurface();
+  }
+  if (value.observed_message_nodes !== value.observed_user_nodes + value.observed_assistant_nodes
+    || (value.nodes_truncated
+      ? value.nodes.length !== MAX_MESSAGE_SUMMARIES || value.observed_message_nodes <= value.nodes.length
+      : value.nodes.length !== value.observed_message_nodes)) {
+    return malformedSurface();
+  }
+  const nodeContext = {
+    observed_user_nodes: value.observed_user_nodes,
+    observed_assistant_nodes: value.observed_assistant_nodes,
+    observed_message_nodes: value.observed_message_nodes,
+  };
+  const nodes = value.nodes.map((node) => validateNodeSummary(node, nodeContext));
+  let previousDocumentOrdinal = -1;
+  const previousRoleOrdinal: Partial<Record<MessageRole, number>> = {};
+  for (const node of nodes) {
+    if (node.document_ordinal <= previousDocumentOrdinal) return malformedSurface();
+    previousDocumentOrdinal = node.document_ordinal;
+    const previous = previousRoleOrdinal[node.role];
+    if (previous !== undefined && node.ordinal !== previous + 1) return malformedSurface();
+    previousRoleOrdinal[node.role] = node.ordinal;
+  }
+  const lastHeadLength = Array.from(value.last_assistant_text_head).length;
+  if (lastHeadLength > Math.min(value.last_assistant_text_length, MAX_TEXT_CODE_POINTS)) return malformedSurface();
+  if (value.observed_assistant_nodes === 0) {
+    if (value.last_assistant_text_length !== 0
+      || value.last_assistant_text_byte_length !== 0
+      || value.last_assistant_text_head !== ''
+      || value.last_assistant_sha256 !== null) return malformedSurface();
+  } else if (value.last_assistant_sha256 === null) {
+    return malformedSurface();
+  }
+  return {
+    page_url: requireActualTargetIdentity(target, value.page_url, requireResolvedUrlMatch),
+    title: boundedCodePoints(value.title),
+    generation_in_progress: value.generation_in_progress,
+    observed_user_nodes: value.observed_user_nodes,
+    observed_assistant_nodes: value.observed_assistant_nodes,
+    observed_message_nodes: value.observed_message_nodes,
+    nodes,
+    nodes_truncated: value.nodes_truncated,
+    last_assistant_text_length: value.last_assistant_text_length,
+    last_assistant_text_byte_length: value.last_assistant_text_byte_length,
+    last_assistant_text_head: boundedCodePoints(value.last_assistant_text_head),
+    last_assistant_sha256: value.last_assistant_sha256,
+  };
+}
+
+export function toCompatibleTargets(targets: readonly CdpTarget[]): CompatibleTarget[] {
+  const compatible: CompatibleTarget[] = [];
+  for (const target of targets) {
+    if (target.type !== 'page'
+      || !target.id
+      || !TARGET_ID_RE.test(target.id)
+      || !target.url
+      || !isCompatibleChatGptUrl(target.url)) continue;
+    let normalized: string;
+    try {
+      normalized = normalizeConversationUrl(target.url);
+    } catch {
+      continue;
+    }
+    if (Array.from(normalized).length > MAX_NORMALIZED_URL_CODE_POINTS) continue;
+    compatible.push({
+      target_id: target.id,
+      normalized_url: normalized,
+      title: safeTitle(target.title),
+      ...(target.webSocketDebuggerUrl ? { web_socket_debugger_url: target.webSocketDebuggerUrl } : {}),
+    });
+  }
+  return compatible;
+}
+
+function baseEnvelope(operation: ProbeOperation, status: ProbeStatus): ProbeEnvelope {
+  return {
+    schema: PROBE_SCHEMA,
+    operation,
+    status,
+    diagnostic_only: true,
+    workflow_authority: 'none',
+  };
+}
+
+function parseOptionPairs(tokens: readonly string[]): ReadonlyMap<string, string> {
+  const values = new Map<string, string>();
+  for (let index = 0; index < tokens.length; index += 2) {
+    const key = tokens[index];
+    const value = tokens[index + 1];
+    if (!key?.startsWith('--') || value === undefined || value.startsWith('--')) {
+      throw new ProbeError('input_invalid', 'invalid_option_shape');
+    }
+    if (values.has(key)) throw new ProbeError('input_invalid', 'duplicate_option', key);
+    values.set(key, value);
+  }
+  return values;
+}
+
+function requireOnly(values: ReadonlyMap<string, string>, allowed: readonly string[]): void {
+  const set = new Set(allowed);
+  for (const key of values.keys()) {
+    if (!set.has(key) throw new ProbeError('input_invalid', 'unknown_option', key);
+  }
+}
+
+function required(values: ReadonlyMap<string, string>, key: string): string {
+  const value = values.get(key);
+  if (!value) throw new ProbeError('input_invalid', 'missing_option', key);
+  return value;
+}
+
+function parseNonNegativeInteger(value: string, key: string): number {
+  if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) throw new ProbeError('input_invalid', 'invalid_integer', key);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new ProbeError('input_invalid', 'invalid_integer', key);
+  return parsed;
+}
+
+function validateCdp(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ProbeError('input_invalid', 'invalid_cdp_url');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new ProbeError('input_invalid', 'invalid_cdp_url');
+  }
+  return value;
+}
+
+export function parseCliArgs(argv: readonly string[]): ParsedArgs {
+  const operation = argv[0];
+  if (operation !== 'list' && operation !== 'inspect' && operation !== 'export') {
+    throw new ProbeError('input_invalid', 'unknown_operation');
+  }
+  if ((argv.length - 1) % 2 !== 0) throw new ProbeError('input_invalid', 'invalid_option_shape');
+  const values = parseOptionPairs(argv.slice(1));
+  const cdp = validateCdp(required(values, '--cdp'));
+
+  if (operation === 'list') {
+    requireOnly(values, ['--cdp']);
+    return { operation, cdp };
+  }
+
+  if (operation === 'inspect') {
+    requireOnly(values, ['--cdp', '--target-id', '--url']);
+    const targetId = values.get('--target-id');
+    const conversation

@@ -1,0 +1,146 @@
+',
+  );
+  await assert.rejects(
+    runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/test' }, deps({
+      listTargets: async () => [
+        { id: 'a', type: 'page', url: 'https://chatgpt.com/c/test', webSocketDebuggerUrl: 'ws://a' },
+        { id: 'b', type: 'page', url: 'https://chatgpt.com/c/test?x=1', webSocketDebuggerUrl: 'ws://b' },
+      ],
+    })),
+    (error: any) => error.status === 'ambiguous',
+  );
+});
+
+test('inspection keeps innerText and textContent distinct and emits bounded witnesses', async () => {
+  const nodes = [
+    new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-1' }),
+    new FakeNode('assistant', 'Visible answer', 'hidden-prefix Visible answer', {
+      'data-message-id': 'a-1',
+      'data-testid': 'conversation-turn-2',
+      'data-ignored-secret': 'must-not-appear',
+    }),
+  ];
+  const raw = await evaluateExpression(INSPECTION_EXPRESSION, nodes, false);
+  assert.equal(raw.status, 'ok');
+  assert.equal(raw.generation_in_progress, false);
+  assert.equal(raw.observed_user_nodes, 1);
+  assert.equal(raw.observed_assistant_nodes, 1);
+  assert.notEqual(raw.nodes[1].innerText.byte_length, raw.nodes[1].textContent.byte_length);
+  assert.notEqual(raw.nodes[1].innerText.sha256, raw.nodes[1].textContent.sha256);
+  assert.equal(raw.nodes[1].message_id, 'a-1');
+  assert.equal(raw.nodes[1].attributes['data-message-id'], 'a-1');
+  assert.equal(raw.nodes[1].attributes['data-ignored-secret'], undefined);
+  assert.equal(raw.last_assistant_sha256, sha256('Visible answer'));
+});
+
+test('missing message structure stays surface_unknown rather than fabricating zero counts', async () => {
+  const raw = await evaluateExpression(INSPECTION_EXPRESSION, []);
+  assert.equal(raw.status, 'surface_unknown');
+  assert.equal(raw.reason, 'message_nodes_missing');
+});
+
+test('host rejects malformed successful inspection snapshots instead of fabricating defaults', async () => {
+  await assert.rejects(
+    runProbe(
+      { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
+      deps({ evaluate: async () => ({ status: 'ok', page_url: 'https://chatgpt.com/c/test', title: 'partial', nodes: [] }) }),
+    ),
+    (error: any) => error.status === 'surface_unknown' && error.reason === 'malformed_snapshot',
+  );
+});
+
+test('host rejects over-broad or inconsistent inspection node evidence', async () => {
+  const raw = await evaluateExpression(INSPECTION_EXPRESSION, [new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-1' })]);
+  raw.nodes[0].attributes['data-testid'] = 'x'.repeat(161);
+  await assert.rejects(
+    runProbe(
+      { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
+      deps({ evaluate: async () => raw }),
+    ),
+    (error: any) => error.status === 'surface_unknown' && error.reason === 'malformed_snapshot',
+  );
+});
+
+test('duplicate message IDs are not promoted to exact identities', async () => {
+  const raw = await evaluateExpression(INSPECTION_EXPRESSION, [
+    new FakeNode('assistant', 'one', 'one', { 'data-message-id': 'dup' }),
+    new FakeNode('assistant', 'two', 'two', { 'data-message-id': 'dup' }),
+  ]);
+  assert.equal(raw.nodes[0].message_id, null);
+  assert.equal(raw.nodes[0].message_id_unique, false);
+  assert.equal(raw.nodes[1].message_id, null);
+});
+
+test('export revalidates exact representation bytes and refuses stale or under-specified witnesses', async () => {
+  const nodes = [new FakeNode('assistant', 'Visible', 'hidden Visible', { 'data-message-id': 'a-1' })];
+  const exact = await evaluateExpression(buildExportExpression({
+    role: 'assistant',
+    ordinal: 0,
+    messageId: 'a-1',
+    representation: 'textContent',
+    expectedByteLength: Buffer.byteLength('hidden Visible'),
+    expectedSha256: sha256('hidden Visible'),
+  }), nodes);
+  assert.equal(exact.status, 'ok');
+  assert.equal(exact.text, 'hidden Visible');
+
+  const stale = await evaluateExpression(buildExportExpression({
+    role: 'assistant',
+    ordinal: 0,
+    messageId: 'a-1',
+    representation: 'textContent',
+    expectedByteLength: Buffer.byteLength('changed'),
+    expectedSha256: sha256('changed'),
+  }), nodes);
+  assert.equal(stale.status, 'stale_node');
+  assert.equal(stale.reason, 'representation_witness_mismatch');
+
+  const missingId = await evaluateExpression(buildExportExpression({
+    role: 'assistant',
+    ordinal: 0,
+    representation: 'innerText',
+    expectedByteLength: Buffer.byteLength('Visible'),
+    expectedSha256: sha256('Visible'),
+  }), nodes);
+  assert.equal(missingId.status, 'stale_node');
+  assert.equal(missingId.reason, 'message_id_required');
+});
+
+test('host re-binds exported bytes and identity to the caller inspection witness before publication', async () => {
+  const expected = 'hidden-prefix Visible answer';
+  const different = 'self-consistent but different';
+  let publishCalls = 0;
+  await assert.rejects(
+    runProbe({
+      operation: 'export',
+      cdp: 'http://127.0.0.1:9222',
+      targetId: 'target-1',
+      role: 'assistant',
+      ordinal: 0,
+      messageId: 'a-1',
+      representation: 'textContent',
+      expectedByteLength: Buffer.byteLength(expected),
+      expectedSha256: sha256(expected),
+      output: '/unused/output.txt',
+    }, deps({
+      evaluate: async () => ({
+        status: 'ok',
+        page_url: 'https://chatgpt.com/c/test',
+        role: 'assistant',
+        ordinal: 0,
+        document_ordinal: 1,
+        message_id: 'a-1',
+        representation: 'textContent',
+        byte_length: Buffer.byteLength(different),
+        sha256: sha256(different),
+        text: different,
+      }),
+      publish: async () => { publishCalls++; },
+    })),
+    (error: any) => error.status === 'stale_node' && error.reason === 'inspection_witness_mismatch',
+  );
+  assert.equal(publishCalls, 0);
+});
+
+test('successful export writes only one exact selected representation', async () => {
+  const directory = await mkdtemp(join(tmpdir
