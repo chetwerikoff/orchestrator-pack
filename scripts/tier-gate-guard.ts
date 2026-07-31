@@ -5,6 +5,7 @@
 import { readFileSync } from 'node:fs';
 import {
   checkTierGateGuard,
+  formatCaptureRevisionHeader,
   formatTierGatePassMessage,
   selectAuthoringReviewStages,
 } from './lib/tier-gate-core.ts';
@@ -23,6 +24,7 @@ interface CliOptions extends DraftTextGuardBaseOptions {
   skipLine: boolean;
   explicitAdversarialWrapper: boolean;
   emitStagesJson: boolean;
+  captureRevision: string | null;
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -32,6 +34,7 @@ function parseArgs(argv: string[]): CliOptions {
     skipLine: false,
     explicitAdversarialWrapper: false,
     emitStagesJson: false,
+    captureRevision: null,
   };
 
   parseDraftTextGuardArgv(argv, opts, (arg, args, index) => {
@@ -48,6 +51,9 @@ function parseArgs(argv: string[]): CliOptions {
       case '--emit-stages-json':
         opts.emitStagesJson = true;
         return 'handled';
+      case '--capture-revision':
+        opts.captureRevision = String(args[++index] ?? '');
+        return index;
       default:
         return 'unknown';
     }
@@ -66,8 +72,31 @@ export function runCli(argv: string[]): number {
     return 2;
   }
 
+  if (opts.captureRevision !== null) {
+    if (
+      opts.textPath
+      || opts.text !== null
+      || opts.draftPath
+      || opts.tier
+      || opts.skipLine
+      || opts.explicitAdversarialWrapper
+      || opts.emitStagesJson
+    ) {
+      process.stderr.write('tier-gate guard: --capture-revision cannot be combined with guard options\n');
+      return 2;
+    }
+    try {
+      process.stdout.write(formatCaptureRevisionHeader(opts.captureRevision));
+      return 0;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`tier-gate guard: ${message}\n`);
+      return 2;
+    }
+  }
+
   if (!opts.textPath && opts.text == null) {
-    process.stderr.write('tier-gate guard: --text-file <path> or --text <string> is required\n');
+    process.stderr.write('tier-gate guard: --text-file <path>, --text <string>, or --capture-revision <rNN> is required\n');
     return 2;
   }
 

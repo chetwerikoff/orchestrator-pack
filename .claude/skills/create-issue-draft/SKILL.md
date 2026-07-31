@@ -375,6 +375,25 @@ reviewer:
 Save every response verbatim before normalization. `architectural-review`
 findings use the same finding-disposition ledger; there is no second ledger.
 
+### Canonical capture producer
+
+The flow-manager, not the reviewer, writes the immutable revision binding as the
+first line of every new counted capture. Initialize the destination before
+launching the Browser-GPT or Claude stage:
+
+```bash
+ISSUE_REVISION=rNN
+CAPTURE="$REVIEW_DIR/pass-NN-<stage>.capture.txt"
+node scripts/tier-gate-guard.ts --capture-revision "$ISSUE_REVISION" > "$CAPTURE"
+# Append the exact terminal reviewer/Claude output verbatim to "$CAPTURE".
+```
+
+For Browser-GPT stages, redirect the canonical `chatgpt-browser-turn -- turn`
+stdout with `>> "$CAPTURE"`; for Claude, append the producing CLI's exact stdout.
+Never ask or trust the reviewer to echo `issue_revision`. The producer-owned
+header is deterministic `issue_revision: rNN` evidence used by the tier guard;
+new captures without it are malformed for correction chronology.
+
 ### Normalized #975 ledger facts
 
 Keep the existing stable row and only bounded row-local facts: persistent

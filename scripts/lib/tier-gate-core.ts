@@ -126,6 +126,19 @@ export interface LegacyDemotionRevalidationRecord {
   afterTier: Tier;
 }
 
+export interface RetiredDemotionFenceEvidence {
+  eventMatches: number;
+  invalidEventMatches: number;
+  revalidationMatches: number;
+  invalidRevalidationMatches: number;
+}
+
+export interface RetiredDemotionCaptureInspection {
+  events: LegacyDemotionEventRecord[];
+  revalidations: LegacyDemotionRevalidationRecord[];
+  fences: RetiredDemotionFenceEvidence;
+}
+
 export interface TierTransitionEvidence {
   taskIdentity: string;
   currentRevision: string;
@@ -143,6 +156,8 @@ export interface TierTransitionEvidence {
     captureText: string;
   }>;
   captures?: Array<{ captureName: string; captureText: string }>;
+  /** Presence and validity of every retired-protocol fence match, including parser failures. */
+  retiredDemotionFences?: RetiredDemotionFenceEvidence;
   /** Filesystem-loaded evidence only: whether the path uses the Issue-number authority. */
   canonicalIssueWorkdir?: boolean;
 }
@@ -329,18 +344,47 @@ function parseLegacyRevalidation(value: unknown): LegacyDemotionRevalidationReco
   };
 }
 
-function parseFencedRecords<T>(text: string, regex: RegExp, parser: (value: unknown) => T | null): T[] {
+interface ParsedFencedRecords<T> {
+  records: T[];
+  totalMatches: number;
+  invalidMatches: number;
+}
+
+function parseFencedRecords<T>(
+  text: string,
+  regex: RegExp,
+  parser: (value: unknown) => T | null,
+): ParsedFencedRecords<T> {
   regex.lastIndex = 0;
   const records: T[] = [];
+  let totalMatches = 0;
+  let invalidMatches = 0;
   for (let match = regex.exec(text); match; match = regex.exec(text)) {
+    totalMatches += 1;
     try {
       const record = parser(JSON.parse(match[1] ?? ''));
       if (record) records.push(record);
+      else invalidMatches += 1;
     } catch {
-      // Malformed legacy evidence is represented by a missing required record and fails closed.
+      invalidMatches += 1;
     }
   }
-  return records;
+  return { records, totalMatches, invalidMatches };
+}
+
+export function inspectRetiredDemotionCapture(text: string): RetiredDemotionCaptureInspection {
+  const events = parseFencedRecords(text, LEGACY_EVENT_RE, parseLegacyEvent);
+  const revalidations = parseFencedRecords(text, LEGACY_REVALIDATION_RE, parseLegacyRevalidation);
+  return {
+    events: events.records,
+    revalidations: revalidations.records,
+    fences: {
+      eventMatches: events.totalMatches,
+      invalidEventMatches: events.invalidMatches,
+      revalidationMatches: revalidations.totalMatches,
+      invalidRevalidationMatches: revalidations.invalidMatches,
+    },
+  };
 }
 
 export interface StageSelectionInput {
@@ -525,14 +569,23 @@ function loadTransitionEvidenceFromWorkdir(
   const events: TierTransitionEvidence['events'] = [];
   const revalidations: TierTransitionEvidence['revalidations'] = [];
   const captures: NonNullable<TierTransitionEvidence['captures']> = [];
+  const retiredDemotionFences: RetiredDemotionFenceEvidence = {
+    eventMatches: 0,
+    invalidEventMatches: 0,
+    revalidationMatches: 0,
+    invalidRevalidationMatches: 0,
+  };
   if (existsSync(layout.reviewDir)) {
     for (const captureName of readdirSync(layout.reviewDir).filter((name) => name.endsWith('.capture.txt')).sort()) {
       const captureText = readFileSync(join(layout.reviewDir, captureName), 'utf8');
       captures.push({ captureName, captureText });
-      events.push(...parseFencedRecords(captureText, LEGACY_EVENT_RE, parseLegacyEvent)
-        .map((record) => ({ record, captureName, captureText })));
-      revalidations.push(...parseFencedRecords(captureText, LEGACY_REVALIDATION_RE, parseLegacyRevalidation)
-        .map((record) => ({ record, captureName, captureText })));
+      const inspection = inspectRetiredDemotionCapture(captureText);
+      retiredDemotionFences.eventMatches += inspection.fences.eventMatches;
+      retiredDemotionFences.invalidEventMatches += inspection.fences.invalidEventMatches;
+      retiredDemotionFences.revalidationMatches += inspection.fences.revalidationMatches;
+      retiredDemotionFences.invalidRevalidationMatches += inspection.fences.invalidRevalidationMatches;
+      events.push(...inspection.events.map((record) => ({ record, captureName, captureText })));
+      revalidations.push(...inspection.revalidations.map((record) => ({ record, captureName, captureText })));
     }
   }
 
@@ -545,6 +598,7 @@ function loadTransitionEvidenceFromWorkdir(
       events,
       revalidations,
       captures,
+      retiredDemotionFences,
       canonicalIssueWorkdir: layout.canonicalIssueWorkdir,
     },
     errors,
@@ -599,6 +653,14 @@ function selectedCaptureKinds(tier: Tier): ReadonlySet<CanonicalCaptureKind> {
   return selected;
 }
 
+export function formatCaptureRevisionHeader(revision: string): string {
+  const normalized = revision.toLowerCase();
+  if (!REVISION_RE.test(normalized)) {
+    throw new Error(`invalid immutable Issue revision: ${revision || '<empty>'}`);
+  }
+  return `issue_revision: ${normalized}\n`;
+}
+
 function captureRevision(text: string): string | null {
   const candidates = [
     ...text.matchAll(/\bissue[_-]revision\s*:\s*(r\d+)\b/gi),
@@ -639,13 +701,30 @@ function correctionWindowClosedBefore(
   return firstCaptureIndex < targetRevisionIndex;
 }
 
+function resolvedRetiredDemotionFences(evidence: TierTransitionEvidence): RetiredDemotionFenceEvidence {
+  return evidence.retiredDemotionFences ?? {
+    eventMatches: evidence.events.length,
+    invalidEventMatches: 0,
+    revalidationMatches: evidence.revalidations.length,
+    invalidRevalidationMatches: 0,
+  };
+}
+
 function validateLegacyCompatibility(
   evidence: TierTransitionEvidence,
   currentIndex: number,
   errors: string[],
 ): void {
-  if (evidence.events.length !== 1 || evidence.revalidations.length !== 1) {
-    errors.push('tier compatibility: frozen identity requires exactly one completed event and revalidation');
+  const retired = resolvedRetiredDemotionFences(evidence);
+  if (
+    retired.eventMatches !== 1
+    || retired.revalidationMatches !== 1
+    || retired.invalidEventMatches !== 0
+    || retired.invalidRevalidationMatches !== 0
+    || evidence.events.length !== 1
+    || evidence.revalidations.length !== 1
+  ) {
+    errors.push('tier compatibility: frozen identity requires exactly one completed event and revalidation with no extra or malformed retired fences');
     return;
   }
   const event = evidence.events[0]?.record;
@@ -679,8 +758,14 @@ function validateFreshProgression(
   intake: TierIntakeRecord,
   errors: string[],
 ): void {
-  if (evidence.events.length > 0 || evidence.revalidations.length > 0) {
+  const retired = resolvedRetiredDemotionFences(evidence);
+  if (retired.eventMatches > 0 || retired.revalidationMatches > 0) {
     errors.push('tier correction: fresh progression cannot produce or consume retired demotion records');
+  }
+  for (const revision of evidence.revisions.slice(0, currentIndex + 1)) {
+    if (revision.receipt?.legacyL4Status) {
+      errors.push(`tier decision: fresh below-T3 receipt must emit l4Status not-applicable (${revision.revision})`);
+    }
   }
 
   const hasCorrectionAttempt = evidence.revisions.slice(0, currentIndex + 1).some((revision, index, revisions) => {
@@ -723,9 +808,6 @@ function validateFreshProgression(
     }
     if (!receipt?.reason || receipt.reason.trim() === '') {
       errors.push(`tier correction: non-empty reason is required (${current.revision})`);
-    }
-    if (receipt?.legacyL4Status) {
-      errors.push('tier correction: new below-T3 receipt must emit l4Status not-applicable');
     }
     if (correctionWindowClosedBefore(evidence, index, errors)) {
       errors.push('tier correction: first canonical reviewer capture already closed the Issue-bound window');

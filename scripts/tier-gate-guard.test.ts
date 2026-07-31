@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   PRE_1142_COMPLETED_DEMOTION_IDENTITIES,
   checkTierGateGuard,
+  inspectRetiredDemotionCapture,
   parseComplexityTierFence,
   parseDecisionReceipt,
   parseIntakeRecord,
@@ -82,6 +83,7 @@ function evidence(
     events: options.events ?? [],
     revalidations: options.revalidations ?? [],
     captures: options.captures ?? [],
+    retiredDemotionFences: options.retiredDemotionFences,
   };
 }
 
@@ -91,6 +93,37 @@ function run(text: string, transitionEvidence: TierTransitionEvidence, legacy: r
     transitionEvidence,
     completedLegacyDemotionIdentities: legacy,
   });
+}
+
+function captureHeader(revision: string): string {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+    stdout.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write);
+  const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => {
+    stderr.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write);
+  try {
+    expect(runCli(['node', 'tier-gate-guard.ts', '--capture-revision', revision])).toBe(0);
+    expect(stderr).toEqual([]);
+    return stdout.join('');
+  } finally {
+    stdoutSpy.mockRestore();
+    stderrSpy.mockRestore();
+  }
+}
+
+function retiredCaptureOptions(captureText: string, captureName = 'pass-01-architectural.capture.txt') {
+  const inspection = inspectRetiredDemotionCapture(captureText);
+  return {
+    events: inspection.events.map((record) => ({ record, captureName, captureText })),
+    revalidations: inspection.revalidations.map((record) => ({ record, captureName, captureText })),
+    retiredDemotionFences: inspection.fences,
+    captures: [{ captureName, captureText }],
+  };
 }
 
 function correction(
@@ -140,6 +173,29 @@ describe('Issue #1142 receipt parsing and L4 matrix', () => {
       expect(parseDecisionReceipt({ schema: 'tier-gate-decision/v1', producer: 'x', revision: 'r01', tier: 'T3', rubricClasses: ['failure-type:subsystem-or-system-guarantee'], l4Status: valid })?.l4Status).toBe(valid);
     }
     expect(parseDecisionReceipt({ schema: 'tier-gate-decision/v1', producer: 'x', revision: 'r01', tier: 'T3', rubricClasses: ['failure-type:subsystem-or-system-guarantee'], l4Status: 'not-applicable' })).toBeNull();
+  });
+
+  it('rejects legacy clear on every fresh below-T3 receipt while preserving parser compatibility', () => {
+    const first = draft('T2', 'T2');
+    const legacyFirst = parseDecisionReceipt({
+      schema: 'tier-gate-decision/v1', producer: 'cursor-flow-manager', revision: 'r01', tier: 'T2',
+      rubricClasses: ['failure-type:local-behavior'], l4Status: 'clear',
+    });
+    const firstErrors = run(first, evidence([
+      { revision: 'r01', text: first, tier: 'T2', receipt: legacyFirst },
+    ], { priorTier: 'T2' })).errors.join('\n');
+    expect(firstErrors).toContain('fresh below-T3 receipt must emit l4Status not-applicable');
+
+    const second = draft('T2', 'T2');
+    const legacySecond = parseDecisionReceipt({
+      schema: 'tier-gate-decision/v1', producer: 'cursor-flow-manager', revision: 'r02', tier: 'T2',
+      rubricClasses: ['failure-type:local-behavior'], l4Status: 'clear',
+    });
+    const secondErrors = run(second, evidence([
+      { revision: 'r01', text: first, tier: 'T2', receipt: receipt('r01', 'T2') },
+      { revision: 'r02', text: second, tier: 'T2', receipt: legacySecond },
+    ], { priorTier: 'T2' })).errors.join('\n');
+    expect(secondErrors).toContain('fresh below-T3 receipt must emit l4Status not-applicable');
   });
 
   it('keeps T1 and T2 on the same one-terminal-architectural review pipeline', () => {
@@ -202,9 +258,11 @@ describe('Issue #1142 free pre-capture adjacent correction', () => {
     expect(run(fixture.current, fixture.transitionEvidence).errors.join('\n')).toContain('already closed');
   });
 
-  it('accepts a capture bound to the corrected revision because the receipt existed first', () => {
+  it('produces a deterministic capture header and accepts it after the corrected receipt', () => {
+    const producedHeader = captureHeader('R02');
+    expect(producedHeader).toBe('issue_revision: r02\n');
     const fixture = correction('T3', 'T2', {
-      captures: [{ captureName: 'pass-01-architectural.capture.txt', captureText: 'issue_revision: r02\nNO_FINDINGS' }],
+      captures: [{ captureName: 'pass-01-architectural.capture.txt', captureText: `${producedHeader}NO_FINDINGS` }],
     });
     const result = run(fixture.current, fixture.transitionEvidence);
     expect(result.ok, result.errors.join('\n')).toBe(true);
@@ -334,6 +392,21 @@ describe('Issue #1142 free pre-capture adjacent correction', () => {
     ]);
     expect(run(current, transitionEvidence).errors.join('\n')).toContain('retired demotion fence fields');
   });
+
+  it('rejects malformed and former fresh-shape retired demotion capture output', () => {
+    const current = draft('T2', 'T2');
+    const samples = [
+      '```tier-demotion-event\n{not-json}\n```',
+      '```tier-demotion-event\n{"schema":"tier-demotion-event/v1","eventId":"new-1","kind":"new","sourceRevision":"r01","beforeTier":"T3","afterTier":"T2"}\n```',
+      '```tier-demotion-revalidation\n{broken-json}\n```',
+    ];
+    for (const captureText of samples) {
+      const transitionEvidence = evidence([
+        { revision: 'r01', text: current, tier: 'T2', receipt: receipt('r01', 'T2') },
+      ], { priorTier: 'T2', ...retiredCaptureOptions(captureText) });
+      expect(run(current, transitionEvidence).errors.join('\n')).toContain('retired demotion records');
+    }
+  });
 });
 
 describe('Issue #1142 frozen read-old/write-none compatibility', () => {
@@ -383,6 +456,24 @@ describe('Issue #1142 frozen read-old/write-none compatibility', () => {
 
     const later = legacyFixture(true);
     expect(run(later.current, later.transitionEvidence, [legacyIdentity]).errors.join('\n')).toContain('existing current lower-tier candidate');
+  });
+
+  it('rejects a valid compatibility chain with any appended malformed retired fence', () => {
+    const validEvent = '```tier-demotion-event\n{"schema":"tier-demotion-event/v1","eventId":"old-1","kind":"compatibility","sourceRevision":"r01","beforeTier":"T3","afterTier":"T2"}\n```';
+    const validRevalidation = '```tier-demotion-revalidation\n{"schema":"tier-demotion-revalidation/v1","eventId":"old-1","candidateRevision":"r02","beforeTier":"T3","afterTier":"T2"}\n```';
+    for (const malformed of [
+      '```tier-demotion-event\n{bad}\n```',
+      '```tier-demotion-revalidation\n{bad}\n```',
+    ]) {
+      const fixture = legacyFixture();
+      const captureText = `${validEvent}\n${validRevalidation}\n${malformed}`;
+      const parsed = retiredCaptureOptions(captureText, 'pass-01-architectural-lens.capture.txt');
+      fixture.transitionEvidence.events = parsed.events;
+      fixture.transitionEvidence.revalidations = parsed.revalidations;
+      fixture.transitionEvidence.retiredDemotionFences = parsed.retiredDemotionFences;
+      fixture.transitionEvidence.captures = parsed.captures;
+      expect(run(fixture.current, fixture.transitionEvidence, [legacyIdentity]).errors.join('\n')).toContain('no extra or malformed retired fences');
+    }
   });
 });
 
