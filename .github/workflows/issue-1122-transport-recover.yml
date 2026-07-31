@@ -42,7 +42,7 @@ jobs:
           package_path = Path('package.json')
           package = json.loads(package_path.read_text(encoding='utf-8'))
           scripts = package['scripts']
-          issue_test = 'npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/browser-gpt-page-probe.test.ts'
+          issue_test = 'npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/browser-gpt-page-probe.test.ts'
           probe_cli = 'npm run check:node-major --silent -- --quiet && node --experimental-strip-types scripts/browser-gpt-page-probe.ts'
           if 'test:issue-1122' in scripts or 'browser-gpt-page-probe' in scripts:
               raise SystemExit('Issue #1122 package registrations already exist unexpectedly')
