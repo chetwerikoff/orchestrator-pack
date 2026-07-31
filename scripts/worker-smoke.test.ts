@@ -292,7 +292,6 @@ describe('ready_for_review smoke and CI orthogonality', () => {
       ownedTerminalClosed: true,
     }).allowed).toBe(false);
 
-
     expect(findCurrentHeadSmokePass([{ body: passComment }], 7, headB)).toBeNull();
     vi.unstubAllEnvs();
   });
@@ -702,7 +701,6 @@ describe('worker smoke gh child env forwarding (#1101)', () => {
     expect(withAuth.stdout).not.toContain(authSentinel);
     expect(withAuth.stderr).not.toContain(authSentinel);
   });
-
 
   it('does not forward GH_REPO as an auth/config carrier', () => {
     const child = buildSmokeGhChildEnv({ GH_REPO: 'other/repo' } as NodeJS.ProcessEnv);
@@ -1142,7 +1140,7 @@ describe('worker smoke non-pass cause classification (#1101)', () => {
     expect(payload.report?.nonPassCause).toBe('zero_parsed_scenarios');
   });
 
-    it('still serializes canonical non-empty scenarios into the smoke-agent prompt', () => {
+  it('still serializes canonical non-empty scenarios into the smoke-agent prompt', () => {
     const markdown = readFixture('action-producing-with-plan.md');
     const plan = resolveSmokeRequirement(markdown);
     expect(plan.scenarios.length).toBeGreaterThan(0);
@@ -1203,7 +1201,6 @@ function writeCompletionBody(binding: { runId: string; artifactDir: string }, bo
 }
 
 describe('worker smoke child-wait completion contract (#1115)', () => {
-
   it('delivery-boot-delayed accepts sealed delivery after startup delay', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-delivery-boot-'));
     const binding = makeRunBinding(root);
@@ -1240,7 +1237,6 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     expect(observeSmokeDeliveryEstablished(binding)).toBe(true);
     rmSync(root, { recursive: true, force: true });
   });
-
 
   it('partial second seal file stays pending rather than duplicate', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-completion-partial-seal2-'));
@@ -1423,7 +1419,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     assertPtyInvariant(() => ({ childState: () => ({ idle: true }), deadlineMs: 200 }), { ok: false, cause: 'agent_idle_without_report' });
     assertPtyInvariant(() => ({ supervisedHandle: 'supervisor', supervisorHandle: 'supervisor' }), { ok: false, cause: 'agent_wait_self_handle' });
     assertPtyInvariant(() => ({ supervisedHandle: 'other' }), { ok: false, cause: 'agent_wait_unowned_handle' });
-    assertPtyInvariant((dir) => ({
+    assertPtyInvariant(() => ({
       runner: vi.fn(() => ({ stdout: JSON.stringify({ ok: false, error: { code: 'channel_control_unavailable', message: 'x' } }), stderr: '', status: 1 })),
     }), { ok: false, cause: 'channel_control_unavailable' });
 
@@ -1525,7 +1521,6 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-
   it('invalid seal without body digest stays pending until deadline', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-invalid-seal-'));
     const binding = makeRunBinding(root);
@@ -1619,7 +1614,6 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     })).toBe('agent_wait_unowned_handle');
   });
 
-
   it('delivery-definite-nondelivery-retry resends only after definite non-delivery', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-delivery-retry-'));
     const binding = makeRunBinding(root);
@@ -1708,7 +1702,6 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     expect(sendCalls).toBe(1);
     rmSync(root, { recursive: true, force: true });
   });
-
 
   it('delivery-bracketed-paste-stuck nudges composer submit until sealed delivery', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-delivery-paste-stuck-'));
@@ -1915,7 +1908,7 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
       now: () => now,
       sleepMs: (ms) => { now += ms; },
     });
-    void deliveryStartedAt;
+    void delivery;
     now = deliveryMs;
     writeDeliverySealed(binding);
     const waitStarted = now;
@@ -2222,5 +2215,407 @@ describe('worker smoke Orca control-plane classification (#1125)', () => {
       expect(probe.operation).toBe('worktree_current');
     }
     vi.unstubAllEnvs();
+  });
+});
+
+interface ReviewHarnessPayload {
+  nonPassCause?: string;
+  controlPlaneDiagnostic?: {
+    cause: string;
+    evidence: string[];
+    remediation: string;
+  };
+  report?: {
+    result: 'PASS' | 'FAIL' | 'BLOCKED';
+    issueNumber: number;
+    prNumber: number;
+    headSha: string;
+    scenarios: Array<{
+      action: string;
+      expected: string;
+      observed?: string;
+      outcome?: 'pass' | 'fail' | 'skipped' | 'blocked';
+    }>;
+    limitations: string[];
+    trackedFilesUnmodified: boolean;
+    terminalCleanup: string;
+    environmentNotes: string[];
+    nonPassCause?: string;
+    controlPlaneDiagnostic?: {
+      cause: string;
+      evidence: string[];
+      remediation: string;
+    };
+  };
+}
+
+function requireHarnessCommand(command: string, args: string[], cwd: string): string {
+  const result = runProcessSync({ command, args, cwd, inheritParentEnv: true });
+  if (!result.ok) {
+    throw new Error(`${command} ${args.join(' ')} failed: ${result.stderr || result.error}`);
+  }
+  return result.stdout.trim();
+}
+
+function withWorkerSmokeRunHarness(
+  scenario: string,
+  callback: (input: {
+    payload: ReviewHarnessPayload;
+    output: string;
+    operationLog: string;
+    headSha: string;
+  }) => void,
+  options: { missingExecutable?: boolean } = {},
+): void {
+  const root = mkdtempSync(join(tmpdir(), 'worker-smoke-run-1125-'));
+  const repoRoot = join(root, 'repo');
+  const fakeOrcaPath = join(root, 'fake-orca.mjs');
+  const operationLogPath = join(root, 'orca-operations.log');
+  const statePath = join(root, 'orca-state.json');
+  const sentinel = 'RAW_RUN_SENTINEL_1125';
+  mkdirSync(repoRoot, { recursive: true });
+  requireHarnessCommand('git', ['init'], repoRoot);
+  requireHarnessCommand('git', ['config', 'user.email', 'smoke@example.invalid'], repoRoot);
+  requireHarnessCommand('git', ['config', 'user.name', 'Smoke Harness'], repoRoot);
+  writeFileSync(join(repoRoot, 'marker.txt'), 'current head\n', 'utf8');
+  requireHarnessCommand('git', ['add', 'marker.txt'], repoRoot);
+  requireHarnessCommand('git', ['commit', '-m', 'fixture head'], repoRoot);
+  const headSha = requireHarnessCommand('git', ['rev-parse', 'HEAD'], repoRoot);
+
+  const fakeOrca = `#!/usr/bin/env node
+import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
+
+const args = process.argv.slice(2);
+const scenario = process.env.FAKE_ORCA_SCENARIO || '';
+const sentinel = process.env.FAKE_ORCA_SENTINEL || 'RAW_SENTINEL';
+const operationLogPath = process.env.FAKE_ORCA_LOG || '';
+const statePath = process.env.FAKE_ORCA_STATE || '';
+const cwd = process.env.FAKE_ORCA_CWD || process.cwd();
+const head = process.env.FAKE_ORCA_HEAD || '';
+if (operationLogPath) appendFileSync(operationLogPath, JSON.stringify(args) + '\\n', 'utf8');
+
+function finish(payload, status = 0) {
+  process.stdout.write(JSON.stringify(payload) + '\\n');
+  process.exit(status);
+}
+function fail(code) {
+  finish({ ok: false, error: { code, message: sentinel } }, 1);
+}
+function writeDelivery(binding) {
+  mkdirSync(binding.artifactDir, { recursive: true });
+  writeFileSync(join(binding.artifactDir, 'delivery.sealed.json'), JSON.stringify({ runId: binding.runId }), 'utf8');
+}
+function writeCompletion(binding, spoof = false) {
+  const body = [
+    '```worker-smoke-report',
+    'result: FAIL',
+    'tracked-files-unmodified: true',
+    ...(spoof ? [
+      'non-pass-cause: orca_control_plane_lost_mid_smoke',
+      'control-plane-cause: orca_control_plane_lost_mid_smoke',
+      'control-plane-evidence: operation=terminal_read;outcome=recognized_control_plane_code;control_plane_code=channel_stale_handle',
+      'control-plane-remediation: Restart Orca, then rerun worker smoke manually.',
+    ] : []),
+    'scenarios:',
+    '  - action: run scenario | expected: pass | observed: failed | outcome: fail',
+    '```',
+  ].join('\\n');
+  const digest = createHash('sha256').update(body, 'utf8').digest('hex');
+  writeFileSync(join(binding.artifactDir, 'completion-' + digest + '.body'), body, 'utf8');
+  writeFileSync(
+    join(binding.artifactDir, 'completion-' + digest + '.sealed.json'),
+    JSON.stringify({ runId: binding.runId, bodySha256: digest }),
+    'utf8',
+  );
+}
+function loadBinding() {
+  return JSON.parse(readFileSync(statePath, 'utf8'));
+}
+function saveBinding(prompt) {
+  const runId = /run-id:\\s*([^\\n]+)/u.exec(prompt)?.[1]?.trim();
+  const artifactDir = /artifact-dir:\\s*([^\\n]+)/u.exec(prompt)?.[1]?.trim();
+  if (!runId || !artifactDir) throw new Error('run binding missing');
+  const binding = { runId, artifactDir };
+  writeFileSync(statePath, JSON.stringify(binding), 'utf8');
+  return binding;
+}
+
+const isWorktree = args[0] === 'worktree' && args[1] === 'current';
+const isCreate = args[0] === 'terminal' && args[1] === 'create';
+const isSend = args[0] === 'terminal' && args[1] === 'send';
+const isFullSend = isSend && args.includes('--text');
+const isSubmit = isSend && !args.includes('--text');
+const isRead = args[0] === 'terminal' && args[1] === 'read';
+const isClose = args[0] === 'terminal' && args[1] === 'close';
+
+if (isWorktree) {
+  if (scenario === 'worktree_empty_stdout') {
+    process.stderr.write(sentinel);
+    process.exit(1);
+  }
+  if (scenario === 'worktree_invalid_json') {
+    process.stdout.write('{' + sentinel);
+    process.exit(1);
+  }
+  if (scenario === 'worktree_unsupported') fail('worktree_busy');
+  if (scenario === 'terminal_create_process_launch_failed') {
+    unlinkSync(process.argv[1]);
+  }
+  finish({ ok: true, result: { worktree: { path: cwd, head } } });
+}
+
+if (isCreate) {
+  if (scenario === 'terminal_create_empty_stdout') {
+    process.stderr.write(sentinel);
+    process.exit(1);
+  }
+  if (scenario === 'terminal_create_invalid_json') {
+    process.stdout.write('{' + sentinel);
+    process.exit(1);
+  }
+  if (scenario === 'terminal_create_unsupported') fail('terminal_busy');
+  finish({ ok: true, result: { terminal: { handle: 'owned-terminal' } } });
+}
+
+if (isFullSend) {
+  const prompt = args[args.indexOf('--text') + 1] || '';
+  const binding = saveBinding(prompt);
+  if (scenario === 'send_recognized') fail('channel_stale_handle');
+  if (scenario === 'send_unsupported') fail('terminal_busy');
+  if (scenario === 'read_recognized' || scenario === 'read_unsupported') {
+    writeDelivery(binding);
+  }
+  if (scenario === 'close_recognized' || scenario === 'close_unsupported' || scenario === 'child_spoof') {
+    writeDelivery(binding);
+    writeCompletion(binding, scenario === 'child_spoof');
+  }
+  finish({ ok: true, result: {} });
+}
+
+if (isRead) {
+  if (scenario === 'read_recognized') fail('channel_lookup_empty');
+  if (scenario === 'read_unsupported') {
+    const binding = loadBinding();
+    writeCompletion(binding);
+    fail('terminal_busy');
+  }
+  if (scenario === 'submit_recognized' || scenario === 'submit_unsupported') {
+    finish({ ok: true, result: { lines: ['[Pasted text #1 +1 lines]'] } });
+  }
+  finish({ ok: true, result: { lines: [] } });
+}
+
+if (isSubmit) {
+  if (scenario === 'submit_recognized') fail('channel_control_unavailable');
+  if (scenario === 'submit_unsupported') {
+    const binding = loadBinding();
+    writeDelivery(binding);
+    writeCompletion(binding);
+    fail('terminal_busy');
+  }
+  finish({ ok: true, result: {} });
+}
+
+if (isClose) {
+  if (scenario === 'close_recognized') fail('channel_control_overwritten');
+  if (scenario === 'close_unsupported') fail('terminal_busy');
+  finish({ ok: true, result: {} });
+}
+
+fail('unsupported_operation');
+`;
+  writeFileSync(fakeOrcaPath, fakeOrca, 'utf8');
+  requireHarnessCommand('chmod', ['+x', fakeOrcaPath], root);
+
+  try {
+    const executable = options.missingExecutable ? join(root, 'missing-orca') : fakeOrcaPath;
+    const result = runProcessSync({
+      command: process.execPath,
+      args: [
+        '--experimental-strip-types',
+        join(import.meta.dirname, 'worker-smoke-run.ts'),
+        'run',
+        '--issue', '1125',
+        '--pr', '1153',
+        '--head-sha', headSha,
+        '--issue-body-file', join(fixtureRoot, 'action-producing-with-plan.md'),
+        '--repo-root', repoRoot,
+        '--cwd', repoRoot,
+        '--dry-run',
+        '--json',
+      ],
+      cwd: repoRoot,
+      inheritParentEnv: true,
+      env: {
+        ORCA_CLI_COMMAND: executable,
+        FAKE_ORCA_SCENARIO: scenario,
+        FAKE_ORCA_SENTINEL: sentinel,
+        FAKE_ORCA_LOG: operationLogPath,
+        FAKE_ORCA_STATE: statePath,
+        FAKE_ORCA_CWD: repoRoot,
+        FAKE_ORCA_HEAD: headSha,
+        ORCA_TERMINAL_HANDLE: 'injected-terminal',
+        ORCA_WORKTREE_ID: 'injected-worktree',
+        ORCA_PANE_KEY: 'injected-pane',
+      },
+    });
+    const output = result.stdout.trim();
+    const lastLine = output.split(/\r?\n/u).at(-1) ?? '';
+    const payload = JSON.parse(lastLine) as ReviewHarnessPayload;
+    let operationLog = '';
+    try {
+      operationLog = readFileSync(operationLogPath, 'utf8');
+    } catch {
+      operationLog = '';
+    }
+    callback({ payload, output, operationLog, headSha });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe('worker smoke run-level control-plane regression matrix (#1125)', () => {
+  const rawSentinel = 'RAW_RUN_SENTINEL_1125';
+
+  it('classifies every pre-acquisition launch/empty/invalid surface without trusting injected ORCA state', () => {
+    const cases = [
+      ['worktree_process_launch_failed', 'worktree_current', 'process_launch_failed', true],
+      ['worktree_empty_stdout', 'worktree_current', 'empty_stdout', false],
+      ['worktree_invalid_json', 'worktree_current', 'invalid_json', false],
+      ['terminal_create_process_launch_failed', 'terminal_create', 'process_launch_failed', false],
+      ['terminal_create_empty_stdout', 'terminal_create', 'empty_stdout', false],
+      ['terminal_create_invalid_json', 'terminal_create', 'invalid_json', false],
+    ] as const;
+
+    for (const [scenario, operation, outcome, missingExecutable] of cases) {
+      withWorkerSmokeRunHarness(scenario, ({ payload, output, operationLog }) => {
+        expect(payload.nonPassCause).toBe('orca_control_plane_unavailable_preflight');
+        expect(payload.controlPlaneDiagnostic?.evidence).toEqual([
+          `operation=${operation}`,
+          `outcome=${outcome}`,
+        ]);
+        expect(payload.report?.controlPlaneDiagnostic).toEqual(payload.controlPlaneDiagnostic);
+        expect(output).not.toContain(rawSentinel);
+        expect(operationLog).not.toContain('"--text"');
+        if (operation === 'worktree_current') {
+          expect(operationLog).not.toContain('"create"');
+        }
+      }, { missingExecutable });
+    }
+  });
+
+  it('preserves recognized send/read/submit/close diagnostics through JSON, comment, and gate channels', () => {
+    const cases = [
+      ['send_recognized', 'terminal_send', 'channel_stale_handle'],
+      ['read_recognized', 'terminal_read', 'channel_lookup_empty'],
+      ['submit_recognized', 'terminal_submit', 'channel_control_unavailable'],
+      ['close_recognized', 'terminal_close', 'channel_control_overwritten'],
+    ] as const;
+
+    for (const [scenario, operation, code] of cases) {
+      withWorkerSmokeRunHarness(scenario, ({ payload, output, headSha }) => {
+        expect(payload.nonPassCause).toBe('orca_control_plane_lost_mid_smoke');
+        expect(payload.controlPlaneDiagnostic?.evidence).toEqual([
+          `operation=${operation}`,
+          'outcome=recognized_control_plane_code',
+          `control_plane_code=${code}`,
+        ]);
+        expect(payload.report?.controlPlaneDiagnostic).toEqual(payload.controlPlaneDiagnostic);
+        expect(output).not.toContain(rawSentinel);
+        if (scenario === 'close_recognized') {
+          expect(payload.report?.terminalCleanup).toBe('close_failed:channel_control_overwritten');
+        }
+
+        const comment = formatSmokeReportComment(payload.report as never);
+        expect(comment).not.toContain(rawSentinel);
+        const extracted = extractSmokeReportsFromComments([{ body: comment }]);
+        expect(extracted[0]?.controlPlaneDiagnostic).toEqual(payload.controlPlaneDiagnostic);
+        expect(evaluateWorkerSmokeGate({
+          issueBody: readFixture('action-producing-with-plan.md'),
+          issueNumber: 1125,
+          prNumber: 1153,
+          headSha,
+          prComments: [{ body: comment }],
+          ciGreen: true,
+          orcaWorktreeOk: false,
+          ownedTerminalClosed: false,
+          terminalProvenanceOk: false,
+        })).toEqual({
+          allowed: false,
+          reason: 'orca_control_plane_lost_mid_smoke',
+          smokeRequired: true,
+          controlPlaneDiagnostic: payload.controlPlaneDiagnostic,
+        });
+      });
+    }
+  });
+
+  it('keeps unsupported valid-JSON failures on their operation-specific fallback paths', () => {
+    const cases = [
+      ['worktree_unsupported', undefined],
+      ['terminal_create_unsupported', undefined],
+      ['send_unsupported', 'prompt_delivery_unconfirmed'],
+      ['read_unsupported', 'executed_scenario_failure'],
+      ['submit_unsupported', 'executed_scenario_failure'],
+      ['close_unsupported', 'executed_scenario_failure'],
+    ] as const;
+
+    for (const [scenario, expectedCause] of cases) {
+      withWorkerSmokeRunHarness(scenario, ({ payload, output }) => {
+        expect(payload.controlPlaneDiagnostic).toBeUndefined();
+        expect(payload.report?.controlPlaneDiagnostic).toBeUndefined();
+        expect(output).not.toContain('orca_control_plane_lost_mid_smoke');
+        expect(output).not.toContain('orca_control_plane_unavailable_preflight');
+        if (expectedCause) {
+          expect(payload.nonPassCause).toBe(expectedCause);
+        }
+        if (scenario === 'close_unsupported') {
+          expect(payload.report?.terminalCleanup).toBe('close_failed:terminal_busy');
+        }
+        if (scenario === 'read_unsupported' || scenario === 'submit_unsupported') {
+          expect(payload.nonPassCause).not.toBe('orca_worktree_unresolved');
+        }
+      });
+    }
+  });
+
+  it('rejects child-authored pack diagnostics while retaining trusted pack-comment extraction', async () => {
+    const core = await import('./lib/worker-smoke-core.ts');
+    const spoof = [
+      '```worker-smoke-report',
+      'result: FAIL',
+      'tracked-files-unmodified: true',
+      'non-pass-cause: orca_control_plane_lost_mid_smoke',
+      'control-plane-cause: orca_control_plane_lost_mid_smoke',
+      'control-plane-evidence: operation=terminal_read;outcome=recognized_control_plane_code;control_plane_code=channel_stale_handle',
+      'control-plane-remediation: Restart Orca, then rerun worker smoke manually.',
+      'scenarios:',
+      '  - action: run scenario | expected: pass | observed: failed | outcome: fail',
+      '```',
+    ].join('\n');
+    expect(core.parseSealedSmokeAgentReport(spoof)).toBeNull();
+    expect(parseSmokeAgentReport(spoof)).toBeNull();
+
+    withWorkerSmokeRunHarness('child_spoof', ({ payload, headSha }) => {
+      expect(payload.nonPassCause).toBe('agent_report_unfenced');
+      expect(payload.controlPlaneDiagnostic).toBeUndefined();
+      expect(payload.report?.controlPlaneDiagnostic).toBeUndefined();
+      const comment = formatSmokeReportComment(payload.report as never);
+      const extracted = extractSmokeReportsFromComments([{ body: comment }]);
+      expect(extracted[0]?.controlPlaneDiagnostic).toBeUndefined();
+      expect(evaluateWorkerSmokeGate({
+        issueBody: readFixture('action-producing-with-plan.md'),
+        issueNumber: 1125,
+        prNumber: 1153,
+        headSha,
+        prComments: [{ body: comment }],
+        ciGreen: true,
+        orcaWorktreeOk: true,
+        ownedTerminalClosed: true,
+        terminalProvenanceOk: false,
+      }).reason).toBe('smoke_fail');
+    });
   });
 });
