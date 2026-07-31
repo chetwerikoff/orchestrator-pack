@@ -209,16 +209,9 @@ export function runOrcaJson<T>(
     if (parsed.ok) {
       return { ...parsed, operation };
     }
-    const errorCode = parsed.error?.code;
-    const recognizedControlPlaneCode = isOrcaSmokeControlPlaneCode(errorCode);
-    const nonCanonicalControlPlaneLookalike = !recognizedControlPlaneCode
-      && typeof errorCode === 'string'
-      && isOrcaSmokeControlPlaneCode(errorCode.trim());
+    const recognizedControlPlaneCode = isOrcaSmokeControlPlaneCode(parsed.error?.code);
     return {
       ...parsed,
-      ...(nonCanonicalControlPlaneLookalike
-        ? { error: { ...parsed.error, code: undefined } }
-        : {}),
       operation,
       outcomeCategory: recognizedControlPlaneCode
         ? 'recognized_control_plane_code'
