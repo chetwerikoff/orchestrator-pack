@@ -267,12 +267,22 @@ function validateTextSummary(value: unknown): TextSummary {
     || !isBoundedString(value.tail, MAX_TEXT_CODE_POINTS)) {
     return malformedSurface();
   }
+  const expectedBoundedLength = Math.min(value.code_point_length, MAX_TEXT_CODE_POINTS);
   const headLength = Array.from(value.head).length;
   const tailLength = Array.from(value.tail).length;
-  if (headLength > Math.min(value.code_point_length, MAX_TEXT_CODE_POINTS)
-    || tailLength > Math.min(value.code_point_length, MAX_TEXT_CODE_POINTS)
-    || (value.code_point_length <= MAX_TEXT_CODE_POINTS && value.head !== value.tail)) {
+  if (headLength !== expectedBoundedLength
+    || tailLength !== expectedBoundedLength
+    || value.byte_length < value.code_point_length
+    || value.byte_length > value.code_point_length * 4) {
     return malformedSurface();
+  }
+  if (value.code_point_length <= MAX_TEXT_CODE_POINTS) {
+    const bytes = Buffer.from(value.head, 'utf8');
+    if (value.head !== value.tail
+      || bytes.byteLength !== value.byte_length
+      || hashBytes(bytes) !== value.sha256) {
+      return malformedSurface();
+    }
   }
   return {
     byte_length: value.byte_length,
@@ -315,13 +325,19 @@ function validateNodeSummary(value: unknown, snapshot: {
     || value.ordinal >= (value.role === 'user' ? snapshot.observed_user_nodes : snapshot.observed_assistant_nodes)) {
     return malformedSurface();
   }
+  const attributes = validateAttributes(value.attributes);
+  if (attributes['data-message-author-role'] !== value.role
+    || (value.message_id !== null
+      && attributes['data-message-id'] !== boundedCodePoints(value.message_id))) {
+    return malformedSurface();
+  }
   return {
     role: value.role,
     ordinal: value.ordinal,
     document_ordinal: value.document_ordinal,
     message_id: value.message_id,
     message_id_unique: value.message_id_unique,
-    attributes: validateAttributes(value.attributes),
+    attributes,
     innerText: validateTextSummary(value.innerText),
     textContent: validateTextSummary(value.textContent),
   };
@@ -374,15 +390,27 @@ function validateInspectionSnapshot(
     if (previous !== undefined && node.ordinal !== previous + 1) return malformedSurface();
     previousRoleOrdinal[node.role] = node.ordinal;
   }
-  const lastHeadLength = Array.from(value.last_assistant_text_head).length;
-  if (lastHeadLength > Math.min(value.last_assistant_text_length, MAX_TEXT_CODE_POINTS)) return malformedSurface();
   if (value.observed_assistant_nodes === 0) {
     if (value.last_assistant_text_length !== 0
       || value.last_assistant_text_byte_length !== 0
       || value.last_assistant_text_head !== ''
       || value.last_assistant_sha256 !== null) return malformedSurface();
-  } else if (value.last_assistant_sha256 === null) {
-    return malformedSurface();
+  } else {
+    if (value.last_assistant_sha256 === null) return malformedSurface();
+    const expectedHeadLength = Math.min(value.last_assistant_text_length, MAX_TEXT_CODE_POINTS);
+    const lastHeadLength = Array.from(value.last_assistant_text_head).length;
+    if (lastHeadLength !== expectedHeadLength
+      || value.last_assistant_text_byte_length < value.last_assistant_text_length
+      || value.last_assistant_text_byte_length > value.last_assistant_text_length * 4) {
+      return malformedSurface();
+    }
+    if (value.last_assistant_text_length <= MAX_TEXT_CODE_POINTS) {
+      const lastBytes = Buffer.from(value.last_assistant_text_head, 'utf8');
+      if (lastBytes.byteLength !== value.last_assistant_text_byte_length
+        || hashBytes(lastBytes) !== value.last_assistant_sha256) {
+        return malformedSurface();
+      }
+    }
   }
   return {
     page_url: requireActualTargetIdentity(target, value.page_url, requireResolvedUrlMatch),
