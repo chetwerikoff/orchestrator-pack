@@ -49,7 +49,7 @@ export function packGptReviewUsage(): string {
     'Canonical Browser-GPT pack review (Issue #1111)',
     '',
     'Usage:',
-    '  npm run pack-gpt-review -- --pr-number <n> [--timeout-seconds <n>]',
+    '  npm run --silent pack-gpt-review -- --pr-number <n> [--timeout-seconds <n>]',
     '',
     'The command resolves the live OPEN PR head, binds GPT for this invocation,',
     'stays foregrounded until the existing pack-review runner returns, and leaves',
