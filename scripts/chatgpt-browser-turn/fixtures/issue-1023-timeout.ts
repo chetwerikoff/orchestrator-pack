@@ -1,3 +1,4 @@
+import { COMPOSER_SELECTOR, SEND_BUTTON_SELECTOR } from '../product-page-selectors.ts';
 import type { FakeTurnPageOptions } from './fake-turn-page.ts';
 
 export interface DelayedComposerOptions extends FakeTurnPageOptions {
@@ -20,7 +21,7 @@ export function delayedComposerFakePage(options: DelayedComposerOptions = {}) {
     on: () => {},
     url: () => 'https://chatgpt.com/c/example',
     locator: (selector: string) => {
-      if (selector === '#prompt-textarea') {
+      if (selector === COMPOSER_SELECTOR) {
         return {
           count: async () => (base.composer ?? true) ? 1 : 0,
           click: async (options?: { timeout?: number }) => {
@@ -61,7 +62,7 @@ export function delayedComposerFakePage(options: DelayedComposerOptions = {}) {
           },
         };
       }
-      if (selector === '[data-testid="send-button"]') {
+      if (selector === SEND_BUTTON_SELECTOR) {
         return { count: async () => 1, click: async () => {} };
       }
       return { count: async () => 0, nth: () => ({ count: async () => 0 }) };
@@ -89,7 +90,7 @@ export function neverSettlingCountPage(): { page: any } {
   const page = {
     __fakeTurnPage: true,
     locator: (selector: string) => {
-      if (selector === '#prompt-textarea') {
+      if (selector === COMPOSER_SELECTOR) {
         return {
           count: () => new Promise<number>(() => {}),
         };

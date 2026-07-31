@@ -1,4 +1,12 @@
+import type { TurnResultV1 } from './contracts.ts';
 import { vi } from 'vitest';
+
+import {
+  ASSISTANT_TURN_ANCESTOR_XPATH,
+  matchesAssistantTurnActionSelector,
+  matchesAssistantTurnInProgressSelector,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+} from './product-page-selectors.ts';
 
 export function scalarLocator(overrides: Record<string, unknown> = {}) {
   const turnActionButtons = overrides.turnActionButtons === true;
@@ -7,11 +15,7 @@ export function scalarLocator(overrides: Record<string, unknown> = {}) {
     first: vi.fn(function first() { return locator; }),
     nth: vi.fn(() => locator),
     locator: vi.fn((selector: string) => {
-      if (turnActionButtons && (
-        selector.includes('copy-turn-action-button')
-        || selector.includes('good-response-turn-action-button')
-        || selector.includes('bad-response-turn-action-button')
-      )) {
+      if (turnActionButtons && matchesAssistantTurnActionSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 1) });
       }
       return scalarLocator();
@@ -22,6 +26,7 @@ export function scalarLocator(overrides: Record<string, unknown> = {}) {
     innerText: vi.fn(async () => ''),
     textContent: vi.fn(async () => ''),
     getAttribute: vi.fn(async () => null),
+    or: vi.fn(function or() { return locator; }),
     ...overrides,
   };
   return locator;
@@ -30,6 +35,8 @@ export function scalarLocator(overrides: Record<string, unknown> = {}) {
 export type StateLightTestMessage = {
   role: 'user' | 'assistant';
   text: string;
+  /** When set, textContent() returns this while innerText() returns `text` (sr-only delta). */
+  domTextContent?: string;
   finalAction?: boolean;
   finalActionInTurnContainer?: boolean;
   inProgress?: boolean;
@@ -45,31 +52,27 @@ export function messageLocator(message: StateLightTestMessage, generating = fals
   return scalarLocator({
     count: vi.fn(async () => 1),
     getAttribute: vi.fn(async (name: string) => {
-      if (name === 'data-message-author-role') return message.role;
+      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role;
       if (name === 'data-is-streaming') return generating ? 'true' : null;
       if (name === 'aria-busy') return null;
       return null;
     }),
     locator: vi.fn((selector: string) => {
-      if (selector.startsWith('xpath=') || selector.includes('conversation-turn-')) {
+      if (selector.startsWith('xpath=') || selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.includes('conversation-turn-')) {
         if (!message.finalActionInTurnContainer) return scalarLocator({ count: vi.fn(async () => 0) });
         return scalarLocator({ turnActionButtons: true, count: vi.fn(async () => 1) });
       }
       if (message.role !== 'assistant') return scalarLocator();
-      if (message.finalAction && !message.finalActionInTurnContainer && selector.includes('copy-turn-action-button')) {
+      if (message.finalAction && !message.finalActionInTurnContainer && matchesAssistantTurnActionSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 1) });
       }
-      if (message.inProgress && (
-        selector.includes('[aria-busy="true"]')
-        || selector.includes('[data-is-streaming="true"]')
-        || selector.includes('[data-testid*="tool"]')
-      )) {
+      if (message.inProgress && matchesAssistantTurnInProgressSelector(selector)) {
         return scalarLocator({ count: vi.fn(async () => 1) });
       }
       return scalarLocator();
     }),
     innerText: vi.fn(async () => message.text),
-    textContent: vi.fn(async () => message.text),
+    textContent: vi.fn(async () => message.domTextContent ?? message.text),
   });
 }
 
@@ -183,10 +186,21 @@ export function enqueueBrowserForTurn(mocks: { browserQueue: any[] }, page: any)
   return harness;
 }
 
+export type CapturedStateLightTurnResult = TurnResultV1 & {
+  send_count?: number;
+  poll_count?: number;
+  goto_count?: number;
+  new_chat_click_count?: number;
+  navigation_count?: number;
+  cleanup?: string;
+  incidents?: string[];
+  journal_write_failed?: boolean;
+};
+
 export async function runStateLightTurnWithStdoutCapture(
   runTurn: (args: string[]) => Promise<number>,
   argv: string[],
-): Promise<{ code: number; result: Record<string, unknown> }> {
+): Promise<{ code: number; result: CapturedStateLightTurnResult }> {
   const writes: string[] = [];
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
     writes.push(String(chunk));
@@ -194,7 +208,10 @@ export async function runStateLightTurnWithStdoutCapture(
   }) as typeof process.stdout.write);
   try {
     const code = await runTurn(argv);
-    return { code, result: JSON.parse(writes.at(-1) ?? '{}') };
+    return {
+      code,
+      result: JSON.parse(writes.at(-1) ?? '{}') as CapturedStateLightTurnResult,
+    };
   } finally {
     stdout.mockRestore();
   }

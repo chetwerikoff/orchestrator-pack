@@ -18,6 +18,7 @@ export const TURN_STATES = [
   'orphaned_fresh_turn',
   'ui_contract_mismatch',
   'foreign_activity',
+  'observation_uncertain',
   'output_conflict',
   'conversation_busy',
   'profile_busy',
@@ -110,6 +111,19 @@ export interface TurnResultV1 {
   driver_diagnostic_id?: string;
   output?: { byte_length: number; sha256: string };
   witness?: CausalWitnessV1;
+  observation_uncertainty_diagnostics?: {
+    cause: string;
+    send_count: number;
+    owned_prompt_seen: boolean;
+    observed_user_heads?: readonly string[];
+  };
+  observation_exhausted_diagnostics?: {
+    observation_state: string;
+    stable_reads: number;
+    last_assistant_head: string;
+    poll_count: number;
+    soft_deadline_elapsed: boolean;
+  };
 }
 
 export interface StatusItemV1 {
@@ -155,7 +169,7 @@ export function turnExitCode(state: TurnState): number {
   if (state === 'ok') return 0;
   if (state === 'driver_error') return 13;
   if (state === 'incompatible_record') return 14;
-  if (['stream_timeout', 'no_reply', 'recovery_required', 'foreign_activity', 'conversation_busy'].includes(state)) return 11;
+  if (['stream_timeout', 'no_reply', 'recovery_required', 'foreign_activity', 'observation_uncertain', 'conversation_busy'].includes(state)) return 11;
   if (['quota', 'rate_limit', 'challenge', 'login', 'chrome_not_running', 'profile_mismatch', 'orphaned_fresh_turn', 'profile_busy'].includes(state)) return 12;
   return 10;
 }

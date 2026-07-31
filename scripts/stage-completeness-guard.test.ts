@@ -334,8 +334,8 @@ describe('Issue #1120 state-light Browser-GPT turn', () => {
       { role: 'user', text: 'foreign task' },
       { role: 'assistant', text: 'foreign answer' },
     ], 0, 'task', false)).toEqual({
-      state: 'foreign_activity',
-      cause: 'foreign_or_ambiguous_user_activity',
+      state: 'ready',
+      reply: 'partial',
     });
   });
 

@@ -10,6 +10,7 @@ import {
 import { join } from 'node:path';
 import {
   classifyProductWall,
+  NEW_CHAT_CONTROL_SELECTORS,
   normalizeConversationUrl,
   productStatusText,
   type BrowserConfig,
@@ -157,6 +158,13 @@ export function isBlankProjectSurfaceUrl(observedUrl: string, projectUrl: string
 export function conversationUuidFromUrl(value: string): string | undefined {
   const match = /\/c\/([0-9a-f-]{36})$/i.exec(normalizeConversationUrl(value));
   return match?.[1]?.toLowerCase();
+}
+
+export function ownedConversationIdentityMatches(observedUrl: string, targetChatUrl: string): boolean {
+  const targetUuid = conversationUuidFromUrl(targetChatUrl);
+  const observedUuid = conversationUuidFromUrl(observedUrl);
+  if (targetUuid && observedUuid) return targetUuid === observedUuid;
+  return normalizeConversationUrl(observedUrl) === normalizeConversationUrl(targetChatUrl);
 }
 
 function stateLightFreshClaimsDir(profileKey: string): string {
@@ -405,13 +413,7 @@ export async function openBlankProjectChatSurface(
       timeout: waitMs,
     });
   }
-  const newChatSelectors = [
-    '[data-testid="create-new-chat-button"]',
-    'a:has-text("New chat")',
-    'button:has-text("New chat")',
-    '[aria-label="New chat"]',
-  ];
-  for (const selector of newChatSelectors) {
+  for (const selector of NEW_CHAT_CONTROL_SELECTORS) {
     const control = page.locator(selector).first();
     try {
       if (Number(await control.count()) <= 0) continue;
@@ -487,4 +489,40 @@ export async function waitForConversationUrlAfterSend(
     await sleep(page, Math.min(pollMs, Math.max(1, deadlineMs - Date.now())));
   }
   return undefined;
+}
+
+
+export function readProjectConversationUrl(page: any, projectUrl: string): string | undefined {
+  try {
+    const projectPrefix = projectConversationPrefix(projectUrl);
+    const currentUrl = normalizeConversationUrl(page.url());
+    if (conversationUuidFromUrl(currentUrl) && currentUrl.startsWith(projectPrefix)) {
+      return currentUrl;
+    }
+  } catch {
+    // keep polling
+  }
+  return undefined;
+}
+
+export async function navigateToProjectConversationIfNeeded(
+  page: any,
+  conversationUrl: string,
+  navigation: StateLightNavigationCounter,
+  gotoTimeoutMs: number,
+): Promise<void> {
+  const target = normalizeConversationUrl(conversationUrl);
+  if (!conversationUuidFromUrl(target)) return;
+  let currentUrl = '';
+  try {
+    currentUrl = normalizeConversationUrl(page.url());
+  } catch {
+    currentUrl = '';
+  }
+  if (ownedConversationIdentityMatches(currentUrl, target)) return;
+  navigation.recordGoto();
+  await page.goto(target, {
+    waitUntil: 'domcontentloaded',
+    timeout: gotoTimeoutMs,
+  });
 }

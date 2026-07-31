@@ -517,6 +517,7 @@ describe('issue 964 normative terminal-state matrix', () => {
     { state: 'no_reply', exit: 11, scope: 'conversation', incident: 'yes', unblock: 'terminal-evidence-plus-exact-clear' },
     { state: 'recovery_required', exit: 11, scope: 'conversation', incident: 'yes', unblock: 'recovery-or-exact-clear' },
     { state: 'foreign_activity', exit: 11, scope: 'conversation', incident: 'yes', unblock: 'status-plus-exact-clear' },
+    { state: 'observation_uncertain', exit: 11, scope: 'invocation', incident: 'yes', unblock: 'caller-decides-next-step' },
     { state: 'conversation_busy', exit: 11, scope: 'conversation', incident: 'active-reference', unblock: 'owner-terminal-or-validated-reclaim' },
     { state: 'driver_error', exit: 13, scope: 'machine', incident: 'conditional', unblock: 'resolved-scope-rule' },
     { state: 'incompatible_record', exit: 14, scope: 'profile', incident: 'yes', unblock: 'compatible-resolution-or-adjudication' },

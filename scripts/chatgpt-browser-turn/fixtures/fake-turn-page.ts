@@ -1,5 +1,15 @@
 import type { SemanticNode } from '../semantic.ts';
 import type { DispatchObservationTestControls } from '../dispatch-observation.ts';
+import {
+  ASSISTANT_MESSAGE_SELECTOR,
+  COMPOSER_SELECTOR,
+  CONTINUE_GENERATING_BUTTON_NAME,
+  MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_NODE_SELECTOR,
+  SEND_BUTTON_SELECTOR,
+  STOP_BUTTON_TESTID,
+  USER_MESSAGE_SELECTOR,
+} from '../product-page-selectors.ts';
 
 export interface FakeAssistantSpec {
   readonly id: string;
@@ -106,7 +116,7 @@ function messageLocator(
       if (textSequence && sequenceIndex < textSequence.length - 1) sequenceIndex++;
     },
     getAttribute: async (name: string) => {
-      if (name === 'data-message-author-role') return role;
+      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return role;
       if (name === 'data-message-id') return id;
       if (name === 'data-parent-message-id') return parent ?? null;
       if (name === 'data-is-streaming') return streaming ? 'true' : 'false';
@@ -424,7 +434,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     },
     url: () => pageUrl,
     locator: (selector: string) => {
-      if (selector === '#prompt-textarea') {
+      if (selector === COMPOSER_SELECTOR) {
         return {
           ...emptyLocator(),
           count: async () => composerPresent ? 1 : 0,
@@ -450,14 +460,14 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
           },
         };
       }
-      if (selector === '[data-testid="send-button"]') return send;
-      if (selector === '[data-testid="stop-button"]') {
+      if (selector === SEND_BUTTON_SELECTOR) return send;
+      if (selector === `[data-testid="${STOP_BUTTON_TESTID}"]`) {
         if (!options.pageLevelStopButton) return emptyLocator();
         return { ...emptyLocator(), count: async () => 1, first: () => ({ ...emptyLocator(), count: async () => 1 }) };
       }
-      if (selector === '[data-message-author-role]') return { count: async () => messages.length, nth: (index: number) => messages[index] ?? emptyLocator() };
-      if (selector === '[data-message-author-role="user"]') return selectMessages('user');
-      if (selector === '[data-message-author-role="assistant"]') return selectMessages('assistant');
+      if (selector === MESSAGE_NODE_SELECTOR) return { count: async () => messages.length, nth: (index: number) => messages[index] ?? emptyLocator() };
+      if (selector === USER_MESSAGE_SELECTOR) return selectMessages('user');
+      if (selector === ASSISTANT_MESSAGE_SELECTOR) return selectMessages('assistant');
       if (selector === '[role="alert"]') {
         const text = sent && options.alertAfterSend ? options.alertAfterSend : options.alertText;
         if (!text) return emptyLocator();
@@ -482,7 +492,7 @@ export function fakeTurnPage(options: FakeTurnPageOptions = {}): { page: any; ge
     },
     getByText: (pattern: string | RegExp) => {
       const label = typeof pattern === 'string' ? pattern : pattern.source;
-      if (!/continue generating/i.test(label) || !continueVisible) return emptyLocator();
+      if (!CONTINUE_GENERATING_BUTTON_NAME.test(label) || !continueVisible) return emptyLocator();
       return {
         count: async () => 1,
         first: () => ({

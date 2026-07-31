@@ -78,9 +78,19 @@ stable non-empty intermediate node is not sufficient by itself. A continuation
 button may be clicked because it continues the same assistant response; it is not
 a second user-prompt send.
 
-If another/interleaved user turn appears after the invocation baseline, attribution
-is ambiguous and only that invocation fails/degrades as `foreign_activity`.
-Sibling Browser-GPT tabs remain independent.
+Reply capture uses a strict publication window: only assistant nodes strictly
+between the owned prompt user node and the next user node (of any origin) may be
+published. Prompt recognition is strict normalized-text equality (markdown syntax
+and whitespace collapsed); a truncated lazy-render miss stays in `waiting` until
+the page catches up. A foreign or interleaved user turn after the owned prompt
+without a capturable reply in that window, or a page that never shows the owned
+prompt before the hard observation deadline, ends the invocation as
+`observation_uncertain` (**exit 11**, no resend). Sibling Browser-GPT tabs
+remain independent.
+
+Recurrence-journal rows for interleaved/ambiguous observation use the
+`interleaved_user_activity` event class with bounded uncertainty diagnostics.
+Unrecognized owned prompts on a readable page never produce journal incidents.
 
 ## Send-once and retry boundary
 
@@ -95,6 +105,8 @@ invocation locally; the caller decides whether to open a fresh chat.
 Slow generation,
 missing historical witness state, an elapsed observation threshold, or process-
 liveness uncertainty never authorizes a second send inside that invocation.
+Once `send_count >= 1`, observation-window expiry alone never yields `send_failed`
+or any other resend-licensing terminal while the owned page stays reachable.
 
 `--timeout-ms` is a **soft post-send observation threshold**. If the helper still
 owns a reachable page after it elapses, the same invocation keeps polling that
@@ -143,7 +155,7 @@ Typical state-light outcomes include:
 - `input_invalid` / `output_conflict`;
 - `login` / `quota` / `rate_limit` / `challenge` / `chrome_not_running` / `profile_mismatch` (product walls and profile blockers use **exit 12**; `rate_limit` is temporary request throttling, distinct from exhausted `quota`);
 - `send_failed`;
-- `ui_contract_mismatch` / `foreign_activity` (**exit 11**) / `driver_error` (**exit 13**).
+- `ui_contract_mismatch` / `observation_uncertain` (**exit 11**) / `driver_error` (**exit 13**).
 
 `stream_timeout` remains part of the shared legacy turn-state contract, but the
 state-light post-send path does not manufacture it merely because
@@ -196,10 +208,46 @@ not the pre-#1120 durable fail-closed blocker machinery.
 
 ## Polling and long turns
 
-Initial dispatch observation may poll more frequently; after that, page reads are
-bounded and low-frequency. Repeated normal `waiting`/`generating` observations are
-not incident-journal rows. Crossing `--timeout-ms` with a still-reachable owned
-page simply continues this low-frequency polling; it is not a resend signal.
+Initial dispatch observation polls every ~500ms for up to 30 seconds. After
+that, post-send page observation polls every ~15 seconds — local CDP DOM reads only,
+decoupled from send/navigation anti-rate-limit pacing (`--poll-ms` no longer slows
+observation). Completion-sighting confirm reads stay at ~1s. Repeated normal
+`waiting`/`generating` observations are not incident-journal rows. Crossing
+`--timeout-ms` with a still-reachable owned page continues observation polling; it
+is not a resend signal.
+
+### Observation heartbeats
+
+During post-send observation the helper emits one machine-greppable JSON line per
+heartbeat to stdout (approximately every 30 seconds wall time or every two polls,
+whichever comes first). Heartbeats use `schema: observation-heartbeat/v1` and carry
+`poll_count`, `observation_state`, `stable_reads`, `completion_ready`,
+`last_reply_length`, and a bounded `last_reply_sha256_head` digest. The terminal
+`turn-result/v1` line remains the only completion authority; heartbeats exist so
+stuck invocations become diagnosable from captured stdout within minutes instead of
+waiting for deadline exhaustion.
+
+### Transcript read resilience
+
+Per-message transcript reads use short bounded per-node timeouts with one retry.
+Chat-url continuations verify conversation identity by UUID after navigation and on
+every post-send poll. A page URL whose `/c/<uuid>` does not match `--chat-url` surfaces
+`owned_conversation_identity_mismatch` instead of polling indefinitely. When the URL still
+matches but assistant completion is visible without the owned prompt after the dispatch
+window, the helper returns `owned_conversation_render_mismatch`.
+
+`--new-chat` turns poll for a project-scoped `/c/<uuid>` after send, navigate onto
+that conversation when it materializes, and require either the owned prompt or a
+materialized conversation URL before the landing window closes. Past that bound
+without either, the helper returns `fresh_conversation_landing_mismatch` instead of
+polling indefinitely on the blank project surface.
+
+A failed node read marks the poll `transcriptIncomplete` instead of silently
+dropping that node from the transcript (which could otherwise yield false
+`owned_prompt_not_observed` on long chats or prevent stability convergence during
+confirm reads). Incomplete polls are retried on the next cadence without resetting
+capture stability once completion has been sighted. Post-send product-wall probes use
+a separate short budget and cannot block or invalidate transcript reads.
 
 PID, log growth, helper stdout timing, or a background shell job prove neither
 that ChatGPT is still generating nor that it has completed. Issue #1120 does not
@@ -263,11 +311,13 @@ Focused Issue #1120 tests cover:
 - a stable intermediate/tool-progress node surviving multiple reads before the
   later final node, with only the final node published;
 - generating/continuation intermediate state;
-- foreign/interleaved activity;
+- foreign/interleaved activity with stable-read promotion and render-tolerant
+  owned-prompt echo matching;
 - mandatory own-prompt attribution after baseline;
 - dedicated-tab creation and one send mutation branch;
 - a reachable owned page continuing past the soft timeout without resend or
-  timeout-triggered close;
+  timeout-triggered close, including fresh-conversation URL-wait expiry;
+- `send_count >= 1` never coexisting with `send_failed` in emitted results;
 - absence of old admission/recovery calls from the state-light module;
 - append-only/non-authoritative recurrence journal behavior;
 - absence of a second inspector/watchdog.
