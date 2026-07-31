@@ -1,0 +1,874 @@
+import { createHash } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
+import { lstat, open, unlink, type FileHandle } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+export const PROBE_SCHEMA = 'browser-gpt-page-probe/v1';
+export const MAX_TARGETS = 50;
+export const MAX_MESSAGE_SUMMARIES = 100;
+export const MAX_TEXT_CODE_POINTS = 160;
+export const CDP_REQUEST_TIMEOUT_MS = 10_000;
+
+const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com']);
+const SHA256_RE = /^[0-9a-f]{64}$/;
+const TARGET_ID_RE = /^[A-Za-z0-9._:-]{1,256}$/;
+const MESSAGE_ID_RE = /^[^\u0000-\u001f\u007f]{1,512}$/u;
+const ALLOWLISTED_ATTRIBUTES = [
+  'data-message-id',
+  'data-message-author-role',
+  'data-testid',
+  'data-turn-start-message',
+  'aria-busy',
+  'data-is-streaming',
+  'data-state',
+] as const;
+
+export type ProbeOperation = 'list' | 'inspect' | 'export';
+export type ProbeStatus =
+  | 'ok'
+  | 'not_found'
+  | 'ambiguous'
+  | 'stale_node'
+  | 'unsafe_output'
+  | 'surface_unknown'
+  | 'unavailable'
+  | 'export_failed'
+  | 'input_invalid';
+export type MessageRole = 'user' | 'assistant';
+export type TextRepresentation = 'innerText' | 'textContent';
+
+export interface CdpTarget {
+  readonly id?: string;
+  readonly type?: string;
+  readonly url?: string;
+  readonly title?: string;
+  readonly webSocketDebuggerUrl?: string;
+}
+
+export interface CompatibleTarget {
+  readonly target_id: string;
+  readonly normalized_url: string;
+  readonly title: string;
+  readonly web_socket_debugger_url?: string;
+}
+
+export interface TextSummary {
+  readonly byte_length: number;
+  readonly code_point_length: number;
+  readonly sha256: string;
+  readonly head: string;
+  readonly tail: string;
+}
+
+export interface NodeSummary {
+  readonly role: MessageRole;
+  readonly ordinal: number;
+  readonly document_ordinal: number;
+  readonly message_id: string | null;
+  readonly message_id_unique: boolean;
+  readonly attributes: Readonly<Record<string, string>>;
+  readonly innerText: TextSummary;
+  readonly textContent: TextSummary;
+}
+
+export interface InspectionSnapshot {
+  readonly page_url: string;
+  readonly title: string;
+  readonly generation_in_progress: boolean | 'unknown';
+  readonly observed_user_nodes: number;
+  readonly observed_assistant_nodes: number;
+  readonly observed_message_nodes: number;
+  readonly nodes: readonly NodeSummary[];
+  readonly nodes_truncated: boolean;
+  readonly last_assistant_text_length: number;
+  readonly last_assistant_text_byte_length: number;
+  readonly last_assistant_text_head: string;
+  readonly last_assistant_sha256: string | null;
+}
+
+interface InspectionExpressionResult {
+  readonly status: 'ok' | 'surface_unknown';
+  readonly reason?: string;
+  readonly page_url?: string;
+  readonly title?: string;
+  readonly generation_in_progress?: boolean | 'unknown';
+  readonly observed_user_nodes?: number;
+  readonly observed_assistant_nodes?: number;
+  readonly observed_message_nodes?: number;
+  readonly nodes?: readonly NodeSummary[];
+  readonly nodes_truncated?: boolean;
+  readonly last_assistant_text_length?: number;
+  readonly last_assistant_text_byte_length?: number;
+  readonly last_assistant_text_head?: string;
+  readonly last_assistant_sha256?: string | null;
+}
+
+interface ExportExpressionResult {
+  readonly status: 'ok' | 'not_found' | 'ambiguous' | 'stale_node' | 'surface_unknown';
+  readonly reason?: string;
+  readonly page_url?: string;
+  readonly title?: string;
+  readonly role?: MessageRole;
+  readonly ordinal?: number;
+  readonly document_ordinal?: number;
+  readonly message_id?: string | null;
+  readonly representation?: TextRepresentation;
+  readonly byte_length?: number;
+  readonly sha256?: string;
+  readonly text?: string;
+}
+
+export interface ProbeDependencies {
+  readonly listTargets: (cdp: string) => Promise<readonly CdpTarget[]>;
+  readonly evaluate: (target: CompatibleTarget, expression: string) => Promise<unknown>;
+  readonly publish: (destination: string, bytes: Uint8Array) => Promise<void>;
+}
+
+export interface ParsedListArgs {
+  readonly operation: 'list';
+  readonly cdp: string;
+}
+
+export interface ParsedInspectArgs {
+  readonly operation: 'inspect';
+  readonly cdp: string;
+  readonly targetId?: string;
+  readonly conversationUrl?: string;
+}
+
+export interface ParsedExportArgs {
+  readonly operation: 'export';
+  readonly cdp: string;
+  readonly targetId: string;
+  readonly role: MessageRole;
+  readonly ordinal: number;
+  readonly messageId?: string;
+  readonly representation: TextRepresentation;
+  readonly expectedByteLength: number;
+  readonly expectedSha256: string;
+  readonly output: string;
+}
+
+export type ParsedArgs = ParsedListArgs | ParsedInspectArgs | ParsedExportArgs;
+
+interface ProbeEnvelope {
+  readonly schema: typeof PROBE_SCHEMA;
+  readonly operation: ProbeOperation;
+  readonly status: ProbeStatus;
+  readonly diagnostic_only: true;
+  readonly workflow_authority: 'none';
+  readonly [key: string]: unknown;
+}
+
+class ProbeError extends Error {
+  readonly status: ProbeStatus;
+  readonly reason: string;
+
+  constructor(status: ProbeStatus, reason: string, detail?: string) {
+    super(detail ? `${reason}:${detail}` : reason);
+    this.name = 'ProbeError';
+    this.status = status;
+    this.reason = reason;
+  }
+}
+
+function boundedCodePoints(value: string, limit = MAX_TEXT_CODE_POINTS): string {
+  return Array.from(value).slice(0, limit).join('');
+}
+
+function boundedTailCodePoints(value: string, limit = MAX_TEXT_CODE_POINTS): string {
+  const points = Array.from(value);
+  return points.slice(Math.max(0, points.length - limit)).join('');
+}
+
+function boundedDetail(value: unknown): string {
+  return boundedCodePoints(value instanceof Error ? value.message : String(value), MAX_TEXT_CODE_POINTS);
+}
+
+function hashBytes(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+export function summarizeText(value: string): TextSummary {
+  const bytes = Buffer.from(value, 'utf8');
+  return {
+    byte_length: bytes.byteLength,
+    code_point_length: Array.from(value).length,
+    sha256: hashBytes(bytes),
+    head: boundedCodePoints(value),
+    tail: boundedTailCodePoints(value),
+  };
+}
+
+export function normalizeConversationUrl(value: string): string {
+  const url = new URL(value);
+  if (url.username || url.password) throw new Error('credentials_not_allowed');
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('unsupported_protocol');
+  url.hash = '';
+  url.search = '';
+  url.hostname = url.hostname.toLowerCase();
+  url.pathname = url.pathname.replace(/\/+$/u, '') || '/';
+  return url.toString().replace(/\/$/u, '');
+}
+
+export function isCompatibleChatGptUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    return (CHATGPT_HOSTS.has(hostname) || hostname.endsWith('.chatgpt.com'))
+      && (url.protocol === 'https:' || url.protocol === 'http:');
+  } catch {
+    return false;
+  }
+}
+
+export function isConversationUrl(value: string): boolean {
+  if (!isCompatibleChatGptUrl(value)) return false;
+  try {
+    return /(?:^|\/)c\/[^/]+(?:$|\/)/u.test(new URL(value).pathname);
+  } catch {
+    return false;
+  }
+}
+
+function safeTitle(value: unknown): string {
+  return boundedCodePoints(typeof value === 'string' ? value : '');
+}
+
+export function toCompatibleTargets(targets: readonly CdpTarget[]): CompatibleTarget[] {
+  const compatible: CompatibleTarget[] = [];
+  for (const target of targets) {
+    if (target.type !== 'page' || !target.id || !target.url || !isCompatibleChatGptUrl(target.url)) continue;
+    let normalized: string;
+    try {
+      normalized = normalizeConversationUrl(target.url);
+    } catch {
+      continue;
+    }
+    compatible.push({
+      target_id: target.id,
+      normalized_url: normalized,
+      title: safeTitle(target.title),
+      ...(target.webSocketDebuggerUrl ? { web_socket_debugger_url: target.webSocketDebuggerUrl } : {}),
+    });
+  }
+  return compatible;
+}
+
+function baseEnvelope(operation: ProbeOperation, status: ProbeStatus): ProbeEnvelope {
+  return {
+    schema: PROBE_SCHEMA,
+    operation,
+    status,
+    diagnostic_only: true,
+    workflow_authority: 'none',
+  };
+}
+
+function parseOptionPairs(tokens: readonly string[]): ReadonlyMap<string, string> {
+  const values = new Map<string, string>();
+  for (let index = 0; index < tokens.length; index += 2) {
+    const key = tokens[index];
+    const value = tokens[index + 1];
+    if (!key?.startsWith('--') || value === undefined || value.startsWith('--')) {
+      throw new ProbeError('input_invalid', 'invalid_option_shape');
+    }
+    if (values.has(key)) throw new ProbeError('input_invalid', 'duplicate_option', key);
+    values.set(key, value);
+  }
+  return values;
+}
+
+function requireOnly(values: ReadonlyMap<string, string>, allowed: readonly string[]): void {
+  const set = new Set(allowed);
+  for (const key of values.keys()) {
+    if (!set.has(key)) throw new ProbeError('input_invalid', 'unknown_option', key);
+  }
+}
+
+function required(values: ReadonlyMap<string, string>, key: string): string {
+  const value = values.get(key);
+  if (!value) throw new ProbeError('input_invalid', 'missing_option', key);
+  return value;
+}
+
+function parseNonNegativeInteger(value: string, key: string): number {
+  if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) throw new ProbeError('input_invalid', 'invalid_integer', key);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new ProbeError('input_invalid', 'invalid_integer', key);
+  return parsed;
+}
+
+function validateCdp(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ProbeError('input_invalid', 'invalid_cdp_url');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new ProbeError('input_invalid', 'invalid_cdp_url');
+  }
+  return value;
+}
+
+export function parseCliArgs(argv: readonly string[]): ParsedArgs {
+  const operation = argv[0];
+  if (operation !== 'list' && operation !== 'inspect' && operation !== 'export') {
+    throw new ProbeError('input_invalid', 'unknown_operation');
+  }
+  if ((argv.length - 1) % 2 !== 0) throw new ProbeError('input_invalid', 'invalid_option_shape');
+  const values = parseOptionPairs(argv.slice(1));
+  const cdp = validateCdp(required(values, '--cdp'));
+
+  if (operation === 'list') {
+    requireOnly(values, ['--cdp']);
+    return { operation, cdp };
+  }
+
+  if (operation === 'inspect') {
+    requireOnly(values, ['--cdp', '--target-id', '--url']);
+    const targetId = values.get('--target-id');
+    const conversationUrl = values.get('--url');
+    if ((targetId ? 1 : 0) + (conversationUrl ? 1 : 0) !== 1) {
+      throw new ProbeError('input_invalid', 'exactly_one_page_selector_required');
+    }
+    if (targetId && !TARGET_ID_RE.test(targetId)) throw new ProbeError('input_invalid', 'invalid_target_id');
+    if (conversationUrl && !isConversationUrl(conversationUrl)) {
+      throw new ProbeError('input_invalid', 'invalid_conversation_url');
+    }
+    return { operation, cdp, ...(targetId ? { targetId } : {}), ...(conversationUrl ? { conversationUrl } : {}) };
+  }
+
+  requireOnly(values, [
+    '--cdp', '--target-id', '--role', '--ordinal', '--message-id', '--representation',
+    '--expected-byte-length', '--expected-sha256', '--output',
+  ]);
+  const targetId = required(values, '--target-id');
+  if (!TARGET_ID_RE.test(targetId)) throw new ProbeError('input_invalid', 'invalid_target_id');
+  const role = required(values, '--role');
+  if (role !== 'user' && role !== 'assistant') throw new ProbeError('input_invalid', 'invalid_role');
+  const representation = required(values, '--representation');
+  if (representation !== 'innerText' && representation !== 'textContent') {
+    throw new ProbeError('input_invalid', 'invalid_representation');
+  }
+  const expectedSha256 = required(values, '--expected-sha256').toLowerCase();
+  if (!SHA256_RE.test(expectedSha256)) throw new ProbeError('input_invalid', 'invalid_expected_sha256');
+  const messageId = values.get('--message-id');
+  if (messageId && !MESSAGE_ID_RE.test(messageId)) throw new ProbeError('input_invalid', 'invalid_message_id');
+  return {
+    operation,
+    cdp,
+    targetId,
+    role,
+    ordinal: parseNonNegativeInteger(required(values, '--ordinal'), '--ordinal'),
+    ...(messageId ? { messageId } : {}),
+    representation,
+    expectedByteLength: parseNonNegativeInteger(required(values, '--expected-byte-length'), '--expected-byte-length'),
+    expectedSha256,
+    output: required(values, '--output'),
+  };
+}
+
+function cdpBase(cdp: string): string {
+  const url = new URL(cdp);
+  url.hash = '';
+  url.search = '';
+  url.pathname = '';
+  return url.toString().replace(/\/$/u, '');
+}
+
+async function defaultListTargets(cdp: string): Promise<readonly CdpTarget[]> {
+  const response = await fetch(`${cdpBase(cdp)}/json/list`, {
+    signal: AbortSignal.timeout(CDP_REQUEST_TIMEOUT_MS),
+    headers: { accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`cdp_list_http_${response.status}`);
+  const value: unknown = await response.json();
+  if (!Array.isArray(value)) throw new Error('cdp_list_not_array');
+  return value as readonly CdpTarget[];
+}
+
+interface WebSocketLike {
+  addEventListener(type: string, listener: (event: { readonly data?: unknown }) => void, options?: { readonly once?: boolean }): void;
+  send(data: string): void;
+  close(): void;
+}
+
+interface WebSocketConstructorLike {
+  new(url: string): WebSocketLike;
+}
+
+async function defaultEvaluate(target: CompatibleTarget, expression: string): Promise<unknown> {
+  if (!target.web_socket_debugger_url) throw new Error('target_websocket_unavailable');
+  const WebSocketCtor = (globalThis as unknown as { WebSocket?: WebSocketConstructorLike }).WebSocket;
+  if (!WebSocketCtor) throw new Error('websocket_unavailable');
+  const socket = new WebSocketCtor(target.web_socket_debugger_url);
+  const commandId = 1;
+  return await new Promise<unknown>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => finishReject(new Error('cdp_evaluate_timeout')), CDP_REQUEST_TIMEOUT_MS);
+    const finishResolve = (value: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.close(); } catch { /* ignore */ }
+      resolve(value);
+    };
+    const finishReject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.close(); } catch { /* ignore */ }
+      reject(error);
+    };
+    socket.addEventListener('open', () => {
+      try {
+        socket.send(JSON.stringify({
+          id: commandId,
+          method: 'Runtime.evaluate',
+          params: {
+            expression,
+            returnByValue: true,
+            awaitPromise: true,
+            userGesture: false,
+          },
+        }));
+      } catch (error) {
+        finishReject(error instanceof Error ? error : new Error(String(error)));
+      }
+    }, { once: true });
+    socket.addEventListener('error', () => finishReject(new Error('cdp_websocket_error')), { once: true });
+    socket.addEventListener('close', () => {
+      if (!settled) finishReject(new Error('cdp_websocket_closed'));
+    }, { once: true });
+    socket.addEventListener('message', (event) => {
+      try {
+        const payload = JSON.parse(String(event.data)) as {
+          readonly id?: number;
+          readonly error?: { readonly message?: string };
+          readonly result?: {
+            readonly exceptionDetails?: { readonly text?: string };
+            readonly result?: { readonly value?: unknown };
+          };
+        };
+        if (payload.id !== commandId) return;
+        if (payload.error) return finishReject(new Error(payload.error.message ?? 'cdp_evaluate_error'));
+        if (payload.result?.exceptionDetails) {
+          return finishReject(new Error(payload.result.exceptionDetails.text ?? 'cdp_expression_exception'));
+        }
+        finishResolve(payload.result?.result?.value);
+      } catch (error) {
+        finishReject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  });
+}
+
+export interface PublishOperations {
+  readonly lstat: typeof lstat;
+  readonly open: typeof open;
+  readonly unlink: typeof unlink;
+}
+
+export const defaultPublishOperations: PublishOperations = { lstat, open, unlink };
+
+export async function publishExactBytes(
+  destination: string,
+  bytes: Uint8Array,
+  ops: PublishOperations = defaultPublishOperations,
+): Promise<void> {
+  const parent = dirname(destination);
+  let parentStat;
+  try {
+    parentStat = await ops.lstat(parent);
+  } catch {
+    throw new ProbeError('unsafe_output', 'parent_unavailable');
+  }
+  if (!parentStat.isDirectory()) throw new ProbeError('unsafe_output', 'parent_not_directory');
+
+  try {
+    await ops.lstat(destination);
+    throw new ProbeError('unsafe_output', 'destination_exists');
+  } catch (error) {
+    if (error instanceof ProbeError) throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') throw new ProbeError('unsafe_output', 'destination_uninspectable', code);
+  }
+
+  let handle: FileHandle | undefined;
+  let created = false;
+  try {
+    handle = await ops.open(
+      destination,
+      fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
+      0o600,
+    );
+    created = true;
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error('created_target_not_regular_file');
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const result = await handle.write(bytes, offset, bytes.byteLength - offset, offset);
+      if (result.bytesWritten <= 0) throw new Error('short_write');
+      offset += result.bytesWritten;
+    }
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+  } catch (error) {
+    if (!created) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST' || code === 'ELOOP' || code === 'EISDIR' || code === 'ENOTDIR' || code === 'ENOENT') {
+        throw new ProbeError('unsafe_output', 'exclusive_create_refused', code);
+      }
+      throw new ProbeError('unsafe_output', 'exclusive_create_unavailable', code ?? boundedDetail(error));
+    }
+    if (handle) {
+      try { await handle.close(); } catch { /* cleanup below */ }
+    }
+    try { await ops.unlink(destination); } catch { /* best effort; never claim validity */ }
+    throw new ProbeError('export_failed', 'file_publication_failed', boundedDetail(error));
+  }
+}
+
+export const defaultDependencies: ProbeDependencies = {
+  listTargets: defaultListTargets,
+  evaluate: defaultEvaluate,
+  publish: publishExactBytes,
+};
+
+function inspectionExpression(): string {
+  const attributes = JSON.stringify(ALLOWLISTED_ATTRIBUTES);
+  return `(async () => {
+    const MAX_NODES = ${MAX_MESSAGE_SUMMARIES};
+    const MAX_TEXT = ${MAX_TEXT_CODE_POINTS};
+    const ATTRS = ${attributes};
+    const points = (value) => Array.from(value);
+    const head = (value) => points(value).slice(0, MAX_TEXT).join('');
+    const tail = (value) => { const p = points(value); return p.slice(Math.max(0, p.length - MAX_TEXT)).join(''); };
+    const digest = async (value) => {
+      const bytes = new TextEncoder().encode(value);
+      const hash = await crypto.subtle.digest('SHA-256', bytes);
+      return { byte_length: bytes.byteLength, code_point_length: points(value).length, sha256: Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join(''), head: head(value), tail: tail(value) };
+    };
+    const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
+    const roleCounts = { user: 0, assistant: 0 };
+    const observed = [];
+    for (let documentOrdinal = 0; documentOrdinal < raw.length; documentOrdinal++) {
+      const node = raw[documentOrdinal];
+      const role = node.getAttribute('data-message-author-role');
+      if (role !== 'user' && role !== 'assistant') continue;
+      const ordinal = roleCounts[role]++;
+      observed.push({ node, documentOrdinal, role, ordinal, rawMessageId: node.getAttribute('data-message-id') });
+    }
+    if (observed.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing' };
+    const messageIdCounts = new Map();
+    for (const entry of observed) if (entry.rawMessageId) messageIdCounts.set(entry.rawMessageId, (messageIdCounts.get(entry.rawMessageId) || 0) + 1);
+    const selected = observed.slice(Math.max(0, observed.length - MAX_NODES));
+    const nodes = [];
+    for (const entry of selected) {
+      const innerText = typeof entry.node.innerText === 'string' ? entry.node.innerText : null;
+      const textContent = typeof entry.node.textContent === 'string' ? entry.node.textContent : null;
+      if (innerText === null || textContent === null) return { status: 'surface_unknown', reason: 'text_representation_unavailable' };
+      const attrs = {};
+      for (const name of ATTRS) {
+        const value = entry.node.getAttribute(name);
+        if (typeof value === 'string') attrs[name] = head(value);
+      }
+      const unique = Boolean(entry.rawMessageId && messageIdCounts.get(entry.rawMessageId) === 1);
+      nodes.push({
+        role: entry.role,
+        ordinal: entry.ordinal,
+        document_ordinal: entry.documentOrdinal,
+        message_id: unique ? entry.rawMessageId : null,
+        message_id_unique: unique,
+        attributes: attrs,
+        innerText: await digest(innerText),
+        textContent: await digest(textContent),
+      });
+    }
+    const lastAssistant = [...observed].reverse().find((entry) => entry.role === 'assistant');
+    let lastDigest = null;
+    if (lastAssistant) {
+      const lastInnerText = typeof lastAssistant.node.innerText === 'string' ? lastAssistant.node.innerText : null;
+      if (lastInnerText === null) return { status: 'surface_unknown', reason: 'last_assistant_text_unavailable' };
+      lastDigest = await digest(lastInnerText.replace(/\\s+/gu, ' ').trim());
+    }
+    let generating = 'unknown';
+    try {
+      generating = Boolean(
+        document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop"], [aria-busy="true"], [data-is-streaming="true"], [data-testid*="tool"][data-state="running"], [data-testid*="tool"][data-state="loading"]')
+      );
+    } catch {
+      generating = 'unknown';
+    }
+    return {
+      status: 'ok',
+      page_url: location.href,
+      title: head(document.title || ''),
+      generation_in_progress: generating,
+      observed_user_nodes: roleCounts.user,
+      observed_assistant_nodes: roleCounts.assistant,
+      observed_message_nodes: observed.length,
+      nodes,
+      nodes_truncated: observed.length > MAX_NODES,
+      last_assistant_text_length: lastDigest ? lastDigest.code_point_length : 0,
+      last_assistant_text_byte_length: lastDigest ? lastDigest.byte_length : 0,
+      last_assistant_text_head: lastDigest ? lastDigest.head : '',
+      last_assistant_sha256: lastDigest ? lastDigest.sha256 : null,
+    };
+  })()`;
+}
+
+export const INSPECTION_EXPRESSION = inspectionExpression();
+
+export interface ExportWitness {
+  readonly role: MessageRole;
+  readonly ordinal: number;
+  readonly messageId?: string;
+  readonly representation: TextRepresentation;
+  readonly expectedByteLength: number;
+  readonly expectedSha256: string;
+}
+
+export function buildExportExpression(witness: ExportWitness): string {
+  const encoded = Buffer.from(JSON.stringify(witness), 'utf8').toString('base64');
+  return `(async () => {
+    const witness = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'), (c) => c.charCodeAt(0))));
+    const raw = Array.from(document.querySelectorAll('[data-message-author-role]'));
+    const roleCounts = { user: 0, assistant: 0 };
+    const nodes = raw.map((node, documentOrdinal) => {
+      const role = node.getAttribute('data-message-author-role');
+      if (role !== 'user' && role !== 'assistant') return null;
+      const ordinal = roleCounts[role]++;
+      return { node, role, ordinal, documentOrdinal, messageId: node.getAttribute('data-message-id') };
+    }).filter(Boolean);
+    if (nodes.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing' };
+    const idCounts = new Map();
+    for (const entry of nodes) if (entry.messageId) idCounts.set(entry.messageId, (idCounts.get(entry.messageId) || 0) + 1);
+    let candidates;
+    if (witness.messageId) {
+      candidates = nodes.filter((entry) => entry.messageId === witness.messageId);
+      if (candidates.length === 0) return { status: 'not_found', reason: 'message_id_not_found' };
+      if (candidates.length > 1) return { status: 'ambiguous', reason: 'message_id_ambiguous' };
+    } else {
+      candidates = nodes.filter((entry) => entry.role === witness.role && entry.ordinal === witness.ordinal);
+      if (candidates.length === 0) return { status: 'not_found', reason: 'role_ordinal_not_found' };
+      if (candidates.length > 1) return { status: 'ambiguous', reason: 'role_ordinal_ambiguous' };
+    }
+    const candidate = candidates[0];
+    if (candidate.role !== witness.role || candidate.ordinal !== witness.ordinal) return { status: 'stale_node', reason: 'role_ordinal_changed' };
+    if (witness.messageId && candidate.messageId !== witness.messageId) return { status: 'stale_node', reason: 'message_id_changed' };
+    if (!witness.messageId && candidate.messageId && idCounts.get(candidate.messageId) === 1) return { status: 'stale_node', reason: 'message_id_required' };
+    const text = witness.representation === 'innerText'
+      ? (typeof candidate.node.innerText === 'string' ? candidate.node.innerText : null)
+      : (typeof candidate.node.textContent === 'string' ? candidate.node.textContent : null);
+    if (text === null) return { status: 'surface_unknown', reason: 'text_representation_unavailable' };
+    const bytes = new TextEncoder().encode(text);
+    const hash = await crypto.subtle.digest('SHA-256', bytes);
+    const sha256 = Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join('');
+    if (bytes.byteLength !== witness.expectedByteLength || sha256 !== witness.expectedSha256) return { status: 'stale_node', reason: 'representation_witness_mismatch' };
+    return {
+      status: 'ok',
+      page_url: location.href,
+      title: Array.from(document.title || '').slice(0, ${MAX_TEXT_CODE_POINTS}).join(''),
+      role: candidate.role,
+      ordinal: candidate.ordinal,
+      document_ordinal: candidate.documentOrdinal,
+      message_id: candidate.messageId,
+      representation: witness.representation,
+      byte_length: bytes.byteLength,
+      sha256,
+      text,
+    };
+  })()`;
+}
+
+function resolveTargetById(targets: readonly CompatibleTarget[], targetId: string): CompatibleTarget {
+  const matches = targets.filter((target) => target.target_id === targetId);
+  if (matches.length === 0) throw new ProbeError('not_found', 'target_not_found');
+  if (matches.length > 1) throw new ProbeError('ambiguous', 'target_id_ambiguous');
+  return matches[0]!;
+}
+
+function resolveTargetByUrl(targets: readonly CompatibleTarget[], conversationUrl: string): CompatibleTarget {
+  const normalized = normalizeConversationUrl(conversationUrl);
+  const matches = targets.filter((target) => target.normalized_url === normalized);
+  if (matches.length === 0) throw new ProbeError('not_found', 'target_not_found');
+  if (matches.length > 1) throw new ProbeError('ambiguous', 'target_url_ambiguous');
+  return matches[0]!;
+}
+
+async function availableTargets(cdp: string, deps: ProbeDependencies): Promise<CompatibleTarget[]> {
+  try {
+    return toCompatibleTargets(await deps.listTargets(cdp));
+  } catch (error) {
+    throw new ProbeError('unavailable', 'cdp_unavailable', boundedDetail(error));
+  }
+}
+
+function requireActualTargetIdentity(
+  target: CompatibleTarget,
+  rawPageUrl: string | undefined,
+  requireResolvedUrlMatch: boolean,
+): string {
+  if (!rawPageUrl || !isCompatibleChatGptUrl(rawPageUrl)) {
+    throw new ProbeError('surface_unknown', 'page_url_unavailable');
+  }
+  const actual = normalizeConversationUrl(rawPageUrl);
+  if (requireResolvedUrlMatch && actual !== target.normalized_url) {
+    throw new ProbeError('not_found', 'target_url_changed');
+  }
+  return actual;
+}
+
+export async function runProbe(args: ParsedArgs, deps: ProbeDependencies = defaultDependencies): Promise<ProbeEnvelope> {
+  if (args.operation === 'list') {
+    const targets = await availableTargets(args.cdp, deps);
+    const truncated = targets.length > MAX_TARGETS;
+    return {
+      ...baseEnvelope('list', 'ok'),
+      targets: targets.slice(0, MAX_TARGETS).map(({ target_id, normalized_url, title }) => ({ target_id, normalized_url, title })),
+      targets_truncated: truncated,
+      observed_compatible_targets: targets.length,
+    };
+  }
+
+  const targets = await availableTargets(args.cdp, deps);
+  const resolvedByUrl = args.operation === 'inspect' && !args.targetId;
+  const target = args.operation === 'inspect'
+    ? (args.targetId ? resolveTargetById(targets, args.targetId) : resolveTargetByUrl(targets, args.conversationUrl!))
+    : resolveTargetById(targets, args.targetId);
+  if (!target.web_socket_debugger_url) throw new ProbeError('unavailable', 'target_attach_unavailable');
+
+  if (args.operation === 'inspect') {
+    let value: unknown;
+    try {
+      value = await deps.evaluate(target, INSPECTION_EXPRESSION);
+    } catch (error) {
+      throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
+    }
+    const snapshot = value as InspectionExpressionResult;
+    if (!snapshot || snapshot.status === 'surface_unknown') {
+      throw new ProbeError('surface_unknown', snapshot?.reason ?? 'uninterpretable_surface');
+    }
+    if (snapshot.status !== 'ok' || !Array.isArray(snapshot.nodes)) {
+      throw new ProbeError('surface_unknown', 'malformed_snapshot');
+    }
+    const pageUrl = requireActualTargetIdentity(target, snapshot.page_url, resolvedByUrl);
+    const result: InspectionSnapshot = {
+      page_url: pageUrl,
+      title: safeTitle(snapshot.title),
+      generation_in_progress: typeof snapshot.generation_in_progress === 'boolean' || snapshot.generation_in_progress === 'unknown'
+        ? snapshot.generation_in_progress
+        : 'unknown',
+      observed_user_nodes: snapshot.observed_user_nodes ?? 0,
+      observed_assistant_nodes: snapshot.observed_assistant_nodes ?? 0,
+      observed_message_nodes: snapshot.observed_message_nodes ?? snapshot.nodes.length,
+      nodes: snapshot.nodes,
+      nodes_truncated: Boolean(snapshot.nodes_truncated),
+      last_assistant_text_length: snapshot.last_assistant_text_length ?? 0,
+      last_assistant_text_byte_length: snapshot.last_assistant_text_byte_length ?? 0,
+      last_assistant_text_head: boundedCodePoints(snapshot.last_assistant_text_head ?? ''),
+      last_assistant_sha256: snapshot.last_assistant_sha256 ?? null,
+    };
+    return { ...baseEnvelope('inspect', 'ok'), target_id: target.target_id, snapshot: result };
+  }
+
+  const witness: ExportWitness = {
+    role: args.role,
+    ordinal: args.ordinal,
+    ...(args.messageId ? { messageId: args.messageId } : {}),
+    representation: args.representation,
+    expectedByteLength: args.expectedByteLength,
+    expectedSha256: args.expectedSha256,
+  };
+  let value: unknown;
+  try {
+    value = await deps.evaluate(target, buildExportExpression(witness));
+  } catch (error) {
+    throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
+  }
+  const selected = value as ExportExpressionResult;
+  if (!selected || !selected.status) throw new ProbeError('surface_unknown', 'malformed_export_snapshot');
+  if (selected.status !== 'ok') throw new ProbeError(selected.status, selected.reason ?? 'export_selection_failed');
+  if (typeof selected.text !== 'string' || selected.byte_length === undefined || !selected.sha256) {
+    throw new ProbeError('surface_unknown', 'malformed_export_snapshot');
+  }
+  const pageUrl = requireActualTargetIdentity(target, selected.page_url, false);
+  const bytes = Buffer.from(selected.text, 'utf8');
+  if (bytes.byteLength !== selected.byte_length || hashBytes(bytes) !== selected.sha256) {
+    throw new ProbeError('stale_node', 'transported_bytes_mismatch');
+  }
+  try {
+    await deps.publish(args.output, bytes);
+  } catch (error) {
+    if (error instanceof ProbeError) throw error;
+    throw new ProbeError('export_failed', 'file_publication_failed', boundedDetail(error));
+  }
+  return {
+    ...baseEnvelope('export', 'ok'),
+    target_id: target.target_id,
+    page_url: pageUrl,
+    node: {
+      role: selected.role,
+      ordinal: selected.ordinal,
+      document_ordinal: selected.document_ordinal,
+      message_id: selected.message_id ?? null,
+    },
+    representation: selected.representation,
+    inspection_witness: {
+      expected_byte_length: args.expectedByteLength,
+      expected_sha256: args.expectedSha256,
+    },
+    output: args.output,
+    byte_length: bytes.byteLength,
+    sha256: hashBytes(bytes),
+    sensitive_caller_owned_output: true,
+  };
+}
+
+function statusExitCode(status: ProbeStatus): number {
+  return ({
+    ok: 0,
+    not_found: 2,
+    ambiguous: 3,
+    stale_node: 4,
+    unsafe_output: 5,
+    surface_unknown: 6,
+    unavailable: 7,
+    export_failed: 8,
+    input_invalid: 9,
+  } satisfies Record<ProbeStatus, number>)[status];
+}
+
+export async function main(argv = process.argv.slice(2), deps: ProbeDependencies = defaultDependencies): Promise<number> {
+  let operation: ProbeOperation = argv[0] === 'list' || argv[0] === 'inspect' || argv[0] === 'export'
+    ? argv[0]
+    : 'list';
+  try {
+    const parsed = parseCliArgs(argv);
+    operation = parsed.operation;
+    const result = await runProbe(parsed, deps);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return statusExitCode(result.status);
+  } catch (error) {
+    const probeError = error instanceof ProbeError
+      ? error
+      : new ProbeError('unavailable', 'unexpected_failure', boundedDetail(error));
+    const result = {
+      ...baseEnvelope(operation, probeError.status),
+      reason: probeError.reason,
+      detail: boundedDetail(probeError.message),
+    };
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return statusExitCode(probeError.status);
+  }
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
+if (invokedPath === import.meta.url) {
+  process.exitCode = await main();
+}
