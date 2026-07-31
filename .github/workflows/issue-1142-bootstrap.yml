@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: issue-1142-bootstrap-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   implement:
     if: github.actor != 'github-actions[bot]'
@@ -20,6 +24,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: agent/issue-1142-tiering-calibration
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -28,7 +33,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/issue-1142-bootstrap/chunk-*.txt | base64 -d | gzip -d > /tmp/issue1142-bootstrap.py
+          cat .github/issue-1142-bootstrap/chunk-*.txt > /tmp/issue1142-bootstrap.b64
+          echo 'd0ffe445375db318b78aad76afe43f447abf698c19df1dba47aaf095e1b451c1  /tmp/issue1142-bootstrap.b64' | sha256sum -c -
+          base64 -d /tmp/issue1142-bootstrap.b64 | gzip -d > /tmp/issue1142-bootstrap.py
+          echo '9ec1a358c3cb49592e5055d9c5fc2cf6f12258a891604f7f262ca397ede56c92  /tmp/issue1142-bootstrap.py' | sha256sum -c -
           python /tmp/issue1142-bootstrap.py
       - name: Install dependencies
         run: npm ci --include=dev
