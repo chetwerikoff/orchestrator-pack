@@ -117,6 +117,25 @@ describe('state-light prompt attribution classification', () => {
     )).toEqual({ state: 'waiting' });
   });
 
+  it('finds the last owned user node even when baseline count includes it', () => {
+    const continuation = [
+      { role: 'user' as const, text: 'USER-ONE' },
+      { role: 'assistant' as const, text: 'ANSWER-ONE' },
+      { role: 'user' as const, text: 'USER-TWO' },
+      { role: 'assistant' as const, text: 'ANSWER-TWO' },
+      { role: 'user' as const, text: 'PROMPT' },
+      { role: 'assistant' as const, text: 'FINAL' },
+    ];
+    const lateBaselineCount = continuation.length - 1;
+
+    expect(classifyPageObservation(
+      continuation,
+      lateBaselineCount,
+      'PROMPT',
+      false,
+    )).toEqual({ state: 'ready', reply: 'FINAL' });
+  });
+
   it('captures the owned reply before a later foreign user turn', () => {
     expect(classifyPageObservation(
       [

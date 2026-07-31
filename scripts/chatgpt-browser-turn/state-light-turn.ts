@@ -237,6 +237,11 @@ function normalizeReplyForStability(text: string): string {
   return stripUiCollapseAffixes(normalizeEchoComparisonText(text));
 }
 
+
+export function hasOwnedUserMessage(messages: readonly PageMessage[], prompt: string): boolean {
+  return messages.some((message) => message.role === 'user' && ownedPromptMatches(message.text, prompt));
+}
+
 export function replyStabilityFingerprint(text: string): string {
   const normalized = normalizeReplyForStability(text);
   if (!normalized) return '';
@@ -474,9 +479,8 @@ export function resolveOwnedReplyWindow(
   readonly observedUserHeads?: readonly string[];
   readonly lastOwnedAssistantMessageIndex: number | null;
 } {
-  const novel = messages.slice(Math.max(0, baselineCount));
-  const baseOffset = Math.max(0, baselineCount);
-  const users = novel
+  void baselineCount;
+  const users = messages
     .map((message, index) => ({ message, index }))
     .filter(({ message }) => message.role === 'user');
 
@@ -490,7 +494,7 @@ export function resolveOwnedReplyWindow(
   }
 
   const lastOwned = ownedUsers[ownedUsers.length - 1]!;
-  const afterOwned = novel.slice(lastOwned.index + 1);
+  const afterOwned = messages.slice(lastOwned.index + 1);
 
   let replyWindow = afterOwned;
   let uncertainCause: string | undefined;
@@ -509,7 +513,7 @@ export function resolveOwnedReplyWindow(
   let lastOwnedAssistantMessageIndex: number | null = null;
   for (let index = replyWindow.length - 1; index >= 0; index--) {
     if (replyWindow[index]!.role === 'assistant') {
-      lastOwnedAssistantMessageIndex = baseOffset + lastOwned.index + 1 + index;
+      lastOwnedAssistantMessageIndex = lastOwned.index + 1 + index;
       break;
     }
   }
@@ -528,10 +532,9 @@ export function classifyPageObservation(
   prompt: string,
   inProgress: boolean,
 ): PageObservationDecision {
-  const novel = messages.slice(Math.max(0, baselineCount));
-  const users = novel.filter((message) => message.role === 'user');
+  const users = messages.filter((message) => message.role === 'user');
   if (users.length === 0) return { state: 'waiting' };
-  if (!users.some((message) => ownedPromptMatches(message.text, prompt))) return { state: 'waiting' };
+  if (!hasOwnedUserMessage(messages, prompt)) return { state: 'waiting' };
 
   const { replyWindow, uncertainCause, observedUserHeads } = resolveOwnedReplyWindow(
     messages,
@@ -1354,8 +1357,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
       const decision = classifyPageObservation(messages, baselineCount, snapshot.text, !ownedWindowCompletionReady);
 
-      const novelMessages = messages.slice(Math.max(0, baselineCount));
-      if (novelMessages.some((message) => message.role === 'user' && ownedPromptMatches(message.text, snapshot.text))) {
+      if (hasOwnedUserMessage(messages, snapshot.text)) {
         ownedPromptEverSeen = true;
       }
 
@@ -1502,8 +1504,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
 
       if (Date.now() >= dispatchDeadline) {
-        const novel = messages.slice(Math.max(0, baselineCount));
-        if (!novel.some((message) => message.role === 'user')) {
+        if (!hasOwnedUserMessage(messages, snapshot.text)) {
           if (sendCount >= 1) {
             if (!sendObservationDeferredLogged) {
               incident(

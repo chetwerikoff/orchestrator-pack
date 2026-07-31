@@ -127,6 +127,7 @@ function makePage(
     sendButton?: boolean;
     wallText?: string;
     wallAfterPoll?: number;
+    preSendMessages?: StateLightTestMessage[];
   } = {},
 ) {
   let sent = false;
@@ -218,7 +219,7 @@ function makePage(
           throw new Error('simulated page loss');
         }
         if (!sent) {
-          activeSnapshot = { messages: BASELINE, generating: false };
+          activeSnapshot = { messages: options.preSendMessages ?? BASELINE, generating: false };
           return collectionLocator(activeSnapshot.messages);
         }
         activeSnapshot = snapshots[Math.min(observationIndex, Math.max(0, snapshots.length - 1))]
@@ -1127,6 +1128,36 @@ ${body}`;
     expect(outcome.result.poll_count).toBeGreaterThanOrEqual(2);
     expect(fake.metrics.closes).toBe(0);
     expect(mocks.linkSync).not.toHaveBeenCalled();
+  });
+
+  it('chat-url continuation finds owned prompt inside a late baseline capture', async () => {
+    const continuationPre: StateLightTestMessage[] = [
+      { role: 'user', text: 'USER-ONE' },
+      { role: 'assistant', text: 'ANSWER-ONE', finalAction: true },
+      { role: 'user', text: 'USER-TWO' },
+      { role: 'assistant', text: 'ANSWER-TWO', finalAction: true },
+      { role: 'user', text: 'PROMPT' },
+    ];
+    const ready: StateLightTestSnapshot = {
+      messages: [...continuationPre, { role: 'assistant', text: 'FINAL', finalAction: true }],
+      generating: false,
+    };
+    const fake = makePage([
+      { messages: [...continuationPre, { role: 'assistant', text: 'working' }], generating: true },
+      ready,
+      ready,
+    ], { preSendMessages: continuationPre });
+    const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      cause: 'completed_page_only',
+      send_count: 1,
+      cleanup: 'confirmed',
+    });
+    expect(outcome.result.state).not.toBe('observation_uncertain');
+    expect(outcome.result.incidents.filter((entry) => entry === 'send_observation_deferred')).toHaveLength(0);
   });
 
   it('chat-url defers owned_user_message_not_observed after send without send_failed', async () => {
