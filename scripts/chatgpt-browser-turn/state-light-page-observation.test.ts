@@ -934,9 +934,7 @@ describe('Issue #1148 runtime identity binding', () => {
   it('defers zero-node admission, then binds the later unique user identity without resend', async () => {
     const empty: StateLightTestSnapshot = { messages: preSend, generating: false };
     const fake = makeIdentityRuntimePage(preSend, [
-      empty,
-      empty,
-      empty,
+      ...Array.from({ length: 12 }, () => empty),
       ...identityRuntimeFrames('deferred-owned', 'DEFERRED-FINAL'),
     ]);
     const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
