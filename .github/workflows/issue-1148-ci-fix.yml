@@ -1,0 +1,169 @@
+name: Issue 1148 CI fix
+
+on:
+  push:
+    branches:
+      - agent/issue-1148-message-identity
+    paths:
+      - .github/workflows/issue-1148-ci-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1148-message-identity
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply exact CI findings
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          page_test = Path('scripts/chatgpt-browser-turn/state-light-page-observation.test.ts')
+          text = page_test.read_text()
+
+          old_signature = """async function runIdentityRuntimeTurn(
+            page: any,
+            prompt = 'PROMPT',
+          ): Promise<{ code: number; result: any; output?: string }> {
+          """
+          new_signature = """async function runIdentityRuntimeTurn(
+            page: any,
+            prompt = 'PROMPT',
+            timeoutMs = '1000',
+          ): Promise<{ code: number; result: any; output?: string }> {
+          """
+          if text.count(old_signature) != 1:
+              raise SystemExit('runtime helper signature precondition failed')
+          text = text.replace(old_signature, new_signature, 1)
+
+          helper_timeout = """      '--timeout-ms', '1000',
+                '--poll-ms', '1',
+          """
+          helper_timeout_new = """      '--timeout-ms', timeoutMs,
+                '--poll-ms', '1',
+          """
+          if text.count(helper_timeout) != 2:
+              raise SystemExit(f'expected two 1000ms runtime timeout sites, found {text.count(helper_timeout)}')
+          text = text.replace(helper_timeout, helper_timeout_new, 1)
+
+          deferred_call = """    const outcome = await runIdentityRuntimeTurn(fake.page);
+
+              expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+              expect(outcome.result.incidents).toContain('send_observation_deferred');
+          """
+          deferred_call_new = """    const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
+
+              expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+              expect(outcome.result.incidents).toContain('send_observation_deferred');
+          """
+          if text.count(deferred_call) != 1:
+              raise SystemExit('deferred runtime call precondition failed')
+          text = text.replace(deferred_call, deferred_call_new, 1)
+
+          # The remaining literal 1000ms site is the concurrent isolation harness.
+          if text.count(helper_timeout) != 1:
+              raise SystemExit('concurrent timeout precondition failed')
+          text = text.replace(helper_timeout, """      '--timeout-ms', '5000',
+                '--poll-ms', '1',
+          """, 1)
+          page_test.write_text(text)
+
+          support = Path('scripts/chatgpt-browser-turn/state-light-turn.test-support.ts')
+          text = support.read_text()
+          old_result = """    expect(outcome.result).toMatchObject({
+                state: 'observation_uncertain',
+                cause: 'owned_prompt_not_observed',
+              });
+          """
+          new_result = """    expect(outcome.result).toMatchObject({
+                state: 'ui_contract_mismatch',
+                cause: 'owned_message_identity_unresolved',
+              });
+          """
+          if text.count(old_result) != 2:
+              raise SystemExit(f'expected two obsolete fallback assertions, found {text.count(old_result)}')
+          text = text.replace(old_result, new_result)
+
+          old_duplicate = """  it('does not classify a transient duplicate owned user render as foreign activity', async () => {
+          """
+          new_duplicate = """  it('fails closed when strict-text fallback observes duplicate owned candidates', async () => {
+          """
+          if text.count(old_duplicate) != 1:
+              raise SystemExit('duplicate test name precondition failed')
+          text = text.replace(old_duplicate, new_duplicate, 1)
+
+          old_duplicate_assertions = """    expect(outcome.code).toBe(0);
+              expect(outcome.result).toMatchObject({
+                state: 'ok',
+                send_count: 1,
+              });
+              expect(outcome.result.state).not.toBe('observation_uncertain');
+          """
+          new_duplicate_assertions = """    expect(outcome.code).toBe(10);
+              expect(outcome.result).toMatchObject({
+                state: 'ui_contract_mismatch',
+                cause: 'owned_message_identity_unresolved',
+                send_count: 1,
+              });
+              expect(mocks.linkSync).not.toHaveBeenCalled();
+          """
+          if text.count(old_duplicate_assertions) != 1:
+              raise SystemExit('duplicate assertion precondition failed')
+          text = text.replace(old_duplicate_assertions, new_duplicate_assertions, 1)
+          support.write_text(text)
+
+          declaration = Path('docs/declarations/1148.issue-1148-message-identity.json')
+          data = json.loads(declaration.read_text())
+          added = 'scripts/chatgpt-browser-turn/state-light-turn.test-support.ts'
+          if data['amendments'] or added in data['declared_paths']:
+              raise SystemExit('declaration amendment precondition failed')
+          data['declared_paths'].append(added)
+          data['declared_paths'].sort()
+          data['amendments'] = [{
+              'previous_active_scope_hash': 'sha256:909c96107a308829b673a532c1cd1ca3eaf418e82a075ac6e431179f37fe3a94',
+              'new_active_scope_hash': 'sha256:e55b0111efd143a8c5ebf722490b32caa0d0e7aa61d02b309504395a36c37b5a',
+              'changed': {'added': [added], 'removed': []},
+              'reason': 'Update existing Browser-GPT regressions to the Issue #1148 fail-closed fallback contract revealed by current-head CI.',
+              'actor': 'chat-executor',
+              'timestamp': '2026-08-01T06:28:00.000Z',
+              'applied': True,
+          }]
+          declaration.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+          test "$(git hash-object scripts/chatgpt-browser-turn/state-light-page-observation.test.ts)" = '7ae5e293f9e9a04b4ad2f1a857b67fb80c9f7896'
+
+      - name: Run focused regression suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --include=dev
+          node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 \
+            scripts/chatgpt-browser-turn/state-light-page-observation.test.ts \
+            scripts/stage-completeness-guard.test.ts
+
+      - name: Commit tested fixes and remove workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/issue-1148-ci-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'test(browser-turn): align identity fallback regressions'
+          git push origin HEAD:agent/issue-1148-message-identity
