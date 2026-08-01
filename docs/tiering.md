@@ -91,8 +91,8 @@ Therefore:
 
 - exact `triple-source/v1` pre-lens admission may be produced and validated by
   #1150;
-- one exact three-capture `stageAttemptId` is one full stage and one logical
-  round, never three rounds;
+- one configured N-capture `stageAttemptId` is one full stage and one logical
+  round, never N rounds;
 - flow-manager consolidation is forbidden;
 - live T3 final acceptance remains fail-closed until #1123 consumes this
   contract. A self-declared receipt field cannot activate it.
@@ -103,13 +103,18 @@ Therefore:
 |------|-----------------|---------------|---------------|
 | **T1** | Exactly one independent browser-GPT `architectural` source → acceptance | **No** | Same source owns aggregate cut + M5 |
 | **T2** | Exactly one independent browser-GPT `architectural` source → acceptance | **No** | Same source owns aggregate cut + M5 |
-| **T3** | Exact 3-source `competitive` stage → exact 3-source `architectural-review` stage → pre-lens guard → one Claude `architectural-lens` (or valid waiver) → one terminal GPT `architectural` → acceptance after #1123 activation | **Yes** | Terminal GPT owns final aggregate cut + M5 |
+| **T3** | Configured N-source `competitive` stage → configured N-source `architectural-review` stage → pre-lens guard → one Claude `architectural-lens` (or valid waiver) → one terminal GPT `architectural` → acceptance after #1123 activation | **Yes** | Terminal GPT owns final aggregate cut + M5 |
 
 The canonical T3 order is:
 
 ```text
-competitive[01,02,03] → architectural-review[01,02,03] → architectural-lens (or valid Claude-unavailable waiver) → architectural
+competitive[01..N] → architectural-review[01..N] → architectural-lens (or valid Claude-unavailable waiver) → architectural
 ```
+
+The single operator control is `OPK_GPT_REVIEWER_CARDINALITY`. Its default T3
+value is `3`; T1/T2 remain singular. Each stage receipt freezes the selected
+`reviewerCardinality` and `cardinalityConfigIdentity`, so a running episode
+cannot silently change N.
 
 There is no `architectural-final` stage. Historical captures with that name are
 audit-only.
@@ -117,46 +122,50 @@ audit-only.
 ### Source-preserving review episode (#1150)
 
 One create-flow review episode begins when the first required reviewer-stage
-attempt is created after intake correction closes. Its `reviewEpisodeId` spans
-all pre-terminal stages, Claude, author-fix revisions, terminal review, relay, and
-author disposition. It does not reset at a lens, revision change, continuation
-chat, replay, or workdir change.
+attempt is created after intake correction closes. Its root is the immutable
+`tier-intake/v1` task identity plus first frozen revision. Its `reviewEpisodeId`
+spans all pre-terminal stages, Claude, author-fix revisions, terminal review,
+relay, and author disposition. It does not reset at a lens, revision change,
+continuation chat, replay, or workdir change.
 
 Each stage attempt:
 
-- has one `stageAttemptId`, one stage, one policy, and one frozen
-  `sourceRevision`;
+- has one `stageAttemptId`, one stage, one policy, one frozen `sourceRevision`,
+  and the selected cardinality snapshot;
 - records revision checks at attempt creation, before launch, and settlement;
 - forbids author edits while unsettled;
 - settles only after every launched invocation is terminal, no retry runs or
   remains eligible, and final revision checks match;
-- emits one authoritative persisted `stage-completeness-receipt/v1`.
+- emits one authoritative persisted `stage-completeness-receipt/v1` in a
+  no-overwrite sequence and cumulative receipt census.
 
 No `review-episode-receipt` or equivalent persisted episode snapshot exists.
-Both guards call the same pure derivation over stage receipts and verified relay
-evidence to obtain episode-wide credentialing sets, governed/relayed unions,
-raw counts, and logical-round identities.
+Both guards call the same pure derivation over the complete canonical receipt
+directory, immutable `tier-intake/v1`, independently produced Claude evidence,
+and verified relay evidence to obtain episode-wide credentialing sets,
+governed/relayed unions, raw counts, and logical-round identities. A caller
+cannot prove a later episode root by passing only a self-consistent subset.
 
 ### T3 plural source stages
 
 T3 `competitive` and `architectural-review` each use policy
-`triple-source/v1` and exact independent reviewer slots `01`, `02`, and `03` in
-one staggered concurrent batch.
+`triple-source/v1` and exact independent reviewer slots `01..N` in one staggered
+concurrent batch. The current default is N=3, not a hard-coded topology.
 
-- All three launches begin before harvesting/adjudicating siblings.
+- All N launches begin before harvesting/adjudicating siblings.
 - Preserve 10–15 second spacing and bounded prior-slot observation.
 - There is no account-wide hard cap or synthetic pre-attempt capacity outcome.
 - Every invocation emits immutable `reviewer-invocation-envelope/v1` evidence,
-  including episode/attempt/policy/stage/revision identities, reviewer slot and
-  independent source identity, invocation and terminal-result identities,
-  observable capacity result, revision check, `send_count`, retry class, and
-  terminal classification.
+  including episode/attempt/policy/stage/revision identities, cardinality and
+  config identity, reviewer slot and independent source identity, invocation
+  and terminal-result identities, observable capacity result, revision check,
+  `send_count`, retry-attempt state, retry class, and terminal classification.
 - Successful siblings remain separate immutable files:
   `pass-NN-competitive-SS.capture.txt` and
   `pass-NN-architectural-review-SS.capture.txt`.
-- Exact slots `01/02/03` credential the stage together. Missing, duplicate,
-  extra, consolidated, mislabeled, mixed-revision, or non-terminal source sets
-  fail closed.
+- Exact slots `01..N` credential the stage together. Missing, duplicate, extra,
+  consolidated, mislabeled, mixed-revision, or non-terminal source sets fail
+  closed.
 
 T1, T2, Claude `architectural-lens`, and terminal `architectural` remain
 `single-source/v1`.
@@ -165,7 +174,9 @@ T1, T2, Claude `architectural-lens`, and terminal `architectural` remain
 
 One paced retry under the same slot and `stageAttemptId` is permitted only after
 an invocation-local terminal result proves a pre-send quota/composer/fill failure
-with `send_count: 0`. It uses `attemptOrdinal: 2` and consumes the only retry.
+with `send_count: 0`. It uses `attemptOrdinal: 2`, records
+`retryAttempt: true`, and consumes the only retry. A failed retry may settle as
+blocked/exhausted; it never creates another retry opportunity.
 
 Possible/post-send failure, ambiguous delivery, output conflict, missing terminal
 result, or any `send_count: 1` failure forbids resend and remains incident/blocking
@@ -176,8 +187,10 @@ until retry or explicit abandonment to a blocked settlement.
 
 Every relay-eligible capture from every stage receipt in the episode remains in
 `governedCaptureUnion`, including settled incomplete-attempt evidence. Claude
-capture evidence is governed; a valid Claude-unavailable waiver contributes no
-capture or synthetic occurrence.
+capture evidence is governed only when a separately produced immutable Claude
+CLI result matches invocation, run, terminal-result, revision, bytes, hash, and
+M3 facts. A valid Claude-unavailable waiver contributes no capture or synthetic
+occurrence.
 
 Before author adjudication or final acceptance:
 
@@ -188,17 +201,20 @@ relayedCaptureUnion == governedCaptureUnion
 Relay evidence must preserve immutable capture identity, bytes, hash, source
 labels, and multipart cardinality. Empty/truncated wrappers, author
 acknowledgement, or transport success without embedded source bytes are not
-delivery. Corrected relays retain supersession identity.
+delivery. Corrected relays retain one linear supersession chain and exactly one
+verified latest head.
 
 Raw finding occurrence identity is capture identity plus source-local ordinal.
 Every occurrence maps exactly once to one author-owned distinct defect. Stable
-reviewer-local finding IDs are not cross-source identity. The ledger records and
-checks episode-wide:
+reviewer-local finding IDs are not cross-source identity. Receipt-backed ledger
+validation re-reads every governed capture text and checks its exact name, byte
+length, SHA-256, and raw occurrence count before accepting:
 
 - `rawFindingCount` for governed source occurrences;
 - `distinctFindingCount` for author-owned distinct defects;
 - `processedDistinctCount` for `addressed` plus `rejected-as-false` defects.
 
+The `counts` object contains exactly those three non-negative integer fields.
 Defect disposition is exactly one of `addressed`, `rejected-as-false`, or
 `unresolved`. Remedy disposition is independently exactly one of `accepted`,
 `replaced-by-cheaper-sufficient`, or `rejected-as-overengineering`. Any unresolved
@@ -270,7 +286,8 @@ the suggested remedy and may choose a cheaper sufficient correction.
 
 `persistent-machinery: yes` requires `cheapest-sufficient-alternative`,
 `stakes-price`, and `trade-in`. Malformed pricing blocks; it cannot be hidden by
-merging sources.
+merging sources. Receipt-backed validation applies this to every raw occurrence,
+not merely one representative row.
 
 ### M3 — protected nominations
 
@@ -279,50 +296,58 @@ addressed-only authority.
 
 - T1/T2 terminal GPT has full current-revision authority under existing evidence
   and why-now rules.
-- T3 pre-Claude may leave `architectPending`; Claude capture may adjudicate.
+- T3 pre-Claude may leave occurrence-local `architectPending`; Claude capture may
+  adjudicate that exact occurrence.
 - A valid Claude-unavailable waiver has no M3 authority.
 - Terminal GPT has full current-revision authority and may supersede earlier
-  Claude state, including same-capture adjudication of a newly emitted protected
-  nomination.
-- Stale, malformed, duplicate-conflicting, or unresolved contest state fails
-  closed.
+  Claude state for the same occurrence, including same-capture adjudication of a
+  newly emitted protected nomination.
+- Stale, malformed, duplicate-conflicting, row-ID substitution, or unresolved
+  contest state fails closed.
 
 Protected occurrence type cannot be silently reclassified when multiple sources
-map into a distinct defect.
+map into a distinct defect. Every receipt-backed ledger row must map at least one
+real occurrence; an empty decoy row cannot satisfy the protected-type floor.
 
 ### M4 — author mechanism inventory
 
 After each logical review round, not each sibling capture, the author updates one
 inventory of review-added mechanisms as `keep`, `simplify`, `defer`, or `cut`.
-One three-capture `stageAttemptId` consumes one round.
+One N-capture `stageAttemptId` consumes one round.
 
 ### M5 — truthful simplification verdict
 
 Terminal GPT `architectural` remains the sole final M5 anchor for all tiers.
-Pre-lens triple-source aggregation is a progression gate only:
+Pre-lens N-source aggregation is a progression gate only:
 
-- union every `simplification-cut-candidate: yes` occurrence across all three
+- union every `simplification-cut-candidate: yes` occurrence across all N
   `architectural-review` sources, independent of file order;
-- aggregate `SIMPLIFICATION_CLEAN` only when all three sources carry it and no
+- aggregate `SIMPLIFICATION_CLEAN` only when all N sources carry it and no
   source emits a candidate;
-- aggregate `NO_FINDINGS` only when all three are locally no-findings;
+- aggregate `NO_FINDINGS` only when all N are locally no-findings;
 - never let one clean source erase another source's finding or candidate.
 
 ### Two-phase finding-ledger guard
 
-- **`pre-lens`** — T3 only, after exact triple `competitive` and exact triple
+- **`pre-lens`** — T3 only, after configured-N `competitive` and configured-N
   `architectural-review` are settled, fully relayed, and occurrence-accounted.
 - **`final-acceptance`** — all tiers, requiring terminal GPT M5 and all applicable
-  M2/M3/relay/count evidence. T3 triple-source activation remains blocked until
+  M2/M3/relay/count evidence. T3 plural-source activation remains blocked until
   #1123.
+
+The production CLI reads `--receipt-directory`, immutable `--tier-intake`, all
+`--stage-receipt` files, optional independent `--claude-producer-evidence`, and
+`--verified-relay-evidence`; it never derives authority from filenames alone or
+from a caller-selected receipt subset.
 
 ### Claude lens and unavailable skip
 
 Claude remains exactly one pre-terminal source. A counted capture requires a
-separate Claude invocation and producing evidence. Only observable `quota`,
-`rate-limit`, `provider-unavailable`, or `cli-unavailable` may produce a
-`claude-unavailable` waiver. The waiver is topology evidence only and creates no
-capture, finding, M3 authority, or tier authority. Terminal GPT remains required.
+separate Claude invocation and independently supplied producing-result evidence.
+Only observable `quota`, `rate-limit`, `provider-unavailable`, or
+`cli-unavailable` may produce a `claude-unavailable` waiver. The waiver is
+topology evidence only and creates no capture, finding, M3 authority, or tier
+authority. Terminal GPT remains required.
 
 ### Architectural-stage goals
 
