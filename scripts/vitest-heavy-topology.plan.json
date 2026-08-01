@@ -23,7 +23,7 @@
     "count": 1,
     "matrixLength": 1
   },
-  "fullDiscoveryCount": 101,
+  "fullDiscoveryCount": 102,
   "prScope": {
     "applicable": false,
     "mode": "shadow",
@@ -110,6 +110,10 @@
     },
     {
       "file": "scripts/estate-cut/issue-906-vertical-slice.test.ts",
+      "reason": "missing-per-file-weight"
+    },
+    {
+      "file": "scripts/flow-manager-long-running-child.test.ts",
       "reason": "missing-per-file-weight"
     },
     {
@@ -307,6 +311,7 @@
     "scripts/estate-cut/issue-906-vertical-slice.test.ts",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts",
     "scripts/finding-ledger-guard.test.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
     "scripts/gate-runner/bulk-declarative-gates.test.ts",
     "scripts/gate-runner/census-generator.test.ts",
     "scripts/gate-runner/census.test.ts",
@@ -410,6 +415,7 @@
     "scripts/estate-cut/issue-906-vertical-slice.test.ts",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts",
     "scripts/finding-ledger-guard.test.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
     "scripts/gate-runner/bulk-declarative-gates.test.ts",
     "scripts/gate-runner/census-generator.test.ts",
     "scripts/gate-runner/census.test.ts",
@@ -531,6 +537,7 @@
     "scripts/cutover/issue-928.test.ts",
     "scripts/estate-cut/issue-906-vertical-slice.test.ts",
     "scripts/finding-ledger-guard.test.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
     "scripts/gate-runner/bulk-declarative-gates.test.ts",
     "scripts/gate-runner/census-generator.test.ts",
     "scripts/gate-runner/census.test.ts",
@@ -590,13 +597,14 @@
   ],
   "lightShardCount": 2,
   "lightShardMatrix": [
-    1,
-    2
+    2,
+    1
   ],
   "lightShards": [
     {
-      "shard": 1,
+      "shard": 2,
       "files": [
+        "plugins/_shared/tests/git_fixture.test.ts",
         "plugins/_shared/tests/normalize.test.ts",
         "plugins/ao-scope-guard/tests/check.test.ts",
         "plugins/ao-scope-guard/tests/normalize_edge.test.ts",
@@ -605,9 +613,9 @@
         "plugins/ao-token-chain-ledger/tests/aggregate.test.ts",
         "plugins/ao-token-chain-ledger/tests/finding_signature.test.ts",
         "plugins/ao-token-chain-ledger/tests/writer.test.ts",
-        "scripts/browser-gpt-page-probe.test.ts",
-        "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
-        "scripts/estate-cut/issue-906-vertical-slice.test.ts",
+        "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+        "scripts/cutover/issue-928.test.ts",
+        "scripts/flow-manager-long-running-child.test.ts",
         "scripts/gate-runner/census-generator.test.ts",
         "scripts/gate-runner/contracts.test.ts",
         "scripts/gate-runner/custom/bulk-cli-parity.test.ts",
@@ -634,13 +642,12 @@
         "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
         "scripts/worker-smoke.test.ts"
       ],
-      "totalRuntimeMs": 3420000
+      "totalRuntimeMs": 3465000
     },
     {
-      "shard": 2,
+      "shard": 1,
       "files": [
         "plugins/_shared/tests/declaration_schema.test.ts",
-        "plugins/_shared/tests/git_fixture.test.ts",
         "plugins/_shared/tests/issue_parser.test.ts",
         "plugins/ao-codex-pr-reviewer/tests/review.test.ts",
         "plugins/ao-scope-guard/tests/declaration_loader.test.ts",
@@ -649,8 +656,9 @@
         "plugins/ao-task-declaration/tests/validate.test.ts",
         "plugins/ao-token-chain-ledger/tests/convergence.test.ts",
         "plugins/ao-token-chain-ledger/tests/session_cost.test.ts",
-        "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
-        "scripts/cutover/issue-928.test.ts",
+        "scripts/browser-gpt-page-probe.test.ts",
+        "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+        "scripts/estate-cut/issue-906-vertical-slice.test.ts",
         "scripts/finding-ledger-guard.test.ts",
         "scripts/gate-runner/bulk-declarative-gates.test.ts",
         "scripts/gate-runner/census.test.ts",
@@ -677,7 +685,7 @@
         "scripts/toolchain/chatgpt-browser-turn.issue-1010.test.ts",
         "scripts/toolchain/chatgpt-browser-turn.test.ts"
       ],
-      "totalRuntimeMs": 3390000
+      "totalRuntimeMs": 3465000
     }
   ],
   "heavyShards": [
