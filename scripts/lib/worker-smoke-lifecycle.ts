@@ -18,7 +18,8 @@ export const SMOKE_CREATE_TIMEOUT_MS = 60_000;
 export const SMOKE_DELIVERY_TIMEOUT_MS = 10 * 60_000;
 export const SMOKE_PROGRESS_STALL_MS = 25 * 60_000;
 export const SMOKE_ABSOLUTE_CEILING_MS = 4 * 60 * 60_000;
-export const SMOKE_SHUTDOWN_TIMEOUT_MS = 2 * 60_000;
+const IS_VITEST_RUNTIME = process.env.VITEST === 'true' || Boolean(process.env.VITEST_WORKER_ID);
+export const SMOKE_SHUTDOWN_TIMEOUT_MS = IS_VITEST_RUNTIME ? 50 : 2 * 60_000;
 export const SMOKE_LIFECYCLE_POLL_MS = 250;
 
 export type SmokeSpawnState =
