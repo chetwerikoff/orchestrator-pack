@@ -1117,7 +1117,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
           ? 'empty_stdout'
           : created.errorCode === 'orca_invalid_json'
             ? 'invalid_json'
-            : 'recognized_cli_error';
+            : 'supported_operation_failure';
       const diagnostic = createSmokeControlPlaneDiagnostic({
         terminalAcquired: false,
         operation: 'terminal_create',
