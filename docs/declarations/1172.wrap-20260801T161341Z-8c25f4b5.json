@@ -7,11 +7,35 @@
   "baseline": {
     "commit_sha": "0494c4eead86286e8929da1f8fd7554c76aa991f",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ea86bdade6da5b18e3e8369b4c1336dce4767495140d3949f1426ea409d1fd87"
+    "active_scope_hash": "sha256:23bd5e7d165dc4535d9025943b4669c35d9ce7fbfbc52ba8a8f2faea661b9d53"
   },
   "declared_paths": [
-    "scripts/chatgpt-browser-turn/README.md"
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/owned-prompt-marker.ts",
+    "scripts/chatgpt-browser-turn/owned-prompt-marker.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:ea86bdade6da5b18e3e8369b4c1336dce4767495140d3949f1426ea409d1fd87",
+      "new_active_scope_hash": "sha256:23bd5e7d165dc4535d9025943b4669c35d9ce7fbfbc52ba8a8f2faea661b9d53",
+      "changed": {
+        "added": [
+          "scripts/chatgpt-browser-turn/owned-prompt-marker.test.ts",
+          "scripts/chatgpt-browser-turn/owned-prompt-marker.ts",
+          "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+          "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+          "scripts/chatgpt-browser-turn/state-light-turn.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Declare the complete Issue 1172 implementation and focused regression surface.",
+      "actor": "local",
+      "timestamp": "2026-08-01T16:14:06.192Z",
+      "applied": true
+    }
+  ]
 }
