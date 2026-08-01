@@ -9,6 +9,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createBoundedOrcaTerminal } from './worker-smoke-bounded-create.ts';
+import { registerWorkerSmokeFindingsRegressionTests } from './worker-smoke-findings-regressions.ts';
 import {
   abandonAmbiguousUnbound,
   bindSmokeTerminalHandle,
@@ -522,5 +523,13 @@ export function registerWorkerSmokeLifecycleRegressionTests(input: {
       expect(inspected.invalidEvents.some((value) => value.includes('terminal_before_start'))).toBe(true);
       rmSync(root, { recursive: true, force: true });
     });
+  });
+
+  registerWorkerSmokeFindingsRegressionTests({
+    describe,
+    expect,
+    it,
+    vi,
+    waitForSmokeChildCompletion,
   });
 }
