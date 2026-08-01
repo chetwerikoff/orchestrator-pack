@@ -1,0 +1,60 @@
+name: Issue 1148 review finding fixes
+
+on:
+  push:
+    branches:
+      - agent/issue-1148-message-identity
+
+permissions:
+  contents: write
+
+concurrency:
+  group: issue-1148-review-fixes
+  cancel-in-progress: false
+
+jobs:
+  apply-review-fixes:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/issue-1148-message-identity
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Apply review findings
+        run: python .github/issue-1148-review-fixes.py
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Run focused verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run check:node-major --silent
+          npm run typecheck:foundation --silent
+          node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 \
+            scripts/chatgpt-browser-turn/state-light-page-observation.test.ts \
+            scripts/stage-completeness-guard.test.ts
+
+      - name: Commit scoped fixes and remove temporary controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/issue-1148-review-fixes.py
+          git rm .github/workflows/issue-1148-review-fixes.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/chatgpt-browser-turn/state-light-turn.ts
+          git add scripts/chatgpt-browser-turn/state-light-page-observation.test.ts
+          git commit -m 'fix(browser-turn): address identity review findings'
+          git push origin HEAD:agent/issue-1148-message-identity
