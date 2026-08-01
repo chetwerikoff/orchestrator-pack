@@ -77,6 +77,8 @@ function escapeCssString(value: string): string {
  * Exact opaque message-identity lookup; never interpolate an unescaped id.
  * Regression coverage evaluates this selector through an independent CSS-string
  * decoder, including quotes, backslashes, brackets, controls, and injection-like ids.
+ * Callers must still require one globally unique current-page user node; selector
+ * construction alone is not an ownership witness.
  */
 export function messageIdentitySelector(identity: string): string {
   if (!identity) throw new Error('message_identity_required');
