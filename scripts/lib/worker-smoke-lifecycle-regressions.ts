@@ -178,7 +178,12 @@ export function registerWorkerSmokeLifecycleRegressionTests(input: {
   describe('worker smoke spawn and cleanup lifecycle (#1138)', () => {
     it('bounds Orca terminal creation and treats timeout as ambiguous unbound', () => {
       const timeout = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
-      const runner = vi.fn(() => ({ stdout: '', stderr: '', status: null, error: timeout }));
+      const runner = vi.fn((_command: string, _args: readonly string[], _options: { timeout?: number }) => ({
+        stdout: '',
+        stderr: '',
+        status: null,
+        error: timeout,
+      }));
       const result = createBoundedOrcaTerminal({
         cwd: '/tmp/worktree',
         title: 'smoke-1138',
