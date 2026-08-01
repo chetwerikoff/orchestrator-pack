@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Flow-manager browser-turn monitoring (binding)
 
-Canonical contract: [`.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md) — **Browser-GPT turn transport — Issue #1120**.
+Canonical contract: [`.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md) — **Browser-GPT turn transport — Issues #1120 and #1150**.
 
 ## One normal monitoring path
 
@@ -16,6 +16,26 @@ For create-issue-draft and pack-review Browser-GPT work, `npm run chatgpt-browse
 - The helper may use bounded low-frequency polling after initial dispatch observation. A normal waiting/generating poll is not an incident.
 - A direct helper failure affects only that invocation. It does not authorize a profile-, conversation-, task-, Issue-, PR-, or agent-wide gate.
 - Owned-tab cleanup is progressive and local. Never close or commandeer sibling/foreign ChatGPT tabs.
+
+## Triple-source launch contract (#1150)
+
+T3 `competitive` and `architectural-review` are each one staggered concurrent batch with one `stageAttemptId`, policy `triple-source/v1`, and exact source slots `01`, `02`, and `03`.
+
+- Start all three slots before harvesting or adjudicating any sibling result. Preserve 10–15 second spacing and bounded observation of earlier slots; do not invent an account-wide concurrency cap.
+- Every invocation emits one immutable `reviewer-invocation-envelope/v1` bound to `reviewEpisodeId`, `stageAttemptId`, policy, stage, frozen `sourceRevision`, reviewer slot/ordinal, invocation identity, reviewer-source identity, terminal-result identity, revision checks, capacity observation, `send_count`, and terminal classification.
+- Successful siblings write separate source-suffixed captures: `pass-NN-competitive-SS.capture.txt` or `pass-NN-architectural-review-SS.capture.txt`. Never consolidate, rewrite, or move sibling captures to satisfy a file-count guard.
+- The final `stage-completeness-receipt/v1` is the only persisted stage authority. Episode-wide governed/relayed unions and counts are derived, never persisted as an episode receipt.
+- One exact three-capture `stageAttemptId` is one logical round. Final T3 activation remains blocked until #1123 replaces Issue-lifetime capture-file counting with logical-round authority.
+
+## Invocation-local retry and settlement
+
+Blind restart is forbidden after any possible or confirmed send.
+
+- One paced retry under the same slot and `stageAttemptId` is permitted only when the terminal helper result proves a pre-send zero-send quota/composer/fill failure and reports `send_count: 0`.
+- The retry uses `attemptOrdinal: 2`; a second retry is forbidden.
+- A post-send failure, ambiguous delivery, output conflict, missing terminal result, or any result with `send_count: 1` is incident evidence and forbids resend.
+- A proven zero-send result with unused retry eligibility keeps the stage attempt unsettled until the retry runs or eligibility is explicitly abandoned and the attempt settles blocked.
+- Relay/adjudication begins only after every launched invocation is terminal, no retry runs or remains eligible, and final revision checks match the frozen attempt revision.
 
 ## Legacy state is not admission authority
 
@@ -30,14 +50,15 @@ Legacy control commands may remain available for compatibility/evidence lookup, 
 
 ## Unexpected events and restart
 
-When the helper directly observes foreign/interleaved user activity, page loss, UI contract failure, cleanup failure, timeout, or another unexpected browser-turn event:
+When the helper directly observes foreign/interleaved user activity, page loss, UI contract failure, cleanup failure, timeout, output conflict, or another unexpected browser-turn event:
 
-1. return/report the invocation-local result;
+1. retain and report the invocation-local terminal result or explicit missing-terminal incident;
 2. append the compact event best-effort to `~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl`;
 3. include the same direct event in the current flow-manager report;
-4. leave sibling Browser-GPT work alone.
+4. leave sibling Browser-GPT work alone;
+5. do not restart unless the result proves an eligible zero-send failure under the rule above.
 
-A lost/crashed invocation may be retried as a fresh chat with a fresh send. Duplicate recoverable GPT text is an accepted residual risk; do not recreate the old recovery/clear protocol to prevent it.
+Duplicate recoverable text is not a reason to reintroduce global recovery/clear machinery. Source-preserving receipts and relay verification govern what may progress.
 
 ## Sanctioned one-shot page probe
 
@@ -65,9 +86,10 @@ Do not replace this command with raw CDP WebSocket scripts, Playwright snippets,
 - No periodic browser-tab sweeper that closes tabs it did not open.
 - No reporting "still running" from shell/PID/log state alone.
 - No probe-driven takeover, helper bypass, resend, or workflow progression.
+- No flow-manager consolidation or content judgment over sibling reviewer output.
 
 The one-shot page probe diagnoses an already-open page; it is not a fallback state machine or browser-turn owner.
 
 ## Session handoff
 
-Never end a flow-manager turn with only "background job running". Status must name the owned chat URL when known, the helper result or latest direct observation, any direct incident surfaced by the helper, and the next flow action.
+Never end a flow-manager turn with only "background job running". Status must name the owned chat URL when known, the helper result or latest direct observation, the `reviewEpisodeId`/`stageAttemptId`/slot when applicable, any direct incident surfaced by the helper, and the next flow action.
