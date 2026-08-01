@@ -1,6 +1,13 @@
 import type { TurnResultV1 } from './contracts.ts';
 import { vi } from 'vitest';
 
+vi.mock('node:crypto', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:crypto')>()),
+  randomBytes: vi.fn(() => Uint8Array.from({ length: 16 }, () => 0x11)),
+}));
+
+export const TEST_OWNED_MARKER = 'OPKTURNV1' + '11'.repeat(16);
+
 import {
   ASSISTANT_TURN_ANCESTOR_XPATH,
   matchesAssistantTurnActionSelector,
@@ -88,11 +95,11 @@ export function collectionLocator(messages: StateLightTestMessage[], generating 
 
 export function readyTurnObservationFrames(prompt: string, reply: string): StateLightTestMessage[][] {
   const working = [
-    { role: 'user' as const, text: prompt },
+    { role: 'user' as const, text: `${TEST_OWNED_MARKER}\n\n${prompt}` },
     { role: 'assistant' as const, text: 'working' },
   ];
   const final = [
-    { role: 'user' as const, text: prompt },
+    { role: 'user' as const, text: `${TEST_OWNED_MARKER}\n\n${prompt}` },
     {
       role: 'assistant' as const,
       text: reply,
