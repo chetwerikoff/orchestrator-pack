@@ -1,10 +1,10 @@
 /**
  * Stage-completeness guard core.
  *
- * Legacy capture-directory validation remains read-compatible for existing
- * callers. Issue #1150 adds an explicit receipt-backed path for source-preserving
- * review episodes. Stage receipts are the only persisted authority in that path;
- * the episode state returned here is recomputed and never persisted.
+ * Legacy capture-directory validation remains read-compatible only for the
+ * explicit historical allowlist. Fresh review episodes use source-preserving
+ * stage receipts. Stage receipts are the only persisted authority; episode
+ * state is recomputed for every guard invocation.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -35,6 +35,12 @@ export type TerminalClassification =
   | 'post-send-failure'
   | 'output-conflict'
   | 'incident';
+/**
+ * retryClass describes whether another send is allowed after this invocation.
+ * retryAttempt separately records whether this invocation consumed the one
+ * permitted retry. The legacy `retry` value remains parser-compatible but new
+ * writers use `none` or `retry-forbidden` for retry attempts.
+ */
 export type RetryClass = 'none' | 'eligible-zero-send' | 'retry' | 'retry-forbidden';
 
 const COUNTED_STAGE_TOKENS = new Set<ReviewStage>([
@@ -95,6 +101,7 @@ export interface ReviewerInvocationEnvelopeV1 {
   reviewerSlot: ReviewerSlot;
   reviewerOrdinal: number;
   attemptOrdinal: 1 | 2;
+  retryAttempt: boolean;
   terminal: boolean;
   terminalClassification: TerminalClassification;
   sendCount: number;
@@ -107,7 +114,13 @@ export interface ReviewerInvocationEnvelopeV1 {
 
 export interface ClaudeCaptureBranchV1 {
   kind: 'capture';
+  provider: 'claude-cli';
+  invocationId: string;
+  producingRunIdentity: string;
+  terminalResultIdentity: string;
   terminal: true;
+  terminalClassification: 'complete';
+  exitCode: 0;
   capture: CaptureIdentityV1;
   m3Status: 'recorded';
 }
@@ -121,10 +134,20 @@ export interface ClaudeWaiverBranchV1 {
   };
 }
 
+/**
+ * A cumulative no-overwrite chain is carried by the authoritative stage
+ * receipts themselves. The latest receipt's census proves which earlier
+ * receipt IDs must be supplied; selective omission therefore fails closed.
+ */
 export interface StageCompletenessReceiptV1 {
   schema: typeof STAGE_COMPLETENESS_RECEIPT_SCHEMA;
   tier: ReviewTier;
+  taskIdentity: string;
+  episodeFirstRevision: string;
   reviewEpisodeId: string;
+  stageReceiptId: string;
+  previousStageReceiptId: string | null;
+  receiptCensus: string[];
   stageAttemptId: string;
   stageSequence: number;
   stage: ReviewStage;
@@ -154,23 +177,28 @@ export interface VerifiedRelayPartV1 {
   embeddedByteLength: number;
   embeddedSha256: string;
   verified: true;
-  supersedes?: string;
 }
 
 export interface VerifiedRelayEvidenceV1 {
+  relayAttemptId: string;
   captureIdentity: string;
+  sourceLabel: string;
   name: string;
   byteLength: number;
   sha256: string;
   verified: boolean;
+  supersedes?: string;
   parts?: VerifiedRelayPartV1[];
 }
 
 export interface ReviewEpisodeStateV1 {
   reviewEpisodeId: string | null;
+  taskIdentity: string | null;
+  episodeFirstRevision: string | null;
   tier: ReviewTier | null;
   receipts: StageCompletenessReceiptV1[];
   receiptsByStage: Record<ReviewStage, StageCompletenessReceiptV1[]>;
+  credentialingReceiptsByStage: Partial<Record<ReviewStage, StageCompletenessReceiptV1>>;
   credentialingCapturesByStage: Record<ReviewStage, CaptureIdentityV1[]>;
   governedCaptures: CaptureIdentityV1[];
   relayedCaptures: CaptureIdentityV1[];
@@ -257,6 +285,18 @@ function nonEmpty(value: unknown): value is string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function canonicalEpisodeId(taskIdentity: string, episodeFirstRevision: string): string {
+  return `${taskIdentity}@${episodeFirstRevision}`;
+}
+
+function canonicalStageReceiptId(reviewEpisodeId: string, stageSequence: number): string {
+  return `${reviewEpisodeId}:stage-receipt:${String(stageSequence).padStart(4, '0')}`;
+}
+
+function canonicalSourceLabel(capture: CaptureIdentityV1): string {
+  return `${capture.name}|${capture.captureIdentity}`;
 }
 
 function sameCapture(left: CaptureIdentityV1, right: CaptureIdentityV1): boolean {
@@ -377,6 +417,9 @@ function parseInvocation(
   if (value.sourceRevision !== receipt.sourceRevision) errors.push(`${label} sourceRevision mismatch`);
   if (slot !== '01' && slot !== '02' && slot !== '03') errors.push(`${label} reviewerSlot must be 01, 02, or 03`);
   if (attemptOrdinal !== 1 && attemptOrdinal !== 2) errors.push(`${label} attemptOrdinal must be 1 or 2`);
+  if (value.retryAttempt !== true && value.retryAttempt !== false) errors.push(`${label} retryAttempt must be boolean`);
+  if (attemptOrdinal === 1 && value.retryAttempt !== false) errors.push(`${label} first invocation cannot be marked retryAttempt`);
+  if (attemptOrdinal === 2 && value.retryAttempt !== true) errors.push(`${label} second invocation must be marked retryAttempt`);
   if (!Number.isInteger(reviewerOrdinal) || Number(reviewerOrdinal) < 1) errors.push(`${label} reviewerOrdinal must be positive`);
   if ((slot === '01' || slot === '02' || slot === '03') && Number(slot) !== Number(reviewerOrdinal)) {
     errors.push(`${label} reviewerOrdinal must match reviewerSlot`);
@@ -414,6 +457,9 @@ function parseInvocation(
     && attemptOrdinal === 1 && retryClass !== 'eligible-zero-send') {
     errors.push(`${label} proven zero-send quota/composer failure must be classified retry-eligible`);
   }
+  if (attemptOrdinal === 2 && retryClass === 'eligible-zero-send') {
+    errors.push(`${label} the one retry cannot create another retry opportunity`);
+  }
   if (capture && !expectedCaptureName(receipt.stage, capture, slot as ReviewerSlot)) {
     errors.push(`${label} capture filename does not match stage/slot`);
   }
@@ -431,6 +477,7 @@ function parseInvocation(
     reviewerSlot: slot as ReviewerSlot,
     reviewerOrdinal: Number(reviewerOrdinal),
     attemptOrdinal: attemptOrdinal as 1 | 2,
+    retryAttempt: Boolean(value.retryAttempt),
     terminal: Boolean(value.terminal),
     terminalClassification: terminalClassification as TerminalClassification,
     sendCount: Number(sendCount),
@@ -485,7 +532,7 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
     if (attempts.length === 2) {
       const first = attempts[0]!;
       const retry = attempts[1]!;
-      if (retry.attemptOrdinal !== 2 || retry.retryClass !== 'retry') {
+      if (retry.attemptOrdinal !== 2 || !retry.retryAttempt) {
         errors.push(`stage ${receipt.stage} slot ${slot} retry envelope is malformed`);
       }
       if (first.sendCount !== 0
@@ -495,6 +542,9 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
       }
       if (retry.reviewerSource !== first.reviewerSource) {
         errors.push(`stage ${receipt.stage} slot ${slot} retry must preserve reviewerSource identity`);
+      }
+      if (retry.retryClass === 'eligible-zero-send') {
+        errors.push(`stage ${receipt.stage} slot ${slot} retry cannot remain retry-eligible`);
       }
     }
     const final = attempts.at(-1)!;
@@ -566,12 +616,20 @@ function validateClaudeReceipt(receipt: StageCompletenessReceiptV1, errors: stri
     return;
   }
   if (receipt.claude.kind === 'capture') {
-    const capture = validateCaptureIdentity(receipt.claude.capture, 'architectural-lens capture', errors);
+    const branch = receipt.claude;
+    const capture = validateCaptureIdentity(branch.capture, 'architectural-lens capture', errors);
     if (!capture || !expectedCaptureName('architectural-lens', capture)) {
       errors.push('architectural-lens capture filename mismatch');
     }
-    if (receipt.claude.terminal !== true || receipt.claude.m3Status !== 'recorded') {
-      errors.push('architectural-lens capture branch requires terminal Claude outcome and M3 status');
+    if (branch.provider !== 'claude-cli'
+      || !nonEmpty(branch.invocationId)
+      || !nonEmpty(branch.producingRunIdentity)
+      || !nonEmpty(branch.terminalResultIdentity)
+      || branch.terminal !== true
+      || branch.terminalClassification !== 'complete'
+      || branch.exitCode !== 0
+      || branch.m3Status !== 'recorded') {
+      errors.push('architectural-lens capture branch requires immutable producing-run, invocation, terminal CLI result, and M3 evidence');
     }
     if (capture && !exactIdentitySet([capture], receipt.relayEligibleCaptures)) {
       errors.push('architectural-lens relayEligibleCaptures must contain exactly the Claude capture');
@@ -611,16 +669,38 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   const stage = value.stage;
   const policyVersion = value.policyVersion;
   const outcome = value.outcome;
+  const taskIdentity = nonEmpty(value.taskIdentity) ? value.taskIdentity.trim() : '';
+  const episodeFirstRevision = nonEmpty(value.episodeFirstRevision) ? value.episodeFirstRevision.trim() : '';
+  const reviewEpisodeId = nonEmpty(value.reviewEpisodeId) ? value.reviewEpisodeId.trim() : '';
+  const stageReceiptId = nonEmpty(value.stageReceiptId) ? value.stageReceiptId.trim() : '';
+  const previousStageReceiptId = value.previousStageReceiptId === null
+    ? null
+    : nonEmpty(value.previousStageReceiptId) ? value.previousStageReceiptId.trim() : '';
   if (tier !== 'T1' && tier !== 'T2' && tier !== 'T3') errors.push(`${label} has unknown tier`);
   if (!COUNTED_STAGE_TOKENS.has(stage as ReviewStage)) errors.push(`${label} has unknown stage`);
   if (policyVersion !== TRIPLE_SOURCE_POLICY_VERSION && policyVersion !== SINGLE_SOURCE_POLICY_VERSION) {
     errors.push(`${label} has unknown policyVersion`);
   }
   if (!['complete', 'partial', 'blocked', 'incident'].includes(String(outcome))) errors.push(`${label} has unknown outcome`);
-  if (!nonEmpty(value.reviewEpisodeId)) errors.push(`${label} missing reviewEpisodeId`);
+  if (!taskIdentity) errors.push(`${label} missing taskIdentity`);
+  if (!episodeFirstRevision) errors.push(`${label} missing episodeFirstRevision`);
+  if (!reviewEpisodeId) errors.push(`${label} missing reviewEpisodeId`);
+  if (!stageReceiptId) errors.push(`${label} missing stageReceiptId`);
+  if (previousStageReceiptId === '') errors.push(`${label} previousStageReceiptId must be null or non-empty`);
   if (!nonEmpty(value.stageAttemptId)) errors.push(`${label} missing stageAttemptId`);
   if (!nonEmpty(value.sourceRevision)) errors.push(`${label} missing sourceRevision`);
   if (!Number.isInteger(value.stageSequence) || Number(value.stageSequence) < 1) errors.push(`${label} stageSequence must be positive`);
+  if (taskIdentity && episodeFirstRevision && reviewEpisodeId !== canonicalEpisodeId(taskIdentity, episodeFirstRevision)) {
+    errors.push(`${label} reviewEpisodeId is not bound to taskIdentity + first frozen revision`);
+  }
+  if (reviewEpisodeId && Number.isInteger(value.stageSequence)
+    && stageReceiptId !== canonicalStageReceiptId(reviewEpisodeId, Number(value.stageSequence))) {
+    errors.push(`${label} stageReceiptId is not canonical for the task-wide receipt sequence`);
+  }
+  if (!Array.isArray(value.receiptCensus)
+    || value.receiptCensus.some((item) => !nonEmpty(item))) {
+    errors.push(`${label} receiptCensus must be a non-empty-string array`);
+  }
   if (!isRecord(value.revisionChecks)
     || value.revisionChecks.attemptCreation !== 'matched'
     || value.revisionChecks.beforeLaunch !== 'matched'
@@ -646,7 +726,12 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   const receipt: StageCompletenessReceiptV1 = {
     schema: STAGE_COMPLETENESS_RECEIPT_SCHEMA,
     tier: tier as ReviewTier,
-    reviewEpisodeId: String(value.reviewEpisodeId).trim(),
+    taskIdentity,
+    episodeFirstRevision,
+    reviewEpisodeId,
+    stageReceiptId,
+    previousStageReceiptId: previousStageReceiptId as string | null,
+    receiptCensus: (value.receiptCensus as string[]).map((item) => item.trim()),
     stageAttemptId: String(value.stageAttemptId).trim(),
     stageSequence: Number(value.stageSequence),
     stage: stage as ReviewStage,
@@ -671,67 +756,142 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   return receipt;
 }
 
-function validateRelayEvidence(
+function validateRelayAttempt(
   value: unknown,
   index: number,
   governed: Map<string, CaptureIdentityV1>,
   errors: string[],
-): CaptureIdentityV1 | null {
+): VerifiedRelayEvidenceV1 | null {
   const label = `relay evidence[${index}]`;
   if (!isRecord(value)) {
     errors.push(`${label} must be an object`);
     return null;
   }
-  if (value.verified !== true) {
-    errors.push(`${label} is not verified`);
-    return null;
-  }
+  const relayAttemptId = nonEmpty(value.relayAttemptId) ? value.relayAttemptId.trim() : '';
   const identity = nonEmpty(value.captureIdentity) ? value.captureIdentity.trim() : '';
+  const sourceLabel = nonEmpty(value.sourceLabel) ? value.sourceLabel.trim() : '';
   const governedCapture = governed.get(identity);
+  if (!relayAttemptId) errors.push(`${label} missing relayAttemptId`);
   if (!governedCapture) {
     errors.push(`${label} references extra or unknown capture ${identity || '<missing>'}`);
     return null;
+  }
+  if (sourceLabel !== canonicalSourceLabel(governedCapture)) {
+    errors.push(`${label} sourceLabel does not match canonical source for ${identity}`);
   }
   if (value.name !== governedCapture.name
     || value.byteLength !== governedCapture.byteLength
     || String(value.sha256).toLowerCase() !== governedCapture.sha256) {
     errors.push(`${label} does not match immutable capture identity ${identity}`);
-    return null;
   }
+  if (value.verified !== true && value.verified !== false) errors.push(`${label} verified must be boolean`);
+  const supersedes = value.supersedes === undefined
+    ? undefined
+    : nonEmpty(value.supersedes) ? value.supersedes.trim() : '';
+  if (supersedes === '') errors.push(`${label} supersedes must be non-empty when present`);
   if (value.parts !== undefined) {
     if (!Array.isArray(value.parts) || value.parts.length === 0) {
       errors.push(`${label} multipart evidence must contain parts`);
-      return null;
-    }
-    const parts = value.parts as unknown[];
-    const expectedOf = parts.length;
-    const seen = new Set<number>();
-    for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
-      const part = parts[partIndex];
-      if (!isRecord(part)
-        || part.verified !== true
-        || part.of !== expectedOf
-        || !Number.isInteger(part.part)
-        || Number(part.part) < 1
-        || Number(part.part) > expectedOf
-        || !nonEmpty(part.sourceLabel)
-        || part.embeddedByteLength !== governedCapture.byteLength
-        || String(part.embeddedSha256).toLowerCase() !== governedCapture.sha256) {
-        errors.push(`${label} multipart part ${partIndex + 1} is invalid`);
-        continue;
+    } else {
+      const parts = value.parts as unknown[];
+      const expectedOf = parts.length;
+      const seen = new Set<number>();
+      for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+        const part = parts[partIndex];
+        if (!isRecord(part)
+          || part.verified !== true
+          || part.of !== expectedOf
+          || !Number.isInteger(part.part)
+          || Number(part.part) < 1
+          || Number(part.part) > expectedOf
+          || part.sourceLabel !== canonicalSourceLabel(governedCapture)
+          || part.embeddedByteLength !== governedCapture.byteLength
+          || String(part.embeddedSha256).toLowerCase() !== governedCapture.sha256) {
+          errors.push(`${label} multipart part ${partIndex + 1} is invalid`);
+          continue;
+        }
+        if (seen.has(Number(part.part))) errors.push(`${label} repeats multipart part ${part.part}`);
+        seen.add(Number(part.part));
       }
-      if (seen.has(Number(part.part))) errors.push(`${label} repeats multipart part ${part.part}`);
-      seen.add(Number(part.part));
+      if (seen.size !== expectedOf) errors.push(`${label} multipart cardinality is incomplete`);
     }
-    if (seen.size !== expectedOf) errors.push(`${label} multipart cardinality is incomplete`);
   }
-  return governedCapture;
+  if (errors.some((error) => error.startsWith(label))) return null;
+  return {
+    relayAttemptId,
+    captureIdentity: identity,
+    sourceLabel,
+    name: governedCapture.name,
+    byteLength: governedCapture.byteLength,
+    sha256: governedCapture.sha256,
+    verified: Boolean(value.verified),
+    ...(supersedes ? { supersedes } : {}),
+    ...(Array.isArray(value.parts) ? { parts: value.parts as VerifiedRelayPartV1[] } : {}),
+  };
+}
+
+function selectVerifiedRelayHeads(
+  input: readonly unknown[],
+  governed: Map<string, CaptureIdentityV1>,
+  errors: string[],
+): Map<string, CaptureIdentityV1> {
+  const attempts = input
+    .map((value, index) => validateRelayAttempt(value, index, governed, errors))
+    .filter((value): value is VerifiedRelayEvidenceV1 => Boolean(value));
+  const byAttempt = new Map<string, VerifiedRelayEvidenceV1>();
+  for (const attempt of attempts) {
+    if (byAttempt.has(attempt.relayAttemptId)) errors.push(`duplicate relayAttemptId ${attempt.relayAttemptId}`);
+    else byAttempt.set(attempt.relayAttemptId, attempt);
+  }
+  for (const attempt of attempts) {
+    if (!attempt.supersedes) continue;
+    const previous = byAttempt.get(attempt.supersedes);
+    if (!previous) {
+      errors.push(`relay attempt ${attempt.relayAttemptId} supersedes unknown attempt ${attempt.supersedes}`);
+    } else if (previous.captureIdentity !== attempt.captureIdentity) {
+      errors.push(`relay attempt ${attempt.relayAttemptId} supersedes a different capture`);
+    } else if (previous.relayAttemptId === attempt.relayAttemptId) {
+      errors.push(`relay attempt ${attempt.relayAttemptId} cannot supersede itself`);
+    }
+  }
+  const result = new Map<string, CaptureIdentityV1>();
+  for (const [captureIdentity, capture] of governed) {
+    const captureAttempts = attempts.filter((attempt) => attempt.captureIdentity === captureIdentity);
+    if (captureAttempts.length === 0) continue;
+    const superseded = new Set(captureAttempts.map((attempt) => attempt.supersedes).filter((id): id is string => Boolean(id)));
+    const heads = captureAttempts.filter((attempt) => !superseded.has(attempt.relayAttemptId));
+    if (heads.length !== 1) {
+      errors.push(`capture ${captureIdentity} must have exactly one latest non-superseded relay attempt`);
+      continue;
+    }
+    const head = heads[0]!;
+    const visited = new Set<string>();
+    let current: VerifiedRelayEvidenceV1 | undefined = head;
+    while (current?.supersedes) {
+      if (visited.has(current.relayAttemptId)) {
+        errors.push(`capture ${captureIdentity} relay supersession contains a cycle`);
+        break;
+      }
+      visited.add(current.relayAttemptId);
+      current = byAttempt.get(current.supersedes);
+    }
+    if (captureAttempts.length > 1 && visited.size + 1 !== captureAttempts.length) {
+      errors.push(`capture ${captureIdentity} relay attempts are not one linear supersession chain`);
+      continue;
+    }
+    if (!head.verified) {
+      errors.push(`latest relay attempt ${head.relayAttemptId} for ${captureIdentity} is not verified`);
+      continue;
+    }
+    result.set(captureIdentity, capture);
+  }
+  return result;
 }
 
 /**
- * Pure, shared Issue #1150 derivation. It consumes only explicit stage receipts
- * and verified delivery evidence; it never scans directories or trusts a
- * persisted episode snapshot.
+ * Pure shared Issue #1150 derivation. It consumes explicit authoritative stage
+ * receipts and verified relay attempts; it never trusts a persisted episode
+ * snapshot. Receipt chain/census validation makes selective omission fail closed.
  */
 export function deriveReviewEpisodeState(
   stageReceiptsInput: readonly unknown[],
@@ -743,19 +903,28 @@ export function deriveReviewEpisodeState(
     .filter((value): value is StageCompletenessReceiptV1 => Boolean(value))
     .sort((a, b) => a.stageSequence - b.stageSequence || a.stageAttemptId.localeCompare(b.stageAttemptId));
   const episodeIds = new Set(receipts.map((receipt) => receipt.reviewEpisodeId));
+  const taskIdentities = new Set(receipts.map((receipt) => receipt.taskIdentity));
+  const firstRevisions = new Set(receipts.map((receipt) => receipt.episodeFirstRevision));
   const tiers = new Set(receipts.map((receipt) => receipt.tier));
   if (receipts.length === 0) errors.push('review episode requires at least one stage receipt');
   if (episodeIds.size > 1) errors.push('stage receipts mix reviewEpisodeId values');
+  if (taskIdentities.size > 1) errors.push('stage receipts mix taskIdentity values');
+  if (firstRevisions.size > 1) errors.push('stage receipts mix episodeFirstRevision values');
   if (tiers.size > 1) errors.push('stage receipts mix tiers');
+
   const attemptIds = new Set<string>();
   const stageSequences = new Set<number>();
+  const receiptIds = new Set<string>();
   const episodeInvocationIds = new Set<string>();
   const episodeTerminalResultIds = new Set<string>();
+  const producingRunIds = new Set<string>();
   for (const receipt of receipts) {
     if (attemptIds.has(receipt.stageAttemptId)) errors.push(`duplicate stageAttemptId ${receipt.stageAttemptId}`);
     attemptIds.add(receipt.stageAttemptId);
     if (stageSequences.has(receipt.stageSequence)) errors.push(`duplicate stageSequence ${receipt.stageSequence}`);
     stageSequences.add(receipt.stageSequence);
+    if (receiptIds.has(receipt.stageReceiptId)) errors.push(`duplicate stageReceiptId ${receipt.stageReceiptId}`);
+    receiptIds.add(receipt.stageReceiptId);
     for (const invocation of receipt.invocations ?? []) {
       if (!isRecord(invocation)) continue;
       const invocationId = nonEmpty(invocation.invocationId) ? invocation.invocationId.trim() : '';
@@ -773,13 +942,56 @@ export function deriveReviewEpisodeState(
         episodeTerminalResultIds.add(terminalResultIdentity);
       }
     }
+    if (receipt.claude?.kind === 'capture') {
+      const branch = receipt.claude;
+      if (episodeInvocationIds.has(branch.invocationId)) errors.push(`review episode repeats invocationId ${branch.invocationId}`);
+      episodeInvocationIds.add(branch.invocationId);
+      if (episodeTerminalResultIds.has(branch.terminalResultIdentity)) {
+        errors.push(`review episode repeats terminalResultIdentity ${branch.terminalResultIdentity}`);
+      }
+      episodeTerminalResultIds.add(branch.terminalResultIdentity);
+      if (producingRunIds.has(branch.producingRunIdentity)) {
+        errors.push(`review episode repeats Claude producingRunIdentity ${branch.producingRunIdentity}`);
+      }
+      producingRunIds.add(branch.producingRunIdentity);
+    }
   }
+
+  if (receipts.length > 0) {
+    const expectedReceiptIds: string[] = [];
+    for (let index = 0; index < receipts.length; index += 1) {
+      const receipt = receipts[index]!;
+      const expectedSequence = index + 1;
+      if (receipt.stageSequence !== expectedSequence) {
+        errors.push(`stage receipt sequence is incomplete: expected ${expectedSequence}, got ${receipt.stageSequence}`);
+      }
+      const expectedPrevious = index === 0 ? null : receipts[index - 1]!.stageReceiptId;
+      if (receipt.previousStageReceiptId !== expectedPrevious) {
+        errors.push(`stage receipt ${receipt.stageReceiptId} previousStageReceiptId does not match authoritative chain`);
+      }
+      expectedReceiptIds.push(receipt.stageReceiptId);
+      if (receipt.receiptCensus.length !== expectedReceiptIds.length
+        || receipt.receiptCensus.some((id, censusIndex) => id !== expectedReceiptIds[censusIndex])) {
+        errors.push(`stage receipt ${receipt.stageReceiptId} receiptCensus does not prove the complete no-overwrite chain`);
+      }
+    }
+    if (receipts[0]!.sourceRevision !== receipts[0]!.episodeFirstRevision) {
+      errors.push('first stage receipt sourceRevision must equal episodeFirstRevision');
+    }
+    const latestCensus = receipts.at(-1)!.receiptCensus;
+    if (latestCensus.length !== receipts.length
+      || latestCensus.some((id, index) => id !== receipts[index]!.stageReceiptId)) {
+      errors.push('latest stage receipt census omits or replaces earlier authoritative receipts');
+    }
+  }
+
   const receiptsByStage: Record<ReviewStage, StageCompletenessReceiptV1[]> = {
     competitive: [],
     'architectural-review': [],
     'architectural-lens': [],
     architectural: [],
   };
+  const credentialingReceiptsByStage: Partial<Record<ReviewStage, StageCompletenessReceiptV1>> = {};
   const credentialingCapturesByStage: Record<ReviewStage, CaptureIdentityV1[]> = {
     competitive: [],
     'architectural-review': [],
@@ -795,7 +1007,14 @@ export function deriveReviewEpisodeState(
   const governed = new Map<string, CaptureIdentityV1>();
   for (const receipt of receipts) {
     receiptsByStage[receipt.stage].push(receipt);
-    credentialingCapturesByStage[receipt.stage].push(...receipt.credentialingCaptures);
+    if (receipt.outcome === 'complete') {
+      if (credentialingReceiptsByStage[receipt.stage]) {
+        errors.push(`${receipt.stage} has more than one credentialing complete stage attempt`);
+      } else {
+        credentialingReceiptsByStage[receipt.stage] = receipt;
+        credentialingCapturesByStage[receipt.stage].push(...receipt.credentialingCaptures);
+      }
+    }
     for (const capture of receipt.relayEligibleCaptures) {
       const existing = governed.get(capture.captureIdentity);
       if (existing && !sameCapture(existing, capture)) {
@@ -808,13 +1027,7 @@ export function deriveReviewEpisodeState(
       }
     }
   }
-  const relayed = new Map<string, CaptureIdentityV1>();
-  for (let index = 0; index < verifiedRelayEvidenceInput.length; index += 1) {
-    const capture = validateRelayEvidence(verifiedRelayEvidenceInput[index], index, governed, errors);
-    if (!capture) continue;
-    if (relayed.has(capture.captureIdentity)) errors.push(`capture ${capture.captureIdentity} has duplicate verified relay evidence`);
-    relayed.set(capture.captureIdentity, capture);
-  }
+  const relayed = selectVerifiedRelayHeads(verifiedRelayEvidenceInput, governed, errors);
   for (const stage of Object.keys(credentialingCapturesByStage) as ReviewStage[]) {
     credentialingCapturesByStage[stage].sort((left, right) => (
       left.name.localeCompare(right.name) || left.captureIdentity.localeCompare(right.captureIdentity)
@@ -832,16 +1045,16 @@ export function deriveReviewEpisodeState(
     && governedCaptureUnion.every((identity, index) => identity === relayedCaptureUnion[index]);
   if (!relayComplete) errors.push('relayedCaptureUnion must equal governedCaptureUnion exactly');
   const completeReceipts = receipts.filter((receipt) => receipt.outcome === 'complete');
-  // #1150 deliberately cannot activate triple-source final acceptance. #1123
-  // owns replacing Issue-lifetime capture-file counters with logical-round
-  // authority and will consume stageAttemptId from these receipts.
   const activationReady = completeReceipts.length > 0
     && !completeReceipts.some((receipt) => receipt.policyVersion === TRIPLE_SOURCE_POLICY_VERSION);
   return {
     reviewEpisodeId: episodeIds.size === 1 ? [...episodeIds][0]! : null,
+    taskIdentity: taskIdentities.size === 1 ? [...taskIdentities][0]! : null,
+    episodeFirstRevision: firstRevisions.size === 1 ? [...firstRevisions][0]! : null,
     tier: tiers.size === 1 ? [...tiers][0]! : null,
     receipts,
     receiptsByStage,
+    credentialingReceiptsByStage,
     credentialingCapturesByStage,
     governedCaptures,
     relayedCaptures,
@@ -869,8 +1082,20 @@ export function validateReviewEpisodeTopology(
     : ['architectural'];
   for (const stage of expected) {
     const receipts = state.receiptsByStage[stage];
-    if (receipts.length !== 1) errors.push(`${stage} requires exactly one stageAttemptId in the review episode`);
-    else if (receipts[0]!.outcome !== 'complete') errors.push(`${stage} stage is not complete`);
+    const complete = receipts.filter((receipt) => receipt.outcome === 'complete');
+    if (complete.length !== 1) errors.push(`${stage} requires exactly one credentialing complete stageAttemptId in the review episode`);
+    const credentialing = complete[0];
+    if (credentialing && receipts.at(-1) !== credentialing) {
+      errors.push(`${stage} credentialing complete attempt must be the latest settled attempt for that stage`);
+    }
+    for (const receipt of receipts) {
+      if (receipt !== credentialing && receipt.outcome === 'complete') {
+        errors.push(`${stage} has multiple credentialing attempts`);
+      }
+      if (credentialing && receipt !== credentialing && receipt.stageSequence > credentialing.stageSequence) {
+        errors.push(`${stage} has a later non-credentialing attempt after completion`);
+      }
+    }
   }
   for (const stage of Object.keys(state.receiptsByStage) as ReviewStage[]) {
     if (!expected.includes(stage) && state.receiptsByStage[stage].length > 0) {
@@ -878,7 +1103,7 @@ export function validateReviewEpisodeTopology(
     }
   }
   const ordered = expected
-    .map((stage) => state.receiptsByStage[stage][0])
+    .map((stage) => state.credentialingReceiptsByStage[stage])
     .filter((receipt): receipt is StageCompletenessReceiptV1 => Boolean(receipt));
   for (let index = 1; index < ordered.length; index += 1) {
     if (ordered[index]!.stageSequence <= ordered[index - 1]!.stageSequence) {
@@ -1086,107 +1311,23 @@ export function checkStageCompletenessGuard(
 ): StageCompletenessGuardResult {
   const fence = parseComplexityTierFence(draftText);
   if (fence.kind !== 'tier-fence') return { ok: true, errors: [], noop: true, receipt: null };
-  if (options.stageReceipts) {
+  if (options.stageReceipts !== undefined) {
     return checkReceiptBackedStageCompleteness(fence.tier as ReviewTier, options);
   }
   if (fence.tier !== 'T3') return { ok: true, errors: [], noop: true, receipt: null };
-  if (!options.draftPath) {
-    return {
-      ok: false,
-      errors: ['draft path is required for T3 stage-completeness checks'],
-      noop: false,
-      receipt: null,
-    };
-  }
 
-  const repoRoot = options.repoRoot ?? process.cwd();
-  const { capturesDir } = resolveReviewArtifacts(options.draftPath, repoRoot);
-  if (GRANDFATHERED_REVIEW_DIR_BASENAMES.has(basename(capturesDir))) {
-    return { ok: true, errors: [], noop: false, receipt: null };
-  }
-
-  const errors: string[] = [];
-  const loaded = loadReviewCaptures(capturesDir);
-  errors.push(...loaded.errors);
-  const activeSegment = resolveActiveAcceptanceSegment(loaded.captures);
-  const captures = activeSegment.captures;
-
-  const competitive = capturesFor(captures, 'competitive');
-  if (competitive.length === 0) errors.push('missing competitive stage');
-  if (competitive.length > 3) errors.push('competitive stage ceiling exceeded (maximum three passes allowed)');
-  const competitiveAnchor = competitive.length > 0
-    ? Math.max(...competitive.map((capture) => capture.passIndex))
-    : null;
-
-  const { invalid: invalidCompetitiveWaiver } = parseCompetitiveWaiver(capturesDir);
-  if (invalidCompetitiveWaiver) errors.push('invalid competitive-stage waiver record');
-
-  const architecturalReviewPass = singlePass(
-    captures,
-    'architectural-review',
-    errors,
-    'missing architectural-review stage',
-    'architectural-review stage ceiling exceeded (exactly one pass allowed)',
-  );
-  if (competitiveAnchor !== null && architecturalReviewPass !== null && architecturalReviewPass <= competitiveAnchor) {
-    errors.push('architectural-review stage out of order (must be strictly after competitive anchor)');
-  }
-
-  const lensCaptures = capturesFor(captures, 'architectural-lens');
-  const { waiver: parsedLensWaiver, invalid: invalidLensWaiver } = parseArchitectLensWaiver(capturesDir);
-  const lensWaiver = parsedLensWaiver && parsedLensWaiver.afterPass > activeSegment.boundaryPass ? parsedLensWaiver : null;
-  if (lensCaptures.length > 1) errors.push('architect-lens stage ceiling exceeded (exactly one Claude lens allowed)');
-  if (lensCaptures.length > 0 && lensWaiver) {
-    errors.push('architect-lens skip record cannot coexist with an architectural-lens capture (skip is not Claude provenance)');
-  }
-
-  const lensMax = lensCaptures.length === 1 ? lensCaptures[0]!.passIndex : null;
-  let lensSkipAnchor: number | null = null;
-  let preTerminalAnchor: number | null = null;
-  if (lensMax !== null) {
-    preTerminalAnchor = lensMax;
-    if (architecturalReviewPass !== null && lensMax <= architecturalReviewPass) {
-      errors.push('architect-lens stage out of order (must be strictly after architectural-review)');
-    }
-  } else if (lensWaiver) {
-    lensSkipAnchor = lensWaiver.afterPass;
-    preTerminalAnchor = lensSkipAnchor;
-    if (architecturalReviewPass !== null && lensSkipAnchor <= architecturalReviewPass) {
-      errors.push('claude-unavailable skip anchor out of order (must be strictly after architectural-review)');
-    }
-  } else {
-    if (invalidLensWaiver) errors.push('invalid architect-lens skip record');
-    errors.push('missing architect-lens stage (no capture and no valid claude-unavailable skip)');
-  }
-
-  const terminalCaptures = capturesFor(captures, 'architectural');
-  let terminalPass: number | null = null;
-  if (terminalCaptures.length === 0) errors.push('missing terminal architectural stage');
-  else if (terminalCaptures.length !== 1) errors.push('terminal architectural stage ceiling exceeded (exactly one GPT lens allowed)');
-  else {
-    terminalPass = terminalCaptures[0]!.passIndex;
-    if (preTerminalAnchor !== null && terminalPass <= preTerminalAnchor) {
-      errors.push('terminal GPT capture out of order (must be strictly after Claude lens/skip anchor)');
+  if (options.draftPath) {
+    const repoRoot = options.repoRoot ?? process.cwd();
+    const { capturesDir } = resolveReviewArtifacts(options.draftPath, repoRoot);
+    if (GRANDFATHERED_REVIEW_DIR_BASENAMES.has(basename(capturesDir))) {
+      return { ok: true, errors: [], noop: false, receipt: null };
     }
   }
-
-  if (errors.length > 0 || competitiveAnchor === null || architecturalReviewPass === null
-    || preTerminalAnchor === null || terminalPass === null) {
-    return { ok: false, errors, noop: false, receipt: null };
-  }
-
   return {
-    ok: true,
-    errors: [],
+    ok: false,
+    errors: [`fresh T3 requires explicit ${STAGE_COMPLETENESS_RECEIPT_SCHEMA} authority; legacy capture scanning is historical-only`],
     noop: false,
-    receipt: {
-      tier: 'T3',
-      competitiveAnchor,
-      architecturalReviewPass,
-      lensMax,
-      lensSkipAnchor,
-      terminalPass,
-    },
+    receipt: null,
   };
 }
 
