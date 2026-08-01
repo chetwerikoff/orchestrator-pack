@@ -1,23 +1,89 @@
 import { describe, expect, it, vi } from 'vitest';
 
+const runtimeMocks = vi.hoisted(() => ({
+  browserQueue: [] as any[],
+  prompt: 'PROMPT',
+  nowMs: 10_000,
+  appendFileSync: vi.fn((_path: string, _data: string, _encoding: string) => undefined),
+  mkdirSync: vi.fn((_path: string, _options?: object) => undefined),
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    appendFileSync: runtimeMocks.appendFileSync,
+    mkdirSync: runtimeMocks.mkdirSync,
+  };
+});
+
+vi.mock('./browser-session.ts', () => ({
+  RESOURCE_CLEANUP_BOUND_MS: 5_000,
+  boundedResourceCleanup: vi.fn(async (cleanup: () => Promise<void>) => {
+    await cleanup();
+    return 'confirmed';
+  }),
+  releaseCdpBrowser: vi.fn(async () => undefined),
+}));
+
+vi.mock('./coordination.ts', () => ({
+  destinationIdentity: vi.fn((path: string) => ({ identity: `identity:${path}`, finalPath: path })),
+}));
+
+vi.mock('./input.ts', () => ({
+  readStableInput: vi.fn(() => ({
+    text: runtimeMocks.prompt,
+    bytes: new Uint8Array([...runtimeMocks.prompt].map((char) => char.charCodeAt(0))),
+    byteLength: runtimeMocks.prompt.length,
+    dev: 1n,
+    ino: 1n,
+  })),
+}));
+
+vi.mock('./ui-adapter.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./ui-adapter.ts')>();
+  return {
+    ...actual,
+    loadChromium: vi.fn(() => ({
+      connectOverCDP: vi.fn(async () => {
+        const browser = runtimeMocks.browserQueue.shift();
+        if (!browser) throw new Error('no fake browser queued');
+        return browser;
+      }),
+    })),
+    productStatusText: vi.fn(async () => ''),
+    verifyProfile: vi.fn(async () => ({ state: 'verified', cause: 'verified', evidence: 'test' })),
+  };
+});
+
 import {
   readAssistantTurnCompletionReady,
   readAssistantTurnGenerating,
 } from './ui-adapter.ts';
 import {
   ASSISTANT_MESSAGE_SELECTOR,
+  ASSISTANT_TURN_ANCESTOR_XPATH,
+  COMPOSER_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_NODE_SELECTOR,
+  SEND_BUTTON_SELECTOR,
   matchesStopButtonSelector,
+  messageIdentitySelector,
 } from './product-page-selectors.ts';
-import { messageLocator, scalarLocator } from './state-light-turn.test-fixtures.ts';
+import { browserFor, collectionLocator, messageLocator, scalarLocator, type StateLightTestMessage, type StateLightTestSnapshot } from './state-light-turn.test-fixtures.ts';
 import {
   buildObservationHeartbeat,
+  classifyOwnedIdentityAdmission,
   classifyPageObservation,
+  establishOwnedTailBoundary,
   ownedPromptMatches,
   readPageObservation,
+  runStateLightTurn,
   replyStabilityMatches,
   replyStabilityFingerprint,
+  resolveBoundOwnedWindow,
+  type PageNodeObservation,
+  type PageObservationResult,
 } from './state-light-turn.ts';
 
 function makeTurnContainerPage(options: {
@@ -414,5 +480,685 @@ describe('readPageObservation transcript reads', () => {
     const second = await readPageObservation(page);
     expect(second.transcriptIncomplete).toBe(false);
     expect(second.messages).toHaveLength(4);
+  });
+});
+
+
+function identityObservation(
+  nodes: readonly PageNodeObservation[],
+  nodeListReadFailed = false,
+): PageObservationResult {
+  return {
+    nodes: [...nodes],
+    messages: nodes.flatMap((node) => node.role
+      ? [{
+          role: node.role,
+          text: node.text,
+          ...(node.identity ? { identity: node.identity } : {}),
+          domIndex: node.domIndex,
+        }]
+      : []),
+    ownedWindowCompletionReady: false,
+    transcriptIncomplete: nodeListReadFailed || nodes.some(
+      (node) => node.roleReadFailed || (node.role !== undefined && node.textReadFailed),
+    ),
+    nodeListReadFailed,
+  };
+}
+
+function identityNode(
+  domIndex: number,
+  role: 'user' | 'assistant',
+  text: string,
+  identity?: string,
+): PageNodeObservation {
+  return {
+    domIndex,
+    role,
+    ...(identity ? { identity } : {}),
+    text,
+    roleReadFailed: false,
+    identityReadFailed: false,
+    textReadFailed: false,
+  };
+}
+
+const unreadableHistoricalNode: PageNodeObservation = {
+  domIndex: 0,
+  text: '',
+  roleReadFailed: true,
+  identityReadFailed: true,
+  textReadFailed: true,
+};
+
+describe('state-light owned message identity', () => {
+  it('escapes opaque identity metacharacters for exact selector lookup', () => {
+    expect(messageIdentitySelector('a"b\\c]')).toBe(
+      '[data-message-author-role][data-message-id="a\\"b\\\\c]"]',
+    );
+  });
+
+  it('establishes a stable tail anchor while ignoring unreadable distant history', () => {
+    const first = identityObservation([
+      unreadableHistoricalNode,
+      identityNode(1, 'user', 'OLD PROMPT', 'old-user'),
+      identityNode(2, 'assistant', 'OLD ANSWER', 'old-assistant'),
+    ]);
+    const second = identityObservation([
+      unreadableHistoricalNode,
+      identityNode(1, 'user', 'OLD PROMPT', 'old-user'),
+      identityNode(2, 'assistant', 'OLD ANSWER', 'old-assistant'),
+    ]);
+
+    expect(establishOwnedTailBoundary(first, second, false)).toEqual({
+      kind: 'anchor',
+      anchorIdentity: 'old-user',
+      suffix: [
+        { role: 'user', identity: 'old-user' },
+        { role: 'assistant', identity: 'old-assistant' },
+      ],
+    });
+  });
+
+  it('falls back when the anchor suffix is not fully readable', () => {
+    const stable = identityObservation([
+      identityNode(0, 'user', 'OLD PROMPT', 'old-user'),
+      identityNode(1, 'assistant', 'OLD ANSWER', 'old-assistant'),
+    ]);
+    const unreadableSuffix = identityObservation([
+      identityNode(0, 'user', 'OLD PROMPT', 'old-user'),
+      {
+        ...identityNode(1, 'assistant', 'OLD ANSWER', 'old-assistant'),
+        identityReadFailed: true,
+      },
+    ]);
+
+    expect(establishOwnedTailBoundary(stable, unreadableSuffix, false)).toEqual({
+      kind: 'text_fallback',
+      cause: 'stable_tail_suffix_unreadable',
+    });
+  });
+
+  it('admits the unique post-tail identity without comparing rendered prompt text', () => {
+    const boundary = {
+      kind: 'anchor' as const,
+      anchorIdentity: 'old-user',
+      suffix: [
+        { role: 'user' as const, identity: 'old-user' },
+        { role: 'assistant' as const, identity: 'old-assistant' },
+      ],
+    };
+    const observation = identityObservation([
+      unreadableHistoricalNode,
+      identityNode(1, 'user', 'OLD PROMPT', 'old-user'),
+      identityNode(2, 'assistant', 'OLD ANSWER', 'old-assistant'),
+      identityNode(3, 'user', 'Rendered text differs from input markdown', 'owned-user'),
+    ]);
+
+    expect(classifyOwnedIdentityAdmission(boundary, observation)).toEqual({
+      state: 'candidate',
+      identity: 'owned-user',
+    });
+  });
+
+  it('fails admission immediately when two post-tail user nodes exist, including identityless nodes', () => {
+    const boundary = { kind: 'fresh' as const };
+    const observation = identityObservation([
+      identityNode(0, 'user', 'OWNED', 'owned-user'),
+      identityNode(1, 'user', 'FOREIGN'),
+    ]);
+
+    expect(classifyOwnedIdentityAdmission(boundary, observation)).toEqual({
+      state: 'unresolved',
+      immediate: true,
+    });
+  });
+
+  it('uses the fresh-chat sentinel after two zero-user snapshots and ignores a historical greeting', () => {
+    const first = identityObservation([
+      identityNode(0, 'assistant', 'How can I help?', 'greeting'),
+    ]);
+    const second = identityObservation([
+      identityNode(0, 'assistant', 'How can I help?', 'greeting'),
+    ]);
+    const boundary = establishOwnedTailBoundary(first, second, true);
+    expect(boundary).toEqual({ kind: 'fresh' });
+
+    const postSend = identityObservation([
+      identityNode(0, 'assistant', 'How can I help?', 'greeting'),
+      identityNode(1, 'user', 'VISIBLE OWNED PROMPT', 'owned-user'),
+    ]);
+    expect(classifyOwnedIdentityAdmission(boundary, postSend)).toEqual({
+      state: 'candidate',
+      identity: 'owned-user',
+    });
+  });
+
+  it('marks an identityless single candidate for bounded strict-text fallback', () => {
+    expect(classifyOwnedIdentityAdmission(
+      { kind: 'fresh' },
+      identityObservation([identityNode(0, 'user', 'VISIBLE OWNED PROMPT')]),
+    )).toEqual({ state: 'identityless' });
+  });
+
+  it('re-resolves a recreated bound node and closes the owned window at the next user', () => {
+    const recreated = identityObservation([
+      unreadableHistoricalNode,
+      identityNode(1, 'user', 'VISIBLE OWNED PROMPT', 'owned-user'),
+      identityNode(2, 'assistant', 'OWNED ANSWER', 'owned-assistant'),
+      identityNode(3, 'user', 'FOREIGN', 'foreign-user'),
+      identityNode(4, 'assistant', 'FOREIGN ANSWER', 'foreign-assistant'),
+    ]);
+
+    expect(resolveBoundOwnedWindow(
+      recreated,
+      'owned-user',
+    )).toEqual({
+      state: 'ok',
+      messages: [
+        {
+          role: 'user',
+          text: 'VISIBLE OWNED PROMPT',
+          identity: 'owned-user',
+          domIndex: 1,
+        },
+        {
+          role: 'assistant',
+          text: 'OWNED ANSWER',
+          identity: 'owned-assistant',
+          domIndex: 2,
+        },
+      ],
+      boundUserDomIndex: 1,
+      lastAssistantDomIndex: 2,
+    });
+  });
+
+  it('fails closed on duplicate or non-user nodes under the bound identity', () => {
+    const duplicate = identityObservation([
+      identityNode(0, 'user', 'VISIBLE OWNED PROMPT', 'owned-user'),
+      identityNode(1, 'user', 'VISIBLE OWNED PROMPT', 'owned-user'),
+    ]);
+    expect(resolveBoundOwnedWindow(
+      duplicate,
+      'owned-user',
+    )).toEqual({ state: 'changed' });
+
+    const nonUser = identityObservation([
+      identityNode(0, 'assistant', 'REPLACEMENT', 'owned-user'),
+    ]);
+    expect(resolveBoundOwnedWindow(
+      nonUser,
+      'owned-user',
+    )).toEqual({ state: 'changed' });
+  });
+
+  it('keeps identity authority when the bound user rendering changes after DOM recreation', () => {
+    const rerendered = identityObservation([
+      identityNode(0, 'user', 'Expanded rendered markdown', 'owned-user'),
+      identityNode(1, 'assistant', 'OWNED ANSWER', 'owned-assistant'),
+    ]);
+    expect(resolveBoundOwnedWindow(rerendered, 'owned-user')).toMatchObject({
+      state: 'ok',
+      lastAssistantDomIndex: 1,
+    });
+  });
+});
+
+function makeIdentityRuntimePage(
+  preSendMessages: StateLightTestMessage[],
+  snapshots: StateLightTestSnapshot[],
+) {
+  let sent = false;
+  let closed = false;
+  let filled = '';
+  let observationIndex = 0;
+  let activeSnapshot: StateLightTestSnapshot = { messages: preSendMessages, generating: false };
+  const metrics = { sends: 0, closes: 0, messageReads: 0, reloads: 0 };
+
+  const composer = scalarLocator({
+    count: vi.fn(async () => 1),
+    fill: vi.fn(async (value: string) => { filled = value; }),
+    press: vi.fn(async (key: string) => {
+      if (key !== 'Enter') throw new Error(`unexpected key: ${key}`);
+      sent = true;
+      metrics.sends += 1;
+    }),
+  });
+  const sendButton = scalarLocator({
+    count: vi.fn(async () => 1),
+    click: vi.fn(async () => {
+      sent = true;
+      metrics.sends += 1;
+    }),
+  });
+
+  const page: any = {
+    __fakeBrowserGptPage: true,
+    goto: vi.fn(async () => undefined),
+    reload: vi.fn(async () => { metrics.reloads += 1; }),
+    url: vi.fn(() => 'https://chatgpt.com/c/existing'),
+    isClosed: vi.fn(() => closed),
+    waitForTimeout: vi.fn(async (ms: number) => { runtimeMocks.nowMs += ms; }),
+    close: vi.fn(async () => {
+      closed = true;
+      metrics.closes += 1;
+    }),
+    getByRole: vi.fn(() => scalarLocator()),
+    getByText: vi.fn(() => scalarLocator()),
+    locator: vi.fn((selector: string) => {
+      if (selector === COMPOSER_SELECTOR) return composer;
+      if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+      if (selector === MESSAGE_NODE_SELECTOR) {
+        if (!sent) {
+          activeSnapshot = { messages: preSendMessages, generating: false };
+          return collectionLocator(preSendMessages);
+        }
+        activeSnapshot = snapshots[Math.min(observationIndex, Math.max(0, snapshots.length - 1))]
+          ?? { messages: [...preSendMessages, { role: 'user', text: filled }], generating: true };
+        observationIndex += 1;
+        metrics.messageReads += 1;
+        return collectionLocator(activeSnapshot.messages, activeSnapshot.generating);
+      }
+      const exactIdentityMatches = activeSnapshot.messages.filter(
+        (message) => message.identity && messageIdentitySelector(message.identity) === selector,
+      );
+      if (exactIdentityMatches.length > 0) {
+        return collectionLocator(exactIdentityMatches, activeSnapshot.generating);
+      }
+      if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+        return collectionLocator(
+          activeSnapshot.messages.filter((message) => message.role === 'assistant'),
+          activeSnapshot.generating,
+        );
+      }
+      if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+        const lastAssistant = activeSnapshot.messages.filter((message) => message.role === 'assistant').at(-1);
+        return lastAssistant ? messageLocator(lastAssistant, activeSnapshot.generating) : scalarLocator();
+      }
+      if (matchesStopButtonSelector(selector)) return scalarLocator();
+      return scalarLocator();
+    }),
+  };
+
+  return { page, metrics };
+}
+
+function identityRuntimeFrames(
+  identity: string,
+  reply: string,
+  options: { includeHistory?: boolean; renderedPrompt?: string } = {},
+): StateLightTestSnapshot[] {
+  const history: StateLightTestMessage[] = options.includeHistory === false
+    ? []
+    : [
+        { role: 'user', text: 'OLD', identity: 'history-user' },
+        { role: 'assistant', text: 'OLD ANSWER', identity: 'history-assistant', finalAction: true },
+      ];
+  const renderedPrompt = options.renderedPrompt ?? 'PROMPT';
+  const working: StateLightTestSnapshot = {
+    messages: [
+      ...history,
+      { role: 'user', text: renderedPrompt, identity },
+      { role: 'assistant', text: 'working', identity: `${identity}-working` },
+    ],
+    generating: true,
+  };
+  const ready: StateLightTestSnapshot = {
+    messages: [
+      ...history,
+      { role: 'user', text: renderedPrompt, identity },
+      { role: 'assistant', text: reply, identity: `${identity}-answer`, finalAction: true },
+    ],
+    generating: false,
+  };
+  // The runtime performs an additional exact-bound completion lookup through the
+  // message collection after binding. Duplicate ready frames keep that lookup and
+  // the following stability poll on the same logical page state.
+  return [working, ready, ready, ready, ready];
+}
+
+async function runIdentityRuntimeTurn(
+  page: any,
+  prompt = 'PROMPT',
+): Promise<{ code: number; result: any; output?: string }> {
+  const { readFileSync, rmSync } = await import('node:fs');
+  const outputPath = `/tmp/issue-1148-${Math.random().toString(16).slice(2)}.txt`;
+  runtimeMocks.prompt = prompt;
+  runtimeMocks.nowMs = 10_000;
+  runtimeMocks.browserQueue.length = 0;
+  runtimeMocks.appendFileSync.mockClear();
+  const { browser } = browserFor(page);
+  runtimeMocks.browserQueue.push(browser);
+  const writes: string[] = [];
+  const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+    writes.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write);
+  const now = vi.spyOn(Date, 'now').mockImplementation(() => runtimeMocks.nowMs);
+  try {
+    const code = await runStateLightTurn([
+      '--profile', '/tmp/profile',
+      '--cdp', 'http://127.0.0.1:9222',
+      '--input', '/tmp/prompt.txt',
+      '--output', outputPath,
+      '--chat-url', 'https://chatgpt.com/c/existing',
+      '--timeout-ms', '1000',
+      '--poll-ms', '1',
+    ]);
+    const rows = writes
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    const result = rows.filter((row) => row.schema === 'turn-result/v1').at(-1) ?? {};
+    let output: string | undefined;
+    try { output = readFileSync(outputPath, 'utf8'); } catch { /* no publication */ }
+    return { code, result, ...(output !== undefined ? { output } : {}) };
+  } finally {
+    stdout.mockRestore();
+    now.mockRestore();
+    try { rmSync(outputPath, { force: true }); } catch { /* best effort */ }
+  }
+}
+
+describe('Issue #1148 runtime identity binding', () => {
+  const preSend: StateLightTestMessage[] = [
+    { role: 'user', text: 'OLD', identity: 'history-user' },
+    { role: 'assistant', text: 'OLD ANSWER', identity: 'history-assistant', finalAction: true },
+  ];
+
+  it('publishes from the exact metacharacter identity window without prompt-text authority', async () => {
+    const identity = 'owned[message]"\\#1';
+    const fake = makeIdentityRuntimePage(
+      preSend,
+      identityRuntimeFrames(identity, 'FINAL-IDENTITY', {
+        renderedPrompt: 'Rendered markdown and Unicode spacing are intentionally different',
+      }),
+    );
+    const outcome = await runIdentityRuntimeTurn(fake.page, '# PROMPT\n\n*canonical body*');
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).not.toContain('owned_message_identity_text_fallback');
+    expect(outcome.output).toBe('FINAL-IDENTITY');
+    expect(fake.metrics.sends).toBe(1);
+    expect(fake.metrics.closes).toBe(1);
+    expect(fake.metrics.reloads).toBe(0);
+  });
+
+  it('does not inherit completion from historical turns before the exact bound reply is complete', async () => {
+    const identity = 'owned-no-historical-completion-leak';
+    const candidateOnly: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'Rendered prompt differs', identity },
+      ],
+      generating: false,
+    };
+    const partial: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'Rendered prompt differs', identity },
+        { role: 'assistant', text: 'PARTIAL-NOT-PUBLISHABLE', identity: `${identity}-partial` },
+      ],
+      generating: false,
+    };
+    const final: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'Rendered prompt differs', identity },
+        { role: 'assistant', text: 'FINAL-AFTER-EXACT-COMPLETION', identity: `${identity}-final`, finalAction: true },
+      ],
+      generating: false,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [
+      candidateOnly,
+      partial,
+      partial,
+      partial,
+      partial,
+      final,
+      final,
+      final,
+      final,
+    ]);
+    const outcome = await runIdentityRuntimeTurn(fake.page, '# Canonical prompt');
+
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.output).toBe('FINAL-AFTER-EXACT-COMPLETION');
+    expect(outcome.output).not.toBe('PARTIAL-NOT-PUBLISHABLE');
+    expect(outcome.result.incidents).not.toContain('owned_message_identity_text_fallback');
+  });
+
+  it('defers zero-node admission, then binds the later unique user identity without resend', async () => {
+    const empty: StateLightTestSnapshot = { messages: preSend, generating: false };
+    const fake = makeIdentityRuntimePage(preSend, [
+      empty,
+      empty,
+      empty,
+      ...identityRuntimeFrames('deferred-owned', 'DEFERRED-FINAL'),
+    ]);
+    const outcome = await runIdentityRuntimeTurn(fake.page);
+
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).toContain('send_observation_deferred');
+    expect(outcome.result.incidents).not.toContain('owned_message_identity_text_fallback');
+    expect(outcome.output).toBe('DEFERRED-FINAL');
+    expect(fake.metrics.sends).toBe(1);
+  });
+
+  it('waits boundedly for one identityless node and then uses visible strict-text fallback', async () => {
+    const identityless: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'FINAL-FALLBACK', finalAction: true },
+      ],
+      generating: false,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [
+      identityless,
+      identityless,
+      identityless,
+      identityless,
+    ]);
+    const outcome = await runIdentityRuntimeTurn(fake.page);
+
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).toContain('owned_message_identity_text_fallback');
+    expect(outcome.output).toBe('FINAL-FALLBACK');
+    expect(fake.metrics.sends).toBe(1);
+  });
+
+  it('fails closed on identified-plus-identityless admission multiplicity', async () => {
+    const ambiguous: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity: 'owned-candidate' },
+        { role: 'user', text: 'FOREIGN' },
+      ],
+      generating: true,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [ambiguous]);
+    const outcome = await runIdentityRuntimeTurn(fake.page);
+
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_unresolved',
+      send_count: 1,
+    });
+    expect(outcome.output).toBeUndefined();
+    expect(fake.metrics.sends).toBe(1);
+  });
+
+  it('fails closed on two identityless post-tail user nodes before fallback', async () => {
+    const ambiguous: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'user', text: 'PROMPT' },
+      ],
+      generating: true,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [ambiguous]);
+    const outcome = await runIdentityRuntimeTurn(fake.page);
+
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_unresolved',
+      send_count: 1,
+    });
+    expect(outcome.result.incidents).not.toContain('owned_message_identity_text_fallback');
+    expect(outcome.output).toBeUndefined();
+  });
+
+  it('does not rebind when the sole candidate identity churns before binding', async () => {
+    const candidateA: StateLightTestSnapshot = {
+      messages: [...preSend, { role: 'user', text: 'PROMPT', identity: 'candidate-a' }],
+      generating: true,
+    };
+    const candidateB: StateLightTestSnapshot = {
+      messages: [...preSend, { role: 'user', text: 'PROMPT', identity: 'candidate-b' }],
+      generating: true,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [candidateA, candidateB]);
+    const outcome = await runIdentityRuntimeTurn(fake.page);
+
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_changed',
+      send_count: 1,
+    });
+    expect(outcome.result.incidents).not.toContain('owned_message_identity_text_fallback');
+    expect(outcome.output).toBeUndefined();
+  });
+
+  it('reports bounded disappearance after binding and never initiates reload', async () => {
+    const ownedWorking: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity: 'owned-disappear' },
+        { role: 'assistant', text: 'working', identity: 'working' },
+      ],
+      generating: true,
+    };
+    const ownedReady: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity: 'owned-disappear' },
+        { role: 'assistant', text: 'NOT-PUBLISHED', identity: 'answer', finalAction: true },
+      ],
+      generating: false,
+    };
+    const absent: StateLightTestSnapshot = { messages: preSend, generating: false };
+    const fake = makeIdentityRuntimePage(preSend, [
+      ownedWorking,
+      ownedReady,
+      ownedReady,
+      absent,
+      absent,
+    ]);
+    const outcome = await runIdentityRuntimeTurn(fake.page);
+
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_disappeared',
+      send_count: 1,
+    });
+    expect(outcome.output).toBeUndefined();
+    expect(fake.metrics.reloads).toBe(0);
+  });
+
+  it('survives DOM recreation and former-anchor virtualization, then stops at the next user boundary', async () => {
+    const ownedWorking: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity: 'owned-recreated' },
+        { role: 'assistant', text: 'working', identity: 'working' },
+      ],
+      generating: true,
+    };
+    const boundWorking: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity: 'owned-recreated' },
+        { role: 'assistant', text: 'working', identity: 'working' },
+      ],
+      generating: true,
+    };
+    const recreatedWindow: StateLightTestSnapshot = {
+      messages: [
+        { role: 'user', text: 'Expanded render', identity: 'owned-recreated' },
+        { role: 'assistant', text: 'OWNED-FINAL', identity: 'owned-answer', finalAction: true },
+        { role: 'user', text: 'FOREIGN' },
+        { role: 'assistant', text: 'FOREIGN-FINAL', identity: 'foreign-answer', finalAction: true },
+      ],
+      generating: false,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [
+      ownedWorking,
+      boundWorking,
+      boundWorking,
+      recreatedWindow,
+      recreatedWindow,
+      recreatedWindow,
+      recreatedWindow,
+    ]);
+    const outcome = await runIdentityRuntimeTurn(fake.page);
+
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.output).toBe('OWNED-FINAL');
+    expect(outcome.result.cause).toBe('completed_page_only');
+    expect(fake.metrics.reloads).toBe(0);
+  });
+
+  it('isolates byte-identical prompts in distinct owned tabs by opaque identity', async () => {
+    const { readFileSync, rmSync } = await import('node:fs');
+    const outputA = `/tmp/issue-1148-a-${Math.random().toString(16).slice(2)}.txt`;
+    const outputB = `/tmp/issue-1148-b-${Math.random().toString(16).slice(2)}.txt`;
+    const fakeA = makeIdentityRuntimePage(preSend, identityRuntimeFrames('owned-a', 'REPLY-A'));
+    const fakeB = makeIdentityRuntimePage(preSend, identityRuntimeFrames('owned-b', 'REPLY-B'));
+    runtimeMocks.prompt = 'BYTE-IDENTICAL-PROMPT';
+    runtimeMocks.nowMs = 10_000;
+    runtimeMocks.browserQueue.length = 0;
+    runtimeMocks.browserQueue.push(browserFor(fakeA.page).browser, browserFor(fakeB.page).browser);
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => runtimeMocks.nowMs);
+    const argv = (output: string) => [
+      '--profile', '/tmp/profile',
+      '--cdp', 'http://127.0.0.1:9222',
+      '--input', '/tmp/prompt.txt',
+      '--output', output,
+      '--chat-url', 'https://chatgpt.com/c/existing',
+      '--timeout-ms', '1000',
+      '--poll-ms', '1',
+    ];
+    try {
+      const codes = await Promise.all([
+        runStateLightTurn(argv(outputA)),
+        runStateLightTurn(argv(outputB)),
+      ]);
+      expect(codes).toEqual([0, 0]);
+      expect(readFileSync(outputA, 'utf8')).toBe('REPLY-A');
+      expect(readFileSync(outputB, 'utf8')).toBe('REPLY-B');
+      const results = writes
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.schema === 'turn-result/v1');
+      expect(results).toHaveLength(2);
+      expect(results.every((row) => row.state === 'ok' && row.send_count === 1)).toBe(true);
+      expect(fakeA.metrics.sends).toBe(1);
+      expect(fakeB.metrics.sends).toBe(1);
+    } finally {
+      stdout.mockRestore();
+      now.mockRestore();
+      rmSync(outputA, { force: true });
+      rmSync(outputB, { force: true });
+    }
   });
 });

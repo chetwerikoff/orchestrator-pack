@@ -5,6 +5,7 @@
 export const COMPOSER_SELECTOR = '#prompt-textarea';
 export const SEND_BUTTON_SELECTOR = '[data-testid="send-button"]';
 export const MESSAGE_AUTHOR_ROLE_ATTR = 'data-message-author-role';
+export const MESSAGE_IDENTITY_ATTR = 'data-message-id';
 export const MESSAGE_NODE_SELECTOR = `[${MESSAGE_AUTHOR_ROLE_ATTR}]`;
 export const USER_MESSAGE_SELECTOR = `[${MESSAGE_AUTHOR_ROLE_ATTR}="user"]`;
 export const ASSISTANT_MESSAGE_SELECTOR = `[${MESSAGE_AUTHOR_ROLE_ATTR}="assistant"]`;
@@ -53,6 +54,30 @@ export const NEW_CHAT_CONTROL_SELECTORS = [
 
 export const UI_COLLAPSE_AFFIX_RE = /(?:\s*(?:show more|read more|see more|view more|continue reading)\s*)+$/iu;
 const UI_COLLAPSE_ELLIPSIS_SUFFIX_RE = /[.…]+\s*$/u;
+
+function escapeCssString(value: string): string {
+  let escaped = '';
+  for (const char of value) {
+    const codePoint = char.codePointAt(0)!;
+    if (codePoint === 0) {
+      escaped += '\\fffd ';
+      continue;
+    }
+    if ((codePoint >= 1 && codePoint <= 31) || codePoint === 127) {
+      escaped += `\\${codePoint.toString(16)} `;
+      continue;
+    }
+    if (char === '"' || char === '\\') escaped += `\\${char}`;
+    else escaped += char;
+  }
+  return escaped;
+}
+
+/** Exact opaque message-identity lookup; never interpolate an unescaped id. */
+export function messageIdentitySelector(identity: string): string {
+  if (!identity) throw new Error('message_identity_required');
+  return `${MESSAGE_NODE_SELECTOR}[${MESSAGE_IDENTITY_ATTR}="${escapeCssString(identity)}"]`;
+}
 
 export function stripUiCollapseAffixes(value: string): string {
   let result = value;

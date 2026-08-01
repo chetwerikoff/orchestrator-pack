@@ -48,7 +48,9 @@ import {
   COMPOSER_SELECTOR,
   loadChromium,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_IDENTITY_ATTR,
   MESSAGE_NODE_SELECTOR,
+  messageIdentitySelector,
   normalizeConversationUrl,
   productStatusText,
   locateContinueGeneratingControl,
@@ -75,6 +77,10 @@ const MAX_LOCAL_READ_WAIT_MS = 5_000;
 const MESSAGE_NODE_READ_TIMEOUT_MS = 800;
 const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
 const MESSAGE_NODE_READ_ATTEMPTS = 2;
+const OWNED_TAIL_CONFIRM_DELAY_MS = 100;
+const OWNED_IDENTITY_STABLE_READS = 2;
+const OWNED_IDENTITY_MISSING_READS = 2;
+const OWNED_IDENTITY_UNRESOLVED_READS = 2;
 /** Post-send wall probes must not block transcript reads or the confirm loop. */
 const POST_SEND_PRODUCT_WALL_PROBE_MS = 800;
 export const OBSERVATION_HEARTBEAT_MS = 30_000;
@@ -94,7 +100,35 @@ interface ParsedTurnArgs {
 interface PageMessage {
   readonly role: 'user' | 'assistant';
   readonly text: string;
+  readonly identity?: string;
+  readonly domIndex?: number;
 }
+
+export interface PageNodeObservation {
+  readonly domIndex: number;
+  readonly role?: 'user' | 'assistant';
+  readonly identity?: string;
+  readonly text: string;
+  readonly roleReadFailed: boolean;
+  readonly identityReadFailed: boolean;
+  readonly textReadFailed: boolean;
+}
+
+export interface OwnedTailWitness {
+  readonly role: 'user' | 'assistant';
+  readonly identity?: string;
+}
+
+export type OwnedTailBoundary =
+  | {
+      readonly kind: 'anchor';
+      readonly anchorIdentity: string;
+      readonly suffix: readonly OwnedTailWitness[];
+    }
+  | { readonly kind: 'fresh' }
+  | { readonly kind: 'text_fallback'; readonly cause: string };
+
+type OwnedMessageObservationMode = 'admission' | 'bound' | 'text_fallback';
 
 export interface PageObservationDecision {
   readonly state: 'waiting' | 'ready' | 'uncertain';
@@ -130,6 +164,8 @@ export interface ObservationHeartbeat {
 
 export interface PageObservationResult {
   readonly messages: PageMessage[];
+  readonly nodes: PageNodeObservation[];
+  readonly nodeListReadFailed: boolean;
   readonly ownedWindowCompletionReady: boolean;
   readonly transcriptIncomplete: boolean;
 }
@@ -271,6 +307,17 @@ function normalizeReplyForStability(text: string): string {
 
 export function hasOwnedUserMessage(messages: readonly PageMessage[], prompt: string): boolean {
   return messages.some((message) => message.role === 'user' && ownedPromptMatches(message.text, prompt));
+}
+
+function strictPostBaselineOwnedUserCount(
+  messages: readonly PageMessage[],
+  baselineCount: number,
+  prompt: string,
+): number {
+  return messages
+    .slice(Math.max(0, baselineCount))
+    .filter((message) => message.role === 'user' && ownedPromptMatches(message.text, prompt))
+    .length;
 }
 
 export function replyStabilityFingerprint(text: string): string {
@@ -750,12 +797,16 @@ async function sleep(page: any, ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-async function locatorCount(locator: any): Promise<number> {
+async function locatorCountResult(locator: any): Promise<{ count: number; readFailed: boolean }> {
   try {
-    return Number(await locator.count());
+    return { count: Number(await locator.count()), readFailed: false };
   } catch {
-    return 0;
+    return { count: 0, readFailed: true };
   }
+}
+
+async function locatorCount(locator: any): Promise<number> {
+  return (await locatorCountResult(locator)).count;
 }
 
 async function locatorText(locator: any, timeoutMs = MAX_LOCAL_READ_WAIT_MS): Promise<string> {
@@ -813,25 +864,41 @@ export async function readPageObservation(
   baselineCount?: number,
 ): Promise<PageObservationResult> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
-  const count = await locatorCount(nodes);
+  const countResult = await locatorCountResult(nodes);
   const messages: PageMessage[] = [];
+  const nodeObservations: PageNodeObservation[] = [];
   const domIndices: number[] = [];
-  let transcriptIncomplete = false;
-  const roleTimeouts = [
+  let transcriptIncomplete = countResult.readFailed;
+  const attributeTimeouts = [
     MESSAGE_NODE_READ_TIMEOUT_MS,
     MESSAGE_NODE_READ_RETRY_TIMEOUT_MS,
   ].slice(0, MESSAGE_NODE_READ_ATTEMPTS);
-  for (let index = 0; index < count; index++) {
+  for (let index = 0; index < countResult.count; index++) {
     const node = nodes.nth(index);
-    const role = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, roleTimeouts);
-    if (role === null) {
-      transcriptIncomplete = true;
-      continue;
-    }
-    if (role !== 'user' && role !== 'assistant') continue;
-    const { text, readFailed } = await readMessageNodeText(node);
-    if (readFailed) transcriptIncomplete = true;
-    messages.push({ role: role as 'user' | 'assistant', text });
+    const roleValue = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, attributeTimeouts);
+    const identityValue = await readLocatorAttribute(node, MESSAGE_IDENTITY_ATTR, attributeTimeouts);
+    const role = roleValue === 'user' || roleValue === 'assistant' ? roleValue : undefined;
+    const { text, readFailed: textReadFailed } = await readMessageNodeText(node);
+    const roleReadFailed = roleValue === null;
+    const identityReadFailed = identityValue === null;
+    const identity = identityReadFailed || identityValue === '' ? undefined : identityValue;
+    if (roleReadFailed || (role !== undefined && textReadFailed)) transcriptIncomplete = true;
+    nodeObservations.push({
+      domIndex: index,
+      ...(role ? { role } : {}),
+      ...(identity ? { identity } : {}),
+      text,
+      roleReadFailed,
+      identityReadFailed,
+      textReadFailed,
+    });
+    if (!role) continue;
+    messages.push({
+      role,
+      text,
+      ...(identity ? { identity } : {}),
+      domIndex: index,
+    });
     domIndices.push(index);
   }
 
@@ -851,7 +918,237 @@ export async function readPageObservation(
     }
   }
 
-  return { messages, ownedWindowCompletionReady, transcriptIncomplete };
+  return {
+    messages,
+    nodes: nodeObservations,
+    ownedWindowCompletionReady,
+    transcriptIncomplete,
+    nodeListReadFailed: countResult.readFailed,
+  };
+}
+
+
+function readableTailWitness(node: PageNodeObservation): OwnedTailWitness | undefined {
+  if (!node.role || node.roleReadFailed || node.identityReadFailed) return undefined;
+  return {
+    role: node.role,
+    ...(node.identity ? { identity: node.identity } : {}),
+  };
+}
+
+function tailWitnessMatches(left: OwnedTailWitness, right: OwnedTailWitness): boolean {
+  return left.role === right.role && left.identity === right.identity;
+}
+
+function uniqueIdentityNodeIndex(
+  nodes: readonly PageNodeObservation[],
+  identity: string,
+): number | undefined {
+  const matches = nodes.filter((node) => node.identity === identity);
+  if (matches.length !== 1) return undefined;
+  return matches[0]!.domIndex;
+}
+
+export function establishOwnedTailBoundary(
+  first: PageObservationResult,
+  second: PageObservationResult,
+  allowFreshSentinel: boolean,
+): OwnedTailBoundary {
+  if (first.nodeListReadFailed || second.nodeListReadFailed) {
+    return { kind: 'text_fallback', cause: 'tail_node_list_unreadable' };
+  }
+
+  const firstUsers = first.nodes.filter((node) => node.role === 'user');
+  const secondUsers = second.nodes.filter((node) => node.role === 'user');
+  if (allowFreshSentinel && firstUsers.length === 0 && secondUsers.length === 0) {
+    const firstWitnesses = first.nodes.map(readableTailWitness);
+    const secondWitnesses = second.nodes.map(readableTailWitness);
+    const stableFresh = firstWitnesses.length === secondWitnesses.length
+      && firstWitnesses.every((value) => value !== undefined)
+      && secondWitnesses.every((value) => value !== undefined)
+      && firstWitnesses.every((value, index) => tailWitnessMatches(
+        value!,
+        secondWitnesses[index]!,
+      ));
+    return stableFresh
+      ? { kind: 'fresh' }
+      : { kind: 'text_fallback', cause: 'fresh_tail_unstable' };
+  }
+
+  const candidate = secondUsers.at(-1);
+  if (!candidate?.identity) {
+    return { kind: 'text_fallback', cause: 'stable_tail_anchor_unavailable' };
+  }
+  const firstIndex = uniqueIdentityNodeIndex(first.nodes, candidate.identity);
+  const secondIndex = uniqueIdentityNodeIndex(second.nodes, candidate.identity);
+  if (firstIndex === undefined || secondIndex === undefined) {
+    return { kind: 'text_fallback', cause: 'stable_tail_anchor_unavailable' };
+  }
+  const firstAnchor = first.nodes[firstIndex];
+  const secondAnchor = second.nodes[secondIndex];
+  if (firstAnchor?.role !== 'user' || secondAnchor?.role !== 'user') {
+    return { kind: 'text_fallback', cause: 'stable_tail_anchor_unavailable' };
+  }
+  if (first.nodes.slice(firstIndex + 1).some((node) => node.role === 'user')) {
+    return { kind: 'text_fallback', cause: 'stable_tail_anchor_unavailable' };
+  }
+  if (second.nodes.slice(secondIndex + 1).some((node) => node.role === 'user')) {
+    return { kind: 'text_fallback', cause: 'stable_tail_anchor_unavailable' };
+  }
+
+  const firstSuffixNodes = first.nodes.slice(firstIndex);
+  const secondSuffixNodes = second.nodes.slice(secondIndex);
+  if (firstSuffixNodes.length !== secondSuffixNodes.length) {
+    return { kind: 'text_fallback', cause: 'stable_tail_suffix_changed' };
+  }
+  const firstSuffix = firstSuffixNodes.map(readableTailWitness);
+  const secondSuffix = secondSuffixNodes.map(readableTailWitness);
+  if (firstSuffix.some((value) => value === undefined) || secondSuffix.some((value) => value === undefined)) {
+    return { kind: 'text_fallback', cause: 'stable_tail_suffix_unreadable' };
+  }
+  const stable = firstSuffix.every((value, index) => tailWitnessMatches(
+    value!,
+    secondSuffix[index]!,
+  ));
+  if (!stable) return { kind: 'text_fallback', cause: 'stable_tail_suffix_changed' };
+  return {
+    kind: 'anchor',
+    anchorIdentity: candidate.identity,
+    suffix: secondSuffix as OwnedTailWitness[],
+  };
+}
+
+export type PostTailResolution =
+  | { readonly state: 'ok'; readonly nodes: readonly PageNodeObservation[] }
+  | { readonly state: 'unresolved' }
+  | { readonly state: 'changed' };
+
+export function resolvePostTailNodes(
+  boundary: OwnedTailBoundary,
+  observation: PageObservationResult,
+): PostTailResolution {
+  if (boundary.kind === 'text_fallback') return { state: 'unresolved' };
+  if (observation.nodeListReadFailed) return { state: 'unresolved' };
+  if (boundary.kind === 'fresh') return { state: 'ok', nodes: observation.nodes };
+
+  const matching = observation.nodes.filter((node) => node.identity === boundary.anchorIdentity);
+  if (matching.length > 1) return { state: 'changed' };
+  if (matching.length === 0) {
+    return observation.nodes.some((node) => node.identityReadFailed)
+      ? { state: 'unresolved' }
+      : { state: 'changed' };
+  }
+  const anchor = matching[0]!;
+  if (anchor.role !== 'user') return { state: 'changed' };
+  const currentSuffix = observation.nodes.slice(anchor.domIndex, anchor.domIndex + boundary.suffix.length);
+  if (currentSuffix.length !== boundary.suffix.length) return { state: 'changed' };
+  for (let index = 0; index < boundary.suffix.length; index++) {
+    const current = currentSuffix[index]!;
+    const expected = boundary.suffix[index]!;
+    const witness = readableTailWitness(current);
+    if (!witness) return { state: 'unresolved' };
+    if (!tailWitnessMatches(witness, expected)) return { state: 'changed' };
+  }
+  return {
+    state: 'ok',
+    nodes: observation.nodes.slice(anchor.domIndex + boundary.suffix.length),
+  };
+}
+
+export type OwnedIdentityAdmissionDecision =
+  | { readonly state: 'waiting' }
+  | { readonly state: 'changed' }
+  | { readonly state: 'identityless' }
+  | { readonly state: 'unresolved'; readonly immediate: boolean }
+  | { readonly state: 'candidate'; readonly identity: string };
+
+export function classifyOwnedIdentityAdmission(
+  boundary: OwnedTailBoundary,
+  observation: PageObservationResult,
+): OwnedIdentityAdmissionDecision {
+  const postTail = resolvePostTailNodes(boundary, observation);
+  if (postTail.state === 'changed') return { state: 'changed' };
+  if (postTail.state === 'unresolved') return { state: 'unresolved', immediate: false };
+  if (postTail.nodes.some((node) => node.roleReadFailed || node.role === undefined)) {
+    return { state: 'unresolved', immediate: false };
+  }
+  const users = postTail.nodes.filter((node) => node.role === 'user');
+  if (users.length === 0) return { state: 'waiting' };
+  if (users.length > 1) return { state: 'unresolved', immediate: true };
+  const user = users[0]!;
+  const nodesBeforeUser = postTail.nodes.filter((node) => node.domIndex < user.domIndex);
+  if (boundary.kind !== 'fresh' && nodesBeforeUser.some((node) => node.role === 'assistant')) {
+    return { state: 'changed' };
+  }
+  if (user.identityReadFailed) return { state: 'unresolved', immediate: false };
+  if (!user.identity) return { state: 'identityless' };
+  return { state: 'candidate', identity: user.identity };
+}
+
+export type BoundOwnedWindowResolution =
+  | {
+      readonly state: 'ok';
+      readonly messages: readonly PageMessage[];
+      readonly boundUserDomIndex: number;
+      readonly lastAssistantDomIndex: number | null;
+    }
+  | { readonly state: 'unresolved' }
+  | { readonly state: 'changed' };
+
+export function resolveBoundOwnedWindow(
+  observation: PageObservationResult,
+  identity: string,
+): BoundOwnedWindowResolution {
+  if (observation.nodeListReadFailed) return { state: 'unresolved' };
+  const matches = observation.nodes.filter((node) => node.identity === identity);
+  if (matches.length > 1) return { state: 'changed' };
+  if (matches.length === 0) return { state: 'unresolved' };
+  const user = matches[0]!;
+  if (user.role !== 'user' || user.identityReadFailed) return { state: 'changed' };
+
+  const messages: PageMessage[] = [{
+    role: 'user',
+    text: user.text,
+    identity,
+    domIndex: user.domIndex,
+  }];
+  let lastAssistantDomIndex: number | null = null;
+  for (const node of observation.nodes.slice(user.domIndex + 1)) {
+    if (node.roleReadFailed || node.role === undefined) return { state: 'unresolved' };
+    if (node.role === 'user') break;
+    if (node.textReadFailed) return { state: 'unresolved' };
+    messages.push({
+      role: 'assistant',
+      text: node.text,
+      ...(node.identity ? { identity: node.identity } : {}),
+      domIndex: node.domIndex,
+    });
+    lastAssistantDomIndex = node.domIndex;
+  }
+  return { state: 'ok', messages, boundUserDomIndex: user.domIndex, lastAssistantDomIndex };
+}
+
+interface ExactOwnedIdentityResolution {
+  readonly state: 'ok' | 'missing' | 'unresolved' | 'changed';
+}
+
+async function readExactOwnedIdentity(
+  page: any,
+  identity: string,
+): Promise<ExactOwnedIdentityResolution> {
+  const locator = page.locator(messageIdentitySelector(identity));
+  const count = await locatorCountResult(locator);
+  if (count.readFailed) return { state: 'unresolved' };
+  if (count.count === 0) return { state: 'missing' };
+  if (count.count !== 1) return { state: 'changed' };
+  const node = locator.first();
+  const timeouts = [MESSAGE_NODE_READ_TIMEOUT_MS, MESSAGE_NODE_READ_RETRY_TIMEOUT_MS]
+    .slice(0, MESSAGE_NODE_READ_ATTEMPTS);
+  const role = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, timeouts);
+  const observedIdentity = await readLocatorAttribute(node, MESSAGE_IDENTITY_ATTR, timeouts);
+  if (role === null || observedIdentity === null) return { state: 'unresolved' };
+  if (role !== 'user' || observedIdentity !== identity) return { state: 'changed' };
+  return { state: 'ok' };
 }
 
 export type SendLandingEvidence = 'landed' | 'not_landed' | 'ambiguous';
@@ -890,26 +1187,19 @@ function recordProductWallAdvisory(
 
 async function readPostSendObservation(
   page: any,
-  prompt: string,
-  baselineCount: number,
-): Promise<{
-  readonly messages: PageMessage[];
+  prompt?: string,
+  baselineCount?: number,
+): Promise<PageObservationResult & {
   readonly wall: ReturnType<typeof classifyProductWall>;
-  readonly ownedWindowCompletionReady: boolean;
-  readonly transcriptIncomplete: boolean;
 }> {
-  const { messages, ownedWindowCompletionReady, transcriptIncomplete } = await readPageObservation(
-    page,
-    prompt,
-    baselineCount,
-  );
+  const observation = await readPageObservation(page, prompt, baselineCount);
   let wall: ReturnType<typeof classifyProductWall> = {};
   try {
     wall = classifyProductWall(await productStatusText(page, POST_SEND_PRODUCT_WALL_PROBE_MS));
   } catch {
     // Product-status probes must not block or invalidate transcript reads.
   }
-  return { messages, wall, ownedWindowCompletionReady, transcriptIncomplete };
+  return { ...observation, wall };
 }
 
 async function maybeContinueGeneration(page: any): Promise<boolean> {
@@ -1070,6 +1360,39 @@ function returnOwnedConversationRenderMismatch(
   };
 }
 
+function returnOwnedMessageIdentityMismatch(
+  cause: 'owned_message_identity_unresolved' | 'owned_message_identity_changed' | 'owned_message_identity_disappeared',
+  page: any,
+  browser: any,
+  invocationId: string,
+  profileKey: string,
+  sendCount: number,
+  pollCount: number,
+  navigation: StateLightNavigationCounter,
+  incidents: BrowserIncident[],
+  journalWriteFailed: boolean,
+  incident: (eventClass: string, symptom: string, action?: string) => void,
+): TurnRunOutcome {
+  incident(cause, cause, 'return_local_error');
+  return {
+    page,
+    browser,
+    result: compactResult(
+      'ui_contract_mismatch',
+      'invocation',
+      cause,
+      invocationId,
+      profileKey,
+      sendCount,
+      pollCount,
+      navigation,
+      incidents,
+      { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+      journalWriteFailed,
+    ),
+  };
+}
+
 function returnFreshConversationLandingMismatch(
   page: any,
   browser: any,
@@ -1216,11 +1539,39 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     const composerDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
     let baselineCount = 0;
     let ownedConversationUrl: string | undefined;
+    let ownedTailBoundary: OwnedTailBoundary = {
+      kind: 'text_fallback',
+      cause: 'tail_snapshot_not_established',
+    };
+    let observationMode: OwnedMessageObservationMode = 'text_fallback';
+    let textFallbackIncidentLogged = false;
+    let admissionCandidateIdentity: string | undefined;
+    let admissionStableReads = 0;
+    let admissionUnresolvedReads = 0;
+    let admissionIdentitylessReads = 0;
+    let boundIdentity: string | undefined;
+    let boundMissingReads = 0;
+    let boundUserDomIndex: number | undefined;
+    let boundUnresolvedReads = 0;
 
     const sendOwnedPrompt = async (): Promise<void> => {
       const composer = page.locator(COMPOSER_SELECTOR);
       await composer.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
       await composer.fill(snapshot.text, { timeout: MAX_LOCAL_READ_WAIT_MS });
+      const firstTail = await readPageObservation(page);
+      await sleep(page, OWNED_TAIL_CONFIRM_DELAY_MS);
+      const secondTail = await readPageObservation(page);
+      ownedTailBoundary = establishOwnedTailBoundary(firstTail, secondTail, config.newChat);
+      observationMode = ownedTailBoundary.kind === 'text_fallback' ? 'text_fallback' : 'admission';
+      baselineCount = secondTail.messages.length;
+      admissionCandidateIdentity = undefined;
+      admissionStableReads = 0;
+      admissionUnresolvedReads = 0;
+      admissionIdentitylessReads = 0;
+      boundIdentity = undefined;
+      boundMissingReads = 0;
+      boundUserDomIndex = undefined;
+      boundUnresolvedReads = 0;
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
       if (await locatorCount(sendButton) > 0) {
         await sendButton.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
@@ -1229,6 +1580,14 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
       sendCount += 1;
       afterSend = true;
+      if (observationMode === 'text_fallback' && !textFallbackIncidentLogged) {
+        incident(
+          'owned_message_identity_text_fallback',
+          ownedTailBoundary.kind === 'text_fallback' ? ownedTailBoundary.cause : 'identityless_owned_message',
+          'continue_strict_text_matching',
+        );
+        textFallbackIncidentLogged = true;
+      }
     };
 
     if (config.newChat) {
@@ -1375,7 +1734,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           }
 
           if (sendAuthorized) {
-            baselineCount = (await readPageMessages(page)).length;
             await sendOwnedPrompt();
             sendAuthorized = false;
           }
@@ -1555,7 +1913,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         };
       }
 
-      baselineCount = (await readPageMessages(page)).length;
       await sendOwnedPrompt();
     }
 
@@ -1619,6 +1976,34 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       );
     };
 
+    const waitForIdentityResolution = async (
+      diagnosticMessages: readonly PageMessage[],
+    ): Promise<TurnRunOutcome | null> => {
+      const exhausted = maybeReturnObservationExhausted(
+        Date.now(),
+        softDeadline,
+        hardExhaustionDeadline,
+        sendCount,
+        { state: 'waiting' },
+        stableReads,
+        pollCount,
+        diagnosticMessages,
+        baselineCount,
+        page,
+        browser,
+        invocationId,
+        profileKey,
+        navigation,
+        incidents,
+        journalWriteFailed,
+        incident,
+      );
+      if (exhausted) return exhausted;
+      emitHeartbeatForPoll({ state: 'waiting' });
+      await sleep(page, completionReadySeen ? COMPLETION_CONFIRM_POLL_MS : INITIAL_POLL_MS);
+      return null;
+    };
+
     // `timeout-ms` is a soft post-send observation threshold. Once a prompt has
     // landed and this invocation still owns a reachable page, #1120 requires us
     // to keep that page rather than manufacture lost-chat/resend eligibility.
@@ -1664,7 +2049,11 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
       let observation: Awaited<ReturnType<typeof readPostSendObservation>>;
       try {
-        observation = await readPostSendObservation(page, snapshot.text, baselineCount);
+        observation = await readPostSendObservation(
+          page,
+          observationMode === 'text_fallback' ? snapshot.text : undefined,
+          observationMode === 'text_fallback' ? baselineCount : undefined,
+        );
       } catch (error) {
         if (browserOrPageDefinitelyLost(page, browser)) throw error;
         const symptom = error instanceof Error ? error.message : String(error);
@@ -1699,8 +2088,20 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         continue;
       }
 
-      const { messages, wall, ownedWindowCompletionReady, transcriptIncomplete } = observation;
-      if (ownedWindowCompletionReady) completionReadySeen = true;
+      let messages = observation.messages;
+      const { wall } = observation;
+      // Text-derived/global completion evidence is valid only on the declared
+      // strict-text fallback path. During identity admission and after binding,
+      // completion authority must come from the exact identity-bounded assistant
+      // node so a completed historical turn cannot make a partial owned reply
+      // publication-eligible.
+      let ownedWindowCompletionReady = observationMode === 'text_fallback'
+        ? observation.ownedWindowCompletionReady
+        : false;
+      let transcriptIncomplete = observation.transcriptIncomplete;
+      if (observationMode === 'text_fallback' && ownedWindowCompletionReady) {
+        completionReadySeen = true;
+      }
       if (wall.state) {
         const cause = wall.cause ?? `${wall.state}_detected`;
         recordProductWallAdvisory(profileKey, wall.state, cause, invocationId);
@@ -1720,6 +2121,249 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             journalWriteFailed,
           ),
         };
+      }
+
+      if ((observationMode as OwnedMessageObservationMode) === 'admission') {
+        const admission = classifyOwnedIdentityAdmission(ownedTailBoundary, observation);
+        if (admission.state === 'changed') {
+          return returnOwnedMessageIdentityMismatch(
+            'owned_message_identity_changed', page, browser, invocationId, profileKey,
+            sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+          );
+        }
+        if (admission.state === 'unresolved') {
+          admissionUnresolvedReads += 1;
+          const cause = admissionCandidateIdentity
+            ? 'owned_message_identity_changed'
+            : 'owned_message_identity_unresolved';
+          if (admission.immediate || admissionUnresolvedReads >= OWNED_IDENTITY_UNRESOLVED_READS) {
+            return returnOwnedMessageIdentityMismatch(
+              cause, page, browser, invocationId, profileKey,
+              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+            );
+          }
+          const exhausted = await waitForIdentityResolution(messages);
+          if (exhausted) return exhausted;
+          continue;
+        }
+        admissionUnresolvedReads = 0;
+        if (admission.state === 'waiting') {
+          if (admissionCandidateIdentity) {
+            return returnOwnedMessageIdentityMismatch(
+              'owned_message_identity_changed', page, browser, invocationId, profileKey,
+              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+            );
+          }
+          admissionIdentitylessReads = 0;
+          if (
+            config.newChat
+            && sendCount >= 1
+            && Date.now() >= freshConversationLandingDeadline
+            && !readProjectConversationUrl(page, config.projectUrl ?? '')
+          ) {
+            return returnFreshConversationLandingMismatch(
+              page,
+              browser,
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              navigation,
+              incidents,
+              journalWriteFailed,
+              incident,
+            );
+          }
+          if (
+            targetChatUrl
+            && Date.now() >= dispatchDeadline
+            && hasPostSendTranscript(messages, baselineCount)
+            && await readAssistantTurnCompletionReady(page, MESSAGE_NODE_READ_TIMEOUT_MS)
+          ) {
+            return returnOwnedConversationRenderMismatch(
+              page,
+              browser,
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              navigation,
+              incidents,
+              journalWriteFailed,
+              incident,
+            );
+          }
+          if (Date.now() >= dispatchDeadline && !sendObservationDeferredLogged) {
+            incident(
+              'send_observation_deferred',
+              'owned_user_message_not_observed',
+              'continue_observing_after_send',
+            );
+            sendObservationDeferredLogged = true;
+          }
+          if (Date.now() >= hardExhaustionDeadline) {
+            return returnOwnedMessageIdentityMismatch(
+              'owned_message_identity_unresolved', page, browser, invocationId, profileKey,
+              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+            );
+          }
+          const exhausted = await waitForIdentityResolution(messages);
+          if (exhausted) return exhausted;
+          continue;
+        }
+        if (admission.state === 'identityless') {
+          if (admissionCandidateIdentity) {
+            return returnOwnedMessageIdentityMismatch(
+              'owned_message_identity_changed', page, browser, invocationId, profileKey,
+              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+            );
+          }
+          admissionIdentitylessReads += 1;
+          if (admissionIdentitylessReads < OWNED_IDENTITY_UNRESOLVED_READS) {
+            const exhausted = await waitForIdentityResolution(messages);
+            if (exhausted) return exhausted;
+            continue;
+          }
+          observationMode = 'text_fallback';
+          if (!textFallbackIncidentLogged) {
+            incident(
+              'owned_message_identity_text_fallback',
+              'identityless_owned_message',
+              'continue_strict_text_matching',
+            );
+            textFallbackIncidentLogged = true;
+          }
+          const exhausted = await waitForIdentityResolution(messages);
+          if (exhausted) return exhausted;
+          continue;
+        }
+
+        admissionIdentitylessReads = 0;
+        if (admissionCandidateIdentity && admissionCandidateIdentity !== admission.identity) {
+          return returnOwnedMessageIdentityMismatch(
+            'owned_message_identity_changed', page, browser, invocationId, profileKey,
+            sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+          );
+        }
+        admissionCandidateIdentity ??= admission.identity;
+        const exactCandidate = await readExactOwnedIdentity(page, admission.identity);
+        if (exactCandidate.state === 'changed' || exactCandidate.state === 'missing') {
+          return returnOwnedMessageIdentityMismatch(
+            'owned_message_identity_changed', page, browser, invocationId, profileKey,
+            sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+          );
+        }
+        if (exactCandidate.state === 'unresolved') {
+          admissionUnresolvedReads += 1;
+          if (admissionUnresolvedReads >= OWNED_IDENTITY_UNRESOLVED_READS) {
+            return returnOwnedMessageIdentityMismatch(
+              'owned_message_identity_changed', page, browser, invocationId, profileKey,
+              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+            );
+          }
+          const exhausted = await waitForIdentityResolution(messages);
+          if (exhausted) return exhausted;
+          continue;
+        }
+        admissionStableReads += 1;
+        if (admissionStableReads < OWNED_IDENTITY_STABLE_READS) {
+          const exhausted = await waitForIdentityResolution(messages);
+          if (exhausted) return exhausted;
+          continue;
+        }
+        boundIdentity = admission.identity;
+        observationMode = 'bound';
+        boundMissingReads = 0;
+        boundUnresolvedReads = 0;
+      }
+
+      const identityOwnedPoll = observationMode === 'bound';
+      if (identityOwnedPoll) {
+        if (!boundIdentity) {
+          return returnOwnedMessageIdentityMismatch(
+            'owned_message_identity_changed', page, browser, invocationId, profileKey,
+            sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+          );
+        }
+        const exactBound = await readExactOwnedIdentity(page, boundIdentity);
+        if (exactBound.state === 'missing') {
+          const replacementAtPriorPosition = boundUserDomIndex === undefined
+            ? undefined
+            : observation.nodes[boundUserDomIndex];
+          if (
+            replacementAtPriorPosition
+            && !replacementAtPriorPosition.roleReadFailed
+            && !replacementAtPriorPosition.identityReadFailed
+            && (
+              replacementAtPriorPosition.role !== 'user'
+              || replacementAtPriorPosition.identity !== boundIdentity
+            )
+          ) {
+            return returnOwnedMessageIdentityMismatch(
+              'owned_message_identity_changed', page, browser, invocationId, profileKey,
+              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+            );
+          }
+          boundMissingReads += 1;
+          if (boundMissingReads >= OWNED_IDENTITY_MISSING_READS) {
+            return returnOwnedMessageIdentityMismatch(
+              'owned_message_identity_disappeared', page, browser, invocationId, profileKey,
+              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+            );
+          }
+          const exhausted = await waitForIdentityResolution(messages);
+          if (exhausted) return exhausted;
+          continue;
+        }
+        boundMissingReads = 0;
+        if (exactBound.state === 'changed') {
+          return returnOwnedMessageIdentityMismatch(
+            'owned_message_identity_changed', page, browser, invocationId, profileKey,
+            sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+          );
+        }
+        if (exactBound.state === 'unresolved') {
+          boundUnresolvedReads += 1;
+          if (boundUnresolvedReads >= OWNED_IDENTITY_UNRESOLVED_READS) {
+            return returnOwnedMessageIdentityMismatch(
+              'owned_message_identity_changed', page, browser, invocationId, profileKey,
+              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+            );
+          }
+          const exhausted = await waitForIdentityResolution(messages);
+          if (exhausted) return exhausted;
+          continue;
+        }
+        const boundWindow = resolveBoundOwnedWindow(observation, boundIdentity);
+        if (boundWindow.state === 'changed') {
+          return returnOwnedMessageIdentityMismatch(
+            'owned_message_identity_changed', page, browser, invocationId, profileKey,
+            sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+          );
+        }
+        if (boundWindow.state === 'unresolved') {
+          boundUnresolvedReads += 1;
+          if (boundUnresolvedReads >= OWNED_IDENTITY_UNRESOLVED_READS) {
+            return returnOwnedMessageIdentityMismatch(
+              'owned_message_identity_changed', page, browser, invocationId, profileKey,
+              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+            );
+          }
+          const exhausted = await waitForIdentityResolution(messages);
+          if (exhausted) return exhausted;
+          continue;
+        }
+        boundUnresolvedReads = 0;
+        boundUserDomIndex = boundWindow.boundUserDomIndex;
+        messages = [...boundWindow.messages];
+        transcriptIncomplete = false;
+        ownedWindowCompletionReady = boundWindow.lastAssistantDomIndex === null
+          ? false
+          : await readAssistantNodeCompletionReady(
+              page.locator(MESSAGE_NODE_SELECTOR).nth(boundWindow.lastAssistantDomIndex),
+              MESSAGE_NODE_READ_TIMEOUT_MS,
+            );
+        if (ownedWindowCompletionReady) completionReadySeen = true;
       }
 
       if (transcriptIncomplete) {
@@ -1749,10 +2393,39 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         continue;
       }
 
-      const inProgress = !ownedWindowCompletionReady && !completionReadySeen;
-      const decision = classifyPageObservation(messages, baselineCount, snapshot.text, inProgress);
+      if (observationMode === 'text_fallback') {
+        const strictOwnedUsers = strictPostBaselineOwnedUserCount(
+          messages,
+          baselineCount,
+          snapshot.text,
+        );
+        if (strictOwnedUsers > 1) {
+          return returnOwnedMessageIdentityMismatch(
+            'owned_message_identity_unresolved', page, browser, invocationId, profileKey,
+            sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+          );
+        }
+        if (strictOwnedUsers === 0 && Date.now() >= hardExhaustionDeadline) {
+          return returnOwnedMessageIdentityMismatch(
+            'owned_message_identity_unresolved', page, browser, invocationId, profileKey,
+            sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+          );
+        }
+      }
 
-      if (hasOwnedUserMessage(messages, snapshot.text)) {
+      const inProgress = !ownedWindowCompletionReady && !completionReadySeen;
+      let decision: PageObservationDecision;
+      if (identityOwnedPoll) {
+        const assistants = messages.filter((message) => message.role === 'assistant');
+        const reply = normalizeVisibleText(assistants.at(-1)?.text ?? '');
+        decision = !inProgress && reply
+          ? { state: 'ready', reply }
+          : { state: 'waiting' };
+      } else {
+        decision = classifyPageObservation(messages, baselineCount, snapshot.text, inProgress);
+      }
+
+      if (identityOwnedPoll || hasOwnedUserMessage(messages, snapshot.text)) {
         ownedPromptEverSeen = true;
       }
 
@@ -1925,7 +2598,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
 
       if (Date.now() >= dispatchDeadline) {
-        if (!hasOwnedUserMessage(messages, snapshot.text)) {
+        if (!identityOwnedPoll && !hasOwnedUserMessage(messages, snapshot.text)) {
           if (sendCount >= 1) {
             if (
               (targetChatUrl || config.newChat)

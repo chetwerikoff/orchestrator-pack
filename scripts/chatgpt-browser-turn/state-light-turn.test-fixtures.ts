@@ -6,6 +6,7 @@ import {
   matchesAssistantTurnActionSelector,
   matchesAssistantTurnInProgressSelector,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_IDENTITY_ATTR,
 } from './product-page-selectors.ts';
 
 export function scalarLocator(overrides: Record<string, unknown> = {}) {
@@ -35,6 +36,10 @@ export function scalarLocator(overrides: Record<string, unknown> = {}) {
 export type StateLightTestMessage = {
   role: 'user' | 'assistant';
   text: string;
+  /** Opaque product message identity exposed through data-message-id. */
+  identity?: string;
+  /** Make identity reads throw to model an unreadable attribute. */
+  identityReadFailed?: boolean;
   /** When set, textContent() returns this while innerText() returns `text` (sr-only delta). */
   domTextContent?: string;
   finalAction?: boolean;
@@ -53,6 +58,10 @@ export function messageLocator(message: StateLightTestMessage, generating = fals
     count: vi.fn(async () => 1),
     getAttribute: vi.fn(async (name: string) => {
       if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role;
+      if (name === MESSAGE_IDENTITY_ATTR) {
+        if (message.identityReadFailed) throw new Error('message identity unreadable');
+        return message.identity ?? null;
+      }
       if (name === 'data-is-streaming') return generating ? 'true' : null;
       if (name === 'aria-busy') return null;
       return null;
@@ -79,6 +88,7 @@ export function messageLocator(message: StateLightTestMessage, generating = fals
 export function collectionLocator(messages: StateLightTestMessage[], generating = false) {
   return scalarLocator({
     count: vi.fn(async () => messages.length),
+    first: vi.fn(() => messageLocator(messages[0]!, generating && messages.length === 1)),
     nth: vi.fn((index: number) => messageLocator(messages[index]!, generating && index === messages.length - 1)),
   });
 }

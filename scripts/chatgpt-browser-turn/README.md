@@ -67,11 +67,21 @@ publication primitives are reused; they do not become workflow admission state.
 ### Page completion is sufficient
 
 The canonical path no longer requires service-terminal/network-witness evidence
-when the page already shows one attributable, final assistant reply. The helper
-requires its own exact user prompt to appear after the page baseline and requires
-page-level completion UI on the last assistant node while generation/tool/
-continuation activity is absent, then returns only that final eligible assistant
-node for the turn.
+when the page already shows one attributable, final assistant reply. Immediately
+before send, the helper establishes a stable local transcript-tail boundary. It
+then prefers the unique post-tail user node's opaque `data-message-id`, confirms
+that identity across bounded reads, and re-resolves the exact escaped identity
+selector on every poll. Rendered prompt text may differ from the submitted input;
+once identity is bound, text is not ownership authority.
+
+If the pre-send tail cannot be established or the single post-tail user node is
+identityless across bounded reads, the helper records
+`owned_message_identity_text_fallback` and retains the prior strict normalized-text
+matcher for that invocation. Once an identity candidate has appeared, fallback is
+not allowed. Multiple post-tail users, identity churn/topology contradiction, or a
+bound identity that disappears fail closed as `ui_contract_mismatch` with
+`owned_message_identity_unresolved`, `owned_message_identity_changed`, or
+`owned_message_identity_disappeared`.
 
 Intermediate/progress assistant nodes are not concatenated into the result and a
 stable non-empty intermediate node is not sufficient by itself. A continuation
@@ -79,18 +89,19 @@ button may be clicked because it continues the same assistant response; it is no
 a second user-prompt send.
 
 Reply capture uses a strict publication window: only assistant nodes strictly
-between the owned prompt user node and the next user node (of any origin) may be
-published. Prompt recognition is strict normalized-text equality (markdown syntax
-and whitespace collapsed); a truncated lazy-render miss stays in `waiting` until
-the page catches up. A foreign or interleaved user turn after the owned prompt
-without a capturable reply in that window, or a page that never shows the owned
-prompt before the hard observation deadline, ends the invocation as
-`observation_uncertain` (**exit 11**, no resend). Sibling Browser-GPT tabs
-remain independent.
+between the identity-bound owned user node and the next user node (of any origin)
+may be published. A later user closes that window; it does not mutate the already
+bound identity. DOM recreation or an external reload is tolerated when the same
+unique identity reappears and the owned conversation URL still matches. The
+strict normalized-text matcher (markdown syntax and whitespace collapsed) remains
+only the explicit fallback path; a truncated lazy-render miss there stays in
+`waiting` until the page catches up. Sibling Browser-GPT tabs remain independent.
 
-Recurrence-journal rows for interleaved/ambiguous observation use the
+Recurrence-journal rows for interleaved/ambiguous strict-text observation use the
 `interleaved_user_activity` event class with bounded uncertainty diagnostics.
-Unrecognized owned prompts on a readable page never produce journal incidents.
+Identity-to-text downgrade is separately visible as
+`owned_message_identity_text_fallback`; normal identity admission waits do not
+produce journal rows.
 
 ## Send-once and retry boundary
 
@@ -242,12 +253,14 @@ materialized conversation URL before the landing window closes. Past that bound
 without either, the helper returns `fresh_conversation_landing_mismatch` instead of
 polling indefinitely on the blank project surface.
 
-A failed node read marks the poll `transcriptIncomplete` instead of silently
-dropping that node from the transcript (which could otherwise yield false
-`owned_prompt_not_observed` on long chats or prevent stability convergence during
-confirm reads). Incomplete polls are retried on the next cadence without resetting
-capture stability once completion has been sighted. Post-send product-wall probes use
-a separate short budget and cannot block or invalidate transcript reads.
+A failed node read remains explicit instead of silently dropping that node. Before
+identity binding, unreadable anchor/suffix or unknown-position reads trigger
+bounded uncertainty or the journaled strict-text fallback. After binding, failures
+strictly before the bound node are irrelevant; reads in the owned window remain
+fail-closed and retry boundedly. This prevents distant virtualized history from
+blocking a valid identity-bound turn while preserving ambiguity safety around the
+owned node. Post-send product-wall probes use a separate short budget and cannot
+block or invalidate transcript reads.
 
 PID, log growth, helper stdout timing, or a background shell job prove neither
 that ChatGPT is still generating nor that it has completed. Issue #1120 does not
@@ -305,7 +318,7 @@ healthy new invocation.
 
 ## Verification
 
-Focused Issue #1120 tests cover:
+Focused Issue #1120 and #1148 tests cover:
 
 - page-only final reply completion with page-level final/in-progress discrimination;
 - a stable intermediate/tool-progress node surviving multiple reads before the
@@ -314,6 +327,11 @@ Focused Issue #1120 tests cover:
 - foreign/interleaved activity with stable-read promotion and render-tolerant
   owned-prompt echo matching;
 - mandatory own-prompt attribution after baseline;
+- stable pre-send tail anchoring and fresh zero-user sentinels;
+- unique post-tail message-identity admission, exact selector escaping, and
+  identityless strict-text fallback;
+- fail-closed duplicate/churn/disappearance cases plus DOM recreation and
+  next-user publication-window closure;
 - dedicated-tab creation and one send mutation branch;
 - a reachable owned page continuing past the soft timeout without resend or
   timeout-triggered close, including fresh-conversation URL-wait expiry;
