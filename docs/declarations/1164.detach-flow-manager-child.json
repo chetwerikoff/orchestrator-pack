@@ -7,19 +7,20 @@
   "baseline": {
     "commit_sha": "a7ba759365a2e4a8a7161ec069c81619d3fbc153",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:86194aab6973b2e24c0224a5d8befeca3df8919df03d47055a117c8ad249daf1"
+    "active_scope_hash": "sha256:624ac99db611323eafd8c34665c7154e13fb8f8078838e36843929d7dcfebb62"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
     "docs/flow-manager-long-running-child-runbook.md",
     "docs/migration_notes.md",
+    "package.json",
     "scripts/chatgpt-browser-turn/README.md",
-    "scripts/flow-manager-long-running-child.ts",
     "scripts/flow-manager-browser-gpt-long-run.ts",
     "scripts/flow-manager-long-running-child.test.ts",
-    "scripts/vitest-ci-lanes.config.json",
-    "package.json"
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "declared_globs": [],
   "amendments": []
