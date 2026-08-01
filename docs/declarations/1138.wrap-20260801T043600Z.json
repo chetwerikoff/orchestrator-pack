@@ -7,12 +7,12 @@
   "baseline": {
     "commit_sha": "801b8981f7c792e2b3c1b9aefdecb47cd38babeb",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:d05249a5b240abb0333876fab43477cdf9d742dbaf3ad05c2f657bdb35d8b468"
+    "active_scope_hash": "sha256:536eb5bc702be951d115fc69db254759863cf0a705773bfbbbbc62ab41b7075e"
   },
   "declared_paths": [
     "docs/worker-smoke-testing.md",
     "scripts/worker-smoke-run.ts",
-    "scripts/lib/worker-smoke-findings-regressions.ts"
+    "scripts/lib/orca-cli.ts"
   ],
   "declared_globs": [
     "scripts/lib/worker-smoke-*.ts"
@@ -20,16 +20,16 @@
   "amendments": [
     {
       "previous_active_scope_hash": "sha256:pending",
-      "new_active_scope_hash": "sha256:d05249a5b240abb0333876fab43477cdf9d742dbaf3ad05c2f657bdb35d8b468",
+      "new_active_scope_hash": "sha256:536eb5bc702be951d115fc69db254759863cf0a705773bfbbbbc62ab41b7075e",
       "changed": {
         "added": [
-          "scripts/lib/worker-smoke-findings-regressions.ts"
+          "scripts/lib/orca-cli.ts"
         ],
         "removed": []
       },
-      "reason": "Add dedicated regression coverage for current-head blocking review findings within the existing worker-smoke helper scope.",
+      "reason": "Bound lifecycle-critical Orca send, read, submit, worktree, and close calls required by the current blocking review findings.",
       "actor": "chat-executor",
-      "timestamp": "2026-08-01T07:50:00.000Z",
+      "timestamp": "2026-08-01T07:58:00.000Z",
       "applied": true
     }
   ]
