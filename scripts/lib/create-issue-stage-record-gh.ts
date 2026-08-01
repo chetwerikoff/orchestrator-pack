@@ -88,11 +88,7 @@ export function fetchIssueComments(
     const response = transport.runGh([
       'gh',
       'api',
-      path,
-      '-f',
-      `per_page=${pageSize}`,
-      '-f',
-      `page=${page}`,
+      `${path}?per_page=${pageSize}&page=${page}`,
     ]);
     if (response.exitCode !== 0) {
       diagnostics.push({
@@ -171,11 +167,7 @@ export function fetchIssueComments(
       const sentinel = transport.runGh([
         'gh',
         'api',
-        path,
-        '-f',
-        `per_page=${pageSize}`,
-        '-f',
-        `page=${page + 1}`,
+        `${path}?per_page=${pageSize}&page=${page + 1}`,
       ]);
       if (sentinel.exitCode !== 0) {
         diagnostics.push({
@@ -414,7 +406,7 @@ export function syncIssueProjectionLabels(
       applied: [],
       removed: [],
       pendingRepair: true,
-      diagnostics: [{ code: 'comments-truncated', message: 'unable to read issue labels for projection synchronization' }],
+      diagnostics: [{ code: 'label-sync-failed', message: 'unable to read issue labels for projection synchronization' }],
     };
   }
   const unrelated = current.labels.filter(
@@ -427,8 +419,7 @@ export function syncIssueProjectionLabels(
     `repos/${owner}/${name}/issues/${issueNumber}`,
     '-X',
     'PATCH',
-    '-f',
-    `labels=${JSON.stringify(nextLabels)}`,
+    ...nextLabels.flatMap((label) => ['-f', `labels[]=${label}`]),
   ]);
   if (response.exitCode !== 0) {
     return {
@@ -437,7 +428,7 @@ export function syncIssueProjectionLabels(
       removed: [],
       pendingRepair: true,
       diagnostics: [{
-        code: 'comments-truncated',
+        code: 'label-sync-failed',
         message: 'projection label synchronization failed',
       }],
     };

@@ -108,7 +108,7 @@ export type LineageDiagnosticCode =
   | 'conflicting-remote-event';
 
 export interface LineageDiagnostic {
-  code: LineageDiagnosticCode | 'foreign-comment' | 'edited-comment' | 'malformed-marker' | 'trust-field-incomplete' | 'comments-truncated' | 'public-journal-gap';
+  code: LineageDiagnosticCode | 'foreign-comment' | 'edited-comment' | 'malformed-marker' | 'trust-field-incomplete' | 'comments-truncated' | 'public-journal-gap' | 'label-sync-failed';
   message: string;
   eventKey?: string;
   commentId?: number;

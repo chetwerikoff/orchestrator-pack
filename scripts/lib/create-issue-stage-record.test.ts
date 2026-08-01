@@ -13,6 +13,7 @@ import {
 import {
   fetchIssueComments,
   parseJournalEvents,
+  syncIssueProjectionLabels,
   readPendingEvent,
 } from './create-issue-stage-record-gh.ts';
 import {
@@ -115,6 +116,86 @@ describe('create-issue-stage-record marker and lineage', () => {
 describe('create-issue-stage-record trusted comment admission and pagination', () => {
   const repo = 'chetwerikoff/orchestrator-pack';
 
+  it('constructs the comment census as a GET with query pagination and no body fields', () => {
+    const comment = trusted(1, 'read me', 'chetwerikoff', '2020-01-01T00:00:00Z');
+    const requests: string[][] = [];
+    const expectedPath = `repos/${repo}/issues/1152/comments?per_page=100&page=1`;
+    const transport = {
+      runGh(argv: string[]) {
+        requests.push(argv);
+        if (argv.length === 3 && argv[0] === 'gh' && argv[1] === 'api' && argv[2] === expectedPath) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify([{
+              id: comment.id,
+              body: comment.body,
+              created_at: comment.createdAt,
+              updated_at: comment.updatedAt,
+              user: { login: comment.userLogin },
+              author_association: comment.authorAssociation,
+            }]),
+            stderr: '',
+          };
+        }
+        return { exitCode: 422, stdout: '', stderr: 'body was not supplied' };
+      },
+    };
+
+    const result = fetchIssueComments(transport, repo, 1152, 'chetwerikoff');
+
+    expect(result.comments).toEqual([comment]);
+    expect(result.commentsComplete).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    expect(requests).toEqual([['gh', 'api', expectedPath]]);
+    expect(requests[0]).not.toContain('-f');
+  });
+
+  it('constructs label synchronization as repeated array fields', () => {
+    const requests: string[][] = [];
+    const issuePath = `repos/${repo}/issues/1152`;
+    const expectedPatch = [
+      'gh', 'api', issuePath, '-X', 'PATCH',
+      '-f', 'labels[]=bug',
+      '-f', 'labels[]=spec-review:in-progress',
+    ];
+    const transport = {
+      runGh(argv: string[]) {
+        requests.push(argv);
+        if (argv.includes('--jq')) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ title: 't', body: 'revision r01', labels: ['bug', 'spec-review:accepted'] }),
+            stderr: '',
+          };
+        }
+        if (JSON.stringify(argv) === JSON.stringify(expectedPatch)) {
+          return { exitCode: 0, stdout: '{}', stderr: '' };
+        }
+        return { exitCode: 422, stdout: '', stderr: 'labels was not an array' };
+      },
+    };
+
+    const result = syncIssueProjectionLabels(transport, repo, 1152, 'spec-review:in-progress', ['bug', 'spec-review:accepted']);
+
+    expect(result.ok).toBe(true);
+    expect(result.pendingRepair).toBe(false);
+    expect(requests).toEqual([
+      ['gh', 'api', issuePath, '--jq', '{title, body, labels: [.labels[].name]}'],
+      expectedPatch,
+    ]);
+    expect(requests[1]).not.toContain('labels=[\"bug\",\"spec-review:in-progress\"]');
+  });
+
+  it('uses a label-specific diagnostic when label state cannot be read', () => {
+    const result = syncIssueProjectionLabels({
+      runGh: () => ({ exitCode: 1, stdout: '', stderr: 'read failed' }),
+    }, repo, 1152, 'spec-review:in-progress', []);
+
+    expect(result.pendingRepair).toBe(true);
+    expect(result.diagnostics.map((item) => item.code)).toContain('label-sync-failed');
+    expect(result.diagnostics.map((item) => item.code)).not.toContain('comments-truncated');
+  });
+
   it('excludes foreign and edited comments from the eligible census', () => {
     const state = createMockGhState();
     state.comments = [
@@ -216,6 +297,8 @@ describe('create-issue-stage-record trusted comment admission and pagination', (
     expect(state.comments).toHaveLength(1);
     expect(state.issue.labels).not.toContain('spec-review:in-progress');
     expect(state.issue.labels).toContain('bug');
+    expect(result.diagnostics.map((item) => item.code)).toContain('label-sync-failed');
+    expect(result.diagnostics.map((item) => item.code)).not.toContain('comments-truncated');
   });
 
   it('does not mutate projection labels when comment create is ambiguous before confirmation', () => {

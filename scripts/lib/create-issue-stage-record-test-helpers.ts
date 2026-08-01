@@ -78,7 +78,8 @@ export function createMockTransport(state: MockGhState): GhTransport {
       }
       const sub = argv[1];
       if (sub === 'api') {
-        const path = argv[2] ?? '';
+        const requestPath = argv[2] ?? '';
+        const [path, query = ''] = requestPath.split('?', 2);
         const owner = path.match(/^repos\/([^/]+)\/([^/]+)/);
         if (path.endsWith('/comments') && argv.includes('-f') && readFormValue(argv, 'body')) {
           if (state.failCreate) {
@@ -100,9 +101,10 @@ export function createMockTransport(state: MockGhState): GhTransport {
           state.comments.push(comment);
           return { exitCode: 0, stdout: JSON.stringify({ id: comment.id }), stderr: '' };
         }
-        if (path.endsWith('/comments') && argv.includes('-f') && (readFormValue(argv, 'page') || readFormValue(argv, 'per_page'))) {
-          const page = Number(readFormValue(argv, 'page') ?? '1');
-          const perPage = Number(readFormValue(argv, 'per_page') ?? '100');
+        if (path.endsWith('/comments') && !argv.includes('-f') && query) {
+          const params = new URLSearchParams(query);
+          const page = Number(params.get('page') ?? '1');
+          const perPage = Number(params.get('per_page') ?? '100');
           const key = pageKey(path, page, perPage);
           const pageItems = state.pagesByRequest.get(key);
           if (!pageItems) {
@@ -148,9 +150,9 @@ export function createMockTransport(state: MockGhState): GhTransport {
           if (state.failLabelSync) {
             return { exitCode: 1, stdout: '', stderr: 'label sync failed' };
           }
-          const labelsIndex = argv.indexOf('-f');
-          const labelsRaw = argv[labelsIndex + 1] ?? 'labels=[]';
-          const labels = JSON.parse(labelsRaw.replace(/^labels=/, '')) as string[];
+          const labels = argv
+            .filter((argument) => argument.startsWith('labels[]='))
+            .map((argument) => argument.slice('labels[]='.length));
           state.issue.labels = labels;
           return { exitCode: 0, stdout: '{}', stderr: '' };
         }
