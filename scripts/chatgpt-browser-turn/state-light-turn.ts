@@ -37,9 +37,12 @@ import {
   releaseStateLightNewChatSendSlot,
   StateLightNavigationCounter,
   STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS,
+  STATE_LIGHT_MAX_TIMEOUT_MS,
   tryClaimStateLightFreshConversation,
   navigateToProjectConversationIfNeeded,
   readProjectConversationUrl,
+  verifyStateLightFreshClaimOwnerFence,
+  verifyStateLightSendSlotOwnerFence,
   waitForConversationUrlAfterSend,
 } from './state-light-fresh-conversation.ts';
 import { configuredProfileKey } from './storage-common.ts';
@@ -486,6 +489,56 @@ function maybeReturnObservationExhausted(
     };
   }
   return null;
+}
+
+
+function returnOwnerFenceLostAfterSend(
+  page: any,
+  browser: any,
+  invocationId: string,
+  profileKey: string,
+  sendCount: number,
+  pollCount: number,
+  navigation: StateLightNavigationCounter,
+  incidents: BrowserIncident[],
+  journalWriteFailed: boolean,
+  incident: (eventClass: string, symptom: string, action?: string) => void,
+): TurnRunOutcome {
+  incident('ownership_fence_lost', 'state_light_owner_fence_lost_after_send', 'retain_owned_page_no_resend');
+  return {
+    page,
+    browser,
+    preserveOwnedPage: true,
+    ownershipForfeited: true,
+    result: compactResult(
+      'driver_error',
+      'invocation',
+      'state_light_owner_fence_lost_after_send',
+      invocationId,
+      profileKey,
+      sendCount,
+      pollCount,
+      navigation,
+      incidents,
+      { ...(pageConversationUrl(page) ? { conversation_id: pageConversationUrl(page) } : {}) },
+      journalWriteFailed,
+    ),
+  };
+}
+
+function freshClaimOwnerFenceValid(
+  profileKey: string,
+  conversationUrl: string | undefined,
+  invocationId: string,
+  acceptedTimeoutMs: number,
+): boolean {
+  if (!conversationUrl) return true;
+  return verifyStateLightFreshClaimOwnerFence(
+    profileKey,
+    conversationUrl,
+    invocationId,
+    acceptedTimeoutMs,
+  ) === 'valid';
 }
 
 function errnoCode(error: unknown): string | undefined {
@@ -1154,6 +1207,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
   let journalWriteFailed = false;
   const incidents: BrowserIncident[] = [];
   let afterSend = false;
+  let ownershipForfeited = false;
 
   const incident = (eventClass: string, symptom: string, action?: string): void => {
     const ok = recordIncident(
@@ -1167,6 +1221,24 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
   try {
     const config = browserConfig(args);
+    if (config.timeoutMs > STATE_LIGHT_MAX_TIMEOUT_MS) {
+      incident('input_invalid', 'timeout_ms_exceeds_maximum', 'return_local_error');
+      return {
+        result: compactResult(
+          'input_invalid',
+          'invocation',
+          'timeout_ms_exceeds_maximum',
+          invocationId,
+          configuredProfileKey(config.profile, config.cdp),
+          0,
+          pollCount,
+          navigation,
+          incidents,
+          {},
+          journalWriteFailed,
+        ),
+      };
+    }
     profileKey = configuredProfileKey(config.profile, config.cdp);
     const snapshot = readStableInput(requireOption(args, 'input'));
     const destination = destinationIdentity(requireOption(args, 'output'));
@@ -1375,6 +1447,25 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           }
 
           if (sendAuthorized) {
+            if (verifyStateLightSendSlotOwnerFence(profileKey, invocationId) !== 'valid') {
+              sendAuthorized = false;
+              if (sendCount >= 1) {
+                ownershipForfeited = true;
+                return returnOwnerFenceLostAfterSend(
+                  page,
+                  browser,
+                  invocationId,
+                  profileKey,
+                  sendCount,
+                  pollCount,
+                  navigation,
+                  incidents,
+                  journalWriteFailed,
+                  incident,
+                );
+              }
+              continue;
+            }
             baselineCount = (await readPageMessages(page)).length;
             await sendOwnedPrompt();
             sendAuthorized = false;
@@ -1418,7 +1509,30 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           }
           lastAttemptConversationUrl = conversationUrl;
 
-          const claim = tryClaimStateLightFreshConversation(profileKey, conversationUrl, invocationId);
+          if (verifyStateLightSendSlotOwnerFence(profileKey, invocationId) !== 'valid') {
+            if (sendCount >= 1) {
+              ownershipForfeited = true;
+              return returnOwnerFenceLostAfterSend(
+                page,
+                browser,
+                invocationId,
+                profileKey,
+                sendCount,
+                pollCount,
+                navigation,
+                incidents,
+                journalWriteFailed,
+                incident,
+              );
+            }
+            continue;
+          }
+          const claim = tryClaimStateLightFreshConversation(
+            profileKey,
+            conversationUrl,
+            invocationId,
+            config.timeoutMs,
+          );
           if (claim === 'contended') {
             const landingEvidence = await classifySendLandingEvidence(
               page,
@@ -1512,7 +1626,9 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           };
         }
       } finally {
-        releaseStateLightNewChatSendSlot(profileKey, invocationId);
+        if (!ownershipForfeited) {
+          releaseStateLightNewChatSendSlot(profileKey, invocationId);
+        }
       }
     } else {
       const chatUrlTarget = normalizeConversationUrl(config.chatUrl ?? '');
@@ -1593,6 +1709,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
     const startedAt = Date.now();
     const softDeadline = startedAt + config.timeoutMs;
+    // `2 × timeout-ms` is a post-send decision threshold, not a hard observation ceiling.
     const hardExhaustionDeadline = startedAt + (config.timeoutMs * 2);
     const dispatchDeadline = startedAt + Math.min(DISPATCH_OBSERVATION_MS, config.timeoutMs);
     const freshConversationLandingDeadline = startedAt + Math.min(
@@ -1700,6 +1817,26 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
 
       const { messages, wall, ownedWindowCompletionReady, transcriptIncomplete } = observation;
+      if (
+        config.newChat
+        && ownedConversationUrl
+        && !ownershipForfeited
+        && !freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)
+      ) {
+        ownershipForfeited = true;
+        return returnOwnerFenceLostAfterSend(
+          page,
+          browser,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation,
+          incidents,
+          journalWriteFailed,
+          incident,
+        );
+      }
       if (ownedWindowCompletionReady) completionReadySeen = true;
       if (wall.state) {
         const cause = wall.cause ?? `${wall.state}_detected`;
@@ -1819,6 +1956,25 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           stableReads = 1;
         }
         if (stableReads >= 2) {
+          if (
+            config.newChat
+            && ownedConversationUrl
+            && !freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs)
+          ) {
+            ownershipForfeited = true;
+            return returnOwnerFenceLostAfterSend(
+              page,
+              browser,
+              invocationId,
+              profileKey,
+              sendCount,
+              pollCount,
+              navigation,
+              incidents,
+              journalWriteFailed,
+              incident,
+            );
+          }
           const captureReply = bestReadyReply.length >= decision.reply.length ? bestReadyReply : decision.reply;
           const publication = publishStateLightReply(
             destination.finalPath,
@@ -1848,6 +2004,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             page,
             browser,
             ...(ownedConversationUrl ? { profileKey, ownedConversationUrl } : {}),
+            ...(ownershipForfeited ? { ownershipForfeited: true } : {}),
             result: compactResult(
               'ok',
               'none',
@@ -1897,7 +2054,13 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         lastReadyReply = '';
         bestReadyReply = '';
       }
-      if (await maybeContinueGeneration(page)) {
+      if (
+        !ownershipForfeited
+        && (!config.newChat
+          || !ownedConversationUrl
+          || freshClaimOwnerFenceValid(profileKey, ownedConversationUrl, invocationId, config.timeoutMs))
+        && await maybeContinueGeneration(page)
+      ) {
         emitHeartbeatForPoll(decision);
         await sleep(page, INITIAL_POLL_MS);
         continue;
@@ -2078,7 +2241,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 }
 
 async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult> {
-  if (outcome.profileKey && outcome.ownedConversationUrl) {
+  if (outcome.profileKey && outcome.ownedConversationUrl && !outcome.ownershipForfeited) {
     releaseStateLightFreshConversationClaim(
       outcome.profileKey,
       outcome.ownedConversationUrl,

@@ -195,6 +195,46 @@ exponential backoff between attempts instead of hot-looping `page.goto`. A produ
 wall observed during prepare returns the wall state immediately — no further
 navigation rounds for that invocation.
 
+### Ownership TTL, owner fences, and fail-open recovery (#1145)
+
+Fresh `--new-chat` turns still serialize behind the profile send slot and
+per-conversation fresh claims, but both artifacts are now **finite and fail-open**:
+
+- `--timeout-ms` through **1,800,000 ms** remains accepted; larger values fail
+  before browser connection, artifact acquisition, or dispatch with
+  `send_count: 0`.
+- The existing **`2 × timeout-ms` post-send value is a decision threshold**, not a
+  hard observation/hold ceiling. An awaited DOM observation pass may return after
+  that threshold; it does not manufacture resend authority.
+- Send-slot authority expires no later than `acquired_at + 2,100,000 ms`.
+- Fresh claims created by new code expire at
+  `claimed_at + 2 × accepted timeout-ms + 300,000 ms` (maximum **3,900,000 ms**).
+  Passive/legacy v1 claims without `expires_at` use `claimed_at + 3,900,000 ms`.
+  The 300,000 ms grace is advisory, not proof that all work finished first.
+
+Immediately before final message dispatch and fresh-claim create/replace, the
+helper re-reads the canonical send slot and requires the complete expected v1
+identity plus unexpired status. After every awaited fresh-chat observation pass
+and immediately before continuation or late-result publication, it re-reads the
+canonical fresh claim the same way. Fence loss suppresses the protected effect:
+before-dispatch loss keeps `send_count: 0`; after-dispatch loss preserves the
+owned page and returns without resend, continuation, publication, cleanup, or
+release. Expiry wins over PID uncertainty; expired/corrupt records recover
+through bounded retry, stale cleanup, exclusive create, and post-create
+revalidation.
+
+Emitted records remain rollback-readable v1 with only optional additive
+`expires_at`. Release compares complete expected v1 identity on a final canonical
+read and skips on mismatch or expected expiry, so a successor present before that
+read survives. Replacement after final revalidation but before protected entry,
+or after final release read but before unlink, remains documented residual risk.
+
+These records are transport-local only. They do not authorize workflow
+progression, prove delivery, permit resend, or become durable recovery state.
+Upgrade/rollback requires no active state-light invocation: new code reads
+passive v1 and emits old-reader-compatible v1; already-running old code is not
+retroactively fenced.
+
 The per-invocation navigation budget (`STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION`,
 currently 10) is a hard ceiling across the owned-tab goto, prepare surfaces, and
 collision-recovery prepares. Worst-case fresh-chat navigation is therefore

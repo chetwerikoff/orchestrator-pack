@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -103,6 +103,10 @@ import {
   STATE_LIGHT_ADVISORY_WALL_TTL_MS,
   STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION,
   tryClaimStateLightFreshConversation,
+  verifyStateLightSendSlotOwnerFence,
+  verifyStateLightFreshClaimOwnerFence,
+  STATE_LIGHT_SEND_SLOT_TTL_MS,
+  STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS,
 } from './state-light-fresh-conversation.ts';
 
 const PROJECT_URL = 'https://chatgpt.com/g/g-p-test/project';
@@ -716,3 +720,235 @@ describe('state-light fresh conversation collision recovery', () => {
   });
 
 });
+
+describe('state-light ownership TTL and owner fences (#1145)', () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), 'slt-ttl-'));
+    process.env.CHATGPT_BROWSER_TURN_STATE_DIR = stateDir;
+    disableSendSlotForTest();
+    mocks.browserQueue.length = 0;
+    mocks.cleanupOutcome = 'confirmed';
+    mocks.nowMs = 1_700_000_000_000;
+    mocks.productStatusText.mockReset();
+    mocks.productStatusText.mockResolvedValue({ text: '', composer: true });
+    vi.spyOn(Date, 'now').mockImplementation(() => mocks.nowMs);
+    mocks.readStableInput.mockReset();
+  });
+
+  afterEach(() => {
+    delete process.env.CHATGPT_BROWSER_TURN_STATE_DIR;
+    clearSendSlotDisableEnv();
+    rmSync(stateDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('accepts timeout-ms through 1_800_000 and rejects larger values before effects', async () => {
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-MAX'));
+    const solo = makeLoserPage('PROMPT-MAX', 'MAX-OK');
+    const okOutcome = await runNewChatTurn(solo.page, '/tmp/max-timeout-ok.txt', '1800000');
+    expect(okOutcome.result.send_count).toBe(1);
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-OVER'));
+    const overOutcome = await runNewChatTurn(solo.page, '/tmp/max-timeout-over.txt', '1800001');
+    expect(overOutcome.result).toMatchObject({
+      state: 'input_invalid',
+      cause: 'timeout_ms_exceeds_maximum',
+      send_count: 0,
+    });
+    expect(overOutcome.result.goto_count).toBe(0);
+  });
+
+  it('treats 2x timeout-ms as a decision threshold that may return after an awaited pass', async () => {
+    const prompt = 'PROMPT-THRESHOLD';
+    const reply = 'THRESHOLD-OK';
+    let sent = false;
+    let url = PROJECT_URL;
+    let observationIndex = 0;
+    const snapshotFrames = readyTurnObservationFrames(prompt, reply).map((messages, index) => ({
+      messages,
+      generating: index < 2,
+    }));
+
+    const composer = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => undefined),
+      fill: vi.fn(async () => undefined),
+      innerText: vi.fn(async () => (sent ? '' : prompt)),
+      textContent: vi.fn(async () => (sent ? '' : prompt)),
+      press: vi.fn(async () => { sent = true; }),
+    });
+    const sendButton = scalarLocator({
+      count: vi.fn(async () => 1),
+      click: vi.fn(async () => { sent = true; }),
+    });
+
+    const page: any = {
+      __fakeBrowserGptPage: true,
+      goto: vi.fn(async (target: string) => { url = target; }),
+      url: vi.fn(() => url),
+      isClosed: vi.fn(() => false),
+      waitForTimeout: vi.fn(async (ms: number) => { mocks.nowMs += ms; }),
+      close: vi.fn(async () => undefined),
+      getByText: vi.fn(() => scalarLocator()),
+      getByRole: vi.fn(() => scalarLocator()),
+      locator: vi.fn((selector: string) => {
+        if (selector === COMPOSER_SELECTOR) return composer;
+        if (selector === SEND_BUTTON_SELECTOR) return sendButton;
+        if (matchesNewChatControlSelector(selector)) {
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === MESSAGE_NODE_SELECTOR) {
+          if (!sent) return collectionLocator([]);
+          const frame = snapshotFrames[Math.min(observationIndex, snapshotFrames.length - 1)]!;
+          observationIndex++;
+          return collectionLocator(frame.messages, frame.generating);
+        }
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=ancestor-or-self::section')) {
+          const frame = snapshotFrames[Math.min(Math.max(observationIndex - 1, 0), snapshotFrames.length - 1)]!;
+          const last = frame.messages.at(-1);
+          if (last?.finalActionInTurnContainer) return messageLocator(last);
+          return scalarLocator({ count: vi.fn(async () => 0) });
+        }
+        if (selector === ASSISTANT_MESSAGE_SELECTOR) {
+          const frame = snapshotFrames[Math.min(Math.max(observationIndex - 1, 0), snapshotFrames.length - 1)]!;
+          return collectionLocator(
+            frame.messages.filter((message: StateLightTestMessage) => message.role === 'assistant'),
+            frame.generating,
+          );
+        }
+        if (selector.includes(STOP_BUTTON_TESTID)) return scalarLocator();
+        return scalarLocator();
+      }),
+    };
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput(prompt));
+    const startedAt = mocks.nowMs;
+    const outcome = await runNewChatTurn(page, '/tmp/threshold-after-2x.txt', '1000');
+    expect(outcome.code).toBe(0);
+    expect(mocks.nowMs).toBeGreaterThanOrEqual(startedAt + 2000);
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+  });
+
+  it('recovers expired and corrupt ownership artifacts through bounded exclusive create', async () => {
+    clearSendSlotDisableEnv();
+    const profileKey = 'collision-profile';
+    const { writeFileSync } = await import('node:fs');
+    const { sha256 } = await import('./storage-common.ts');
+
+    await acquireStateLightNewChatSendSlot(profileKey, 'stale-owner', 5_000);
+    const slotPath = join(stateDir, profileKey, 'locks', 'state-light-new-chat-send.slot');
+    writeFileSync(slotPath, `${JSON.stringify({
+      schema: 'state-light-new-chat-send-slot/v1',
+      version: 1,
+      invocation_id: 'expired-foreign',
+      pid: 999_999,
+      acquired_at: new Date(mocks.nowMs - STATE_LIGHT_SEND_SLOT_TTL_MS - 1).toISOString(),
+      expires_at: new Date(mocks.nowMs - 1).toISOString(),
+    })}\n`);
+
+    await acquireStateLightNewChatSendSlot(profileKey, 'successor', 5_000);
+    expect(verifyStateLightSendSlotOwnerFence(profileKey, 'successor')).toBe('valid');
+    releaseStateLightNewChatSendSlot(profileKey, 'successor');
+
+    const claimDir = join(stateDir, profileKey, 'state-light-fresh-claims');
+    mkdirSync(claimDir, { recursive: true });
+    const claimPath = join(claimDir, `${sha256(SHARED_CONV)}.json`);
+    writeFileSync(claimPath, '{not-json');
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim', 5_000)).toBe('claimed');
+    writeFileSync(claimPath, `${JSON.stringify({
+      schema: 'state-light-fresh-claim/v1',
+      version: 1,
+      invocation_id: 'expired-foreign',
+      conversation_id: SHARED_CONV,
+      pid: 999_999,
+      claimed_at: new Date(mocks.nowMs - STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS - 1).toISOString(),
+      expires_at: new Date(mocks.nowMs - 1).toISOString(),
+    })}\n`);
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim-2', 5_000)).toBe('claimed');
+    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'successor-claim-2', 5_000);
+  });
+
+  it('emits rollback-readable v1 records with optional expires_at only', async () => {
+    clearSendSlotDisableEnv();
+    const profileKey = 'collision-profile';
+    await acquireStateLightNewChatSendSlot(profileKey, 'writer', 5_000);
+    const slotPath = join(stateDir, profileKey, 'locks', 'state-light-new-chat-send.slot');
+    const slotRaw = readFileSync(slotPath, 'utf8');
+    const slot = JSON.parse(slotRaw);
+    expect(slot).toMatchObject({
+      schema: 'state-light-new-chat-send-slot/v1',
+      version: 1,
+      invocation_id: 'writer',
+      pid: expect.any(Number),
+      acquired_at: expect.any(String),
+      expires_at: expect.any(String),
+    });
+    releaseStateLightNewChatSendSlot(profileKey, 'writer');
+
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'writer', 5_000)).toBe('claimed');
+    const claimPath = join(
+      stateDir,
+      profileKey,
+      'state-light-fresh-claims',
+      (await import('./storage-common.ts')).sha256(SHARED_CONV) + '.json',
+    );
+    const claim = JSON.parse(readFileSync(claimPath, 'utf8'));
+    expect(claim.schema).toBe('state-light-fresh-claim/v1');
+    expect(claim.version).toBe(1);
+    expect(claim.expires_at).toEqual(expect.any(String));
+    const legacyShaped = {
+      schema: 'state-light-fresh-claim/v1',
+      version: 1,
+      invocation_id: 'legacy',
+      conversation_id: SHARED_CONV,
+      pid: process.pid,
+      claimed_at: new Date(mocks.nowMs).toISOString(),
+    };
+    expect(legacyShaped.invocation_id).toBe('legacy');
+    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'writer', 5_000);
+  });
+
+  it('preserves a successor claim present before the owner final read', () => {
+    const profileKey = 'collision-profile';
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'owner', 5_000)).toBe('claimed');
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor', 5_000)).toBe('contended');
+    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'owner', 5_000);
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor', 5_000)).toBe('claimed');
+    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'successor', 5_000);
+  });
+
+  it('forfeits send-slot authority after expiry so the stale owner cannot dispatch', async () => {
+    clearSendSlotDisableEnv();
+    const profileKey = 'collision-profile';
+    await acquireStateLightNewChatSendSlot(profileKey, 'expired-owner', 5_000);
+    expect(verifyStateLightSendSlotOwnerFence(profileKey, 'expired-owner')).toBe('valid');
+    mocks.nowMs += STATE_LIGHT_SEND_SLOT_TTL_MS + 1;
+    expect(verifyStateLightSendSlotOwnerFence(profileKey, 'expired-owner')).toBe('lost');
+    await acquireStateLightNewChatSendSlot(profileKey, 'successor', 5_000);
+    expect(verifyStateLightSendSlotOwnerFence(profileKey, 'successor')).toBe('valid');
+    releaseStateLightNewChatSendSlot(profileKey, 'successor');
+  });
+
+  it('forfeits fresh-claim authority after expiry before continuation or publication', async () => {
+    const profileKey = 'collision-profile';
+    const { writeFileSync } = await import('node:fs');
+    const { sha256 } = await import('./storage-common.ts');
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'owner', 5_000)).toBe('claimed');
+    const claimPath = join(stateDir, profileKey, 'state-light-fresh-claims', `${sha256(SHARED_CONV)}.json`);
+    writeFileSync(claimPath, `${JSON.stringify({
+      schema: 'state-light-fresh-claim/v1',
+      version: 1,
+      invocation_id: 'owner',
+      conversation_id: SHARED_CONV,
+      pid: process.pid,
+      claimed_at: new Date(mocks.nowMs).toISOString(),
+      expires_at: new Date(mocks.nowMs - 1).toISOString(),
+    })}\n`);
+    expect(verifyStateLightFreshClaimOwnerFence(profileKey, SHARED_CONV, 'owner', 5_000)).toBe('lost');
+    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'owner', 5_000);
+  });
+});
+
+
