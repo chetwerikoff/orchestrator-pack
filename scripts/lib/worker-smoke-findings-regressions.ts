@@ -3,38 +3,55 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { runProcessSync } from '../kernel/subprocess.ts';
 
-type FindingsRegressionInput = Pick<typeof import('vitest'), 'describe' | 'expect' | 'it'> & {
+type FindingsRegressionInput = Pick<
+  typeof import('vitest'),
+  'describe' | 'expect' | 'it' | 'vi'
+> & {
   waitForSmokeChildCompletion: typeof import('../worker-smoke-run.ts').waitForSmokeChildCompletion;
 };
+
+function requireCommand(
+  expect: FindingsRegressionInput['expect'],
+  command: string,
+  args: readonly string[],
+  cwd: string,
+): string {
+  const result = runProcessSync({ command, args, cwd, inheritParentEnv: true });
+  expect(result.ok, result.stderr || result.error).toBe(true);
+  return result.stdout.trim();
+}
 
 export function registerWorkerSmokeFindingsRegressionTests(input: FindingsRegressionInput): void {
   const { describe, expect, it } = input;
 
-  describe('ci diagnostic: legacy worker-smoke harness environment', () => {
-    it('shows the exact payload produced with injected ORCA context', () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-ci-diagnostic-'));
+  describe('ci diagnostic: post-reservation terminal create failure', () => {
+    it('shows the terminal-create process-launch payload', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-create-diagnostic-'));
       const repoRoot = path.join(root, 'repo');
+      const fakeOrcaPath = path.join(root, 'fake-orca.mjs');
       fs.mkdirSync(repoRoot, { recursive: true });
-      for (const [command, args] of [
-        ['git', ['init']],
-        ['git', ['config', 'user.email', 'smoke@example.invalid']],
-        ['git', ['config', 'user.name', 'Smoke Harness']],
-      ] as const) {
-        const result = runProcessSync({ command, args, cwd: repoRoot, inheritParentEnv: true });
-        expect(result.ok, result.stderr || result.error).toBe(true);
-      }
+      requireCommand(expect, 'git', ['init'], repoRoot);
+      requireCommand(expect, 'git', ['config', 'user.email', 'smoke@example.invalid'], repoRoot);
+      requireCommand(expect, 'git', ['config', 'user.name', 'Smoke Harness'], repoRoot);
       fs.writeFileSync(path.join(repoRoot, 'marker.txt'), 'current head\n', 'utf8');
-      for (const args of [['add', 'marker.txt'], ['commit', '-m', 'fixture head']] as const) {
-        const result = runProcessSync({ command: 'git', args, cwd: repoRoot, inheritParentEnv: true });
-        expect(result.ok, result.stderr || result.error).toBe(true);
-      }
-      const headResult = runProcessSync({
-        command: 'git',
-        args: ['rev-parse', 'HEAD'],
-        cwd: repoRoot,
-        inheritParentEnv: true,
-      });
-      expect(headResult.ok, headResult.stderr || headResult.error).toBe(true);
+      requireCommand(expect, 'git', ['add', 'marker.txt'], repoRoot);
+      requireCommand(expect, 'git', ['commit', '-m', 'fixture head'], repoRoot);
+      const headSha = requireCommand(expect, 'git', ['rev-parse', 'HEAD'], repoRoot);
+
+      fs.writeFileSync(fakeOrcaPath, [
+        '#!/usr/bin/env node',
+        "import { unlinkSync } from 'node:fs';",
+        'const args = process.argv.slice(2);',
+        "if (args[0] === 'worktree' && args[1] === 'current') {",
+        '  unlinkSync(process.argv[1]);',
+        `  process.stdout.write(JSON.stringify({ ok: true, result: { worktree: { path: ${JSON.stringify(repoRoot)}, head: ${JSON.stringify(headSha)} } } }) + '\\n');`,
+        '  process.exit(0);',
+        '}',
+        "process.stdout.write(JSON.stringify({ ok: false, error: { code: 'unexpected', message: 'unexpected' } }) + '\\n');",
+        'process.exit(1);',
+      ].join('\n'), 'utf8');
+      requireCommand(expect, 'chmod', ['+x', fakeOrcaPath], root);
+
       const result = runProcessSync({
         command: process.execPath,
         args: [
@@ -43,7 +60,7 @@ export function registerWorkerSmokeFindingsRegressionTests(input: FindingsRegres
           'run',
           '--issue', '1125',
           '--pr', '1153',
-          '--head-sha', headResult.stdout.trim(),
+          '--head-sha', headSha,
           '--issue-body-file', path.join(
             import.meta.dirname,
             '..',
@@ -61,13 +78,7 @@ export function registerWorkerSmokeFindingsRegressionTests(input: FindingsRegres
         cwd: repoRoot,
         inheritParentEnv: true,
         env: {
-          ORCA_CLI_COMMAND: path.join(root, 'missing-orca'),
-          FAKE_ORCA_SCENARIO: 'worktree_process_launch_failed',
-          FAKE_ORCA_SENTINEL: 'RAW_RUN_SENTINEL_1125',
-          FAKE_ORCA_LOG: path.join(root, 'orca-operations.log'),
-          FAKE_ORCA_STATE: path.join(root, 'orca-state.json'),
-          FAKE_ORCA_CWD: repoRoot,
-          FAKE_ORCA_HEAD: headResult.stdout.trim(),
+          ORCA_CLI_COMMAND: fakeOrcaPath,
           ORCA_TERMINAL_HANDLE: 'injected-terminal',
           ORCA_WORKTREE_ID: 'injected-worktree',
           ORCA_PANE_KEY: 'injected-pane',
