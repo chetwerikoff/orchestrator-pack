@@ -503,6 +503,82 @@ describe('flow-manager long-running child (#1164)', () => {
     expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('success');
   });
 
+  it('commits exactly one receipt and starts one child when launchers race (P1)', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'concurrent-launch');
+    const counterPath = join(root, 'child-start-count.txt');
+    const result = makeTurnResult();
+    const counterPortable = counterPath.replace(/\\/g, '/');
+    const fixture = nodeFixture([
+      'const fs = require("fs");',
+      `const counter = "${counterPortable}";`,
+      'const prior = fs.existsSync(counter) ? Number(fs.readFileSync(counter, "utf8")) : 0;',
+      'fs.writeFileSync(counter, String(prior + 1));',
+      `process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');`,
+      'process.exit(0);',
+    ].join(''));
+    const launchConfig = {
+      runIdentity: 'run-concurrent',
+      attemptIdentity: 'attempt-concurrent',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    };
+    process.env.OPK_FM_LONG_CHILD_DISABLE_DETACH = '1';
+    const [firstCode, secondCode] = await Promise.all([
+      runLaunch(launchConfig),
+      runLaunch(launchConfig),
+    ]);
+    expect(existsSync(paths.receipt)).toBe(true);
+    expect(readHandoffReceipt(paths.receipt)?.schema).toBe(HANDOFF_SCHEMA);
+    expect(readFileSync(counterPath, 'utf8')).toBe('1');
+    expect([firstCode, secondCode].sort()).toEqual([0, 2]);
+    expect(existsSync(paths.envelope)).toBe(true);
+    expect(readTerminalEnvelope(paths.envelope)?.lifecycle_outcome).toBe('success');
+  });
+
+  it('carries conversation locator on fresh-chat non-ok incident when recovery is available (P1)', async () => {
+    const root = tempDir();
+    const paths = launchPaths(root, 'fresh-chat-locator');
+    const conversationUrl = 'https://chatgpt.com/c/fresh-uuid-1164';
+    const result = makeTurnResult({
+      state: 'login',
+      scope: 'profile',
+      cause: 'challenge_wall',
+      conversation_id: conversationUrl,
+      witness: undefined,
+      observation_uncertainty_diagnostics: {
+        cause: 'challenge_wall',
+        send_count: 1,
+        owned_prompt_seen: false,
+      },
+    });
+    const fixture = nodeFixture(`
+      process.stdout.write(JSON.stringify(${JSON.stringify(result)}) + '\\n');
+      process.exit(0);
+    `);
+    const code = await runLaunch({
+      runIdentity: 'run-fresh',
+      attemptIdentity: 'attempt-fresh',
+      handoffReceiptPath: paths.receipt,
+      terminalEnvelopePath: paths.envelope,
+      browserOutputPath: paths.output,
+      cwd: repoRoot,
+      childCommand: fixture.command,
+      childArgs: fixture.args,
+    });
+    expect(code).toBe(1);
+    const envelope = readTerminalEnvelope(paths.envelope);
+    expect(envelope?.recovery_available).toBe(true);
+    expect(envelope?.conversation_locator).toBe(conversationUrl);
+    expect(envelope?.lifecycle_outcome).toBe('incident');
+    expect(envelope?.incident).toBe('child_turn_state:login');
+    expect(envelope?.delivery).toBe('POSSIBLY_DELIVERED');
+  });
+
   it('rejects stale handoff receipt from a prior attempt (P1)', async () => {
     const root = tempDir();
     const paths = launchPaths(root, 'stale-receipt');

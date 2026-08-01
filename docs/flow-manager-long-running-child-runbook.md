@@ -8,14 +8,14 @@ handoff receipt before acknowledging acceptance.
 ## Package commands
 
 ```bash
-npm run flow-manager-browser-gpt-long-run --
-npm run flow-manager-long-running-child --
+npm run --silent flow-manager-browser-gpt-long-run --
+npm run --silent flow-manager-long-running-child --
 ```
 
-Production Browser-GPT long-running turns use the adapter:
+Production Browser-GPT long-running turns use the adapter (`--silent` keeps npm lifecycle banners off stdout so acceptance JSON parsers stay clean):
 
 ```bash
-npm run flow-manager-browser-gpt-long-run -- \
+npm run --silent flow-manager-browser-gpt-long-run -- \
   --run-identity <opaque-run-id> \
   --attempt-identity <opaque-attempt-id> \
   --handoff-receipt /absolute/path/handoff-receipt.json \
@@ -30,7 +30,7 @@ npm run flow-manager-browser-gpt-long-run -- \
 Fresh conversation:
 
 ```bash
-npm run flow-manager-browser-gpt-long-run -- \
+npm run --silent flow-manager-browser-gpt-long-run -- \
   ... \
   --new-chat \
   --project-url <configured-project-url>
@@ -55,7 +55,7 @@ There is no completion-mode selector. Authority is fixed to `browser-turn-result
 ### Waiter (non-terminal)
 
 ```bash
-npm run flow-manager-long-running-child -- wait \
+npm run --silent flow-manager-long-running-child -- wait \
   --run-identity <id> \
   --attempt-identity <id> \
   --handoff-receipt /path/handoff.json \

@@ -174,5 +174,5 @@ if (process.argv[1] && resolve(process.argv[1]) === entryPath) {
   });
 }
 
-export const ADAPTER_PACKAGE_COMMAND = 'npm run flow-manager-browser-gpt-long-run --';
-export const LAUNCHER_PACKAGE_COMMAND = 'npm run flow-manager-long-running-child --';
+export const ADAPTER_PACKAGE_COMMAND = 'npm run --silent flow-manager-browser-gpt-long-run --';
+export const LAUNCHER_PACKAGE_COMMAND = 'npm run --silent flow-manager-long-running-child --';

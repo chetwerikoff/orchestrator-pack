@@ -11,7 +11,6 @@ import {
   realpathSync,
   statSync,
   unlinkSync,
-  renameSync,
   writeSync,
   fsyncSync,
 } from 'node:fs';
@@ -218,6 +217,12 @@ function ensureParentWritable(path: string): void {
   }
 }
 
+function isOccupiedPathError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EEXIST';
+}
+
 function atomicCreateJson(path: string, body: Record<string, unknown>, kind: 'receipt' | 'envelope'): void {
   ensureParentWritable(path);
   if (kind === 'receipt' && process.env.OPK_FM_LONG_CHILD_FORCE_RECEIPT_CREATE_FAIL === '1') {
@@ -227,13 +232,16 @@ function atomicCreateJson(path: string, body: Record<string, unknown>, kind: 're
     throw new Error('forced_envelope_create_failure');
   }
   const target = resolve(path);
-  if (existsSync(target)) {
-    throw new Error('occupied_launcher_owned_path');
-  }
-  const parent = dirname(target);
-  const tempPath = join(parent, '.opk-fm-long-child-' + basename(target) + '.' + process.pid + '.' + Date.now() + '.tmp');
   const bytes = Buffer.from(JSON.stringify(body) + '\n', 'utf8');
-  const handle = openSync(tempPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
+  let handle: number;
+  try {
+    handle = openSync(target, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
+  } catch (error) {
+    if (isOccupiedPathError(error)) {
+      throw new Error('occupied_launcher_owned_path');
+    }
+    throw error;
+  }
   try {
     writeSync(handle, bytes);
     try {
@@ -246,18 +254,15 @@ function atomicCreateJson(path: string, body: Record<string, unknown>, kind: 're
     } catch {
       // best effort
     }
-  } finally {
-    closeSync(handle);
-  }
-  try {
-    renameSync(tempPath, target);
   } catch (error) {
     try {
-      unlinkSync(tempPath);
+      unlinkSync(target);
     } catch {
       // best effort
     }
     throw error;
+  } finally {
+    closeSync(handle);
   }
 }
 
@@ -396,6 +401,24 @@ function parseHeartbeat(line: string): Record<string, unknown> | null {
   }
 }
 
+function resolveConversationLocator(
+  config: LaunchConfig,
+  candidate?: { conversation_id?: string },
+): string | undefined {
+  return config.conversationLocator ?? candidate?.conversation_id ?? undefined;
+}
+
+function conversationLocatorFields(
+  config: LaunchConfig,
+  candidate?: { conversation_id?: string },
+): Pick<TerminalEnvelope, 'recovery_available' | 'conversation_locator'> {
+  const locator = resolveConversationLocator(config, candidate);
+  return {
+    recovery_available: Boolean(locator),
+    ...(locator ? { conversation_locator: locator } : {}),
+  };
+}
+
 export function deriveDelivery(result: ParsedTurnResult | null, childStartFailed: boolean): DeliveryState {
   if (childStartFailed) return 'not-sent';
   if (!result) return 'not-sent';
@@ -522,8 +545,7 @@ async function finalizeCandidatePath(
     turn_result_state: candidate.state,
     turn_result_cause: candidate.cause,
     send_count: candidate.resolved_send_count,
-    recovery_available: Boolean(config.conversationLocator || candidate.conversation_id),
-    ...(config.conversationLocator ? { conversation_locator: config.conversationLocator } : {}),
+    ...conversationLocatorFields(config, candidate),
   });
   if (capture.duplicateCandidate) {
     await publishEnvelope(config, incidentEnvelope('child_terminal_result_duplicate'));
@@ -553,9 +575,7 @@ async function finalizeCandidatePath(
       turn_result_state: candidate.state,
       turn_result_cause: candidate.cause,
       send_count: candidate.resolved_send_count,
-      recovery_available: Boolean(config.conversationLocator || candidate.conversation_id),
-      ...(config.conversationLocator ? { conversation_locator: config.conversationLocator } : {}),
-      ...(candidate.conversation_id ? { conversation_locator: candidate.conversation_id } : {}),
+      ...conversationLocatorFields(config, candidate),
       ...(heartbeatDiagnostics ? { diagnostics: heartbeatDiagnostics } : {}),
     });
     await abortManagedProcess(controller, runPromise);
