@@ -50,6 +50,31 @@ Structured `worker-smoke-run` JSON distinguishes at least:
 
 Top-level `PASS | FAIL | BLOCKED` semantics are unchanged.
 
+## Orca control-plane failure classification
+
+Issue #1125 adds two phase-aware, pack-owned causes without changing positive worktree authority:
+
+| Phase | Classified evidence | Stable cause |
+|---|---|---|
+| Before an owned terminal is acquired | `worktree current` or `terminal create` cannot launch, returns empty stdout, or returns invalid JSON | `orca_control_plane_unavailable_preflight` |
+| After an owned terminal is acquired | `terminal send`, `terminal read`, composer submit, or `terminal close` returns one of the existing exact channel codes (`channel_stale_handle`, `channel_lookup_empty`, `channel_control_unavailable`, `channel_control_overwritten`) | `orca_control_plane_lost_mid_smoke` |
+
+The structured diagnostic has one closed shape everywhere it appears: immediate `run --json`, the published `worker-smoke-report`, and current-head `gate-check` output.
+
+```text
+cause: <one stable phase cause>
+evidence: <1..3 ordered canonical key=value entries>
+remediation: <fixed pack-owned operator instruction>
+```
+
+The evidence keys are limited to `operation`, `outcome`, and (only for recognized post-acquisition loss) `control_plane_code`. There are at most three entries; each entry and the remediation are at most 256 UTF-8 bytes. Noncanonical, reordered, duplicated, oversized, or mismatched payloads are rejected rather than truncated. Classified output never embeds Orca stdout/stderr, upstream prose, runtime paths, command lines, socket/process metadata, or token-like values.
+
+Classification is deliberately narrow:
+
+- `orca worktree current` remains the **only** positive authority that the supplied cwd is the Orca-managed worktree. `ORCA_*` environment values cannot authorize, skip, or advance the run.
+- Valid JSON errors outside the exact recognized channel-code set retain their pre-existing operation-specific fallback. They are not promoted into either phase cause.
+- If the initiating send/read/submit operation and cleanup both fail, the initiating phase cause wins the single cause slot. Cleanup stays separately visible through `terminal-cleanup` and remains blocking.
+- The harness does not retry, restart, reconnect, discover sockets/processes, or select another worktree. Recovery is operator-owned: verify Orca/CLI availability for preflight loss; restart Orca and rerun the current-head smoke for mid-smoke loss.
 
 
 ## Child-wait delivery and completion
@@ -58,7 +83,7 @@ Issue #1115 owns the parent wait contract from prompt delivery through publish-c
 
 - Each smoke attempt creates one ephemeral **run identity** before send. Delivery and completion evidence must bind to that same run.
 - **Delivery** requires publish-complete durable evidence (for example `delivery.sealed.json` under the run artifact directory). `orca terminal send` success alone is not delivery proof. Ambiguous prior delivery never authorizes a **full-prompt** resend; optional resend is allowed only on definite non-delivery (`terminal_send_rejected`, `prompt_not_accepted`). During delivery establishment the parent may **nudge composer submit** (`terminal send --enter` only) when PTY shows an unsubmitted bracketed paste and the current run still lacks `delivery.sealed.json` — this submits the already-inserted buffer, not a second prompt copy. Exhaustion yields `prompt_delivery_unconfirmed`, owned-terminal cleanup, and no completion wait.
-- **Completion** is accepted only from a **publish-complete** durable artifact for the current run (`completion-<bodySha256>.body` + `completion-<bodySha256>.sealed.json` with matching `runId` and `bodySha256`; in-progress bytes may use `completion.pending.body` only). Each terminalization must use new content-addressed filenames; competing same-run seals are observable as duplicate even on first parent poll. Partial bytes before the seal remain pending and are not classified as PASS, unfenced, or duplicate. One valid seal consumes `PASS | FAIL | BLOCKED`; duplicate same-run terminalizations yield `agent_report_duplicate`; malformed sealed bodies yield `agent_report_unfenced`; no sealed completion at the shared deadline yields `agent_report_timeout`.
+- **Completion** is accepted only from a **publish-complete** durable artifact for the current run (`completion-<bodySha256>.body` + `completion-<bodySha256>.sealed.json` with matching `runId` and `bodySha256`; in-progress bytes may use `completion.pending.body` only). The prompt asks the child to copy its whole `worker-smoke-report` block — delimiters included — into the body file, and to hash exactly the bytes it writes there. The consumer accepts the report **with or without** the fence delimiters: the body file is dedicated, create-only, and content-addressed, so the delimiters disambiguate nothing that the seal has not already established. A body carrying no parseable verdict, or one carrying pack-owned control-plane fields, is still refused on either shape. The fence stays **required** where a report is extracted from a PR comment. Each terminalization must use new content-addressed filenames; competing same-run seals are observable as duplicate even on first parent poll. Partial bytes before the seal remain pending and are not classified as PASS, unfenced, or duplicate. One valid seal consumes `PASS | FAIL | BLOCKED`; duplicate same-run terminalizations yield `agent_report_duplicate`; malformed sealed bodies yield `agent_report_unfenced`; no sealed completion at the shared deadline yields `agent_report_timeout`.
 - Grounded child exit/idle witnesses may yield `agent_exited_without_report` or `agent_idle_without_report` only when capture-backed on the production path; otherwise the timeout fallback applies.
 - Self/unowned handle binding is refused locally (`agent_wait_self_handle`, `agent_wait_unowned_handle`). Known untrustworthy control-plane channels preserve upstream causes without handle re-derivation or smoke verdict synthesis.
 - `orca terminal read` is secondary liveness/diagnostic only; suppressing PTY bytes must not change the terminal class when durable artifact evidence is unchanged.
