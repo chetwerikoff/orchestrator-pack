@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  extractMarker,
   logicalFingerprint,
   parseLogicalFromCommentBody,
 } from './create-issue-stage-record-marker.ts';
@@ -74,8 +75,8 @@ export function fetchIssueComments(
   options: CommentCensusOptions = {},
 ): CommentCensusResult {
   const diagnostics: LineageDiagnostic[] = [];
-  const pageSize = options.pageSize ?? 100;
-  const maxPages = options.maxPages ?? 10;
+  const pageSize = Math.max(1, Math.floor(options.pageSize ?? 100));
+  const maxPages = Math.max(1, Math.floor(options.maxPages ?? 10));
   const { owner, name } = parseRepo(repo);
   const path = `repos/${owner}/${name}/issues/${issueNumber}/comments`;
   const collected: TrustedComment[] = [];
@@ -230,6 +231,7 @@ export function parseJournalEvents(comments: TrustedComment[]): {
   const events: ParsedJournalEvent[] = [];
   const diagnostics: LineageDiagnostic[] = [];
   for (const comment of comments) {
+    if (!extractMarker(comment.body)) continue;
     const logical = parseLogicalFromCommentBody(comment.body);
     if (!logical) {
       diagnostics.push({
@@ -356,7 +358,18 @@ export function syncIssueProjectionLabels(
   const remove = desired === PROJECTION_ACCEPTED ? PROJECTION_IN_PROGRESS : PROJECTION_ACCEPTED;
   const apply = desired;
   const { owner, name } = parseRepo(repo);
-  const current = fetchIssueRevision(transport, repo, issueNumber);
+  let current: ReturnType<typeof fetchIssueRevision>;
+  try {
+    current = fetchIssueRevision(transport, repo, issueNumber);
+  } catch {
+    return {
+      ok: false,
+      applied: [],
+      removed: [],
+      pendingRepair: true,
+      diagnostics: [{ code: 'comments-truncated', message: 'unable to read issue labels for projection synchronization' }],
+    };
+  }
   const unrelated = current.labels.filter(
     (label) => label !== PROJECTION_IN_PROGRESS && label !== PROJECTION_ACCEPTED,
   );
@@ -414,6 +427,11 @@ export function readPendingEvent(workdir: string, eventKey: string): PendingJour
 
 export function clearPendingEvent(workdir: string, eventKey: string): void {
   const filePath = pendingPath(workdir, eventKey);
+  if (existsSync(filePath)) unlinkSync(filePath);
+}
+
+export function clearPersistedCycleId(workdir: string): void {
+  const filePath = cycleIdPath(workdir);
   if (existsSync(filePath)) unlinkSync(filePath);
 }
 

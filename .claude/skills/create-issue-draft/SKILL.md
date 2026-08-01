@@ -201,6 +201,32 @@ authority. The derivation exposes per-stage credentialing sets, complete governe
 and relayed unions, stage/episode raw counts, logical round identities, relay
 completeness, and activation state.
 
+### Issue journal passage records — Issue #1152
+
+The flow-manager uses the TypeScript journal commands as the only writers for the
+Issue-bound passage record:
+
+- `node --experimental-strip-types scripts/create-issue-stage-finalize.ts start-cycle`
+  admits one closed `create-issue-review-cycle/v1` root/continuation and bootstraps
+  the `spec-review:in-progress` projection.
+- `node --experimental-strip-types scripts/create-issue-stage-finalize.ts publish-stage`
+  consumes a settled #1150 receipt only when its `cycleId`, `sourceRevision`, and
+  `cycleBinding.boundBeforeLaunch` witness match the admitted cycle.
+- `node --experimental-strip-types scripts/create-issue-stage-finalize.ts retry-pending`
+  is the sole retry path for delayed local journal delivery. Pending files are
+  best-effort transport state, never acceptance authority.
+- `node --experimental-strip-types scripts/create-issue-final-acceptance.ts`
+  executes tier-gate, stage-completeness, and finding-ledger guards directly, then
+  alone writes `create-issue-final-acceptance/v1` and synchronizes
+  `spec-review:accepted` after event confirmation. An external PASS receipt cannot
+  substitute for these guards.
+
+All three hidden journal markers carry a schema and event-key. Remote admission
+uses only complete, unedited owner comments and a fully exhausted bounded REST
+comment census; delivery metadata is excluded from logical fingerprints. Public
+payloads contain only the flow-manager actor enum and contract facts—never capture
+text, chat URLs, secrets, or producer strings.
+
 ## T3 plural-source attempt
 
 For `competitive` and `architectural-review`:

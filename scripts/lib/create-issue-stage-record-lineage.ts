@@ -27,6 +27,41 @@ function sortEvents(events: ParsedJournalEvent[]): ParsedJournalEvent[] {
   });
 }
 
+function addDiagnostic(
+  diagnostics: LineageDiagnostic[],
+  code: LineageDiagnostic['code'],
+  event: ParsedJournalEvent,
+  message: string,
+): void {
+  if (diagnostics.some((item) => item.code === code && item.eventKey === event.eventKey && item.commentId === event.commentId)) return;
+  diagnostics.push({ code, message, eventKey: event.eventKey, commentId: event.commentId });
+}
+
+function findCycleMembers(events: ParsedJournalEvent[]): Set<string> {
+  const byId = new Map<string, { predecessor: string; event: ParsedJournalEvent }>();
+  for (const event of events) {
+    const payload = cyclePayload(event);
+    if (payload && !byId.has(payload.cycleId)) byId.set(payload.cycleId, { predecessor: payload.predecessor, event });
+  }
+  const cyclic = new Set<string>();
+  for (const cycleId of byId.keys()) {
+    const path: string[] = [];
+    const positions = new Map<string, number>();
+    let current: string | undefined = cycleId;
+    while (current && current !== 'none' && byId.has(current)) {
+      const position = positions.get(current);
+      if (position !== undefined) {
+        for (const member of path.slice(position)) cyclic.add(member);
+        break;
+      }
+      positions.set(current, path.length);
+      path.push(current);
+      current = byId.get(current)?.predecessor;
+    }
+  }
+  return cyclic;
+}
+
 export function buildCanonicalLineage(events: ParsedJournalEvent[]): CanonicalLineage {
   const diagnostics: LineageDiagnostic[] = [];
   const eventsByKey = new Map<string, ParsedJournalEvent>();
@@ -62,6 +97,23 @@ export function buildCanonicalLineage(events: ParsedJournalEvent[]): CanonicalLi
     }),
   );
 
+  const cycleIdOwners = new Map<string, ParsedJournalEvent>();
+  for (const event of canonicalCycles) {
+    const payload = cyclePayload(event);
+    if (!payload) continue;
+    const previous = cycleIdOwners.get(payload.cycleId);
+    if (!previous) {
+      cycleIdOwners.set(payload.cycleId, event);
+      continue;
+    }
+    addDiagnostic(
+      diagnostics,
+      'conflicting-cycle-id',
+      event,
+      `cycle id ${payload.cycleId} is claimed by more than one logical event`,
+    );
+  }
+
   const roots = canonicalCycles.filter((event) => {
     const payload = cyclePayload(event);
     return payload?.predecessor === 'none';
@@ -92,6 +144,8 @@ export function buildCanonicalLineage(events: ParsedJournalEvent[]): CanonicalLi
     canonicalCycles.filter((event) => eventsByKey.get(event.eventKey)?.commentId === event.commentId),
   );
 
+  const cyclicIds = findCycleMembers(pending);
+
   let progressed = true;
   while (progressed) {
     progressed = false;
@@ -100,23 +154,17 @@ export function buildCanonicalLineage(events: ParsedJournalEvent[]): CanonicalLi
       if (!payload) continue;
       if (admitted.has(payload.cycleId)) continue;
       if (payload.cycleId === payload.predecessor) {
-        diagnostics.push({
-          code: 'cyclic-cycle-lineage',
-          message: `self-referential cycle ${payload.cycleId}`,
-          eventKey: event.eventKey,
-          commentId: event.commentId,
-        });
+        addDiagnostic(diagnostics, 'cyclic-cycle-lineage', event, `self-referential cycle ${payload.cycleId}`);
+        continue;
+      }
+      if (cyclicIds.has(payload.cycleId)) {
+        addDiagnostic(diagnostics, 'cyclic-cycle-lineage', event, `cycle ${payload.cycleId} has no acyclic root`);
         continue;
       }
       if (payload.predecessor === 'none') continue;
       const predecessor = admitted.get(payload.predecessor);
       if (!predecessor) {
-        diagnostics.push({
-          code: 'orphan-cycle',
-          message: `orphan cycle ${payload.cycleId}`,
-          eventKey: event.eventKey,
-          commentId: event.commentId,
-        });
+        addDiagnostic(diagnostics, 'orphan-cycle', event, `orphan cycle ${payload.cycleId}`);
         continue;
       }
       const siblings = pending.filter((candidate) => {
@@ -125,16 +173,22 @@ export function buildCanonicalLineage(events: ParsedJournalEvent[]): CanonicalLi
       });
       const winner = sortEvents(siblings)[0];
       if (winner && winner.commentId !== event.commentId) {
-        diagnostics.push({
-          code: 'non-current-cycle-fork',
-          message: `non-current fork for predecessor ${payload.predecessor}`,
-          eventKey: event.eventKey,
-          commentId: event.commentId,
-        });
+        addDiagnostic(diagnostics, 'non-current-cycle-fork', event, `non-current fork for predecessor ${payload.predecessor}`);
         continue;
       }
       admitted.set(payload.cycleId, event);
       progressed = true;
+    }
+  }
+
+  for (const event of pending) {
+    const payload = cyclePayload(event);
+    if (!payload || admitted.has(payload.cycleId)) continue;
+    if (diagnostics.some((item) => item.eventKey === event.eventKey && item.commentId === event.commentId)) continue;
+    if (cyclicIds.has(payload.cycleId)) {
+      addDiagnostic(diagnostics, 'cyclic-cycle-lineage', event, `cycle ${payload.cycleId} has no acyclic root`);
+    } else if (payload.predecessor !== 'none') {
+      addDiagnostic(diagnostics, 'orphan-cycle', event, `orphan cycle ${payload.cycleId}`);
     }
   }
 
@@ -163,6 +217,6 @@ export function buildCanonicalLineage(events: ParsedJournalEvent[]): CanonicalLi
 export function hasBlockingLineageConflict(lineage: CanonicalLineage, eventKey: string): boolean {
   return lineage.diagnostics.some((item) => {
     if (item.eventKey !== eventKey) return false;
-    return item.code === 'conflicting-cycle-id' || item.code === 'conflicting-remote-event';
+    return item.code !== 'duplicate-remote-event';
   });
 }

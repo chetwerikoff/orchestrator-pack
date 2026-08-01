@@ -1,9 +1,15 @@
 import { readFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
-import { checkStageCompletenessGuard } from '../lib/stage-completeness-core.ts';
-import { checkTierGateGuard } from '../lib/tier-gate-core.ts';
-import { validateReceiptMatchesCycle } from './create-issue-stage-record-receipt.ts';
-import type { ConsumableStageReceipt } from './create-issue-stage-record-types.ts';
+import {
+  checkStageCompletenessGuard,
+  type ReviewEpisodeDerivationAuthorityV1,
+} from '../lib/stage-completeness-core.ts';
+import {
+  checkTierGateGuard,
+  type TierTransitionEvidence,
+} from '../lib/tier-gate-core.ts';
+import { parseConsumableStageReceipt, validateReceiptMatchesCycle } from './create-issue-stage-record-receipt.ts';
 
 export const FINAL_ACCEPTANCE_CONTRACT_VERSION = 'create-issue-final-acceptance-contract/v1';
 
@@ -19,6 +25,9 @@ export interface FinalAcceptanceGuardInput {
   relayEvidencePaths?: string[];
   claudeProducerEvidencePaths?: string[];
   tierReceiptPath?: string;
+  tierTransitionEvidence?: TierTransitionEvidence;
+  episodeAuthority?: ReviewEpisodeDerivationAuthorityV1;
+  tierIntakePath?: string;
   externalPassReceiptPath?: string;
   readText?: (path: string) => string;
   readJson?: (path: string) => unknown;
@@ -38,6 +47,42 @@ function defaultReadJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+function readJsonSafely(
+  path: string,
+  readJson: (path: string) => unknown,
+  errors: string[],
+  label: string,
+): unknown | null {
+  try {
+    return readJson(path);
+  } catch {
+    errors.push(`${label}: unable to read ${path}`);
+    return null;
+  }
+}
+
+function readTextSafely(
+  path: string,
+  readText: (path: string) => string,
+  errors: string[],
+  label: string,
+): string | null {
+  try {
+    return readText(path);
+  } catch {
+    errors.push(`${label}: unable to read ${path}`);
+    return null;
+  }
+}
+
+function tryReadJson(path: string, readJson: (path: string) => unknown): unknown | null {
+  try {
+    return readJson(path);
+  } catch {
+    return null;
+  }
+}
+
 export function executeFinalAcceptanceGuards(
   input: FinalAcceptanceGuardInput,
 ): FinalAcceptanceGuardResult {
@@ -54,59 +99,114 @@ export function executeFinalAcceptanceGuards(
     };
   }
 
+  if (!input.cycleId.trim()) errors.push('cycleId is required');
+  if (!input.issueRevision.trim()) errors.push('issueRevision is required');
+
+  const tierEvidence = input.tierTransitionEvidence
+    ?? (input.tierReceiptPath
+      ? readJsonSafely(input.tierReceiptPath, readJson, errors, 'tier-gate')
+      : null);
+  const transitionEvidence = tierEvidence && typeof tierEvidence === 'object'
+    && 'revisions' in tierEvidence && 'intake' in tierEvidence
+    ? tierEvidence as TierTransitionEvidence
+    : input.tierTransitionEvidence;
+
   const tierResult = checkTierGateGuard(input.issueBody, {
     tier: input.tier,
     repoRoot: process.cwd(),
+    transitionEvidence,
   });
   if (!tierResult.ok) errors.push(...tierResult.errors.map((item) => `tier-gate: ${item}`));
 
-  const stageReceipts = input.stageReceiptPaths.map((path) => readJson(path));
+  const stageReceipts = input.stageReceiptPaths.flatMap((path) => {
+    const value = readJsonSafely(path, readJson, errors, 'stage-completeness');
+    return value === null ? [] : [value];
+  });
+  const consumableReceipts = stageReceipts.map((value, index) => {
+    const parsed = parseConsumableStageReceipt(value);
+    if (!parsed.receipt) {
+      errors.push(...parsed.errors.map((error) => `cycle-binding receipt ${index + 1}: ${error}`));
+    }
+    return parsed.receipt;
+  }).filter((receipt): receipt is NonNullable<typeof receipt> => receipt !== null);
+
+  let episodeAuthority = input.episodeAuthority;
+  if (!episodeAuthority) {
+    const intakePath = input.tierIntakePath ?? join(input.reviewDir, 'tier-intake.json');
+    const intake = input.tierIntakePath
+      ? readJsonSafely(intakePath, readJson, errors, 'stage-completeness')
+      : tryReadJson(intakePath, readJson);
+    const first = stageReceipts[0];
+    if (intake && first && typeof intake === 'object' && typeof first === 'object') {
+      const intakeRecord = intake as Record<string, unknown>;
+      if (typeof intakeRecord.taskIdentity === 'string' && typeof intakeRecord.firstRevision === 'string') {
+        const orderedStageReceipts = stageReceipts
+          .filter((value): value is Record<string, unknown> => typeof value === 'object' && value !== null)
+          .sort((left, right) => Number(left.stageSequence ?? 0) - Number(right.stageSequence ?? 0));
+        const claudeProducerEvidence = input.claudeProducerEvidencePaths?.flatMap((path) => {
+          const value = readJsonSafely(path, readJson, errors, 'stage-completeness');
+          return value === null ? [] : [value];
+        });
+        episodeAuthority = {
+          tierIntake: intake as ReviewEpisodeDerivationAuthorityV1['tierIntake'],
+          receiptInventory: {
+            source: 'canonical-review-directory',
+            taskIdentity: intakeRecord.taskIdentity,
+            episodeFirstRevision: intakeRecord.firstRevision,
+            reviewEpisodeId: `${intakeRecord.taskIdentity}@${intakeRecord.firstRevision}`,
+            stageReceiptIds: orderedStageReceipts.flatMap((value) => {
+              const stageReceiptId = value.stageReceiptId;
+              return typeof stageReceiptId === 'string' ? [stageReceiptId] : [];
+            }),
+          },
+          claudeProducerEvidence,
+        };
+      }
+    }
+  }
   const stageResult = checkStageCompletenessGuard(input.issueBody, {
     phase: 'final-acceptance',
     stageReceipts,
+    verifiedRelayEvidence: input.relayEvidencePaths?.flatMap((path) => {
+      const value = readJsonSafely(path, readJson, errors, 'stage-completeness');
+      return value === null ? [] : Array.isArray(value) ? value : [value];
+    }),
+    episodeAuthority,
     repoRoot: process.cwd(),
     draftPath: undefined,
   });
   if (!stageResult.ok) errors.push(...stageResult.errors.map((item) => `stage-completeness: ${item}`));
 
-  if (input.ledgerPath) {
-    const captures = input.capturePaths.map((path) => readText(path));
-    const ledgerText = readText(input.ledgerPath);
+  if (!input.ledgerPath) {
+    errors.push('finding-ledger: ledger path is required for final acceptance');
+  } else {
+    const captures = input.capturePaths.flatMap((path) => {
+      const value = readTextSafely(path, readText, errors, 'finding-ledger');
+      return value === null ? [] : [value];
+    });
+    const ledgerText = readTextSafely(input.ledgerPath, readText, errors, 'finding-ledger');
+    if (ledgerText === null) {
+      return { ok: false, contractVersion: FINAL_ACCEPTANCE_CONTRACT_VERSION, errors: [...new Set(errors)] };
+    }
     const ledgerResult = checkFindingLedgerGuard(captures.length === 1 ? captures[0]! : captures, ledgerText, {
       phase: 'final-acceptance',
       issueRevision: input.issueRevision,
       stageReceipts,
-      verifiedRelayEvidence: (input.relayEvidencePaths ?? []).map((path) => readJson(path)),
+      verifiedRelayEvidence: input.relayEvidencePaths?.flatMap((path) => {
+        const value = readJsonSafely(path, readJson, errors, 'finding-ledger');
+        return value === null ? [] : Array.isArray(value) ? value : [value];
+      }),
+      episodeAuthority,
+      captureMetadata: input.capturePaths.map((path, index) => ({
+        name: basename(path),
+        timestampMs: index + 1,
+      })),
       repoRoot: process.cwd(),
     });
     if (!ledgerResult.ok) errors.push(...ledgerResult.errors.map((item) => `finding-ledger: ${item}`));
   }
 
-  for (const receiptValue of stageReceipts) {
-    const record = receiptValue as Record<string, unknown>;
-    const cycleId = typeof record.cycleId === 'string' ? record.cycleId : '';
-    const sourceRevision = typeof record.sourceRevision === 'string' ? record.sourceRevision : '';
-    const cycleBinding = record.cycleBinding;
-    if (!cycleId || !sourceRevision || !cycleBinding) {
-      errors.push('stage receipt missing cycle binding witness');
-      continue;
-    }
-    const consumable: ConsumableStageReceipt = {
-      tier: String(record.tier ?? ''),
-      stage: String(record.stage ?? ''),
-      cycleId,
-      stageAttemptId: String(record.stageAttemptId ?? ''),
-      policyVersion: String(record.policyVersion ?? ''),
-      sourceRevision,
-      outcome: record.outcome as ConsumableStageReceipt['outcome'],
-      reviewerCardinality: Number(record.reviewerCardinality ?? 0),
-      completedSourceCount: Number(record.completedSourceCount ?? record.sourceCount ?? 0),
-      cycleBinding: cycleBinding as ConsumableStageReceipt['cycleBinding'],
-      producerEvidence: (record.producerEvidence as ConsumableStageReceipt['producerEvidence']) ?? 'not-applicable',
-      tierTransition: String(record.tierTransition ?? 'none'),
-    };
-    errors.push(...validateReceiptMatchesCycle(consumable, input.cycleId, input.issueRevision).map((item) => `cycle-binding: ${item}`));
-  }
+  for (const receipt of consumableReceipts) errors.push(...validateReceiptMatchesCycle(receipt, input.cycleId, input.issueRevision).map((item) => `cycle-binding: ${item}`));
 
   if (!input.issueBody.includes(input.issueRevision)) {
     errors.push('issue revision drift detected before final acceptance');

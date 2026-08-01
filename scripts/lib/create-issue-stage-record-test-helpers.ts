@@ -22,6 +22,7 @@ export interface MockGhState {
   nextCommentId: number;
   failCreate?: boolean;
   failLabelSync?: boolean;
+  ambiguousCreate?: boolean;
   pagesByRequest: Map<string, unknown[]>;
 }
 
@@ -84,6 +85,9 @@ export function createMockTransport(state: MockGhState): GhTransport {
             return { exitCode: 1, stdout: '', stderr: 'create failed' };
           }
           const body = readFormValue(argv, 'body') ?? '';
+          if (state.ambiguousCreate) {
+            return { exitCode: 0, stdout: '{}', stderr: '' };
+          }
           const comment: TrustedComment = {
             id: state.nextCommentId,
             body,

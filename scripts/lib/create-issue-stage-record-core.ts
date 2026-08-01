@@ -22,6 +22,7 @@ import {
 } from './create-issue-stage-record-gh.ts';
 import {
   parseConsumableStageReceipt,
+  readEvidenceWaiverProducerEvidence,
   validateReceiptMatchesCycle,
 } from './create-issue-stage-record-receipt.ts';
 import type {
@@ -70,6 +71,21 @@ export interface OperationResult {
 
 function resolveWorkdir(issueNumber: number, workdir?: string): string {
   return workdir ?? defaultWorkdir(issueNumber);
+}
+
+function pendingFailure(
+  workdir: string,
+  event: { schema: string; eventKey: string; body: string },
+  failureClass: string,
+): void {
+  const previous = readPendingEvent(workdir, event.eventKey);
+  writePendingEvent(workdir, {
+    ...event,
+    createdAt: previous?.createdAt ?? new Date().toISOString(),
+    delivery: 'delayed',
+    deliveryFailureClass: failureClass,
+    firstFailureAt: previous?.firstFailureAt ?? new Date().toISOString(),
+  });
 }
 
 function loadCensus(
@@ -145,13 +161,10 @@ export function publishJournalEvent(
   const censusState = loadCensus(transport, repo, issueNumber, census);
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
-    writePendingEvent(workdir, {
-      schema,
-      eventKey,
-      body,
-      createdAt: new Date().toISOString(),
-      delivery: 'delayed',
-    });
+    pendingFailure(workdir, { schema, eventKey, body }, 'census-incomplete');
+    return { ok: false, diagnostics, eventKey };
+  }
+  if (censusState.parsed.diagnostics.some((item) => item.code === 'malformed-marker')) {
     return { ok: false, diagnostics, eventKey };
   }
   const existing = censusState.lineage.eventsByKey.get(eventKey);
@@ -177,6 +190,7 @@ export function publishJournalEvent(
   });
   const created = createIssueComment(transport, repo, issueNumber, body);
   if (!created.ok) {
+    pendingFailure(workdir, { schema, eventKey, body }, 'comment-create');
     diagnostics.push({
       code: 'comments-truncated',
       message: `comment create failed for ${eventKey}`,
@@ -187,6 +201,7 @@ export function publishJournalEvent(
   const confirmed = confirmCanonicalEvent(transport, repo, issueNumber, eventKey, fingerprint, census);
   diagnostics.push(...confirmed.diagnostics);
   if (!confirmed.confirmed) {
+    pendingFailure(workdir, { schema, eventKey, body }, 'confirmation');
     return { ok: false, diagnostics, eventKey, projectionPendingRepair: true };
   }
   clearPendingEvent(workdir, eventKey);
@@ -197,25 +212,66 @@ export function retryPendingEvents(
   transport: GhTransport,
   repo: string,
   issueNumber: number,
-  workdir: string,
+  workdir?: string,
   census?: CommentCensusOptions,
 ): OperationResult[] {
-  const pending = listPendingEvents(workdir);
+  const resolvedWorkdir = resolveWorkdir(issueNumber, workdir);
+  const pending = listPendingEvents(resolvedWorkdir);
   const results: OperationResult[] = [];
   for (const item of pending) {
-    const logical = JSON.parse(item.body.match(/```json\s*([\s\S]*?)\s*```/i)?.[1] ?? 'null');
+    if (item.schema !== CYCLE_SCHEMA && item.schema !== STAGE_SCHEMA) {
+      results.push({
+        ok: false,
+        diagnostics: [{ code: 'conflicting-remote-event', message: `pending ${item.schema} is owned by another finalizer`, eventKey: item.eventKey }],
+        eventKey: item.eventKey,
+      });
+      continue;
+    }
+    let logical: ReturnType<typeof parseJournalEvents>['events'][number]['logical'] | null = null;
+    try {
+      const parsed = parseJournalEvents([{
+        id: 0,
+        body: item.body,
+        createdAt: item.createdAt,
+        updatedAt: item.createdAt,
+        userLogin: 'pending-local',
+        authorAssociation: 'OWNER',
+      }]);
+      logical = parsed.events[0]?.logical ?? null;
+    } catch {
+      logical = null;
+    }
+    if (!logical || logical.schema !== item.schema || logical['event-key'] !== item.eventKey) {
+      results.push({
+        ok: false,
+        diagnostics: [{ code: 'malformed-marker', message: `pending event ${item.eventKey} is malformed`, eventKey: item.eventKey }],
+        eventKey: item.eventKey,
+      });
+      continue;
+    }
     const fingerprint = logicalFingerprint(logical);
-    results.push(publishJournalEvent(
+    const published = publishJournalEvent(
       transport,
       repo,
       issueNumber,
-      workdir,
+      resolvedWorkdir,
       item.body,
       item.schema,
       item.eventKey,
       fingerprint,
       census,
-    ));
+    );
+    if (published.ok && item.schema === CYCLE_SCHEMA) {
+      try {
+        const issue = fetchIssueRevision(transport, repo, issueNumber);
+        const projection = syncIssueProjectionLabels(transport, repo, issueNumber, PROJECTION_IN_PROGRESS, issue.labels);
+        results.push({ ...published, ok: projection.ok, diagnostics: [...published.diagnostics, ...projection.diagnostics], projectionPendingRepair: projection.pendingRepair });
+      } catch {
+        results.push({ ...published, ok: false, projectionPendingRepair: true, diagnostics: [...published.diagnostics, { code: 'comments-truncated', message: 'cycle projection retry could not read the issue', eventKey: item.eventKey }] });
+      }
+    } else {
+      results.push(published);
+    }
   }
   return results;
 }
@@ -226,16 +282,30 @@ export function startReviewCycle(
 ): OperationResult {
   const workdir = resolveWorkdir(input.issueNumber, input.workdir);
   const diagnostics: LineageDiagnostic[] = [];
-  diagnostics.push(...ensureProjectionLabels(transport, input.repo));
-
-  const persisted = readPersistedCycleId(workdir) ?? randomUUID();
-  persistCycleId(workdir, persisted);
+  const bootstrapDiagnostics = ensureProjectionLabels(transport, input.repo);
+  diagnostics.push(...bootstrapDiagnostics);
+  if (bootstrapDiagnostics.length > 0) return { ok: false, diagnostics, projectionPendingRepair: true };
 
   const censusState = loadCensus(transport, input.repo, input.issueNumber, input.census);
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
     return { ok: false, diagnostics };
   }
+
+  let issueBefore: ReturnType<typeof fetchIssueRevision>;
+  try {
+    issueBefore = fetchIssueRevision(transport, input.repo, input.issueNumber);
+  } catch {
+    diagnostics.push({ code: 'comments-truncated', message: 'unable to read issue before cycle admission' });
+    return { ok: false, diagnostics, projectionPendingRepair: true };
+  }
+  const persistedCandidate = readPersistedCycleId(workdir);
+  const persistedEvent = persistedCandidate ? censusState.lineage.eventsByKey.get(persistedCandidate) : undefined;
+  const activeCycleIsAccepted = issueBefore.labels.includes('spec-review:accepted');
+  const revisionChanged = persistedEvent?.logical.schema === CYCLE_SCHEMA
+    && (persistedEvent.logical as CycleEventLogical)['source-revision'] !== input.sourceRevision;
+  const persisted = !persistedCandidate || activeCycleIsAccepted || revisionChanged ? randomUUID() : persistedCandidate;
+  persistCycleId(workdir, persisted);
 
   let predecessor = input.predecessorCycleId;
   if (!predecessor) {
@@ -274,10 +344,22 @@ export function startReviewCycle(
   );
   diagnostics.push(...published.diagnostics);
   if (!published.ok) {
-    return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted };
+    return {
+      ok: false,
+      diagnostics,
+      cycleId: persisted,
+      eventKey: persisted,
+      projectionPendingRepair: published.projectionPendingRepair,
+    };
   }
 
-  const issue = fetchIssueRevision(transport, input.repo, input.issueNumber);
+  let issue: ReturnType<typeof fetchIssueRevision>;
+  try {
+    issue = fetchIssueRevision(transport, input.repo, input.issueNumber);
+  } catch {
+    diagnostics.push({ code: 'comments-truncated', message: 'unable to confirm issue revision after cycle publication' });
+    return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted, projectionPendingRepair: true };
+  }
   const head = loadCensus(transport, input.repo, input.issueNumber, input.census).lineage.head;
   const headCycleId = head?.logical.schema === CYCLE_SCHEMA
     ? (head.logical as CycleEventLogical)['cycle-id']
@@ -321,7 +403,17 @@ export function publishSettledStageRecord(
 ): OperationResult {
   const workdir = resolveWorkdir(input.issueNumber, input.workdir);
   const diagnostics: LineageDiagnostic[] = [];
-  const parsedReceipt = parseConsumableStageReceipt(input.receipt);
+  let receiptInput = input.receipt;
+  if (input.waiverPath && input.readJson) {
+    const current = receiptInput && typeof receiptInput === 'object' ? receiptInput as Record<string, unknown> : {};
+    if (current.producerEvidence === undefined) {
+      receiptInput = {
+        ...current,
+        producerEvidence: readEvidenceWaiverProducerEvidence(input.waiverPath, input.readJson),
+      };
+    }
+  }
+  const parsedReceipt = parseConsumableStageReceipt(receiptInput);
   diagnostics.push(...parsedReceipt.errors.map((message) => ({
     code: 'malformed-marker' as const,
     message,

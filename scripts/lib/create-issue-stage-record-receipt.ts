@@ -43,9 +43,16 @@ export function parseConsumableStageReceipt(value: unknown): {
   const sourceRevision = nonEmpty(value.sourceRevision) ? value.sourceRevision.trim() : '';
   const outcome = value.outcome;
   const reviewerCardinality = Number(value.reviewerCardinality);
-  const completedSourceCount = Number(value.completedSourceCount ?? value.sourceCount);
+  const completedSourceCount = Number(
+    value.completedSourceCount
+      ?? value.sourceCount
+      ?? (Array.isArray(value.credentialingCaptures) ? value.credentialingCaptures.length : undefined),
+  );
   const cycleBinding = parseCycleBinding(value.cycleBinding);
-  const producerEvidence = value.producerEvidence;
+  const producerEvidence = value.producerEvidence
+    ?? (stage === 'architectural-lens'
+      ? (isRecord(value.claude) && value.claude.kind === 'capture' ? 'verified' : 'waived')
+      : 'not-applicable');
   const tierTransition = nonEmpty(value.tierTransition) ? value.tierTransition.trim() : 'none';
 
   if (!tier) errors.push('missing tier');

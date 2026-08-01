@@ -2,10 +2,10 @@
 import { readFileSync } from 'node:fs';
 import {
   defaultGhTransport,
-  retryPendingEvents,
 } from './lib/create-issue-stage-record-gh.ts';
 import {
   publishSettledStageRecord,
+  retryPendingEvents,
   startReviewCycle,
 } from './lib/create-issue-stage-record-core.ts';
 import type { PublicActor } from './lib/create-issue-stage-record-types.ts';
@@ -25,6 +25,7 @@ interface CliOptions {
   publicActor: PublicActor;
   predecessorCycleId?: string;
   receiptPath?: string;
+  waiverPath?: string;
   workdir?: string;
   json: boolean;
 }
@@ -33,7 +34,7 @@ function usage(): string {
   return [
     'Usage:',
     '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --tier <T1|T2|T3> [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
-    '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--workdir <path>] [--json]',
+    '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
   ].join('\n');
 }
@@ -73,6 +74,9 @@ function parseArgs(argv: string[]): CliOptions {
         break;
       case '--receipt':
         opts.receiptPath = String(argv[++i] ?? '');
+        break;
+      case '--waiver':
+        opts.waiverPath = String(argv[++i] ?? '');
         break;
       case '--workdir':
         opts.workdir = String(argv[++i] ?? '');
@@ -129,6 +133,8 @@ export function runCli(argv: string[]): number {
       repo: opts.repo,
       issueNumber,
       receipt,
+      waiverPath: opts.waiverPath,
+      readJson: (path) => JSON.parse(readFileSync(path, 'utf8')) as unknown,
       workdir: opts.workdir,
     });
     if (opts.json) console.log(JSON.stringify(result));
@@ -136,7 +142,7 @@ export function runCli(argv: string[]): number {
     return result.ok ? 0 : 1;
   }
 
-  const results = retryPendingEvents(transport, opts.repo, issueNumber, opts.workdir ?? '', undefined);
+  const results = retryPendingEvents(transport, opts.repo, issueNumber, opts.workdir);
   const ok = results.every((item) => item.ok);
   if (opts.json) console.log(JSON.stringify(results));
   return ok ? 0 : 1;

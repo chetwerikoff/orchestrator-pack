@@ -5,6 +5,7 @@ import {
 } from './create-issue-stage-record-marker.ts';
 import {
   clearPendingEvent,
+  clearPersistedCycleId,
   defaultWorkdir,
   ensureProjectionLabels,
   fetchIssueComments,
@@ -12,7 +13,6 @@ import {
   fetchRepositoryOwnerLogin,
   parseJournalEvents,
   syncIssueProjectionLabels,
-  writePendingEvent,
 } from './create-issue-stage-record-gh.ts';
 import { publishJournalEvent } from './create-issue-stage-record-core.ts';
 import {
@@ -73,12 +73,19 @@ export function runFinalAcceptance(
 ): FinalAcceptanceResult {
   const diagnostics: LineageDiagnostic[] = [];
   const workdir = input.workdir ?? defaultWorkdir(input.issueNumber);
-  diagnostics.push(...ensureProjectionLabels(transport, input.repo));
+  const bootstrapDiagnostics = ensureProjectionLabels(transport, input.repo);
+  diagnostics.push(...bootstrapDiagnostics);
+  if (bootstrapDiagnostics.length > 0) {
+    return { ok: false, diagnostics, guardErrors: ['projection label bootstrap failed'], projectionPendingRepair: true };
+  }
 
   const censusState = loadCensus(transport, input.repo, input.issueNumber, input.census);
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
     return { ok: false, diagnostics, guardErrors: ['comment census incomplete'] };
+  }
+  if (censusState.diagnostics.some((item) => item.code === 'malformed-marker')) {
+    return { ok: false, diagnostics, guardErrors: ['journal contains a malformed hidden marker'] };
   }
   const head = censusState.lineage.head;
   if (!head || head.logical.schema !== CYCLE_SCHEMA) {
@@ -89,11 +96,14 @@ export function runFinalAcceptance(
   if (headCycle['cycle-id'] !== input.cycleId) {
     return { ok: false, diagnostics, guardErrors: ['cycle head mismatch'] };
   }
+  if (headCycle['source-revision'] !== input.issueRevision) {
+    return { ok: false, diagnostics, guardErrors: ['issue revision does not match canonical cycle head'] };
+  }
 
   const guard = executeFinalAcceptanceGuards({
     ...input,
     cycleId: headCycle['cycle-id'],
-    issueRevision: headCycle['source-revision'],
+    issueRevision: input.issueRevision,
   });
   if (!guard.ok) {
     return { ok: false, diagnostics, guardErrors: guard.errors };
@@ -112,13 +122,6 @@ export function runFinalAcceptance(
   };
   const body = serializeCommentBody(logical);
   const fingerprint = logicalFingerprint(logical);
-  writePendingEvent(workdir, {
-    schema: FINAL_SCHEMA,
-    eventKey,
-    body,
-    createdAt: new Date().toISOString(),
-    delivery: 'immediate',
-  });
   const published = publishJournalEvent(
     transport,
     input.repo,
@@ -141,8 +144,28 @@ export function runFinalAcceptance(
     };
   }
 
-  const issue = fetchIssueRevision(transport, input.repo, input.issueNumber);
+  let issue: ReturnType<typeof fetchIssueRevision>;
+  try {
+    issue = fetchIssueRevision(transport, input.repo, input.issueNumber);
+  } catch {
+    return {
+      ok: false,
+      diagnostics,
+      guardErrors: ['unable to confirm issue revision after final event confirmation'],
+      eventKey,
+      projectionPendingRepair: true,
+    };
+  }
   const refreshed = loadCensus(transport, input.repo, input.issueNumber, input.census);
+  if (!refreshed.fetched.commentsComplete) {
+    return {
+      ok: false,
+      diagnostics: [...diagnostics, ...refreshed.diagnostics],
+      guardErrors: ['comment census incomplete after final event confirmation'],
+      eventKey,
+      projectionPendingRepair: true,
+    };
+  }
   const confirmed = refreshed.lineage.eventsByKey.get(eventKey);
   if (!confirmed || confirmed.fingerprint !== fingerprint) {
     return {
@@ -172,6 +195,7 @@ export function runFinalAcceptance(
     issue.labels,
   );
   diagnostics.push(...projection.diagnostics);
+  if (projection.ok) clearPersistedCycleId(workdir);
   return {
     ok: projection.ok,
     diagnostics,

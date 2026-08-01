@@ -10,7 +10,9 @@ import {
 import {
   fetchIssueComments,
   parseJournalEvents,
+  readPendingEvent,
 } from './create-issue-stage-record-gh.ts';
+import { retryPendingEvents, startReviewCycle, detectAcceptedRevisionDrift } from './create-issue-stage-record-core.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
 import {
   createMockGhState,
@@ -19,7 +21,7 @@ import {
   makeTempDir,
 } from './create-issue-stage-record-test-helpers.ts';
 import type { CycleEventLogical, StageEventLogical, TrustedComment } from './create-issue-stage-record-types.ts';
-import { CYCLE_SCHEMA, STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
+import { CYCLE_SCHEMA, FINAL_SCHEMA, STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
 
 describe('create-issue-stage-record marker and lineage', () => {
   it('parses markers for all schemas and compares logical fingerprints without delivery metadata', () => {
@@ -32,6 +34,17 @@ describe('create-issue-stage-record marker and lineage', () => {
       tier: 'T3',
       'public-actor': 'cursor-flow-manager',
     };
+    const finalBody = serializeCommentBody({
+      schema: FINAL_SCHEMA,
+      'event-key': 'cycle-1:final-acceptance:r01',
+      'cycle-id': 'cycle-1',
+      tier: 'T3',
+      'source-revision': 'r01',
+      outcome: 'accepted',
+      'contract-version': 'create-issue-final-acceptance-contract/v1',
+      'public-actor': 'cursor-flow-manager',
+    });
+    expect(parseLogicalFromCommentBody(finalBody)?.schema).toBe(FINAL_SCHEMA);
     const delayedBody = serializeCommentBody(cycle, { delivery: 'delayed', deliveryFailureClass: 'transport' });
     const immediateBody = serializeCommentBody(cycle, { delivery: 'immediate' });
     const delayed = parseLogicalFromCommentBody(delayedBody);
@@ -59,6 +72,34 @@ describe('create-issue-stage-record marker and lineage', () => {
       'orphan-cycle',
       'non-current-cycle-fork',
     ]));
+  });
+
+  it('closes admission for self-referential, cyclic, and duplicate predecessors', () => {
+    const self = makeCycleComment(1, 'cycle-self', 'cycle-self', '2020-01-01T00:00:00Z');
+    const selfLineage = buildCanonicalLineage(parseJournalEvents([self]).events);
+    expect(selfLineage.diagnostics.map((item) => item.code)).toContain('cyclic-cycle-lineage');
+
+    const a = makeCycleComment(2, 'cycle-a', 'cycle-b', '2020-01-01T00:00:00Z');
+    const b = makeCycleComment(3, 'cycle-b', 'cycle-a', '2020-01-02T00:00:00Z');
+    const duplicate = makeCycleComment(4, 'cycle-b', 'cycle-a', '2020-01-03T00:00:00Z');
+    const { events } = parseJournalEvents([a, b, duplicate]);
+    const lineage = buildCanonicalLineage(events);
+    expect(lineage.canonicalRoot).toBeNull();
+    expect(lineage.diagnostics.map((item) => item.code)).toEqual(expect.arrayContaining(['cyclic-cycle-lineage', 'duplicate-remote-event']));
+  });
+
+  it('rejects a marked payload that omits required schema fields', () => {
+    const malformed = '<!-- opk-create-issue-journal:create-issue-stage-record/v1:bad -->\n```json\n{"schema":"create-issue-stage-record/v1","event-key":"bad"}\n```';
+    expect(parseJournalEvents([trusted(1, malformed, 'owner', '2020-01-01T00:00:00Z')]).events).toEqual([]);
+  });
+
+  it('fails closed when a comment omits a trust field', () => {
+    const state = createMockGhState();
+    state.comments = [trusted(1, 'ok', state.ownerLogin, '2020-01-01T00:00:00Z')];
+    state.comments[0] = { ...state.comments[0]!, authorAssociation: undefined as unknown as string };
+    const result = fetchIssueComments(createMockTransport(state), 'chetwerikoff/orchestrator-pack', 1152, state.ownerLogin, { pageSize: 10 });
+    expect(result.commentsComplete).toBe(false);
+    expect(result.diagnostics.map((item) => item.code)).toContain('trust-field-incomplete');
   });
 });
 
@@ -101,6 +142,122 @@ describe('create-issue-stage-record trusted comment admission and pagination', (
     const result = fetchIssueComments(transport, repo, 1152, state.ownerLogin, { pageSize: 1, maxPages: 2 });
     expect(result.commentsComplete).toBe(true);
     expect(result.comments).toHaveLength(2);
+  });
+
+  it('does not admit a full page when the injected sentinel still has data', () => {
+    const state = createMockGhState();
+    state.comments = [
+      trusted(1, 'a', state.ownerLogin, '2020-01-01T00:00:00Z'),
+      trusted(2, 'b', state.ownerLogin, '2020-01-02T00:00:00Z'),
+    ];
+    const result = fetchIssueComments(createMockTransport(state), repo, 1152, state.ownerLogin, { pageSize: 1, maxPages: 1 });
+    expect(result.commentsComplete).toBe(false);
+    expect(result.diagnostics.map((item) => item.code)).toContain('comments-truncated');
+  });
+
+  it('keeps public journal bodies free of URLs, capture text, and producer strings', () => {
+    const cycle: CycleEventLogical = {
+      schema: CYCLE_SCHEMA, 'event-key': 'cycle-privacy', 'cycle-id': 'cycle-privacy',
+      'predecessor-cycle-id': 'none', 'source-revision': 'r01', tier: 'T1', 'public-actor': 'cursor-flow-manager',
+    };
+    const body = serializeCommentBody(cycle);
+    expect(body).not.toMatch(/https?:\/\//i);
+    expect(body).not.toMatch(/capture|producer|secret/i);
+  });
+
+  it('keeps a delayed pending cycle delivery and retries it through the cycle finalizer', () => {
+    const state = createMockGhState({ issue: { title: 't', body: 'revision r01', labels: [] }, failCreate: true });
+    const transport = createMockTransport(state);
+    const workdir = makeTempDir();
+    const failed = startReviewCycle(transport, {
+      repo,
+      issueNumber: 1152,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(failed.ok).toBe(false);
+    expect(readPendingEvent(workdir, failed.eventKey!)).toMatchObject({ delivery: 'delayed', deliveryFailureClass: 'comment-create' });
+    state.failCreate = false;
+    const retried = retryPendingEvents(transport, repo, 1152, workdir, { pageSize: 10 });
+    expect(retried).toHaveLength(1);
+    expect(retried[0]?.ok).toBe(true);
+    expect(state.issue.labels).toContain('spec-review:in-progress');
+    expect(readPendingEvent(workdir, failed.eventKey!)).toBeNull();
+  });
+
+  it('retains the published event but leaves projection repair pending when label sync fails', () => {
+    const state = createMockGhState({
+      issue: { title: 't', body: 'revision r01', labels: ['bug'] },
+      failLabelSync: true,
+    });
+    const transport = createMockTransport(state);
+    const workdir = makeTempDir();
+    const result = startReviewCycle(transport, {
+      repo,
+      issueNumber: 1152,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.projectionPendingRepair).toBe(true);
+    expect(state.comments).toHaveLength(1);
+    expect(state.issue.labels).not.toContain('spec-review:in-progress');
+    expect(state.issue.labels).toContain('bug');
+  });
+
+  it('does not mutate projection labels when comment create is ambiguous before confirmation', () => {
+    const state = createMockGhState({
+      issue: { title: 't', body: 'revision r01', labels: ['bug'] },
+      ambiguousCreate: true,
+    });
+    const transport = createMockTransport(state);
+    const workdir = makeTempDir();
+    const result = startReviewCycle(transport, {
+      repo,
+      issueNumber: 1152,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.projectionPendingRepair).toBe(true);
+    expect(state.comments).toHaveLength(0);
+    expect(state.issue.labels).not.toContain('spec-review:in-progress');
+  });
+
+  it('starts a successor cycle by removing accepted and applying in-progress while preserving unrelated labels', () => {
+    const state = createMockGhState({
+      issue: { title: 't', body: 'revision r02', labels: ['bug', 'spec-review:accepted'] },
+    });
+    const transport = createMockTransport(state);
+    const workdir = makeTempDir();
+    const result = startReviewCycle(transport, {
+      repo,
+      issueNumber: 1152,
+      sourceRevision: 'r02',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(result.ok).toBe(true);
+    expect(state.issue.labels).toContain('spec-review:in-progress');
+    expect(state.issue.labels).not.toContain('spec-review:accepted');
+    expect(state.issue.labels).toContain('bug');
+  });
+
+  it('detects post-acceptance revision drift and does not claim eventual delivery without pending evidence', () => {
+    const state = createMockGhState({
+      issue: { title: 't', body: 'revision r02', labels: ['spec-review:accepted'] },
+    });
+    const transport = createMockTransport(state);
+    expect(detectAcceptedRevisionDrift(transport, repo, 1152, 'r01')).toBe(true);
+    const retried = retryPendingEvents(transport, repo, 1152, makeTempDir(), { pageSize: 10 });
+    expect(retried).toEqual([]);
   });
 });
 
@@ -164,4 +321,3 @@ function makeCycleComment(
 afterEach(() => {
   // no shared temp dirs in unit tests here
 });
-

@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { JOURNAL_MARKER_PREFIX } from './create-issue-stage-record-types.ts';
+import {
+  CYCLE_SCHEMA,
+  FINAL_SCHEMA,
+  JOURNAL_MARKER_PREFIX,
+  STAGE_SCHEMA,
+} from './create-issue-stage-record-types.ts';
 import type { JournalLogical } from './create-issue-stage-record-types.ts';
 
 const MARKER_RE = new RegExp(
@@ -9,6 +14,48 @@ const MARKER_RE = new RegExp(
 
 export function buildMarker(schema: string, eventKey: string): string {
   return `<!-- ${JOURNAL_MARKER_PREFIX}:${schema}:${eventKey} -->`;
+}
+
+function isKnownSchema(value: unknown): value is typeof CYCLE_SCHEMA | typeof STAGE_SCHEMA | typeof FINAL_SCHEMA {
+  return value === CYCLE_SCHEMA || value === STAGE_SCHEMA || value === FINAL_SCHEMA;
+}
+
+const PUBLIC_ACTORS = new Set(['opencode-flow-manager', 'cursor-flow-manager', 'codex-flow-manager', 'other-flow-manager']);
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isJournalPayload(value: Record<string, unknown>): boolean {
+  if (!isKnownSchema(value.schema) || !isNonEmptyString(value['event-key'])) {
+    return false;
+  }
+  if (value.schema === CYCLE_SCHEMA) {
+    return isNonEmptyString(value['cycle-id'])
+      && isNonEmptyString(value['predecessor-cycle-id'])
+      && isNonEmptyString(value['source-revision'])
+      && isNonEmptyString(value.tier)
+      && PUBLIC_ACTORS.has(String(value['public-actor'] ?? ''));
+  }
+  if (value.schema === STAGE_SCHEMA) {
+    return isNonEmptyString(value['cycle-id'])
+      && isNonEmptyString(value.stage)
+      && isNonEmptyString(value.tier)
+      && isNonEmptyString(value['source-revision'])
+      && isNonEmptyString(value['stage-attempt-id'])
+      && isNonEmptyString(value['policy-version'])
+      && isNonEmptyString(value['tier-transition'])
+      && Number.isInteger(value['source-count'])
+      && Number.isInteger(value['required-source-count'])
+      && ['complete', 'partial', 'blocked', 'incident'].includes(String(value['settled-outcome']))
+      && ['verified', 'waived', 'not-applicable'].includes(String(value['producer-evidence']));
+  }
+  return isNonEmptyString(value['cycle-id'])
+    && isNonEmptyString(value.tier)
+    && isNonEmptyString(value['source-revision'])
+    && value.outcome === 'accepted'
+    && isNonEmptyString(value['contract-version'])
+    && PUBLIC_ACTORS.has(String(value['public-actor'] ?? ''));
 }
 
 export function extractMarker(body: string): { schema: string; eventKey: string } | null {
@@ -39,8 +86,9 @@ export function parseLogicalFromCommentBody(body: string): JournalLogical | null
   if (!fence) return null;
   try {
     const parsed = JSON.parse(fence[1] ?? '') as Record<string, unknown>;
-    if (parsed.schema !== marker.schema) return null;
-    if (String(parsed['event-key'] ?? '') !== marker.eventKey) return null;
+    if (!isKnownSchema(marker.schema) || parsed.schema !== marker.schema) return null;
+    if (typeof parsed['event-key'] !== 'string' || parsed['event-key'] !== marker.eventKey) return null;
+    if (!isJournalPayload(parsed)) return null;
     return parsed as JournalLogical;
   } catch {
     return null;
