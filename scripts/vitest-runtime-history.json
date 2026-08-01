@@ -1,7 +1,7 @@
 {
   "issue": 556,
   "source": "ci-measured",
-  "dataChangedAt": "2026-08-01T16:46:17.749Z",
+  "dataChangedAt": "2026-08-01T16:58:55.741Z",
   "smoothingRule": "median-of-last-5-samples",
   "files": {
     "plugins/_shared/tests/declaration_schema.test.ts": 45000,
@@ -196,7 +196,8 @@
     "scripts/kernel/subprocess.test.ts": 1968,
     "scripts/pr2-foundation/mutation-external-ci.test.ts": 490,
     "scripts/pr2-foundation/foundation.test.ts": 54,
-    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 43405
+    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 43405,
+    "scripts/lib/create-issue-stage-record.test.ts": 22
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -391,7 +392,8 @@
     "scripts/kernel/subprocess.test.ts": "measured",
     "scripts/pr2-foundation/mutation-external-ci.test.ts": "measured",
     "scripts/pr2-foundation/foundation.test.ts": "measured",
-    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "measured"
+    "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "measured",
+    "scripts/lib/create-issue-stage-record.test.ts": "measured"
   },
   "recentSamples": {
     "scripts/contract-evidence-legacy-list-guard.test.ts": [
@@ -568,6 +570,9 @@
       55,
       81,
       79
+    ],
+    "scripts/lib/create-issue-stage-record.test.ts": [
+      22
     ]
   },
   "fileChangedAt": {
@@ -595,6 +600,7 @@
     "scripts/review-trigger-reconcile.test.ts": "2026-08-01T16:46:17.749Z",
     "scripts/review-wake-trigger.test.ts": "2026-08-01T16:46:17.749Z",
     "scripts/worker-message-submit-reconcile.test.ts": "2026-08-01T12:22:54.531Z",
-    "scripts/review-cycle-cap.test.ts": "2026-08-01T16:46:17.748Z"
+    "scripts/review-cycle-cap.test.ts": "2026-08-01T16:46:17.748Z",
+    "scripts/lib/create-issue-stage-record.test.ts": "2026-08-01T16:58:55.741Z"
   }
 }

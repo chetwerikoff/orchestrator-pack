@@ -201,6 +201,32 @@ authority. The derivation exposes per-stage credentialing sets, complete governe
 and relayed unions, stage/episode raw counts, logical round identities, relay
 completeness, and activation state.
 
+### Issue journal passage records — Issue #1152
+
+The flow-manager uses the TypeScript journal commands as the only writers for the
+Issue-bound passage record:
+
+- `node --experimental-strip-types scripts/create-issue-stage-finalize.ts start-cycle`
+  admits one closed `create-issue-review-cycle/v1` root/continuation and bootstraps
+  the `spec-review:in-progress` projection.
+- `node --experimental-strip-types scripts/create-issue-stage-finalize.ts publish-stage`
+  consumes a settled #1150 receipt only when its `cycleId`, `sourceRevision`, and
+  `cycleBinding.boundBeforeLaunch` witness match the admitted cycle.
+- `node --experimental-strip-types scripts/create-issue-stage-finalize.ts retry-pending`
+  is the sole retry path for delayed local journal delivery. Pending files are
+  best-effort transport state, never acceptance authority.
+- `node --experimental-strip-types scripts/create-issue-final-acceptance.ts`
+  executes tier-gate, stage-completeness, and finding-ledger guards directly, then
+  alone writes `create-issue-final-acceptance/v1` and synchronizes
+  `spec-review:accepted` after event confirmation. An external PASS receipt cannot
+  substitute for these guards.
+
+All three hidden journal markers carry a schema and event-key. Remote admission
+uses only complete, unedited owner comments and a fully exhausted bounded REST
+comment census; delivery metadata is excluded from logical fingerprints. Public
+payloads contain only the flow-manager actor enum and contract facts—never capture
+text, chat URLs, secrets, or producer strings.
+
 ## T3 plural-source attempt
 
 For `competitive` and `architectural-review`:
@@ -531,6 +557,35 @@ rNN/tier-gate-receipt.json
 ```
 
 Do not persist an episode receipt or consolidated reviewer output.
+
+## GitHub issue journal (Issue #1152)
+
+The public Issue journal is best-effort transport only. Local guards and receipts
+remain authoritative; comments and `spec-review:*` labels are last-synchronized
+projections, not workflow gates.
+
+- `scripts/create-issue-stage-finalize.ts` is the sole writer for cycle start,
+  settled stage publication, and bounded pending-delivery retry.
+- `scripts/create-issue-final-acceptance.ts` is the sole writer for the final
+  acceptance event and `spec-review:accepted`. It directly executes the shared
+  module `scripts/lib/create-issue-final-acceptance-contract.ts`; a finding-ledger
+  PASS alone is never acceptance.
+- Start one v1 cycle before review work, publish one logical stage event per
+  settled #1150 receipt, and run aggregate final acceptance only after every guard
+  in the shared contract is green for the frozen cycle head and revision.
+
+```bash
+node scripts/create-issue-stage-finalize.ts start-cycle \
+  --repo <owner/name> --issue-number <N> --source-revision <rNN> --tier <T1|T2|T3>
+
+node scripts/create-issue-stage-finalize.ts publish-stage \
+  --repo <owner/name> --issue-number <N> --receipt "$REVIEW_DIR/<stage-receipt>.json"
+
+node scripts/create-issue-final-acceptance.ts \
+  --repo <owner/name> --issue-number <N> --cycle-id <cycle-id> \
+  --issue-body <path> --issue-revision <rNN> --review-dir "$REVIEW_DIR" \
+  --stage-receipt "$REVIEW_DIR/<receipt>.json" ...
+```
 
 ## Don't
 

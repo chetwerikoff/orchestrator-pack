@@ -1,0 +1,496 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { executeFinalAcceptanceGuards, FINAL_ACCEPTANCE_CONTRACT_VERSION } from './create-issue-final-acceptance-contract.ts';
+import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
+import {
+  logicalEventsEqual,
+  logicalFingerprint,
+  parseLogicalFromCommentBody,
+  serializeCommentBody,
+} from './create-issue-stage-record-marker.ts';
+import {
+  fetchIssueComments,
+  parseJournalEvents,
+  readPendingEvent,
+} from './create-issue-stage-record-gh.ts';
+import {
+  detectAcceptedRevisionDrift,
+  publishSettledStageRecord,
+  retryPendingEvents,
+  startReviewCycle,
+} from './create-issue-stage-record-core.ts';
+import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
+import {
+  createMockGhState,
+  createMockTransport,
+  installCommentPages,
+  makeTempDir,
+  sampleStageReceipt,
+} from './create-issue-stage-record-test-helpers.ts';
+import type { CycleEventLogical, StageEventLogical, TrustedComment } from './create-issue-stage-record-types.ts';
+import { CYCLE_SCHEMA, FINAL_SCHEMA, STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
+
+describe('create-issue-stage-record marker and lineage', () => {
+  it('parses markers for all schemas and compares logical fingerprints without delivery metadata', () => {
+    const cycle: CycleEventLogical = {
+      schema: CYCLE_SCHEMA,
+      'event-key': 'cycle-1',
+      'cycle-id': 'cycle-1',
+      'predecessor-cycle-id': 'none',
+      'source-revision': 'r01',
+      tier: 'T3',
+      'public-actor': 'cursor-flow-manager',
+    };
+    const finalBody = serializeCommentBody({
+      schema: FINAL_SCHEMA,
+      'event-key': 'cycle-1:final-acceptance:r01',
+      'cycle-id': 'cycle-1',
+      tier: 'T3',
+      'source-revision': 'r01',
+      outcome: 'accepted',
+      'contract-version': 'create-issue-final-acceptance-contract/v1',
+      'public-actor': 'cursor-flow-manager',
+    });
+    expect(parseLogicalFromCommentBody(finalBody)?.schema).toBe(FINAL_SCHEMA);
+    const delayedBody = serializeCommentBody(cycle, { delivery: 'delayed', deliveryFailureClass: 'transport' });
+    const immediateBody = serializeCommentBody(cycle, { delivery: 'immediate' });
+    const delayed = parseLogicalFromCommentBody(delayedBody);
+    const immediate = parseLogicalFromCommentBody(immediateBody);
+    expect(delayed).not.toBeNull();
+    expect(immediate).not.toBeNull();
+    expect(logicalEventsEqual(delayed!, immediate!)).toBe(true);
+    expect(logicalFingerprint(delayed!)).toBe(logicalFingerprint(immediate!));
+  });
+
+  it('resolves one canonical root, orphan, fork, and conflicting cycle ids', () => {
+    const root = makeCycleComment(1, 'cycle-a', 'none', '2020-01-01T00:00:00Z');
+    const conflictingRoot = makeCycleComment(2, 'cycle-a', 'none', '2020-01-02T00:00:00Z', {
+      'source-revision': 'r02',
+    });
+    const child = makeCycleComment(3, 'cycle-b', 'cycle-a', '2020-01-03T00:00:00Z');
+    const orphan = makeCycleComment(4, 'cycle-c', 'missing', '2020-01-04T00:00:00Z');
+    const fork = makeCycleComment(5, 'cycle-d', 'cycle-a', '2020-01-05T00:00:00Z');
+    const { events } = parseJournalEvents([root, conflictingRoot, child, orphan, fork]);
+    const lineage = buildCanonicalLineage(events);
+    expect(lineage.canonicalRoot?.eventKey).toBe('cycle-a');
+    expect(lineage.head?.eventKey).toBe('cycle-b');
+    expect(lineage.diagnostics.map((item) => item.code)).toEqual(expect.arrayContaining([
+      'conflicting-cycle-id',
+      'orphan-cycle',
+      'non-current-cycle-fork',
+    ]));
+  });
+
+  it('closes admission for self-referential, cyclic, and duplicate predecessors', () => {
+    const self = makeCycleComment(1, 'cycle-self', 'cycle-self', '2020-01-01T00:00:00Z');
+    const selfLineage = buildCanonicalLineage(parseJournalEvents([self]).events);
+    expect(selfLineage.diagnostics.map((item) => item.code)).toContain('cyclic-cycle-lineage');
+
+    const a = makeCycleComment(2, 'cycle-a', 'cycle-b', '2020-01-01T00:00:00Z');
+    const b = makeCycleComment(3, 'cycle-b', 'cycle-a', '2020-01-02T00:00:00Z');
+    const duplicate = makeCycleComment(4, 'cycle-b', 'cycle-a', '2020-01-03T00:00:00Z');
+    const { events } = parseJournalEvents([a, b, duplicate]);
+    const lineage = buildCanonicalLineage(events);
+    expect(lineage.canonicalRoot).toBeNull();
+    expect(lineage.diagnostics.map((item) => item.code)).toEqual(expect.arrayContaining(['cyclic-cycle-lineage', 'duplicate-remote-event']));
+  });
+
+  it('rejects a marked payload that omits required schema fields', () => {
+    const malformed = '<!-- opk-create-issue-journal:create-issue-stage-record/v1:bad -->\n```json\n{"schema":"create-issue-stage-record/v1","event-key":"bad"}\n```';
+    expect(parseJournalEvents([trusted(1, malformed, 'owner', '2020-01-01T00:00:00Z')]).events).toEqual([]);
+  });
+
+  it('fails closed when a comment omits a trust field', () => {
+    const state = createMockGhState();
+    state.comments = [trusted(1, 'ok', state.ownerLogin, '2020-01-01T00:00:00Z')];
+    state.comments[0] = { ...state.comments[0]!, authorAssociation: undefined as unknown as string };
+    const result = fetchIssueComments(createMockTransport(state), 'chetwerikoff/orchestrator-pack', 1152, state.ownerLogin, { pageSize: 10 });
+    expect(result.commentsComplete).toBe(false);
+    expect(result.diagnostics.map((item) => item.code)).toContain('trust-field-incomplete');
+  });
+});
+
+describe('create-issue-stage-record trusted comment admission and pagination', () => {
+  const repo = 'chetwerikoff/orchestrator-pack';
+
+  it('excludes foreign and edited comments from the eligible census', () => {
+    const state = createMockGhState();
+    state.comments = [
+      trusted(1, 'ok', state.ownerLogin, '2020-01-01T00:00:00Z'),
+      trusted(2, 'foreign', 'someone-else', '2020-01-02T00:00:00Z'),
+      trusted(3, 'edited', state.ownerLogin, '2020-01-03T00:00:00Z', '2020-01-03T01:00:00Z'),
+    ];
+    const transport = createMockTransport(state);
+    const result = fetchIssueComments(transport, repo, 1152, state.ownerLogin, { pageSize: 10, maxPages: 1 });
+    expect(result.comments).toHaveLength(1);
+    expect(result.commentsComplete).toBe(true);
+    expect(result.diagnostics.map((item) => item.code)).toEqual(expect.arrayContaining(['foreign-comment', 'edited-comment']));
+  });
+
+  it('fails closed when pagination is truncated before exhaustion is proven', () => {
+    const state = createMockGhState();
+    state.comments = [
+      trusted(1, 'ok', state.ownerLogin, '2020-01-01T00:00:00Z'),
+      trusted(2, 'more', state.ownerLogin, '2020-01-02T00:00:00Z'),
+    ];
+    const transport = createMockTransport(state);
+    const result = fetchIssueComments(transport, repo, 1152, state.ownerLogin, { pageSize: 1, maxPages: 1, sentinelProbe: false });
+    expect(result.commentsComplete).toBe(false);
+    expect(result.diagnostics.map((item) => item.code)).toContain('comments-truncated');
+  });
+
+  it('proves exhaustion with a full final page and empty sentinel page', () => {
+    const state = createMockGhState();
+    installCommentPages(state, repo, 1152, [
+      [trusted(1, 'a', state.ownerLogin, '2020-01-01T00:00:00Z')],
+      [trusted(2, 'b', state.ownerLogin, '2020-01-02T00:00:00Z')],
+    ], 1);
+    const transport = createMockTransport(state);
+    const result = fetchIssueComments(transport, repo, 1152, state.ownerLogin, { pageSize: 1, maxPages: 2 });
+    expect(result.commentsComplete).toBe(true);
+    expect(result.comments).toHaveLength(2);
+  });
+
+  it('does not admit a full page when the injected sentinel still has data', () => {
+    const state = createMockGhState();
+    state.comments = [
+      trusted(1, 'a', state.ownerLogin, '2020-01-01T00:00:00Z'),
+      trusted(2, 'b', state.ownerLogin, '2020-01-02T00:00:00Z'),
+    ];
+    const result = fetchIssueComments(createMockTransport(state), repo, 1152, state.ownerLogin, { pageSize: 1, maxPages: 1 });
+    expect(result.commentsComplete).toBe(false);
+    expect(result.diagnostics.map((item) => item.code)).toContain('comments-truncated');
+  });
+
+  it('keeps public journal bodies free of URLs, capture text, and producer strings', () => {
+    const cycle: CycleEventLogical = {
+      schema: CYCLE_SCHEMA, 'event-key': 'cycle-privacy', 'cycle-id': 'cycle-privacy',
+      'predecessor-cycle-id': 'none', 'source-revision': 'r01', tier: 'T1', 'public-actor': 'cursor-flow-manager',
+    };
+    const body = serializeCommentBody(cycle);
+    expect(body).not.toMatch(/https?:\/\//i);
+    expect(body).not.toMatch(/capture|producer|secret/i);
+  });
+
+  it('keeps a delayed pending cycle delivery and retries it through the cycle finalizer', () => {
+    const state = createMockGhState({ issue: { title: 't', body: 'revision r01', labels: [] }, failCreate: true });
+    const transport = createMockTransport(state);
+    const workdir = makeTempDir();
+    const failed = startReviewCycle(transport, {
+      repo,
+      issueNumber: 1152,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(failed.ok).toBe(false);
+    expect(readPendingEvent(workdir, failed.eventKey!)).toMatchObject({ delivery: 'delayed', deliveryFailureClass: 'comment-create' });
+    state.failCreate = false;
+    const retried = retryPendingEvents(transport, repo, 1152, workdir, { pageSize: 10 });
+    expect(retried).toHaveLength(1);
+    expect(retried[0]?.ok).toBe(true);
+    expect(state.issue.labels).toContain('spec-review:in-progress');
+    expect(readPendingEvent(workdir, failed.eventKey!)).toBeNull();
+  });
+
+  it('retains the published event but leaves projection repair pending when label sync fails', () => {
+    const state = createMockGhState({
+      issue: { title: 't', body: 'revision r01', labels: ['bug'] },
+      failLabelSync: true,
+    });
+    const transport = createMockTransport(state);
+    const workdir = makeTempDir();
+    const result = startReviewCycle(transport, {
+      repo,
+      issueNumber: 1152,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.projectionPendingRepair).toBe(true);
+    expect(state.comments).toHaveLength(1);
+    expect(state.issue.labels).not.toContain('spec-review:in-progress');
+    expect(state.issue.labels).toContain('bug');
+  });
+
+  it('does not mutate projection labels when comment create is ambiguous before confirmation', () => {
+    const state = createMockGhState({
+      issue: { title: 't', body: 'revision r01', labels: ['bug'] },
+      ambiguousCreate: true,
+    });
+    const transport = createMockTransport(state);
+    const workdir = makeTempDir();
+    const result = startReviewCycle(transport, {
+      repo,
+      issueNumber: 1152,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.projectionPendingRepair).toBe(true);
+    expect(state.comments).toHaveLength(0);
+    expect(state.issue.labels).not.toContain('spec-review:in-progress');
+  });
+
+  it('starts a successor cycle by removing accepted and applying in-progress while preserving unrelated labels', () => {
+    const state = createMockGhState({
+      issue: { title: 't', body: 'revision r02', labels: ['bug', 'spec-review:accepted'] },
+    });
+    const transport = createMockTransport(state);
+    const workdir = makeTempDir();
+    const result = startReviewCycle(transport, {
+      repo,
+      issueNumber: 1152,
+      sourceRevision: 'r02',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(result.ok).toBe(true);
+    expect(state.issue.labels).toContain('spec-review:in-progress');
+    expect(state.issue.labels).not.toContain('spec-review:accepted');
+    expect(state.issue.labels).toContain('bug');
+  });
+
+  it('detects post-acceptance revision drift and does not claim eventual delivery without pending evidence', () => {
+    const state = createMockGhState({
+      issue: { title: 't', body: 'revision r02', labels: ['spec-review:accepted'] },
+    });
+    const transport = createMockTransport(state);
+    expect(detectAcceptedRevisionDrift(transport, repo, 1152, 'r01')).toBe(true);
+    const retried = retryPendingEvents(transport, repo, 1152, makeTempDir(), { pageSize: 10 });
+    expect(retried).toEqual([]);
+  });
+});
+
+const issueNumber = 1152;
+const repo = 'chetwerikoff/orchestrator-pack';
+const cliTempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of cliTempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe('create-issue-stage-finalize integration', () => {
+  it('starts a cycle, retries equal logical events, and rejects conflicting roots', () => {
+    const state = createMockGhState({ issue: { title: 't', body: 'revision r01', labels: ['bug'] } });
+    const transport = createMockTransport(state);
+    const workdir = makeCliTempDir();
+
+    const first = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(first.ok).toBe(true);
+    expect(state.comments).toHaveLength(1);
+    expect(state.issue.labels).toContain('spec-review:in-progress');
+
+    const retry = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(retry.ok).toBe(true);
+    expect(state.comments).toHaveLength(1);
+
+    const conflicting = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r02',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      predecessorCycleId: 'none',
+      workdir: makeCliTempDir(),
+    });
+    expect(conflicting.ok).toBe(false);
+  });
+
+  it('publishes a bound stage record and refuses github failure as non-authoritative local progression', () => {
+    const state = createMockGhState({ issue: { title: 't', body: 'revision r01', labels: [] } });
+    const transport = createMockTransport(state);
+    const workdir = makeCliTempDir();
+    const started = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    const cycleId = started.cycleId!;
+    const receipt = sampleStageReceipt(cycleId);
+    const published = publishSettledStageRecord(transport, {
+      repo,
+      issueNumber,
+      receipt,
+      workdir,
+    });
+    expect(published.ok).toBe(true);
+    expect(state.comments).toHaveLength(2);
+
+    state.failCreate = true;
+    const blocked = publishSettledStageRecord(transport, {
+      repo,
+      issueNumber,
+      receipt: {
+        ...receipt,
+        stageAttemptId: 'attempt-2',
+        stage: 'architectural-review',
+      },
+      workdir,
+    });
+    expect(blocked.ok).toBe(false);
+    expect(state.comments).toHaveLength(2);
+  });
+
+  it('refuses stage publication when cycle binding is missing or cross-cycle', () => {
+    const state = createMockGhState({ issue: { title: 't', body: 'revision r01', labels: [] } });
+    const transport = createMockTransport(state);
+    const workdir = makeCliTempDir();
+    const started = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    const missing = publishSettledStageRecord(transport, {
+      repo,
+      issueNumber,
+      receipt: { ...sampleStageReceipt(started.cycleId!), cycleBinding: undefined },
+      workdir,
+    });
+    expect(missing.ok).toBe(false);
+    const cross = publishSettledStageRecord(transport, {
+      repo,
+      issueNumber,
+      receipt: {
+        ...sampleStageReceipt(started.cycleId!),
+        cycleId: 'other-cycle',
+      },
+      workdir,
+    });
+    expect(cross.ok).toBe(false);
+  });
+});
+
+describe('create-issue-final-acceptance contract parity', () => {
+  it('exports the shared contract version', () => {
+    expect(FINAL_ACCEPTANCE_CONTRACT_VERSION).toBe('create-issue-final-acceptance-contract/v1');
+  });
+
+  it('requires direct guard execution inputs instead of a PASS receipt shortcut', () => {
+    const result = executeFinalAcceptanceGuards({
+      issueBody: 'body without revision marker',
+      issueRevision: 'r01',
+      cycleId: 'cycle-1',
+      reviewDir: '/tmp/review',
+      stageReceiptPaths: [],
+      capturePaths: [],
+      externalPassReceiptPath: '/tmp/fake-pass.json',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.contractVersion).toBe('create-issue-final-acceptance-contract/v1');
+    expect(result.errors[0]).toMatch(/external PASS receipt/);
+  });
+
+  it('runs the three acceptance guards and cycle witness validation directly', () => {
+    const result = executeFinalAcceptanceGuards({
+      issueBody: '```complexity-tier\ntier: T1\nadvisory-prior: T1\n```\nr01',
+      issueRevision: 'r01',
+      cycleId: 'cycle-1',
+      reviewDir: '/tmp/review',
+      stageReceiptPaths: ['receipt.json'],
+      capturePaths: [],
+      readJson: () => ({
+        tier: 'T1', stage: 'architectural', cycleId: 'cycle-2', stageAttemptId: 'attempt-1',
+        policyVersion: 'single-source/v1', sourceRevision: 'r01', outcome: 'complete',
+        reviewerCardinality: 1, completedSourceCount: 1, producerEvidence: 'not-applicable', tierTransition: 'none',
+        cycleBinding: { cycleId: 'cycle-2', sourceRevision: 'r01', boundBeforeLaunch: true },
+      }),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.startsWith('tier-gate:'))).toBe(true);
+    expect(result.errors.some((error) => error.startsWith('stage-completeness:'))).toBe(true);
+    expect(result.errors.some((error) => error.startsWith('finding-ledger:'))).toBe(true);
+    expect(result.errors.some((error) => error.startsWith('cycle-binding:'))).toBe(true);
+  });
+});
+
+describe('create-issue-stage-record receipt binding', () => {
+  it('requires pre-launch cycle binding witness and rejects rebinding or revision mismatch', () => {
+    const valid = parseConsumableStageReceipt({
+      tier: 'T3',
+      stage: 'competitive',
+      cycleId: 'cycle-1',
+      stageAttemptId: 'attempt-1',
+      policyVersion: 'triple-source/v1',
+      sourceRevision: 'r01',
+      outcome: 'complete',
+      reviewerCardinality: 3,
+      completedSourceCount: 3,
+      producerEvidence: 'not-applicable',
+      tierTransition: 'none',
+      cycleBinding: { cycleId: 'cycle-1', sourceRevision: 'r01', boundBeforeLaunch: true },
+    });
+    expect(valid.errors).toEqual([]);
+    const missing = parseConsumableStageReceipt({ ...valid.receipt, cycleBinding: undefined });
+    expect(missing.errors.join('\n')).toMatch(/cycleBinding/);
+    const rebound = parseConsumableStageReceipt({
+      ...valid.receipt,
+      cycleBinding: { cycleId: 'cycle-2', sourceRevision: 'r01', boundBeforeLaunch: true },
+    });
+    expect(rebound.errors.join('\n')).toMatch(/mismatch/);
+  });
+});
+
+function trusted(
+  id: number,
+  body: string,
+  userLogin: string,
+  createdAt: string,
+  updatedAt = createdAt,
+): TrustedComment {
+  return { id, body, createdAt, updatedAt, userLogin, authorAssociation: 'OWNER' };
+}
+
+function makeCycleComment(
+  id: number,
+  cycleId: string,
+  predecessor: string,
+  createdAt: string,
+  overrides: Partial<CycleEventLogical> = {},
+): TrustedComment {
+  const logical: CycleEventLogical = {
+    schema: CYCLE_SCHEMA,
+    'event-key': cycleId,
+    'cycle-id': cycleId,
+    'predecessor-cycle-id': predecessor,
+    'source-revision': 'r01',
+    tier: 'T3',
+    'public-actor': 'cursor-flow-manager',
+    ...overrides,
+  };
+  return trusted(id, serializeCommentBody(logical), 'owner', createdAt);
+}
+
+function makeCliTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'opk-1152-cli-'));
+  cliTempDirs.push(dir);
+  return dir;
+}
