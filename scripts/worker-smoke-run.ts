@@ -8,7 +8,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   closeOrcaTerminal,
-  createOrcaTerminal,
   probeOrcaWorktree,
   readOrcaTerminal,
   resolveOrcaExecutable,
@@ -16,8 +15,31 @@ import {
   submitOrcaTerminalComposer,
   waitOrcaTerminal,
   type OrcaJsonResponse,
-  type OrcaOperationName,
 } from './lib/orca-cli.ts';
+import { createBoundedOrcaTerminal } from './lib/worker-smoke-bounded-create.ts';
+import {
+  bindSmokeTerminalHandle,
+  cleanupSmokeLifecycle,
+  createSmokeLifecycleReservation,
+  evaluateSmokeLifecycleCleanliness,
+  inspectSmokeProgress,
+  markSmokeCreateAmbiguous,
+  markSmokeCreateInProgress,
+  observeSmokeCancellationAcknowledgement,
+  preflightSmokeLifecycle,
+  releaseSmokeAdmission,
+  SMOKE_ABSOLUTE_CEILING_MS,
+  SMOKE_CREATE_TIMEOUT_MS,
+  SMOKE_DELIVERY_TIMEOUT_MS,
+  SMOKE_LIFECYCLE_POLL_MS,
+  SMOKE_ORCA_OPERATION_TIMEOUT_MS,
+  SMOKE_PROGRESS_STALL_MS,
+  SMOKE_SHUTDOWN_TIMEOUT_MS,
+  smokeCancelAcknowledgementPath,
+  smokeCancelRequestPath,
+  smokeProgressPath,
+  writeSmokeCancelRequest,
+} from './lib/worker-smoke-lifecycle.ts';
 import {
   buildSmokeAgentPrompt,
   buildSmokeGhChildEnv,
@@ -25,45 +47,45 @@ import {
   classifyDeclaredScenarioNonPassCause,
   classifySmokeChannelBinding,
   classifySmokeChildWaitObservation,
-  classifySmokeNonPassCause,
+  createSmokeCompletionObservationState,
   createSmokeControlPlaneDiagnostic,
   createSmokeRunIdentity,
-  ensureSmokeRunArtifactDir,
-  isSmokeControlPlaneCause,
-  isDefinitePromptNonDelivery,
-  preserveSmokeControlPlaneCause,
-  createSmokeCompletionObservationState,
-  observeSmokeCompletionEvidence,
-  observeSmokeDeliveryEstablished,
-  observeSmokeUnsubmittedComposerPaste,
-  resolveSmokeRunArtifactDir,
-  type SmokeChildWaitNonPassCause,
-  type SmokeControlPlaneCause,
-  type SmokeControlPlaneDiagnostic,
-  SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
   detectTrackedImplementationMutation,
-  hasPreexistingTrackedDirtiness,
-  trackedPorcelainPaths,
+  ensureSmokeRunArtifactDir,
   evaluateWorkerSmokeGate,
   findCurrentHeadSmokePass,
   formatSmokeReportComment,
+  hasPreexistingTrackedDirtiness,
+  isDefinitePromptNonDelivery,
+  isSmokeNonPassCause,
   normalizeSmokeReport,
+  observeSmokeCompletionEvidence,
+  observeSmokeDeliveryEstablished,
+  observeSmokeUnsubmittedComposerPaste,
   orcaTerminalReadLines,
   orcaTerminalReadNextCursor,
   ownedSmokeTerminalClosedFromReports,
   parseSmokeAgentReport,
-  smokeAgentTerminalActivityBeyondSentPrompt,
-  smokeAgentTerminalDeltaActivity,
-  smokeAgentTerminalFullActivity,
-  scrubForwardedGhSecrets,
-  smokeReportHasPackProducer,
-  SMOKE_REPORT_PRODUCER,
-  verifySmokeHeadBinding,
+  preserveSmokeControlPlaneCause,
   resolveSmokeRequirement,
+  resolveSmokeRunArtifactDir,
+  scrubForwardedGhSecrets,
   scrubSmokeOutput,
+  smokeAgentTerminalActivityBeyondSentPrompt,
+  smokeAgentTerminalFullActivity,
+  smokeReportHasPackProducer,
+  SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
+  SMOKE_REPORT_PRODUCER,
   stripLeadingSmokeAgentPrompt,
+  trackedPorcelainPaths,
+  verifySmokeHeadBinding,
+  type SmokeChildStateWitness,
+  type SmokeChildWaitNonPassCause,
+  type SmokeControlPlaneCause,
+  type SmokeControlPlaneDiagnostic,
   type SmokeNonPassCause,
   type SmokeReport,
+  type SmokeRunBinding,
 } from './lib/worker-smoke-core.ts';
 import { verifySmokeRunReceipt, writeWorkerSmokeReceipt } from './lib/worker-smoke-receipt.ts';
 
@@ -91,12 +113,10 @@ function parseArgs(argv: readonly string[]): CliOptions {
     dryRun: false,
     json: false,
   };
-
   const args = [...argv];
   if (args[0] && !args[0].startsWith('-')) {
     options.command = args.shift() ?? '';
   }
-
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     switch (token) {
@@ -128,16 +148,25 @@ function parseArgs(argv: readonly string[]): CliOptions {
         throw new Error(`unknown argument: ${token}`);
     }
   }
-
   return options;
 }
 
 function emit(result: unknown, json: boolean): void {
   if (json) {
+    if (result && typeof result === 'object' && 'report' in result) {
+      const envelope = result as {
+        report?: SmokeReport;
+        nonPassCause?: SmokeNonPassCause;
+        controlPlaneDiagnostic?: SmokeControlPlaneDiagnostic;
+      };
+      if (envelope.report) {
+        finalizeSmokeReportMachineCause(envelope.report);
+        envelope.nonPassCause = envelope.report.nonPassCause;
+        envelope.controlPlaneDiagnostic = envelope.report.controlPlaneDiagnostic;
+      }
+    }
     process.stdout.write(`${JSON.stringify(result)}\n`);
-    return;
-  }
-  if (typeof result === 'string') {
+  } else if (typeof result === 'string') {
     process.stdout.write(`${result}\n`);
   }
 }
@@ -154,8 +183,31 @@ function readIssueBody(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
-const SMOKE_AGENT_WAIT_BUDGET_MS = 30 * 60 * 1000;
-const SMOKE_AGENT_POLL_MS = 250;
+const LEGACY_SMOKE_AGENT_WAIT_BUDGET_MS = 30 * 60 * 1000;
+const SMOKE_AGENT_POLL_MS = SMOKE_LIFECYCLE_POLL_MS;
+
+type SmokeLifecycleTerminalReason =
+  | 'progress_stall'
+  | 'absolute_safety_ceiling'
+  | 'operator_cancelled';
+
+function sleepSynchronously(milliseconds: number): void {
+  if (milliseconds <= 0) {
+    return;
+  }
+  runProcessSync({
+    command: process.platform === 'win32' ? 'powershell' : 'sleep',
+    args: process.platform === 'win32'
+      ? ['-NoProfile', '-Command', `Start-Sleep -Milliseconds ${milliseconds}`]
+      : [String(Math.max(1, Math.ceil(milliseconds / 1000)))],
+  });
+}
+
+function boundedOperationTimeout(...remainingMs: number[]): number {
+  const finite = remainingMs.filter((value) => Number.isFinite(value));
+  const remaining = finite.length > 0 ? Math.min(...finite) : SMOKE_ORCA_OPERATION_TIMEOUT_MS;
+  return Math.max(1, Math.min(SMOKE_ORCA_OPERATION_TIMEOUT_MS, remaining));
+}
 
 export function runSmokeGhSync(
   args: readonly string[],
@@ -174,21 +226,6 @@ function scrubGhFailureMessage(message: string): string {
   return scrubSmokeOutput(scrubForwardedGhSecrets(message, buildSmokeGhChildEnv()));
 }
 
-function smokeAgentTerminalHasReport(
-  terminalText: string,
-  sentPrompt: string,
-  baselineText = '',
-): boolean {
-  const observedSinceBaseline = terminalText.startsWith(baselineText)
-    ? terminalText.slice(baselineText.length)
-    : terminalText;
-  const remainder = stripLeadingSmokeAgentPrompt(observedSinceBaseline, sentPrompt);
-  if (!remainder.trim()) {
-    return false;
-  }
-  return parseSmokeAgentReport(remainder) !== null;
-}
-
 function diagnosticFromResponse(response: OrcaJsonResponse): SmokeControlPlaneDiagnostic | undefined {
   return createSmokeControlPlaneDiagnostic({
     terminalAcquired: true,
@@ -202,11 +239,41 @@ function attachControlPlaneDiagnostic(
   report: SmokeReport,
   diagnostic: SmokeControlPlaneDiagnostic | undefined,
 ): SmokeReport {
-  if (!diagnostic) {
-    return report;
+  if (diagnostic) {
+    report.nonPassCause = diagnostic.cause;
+    report.controlPlaneDiagnostic = diagnostic;
   }
-  report.nonPassCause = diagnostic.cause;
-  report.controlPlaneDiagnostic = diagnostic;
+  return report;
+}
+
+function inferSmokeReportMachineCause(report: SmokeReport): SmokeNonPassCause | undefined {
+  if (report.result === 'PASS') {
+    return undefined;
+  }
+  if (report.controlPlaneDiagnostic?.cause) {
+    return report.controlPlaneDiagnostic.cause;
+  }
+  for (const scenario of report.scenarios) {
+    const observed = String(scenario.observed ?? '').trim();
+    if (isSmokeNonPassCause(observed)) {
+      return observed;
+    }
+  }
+  if (report.nonPassCause) {
+    return report.nonPassCause;
+  }
+  return classifyDeclaredScenarioNonPassCause({
+    partial: report,
+    agentActivityObserved: true,
+    agentCompleted: true,
+  });
+}
+
+function finalizeSmokeReportMachineCause(report: SmokeReport): SmokeReport {
+  const cause = inferSmokeReportMachineCause(report);
+  if (cause) {
+    report.nonPassCause = cause;
+  }
   return report;
 }
 
@@ -215,6 +282,7 @@ function buildSmokeRunResult(
   published: boolean,
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> {
+  finalizeSmokeReportMachineCause(report);
   return {
     ok: report.result === 'PASS',
     report,
@@ -231,7 +299,10 @@ function closeOwnedSmokeTerminal(handle: string, cwd: string): {
   terminalCleanup: string;
   diagnostic?: SmokeControlPlaneDiagnostic;
 } {
-  const closeResult = closeOrcaTerminal(handle, { cwd });
+  const closeResult = closeOrcaTerminal(handle, {
+    cwd,
+    timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS,
+  });
   if (closeResult.ok) {
     return { terminalCleanup: 'closed_owned_handle' };
   }
@@ -244,6 +315,7 @@ function closeOwnedSmokeTerminal(handle: string, cwd: string): {
 export interface SmokePromptDeliveryResult {
   ok: boolean;
   cause?: SmokeChildWaitNonPassCause;
+  terminalReason?: Extract<SmokeLifecycleTerminalReason, 'absolute_safety_ceiling' | 'operator_cancelled'>;
   controlPlaneCause?: SmokeControlPlaneCause;
   controlPlaneDiagnostic?: SmokeControlPlaneDiagnostic;
   resendCount: number;
@@ -252,9 +324,11 @@ export interface SmokePromptDeliveryResult {
 
 export interface SmokeChildCompletionResult {
   ok: boolean;
-  partial?: Partial<import('./lib/worker-smoke-core.ts').SmokeReport> | null;
+  partial?: Partial<SmokeReport> | null;
   agentActivityObserved: boolean;
   nonPassCause?: SmokeChildWaitNonPassCause | SmokeControlPlaneCause;
+  terminalReason?: SmokeLifecycleTerminalReason;
+  progress?: ReturnType<typeof inspectSmokeProgress>;
   controlPlaneDiagnostic?: SmokeControlPlaneDiagnostic;
   error?: { code: string; message: string };
 }
@@ -264,7 +338,8 @@ export function establishSmokePromptDelivery(
   input: {
     readonly cwd?: string;
     readonly deadlineMs: number;
-    readonly runBinding: import('./lib/worker-smoke-core.ts').SmokeRunBinding;
+    readonly absoluteDeadlineMs?: number;
+    readonly runBinding: SmokeRunBinding;
     readonly prompt: string;
     readonly preSendBaselineText?: string;
     readonly preSendCursor?: number;
@@ -272,27 +347,46 @@ export function establishSmokePromptDelivery(
     readonly now?: () => number;
     readonly sleepMs?: (milliseconds: number) => void;
     readonly allowDefiniteNondeliveryRetry?: boolean;
+    readonly abortReason?: () => string | undefined;
   },
 ): SmokePromptDeliveryResult {
   const now = input.now ?? (() => Date.now());
   const deadline = now() + input.deadlineMs;
-  const sleepMs = input.sleepMs ?? ((milliseconds: number) => {
-    if (milliseconds <= 0) {
-      return;
+  const sleepMs = input.sleepMs ?? sleepSynchronously;
+  const terminalInterruption = (): SmokePromptDeliveryResult | undefined => {
+    const currentNow = now();
+    if (input.absoluteDeadlineMs !== undefined && currentNow >= input.absoluteDeadlineMs) {
+      return {
+        ok: false,
+        terminalReason: 'absolute_safety_ceiling',
+        resendCount: 0,
+        composerSubmitCount: 0,
+      };
     }
-    runProcessSync({
-      command: process.platform === 'win32' ? 'powershell' : 'sleep',
-      args: process.platform === 'win32'
-        ? ['-NoProfile', '-Command', `Start-Sleep -Milliseconds ${milliseconds}`]
-        : [String(Math.max(1, Math.ceil(milliseconds / 1000)))],
-    });
-  });
+    const abortReason = input.abortReason?.();
+    if (abortReason) {
+      return {
+        ok: false,
+        terminalReason: 'operator_cancelled',
+        resendCount: 0,
+        composerSubmitCount: 0,
+      };
+    }
+    return undefined;
+  };
+  const operationTimeout = (): number => boundedOperationTimeout(
+    deadline - now(),
+    input.absoluteDeadlineMs === undefined ? Number.POSITIVE_INFINITY : input.absoluteDeadlineMs - now(),
+  );
+  const beforeSendInterruption = terminalInterruption();
+  if (beforeSendInterruption) return beforeSendInterruption;
 
   let resendCount = 0;
-  const attemptSend = (): ReturnType<typeof sendOrcaTerminal> => {
-    return sendOrcaTerminal(handle, input.prompt, { cwd: input.cwd, runner: input.runner });
-  };
-
+  const attemptSend = (): ReturnType<typeof sendOrcaTerminal> => sendOrcaTerminal(
+    handle,
+    input.prompt,
+    { cwd: input.cwd, runner: input.runner, timeoutMs: operationTimeout() },
+  );
   let sendResult = attemptSend();
   if (!sendResult.ok) {
     const controlPlane = preserveSmokeControlPlaneCause(sendResult.error?.code);
@@ -306,6 +400,8 @@ export function establishSmokePromptDelivery(
       };
     }
     if (input.allowDefiniteNondeliveryRetry && isDefinitePromptNonDelivery(sendResult.error?.code)) {
+      const retryInterruption = terminalInterruption();
+      if (retryInterruption) return retryInterruption;
       resendCount += 1;
       sendResult = attemptSend();
       if (!sendResult.ok) {
@@ -328,15 +424,28 @@ export function establishSmokePromptDelivery(
 
   let composerSubmitCount = 0;
   while (now() < deadline) {
+    const interruption = terminalInterruption();
+    if (interruption) {
+      return { ...interruption, resendCount, composerSubmitCount };
+    }
     if (observeSmokeDeliveryEstablished(input.runBinding)) {
       return { ok: true, resendCount, composerSubmitCount };
     }
-
+    const remainingBeforeRead = Math.min(
+      deadline - now(),
+      input.absoluteDeadlineMs === undefined ? Number.POSITIVE_INFINITY : input.absoluteDeadlineMs - now(),
+    );
+    if (remainingBeforeRead <= 0) break;
     const read = readOrcaTerminal(handle, {
       cwd: input.cwd,
       limit: 200,
       runner: input.runner,
+      timeoutMs: boundedOperationTimeout(remainingBeforeRead),
     });
+    const afterReadInterruption = terminalInterruption();
+    if (afterReadInterruption) {
+      return { ...afterReadInterruption, resendCount, composerSubmitCount };
+    }
     if (!read.ok) {
       const controlPlane = preserveSmokeControlPlaneCause(read.error?.code);
       if (controlPlane) {
@@ -348,39 +457,44 @@ export function establishSmokePromptDelivery(
           composerSubmitCount,
         };
       }
-    } else {
-      const lines = orcaTerminalReadLines(read.result);
-      if (
-        !observeSmokeDeliveryEstablished(input.runBinding)
-        && observeSmokeUnsubmittedComposerPaste(lines)
-      ) {
-        const submit = submitOrcaTerminalComposer(handle, { cwd: input.cwd, runner: input.runner });
-        composerSubmitCount += 1;
-        if (!submit.ok) {
-          const controlPlane = preserveSmokeControlPlaneCause(submit.error?.code);
-          if (controlPlane) {
-            return {
-              ok: false,
-              controlPlaneCause: controlPlane,
-              controlPlaneDiagnostic: diagnosticFromResponse(submit),
-              resendCount,
-              composerSubmitCount,
-            };
-          }
-        }
-        if (observeSmokeDeliveryEstablished(input.runBinding)) {
-          return { ok: true, resendCount, composerSubmitCount };
+    } else if (
+      !observeSmokeDeliveryEstablished(input.runBinding)
+      && observeSmokeUnsubmittedComposerPaste(orcaTerminalReadLines(read.result))
+    ) {
+      const submit = submitOrcaTerminalComposer(handle, {
+        cwd: input.cwd,
+        runner: input.runner,
+        timeoutMs: operationTimeout(),
+      });
+      composerSubmitCount += 1;
+      const afterSubmitInterruption = terminalInterruption();
+      if (afterSubmitInterruption) {
+        return { ...afterSubmitInterruption, resendCount, composerSubmitCount };
+      }
+      if (!submit.ok) {
+        const controlPlane = preserveSmokeControlPlaneCause(submit.error?.code);
+        if (controlPlane) {
+          return {
+            ok: false,
+            controlPlaneCause: controlPlane,
+            controlPlaneDiagnostic: diagnosticFromResponse(submit),
+            resendCount,
+            composerSubmitCount,
+          };
         }
       }
     }
-
-    const remaining = deadline - now();
+    const remaining = Math.min(
+      deadline - now(),
+      input.absoluteDeadlineMs === undefined ? Number.POSITIVE_INFINITY : input.absoluteDeadlineMs - now(),
+    );
     if (remaining <= 0) {
       break;
     }
     sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
   }
-
+  const finalInterruption = terminalInterruption();
+  if (finalInterruption) return { ...finalInterruption, resendCount, composerSubmitCount };
   return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount, composerSubmitCount };
 }
 
@@ -389,14 +503,19 @@ export function waitForSmokeChildCompletion(
   input: {
     readonly cwd?: string;
     readonly deadlineMs: number;
-    readonly runBinding: import('./lib/worker-smoke-core.ts').SmokeRunBinding;
+    readonly runBinding: SmokeRunBinding;
     readonly ownedChildHandle: string;
     readonly supervisorHandle?: string;
     readonly runner?: NonNullable<Parameters<typeof readOrcaTerminal>[1]>['runner'];
     readonly now?: () => number;
     readonly sleepMs?: (milliseconds: number) => void;
-    readonly childStateWitness?: () => import('./lib/worker-smoke-core.ts').SmokeChildStateWitness;
+    readonly childStateWitness?: () => SmokeChildStateWitness;
     readonly suppressPtyReads?: boolean;
+    readonly scenarioCount?: number;
+    readonly lifecycleStartedAtMs?: number;
+    readonly stallMs?: number;
+    readonly absoluteCeilingMs?: number;
+    readonly abortReason?: () => string | undefined;
   },
 ): SmokeChildCompletionResult {
   const channelCause = classifySmokeChannelBinding({
@@ -414,32 +533,91 @@ export function waitForSmokeChildCompletion(
   }
 
   const now = input.now ?? (() => Date.now());
-  const deadline = now() + input.deadlineMs;
-  const sleepMs = input.sleepMs ?? ((milliseconds: number) => {
-    if (milliseconds <= 0) {
-      return;
-    }
-    runProcessSync({
-      command: process.platform === 'win32' ? 'powershell' : 'sleep',
-      args: process.platform === 'win32'
-        ? ['-NoProfile', '-Command', `Start-Sleep -Milliseconds ${milliseconds}`]
-        : [String(Math.max(1, Math.ceil(milliseconds / 1000)))],
-    });
-  });
+  const sleepMs = input.sleepMs ?? sleepSynchronously;
+  const progressAware = Number.isInteger(input.scenarioCount) && (input.scenarioCount ?? 0) > 0;
+  const legacyDeadline = now() + input.deadlineMs;
+  const lifecycleStartedAtMs = input.lifecycleStartedAtMs ?? now();
+  const absoluteDeadline = lifecycleStartedAtMs
+    + (input.absoluteCeilingMs ?? SMOKE_ABSOLUTE_CEILING_MS);
+  const stallMs = input.stallMs ?? SMOKE_PROGRESS_STALL_MS;
+  let lastAcceptedProgressAt = now();
+  let acceptedProgressCount = 0;
+  let latestProgress = progressAware
+    ? inspectSmokeProgress({
+      artifactDir: input.runBinding.artifactDir,
+      runId: input.runBinding.runId,
+      scenarioCount: input.scenarioCount!,
+    })
+    : undefined;
+  if (latestProgress) {
+    acceptedProgressCount = latestProgress.acceptedCount;
+  }
 
-  let agentActivityObserved = false;
+  let agentActivityObserved = acceptedProgressCount > 0;
   let completionState = createSmokeCompletionObservationState();
-  while (now() < deadline) {
-    const remaining = deadline - now();
-    if (remaining <= 0) {
-      break;
-    }
 
+  const terminalDecision = (currentNow: number): SmokeChildCompletionResult | undefined => {
+    const abortReason = input.abortReason?.();
+    if (abortReason) {
+      return {
+        ok: false,
+        agentActivityObserved,
+        terminalReason: 'operator_cancelled',
+        error: { code: 'operator_cancelled', message: abortReason },
+        ...(latestProgress ? { progress: latestProgress } : {}),
+      };
+    }
+    if (progressAware && currentNow >= absoluteDeadline) {
+      return {
+        ok: false,
+        agentActivityObserved,
+        terminalReason: 'absolute_safety_ceiling',
+        ...(latestProgress ? { progress: latestProgress } : {}),
+        error: {
+          code: 'absolute_safety_ceiling',
+          message: 'absolute smoke lifecycle safety ceiling reached',
+        },
+      };
+    }
+    if (progressAware && currentNow - lastAcceptedProgressAt >= stallMs) {
+      return {
+        ok: false,
+        agentActivityObserved,
+        terminalReason: 'progress_stall',
+        ...(latestProgress ? { progress: latestProgress } : {}),
+        error: {
+          code: 'progress_stall',
+          message: 'no accepted declared-scenario transition before stall deadline',
+        },
+      };
+    }
+    return undefined;
+  };
+
+  for (;;) {
+    const beforeReadNow = now();
+    const beforeReadDecision = terminalDecision(beforeReadNow);
+    if (beforeReadDecision) return beforeReadDecision;
+    if (!progressAware && beforeReadNow >= legacyDeadline) break;
+
+    const readTimeoutMs = progressAware
+      ? boundedOperationTimeout(
+        absoluteDeadline - beforeReadNow,
+        stallMs - (beforeReadNow - lastAcceptedProgressAt),
+      )
+      : boundedOperationTimeout(legacyDeadline - beforeReadNow);
     const read = readOrcaTerminal(handle, {
       cwd: input.cwd,
       limit: input.suppressPtyReads ? 0 : 200,
       runner: input.runner,
+      timeoutMs: readTimeoutMs,
     });
+
+    const currentNow = now();
+    const afterReadDecision = terminalDecision(currentNow);
+    if (afterReadDecision) return afterReadDecision;
+    if (!progressAware && currentNow >= legacyDeadline) break;
+
     if (!read.ok) {
       const controlPlane = preserveSmokeControlPlaneCause(read.error?.code);
       if (controlPlane) {
@@ -458,6 +636,19 @@ export function waitForSmokeChildCompletion(
       }
     }
 
+    if (progressAware) {
+      latestProgress = inspectSmokeProgress({
+        artifactDir: input.runBinding.artifactDir,
+        runId: input.runBinding.runId,
+        scenarioCount: input.scenarioCount!,
+      });
+      if (latestProgress.acceptedCount > acceptedProgressCount) {
+        acceptedProgressCount = latestProgress.acceptedCount;
+        lastAcceptedProgressAt = currentNow;
+        agentActivityObserved = true;
+      }
+    }
+
     const observed = observeSmokeCompletionEvidence(input.runBinding, completionState);
     completionState = observed.state;
     const outcome = classifySmokeChildWaitObservation({
@@ -466,30 +657,36 @@ export function waitForSmokeChildCompletion(
       deadlineReached: false,
     });
     if (outcome.status === 'completed') {
-      return { ok: true, partial: outcome.partial, agentActivityObserved: true };
-    }
-    if (outcome.status === 'non_pass') {
       return {
-        ok: false,
-        agentActivityObserved,
-        nonPassCause: outcome.cause,
-        error: { code: outcome.cause, message: outcome.cause },
+        ok: true,
+        partial: outcome.partial,
+        agentActivityObserved: true,
+        ...(latestProgress ? { progress: latestProgress } : {}),
       };
     }
-    if (outcome.status === 'control_plane') {
+    if (outcome.status === 'non_pass' || outcome.status === 'control_plane') {
       return {
         ok: false,
         agentActivityObserved,
         nonPassCause: outcome.cause,
         error: { code: outcome.cause, message: outcome.cause },
+        ...(latestProgress ? { progress: latestProgress } : {}),
       };
     }
 
-    sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
+    if (progressAware) {
+      sleepMs(Math.min(
+        SMOKE_AGENT_POLL_MS,
+        Math.max(1, absoluteDeadline - currentNow),
+        Math.max(1, stallMs - (currentNow - lastAcceptedProgressAt)),
+      ));
+      continue;
+    }
+
+    sleepMs(Math.min(SMOKE_AGENT_POLL_MS, legacyDeadline - currentNow));
   }
 
   const observed = observeSmokeCompletionEvidence(input.runBinding, completionState);
-  completionState = observed.state;
   const outcome = classifySmokeChildWaitObservation({
     completion: observed.observation,
     childState: input.childStateWitness?.(),
@@ -526,19 +723,19 @@ export function waitForSmokeAgentCompletion(
     readonly runner?: NonNullable<Parameters<typeof waitOrcaTerminal>[1]>['runner'];
     readonly now?: () => number;
     readonly sleepMs?: (milliseconds: number) => void;
-    readonly runBinding?: import('./lib/worker-smoke-core.ts').SmokeRunBinding;
+    readonly runBinding?: SmokeRunBinding;
     readonly ownedChildHandle?: string;
   } = {},
 ): {
   ok: boolean;
   agentActivityObserved: boolean;
-  partial?: Partial<import('./lib/worker-smoke-core.ts').SmokeReport> | null;
+  partial?: Partial<SmokeReport> | null;
   error?: { code: string; message: string };
 } {
   if (options.runBinding && options.ownedChildHandle) {
     const result = waitForSmokeChildCompletion(handle, {
       cwd: options.cwd,
-      deadlineMs: options.deadlineMs ?? SMOKE_AGENT_WAIT_BUDGET_MS,
+      deadlineMs: options.deadlineMs ?? LEGACY_SMOKE_AGENT_WAIT_BUDGET_MS,
       runBinding: options.runBinding,
       ownedChildHandle: options.ownedChildHandle,
       runner: options.runner,
@@ -554,30 +751,19 @@ export function waitForSmokeAgentCompletion(
   }
 
   const now = options.now ?? (() => Date.now());
-  const deadline = now() + (options.deadlineMs ?? SMOKE_AGENT_WAIT_BUDGET_MS);
-  const sleepMs = options.sleepMs ?? ((milliseconds: number) => {
-    if (milliseconds <= 0) {
-      return;
-    }
-    runProcessSync({
-      command: process.platform === 'win32' ? 'powershell' : 'sleep',
-      args: process.platform === 'win32'
-        ? ['-NoProfile', '-Command', `Start-Sleep -Milliseconds ${milliseconds}`]
-        : [String(Math.max(1, Math.ceil(milliseconds / 1000)))],
-    });
-  });
-
+  const deadline = now() + (options.deadlineMs ?? LEGACY_SMOKE_AGENT_WAIT_BUDGET_MS);
+  const sleepMs = options.sleepMs ?? sleepSynchronously;
   let agentActivityObserved = false;
   const baselineText = options.preSendBaselineText ?? '';
   const sentPrompt = options.sentPrompt ?? '';
   let observedSinceBaseline = '';
   let cursor = options.preSendCursor;
-
   const initialRead = readOrcaTerminal(handle, {
     cwd: options.cwd,
     cursor,
     limit: 2000,
     runner: options.runner,
+    timeoutMs: boundedOperationTimeout(deadline - now()),
   });
   if (initialRead.ok) {
     const initialText = orcaTerminalReadLines(initialRead.result).join('\n');
@@ -598,18 +784,17 @@ export function waitForSmokeAgentCompletion(
       cursor = initialNextCursor;
     }
   }
-
   while (now() < deadline) {
     const remaining = deadline - now();
     if (remaining <= 0) {
       break;
     }
-
     const read = readOrcaTerminal(handle, {
       cwd: options.cwd,
       cursor,
       limit: 2000,
       runner: options.runner,
+      timeoutMs: boundedOperationTimeout(remaining),
     });
     if (read.ok) {
       const deltaText = orcaTerminalReadLines(read.result).join('\n');
@@ -630,10 +815,8 @@ export function waitForSmokeAgentCompletion(
         cursor = readNextCursor;
       }
     }
-
     sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
   }
-
   return {
     ok: false,
     agentActivityObserved,
@@ -666,11 +849,7 @@ function gitPorcelain(cwd: string): string[] {
 function hashTrackedPaths(cwd: string, paths: readonly string[]): Record<string, string> {
   const hashes: Record<string, string> = {};
   for (const path of paths) {
-    const result = runProcessSync({
-      command: 'git',
-      args: ['hash-object', path],
-      cwd,
-    });
+    const result = runProcessSync({ command: 'git', args: ['hash-object', path], cwd });
     if (result.ok) {
       hashes[path] = result.stdout.trim();
     }
@@ -715,8 +894,7 @@ function resolveCiGreen(prNumber: number, headSha: string, repoRoot: string): bo
     repoRoot,
   ));
   const prMeta = JSON.parse(prMetaRaw) as { headRefOid?: string; baseRefName?: string };
-  const normalizedHead = headSha.trim().toLowerCase();
-  if ((prMeta.headRefOid ?? '').trim().toLowerCase() !== normalizedHead) {
+  if ((prMeta.headRefOid ?? '').trim().toLowerCase() !== headSha.trim().toLowerCase()) {
     return false;
   }
   const checksRaw = requireProcessOutput('required-ci-checks', runSmokeGhSync(
@@ -759,8 +937,7 @@ function attachPackProducerFields<T extends Partial<SmokeReport>>(
 }
 
 function runValidatePlan(options: CliOptions): number {
-  const markdown = readIssueBody(options.issueBodyFile);
-  const result = checkSmokeTestPlan(markdown);
+  const result = checkSmokeTestPlan(readIssueBody(options.issueBodyFile));
   if (!result.ok) {
     for (const error of result.errors) {
       process.stderr.write(`worker-smoke-run: ${error}\n`);
@@ -772,9 +949,21 @@ function runValidatePlan(options: CliOptions): number {
 }
 
 function runGateCheck(options: CliOptions): number {
+  const lifecycle = evaluateSmokeLifecycleCleanliness(options.cwd);
+  if (!lifecycle.clean) {
+    const result = {
+      ok: false,
+      allowed: false,
+      reason: `smoke_lifecycle_unclean:${lifecycle.reasons[0]}`,
+      smokeRequired: true,
+      lifecycle,
+    };
+    emit(result, options.json);
+    return 1;
+  }
   const issueBody = readIssueBody(options.issueBodyFile);
   const comments = options.prNumber > 0 ? fetchPrComments(options.prNumber, options.repoRoot) : [];
-  const worktree = probeOrcaWorktree(options.cwd);
+  const worktree = probeOrcaWorktree(options.cwd, { timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS });
   const pass = options.prNumber > 0
     ? findCurrentHeadSmokePass(comments, options.prNumber, options.headSha, options.issueNumber)
     : null;
@@ -784,24 +973,28 @@ function runGateCheck(options: CliOptions): number {
     prNumber: options.prNumber,
     headSha: options.headSha,
     prComments: comments,
-    ciGreen: options.prNumber > 0 ? resolveCiGreen(options.prNumber, options.headSha, options.repoRoot) : false,
+    ciGreen: options.prNumber > 0
+      ? resolveCiGreen(options.prNumber, options.headSha, options.repoRoot)
+      : false,
     orcaWorktreeOk: worktree.ok,
     ownedTerminalClosed: options.prNumber > 0
-      ? ownedSmokeTerminalClosedFromReports(comments, options.prNumber, options.headSha, options.issueNumber)
+      ? ownedSmokeTerminalClosedFromReports(
+        comments,
+        options.prNumber,
+        options.headSha,
+        options.issueNumber,
+      )
       : false,
     terminalProvenanceOk: pass ? verifyPublishedSmokeProvenance(pass) : false,
   });
-  emit({ ok: decision.allowed, ...decision }, options.json);
+  emit({ ok: decision.allowed, ...decision, lifecycle }, options.json);
   return decision.allowed ? 0 : 1;
 }
 
-function publishSmokeReport(
-  report: SmokeReport,
-  options: CliOptions,
-): void {
-  const comment = formatSmokeReportComment(report);
+function publishSmokeReport(report: SmokeReport, options: CliOptions): void {
+  finalizeSmokeReportMachineCause(report);
   if (!options.dryRun) {
-    publishPrComment(options.prNumber, comment, options.repoRoot);
+    publishPrComment(options.prNumber, formatSmokeReportComment(report), options.repoRoot);
     writeWorkerSmokeReceipt(report);
   }
 }
@@ -837,6 +1030,68 @@ function buildOperationalSmokeReport(
   };
 }
 
+function buildLifecyclePrompt(
+  basePrompt: string,
+  binding: SmokeRunBinding,
+  scenarioCount: number,
+): string {
+  return [
+    basePrompt,
+    '',
+    'Lifecycle protocol (child-produced evidence only):',
+    `- Progress file: ${smokeProgressPath(binding.artifactDir)}`,
+    `- Cancel request: ${smokeCancelRequestPath(binding.artifactDir)}`,
+    `- Cancel acknowledgement: ${smokeCancelAcknowledgementPath(binding.artifactDir)}`,
+    `- Declared scenario count: ${scenarioCount}`,
+    '- Before each declared scenario append exactly one JSON line: {"runId":"<run-id>","scenarioOrdinal":N,"phase":"started"}.',
+    '- After that scenario append exactly one JSON line: {"runId":"<run-id>","scenarioOrdinal":N,"phase":"terminal","outcome":"pass|fail|blocked|skipped"}.',
+    '- Use declared order only. Never emit heartbeats, milestones, duplicate starts, or parent-authored progress.',
+    '- Check cancel-request.json between scenarios, before every new Browser-GPT turn, and immediately after an already-started turn returns.',
+    '- When cancellation is observed, start no new scenario or turn; create cancel-acknowledgement.json with {"runId":"<run-id>"}, then publish ordinary sealed completion only if available.',
+    '- The supervisor never writes accepted progress or completion artifacts.',
+  ].join('\n');
+}
+
+function waitForCooperativeShutdown(input: {
+  handle: string;
+  cwd: string;
+  runBinding: SmokeRunBinding;
+  now?: () => number;
+  sleepMs?: (milliseconds: number) => void;
+  shutdownMs?: number;
+}): boolean {
+  const now = input.now ?? (() => Date.now());
+  const sleepMs = input.sleepMs ?? sleepSynchronously;
+  const deadline = now() + (input.shutdownMs ?? SMOKE_SHUTDOWN_TIMEOUT_MS);
+  let completionState = createSmokeCompletionObservationState();
+  while (now() < deadline) {
+    if (observeSmokeCancellationAcknowledgement(
+      input.runBinding.artifactDir,
+      input.runBinding.runId,
+    )) {
+      return true;
+    }
+    const observed = observeSmokeCompletionEvidence(input.runBinding, completionState);
+    completionState = observed.state;
+    if (observed.observation.publicationState === 'publish_complete_single') {
+      return true;
+    }
+    const remainingBeforeRead = deadline - now();
+    if (remainingBeforeRead <= 0) break;
+    readOrcaTerminal(input.handle, {
+      cwd: input.cwd,
+      limit: 0,
+      timeoutMs: boundedOperationTimeout(remainingBeforeRead),
+    });
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      break;
+    }
+    sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
+  }
+  return false;
+}
+
 async function runSmokeAttempt(options: CliOptions): Promise<number> {
   const issueBody = readIssueBody(options.issueBodyFile);
   const plan = resolveSmokeRequirement(issueBody);
@@ -844,38 +1099,20 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     emit({ ok: true, skipped: true, reason: plan.requirement }, options.json);
     return 0;
   }
-
   if (plan.scenarios.length === 0) {
-    const report: SmokeReport = {
-      result: 'FAIL',
-      issueNumber: options.issueNumber,
-      prNumber: options.prNumber,
-      headSha: options.headSha,
-      scenarios: [{
-        action: 'parse smoke-test-plan',
-        expected: 'at least one executable scenario',
-        observed: 'zero_parsed_scenarios',
-        outcome: 'fail',
-      }],
-      limitations: [],
-      trackedFilesUnmodified: true,
-      terminalCleanup: 'not_started',
+    const report = buildOperationalSmokeReport('FAIL', options, {
+      action: 'parse smoke-test-plan',
+      expected: 'at least one executable scenario',
+      observed: 'zero_parsed_scenarios',
       environmentNotes: ['smoke agent was not launched'],
-      nonPassCause: 'zero_parsed_scenarios',
-    };
+    });
+    report.nonPassCause = 'zero_parsed_scenarios';
     publishSmokeReport(report, options);
-    emit({
-      ok: false,
-      nonPassCause: 'zero_parsed_scenarios' satisfies SmokeNonPassCause,
-      reason: 'zero_parsed_scenarios',
-      terminalCreated: false,
-      published: !options.dryRun,
-      report,
-    }, options.json);
+    emit(buildSmokeRunResult(report, !options.dryRun, { terminalCreated: false }), options.json);
     return 1;
   }
 
-  const worktree = probeOrcaWorktree(options.cwd);
+  const worktree = probeOrcaWorktree(options.cwd, { timeoutMs: SMOKE_ORCA_OPERATION_TIMEOUT_MS });
   if (!worktree.ok) {
     const diagnostic = createSmokeControlPlaneDiagnostic({
       terminalAcquired: false,
@@ -883,240 +1120,300 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       outcomeCategory: worktree.outcomeCategory,
       controlPlaneCode: worktree.errorCode,
     });
-    const blocked: Partial<SmokeReport> = {
-      result: 'BLOCKED',
-      scenarios: [{
-        action: 'resolve orca worktree',
-        expected: 'cwd is Orca-managed',
-        observed: diagnostic?.cause ?? worktree.reason ?? 'blocked',
-        outcome: 'blocked',
-      }],
-      trackedFilesUnmodified: true,
-      terminalCleanup: 'not_started',
-      limitations: [],
-      environmentNotes: [diagnostic ? 'orca control-plane preflight unavailable' : 'orca worktree current failed'],
-      nonPassCause: diagnostic?.cause,
-      controlPlaneDiagnostic: diagnostic,
-    };
-    const normalized = normalizeSmokeReport(blocked, {
-      issueNumber: options.issueNumber,
-      prNumber: options.prNumber,
-      headSha: options.headSha,
-    });
-    if (!normalized.ok) {
-      fail(normalized.reason);
-    }
-    publishSmokeReport(normalized.report, options);
-    emit(buildSmokeRunResult(normalized.report, !options.dryRun), options.json);
-    return 1;
-  }
-
-  const gitHeadSha = resolveGitHead(options.cwd);
-  const headBinding = verifySmokeHeadBinding({
-    requestedHeadSha: options.headSha,
-    orcaHeadSha: worktree.headSha,
-    gitHeadSha,
-  });
-  if (!headBinding.ok) {
-    const blocked: Partial<SmokeReport> = {
-      result: 'BLOCKED',
-      scenarios: [{
-        action: 'bind smoke run to current checkout head',
-        expected: `orca/git head equals ${options.headSha}`,
-        observed: `${headBinding.reason}:${headBinding.observed}`,
-        outcome: 'blocked',
-      }],
-      trackedFilesUnmodified: true,
-      terminalCleanup: 'not_started',
-      limitations: [],
-      environmentNotes: ['head binding failed'],
-    };
-    const normalized = normalizeSmokeReport(blocked, {
-      issueNumber: options.issueNumber,
-      prNumber: options.prNumber,
-      headSha: options.headSha,
-    });
-    if (!normalized.ok) {
-      fail(normalized.reason);
-    }
-    publishSmokeReport(normalized.report, options);
-    emit(buildSmokeRunResult(normalized.report, !options.dryRun), options.json);
-    return 1;
-  }
-
-  const beforeStatus = gitPorcelain(options.cwd);
-  if (hasPreexistingTrackedDirtiness(beforeStatus)) {
-    const blocked: Partial<SmokeReport> = {
-      result: 'BLOCKED',
-      scenarios: [{
-        action: 'verify clean tracked worktree before smoke',
-        expected: 'no pre-existing tracked modifications',
-        observed: trackedPorcelainPaths(beforeStatus).join(', ') || 'tracked_dirty',
-        outcome: 'blocked',
-      }],
-      trackedFilesUnmodified: true,
-      terminalCleanup: 'not_started',
-      limitations: [],
-      environmentNotes: ['tracked worktree dirty before smoke launch'],
-    };
-    const normalized = normalizeSmokeReport(blocked, {
-      issueNumber: options.issueNumber,
-      prNumber: options.prNumber,
-      headSha: options.headSha,
-    });
-    if (!normalized.ok) {
-      fail(normalized.reason);
-    }
-    publishSmokeReport(normalized.report, options);
-    emit(buildSmokeRunResult(normalized.report, !options.dryRun), options.json);
-    return 1;
-  }
-  const beforeHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(beforeStatus));
-  const created = createOrcaTerminal({
-    cwd: options.cwd,
-    title: `smoke-${options.issueNumber}`,
-    command: 'cursor-agent',
-  });
-  if (!created.ok) {
-    const diagnostic = createSmokeControlPlaneDiagnostic({
-      terminalAcquired: false,
-      operation: created.operation,
-      outcomeCategory: created.outcomeCategory,
-      controlPlaneCode: created.errorCode,
-    });
-    const blocked: Partial<SmokeReport> = {
-      result: 'BLOCKED',
-      scenarios: [{
-        action: 'create Orca smoke terminal',
-        expected: 'terminal create succeeds',
-        observed: diagnostic?.cause ?? created.reason,
-        outcome: 'blocked',
-      }],
-      trackedFilesUnmodified: true,
-      terminalCleanup: 'not_started',
-      limitations: [],
-      environmentNotes: [diagnostic ? 'orca control-plane preflight unavailable' : 'orca terminal create failed'],
-      nonPassCause: diagnostic?.cause,
-      controlPlaneDiagnostic: diagnostic,
-    };
-    const normalized = normalizeSmokeReport(blocked, {
-      issueNumber: options.issueNumber,
-      prNumber: options.prNumber,
-      headSha: options.headSha,
-    });
-    if (!normalized.ok) {
-      fail(normalized.reason);
-    }
-    const report = attachPackProducerFields(normalized.report, {});
+    const report = attachControlPlaneDiagnostic(buildOperationalSmokeReport('BLOCKED', options, {
+      action: 'resolve orca worktree',
+      expected: 'cwd is Orca-managed',
+      observed: diagnostic?.cause ?? worktree.reason,
+      environmentNotes: ['smoke agent was not launched'],
+    }), diagnostic);
     publishSmokeReport(report, options);
     emit(buildSmokeRunResult(report, !options.dryRun), options.json);
     return 1;
   }
 
-  const handle = created.terminal.handle;
+  const headBinding = verifySmokeHeadBinding({
+    requestedHeadSha: options.headSha,
+    orcaHeadSha: worktree.headSha,
+    gitHeadSha: resolveGitHead(options.cwd),
+  });
+  if (!headBinding.ok) {
+    const report = buildOperationalSmokeReport('BLOCKED', options, {
+      action: 'bind smoke run to current checkout head',
+      expected: `orca/git head equals ${options.headSha}`,
+      observed: `${headBinding.reason}:${headBinding.observed}`,
+      environmentNotes: ['head binding failed'],
+    });
+    publishSmokeReport(report, options);
+    emit(buildSmokeRunResult(report, !options.dryRun), options.json);
+    return 1;
+  }
+
+  const beforeStatus = gitPorcelain(options.cwd);
+  if (hasPreexistingTrackedDirtiness(beforeStatus)) {
+    const report = buildOperationalSmokeReport('BLOCKED', options, {
+      action: 'verify clean tracked worktree before smoke',
+      expected: 'no pre-existing tracked modifications',
+      observed: trackedPorcelainPaths(beforeStatus).join(', ') || 'tracked_dirty',
+      environmentNotes: ['tracked worktree dirty before smoke launch'],
+    });
+    publishSmokeReport(report, options);
+    emit(buildSmokeRunResult(report, !options.dryRun), options.json);
+    return 1;
+  }
+  const beforeHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(beforeStatus));
+
   const runId = createSmokeRunIdentity();
   const artifactDir = resolveSmokeRunArtifactDir(options.cwd, runId);
-  ensureSmokeRunArtifactDir(artifactDir);
-  const terminalPhaseStartedAt = Date.now();
-  let terminalCleanup = 'pending';
+  const admission = preflightSmokeLifecycle({
+    repoRoot: options.cwd,
+    runId,
+    closeBoundHandle: (handle) => closeOwnedSmokeTerminal(handle, options.cwd).terminalCleanup,
+  });
+  if (!admission.admitted) {
+    const report = buildOperationalSmokeReport('BLOCKED', options, {
+      action: 'worker-smoke lifecycle preflight',
+      expected: 'safe stale state cleaned and one spawn admission granted',
+      observed: admission.reason ?? 'lifecycle_preflight_refused',
+      environmentNotes: admission.diagnostics,
+    });
+    publishSmokeReport(report, options);
+    emit(buildSmokeRunResult(report, !options.dryRun, { lifecycle: admission }), options.json);
+    return 1;
+  }
+
+  const lifecycleStartedAtMs = Date.now();
   try {
-    const prompt = buildSmokeAgentPrompt({
+    ensureSmokeRunArtifactDir(artifactDir);
+    createSmokeLifecycleReservation({
+      runId,
+      artifactDir,
+      issueNumber: options.issueNumber,
+      prNumber: options.prNumber,
+      headSha: options.headSha,
+      nowMs: lifecycleStartedAtMs,
+      createTimeoutMs: SMOKE_CREATE_TIMEOUT_MS,
+      scenarioCount: plan.scenarios.length,
+    });
+    markSmokeCreateInProgress(artifactDir);
+  } catch (error) {
+    releaseSmokeAdmission(options.cwd, runId);
+    const observed = error instanceof Error ? error.message : 'lifecycle_reservation_failed';
+    const report = buildOperationalSmokeReport('BLOCKED', options, {
+      action: 'reserve worker-smoke lifecycle before terminal creation',
+      expected: 'durable current-run reservation before any spawn side effect',
+      observed: scrubSmokeOutput(observed),
+      environmentNotes: ['terminal was not created'],
+    });
+    publishSmokeReport(report, options);
+    emit(buildSmokeRunResult(report, !options.dryRun, { terminalCreated: false }), options.json);
+    return 1;
+  }
+
+  let handle = '';
+  let terminalCleanup = 'pending';
+  let cleanupDiagnostic: SmokeControlPlaneDiagnostic | undefined;
+  let cleanupFinished = false;
+  let signalReason: string | undefined;
+  const onSigint = (): void => { signalReason = 'SIGINT'; };
+  const onSigterm = (): void => { signalReason = 'SIGTERM'; };
+  process.once('SIGINT', onSigint);
+  process.once('SIGTERM', onSigterm);
+
+  const cleanup = (reason: string, requestCancellation: boolean): ReturnType<typeof cleanupSmokeLifecycle> => {
+    let acknowledged = false;
+    if (requestCancellation && handle) {
+      const cancellationRecorded = writeSmokeCancelRequest({ artifactDir, runId, reason });
+      if (cancellationRecorded) {
+        acknowledged = waitForCooperativeShutdown({
+          handle,
+          cwd: options.cwd,
+          runBinding: { runId, artifactDir },
+        });
+      }
+    }
+    const result = cleanupSmokeLifecycle({
+      artifactDir,
+      runId,
+      reason,
+      requestCancellation,
+      cooperativeAcknowledgementObserved: acknowledged,
+      closeBoundHandle: (ownedHandle) => {
+        const close = closeOwnedSmokeTerminal(ownedHandle, options.cwd);
+        cleanupDiagnostic ??= close.diagnostic;
+        return close.terminalCleanup;
+      },
+    });
+    terminalCleanup = result.closeOutcome;
+    cleanupFinished = true;
+    releaseSmokeAdmission(options.cwd, runId);
+    return result;
+  };
+
+  try {
+    const created = createBoundedOrcaTerminal({
+      cwd: options.cwd,
+      title: `smoke-${options.issueNumber}`,
+      command: 'cursor-agent',
+      timeoutMs: SMOKE_CREATE_TIMEOUT_MS,
+    });
+    if (!created.ok) {
+      markSmokeCreateAmbiguous(
+        artifactDir,
+        scrubSmokeOutput(`${created.errorCode}:${created.reason}`),
+      );
+      releaseSmokeAdmission(options.cwd, runId);
+      const createOutcome = created.errorCode === 'orca_process_launch_failed'
+        ? 'process_launch_failed'
+        : created.errorCode === 'orca_empty_stdout'
+          ? 'empty_stdout'
+          : created.errorCode === 'orca_invalid_json'
+            ? 'invalid_json'
+            : 'supported_operation_failure';
+      const diagnostic = createSmokeControlPlaneDiagnostic({
+        terminalAcquired: false,
+        operation: 'terminal_create',
+        outcomeCategory: createOutcome,
+        controlPlaneCode: created.errorCode,
+      });
+      const report = attachControlPlaneDiagnostic(attachPackProducerFields(
+        buildOperationalSmokeReport('BLOCKED', options, {
+          action: 'create bounded Orca smoke terminal',
+          expected: `terminal handle returned within ${SMOKE_CREATE_TIMEOUT_MS}ms and durably bound`,
+          observed: diagnostic?.cause ?? `${created.errorCode}:ambiguous_unbound`,
+          terminalCleanup: 'ambiguous_unbound',
+          environmentNotes: admission.diagnostics,
+        }),
+        {},
+      ), diagnostic);
+      publishSmokeReport(report, options);
+      emit(buildSmokeRunResult(report, !options.dryRun, {
+        lifecycleState: 'ambiguous_unbound',
+        createElapsedMs: created.elapsedMs,
+      }), options.json);
+      return 1;
+    }
+
+    handle = created.terminal.handle;
+    bindSmokeTerminalHandle(artifactDir, handle);
+    const prompt = buildLifecyclePrompt(buildSmokeAgentPrompt({
       issueNumber: options.issueNumber,
       issueBody,
       prNumber: options.prNumber,
       headSha: options.headSha,
       plan,
       runBinding: { runId, artifactDir },
-    });
-    const remainingTerminalBudgetMs = Math.max(
-      0,
-      SMOKE_AGENT_WAIT_BUDGET_MS - (Date.now() - terminalPhaseStartedAt),
-    );
+    }), { runId, artifactDir }, plan.scenarios.length);
+    const absoluteDeadlineMs = lifecycleStartedAtMs + SMOKE_ABSOLUTE_CEILING_MS;
+    const absoluteRemaining = Math.max(0, absoluteDeadlineMs - Date.now());
     const deliveryResult = establishSmokePromptDelivery(handle, {
       cwd: options.cwd,
-      deadlineMs: remainingTerminalBudgetMs,
+      deadlineMs: Math.min(SMOKE_DELIVERY_TIMEOUT_MS, absoluteRemaining),
+      absoluteDeadlineMs,
       runBinding: { runId, artifactDir },
       prompt,
+      abortReason: () => signalReason,
     });
     if (!deliveryResult.ok) {
-      const close = closeOwnedSmokeTerminal(handle, options.cwd);
-      terminalCleanup = close.terminalCleanup;
-      const diagnostic = deliveryResult.controlPlaneDiagnostic ?? close.diagnostic;
-      const observed = diagnostic?.cause
+      const reason = deliveryResult.terminalReason
+        ?? deliveryResult.controlPlaneCause
         ?? deliveryResult.cause
         ?? 'prompt_delivery_unconfirmed';
+      const cleanupResult = cleanup(reason, true);
+      const diagnostic = deliveryResult.controlPlaneDiagnostic;
       const report = attachControlPlaneDiagnostic(buildOperationalSmokeReport(
         diagnostic ? 'BLOCKED' : 'FAIL',
         options,
         {
           action: 'establish smoke prompt delivery',
-          expected: 'publish-complete durable delivery evidence for current run',
-          observed,
+          expected: 'publish-complete current-run delivery before bounded delivery deadline',
+          observed: diagnostic?.cause ?? reason,
           terminalCleanup,
-          environmentNotes: ['completion wait was not started'],
+          environmentNotes: [
+            `lifecycle-clean=${cleanupResult.clean}`,
+            ...admission.diagnostics,
+          ],
         },
       ), diagnostic);
       if (!diagnostic && deliveryResult.cause) {
         report.nonPassCause = deliveryResult.cause;
       }
       publishSmokeReport(report, options);
-      emit(buildSmokeRunResult(report, !options.dryRun), options.json);
+      emit(buildSmokeRunResult(report, !options.dryRun, {
+        terminalReason: deliveryResult.terminalReason,
+        lifecycleCleanup: cleanupResult,
+      }), options.json);
       return 1;
     }
 
-    const completionBudgetMs = Math.max(
-      0,
-      SMOKE_AGENT_WAIT_BUDGET_MS - (Date.now() - terminalPhaseStartedAt),
-    );
     const waitResult = waitForSmokeChildCompletion(handle, {
       cwd: options.cwd,
-      deadlineMs: completionBudgetMs,
+      deadlineMs: SMOKE_ABSOLUTE_CEILING_MS,
       runBinding: { runId, artifactDir },
       ownedChildHandle: handle,
+      scenarioCount: plan.scenarios.length,
+      lifecycleStartedAtMs,
+      stallMs: SMOKE_PROGRESS_STALL_MS,
+      absoluteCeilingMs: SMOKE_ABSOLUTE_CEILING_MS,
+      abortReason: () => signalReason,
     });
     if (!waitResult.ok) {
-      const close = closeOwnedSmokeTerminal(handle, options.cwd);
-      terminalCleanup = close.terminalCleanup;
-      const diagnostic = waitResult.controlPlaneDiagnostic ?? close.diagnostic;
-      const observed = diagnostic?.cause
+      const reason = waitResult.terminalReason
         ?? waitResult.nonPassCause
-        ?? scrubGhFailureMessage(waitResult.error?.message ?? 'child_wait_failed');
+        ?? waitResult.error?.code
+        ?? 'child_wait_failed';
+      const diagnostic = waitResult.controlPlaneDiagnostic;
+      const cleanupResult = cleanup(reason, true);
       const report = attachControlPlaneDiagnostic(buildOperationalSmokeReport(
         diagnostic ? 'BLOCKED' : 'FAIL',
         options,
         {
-          action: 'wait for publish-complete smoke child completion',
-          expected: 'one sealed durable completion artifact for current run',
-          observed,
+          action: 'wait for progressing smoke child completion',
+          expected: 'legal progress before stall bound and sealed completion before absolute ceiling',
+          observed: diagnostic?.cause ?? reason,
           terminalCleanup,
+          limitations: waitResult.progress?.invalidEvents.slice(0, 10),
+          environmentNotes: [
+            `stall-ms=${SMOKE_PROGRESS_STALL_MS}`,
+            `absolute-ceiling-ms=${SMOKE_ABSOLUTE_CEILING_MS}`,
+            `lifecycle-clean=${cleanupResult.clean}`,
+          ],
         },
       ), diagnostic);
       if (!diagnostic && waitResult.nonPassCause) {
         report.nonPassCause = waitResult.nonPassCause;
       }
       publishSmokeReport(report, options);
-      emit(buildSmokeRunResult(report, !options.dryRun), options.json);
+      emit(buildSmokeRunResult(report, !options.dryRun, {
+        terminalReason: waitResult.terminalReason,
+        progress: waitResult.progress,
+        lifecycleCleanup: cleanupResult,
+      }), options.json);
       return 1;
     }
 
     const partial = waitResult.partial;
     if (!partial) {
-      const close = closeOwnedSmokeTerminal(handle, options.cwd);
-      terminalCleanup = close.terminalCleanup;
-      const report = attachControlPlaneDiagnostic(buildOperationalSmokeReport('BLOCKED', options, {
+      const cleanupResult = cleanup('missing_completion_partial', true);
+      const report = buildOperationalSmokeReport('BLOCKED', options, {
         action: 'consume publish-complete smoke child completion',
-        expected: 'durable completion artifact with parseable fenced report',
-        observed: close.diagnostic?.cause ?? 'missing_completion_partial',
+        expected: 'durable completion artifact with parseable report',
+        observed: 'missing_completion_partial',
         terminalCleanup,
-      }), close.diagnostic);
+        environmentNotes: [`lifecycle-clean=${cleanupResult.clean}`],
+      });
       publishSmokeReport(report, options);
       emit(buildSmokeRunResult(report, !options.dryRun), options.json);
       return 1;
     }
+
     const afterStatus = gitPorcelain(options.cwd);
     const afterHashes = hashTrackedPaths(options.cwd, trackedPorcelainPaths(afterStatus));
-    const mutated = detectTrackedImplementationMutation(beforeStatus, afterStatus, beforeHashes, afterHashes);
-
+    const mutated = detectTrackedImplementationMutation(
+      beforeStatus,
+      afterStatus,
+      beforeHashes,
+      afterHashes,
+    );
     if (mutated) {
       partial.result = 'FAIL';
       partial.trackedFilesUnmodified = false;
@@ -1135,25 +1432,22 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       prNumber: options.prNumber,
       headSha: options.headSha,
     });
+
     if (!normalized.ok && partial.result !== 'FAIL' && partial.result !== 'BLOCKED') {
-      const close = closeOwnedSmokeTerminal(handle, options.cwd);
-      terminalCleanup = close.terminalCleanup;
-      const report = attachControlPlaneDiagnostic(attachPackProducerFields(buildOperationalSmokeReport(
-        close.diagnostic ? 'BLOCKED' : 'FAIL',
-        options,
-        {
-          action: 'normalize smoke agent report',
-          expected: 'valid PASS evidence',
-          observed: close.diagnostic?.cause ?? normalized.reason,
-          terminalCleanup,
-        },
-      ), { terminalHandle: handle }), close.diagnostic);
+      const cleanupResult = cleanup('invalid_child_report', false);
+      const report = attachPackProducerFields(buildOperationalSmokeReport('FAIL', options, {
+        action: 'normalize smoke agent report',
+        expected: 'valid PASS evidence',
+        observed: normalized.reason,
+        terminalCleanup,
+        environmentNotes: [`lifecycle-clean=${cleanupResult.clean}`],
+      }), { terminalHandle: handle });
       const nonPassCause = classifyDeclaredScenarioNonPassCause({
         partial,
         agentActivityObserved: waitResult.agentActivityObserved,
         agentCompleted: true,
       });
-      if (!close.diagnostic && nonPassCause) {
+      if (nonPassCause) {
         report.nonPassCause = nonPassCause;
       }
       publishSmokeReport(report, options);
@@ -1164,34 +1458,36 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     const report: SmokeReport = normalized.ok
       ? attachPackProducerFields(normalized.report, { terminalHandle: handle })
       : attachPackProducerFields({
-          result: partial.result === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
-          issueNumber: options.issueNumber,
-          prNumber: options.prNumber,
-          headSha: options.headSha,
-          scenarios: partial.scenarios ?? [],
-          limitations: partial.limitations ?? [],
-          trackedFilesUnmodified: !mutated,
-          terminalCleanup: 'pending',
-          environmentNotes: partial.environmentNotes ?? [],
-        } as SmokeReport, { terminalHandle: handle });
+        result: partial.result === 'BLOCKED' ? 'BLOCKED' : 'FAIL',
+        issueNumber: options.issueNumber,
+        prNumber: options.prNumber,
+        headSha: options.headSha,
+        scenarios: partial.scenarios ?? [],
+        limitations: partial.limitations ?? [],
+        trackedFilesUnmodified: !mutated,
+        terminalCleanup: 'pending',
+        environmentNotes: partial.environmentNotes ?? [],
+      } as SmokeReport, { terminalHandle: handle });
 
-    const close = closeOwnedSmokeTerminal(handle, options.cwd);
-    terminalCleanup = close.terminalCleanup;
+    const cleanupResult = cleanup('child_completed', false);
     report.terminalCleanup = terminalCleanup;
-    const establishedDiagnostic = report.controlPlaneDiagnostic ?? close.diagnostic;
-    if (terminalCleanup !== 'closed_owned_handle') {
-      if (report.result === 'PASS' || close.diagnostic) {
-        report.result = close.diagnostic ? 'BLOCKED' : 'FAIL';
+    if (cleanupDiagnostic) {
+      attachControlPlaneDiagnostic(report, cleanupDiagnostic);
+    }
+    if (!cleanupResult.clean || (
+      terminalCleanup !== 'closed_owned_handle'
+      && terminalCleanup !== 'closed_owned_handle_already_absent'
+    )) {
+      if (report.result === 'PASS') {
+        report.result = 'FAIL';
       }
       report.scenarios.push({
         action: SMOKE_HARNESS_TERMINAL_CLOSE_ACTION,
-        expected: 'terminal close succeeds',
-        observed: close.diagnostic?.cause ?? terminalCleanup,
+        expected: 'owned terminal closes and lifecycle becomes clean',
+        observed: `${terminalCleanup};lifecycle-clean=${cleanupResult.clean}`,
         outcome: 'fail',
       });
     }
-    attachControlPlaneDiagnostic(report, establishedDiagnostic);
-
     if (report.result !== 'PASS' && !report.controlPlaneDiagnostic) {
       const nonPassCause = classifyDeclaredScenarioNonPassCause({
         partial: report,
@@ -1202,17 +1498,58 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
         report.nonPassCause = nonPassCause;
       }
     }
-
     publishSmokeReport(report, options);
     emit(buildSmokeRunResult(report, !options.dryRun, {
       orcaExecutable: resolveOrcaExecutable(),
       terminalHandle: handle,
+      progress: waitResult.progress,
+      lifecycleCleanup: cleanupResult,
     }), options.json);
     return report.result === 'PASS' ? 0 : 1;
-  } finally {
-    if (terminalCleanup === 'pending') {
-      terminalCleanup = closeOwnedSmokeTerminal(handle, options.cwd).terminalCleanup;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'handled_exception';
+    if (handle && !cleanupFinished) {
+      const cleanupResult = cleanup('handled_exception', true);
+      const report = buildOperationalSmokeReport('BLOCKED', options, {
+        action: 'handle smoke supervisor exception',
+        expected: 'durable cancellation and bound-only cleanup',
+        observed: scrubSmokeOutput(reason),
+        terminalCleanup,
+        environmentNotes: [`lifecycle-clean=${cleanupResult.clean}`],
+      });
+      publishSmokeReport(report, options);
+      emit(buildSmokeRunResult(report, !options.dryRun, { lifecycleCleanup: cleanupResult }), options.json);
+    } else if (!handle) {
+      try {
+        markSmokeCreateAmbiguous(
+          artifactDir,
+          scrubSmokeOutput(`handled_exception:${reason}`),
+        );
+      } catch {
+        // Reservation write failure is already a blocking preflight condition.
+      }
+      releaseSmokeAdmission(options.cwd, runId);
+      const report = buildOperationalSmokeReport('BLOCKED', options, {
+        action: 'handle pre-bind smoke supervisor exception',
+        expected: 'preserve ambiguous-unbound state without guessing a terminal handle',
+        observed: scrubSmokeOutput(reason),
+        terminalCleanup: 'ambiguous_unbound',
+      });
+      publishSmokeReport(report, options);
+      emit(buildSmokeRunResult(report, !options.dryRun, { lifecycleState: 'ambiguous_unbound' }), options.json);
     }
+    return 1;
+  } finally {
+    process.off('SIGINT', onSigint);
+    process.off('SIGTERM', onSigterm);
+    if (handle && !cleanupFinished) {
+      try {
+        cleanup('finally_cleanup', true);
+      } catch {
+        // A failed fallback remains blocking through the durable lifecycle registry.
+      }
+    }
+    releaseSmokeAdmission(options.cwd, runId);
   }
 }
 
@@ -1230,7 +1567,26 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   }
 }
 
-if (import.meta.url === new URL(process.argv[1] ?? '', 'file:').href) {
+const isDirectInvocation = import.meta.url === new URL(process.argv[1] ?? '', 'file:').href;
+
+// Keep lifecycle regressions inside the existing classified worker-smoke Vitest module.
+if (!isDirectInvocation && (process.env.VITEST === 'true' || process.env.VITEST_WORKER_ID)) {
+  const [{ describe, expect, it, vi }, { registerWorkerSmokeLifecycleRegressionTests }] =
+    await Promise.all([
+      import('vitest'),
+      import('./lib/worker-smoke-lifecycle-regressions.ts'),
+    ]);
+  registerWorkerSmokeLifecycleRegressionTests({
+    describe,
+    expect,
+    it,
+    vi,
+    establishSmokePromptDelivery,
+    waitForSmokeChildCompletion,
+  });
+}
+
+if (isDirectInvocation) {
   main().then((code) => {
     process.exitCode = code;
   });

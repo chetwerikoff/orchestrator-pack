@@ -83,6 +83,15 @@ export type OrcaTerminalCreateResult =
   | { ok: true; terminal: OrcaTerminalHandle }
   | OrcaOperationFailure;
 
+export interface OrcaRunOptions {
+  readonly cwd?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly executable?: string;
+  readonly runner?: typeof spawnSync;
+  readonly timeoutMs?: number;
+  readonly killSignal?: NodeJS.Signals;
+}
+
 const ORCA_CANDIDATES = ['orca-dev', 'orca-ide', 'orca'] as const;
 
 function requireStdout(result: ReturnType<typeof runProcessSync>): string {
@@ -90,6 +99,12 @@ function requireStdout(result: ReturnType<typeof runProcessSync>): string {
     throw new Error(result.stderr || result.error || 'process failed');
   }
   return result.stdout;
+}
+
+function errnoCode(error: unknown): string | undefined {
+  return error instanceof Error && 'code' in error
+    ? String((error as NodeJS.ErrnoException).code)
+    : undefined;
 }
 
 export function isOrcaSmokeControlPlaneCode(
@@ -152,12 +167,7 @@ export function resolveOrcaExecutable(env: NodeJS.ProcessEnv = process.env): str
 
 export function runOrcaJson<T>(
   args: readonly string[],
-  options: {
-    readonly cwd?: string;
-    readonly env?: NodeJS.ProcessEnv;
-    readonly executable?: string;
-    readonly runner?: typeof spawnSync;
-  } = {},
+  options: OrcaRunOptions = {},
 ): OrcaJsonResponse<T> {
   const runner = options.runner ?? spawnSync;
   const executable = options.executable ?? resolveOrcaExecutable(options.env);
@@ -169,6 +179,10 @@ export function runOrcaJson<T>(
       env: { ...process.env, ...options.env },
       encoding: 'utf8',
       maxBuffer: 16 * 1024 * 1024,
+      ...(options.timeoutMs === undefined ? {} : {
+        timeout: options.timeoutMs,
+        killSignal: options.killSignal ?? 'SIGKILL',
+      }),
     });
   } catch (error) {
     return {
@@ -182,6 +196,17 @@ export function runOrcaJson<T>(
     };
   }
   if (result.error) {
+    if (errnoCode(result.error) === 'ETIMEDOUT') {
+      return {
+        ok: false,
+        operation,
+        outcomeCategory: 'supported_operation_failure',
+        error: {
+          code: 'orca_operation_timeout',
+          message: `orca ${args.join(' ')} exceeded ${options.timeoutMs ?? 0}ms`,
+        },
+      };
+    }
     return {
       ok: false,
       operation,
@@ -229,12 +254,13 @@ export function runOrcaJson<T>(
 
 export function probeOrcaWorktree(
   cwd: string,
-  options: { readonly executable?: string; readonly runner?: typeof spawnSync } = {},
+  options: { readonly executable?: string; readonly runner?: typeof spawnSync; readonly timeoutMs?: number } = {},
 ): OrcaWorktreeProbeResult {
   const response = runOrcaJson<OrcaWorktreeCurrent>(['worktree', 'current'], {
     cwd,
     executable: options.executable,
     runner: options.runner,
+    timeoutMs: options.timeoutMs,
   });
   if (!response.ok) {
     return {
@@ -290,11 +316,17 @@ export function createOrcaTerminal(
     readonly command: string;
     readonly executable?: string;
     readonly runner?: typeof spawnSync;
+    readonly timeoutMs?: number;
   },
 ): OrcaTerminalCreateResult {
   const response = runOrcaJson<{ terminal?: OrcaTerminalHandle }>(
     ['terminal', 'create', '--worktree', 'active', '--title', input.title, '--command', input.command],
-    { cwd: input.cwd, executable: input.executable, runner: input.runner },
+    {
+      cwd: input.cwd,
+      executable: input.executable,
+      runner: input.runner,
+      timeoutMs: input.timeoutMs,
+    },
   );
   const handle = response.result?.terminal?.handle?.trim();
   if (!response.ok || !handle) {
@@ -312,7 +344,7 @@ export function createOrcaTerminal(
 export function sendOrcaTerminal(
   handle: string,
   text: string,
-  options: { readonly cwd?: string; readonly executable?: string; readonly runner?: typeof spawnSync } = {},
+  options: OrcaRunOptions = {},
 ): OrcaJsonResponse {
   return runOrcaJson(
     ['terminal', 'send', '--terminal', handle, '--text', text, '--enter'],
@@ -322,7 +354,7 @@ export function sendOrcaTerminal(
 
 export function submitOrcaTerminalComposer(
   handle: string,
-  options: { readonly cwd?: string; readonly executable?: string; readonly runner?: typeof spawnSync } = {},
+  options: OrcaRunOptions = {},
 ): OrcaJsonResponse {
   return runOrcaJson(
     ['terminal', 'send', '--terminal', handle, '--enter'],
@@ -332,12 +364,9 @@ export function submitOrcaTerminalComposer(
 
 export function readOrcaTerminal(
   handle: string,
-  options: {
-    readonly cwd?: string;
+  options: OrcaRunOptions & {
     readonly cursor?: number;
     readonly limit?: number;
-    readonly executable?: string;
-    readonly runner?: typeof spawnSync;
   } = {},
 ): OrcaJsonResponse<OrcaTerminalReadResult> {
   const args = ['terminal', 'read', '--terminal', handle];
@@ -352,23 +381,20 @@ export function readOrcaTerminal(
 
 export function waitOrcaTerminal(
   handle: string,
-  input: {
+  input: OrcaRunOptions & {
     readonly for: 'exit' | 'tui-idle';
     readonly timeoutMs: number;
-    readonly cwd?: string;
-    readonly executable?: string;
-    readonly runner?: typeof spawnSync;
   },
 ): OrcaJsonResponse {
   return runOrcaJson(
     ['terminal', 'wait', '--terminal', handle, '--for', input.for, '--timeout-ms', String(input.timeoutMs)],
-    input,
+    { ...input, timeoutMs: input.timeoutMs + 1_000 },
   );
 }
 
 export function closeOrcaTerminal(
   handle: string,
-  options: { readonly cwd?: string; readonly executable?: string; readonly runner?: typeof spawnSync } = {},
+  options: OrcaRunOptions = {},
 ): OrcaJsonResponse {
   return runOrcaJson(['terminal', 'close', '--terminal', handle], options);
 }

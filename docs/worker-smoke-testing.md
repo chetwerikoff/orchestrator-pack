@@ -1,15 +1,19 @@
-# Worker smoke testing (Issue #1061)
+# Worker smoke testing (Issues #1061 and #1138)
 
-Workers prove operator-visible behavior with a **head-bound Orca smoke run** before `ready_for_review`. CI remains mandatory and separate.
+Workers prove operator-visible behavior with a **head-bound Orca smoke run** before
+`ready_for_review`. CI remains mandatory and separate. Issue #1138 adds progress-aware
+deadlines, durable spawn state, cooperative cancellation, deterministic recovery, and an
+orthogonal lifecycle-cleanliness gate without changing Browser-GPT transport or smoke report
+authority.
 
 ## When smoke is required
 
 | Issue body signal | Worker gate |
 |---|---|
 | No `smoke-test-plan` fence + `smoke-plan-floor` grandfather marker | Smoke not required (legacy queue only) |
-| No `smoke-test-plan` fence on action-producing Issue without grandfather marker | Smoke required; missing plan blocks handoff |
+| No `smoke-test-plan` fence on an action-producing Issue without grandfather marker | Smoke required; missing plan blocks handoff |
 | `smoke-test-plan` with `not-applicable: true` + reason | Smoke skipped |
-| `smoke-test-plan` with scenarios | Smoke required for current PR head |
+| `smoke-test-plan` with scenarios | Smoke required for the current PR head |
 
 New action-producing tasks must declare a plan during authoring:
 
@@ -30,190 +34,201 @@ worker-smoke-run run \
   --cwd "$PWD"
 ```
 
-Lifecycle:
+The supported lifecycle is:
 
-1. `orca worktree current --json` must resolve the worker cwd to the existing Orca-managed worktree.
-2. `orca terminal create --worktree active --command "cursor-agent"` captures one owned handle.
-3. Worker sends the smoke prompt, waits/reads through Orca terminal surfaces, parses the `worker-smoke-report` block.
-4. Worker closes only `orca terminal close --terminal <owned-handle>` **before** publishing the PR comment; cleanup result is recorded in the report.
-5. Pack publishes a top-level PR comment via `gh pr comment` (through pack `scripts/gh`). Smoke-owned `gh` children receive only the supported parent auth/config carriers (`GH_TOKEN` / `GITHUB_TOKEN`, enterprise token variants, `GH_HOST`, `GH_CONFIG_DIR`, `XDG_CONFIG_HOME`, `HOME`, `USERPROFILE`) — not the full parent environment. `GH_REPO` is intentionally not forwarded because it can redirect smoke-owned GitHub operations away from the bound worktree.
+1. `orca worktree current --json` positively binds the supplied cwd to the existing
+   Orca-managed worktree.
+2. A smoke-only admission lock is acquired. Deterministic preflight classifies and safely
+   cleans prior worker-smoke state before any new child is created.
+3. The run id, run directory, and `lifecycle.json` reservation are durably written before
+   terminal creation. The create subprocess has a finite timeout.
+4. A successful create response must return a terminal handle. That handle is written to the
+   same registry before prompt delivery; no title/list/recency heuristic may replace it.
+5. Publish-complete delivery and sealed current-run completion retain the Issue #1115 contract.
+6. After delivery, only legal child-produced declared-scenario transitions refresh the stall
+   deadline. A separate absolute safety ceiling is never reset.
+7. Every terminal path converges on the same cancellation/cleanup routine. Only the recorded
+   handle may be closed. Operator-action files are tombstoned and `terminal.json` records the
+   result even when no PR smoke report is published.
+8. The PR comment is published only after owned-terminal cleanup. `gate-check` independently
+   requires both current-head smoke/CI evidence and clean lifecycle state.
 
-## Pack-generated non-PASS causes
+## Report and control-plane semantics
 
-Structured `worker-smoke-run` JSON distinguishes at least:
+Top-level `PASS | FAIL | BLOCKED`, current-head report selection, receipt/provenance checks, and
+latest-same-head revocation remain unchanged. Pack-generated non-PASS causes continue to include
+zero parsed scenarios, missing/invalid agent reports, and executed scenario failures.
 
-| `nonPassCause` | Meaning |
+Issue #1125 control-plane classification also remains unchanged:
+
+| Phase | Stable cause |
 |---|---|
-| `zero_parsed_scenarios` | Required plan parsed to zero executable scenarios; no Orca terminal was created |
-| `missing_agent_report` | Agent activity was observed but no parseable `worker-smoke-report` block was found |
-| `executed_scenario_failure` | A valid report shows one or more declared scenarios ran and failed |
+| `worktree current` or terminal create cannot launch, returns empty stdout, or returns malformed JSON before a handle is acquired | `orca_control_plane_unavailable_preflight` |
+| send/read/submit/close returns a recognized channel code after a handle is acquired | `orca_control_plane_lost_mid_smoke` |
 
-Top-level `PASS | FAIL | BLOCKED` semantics are unchanged.
+`orca worktree current` is still the only positive worktree authority. The harness does not
+restart Orca, reconnect, discover sockets, select another worktree, or promote arbitrary valid
+JSON errors into a control-plane cause.
 
-## Orca control-plane failure classification
+## Delivery and completion authority
 
-Issue #1125 adds two phase-aware, pack-owned causes without changing positive worktree authority:
+Each attempt has one run identity. Delivery requires `delivery.sealed.json` bound to that run;
+`terminal send` success alone is not proof. Ambiguous delivery never authorizes a full-prompt
+resend. The existing visible-bracketed-paste recovery may submit Enter without re-sending text.
+Delivery establishment is separately bounded to **10 minutes** and cannot be extended by scenario
+progress that has not begun.
 
-| Phase | Classified evidence | Stable cause |
-|---|---|---|
-| Before an owned terminal is acquired | `worktree current` or `terminal create` cannot launch, returns empty stdout, or returns invalid JSON | `orca_control_plane_unavailable_preflight` |
-| After an owned terminal is acquired | `terminal send`, `terminal read`, composer submit, or `terminal close` returns one of the existing exact channel codes (`channel_stale_handle`, `channel_lookup_empty`, `channel_control_unavailable`, `channel_control_overwritten`) | `orca_control_plane_lost_mid_smoke` |
-
-The structured diagnostic has one closed shape everywhere it appears: immediate `run --json`, the published `worker-smoke-report`, and current-head `gate-check` output.
+Completion is accepted only from one publish-complete current-run pair:
 
 ```text
-cause: <one stable phase cause>
-evidence: <1..3 ordered canonical key=value entries>
-remediation: <fixed pack-owned operator instruction>
+completion-<sha256>.body
+completion-<sha256>.sealed.json
 ```
 
-The evidence keys are limited to `operation`, `outcome`, and (only for recognized post-acquisition loss) `control_plane_code`. There are at most three entries; each entry and the remediation are at most 256 UTF-8 bytes. Noncanonical, reordered, duplicated, oversized, or mismatched payloads are rejected rather than truncated. Classified output never embeds Orca stdout/stderr, upstream prose, runtime paths, command lines, socket/process metadata, or token-like values.
+The seal must bind the current run and exact body digest. Partial bytes, PTY text, in-memory
+lookalikes, wrong-run artifacts, malformed reports, and duplicate terminalizations do not become a
+PASS. PTY reads remain secondary liveness/diagnostic evidence only.
 
-Classification is deliberately narrow:
+## Finite scenario progress and deadlines
 
-- `orca worktree current` remains the **only** positive authority that the supplied cwd is the Orca-managed worktree. `ORCA_*` environment values cannot authorize, skip, or advance the run.
-- Valid JSON errors outside the exact recognized channel-code set retain their pre-existing operation-specific fallback. They are not promoted into either phase cause.
-- If the initiating send/read/submit operation and cleanup both fail, the initiating phase cause wins the single cause slot. Cleanup stays separately visible through `terminal-cleanup` and remains blocking.
-- The harness does not retry, restart, reconnect, discover sockets/processes, or select another worktree. Recovery is operator-owned: verify Orca/CLI availability for preflight loss; restart Orca and rerun the current-head smoke for mid-smoke loss.
+After delivery, the child appends progress events to `progress.ndjson`. For each Issue-declared
+scenario ordinal, the only accepted sequence is:
 
+```text
+not_started -> started -> terminal(pass|fail|blocked|skipped)
+```
 
-## Child-wait delivery and completion
+An event advances progress only when it is durable, binds the current run, names the next declared
+ordinal, and is the next legal transition. The following never refresh stall age:
 
-Issue #1115 owns the parent wait contract from prompt delivery through publish-complete child completion.
+- wrong-run or stale bytes;
+- unknown ordinals;
+- duplicate or backward transitions;
+- terminal-before-start, post-terminal, or non-monotonic transitions;
+- free-form milestones, heartbeats, mtime/byte growth, PTY chatter, or process liveness;
+- anything written by the supervisor.
 
-- Each smoke attempt creates one ephemeral **run identity** before send. Delivery and completion evidence must bind to that same run.
-- **Delivery** requires publish-complete durable evidence (for example `delivery.sealed.json` under the run artifact directory). `orca terminal send` success alone is not delivery proof. Ambiguous prior delivery never authorizes a **full-prompt** resend; optional resend is allowed only on definite non-delivery (`terminal_send_rejected`, `prompt_not_accepted`). During delivery establishment the parent may **nudge composer submit** (`terminal send --enter` only) when PTY shows an unsubmitted bracketed paste and the current run still lacks `delivery.sealed.json` — this submits the already-inserted buffer, not a second prompt copy. Exhaustion yields `prompt_delivery_unconfirmed`, owned-terminal cleanup, and no completion wait.
-- **Completion** is accepted only from a **publish-complete** durable artifact for the current run (`completion-<bodySha256>.body` + `completion-<bodySha256>.sealed.json` with matching `runId` and `bodySha256`; in-progress bytes may use `completion.pending.body` only). The prompt asks the child to copy its whole `worker-smoke-report` block — delimiters included — into the body file, and to hash exactly the bytes it writes there. The consumer accepts the report **with or without** the fence delimiters: the body file is dedicated, create-only, and content-addressed, so the delimiters disambiguate nothing that the seal has not already established. A body carrying no parseable verdict, or one carrying pack-owned control-plane fields, is still refused on either shape. The fence stays **required** where a report is extracted from a PR comment. Each terminalization must use new content-addressed filenames; competing same-run seals are observable as duplicate even on first parent poll. Partial bytes before the seal remain pending and are not classified as PASS, unfenced, or duplicate. One valid seal consumes `PASS | FAIL | BLOCKED`; duplicate same-run terminalizations yield `agent_report_duplicate`; malformed sealed bodies yield `agent_report_unfenced`; no sealed completion at the shared deadline yields `agent_report_timeout`.
-- Grounded child exit/idle witnesses may yield `agent_exited_without_report` or `agent_idle_without_report` only when capture-backed on the production path; otherwise the timeout fallback applies.
-- Self/unowned handle binding is refused locally (`agent_wait_self_handle`, `agent_wait_unowned_handle`). Known untrustworthy control-plane channels preserve upstream causes without handle re-derivation or smoke verdict synthesis.
-- `orca terminal read` is secondary liveness/diagnostic only; suppressing PTY bytes must not change the terminal class when durable artifact evidence is unchanged.
-- Delivery, completion publication/consumption, negative-terminal checks, and bounded polling share one terminal-phase budget (<= 30 minutes) started at owned-terminal creation.
+Production defaults:
 
-### Unsubmitted composer paste (delivery stall)
+| Bound | Default | Meaning |
+|---|---:|---|
+| terminal create | 60 seconds | `spawnSync` cannot block the parent indefinitely |
+| delivery | 10 minutes | delivery must seal before scenario waiting starts |
+| progress stall | 25 minutes | no accepted declared-scenario transition during this interval terminates as `progress_stall` |
+| absolute lifecycle ceiling | 4 hours | terminates as `absolute_safety_ceiling`; progress never resets it |
+| cooperative shutdown | 2 minutes | bounded wait for child acknowledgement or sealed completion before handle close |
 
-Recurring Cursor/TUI defect when `worker-smoke-run` delivers a large smoke prompt through `orca terminal send --text … --enter` (`scripts/lib/orca-cli.ts`): Orca reports send success, but the composer keeps the prompt as an **unsubmitted** bracketed paste and the turn does not start until the line is submitted. The initial `--enter` is absorbed by bracketed-paste mode instead of submitting the composer.
+The absolute ceiling starts with lifecycle reservation/create and is not granted again after
+another phase. A legal slow plan may therefore run beyond the former 30-minute wall, while true
+stall and absolute-ceiling outcomes remain mechanically distinct.
 
-**Symptom**
+## Child-only progress and cancellation protocol
 
-- PTY/composer shows `→ [Pasted text #1 +NNN lines]` — full prompt visible, not submitted.
-- No spinner, no `Run Everything` progress, no tool output.
-- `.orca-worker-smoke/runs/<runId>/` stays **empty** (no `delivery.sealed.json`, no completion seals).
-- Smoke parent is still running and polling; owned handle is still open — the stall does **not** clear without a composer submit.
+The smoke prompt names the run-local progress, cancel-request, and acknowledgement paths. The
+registered child must:
 
-This has recurred across multiple Cursor smoke sessions.
+1. append `started` before each declared scenario;
+2. append one terminal outcome after that scenario;
+3. check `cancel-request.json` between scenarios, before each new Browser-GPT turn, and immediately
+   after an already-started turn returns;
+4. after cancellation, start no new scenario or turn and write current-run cancellation
+   acknowledgement or ordinary sealed completion.
 
-**Automated recovery (delivery phase)**
+The supervisor may create the run, deliver/nudge the prompt, observe durable artifacts, write the
+cancel request, wait, and clean the bound child. It has no production path that writes accepted
+progress or completion. Browser-GPT send-once, owned-tab, sibling-independence, and final-capture
+behavior remain owned by Issues #1120 and #1140 and are not reimplemented here.
 
-`establishSmokePromptDelivery` polls the owned terminal and current-run artifact directory on each cycle within the shared terminal-phase budget. When **both** hold:
+## Durable spawn state and ambiguity recovery
 
-1. PTY shows an unsubmitted bracketed paste (`observeSmokeUnsubmittedComposerPaste`), **and**
-2. `delivery.sealed.json` for the **current run** is still absent,
+`lifecycle.json` records a finite per-run state such as reservation, create in progress, bound,
+ambiguous unbound, cleanup pending, clean, or cleanup failed. It is not a lease, daemon, heartbeat,
+global process database, or general scheduler.
 
-the parent issues `submitOrcaTerminalComposer` — `orca terminal send --enter` with **no** `--text`. That submits the single buffer already in the composer; it is **not** a full-prompt resend and does not duplicate the prompt text. Repeated Enter nudges are safe and may occur on subsequent polls until delivery seals or the budget expires. Nudges are scoped to the current `runId` and never exceed the terminal-phase deadline.
+When create times out, is cancelled, returns no output, returns malformed output, or otherwise
+cannot prove a handle, the reservation becomes `ambiguous_unbound`. On a later supported preflight
+it may become `abandoned_unbound` only when all current-run evidence says execution never began:
 
-r01 ambiguity rules are unchanged: without the paste+no-seal pair, the parent does not nudge; ambiguous send failures still do not authorize full-prompt resend.
+- no handle was durably bound;
+- no delivery seal exists;
+- no accepted progress exists;
+- no completion seal or cancellation acknowledgement exists.
 
-**PTY visibility limit.** Paste detection and Enter-nudge use only **visible PTY bytes** from `orca terminal read`. If Orca drops or withholds scrollback (for example when the host window is minimized — see **Owned-handle supervision** below), the parent cannot see the paste affordance, nudges do not fire, and the attempt still consumes the terminal-phase budget until **`prompt_delivery_unconfirmed`**. The failure class is unchanged from the pre-automation case; only recovery is PTY-dependent, and operator manual submit remains the fallback in that slice.
+The original ambiguity diagnostic remains durable. Any unattributable terminal is left alone:
+without a bound handle the parent never delivered the prompt, so it neither adopts nor kills that
+terminal. Any delivery/execution evidence forbids abandonment and keeps the state blocking.
 
-**Grounded example (2026-07-29, PR #1132 head `447a908b`)**
+## Cancellation, cleanup, and restart recovery
 
-Run `5dc077c7-6bec-4f0d-b0dd-11986a7f0d74`, terminal `term_a8bcd171-5162-4fc1-8b91-b2606b2f9216`:
+Cancellation, operator stop, supported termination signal, delivery exhaustion, progress stall,
+absolute ceiling, child verdict, handled exception, and restart recovery use one ownership-scoped
+cleanup contract:
 
-| Time (UTC) | Event |
-|---|---|
-| 17:33:30 | Owned terminal created; `terminal send` returned success |
-| 17:33:30 – 17:44:06 | Paste line visible, no spinner/output, run directory empty (~10½ minutes) |
-| 17:44:06 | `delivery.sealed.json` appeared after composer submit (operator Enter before automation landed) |
-| 17:46:17 | Completion seal written; **PASS** published to #1132; owned handle closed |
+1. stop admitting new scenario work;
+2. write an idempotent current-run cancel request when an active child is being stopped;
+3. wait at most the shutdown bound for child acknowledgement/completion;
+4. close only handles durably recorded in that run registry;
+5. tombstone `live/OPERATOR-ACTION-*.txt` before declaring the run clean;
+6. write `terminal.json` with reason, acknowledgement observation, close outcome, and cleanup
+   result;
+7. remain idempotent on retry: a clean/abandoned entry is not closed or terminalized again.
 
-That run's PASS required manual Enter because automation was not yet deployed. With the composer-nudge path, the parent should recover without operator interaction.
+No terminal-list lookup, title matching, process scan, or recency heuristic is cleanup authority.
+Unrelated or unattributable Browser-GPT work is never killed, adopted, or made blocking merely
+because it exists.
 
-**If automation does not recover**
+The earlier documentation-only caveat is revised as follows: automatic harness teardown now has a
+candidate implementation in `worker-smoke-run`, but the implementation PR must remain draft until
+a current-head reduced-threshold lifecycle canary and required CI pass. A failed or unavailable
+canary is not permission to claim runtime verification or mark the PR ready.
 
-The parent keeps polling and nudging within the **shared terminal-phase budget** (<= 30 minutes from owned-terminal create). If `delivery.sealed.json` never appears, exhaustion yields **`prompt_delivery_unconfirmed`**, owned-terminal cleanup, and **no completion wait**.
+## Deterministic preflight and concurrent starts
 
-**Operator fallback**
+Before create, preflight performs one bounded classify/clean/re-evaluate pass:
 
-1. **Recognize the stall** — unsubmitted paste visible **and** no `delivery.sealed.json` under `.orca-worker-smoke/runs/<runId>/`.
-2. **Prefer waiting on automation** — the parent nudges Enter on that pair; additional Enter presses only submit the same buffer.
-3. **If the budget is nearly exhausted with no seal**, press Enter in the smoke tab or restart smoke on the current head.
-4. **If `delivery.sealed.json` already exists**, do not interact with the terminal — wait on completion artifacts only.
+- stale smoke admission owned by a dead supervisor may be removed;
+- safely removable operator files are tombstoned;
+- expired unbound create reservations are classified and abandoned only under the evidence rules
+  above;
+- bound/incomplete prior runs are closed by their recorded handle only;
+- corrupt state, failed close, executable ambiguous state, or unsafe routing state remains blocking.
 
-Durable artifacts remain authoritative for delivery/completion classification; the paste+no-seal pair is the delivery-phase trigger because the prompt is observably unsubmitted, not because of prompt duplication risk.
-
-## Owned-handle supervision
-
-When a worker supervises a child agent in an Orca terminal, binding discipline is behavioral —
-pack scripts take the owned handle from `orca terminal create`, but a supervisor that re-binds to
-its own terminal after runtime restart can poll forever (2026-07-29 incident).
-
-- **Handle binding.** Record the owned handle from `orca terminal create` **immediately** and use
-  **only** that handle for send, read, and close on the supervised child.
-- **No re-derivation.** **MUST NOT** replace a lost or missing owned handle by searching
-  `orca terminal list` (or equivalent) by title, workspace, position, recency, or any other
-  heuristic — including after `runtime_unavailable`, Orca restart, or handle rotation.
-- **Self-monitoring is a binding error.** If the supervised handle equals your own terminal,
-  treat it as **failed binding**, not as "child still running". **Fail closed** and report; do
-  not keep polling.
-- **Stale handle = lost run.** If the handle is invalid or unreadable, the supervised run is
-  **lost**. Stop, report what is known, and do not guess a replacement or attach to an unrelated
-  terminal.
-- **Terminal text is not completion.** Visible TUI output may inform liveness only as a
-  **secondary** hint. It is **not** a completion signal: the PTY channel is unsigned (every
-  agent TUI looks alike), has no reliable negative state (absence of a marker means working, wrong
-  output, or dead), and is lossy (Orca may drop PTY bytes when the window is collapsed).
-  **Completion** requires a **durable artifact** the child produces (e.g. the `worker-smoke-report`
-  block).
-
-## Run cancellation and cleanup
-
-Cancellation or abortion of a smoke run (operator stop, supervisor stop, rate-limit stop) is a
-**first-class terminal path** imposing the same cleanup obligations on the supervisor as report
-publication and prompt-delivery exhaustion. Skipping report publication never waives these duties.
-**Note:** Harness-side automatic teardown is not yet implemented; until it lands, the supervising
-worker performs these cleanup steps manually on every cancellation.
-
-- **Cleanup obligations on cancellation.** The supervisor **MUST** perform the following when a
-  run is cancelled: close every **owned child terminal** recorded in the run's registry (same
-  discipline as in **Owned-handle supervision**); terminate in-flight invocations gracefully
-  (allow a live browser turn to reach a terminal outcome; start nothing new); remove or tombstone
-  the run's `live/OPERATOR-ACTION-*.txt` files to prevent stale operator misdirection; and record
-  a **durable cancellation artifact** in the run directory (e.g. the existing `HANDOFF-CANCELLED.txt`
-  pattern). Cleanup is scoped to PIDs and terminal handles recorded in the run's registry — the
-  supervisor **MUST NOT** kill foreign or unattributable live browser-turn processes that may
-  belong to sibling invocations.
-
-- **Registry of spawned children.** The supervisor **MUST** record every spawned child at spawn
-  time as a run artifact: terminal handle, PID when known, and run id. **Ordering:** The run id
-  and artifact directory (including the registry file itself) **MUST** exist before the child
-  terminal is created; the registry entry for a child **MUST** be written before or atomically
-  with spawn — no window in which a spawned child is unregistered. Cleanup on any terminal path
-  (publish, exhaustion, cancellation) iterates that **registry**, not memory or terminal-list
-  heuristics (forbidden per **Owned-handle supervision**).
-
-- **Fail-closed start guard.** A new run **MUST NOT** start while any of these conditions hold:
-  live children recorded in prior run registries exist, or stale operator-action files remain
-  under prior run directories. The guard detects and cleans up these artifacts first (only
-  terminating processes recorded in run registries); if cleanup fails, the run refuses to start.
-  When foreign or unattributable live browser-turn processes are detected, the guard **MUST**
-  fail closed, refuse the run start, and report the finding — such processes may belong to
-  legitimate sibling invocations and **MUST NOT** be killed.
-
-- **Supervisor execution boundary.** The plan is executed only by the harness-spawned child
-  process; the supervisor **MUST NOT** execute the plan inline. The supervisor may issue nudges on
-  the **owned handle** (e.g. composer submit for delivery stalls as in **Unsubmitted composer
-  paste**) or pre-flight probes if the doc's existing flow allows, but never runs the plan itself.
-
-## Orca contract evidence
-
-`scripts/lib/orca-cli.ts` consumes concrete Orca JSON fields (`result.worktree.*`, `result.terminal.handle`, `result.lines`). Capture-backed producer evidence lives under `tests/external-output-references/captures/orca-worker-smoke/` (grounding commit `89968a10614d0e5f5a6b7805c81dccc3a1b5110b` per Issue #1061).
-
-## Orca executable selection
-
-Use `ORCA_CLI_COMMAND` when exported. Otherwise prefer `orca-dev`, then `orca-ide`, then `orca`. Do not assume `/usr/bin/orca` is the CLI on Linux.
+Admission uses a worker-smoke-only create-once lock. At most one concurrent `worker-smoke-run run`
+may cross the spawn boundary. The loser refuses without touching the winner. This is not a global
+Browser-GPT lock and does not serialize unrelated browser work.
 
 ## Readiness gate
 
-`pack-worker-report --state ready_for_review` invokes `worker-smoke-run gate-check` and fails closed when smoke is required and the current head lacks a bound `PASS` with `terminal-cleanup: closed_owned_handle`. The latest same-head FAIL/BLOCKED report revokes an earlier PASS. Issue binding resolves from `Closes #N` on the PR when `AO_ISSUE_NUMBER` is unset.
+`pack-worker-report --state ready_for_review` invokes `worker-smoke-run gate-check`. Handoff is
+allowed only when all independent predicates hold:
 
-Production adoption aligns with Issue #1038: pre-cutover AO workers that are not Orca-managed remain `BLOCKED` rather than faking compliance via another checkout.
+- the Issue requires smoke and the current PR head has a fully covering pack-produced PASS;
+- required CI is green;
+- the owned terminal was closed and report provenance/receipt validate;
+- there is no active admission, live bound worker-smoke child, incomplete teardown, executable
+  ambiguous state, corrupt registry, or unsafe smoke operator-routing file.
+
+A same-head PASS cannot bypass unclean lifecycle state. Operator cancellation may omit a new FAIL
+comment, but it still must produce clean durable lifecycle state before admission or handoff.
+
+## Runtime verification and rollback
+
+Run the focused current-head canary with controllable clocks before marking the PR ready:
+
+```bash
+npx vitest run scripts/worker-smoke.test.ts -t '#1138'
+```
+
+The canary must visibly cover: a sealed PASS after virtual elapsed time beyond 30 minutes, a true
+stall, continuously progressing absolute-ceiling termination, create timeout ambiguity, concurrent
+admission, restart recovery, idempotent bound-only close, and stale operator-file tombstoning.
+A real Orca smoke run remains required when the binding Issue's smoke plan requires it.
+
+Rollback is allowed only after current lifecycle state is clean. Do not roll back while a bound
+child, active admission, incomplete teardown, or executable ambiguous reservation remains. Durable
+historical and `abandoned_unbound` diagnostics may remain; they are non-blocking audit records.
+
+## Orca executable selection
+
+Use `ORCA_CLI_COMMAND` when exported. Otherwise prefer `orca-dev`, then `orca-ide`, then `orca`.
+Do not assume `/usr/bin/orca` is the CLI on Linux.
