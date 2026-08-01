@@ -21,6 +21,7 @@ import { destinationIdentity } from './coordination.ts';
 import {
   turnExitCode,
   type FailureScope,
+  type PreSendComposerFailureCause,
   type TurnResultV1,
   type TurnState,
 } from './contracts.ts';
@@ -73,7 +74,26 @@ const FRESH_CONVERSATION_LANDING_MS = DISPATCH_OBSERVATION_MS;
 const STABILITY_READ_DELAY_MS = 1_000;
 const COMPLETION_CONFIRM_POLL_MS = 1_000;
 const DIAGNOSTIC_HEAD_CHARS = 300;
-const MAX_LOCAL_READ_WAIT_MS = 5_000;
+export const MAX_LOCAL_READ_WAIT_MS = 5_000;
+/** Base composer mutation budget — independent of the local DOM-read constant. */
+export const COMPOSER_MUTATION_BASE_WAIT_MS = 3_000;
+/** Additional mutation wait granted per payload byte inserted into the composer. */
+export const COMPOSER_MUTATION_MS_PER_BYTE = 0.25;
+/** Upper bound for one composer mutation; matches ui-adapter segment ceiling. */
+export const MAX_COMPOSER_MUTATION_WAIT_MS = 30_000;
+const BLOCKING_PAGE_OVERLAY_SELECTOR = '[role="dialog"][aria-modal="true"], [data-testid*="modal-overlay"]';
+
+export function deriveComposerMutationBudgetMs(
+  payloadByteLength: number,
+  invocationTimeoutMs: number,
+  remainingInvocationMs?: number,
+): number {
+  const scaled = COMPOSER_MUTATION_BASE_WAIT_MS + Math.max(0, payloadByteLength) * COMPOSER_MUTATION_MS_PER_BYTE;
+  const capped = Math.min(Math.floor(scaled), MAX_COMPOSER_MUTATION_WAIT_MS);
+  const bounded = Math.min(capped, invocationTimeoutMs);
+  if (remainingInvocationMs === undefined) return bounded;
+  return Math.min(bounded, Math.max(0, remainingInvocationMs));
+}
 /** Per-node transcript reads use shorter budgets so one hung node cannot block the poll. */
 const MESSAGE_NODE_READ_TIMEOUT_MS = 800;
 const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
@@ -993,6 +1013,41 @@ async function waitForComposer(
   return { state: 'ui_contract_mismatch', cause: 'composer_unavailable' };
 }
 
+function isPlaywrightTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === 'TimeoutError' || /timeout/i.test(error.message);
+}
+
+async function hasBlockingPageOverlay(page: any): Promise<boolean> {
+  const overlay = page.locator(BLOCKING_PAGE_OVERLAY_SELECTOR);
+  if (await locatorCount(overlay) === 0) return false;
+  const wall = classifyProductWall(
+    await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, POST_SEND_PRODUCT_WALL_PROBE_MS)),
+  );
+  return !wall.state;
+}
+
+async function mutateComposerOrCause(
+  page: any,
+  text: string,
+  payloadByteLength: number,
+  config: BrowserConfig,
+  invocationDeadlineMs: number,
+): Promise<PreSendComposerFailureCause | null> {
+  const remainingMs = Math.max(0, invocationDeadlineMs - Date.now());
+  const mutationBudgetMs = deriveComposerMutationBudgetMs(payloadByteLength, config.timeoutMs, remainingMs);
+  const composer = page.locator(COMPOSER_SELECTOR);
+  try {
+    await composer.click({ timeout: mutationBudgetMs });
+    await composer.fill(text, { timeout: mutationBudgetMs });
+    return null;
+  } catch (error) {
+    if (!isPlaywrightTimeoutError(error)) throw error;
+    if (await hasBlockingPageOverlay(page)) return 'blocking_page_overlay';
+    return 'composer_mutation_budget_exhausted';
+  }
+}
+
 async function createDedicatedTurnPage(browser: any): Promise<any> {
   const contexts = browser.contexts();
   if (contexts.length !== 1) throw new Error('ui_contract_mismatch:context_count');
@@ -1290,10 +1345,39 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let baselineCount = 0;
     let ownedConversationUrl: string | undefined;
 
-    const sendOwnedPrompt = async (): Promise<void> => {
+    const invocationDeadlineMs = Date.now() + config.timeoutMs;
+
+    const returnComposerMutationFailure = (
+      cause: PreSendComposerFailureCause,
+    ): TurnRunOutcome => {
+      incident('invocation_blocker', cause, 'return_local_error');
+      return {
+        page,
+        browser,
+        result: compactResult(
+          'driver_error',
+          'invocation',
+          cause,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount, navigation, incidents,
+          {},
+          journalWriteFailed,
+        ),
+      };
+    };
+
+    const sendOwnedPrompt = async (): Promise<TurnRunOutcome | null> => {
+      const mutationFailure = await mutateComposerOrCause(
+        page,
+        snapshot.text,
+        snapshot.byteLength,
+        config,
+        invocationDeadlineMs,
+      );
+      if (mutationFailure) return returnComposerMutationFailure(mutationFailure);
       const composer = page.locator(COMPOSER_SELECTOR);
-      await composer.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
-      await composer.fill(snapshot.text, { timeout: MAX_LOCAL_READ_WAIT_MS });
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
       if (await locatorCount(sendButton) > 0) {
         await sendButton.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
@@ -1302,6 +1386,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
       sendCount += 1;
       afterSend = true;
+      return null;
     };
 
     if (config.newChat) {
@@ -1468,7 +1553,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               continue;
             }
             baselineCount = (await readPageMessages(page)).length;
-            await sendOwnedPrompt();
+            const sendFailure = await sendOwnedPrompt();
+            if (sendFailure) return sendFailure;
             sendAuthorized = false;
           }
 
@@ -1673,7 +1759,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
 
       baselineCount = (await readPageMessages(page)).length;
-      await sendOwnedPrompt();
+      const sendFailure = await sendOwnedPrompt();
+      if (sendFailure) return sendFailure;
     }
 
     const targetChatUrl = config.newChat
@@ -2275,6 +2362,12 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
     ...(journalWriteFailed ? { journal_write_failed: true } : {}),
   };
 }
+
+export const __testComposerMutation = {
+  mutateComposerOrCause,
+  hasBlockingPageOverlay,
+  waitForComposer,
+};
 
 export async function runStateLightTurn(argv: readonly string[]): Promise<number> {
   let args: ParsedTurnArgs;
