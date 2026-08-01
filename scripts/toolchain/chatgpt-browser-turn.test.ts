@@ -3561,7 +3561,7 @@ describe('issue 1174 composer mutation budget', () => {
     const input = join(root, 'deadline-input.txt');
     const output = join(root, 'deadline-output.txt');
     writeFileSync(input, 'payload');
-    const fixture = makeComposerPage();
+    const fixture = makeComposerPage({});
     const originalLocator = fixture.page.locator;
     fixture.composer.count = vi.fn(async () => 1);
     fixture.page.locator = vi.fn((selector: string) => (
