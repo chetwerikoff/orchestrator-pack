@@ -18,6 +18,10 @@ record-only task can never be T3.
 
 ### Failure-type lens (apply first)
 
+Apply the conjunctive T3 test below before any size or ceremony signal.
+
+### Binding T3 test (both prongs required)
+
 A task is T3 only when **both** conditions hold:
 
 1. **Guarantee boundary.** The task changes an enforced subsystem/system guarantee
@@ -28,7 +32,10 @@ A task is T3 only when **both** conditions hold:
    defect can admit, ship, execute, authorize, corrupt, duplicate, lose, make
    unrecoverable, or cause material unavailability/coordinated recovery before a
    fail-closed rejection or ordinary operator-visible handling safely contains
-   it. Visibility after material impact does not make the task non-T3.
+   it. Operator-visible rejection disproves this prong only when it occurs
+   **before** material unavailability, irreversible change, or coordinated
+   recovery is required. Visibility after material impact does not make the task
+   non-T3.
 
 If either prong is false, classify by the T1/T2 split below. Doubt fails upward
 only after applying the conjunctive test to the actual change.
@@ -46,7 +53,9 @@ T1 and T2 use the same create-flow review pipeline: exactly one independent
 terminal browser-GPT `architectural` lens. Their classification is descriptive
 and calibrational, not a reason to buy a different review topology.
 
-Stable receipt rubric labels remain:
+Numeric magnitude may disqualify a task from a lower tier but never qualifies a
+task into T1. Smallness is necessary, not sufficient. Stable receipt rubric
+labels remain:
 
 - `failure-type:text-cosmetics`;
 - `failure-type:local-behavior`;
@@ -56,17 +65,19 @@ Stable receipt rubric labels remain:
 - `fail-up:doubt`.
 
 Any tier may include one optional `risk-note:` line in the `complexity-tier`
-fence. It is descriptive and non-gating.
+fence. It is descriptive and non-gating: it creates no second ladder, stage,
+taxonomy, or floor.
 
 ## Per-tier draft-review flow
 
-This governs **create-issue-draft task-spec review** only. Worker **PR-code**
-review (`prompts/codex_review_prompt.md`, pack review runner) is unchanged.
+Governs **create-issue-draft task-spec review** only. Worker **PR-code** review
+(`prompts/codex_review_prompt.md`, pack review runner) is unchanged.
 
 For newly authored tasks, the GitHub Issue is the sole live task specification
-and queue entry. Working anchors, immutable pulled revisions, reviewer captures,
-chat references, stage receipts, relay evidence, the finding ledger, and related
-audit state remain outside the repository. `.claude/skills/create-issue-draft/SKILL.md`
+and queue entry. The mirrorless flow creates no tracked or in-repository draft or
+queue-index artifact. Its working anchor, immutable pulled revisions, reviewer
+captures, chat references, stage receipts, relay evidence, the finding ledger,
+and related audit state remain outside the repository. `.claude/skills/create-issue-draft/SKILL.md`
 owns the exact procedure and layout.
 
 ### Guard-alignment and activation ordering
