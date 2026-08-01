@@ -73,7 +73,11 @@ function escapeCssString(value: string): string {
   return escaped;
 }
 
-/** Exact opaque message-identity lookup; never interpolate an unescaped id. */
+/**
+ * Exact opaque message-identity lookup; never interpolate an unescaped id.
+ * Regression coverage evaluates this selector through an independent CSS-string
+ * decoder, including quotes, backslashes, brackets, controls, and injection-like ids.
+ */
 export function messageIdentitySelector(identity: string): string {
   if (!identity) throw new Error('message_identity_required');
   return `${MESSAGE_NODE_SELECTOR}[${MESSAGE_IDENTITY_ATTR}="${escapeCssString(identity)}"]`;
