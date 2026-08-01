@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 /**
- * Finding-disposition ledger guard (Issue #575, review economics Issue #975).
- * Legacy callers retain the original addressed-only protected behavior. The #975
- * economics/progression/acceptance contract is enabled explicitly through phase
- * options so historical consumers are not silently migrated.
+ * Finding-disposition ledger guard (Issues #575, #975, #1150).
+ *
+ * Legacy callers retain their addressed-only behavior. Receipt-backed review
+ * economics adds source-preserving occurrence accounting without changing the
+ * historical default path.
  */
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import {
+  deriveReviewEpisodeState,
+  validateReviewEpisodeTopology,
+} from './lib/stage-completeness-core.ts';
 import {
   collectProtectedSignalMatches,
   loadProtectedSignalReceipt,
@@ -19,7 +25,6 @@ const REVIEW_ECONOMICS_MARKER = 'review-economics-contract: v1';
 const M5_CLEAN_TOKEN = 'SIMPLIFICATION_CLEAN';
 const NO_FINDINGS_TOKEN = 'NO_FINDINGS';
 const REVIEWER_STAGES = new Set(['competitive', 'architectural-review', 'architectural', 'architectural-final']);
-const PRE_LENS_REVIEWER_STAGES = new Set(['competitive', 'architectural-review']);
 const LEGACY_PRE_LENS_ECONOMICS_STAGES = new Set(['competitive', 'architectural-review', 'architectural']);
 const ANY_TYPE_PATTERN = /(?<!binding-)\btype:\s*([a-z][a-z0-9-]*)\b/gi;
 const FINDING_ID_PATTERN = /(?<!binding-)\bid:\s*([A-Za-z0-9._-]+)\b/gi;
@@ -27,10 +32,12 @@ const FINDING_ID_EXTRACT = /(?<!binding-)\bid:\s*([A-Za-z0-9._-]+)\b/i;
 const UNTYPED_FINDING_LINE = /^(?:\s*)(?:\[(P[0-3])\]|(P[0-3]))\s*[-–—:]\s*(.+)$/;
 const ECHOED_ARTIFACT_MARKER = /^--- ARTIFACT\s/m;
 const ECHOED_DRAFT_REVIEW_PROMPT = /^#\s+Codex draft\/spec review prompt/m;
-const REVIEW_CAPTURE_NAME = /^pass-(\d+)-(competitive|architectural-review|architectural|architectural-lens|architectural-final)\.capture\.txt$/;
-const RAW_CODEX_NAME = /^pass-(\d+)-(competitive|architectural|architectural-final)\.codex\.json$/;
+const REVIEW_CAPTURE_NAME = /^pass-(\d+)-(competitive|architectural-review|architectural|architectural-lens|architectural-final)(?:-(01|02|03))?\.capture\.txt$/;
+const RAW_CODEX_NAME = /^pass-(\d+)-(competitive|architectural-review|architectural|architectural-final)(?:-(01|02|03))?\.codex\.json$/;
 const FIELD_LINE = /^(id|type|severity|title|evidence|recommendation|persistent-machinery|cheapest-sufficient-alternative|stakes-price|trade-in|simplification-cut-candidate):\s*(.*)$/i;
 const M3_LENS_LINE = /^m3-protected:\s*id=([A-Za-z0-9._-]+)\s*\|\s*revision=([^|]+?)\s*\|\s*contest=(none|contested|contest-withdrawn)\s*\|\s*outcome=(none|activate|non-activate)(?:\s*\|\s*evidence=([^|]*?))?(?:\s*\|\s*why-now=(.*))?\s*$/i;
+const DEFECT_DISPOSITIONS = new Set(['addressed', 'rejected-as-false', 'unresolved']);
+const REMEDY_DISPOSITIONS = new Set(['accepted', 'replaced-by-cheaper-sufficient', 'rejected-as-overengineering']);
 
 const PROTECTED_SIGNAL_PATTERNS = [
   { type: 'security', pattern: /\btype:\s*security\b/i, nominationMetadata: true },
@@ -86,6 +93,15 @@ function booleanField(row, ...keys) {
     }
   }
   return false;
+}
+
+function stringArrayField(row, ...keys) {
+  for (const key of keys) {
+    if (Array.isArray(row?.[key])) {
+      return row[key].filter((value) => typeof value === 'string').map((value) => value.trim()).filter(Boolean);
+    }
+  }
+  return [];
 }
 
 function parseProtectedActivation(row) {
@@ -223,23 +239,35 @@ export function parseLedger(ledgerText) {
   } catch (error) {
     throw new Error(`finding-ledger guard: ledger is not valid JSON (${error.message})`);
   }
-  if (!Array.isArray(parsed.findings)) {
-    throw new Error('finding-ledger guard: ledger must include a findings array');
-  }
+  if (!Array.isArray(parsed.findings)) throw new Error('finding-ledger guard: ledger must include a findings array');
   const findings = parsed.findings.map((row, index) => {
-    const id = typeof row.id === 'string' ? row.id.trim() : '';
-    const summary = typeof row.summary === 'string' ? row.summary.trim() : '';
-    const type = typeof row.type === 'string' ? row.type.trim().toLowerCase() : '';
-    const disposition = typeof row.disposition === 'string' ? row.disposition.trim().toLowerCase() : '';
+    const id = stringField(row, 'id');
+    const summary = stringField(row, 'summary');
+    const type = stringField(row, 'type').toLowerCase();
+    const disposition = stringField(row, 'disposition').toLowerCase();
     const rejectReason = stringField(row, 'rejectReason', 'reject-reason');
+    const defectDisposition = stringField(row, 'defectDisposition', 'defect-disposition').toLowerCase();
+    const remedyDisposition = stringField(row, 'remedyDisposition', 'remedy-disposition').toLowerCase();
+    const occurrences = stringArrayField(row, 'occurrences', 'occurrenceIds', 'occurrence-ids');
     if (!id) throw new Error(`finding-ledger guard: findings[${index}] missing id`);
     if (!summary) throw new Error(`finding-ledger guard: findings[${index}] missing summary`);
     if (!type) throw new Error(`finding-ledger guard: findings[${index}] missing type`);
-    if (disposition !== 'addressed' && disposition !== 'rejected') {
-      throw new Error(`finding-ledger guard: findings[${index}] disposition must be addressed or rejected`);
-    }
-    if (disposition === 'rejected' && !rejectReason) {
-      throw new Error(`finding-ledger guard: findings[${index}] rejected findings require rejectReason`);
+    const occurrenceMode = defectDisposition || remedyDisposition || occurrences.length > 0;
+    if (!occurrenceMode) {
+      if (disposition !== 'addressed' && disposition !== 'rejected') {
+        throw new Error(`finding-ledger guard: findings[${index}] disposition must be addressed or rejected`);
+      }
+      if (disposition === 'rejected' && !rejectReason) {
+        throw new Error(`finding-ledger guard: findings[${index}] rejected findings require rejectReason`);
+      }
+    } else {
+      if (!DEFECT_DISPOSITIONS.has(defectDisposition)) {
+        throw new Error(`finding-ledger guard: findings[${index}] defectDisposition is invalid`);
+      }
+      if (!REMEDY_DISPOSITIONS.has(remedyDisposition)) {
+        throw new Error(`finding-ledger guard: findings[${index}] remedyDisposition is invalid`);
+      }
+      if (occurrences.length === 0) throw new Error(`finding-ledger guard: findings[${index}] occurrence ledger requires occurrences`);
     }
     return {
       id,
@@ -247,6 +275,9 @@ export function parseLedger(ledgerText) {
       type,
       disposition,
       rejectReason,
+      defectDisposition,
+      remedyDisposition,
+      occurrences,
       persistentMachinery: stringField(row, 'persistentMachinery', 'persistent-machinery').toLowerCase(),
       cheapestSufficientAlternative: stringField(row, 'cheapestSufficientAlternative', 'cheapest-sufficient-alternative'),
       stakesPrice: stringField(row, 'stakesPrice', 'stakes-price'),
@@ -259,7 +290,12 @@ export function parseLedger(ledgerText) {
       protectedActivation: parseProtectedActivation(row),
     };
   });
-  return { version: parsed.version ?? 1, draft: parsed.draft ?? null, findings };
+  return {
+    version: parsed.version ?? 1,
+    draft: parsed.draft ?? null,
+    counts: parsed.counts ?? null,
+    findings,
+  };
 }
 
 export function detectTypedFindingsInCapture(capture) {
@@ -335,7 +371,8 @@ export function detectProtectedSignalsInCapture(capture, options = {}) {
 }
 
 function ledgerHasProtectedCoverage(ledger, protectedType) {
-  return ledger.findings.some((row) => row.type === protectedType && row.disposition === 'addressed');
+  return ledger.findings.some((row) => row.type === protectedType
+    && (row.disposition === 'addressed' || row.defectDisposition === 'addressed'));
 }
 
 function ledgerHasProtectedRejection(ledger) {
@@ -352,13 +389,11 @@ function validateCaptureFindingInLedger(captureFinding, ledger, errors, consumed
   if (!row) {
     if (captureFinding.type === 'untyped') {
       errors.push(`untyped capture finding (id: ${captureFinding.id}) is missing from the ledger — add type: when normalizing`);
-      return;
-    }
-    if (captureFinding.hasCaptureId) {
+    } else if (captureFinding.hasCaptureId) {
       errors.push(`capture finding type: ${captureFinding.type} (id: ${captureFinding.id}) is missing from the ledger`);
-      return;
+    } else {
+      errors.push(`capture finding type: ${captureFinding.type} has no matching ledger row — normalize the reviewer finding into the ledger`);
     }
-    errors.push(`capture finding type: ${captureFinding.type} has no matching ledger row — normalize the reviewer finding into the ledger`);
     return;
   }
   consumedLedgerIds.add(row.id);
@@ -402,8 +437,10 @@ function parseCaptureMetadata(captures, options, errors) {
       index,
       text,
       name,
+      captureIdentity: stringField(raw, 'captureIdentity', 'capture-identity'),
       pass: match ? Number(match[1]) : null,
       stage: match ? match[2] : null,
+      reviewerSlot: match?.[3] ?? null,
       timestampMs: Number.isFinite(timestampMs) ? timestampMs : null,
     };
   });
@@ -413,18 +450,16 @@ function parseCaptureMetadata(captures, options, errors) {
   return metadata.sort((a, b) => {
     if (a.timestampMs !== null && b.timestampMs !== null && a.timestampMs !== b.timestampMs) return a.timestampMs - b.timestampMs;
     if (a.pass !== null && b.pass !== null && a.pass !== b.pass) return a.pass - b.pass;
+    if (a.reviewerSlot && b.reviewerSlot && a.reviewerSlot !== b.reviewerSlot) return a.reviewerSlot.localeCompare(b.reviewerSlot);
     return a.index - b.index;
   });
 }
 
 function metadataForActiveAcceptanceSegment(metadata) {
   const staged = metadata.filter((meta) => Number.isInteger(meta.pass) && meta.stage);
-  const competitivePasses = staged
-    .filter((meta) => meta.stage === 'competitive')
-    .map((meta) => meta.pass);
+  const competitivePasses = staged.filter((meta) => meta.stage === 'competitive').map((meta) => meta.pass);
   const terminalBoundaries = staged.filter((meta) => (
-    meta.stage === 'architectural'
-    && competitivePasses.some((pass) => pass > meta.pass)
+    meta.stage === 'architectural' && competitivePasses.some((pass) => pass > meta.pass)
   ));
   if (terminalBoundaries.length === 0) return metadata;
   const boundaryPass = Math.max(...terminalBoundaries.map((meta) => meta.pass));
@@ -490,7 +525,9 @@ function parseFindingBlocks(text) {
     if (!type) errors.push(`review-economics: finding ${id} missing type`);
     if (!evidence) errors.push(`review-economics: finding ${id} missing evidence`);
     if (!recommendation) errors.push(`review-economics: finding ${id} missing recommendation`);
-    if (persistentMachinery !== 'yes' && persistentMachinery !== 'no') errors.push(`review-economics: finding ${id} persistent-machinery must be yes or no`);
+    if (persistentMachinery !== 'yes' && persistentMachinery !== 'no') {
+      errors.push(`review-economics: finding ${id} persistent-machinery must be yes or no`);
+    }
     const missingPrice = persistentMachinery === 'yes'
       ? Object.entries(price).filter(([, value]) => !value).map(([key]) => key)
       : [];
@@ -586,12 +623,9 @@ function foldM3LensState(metadata, currentRevision, errors) {
       histories.set(record.id, history);
     }
   }
-
   const states = new Map();
   for (const [id, history] of histories) {
-    const terminalCurrent = history.filter(
-      ({ record, meta }) => meta.stage === 'architectural' && record.revision === currentRevision,
-    );
+    const terminalCurrent = history.filter(({ record, meta }) => meta.stage === 'architectural' && record.revision === currentRevision);
     if (terminalCurrent.length > 1) {
       errors.push(`review-economics: duplicate-conflicting terminal m3-protected state for ${id} at revision ${currentRevision}`);
     }
@@ -600,7 +634,6 @@ function foldM3LensState(metadata, currentRevision, errors) {
       states.set(id, { record: latest?.record ?? null, current: false, contestOpen: false });
       continue;
     }
-
     let effective = null;
     let contestOpen = false;
     for (const { record } of history) {
@@ -608,19 +641,15 @@ function foldM3LensState(metadata, currentRevision, errors) {
       if (record.outcome === 'activate' || record.outcome === 'non-activate') {
         contestOpen = false;
         effective = record;
-        continue;
-      }
-      if (record.contest === 'contest-withdrawn') {
+      } else if (record.contest === 'contest-withdrawn') {
         contestOpen = false;
         effective = record;
-        continue;
-      }
-      if (record.contest === 'contested') {
+      } else if (record.contest === 'contested') {
         contestOpen = true;
         effective = record;
-        continue;
+      } else if (record.contest === 'none' && !contestOpen) {
+        effective = record;
       }
-      if (record.contest === 'none' && !contestOpen) effective = record;
     }
     states.set(id, { record: effective, current: Boolean(effective), contestOpen });
   }
@@ -634,9 +663,7 @@ function unwrapRawCodexPayload(entry) {
 }
 
 function rawCodexReviewText(raw) {
-  const nextSteps = Array.isArray(raw?.next_steps)
-    ? raw.next_steps.filter((item) => typeof item === 'string')
-    : [];
+  const nextSteps = Array.isArray(raw?.next_steps) ? raw.next_steps.filter((item) => typeof item === 'string') : [];
   return [stringField(raw, 'summary'), ...nextSteps].filter(Boolean).join('\n');
 }
 
@@ -653,14 +680,11 @@ function validateRawCodexEconomics(rawResults, errors) {
     }
     const stage = stringField(entry, 'stage', 'reviewStage', 'review-stage').toLowerCase();
     const raw = unwrapRawCodexPayload(entry);
-    if (!REVIEWER_STAGES.has(stage)) {
-      errors.push(`review-economics: ${source} missing governed stage identity before transcription`);
-    }
+    if (!REVIEWER_STAGES.has(stage)) errors.push(`review-economics: ${source} missing governed stage identity before transcription`);
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       errors.push(`review-economics: ${source} missing companion review JSON object`);
       continue;
     }
-
     const reviewText = rawCodexReviewText(raw);
     if (!lineHasExactToken(reviewText, REVIEW_ECONOMICS_MARKER)) {
       errors.push(`review-economics: ${source} missing ${REVIEW_ECONOMICS_MARKER} in companion summary/next_steps before transcription`);
@@ -679,10 +703,7 @@ function validateRawCodexEconomics(rawResults, errors) {
         errors.push(`review-economics: ${source} finding ${findingIndex + 1} missing companion body before transcription`);
         continue;
       }
-      if (!recommendation) {
-        errors.push(`review-economics: ${source} finding ${findingIndex + 1} missing recommendation before transcription`);
-      }
-
+      if (!recommendation) errors.push(`review-economics: ${source} finding ${findingIndex + 1} missing recommendation before transcription`);
       const parsed = parseFindingBlocks(`${body}\nrecommendation: ${recommendation}`);
       errors.push(...parsed.errors.map((error) => `${source}: ${error}`));
       if (parsed.findings.length !== 1) {
@@ -695,19 +716,12 @@ function validateRawCodexEconomics(rawResults, errors) {
       }
       if (finding.cutCandidate) hasCutCandidate = true;
     }
-
     const hasNoFindings = lineHasExactToken(reviewText, NO_FINDINGS_TOKEN);
     const hasSimplificationClean = lineHasExactToken(reviewText, M5_CLEAN_TOKEN);
-    if (findings.length === 0 && !hasNoFindings) {
-      errors.push(`review-economics: clean ${source} missing ${NO_FINDINGS_TOKEN} before transcription`);
-    }
+    if (findings.length === 0 && !hasNoFindings) errors.push(`review-economics: clean ${source} missing ${NO_FINDINGS_TOKEN} before transcription`);
     if (LEGACY_PRE_LENS_ECONOMICS_STAGES.has(stage)) {
-      if (hasCutCandidate && hasSimplificationClean) {
-        errors.push(`review-economics: pre-lens ${source} cannot claim ${M5_CLEAN_TOKEN} while cut candidates are present`);
-      }
-      if (!hasCutCandidate && !hasSimplificationClean) {
-        errors.push(`review-economics: pre-lens ${source} without cut candidate must carry ${M5_CLEAN_TOKEN} before transcription`);
-      }
+      if (hasCutCandidate && hasSimplificationClean) errors.push(`review-economics: pre-lens ${source} cannot claim ${M5_CLEAN_TOKEN} while cut candidates are present`);
+      if (!hasCutCandidate && !hasSimplificationClean) errors.push(`review-economics: pre-lens ${source} without cut candidate must carry ${M5_CLEAN_TOKEN} before transcription`);
     }
   }
 }
@@ -729,7 +743,6 @@ function validateM2(metadata, ledger, options, errors) {
       continue;
     }
     if (meta.timestampMs < adoptionTimestampMs) continue;
-
     const parsed = parseFindingBlocks(meta.text);
     governed.push(meta);
     if (!parsed.marker) {
@@ -740,11 +753,15 @@ function validateM2(metadata, ledger, options, errors) {
     for (const finding of parsed.findings) latestMarkedById.set(finding.id, { finding, meta });
     errors.push(...parsed.errors.map((error) => `${meta.name}: ${error}`));
   }
-  if (options.phase === 'final-acceptance' && governed.length === 0) errors.push('review-economics: final acceptance requires governed reviewer evidence after adoption');
+  if (options.phase === 'final-acceptance' && governed.length === 0) {
+    errors.push('review-economics: final acceptance requires governed reviewer evidence after adoption');
+  }
   for (const [id, { finding }] of latestMarkedById) {
     const row = ledger.findings.find((candidate) => candidate.id === id);
     if (!row) continue;
-    if (row.persistentMachinery !== finding.persistentMachinery) errors.push(`review-economics: finding ${id} ledger persistent-machinery does not match latest marked occurrence`);
+    if (row.persistentMachinery !== finding.persistentMachinery) {
+      errors.push(`review-economics: finding ${id} ledger persistent-machinery does not match latest marked occurrence`);
+    }
     if (finding.persistentMachinery === 'yes') {
       if (finding.missingPrice.length > 0) {
         const declinedMalformed = row.proposalOutcome === 'declined' && row.proposalReason === 'malformed-proposal';
@@ -755,7 +772,9 @@ function validateM2(metadata, ledger, options, errors) {
         if (row.tradeIn !== finding.tradeIn) errors.push(`review-economics: finding ${id} trade-in mismatch`);
       }
     }
-    if (row.simplificationCutCandidate !== finding.cutCandidate) errors.push(`review-economics: finding ${id} simplification-cut-candidate raw/ledger mismatch`);
+    if (row.simplificationCutCandidate !== finding.cutCandidate) {
+      errors.push(`review-economics: finding ${id} simplification-cut-candidate raw/ledger mismatch`);
+    }
   }
   return { parsedByName, latestMarkedById, governed };
 }
@@ -775,9 +794,7 @@ function protectedFindingOriginatedBeforeLatestLens(metadata, findingId) {
   for (let index = 0; index <= latestLensIndex; index += 1) {
     const meta = metadata[index];
     if (meta.stage !== 'architectural-lens' && !REVIEWER_STAGES.has(meta.stage)) continue;
-    for (const [id] of parseEvidenceByFindingId(meta.text)) {
-      if (id === findingId) return true;
-    }
+    for (const [id] of parseEvidenceByFindingId(meta.text)) if (id === findingId) return true;
   }
   return false;
 }
@@ -796,12 +813,8 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
     const zeroSignal = !evidenceHasProtectedSignal(finding.type, rawEvidence);
     const activation = row.protectedActivation;
     const validAuthorActivation = Boolean(
-      activation
-      && activation.authority === 'author'
-      && activation.signal
-      && activation.whyNow
-      && evidenceHasProtectedSignal(finding.type, activation.signal)
-      && !zeroSignal,
+      activation && activation.authority === 'author' && activation.signal && activation.whyNow
+      && evidenceHasProtectedSignal(finding.type, activation.signal) && !zeroSignal,
     );
     const lensState = lensStates.get(finding.id);
     const lensRecord = lensState?.record ?? null;
@@ -810,23 +823,20 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
     const contestOpen = Boolean(lensState?.contestOpen);
     const contest = lensCurrent ? (contestOpen ? 'contested' : lensRecord.contest) : 'unknown';
     const contestUnambiguousAbsent = contest === 'none' || contest === 'contest-withdrawn';
+    const addressed = row.disposition === 'addressed' || row.defectDisposition === 'addressed';
     if (options.phase === 'pre-lens') {
       if (architectOutcome === 'activate') {
-        if (row.disposition !== 'addressed') errors.push(`review-economics: architect-activated protected nomination ${finding.id} must be disposition addressed`);
+        if (!addressed) errors.push(`review-economics: architect-activated protected nomination ${finding.id} must be disposition addressed`);
         continue;
       }
       if (architectOutcome === 'non-activate') continue;
-      const architectRequired = zeroSignal
-        || row.architectRequired
-        || contestOpen
-        || !lensCurrent
-        || !contestUnambiguousAbsent
-        || !validAuthorActivation;
+      const architectRequired = zeroSignal || row.architectRequired || contestOpen || !lensCurrent
+        || !contestUnambiguousAbsent || !validAuthorActivation;
       if (architectRequired) {
         if (!row.architectPending) errors.push(`review-economics: protected nomination ${finding.id} requires architect-pending before lens progression`);
         continue;
       }
-      if (row.disposition !== 'addressed') errors.push(`review-economics: activated protected nomination ${finding.id} must be disposition addressed`);
+      if (!addressed) errors.push(`review-economics: activated protected nomination ${finding.id} must be disposition addressed`);
       continue;
     }
     if (row.architectPending) {
@@ -852,14 +862,15 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
         continue;
       }
       if (validAuthorActivation) {
-        if (row.disposition !== 'addressed') errors.push(`review-economics: author-activated protected nomination ${finding.id} must be disposition addressed`);
-        continue;
+        if (!addressed) errors.push(`review-economics: author-activated protected nomination ${finding.id} must be disposition addressed`);
       }
       continue;
     }
     if (architectOutcome === 'activate') {
-      if (!lensRecord.evidence || !lensRecord.whyNow || !evidenceHasProtectedSignal(finding.type, lensRecord.evidence)) errors.push(`review-economics: architect activation ${finding.id} lacks current real protected evidence + why-now provenance`);
-      if (row.disposition !== 'addressed') errors.push(`review-economics: architect-activated protected nomination ${finding.id} must be disposition addressed`);
+      if (!lensRecord.evidence || !lensRecord.whyNow || !evidenceHasProtectedSignal(finding.type, lensRecord.evidence)) {
+        errors.push(`review-economics: architect activation ${finding.id} lacks current real protected evidence + why-now provenance`);
+      }
+      if (!addressed) errors.push(`review-economics: architect-activated protected nomination ${finding.id} must be disposition addressed`);
       continue;
     }
     if (architectOutcome === 'non-activate') continue;
@@ -875,7 +886,7 @@ function validateM3(metadata, ledger, captureFindings, options, errors) {
       errors.push(`review-economics: protected nomination ${finding.id} contest state is not unambiguously absent/withdrawn`);
       continue;
     }
-    if (row.disposition !== 'addressed') errors.push(`review-economics: author-activated protected nomination ${finding.id} must be disposition addressed`);
+    if (!addressed) errors.push(`review-economics: author-activated protected nomination ${finding.id} must be disposition addressed`);
   }
 }
 
@@ -885,29 +896,18 @@ function validateT3PreLensTopology(metadata, errors) {
   const architecturalReviews = segment.filter((meta) => meta.stage === 'architectural-review');
   const claude = segment.filter((meta) => meta.stage === 'architectural-lens');
   const terminal = segment.filter((meta) => meta.stage === 'architectural');
-
-  if (competitive.length === 0) {
-    errors.push('review-economics: pre-lens progression requires a current-segment competitive capture');
-  } else if (competitive.length > 3) {
-    errors.push('review-economics: pre-lens current-segment competitive ceiling exceeded (maximum three passes allowed)');
-  }
-  if (architecturalReviews.length === 0) {
-    errors.push('review-economics: pre-lens progression requires exactly one current-segment architectural-review capture');
-  } else if (architecturalReviews.length > 1) {
-    errors.push('review-economics: pre-lens current-segment architectural-review ceiling exceeded (exactly one pass allowed)');
-  }
+  if (competitive.length === 0) errors.push('review-economics: pre-lens progression requires a current-segment competitive capture');
+  else if (competitive.length > 3) errors.push('review-economics: pre-lens current-segment competitive ceiling exceeded (maximum three passes allowed)');
+  if (architecturalReviews.length === 0) errors.push('review-economics: pre-lens progression requires exactly one current-segment architectural-review capture');
+  else if (architecturalReviews.length > 1) errors.push('review-economics: pre-lens current-segment architectural-review ceiling exceeded (exactly one pass allowed)');
   if (competitive.length > 0 && architecturalReviews.length === 1) {
     const competitiveAnchor = Math.max(...competitive.map((meta) => meta.pass));
     if (architecturalReviews[0].pass <= competitiveAnchor) {
       errors.push('review-economics: pre-lens architectural-review must be strictly after the current-segment competitive anchor');
     }
   }
-  if (claude.length > 0) {
-    errors.push('review-economics: pre-lens progression must run before the current-segment Claude architectural-lens');
-  }
-  if (terminal.length > 0) {
-    errors.push('review-economics: terminal architectural cannot satisfy pre-lens authority before Claude');
-  }
+  if (claude.length > 0) errors.push('review-economics: pre-lens progression must run before the current-segment Claude architectural-lens');
+  if (terminal.length > 0) errors.push('review-economics: terminal architectural cannot satisfy pre-lens authority before Claude');
   return segment;
 }
 
@@ -936,17 +936,16 @@ function validateM5(metadata, ledger, parsedByName, options, errors) {
   const anchorMetadata = strictT3PreLens ? validateT3PreLensTopology(metadata, errors) : metadata;
   const anchor = selectM5Anchor(anchorMetadata, options.phase, strictT3PreLens);
   if (!anchor) {
-    if (options.phase === 'final-acceptance') {
-      errors.push('review-economics: final-acceptance cannot resolve a terminal architectural M5 anchor');
-    } else {
-      errors.push('review-economics: pre-lens progression cannot resolve a terminal pre-lens M5 anchor');
-    }
+    errors.push(options.phase === 'final-acceptance'
+      ? 'review-economics: final-acceptance cannot resolve a terminal architectural M5 anchor'
+      : 'review-economics: pre-lens progression cannot resolve a terminal pre-lens M5 anchor');
     return;
   }
   if (anchor.timestampMs === null || !Number.isFinite(adoptionTimestampMs)) return;
   if (anchor.timestampMs <= adoptionTimestampMs) {
-    if (options.phase === 'final-acceptance') errors.push('review-economics: pre-adoption M5 anchor cannot satisfy final acceptance; governed post-adoption pre-lens re-entry is required');
-    else errors.push('review-economics: pre-lens M5 anchor must be post-adoption');
+    errors.push(options.phase === 'final-acceptance'
+      ? 'review-economics: pre-adoption M5 anchor cannot satisfy final acceptance; governed post-adoption pre-lens re-entry is required'
+      : 'review-economics: pre-lens M5 anchor must be post-adoption');
     return;
   }
   const parsed = parsedByName.get(anchor.name) ?? parseFindingBlocks(anchor.text);
@@ -965,27 +964,370 @@ function validateM5(metadata, ledger, parsedByName, options, errors) {
       if (!row) continue;
       if (options.phase === 'pre-lens' && !row.simplificationCutCandidate) errors.push(`review-economics: M5 cut candidate ${candidate.id} missing matching ledger flag`);
       if (PROTECTED_TYPES.has(row.type) && row.architectPending) continue;
-      if (row.disposition !== 'addressed' && row.disposition !== 'rejected') errors.push(`review-economics: M5 cut candidate ${candidate.id} is not dispositioned or architect-pending`);
+      if (!row.disposition && row.defectDisposition === 'unresolved') errors.push(`review-economics: M5 cut candidate ${candidate.id} is unresolved`);
+      else if (row.disposition && row.disposition !== 'addressed' && row.disposition !== 'rejected') errors.push(`review-economics: M5 cut candidate ${candidate.id} is not dispositioned or architect-pending`);
     }
   }
   if (options.phase === 'pre-lens') {
     const candidateIds = new Set(candidates.map((candidate) => candidate.id));
     for (const row of ledger.findings) {
-      if (row.simplificationCutCandidate && !candidateIds.has(row.id)) errors.push(`review-economics: ledger candidate ${row.id} has no raw yes discriminator in current M5 anchor`);
+      if (row.simplificationCutCandidate && !candidateIds.has(row.id)) {
+        errors.push(`review-economics: ledger candidate ${row.id} has no raw yes discriminator in current M5 anchor`);
+      }
     }
   }
+}
+
+function captureHash(text) {
+  return createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
+}
+
+function validateReceiptCaptureBytes(state, metadata, errors) {
+  const byName = new Map(metadata.map((meta) => [meta.name, meta]));
+  const governedNames = new Set(state.governedCaptures.map((capture) => capture.name));
+  for (const capture of state.governedCaptures) {
+    const meta = byName.get(capture.name);
+    if (!meta) {
+      errors.push(`review-economics: governed capture ${capture.name} is missing from supplied capture bytes`);
+      continue;
+    }
+    const bytes = Buffer.byteLength(meta.text, 'utf8');
+    const sha256 = captureHash(meta.text);
+    if (bytes !== capture.byteLength || sha256 !== capture.sha256) {
+      errors.push(`review-economics: governed capture ${capture.name} bytes/hash do not match stage receipt`);
+    }
+    if (meta.captureIdentity && meta.captureIdentity !== capture.captureIdentity) {
+      errors.push(`review-economics: capture metadata identity mismatch for ${capture.name}`);
+    }
+  }
+  for (const meta of metadata) {
+    if (!governedNames.has(meta.name)) errors.push(`review-economics: supplied capture ${meta.name} is not in governedCaptureUnion`);
+  }
+}
+
+function buildOccurrenceInventory(state, metadata, errors) {
+  const byName = new Map(metadata.map((meta) => [meta.name, meta]));
+  const provenanceByCaptureIdentity = new Map();
+  for (const receipt of state.receipts) {
+    for (const capture of receipt.relayEligibleCaptures) {
+      provenanceByCaptureIdentity.set(capture.captureIdentity, {
+        stage: receipt.stage,
+        stageSequence: receipt.stageSequence,
+        stageAttemptId: receipt.stageAttemptId,
+        sourceRevision: receipt.sourceRevision,
+      });
+    }
+  }
+  const occurrences = [];
+  const parsedByCaptureIdentity = new Map();
+  for (const capture of state.governedCaptures) {
+    const meta = byName.get(capture.name);
+    if (!meta) continue;
+    const parsed = parseFindingBlocks(meta.text);
+    parsedByCaptureIdentity.set(capture.captureIdentity, parsed);
+    errors.push(...parsed.errors.map((error) => `${capture.name}: ${error}`));
+    if (parsed.findings.length !== capture.rawFindingCount) {
+      errors.push(`review-economics: ${capture.name} rawFindingCount receipt=${capture.rawFindingCount} parsed=${parsed.findings.length}`);
+    }
+    const provenance = provenanceByCaptureIdentity.get(capture.captureIdentity);
+    parsed.findings.forEach((finding, index) => {
+      occurrences.push({
+        occurrenceId: `${capture.captureIdentity}:${index + 1}`,
+        captureIdentity: capture.captureIdentity,
+        captureName: capture.name,
+        sourceOrdinal: index + 1,
+        stage: provenance?.stage ?? null,
+        stageSequence: provenance?.stageSequence ?? null,
+        stageAttemptId: provenance?.stageAttemptId ?? '',
+        sourceRevision: provenance?.sourceRevision ?? '',
+        finding,
+      });
+    });
+  }
+  if (occurrences.length !== state.rawFindingCount) {
+    errors.push(`review-economics: episode raw occurrence count receipt=${state.rawFindingCount} parsed=${occurrences.length}`);
+  }
+  return { occurrences, parsedByCaptureIdentity };
+}
+
+function validateOccurrenceLedger(ledger, inventory, errors) {
+  const occurrenceById = new Map(inventory.occurrences.map((occurrence) => [occurrence.occurrenceId, occurrence]));
+  const assigned = new Map();
+  const occurrenceRows = ledger.findings.filter((row) => row.occurrences.length > 0 || row.defectDisposition || row.remedyDisposition);
+  for (const row of occurrenceRows) {
+    if (row.persistentMachinery !== 'yes' && row.persistentMachinery !== 'no') {
+      errors.push(`review-economics: distinct defect ${row.id} persistent-machinery must be yes or no`);
+    }
+    if (row.persistentMachinery === 'yes') {
+      const missing = [
+        ['cheapest-sufficient-alternative', row.cheapestSufficientAlternative],
+        ['stakes-price', row.stakesPrice],
+        ['trade-in', row.tradeIn],
+      ].filter(([, value]) => !value).map(([key]) => key);
+      if (missing.length > 0) {
+        errors.push(`review-economics: distinct defect ${row.id} persistent machinery missing ${missing.join(', ')}`);
+      }
+    }
+    for (const occurrenceId of row.occurrences) {
+      const occurrence = occurrenceById.get(occurrenceId);
+      if (!occurrence) {
+        errors.push(`review-economics: ledger defect ${row.id} references unknown occurrence ${occurrenceId}`);
+        continue;
+      }
+      if (assigned.has(occurrenceId)) {
+        errors.push(`review-economics: occurrence ${occurrenceId} is mapped to multiple distinct defects`);
+        continue;
+      }
+      assigned.set(occurrenceId, row.id);
+      if (PROTECTED_TYPES.has(occurrence.finding.type) && row.type !== occurrence.finding.type) {
+        errors.push(`review-economics: protected occurrence ${occurrenceId} was reclassified as ${row.type}`);
+      }
+      if (occurrence.finding.persistentMachinery === 'yes' && occurrence.finding.missingPrice.length > 0) {
+        const declinedMalformed = row.proposalOutcome === 'declined'
+          && row.proposalReason === 'malformed-proposal';
+        if (!declinedMalformed) {
+          errors.push(`review-economics: occurrence ${occurrenceId} malformed persistent-machinery proposal requires malformed-proposal decline`);
+        }
+      }
+    }
+    if (row.defectDisposition === 'unresolved') errors.push(`review-economics: distinct defect ${row.id} remains unresolved`);
+  }
+  for (const occurrence of inventory.occurrences) {
+    if (!assigned.has(occurrence.occurrenceId)) {
+      errors.push(`review-economics: raw occurrence ${occurrence.occurrenceId} is not mapped to an author-owned distinct defect`);
+    }
+  }
+  const counts = {
+    rawFindingCount: inventory.occurrences.length,
+    distinctFindingCount: occurrenceRows.length,
+    processedDistinctCount: occurrenceRows.filter((row) => row.defectDisposition !== 'unresolved').length,
+  };
+  if (!ledger.counts || typeof ledger.counts !== 'object') {
+    errors.push('review-economics: occurrence ledger requires counts {rawFindingCount, distinctFindingCount, processedDistinctCount}');
+  } else {
+    for (const [key, value] of Object.entries(counts)) {
+      if (ledger.counts[key] !== value) errors.push(`review-economics: ledger count ${key}=${ledger.counts[key]} does not equal derived ${value}`);
+    }
+  }
+  return { counts, occurrenceRows, assigned };
+}
+
+function validateReceiptBackedM3(metadata, ledger, inventory, occurrenceState, state, options, errors) {
+  const occurrenceById = new Map(inventory.occurrences.map((occurrence) => [occurrence.occurrenceId, occurrence]));
+  const protectedRows = occurrenceState.occurrenceRows
+    .map((row) => ({
+      row,
+      occurrences: row.occurrences.map((occurrenceId) => occurrenceById.get(occurrenceId)).filter(Boolean),
+    }))
+    .map(({ row, occurrences }) => ({
+      row,
+      protectedOccurrences: occurrences.filter((occurrence) => PROTECTED_TYPES.has(occurrence.finding.type)),
+    }))
+    .filter(({ protectedOccurrences }) => protectedOccurrences.length > 0);
+  if (protectedRows.length === 0) return;
+
+  const currentRevision = typeof options.issueRevision === 'string' ? options.issueRevision.trim() : '';
+  const lensStates = foldM3LensState(metadata, currentRevision, errors);
+  const latestLensSequence = state.receiptsByStage['architectural-lens'].reduce(
+    (latest, receipt) => Math.max(latest, receipt.stageSequence),
+    -1,
+  );
+
+  for (const { row, protectedOccurrences } of protectedRows) {
+    const protectedTypes = new Set(protectedOccurrences.map((occurrence) => occurrence.finding.type));
+    if (protectedTypes.size !== 1 || !protectedTypes.has(row.type)) {
+      errors.push(`review-economics: protected distinct defect ${row.id} mixes protected occurrence identities/types`);
+      continue;
+    }
+    const protectedType = row.type;
+    const zeroSignal = protectedOccurrences.some(
+      (occurrence) => !evidenceHasProtectedSignal(protectedType, occurrence.finding.evidence),
+    );
+    const activation = row.protectedActivation;
+    const validAuthorActivation = Boolean(
+      activation && activation.authority === 'author' && activation.signal && activation.whyNow
+      && evidenceHasProtectedSignal(protectedType, activation.signal) && !zeroSignal,
+    );
+    const lensState = lensStates.get(row.id);
+    const lensRecord = lensState?.record ?? null;
+    const lensCurrent = Boolean(lensState?.current && lensRecord);
+    const architectOutcome = lensCurrent ? lensRecord.outcome : 'none';
+    const contestOpen = Boolean(lensState?.contestOpen);
+    const contest = lensCurrent ? (contestOpen ? 'contested' : lensRecord.contest) : 'unknown';
+    const contestUnambiguousAbsent = contest === 'none' || contest === 'contest-withdrawn';
+    const addressed = row.disposition === 'addressed' || row.defectDisposition === 'addressed';
+
+    if (options.phase === 'pre-lens') {
+      if (architectOutcome === 'activate') {
+        if (!addressed) errors.push(`review-economics: architect-activated protected distinct defect ${row.id} must be addressed`);
+        continue;
+      }
+      if (architectOutcome === 'non-activate') continue;
+      const architectRequired = zeroSignal || row.architectRequired || contestOpen || !lensCurrent
+        || !contestUnambiguousAbsent || !validAuthorActivation;
+      if (architectRequired) {
+        if (!row.architectPending) {
+          errors.push(`review-economics: protected distinct defect ${row.id} requires architect-pending before lens progression`);
+        }
+        continue;
+      }
+      if (!addressed) errors.push(`review-economics: activated protected distinct defect ${row.id} must be addressed`);
+      continue;
+    }
+
+    if (row.architectPending) {
+      errors.push(`review-economics: protected distinct defect ${row.id} must clear architect-pending before final acceptance`);
+      continue;
+    }
+    if (!currentRevision) {
+      errors.push(`review-economics: final acceptance missing current Issue revision for protected distinct defect ${row.id}`);
+      continue;
+    }
+    if (!lensCurrent) {
+      if (lensState?.record) {
+        errors.push(`review-economics: protected distinct defect ${row.id} has unknown/stale architect contest state for revision ${currentRevision}`);
+        continue;
+      }
+      const terminalOnlyNomination = protectedOccurrences.every((occurrence) => (
+        occurrence.stage === 'architectural' && occurrence.stageSequence > latestLensSequence
+      ));
+      if (!terminalOnlyNomination) {
+        errors.push(`review-economics: protected distinct defect ${row.id} has unknown/stale architect contest state for revision ${currentRevision}`);
+        continue;
+      }
+      if (row.architectRequired) {
+        errors.push(`review-economics: protected distinct defect ${row.id} requires current architect adjudication`);
+        continue;
+      }
+      if (validAuthorActivation && !addressed) {
+        errors.push(`review-economics: author-activated protected distinct defect ${row.id} must be addressed`);
+      }
+      continue;
+    }
+    if (architectOutcome === 'activate') {
+      if (!lensRecord.evidence || !lensRecord.whyNow || !evidenceHasProtectedSignal(protectedType, lensRecord.evidence)) {
+        errors.push(`review-economics: architect activation ${row.id} lacks current real protected evidence + why-now provenance`);
+      }
+      if (!addressed) errors.push(`review-economics: architect-activated protected distinct defect ${row.id} must be addressed`);
+      continue;
+    }
+    if (architectOutcome === 'non-activate') continue;
+    if (contestOpen) {
+      errors.push(`review-economics: protected distinct defect ${row.id} remains architect-pending under current contest`);
+      continue;
+    }
+    if (zeroSignal || row.architectRequired || !validAuthorActivation) {
+      errors.push(`review-economics: protected distinct defect ${row.id} requires current architect adjudication`);
+      continue;
+    }
+    if (!contestUnambiguousAbsent) {
+      errors.push(`review-economics: protected distinct defect ${row.id} contest state is not unambiguously absent/withdrawn`);
+      continue;
+    }
+    if (!addressed) errors.push(`review-economics: author-activated protected distinct defect ${row.id} must be addressed`);
+  }
+}
+
+function validateLocalPreTerminalSourceTokens(state, inventory, errors) {
+  for (const stage of ['competitive', 'architectural-review']) {
+    const captures = state.credentialingCapturesByStage[stage];
+    if (captures.length !== 3) continue;
+    for (const capture of captures) {
+      const parsed = inventory.parsedByCaptureIdentity.get(capture.captureIdentity);
+      if (!parsed) continue;
+      const candidates = parsed.findings.filter((finding) => finding.cutCandidate);
+      if (candidates.length > 0 && parsed.simplificationClean) {
+        errors.push(`review-economics: ${capture.name} cannot claim ${M5_CLEAN_TOKEN} while cut candidates are present`);
+      }
+      if (candidates.length === 0 && !parsed.simplificationClean) {
+        errors.push(`review-economics: ${capture.name} without cut candidate must carry ${M5_CLEAN_TOKEN}`);
+      }
+      if (parsed.findings.length === 0 && !parsed.noFindings) {
+        errors.push(`review-economics: genuinely clean source ${capture.name} must carry ${NO_FINDINGS_TOKEN}`);
+      }
+      if (parsed.findings.length > 0 && parsed.noFindings) {
+        errors.push(`review-economics: ${capture.name} cannot claim ${NO_FINDINGS_TOKEN} while findings are present`);
+      }
+    }
+  }
+}
+
+function validateTriplePreLensSimplification(state, inventory, ledger, errors) {
+  const captures = state.credentialingCapturesByStage['architectural-review'];
+  if (captures.length !== 3) {
+    errors.push('review-economics: architectural-review triple source requires exactly three credentialing captures');
+    return { simplificationClean: false, noFindings: false, candidateOccurrences: [] };
+  }
+  const parsed = captures.map((capture) => inventory.parsedByCaptureIdentity.get(capture.captureIdentity));
+  if (parsed.some((value) => !value)) {
+    errors.push('review-economics: architectural-review triple source is missing capture parse evidence');
+    return { simplificationClean: false, noFindings: false, candidateOccurrences: [] };
+  }
+  const candidateOccurrences = [];
+  for (const capture of captures) {
+    const captureParsed = inventory.parsedByCaptureIdentity.get(capture.captureIdentity);
+    captureParsed.findings.forEach((finding, index) => {
+      if (finding.cutCandidate) candidateOccurrences.push(`${capture.captureIdentity}:${index + 1}`);
+    });
+  }
+  const simplificationClean = candidateOccurrences.length === 0 && parsed.every((value) => value.simplificationClean);
+  const noFindings = parsed.every((value) => value.noFindings && value.findings.length === 0);
+  if (candidateOccurrences.length === 0 && !simplificationClean) {
+    errors.push('review-economics: triple architectural-review without candidates requires SIMPLIFICATION_CLEAN from all three sources');
+  }
+  const candidateRows = new Set();
+  for (const occurrenceId of candidateOccurrences) {
+    const row = ledger.findings.find((item) => item.occurrences.includes(occurrenceId));
+    if (!row) continue;
+    candidateRows.add(row.id);
+    if (!row.simplificationCutCandidate) {
+      errors.push(`review-economics: simplification candidate occurrence ${occurrenceId} lacks matching ledger flag`);
+    }
+  }
+  for (const row of ledger.findings) {
+    if (row.simplificationCutCandidate && !candidateRows.has(row.id)) {
+      errors.push(`review-economics: ledger candidate ${row.id} has no raw yes discriminator in triple architectural-review union`);
+    }
+  }
+  candidateOccurrences.sort();
+  return { simplificationClean, noFindings, candidateOccurrences };
+}
+
+function validateReceiptBackedReview(metadata, ledger, options, errors) {
+  const state = deriveReviewEpisodeState(options.stageReceipts ?? [], options.verifiedRelayEvidence ?? []);
+  errors.push(...state.errors.map((error) => `review-economics: ${error}`));
+  errors.push(...validateReviewEpisodeTopology(state, options.phase).map((error) => `review-economics: ${error}`));
+  validateReceiptCaptureBytes(state, metadata, errors);
+  const inventory = buildOccurrenceInventory(state, metadata, errors);
+  const occurrence = validateOccurrenceLedger(ledger, inventory, errors);
+  validateReceiptBackedM3(metadata, ledger, inventory, occurrence, state, options, errors);
+  if (options.phase === 'pre-lens' && state.tier === 'T3') {
+    validateLocalPreTerminalSourceTokens(state, inventory, errors);
+  }
+  const simplification = options.phase === 'pre-lens' && state.tier === 'T3'
+    ? validateTriplePreLensSimplification(state, inventory, ledger, errors)
+    : null;
+  return { state, inventory, occurrence, simplification };
 }
 
 function validateReviewEconomics(captures, ledger, captureFindings, options, errors) {
   if (options.phase !== 'pre-lens' && options.phase !== 'final-acceptance') {
     errors.push('review-economics: phase must be pre-lens or final-acceptance');
-    return;
+    return {};
   }
   validateRawCodexEconomics(options.rawCodexResults, errors);
   const metadata = parseCaptureMetadata(captures, options, errors);
+  const receiptBacked = Array.isArray(options.stageReceipts)
+    ? validateReceiptBackedReview(metadata, ledger, options, errors)
+    : null;
   const { parsedByName } = validateM2(metadata, ledger, options, errors);
-  validateM3(metadata, ledger, captureFindings, options, errors);
-  validateM5(metadata, ledger, parsedByName, options, errors);
+  if (!receiptBacked) validateM3(metadata, ledger, captureFindings, options, errors);
+  if (!receiptBacked || options.phase === 'final-acceptance' || receiptBacked.state.tier !== 'T3') {
+    validateM5(metadata, ledger, parsedByName, options, errors);
+  } else if (options.stageTerminalConfirmed !== true) {
+    errors.push('review-economics: pre-lens progression requires existing stage authority to confirm a legal terminal reviewer state');
+  }
+  return receiptBacked ?? {};
 }
 
 export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options = {}) {
@@ -1000,8 +1342,13 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
   }
   const { findings: captureFindings, errors: mergeErrors } = mergeCaptureFindings(captures);
   errors.push(...mergeErrors);
-  const consumedLedgerIds = new Set();
-  for (const captureFinding of captureFindings) validateCaptureFindingInLedger(captureFinding, ledger, errors, consumedLedgerIds, { reviewEconomics });
+  const receiptBackedMode = reviewEconomics && Array.isArray(options.stageReceipts);
+  if (!receiptBackedMode) {
+    const consumedLedgerIds = new Set();
+    for (const captureFinding of captureFindings) {
+      validateCaptureFindingInLedger(captureFinding, ledger, errors, consumedLedgerIds, { reviewEconomics });
+    }
+  }
   const protectedSignals = new Set();
   for (const capture of captures) {
     for (const signal of detectProtectedSignalsInCapture(capture, {
@@ -1013,23 +1360,42 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
   }
   const protectedConsumedLedgerIds = new Set();
   for (const protectedType of protectedSignals) {
-    const typedInCapture = captureFindings.some((row) => row.type === protectedType);
-    const covered = typedInCapture
-      ? captureFindings.filter((row) => row.type === protectedType).every((row) => {
-          const ledgerRow = ledgerRowForCaptureFinding(row, ledger, protectedConsumedLedgerIds);
-          return ledgerRow && ledgerRow.type === row.type && ledgerRow.disposition === 'addressed';
-        })
-      : ledgerHasProtectedCoverage(ledger, protectedType);
+    let covered;
+    if (receiptBackedMode) {
+      covered = ledger.findings.some((row) => row.type === protectedType && row.occurrences.length > 0)
+        || ledgerHasProtectedCoverage(ledger, protectedType);
+    } else {
+      const typedInCapture = captureFindings.some((row) => row.type === protectedType);
+      covered = typedInCapture
+        ? captureFindings.filter((row) => row.type === protectedType).every((row) => {
+            const ledgerRow = ledgerRowForCaptureFinding(row, ledger, protectedConsumedLedgerIds);
+            return ledgerRow && ledgerRow.type === row.type
+              && (ledgerRow.disposition === 'addressed' || ledgerRow.defectDisposition === 'addressed');
+          })
+        : ledgerHasProtectedCoverage(ledger, protectedType);
+    }
     if (!covered) errors.push(`protected signal type: ${protectedType} present in capture but not addressed in the ledger`);
   }
+  let receiptBacked = {};
   if (!reviewEconomics) {
     for (const row of ledger.findings) {
       if (PROTECTED_TYPES.has(row.type) && row.disposition !== 'addressed' && !errors.some((message) => message.includes(row.id))) {
         errors.push(`protected finding ${row.id} (type: ${row.type}) must be disposition addressed`);
       }
     }
-  } else validateReviewEconomics(captures, ledger, captureFindings, options, errors);
-  return { ok: errors.length === 0, errors, ledger, captureFindings, protectedSignals: [...protectedSignals] };
+  } else {
+    receiptBacked = validateReviewEconomics(captures, ledger, captureFindings, options, errors);
+  }
+  return {
+    ok: errors.length === 0,
+    errors: [...new Set(errors)],
+    ledger,
+    captureFindings,
+    protectedSignals: [...protectedSignals],
+    episodeState: receiptBacked.state,
+    economicsCounts: receiptBacked.occurrence?.counts,
+    simplificationAggregate: receiptBacked.simplification,
+  };
 }
 
 function listCaptureFilesInDir(capturesDir) {
@@ -1057,11 +1423,7 @@ function readRawCodexJson(rawPath) {
 function rawCodexEntry(rawPath, stage = '') {
   const name = path.basename(rawPath);
   const match = name.match(RAW_CODEX_NAME);
-  return {
-    stage: stage || (match ? match[2] : ''),
-    sourceName: name,
-    raw: readRawCodexJson(rawPath),
-  };
+  return { stage: stage || (match ? match[2] : ''), sourceName: name, raw: readRawCodexJson(rawPath) };
 }
 
 function runRawCodexOnly(argv) {
@@ -1086,18 +1448,37 @@ function runRawCodexOnly(argv) {
   return 0;
 }
 
-export function runCli(argv) {
-  if (argv.includes('--raw-codex-only')) return runRawCodexOnly(argv);
-
-  const ledgerFlag = argv.indexOf('--ledger');
-  const capturesDirFlag = argv.indexOf('--captures-dir');
-  const capturePaths = [];
+function collectRepeatedFlag(argv, flag) {
+  const values = [];
   for (let index = 2; index < argv.length; index += 1) {
-    if (argv[index] === '--capture' && argv[index + 1]) {
-      capturePaths.push(argv[index + 1]);
+    if (argv[index] === flag && argv[index + 1]) {
+      values.push(argv[index + 1]);
       index += 1;
     }
   }
+  return values;
+}
+
+function readReceiptFiles(paths) {
+  return paths.flatMap((receiptPath) => {
+    const value = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    return Array.isArray(value) ? value : [value];
+  });
+}
+
+function readRelayEvidence(evidencePath) {
+  if (!evidencePath) return [];
+  const value = JSON.parse(readFileSync(evidencePath, 'utf8'));
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object' && Array.isArray(value.evidence)) return value.evidence;
+  throw new Error('verified relay evidence must be an array or {"evidence": [...]}');
+}
+
+export function runCli(argv) {
+  if (argv.includes('--raw-codex-only')) return runRawCodexOnly(argv);
+  const ledgerFlag = argv.indexOf('--ledger');
+  const capturesDirFlag = argv.indexOf('--captures-dir');
+  const capturePaths = collectRepeatedFlag(argv, '--capture');
   if (capturesDirFlag >= 0) capturePaths.push(...listCaptureFilesInDir(argv[capturesDirFlag + 1]));
   if (ledgerFlag < 0 || capturePaths.length === 0) {
     process.stderr.write('finding-ledger guard: --ledger <path> and at least one --capture <path> or --captures-dir <path> are required\n');
@@ -1109,6 +1490,7 @@ export function runCli(argv) {
   const phaseFlag = argv.indexOf('--phase');
   const adoptionFlag = argv.indexOf('--adoption-timestamp');
   const revisionFlag = argv.indexOf('--issue-revision');
+  const relayFlag = argv.indexOf('--verified-relay-evidence');
   const captures = capturePaths.map((capturePath) => readFileSync(capturePath, 'utf8'));
   const ledgerText = readFileSync(ledgerPath, 'utf8');
   const options = {
@@ -1121,12 +1503,25 @@ export function runCli(argv) {
     options.adoptionTimestampMs = adoptionTimestampMs;
     options.issueRevision = revisionFlag >= 0 ? argv[revisionFlag + 1] : '';
     options.stageTerminalConfirmed = argv.includes('--stage-terminal');
-    options.captureMetadata = capturePaths.map((capturePath) => ({ name: path.basename(capturePath), timestampMs: statSync(capturePath).mtimeMs }));
+    options.captureMetadata = capturePaths.map((capturePath) => ({
+      name: path.basename(capturePath),
+      timestampMs: statSync(capturePath).mtimeMs,
+    }));
     if (adoptionFlag < 0 || adoptionTimestampMs === null) {
       process.stderr.write('finding-ledger guard: --phase requires a valid --adoption-timestamp <ISO-8601>\n');
       return 2;
     }
-    if (options.phase === 'pre-lens') {
+    const receiptPaths = collectRepeatedFlag(argv, '--stage-receipt');
+    if (receiptPaths.length > 0) {
+      try {
+        options.stageReceipts = readReceiptFiles(receiptPaths);
+        options.verifiedRelayEvidence = readRelayEvidence(relayFlag >= 0 ? argv[relayFlag + 1] : '');
+        options.stageTerminalConfirmed = true;
+      } catch (error) {
+        process.stderr.write(`finding-ledger guard: ${error.message}\n`);
+        return 2;
+      }
+    } else if (options.phase === 'pre-lens') {
       if (!options.draftPath) {
         process.stderr.write('finding-ledger guard: pre-lens phase requires --draft-path for T3 topology binding\n');
         return 2;
@@ -1138,7 +1533,9 @@ export function runCli(argv) {
       options.rawCodexResults = listRawCodexFilesInDir(argv[capturesDirFlag + 1])
         .map((rawPath) => {
           const match = path.basename(rawPath).match(RAW_CODEX_NAME);
-          const captureName = match ? `pass-${match[1]}-${match[2]}.capture.txt` : '';
+          const captureName = match
+            ? `pass-${match[1]}-${match[2]}${match[3] ? `-${match[3]}` : ''}.capture.txt`
+            : '';
           return { rawPath, captureTimestampMs: captureTimestamps.get(captureName) ?? null };
         })
         .filter(({ captureTimestampMs }) => Number.isFinite(captureTimestampMs) && captureTimestampMs > adoptionTimestampMs)
@@ -1160,7 +1557,10 @@ export function runCli(argv) {
     for (const error of result.errors) process.stderr.write(`finding-ledger guard: ${error}\n`);
     return 1;
   }
-  process.stdout.write(`finding-ledger guard: PASS (${captures.length} capture file(s))\n`);
+  const countSuffix = result.economicsCounts
+    ? ` raw=${result.economicsCounts.rawFindingCount} distinct=${result.economicsCounts.distinctFindingCount} processed=${result.economicsCounts.processedDistinctCount}`
+    : '';
+  process.stdout.write(`finding-ledger guard: PASS (${captures.length} capture file(s)${countSuffix})\n`);
   return 0;
 }
 

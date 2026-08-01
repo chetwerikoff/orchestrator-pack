@@ -1,373 +1,371 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
-import './chatgpt-browser-turn/state-light-turn.test-support.ts';
-import { normalizeConversationUrl } from './chatgpt-browser-turn/ui-adapter.ts';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
 import { checkFindingLedgerGuard } from './finding-ledger-guard.mjs';
 import {
   checkStageCompletenessGuard,
-  formatStageCompletenessPassMessage,
-  parseArchitectLensWaiver,
-  parseCompetitiveWaiver,
+  deriveReviewEpisodeState,
+  validateReviewEpisodeTopology,
+  type CaptureIdentityV1,
+  type ReviewerInvocationEnvelopeV1,
+  type ReviewStage,
+  type StageCompletenessReceiptV1,
+  type VerifiedRelayEvidenceV1,
 } from './lib/stage-completeness-core.ts';
-import { runCli } from './stage-completeness-guard.ts';
 
-vi.mocked(normalizeConversationUrl).mockReturnValue('https://chatgpt.com/c/fake-owned-turn');
+const T3_DRAFT = `# fixture\n\n\`\`\`complexity-tier\ntier: T3\nadvisory-prior: T3\n\`\`\`\n`;
+const CLEAN = ['review-economics-contract: v1', 'NO_FINDINGS', 'SIMPLIFICATION_CLEAN'].join('\n');
 
-const T3_DRAFT = `# T3 fixture
-
-\`\`\`complexity-tier
-tier: T3
-advisory-prior: T3
-\`\`\`
-`;
-
-function withCase<T>(
-  files: Record<string, string>,
-  run: (input: { repoRoot: string; draftPath: string; reviewDir: string }) => T,
-): T {
-  const repoRoot = mkdtempSync(join(tmpdir(), 'stage-completeness-1120-'));
-  const draftsDir = join(repoRoot, 'docs/issues_drafts');
-  const draftPath = join(draftsDir, '1120-browser-gpt.md');
-  const reviewDir = join(draftsDir, '.review/1120-browser-gpt');
-  mkdirSync(reviewDir, { recursive: true });
-  writeFileSync(draftPath, T3_DRAFT, 'utf8');
-  for (const [name, body] of Object.entries(files)) {
-    writeFileSync(join(reviewDir, name), body, 'utf8');
-  }
-  try {
-    return run({ repoRoot, draftPath, reviewDir });
-  } finally {
-    rmSync(repoRoot, { recursive: true, force: true });
-  }
+function sha(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
 }
 
-function check(files: Record<string, string>) {
-  return withCase(files, ({ repoRoot, draftPath }) => checkStageCompletenessGuard(T3_DRAFT, {
-    repoRoot,
-    draftPath,
+function capture(identity: string, name: string, text = CLEAN, rawFindingCount = 0): CaptureIdentityV1 {
+  return {
+    captureIdentity: identity,
+    name,
+    byteLength: Buffer.byteLength(text),
+    sha256: sha(text),
+    rawFindingCount,
+  };
+}
+
+function invocation(
+  stage: 'competitive' | 'architectural-review' | 'architectural',
+  attemptId: string,
+  slot: '01' | '02' | '03',
+  item: CaptureIdentityV1 | undefined,
+  overrides: Partial<ReviewerInvocationEnvelopeV1> = {},
+): ReviewerInvocationEnvelopeV1 {
+  return {
+    schema: 'reviewer-invocation-envelope/v1',
+    reviewEpisodeId: 'episode-1150',
+    stageAttemptId: attemptId,
+    policyVersion: stage === 'architectural' ? 'single-source/v1' : 'triple-source/v1',
+    stage,
+    sourceRevision: 'r09',
+    invocationId: `invocation-${attemptId}-${slot}-1`,
+    terminalResultIdentity: `result-${attemptId}-${slot}-1`,
+    reviewerSource: `reviewer-${attemptId}-${slot}`,
+    reviewerSlot: slot,
+    reviewerOrdinal: Number(slot),
+    attemptOrdinal: 1,
+    terminal: true,
+    terminalClassification: item ? 'complete' : 'quota',
+    sendCount: item ? 1 : 0,
+    retryClass: item ? 'none' : 'eligible-zero-send',
+    revisionCheck: 'matched',
+    capacityOutcome: 'admitted',
+    capacityWaitMs: 0,
+    ...(item ? { capture: item } : {}),
+    ...overrides,
+  };
+}
+
+type ReceiptInput = {
+  stage: ReviewStage;
+  sequence: number;
+  attemptId: string;
+  captures: CaptureIdentityV1[];
+  invocations?: ReviewerInvocationEnvelopeV1[];
+  outcome?: StageCompletenessReceiptV1['outcome'];
+  retryState?: StageCompletenessReceiptV1['settlement']['retryState'];
+  claude?: StageCompletenessReceiptV1['claude'];
+};
+
+function receipt(input: ReceiptInput): StageCompletenessReceiptV1 {
+  const policyVersion = input.stage === 'competitive' || input.stage === 'architectural-review'
+    ? 'triple-source/v1'
+    : 'single-source/v1';
+  return {
+    schema: 'stage-completeness-receipt/v1',
+    tier: 'T3',
+    reviewEpisodeId: 'episode-1150',
+    stageAttemptId: input.attemptId,
+    stageSequence: input.sequence,
+    stage: input.stage,
+    policyVersion,
+    sourceRevision: 'r09',
+    outcome: input.outcome ?? 'complete',
+    revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+    settlement: {
+      allLaunchedTerminal: true,
+      retryState: input.retryState ?? 'none',
+      finalRevisionMatched: true,
+    },
+    ...(input.invocations ? { invocations: input.invocations } : {}),
+    ...(input.claude ? { claude: input.claude } : {}),
+    credentialingCaptures: input.outcome && input.outcome !== 'complete' ? [] : input.captures,
+    relayEligibleCaptures: input.captures,
+  };
+}
+
+function tripleStage(
+  stage: 'competitive' | 'architectural-review',
+  sequence: number,
+  attemptId: string,
+  texts: readonly string[] = [CLEAN, CLEAN, CLEAN],
+): { receipt: StageCompletenessReceiptV1; captures: CaptureIdentityV1[] } {
+  const captures = texts.map((text, index) => capture(
+    `${attemptId}-${index + 1}`,
+    `pass-${String(sequence).padStart(2, '0')}-${stage}-0${index + 1}.capture.txt`,
+    text,
+    text === CLEAN ? 0 : 1,
+  ));
+  const invocations = captures.map((item, index) => invocation(
+    stage,
+    attemptId,
+    `0${index + 1}` as '01' | '02' | '03',
+    item,
+  ));
+  return { receipt: receipt({ stage, sequence, attemptId, captures, invocations }), captures };
+}
+
+function relay(captures: readonly CaptureIdentityV1[]): VerifiedRelayEvidenceV1[] {
+  return captures.map((item) => ({
+    captureIdentity: item.captureIdentity,
+    name: item.name,
+    byteLength: item.byteLength,
+    sha256: item.sha256,
+    verified: true,
   }));
 }
 
-const CONFORMING = {
-  'pass-01-competitive.capture.txt': 'competitive pass',
-  'pass-02-architectural-review.capture.txt': 'architectural review',
-  'pass-03-architectural-lens.capture.txt': 'claude lens',
-  'pass-04-architectural.capture.txt': 'terminal gpt lens',
-};
+function preLensFixture(
+  architecturalTexts: readonly string[] = [CLEAN, CLEAN, CLEAN],
+): {
+  texts: string[];
+  captures: CaptureIdentityV1[];
+  receipts: StageCompletenessReceiptV1[];
+  relayEvidence: VerifiedRelayEvidenceV1[];
+} {
+  const competitive = tripleStage('competitive', 1, 'competitive-attempt', [CLEAN, CLEAN, CLEAN]);
+  const architectural = tripleStage('architectural-review', 2, 'architectural-attempt', architecturalTexts);
+  const captures = [...competitive.captures, ...architectural.captures];
+  return {
+    texts: [CLEAN, CLEAN, CLEAN, ...architecturalTexts],
+    captures,
+    receipts: [competitive.receipt, architectural.receipt],
+    relayEvidence: relay(captures),
+  };
+}
 
-const ECONOMICS_CLEAN = [
-  'review-economics-contract: v1',
-  'NO_FINDINGS',
-  'SIMPLIFICATION_CLEAN',
-].join('\n');
-
-describe('Issue #1120 T3 four-stage completeness', () => {
-  it('requires competitive -> architectural-review -> Claude lens -> GPT lens', () => {
-    const result = check(CONFORMING);
-    expect(result.ok, result.errors.join('\n')).toBe(true);
-    expect(result.receipt).toEqual({
-      tier: 'T3',
-      competitiveAnchor: 1,
-      architecturalReviewPass: 2,
-      lensMax: 3,
-      lensSkipAnchor: null,
-      terminalPass: 4,
-    });
-    const message = formatStageCompletenessPassMessage(result);
-    expect(message).toMatch(/competitive-anchor=1/);
-    expect(message).toMatch(/architectural-review-pass=2/);
-    expect(message).toMatch(/lens-max=3/);
-    expect(message).toMatch(/terminal-pass=4/);
+describe('Issue #1150 stage receipts', () => {
+  it('credentials exact independent 01/02/03 sources as one logical round', () => {
+    const stage = tripleStage('competitive', 1, 'competitive-attempt');
+    const state = deriveReviewEpisodeState([stage.receipt], relay(stage.captures));
+    expect(state.errors, state.errors.join('\n')).toEqual([]);
+    expect(state.logicalRoundIds).toEqual(['competitive-attempt']);
+    expect(state.credentialingCapturesByStage.competitive).toHaveLength(3);
   });
 
-  it('counts stage ceilings only inside the active acceptance-attempt segment', () => {
-    const result = check({
-      'pass-01-competitive.capture.txt': 'historical competitive',
-      'pass-02-architectural-review.capture.txt': 'historical architectural review',
-      'pass-03-architectural-lens.capture.txt': 'historical claude lens',
-      'pass-04-architectural.capture.txt': 'historical terminal gpt lens',
-      'pass-05-competitive.capture.txt': 'current competitive',
-      'pass-06-architectural-review.capture.txt': 'current architectural review',
-      'pass-07-architectural-lens.capture.txt': 'current claude lens',
-      'pass-08-architectural.capture.txt': 'current terminal gpt lens',
-    });
+  it('rejects missing, duplicate-source, mislabeled, or cross-pass siblings', () => {
+    const stage = tripleStage('competitive', 1, 'competitive-attempt');
+    stage.receipt.invocations!.pop();
+    stage.receipt.credentialingCaptures.pop();
+    stage.receipt.relayEligibleCaptures.pop();
+    expect(deriveReviewEpisodeState([stage.receipt], relay(stage.receipt.relayEligibleCaptures)).errors.join('\n'))
+      .toMatch(/missing reviewer slot 03/);
 
-    expect(result.ok, result.errors.join('\n')).toBe(true);
-    expect(result.receipt).toEqual({
-      tier: 'T3',
-      competitiveAnchor: 5,
-      architecturalReviewPass: 6,
-      lensMax: 7,
-      lensSkipAnchor: null,
-      terminalPass: 8,
-    });
+    const duplicate = tripleStage('competitive', 1, 'duplicate-attempt');
+    duplicate.receipt.invocations![1]!.reviewerSource = duplicate.receipt.invocations![0]!.reviewerSource;
+    expect(deriveReviewEpisodeState([duplicate.receipt], relay(duplicate.captures)).errors.join('\n'))
+      .toMatch(/reviewer sources must be independent/);
+
+    const crossPass = tripleStage('competitive', 1, 'cross-pass-attempt');
+    crossPass.captures[2]!.name = 'pass-02-competitive-03.capture.txt';
+    crossPass.receipt.invocations![2]!.capture = crossPass.captures[2];
+    expect(deriveReviewEpisodeState([crossPass.receipt], relay(crossPass.captures)).errors.join('\n'))
+      .toMatch(/share one pass-NN prefix/);
   });
 
-  it('fails closed when architectural-review is missing, duplicated, or out of order', () => {
-    const missing = check({
-      'pass-01-competitive.capture.txt': 'competitive',
-      'pass-02-architectural-lens.capture.txt': 'claude',
-      'pass-03-architectural.capture.txt': 'terminal',
+  it('permits one retry only after a proven zero-send pre-send failure', () => {
+    const stage = tripleStage('competitive', 1, 'retry-attempt');
+    const successful = stage.receipt.invocations![0]!;
+    const first = invocation('competitive', 'retry-attempt', '01', undefined);
+    const retry = invocation('competitive', 'retry-attempt', '01', successful.capture, {
+      attemptOrdinal: 2,
+      retryClass: 'retry',
+      invocationId: 'retry-invocation',
+      terminalResultIdentity: 'retry-result',
+      reviewerSource: first.reviewerSource,
     });
-    expect(missing.errors.join(' ')).toMatch(/missing architectural-review stage/);
+    stage.receipt.invocations!.splice(0, 1, first, retry);
+    stage.receipt.settlement.retryState = 'exhausted';
+    expect(deriveReviewEpisodeState([stage.receipt], relay(stage.captures)).errors).toEqual([]);
 
-    const duplicate = check({
-      'pass-01-competitive.capture.txt': 'competitive',
-      'pass-02-architectural-review.capture.txt': 'review one',
-      'pass-03-architectural-review.capture.txt': 'review two',
-      'pass-04-architectural-lens.capture.txt': 'claude',
-      'pass-05-architectural.capture.txt': 'terminal',
-    });
-    expect(duplicate.errors.join(' ')).toMatch(/architectural-review stage ceiling exceeded/);
-
-    const early = check({
-      'pass-01-architectural-review.capture.txt': 'review too early',
-      'pass-02-competitive.capture.txt': 'competitive',
-      'pass-03-architectural-lens.capture.txt': 'claude',
-      'pass-04-architectural.capture.txt': 'terminal',
-    });
-    expect(early.errors.join(' ')).toMatch(/architectural-review stage out of order/);
+    const forbidden = structuredClone(stage.receipt);
+    forbidden.invocations![0]!.sendCount = 1;
+    forbidden.invocations![0]!.retryClass = 'retry-forbidden';
+    expect(deriveReviewEpisodeState([forbidden], relay(stage.captures)).errors.join('\n'))
+      .toMatch(/retry requires a proven retryable zero-send/);
   });
 
-  it('requires a real competitive pass and retains the three-pass ceiling', () => {
-    const tooMany = check({
-      'pass-01-competitive.capture.txt': 'one',
-      'pass-02-competitive.capture.txt': 'two',
-      'pass-03-competitive.capture.txt': 'three',
-      'pass-04-competitive.capture.txt': 'four',
-      'pass-05-architectural-review.capture.txt': 'review',
-      'pass-06-architectural-lens.capture.txt': 'claude',
-      'pass-07-architectural.capture.txt': 'terminal',
+  it('requires exact relay equality and preserves Claude waiver zero-capture semantics', () => {
+    const preLens = preLensFixture();
+    const state = deriveReviewEpisodeState(preLens.receipts, preLens.relayEvidence.slice(1));
+    expect(state.errors.join('\n')).toMatch(/relayedCaptureUnion must equal governedCaptureUnion/);
+
+    const waiverReceipt = receipt({
+      stage: 'architectural-lens',
+      sequence: 3,
+      attemptId: 'claude-attempt',
+      captures: [],
+      claude: {
+        kind: 'waiver',
+        waiver: {
+          reason: 'claude-unavailable',
+          unavailability: 'quota',
+          evidenceIdentity: 'quota-evidence',
+        },
+      },
     });
-    expect(tooMany.errors.join(' ')).toMatch(/competitive stage ceiling exceeded/);
-
-    const waived = withCase({
-      'competitive-stage-waiver.json': JSON.stringify({
-        reason: 'operator-waiver',
-        'recorded-at': '2026-07-29T00:00:00.000Z',
-        'after-pass': 0,
-      }),
-      'pass-01-architectural-review.capture.txt': 'review',
-      'pass-02-architectural-lens.capture.txt': 'claude',
-      'pass-03-architectural.capture.txt': 'terminal',
-    }, ({ repoRoot, draftPath, reviewDir }) => ({
-      parsed: parseCompetitiveWaiver(reviewDir),
-      result: checkStageCompletenessGuard(T3_DRAFT, { repoRoot, draftPath }),
-    }));
-    expect(waived.parsed.waiver?.reason).toBe('operator-waiver');
-    expect(waived.result.errors.join(' ')).toMatch(/missing competitive stage/);
+    const withWaiver = deriveReviewEpisodeState([...preLens.receipts, waiverReceipt], preLens.relayEvidence);
+    expect(withWaiver.errors, withWaiver.errors.join('\n')).toEqual([]);
+    expect(withWaiver.rawFindingCountByStage['architectural-lens']).toBe(0);
   });
 
-  it('accepts only the existing explicit Claude-unavailable waiver after architectural-review', () => {
-    const outcome = withCase({
-      'pass-01-competitive.capture.txt': 'competitive',
-      'pass-02-architectural-review.capture.txt': 'review',
-      'architect-lens-stage-waiver.json': JSON.stringify({
-        reason: 'claude-unavailable',
-        'recorded-at': '2026-07-29T00:00:00.000Z',
-        'after-pass': 3,
-        unavailability: 'provider-unavailable',
-      }),
-      'pass-04-architectural.capture.txt': 'terminal',
-    }, ({ repoRoot, draftPath, reviewDir }) => ({
-      parsed: parseArchitectLensWaiver(reviewDir),
-      result: checkStageCompletenessGuard(T3_DRAFT, { repoRoot, draftPath }),
-    }));
-    expect(outcome.parsed.waiver?.reason).toBe('claude-unavailable');
-    expect(outcome.result.ok, outcome.result.errors.join('\n')).toBe(true);
-    expect(outcome.result.receipt?.lensSkipAnchor).toBe(3);
-  });
-
-  it('keeps historical architectural-final captures audit-only while rejecting bad current ordering', () => {
-    const baseline = check(CONFORMING);
-    const historical = check({ ...CONFORMING, 'pass-05-architectural-final.capture.txt': 'obsolete audit evidence' });
-    expect(baseline.ok, baseline.errors.join('\n')).toBe(true);
-    expect(historical.ok, historical.errors.join('\n')).toBe(true);
-    expect(historical.receipt).toEqual(baseline.receipt);
-
-    const lensEarly = check({
-      'pass-01-competitive.capture.txt': 'competitive',
-      'pass-02-architectural-lens.capture.txt': 'claude too early',
-      'pass-03-architectural-review.capture.txt': 'review',
-      'pass-04-architectural.capture.txt': 'terminal',
+  it('keeps T3 final acceptance fail-closed until #1123 while allowing pre-lens', () => {
+    const preLens = preLensFixture();
+    const pre = checkStageCompletenessGuard(T3_DRAFT, {
+      stageReceipts: preLens.receipts,
+      verifiedRelayEvidence: preLens.relayEvidence,
+      phase: 'pre-lens',
     });
-    expect(lensEarly.errors.join(' ')).toMatch(/architect-lens stage out of order/);
+    expect(pre.ok, pre.errors.join('\n')).toBe(true);
 
-    const t2 = T3_DRAFT.replace('tier: T3', 'tier: T2').replace('advisory-prior: T3', 'advisory-prior: T2');
-    const t2Result = checkStageCompletenessGuard(t2, {});
-    expect(t2Result.ok).toBe(true);
-    expect(t2Result.noop).toBe(true);
-  });
-
-  it('preserves the grandfathered review-dir carve-out and CLI receipt', () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'stage-completeness-grandfather-'));
-    const draftsDir = join(repoRoot, 'docs/issues_drafts');
-    const draftPath = join(draftsDir, '206-ao-010-session-status-readers-migration.md');
-    mkdirSync(join(draftsDir, '.review/206-ao-010-session-status-readers-migration'), { recursive: true });
-    writeFileSync(draftPath, T3_DRAFT, 'utf8');
-    try {
-      const grandfathered = checkStageCompletenessGuard(T3_DRAFT, { repoRoot, draftPath });
-      expect(grandfathered.ok).toBe(true);
-      expect(grandfathered.receipt).toBeNull();
-    } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
-    }
-
-    const code = withCase(CONFORMING, ({ repoRoot: root, draftPath: draft }) => runCli([
-      'node',
-      'stage-completeness-guard.ts',
-      '--text-file', draft,
-      '--draft-path', draft,
-      '--repo-root', root,
-    ]));
-    expect(code).toBe(0);
+    const terminalText = CLEAN;
+    const terminalCapture = capture('terminal-capture', 'pass-04-architectural.capture.txt', terminalText, 0);
+    const terminalReceipt = receipt({
+      stage: 'architectural',
+      sequence: 4,
+      attemptId: 'terminal-attempt',
+      captures: [terminalCapture],
+      invocations: [invocation('architectural', 'terminal-attempt', '01', terminalCapture)],
+    });
+    const claudeCapture = capture('claude-capture', 'pass-03-architectural-lens.capture.txt', CLEAN, 0);
+    const claudeReceipt = receipt({
+      stage: 'architectural-lens',
+      sequence: 3,
+      attemptId: 'claude-attempt',
+      captures: [claudeCapture],
+      claude: { kind: 'capture', terminal: true, capture: claudeCapture, m3Status: 'recorded' },
+    });
+    const allReceipts = [...preLens.receipts, claudeReceipt, terminalReceipt];
+    const allCaptures = [...preLens.captures, claudeCapture, terminalCapture];
+    const finalState = deriveReviewEpisodeState(allReceipts, relay(allCaptures));
+    expect(validateReviewEpisodeTopology(finalState, 'final-acceptance').join('\n'))
+      .toMatch(/blocked until #1123/);
   });
 });
 
-describe('Issue #1120 architectural-review economics', () => {
-  const emptyLedger = JSON.stringify({ version: 1, findings: [] });
-  const baseOptions = {
-    phase: 'pre-lens',
-    reviewEconomics: true,
-    stageTerminalConfirmed: true,
-    adoptionTimestampMs: 1,
-    enforceT3PreLensTopology: true,
-  } as const;
+describe('Issue #1150 occurrence economics', () => {
+  const finding = (type: 'quality' | 'security' | 'scope-violation', evidence: string) => [
+    'review-economics-contract: v1',
+    'id: REUSED-ID',
+    `type: ${type}`,
+    'severity: P1',
+    `evidence: ${evidence}`,
+    'recommendation: use the cheapest sufficient correction',
+    'persistent-machinery: no',
+    'SIMPLIFICATION_CLEAN',
+  ].join('\n');
 
-  it('treats architectural-review as the governed pre-lens reviewer anchor', () => {
-    const result = checkFindingLedgerGuard([ECONOMICS_CLEAN, ECONOMICS_CLEAN], emptyLedger, {
-      ...baseOptions,
-      captureMetadata: [
-        { name: 'pass-01-competitive.capture.txt', timestampMs: 2 },
-        { name: 'pass-02-architectural-review.capture.txt', timestampMs: 3 },
+  it('maps duplicate reviewer-local ids by occurrence and derives exact counts', () => {
+    const texts = [finding('quality', 'first defect'), finding('quality', 'second defect'), CLEAN];
+    const fixture = preLensFixture(texts);
+    const ledger = {
+      version: 2,
+      counts: { rawFindingCount: 2, distinctFindingCount: 2, processedDistinctCount: 2 },
+      findings: [
+        {
+          id: 'DEFECT-1', summary: 'first', type: 'quality',
+          occurrences: ['architectural-attempt-1:1'],
+          defectDisposition: 'addressed', remedyDisposition: 'accepted',
+          'persistent-machinery': 'no',
+        },
+        {
+          id: 'DEFECT-2', summary: 'second', type: 'quality',
+          occurrences: ['architectural-attempt-2:1'],
+          defectDisposition: 'rejected-as-false', remedyDisposition: 'rejected-as-overengineering',
+          'persistent-machinery': 'no',
+        },
       ],
+    };
+    const result = checkFindingLedgerGuard(fixture.texts, JSON.stringify(ledger), {
+      phase: 'pre-lens', reviewEconomics: true, stageTerminalConfirmed: true,
+      adoptionTimestampMs: 1_000, issueRevision: 'r09',
+      captureMetadata: fixture.captures.map((item, index) => ({
+        name: item.name, timestampMs: 2_000 + index, captureIdentity: item.captureIdentity,
+      })),
+      stageReceipts: fixture.receipts,
+      verifiedRelayEvidence: fixture.relayEvidence,
     });
     expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(result.economicsCounts).toEqual({ rawFindingCount: 2, distinctFindingCount: 2, processedDistinctCount: 2 });
   });
 
-  it('uses only the current acceptance-attempt segment for the pre-lens topology', () => {
-    const captures = [
-      ECONOMICS_CLEAN,
-      ECONOMICS_CLEAN,
-      'historical claude',
-      ECONOMICS_CLEAN,
-      ECONOMICS_CLEAN,
-      ECONOMICS_CLEAN,
+  it('blocks unresolved/missing mappings and protected-type erasure', () => {
+    const texts = [
+      finding('security', 'This is a security issue.'),
+      finding('scope-violation', 'This path is out of scope under allowed_roots.'),
+      CLEAN,
     ];
-    const result = checkFindingLedgerGuard(captures, emptyLedger, {
-      ...baseOptions,
-      captureMetadata: [
-        { name: 'pass-01-competitive.capture.txt', timestampMs: 2 },
-        { name: 'pass-02-architectural-review.capture.txt', timestampMs: 3 },
-        { name: 'pass-03-architectural-lens.capture.txt', timestampMs: 4 },
-        { name: 'pass-04-architectural.capture.txt', timestampMs: 5 },
-        { name: 'pass-05-competitive.capture.txt', timestampMs: 6 },
-        { name: 'pass-06-architectural-review.capture.txt', timestampMs: 7 },
-      ],
+    const fixture = preLensFixture(texts);
+    const ledger = {
+      version: 2,
+      counts: { rawFindingCount: 2, distinctFindingCount: 1, processedDistinctCount: 1 },
+      findings: [{
+        id: 'MIXED', summary: 'invalid grouping', type: 'security',
+        occurrences: ['architectural-attempt-1:1', 'architectural-attempt-2:1'],
+        defectDisposition: 'addressed', remedyDisposition: 'accepted', architectPending: true,
+        'persistent-machinery': 'no',
+      }],
+    };
+    const result = checkFindingLedgerGuard(fixture.texts, JSON.stringify(ledger), {
+      phase: 'pre-lens', reviewEconomics: true, stageTerminalConfirmed: true,
+      adoptionTimestampMs: 1_000, issueRevision: 'r09',
+      captureMetadata: fixture.captures.map((item, index) => ({
+        name: item.name, timestampMs: 2_000 + index, captureIdentity: item.captureIdentity,
+      })),
+      stageReceipts: fixture.receipts,
+      verifiedRelayEvidence: fixture.relayEvidence,
+    });
+    expect(result.errors.join('\n')).toMatch(/mixes protected occurrence identities\/types/);
+  });
+
+  it('aggregates clean/no-findings across all sources independent of order', () => {
+    const fixture = preLensFixture();
+    const result = checkFindingLedgerGuard([...fixture.texts].reverse(), JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 },
+      findings: [],
+    }), {
+      phase: 'pre-lens', reviewEconomics: true, stageTerminalConfirmed: true,
+      adoptionTimestampMs: 1_000, issueRevision: 'r09',
+      captureMetadata: [...fixture.captures].reverse().map((item, index) => ({
+        name: item.name, timestampMs: 2_000 + index, captureIdentity: item.captureIdentity,
+      })),
+      stageReceipts: [...fixture.receipts].reverse(),
+      verifiedRelayEvidence: [...fixture.relayEvidence].reverse(),
     });
     expect(result.ok, result.errors.join('\n')).toBe(true);
-  });
-
-  it('rejects pre-lens progression without architectural-review', () => {
-    const result = checkFindingLedgerGuard([ECONOMICS_CLEAN], emptyLedger, {
-      ...baseOptions,
-      captureMetadata: [
-        { name: 'pass-01-competitive.capture.txt', timestampMs: 2 },
-      ],
+    expect(result.simplificationAggregate).toEqual({
+      simplificationClean: true,
+      noFindings: true,
+      candidateOccurrences: [],
     });
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/requires exactly one current-segment architectural-review capture/);
-  });
-
-  it('rejects terminal architectural as pre-lens authority before Claude', () => {
-    const result = checkFindingLedgerGuard([ECONOMICS_CLEAN, ECONOMICS_CLEAN], emptyLedger, {
-      ...baseOptions,
-      captureMetadata: [
-        { name: 'pass-01-competitive.capture.txt', timestampMs: 2 },
-        { name: 'pass-02-architectural.capture.txt', timestampMs: 3 },
-      ],
-    });
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/terminal architectural cannot satisfy pre-lens authority before Claude/);
-    expect(result.errors.join(' ')).toMatch(/requires exactly one current-segment architectural-review capture/);
-  });
-
-  it('fails when architectural-review omits the economics marker', () => {
-    const result = checkFindingLedgerGuard([ECONOMICS_CLEAN, 'NO_FINDINGS\nSIMPLIFICATION_CLEAN'], emptyLedger, {
-      ...baseOptions,
-      captureMetadata: [
-        { name: 'pass-01-competitive.capture.txt', timestampMs: 2 },
-        { name: 'pass-02-architectural-review.capture.txt', timestampMs: 3 },
-      ],
-    });
-    expect(result.ok).toBe(false);
-    expect(result.errors.join(' ')).toMatch(/pass-02-architectural-review\.capture\.txt missing review-economics-contract: v1/);
   });
 });
 
-describe('Issue #1120 state-light Browser-GPT turn', () => {
-  const helperSource = readFileSync(
-    resolve(process.cwd(), 'scripts/chatgpt-browser-turn/state-light-turn.ts'),
-    'utf8',
-  );
-
-  it('accepts page-only final output, but not generating or foreign activity', async () => {
-    const { classifyPageObservation } = await import('./chatgpt-browser-turn/state-light-turn.ts');
-    expect(classifyPageObservation([
-      { role: 'user', text: 'old prompt' },
-      { role: 'assistant', text: 'old answer' },
-      { role: 'user', text: 'review PR 1120' },
-      { role: 'assistant', text: 'progress' },
-      { role: 'assistant', text: 'NO_FINDINGS' },
-    ], 2, 'review PR 1120', false)).toEqual({ state: 'ready', reply: 'NO_FINDINGS' });
-
-    expect(classifyPageObservation([
-      { role: 'user', text: 'task' },
-      { role: 'assistant', text: 'partial' },
-    ], 0, 'task', true)).toEqual({ state: 'waiting' });
-
-    expect(classifyPageObservation([
-      { role: 'user', text: 'task' },
-      { role: 'assistant', text: 'partial' },
-      { role: 'user', text: 'foreign task' },
-      { role: 'assistant', text: 'foreign answer' },
-    ], 0, 'task', false)).toEqual({
-      state: 'ready',
-      reply: 'partial',
-    });
-  });
-
-  it('does not claim an unattributed assistant node before its own prompt appears', async () => {
-    const { classifyPageObservation } = await import('./chatgpt-browser-turn/state-light-turn.ts');
-    expect(classifyPageObservation([
-      { role: 'user', text: 'old prompt' },
-      { role: 'assistant', text: 'old answer' },
-      { role: 'assistant', text: 'unattributed text' },
-    ], 2, 'new prompt', false)).toEqual({ state: 'waiting' });
-  });
-
-  it('contains no old admission authority, second monitor, or journal read path', () => {
+describe('Issue #1120 transport boundary remains unchanged', () => {
+  it('does not add a second monitor or legacy admission authority', () => {
+    const source = readFileSync(resolve(process.cwd(), 'scripts/chatgpt-browser-turn/state-light-turn.ts'), 'utf8');
     for (const forbidden of [
-      'acquireDomainLock(',
-      'reserveDestination(',
-      'blockerBeforeSend(',
-      'statusList(',
-      'capabilityStatus(',
-      'runtimeWitnessSurfaceAvailable(',
-      'runGateBCharacterization(',
-      "cause: 'reply_finished_terminal_unproven'",
-    ]) expect(helperSource, forbidden).not.toContain(forbidden);
-    expect(helperSource).not.toMatch(/browser-gpt-inspect|15\s*minute|10\s*minute|watchdog/i);
-    expect(helperSource).toContain('contexts[0].newPage()');
-    expect(helperSource.match(/sendButton\.click\(/g) ?? []).toHaveLength(1);
-    expect(helperSource.match(/composer\.press\('Enter'/g) ?? []).toHaveLength(1);
-    expect(helperSource).toContain('sendCount += 1');
-    expect(helperSource).toContain('appendFileSync(BROWSER_TURN_RECURRENCE_PATH');
-    expect(helperSource).not.toMatch(/readFileSync\(BROWSER_TURN_RECURRENCE_PATH/);
-    expect(helperSource).not.toMatch(/acquire.*journal|journal.*lock/i);
-    expect(helperSource).not.toContain("incident('waiting'");
-    expect(helperSource).not.toContain("incident('generating'");
+      'acquireDomainLock(', 'reserveDestination(', 'blockerBeforeSend(',
+      'statusList(', 'capabilityStatus(', 'runtimeWitnessSurfaceAvailable(',
+    ]) expect(source).not.toContain(forbidden);
+    expect(source.match(/sendButton\.click\(/g) ?? []).toHaveLength(1);
   });
 });
