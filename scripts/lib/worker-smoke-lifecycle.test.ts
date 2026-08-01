@@ -246,6 +246,27 @@ describe('worker smoke spawn and cleanup lifecycle', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it('fails lifecycle cleanliness when a required cancel request cannot be persisted', () => {
+    const root = mkdtempSync(join(tmpdir(), 'worker-smoke-cancel-write-'));
+    const runId = 'cancel-write-failure';
+    const artifactDir = runDir(root, runId);
+    createSmokeLifecycleReservation({ runId, artifactDir, issueNumber: 1138, prNumber: 1, headSha: head });
+    bindSmokeTerminalHandle(artifactDir, 'term_owned');
+    mkdirSync(smokeCancelRequestPath(artifactDir));
+    const result = cleanupSmokeLifecycle({
+      artifactDir,
+      runId,
+      reason: 'progress_stall',
+      requestCancellation: false,
+      cooperativeAcknowledgementObserved: false,
+      closeBoundHandle: () => 'closed_owned_handle',
+    });
+    expect(result.clean).toBe(false);
+    expect(result.operatorFilesCleared).toBe(false);
+    expect(readSmokeLifecycleRegistry(artifactDir)?.spawnState).toBe('cleanup_failed');
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it('admits at most one concurrent smoke start and restores cleanliness after release', () => {
     const root = mkdtempSync(join(tmpdir(), 'worker-smoke-admission-'));
     const first = preflightSmokeLifecycle({
