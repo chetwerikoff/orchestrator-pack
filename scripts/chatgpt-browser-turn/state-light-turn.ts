@@ -1027,6 +1027,14 @@ async function hasBlockingPageOverlay(page: any): Promise<boolean> {
   return !wall.state;
 }
 
+function remainingComposerMutationMs(
+  mutationPairDeadlineMs: number,
+  invocationDeadlineMs: number,
+): number {
+  const now = Date.now();
+  return Math.min(mutationPairDeadlineMs - now, invocationDeadlineMs - now);
+}
+
 async function mutateComposerOrCause(
   page: any,
   text: string,
@@ -1036,10 +1044,15 @@ async function mutateComposerOrCause(
 ): Promise<PreSendComposerFailureCause | null> {
   const remainingMs = Math.max(0, invocationDeadlineMs - Date.now());
   const mutationBudgetMs = deriveComposerMutationBudgetMs(payloadByteLength, config.timeoutMs, remainingMs);
+  const mutationPairDeadlineMs = Date.now() + mutationBudgetMs;
   const composer = page.locator(COMPOSER_SELECTOR);
   try {
-    await composer.click({ timeout: mutationBudgetMs });
-    await composer.fill(text, { timeout: mutationBudgetMs });
+    let actionBudgetMs = remainingComposerMutationMs(mutationPairDeadlineMs, invocationDeadlineMs);
+    if (actionBudgetMs <= 0) return 'composer_mutation_budget_exhausted';
+    await composer.click({ timeout: actionBudgetMs });
+    actionBudgetMs = remainingComposerMutationMs(mutationPairDeadlineMs, invocationDeadlineMs);
+    if (actionBudgetMs <= 0) return 'composer_mutation_budget_exhausted';
+    await composer.fill(text, { timeout: actionBudgetMs });
     return null;
   } catch (error) {
     if (!isPlaywrightTimeoutError(error)) throw error;
@@ -1336,6 +1349,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       };
     }
 
+    const invocationDeadlineMs = Date.now() + config.timeoutMs;
+
     const chromium = loadChromium();
     browser = await chromium.connectOverCDP(config.cdp, { timeout: Math.min(30_000, config.timeoutMs) });
     page = await createDedicatedTurnPage(browser);
@@ -1344,8 +1359,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     const composerDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
     let baselineCount = 0;
     let ownedConversationUrl: string | undefined;
-
-    const invocationDeadlineMs = Date.now() + config.timeoutMs;
 
     const returnComposerMutationFailure = (
       cause: PreSendComposerFailureCause,
@@ -2364,6 +2377,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
 }
 
 export const __testComposerMutation = {
+  remainingComposerMutationMs,
   mutateComposerOrCause,
   hasBlockingPageOverlay,
   waitForComposer,

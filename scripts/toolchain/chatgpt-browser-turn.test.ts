@@ -3323,10 +3323,12 @@ describe('issue 1174 composer mutation budget', () => {
   const MEASURED_LARGE_PROMPT = 'x'.repeat(ISSUE_1174_PAYLOAD_BYTES);
 
   function makeComposerPage(options: {
+    clickDelayMs?: number;
     fillDelayMs?: number;
     composerPresent?: boolean;
     blockingOverlay?: boolean;
     onFill?: () => void;
+    onClick?: () => void;
     onPress?: () => void;
   }) {
     let filled = false;
@@ -3336,7 +3338,22 @@ describe('issue 1174 composer mutation budget', () => {
     const messages = frames.at(-1)!.map((message) => ({ role: message.role as 'user' | 'assistant', text: message.text, finalAction: message.finalAction, finalActionInTurnContainer: message.finalActionInTurnContainer }));
     const composer = scalarLocator({
       count: vi.fn(async () => (options.composerPresent === false ? 0 : 1)),
-      click: vi.fn(async () => undefined),
+      click: vi.fn(async (opts?: { timeout?: number }) => {
+        const delayMs = options.clickDelayMs ?? 0;
+        const timeoutMs = opts?.timeout ?? 30_000;
+        if (delayMs > 0) {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => reject(Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' })), timeoutMs);
+            setTimeout(() => {
+              clearTimeout(timer);
+              options.onClick?.();
+              resolve();
+            }, delayMs);
+          });
+        } else {
+          options.onClick?.();
+        }
+      }),
       fill: vi.fn(async (_text: string, opts?: { timeout?: number }) => {
         const delayMs = options.fillDelayMs ?? 0;
         const timeoutMs = opts?.timeout ?? 30_000;
@@ -3462,6 +3479,70 @@ describe('issue 1174 composer mutation budget', () => {
     expect(mutationRegion).not.toMatch(/slice\(|substring\(|split\(/);
     const uiAdapter = readFileSync(join(repoRoot, 'scripts/chatgpt-browser-turn/ui-adapter.ts'), 'utf8');
     expect(uiAdapter).not.toContain('COMPOSER_MUTATION_BASE_WAIT_MS');
+  });
+
+  it('click and fill share one derived mutation budget and respect the invocation deadline', async () => {
+    const config = { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 60_000 };
+    const payloadBytes = 100;
+    const pairBudget = deriveComposerMutationBudgetMs(payloadBytes, config.timeoutMs);
+    const clickDelayMs = pairBudget - 40;
+    const { page, composer } = makeComposerPage({ clickDelayMs, fillDelayMs: 200 });
+    const invocationDeadlineMs = Date.now() + pairBudget;
+    const failure = await __testComposerMutation.mutateComposerOrCause(
+      page,
+      'payload',
+      payloadBytes,
+      config,
+      invocationDeadlineMs,
+    );
+    expect(failure).toBe('composer_mutation_budget_exhausted');
+    expect(composer.click).toHaveBeenCalledTimes(1);
+    expect(composer.click.mock.calls[0]?.[0]?.timeout).toBeLessThanOrEqual(pairBudget);
+    expect(composer.fill).toHaveBeenCalledTimes(1);
+    const fillTimeout = composer.fill.mock.calls[0]?.[1]?.timeout as number;
+    expect(fillTimeout).toBeGreaterThan(0);
+    expect(fillTimeout).toBeLessThanOrEqual(40);
+    const elapsedBudget = __testComposerMutation.remainingComposerMutationMs(
+      Date.now() - 1,
+      invocationDeadlineMs,
+    );
+    expect(elapsedBudget).toBeLessThanOrEqual(0);
+  });
+
+  it('returns budget exhaustion before issuing an action with zero or negative remaining time', async () => {
+    const config = { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 60_000 };
+    const { page, composer } = makeComposerPage({ fillDelayMs: 5_000 });
+    const failure = await __testComposerMutation.mutateComposerOrCause(
+      page,
+      'payload',
+      100,
+      config,
+      Date.now() - 1,
+    );
+    expect(failure).toBe('composer_mutation_budget_exhausted');
+    expect(composer.click).not.toHaveBeenCalled();
+    expect(composer.fill).not.toHaveBeenCalled();
+
+    const budget = deriveComposerMutationBudgetMs(100, config.timeoutMs);
+    const exhaustedAfterClick = makeComposerPage({ clickDelayMs: budget + 50 });
+    const lateFailure = await __testComposerMutation.mutateComposerOrCause(
+      exhaustedAfterClick.page,
+      'payload',
+      100,
+      config,
+      Date.now() + budget,
+    );
+    expect(lateFailure).toBe('composer_mutation_budget_exhausted');
+    expect(exhaustedAfterClick.composer.fill).not.toHaveBeenCalled();
+  });
+
+  it('establishes the invocation deadline before CDP connect and pre-send navigation', () => {
+    const source = readFileSync(join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-turn.ts'), 'utf8');
+    const runTurn = source.slice(source.indexOf('async function runTurn'), source.indexOf('async function finalizeTurn'));
+    const connectIdx = runTurn.indexOf('connectOverCDP');
+    const deadlineIdx = runTurn.indexOf('const invocationDeadlineMs = Date.now() + config.timeoutMs;');
+    expect(deadlineIdx).toBeGreaterThan(-1);
+    expect(connectIdx).toBeGreaterThan(deadlineIdx);
   });
 
   it('measured 36906-byte payload completes mutation under derived budget and sends once', async () => {
