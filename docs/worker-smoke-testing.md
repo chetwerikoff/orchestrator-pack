@@ -216,7 +216,7 @@ comment, but it still must produce clean durable lifecycle state before admissio
 Run the focused current-head canary with controllable clocks before marking the PR ready:
 
 ```bash
-npx vitest run scripts/lib/worker-smoke-lifecycle.test.ts
+npx vitest run scripts/worker-smoke.test.ts -t '#1138'
 ```
 
 The canary must visibly cover: a sealed PASS after virtual elapsed time beyond 30 minutes, a true
