@@ -3410,18 +3410,26 @@ describe('issue 1174 composer mutation budget', () => {
     );
   });
 
-  it('mutation budget grows with payload byte length', () => {
-    const small = deriveComposerMutationBudgetMs(3_700, 1_800_000);
-    const large = deriveComposerMutationBudgetMs(37_000, 1_800_000);
-    expect(large).toBeGreaterThan(small);
-    expect(large).toBe(COMPOSER_MUTATION_BASE_WAIT_MS + 37_000 * COMPOSER_MUTATION_MS_PER_BYTE);
-    const capped = deriveComposerMutationBudgetMs(500_000, 1_800_000);
-    expect(capped).toBe(MAX_COMPOSER_MUTATION_WAIT_MS);
-    const subordinate = deriveComposerMutationBudgetMs(10_000, 4_000, 2_500);
-    expect(subordinate).toBe(2_500);
-    const readme = readFileSync(join(repoRoot, 'scripts/chatgpt-browser-turn/README.md'), 'utf8');
-    expect(readme).toContain('3_000 + B × 0.25');
-    expect(readme).toContain('30_000');
+  it('derives the deterministic mutation budget at growth and clamp boundaries', () => {
+    const uncappedSamples = [0, 1, 3, 4, 100, 10_000, 107_998];
+    const uncappedBudgets = uncappedSamples.map((bytes) => (
+      deriveComposerMutationBudgetMs(bytes, 1_800_000)
+    ));
+    for (let index = 1; index < uncappedBudgets.length; index += 1) {
+      expect(uncappedBudgets[index]).toBeGreaterThanOrEqual(uncappedBudgets[index - 1]!);
+    }
+    expect(uncappedBudgets[3]).toBeGreaterThan(uncappedBudgets[0]!);
+    expect(deriveComposerMutationBudgetMs(10_000, 1_800_000)).toBe(
+      Math.floor(COMPOSER_MUTATION_BASE_WAIT_MS + 10_000 * COMPOSER_MUTATION_MS_PER_BYTE),
+    );
+
+    expect(deriveComposerMutationBudgetMs(107_999, 1_800_000)).toBe(29_999);
+    expect(deriveComposerMutationBudgetMs(108_000, 1_800_000)).toBe(MAX_COMPOSER_MUTATION_WAIT_MS);
+    expect(deriveComposerMutationBudgetMs(500_000, 1_800_000)).toBe(MAX_COMPOSER_MUTATION_WAIT_MS);
+    expect(deriveComposerMutationBudgetMs(10_000, 4_000)).toBe(4_000);
+    expect(deriveComposerMutationBudgetMs(10_000, 1_800_000, 2_500)).toBe(2_500);
+    expect(deriveComposerMutationBudgetMs(10_000, 1_800_000, 0)).toBe(0);
+    expect(deriveComposerMutationBudgetMs(10_000, 1_800_000, -1)).toBe(0);
   });
 
   it('budget exhaustion fails before send with zero send count and cleanup', async () => {
@@ -3468,17 +3476,22 @@ describe('issue 1174 composer mutation budget', () => {
     expect(new Set([exhausted, overlay, unreadableCause]).size).toBe(3);
   });
 
-  it('no retry queue lock or reactive payload resizing around composer insertion', () => {
-    const source = readFileSync(join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-turn.ts'), 'utf8');
-    const mutationRegion = source.slice(source.indexOf('async function mutateComposerOrCause'), source.indexOf('async function createDedicatedTurnPage'));
-    expect(mutationRegion).not.toMatch(/\bretry\b/i);
-    expect(mutationRegion).not.toMatch(/\bqueue\b/i);
-    expect(mutationRegion).not.toMatch(/\block\b/i);
-    expect(mutationRegion).not.toMatch(/\blease\b/i);
-    expect(mutationRegion).not.toMatch(/\bbackoff\b/i);
-    expect(mutationRegion).not.toMatch(/slice\(|substring\(|split\(/);
-    const uiAdapter = readFileSync(join(repoRoot, 'scripts/chatgpt-browser-turn/ui-adapter.ts'), 'utf8');
-    expect(uiAdapter).not.toContain('COMPOSER_MUTATION_BASE_WAIT_MS');
+  it('attempts one mutation with the complete payload and never retries or sends after timeout', async () => {
+    const payload = 'payload with no truncation or retry';
+    const config = { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 100 };
+    const { page, composer, getPressed } = makeComposerPage({ fillDelayMs: 150 });
+    const failure = await __testComposerMutation.mutateComposerOrCause(
+      page,
+      payload,
+      payload.length,
+      config,
+      Date.now() + 1_000,
+    );
+    expect(failure).toBe('composer_mutation_budget_exhausted');
+    expect(composer.click).toHaveBeenCalledTimes(1);
+    expect(composer.fill).toHaveBeenCalledTimes(1);
+    expect(composer.fill).toHaveBeenCalledWith(payload, expect.any(Object));
+    expect(getPressed()).toBe(false);
   });
 
   it('click and fill share one derived mutation budget and respect the invocation deadline', async () => {
@@ -3509,7 +3522,7 @@ describe('issue 1174 composer mutation budget', () => {
     expect(elapsedBudget).toBeLessThanOrEqual(0);
   });
 
-  it('returns budget exhaustion before issuing an action with zero or negative remaining time', async () => {
+  it('late-start with an exhausted invocation deadline fails before click or fill', async () => {
     const config = { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 60_000 };
     const { page, composer } = makeComposerPage({ fillDelayMs: 5_000 });
     const failure = await __testComposerMutation.mutateComposerOrCause(
@@ -3522,7 +3535,10 @@ describe('issue 1174 composer mutation budget', () => {
     expect(failure).toBe('composer_mutation_budget_exhausted');
     expect(composer.click).not.toHaveBeenCalled();
     expect(composer.fill).not.toHaveBeenCalled();
+  });
 
+  it('does not start fill after click exhausts the shared budget', async () => {
+    const config = { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 60_000 };
     const budget = deriveComposerMutationBudgetMs(100, config.timeoutMs);
     const exhaustedAfterClick = makeComposerPage({ clickDelayMs: budget + 50 });
     const lateFailure = await __testComposerMutation.mutateComposerOrCause(
@@ -3533,16 +3549,82 @@ describe('issue 1174 composer mutation budget', () => {
       Date.now() + budget,
     );
     expect(lateFailure).toBe('composer_mutation_budget_exhausted');
+    expect(exhaustedAfterClick.composer.click).toHaveBeenCalledTimes(1);
     expect(exhaustedAfterClick.composer.fill).not.toHaveBeenCalled();
   });
 
-  it('establishes the invocation deadline before CDP connect and pre-send navigation', () => {
-    const source = readFileSync(join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-turn.ts'), 'utf8');
-    const runTurn = source.slice(source.indexOf('async function runTurn'), source.indexOf('async function finalizeTurn'));
-    const connectIdx = runTurn.indexOf('connectOverCDP');
-    const deadlineIdx = runTurn.indexOf('const invocationDeadlineMs = Date.now() + config.timeoutMs;');
-    expect(deadlineIdx).toBeGreaterThan(-1);
-    expect(connectIdx).toBeGreaterThan(deadlineIdx);
+  it('runTurn starts its invocation deadline before CDP connect and navigation', async () => {
+    let now = 1_000;
+    let connectAt = -1;
+    let navigateAt = -1;
+    const target = 'https://chatgpt.com/c/deadline-test';
+    const input = join(root, 'deadline-input.txt');
+    const output = join(root, 'deadline-output.txt');
+    writeFileSync(input, 'payload');
+    const fixture = makeComposerPage({});
+    const originalLocator = fixture.page.locator;
+    fixture.composer.count = vi.fn(async () => 1);
+    fixture.page.locator = vi.fn((selector: string) => (
+      selector.includes('prompt-textarea') ? fixture.composer : originalLocator(selector)
+    ));
+    fixture.page.url = vi.fn(() => target);
+    fixture.page.goto = vi.fn(async () => {
+      navigateAt = now;
+      now += 5_000;
+    });
+    const browser = {
+      contexts: () => [{ newPage: async () => fixture.page }],
+      close: vi.fn(async () => undefined),
+      isConnected: () => true,
+    };
+    const connectOverCDP = vi.fn(async () => {
+      connectAt = now;
+      now += 6_000;
+      return browser;
+    });
+    vi.spyOn(Date, 'now').mockImplementation(() => {
+      const current = now;
+      now += 1;
+      return current;
+    });
+    vi.resetModules();
+    vi.doMock('../chatgpt-browser-turn/ui-adapter.ts', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../chatgpt-browser-turn/ui-adapter.ts')>();
+      return {
+        ...actual,
+        verifyProfile: vi.fn(async () => ({ state: 'verified' as const, cause: 'ok' })),
+        productStatusText: vi.fn(async () => ({ text: '', composer: true })),
+        loadChromium: vi.fn(() => ({ connectOverCDP })),
+      };
+    });
+    const { runStateLightTurn } = await import('../chatgpt-browser-turn/state-light-turn.ts');
+    const writes: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+      return true;
+    });
+
+    const exitCode = await runStateLightTurn([
+      '--profile', join(root, 'profile'),
+      '--cdp', cdp,
+      '--input', input,
+      '--output', output,
+      '--chat-url', target,
+      '--timeout-ms', '10000',
+    ]);
+    const result = JSON.parse(writes.join(''));
+
+    expect(exitCode).toBe(13);
+    expect(result.cause).toBe('composer_mutation_budget_exhausted');
+    expect(connectAt).toBeGreaterThanOrEqual(1_000);
+    expect(connectAt).toBeLessThan(2_000);
+    expect(navigateAt).toBeGreaterThanOrEqual(7_000);
+    expect(now).toBeGreaterThan(11_000);
+    expect(fixture.composer.click).not.toHaveBeenCalled();
+    expect(fixture.composer.fill).not.toHaveBeenCalled();
+    vi.doUnmock('../chatgpt-browser-turn/ui-adapter.ts');
+    vi.resetModules();
+    vi.restoreAllMocks();
   });
 
   it('measured 36906-byte payload completes mutation under derived budget and sends once', async () => {
@@ -3551,7 +3633,7 @@ describe('issue 1174 composer mutation budget', () => {
     const fillDelayMs = MAX_LOCAL_READ_WAIT_MS + 500;
     expect(fillDelayMs).toBeLessThan(budget);
     let sendCount = 0;
-    const { page, getPressed } = makeComposerPage({
+    const { page, composer, getPressed } = makeComposerPage({
       fillDelayMs,
       onPress: () => { sendCount += 1; },
     });
@@ -3563,7 +3645,7 @@ describe('issue 1174 composer mutation budget', () => {
       Date.now() + 60_000,
     );
     expect(failure).toBeNull();
-    const composer = page.locator(COMPOSER_SELECTOR);
+    expect(composer.fill).toHaveBeenCalledWith(MEASURED_LARGE_PROMPT, expect.any(Object));
     await composer.press('Enter', { timeout: MAX_LOCAL_READ_WAIT_MS });
     expect(getPressed()).toBe(true);
     expect(sendCount).toBe(1);
