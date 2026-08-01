@@ -115,6 +115,40 @@ describe('create-issue-stage-record marker and lineage', () => {
 describe('create-issue-stage-record trusted comment admission and pagination', () => {
   const repo = 'chetwerikoff/orchestrator-pack';
 
+  it('constructs the comment census as a GET with query pagination and no body fields', () => {
+    const comment = trusted(1, 'read me', 'chetwerikoff', '2020-01-01T00:00:00Z');
+    const requests: string[][] = [];
+    const expectedPath = `repos/${repo}/issues/1152/comments?per_page=100&page=1`;
+    const transport = {
+      runGh(argv: string[]) {
+        requests.push(argv);
+        if (argv.length === 3 && argv[0] === 'gh' && argv[1] === 'api' && argv[2] === expectedPath) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify([{
+              id: comment.id,
+              body: comment.body,
+              created_at: comment.createdAt,
+              updated_at: comment.updatedAt,
+              user: { login: comment.userLogin },
+              author_association: comment.authorAssociation,
+            }]),
+            stderr: '',
+          };
+        }
+        return { exitCode: 422, stdout: '', stderr: 'body was not supplied' };
+      },
+    };
+
+    const result = fetchIssueComments(transport, repo, 1152, 'chetwerikoff');
+
+    expect(result.comments).toEqual([comment]);
+    expect(result.commentsComplete).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    expect(requests).toEqual([['gh', 'api', expectedPath]]);
+    expect(requests[0]).not.toContain('-f');
+  });
+
   it('excludes foreign and edited comments from the eligible census', () => {
     const state = createMockGhState();
     state.comments = [

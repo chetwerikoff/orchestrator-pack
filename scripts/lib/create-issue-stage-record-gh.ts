@@ -88,11 +88,7 @@ export function fetchIssueComments(
     const response = transport.runGh([
       'gh',
       'api',
-      path,
-      '-f',
-      `per_page=${pageSize}`,
-      '-f',
-      `page=${page}`,
+      `${path}?per_page=${pageSize}&page=${page}`,
     ]);
     if (response.exitCode !== 0) {
       diagnostics.push({
@@ -171,11 +167,7 @@ export function fetchIssueComments(
       const sentinel = transport.runGh([
         'gh',
         'api',
-        path,
-        '-f',
-        `per_page=${pageSize}`,
-        '-f',
-        `page=${page + 1}`,
+        `${path}?per_page=${pageSize}&page=${page + 1}`,
       ]);
       if (sentinel.exitCode !== 0) {
         diagnostics.push({
