@@ -1,19 +1,19 @@
 name: Issue 1148 finalize scoped regressions
 
 on:
-  push:
-    branches:
-      - agent/issue-1148-message-identity
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 concurrency:
-  group: issue-1148-finalize
+  group: issue-1148-finalize-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
   apply-scoped-fix:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -132,6 +132,15 @@ jobs:
           }]
           declaration.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
           PY
+
+      - name: Run focused regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --include=dev
+          node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 \
+            scripts/chatgpt-browser-turn/state-light-page-observation.test.ts \
+            scripts/stage-completeness-guard.test.ts
 
       - name: Commit scoped changes and remove temporary controls
         shell: bash
