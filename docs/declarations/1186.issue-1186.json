@@ -1,0 +1,20 @@
+{
+  "issue_number": 1186,
+  "iteration_id": "issue-1186",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-08-01T19:31:24.109Z",
+  "baseline": {
+    "commit_sha": "aa6634e1b86f564f46a9a5e601d0a37ff453afd5",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:a0bb5358ba4e8c3eb06c47a0d6b7e8210ed1379cf60adb7c827689d9ab7a2f3b"
+  },
+  "declared_paths": [
+    "scripts/lib/create-issue-stage-record-gh.ts",
+    "scripts/lib/create-issue-stage-record-test-helpers.ts"
+  ],
+  "declared_globs": [
+    "scripts/lib/create-issue-stage-record*.test.ts"
+  ],
+  "amendments": []
+}
