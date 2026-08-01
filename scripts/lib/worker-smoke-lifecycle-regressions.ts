@@ -22,21 +22,32 @@ import {
   readSmokeLifecycleRegistry,
   releaseSmokeAdmission,
   smokeCancelRequestPath,
+  smokeLifecycleRegistryPath,
   smokeProgressPath,
+  smokeTerminalRecordPath,
 } from './worker-smoke-lifecycle.ts';
 import {
   computeSmokeCompletionBodyDigest,
   smokeCompletionBodyPath,
   smokeCompletionSealPath,
 } from './worker-smoke-core.ts';
+
 export function registerWorkerSmokeLifecycleRegressionTests(input: {
   describe: typeof import('vitest').describe;
   expect: typeof import('vitest').expect;
   it: typeof import('vitest').it;
   vi: typeof import('vitest').vi;
+  establishSmokePromptDelivery: typeof import('../worker-smoke-run.ts').establishSmokePromptDelivery;
   waitForSmokeChildCompletion: typeof import('../worker-smoke-run.ts').waitForSmokeChildCompletion;
 }): void {
-  const { describe, expect, it, vi, waitForSmokeChildCompletion } = input;
+  const {
+    describe,
+    expect,
+    it,
+    vi,
+    establishSmokePromptDelivery,
+    waitForSmokeChildCompletion,
+  } = input;
   const head = 'a'.repeat(40);
   const minute = 60_000;
 
@@ -173,12 +184,91 @@ export function registerWorkerSmokeLifecycleRegressionTests(input: {
       expect(result.progress?.acceptedCount).toBeGreaterThan(0);
       rmSync(root, { recursive: true, force: true });
     });
+
+    it('does not accept a completion first observed after the absolute ceiling', () => {
+      const root = mkdtempSync(join(tmpdir(), 'worker-smoke-late-ceiling-completion-'));
+      const runId = 'late-ceiling-completion';
+      const artifactDir = runDir(root, runId);
+      mkdirSync(artifactDir, { recursive: true });
+      let now = 0;
+      const result = waitForSmokeChildCompletion('child', {
+        cwd: root,
+        deadlineMs: 60 * minute,
+        runBinding: { runId, artifactDir },
+        ownedChildHandle: 'child',
+        scenarioCount: 2,
+        lifecycleStartedAtMs: 0,
+        stallMs: 50 * minute,
+        absoluteCeilingMs: 35 * minute,
+        suppressPtyReads: true,
+        runner: quietRunner as never,
+        now: () => now,
+        sleepMs: () => {
+          now = 40 * minute;
+          publishCompletion(artifactDir, runId);
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(result.terminalReason).toBe('absolute_safety_ceiling');
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    it('does not accept a completion first observed after the progress stall deadline', () => {
+      const root = mkdtempSync(join(tmpdir(), 'worker-smoke-late-stall-completion-'));
+      const runId = 'late-stall-completion';
+      const artifactDir = runDir(root, runId);
+      mkdirSync(artifactDir, { recursive: true });
+      let now = 0;
+      const result = waitForSmokeChildCompletion('child', {
+        cwd: root,
+        deadlineMs: 60 * minute,
+        runBinding: { runId, artifactDir },
+        ownedChildHandle: 'child',
+        scenarioCount: 2,
+        lifecycleStartedAtMs: 0,
+        stallMs: 20 * minute,
+        absoluteCeilingMs: 90 * minute,
+        suppressPtyReads: true,
+        runner: quietRunner as never,
+        now: () => now,
+        sleepMs: () => {
+          now = 20 * minute;
+          publishCompletion(artifactDir, runId);
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(result.terminalReason).toBe('progress_stall');
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    it('honours cancellation before sending or polling prompt delivery', () => {
+      const root = mkdtempSync(join(tmpdir(), 'worker-smoke-delivery-cancel-'));
+      const runId = 'delivery-cancel';
+      const artifactDir = runDir(root, runId);
+      mkdirSync(artifactDir, { recursive: true });
+      const runner = vi.fn();
+      const result = establishSmokePromptDelivery('child', {
+        cwd: root,
+        deadlineMs: minute,
+        runBinding: { runId, artifactDir },
+        prompt: 'run smoke',
+        abortReason: () => 'SIGTERM',
+        runner: runner as never,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.terminalReason).toBe('operator_cancelled');
+      expect(runner).not.toHaveBeenCalled();
+      rmSync(root, { recursive: true, force: true });
+    });
   });
 
   describe('worker smoke spawn and cleanup lifecycle (#1138)', () => {
     it('bounds Orca terminal creation and treats timeout as ambiguous unbound', () => {
       const timeout = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
-      const runner = vi.fn((_command: string, _args: readonly string[], _options: { timeout?: number }) => ({
+      const runner = vi.fn((_command: string, _args: readonly string[], _options: {
+        timeout?: number;
+        killSignal?: string;
+      }) => ({
         stdout: '',
         stderr: '',
         status: null,
@@ -201,6 +291,7 @@ export function registerWorkerSmokeLifecycleRegressionTests(input: {
       expect(typeof runner.mock.calls[0]?.[0]).toBe('string');
       expect(Array.isArray(runner.mock.calls[0]?.[1])).toBe(true);
       expect(runner.mock.calls[0]?.[2]?.timeout).toBe(1234);
+      expect(runner.mock.calls[0]?.[2]?.killSignal).toBe('SIGKILL');
     });
 
     it('abandons only ambiguous reservations with no bound or execution evidence', () => {
@@ -212,6 +303,9 @@ export function registerWorkerSmokeLifecycleRegressionTests(input: {
       const ambiguous = markSmokeCreateAmbiguous(artifactDir, 'timeout', 1);
       expect(canAbandonAmbiguousUnbound(ambiguous)).toBe(true);
       expect(abandonAmbiguousUnbound(artifactDir, 2).spawnState).toBe('abandoned_unbound');
+      expect(readFileSync(smokeTerminalRecordPath(artifactDir), 'utf8')).toContain(
+        'abandoned_unbound_no_execution_evidence',
+      );
 
       const executableDir = runDir(root, 'executable');
       createSmokeLifecycleReservation({
@@ -220,6 +314,57 @@ export function registerWorkerSmokeLifecycleRegressionTests(input: {
       markSmokeCreateAmbiguous(executableDir, 'timeout', 1);
       writeFileSync(join(executableDir, 'delivery.sealed.json'), JSON.stringify({ runId: 'executable' }), 'utf8');
       expect(canAbandonAmbiguousUnbound(readSmokeLifecycleRegistry(executableDir)!)).toBe(false);
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    it('fails closed for lifecycle state that contradicts its bound handle', () => {
+      const root = mkdtempSync(join(tmpdir(), 'worker-smoke-corrupt-state-'));
+      const artifactDir = runDir(root, 'contradictory');
+      const registry = createSmokeLifecycleReservation({
+        runId: 'contradictory',
+        artifactDir,
+        issueNumber: 1138,
+        prNumber: 1,
+        headSha: head,
+        scenarioCount: 2,
+      });
+      writeFileSync(smokeLifecycleRegistryPath(artifactDir), JSON.stringify({
+        ...registry,
+        spawnState: 'abandoned_unbound',
+        terminalHandle: 'term_must_not_be_hidden',
+        cleanup: {
+          reason: 'abandoned_unbound_no_execution_evidence',
+          cooperativeAcknowledgementObserved: false,
+          closeOutcome: 'no_bound_handle',
+          operatorFilesCleared: true,
+          completedAtMs: 1,
+        },
+      }), 'utf8');
+      expect(readSmokeLifecycleRegistry(artifactDir)).toBeUndefined();
+      expect(evaluateSmokeLifecycleCleanliness(root)).toMatchObject({
+        clean: false,
+        reasons: ['corrupt_lifecycle_state:contradictory'],
+      });
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    it('fails closed when registry artifactDir points outside its containing run', () => {
+      const root = mkdtempSync(join(tmpdir(), 'worker-smoke-path-mismatch-'));
+      const artifactDir = runDir(root, 'path-mismatch');
+      const registry = createSmokeLifecycleReservation({
+        runId: 'path-mismatch',
+        artifactDir,
+        issueNumber: 1138,
+        prNumber: 1,
+        headSha: head,
+        scenarioCount: 2,
+      });
+      writeFileSync(smokeLifecycleRegistryPath(artifactDir), JSON.stringify({
+        ...registry,
+        artifactDir: runDir(root, 'different-run'),
+      }), 'utf8');
+      expect(readSmokeLifecycleRegistry(artifactDir)).toBeUndefined();
+      expect(evaluateSmokeLifecycleCleanliness(root).clean).toBe(false);
       rmSync(root, { recursive: true, force: true });
     });
 
@@ -331,26 +476,32 @@ export function registerWorkerSmokeLifecycleRegressionTests(input: {
       rmSync(root, { recursive: true, force: true });
     });
 
-    it('recovery closes only a registry-bound child and leaves unrelated work unobserved', () => {
+    it('restart recovery requests cancellation before closing only the registry-bound child', () => {
       const root = mkdtempSync(join(tmpdir(), 'worker-smoke-recovery-'));
       const artifactDir = runDir(root, 'prior');
       createSmokeLifecycleReservation({
         runId: 'prior', artifactDir, issueNumber: 1138, prNumber: 1, headSha: head, nowMs: 0, scenarioCount: 2,
       });
       bindSmokeTerminalHandle(artifactDir, 'term_prior', 1);
-      const close = vi.fn(() => 'closed_owned_handle');
+      const close = vi.fn((handle: string, closedArtifactDir: string) => {
+        expect(handle).toBe('term_prior');
+        expect(closedArtifactDir).toBe(artifactDir);
+        expect(readFileSync(smokeCancelRequestPath(artifactDir), 'utf8')).toContain('prior');
+        return 'closed_owned_handle';
+      });
       const result = preflightSmokeLifecycle({
         repoRoot: root,
         runId: 'next',
         supervisorPid: 333,
         nowMs: 100,
+        shutdownMs: 0,
         isProcessAlive: () => false,
         closeBoundHandle: close,
       });
       expect(result.admitted).toBe(true);
       expect(close).toHaveBeenCalledTimes(1);
-      expect(close).toHaveBeenCalledWith('term_prior', artifactDir);
       expect(readSmokeLifecycleRegistry(artifactDir)?.spawnState).toBe('clean');
+      expect(readFileSync(smokeTerminalRecordPath(artifactDir), 'utf8')).toContain('restart_recovery');
       releaseSmokeAdmission(root, 'next');
       rmSync(root, { recursive: true, force: true });
     });
