@@ -1035,21 +1035,37 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     return 1;
   }
 
-  ensureSmokeRunArtifactDir(artifactDir);
   const lifecycleStartedAtMs = Date.now();
-  createSmokeLifecycleReservation({
-    runId,
-    artifactDir,
-    issueNumber: options.issueNumber,
-    prNumber: options.prNumber,
-    headSha: options.headSha,
-    nowMs: lifecycleStartedAtMs,
-    createTimeoutMs: SMOKE_CREATE_TIMEOUT_MS,
-  });
-  markSmokeCreateInProgress(artifactDir);
+  try {
+    ensureSmokeRunArtifactDir(artifactDir);
+    createSmokeLifecycleReservation({
+      runId,
+      artifactDir,
+      issueNumber: options.issueNumber,
+      prNumber: options.prNumber,
+      headSha: options.headSha,
+      nowMs: lifecycleStartedAtMs,
+      createTimeoutMs: SMOKE_CREATE_TIMEOUT_MS,
+      scenarioCount: plan.scenarios.length,
+    });
+    markSmokeCreateInProgress(artifactDir);
+  } catch (error) {
+    releaseSmokeAdmission(options.cwd, runId);
+    const observed = error instanceof Error ? error.message : 'lifecycle_reservation_failed';
+    const report = buildOperationalSmokeReport('BLOCKED', options, {
+      action: 'reserve worker-smoke lifecycle before terminal creation',
+      expected: 'durable current-run reservation before any spawn side effect',
+      observed: scrubSmokeOutput(observed),
+      environmentNotes: ['terminal was not created'],
+    });
+    publishSmokeReport(report, options);
+    emit(buildSmokeRunResult(report, !options.dryRun, { terminalCreated: false }), options.json);
+    return 1;
+  }
 
   let handle = '';
   let terminalCleanup = 'pending';
+  let cleanupDiagnostic: SmokeControlPlaneDiagnostic | undefined;
   let cleanupFinished = false;
   let signalReason: string | undefined;
   const onSigint = (): void => { signalReason = 'SIGINT'; };
@@ -1073,10 +1089,11 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       reason,
       requestCancellation: false,
       cooperativeAcknowledgementObserved: acknowledged,
-      closeBoundHandle: (ownedHandle) => closeOwnedSmokeTerminal(
-        ownedHandle,
-        options.cwd,
-      ).terminalCleanup,
+      closeBoundHandle: (ownedHandle) => {
+        const close = closeOwnedSmokeTerminal(ownedHandle, options.cwd);
+        cleanupDiagnostic ??= close.diagnostic;
+        return close.terminalCleanup;
+      },
     });
     terminalCleanup = result.closeOutcome;
     cleanupFinished = true;
@@ -1094,13 +1111,29 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
     if (!created.ok) {
       markSmokeCreateAmbiguous(artifactDir, `${created.errorCode}:${created.reason}`);
       releaseSmokeAdmission(options.cwd, runId);
-      const report = attachPackProducerFields(buildOperationalSmokeReport('BLOCKED', options, {
-        action: 'create bounded Orca smoke terminal',
-        expected: `terminal handle returned within ${SMOKE_CREATE_TIMEOUT_MS}ms and durably bound`,
-        observed: `${created.errorCode}:ambiguous_unbound`,
-        terminalCleanup: 'ambiguous_unbound',
-        environmentNotes: admission.diagnostics,
-      }), {});
+      const createOutcome = created.errorCode === 'orca_process_launch_failed'
+        ? 'process_launch_failed'
+        : created.errorCode === 'orca_empty_stdout'
+          ? 'empty_stdout'
+          : created.errorCode === 'orca_invalid_json'
+            ? 'invalid_json'
+            : 'recognized_cli_error';
+      const diagnostic = createSmokeControlPlaneDiagnostic({
+        terminalAcquired: false,
+        operation: 'terminal_create',
+        outcomeCategory: createOutcome,
+        controlPlaneCode: created.errorCode,
+      });
+      const report = attachControlPlaneDiagnostic(attachPackProducerFields(
+        buildOperationalSmokeReport('BLOCKED', options, {
+          action: 'create bounded Orca smoke terminal',
+          expected: `terminal handle returned within ${SMOKE_CREATE_TIMEOUT_MS}ms and durably bound`,
+          observed: diagnostic?.cause ?? `${created.errorCode}:ambiguous_unbound`,
+          terminalCleanup: 'ambiguous_unbound',
+          environmentNotes: admission.diagnostics,
+        }),
+        {},
+      ), diagnostic);
       publishSmokeReport(report, options);
       emit(buildSmokeRunResult(report, !options.dryRun, {
         lifecycleState: 'ambiguous_unbound',
@@ -1130,7 +1163,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       prompt,
     });
     if (!deliveryResult.ok) {
-      const cleanupResult = cleanup('prompt_delivery_exhausted', true);
+      const cleanupResult = cleanup('prompt_delivery_exhausted', false);
       const diagnostic = deliveryResult.controlPlaneDiagnostic;
       const report = attachControlPlaneDiagnostic(buildOperationalSmokeReport(
         diagnostic ? 'BLOCKED' : 'FAIL',
@@ -1170,8 +1203,8 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
         ?? waitResult.nonPassCause
         ?? waitResult.error?.code
         ?? 'child_wait_failed';
-      const cleanupResult = cleanup(reason, true);
       const diagnostic = waitResult.controlPlaneDiagnostic;
+      const cleanupResult = cleanup(reason, !diagnostic);
       const report = attachControlPlaneDiagnostic(buildOperationalSmokeReport(
         diagnostic ? 'BLOCKED' : 'FAIL',
         options,
@@ -1280,6 +1313,9 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
 
     const cleanupResult = cleanup('child_completed', false);
     report.terminalCleanup = terminalCleanup;
+    if (cleanupDiagnostic) {
+      attachControlPlaneDiagnostic(report, cleanupDiagnostic);
+    }
     if (!cleanupResult.clean || terminalCleanup !== 'closed_owned_handle') {
       if (report.result === 'PASS') {
         report.result = 'FAIL';
@@ -1322,23 +1358,32 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       });
       publishSmokeReport(report, options);
       emit(buildSmokeRunResult(report, !options.dryRun, { lifecycleCleanup: cleanupResult }), options.json);
+    } else if (!handle) {
+      try {
+        markSmokeCreateAmbiguous(artifactDir, `handled_exception:${reason}`);
+      } catch {
+        // Reservation write failure is already a blocking preflight condition.
+      }
+      releaseSmokeAdmission(options.cwd, runId);
+      const report = buildOperationalSmokeReport('BLOCKED', options, {
+        action: 'handle pre-bind smoke supervisor exception',
+        expected: 'preserve ambiguous-unbound state without guessing a terminal handle',
+        observed: scrubSmokeOutput(reason),
+        terminalCleanup: 'ambiguous_unbound',
+      });
+      publishSmokeReport(report, options);
+      emit(buildSmokeRunResult(report, !options.dryRun, { lifecycleState: 'ambiguous_unbound' }), options.json);
     }
     return 1;
   } finally {
     process.off('SIGINT', onSigint);
     process.off('SIGTERM', onSigterm);
     if (handle && !cleanupFinished) {
-      cleanupSmokeLifecycle({
-        artifactDir,
-        runId,
-        reason: 'finally_cleanup',
-        requestCancellation: true,
-        cooperativeAcknowledgementObserved: false,
-        closeBoundHandle: (ownedHandle) => closeOwnedSmokeTerminal(
-          ownedHandle,
-          options.cwd,
-        ).terminalCleanup,
-      });
+      try {
+        cleanup('finally_cleanup', true);
+      } catch {
+        // A failed fallback remains blocking through the durable lifecycle registry.
+      }
     }
     releaseSmokeAdmission(options.cwd, runId);
   }
@@ -1358,7 +1403,25 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   }
 }
 
-if (import.meta.url === new URL(process.argv[1] ?? '', 'file:').href) {
+const isDirectInvocation = import.meta.url === new URL(process.argv[1] ?? '', 'file:').href;
+
+// Keep lifecycle regressions inside the existing classified worker-smoke Vitest module.
+if (!isDirectInvocation && (process.env.VITEST === 'true' || process.env.VITEST_WORKER_ID)) {
+  const [{ describe, expect, it, vi }, { registerWorkerSmokeLifecycleRegressionTests }] =
+    await Promise.all([
+      import('vitest'),
+      import('./lib/worker-smoke-lifecycle-regressions.ts'),
+    ]);
+  registerWorkerSmokeLifecycleRegressionTests({
+    describe,
+    expect,
+    it,
+    vi,
+    waitForSmokeChildCompletion,
+  });
+}
+
+if (isDirectInvocation) {
   main().then((code) => {
     process.exitCode = code;
   });
