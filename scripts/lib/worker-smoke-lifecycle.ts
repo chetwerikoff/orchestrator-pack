@@ -10,7 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 export const SMOKE_LIFECYCLE_ROOT = '.orca-worker-smoke/runs';
 export const SMOKE_ADMISSION_LOCK = '.orca-worker-smoke/admission.lock.json';
@@ -119,6 +119,14 @@ function readJson(path: string): unknown | undefined {
   }
 }
 
+function samePath(left: string, right: string): boolean {
+  const normalizedLeft = resolve(left);
+  const normalizedRight = resolve(right);
+  return process.platform === 'win32'
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
 function parseCleanup(value: unknown): SmokeLifecycleRegistry['cleanup'] | undefined {
   if (!isRecord(value)) return undefined;
   const completedAtMs = Number(value.completedAtMs);
@@ -132,13 +140,44 @@ function parseCleanup(value: unknown): SmokeLifecycleRegistry['cleanup'] | undef
   };
 }
 
-function parseRegistry(value: unknown): SmokeLifecycleRegistry | undefined {
+function registryStateIsConsistent(registry: SmokeLifecycleRegistry): boolean {
+  const hasHandle = Boolean(registry.terminalHandle);
+  switch (registry.spawnState) {
+    case 'reserved':
+    case 'create_in_progress':
+    case 'ambiguous_unbound':
+      return !hasHandle && !registry.cleanup;
+    case 'abandoned_unbound':
+      return !hasHandle
+        && registry.cleanup?.reason === 'abandoned_unbound_no_execution_evidence'
+        && registry.cleanup.closeOutcome === 'no_bound_handle'
+        && registry.cleanup.operatorFilesCleared;
+    case 'bound':
+      return hasHandle && !registry.cleanup;
+    case 'cleanup_pending':
+      return hasHandle;
+    case 'clean':
+      return hasHandle
+        && registry.cleanup?.closeOutcome === 'closed_owned_handle'
+        && registry.cleanup.operatorFilesCleared;
+    case 'cleanup_failed':
+      return hasHandle && Boolean(registry.cleanup);
+    default:
+      return false;
+  }
+}
+
+function parseRegistry(
+  value: unknown,
+  expectedArtifactDir?: string,
+): SmokeLifecycleRegistry | undefined {
   if (!isRecord(value)) return undefined;
   const spawnState = String(value.spawnState ?? '') as SmokeSpawnState;
   if (![
     'reserved', 'create_in_progress', 'bound', 'ambiguous_unbound',
     'abandoned_unbound', 'cleanup_pending', 'clean', 'cleanup_failed',
   ].includes(spawnState)) return undefined;
+  const cleanup = parseCleanup(value.cleanup);
   const registry: SmokeLifecycleRegistry = {
     version: 1,
     runId: String(value.runId ?? '').trim(),
@@ -158,21 +197,26 @@ function parseRegistry(value: unknown): SmokeLifecycleRegistry | undefined {
     ...(typeof value.createDiagnostic === 'string'
       ? { createDiagnostic: value.createDiagnostic.slice(0, 512) }
       : {}),
-    ...(parseCleanup(value.cleanup) ? { cleanup: parseCleanup(value.cleanup)! } : {}),
+    ...(cleanup ? { cleanup } : {}),
   };
   if (
     Number(value.version) !== 1
     || !registry.runId
     || !registry.artifactDir
+    || (expectedArtifactDir !== undefined && !samePath(registry.artifactDir, expectedArtifactDir))
     || !/^[0-9a-f]{40}$/u.test(registry.headSha)
     || !Number.isInteger(registry.issueNumber)
+    || registry.issueNumber <= 0
     || !Number.isInteger(registry.prNumber)
+    || registry.prNumber <= 0
     || !Number.isInteger(registry.supervisorPid)
+    || registry.supervisorPid <= 0
     || !Number.isFinite(registry.createdAtMs)
     || !Number.isFinite(registry.updatedAtMs)
     || !Number.isFinite(registry.createDeadlineMs)
     || !Number.isInteger(registry.scenarioCount)
     || registry.scenarioCount < 1
+    || !registryStateIsConsistent(registry)
   ) return undefined;
   return registry;
 }
@@ -209,7 +253,7 @@ export const smokeAdmissionLockPath = (repoRoot: string): string =>
   join(repoRoot, SMOKE_ADMISSION_LOCK);
 
 export function readSmokeLifecycleRegistry(artifactDir: string): SmokeLifecycleRegistry | undefined {
-  return parseRegistry(readJson(smokeLifecycleRegistryPath(artifactDir)));
+  return parseRegistry(readJson(smokeLifecycleRegistryPath(artifactDir)), artifactDir);
 }
 
 function mutateRegistry(
@@ -219,6 +263,9 @@ function mutateRegistry(
   const current = readSmokeLifecycleRegistry(artifactDir);
   if (!current) throw new Error(`smoke lifecycle registry unreadable: ${artifactDir}`);
   const next = mutate(current);
+  if (!registryStateIsConsistent(next) || !samePath(next.artifactDir, artifactDir)) {
+    throw new Error(`smoke lifecycle mutation produced inconsistent state: ${next.runId}`);
+  }
   atomicJson(smokeLifecycleRegistryPath(artifactDir), next);
   return next;
 }
@@ -249,6 +296,9 @@ export function createSmokeLifecycleReservation(input: {
     createDeadlineMs: nowMs + (input.createTimeoutMs ?? SMOKE_CREATE_TIMEOUT_MS),
     scenarioCount: input.scenarioCount,
   };
+  if (!parseRegistry(registry, input.artifactDir)) {
+    throw new Error('invalid smoke lifecycle reservation');
+  }
   mkdirSync(input.artifactDir, { recursive: true });
   atomicJson(smokeLifecycleRegistryPath(input.artifactDir), registry);
   return registry;
@@ -297,6 +347,21 @@ const hasCompletionSeal = (artifactDir: string): boolean => {
   }
 };
 
+function observeSmokeCompletionSealForRun(artifactDir: string, runId: string): boolean {
+  let entries: string[];
+  try {
+    entries = readdirSync(artifactDir);
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (!/^completion-[0-9a-f]{64}\.sealed\.json$/u.test(entry)) continue;
+    const seal = readJson(join(artifactDir, entry));
+    if (isRecord(seal) && String(seal.runId ?? '').trim() === runId) return true;
+  }
+  return false;
+}
+
 export function observeSmokeCancellationAcknowledgement(
   artifactDir: string,
   runId: string,
@@ -318,27 +383,58 @@ export function canAbandonAmbiguousUnbound(registry: SmokeLifecycleRegistry): bo
     && !observeSmokeCancellationAcknowledgement(registry.artifactDir, registry.runId);
 }
 
+function writeTerminalRecord(input: {
+  artifactDir: string;
+  runId: string;
+  reason: string;
+  cooperativeAcknowledgementObserved: boolean;
+  closeOutcome: string;
+  operatorFilesCleared: boolean;
+  cleanupClean: boolean;
+  completedAtMs: number;
+}): void {
+  atomicJson(smokeTerminalRecordPath(input.artifactDir), {
+    version: 1,
+    runId: input.runId,
+    reason: input.reason,
+    cooperativeAcknowledgementObserved: input.cooperativeAcknowledgementObserved,
+    closeOutcome: input.closeOutcome,
+    operatorFilesCleared: input.operatorFilesCleared,
+    cleanupClean: input.cleanupClean,
+    completedAtMs: input.completedAtMs,
+  });
+}
+
 export function abandonAmbiguousUnbound(
   artifactDir: string,
   nowMs = Date.now(),
 ): SmokeLifecycleRegistry {
-  return mutateRegistry(artifactDir, (registry) => {
-    if (!canAbandonAmbiguousUnbound(registry)) {
-      throw new Error(`ambiguous reservation is not abandonable: ${registry.runId}`);
-    }
-    return {
-      ...registry,
-      spawnState: 'abandoned_unbound',
-      updatedAtMs: nowMs,
-      cleanup: {
-        reason: 'abandoned_unbound_no_execution_evidence',
-        cooperativeAcknowledgementObserved: false,
-        closeOutcome: 'no_bound_handle',
-        operatorFilesCleared: true,
-        completedAtMs: nowMs,
-      },
-    };
+  const current = readSmokeLifecycleRegistry(artifactDir);
+  if (!current || !canAbandonAmbiguousUnbound(current)) {
+    throw new Error(`ambiguous reservation is not abandonable: ${current?.runId ?? artifactDir}`);
+  }
+  writeTerminalRecord({
+    artifactDir,
+    runId: current.runId,
+    reason: 'abandoned_unbound_no_execution_evidence',
+    cooperativeAcknowledgementObserved: false,
+    closeOutcome: 'no_bound_handle',
+    operatorFilesCleared: true,
+    cleanupClean: true,
+    completedAtMs: nowMs,
   });
+  return mutateRegistry(artifactDir, (registry) => ({
+    ...registry,
+    spawnState: 'abandoned_unbound',
+    updatedAtMs: nowMs,
+    cleanup: {
+      reason: 'abandoned_unbound_no_execution_evidence',
+      cooperativeAcknowledgementObserved: false,
+      closeOutcome: 'no_bound_handle',
+      operatorFilesCleared: true,
+      completedAtMs: nowMs,
+    },
+  }));
 }
 
 function parseProgressEvent(raw: unknown): SmokeProgressEvent | undefined {
@@ -470,15 +566,9 @@ function finalize(input: {
   operatorFilesCleared: boolean;
   nowMs: number;
 }): SmokeLifecycleRegistry {
-  const clean = input.operatorFilesCleared
-    && ['closed_owned_handle', 'no_bound_handle'].includes(input.closeOutcome);
-  atomicJson(smokeTerminalRecordPath(input.artifactDir), {
-    version: 1,
-    runId: input.runId,
-    reason: input.reason,
-    cooperativeAcknowledgementObserved: input.cooperativeAcknowledgementObserved,
-    closeOutcome: input.closeOutcome,
-    operatorFilesCleared: input.operatorFilesCleared,
+  const clean = input.operatorFilesCleared && input.closeOutcome === 'closed_owned_handle';
+  writeTerminalRecord({
+    ...input,
     cleanupClean: clean,
     completedAtMs: input.nowMs,
   });
@@ -535,6 +625,31 @@ function createLock(repoRoot: string, lock: AdmissionLock): boolean {
   }
 }
 
+function sleepWithAtomics(milliseconds: number): void {
+  if (milliseconds <= 0) return;
+  const signal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  Atomics.wait(signal, 0, 0, milliseconds);
+}
+
+function waitForCooperativeShutdown(input: {
+  artifactDir: string;
+  runId: string;
+  timeoutMs: number;
+  now: () => number;
+  sleepMs: (milliseconds: number) => void;
+}): boolean {
+  const deadline = input.now() + Math.max(0, input.timeoutMs);
+  for (;;) {
+    if (
+      observeSmokeCancellationAcknowledgement(input.artifactDir, input.runId)
+      || observeSmokeCompletionSealForRun(input.artifactDir, input.runId)
+    ) return true;
+    const remaining = deadline - input.now();
+    if (remaining <= 0) return false;
+    input.sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, remaining));
+  }
+}
+
 export function releaseSmokeAdmission(repoRoot: string, runId: string): boolean {
   const path = smokeAdmissionLockPath(repoRoot);
   const lock = parseLock(readJson(path));
@@ -582,10 +697,15 @@ export function preflightSmokeLifecycle(input: {
   runId: string;
   supervisorPid?: number;
   nowMs?: number;
+  now?: () => number;
+  sleepMs?: (milliseconds: number) => void;
+  shutdownMs?: number;
   isProcessAlive?: (pid: number) => boolean;
   closeBoundHandle: (handle: string, artifactDir: string) => string;
 }): SmokeAdmissionResult {
-  const nowMs = input.nowMs ?? Date.now();
+  const now = input.now ?? (() => Date.now());
+  const nowMs = input.nowMs ?? now();
+  const sleepMs = input.sleepMs ?? sleepWithAtomics;
   const isAlive = input.isProcessAlive ?? processAlive;
   const diagnostics: string[] = [];
   const lockPath = smokeAdmissionLockPath(input.repoRoot);
@@ -617,8 +737,6 @@ export function preflightSmokeLifecycle(input: {
     }
     let registry = readSmokeLifecycleRegistry(artifactDir);
     if (!registry) { refusal ??= `corrupt_lifecycle_state:${basename(artifactDir)}`; continue; }
-    const tombstone = tombstoneSmokeOperatorFiles(artifactDir, nowMs);
-    if (!tombstone.cleared) { refusal ??= `unsafe_operator_state:${registry.runId}`; continue; }
     if (
       ['reserved', 'create_in_progress'].includes(registry.spawnState)
       && !registry.terminalHandle
@@ -636,17 +754,35 @@ export function preflightSmokeLifecycle(input: {
       && registry.terminalHandle
     ) {
       beginCleanup(artifactDir, nowMs);
+      const cancellationRecorded = writeSmokeCancelRequest({
+        artifactDir,
+        runId: registry.runId,
+        reason: 'restart_recovery',
+        nowMs,
+      });
+      const acknowledged = cancellationRecorded && waitForCooperativeShutdown({
+        artifactDir,
+        runId: registry.runId,
+        timeoutMs: input.shutdownMs ?? SMOKE_SHUTDOWN_TIMEOUT_MS,
+        now,
+        sleepMs,
+      });
       const closeOutcome = input.closeBoundHandle(registry.terminalHandle, artifactDir);
+      const tombstone = tombstoneSmokeOperatorFiles(artifactDir, nowMs);
       registry = finalize({
         artifactDir,
         runId: registry.runId,
         reason: 'restart_recovery',
-        cooperativeAcknowledgementObserved: observeSmokeCancellationAcknowledgement(artifactDir, registry.runId),
+        cooperativeAcknowledgementObserved: acknowledged,
         closeOutcome,
-        operatorFilesCleared: tombstone.cleared,
+        operatorFilesCleared: tombstone.cleared && cancellationRecorded,
         nowMs,
       });
       diagnostics.push(`recovered_bound_run:${registry.runId}:${closeOutcome}`);
+    } else {
+      const tombstone = tombstoneSmokeOperatorFiles(artifactDir, nowMs);
+      if (!tombstone.cleared) refusal ??= `unsafe_operator_state:${registry.runId}`;
+      else if (tombstone.tombstoned.length) diagnostics.push(`tombstoned_operator_state:${registry.runId}`);
     }
     if (blocks(registry)) refusal ??= `blocking_lifecycle:${registry.runId}:${registry.spawnState}`;
   }
