@@ -223,6 +223,34 @@ export function registerWorkerSmokeLifecycleRegressionTests(input: {
       rmSync(root, { recursive: true, force: true });
     });
 
+    it('preserves create-success bind-failure ambiguity instead of claiming clean', () => {
+      const root = mkdtempSync(join(tmpdir(), 'worker-smoke-bind-failure-'));
+      const runId = 'bind-failure';
+      const artifactDir = runDir(root, runId);
+      createSmokeLifecycleReservation({
+        runId,
+        artifactDir,
+        issueNumber: 1138,
+        prNumber: 1,
+        headSha: head,
+        scenarioCount: 2,
+      });
+      const close = vi.fn(() => 'closed_owned_handle');
+      const result = cleanupSmokeLifecycle({
+        artifactDir,
+        runId,
+        reason: 'handled_exception',
+        requestCancellation: true,
+        cooperativeAcknowledgementObserved: false,
+        closeBoundHandle: close,
+      });
+      expect(result.clean).toBe(false);
+      expect(result.closeOutcome).toBe('ambiguous_unbound');
+      expect(close).not.toHaveBeenCalled();
+      expect(readSmokeLifecycleRegistry(artifactDir)?.spawnState).toBe('ambiguous_unbound');
+      rmSync(root, { recursive: true, force: true });
+    });
+
     it('makes cleanup idempotent and never closes anything except the bound handle', () => {
       const root = mkdtempSync(join(tmpdir(), 'worker-smoke-cleanup-'));
       const runId = 'bound';
