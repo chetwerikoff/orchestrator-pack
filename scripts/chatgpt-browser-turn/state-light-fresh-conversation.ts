@@ -1,6 +1,7 @@
 import {
   closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -28,8 +29,14 @@ export const STATE_LIGHT_FRESH_RECOVERY_ATTEMPTS = 2;
 export const STATE_LIGHT_MAX_NAVIGATIONS_PER_INVOCATION = 10;
 export const STATE_LIGHT_ADVISORY_WALL_TTL_MS = 5 * 60 * 1000;
 export const STATE_LIGHT_FRESH_PREPARE_BACKOFF_BASE_MS = 250;
+export const STATE_LIGHT_MAX_TIMEOUT_MS = 1_800_000;
+export const STATE_LIGHT_SEND_SLOT_TTL_MS = 2_100_000;
+export const STATE_LIGHT_FRESH_CLAIM_GRACE_MS = 300_000;
+export const STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS = 3_900_000;
+export const STATE_LIGHT_OWNERSHIP_RECOVERY_ATTEMPTS = 3;
 
 const SEND_SLOT_POLL_MS = 50;
+const OWNERSHIP_CLOCK_SKEW_MS = 60_000;
 const ADVISORY_WALL_STATES = new Set<TurnState>(['rate_limit', 'quota', 'challenge', 'login']);
 
 interface StateLightFreshClaimRecord {
@@ -39,6 +46,7 @@ interface StateLightFreshClaimRecord {
   readonly conversation_id: string;
   readonly pid: number;
   readonly claimed_at: string;
+  readonly expires_at?: string;
 }
 
 interface StateLightNewChatSendSlotRecord {
@@ -47,6 +55,7 @@ interface StateLightNewChatSendSlotRecord {
   readonly invocation_id: string;
   readonly pid: number;
   readonly acquired_at: string;
+  readonly expires_at?: string;
 }
 
 interface StateLightAdvisoryWallRecord {
@@ -167,6 +176,163 @@ export function ownedConversationIdentityMatches(observedUrl: string, targetChat
   return normalizeConversationUrl(observedUrl) === normalizeConversationUrl(targetChatUrl);
 }
 
+
+export type StateLightOwnerFenceResult = 'valid' | 'lost';
+
+function parseOwnershipTimestamp(value: string, nowMs: number): number | null {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed > nowMs + OWNERSHIP_CLOCK_SKEW_MS) return null;
+  return parsed;
+}
+
+function parseExpiresAtTimestamp(value: string): number | null {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function computeStateLightSendSlotExpiresAtMs(acquiredAtMs: number): number {
+  return acquiredAtMs + STATE_LIGHT_SEND_SLOT_TTL_MS;
+}
+
+export function computeStateLightFreshClaimExpiresAtMs(
+  claimedAtMs: number,
+  acceptedTimeoutMs: number,
+): number {
+  const boundedTimeout = Math.min(acceptedTimeoutMs, STATE_LIGHT_MAX_TIMEOUT_MS);
+  const activeTtl = (boundedTimeout * 2) + STATE_LIGHT_FRESH_CLAIM_GRACE_MS;
+  return claimedAtMs + Math.min(activeTtl, STATE_LIGHT_PASSIVE_FRESH_CLAIM_TTL_MS);
+}
+
+function sendSlotExpiresAtMs(record: StateLightNewChatSendSlotRecord, nowMs: number): number | null {
+  if (record.expires_at) {
+    const explicit = parseExpiresAtTimestamp(record.expires_at);
+    if (explicit !== null) return explicit;
+  }
+  const acquiredAt = parseOwnershipTimestamp(record.acquired_at, nowMs);
+  if (acquiredAt === null) return null;
+  return computeStateLightSendSlotExpiresAtMs(acquiredAt);
+}
+
+function freshClaimExpiresAtMs(
+  record: StateLightFreshClaimRecord,
+  acceptedTimeoutMs: number,
+  nowMs: number,
+): number | null {
+  if (record.expires_at) {
+    const explicit = parseExpiresAtTimestamp(record.expires_at);
+    if (explicit !== null) return explicit;
+  }
+  const claimedAt = parseOwnershipTimestamp(record.claimed_at, nowMs);
+  if (claimedAt === null) return null;
+  return computeStateLightFreshClaimExpiresAtMs(claimedAt, acceptedTimeoutMs);
+}
+
+export function isStateLightSendSlotRecordExpired(
+  record: StateLightNewChatSendSlotRecord,
+  nowMs = Date.now(),
+): boolean {
+  const expiresAt = sendSlotExpiresAtMs(record, nowMs);
+  return expiresAt === null || expiresAt <= nowMs;
+}
+
+export function isStateLightFreshClaimRecordExpired(
+  record: StateLightFreshClaimRecord,
+  acceptedTimeoutMs: number,
+  nowMs = Date.now(),
+): boolean {
+  const expiresAt = freshClaimExpiresAtMs(record, acceptedTimeoutMs, nowMs);
+  return expiresAt === null || expiresAt <= nowMs;
+}
+
+function isSendSlotRecordReclaimable(
+  record: StateLightNewChatSendSlotRecord | null,
+  invocationId: string,
+  nowMs: number,
+): boolean {
+  if (!record) return false;
+  if (record.invocation_id === invocationId) {
+    return isStateLightSendSlotRecordExpired(record, nowMs);
+  }
+  if (isStateLightSendSlotRecordExpired(record, nowMs)) return true;
+  return claimPidProvablyDead(record.pid);
+}
+
+function isFreshClaimRecordReclaimable(
+  record: StateLightFreshClaimRecord | null,
+  invocationId: string,
+  acceptedTimeoutMs: number,
+  nowMs: number,
+): boolean {
+  if (!record) return false;
+  if (record.invocation_id === invocationId) {
+    return isStateLightFreshClaimRecordExpired(record, acceptedTimeoutMs, nowMs);
+  }
+  if (isStateLightFreshClaimRecordExpired(record, acceptedTimeoutMs, nowMs)) return true;
+  return claimPidProvablyDead(record.pid);
+}
+
+function atomicWriteOwnershipRecord(path: string, record: object): void {
+  const fd = openSync(path, 'wx', 0o600);
+  try {
+    writeFileSync(fd, `${JSON.stringify(record)}\n`, 'utf8');
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function readCorruptOwnershipArtifact<T>(
+  path: string,
+  readRecord: (path: string) => T | null,
+): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    const raw = readFileSync(path, 'utf8').trim();
+    if (!raw) return true;
+    JSON.parse(raw);
+    return readRecord(path) === null;
+  } catch {
+    return true;
+  }
+}
+
+function cleanupReclaimableOwnershipArtifact(path: string): void {
+  try {
+    rmSync(path, { force: true });
+  } catch {
+    // fail-open cleanup
+  }
+}
+
+export function verifyStateLightSendSlotOwnerFence(
+  profileKey: string,
+  invocationId: string,
+  env: NodeJS.ProcessEnv = process.env,
+  nowMs = Date.now(),
+): StateLightOwnerFenceResult {
+  if (!newChatSendSlotEnabled(env)) return 'valid';
+  const slotPath = stateLightNewChatSendSlotPath(profileKey);
+  const record = existsSync(slotPath) ? readStateLightNewChatSendSlotRecord(slotPath) : null;
+  if (!record) return 'lost';
+  if (record.invocation_id !== invocationId || record.pid !== process.pid) return 'lost';
+  return isStateLightSendSlotRecordExpired(record, nowMs) ? 'lost' : 'valid';
+}
+
+export function verifyStateLightFreshClaimOwnerFence(
+  profileKey: string,
+  conversationUrl: string,
+  invocationId: string,
+  acceptedTimeoutMs: number,
+  nowMs = Date.now(),
+): StateLightOwnerFenceResult {
+  const claimPath = stateLightFreshClaimPath(profileKey, conversationUrl);
+  const record = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
+  if (!record) return 'lost';
+  if (record.invocation_id !== invocationId || record.pid !== process.pid) return 'lost';
+  return isStateLightFreshClaimRecordExpired(record, acceptedTimeoutMs, nowMs) ? 'lost' : 'valid';
+}
+
 function stateLightFreshClaimsDir(profileKey: string): string {
   const dir = join(profileDirs(profileKey).root, 'state-light-fresh-claims');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -192,9 +358,17 @@ function readStateLightFreshClaimRecord(path: string): StateLightFreshClaimRecor
     if (value.schema !== STATE_LIGHT_FRESH_CLAIM_SCHEMA
       || value.version !== 1
       || typeof value.invocation_id !== 'string'
+      || value.invocation_id.length === 0
       || typeof value.conversation_id !== 'string'
       || !Number.isInteger(value.pid)
-      || value.pid <= 0) {
+      || value.pid <= 0
+      || typeof value.claimed_at !== 'string'
+      || parseOwnershipTimestamp(value.claimed_at, Date.now()) === null) {
+      return null;
+    }
+    if (value.expires_at !== undefined
+      && (typeof value.expires_at !== 'string'
+        || parseExpiresAtTimestamp(value.expires_at) === null)) {
       return null;
     }
     return value;
@@ -209,8 +383,16 @@ function readStateLightNewChatSendSlotRecord(path: string): StateLightNewChatSen
     if (value.schema !== STATE_LIGHT_NEW_CHAT_SEND_SLOT_SCHEMA
       || value.version !== 1
       || typeof value.invocation_id !== 'string'
+      || value.invocation_id.length === 0
       || !Number.isInteger(value.pid)
-      || value.pid <= 0) {
+      || value.pid <= 0
+      || typeof value.acquired_at !== 'string'
+      || parseOwnershipTimestamp(value.acquired_at, Date.now()) === null) {
+      return null;
+    }
+    if (value.expires_at !== undefined
+      && (typeof value.expires_at !== 'string'
+        || parseExpiresAtTimestamp(value.expires_at) === null)) {
       return null;
     }
     return value;
@@ -288,46 +470,66 @@ export function tryClaimStateLightFreshConversation(
   profileKey: string,
   conversationUrl: string,
   invocationId: string,
+  acceptedTimeoutMs: number = STATE_LIGHT_MAX_TIMEOUT_MS,
 ): StateLightFreshConversationClaimResult {
   const normalized = normalizeConversationUrl(conversationUrl);
   const claimPath = stateLightFreshClaimPath(profileKey, normalized);
-  const existing = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
-  if (existing) {
-    if (existing.invocation_id === invocationId) return 'owned';
-    if (!claimPidProvablyDead(existing.pid)) return 'contended';
-    rmSync(claimPath, { force: true });
-  }
-  const record: StateLightFreshClaimRecord = {
-    schema: STATE_LIGHT_FRESH_CLAIM_SCHEMA,
-    version: 1,
-    invocation_id: invocationId,
-    conversation_id: normalized,
-    pid: process.pid,
-    claimed_at: new Date().toISOString(),
-  };
-  try {
-    const fd = openSync(claimPath, 'wx', 0o600);
-    try {
-      writeFileSync(fd, `${JSON.stringify(record)}\n`, 'utf8');
-    } finally {
-      closeSync(fd);
+  const boundedTimeout = Math.min(acceptedTimeoutMs, STATE_LIGHT_MAX_TIMEOUT_MS);
+  for (let attempt = 0; attempt < STATE_LIGHT_OWNERSHIP_RECOVERY_ATTEMPTS; attempt++) {
+    const nowMs = Date.now();
+    if (readCorruptOwnershipArtifact(claimPath, readStateLightFreshClaimRecord)) {
+      cleanupReclaimableOwnershipArtifact(claimPath);
     }
-    return 'claimed';
-  } catch (error) {
-    if (claimErrnoCode(error) === 'EEXIST') return 'contended';
-    throw error;
+    const existing = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
+    if (existing) {
+      if (existing.invocation_id === invocationId && !isStateLightFreshClaimRecordExpired(existing, boundedTimeout, nowMs)) {
+        return 'owned';
+      }
+      if (!isFreshClaimRecordReclaimable(existing, invocationId, boundedTimeout, nowMs)) {
+        return 'contended';
+      }
+      cleanupReclaimableOwnershipArtifact(claimPath);
+    }
+    const claimedAtMs = nowMs;
+    const expiresAtMs = computeStateLightFreshClaimExpiresAtMs(claimedAtMs, boundedTimeout);
+    const record: StateLightFreshClaimRecord = {
+      schema: STATE_LIGHT_FRESH_CLAIM_SCHEMA,
+      version: 1,
+      invocation_id: invocationId,
+      conversation_id: normalized,
+      pid: process.pid,
+      claimed_at: new Date(claimedAtMs).toISOString(),
+      expires_at: new Date(expiresAtMs).toISOString(),
+    };
+    try {
+      atomicWriteOwnershipRecord(claimPath, record);
+    } catch (error) {
+      if (claimErrnoCode(error) === 'EEXIST') continue;
+      throw error;
+    }
+    const reread = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
+    if (reread?.invocation_id === invocationId
+      && reread.pid === process.pid
+      && !isStateLightFreshClaimRecordExpired(reread, boundedTimeout, Date.now())) {
+      return 'claimed';
+    }
   }
+  return 'contended';
 }
 
 export function releaseStateLightFreshConversationClaim(
   profileKey: string,
   conversationUrl: string | undefined,
   invocationId: string,
+  acceptedTimeoutMs: number = STATE_LIGHT_MAX_TIMEOUT_MS,
 ): void {
   if (!conversationUrl) return;
-  const claimPath = stateLightFreshClaimPath(profileKey, conversationUrl);
+  const claimPath = stateLightFreshClaimPath(profileKey, normalizeConversationUrl(conversationUrl));
   const existing = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
-  if (existing?.invocation_id === invocationId) rmSync(claimPath, { force: true });
+  if (!existing) return;
+  if (existing.invocation_id !== invocationId) return;
+  if (isStateLightFreshClaimRecordExpired(existing, acceptedTimeoutMs, Date.now())) return;
+  cleanupReclaimableOwnershipArtifact(claimPath);
 }
 
 async function sleepMs(ms: number): Promise<void> {
@@ -345,32 +547,42 @@ export async function acquireStateLightNewChatSendSlot(
   const slotPath = stateLightNewChatSendSlotPath(profileKey);
   const deadline = Date.now() + Math.min(timeoutMs, 120_000);
   while (Date.now() < deadline) {
-    const existing = existsSync(slotPath) ? readStateLightNewChatSendSlotRecord(slotPath) : null;
-    if (existing?.invocation_id === invocationId) return;
-    if (existing && !claimPidProvablyDead(existing.pid)) {
-      await sleepMs(Math.min(SEND_SLOT_POLL_MS, Math.max(1, deadline - Date.now())));
-      continue;
-    }
-    if (existing) rmSync(slotPath, { force: true });
-    const record: StateLightNewChatSendSlotRecord = {
-      schema: STATE_LIGHT_NEW_CHAT_SEND_SLOT_SCHEMA,
-      version: 1,
-      invocation_id: invocationId,
-      pid: process.pid,
-      acquired_at: new Date().toISOString(),
-    };
-    try {
-      const fd = openSync(slotPath, 'wx', 0o600);
-      try {
-        writeFileSync(fd, `${JSON.stringify(record)}\n`, 'utf8');
-      } finally {
-        closeSync(fd);
+    for (let attempt = 0; attempt < STATE_LIGHT_OWNERSHIP_RECOVERY_ATTEMPTS; attempt++) {
+      const nowMs = Date.now();
+      if (readCorruptOwnershipArtifact(slotPath, readStateLightNewChatSendSlotRecord)) {
+        cleanupReclaimableOwnershipArtifact(slotPath);
       }
-      return;
-    } catch (error) {
-      if (claimErrnoCode(error) !== 'EEXIST') throw error;
-      await sleepMs(Math.min(SEND_SLOT_POLL_MS, Math.max(1, deadline - Date.now())));
+      const existing = existsSync(slotPath) ? readStateLightNewChatSendSlotRecord(slotPath) : null;
+      if (existing?.invocation_id === invocationId && !isStateLightSendSlotRecordExpired(existing, nowMs)) {
+        return;
+      }
+      if (existing && !isSendSlotRecordReclaimable(existing, invocationId, nowMs)) {
+        break;
+      }
+      if (existing) cleanupReclaimableOwnershipArtifact(slotPath);
+      const acquiredAtMs = nowMs;
+      const record: StateLightNewChatSendSlotRecord = {
+        schema: STATE_LIGHT_NEW_CHAT_SEND_SLOT_SCHEMA,
+        version: 1,
+        invocation_id: invocationId,
+        pid: process.pid,
+        acquired_at: new Date(acquiredAtMs).toISOString(),
+        expires_at: new Date(computeStateLightSendSlotExpiresAtMs(acquiredAtMs)).toISOString(),
+      };
+      try {
+        atomicWriteOwnershipRecord(slotPath, record);
+      } catch (error) {
+        if (claimErrnoCode(error) === 'EEXIST') break;
+        throw error;
+      }
+      const reread = existsSync(slotPath) ? readStateLightNewChatSendSlotRecord(slotPath) : null;
+      if (reread?.invocation_id === invocationId
+        && reread.pid === process.pid
+        && !isStateLightSendSlotRecordExpired(reread, Date.now())) {
+        return;
+      }
     }
+    await sleepMs(Math.min(SEND_SLOT_POLL_MS, Math.max(1, deadline - Date.now())));
   }
   throw new Error('state_light_new_chat_send_slot_timeout');
 }
@@ -383,7 +595,10 @@ export function releaseStateLightNewChatSendSlot(
   if (!newChatSendSlotEnabled(env)) return;
   const slotPath = stateLightNewChatSendSlotPath(profileKey);
   const existing = existsSync(slotPath) ? readStateLightNewChatSendSlotRecord(slotPath) : null;
-  if (existing?.invocation_id === invocationId) rmSync(slotPath, { force: true });
+  if (!existing) return;
+  if (existing.invocation_id !== invocationId) return;
+  if (isStateLightSendSlotRecordExpired(existing, Date.now())) return;
+  cleanupReclaimableOwnershipArtifact(slotPath);
 }
 
 async function probeProductWall(page: any): Promise<{ state: TurnState; cause: string } | null> {
@@ -460,11 +675,20 @@ export async function prepareStateLightFreshConversation(
     const conversationUuid = conversationUuidFromUrl(currentUrl);
     if (!conversationUuid) return { state: 'ready' };
     const claimPath = stateLightFreshClaimPath(profileKey, currentUrl);
+    if (readCorruptOwnershipArtifact(claimPath, readStateLightFreshClaimRecord)) {
+      cleanupReclaimableOwnershipArtifact(claimPath);
+    }
     const existing = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
-    if (existing?.invocation_id === invocationId) return { state: 'ready' };
-    if (existing && existing.invocation_id !== invocationId && !claimPidProvablyDead(existing.pid)) {
+    if (existing?.invocation_id === invocationId
+      && !isStateLightFreshClaimRecordExpired(existing, config.timeoutMs, Date.now())) {
+      return { state: 'ready' };
+    }
+    if (existing
+      && existing.invocation_id !== invocationId
+      && !isFreshClaimRecordReclaimable(existing, invocationId, config.timeoutMs, Date.now())) {
       continue;
     }
+    if (existing) cleanupReclaimableOwnershipArtifact(claimPath);
   }
   return { state: 'ui_contract_mismatch', cause: 'fresh_conversation_surface_unavailable' };
 }
