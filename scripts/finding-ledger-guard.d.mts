@@ -4,6 +4,19 @@ import type {
   VerifiedRelayEvidenceV1,
 } from './lib/stage-completeness-core.ts';
 
+export interface ProtectedActivationState {
+  authority: string;
+  signal: string;
+  whyNow: string;
+}
+
+export interface ProtectedOccurrenceState {
+  occurrenceId: string;
+  architectPending: boolean;
+  architectRequired: boolean;
+  protectedActivation: ProtectedActivationState | null;
+}
+
 export interface FindingLedgerRow {
   id: string;
   summary: string;
@@ -22,7 +35,8 @@ export interface FindingLedgerRow {
   simplificationCutCandidate: boolean;
   architectPending: boolean;
   architectRequired: boolean;
-  protectedActivation: { authority: string; signal: string; whyNow: string } | null;
+  protectedActivation: ProtectedActivationState | null;
+  protectedOccurrences: ProtectedOccurrenceState[];
 }
 
 export function parseLedger(ledgerText: string): {
