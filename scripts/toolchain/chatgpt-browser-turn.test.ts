@@ -3446,7 +3446,9 @@ describe('issue 1174 composer mutation budget', () => {
     expect(exhausted).toBe('composer_mutation_budget_exhausted');
     expect(overlay).toBe('blocking_page_overlay');
     expect(unreadable).toEqual({ state: 'ui_contract_mismatch', cause: 'composer_unavailable' });
-    expect(new Set([exhausted, overlay, unreadable.cause]).size).toBe(3);
+    const unreadableCause = unreadable.state === 'ready' ? null : unreadable.cause;
+    expect(unreadableCause).toBe('composer_unavailable');
+    expect(new Set([exhausted, overlay, unreadableCause]).size).toBe(3);
   });
 
   it('no retry queue lock or reactive payload resizing around composer insertion', () => {
