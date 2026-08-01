@@ -429,8 +429,7 @@ function observeSmokePublishCompleteForRun(artifactDir: string, runId: string): 
     { artifactDir, runId },
     createSmokeCompletionObservationState(),
   ).observation;
-  return observed.publicationState === 'publish_complete_single'
-    || observed.publicationState === 'publish_complete_unfenced';
+  return observed.publicationState === 'publish_complete_single';
 }
 
 export function observeSmokeCancellationAcknowledgement(
