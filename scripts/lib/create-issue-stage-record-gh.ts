@@ -1,0 +1,443 @@
+import { runProcessSync } from '../kernel/subprocess.mjs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  logicalFingerprint,
+  parseLogicalFromCommentBody,
+} from './create-issue-stage-record-marker.ts';
+import type {
+  CommentCensusOptions,
+  CommentCensusResult,
+  GhTransport,
+  LineageDiagnostic,
+  ParsedJournalEvent,
+  PendingJournalEvent,
+  ProjectionSyncResult,
+  TrustedComment,
+} from './create-issue-stage-record-types.ts';
+import {
+  PROJECTION_ACCEPTED,
+  PROJECTION_IN_PROGRESS,
+  PROJECTION_LABELS,
+} from './create-issue-stage-record-types.ts';
+
+export function resolvePackGh(): string {
+  const here = fileURLToPath(new URL('.', import.meta.url));
+  return join(here, '..', 'gh');
+}
+
+export function defaultGhTransport(): GhTransport {
+  const gh = resolvePackGh();
+  return {
+    runGh(argv: string[]) {
+      const result = runProcessSync({
+        command: gh,
+        args: argv.slice(1),
+        inheritParentEnv: true,
+      });
+      return {
+        exitCode: result.exitCode ?? 1,
+        stdout: result.stdout ?? '',
+        stderr: result.stderr ?? '',
+      };
+    },
+  };
+}
+
+function parseRepo(repo: string): { owner: string; name: string } {
+  const [owner, name] = repo.split('/');
+  if (!owner || !name) throw new Error(`invalid repo ${repo}`);
+  return { owner, name };
+}
+
+function normalizeComment(raw: Record<string, unknown>): TrustedComment | null {
+  const id = Number(raw.id);
+  const body = typeof raw.body === 'string' ? raw.body : null;
+  const createdAt = typeof raw.created_at === 'string' ? raw.created_at : null;
+  const updatedAt = typeof raw.updated_at === 'string' ? raw.updated_at : null;
+  const user = raw.user as Record<string, unknown> | undefined;
+  const userLogin = typeof user?.login === 'string' ? user.login : null;
+  const authorAssociation = typeof raw.author_association === 'string' ? raw.author_association : null;
+  if (!Number.isFinite(id) || !body || !createdAt || !updatedAt || !userLogin || !authorAssociation) {
+    return null;
+  }
+  return { id, body, createdAt, updatedAt, userLogin, authorAssociation };
+}
+
+export function fetchIssueComments(
+  transport: GhTransport,
+  repo: string,
+  issueNumber: number,
+  ownerLogin: string,
+  options: CommentCensusOptions = {},
+): CommentCensusResult {
+  const diagnostics: LineageDiagnostic[] = [];
+  const pageSize = options.pageSize ?? 100;
+  const maxPages = options.maxPages ?? 10;
+  const { owner, name } = parseRepo(repo);
+  const path = `repos/${owner}/${name}/issues/${issueNumber}/comments`;
+  const collected: TrustedComment[] = [];
+  let page = 1;
+  let commentsComplete = false;
+
+  while (page <= maxPages) {
+    const response = transport.runGh([
+      'gh',
+      'api',
+      path,
+      '-f',
+      `per_page=${pageSize}`,
+      '-f',
+      `page=${page}`,
+    ]);
+    if (response.exitCode !== 0) {
+      diagnostics.push({
+        code: 'comments-truncated',
+        message: 'comment census transport failed',
+      });
+      return { comments: collected, commentsComplete: false, diagnostics };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(response.stdout);
+    } catch {
+      diagnostics.push({
+        code: 'comments-truncated',
+        message: 'comment census response malformed',
+      });
+      return { comments: collected, commentsComplete: false, diagnostics };
+    }
+    if (!Array.isArray(parsed)) {
+      diagnostics.push({
+        code: 'comments-truncated',
+        message: 'comment census response not an array',
+      });
+      return { comments: collected, commentsComplete: false, diagnostics };
+    }
+    if (parsed.length === 0) {
+      commentsComplete = true;
+      break;
+    }
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object') {
+        diagnostics.push({
+          code: 'trust-field-incomplete',
+          message: 'comment record is not an object',
+        });
+        return { comments: [], commentsComplete: false, diagnostics };
+      }
+      const normalized = normalizeComment(item as Record<string, unknown>);
+      if (!normalized) {
+        diagnostics.push({
+          code: 'trust-field-incomplete',
+          message: 'comment record missing required trust fields',
+        });
+        return { comments: [], commentsComplete: false, diagnostics };
+      }
+      if (normalized.userLogin !== ownerLogin) {
+        diagnostics.push({
+          code: 'foreign-comment',
+          message: `foreign comment ${normalized.id}`,
+          commentId: normalized.id,
+        });
+        continue;
+      }
+      if (normalized.updatedAt !== normalized.createdAt) {
+        diagnostics.push({
+          code: 'edited-comment',
+          message: `edited comment ${normalized.id}`,
+          commentId: normalized.id,
+        });
+        continue;
+      }
+      collected.push(normalized);
+    }
+    if (parsed.length < pageSize) {
+      commentsComplete = true;
+      break;
+    }
+    if (page === maxPages) {
+      if (options.sentinelProbe === false) {
+        diagnostics.push({
+          code: 'comments-truncated',
+          message: 'comment census hit page ceiling without exhaustion proof',
+        });
+        return { comments: collected, commentsComplete: false, diagnostics };
+      }
+      const sentinel = transport.runGh([
+        'gh',
+        'api',
+        path,
+        '-f',
+        `per_page=${pageSize}`,
+        '-f',
+        `page=${page + 1}`,
+      ]);
+      if (sentinel.exitCode !== 0) {
+        diagnostics.push({
+          code: 'comments-truncated',
+          message: 'comment census sentinel probe failed',
+        });
+        return { comments: collected, commentsComplete: false, diagnostics };
+      }
+      let sentinelParsed: unknown;
+      try {
+        sentinelParsed = JSON.parse(sentinel.stdout);
+      } catch {
+        diagnostics.push({
+          code: 'comments-truncated',
+          message: 'comment census sentinel response malformed',
+        });
+        return { comments: collected, commentsComplete: false, diagnostics };
+      }
+      if (!Array.isArray(sentinelParsed)) {
+        diagnostics.push({
+          code: 'comments-truncated',
+          message: 'comment census sentinel response not an array',
+        });
+        return { comments: collected, commentsComplete: false, diagnostics };
+      }
+      commentsComplete = sentinelParsed.length === 0;
+      if (!commentsComplete) {
+        diagnostics.push({
+          code: 'comments-truncated',
+          message: 'comment census exceeded configured page ceiling',
+        });
+      }
+      break;
+    }
+    page += 1;
+  }
+
+  return {
+    comments: collected.sort((a, b) => {
+      const at = Date.parse(a.createdAt);
+      const bt = Date.parse(b.createdAt);
+      if (at !== bt) return at - bt;
+      return a.id - b.id;
+    }),
+    commentsComplete,
+    diagnostics,
+  };
+}
+
+export function parseJournalEvents(comments: TrustedComment[]): {
+  events: ParsedJournalEvent[];
+  diagnostics: LineageDiagnostic[];
+} {
+  const events: ParsedJournalEvent[] = [];
+  const diagnostics: LineageDiagnostic[] = [];
+  for (const comment of comments) {
+    const logical = parseLogicalFromCommentBody(comment.body);
+    if (!logical) {
+      diagnostics.push({
+        code: 'malformed-marker',
+        message: `malformed journal marker in comment ${comment.id}`,
+        commentId: comment.id,
+      });
+      continue;
+    }
+    const payload = logical as Record<string, unknown>;
+    events.push({
+      schema: logical.schema,
+      eventKey: logical['event-key'],
+      logical,
+      fingerprint: logicalFingerprint(logical),
+      commentId: comment.id,
+      createdAt: comment.createdAt,
+      delivery: payload.delivery as 'immediate' | 'delayed' | undefined,
+      deliveryFailureClass: typeof payload['delivery-failure-class'] === 'string'
+        ? payload['delivery-failure-class']
+        : undefined,
+      firstFailureAt: typeof payload['first-failure-at'] === 'string'
+        ? payload['first-failure-at']
+        : undefined,
+    });
+  }
+  return { events, diagnostics };
+}
+
+export function fetchRepositoryOwnerLogin(transport: GhTransport, repo: string): string {
+  const { owner, name } = parseRepo(repo);
+  const response = transport.runGh(['gh', 'api', `repos/${owner}/${name}`, '--jq', '.owner.login']);
+  if (response.exitCode !== 0 || !response.stdout.trim()) {
+    throw new Error('unable to resolve repository owner login');
+  }
+  return response.stdout.trim();
+}
+
+export function fetchIssueRevision(transport: GhTransport, repo: string, issueNumber: number): {
+  title: string;
+  body: string;
+  labels: string[];
+} {
+  const { owner, name } = parseRepo(repo);
+  const response = transport.runGh([
+    'gh',
+    'api',
+    `repos/${owner}/${name}/issues/${issueNumber}`,
+    '--jq',
+    '{title, body, labels: [.labels[].name]}',
+  ]);
+  if (response.exitCode !== 0) {
+    throw new Error('unable to read issue revision');
+  }
+  const parsed = JSON.parse(response.stdout) as { title: string; body: string; labels: string[] };
+  return parsed;
+}
+
+export function createIssueComment(
+  transport: GhTransport,
+  repo: string,
+  issueNumber: number,
+  body: string,
+): { ok: boolean; commentId?: number; ambiguous?: boolean } {
+  const { owner, name } = parseRepo(repo);
+  const response = transport.runGh([
+    'gh',
+    'api',
+    `repos/${owner}/${name}/issues/${issueNumber}/comments`,
+    '-f',
+    `body=${body}`,
+  ]);
+  if (response.exitCode !== 0) {
+    return { ok: false };
+  }
+  try {
+    const parsed = JSON.parse(response.stdout) as { id?: number };
+    if (!parsed.id) return { ok: true, ambiguous: true };
+    return { ok: true, commentId: Number(parsed.id) };
+  } catch {
+    return { ok: true, ambiguous: true };
+  }
+}
+
+export function ensureProjectionLabels(transport: GhTransport, repo: string): LineageDiagnostic[] {
+  const diagnostics: LineageDiagnostic[] = [];
+  const { owner, name } = parseRepo(repo);
+  for (const [label, meta] of Object.entries(PROJECTION_LABELS)) {
+    const response = transport.runGh([
+      'gh',
+      'api',
+      `repos/${owner}/${name}/labels/${encodeURIComponent(label)}`,
+    ]);
+    if (response.exitCode === 0) continue;
+    const create = transport.runGh([
+      'gh',
+      'api',
+      `repos/${owner}/${name}/labels`,
+      '-f',
+      `name=${label}`,
+      '-f',
+      `description=${meta.description}`,
+      '-f',
+      `color=${meta.color}`,
+    ]);
+    if (create.exitCode !== 0) {
+      diagnostics.push({
+        code: 'comments-truncated',
+        message: `label bootstrap failed for ${label}`,
+      });
+    }
+  }
+  return diagnostics;
+}
+
+export function syncIssueProjectionLabels(
+  transport: GhTransport,
+  repo: string,
+  issueNumber: number,
+  desired: typeof PROJECTION_IN_PROGRESS | typeof PROJECTION_ACCEPTED,
+  preserveLabels: string[],
+): ProjectionSyncResult {
+  const diagnostics: LineageDiagnostic[] = [];
+  const remove = desired === PROJECTION_ACCEPTED ? PROJECTION_IN_PROGRESS : PROJECTION_ACCEPTED;
+  const apply = desired;
+  const { owner, name } = parseRepo(repo);
+  const current = fetchIssueRevision(transport, repo, issueNumber);
+  const unrelated = current.labels.filter(
+    (label) => label !== PROJECTION_IN_PROGRESS && label !== PROJECTION_ACCEPTED,
+  );
+  const nextLabels = [...new Set([...unrelated, ...preserveLabels.filter((label) => label !== remove), apply])];
+  const response = transport.runGh([
+    'gh',
+    'api',
+    `repos/${owner}/${name}/issues/${issueNumber}`,
+    '-X',
+    'PATCH',
+    '-f',
+    `labels=${JSON.stringify(nextLabels)}`,
+  ]);
+  if (response.exitCode !== 0) {
+    return {
+      ok: false,
+      applied: [],
+      removed: [],
+      pendingRepair: true,
+      diagnostics: [{
+        code: 'comments-truncated',
+        message: 'projection label synchronization failed',
+      }],
+    };
+  }
+  return {
+    ok: true,
+    applied: [apply],
+    removed: current.labels.includes(remove) ? [remove] : [],
+    pendingRepair: false,
+    diagnostics,
+  };
+}
+
+export function defaultWorkdir(issueNumber: number): string {
+  return join(homedir(), '.local', 'state', 'create-issue-draft', String(issueNumber), 'journal');
+}
+
+export function pendingPath(workdir: string, eventKey: string): string {
+  const safe = eventKey.replace(/[^a-zA-Z0-9:_-]+/g, '_');
+  return join(workdir, 'pending', `${safe}.json`);
+}
+
+export function writePendingEvent(workdir: string, pending: PendingJournalEvent): void {
+  const filePath = pendingPath(workdir, pending.eventKey);
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, JSON.stringify(pending, null, 2), 'utf8');
+}
+
+export function readPendingEvent(workdir: string, eventKey: string): PendingJournalEvent | null {
+  const filePath = pendingPath(workdir, eventKey);
+  if (!existsSync(filePath)) return null;
+  return JSON.parse(readFileSync(filePath, 'utf8')) as PendingJournalEvent;
+}
+
+export function clearPendingEvent(workdir: string, eventKey: string): void {
+  const filePath = pendingPath(workdir, eventKey);
+  if (existsSync(filePath)) unlinkSync(filePath);
+}
+
+export function listPendingEvents(workdir: string): PendingJournalEvent[] {
+  const dir = join(workdir, 'pending');
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')) as PendingJournalEvent);
+}
+
+export function cycleIdPath(workdir: string): string {
+  return join(workdir, 'active-cycle-id.txt');
+}
+
+export function readPersistedCycleId(workdir: string): string | null {
+  const filePath = cycleIdPath(workdir);
+  if (!existsSync(filePath)) return null;
+  const value = readFileSync(filePath, 'utf8').trim();
+  return value || null;
+}
+
+export function persistCycleId(workdir: string, cycleId: string): void {
+  const filePath = cycleIdPath(workdir);
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${cycleId}\n`, 'utf8');
+}

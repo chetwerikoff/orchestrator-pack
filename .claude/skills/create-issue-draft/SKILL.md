@@ -532,6 +532,35 @@ rNN/tier-gate-receipt.json
 
 Do not persist an episode receipt or consolidated reviewer output.
 
+## GitHub issue journal (Issue #1152)
+
+The public Issue journal is best-effort transport only. Local guards and receipts
+remain authoritative; comments and `spec-review:*` labels are last-synchronized
+projections, not workflow gates.
+
+- `scripts/create-issue-stage-finalize.ts` is the sole writer for cycle start,
+  settled stage publication, and bounded pending-delivery retry.
+- `scripts/create-issue-final-acceptance.ts` is the sole writer for the final
+  acceptance event and `spec-review:accepted`. It directly executes the shared
+  module `scripts/lib/create-issue-final-acceptance-contract.ts`; a finding-ledger
+  PASS alone is never acceptance.
+- Start one v1 cycle before review work, publish one logical stage event per
+  settled #1150 receipt, and run aggregate final acceptance only after every guard
+  in the shared contract is green for the frozen cycle head and revision.
+
+```bash
+node scripts/create-issue-stage-finalize.ts start-cycle \
+  --repo <owner/name> --issue-number <N> --source-revision <rNN> --tier <T1|T2|T3>
+
+node scripts/create-issue-stage-finalize.ts publish-stage \
+  --repo <owner/name> --issue-number <N> --receipt "$REVIEW_DIR/<stage-receipt>.json"
+
+node scripts/create-issue-final-acceptance.ts \
+  --repo <owner/name> --issue-number <N> --cycle-id <cycle-id> \
+  --issue-body <path> --issue-revision <rNN> --review-dir "$REVIEW_DIR" \
+  --stage-receipt "$REVIEW_DIR/<receipt>.json" ...
+```
+
 ## Don't
 
 - Review in the author chat or reuse reviewer chats/sources.
