@@ -1,26 +1,29 @@
 #!/usr/bin/env node
-/**
- * Stage-completeness guard CLI (Issues #620, #1150).
- */
-import { readFileSync } from 'node:fs';
+/** Stage-completeness guard CLI (Issues #620, #1150). */
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import {
   checkStageCompletenessGuard,
   formatStageCompletenessPassMessage,
+  STAGE_COMPLETENESS_RECEIPT_SCHEMA,
+  type ReviewEpisodeDerivationAuthorityV1,
+  type StageCompletenessReceiptV1,
+  type TierIntakeAuthorityV1,
 } from './lib/stage-completeness-core.ts';
 import {
   type DraftTextGuardBaseOptions,
   runDraftTextGuardCli,
 } from './lib/draft-text-guard-cli.ts';
-import {
-  isDirectCliExecution,
-  runReviewerTsCli,
-} from './lib/reviewer-ts-cli.ts';
+import { isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.ts';
 
 const GUARD_LABEL = 'stage-completeness guard';
 
 type ReceiptCliOptions = DraftTextGuardBaseOptions & {
   stageReceiptPaths?: string[];
+  receiptDirectory?: string;
   relayEvidencePath?: string;
+  claudeProducerEvidencePaths?: string[];
+  tierIntakePath?: string;
   phase?: 'pre-lens' | 'final-acceptance';
 };
 
@@ -28,11 +31,70 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8')) as unknown;
 }
 
-function loadStageReceipts(paths: readonly string[]): unknown[] {
-  return paths.flatMap((path) => {
-    const value = readJson(path);
-    return Array.isArray(value) ? value : [value];
-  });
+function asObjects(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [value];
+}
+
+function isStageReceipt(value: unknown): value is StageCompletenessReceiptV1 {
+  return Boolean(value) && typeof value === 'object'
+    && (value as { schema?: unknown }).schema === STAGE_COMPLETENESS_RECEIPT_SCHEMA;
+}
+
+function canonicalReceiptDirectory(opts: ReceiptCliOptions): string {
+  if (opts.receiptDirectory) return resolve(opts.receiptDirectory);
+  const first = opts.stageReceiptPaths?.[0];
+  if (!first) throw new Error('--receipt-directory or at least one --stage-receipt is required');
+  return dirname(resolve(first));
+}
+
+export function loadCanonicalReceiptInventory(opts: ReceiptCliOptions): {
+  receipts: StageCompletenessReceiptV1[];
+  authority: ReviewEpisodeDerivationAuthorityV1;
+} {
+  if (!opts.tierIntakePath) throw new Error('--tier-intake is required for receipt-backed review episodes');
+  const intake = readJson(opts.tierIntakePath) as TierIntakeAuthorityV1;
+  const directory = canonicalReceiptDirectory(opts);
+  if (!existsSync(directory)) throw new Error(`receipt directory does not exist: ${directory}`);
+  const explicit = new Set((opts.stageReceiptPaths ?? []).map((path) => resolve(path)));
+  const candidates = readdirSync(directory)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => resolve(directory, name));
+  const receipts: StageCompletenessReceiptV1[] = [];
+  for (const path of candidates) {
+    let parsed: unknown;
+    try {
+      parsed = readJson(path);
+    } catch (error) {
+      if (explicit.has(path) || /stage-completeness-receipt/i.test(path)) throw error;
+      continue;
+    }
+    const found = asObjects(parsed).filter(isStageReceipt);
+    if (found.length === 0) {
+      if (explicit.has(path)) throw new Error(`explicit --stage-receipt is not ${STAGE_COMPLETENESS_RECEIPT_SCHEMA}: ${path}`);
+      continue;
+    }
+    receipts.push(...found);
+  }
+  for (const path of explicit) {
+    if (!candidates.includes(path)) throw new Error(`explicit stage receipt is outside canonical receipt directory: ${path}`);
+  }
+  receipts.sort((left, right) => left.stageSequence - right.stageSequence || left.stageReceiptId.localeCompare(right.stageReceiptId));
+  if (receipts.length === 0) throw new Error(`no ${STAGE_COMPLETENESS_RECEIPT_SCHEMA} files found in ${directory}`);
+  const evidence = (opts.claudeProducerEvidencePaths ?? []).flatMap((path) => asObjects(readJson(path)));
+  return {
+    receipts,
+    authority: {
+      tierIntake: intake,
+      receiptInventory: {
+        source: 'canonical-review-directory',
+        taskIdentity: intake.taskIdentity,
+        episodeFirstRevision: intake.firstRevision,
+        reviewEpisodeId: `${intake.taskIdentity}@${intake.firstRevision}`,
+        stageReceiptIds: receipts.map((receipt) => receipt.stageReceiptId),
+      },
+      claudeProducerEvidence: evidence,
+    },
+  };
 }
 
 function loadRelayEvidence(path?: string): unknown[] {
@@ -51,14 +113,14 @@ export function runCli(argv: string[]): number {
     missingInputMessage: '--text-file <path> or --text <string> is required',
     evaluate(text, baseOpts) {
       const opts = baseOpts as ReceiptCliOptions;
-      const receiptPaths = opts.stageReceiptPaths ?? [];
+      const receiptBacked = Boolean(opts.receiptDirectory || opts.stageReceiptPaths?.length);
+      const loaded = receiptBacked ? loadCanonicalReceiptInventory(opts) : null;
       const result = checkStageCompletenessGuard(text, {
         repoRoot: opts.repoRoot,
         draftPath: opts.draftPath ?? opts.textPath ?? undefined,
-        stageReceipts: receiptPaths.length > 0 ? loadStageReceipts(receiptPaths) : undefined,
-        verifiedRelayEvidence: receiptPaths.length > 0
-          ? loadRelayEvidence(opts.relayEvidencePath)
-          : undefined,
+        stageReceipts: loaded?.receipts,
+        verifiedRelayEvidence: loaded ? loadRelayEvidence(opts.relayEvidencePath) : undefined,
+        episodeAuthority: loaded?.authority,
         phase: opts.phase,
       });
       if (!result.ok) return { ok: false, errors: result.errors, passMessage: '' };
@@ -66,25 +128,37 @@ export function runCli(argv: string[]): number {
     },
   }, (arg, values, index, baseOpts) => {
     const opts = baseOpts as ReceiptCliOptions;
+    const value = String(values[index + 1] ?? '');
     if (arg === '--stage-receipt') {
-      const path = String(values[index + 1] ?? '');
-      if (!path) throw new Error('--stage-receipt requires a path');
+      if (!value) throw new Error('--stage-receipt requires a path');
       opts.stageReceiptPaths ??= [];
-      opts.stageReceiptPaths.push(path);
+      opts.stageReceiptPaths.push(value);
+      return index + 1;
+    }
+    if (arg === '--receipt-directory') {
+      if (!value) throw new Error('--receipt-directory requires a path');
+      opts.receiptDirectory = value;
+      return index + 1;
+    }
+    if (arg === '--tier-intake') {
+      if (!value) throw new Error('--tier-intake requires a path');
+      opts.tierIntakePath = value;
+      return index + 1;
+    }
+    if (arg === '--claude-producer-evidence') {
+      if (!value) throw new Error('--claude-producer-evidence requires a path');
+      opts.claudeProducerEvidencePaths ??= [];
+      opts.claudeProducerEvidencePaths.push(value);
       return index + 1;
     }
     if (arg === '--verified-relay-evidence') {
-      const path = String(values[index + 1] ?? '');
-      if (!path) throw new Error('--verified-relay-evidence requires a path');
-      opts.relayEvidencePath = path;
+      if (!value) throw new Error('--verified-relay-evidence requires a path');
+      opts.relayEvidencePath = value;
       return index + 1;
     }
     if (arg === '--phase') {
-      const phase = String(values[index + 1] ?? '');
-      if (phase !== 'pre-lens' && phase !== 'final-acceptance') {
-        throw new Error('--phase must be pre-lens or final-acceptance');
-      }
-      opts.phase = phase;
+      if (value !== 'pre-lens' && value !== 'final-acceptance') throw new Error('--phase must be pre-lens or final-acceptance');
+      opts.phase = value;
       return index + 1;
     }
     return 'unknown';
@@ -95,6 +169,4 @@ function main(): void {
   process.exit(runCli(process.argv));
 }
 
-if (isDirectCliExecution(import.meta.url, process.argv[1])) {
-  runReviewerTsCli(main);
-}
+if (isDirectCliExecution(import.meta.url, process.argv[1])) runReviewerTsCli(main);
