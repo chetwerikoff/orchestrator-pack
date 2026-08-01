@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { runOrcaJson } from './orca-cli.ts';
 import * as lifecycle from './worker-smoke-lifecycle.ts';
 import * as core from './worker-smoke-core.ts';
@@ -60,6 +61,66 @@ export function registerWorkerSmokeFindingsRegressionTests(
       'utf8',
     );
   }
+
+  describe('ci diagnostic: worker-smoke subprocess envelope', () => {
+    it('prints the actual preflight failure payload when its stable cause is absent', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-ci-diagnostic-'));
+      const repoRoot = path.join(root, 'repo');
+      fs.mkdirSync(repoRoot, { recursive: true });
+      for (const [command, args] of [
+        ['git', ['init']],
+        ['git', ['config', 'user.email', 'smoke@example.invalid']],
+        ['git', ['config', 'user.name', 'Smoke Harness']],
+      ] as const) {
+        const result = runProcessSync({ command, args, cwd: repoRoot, inheritParentEnv: true });
+        expect(result.ok, result.stderr || result.error).toBe(true);
+      }
+      fs.writeFileSync(path.join(repoRoot, 'marker.txt'), 'current head\n', 'utf8');
+      for (const args of [['add', 'marker.txt'], ['commit', '-m', 'fixture head']] as const) {
+        const result = runProcessSync({ command: 'git', args, cwd: repoRoot, inheritParentEnv: true });
+        expect(result.ok, result.stderr || result.error).toBe(true);
+      }
+      const headResult = runProcessSync({
+        command: 'git', args: ['rev-parse', 'HEAD'], cwd: repoRoot, inheritParentEnv: true,
+      });
+      expect(headResult.ok, headResult.stderr || headResult.error).toBe(true);
+      const result = runProcessSync({
+        command: process.execPath,
+        args: [
+          '--experimental-strip-types',
+          path.join(import.meta.dirname, '..', 'worker-smoke-run.ts'),
+          'run',
+          '--issue', '1125',
+          '--pr', '1153',
+          '--head-sha', headResult.stdout.trim(),
+          '--issue-body-file', path.join(
+            import.meta.dirname,
+            '..',
+            '..',
+            'tests',
+            'fixtures',
+            'worker-smoke',
+            'action-producing-with-plan.md',
+          ),
+          '--repo-root', repoRoot,
+          '--cwd', repoRoot,
+          '--dry-run',
+          '--json',
+        ],
+        cwd: repoRoot,
+        inheritParentEnv: true,
+        env: { ORCA_CLI_COMMAND: path.join(root, 'missing-orca') },
+      });
+      const payload = JSON.parse(result.stdout.trim().split(/\r?\n/u).at(-1) ?? '{}') as {
+        nonPassCause?: string;
+      };
+      expect(
+        payload.nonPassCause,
+        JSON.stringify({ payload, stdout: result.stdout, stderr: result.stderr }),
+      ).toBe('orca_control_plane_unavailable_preflight');
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+  });
 
   describe('review findings: deadline and bounded I/O (#1138)', () => {
     it('terminalizes before accepting progress first observed at the stall deadline', () => {
