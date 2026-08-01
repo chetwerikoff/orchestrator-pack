@@ -245,7 +245,7 @@ function inferSmokeReportMachineCause(report: SmokeReport): SmokeNonPassCause | 
     return report.controlPlaneDiagnostic.cause;
   }
   for (const scenario of report.scenarios) {
-    const observed = scenario.observed.trim();
+    const observed = String(scenario.observed ?? '').trim();
     if (isSmokeNonPassCause(observed)) {
       return observed;
     }
