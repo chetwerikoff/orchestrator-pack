@@ -38,6 +38,26 @@ npm run chatgpt-browser-turn -- turn \
 The package entrypoint also accepts the new direct shape without the `turn` word,
 but existing callers do not need to change their argv.
 
+
+## Flow-manager long-running launcher (#1164)
+
+Applicable create-issue-draft long turns must launch through the caller-side
+adapter rather than spawning this transport directly from a flow-manager caller
+that may exit before the turn completes:
+
+```bash
+npm run flow-manager-browser-gpt-long-run -- \
+  --run-identity <id> --attempt-identity <id> \
+  --handoff-receipt /path/receipt.json \
+  --terminal-envelope /path/envelope.json \
+  --output /path/reply.txt \
+  --profile ... --cdp ... --input ... --chat-url ...
+```
+
+See [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
+This transport's send-once, atomic reply publication, and `turn-result/v1`
+stdout authority are unchanged.
+
 ## State-light turn contract
 
 One invocation owns one Browser-GPT exchange:

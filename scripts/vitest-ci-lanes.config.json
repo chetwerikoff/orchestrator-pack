@@ -108,7 +108,8 @@
     "scripts/worker-message-submit-reconcile.test.ts": "heavy",
     "scripts/worker-smoke.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts": "light",
-    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light"
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light",
+    "scripts/flow-manager-long-running-child.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,

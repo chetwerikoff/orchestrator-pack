@@ -31,6 +31,9 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1122 focused read-only page-probe tests are fast light-lane coverage;
   // keep the pre-topology producer bounded until CI runtime history harvests them.
   'scripts/browser-gpt-page-probe.test.ts': 120,
+  // Issue #1164 flow-manager long-running child launcher tests are fast fixture
+  // coverage; fixed estimate keeps verify-pack topology guard within the 32-file bound.
+  'scripts/flow-manager-long-running-child.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains

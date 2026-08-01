@@ -1,3 +1,23 @@
+## 2026-08-01 — Flow-manager long-running Browser-GPT child launcher (Issue #1164)
+
+**What changed.** Applicable create-issue-draft long Browser-GPT turns launch through
+`npm run flow-manager-browser-gpt-long-run`, which starts the canonical detached
+launcher `flow-manager-long-running-child`. The launcher commits an immutable
+handoff receipt before Browser-child start, parses child stdout for
+`turn-result/v1`, and publishes one terminal envelope.
+
+**Operator adoption.**
+
+1. Recycle live flow-manager and worker sessions that must pick up tracked
+   `AGENTS.md`, `.claude/skills/create-issue-draft/SKILL.md`, and Cursor rules.
+2. Use the adapter for long-running Browser-GPT turns per
+   `docs/flow-manager-long-running-child-runbook.md`.
+3. No daemon restart, supervisor change, or durable-state backfill is required.
+
+**Rollback.** Revert to direct `npm run chatgpt-browser-turn -- turn ...` for new
+attempts only; do not rewrite receipts, reply output, or envelopes from attempts
+already launched through the launcher.
+
 ## 2026-07-31 — Canonical Browser-GPT PR-number pack review (Issue #1111)
 
 ### Rollout:

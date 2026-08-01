@@ -5,7 +5,9 @@ alwaysApply: true
 
 # Flow-manager browser-turn monitoring (binding)
 
-Canonical contract: [`.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md) — **Browser-GPT turn transport — Issues #1120 and #1150**.
+Canonical contract:
+Canonical long-running launcher runbook: [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md) — use `npm run flow-manager-browser-gpt-long-run` for applicable long turns; the Cursor rule remains a thin pointer.
+ [`.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md) — **Browser-GPT turn transport — Issues #1120 and #1150**.
 
 ## One normal monitoring path
 

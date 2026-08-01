@@ -23,6 +23,8 @@
     "test:issue-1122": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/browser-gpt-page-probe.test.ts",
     "pack-gpt-review": "node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pack-gpt-review.ts --",
     "chatgpt-browser-turn": "npm run check:node-major --silent && node --experimental-strip-types scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "flow-manager-long-running-child": "npm run check:node-major --silent && node --experimental-strip-types scripts/flow-manager-long-running-child.ts",
+    "flow-manager-browser-gpt-long-run": "npm run check:node-major --silent && node --experimental-strip-types scripts/flow-manager-browser-gpt-long-run.ts",
     "browser-gpt-page-probe": "node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/browser-gpt-page-probe.ts --",
     "gate-runner-selftest": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/gate-runner",
     "gate-census-generate": "npm run check:node-major --silent && node --experimental-strip-types scripts/gate-runner/census-generator.ts",
@@ -35,7 +37,8 @@
     "pr2a:receipt": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/closure-receipt.ts",
     "test:issue-948": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/pr2a/planning.test.ts scripts/pr2a/final-conformance.test.ts scripts/review-start-claim.test.ts scripts/review-start-claim-lifecycle.test.ts scripts/review-start-claim-run-binding.test.ts scripts/review-start-claim-budget-semantics.test.ts scripts/pack-review-runner-severity.test.ts scripts/orchestrator-wake-supervisor.test.ts scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
     "tiering:calibration": "npm run check:node-major --silent && node --experimental-strip-types scripts/tiering-calibration.ts",
-    "tiering:distribution": "npm run check:node-major --silent && node --experimental-strip-types scripts/tiering-distribution-report.ts"
+    "tiering:distribution": "npm run check:node-major --silent && node --experimental-strip-types scripts/tiering-distribution-report.ts",
+    "test:issue-1164": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/flow-manager-long-running-child.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",
