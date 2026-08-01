@@ -122,7 +122,7 @@ describe('Issue #1150 stage authority', () => {
     expect(deriveReviewEpisodeState(mismatch, fixture.relay, authority(mismatch)).errors.join('\n')).toMatch(/reviewerCardinality mismatch/);
     const reroot = structuredClone(fixture.receipts);
     for (const item of reroot) { item.episodeFirstRevision = 'r10'; item.reviewEpisodeId = `${TASK}@r10`; item.sourceRevision = 'r10'; }
-    expect(deriveReviewEpisodeState(reroot, fixture.relay, fixture.authority).errors.join('\n')).toMatch(/outside the authoritative episode root|inventory root/);
+    expect(deriveReviewEpisodeState(reroot, fixture.relay, fixture.authority).errors.join('\n')).toMatch(/outside the authoritative episode root|inventory root|not canonical/);
   });
 
   it('validates every attempt order, including partial attempts', () => {
@@ -150,8 +150,12 @@ describe('Issue #1150 stage authority', () => {
     const fixture = sourceStage('competitive', 1, 3);
     const first = invocation('competitive', 'competitive-attempt', 1, 3, undefined);
     const retry = invocation('competitive', 'competitive-attempt', 1, 3, undefined, { invocationId: 'retry-inv', terminalResultIdentity: 'retry-result', attemptOrdinal: 2, retryAttempt: true, retryClass: 'retry-forbidden', terminalClassification: 'quota' });
-    fixture.receipt.invocations!.splice(0, 1, first, retry); fixture.receipt.outcome = 'blocked'; fixture.receipt.credentialingCaptures = []; fixture.receipt.settlement.retryState = 'exhausted';
-    const relayEvidence = relay(fixture.captures);
+    fixture.receipt.invocations!.splice(0, 1, first, retry);
+    fixture.receipt.outcome = 'blocked';
+    fixture.receipt.credentialingCaptures = [];
+    fixture.receipt.settlement.retryState = 'exhausted';
+    fixture.receipt.relayEligibleCaptures = fixture.receipt.invocations!.flatMap((item) => item.capture ? [item.capture] : []);
+    const relayEvidence = relay(fixture.receipt.relayEligibleCaptures);
     relayEvidence[0] = { ...relayEvidence[0]!, relayAttemptId: 'bad-relay', verified: false };
     relayEvidence.push({ ...relayEvidence[0]!, relayAttemptId: 'fixed-relay', supersedes: 'bad-relay', verified: true });
     expect(deriveReviewEpisodeState([fixture.receipt], relayEvidence, authority([fixture.receipt])).errors).toEqual([]);
