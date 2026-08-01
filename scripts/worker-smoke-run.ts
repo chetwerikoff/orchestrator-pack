@@ -57,6 +57,7 @@ import {
   formatSmokeReportComment,
   hasPreexistingTrackedDirtiness,
   isDefinitePromptNonDelivery,
+  isSmokeNonPassCause,
   normalizeSmokeReport,
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
@@ -152,9 +153,6 @@ function parseArgs(argv: readonly string[]): CliOptions {
 
 function emit(result: unknown, json: boolean): void {
   if (json) {
-    if (process.env.FAKE_ORCA_SCENARIO) {
-      process.stderr.write(`[worker-smoke-test-payload:${process.env.FAKE_ORCA_SCENARIO}] ${JSON.stringify(result)}\n`);
-    }
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } else if (typeof result === 'string') {
     process.stdout.write(`${result}\n`);
@@ -236,11 +234,43 @@ function attachControlPlaneDiagnostic(
   return report;
 }
 
+function inferSmokeReportMachineCause(report: SmokeReport): SmokeNonPassCause | undefined {
+  if (report.result === 'PASS') {
+    return undefined;
+  }
+  if (report.nonPassCause) {
+    return report.nonPassCause;
+  }
+  if (report.controlPlaneDiagnostic?.cause) {
+    return report.controlPlaneDiagnostic.cause;
+  }
+  for (const scenario of report.scenarios) {
+    const observed = scenario.observed.trim();
+    if (isSmokeNonPassCause(observed)) {
+      return observed;
+    }
+  }
+  return classifyDeclaredScenarioNonPassCause({
+    partial: report,
+    agentActivityObserved: true,
+    agentCompleted: true,
+  });
+}
+
+function finalizeSmokeReportMachineCause(report: SmokeReport): SmokeReport {
+  const cause = inferSmokeReportMachineCause(report);
+  if (cause) {
+    report.nonPassCause = cause;
+  }
+  return report;
+}
+
 function buildSmokeRunResult(
   report: SmokeReport,
   published: boolean,
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> {
+  finalizeSmokeReportMachineCause(report);
   return {
     ok: report.result === 'PASS',
     report,
@@ -950,6 +980,7 @@ function runGateCheck(options: CliOptions): number {
 }
 
 function publishSmokeReport(report: SmokeReport, options: CliOptions): void {
+  finalizeSmokeReportMachineCause(report);
   if (!options.dryRun) {
     publishPrComment(options.prNumber, formatSmokeReportComment(report), options.repoRoot);
     writeWorkerSmokeReceipt(report);
