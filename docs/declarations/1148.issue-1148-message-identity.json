@@ -14,8 +14,24 @@
     "scripts/chatgpt-browser-turn/product-page-selectors.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:909c96107a308829b673a532c1cd1ca3eaf418e82a075ac6e431179f37fe3a94",
+      "new_active_scope_hash": "sha256:e55b0111efd143a8c5ebf722490b32caa0d0e7aa61d02b309504395a36c37b5a",
+      "changed": {
+        "added": [
+          "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Update existing Browser-GPT regressions to the Issue #1148 fail-closed fallback contract revealed by current-head CI.",
+      "actor": "chat-executor",
+      "timestamp": "2026-08-01T07:20:00.000Z",
+      "applied": true
+    }
+  ]
 }
