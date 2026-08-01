@@ -4,10 +4,11 @@ import { defaultGhTransport } from './lib/create-issue-stage-record-gh.ts';
 import { runFinalAcceptance } from './lib/create-issue-final-acceptance.ts';
 import type { PublicActor } from './lib/create-issue-stage-record-types.ts';
 import {
-  isDirectCliExecution,
+  bootstrapReviewerCli,
+  finalizeReviewerArgvIndex,
   parseRequiredNonEmptyString,
   parseRequiredPositiveInt,
-  runReviewerTsCli,
+  runReviewerParsedCli,
 } from './lib/reviewer-ts-cli.ts';
 
 interface CliOptions {
@@ -89,37 +90,16 @@ function parseArgs(argv: string[]): CliOptions {
       case '--external-pass-receipt':
         opts.externalPassReceiptPath = String(argv[++i] ?? '');
         break;
-      case '--public-actor':
-        opts.publicActor = String(argv[++i] ?? opts.publicActor) as PublicActor;
-        break;
-      case '--workdir':
-        opts.workdir = String(argv[++i] ?? '');
-        break;
-      case '--json':
-        opts.json = true;
-        break;
-      case '--help':
-      case '-h':
-        console.log(usage());
-        process.exit(0);
-        break;
       default:
-        throw new Error(`unknown argument ${arg}\n${usage()}`);
+        i = finalizeReviewerArgvIndex(arg, argv, i, opts, usage());
+        break;
     }
   }
   return opts;
 }
 
 export function runCli(argv: string[]): number {
-  let opts: CliOptions;
-  try {
-    opts = parseArgs(argv);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`create-issue-final-acceptance: ${message}\n`);
-    return 2;
-  }
-
+  return runReviewerParsedCli(argv, 'create-issue-final-acceptance', parseArgs, (opts) => {
   const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
   const cycleId = parseRequiredNonEmptyString(opts.cycleId, '--cycle-id');
   const issueBodyPath = parseRequiredNonEmptyString(opts.issueBodyPath, '--issue-body');
@@ -155,12 +135,7 @@ export function runCli(argv: string[]): number {
     for (const diagnostic of result.diagnostics) process.stderr.write(`${diagnostic.message}\n`);
   }
   return result.ok ? 0 : 1;
+  });
 }
 
-function main(): void {
-  process.exit(runCli(process.argv));
-}
-
-if (isDirectCliExecution(import.meta.url, process.argv[1])) {
-  runReviewerTsCli(main);
-}
+bootstrapReviewerCli(import.meta.url, process.argv[1], runCli);

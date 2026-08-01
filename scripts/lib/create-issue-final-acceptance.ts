@@ -1,20 +1,14 @@
-import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
-import {
-  logicalFingerprint,
-  serializeCommentBody,
-} from './create-issue-stage-record-marker.ts';
+import { logicalFingerprint } from './create-issue-stage-record-marker.ts';
 import {
   clearPendingEvent,
   clearPersistedCycleId,
   defaultWorkdir,
   ensureProjectionLabels,
-  fetchIssueComments,
   fetchIssueRevision,
-  fetchRepositoryOwnerLogin,
-  parseJournalEvents,
+  loadIssueJournalCensus,
   syncIssueProjectionLabels,
 } from './create-issue-stage-record-gh.ts';
-import { publishJournalEvent } from './create-issue-stage-record-core.ts';
+import { appendPublishedLogicalJournalEvent } from './create-issue-stage-record-core.ts';
 import {
   executeFinalAcceptanceGuards,
   FINAL_ACCEPTANCE_CONTRACT_VERSION,
@@ -50,23 +44,6 @@ export interface FinalAcceptanceResult {
   projectionPendingRepair?: boolean;
 }
 
-function loadCensus(
-  transport: GhTransport,
-  repo: string,
-  issueNumber: number,
-  census?: CommentCensusOptions,
-) {
-  const ownerLogin = fetchRepositoryOwnerLogin(transport, repo);
-  const fetched = fetchIssueComments(transport, repo, issueNumber, ownerLogin, census);
-  const parsed = parseJournalEvents(fetched.comments);
-  const lineage = buildCanonicalLineage(parsed.events);
-  return {
-    fetched,
-    lineage,
-    diagnostics: [...fetched.diagnostics, ...parsed.diagnostics, ...lineage.diagnostics],
-  };
-}
-
 export function runFinalAcceptance(
   transport: GhTransport,
   input: FinalAcceptanceInput,
@@ -79,7 +56,7 @@ export function runFinalAcceptance(
     return { ok: false, diagnostics, guardErrors: ['projection label bootstrap failed'], projectionPendingRepair: true };
   }
 
-  const censusState = loadCensus(transport, input.repo, input.issueNumber, input.census);
+  const censusState = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
     return { ok: false, diagnostics, guardErrors: ['comment census incomplete'] };
@@ -120,20 +97,8 @@ export function runFinalAcceptance(
     'contract-version': FINAL_ACCEPTANCE_CONTRACT_VERSION,
     'public-actor': input.publicActor,
   };
-  const body = serializeCommentBody(logical);
   const fingerprint = logicalFingerprint(logical);
-  const published = publishJournalEvent(
-    transport,
-    input.repo,
-    input.issueNumber,
-    workdir,
-    body,
-    FINAL_SCHEMA,
-    eventKey,
-    fingerprint,
-    input.census,
-  );
-  diagnostics.push(...published.diagnostics);
+  const published = appendPublishedLogicalJournalEvent(diagnostics, transport, input.repo, input.issueNumber, workdir, logical, input.census);
   if (!published.ok) {
     return {
       ok: false,
@@ -156,7 +121,7 @@ export function runFinalAcceptance(
       projectionPendingRepair: true,
     };
   }
-  const refreshed = loadCensus(transport, input.repo, input.issueNumber, input.census);
+  const refreshed = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
   if (!refreshed.fetched.commentsComplete) {
     return {
       ok: false,

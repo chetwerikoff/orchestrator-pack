@@ -10,10 +10,11 @@ import {
 } from './lib/create-issue-stage-record-core.ts';
 import type { PublicActor } from './lib/create-issue-stage-record-types.ts';
 import {
-  isDirectCliExecution,
+  bootstrapReviewerCli,
+  finalizeReviewerArgvIndex,
   parseRequiredNonEmptyString,
   parseRequiredPositiveInt,
-  runReviewerTsCli,
+  runReviewerParsedCli,
 } from './lib/reviewer-ts-cli.ts';
 
 interface CliOptions {
@@ -66,9 +67,6 @@ function parseArgs(argv: string[]): CliOptions {
       case '--tier':
         opts.tier = String(argv[++i] ?? '');
         break;
-      case '--public-actor':
-        opts.publicActor = String(argv[++i] ?? opts.publicActor) as PublicActor;
-        break;
       case '--predecessor-cycle-id':
         opts.predecessorCycleId = String(argv[++i] ?? '');
         break;
@@ -78,34 +76,16 @@ function parseArgs(argv: string[]): CliOptions {
       case '--waiver':
         opts.waiverPath = String(argv[++i] ?? '');
         break;
-      case '--workdir':
-        opts.workdir = String(argv[++i] ?? '');
-        break;
-      case '--json':
-        opts.json = true;
-        break;
-      case '--help':
-      case '-h':
-        console.log(usage());
-        process.exit(0);
-        break;
       default:
-        throw new Error(`unknown argument ${arg}\n${usage()}`);
+        i = finalizeReviewerArgvIndex(arg, argv, i, opts, usage());
+        break;
     }
   }
   return opts;
 }
 
 export function runCli(argv: string[]): number {
-  let opts: CliOptions;
-  try {
-    opts = parseArgs(argv);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`create-issue-stage-finalize: ${message}\n`);
-    return 2;
-  }
-
+  return runReviewerParsedCli(argv, 'create-issue-stage-finalize', parseArgs, (opts) => {
   const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
   const transport = defaultGhTransport();
 
@@ -146,12 +126,7 @@ export function runCli(argv: string[]): number {
   const ok = results.every((item) => item.ok);
   if (opts.json) console.log(JSON.stringify(results));
   return ok ? 0 : 1;
+  });
 }
 
-function main(): void {
-  process.exit(runCli(process.argv));
-}
-
-if (isDirectCliExecution(import.meta.url, process.argv[1])) {
-  runReviewerTsCli(main);
-}
+bootstrapReviewerCli(import.meta.url, process.argv[1], runCli);

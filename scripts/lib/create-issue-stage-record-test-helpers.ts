@@ -23,7 +23,7 @@ export interface MockGhState {
   failCreate?: boolean;
   failLabelSync?: boolean;
   ambiguousCreate?: boolean;
-  pagesByRequest: Map<string, unknown[]>;
+  pagesByRequest: Map<string, TrustedComment[]>;
 }
 
 export function createMockGhState(overrides: Partial<MockGhState> = {}): MockGhState {

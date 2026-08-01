@@ -67,3 +67,71 @@ export function dispatchDefaultCliArg(
     throwUnknownCliArg(arg, usage);
   }
 }
+
+export function finishReviewerArgvParse<T extends { json: boolean }>(
+  arg: string,
+  usage: string,
+  opts: T,
+): void {
+  dispatchDefaultCliArg(arg, usage, () => { opts.json = true; });
+}
+
+export function runReviewerParsedCli<T>(
+  argv: string[],
+  toolName: string,
+  parseArgs: (argv: string[]) => T,
+  run: (opts: T) => number,
+): number {
+  let opts: T;
+  try {
+    opts = parseArgs(argv);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${toolName}: ${message}\n`);
+    return 2;
+  }
+  return run(opts);
+}
+
+export function applyJournalTailCliArg<T extends { json: boolean; publicActor: string; workdir?: string }>(
+  arg: string,
+  argv: string[],
+  index: number,
+  opts: T,
+  usage: string,
+): number {
+  if (arg === '--public-actor') {
+    opts.publicActor = String(argv[index + 1] ?? opts.publicActor);
+    return index + 1;
+  }
+  if (arg === '--workdir') {
+    opts.workdir = String(argv[index + 1] ?? '');
+    return index + 1;
+  }
+  finishReviewerArgvParse(arg, usage, opts);
+  return index;
+}
+
+export function finalizeReviewerArgvIndex<T extends { json: boolean; publicActor: string; workdir?: string }>(
+  arg: string,
+  argv: string[],
+  index: number,
+  opts: T,
+  usage: string,
+): number {
+  const next = applyJournalTailCliArg(arg, argv, index, opts, usage);
+  return next > index ? next : index;
+}
+
+export function bootstrapReviewerCli(
+  importMetaUrl: string,
+  argvScript: string | undefined,
+  runCli: (argv: string[]) => number,
+): void {
+  const main = (): void => {
+    process.exit(runCli(process.argv));
+  };
+  if (isDirectCliExecution(importMetaUrl, argvScript)) {
+    runReviewerTsCli(main);
+  }
+}

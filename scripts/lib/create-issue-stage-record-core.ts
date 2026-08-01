@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { buildCanonicalLineage, hasBlockingLineageConflict } from './create-issue-stage-record-lineage.ts';
+import { hasBlockingLineageConflict } from './create-issue-stage-record-lineage.ts';
 import {
   logicalFingerprint,
   serializeCommentBody,
@@ -9,10 +9,9 @@ import {
   createIssueComment,
   defaultWorkdir,
   ensureProjectionLabels,
-  fetchIssueComments,
   fetchIssueRevision,
-  fetchRepositoryOwnerLogin,
   listPendingEvents,
+  loadIssueJournalCensus,
   parseJournalEvents,
   persistCycleId,
   readPendingEvent,
@@ -30,6 +29,7 @@ import type {
   ConsumableStageReceipt,
   CycleEventLogical,
   GhTransport,
+  JournalLogical,
   LineageDiagnostic,
   PublicActor,
   StageEventLogical,
@@ -88,23 +88,43 @@ function pendingFailure(
   });
 }
 
-function loadCensus(
+
+
+export function appendPublishedLogicalJournalEvent(
+  diagnostics: LineageDiagnostic[],
   transport: GhTransport,
   repo: string,
   issueNumber: number,
+  workdir: string,
+  logical: JournalLogical,
   census?: CommentCensusOptions,
-) {
-  const ownerLogin = fetchRepositoryOwnerLogin(transport, repo);
-  const fetched = fetchIssueComments(transport, repo, issueNumber, ownerLogin, census);
-  const parsed = parseJournalEvents(fetched.comments);
-  const lineage = buildCanonicalLineage(parsed.events);
-  return {
-    ownerLogin,
-    fetched,
-    parsed,
-    lineage,
-    diagnostics: [...fetched.diagnostics, ...parsed.diagnostics, ...lineage.diagnostics],
-  };
+): OperationResult {
+  const published = publishLogicalJournalEvent(transport, repo, issueNumber, workdir, logical, census);
+  diagnostics.push(...published.diagnostics);
+  return published;
+}
+
+export function publishLogicalJournalEvent(
+  transport: GhTransport,
+  repo: string,
+  issueNumber: number,
+  workdir: string,
+  logical: JournalLogical,
+  census?: CommentCensusOptions,
+): OperationResult {
+  const body = serializeCommentBody(logical);
+  const fingerprint = logicalFingerprint(logical);
+  return publishJournalEvent(
+    transport,
+    repo,
+    issueNumber,
+    workdir,
+    body,
+    logical.schema,
+    logical['event-key'],
+    fingerprint,
+    census,
+  );
 }
 
 function confirmCanonicalEvent(
@@ -115,7 +135,7 @@ function confirmCanonicalEvent(
   fingerprint: string,
   census?: CommentCensusOptions,
 ): { confirmed: boolean; diagnostics: LineageDiagnostic[] } {
-  const censusState = loadCensus(transport, repo, issueNumber, census);
+  const censusState = loadIssueJournalCensus(transport, repo, issueNumber, census);
   if (!censusState.fetched.commentsComplete) {
     return {
       confirmed: false,
@@ -158,7 +178,7 @@ export function publishJournalEvent(
   census?: CommentCensusOptions,
 ): OperationResult {
   const diagnostics: LineageDiagnostic[] = [];
-  const censusState = loadCensus(transport, repo, issueNumber, census);
+  const censusState = loadIssueJournalCensus(transport, repo, issueNumber, census);
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
     pendingFailure(workdir, { schema, eventKey, body }, 'census-incomplete');
@@ -286,7 +306,7 @@ export function startReviewCycle(
   diagnostics.push(...bootstrapDiagnostics);
   if (bootstrapDiagnostics.length > 0) return { ok: false, diagnostics, projectionPendingRepair: true };
 
-  const censusState = loadCensus(transport, input.repo, input.issueNumber, input.census);
+  const censusState = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
     return { ok: false, diagnostics };
@@ -329,20 +349,7 @@ export function startReviewCycle(
     tier: input.tier,
     'public-actor': input.publicActor,
   };
-  const body = serializeCommentBody(logical);
-  const fingerprint = logicalFingerprint(logical);
-  const published = publishJournalEvent(
-    transport,
-    input.repo,
-    input.issueNumber,
-    workdir,
-    body,
-    CYCLE_SCHEMA,
-    persisted,
-    fingerprint,
-    input.census,
-  );
-  diagnostics.push(...published.diagnostics);
+  const published = appendPublishedLogicalJournalEvent(diagnostics, transport, input.repo, input.issueNumber, workdir, logical, input.census);
   if (!published.ok) {
     return {
       ok: false,
@@ -360,7 +367,7 @@ export function startReviewCycle(
     diagnostics.push({ code: 'comments-truncated', message: 'unable to confirm issue revision after cycle publication' });
     return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted, projectionPendingRepair: true };
   }
-  const head = loadCensus(transport, input.repo, input.issueNumber, input.census).lineage.head;
+  const head = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census).lineage.head;
   const headCycleId = head?.logical.schema === CYCLE_SCHEMA
     ? (head.logical as CycleEventLogical)['cycle-id']
     : persisted;
@@ -422,7 +429,7 @@ export function publishSettledStageRecord(
     return { ok: false, diagnostics };
   }
   const receipt = parsedReceipt.receipt;
-  const censusState = loadCensus(transport, input.repo, input.issueNumber, input.census);
+  const censusState = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
     return { ok: false, diagnostics };
@@ -457,17 +464,12 @@ export function publishSettledStageRecord(
     'producer-evidence': receipt.producerEvidence,
     'tier-transition': receipt.tierTransition,
   };
-  const body = serializeCommentBody(logical);
-  const fingerprint = logicalFingerprint(logical);
-  const published = publishJournalEvent(
+  const published = publishLogicalJournalEvent(
     transport,
     input.repo,
     input.issueNumber,
     workdir,
-    body,
-    STAGE_SCHEMA,
-    eventKey,
-    fingerprint,
+    logical,
     input.census,
   );
   diagnostics.push(...published.diagnostics);

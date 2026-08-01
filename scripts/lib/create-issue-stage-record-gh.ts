@@ -1,4 +1,4 @@
-import { runProcessSync } from '../kernel/subprocess.mjs';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -18,6 +18,7 @@ import type {
   ProjectionSyncResult,
   TrustedComment,
 } from './create-issue-stage-record-types.ts';
+import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
 import {
   PROJECTION_ACCEPTED,
   PROJECTION_IN_PROGRESS,
@@ -224,6 +225,36 @@ export function fetchIssueComments(
   };
 }
 
+function readJournalDeliveryEnvelope(body: string): {
+  delivery?: 'immediate' | 'delayed';
+  deliveryFailureClass?: string;
+  firstFailureAt?: string;
+} {
+  const fence = body.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (!fence) return {};
+  try {
+    const parsed = JSON.parse(fence[1] ?? '');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const record = parsed as {
+      delivery?: unknown;
+      'delivery-failure-class'?: unknown;
+      'first-failure-at'?: unknown;
+    };
+    const delivery = record.delivery === 'immediate' || record.delivery === 'delayed'
+      ? record.delivery
+      : undefined;
+    const deliveryFailureClass = typeof record['delivery-failure-class'] === 'string'
+      ? record['delivery-failure-class']
+      : undefined;
+    const firstFailureAt = typeof record['first-failure-at'] === 'string'
+      ? record['first-failure-at']
+      : undefined;
+    return { delivery, deliveryFailureClass, firstFailureAt };
+  } catch {
+    return {};
+  }
+}
+
 export function parseJournalEvents(comments: TrustedComment[]): {
   events: ParsedJournalEvent[];
   diagnostics: LineageDiagnostic[];
@@ -241,7 +272,7 @@ export function parseJournalEvents(comments: TrustedComment[]): {
       });
       continue;
     }
-    const payload = logical as Record<string, unknown>;
+    const envelope = readJournalDeliveryEnvelope(comment.body);
     events.push({
       schema: logical.schema,
       eventKey: logical['event-key'],
@@ -249,16 +280,32 @@ export function parseJournalEvents(comments: TrustedComment[]): {
       fingerprint: logicalFingerprint(logical),
       commentId: comment.id,
       createdAt: comment.createdAt,
-      delivery: payload.delivery as 'immediate' | 'delayed' | undefined,
-      deliveryFailureClass: typeof payload['delivery-failure-class'] === 'string'
-        ? payload['delivery-failure-class']
-        : undefined,
-      firstFailureAt: typeof payload['first-failure-at'] === 'string'
-        ? payload['first-failure-at']
-        : undefined,
+      delivery: envelope.delivery,
+      deliveryFailureClass: envelope.deliveryFailureClass,
+      firstFailureAt: envelope.firstFailureAt,
     });
   }
   return { events, diagnostics };
+}
+
+
+export function loadIssueJournalCensus(
+  transport: GhTransport,
+  repo: string,
+  issueNumber: number,
+  census?: CommentCensusOptions,
+) {
+  const ownerLogin = fetchRepositoryOwnerLogin(transport, repo);
+  const fetched = fetchIssueComments(transport, repo, issueNumber, ownerLogin, census);
+  const parsed = parseJournalEvents(fetched.comments);
+  const lineage = buildCanonicalLineage(parsed.events);
+  return {
+    ownerLogin,
+    fetched,
+    parsed,
+    lineage,
+    diagnostics: [...fetched.diagnostics, ...parsed.diagnostics, ...lineage.diagnostics],
+  };
 }
 
 export function fetchRepositoryOwnerLogin(transport: GhTransport, repo: string): string {

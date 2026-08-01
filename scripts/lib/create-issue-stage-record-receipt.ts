@@ -71,7 +71,7 @@ export function parseConsumableStageReceipt(value: unknown): {
     errors.push('invalid producerEvidence');
   }
 
-  if (errors.length > 0) return { receipt: null, errors };
+  if (errors.length > 0 || cycleBinding === null) return { receipt: null, errors };
 
   return {
     receipt: {

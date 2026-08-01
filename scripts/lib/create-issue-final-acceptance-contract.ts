@@ -3,6 +3,7 @@ import { basename, join } from 'node:path';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import {
   checkStageCompletenessGuard,
+  deriveReviewEpisodeState,
   type ReviewEpisodeDerivationAuthorityV1,
 } from '../lib/stage-completeness-core.ts';
 import {
@@ -164,18 +165,21 @@ export function executeFinalAcceptanceGuards(
       }
     }
   }
+  const verifiedRelayEvidence = input.relayEvidencePaths?.flatMap((path) => {
+    const value = readJsonSafely(path, readJson, errors, 'stage-completeness');
+    return value === null ? [] : Array.isArray(value) ? value : [value];
+  }) ?? [];
   const stageResult = checkStageCompletenessGuard(input.issueBody, {
     phase: 'final-acceptance',
     stageReceipts,
-    verifiedRelayEvidence: input.relayEvidencePaths?.flatMap((path) => {
-      const value = readJsonSafely(path, readJson, errors, 'stage-completeness');
-      return value === null ? [] : Array.isArray(value) ? value : [value];
-    }),
+    verifiedRelayEvidence,
     episodeAuthority,
     repoRoot: process.cwd(),
     draftPath: undefined,
   });
   if (!stageResult.ok) errors.push(...stageResult.errors.map((item) => `stage-completeness: ${item}`));
+
+  const ledgerEpisodeState = deriveReviewEpisodeState(stageReceipts, verifiedRelayEvidence, episodeAuthority);
 
   if (!input.ledgerPath) {
     errors.push('finding-ledger: ledger path is required for final acceptance');
@@ -191,11 +195,8 @@ export function executeFinalAcceptanceGuards(
     const ledgerResult = checkFindingLedgerGuard(captures.length === 1 ? captures[0]! : captures, ledgerText, {
       phase: 'final-acceptance',
       issueRevision: input.issueRevision,
-      stageReceipts,
-      verifiedRelayEvidence: input.relayEvidencePaths?.flatMap((path) => {
-        const value = readJsonSafely(path, readJson, errors, 'finding-ledger');
-        return value === null ? [] : Array.isArray(value) ? value : [value];
-      }),
+      stageReceipts: ledgerEpisodeState.receipts,
+      verifiedRelayEvidence,
       episodeAuthority,
       captureMetadata: input.capturePaths.map((path, index) => ({
         name: basename(path),
