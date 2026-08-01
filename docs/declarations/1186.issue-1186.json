@@ -7,14 +7,30 @@
   "baseline": {
     "commit_sha": "aa6634e1b86f564f46a9a5e601d0a37ff453afd5",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:a0bb5358ba4e8c3eb06c47a0d6b7e8210ed1379cf60adb7c827689d9ab7a2f3b"
+    "active_scope_hash": "sha256:5370add0d6301116a8d3d1c565de7e98b369ce050b0ba8d44f48348e95d673dd"
   },
   "declared_paths": [
     "scripts/lib/create-issue-stage-record-gh.ts",
-    "scripts/lib/create-issue-stage-record-test-helpers.ts"
+    "scripts/lib/create-issue-stage-record-test-helpers.ts",
+    "scripts/lib/create-issue-stage-record-types.ts"
   ],
   "declared_globs": [
     "scripts/lib/create-issue-stage-record*.test.ts"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:a0bb5358ba4e8c3eb06c47a0d6b7e8210ed1379cf60adb7c827689d9ab7a2f3b",
+      "new_active_scope_hash": "sha256:5370add0d6301116a8d3d1c565de7e98b369ce050b0ba8d44f48348e95d673dd",
+      "changed": {
+        "added": [
+          "scripts/lib/create-issue-stage-record-types.ts"
+        ],
+        "removed": []
+      },
+      "reason": "Type the new label-sync diagnostic and remove casts",
+      "actor": "local",
+      "timestamp": "2026-08-01T19:44:54.321Z",
+      "applied": true
+    }
+  ]
 }
