@@ -61,7 +61,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/issue-1148-r4.part{00..05} > /tmp/issue-1148-r4-fixes.py.gz.b64
+          cat \
+            .github/issue-1148-r4.part00 \
+            .github/issue-1148-r4.part01 \
+            .github/issue-1148-r4.part02{a,b,c,d} \
+            .github/issue-1148-r4.part03 \
+            .github/issue-1148-r4.part04 \
+            .github/issue-1148-r4.part05 \
+            > /tmp/issue-1148-r4-fixes.py.gz.b64
           echo '546688a1fc9b82e44db66d88487e543ae5c14183dd243e2786ab6fa24285d427  /tmp/issue-1148-r4-fixes.py.gz.b64' | sha256sum -c -
           base64 -d /tmp/issue-1148-r4-fixes.py.gz.b64 | gzip -d > /tmp/issue-1148-r4-fixes.py
           python -m py_compile /tmp/issue-1148-r4-fixes.py
@@ -87,7 +94,7 @@ jobs:
           set -euo pipefail
           git checkout 801b8981f7c792e2b3c1b9aefdecb47cd38babeb -- .github/workflows/read-delegation-audit.yml
           rm -f .github/issue-1148-r4-fixes.py.gz.b64
-          rm -f .github/issue-1148-r4.part{00..05}
+          rm -f .github/issue-1148-r4.part00 .github/issue-1148-r4.part01 .github/issue-1148-r4.part02 .github/issue-1148-r4.part02{a,b,c,d} .github/issue-1148-r4.part03 .github/issue-1148-r4.part04 .github/issue-1148-r4.part05
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
