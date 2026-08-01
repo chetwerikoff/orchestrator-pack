@@ -86,7 +86,7 @@ Therefore:
 - live T3 final acceptance remains fail-closed until #1123 consumes this
   contract. A self-declared receipt field cannot activate it.
 
-### Fixed per-tier pipeline
+### Per-tier pipeline (ceilings, not quotas)
 
 | Tier | Review sequence | Pre-lens #975 | Terminal lens |
 |------|-----------------|---------------|---------------|
