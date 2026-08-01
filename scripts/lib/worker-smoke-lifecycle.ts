@@ -4,11 +4,10 @@ import {
   existsSync,
   mkdirSync,
   openSync,
-  readFileSync,
+  readFileSync as readFileUtf8Sync,
   readdirSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -44,6 +43,7 @@ export interface SmokeLifecycleRegistry {
   updatedAtMs: number;
   spawnState: SmokeSpawnState;
   createDeadlineMs: number;
+  scenarioCount: number;
   terminalHandle?: string;
   createDiagnostic?: string;
   cleanup?: {
@@ -113,7 +113,7 @@ function atomicJson(path: string, value: unknown): void {
 function readJson(path: string): unknown | undefined {
   if (!existsSync(path)) return undefined;
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    return JSON.parse(readFileUtf8Sync(path, 'utf8')) as unknown;
   } catch {
     return undefined;
   }
@@ -151,6 +151,7 @@ function parseRegistry(value: unknown): SmokeLifecycleRegistry | undefined {
     updatedAtMs: Number(value.updatedAtMs),
     spawnState,
     createDeadlineMs: Number(value.createDeadlineMs),
+    scenarioCount: Number(value.scenarioCount),
     ...(typeof value.terminalHandle === 'string' && value.terminalHandle.trim()
       ? { terminalHandle: value.terminalHandle.trim() }
       : {}),
@@ -170,6 +171,8 @@ function parseRegistry(value: unknown): SmokeLifecycleRegistry | undefined {
     || !Number.isFinite(registry.createdAtMs)
     || !Number.isFinite(registry.updatedAtMs)
     || !Number.isFinite(registry.createDeadlineMs)
+    || !Number.isInteger(registry.scenarioCount)
+    || registry.scenarioCount < 1
   ) return undefined;
   return registry;
 }
@@ -229,6 +232,7 @@ export function createSmokeLifecycleReservation(input: {
   supervisorPid?: number;
   nowMs?: number;
   createTimeoutMs?: number;
+  scenarioCount: number;
 }): SmokeLifecycleRegistry {
   const nowMs = input.nowMs ?? Date.now();
   const registry: SmokeLifecycleRegistry = {
@@ -243,6 +247,7 @@ export function createSmokeLifecycleReservation(input: {
     updatedAtMs: nowMs,
     spawnState: 'reserved',
     createDeadlineMs: nowMs + (input.createTimeoutMs ?? SMOKE_CREATE_TIMEOUT_MS),
+    scenarioCount: input.scenarioCount,
   };
   mkdirSync(input.artifactDir, { recursive: true });
   atomicJson(smokeLifecycleRegistryPath(input.artifactDir), registry);
@@ -292,12 +297,6 @@ const hasCompletionSeal = (artifactDir: string): boolean => {
   }
 };
 
-const hasProgressBytes = (artifactDir: string): boolean => {
-  const path = smokeProgressPath(artifactDir);
-  if (!existsSync(path)) return false;
-  try { return statSync(path).size > 0; } catch { return true; }
-};
-
 export function observeSmokeCancellationAcknowledgement(
   artifactDir: string,
   runId: string,
@@ -310,7 +309,11 @@ export function canAbandonAmbiguousUnbound(registry: SmokeLifecycleRegistry): bo
   return registry.spawnState === 'ambiguous_unbound'
     && !registry.terminalHandle
     && !existsSync(join(registry.artifactDir, 'delivery.sealed.json'))
-    && !hasProgressBytes(registry.artifactDir)
+    && inspectSmokeProgress({
+      artifactDir: registry.artifactDir,
+      runId: registry.runId,
+      scenarioCount: registry.scenarioCount,
+    }).acceptedCount === 0
     && !hasCompletionSeal(registry.artifactDir)
     && !observeSmokeCancellationAcknowledgement(registry.artifactDir, registry.runId);
 }
@@ -370,7 +373,7 @@ export function inspectSmokeProgress(input: {
   let ordinal = 1;
   let started = false;
   const path = smokeProgressPath(input.artifactDir);
-  const lines = existsSync(path) ? readFileSync(path, 'utf8').split(/\r?\n/u) : [];
+  const lines = existsSync(path) ? readFileUtf8Sync(path, 'utf8').split(/\r?\n/u) : [];
   lines.forEach((line, index) => {
     if (!line.trim()) return;
     let event: SmokeProgressEvent | undefined;
