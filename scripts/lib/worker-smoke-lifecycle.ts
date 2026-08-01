@@ -9,6 +9,7 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
@@ -129,6 +130,18 @@ function atomicJson(path: string, value: unknown): void {
   const temp = `${path}.tmp-${process.pid}-${Date.now()}`;
   writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
   renameSync(temp, path);
+}
+
+function writeAllSync(descriptor: number, value: string): void {
+  const bytes = Buffer.from(value, 'utf8');
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = writeSync(descriptor, bytes, offset, bytes.length - offset, null);
+    if (written <= 0) {
+      throw new Error('synchronous file write made no progress');
+    }
+    offset += written;
+  }
 }
 
 function readJson(path: string): unknown | undefined {
@@ -711,7 +724,7 @@ function createLock(repoRoot: string, lock: AdmissionLock): boolean {
   mkdirSync(dirname(path), { recursive: true });
   try {
     const descriptor = openSync(path, 'wx');
-    try { writeFileSync(descriptor, `${JSON.stringify(lock)}\n`, 'utf8'); }
+    try { writeAllSync(descriptor, `${JSON.stringify(lock)}\n`); }
     finally { closeSync(descriptor); }
     return true;
   } catch {
@@ -747,7 +760,7 @@ function createReclaimMarker(
   mkdirSync(dirname(path), { recursive: true });
   try {
     const descriptor = openSync(path, 'wx');
-    try { writeFileSync(descriptor, `${JSON.stringify(marker)}\n`, 'utf8'); }
+    try { writeAllSync(descriptor, `${JSON.stringify(marker)}\n`); }
     finally { closeSync(descriptor); }
     return path;
   } catch {
