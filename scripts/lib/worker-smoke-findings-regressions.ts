@@ -30,13 +30,16 @@ import {
   smokeCompletionSealPath,
 } from './worker-smoke-core.ts';
 
-export function registerWorkerSmokeFindingsRegressionTests(input: {
-  describe: typeof import('vitest').describe;
-  expect: typeof import('vitest').expect;
-  it: typeof import('vitest').it;
-  vi: typeof import('vitest').vi;
+type FindingsRegressionInput = Pick<
+  typeof import('vitest'),
+  'describe' | 'expect' | 'it' | 'vi'
+> & {
   waitForSmokeChildCompletion: typeof import('../worker-smoke-run.ts').waitForSmokeChildCompletion;
-}): void {
+};
+
+export function registerWorkerSmokeFindingsRegressionTests(
+  input: FindingsRegressionInput,
+): void {
   const { describe, expect, it, vi, waitForSmokeChildCompletion } = input;
   const head = 'b'.repeat(40);
   const minute = 60_000;
@@ -101,17 +104,17 @@ export function registerWorkerSmokeFindingsRegressionTests(input: {
         };
       });
       const result = waitForSmokeChildCompletion('child', {
-        cwd: root,
-        deadlineMs: 60 * minute,
         runBinding: { runId, artifactDir },
         ownedChildHandle: 'child',
+        cwd: root,
         scenarioCount: 2,
-        lifecycleStartedAtMs: 0,
-        stallMs: 20 * minute,
-        absoluteCeilingMs: 90 * minute,
         suppressPtyReads: true,
-        runner: runner as never,
+        deadlineMs: 60 * minute,
+        stallMs: 20 * minute,
+        lifecycleStartedAtMs: 0,
+        absoluteCeilingMs: 90 * minute,
         now: () => now,
+        runner: runner as never,
         sleepMs: () => undefined,
       });
       expect(result.ok).toBe(false);
