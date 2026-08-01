@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "801b8981f7c792e2b3c1b9aefdecb47cd38babeb",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:pending"
+    "active_scope_hash": "sha256:d05249a5b240abb0333876fab43477cdf9d742dbaf3ad05c2f657bdb35d8b468"
   },
   "declared_paths": [
     "docs/worker-smoke-testing.md",
@@ -19,11 +19,18 @@
   ],
   "amendments": [
     {
-      "added_at": "2026-08-01T07:50:00.000Z",
+      "previous_active_scope_hash": "sha256:pending",
+      "new_active_scope_hash": "sha256:d05249a5b240abb0333876fab43477cdf9d742dbaf3ad05c2f657bdb35d8b468",
+      "changed": {
+        "added": [
+          "scripts/lib/worker-smoke-findings-regressions.ts"
+        ],
+        "removed": []
+      },
       "reason": "Add dedicated regression coverage for current-head blocking review findings within the existing worker-smoke helper scope.",
-      "paths": [
-        "scripts/lib/worker-smoke-findings-regressions.ts"
-      ]
+      "actor": "chat-executor",
+      "timestamp": "2026-08-01T07:50:00.000Z",
+      "applied": true
     }
   ]
 }
