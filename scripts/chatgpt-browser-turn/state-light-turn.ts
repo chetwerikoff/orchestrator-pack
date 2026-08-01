@@ -2188,8 +2188,20 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     const waitForIdentityResolution = async (
       diagnosticMessages: readonly PageMessage[],
     ): Promise<TurnRunOutcome | null> => {
+      const now = Date.now();
+      if (
+        sendCount >= 1
+        && now >= hardExhaustionDeadline
+        && observationMode === 'admission'
+        && !boundIdentity
+      ) {
+        return returnOwnedMessageIdentityMismatch(
+          'owned_message_identity_unresolved', page, browser, invocationId, profileKey,
+          sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+        );
+      }
       const exhausted = maybeReturnObservationExhausted(
-        Date.now(),
+        now,
         softDeadline,
         hardExhaustionDeadline,
         sendCount,

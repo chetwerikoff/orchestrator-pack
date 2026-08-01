@@ -794,6 +794,7 @@ function makeIdentityRuntimePage(
   snapshots: StateLightTestSnapshot[],
   options: {
     exactStates?: Record<string, Array<'ok' | 'missing' | 'unresolved' | 'duplicate'>>;
+    cycleObservations?: boolean;
   } = {},
 ) {
   let sent = false;
@@ -842,7 +843,11 @@ function makeIdentityRuntimePage(
           activeSnapshot = { messages: preSendMessages, generating: false };
           return collectionLocator(preSendMessages);
         }
-        activeSnapshot = snapshots[Math.min(observationIndex, Math.max(0, snapshots.length - 1))]
+        activeSnapshot = (
+          options.cycleObservations && snapshots.length > 0
+            ? snapshots[observationIndex % snapshots.length]
+            : snapshots[Math.min(observationIndex, Math.max(0, snapshots.length - 1))]
+        )
           ?? { messages: [...preSendMessages, { role: 'user', text: filled }], generating: true };
         observationIndex += 1;
         metrics.messageReads += 1;
@@ -1182,13 +1187,12 @@ describe('Issue #1148 runtime identity binding', () => {
       messages: [...preSend, { role: 'user', text: 'PROMPT', identity: 'candidate-b' }],
       generating: true,
     };
-    const churning = [candidateA, candidateB, candidateA, candidateB, candidateA, candidateB];
-    const fake = makeIdentityRuntimePage(preSend, churning);
+    const fake = makeIdentityRuntimePage(preSend, [candidateA, candidateB], { cycleObservations: true });
     const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
 
     expect(outcome.result).toMatchObject({
-      state: 'no_reply',
-      cause: 'observation_exhausted_no_resend',
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_unresolved',
       send_count: 1,
     });
     expect(outcome.result.incidents).not.toContain('owned_message_identity_text_fallback');
