@@ -12,7 +12,7 @@ start = text.index(
     "      it('escapes opaque identity metacharacters for exact selector lookup'"
 )
 end = text.index('tail_test = block(r"""', start)
-replacement = r'''selector_unit_start = test.index(
+replacement = r"""selector_unit_start = test.index(
     "  it('escapes opaque identity metacharacters for exact selector lookup'"
 )
 selector_unit_end = test.index(
@@ -29,7 +29,7 @@ selector_unit = r'''  it('builds an exact opaque selector accepted by an indepen
   });'''
 test = test[:selector_unit_start] + selector_unit + test[selector_unit_end:]
 
-'''
+"""
 text = text[:start] + replacement + text[end:]
 
 # Replace the circular fake-locator matcher by exact selector decoding without
@@ -47,7 +47,7 @@ end = text.index(
     "      it('publishes from the exact metacharacter identity window",
     start,
 )
-replacement = r'''locator_match_start = test.index(
+replacement = r"""locator_match_start = test.index(
     "      const exactIdentityMatches = activeSnapshot.messages.filter("
 )
 locator_match_end = test.index(
@@ -61,7 +61,7 @@ test = test[:locator_match_start] + (
     "        : activeSnapshot.messages.filter((message) => message.identity === selectedIdentity);\n"
 ) + test[locator_match_end:]
 
-'''
+"""
 text = text[:start] + replacement + text[end:]
 
 # Replace the old runtime selector regression with independent-decoder success
@@ -73,7 +73,7 @@ start = text.index(
     "      it('publishes from the exact metacharacter identity window"
 )
 end = text.index('stale_prefix_test = block(r"""', start)
-replacement = r'''selector_runtime_start = test.index(
+replacement = r"""selector_runtime_start = test.index(
     "  it('publishes from the exact metacharacter identity window without prompt-text authority'"
 )
 selector_runtime_end = test.index(
@@ -135,7 +135,7 @@ selector_runtime_tests = r'''  it('publishes only from an independently evaluate
   });'''
 test = test[:selector_runtime_start] + selector_runtime_tests + test[selector_runtime_end:]
 
-'''
+"""
 text = text[:start] + replacement + text[end:]
 
 path.write_text(text, encoding='utf-8')
