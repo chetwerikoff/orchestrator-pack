@@ -153,6 +153,18 @@ function parseArgs(argv: readonly string[]): CliOptions {
 
 function emit(result: unknown, json: boolean): void {
   if (json) {
+    if (result && typeof result === 'object' && 'report' in result) {
+      const envelope = result as {
+        report?: SmokeReport;
+        nonPassCause?: SmokeNonPassCause;
+        controlPlaneDiagnostic?: SmokeControlPlaneDiagnostic;
+      };
+      if (envelope.report) {
+        finalizeSmokeReportMachineCause(envelope.report);
+        envelope.nonPassCause = envelope.report.nonPassCause;
+        envelope.controlPlaneDiagnostic = envelope.report.controlPlaneDiagnostic;
+      }
+    }
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } else if (typeof result === 'string') {
     process.stdout.write(`${result}\n`);
@@ -238,9 +250,6 @@ function inferSmokeReportMachineCause(report: SmokeReport): SmokeNonPassCause | 
   if (report.result === 'PASS') {
     return undefined;
   }
-  if (report.nonPassCause) {
-    return report.nonPassCause;
-  }
   if (report.controlPlaneDiagnostic?.cause) {
     return report.controlPlaneDiagnostic.cause;
   }
@@ -249,6 +258,9 @@ function inferSmokeReportMachineCause(report: SmokeReport): SmokeNonPassCause | 
     if (isSmokeNonPassCause(observed)) {
       return observed;
     }
+  }
+  if (report.nonPassCause) {
+    return report.nonPassCause;
   }
   return classifyDeclaredScenarioNonPassCause({
     partial: report,
