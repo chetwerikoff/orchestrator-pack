@@ -17,25 +17,34 @@ For create-issue-draft and pack-review Browser-GPT work, `npm run chatgpt-browse
 - A direct helper failure affects only that invocation. It does not authorize a profile-, conversation-, task-, Issue-, PR-, or agent-wide gate.
 - Owned-tab cleanup is progressive and local. Never close or commandeer sibling/foreign ChatGPT tabs.
 
-## Triple-source launch contract (#1150)
+## Configured plural-source launch contract (#1150)
 
-T3 `competitive` and `architectural-review` are each one staggered concurrent batch with one `stageAttemptId`, policy `triple-source/v1`, and exact source slots `01`, `02`, and `03`.
+T3 `competitive` and `architectural-review` are each one staggered concurrent batch with one `stageAttemptId` and policy `triple-source/v1`.
 
-- Start all three slots before harvesting or adjudicating any sibling result. Preserve 10–15 second spacing and bounded observation of earlier slots; do not invent an account-wide concurrency cap.
-- Every invocation emits one immutable `reviewer-invocation-envelope/v1` bound to `reviewEpisodeId`, `stageAttemptId`, policy, stage, frozen `sourceRevision`, reviewer slot/ordinal, invocation identity, reviewer-source identity, terminal-result identity, revision checks, capacity observation, `send_count`, and terminal classification.
+`OPK_GPT_REVIEWER_CARDINALITY` is the single operator control. The default T3 cardinality is 3; T1/T2 remain singular. Every stage receipt and invocation envelope freezes the selected `reviewerCardinality` and `cardinalityConfigIdentity`. Required slots are exact `01..N`, not hard-coded `01/02/03`.
+
+- Start all N slots before harvesting or adjudicating any sibling result. Preserve 10–15 second spacing and bounded observation of earlier slots; do not invent an account-wide concurrency cap.
+- Every invocation emits one immutable `reviewer-invocation-envelope/v1` bound to `reviewEpisodeId`, `stageAttemptId`, policy, stage, frozen `sourceRevision`, cardinality/config identity, reviewer slot/ordinal, invocation identity, reviewer-source identity, terminal-result identity, revision checks, capacity observation, `send_count`, retry-attempt state, retry class, and terminal classification.
 - Successful siblings write separate source-suffixed captures: `pass-NN-competitive-SS.capture.txt` or `pass-NN-architectural-review-SS.capture.txt`. Never consolidate, rewrite, or move sibling captures to satisfy a file-count guard.
-- The final `stage-completeness-receipt/v1` is the only persisted stage authority. Episode-wide governed/relayed unions and counts are derived, never persisted as an episode receipt.
-- One exact three-capture `stageAttemptId` is one logical round. Final T3 activation remains blocked until #1123 replaces Issue-lifetime capture-file counting with logical-round authority.
+- The final `stage-completeness-receipt/v1` is the only persisted stage authority. It belongs to one task-wide no-overwrite receipt sequence with canonical previous links and cumulative census.
+- The immutable `tier-intake/v1` task identity plus first frozen revision roots the episode. Guards read every stage receipt in the canonical review directory; a caller-selected subset or later-revision re-root is not authority.
+- Episode-wide governed/relayed unions and counts are derived, never persisted as an episode receipt.
+- One exact configured-N capture `stageAttemptId` is one logical round. Final T3 activation remains blocked until #1123 replaces Issue-lifetime capture-file counting with logical-round authority.
 
 ## Invocation-local retry and settlement
 
 Blind restart is forbidden after any possible or confirmed send.
 
 - One paced retry under the same slot and `stageAttemptId` is permitted only when the terminal helper result proves a pre-send zero-send quota/composer/fill failure and reports `send_count: 0`.
-- The retry uses `attemptOrdinal: 2`; a second retry is forbidden.
+- The retry uses `attemptOrdinal: 2` and `retryAttempt: true`; it consumes the only retry and cannot remain retry-eligible. A failed retry may settle blocked/exhausted.
 - A post-send failure, ambiguous delivery, output conflict, missing terminal result, or any result with `send_count: 1` is incident evidence and forbids resend.
 - A proven zero-send result with unused retry eligibility keeps the stage attempt unsettled until the retry runs or eligibility is explicitly abandoned and the attempt settles blocked.
 - Relay/adjudication begins only after every launched invocation is terminal, no retry runs or remains eligible, and final revision checks match the frozen attempt revision.
+- Every partial, blocked, or incident attempt remains ordered evidence. A later stage cannot start before the preceding required stage has credentialed.
+
+## Claude producer evidence
+
+A Claude `architectural-lens` receipt cannot prove its own producer provenance. A counted Claude capture requires a separately produced immutable `claude-producer-evidence/v1` artifact matching episode, attempt, revision, invocation, producing run, terminal result, exit status, M3 status, and capture bytes/hash. A valid unavailable waiver contributes no capture or M3 authority.
 
 ## Legacy state is not admission authority
 
