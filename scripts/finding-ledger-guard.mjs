@@ -367,11 +367,13 @@ function latestByStableId(occurrences, metadata) {
   return new Map([...map.entries()].map(([id, value]) => [id, value.occurrence]));
 }
 
-function validateM2Legacy(rows, occurrences, metadata, errors) {
+function validateM2Legacy(rows, occurrences, metadata, adoptionTimestampMs, errors) {
   const latest = latestByStableId(occurrences, metadata);
   for (const row of rows) {
     const proposal = latest.get(row.id);
     if (!proposal) continue;
+    const proposalTimestamp = Number(metadata[proposal.captureIndex]?.timestampMs ?? proposal.captureIndex);
+    if (Number.isFinite(adoptionTimestampMs) && proposalTimestamp < adoptionTimestampMs) continue;
     if (!proposal.persistentMachinery) {
       errors.push(`review-economics: ${row.id} persistent-machinery must be yes or no`);
       continue;
@@ -450,9 +452,27 @@ function validateOccurrenceLedger(ledger, occurrences, errors) {
   return { occurrenceMap, counts: { rawFindingCount, distinctFindingCount, processedDistinctCount } };
 }
 
+function contestRemainsOpen(records) {
+  let open = false;
+  const ordered = [...records].sort((left, right) => (
+    left.timestampMs - right.timestampMs || left.captureIndex - right.captureIndex
+  ));
+  for (const record of ordered) {
+    if (record.contest === 'contested') open = true;
+    if (record.contest === 'contest-withdrawn'
+      || record.outcome === 'activate'
+      || record.outcome === 'non-activate') {
+      open = false;
+    }
+  }
+  return open;
+}
+
 function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, phase, issueRevision, errors }) {
   const records = m3Records.get(occurrence.occurrenceId) ?? m3Records.get(row.id) ?? [];
-  const current = records.filter((record) => record.revision === issueRevision);
+  const current = records
+    .filter((record) => record.revision === issueRevision)
+    .sort((left, right) => left.timestampMs - right.timestampMs || left.captureIndex - right.captureIndex);
   if (current.length > 1) {
     errors.push(`review-economics: duplicate m3-protected records for ${occurrence.occurrenceId}`);
     return;
@@ -488,11 +508,11 @@ function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, p
     errors.push(`review-economics: protected finding ${occurrence.occurrenceId} must clear architect-pending before final acceptance`);
     return;
   }
+  if (contestRemainsOpen(current)) {
+    errors.push(`review-economics: protected finding ${occurrence.occurrenceId} remains under current contest`);
+    return;
+  }
   if (record) {
-    if (record.contest === 'contested') {
-      errors.push(`review-economics: protected finding ${occurrence.occurrenceId} remains under current contest`);
-      return;
-    }
     if (record.outcome === 'activate') {
       if (!record.evidence || !record.whyNow || !protectedEvidenceMatches(occurrence.type, record.evidence)) {
         errors.push(`review-economics: architect activation for ${occurrence.occurrenceId} lacks current real protected evidence + why-now provenance`);
@@ -554,9 +574,19 @@ function validateLegacyM3(rows, occurrences, captures, metadata, phase, issueRev
     const occurrence = [...occurrences].reverse().find((item) => item.id === row.id && item.type === row.type);
     if (!occurrence) continue;
     const records = m3Records.get(row.id) ?? [];
-    const current = records.filter((record) => record.revision === issueRevision);
+    const current = records
+      .filter((record) => record.revision === issueRevision)
+      .sort((left, right) => left.timestampMs - right.timestampMs || left.captureIndex - right.captureIndex);
     const terminalRecords = current.filter((record) => record.stage === 'architectural');
-    if (terminalRecords.length > 1) errors.push(`review-economics: duplicate m3-protected records for ${row.id}`);
+    if (terminalRecords.length > 1) {
+      const captureIndices = new Set(terminalRecords.map((record) => record.captureIndex));
+      const states = new Set(terminalRecords.map((record) => `${record.contest}|${record.outcome}`));
+      if (captureIndices.size > 1 && states.size > 1) {
+        errors.push(`review-economics: duplicate-conflicting terminal m3-protected state for ${row.id}`);
+      } else {
+        errors.push(`review-economics: duplicate m3-protected records for ${row.id}`);
+      }
+    }
     if (terminalRecords.length > 0 && current.some((record) => record.stage !== 'architectural')) {
       const terminal = terminalRecords.at(-1);
       const nonTerminal = current.filter((record) => record.stage !== 'architectural').at(-1);
@@ -566,7 +596,7 @@ function validateLegacyM3(rows, occurrences, captures, metadata, phase, issueRev
         }
       }
     }
-    const latest = current.sort((a, b) => a.timestampMs - b.timestampMs).at(-1) ?? null;
+    const latest = current.at(-1) ?? null;
     const activation = row.protectedActivation;
     const activationValid = Boolean(activation?.authority && activation?.signal && activation?.whyNow
       && protectedEvidenceMatches(row.type, activation.signal));
@@ -585,11 +615,15 @@ function validateLegacyM3(rows, occurrences, captures, metadata, phase, issueRev
       errors.push(`review-economics: protected finding ${row.id} must clear architect-pending before final acceptance`);
       continue;
     }
+    if (contestRemainsOpen(current)) {
+      errors.push(`review-economics: protected finding ${row.id} remains under current contest`);
+      continue;
+    }
+    if (terminalOnly && !terminalRecords.some((record) => record.captureIndex >= occurrence.captureIndex)) {
+      errors.push(`review-economics: protected finding ${row.id} has unknown/stale architect contest state`);
+      continue;
+    }
     if (latest) {
-      if (latest.contest === 'contested') {
-        errors.push(`review-economics: protected finding ${row.id} remains under current contest`);
-        continue;
-      }
       if (latest.outcome === 'activate') {
         if (!latest.evidence || !latest.whyNow || !protectedEvidenceMatches(row.type, latest.evidence)) {
           errors.push(`review-economics: architect activation for ${row.id} lacks current real protected evidence + why-now provenance`);
@@ -741,7 +775,7 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
       errors,
     );
   } else {
-    validateM2Legacy(ledger.findings, occurrences, metadata, errors);
+    validateM2Legacy(ledger.findings, occurrences, metadata, Number(options.adoptionTimestampMs), errors);
     validateLegacyM3(
       ledger.findings,
       occurrences,
