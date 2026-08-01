@@ -60,6 +60,35 @@ or new store for this role boundary.
 ## Browser-GPT transport — Issues #1120 and #1150
 
 Use `npm run chatgpt-browser-turn -- turn ...` as the routine monitor.
+### Long-running Browser-GPT child launcher (#1164)
+
+For applicable long-running create-issue-draft Browser-GPT turns, use the
+deterministic adapter — not a direct `chatgpt-browser-turn` spawn from the
+flow-manager caller:
+
+```bash
+npm run flow-manager-browser-gpt-long-run -- ...
+```
+
+Canonical mechanics: [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
+
+- One canonical launcher (`flow-manager-long-running-child`) is the sole
+  terminal-envelope writer; the adapter starts it at the detached boundary and
+  waits for a committed `flow-manager-long-running-child-handoff/v1` receipt
+  before acknowledging acceptance.
+- `completion_mode` is fixed to `browser-turn-result-v1`; no caller-facing
+  completion-mode selector exists.
+- Receipt, terminal envelope, and Browser `--output` destinations must be
+  pairwise distinct before handoff commit.
+- Browser success requires one valid child-produced `turn-result/v1` on stdout
+  plus bounded child-exit/stdout-EOF finalization; child exit alone is not
+  missing-result authority.
+- Waiter deadline expiry is non-terminal and carries no success or retry
+  authority.
+- Delivery remains exactly `not-sent`, `POSSIBLY_DELIVERED`, or `landed`; blind
+  re-send after ambiguous post-send loss is forbidden.
+
+
 
 - One invocation owns one newly opened tab, sends the exact prompt once, polls
   that tab, and closes only that tab.
