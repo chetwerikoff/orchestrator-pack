@@ -152,6 +152,9 @@ function parseArgs(argv: readonly string[]): CliOptions {
 
 function emit(result: unknown, json: boolean): void {
   if (json) {
+    if (process.env.FAKE_ORCA_SCENARIO) {
+      process.stderr.write(`[worker-smoke-test-payload:${process.env.FAKE_ORCA_SCENARIO}] ${JSON.stringify(result)}\n`);
+    }
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } else if (typeof result === 'string') {
     process.stdout.write(`${result}\n`);
@@ -1027,10 +1030,7 @@ function waitForCooperativeShutdown(input: {
     }
     const observed = observeSmokeCompletionEvidence(input.runBinding, completionState);
     completionState = observed.state;
-    if (
-      observed.observation.publicationState === 'publish_complete_single'
-      || observed.observation.publicationState === 'publish_complete_unfenced'
-    ) {
+    if (observed.observation.publicationState === 'publish_complete_single') {
       return true;
     }
     const remainingBeforeRead = deadline - now();
