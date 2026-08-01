@@ -687,6 +687,26 @@ export function cleanupSmokeLifecycle(input: {
       reason: registry.cleanup?.reason ?? input.reason,
     };
   }
+  if (!registry.terminalHandle && [
+    'reserved',
+    'create_in_progress',
+    'ambiguous_unbound',
+  ].includes(registry.spawnState)) {
+    if (registry.spawnState !== 'ambiguous_unbound') {
+      markSmokeCreateAmbiguous(
+        input.artifactDir,
+        `cleanup_without_bound_handle:${input.reason}`,
+        nowMs,
+      );
+    }
+    return {
+      clean: false,
+      cooperativeAcknowledgementObserved: input.cooperativeAcknowledgementObserved,
+      closeOutcome: 'ambiguous_unbound',
+      operatorFilesCleared: false,
+      reason: input.reason,
+    };
+  }
   beginCleanup(input.artifactDir, nowMs);
   const cancellationRequired = input.requestCancellation || (
     Boolean(registry.terminalHandle)
