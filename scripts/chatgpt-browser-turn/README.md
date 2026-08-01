@@ -84,6 +84,31 @@ invocation.
 The input remains content-neutral. Existing stable-input validation and atomic
 publication primitives are reused; they do not become workflow admission state.
 
+### Composer mutation budget (Issue #1174)
+
+Inserting the caller prompt into the composer uses a **separate** timeout from
+local DOM reads and control clicks (`MAX_LOCAL_READ_WAIT_MS`, currently 5s).
+The mutation budget is derived from payload volume and is independent of that
+read constant — changing one does not change the other.
+
+For a payload of `B` bytes and invocation `--timeout-ms` of `T`:
+
+```text
+mutationMs = min(T, 30_000, 3_000 + B × 0.25)
+```
+
+- **Base:** 3_000 ms floor before byte scaling.
+- **Scale:** 0.25 ms per byte (≈250 ms per KiB). A payload an order of magnitude
+  larger receives a strictly larger budget.
+- **Cap:** 30_000 ms maximum for one composer click+fill pair.
+- **Invocation ceiling:** the derived budget never exceeds the remaining
+  `--timeout-ms` for the live invocation.
+
+When the mutation budget is exhausted the turn fails before the send boundary
+with `send_count: 0`, `driver_error`, cause `composer_mutation_budget_exhausted`,
+and confirmed owned-tab cleanup. `composer_unavailable` and
+`blocking_page_overlay` are reported as distinct causes on their own paths.
+
 ### Page completion is sufficient
 
 The canonical path no longer requires service-terminal/network-witness evidence

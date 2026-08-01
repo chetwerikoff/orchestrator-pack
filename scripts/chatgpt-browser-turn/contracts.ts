@@ -67,6 +67,14 @@ export type IncidentKind =
   | 'publication_incident';
 export type IncidentPhase = 'pre_send' | 'possible_delivery' | 'reply_complete' | 'publication_prepared' | 'committed';
 
+/** Distinct pre-send composer failure causes (Issue #1174). */
+export const PRE_SEND_COMPOSER_FAILURE_CAUSES = [
+  'composer_mutation_budget_exhausted',
+  'composer_unavailable',
+  'blocking_page_overlay',
+] as const;
+export type PreSendComposerFailureCause = (typeof PRE_SEND_COMPOSER_FAILURE_CAUSES)[number];
+
 export interface CommonIncidentRecordV1 {
   schema: typeof RECORD_SCHEMA;
   version: typeof RECORD_VERSION;
