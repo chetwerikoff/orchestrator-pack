@@ -1,22 +1,46 @@
+import type {
+  ReviewEpisodeStateV1,
+  StageCompletenessReceiptV1,
+  VerifiedRelayEvidenceV1,
+} from './lib/stage-completeness-core.ts';
+
+export interface FindingLedgerRow {
+  id: string;
+  summary: string;
+  type: string;
+  disposition: string;
+  rejectReason: string;
+  defectDisposition: string;
+  remedyDisposition: string;
+  occurrences: string[];
+  persistentMachinery: string;
+  cheapestSufficientAlternative: string;
+  stakesPrice: string;
+  tradeIn: string;
+  proposalOutcome: string;
+  proposalReason: string;
+  simplificationCutCandidate: boolean;
+  architectPending: boolean;
+  architectRequired: boolean;
+  protectedActivation: { authority: string; signal: string; whyNow: string } | null;
+}
+
 export function parseLedger(ledgerText: string): {
   version: number;
   draft: string | null;
-  findings: Array<{
-    id: string;
-    summary: string;
-    type: string;
-    disposition: string;
-    rejectReason: string;
-  }>;
+  counts: Record<string, number> | null;
+  findings: FindingLedgerRow[];
 };
 
-export function detectTypedFindingsInCapture(capture: string): Array<{
+export interface CaptureFinding {
   id: string;
   hasCaptureId: boolean;
   type: string;
   anchor: number;
   summary: string;
-}>;
+}
+
+export function detectTypedFindingsInCapture(capture: string): CaptureFinding[];
 
 export interface FindingLedgerGuardOptions {
   draftPath?: string;
@@ -25,6 +49,20 @@ export interface FindingLedgerGuardOptions {
   receiptPath?: string;
   receipt?: import('./lib/protected-signal-receipt.mjs').ProtectedSignalReceipt;
   consumedReceiptEntries?: Set<string>;
+  reviewEconomics?: boolean;
+  phase?: 'pre-lens' | 'final-acceptance';
+  adoptionTimestampMs?: number;
+  issueRevision?: string;
+  stageTerminalConfirmed?: boolean;
+  enforceT3PreLensTopology?: boolean;
+  captureMetadata?: Array<{
+    name: string;
+    timestampMs: number;
+    captureIdentity?: string;
+  }>;
+  rawCodexResults?: unknown[];
+  stageReceipts?: StageCompletenessReceiptV1[];
+  verifiedRelayEvidence?: VerifiedRelayEvidenceV1[];
 }
 
 export function detectProtectedSignalsInCapture(
@@ -32,20 +70,13 @@ export function detectProtectedSignalsInCapture(
   options?: FindingLedgerGuardOptions,
 ): string[];
 
-export function detectUntypedFindingsInCapture(capture: string): Array<{
-  id: string;
-  hasCaptureId: boolean;
-  type: string;
-  anchor: number;
-  summary: string;
-}>;
-
+export function detectUntypedFindingsInCapture(capture: string): CaptureFinding[];
 export function stripMarkdownFencedCodeBlocks(text: string): string;
-
+export function maskDelimitedMarkdownQuotes(text: string): string;
 export function extractFindingsScanText(capture: string): string;
 
 export function mergeCaptureFindings(captures: string[]): {
-  findings: ReturnType<typeof detectTypedFindingsInCapture>;
+  findings: CaptureFinding[];
   errors: string[];
 };
 
@@ -57,10 +88,20 @@ export function checkFindingLedgerGuard(
   ok: boolean;
   errors: string[];
   ledger: ReturnType<typeof parseLedger>;
-  captureFindings: ReturnType<typeof detectTypedFindingsInCapture>;
+  captureFindings: CaptureFinding[];
   protectedSignals: string[];
+  episodeState?: ReviewEpisodeStateV1;
+  economicsCounts?: {
+    rawFindingCount: number;
+    distinctFindingCount: number;
+    processedDistinctCount: number;
+  };
+  simplificationAggregate?: {
+    simplificationClean: boolean;
+    noFindings: boolean;
+    candidateOccurrences: string[];
+  } | null;
 };
 
 export function runCli(argv: string[]): number;
-
 export const PROTECTED_TYPES: Set<string>;
