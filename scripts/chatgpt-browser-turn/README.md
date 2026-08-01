@@ -430,3 +430,4 @@ If the marker is unresolved, ambiguous, or disappears after binding, the helper
 returns `ui_contract_mismatch` with the corresponding marker cause, publishes no
 reply, and keeps `send_count` at one. It never falls back to prompt text, product
 identity, or a second send.
+This marker contract is shared by future per-payload session adoption.
