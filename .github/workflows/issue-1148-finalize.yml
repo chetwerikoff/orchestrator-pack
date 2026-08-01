@@ -74,13 +74,13 @@ jobs:
           support = Path('scripts/chatgpt-browser-turn/state-light-turn.test-support.ts')
           text = support.read_text(encoding='utf-8')
           old_result = """    expect(outcome.result).toMatchObject({
-              state: 'observation_uncertain',
-              cause: 'owned_prompt_not_observed',
-            });"""
+      state: 'observation_uncertain',
+      cause: 'owned_prompt_not_observed',
+    });"""
           new_result = """    expect(outcome.result).toMatchObject({
-              state: 'ui_contract_mismatch',
-              cause: 'owned_message_identity_unresolved',
-            });"""
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_unresolved',
+    });"""
           count = text.count(old_result)
           if count != 2:
               raise SystemExit(f'fallback result assertions: expected two matches, found {count}')
@@ -97,18 +97,18 @@ jobs:
           duplicate = replace_once(
               duplicate,
               """    expect(outcome.code).toBe(0);
-            expect(outcome.result).toMatchObject({
-              state: 'ok',
-              send_count: 1,
-            });
-            expect(outcome.result.state).not.toBe('observation_uncertain');""",
+    expect(outcome.result).toMatchObject({
+      state: 'ok',
+      send_count: 1,
+    });
+    expect(outcome.result.state).not.toBe('observation_uncertain');""",
               """    expect(outcome.code).toBe(10);
-            expect(outcome.result).toMatchObject({
-              state: 'ui_contract_mismatch',
-              cause: 'owned_message_identity_unresolved',
-              send_count: 1,
-            });
-            expect(mocks.linkSync).not.toHaveBeenCalled();""",
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_unresolved',
+      send_count: 1,
+    });
+    expect(mocks.linkSync).not.toHaveBeenCalled();""",
               'duplicate fallback assertions',
           )
           text = text[:duplicate_start] + duplicate + text[duplicate_end:]
