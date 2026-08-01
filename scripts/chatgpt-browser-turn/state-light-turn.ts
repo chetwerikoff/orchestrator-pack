@@ -78,6 +78,7 @@ const MESSAGE_NODE_READ_TIMEOUT_MS = 800;
 const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
 const MESSAGE_NODE_READ_ATTEMPTS = 2;
 const OWNED_TAIL_CONFIRM_DELAY_MS = 100;
+const OWNED_TAIL_SNAPSHOT_BUDGET_MS = MAX_LOCAL_READ_WAIT_MS;
 const OWNED_IDENTITY_STABLE_READS = 2;
 const OWNED_IDENTITY_MISSING_READS = 2;
 const OWNED_IDENTITY_UNRESOLVED_READS = 2;
@@ -165,6 +166,8 @@ export interface ObservationHeartbeat {
 export interface PageObservationResult {
   readonly messages: PageMessage[];
   readonly nodes: PageNodeObservation[];
+  /** Total rendered node count, including nodes outside a bounded tail read. */
+  readonly nodeCount?: number;
   readonly nodeListReadFailed: boolean;
   readonly ownedWindowCompletionReady: boolean;
   readonly transcriptIncomplete: boolean;
@@ -314,10 +317,12 @@ function strictPostBaselineOwnedUserCount(
   baselineCount: number,
   prompt: string,
 ): number {
-  return messages
-    .slice(Math.max(0, baselineCount))
-    .filter((message) => message.role === 'user' && ownedPromptMatches(message.text, prompt))
-    .length;
+  return messages.filter((message, index) => {
+    const domIndex = message.domIndex ?? index;
+    return domIndex >= Math.max(0, baselineCount)
+      && message.role === 'user'
+      && ownedPromptMatches(message.text, prompt);
+  }).length;
 }
 
 export function replyStabilityFingerprint(text: string): string {
@@ -341,8 +346,10 @@ function lastAssistantVisibleText(
   messages: readonly PageMessage[],
   baselineCount: number,
 ): string {
-  const novel = messages.slice(Math.max(0, baselineCount));
-  const assistants = novel.filter((message) => message.role === 'assistant');
+  const assistants = messages.filter((message, index) => {
+    const domIndex = message.domIndex ?? index;
+    return domIndex >= Math.max(0, baselineCount) && message.role === 'assistant';
+  });
   return normalizeVisibleText(assistants.at(-1)?.text ?? '');
 }
 
@@ -921,7 +928,95 @@ export async function readPageObservation(
   return {
     messages,
     nodes: nodeObservations,
+    nodeCount: countResult.count,
     ownedWindowCompletionReady,
+    transcriptIncomplete,
+    nodeListReadFailed: countResult.readFailed,
+  };
+}
+
+async function readTailAttribute(
+  locator: any,
+  attribute: string,
+  deadline: number,
+): Promise<string | null> {
+  const budgets = [
+    MESSAGE_NODE_READ_TIMEOUT_MS,
+    MESSAGE_NODE_READ_RETRY_TIMEOUT_MS,
+  ].slice(0, MESSAGE_NODE_READ_ATTEMPTS);
+  for (const budget of budgets) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return null;
+    try {
+      return String(await locator.getAttribute(attribute, {
+        timeout: Math.max(1, Math.min(budget, remaining)),
+      }) ?? '');
+    } catch {
+      // Retry only while the single tail-snapshot budget remains.
+    }
+  }
+  return null;
+}
+
+/**
+ * Read only the minimal pre-send suffix. Continuation reads walk backward
+ * and stop at the last user anchor; verified-fresh reads prove zero users.
+ */
+export async function readTailPageObservation(
+  page: any,
+  allowFreshSentinel: boolean,
+): Promise<PageObservationResult> {
+  const nodes = page.locator(MESSAGE_NODE_SELECTOR);
+  const countResult = await locatorCountResult(nodes);
+  const deadline = Date.now() + OWNED_TAIL_SNAPSHOT_BUDGET_MS;
+  const reverseNodes: PageNodeObservation[] = [];
+  const reverseMessages: PageMessage[] = [];
+  let transcriptIncomplete = countResult.readFailed;
+
+  if (!countResult.readFailed) {
+    for (let index = countResult.count - 1; index >= 0; index--) {
+      const node = nodes.nth(index);
+      const roleValue = await readTailAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, deadline);
+      const identityValue = await readTailAttribute(node, MESSAGE_IDENTITY_ATTR, deadline);
+      const role = roleValue === 'user' || roleValue === 'assistant'
+        ? roleValue
+        : undefined;
+      const roleReadFailed = roleValue === null;
+      const identityReadFailed = identityValue === null;
+      const identity = identityReadFailed || identityValue === ''
+        ? undefined
+        : identityValue;
+
+      reverseNodes.push({
+        domIndex: index,
+        ...(role ? { role } : {}),
+        ...(identity ? { identity } : {}),
+        text: '',
+        roleReadFailed,
+        identityReadFailed,
+        textReadFailed: false,
+      });
+      if (role) {
+        reverseMessages.push({
+          role,
+          text: '',
+          ...(identity ? { identity } : {}),
+          domIndex: index,
+        });
+      }
+      if (roleReadFailed || role === undefined) {
+        transcriptIncomplete = true;
+        break;
+      }
+      if (!allowFreshSentinel && role === 'user') break;
+    }
+  }
+
+  return {
+    messages: reverseMessages.reverse(),
+    nodes: reverseNodes.reverse(),
+    nodeCount: countResult.count,
+    ownedWindowCompletionReady: false,
     transcriptIncomplete,
     nodeListReadFailed: countResult.readFailed,
   };
@@ -944,9 +1039,11 @@ function uniqueIdentityNodeIndex(
   nodes: readonly PageNodeObservation[],
   identity: string,
 ): number | undefined {
-  const matches = nodes.filter((node) => node.identity === identity);
+  const matches = nodes
+    .map((node, index) => ({ node, index }))
+    .filter(({ node }) => node.identity === identity);
   if (matches.length !== 1) return undefined;
-  return matches[0]!.domIndex;
+  return matches[0]!.index;
 }
 
 export function establishOwnedTailBoundary(
@@ -1031,16 +1128,21 @@ export function resolvePostTailNodes(
   if (observation.nodeListReadFailed) return { state: 'unresolved' };
   if (boundary.kind === 'fresh') return { state: 'ok', nodes: observation.nodes };
 
-  const matching = observation.nodes.filter((node) => node.identity === boundary.anchorIdentity);
+  const matching = observation.nodes
+    .map((node, index) => ({ node, index }))
+    .filter(({ node }) => node.identity === boundary.anchorIdentity);
   if (matching.length > 1) return { state: 'changed' };
   if (matching.length === 0) {
     return observation.nodes.some((node) => node.identityReadFailed)
       ? { state: 'unresolved' }
       : { state: 'changed' };
   }
-  const anchor = matching[0]!;
+  const { node: anchor, index: anchorIndex } = matching[0]!;
   if (anchor.role !== 'user') return { state: 'changed' };
-  const currentSuffix = observation.nodes.slice(anchor.domIndex, anchor.domIndex + boundary.suffix.length);
+  const currentSuffix = observation.nodes.slice(
+    anchorIndex,
+    anchorIndex + boundary.suffix.length,
+  );
   if (currentSuffix.length !== boundary.suffix.length) return { state: 'changed' };
   for (let index = 0; index < boundary.suffix.length; index++) {
     const current = currentSuffix[index]!;
@@ -1051,7 +1153,7 @@ export function resolvePostTailNodes(
   }
   return {
     state: 'ok',
-    nodes: observation.nodes.slice(anchor.domIndex + boundary.suffix.length),
+    nodes: observation.nodes.slice(anchorIndex + boundary.suffix.length),
   };
 }
 
@@ -1551,26 +1653,24 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let admissionIdentitylessReads = 0;
     let boundIdentity: string | undefined;
     let boundMissingReads = 0;
-    let boundUserDomIndex: number | undefined;
     let boundUnresolvedReads = 0;
 
     const sendOwnedPrompt = async (): Promise<void> => {
       const composer = page.locator(COMPOSER_SELECTOR);
       await composer.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
       await composer.fill(snapshot.text, { timeout: MAX_LOCAL_READ_WAIT_MS });
-      const firstTail = await readPageObservation(page);
+      const firstTail = await readTailPageObservation(page, config.newChat);
       await sleep(page, OWNED_TAIL_CONFIRM_DELAY_MS);
-      const secondTail = await readPageObservation(page);
+      const secondTail = await readTailPageObservation(page, config.newChat);
       ownedTailBoundary = establishOwnedTailBoundary(firstTail, secondTail, config.newChat);
       observationMode = ownedTailBoundary.kind === 'text_fallback' ? 'text_fallback' : 'admission';
-      baselineCount = secondTail.messages.length;
+      baselineCount = secondTail.nodeCount ?? secondTail.messages.length;
       admissionCandidateIdentity = undefined;
       admissionStableReads = 0;
       admissionUnresolvedReads = 0;
       admissionIdentitylessReads = 0;
       boundIdentity = undefined;
       boundMissingReads = 0;
-      boundUserDomIndex = undefined;
       boundUnresolvedReads = 0;
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
       if (await locatorCount(sendButton) > 0) {
@@ -2287,23 +2387,9 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         }
         const exactBound = await readExactOwnedIdentity(page, boundIdentity);
         if (exactBound.state === 'missing') {
-          const replacementAtPriorPosition = boundUserDomIndex === undefined
-            ? undefined
-            : observation.nodes[boundUserDomIndex];
-          if (
-            replacementAtPriorPosition
-            && !replacementAtPriorPosition.roleReadFailed
-            && !replacementAtPriorPosition.identityReadFailed
-            && (
-              replacementAtPriorPosition.role !== 'user'
-              || replacementAtPriorPosition.identity !== boundIdentity
-            )
-          ) {
-            return returnOwnedMessageIdentityMismatch(
-              'owned_message_identity_changed', page, browser, invocationId, profileKey,
-              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
-            );
-          }
+          // DOM indices can shift as historical nodes materialize or virtualize.
+          // Zero exact matches are bounded disappearance evidence unless another
+          // current-page identity/role/topology contradiction exists.
           boundMissingReads += 1;
           if (boundMissingReads >= OWNED_IDENTITY_MISSING_READS) {
             return returnOwnedMessageIdentityMismatch(
@@ -2354,7 +2440,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           continue;
         }
         boundUnresolvedReads = 0;
-        boundUserDomIndex = boundWindow.boundUserDomIndex;
         messages = [...boundWindow.messages];
         transcriptIncomplete = false;
         ownedWindowCompletionReady = boundWindow.lastAssistantDomIndex === null

@@ -65,6 +65,7 @@ import {
   ASSISTANT_TURN_ANCESTOR_XPATH,
   COMPOSER_SELECTOR,
   MESSAGE_AUTHOR_ROLE_ATTR,
+  MESSAGE_IDENTITY_ATTR,
   MESSAGE_NODE_SELECTOR,
   SEND_BUTTON_SELECTOR,
   matchesStopButtonSelector,
@@ -78,6 +79,7 @@ import {
   establishOwnedTailBoundary,
   ownedPromptMatches,
   readPageObservation,
+  readTailPageObservation,
   runStateLightTurn,
   replyStabilityMatches,
   replyStabilityFingerprint,
@@ -484,6 +486,41 @@ describe('readPageObservation transcript reads', () => {
 });
 
 
+describe('bounded pre-send tail observation', () => {
+  it('reads only the last-user suffix on a long continuation with unreadable distant history', async () => {
+    const messageCount = 1_202;
+    const accessed: number[] = [];
+    const page = {
+      locator: vi.fn((selector: string) => {
+        if (selector !== MESSAGE_NODE_SELECTOR) return scalarLocator();
+        return scalarLocator({
+          count: vi.fn(async () => messageCount),
+          nth: vi.fn((index: number) => {
+            accessed.push(index);
+            if (index < 1_200) throw new Error('distant history must not be read');
+            return messageLocator(index === 1_200
+              ? { role: 'user', text: '', identity: 'tail-user' }
+              : { role: 'assistant', text: '', identity: 'tail-assistant' });
+          }),
+        });
+      }),
+    };
+
+    const first = await readTailPageObservation(page, false);
+    const second = await readTailPageObservation(page, false);
+
+    expect(accessed).toEqual([1_201, 1_200, 1_201, 1_200]);
+    expect(first.nodeCount).toBe(messageCount);
+    expect(establishOwnedTailBoundary(first, second, false)).toEqual({
+      kind: 'anchor',
+      anchorIdentity: 'tail-user',
+      suffix: [
+        { role: 'user', identity: 'tail-user' },
+        { role: 'assistant', identity: 'tail-assistant' },
+      ],
+    });
+  });
+});
 function identityObservation(
   nodes: readonly PageNodeObservation[],
   nodeListReadFailed = false,
@@ -531,11 +568,54 @@ const unreadableHistoricalNode: PageNodeObservation = {
   textReadFailed: true,
 };
 
+function decodeCssStringToken(value: string): string | undefined {
+  let decoded = '';
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index]!;
+    if (char === '"' || char === '\n' || char === '\r' || char === '\f') {
+      return undefined;
+    }
+    if (char !== '\\') {
+      decoded += char;
+      continue;
+    }
+    index += 1;
+    if (index >= value.length) return undefined;
+    const escaped = value[index]!;
+    if (/[0-9a-f]/iu.test(escaped)) {
+      let hex = escaped;
+      while (
+        hex.length < 6
+        && index + 1 < value.length
+        && /[0-9a-f]/iu.test(value[index + 1]!)
+      ) {
+        index += 1;
+        hex += value[index]!;
+      }
+      if (index + 1 < value.length && /\s/u.test(value[index + 1]!)) index += 1;
+      const codePoint = Number.parseInt(hex, 16);
+      decoded += codePoint === 0 ? '\uFFFD' : String.fromCodePoint(codePoint);
+      continue;
+    }
+    if (escaped === '\n' || escaped === '\r' || escaped === '\f') return undefined;
+    decoded += escaped;
+  }
+  return decoded;
+}
+
+function independentlyDecodeMessageIdentitySelector(selector: string): string | undefined {
+  const prefix = `[${MESSAGE_AUTHOR_ROLE_ATTR}][${MESSAGE_IDENTITY_ATTR}="`;
+  if (!selector.startsWith(prefix) || !selector.endsWith('"]')) return undefined;
+  return decodeCssStringToken(selector.slice(prefix.length, -2));
+}
 describe('state-light owned message identity', () => {
-  it('escapes opaque identity metacharacters for exact selector lookup', () => {
-    expect(messageIdentitySelector('a"b\\c]')).toBe(
-      '[data-message-author-role][data-message-id="a\\"b\\\\c]"]',
-    );
+  it('builds an exact opaque selector accepted by an independent selector decoder', () => {
+    const identity = 'opaque"\\[]\u0001\u007f"][data-message-author-role="assistant';
+    const selector = messageIdentitySelector(identity);
+    expect(independentlyDecodeMessageIdentitySelector(selector)).toBe(identity);
+
+    const malformed = `[${MESSAGE_AUTHOR_ROLE_ATTR}][${MESSAGE_IDENTITY_ATTR}="${identity}"]`;
+    expect(independentlyDecodeMessageIdentitySelector(malformed)).toBeUndefined();
   });
 
   it('establishes a stable tail anchor while ignoring unreadable distant history', () => {
@@ -760,9 +840,10 @@ function makeIdentityRuntimePage(
         metrics.messageReads += 1;
         return collectionLocator(activeSnapshot.messages, activeSnapshot.generating);
       }
-      const exactIdentityMatches = activeSnapshot.messages.filter(
-        (message) => message.identity && messageIdentitySelector(message.identity) === selector,
-      );
+      const selectedIdentity = independentlyDecodeMessageIdentitySelector(selector);
+      const exactIdentityMatches = selectedIdentity === undefined
+        ? []
+        : activeSnapshot.messages.filter((message) => message.identity === selectedIdentity);
       if (exactIdentityMatches.length > 0) {
         return collectionLocator(exactIdentityMatches, activeSnapshot.generating);
       }
@@ -868,10 +949,15 @@ describe('Issue #1148 runtime identity binding', () => {
     { role: 'assistant', text: 'OLD ANSWER', identity: 'history-assistant', finalAction: true },
   ];
 
-  it('publishes from the exact metacharacter identity window without prompt-text authority', async () => {
-    const identity = 'owned[message]"\\#1';
+  it('publishes only from an independently evaluated opaque exact selector', async () => {
+    const identity = 'owned"\\[]\u0001\u007f"][data-message-author-role="assistant';
+    const selectorPreSend: StateLightTestMessage[] = [
+      { role: 'user', text: 'DECOY', identity: `${identity}-prefix` },
+      { role: 'assistant', text: 'DECOY ANSWER', identity: `${identity}-assistant` },
+      ...preSend,
+    ];
     const fake = makeIdentityRuntimePage(
-      preSend,
+      selectorPreSend,
       identityRuntimeFrames(identity, 'FINAL-IDENTITY', {
         renderedPrompt: 'Rendered markdown and Unicode spacing are intentionally different',
       }),
@@ -885,6 +971,36 @@ describe('Issue #1148 runtime identity binding', () => {
     expect(fake.metrics.sends).toBe(1);
     expect(fake.metrics.closes).toBe(1);
     expect(fake.metrics.reloads).toBe(0);
+  });
+
+  it('fails closed when an opaque exact selector becomes duplicate after binding', async () => {
+    const identity = 'duplicate"\\[]\u0001\u007f"][data-message-id="other';
+    const working: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity },
+        { role: 'assistant', text: 'working', identity: 'working' },
+      ],
+      generating: true,
+    };
+    const duplicate: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity },
+        { role: 'assistant', text: 'NOT-PUBLISHED', identity: 'answer', finalAction: true },
+        { role: 'user', text: 'PROMPT', identity },
+      ],
+      generating: false,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [working, working, working, duplicate]);
+    const outcome = await runIdentityRuntimeTurn(fake.page);
+
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_changed',
+      send_count: 1,
+    });
+    expect(outcome.output).toBeUndefined();
   });
 
   it('does not inherit completion from historical turns before the exact bound reply is complete', async () => {
@@ -1032,6 +1148,50 @@ describe('Issue #1148 runtime identity binding', () => {
     expect(outcome.output).toBeUndefined();
   });
 
+it('treats a transient exact-selector miss after prefix materialization as bounded disappearance', async () => {
+  const identity = 'owned-prefix-shift';
+  const working: StateLightTestSnapshot = {
+    messages: [
+      ...preSend,
+      { role: 'user', text: 'PROMPT', identity },
+      { role: 'assistant', text: 'working', identity: 'working' },
+    ],
+    generating: true,
+  };
+  const materializedPrefix: StateLightTestMessage[] = [
+    { role: 'user', text: 'OLDER', identity: 'older-user' },
+    { role: 'assistant', text: 'OLDER ANSWER', identity: 'older-assistant' },
+  ];
+  const shiftedMissing: StateLightTestSnapshot = {
+    messages: [...materializedPrefix, ...preSend],
+    generating: false,
+  };
+  const shiftedReady: StateLightTestSnapshot = {
+    messages: [
+      ...materializedPrefix,
+      ...preSend,
+      { role: 'user', text: 'PROMPT', identity },
+      { role: 'assistant', text: 'SHIFTED-FINAL', identity: 'shifted-answer', finalAction: true },
+    ],
+    generating: false,
+  };
+  const fake = makeIdentityRuntimePage(preSend, [
+    working,
+    working,
+    working,
+    shiftedMissing,
+    shiftedReady,
+    shiftedReady,
+    shiftedReady,
+    shiftedReady,
+  ]);
+  const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
+
+  expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+  expect(outcome.output).toBe('SHIFTED-FINAL');
+  expect(outcome.result.cause).toBe('completed_page_only');
+  expect(fake.metrics.reloads).toBe(0);
+});
   it('reports bounded disappearance after binding and never initiates reload', async () => {
     const ownedWorking: StateLightTestSnapshot = {
       messages: [
@@ -1111,53 +1271,93 @@ describe('Issue #1148 runtime identity binding', () => {
     expect(fake.metrics.reloads).toBe(0);
   });
 
-  it('isolates byte-identical prompts in distinct owned tabs by opaque identity', async () => {
-    const { readFileSync, rmSync } = await import('node:fs');
-    const outputA = `/tmp/issue-1148-a-${Math.random().toString(16).slice(2)}.txt`;
-    const outputB = `/tmp/issue-1148-b-${Math.random().toString(16).slice(2)}.txt`;
-    const fakeA = makeIdentityRuntimePage(preSend, identityRuntimeFrames('owned-a', 'REPLY-A'));
-    const fakeB = makeIdentityRuntimePage(preSend, identityRuntimeFrames('owned-b', 'REPLY-B'));
-    runtimeMocks.prompt = 'BYTE-IDENTICAL-PROMPT';
-    runtimeMocks.nowMs = 10_000;
-    runtimeMocks.browserQueue.length = 0;
-    runtimeMocks.browserQueue.push(browserFor(fakeA.page).browser, browserFor(fakeB.page).browser);
-    const writes: string[] = [];
-    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
-      writes.push(String(chunk));
-      return true;
-    }) as typeof process.stdout.write);
-    const now = vi.spyOn(Date, 'now').mockImplementation(() => runtimeMocks.nowMs);
-    const argv = (output: string) => [
-      '--profile', '/tmp/profile',
-      '--cdp', 'http://127.0.0.1:9222',
-      '--input', '/tmp/prompt.txt',
-      '--output', output,
-      '--chat-url', 'https://chatgpt.com/c/existing',
-      '--timeout-ms', '5000',
-      '--poll-ms', '1',
-    ];
-    try {
-      const codes = await Promise.all([
-        runStateLightTurn(argv(outputA)),
-        runStateLightTurn(argv(outputB)),
-      ]);
-      expect(codes).toEqual([0, 0]);
-      expect(readFileSync(outputA, 'utf8')).toBe('REPLY-A');
-      expect(readFileSync(outputB, 'utf8')).toBe('REPLY-B');
-      const results = writes
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => JSON.parse(line))
-        .filter((row) => row.schema === 'turn-result/v1');
-      expect(results).toHaveLength(2);
-      expect(results.every((row) => row.state === 'ok' && row.send_count === 1)).toBe(true);
-      expect(fakeA.metrics.sends).toBe(1);
-      expect(fakeB.metrics.sends).toBe(1);
-    } finally {
-      stdout.mockRestore();
-      now.mockRestore();
-      rmSync(outputA, { force: true });
-      rmSync(outputB, { force: true });
-    }
-  });
+it('uses a controlled identity-to-window swap for byte-identical prompts across pages', async () => {
+  const { readFileSync, rmSync } = await import('node:fs');
+  const outputA = `/tmp/issue-1148-a-${Math.random().toString(16).slice(2)}.txt`;
+  const outputB = `/tmp/issue-1148-b-${Math.random().toString(16).slice(2)}.txt`;
+  const swappedFrames = (
+    ownedIdentity: string,
+    ownedReply: string,
+    decoyIdentity: string,
+    decoyReply: string,
+  ): StateLightTestSnapshot[] => {
+    const working: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'BYTE-IDENTICAL-PROMPT', identity: ownedIdentity },
+        { role: 'assistant', text: 'working', identity: `${ownedIdentity}-working` },
+      ],
+      generating: true,
+    };
+    const ownedReady: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'BYTE-IDENTICAL-PROMPT', identity: ownedIdentity },
+        { role: 'assistant', text: ownedReply, identity: `${ownedIdentity}-answer`, finalAction: true },
+      ],
+      generating: false,
+    };
+    const swappedReady: StateLightTestSnapshot = {
+      messages: [
+        ...ownedReady.messages,
+        { role: 'user', text: 'BYTE-IDENTICAL-PROMPT', identity: decoyIdentity },
+        { role: 'assistant', text: decoyReply, identity: `${decoyIdentity}-answer`, finalAction: true },
+      ],
+      generating: false,
+    };
+    return [working, ownedReady, swappedReady, swappedReady, swappedReady, swappedReady];
+  };
+  const fakeA = makeIdentityRuntimePage(
+    preSend,
+    swappedFrames('owned-a', 'REPLY-A', 'owned-b', 'DECOY-B-ON-A'),
+  );
+  const fakeB = makeIdentityRuntimePage(
+    preSend,
+    swappedFrames('owned-b', 'REPLY-B', 'owned-a', 'DECOY-A-ON-B'),
+  );
+  runtimeMocks.prompt = 'BYTE-IDENTICAL-PROMPT';
+  runtimeMocks.nowMs = 10_000;
+  runtimeMocks.browserQueue.length = 0;
+  runtimeMocks.browserQueue.push(browserFor(fakeA.page).browser, browserFor(fakeB.page).browser);
+  const writes: string[] = [];
+  const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+    writes.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write);
+  const now = vi.spyOn(Date, 'now').mockImplementation(() => runtimeMocks.nowMs);
+  const argv = (output: string) => [
+    '--profile', '/tmp/profile',
+    '--cdp', 'http://127.0.0.1:9222',
+    '--input', '/tmp/prompt.txt',
+    '--output', output,
+    '--chat-url', 'https://chatgpt.com/c/existing',
+    '--timeout-ms', '5000',
+    '--poll-ms', '1',
+  ];
+  try {
+    const codes = await Promise.all([
+      runStateLightTurn(argv(outputA)),
+      runStateLightTurn(argv(outputB)),
+    ]);
+    expect(codes).toEqual([0, 0]);
+    expect(readFileSync(outputA, 'utf8')).toBe('REPLY-A');
+    expect(readFileSync(outputB, 'utf8')).toBe('REPLY-B');
+    expect(readFileSync(outputA, 'utf8')).not.toBe('DECOY-B-ON-A');
+    expect(readFileSync(outputB, 'utf8')).not.toBe('DECOY-A-ON-B');
+    const results = writes
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((row) => row.schema === 'turn-result/v1');
+    expect(results).toHaveLength(2);
+    expect(results.every((row) => row.state === 'ok' && row.send_count === 1)).toBe(true);
+    expect(fakeA.metrics.sends).toBe(1);
+    expect(fakeB.metrics.sends).toBe(1);
+  } finally {
+    stdout.mockRestore();
+    now.mockRestore();
+    rmSync(outputA, { force: true });
+    rmSync(outputB, { force: true });
+  }
+});
 });
