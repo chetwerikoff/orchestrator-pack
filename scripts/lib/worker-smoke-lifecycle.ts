@@ -685,7 +685,12 @@ export function cleanupSmokeLifecycle(input: {
     };
   }
   beginCleanup(input.artifactDir, nowMs);
-  const cancellationRecorded = !input.requestCancellation || writeSmokeCancelRequest({
+  const cancellationRequired = input.requestCancellation || (
+    Boolean(registry.terminalHandle)
+    && input.reason !== 'child_completed'
+    && input.reason !== 'invalid_child_report'
+  );
+  const cancellationRecorded = !cancellationRequired || writeSmokeCancelRequest({
     artifactDir: input.artifactDir,
     runId: input.runId,
     reason: input.reason,
