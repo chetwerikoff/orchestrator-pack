@@ -619,7 +619,12 @@ function validateLegacyM3(rows, occurrences, captures, metadata, phase, issueRev
       errors.push(`review-economics: protected finding ${row.id} remains under current contest`);
       continue;
     }
-    if (terminalOnly && !terminalRecords.some((record) => record.captureIndex >= occurrence.captureIndex)) {
+    const terminalRecordsAnyRevision = records.filter((record) => (
+      record.stage === 'architectural' && record.captureIndex >= occurrence.captureIndex
+    ));
+    if (terminalOnly
+      && terminalRecordsAnyRevision.length > 0
+      && !terminalRecords.some((record) => record.captureIndex >= occurrence.captureIndex)) {
       errors.push(`review-economics: protected finding ${row.id} has unknown/stale architect contest state`);
       continue;
     }
