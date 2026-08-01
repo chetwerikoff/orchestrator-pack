@@ -1,29 +1,19 @@
 name: Issue 1148 apply tested CI fixes
 
-on:
-  push:
-    branches:
-      - agent/issue-1148-message-identity
-    paths:
-      - .issue-1148-fix/**
-      - .github/workflows/issue-1148-apply.yml
-
-permissions:
-  contents: write
+on: push
 
 jobs:
   apply-tested-fix:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout branch
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: agent/issue-1148-message-identity
           fetch-depth: 0
 
-      - name: Setup Node 22
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
@@ -35,18 +25,11 @@ jobs:
         run: npm ci --include=dev
 
       - name: Run focused regressions
-        run: >-
-          node scripts/run-vitest-with-harness.mjs run --maxWorkers=1
-          scripts/chatgpt-browser-turn/state-light-page-observation.test.ts
-          scripts/stage-completeness-guard.test.ts
-
-      - name: Validate diff
-        run: |
-          git diff --check
-          git diff --exit-code -- .github/workflows/issue-1148-materialize.yml || true
+        run: node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/chatgpt-browser-turn/state-light-page-observation.test.ts scripts/stage-completeness-guard.test.ts
 
       - name: Commit tested changes and remove temporary files
         run: |
+          git diff --check
           rm -rf .issue-1148-fix
           rm -f .github/workflows/issue-1148-apply.yml
           rm -f .github/workflows/issue-1148-ci-fix.yml
