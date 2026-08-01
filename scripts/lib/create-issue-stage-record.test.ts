@@ -1,5 +1,8 @@
-import { rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { executeFinalAcceptanceGuards, FINAL_ACCEPTANCE_CONTRACT_VERSION } from './create-issue-final-acceptance-contract.ts';
 import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
 import {
   logicalEventsEqual,
@@ -12,13 +15,19 @@ import {
   parseJournalEvents,
   readPendingEvent,
 } from './create-issue-stage-record-gh.ts';
-import { retryPendingEvents, startReviewCycle, detectAcceptedRevisionDrift } from './create-issue-stage-record-core.ts';
+import {
+  detectAcceptedRevisionDrift,
+  publishSettledStageRecord,
+  retryPendingEvents,
+  startReviewCycle,
+} from './create-issue-stage-record-core.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
 import {
   createMockGhState,
   createMockTransport,
   installCommentPages,
   makeTempDir,
+  sampleStageReceipt,
 } from './create-issue-stage-record-test-helpers.ts';
 import type { CycleEventLogical, StageEventLogical, TrustedComment } from './create-issue-stage-record-types.ts';
 import { CYCLE_SCHEMA, FINAL_SCHEMA, STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
@@ -261,6 +270,168 @@ describe('create-issue-stage-record trusted comment admission and pagination', (
   });
 });
 
+const issueNumber = 1152;
+const repo = 'chetwerikoff/orchestrator-pack';
+const cliTempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of cliTempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe('create-issue-stage-finalize integration', () => {
+  it('starts a cycle, retries equal logical events, and rejects conflicting roots', () => {
+    const state = createMockGhState({ issue: { title: 't', body: 'revision r01', labels: ['bug'] } });
+    const transport = createMockTransport(state);
+    const workdir = makeCliTempDir();
+
+    const first = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(first.ok).toBe(true);
+    expect(state.comments).toHaveLength(1);
+    expect(state.issue.labels).toContain('spec-review:in-progress');
+
+    const retry = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    expect(retry.ok).toBe(true);
+    expect(state.comments).toHaveLength(1);
+
+    const conflicting = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r02',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      predecessorCycleId: 'none',
+      workdir: makeCliTempDir(),
+    });
+    expect(conflicting.ok).toBe(false);
+  });
+
+  it('publishes a bound stage record and refuses github failure as non-authoritative local progression', () => {
+    const state = createMockGhState({ issue: { title: 't', body: 'revision r01', labels: [] } });
+    const transport = createMockTransport(state);
+    const workdir = makeCliTempDir();
+    const started = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    const cycleId = started.cycleId!;
+    const receipt = sampleStageReceipt(cycleId);
+    const published = publishSettledStageRecord(transport, {
+      repo,
+      issueNumber,
+      receipt,
+      workdir,
+    });
+    expect(published.ok).toBe(true);
+    expect(state.comments).toHaveLength(2);
+
+    state.failCreate = true;
+    const blocked = publishSettledStageRecord(transport, {
+      repo,
+      issueNumber,
+      receipt: {
+        ...receipt,
+        stageAttemptId: 'attempt-2',
+        stage: 'architectural-review',
+      },
+      workdir,
+    });
+    expect(blocked.ok).toBe(false);
+    expect(state.comments).toHaveLength(2);
+  });
+
+  it('refuses stage publication when cycle binding is missing or cross-cycle', () => {
+    const state = createMockGhState({ issue: { title: 't', body: 'revision r01', labels: [] } });
+    const transport = createMockTransport(state);
+    const workdir = makeCliTempDir();
+    const started = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    const missing = publishSettledStageRecord(transport, {
+      repo,
+      issueNumber,
+      receipt: { ...sampleStageReceipt(started.cycleId!), cycleBinding: undefined },
+      workdir,
+    });
+    expect(missing.ok).toBe(false);
+    const cross = publishSettledStageRecord(transport, {
+      repo,
+      issueNumber,
+      receipt: {
+        ...sampleStageReceipt(started.cycleId!),
+        cycleId: 'other-cycle',
+      },
+      workdir,
+    });
+    expect(cross.ok).toBe(false);
+  });
+});
+
+describe('create-issue-final-acceptance contract parity', () => {
+  it('exports the shared contract version', () => {
+    expect(FINAL_ACCEPTANCE_CONTRACT_VERSION).toBe('create-issue-final-acceptance-contract/v1');
+  });
+
+  it('requires direct guard execution inputs instead of a PASS receipt shortcut', () => {
+    const result = executeFinalAcceptanceGuards({
+      issueBody: 'body without revision marker',
+      issueRevision: 'r01',
+      cycleId: 'cycle-1',
+      reviewDir: '/tmp/review',
+      stageReceiptPaths: [],
+      capturePaths: [],
+      externalPassReceiptPath: '/tmp/fake-pass.json',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.contractVersion).toBe('create-issue-final-acceptance-contract/v1');
+    expect(result.errors[0]).toMatch(/external PASS receipt/);
+  });
+
+  it('runs the three acceptance guards and cycle witness validation directly', () => {
+    const result = executeFinalAcceptanceGuards({
+      issueBody: '```complexity-tier\ntier: T1\nadvisory-prior: T1\n```\nr01',
+      issueRevision: 'r01',
+      cycleId: 'cycle-1',
+      reviewDir: '/tmp/review',
+      stageReceiptPaths: ['receipt.json'],
+      capturePaths: [],
+      readJson: () => ({
+        tier: 'T1', stage: 'architectural', cycleId: 'cycle-2', stageAttemptId: 'attempt-1',
+        policyVersion: 'single-source/v1', sourceRevision: 'r01', outcome: 'complete',
+        reviewerCardinality: 1, completedSourceCount: 1, producerEvidence: 'not-applicable', tierTransition: 'none',
+        cycleBinding: { cycleId: 'cycle-2', sourceRevision: 'r01', boundBeforeLaunch: true },
+      }),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.startsWith('tier-gate:'))).toBe(true);
+    expect(result.errors.some((error) => error.startsWith('stage-completeness:'))).toBe(true);
+    expect(result.errors.some((error) => error.startsWith('finding-ledger:'))).toBe(true);
+    expect(result.errors.some((error) => error.startsWith('cycle-binding:'))).toBe(true);
+  });
+});
+
 describe('create-issue-stage-record receipt binding', () => {
   it('requires pre-launch cycle binding witness and rejects rebinding or revision mismatch', () => {
     const valid = parseConsumableStageReceipt({
@@ -318,6 +489,8 @@ function makeCycleComment(
   return trusted(id, serializeCommentBody(logical), 'owner', createdAt);
 }
 
-afterEach(() => {
-  // no shared temp dirs in unit tests here
-});
+function makeCliTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'opk-1152-cli-'));
+  cliTempDirs.push(dir);
+  return dir;
+}
