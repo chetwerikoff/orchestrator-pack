@@ -625,8 +625,8 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(outcome.result.send_count).toBe(1);
     expect(outcome.result.state).not.toBe('send_failed');
     expect(outcome.result).toMatchObject({
-      state: 'observation_uncertain',
-      cause: 'owned_prompt_not_observed',
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_unresolved',
     });
     expect(metrics.closes).toBe(1);
     expect(metrics.polls).toBeGreaterThanOrEqual(3);
@@ -903,7 +903,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(mocks.writeFileSync.mock.calls[0]?.[1]).toBe('FINAL');
   });
 
-  it('does not classify a transient duplicate owned user render as foreign activity', async () => {
+  it('fails closed when strict-text fallback observes duplicate owned candidates', async () => {
     const snapshots: StateLightTestSnapshot[] = [
       {
         messages: [
@@ -934,12 +934,13 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     const fake = makePage(snapshots);
     const outcome = await runAndCapture(fake.page, { timeoutMs: '5000' });
 
-    expect(outcome.code).toBe(0);
+    expect(outcome.code).toBe(10);
     expect(outcome.result).toMatchObject({
-      state: 'ok',
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_unresolved',
       send_count: 1,
     });
-    expect(outcome.result.state).not.toBe('observation_uncertain');
+    expect(mocks.linkSync).not.toHaveBeenCalled();
   });
 
   it('never emits send_failed once send_count is at least one', async () => {
@@ -953,8 +954,8 @@ describe('Issue #1120 state-light turn lifecycle', () => {
     expect(outcome.result.send_count).toBeGreaterThanOrEqual(1);
     expect(outcome.result.state).not.toBe('send_failed');
     expect(outcome.result).toMatchObject({
-      state: 'observation_uncertain',
-      cause: 'owned_prompt_not_observed',
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_unresolved',
     });
   });
 
