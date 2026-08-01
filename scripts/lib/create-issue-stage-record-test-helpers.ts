@@ -150,9 +150,9 @@ export function createMockTransport(state: MockGhState): GhTransport {
           if (state.failLabelSync) {
             return { exitCode: 1, stdout: '', stderr: 'label sync failed' };
           }
-          const labelsIndex = argv.indexOf('-f');
-          const labelsRaw = argv[labelsIndex + 1] ?? 'labels=[]';
-          const labels = JSON.parse(labelsRaw.replace(/^labels=/, '')) as string[];
+          const labels = argv
+            .filter((argument) => argument.startsWith('labels[]='))
+            .map((argument) => argument.slice('labels[]='.length));
           state.issue.labels = labels;
           return { exitCode: 0, stdout: '{}', stderr: '' };
         }

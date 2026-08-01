@@ -406,7 +406,7 @@ export function syncIssueProjectionLabels(
       applied: [],
       removed: [],
       pendingRepair: true,
-      diagnostics: [{ code: 'comments-truncated', message: 'unable to read issue labels for projection synchronization' }],
+      diagnostics: [{ code: 'label-sync-failed' as LineageDiagnostic['code'], message: 'unable to read issue labels for projection synchronization' }],
     };
   }
   const unrelated = current.labels.filter(
@@ -419,8 +419,7 @@ export function syncIssueProjectionLabels(
     `repos/${owner}/${name}/issues/${issueNumber}`,
     '-X',
     'PATCH',
-    '-f',
-    `labels=${JSON.stringify(nextLabels)}`,
+    ...nextLabels.flatMap((label) => ['-f', `labels[]=${label}`]),
   ]);
   if (response.exitCode !== 0) {
     return {
@@ -429,7 +428,7 @@ export function syncIssueProjectionLabels(
       removed: [],
       pendingRepair: true,
       diagnostics: [{
-        code: 'comments-truncated',
+        code: 'label-sync-failed' as LineageDiagnostic['code'],
         message: 'projection label synchronization failed',
       }],
     };
