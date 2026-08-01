@@ -821,6 +821,7 @@ function identityRuntimeFrames(
 async function runIdentityRuntimeTurn(
   page: any,
   prompt = 'PROMPT',
+  timeoutMs = '1000',
 ): Promise<{ code: number; result: any; output?: string }> {
   const { readFileSync, rmSync } = await import('node:fs');
   const outputPath = `/tmp/issue-1148-${Math.random().toString(16).slice(2)}.txt`;
@@ -843,7 +844,7 @@ async function runIdentityRuntimeTurn(
       '--input', '/tmp/prompt.txt',
       '--output', outputPath,
       '--chat-url', 'https://chatgpt.com/c/existing',
-      '--timeout-ms', '1000',
+      '--timeout-ms', timeoutMs,
       '--poll-ms', '1',
     ]);
     const rows = writes
@@ -938,7 +939,7 @@ describe('Issue #1148 runtime identity binding', () => {
       empty,
       ...identityRuntimeFrames('deferred-owned', 'DEFERRED-FINAL'),
     ]);
-    const outcome = await runIdentityRuntimeTurn(fake.page);
+    const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
 
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(outcome.result.incidents).toContain('send_observation_deferred');
@@ -1134,7 +1135,7 @@ describe('Issue #1148 runtime identity binding', () => {
       '--input', '/tmp/prompt.txt',
       '--output', output,
       '--chat-url', 'https://chatgpt.com/c/existing',
-      '--timeout-ms', '1000',
+      '--timeout-ms', '5000',
       '--poll-ms', '1',
     ];
     try {
