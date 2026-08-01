@@ -282,13 +282,16 @@ function atomicWriteOwnershipRecord(path: string, record: object): void {
   }
 }
 
-function readCorruptOwnershipArtifact(path: string): boolean {
+function readCorruptOwnershipArtifact<T>(
+  path: string,
+  readRecord: (path: string) => T | null,
+): boolean {
   if (!existsSync(path)) return false;
   try {
     const raw = readFileSync(path, 'utf8').trim();
     if (!raw) return true;
     JSON.parse(raw);
-    return false;
+    return readRecord(path) === null;
   } catch {
     return true;
   }
@@ -474,7 +477,7 @@ export function tryClaimStateLightFreshConversation(
   const boundedTimeout = Math.min(acceptedTimeoutMs, STATE_LIGHT_MAX_TIMEOUT_MS);
   for (let attempt = 0; attempt < STATE_LIGHT_OWNERSHIP_RECOVERY_ATTEMPTS; attempt++) {
     const nowMs = Date.now();
-    if (readCorruptOwnershipArtifact(claimPath)) {
+    if (readCorruptOwnershipArtifact(claimPath, readStateLightFreshClaimRecord)) {
       cleanupReclaimableOwnershipArtifact(claimPath);
     }
     const existing = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;
@@ -546,7 +549,7 @@ export async function acquireStateLightNewChatSendSlot(
   while (Date.now() < deadline) {
     for (let attempt = 0; attempt < STATE_LIGHT_OWNERSHIP_RECOVERY_ATTEMPTS; attempt++) {
       const nowMs = Date.now();
-      if (readCorruptOwnershipArtifact(slotPath)) {
+      if (readCorruptOwnershipArtifact(slotPath, readStateLightNewChatSendSlotRecord)) {
         cleanupReclaimableOwnershipArtifact(slotPath);
       }
       const existing = existsSync(slotPath) ? readStateLightNewChatSendSlotRecord(slotPath) : null;
@@ -672,7 +675,7 @@ export async function prepareStateLightFreshConversation(
     const conversationUuid = conversationUuidFromUrl(currentUrl);
     if (!conversationUuid) return { state: 'ready' };
     const claimPath = stateLightFreshClaimPath(profileKey, currentUrl);
-    if (readCorruptOwnershipArtifact(claimPath)) {
+    if (readCorruptOwnershipArtifact(claimPath, readStateLightFreshClaimRecord)) {
       cleanupReclaimableOwnershipArtifact(claimPath);
     }
     const existing = existsSync(claimPath) ? readStateLightFreshClaimRecord(claimPath) : null;

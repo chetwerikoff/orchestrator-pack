@@ -857,6 +857,9 @@ describe('state-light ownership TTL and owner fences (#1145)', () => {
     const claimPath = join(claimDir, `${sha256(SHARED_CONV)}.json`);
     writeFileSync(claimPath, '{not-json');
     expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim', 5_000)).toBe('claimed');
+    writeFileSync(claimPath, '{}\n');
+    expect(tryClaimStateLightFreshConversation(profileKey, SHARED_CONV, 'successor-claim-schema-invalid', 5_000)).toBe('claimed');
+    releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'successor-claim-schema-invalid', 5_000);
     writeFileSync(claimPath, `${JSON.stringify({
       schema: 'state-light-fresh-claim/v1',
       version: 1,

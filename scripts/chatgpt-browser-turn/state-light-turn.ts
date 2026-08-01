@@ -162,6 +162,7 @@ interface TurnRunOutcome {
   readonly preserveOwnedPage?: boolean;
   readonly ownedConversationUrl?: string;
   readonly profileKey?: string;
+  readonly ownershipForfeited?: boolean;
 }
 
 interface StateLightPublicationResult {
