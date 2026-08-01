@@ -11,11 +11,10 @@
   },
   "declared_paths": [
     "docs/worker-smoke-testing.md",
-    "scripts/lib/worker-smoke-bounded-create.ts",
-    "scripts/lib/worker-smoke-lifecycle-regressions.ts",
-    "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/worker-smoke-run.ts"
   ],
-  "declared_globs": [],
+  "declared_globs": [
+    "scripts/lib/worker-smoke-*.ts"
+  ],
   "amendments": []
 }
