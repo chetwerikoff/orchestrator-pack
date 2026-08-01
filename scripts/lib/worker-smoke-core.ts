@@ -280,9 +280,10 @@ export function buildSmokeAgentPrompt(input: {
       '  contents: {"runId":"<run-id>"}',
       'Completion is accepted only after publish-complete sealing:',
       `  1. optional in-progress bytes may go only to ${smokeCompletionPendingBodyPath(input.runBinding.artifactDir)}`,
-      '  2. compute sha256 hex of the final fenced report body',
-      '  3. create-only write completion-<sha256>.body (never overwrite an existing completion-*.body)',
-      '  4. create-only write completion-<sha256>.sealed.json with {"runId":"<run-id>","bodySha256":"<sha256>"}',
+      '  2. the completion body file holds your report block above, copied from the opening ```worker-smoke-report line through the closing ``` line',
+      '  3. compute sha256 hex over exactly the bytes you write to completion-<sha256>.body, and over no other byte range',
+      '  4. create-only write completion-<sha256>.body (never overwrite an existing completion-*.body)',
+      '  5. create-only write completion-<sha256>.sealed.json with {"runId":"<run-id>","bodySha256":"<sha256>"}',
       'Each new terminalization must use new content and therefore new completion-<sha256> filenames.',
       'Never delete or overwrite any completion-* artifact in the run directory.',
       'Terminal scrollback is not completion evidence; only the sealed artifact counts.',
@@ -601,10 +602,17 @@ export function parseSealedSmokeAgentReport(text: string): Partial<SmokeReport> 
     return null;
   }
   const fenced = text.match(SMOKE_REPORT_BLOCK);
-  if (!fenced) {
-    return null;
+  if (fenced) {
+    const parsed = parseSmokeAgentReportBody(fenced[1]);
+    if (parsed) {
+      return parsed;
+    }
   }
-  return parseSmokeAgentReportBody(fenced[1]);
+  // The sealed artifact is a dedicated, create-only, content-addressed file whose whole
+  // content is the report, so the fence delimiters carry no disambiguation work here and
+  // their absence is not evidence of an accidental payload. A body that is not a report
+  // still fails to parse and never becomes a verdict.
+  return parseSmokeAgentReportBody(text);
 }
 
 export function parseSmokeAgentReport(text: string): Partial<SmokeReport> | null {

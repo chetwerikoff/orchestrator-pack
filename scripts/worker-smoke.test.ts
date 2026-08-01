@@ -1154,6 +1154,23 @@ describe('worker smoke non-pass cause classification (#1101)', () => {
     expect(prompt).toContain(plan.scenarios[0]?.action ?? '');
     expect(prompt).not.toContain('(none — report BLOCKED');
   });
+
+  it('states one completion-body shape and one hashed byte range', () => {
+    const markdown = readFixture('action-producing-with-plan.md');
+    const prompt = buildSmokeAgentPrompt({
+      issueNumber: 1101,
+      issueBody: markdown,
+      prNumber: 1,
+      headSha: headA,
+      plan: resolveSmokeRequirement(markdown),
+      runBinding: { runId: 'run-shape', artifactDir: join(tmpdir(), 'smoke-shape') },
+    });
+    expect(prompt).toContain('from the opening ```worker-smoke-report line through the closing ``` line');
+    expect(prompt).toContain('compute sha256 hex over exactly the bytes you write to completion-<sha256>.body');
+    // "the final fenced report body" is the wording that let a child hash and store the
+    // inner content while the consumer required the delimited block.
+    expect(prompt).not.toContain('fenced report body');
+  });
 });
 
 function makeRunBinding(root: string, runId = createSmokeRunIdentity()) {
@@ -1414,6 +1431,10 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
       const unfenced = 'result: PASS\ntracked-files-unmodified: true\nscenarios:\n  - action: x | expected: y | observed: z | outcome: pass';
       writeCompletionBody(dir, unfenced);
       return {};
+    }, { ok: true });
+    assertPtyInvariant((dir) => {
+      writeCompletionBody(dir, 'the smoke went fine, everything passed');
+      return {};
     }, { ok: false, cause: 'agent_report_unfenced' });
     assertPtyInvariant(() => ({ childState: () => ({ exited: true }), deadlineMs: 200 }), { ok: false, cause: 'agent_exited_without_report' });
     assertPtyInvariant(() => ({ childState: () => ({ idle: true }), deadlineMs: 200 }), { ok: false, cause: 'agent_idle_without_report' });
@@ -1541,11 +1562,27 @@ describe('worker smoke child-wait completion contract (#1115)', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('completion-unfenced classifies only after publish-complete closure', () => {
+  it('sealed completion body terminalizes on the declared verdict with or without fence delimiters', () => {
+    const report = 'result: PASS\ntracked-files-unmodified: true\nscenarios:\n  - action: x | expected: y | observed: z | outcome: pass';
+    for (const body of [report, `\`\`\`worker-smoke-report\n${report}\n\`\`\``]) {
+      const root = mkdtempSync(join(tmpdir(), 'smoke-completion-shape-'));
+      const binding = makeRunBinding(root);
+      writeCompletionBody(binding, body);
+      const outcome = classifySmokeChildWaitObservation({
+        completion: observeCompletion(binding),
+        deadlineReached: false,
+      });
+      expect(outcome.status).toBe('completed');
+      expect(outcome.cause).toBeUndefined();
+      expect(outcome.partial?.result).toBe('PASS');
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('sealed completion body without a parseable verdict never becomes a report', () => {
     const root = mkdtempSync(join(tmpdir(), 'smoke-completion-unfenced-'));
     const binding = makeRunBinding(root);
-    const unfencedBody = 'result: PASS\ntracked-files-unmodified: true\nscenarios:\n  - action: x | expected: y | observed: z | outcome: pass';
-    writeCompletionBody(binding, unfencedBody);
+    writeCompletionBody(binding, 'ran the scenarios, all good, nothing to report');
     const outcome = classifySmokeChildWaitObservation({
       completion: observeCompletion(binding),
       deadlineReached: false,
@@ -2598,6 +2635,11 @@ describe('worker smoke run-level control-plane regression matrix (#1125)', () =>
     ].join('\n');
     expect(core.parseSealedSmokeAgentReport(spoof)).toBeNull();
     expect(parseSmokeAgentReport(spoof)).toBeNull();
+
+    // Tolerating an undelimited sealed body must not open a second forgery route.
+    const undelimitedSpoof = spoof.split('\n').filter((line) => !line.startsWith('```')).join('\n');
+    expect(core.parseSealedSmokeAgentReport(undelimitedSpoof)).toBeNull();
+    expect(parseSmokeAgentReport(undelimitedSpoof)).toBeNull();
 
     withWorkerSmokeRunHarness('child_spoof', ({ payload, headSha }) => {
       expect(payload.nonPassCause).toBe('agent_report_unfenced');
