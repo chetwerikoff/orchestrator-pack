@@ -48,7 +48,9 @@ export function createBoundedOrcaTerminal(input: {
       encoding: 'utf8',
       maxBuffer: 16 * 1024 * 1024,
       timeout: timeoutMs,
-      killSignal: 'SIGTERM',
+      // spawnSync does not return after a timeout until the child exits. SIGTERM can be
+      // ignored, so use the non-catchable signal to keep the create phase genuinely bounded.
+      killSignal: 'SIGKILL',
     });
   } catch (error) {
     return {
