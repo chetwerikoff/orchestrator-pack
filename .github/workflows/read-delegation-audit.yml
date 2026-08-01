@@ -74,6 +74,12 @@ jobs:
           python -m py_compile /tmp/issue-1148-r4-fixes.py
           python /tmp/issue-1148-r4-fixes.py
 
+          cat .github/issue-1148-r4-followup.part{00..02} > /tmp/issue-1148-r4-followup.py.gz.b64
+          echo 'c2d5a06a0ad28b4eeaaaf51e5fb0d8af8ac1c9325fb87f0089442bd016ffc6e0  /tmp/issue-1148-r4-followup.py.gz.b64' | sha256sum -c -
+          base64 -d /tmp/issue-1148-r4-followup.py.gz.b64 | gzip -d > /tmp/issue-1148-r4-followup.py
+          python -m py_compile /tmp/issue-1148-r4-followup.py
+          python /tmp/issue-1148-r4-followup.py
+
       - name: Install dependencies
         run: npm ci --include=dev
 
@@ -95,6 +101,7 @@ jobs:
           git checkout 801b8981f7c792e2b3c1b9aefdecb47cd38babeb -- .github/workflows/read-delegation-audit.yml
           rm -f .github/issue-1148-r4-fixes.py.gz.b64
           rm -f .github/issue-1148-r4.part00 .github/issue-1148-r4.part01 .github/issue-1148-r4.part02 .github/issue-1148-r4.part02{a,b,c,d} .github/issue-1148-r4.part03 .github/issue-1148-r4.part04 .github/issue-1148-r4.part05
+          rm -f .github/issue-1148-r4-followup.part{00..02}
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
