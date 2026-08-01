@@ -9,7 +9,7 @@
   ],
   "fallbackClassification": "derived",
   "targetShardSeconds": 900,
-  "heavyLaneTotalWeightSeconds": 196.899,
+  "heavyLaneTotalWeightSeconds": 194.791,
   "underProvisioned": false,
   "rawDerivedCount": 1,
   "weightInputReason": null,
@@ -174,10 +174,6 @@
     },
     {
       "file": "scripts/kernel/json-contract.test.ts",
-      "reason": "missing-per-file-weight"
-    },
-    {
-      "file": "scripts/lib/create-issue-stage-record.test.ts",
       "reason": "missing-per-file-weight"
     },
     {
@@ -604,17 +600,19 @@
     {
       "shard": 2,
       "files": [
+        "plugins/_shared/tests/declaration_schema.test.ts",
         "plugins/_shared/tests/git_fixture.test.ts",
-        "plugins/_shared/tests/normalize.test.ts",
-        "plugins/ao-scope-guard/tests/check.test.ts",
-        "plugins/ao-scope-guard/tests/normalize_edge.test.ts",
-        "plugins/ao-task-declaration/tests/baseline.test.ts",
-        "plugins/ao-task-declaration/tests/snapshot.test.ts",
-        "plugins/ao-token-chain-ledger/tests/aggregate.test.ts",
-        "plugins/ao-token-chain-ledger/tests/finding_signature.test.ts",
-        "plugins/ao-token-chain-ledger/tests/writer.test.ts",
+        "plugins/_shared/tests/issue_parser.test.ts",
+        "plugins/ao-codex-pr-reviewer/tests/review.test.ts",
+        "plugins/ao-scope-guard/tests/declaration_loader.test.ts",
+        "plugins/ao-task-declaration/tests/amendment.test.ts",
+        "plugins/ao-task-declaration/tests/iteration.test.ts",
+        "plugins/ao-task-declaration/tests/validate.test.ts",
+        "plugins/ao-token-chain-ledger/tests/convergence.test.ts",
+        "plugins/ao-token-chain-ledger/tests/session_cost.test.ts",
         "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
         "scripts/cutover/issue-928.test.ts",
+        "scripts/finding-ledger-guard.test.ts",
         "scripts/flow-manager-long-running-child.test.ts",
         "scripts/gate-runner/census-generator.test.ts",
         "scripts/gate-runner/contracts.test.ts",
@@ -624,6 +622,47 @@
         "scripts/gate-runner/runner.test.ts",
         "scripts/kernel/json-artifact.test.ts",
         "scripts/lib/create-issue-stage-record.test.ts",
+        "scripts/lib/protected-signal-receipt.test.ts",
+        "scripts/pack-gpt-reviewer.test.ts",
+        "scripts/pack-review-runner-gpt.test.ts",
+        "scripts/pr-session-binding-cache.test.ts",
+        "scripts/pr2-foundation/migration-symlink.test.ts",
+        "scripts/pr2-foundation/mutation-semantic-gates.test.ts",
+        "scripts/pr2-foundation/review-4750643719-regression.test.ts",
+        "scripts/pr2-foundation/terminalized-port.test.ts",
+        "scripts/pr2a/final-conformance.test.ts",
+        "scripts/review-delivery.test.ts",
+        "scripts/review-send-reconcile.test.ts",
+        "scripts/session-pr-binding-resolver.test.ts",
+        "scripts/stage-completeness-guard.test.ts",
+        "scripts/tiering-distribution-report.test.ts",
+        "scripts/toolchain/chatgpt-browser-turn.issue-1010.test.ts",
+        "scripts/toolchain/chatgpt-browser-turn.test.ts"
+      ],
+      "totalRuntimeMs": 3390022
+    },
+    {
+      "shard": 1,
+      "files": [
+        "plugins/_shared/tests/normalize.test.ts",
+        "plugins/ao-scope-guard/tests/check.test.ts",
+        "plugins/ao-scope-guard/tests/normalize_edge.test.ts",
+        "plugins/ao-task-declaration/tests/baseline.test.ts",
+        "plugins/ao-task-declaration/tests/snapshot.test.ts",
+        "plugins/ao-token-chain-ledger/tests/aggregate.test.ts",
+        "plugins/ao-token-chain-ledger/tests/finding_signature.test.ts",
+        "plugins/ao-token-chain-ledger/tests/writer.test.ts",
+        "scripts/browser-gpt-page-probe.test.ts",
+        "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+        "scripts/estate-cut/issue-906-vertical-slice.test.ts",
+        "scripts/gate-runner/bulk-declarative-gates.test.ts",
+        "scripts/gate-runner/census.test.ts",
+        "scripts/gate-runner/custom/ao-capture-redaction.test.ts",
+        "scripts/gate-runner/custom/bulk-static-gates.test.ts",
+        "scripts/gate-runner/declarative.test.ts",
+        "scripts/gate-runner/registry.test.ts",
+        "scripts/json-producers/generate-capture-manifest.test.ts",
+        "scripts/kernel/json-contract.test.ts",
         "scripts/orchestrator-escalation.test.ts",
         "scripts/pack-gpt-browser-path.test.ts",
         "scripts/pack-pr-review-contract.test.ts",
@@ -642,50 +681,7 @@
         "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
         "scripts/worker-smoke.test.ts"
       ],
-      "totalRuntimeMs": 3465000
-    },
-    {
-      "shard": 1,
-      "files": [
-        "plugins/_shared/tests/declaration_schema.test.ts",
-        "plugins/_shared/tests/issue_parser.test.ts",
-        "plugins/ao-codex-pr-reviewer/tests/review.test.ts",
-        "plugins/ao-scope-guard/tests/declaration_loader.test.ts",
-        "plugins/ao-task-declaration/tests/amendment.test.ts",
-        "plugins/ao-task-declaration/tests/iteration.test.ts",
-        "plugins/ao-task-declaration/tests/validate.test.ts",
-        "plugins/ao-token-chain-ledger/tests/convergence.test.ts",
-        "plugins/ao-token-chain-ledger/tests/session_cost.test.ts",
-        "scripts/browser-gpt-page-probe.test.ts",
-        "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
-        "scripts/estate-cut/issue-906-vertical-slice.test.ts",
-        "scripts/finding-ledger-guard.test.ts",
-        "scripts/gate-runner/bulk-declarative-gates.test.ts",
-        "scripts/gate-runner/census.test.ts",
-        "scripts/gate-runner/custom/ao-capture-redaction.test.ts",
-        "scripts/gate-runner/custom/bulk-static-gates.test.ts",
-        "scripts/gate-runner/declarative.test.ts",
-        "scripts/gate-runner/registry.test.ts",
-        "scripts/json-producers/generate-capture-manifest.test.ts",
-        "scripts/kernel/json-contract.test.ts",
-        "scripts/lib/protected-signal-receipt.test.ts",
-        "scripts/pack-gpt-reviewer.test.ts",
-        "scripts/pack-review-runner-gpt.test.ts",
-        "scripts/pr-session-binding-cache.test.ts",
-        "scripts/pr2-foundation/migration-symlink.test.ts",
-        "scripts/pr2-foundation/mutation-semantic-gates.test.ts",
-        "scripts/pr2-foundation/review-4750643719-regression.test.ts",
-        "scripts/pr2-foundation/terminalized-port.test.ts",
-        "scripts/pr2a/final-conformance.test.ts",
-        "scripts/review-delivery.test.ts",
-        "scripts/review-send-reconcile.test.ts",
-        "scripts/session-pr-binding-resolver.test.ts",
-        "scripts/stage-completeness-guard.test.ts",
-        "scripts/tiering-distribution-report.test.ts",
-        "scripts/toolchain/chatgpt-browser-turn.issue-1010.test.ts",
-        "scripts/toolchain/chatgpt-browser-turn.test.ts"
-      ],
-      "totalRuntimeMs": 3465000
+      "totalRuntimeMs": 3420000
     }
   ],
   "heavyShards": [
@@ -718,7 +714,7 @@
         "scripts/session-runtime-liveness.test.ts",
         "scripts/worker-message-submit-reconcile.test.ts"
       ],
-      "totalRuntimeMs": 196899
+      "totalRuntimeMs": 194791
     }
   ]
 }
