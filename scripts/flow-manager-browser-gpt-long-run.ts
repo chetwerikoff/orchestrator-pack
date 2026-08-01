@@ -1,34 +1,18 @@
 #!/usr/bin/env node
 import './toolchain/native-entrypoint-preflight.ts';
-import { spawn } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   HANDOFF_SCHEMA,
+  parseFlagArgv,
   readHandoffReceipt,
 } from './flow-manager-long-running-child.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const launcherPath = join(repoRoot, 'scripts/flow-manager-long-running-child.ts');
 const browserEntry = join(repoRoot, 'scripts/chatgpt-browser-turn/state-light-entry.ts');
-
-function parseArgs(argv: readonly string[]): Map<string, string | true> {
-  const options = new Map<string, string | true>();
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index] ?? '';
-    if (!token.startsWith('--')) continue;
-    const key = token.slice(2);
-    const next = argv[index + 1];
-    if (next && !next.startsWith('--')) {
-      options.set(key, next);
-      index += 1;
-    } else {
-      options.set(key, true);
-    }
-  }
-  return options;
-}
 
 function requiredOption(options: Map<string, string | true>, key: string): string {
   const value = options.get(key);
@@ -41,11 +25,38 @@ function refuse(reason: string): void {
   process.exitCode = 2;
 }
 
-async function waitForReceipt(path: string, timeoutMs: number): Promise<boolean> {
+
+function refuseStaleHandoffReceipt(
+  handoffReceipt: string,
+  runIdentity: string,
+  attemptIdentity: string,
+): boolean {
+  if (!existsSync(handoffReceipt) || statSync(handoffReceipt).size === 0) return false;
+  try {
+    const body = JSON.parse(readFileSync(handoffReceipt, 'utf8')) as {
+      schema?: string;
+      run_identity?: string;
+      attempt_identity?: string;
+    };
+    if (body.schema !== HANDOFF_SCHEMA) return false;
+    if (body.run_identity === runIdentity && body.attempt_identity === attemptIdentity) return false;
+  } catch {
+    return false;
+  }
+  refuse('stale_handoff_receipt');
+  return true;
+}
+
+async function waitForReceipt(
+  path: string,
+  runIdentity: string,
+  attemptIdentity: string,
+  timeoutMs: number,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const receipt = readHandoffReceipt(path);
-    if (receipt?.schema === HANDOFF_SCHEMA) return true;
+    const receipt = readHandoffReceipt(path, { runIdentity, attemptIdentity });
+    if (receipt) return true;
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
   }
   return false;
@@ -90,7 +101,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     refuse('forbidden_authority_selector');
     return 2;
   }
-  const options = parseArgs(argv);
+  const options = parseFlagArgv(argv);
   const runIdentity = requiredOption(options, 'run-identity');
   const attemptIdentity = requiredOption(options, 'attempt-identity');
   const handoffReceipt = requiredOption(options, 'handoff-receipt');
@@ -130,8 +141,10 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     ...browserArgs,
   ];
 
+  if (refuseStaleHandoffReceipt(handoffReceipt, runIdentity, attemptIdentity)) return 2;
+
   const pid = await spawnDetachedLauncher(launcherArgs);
-  const receiptReady = await waitForReceipt(handoffReceipt, 30_000);
+  const receiptReady = await waitForReceipt(handoffReceipt, runIdentity, attemptIdentity, 30_000);
   if (!receiptReady) {
     refuse('handoff_receipt_missing');
     return 2;

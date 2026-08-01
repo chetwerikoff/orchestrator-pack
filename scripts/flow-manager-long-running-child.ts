@@ -11,12 +11,14 @@ import {
   realpathSync,
   statSync,
   unlinkSync,
+  renameSync,
   writeSync,
+  fsyncSync,
 } from 'node:fs';
-import { spawn, type ChildProcess } from 'node:child_process';
 import { dirname, basename, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { TurnResultV1 } from './chatgpt-browser-turn/contracts.ts';
+import { TURN_STATES, type FailureScope, type TurnResultV1, type TurnState } from './chatgpt-browser-turn/contracts.ts';
+import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 
 export const COMPLETION_MODE = 'browser-turn-result-v1' as const;
 export const HANDOFF_SCHEMA = 'flow-manager-long-running-child-handoff/v1' as const;
@@ -25,6 +27,8 @@ export const WAIT_SCHEMA = 'flow-manager-long-running-child-wait/v1' as const;
 export const REFUSAL_SCHEMA = 'flow-manager-long-running-child-refusal/v1' as const;
 
 export type DeliveryState = 'not-sent' | 'POSSIBLY_DELIVERED' | 'landed';
+
+export type ParsedTurnResult = TurnResultV1 & { readonly resolved_send_count: number };
 
 export interface HandoffReceipt {
   readonly schema: typeof HANDOFF_SCHEMA;
@@ -59,6 +63,22 @@ export interface TerminalEnvelope {
 const DEFAULT_CANDIDATE_GRACE_MS = 5_000;
 const DEFAULT_NO_CANDIDATE_GRACE_MS = 5_000;
 const DIAGNOSTICS_BYTE_CAP = 4_096;
+const FAILURE_SCOPES: readonly FailureScope[] = [
+  'none',
+  'invocation',
+  'conversation',
+  'profile',
+  'machine',
+  'blocking_domain',
+];
+
+function isTurnState(value: string): value is TurnState {
+  return (TURN_STATES as readonly string[]).includes(value);
+}
+
+function isFailureScope(value: string): value is FailureScope {
+  return FAILURE_SCOPES.includes(value as FailureScope);
+}
 
 function envMs(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -82,6 +102,24 @@ function nowIso(): string {
 interface ParsedCli {
   readonly options: Map<string, string | true>;
   readonly childArgs: readonly string[];
+}
+
+/** Shared `--key value` / `--flag` argv parser for flow-manager launcher CLIs (#1164). */
+export function parseFlagArgv(argv: readonly string[]): Map<string, string | true> {
+  const options = new Map<string, string | true>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index] ?? '';
+    if (!token.startsWith('--')) continue;
+    const key = token.slice(2);
+    const next = argv[index + 1];
+    if (next && !next.startsWith('--')) {
+      options.set(key, next);
+      index += 1;
+    } else {
+      options.set(key, true);
+    }
+  }
+  return options;
 }
 
 function parseCli(argv: readonly string[]): ParsedCli {
@@ -188,8 +226,14 @@ function atomicCreateJson(path: string, body: Record<string, unknown>, kind: 're
   if (kind === 'envelope' && process.env.OPK_FM_LONG_CHILD_FORCE_ENVELOPE_CREATE_FAIL === '1') {
     throw new Error('forced_envelope_create_failure');
   }
-  const bytes = Buffer.from(`${JSON.stringify(body)}\n`, 'utf8');
-  const handle = openSync(path, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
+  const target = resolve(path);
+  if (existsSync(target)) {
+    throw new Error('occupied_launcher_owned_path');
+  }
+  const parent = dirname(target);
+  const tempPath = join(parent, '.opk-fm-long-child-' + basename(target) + '.' + process.pid + '.' + Date.now() + '.tmp');
+  const bytes = Buffer.from(JSON.stringify(body) + '\n', 'utf8');
+  const handle = openSync(tempPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
   try {
     writeSync(handle, bytes);
     try {
@@ -197,8 +241,23 @@ function atomicCreateJson(path: string, body: Record<string, unknown>, kind: 're
     } catch {
       // unsupported on some platforms
     }
+    try {
+      fsyncSync(handle);
+    } catch {
+      // best effort
+    }
   } finally {
     closeSync(handle);
+  }
+  try {
+    renameSync(tempPath, target);
+  } catch (error) {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // best effort
+    }
+    throw error;
   }
 }
 
@@ -207,16 +266,114 @@ function refuse(reason: string, details?: Record<string, unknown>): void {
   process.exitCode = 2;
 }
 
-function parseTurnResult(line: string): TurnResultV1 | null {
+function resolveSendCount(body: Record<string, unknown>, result: TurnResultV1): number {
+  if (typeof body.send_count === 'number' && Number.isFinite(body.send_count)) {
+    return body.send_count;
+  }
+  return result.observation_uncertainty_diagnostics?.send_count ?? 0;
+}
+
+function deliveryWithoutTurnResult(spawnFailed: boolean): DeliveryState {
+  return spawnFailed ? 'not-sent' : 'POSSIBLY_DELIVERED';
+}
+
+function parseTurnResult(line: string): ParsedTurnResult | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
   try {
-    const body = JSON.parse(trimmed) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const body = parsed as Record<string, unknown>;
     if (body.schema !== 'turn-result/v1') return null;
-    if (typeof body.state !== 'string' || typeof body.cause !== 'string') return null;
-    if (typeof body.invocation_id !== 'string' || typeof body.configured_profile_key !== 'string') return null;
-    if (typeof body.scope !== 'string') return null;
-    return body as TurnResultV1;
+    if (typeof body.state !== 'string' || !isTurnState(body.state)) return null;
+    if (typeof body.scope !== 'string' || !isFailureScope(body.scope)) return null;
+    if (typeof body.cause !== 'string') return null;
+    if (typeof body.invocation_id !== 'string') return null;
+    if (typeof body.configured_profile_key !== 'string') return null;
+
+    const result: TurnResultV1 = {
+      schema: 'turn-result/v1',
+      state: body.state,
+      scope: body.scope,
+      cause: body.cause,
+      invocation_id: body.invocation_id,
+      configured_profile_key: body.configured_profile_key,
+    };
+
+    if (typeof body.legacy_configured_profile_key === 'string') {
+      result.legacy_configured_profile_key = body.legacy_configured_profile_key;
+    }
+    if (typeof body.legacy_namespace_root === 'string') {
+      result.legacy_namespace_root = body.legacy_namespace_root;
+    }
+    if (typeof body.conversation_id === 'string') {
+      result.conversation_id = body.conversation_id;
+    }
+    if (typeof body.provisional_id === 'string') {
+      result.provisional_id = body.provisional_id;
+    }
+    if (typeof body.incident_id === 'string') {
+      result.incident_id = body.incident_id;
+    }
+    if (typeof body.generation === 'number' && Number.isFinite(body.generation)) {
+      result.generation = body.generation;
+    }
+    if (typeof body.driver_diagnostic_id === 'string') {
+      result.driver_diagnostic_id = body.driver_diagnostic_id;
+    }
+
+    const output = body.output;
+    if (
+      output &&
+      typeof output === 'object' &&
+      typeof (output as Record<string, unknown>).byte_length === 'number' &&
+      typeof (output as Record<string, unknown>).sha256 === 'string'
+    ) {
+      result.output = {
+        byte_length: (output as { byte_length: number }).byte_length,
+        sha256: (output as { sha256: string }).sha256,
+      };
+    }
+
+    const witness = body.witness;
+    if (
+      witness &&
+      typeof witness === 'object' &&
+      typeof (witness as Record<string, unknown>).user_message_id === 'string' &&
+      typeof (witness as Record<string, unknown>).assistant_message_id === 'string' &&
+      (witness as Record<string, unknown>).relation === 'reply_to' &&
+      (witness as Record<string, unknown>).source === 'service'
+    ) {
+      result.witness = {
+        user_message_id: (witness as { user_message_id: string }).user_message_id,
+        assistant_message_id: (witness as { assistant_message_id: string }).assistant_message_id,
+        relation: 'reply_to',
+        source: 'service',
+      };
+    }
+
+    const uncertainty = body.observation_uncertainty_diagnostics;
+    if (
+      uncertainty &&
+      typeof uncertainty === 'object' &&
+      typeof (uncertainty as Record<string, unknown>).cause === 'string' &&
+      typeof (uncertainty as Record<string, unknown>).send_count === 'number' &&
+      typeof (uncertainty as Record<string, unknown>).owned_prompt_seen === 'boolean'
+    ) {
+      const diag: TurnResultV1['observation_uncertainty_diagnostics'] = {
+        cause: (uncertainty as { cause: string }).cause,
+        send_count: (uncertainty as { send_count: number }).send_count,
+        owned_prompt_seen: (uncertainty as { owned_prompt_seen: boolean }).owned_prompt_seen,
+      };
+      const observedHeads = (uncertainty as { observed_user_heads?: unknown }).observed_user_heads;
+      if (Array.isArray(observedHeads) && observedHeads.every((head) => typeof head === 'string')) {
+        diag.observed_user_heads = observedHeads;
+      }
+      result.observation_uncertainty_diagnostics = diag;
+    }
+
+    const resolved_send_count = resolveSendCount(body, result);
+    return { ...result, resolved_send_count };
   } catch {
     return null;
   }
@@ -239,18 +396,18 @@ function parseHeartbeat(line: string): Record<string, unknown> | null {
   }
 }
 
-export function deriveDelivery(result: TurnResultV1 | null, childStartFailed: boolean): DeliveryState {
+export function deriveDelivery(result: ParsedTurnResult | null, childStartFailed: boolean): DeliveryState {
   if (childStartFailed) return 'not-sent';
   if (!result) return 'not-sent';
+  const sendCount = result.resolved_send_count;
   if (result.state === 'output_conflict') {
-    return (result.observation_uncertainty_diagnostics?.send_count ?? 0) === 0 ? 'not-sent' : 'POSSIBLY_DELIVERED';
+    return sendCount === 0 ? 'not-sent' : 'POSSIBLY_DELIVERED';
   }
-  const sendCount = result.observation_uncertainty_diagnostics?.send_count;
   if (sendCount === 0) return 'not-sent';
   if (result.witness?.relation === 'reply_to' && (result.conversation_id || result.observation_uncertainty_diagnostics?.owned_prompt_seen)) {
     return 'landed';
   }
-  if (sendCount === 1 || (sendCount !== undefined && sendCount > 0)) return 'POSSIBLY_DELIVERED';
+  if (sendCount > 0) return 'POSSIBLY_DELIVERED';
   if (result.state === 'ok') return 'POSSIBLY_DELIVERED';
   return 'not-sent';
 }
@@ -265,43 +422,25 @@ async function delay(ms: number): Promise<void> {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
-async function waitForChildExit(child: ChildProcess, graceMs: number): Promise<boolean> {
-  if (child.exitCode !== null) return true;
-  return await new Promise((resolvePromise) => {
-    const timer = setTimeout(() => resolvePromise(false), graceMs);
-    child.once('close', () => {
-      clearTimeout(timer);
-      resolvePromise(true);
-    });
-  });
+async function waitForProcessCompletion(
+  runPromise: Promise<ProcessResult>,
+  graceMs: number,
+): Promise<{ completed: boolean; result?: ProcessResult }> {
+  return await Promise.race([
+    runPromise.then((result) => ({ completed: true, result })),
+    delay(graceMs).then(() => ({ completed: false })),
+  ]);
 }
 
-async function waitForStdoutEof(stream: NodeJS.ReadableStream | null | undefined, graceMs: number): Promise<boolean> {
-  if (!stream) return true;
-  if (stream.readableEnded) return true;
-  return await new Promise((resolvePromise) => {
-    const timer = setTimeout(() => resolvePromise(false), graceMs);
-    const finish = () => {
-      clearTimeout(timer);
-      resolvePromise(true);
-    };
-    stream.once('end', finish);
-    stream.once('close', finish);
-  });
-}
-
-function killChildTree(child: ChildProcess): void {
-  const pid = child.pid;
-  if (!pid) return;
+async function abortManagedProcess(
+  controller: AbortController,
+  runPromise: Promise<ProcessResult>,
+): Promise<void> {
+  controller.abort();
   try {
-    if (process.platform !== 'win32') process.kill(-pid, 'SIGTERM');
-    else process.kill(pid, 'SIGTERM');
+    await runPromise;
   } catch {
-    try {
-      process.kill(pid, 'SIGTERM');
-    } catch {
-      // already gone
-    }
+    // process already terminal
   }
 }
 
@@ -333,19 +472,40 @@ async function publishEnvelope(config: LaunchConfig, envelope: TerminalEnvelope)
   }
 }
 
+interface CandidateCapture {
+  firstCandidate: ParsedTurnResult | null;
+  duplicateCandidate: boolean;
+  stdoutBuffer: string;
+  drainStdoutBuffer: () => void;
+}
+
 async function finalizeCandidatePath(
   config: LaunchConfig,
   receipt: HandoffReceipt,
   launcherStartedAt: string,
-  candidate: TurnResultV1,
-  duplicateCandidate: boolean,
-  child: ChildProcess,
+  capture: CandidateCapture,
+  runPromise: Promise<ProcessResult>,
+  controller: AbortController,
   childExitCode: number | null,
   heartbeatDiagnostics: Record<string, unknown> | undefined,
 ): Promise<number> {
   const grace = candidateGraceMs();
-  const exited = await waitForChildExit(child, grace);
-  const eof = await waitForStdoutEof(child.stdout, grace);
+  const completion = await waitForProcessCompletion(runPromise, grace);
+  capture.drainStdoutBuffer();
+  if (capture.stdoutBuffer.trim()) {
+    const trailing = parseTurnResult(capture.stdoutBuffer);
+    if (trailing) {
+      if (!capture.firstCandidate) capture.firstCandidate = trailing;
+      else capture.duplicateCandidate = true;
+    }
+  }
+  const candidate = capture.firstCandidate;
+  if (!candidate) {
+    await abortManagedProcess(controller, runPromise);
+    return 1;
+  }
+  const exited = completion.completed;
+  const eof = exited;
   const incidentEnvelope = (incident: string): TerminalEnvelope => ({
     schema: TERMINAL_SCHEMA,
     run_identity: config.runIdentity,
@@ -361,19 +521,19 @@ async function finalizeCandidatePath(
     child_exit_code: childExitCode,
     turn_result_state: candidate.state,
     turn_result_cause: candidate.cause,
-    send_count: candidate.observation_uncertainty_diagnostics?.send_count,
+    send_count: candidate.resolved_send_count,
     recovery_available: Boolean(config.conversationLocator || candidate.conversation_id),
     ...(config.conversationLocator ? { conversation_locator: config.conversationLocator } : {}),
   });
-  if (duplicateCandidate) {
+  if (capture.duplicateCandidate) {
     await publishEnvelope(config, incidentEnvelope('child_terminal_result_duplicate'));
-    killChildTree(child);
+    await abortManagedProcess(controller, runPromise);
     await delay(100);
     return 1;
   }
   if (!exited || !eof) {
     await publishEnvelope(config, incidentEnvelope('child_post_result_exit_timeout'));
-    killChildTree(child);
+    await abortManagedProcess(controller, runPromise);
     await delay(100);
     return 1;
   }
@@ -392,17 +552,17 @@ async function finalizeCandidatePath(
       child_exit_code: childExitCode,
       turn_result_state: candidate.state,
       turn_result_cause: candidate.cause,
-      send_count: candidate.observation_uncertainty_diagnostics?.send_count,
+      send_count: candidate.resolved_send_count,
       recovery_available: Boolean(config.conversationLocator || candidate.conversation_id),
       ...(config.conversationLocator ? { conversation_locator: config.conversationLocator } : {}),
       ...(candidate.conversation_id ? { conversation_locator: candidate.conversation_id } : {}),
       ...(heartbeatDiagnostics ? { diagnostics: heartbeatDiagnostics } : {}),
     });
-    killChildTree(child);
+    await abortManagedProcess(controller, runPromise);
     return 0;
   }
   await publishEnvelope(config, incidentEnvelope(`child_turn_state:${candidate.state}`));
-  killChildTree(child);
+  await abortManagedProcess(controller, runPromise);
   return 1;
 }
 
@@ -447,19 +607,63 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     return 2;
   }
 
-  let child: ChildProcess | undefined;
-  try {
-    child = spawn(config.childCommand, [...config.childArgs], {
-      cwd: config.cwd,
-      env: { ...process.env },
-      stdio: ['ignore', 'pipe', 'ignore'],
-      detached: process.platform !== 'win32',
-    });
-  } catch {
-    child = undefined;
-  }
+  const controller = new AbortController();
+  const capture: CandidateCapture = {
+    firstCandidate: null,
+    duplicateCandidate: false,
+    stdoutBuffer: '',
+    drainStdoutBuffer: () => {},
+  };
+  let lastHeartbeatDiagnostics: Record<string, unknown> | undefined;
+  let childExitCode: number | null = null;
+  let childExitedBeforeCandidate = false;
 
-  if (!child?.pid) {
+  const ingestStdoutLine = (line: string): void => {
+    const heartbeat = parseHeartbeat(line);
+    if (heartbeat) {
+      lastHeartbeatDiagnostics = boundedDiagnostics(heartbeat);
+      return;
+    }
+    const candidate = parseTurnResult(line);
+    if (!candidate) return;
+    if (!capture.firstCandidate) capture.firstCandidate = candidate;
+    else capture.duplicateCandidate = true;
+  };
+
+  const drainStdoutBuffer = (): void => {
+    let newlineIndex = capture.stdoutBuffer.indexOf('\n');
+    while (newlineIndex >= 0) {
+      const line = capture.stdoutBuffer.slice(0, newlineIndex);
+      capture.stdoutBuffer = capture.stdoutBuffer.slice(newlineIndex + 1);
+      newlineIndex = capture.stdoutBuffer.indexOf('\n');
+      ingestStdoutLine(line);
+    }
+  };
+  capture.drainStdoutBuffer = drainStdoutBuffer;
+
+  const runPromise = runProcess({
+    command: config.childCommand,
+    args: [...config.childArgs],
+    cwd: config.cwd,
+    inheritParentEnv: true,
+    allowEmptyStdout: true,
+    signal: controller.signal,
+    onStdoutChunk: (chunk) => {
+      capture.stdoutBuffer += chunk;
+      capture.drainStdoutBuffer();
+    },
+  }).then((result) => {
+    childExitCode = result.exitCode;
+    capture.drainStdoutBuffer();
+    if (!capture.firstCandidate) childExitedBeforeCandidate = true;
+    return result;
+  });
+
+  const spawnProbe = await Promise.race([
+    runPromise.then((result) => ({ kind: 'done' as const, result })),
+    delay(100).then(() => ({ kind: 'pending' as const })),
+  ]);
+  if (spawnProbe.kind === 'done' && spawnProbe.result.outcome === 'spawn-failure') {
     await publishEnvelope(config, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
@@ -471,74 +675,62 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       terminal_at: nowIso(),
       lifecycle_outcome: 'incident',
       incident: 'child_start_failed',
-      delivery: 'not-sent',
+      delivery: deliveryWithoutTurnResult(true),
       recovery_available: Boolean(config.conversationLocator),
       ...(config.conversationLocator ? { conversation_locator: config.conversationLocator } : {}),
     });
     return 1;
   }
 
-  let stdoutBuffer = '';
-  let firstCandidate: TurnResultV1 | null = null;
-  let duplicateCandidate = false;
-  let lastHeartbeatDiagnostics: Record<string, unknown> | undefined;
-  let childExitCode: number | null = null;
-  let childExitedBeforeCandidate = false;
-  const stdout = child.stdout;
-
-  const ingestStdoutLine = (line: string): void => {
-    const heartbeat = parseHeartbeat(line);
-    if (heartbeat) {
-      lastHeartbeatDiagnostics = boundedDiagnostics(heartbeat);
-      return;
-    }
-    const candidate = parseTurnResult(line);
-    if (!candidate) return;
-    if (!firstCandidate) firstCandidate = candidate;
-    else duplicateCandidate = true;
-  };
-
-  const drainStdoutBuffer = (): void => {
-    let newlineIndex = stdoutBuffer.indexOf('\n');
-    while (newlineIndex >= 0) {
-      const line = stdoutBuffer.slice(0, newlineIndex);
-      stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-      newlineIndex = stdoutBuffer.indexOf('\n');
-      ingestStdoutLine(line);
-    }
-  };
-
-  stdout?.on('data', (chunk: Buffer) => {
-    stdoutBuffer += chunk.toString('utf8');
-    drainStdoutBuffer();
-  });
-
-  child.once('exit', (code) => {
-    childExitCode = code;
-    drainStdoutBuffer();
-    if (!firstCandidate) childExitedBeforeCandidate = true;
-  });
-
   const deadline = Date.now() + noCandidateGraceMs() + candidateGraceMs();
-  while (!firstCandidate && !childExitedBeforeCandidate && Date.now() < deadline) {
+  while (!capture.firstCandidate && !childExitedBeforeCandidate && Date.now() < deadline) {
     await delay(20);
   }
 
-  if (stdoutBuffer.trim() && !firstCandidate) {
-    const trailing = parseTurnResult(stdoutBuffer);
-    if (trailing) firstCandidate = trailing;
+  if (capture.stdoutBuffer.trim() && !capture.firstCandidate) {
+    const trailing = parseTurnResult(capture.stdoutBuffer);
+    if (trailing) capture.firstCandidate = trailing;
   }
 
-  if (firstCandidate) {
+  if (capture.firstCandidate) {
     return await finalizeCandidatePath(
-      config, receipt, launcherStartedAt, firstCandidate, duplicateCandidate, child, childExitCode, lastHeartbeatDiagnostics,
+      config,
+      receipt,
+      launcherStartedAt,
+      capture,
+      runPromise,
+      controller,
+      childExitCode,
+      lastHeartbeatDiagnostics,
     );
   }
 
   if (childExitedBeforeCandidate || childExitCode !== null) {
     const grace = noCandidateGraceMs();
-    const eof = await waitForStdoutEof(stdout, grace);
-    const incident = eof ? 'child_terminal_result_missing' : 'child_stdout_eof_timeout';
+    const completion = await waitForProcessCompletion(runPromise, grace);
+    capture.drainStdoutBuffer();
+    if (capture.stdoutBuffer.trim() && !capture.firstCandidate) {
+      const trailing = parseTurnResult(capture.stdoutBuffer);
+      if (trailing) capture.firstCandidate = trailing;
+    }
+    if (capture.firstCandidate) {
+      return await finalizeCandidatePath(
+        config,
+        receipt,
+        launcherStartedAt,
+        capture,
+        runPromise,
+        controller,
+        childExitCode,
+        lastHeartbeatDiagnostics,
+      );
+    }
+    const spawnFailed = completion.result?.outcome === 'spawn-failure';
+    const incident = !completion.completed
+      ? 'child_stdout_eof_timeout'
+      : spawnFailed
+        ? 'child_start_failed'
+        : 'child_terminal_result_missing';
     await publishEnvelope(config, {
       schema: TERMINAL_SCHEMA,
       run_identity: config.runIdentity,
@@ -550,12 +742,12 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
       terminal_at: nowIso(),
       lifecycle_outcome: 'incident',
       incident,
-      delivery: 'not-sent',
+      delivery: deliveryWithoutTurnResult(spawnFailed),
       child_exit_code: childExitCode,
       recovery_available: Boolean(config.conversationLocator),
       ...(config.conversationLocator ? { conversation_locator: config.conversationLocator } : {}),
     });
-    killChildTree(child);
+    await abortManagedProcess(controller, runPromise);
     return 1;
   }
 
@@ -570,31 +762,49 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     terminal_at: nowIso(),
     lifecycle_outcome: 'incident',
     incident: 'child_stdout_eof_timeout',
-    delivery: 'not-sent',
+    delivery: deliveryWithoutTurnResult(false),
     child_exit_code: childExitCode,
     recovery_available: Boolean(config.conversationLocator),
     ...(config.conversationLocator ? { conversation_locator: config.conversationLocator } : {}),
   });
-  killChildTree(child);
+  await abortManagedProcess(controller, runPromise);
   return 1;
 }
 
-export function readTerminalEnvelope(path: string): TerminalEnvelope | null {
+export function readTerminalEnvelope(
+  path: string,
+  expected?: { runIdentity: string; attemptIdentity: string },
+): TerminalEnvelope | null {
   if (!existsSync(path)) return null;
   try {
     const body = JSON.parse(readFileSync(path, 'utf8')) as TerminalEnvelope;
     if (body.schema !== TERMINAL_SCHEMA) return null;
+    if (
+      expected &&
+      (body.run_identity !== expected.runIdentity || body.attempt_identity !== expected.attemptIdentity)
+    ) {
+      return null;
+    }
     return body;
   } catch {
     return null;
   }
 }
 
-export function readHandoffReceipt(path: string): HandoffReceipt | null {
+export function readHandoffReceipt(
+  path: string,
+  expected?: { runIdentity: string; attemptIdentity: string },
+): HandoffReceipt | null {
   if (!existsSync(path)) return null;
   try {
     const body = JSON.parse(readFileSync(path, 'utf8')) as HandoffReceipt;
     if (body.schema !== HANDOFF_SCHEMA) return null;
+    if (
+      expected &&
+      (body.run_identity !== expected.runIdentity || body.attempt_identity !== expected.attemptIdentity)
+    ) {
+      return null;
+    }
     return body;
   } catch {
     return null;
@@ -611,11 +821,17 @@ export async function runWait(options: {
   const started = Date.now();
   let envelope: TerminalEnvelope | null = null;
   while (Date.now() - started < options.deadlineMs) {
-    envelope = readTerminalEnvelope(options.terminalEnvelopePath);
+    envelope = readTerminalEnvelope(options.terminalEnvelopePath, {
+      runIdentity: options.runIdentity,
+      attemptIdentity: options.attemptIdentity,
+    });
     if (envelope) break;
     await delay(50);
   }
-  const handoff = readHandoffReceipt(options.handoffReceiptPath);
+  const handoff = readHandoffReceipt(options.handoffReceiptPath, {
+    runIdentity: options.runIdentity,
+    attemptIdentity: options.attemptIdentity,
+  });
   process.stdout.write(`${JSON.stringify({
     schema: WAIT_SCHEMA,
     run_identity: options.runIdentity,

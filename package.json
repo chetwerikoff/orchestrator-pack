@@ -37,7 +37,8 @@
     "pr2a:receipt": "npm run check:node-major --silent && node --experimental-strip-types scripts/pr2a/closure-receipt.ts",
     "test:issue-948": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/pr2a/planning.test.ts scripts/pr2a/final-conformance.test.ts scripts/review-start-claim.test.ts scripts/review-start-claim-lifecycle.test.ts scripts/review-start-claim-run-binding.test.ts scripts/review-start-claim-budget-semantics.test.ts scripts/pack-review-runner-severity.test.ts scripts/orchestrator-wake-supervisor.test.ts scripts/orchestrator-wake-supervisor-side-process-registry.test.ts",
     "tiering:calibration": "npm run check:node-major --silent && node --experimental-strip-types scripts/tiering-calibration.ts",
-    "tiering:distribution": "npm run check:node-major --silent && node --experimental-strip-types scripts/tiering-distribution-report.ts"
+    "tiering:distribution": "npm run check:node-major --silent && node --experimental-strip-types scripts/tiering-distribution-report.ts",
+    "test:issue-1164": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/flow-manager-long-running-child.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",
