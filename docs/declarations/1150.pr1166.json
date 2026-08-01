@@ -7,13 +7,12 @@
   "baseline": {
     "commit_sha": "801b8981f7c792e2b3c1b9aefdecb47cd38babeb",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:0fb0cda48836fe35d71af7c2ccbe32536567df662b112e52e3ce9cb4759d6dc0"
+    "active_scope_hash": "sha256:d97c169d14dbfc4c7a1f94135889fb90d1a30cfc14ac70bfc76ca904890388a4"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
     ".cursor/skills/create-issue-draft/SKILL.md",
-    "docs/declarations/1150.pr1166.json",
     "docs/tiering.md",
     "scripts/finding-ledger-guard.d.mts",
     "scripts/finding-ledger-guard.mjs",
@@ -22,20 +21,5 @@
     "scripts/stage-completeness-guard.ts"
   ],
   "declared_globs": [],
-  "amendments": [
-    {
-      "previous_active_scope_hash": "sha256:d97c169d14dbfc4c7a1f94135889fb90d1a30cfc14ac70bfc76ca904890388a4",
-      "new_active_scope_hash": "sha256:0fb0cda48836fe35d71af7c2ccbe32536567df662b112e52e3ce9cb4759d6dc0",
-      "changed": {
-        "added": [
-          "docs/declarations/1150.pr1166.json"
-        ],
-        "removed": []
-      },
-      "reason": "include declaration snapshot in declared paths",
-      "actor": "pr1166",
-      "timestamp": "2026-08-01T05:39:47.000Z",
-      "applied": true
-    }
-  ]
+  "amendments": []
 }
