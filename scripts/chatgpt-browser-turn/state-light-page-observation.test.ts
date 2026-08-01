@@ -20,6 +20,11 @@ import {
   replyStabilityMatches,
 } from './state-light-turn.ts';
 import {
+  generateOwnedPromptMarker,
+  isOwnedPromptMarker,
+  wrapOwnedPromptPayload,
+} from './owned-prompt-marker.ts';
+import {
   collectionLocator,
   messageLocator,
   scalarLocator,
@@ -119,6 +124,43 @@ describe('marker ownership classification', () => {
       { role: 'user', text: 'foreign later user' },
       { role: 'assistant', text: 'foreign reply' },
     ])).toEqual({ state: 'ready', reply: 'FINAL' });
+  });
+});
+
+describe('owned marker primitive', () => {
+  it('generates the fixed version-1 grammar with one source call', () => {
+    const source = vi.fn(() => Uint8Array.from({ length: 16 }, (_, index) => index));
+    const generated = generateOwnedPromptMarker(source);
+
+    expect(generated).toMatch(/^OPKTURNV1[0-9a-f]{32}$/);
+    expect(isOwnedPromptMarker(generated)).toBe(true);
+    expect(source).toHaveBeenCalledOnce();
+    expect(source).toHaveBeenCalledWith(16);
+  });
+
+  it('generates distinct valid markers for byte-identical payloads', () => {
+    const source = vi.fn()
+      .mockReturnValueOnce(Uint8Array.from({ length: 16 }, () => 0x11))
+      .mockReturnValueOnce(Uint8Array.from({ length: 16 }, () => 0x22));
+    const payload = 'same payload bytes';
+    const first = generateOwnedPromptMarker(source);
+    const second = generateOwnedPromptMarker(source);
+
+    expect(first).not.toBe(second);
+    expect(isOwnedPromptMarker(first)).toBe(true);
+    expect(isOwnedPromptMarker(second)).toBe(true);
+    expect(wrapOwnedPromptPayload(first, payload).endsWith(`\n\n${payload}`)).toBe(true);
+    expect(wrapOwnedPromptPayload(second, payload).endsWith(`\n\n${payload}`)).toBe(true);
+    expect(source).toHaveBeenCalledTimes(2);
+    expect(source).toHaveBeenNthCalledWith(1, 16);
+    expect(source).toHaveBeenNthCalledWith(2, 16);
+  });
+
+  it('places the marker at the payload head without rewriting the payload', () => {
+    const payload = '# table\n\n| a | b |\n|---|---|\n| 1 | 2 |';
+    const wrapped = wrapOwnedPromptPayload(marker, payload);
+
+    expect(wrapped).toBe(`${marker}\n\n${payload}`);
   });
 });
 
