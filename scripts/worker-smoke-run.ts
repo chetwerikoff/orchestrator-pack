@@ -172,6 +172,11 @@ function readIssueBody(path: string): string {
 const LEGACY_SMOKE_AGENT_WAIT_BUDGET_MS = 30 * 60 * 1000;
 const SMOKE_AGENT_POLL_MS = SMOKE_LIFECYCLE_POLL_MS;
 
+type SmokeLifecycleTerminalReason =
+  | 'progress_stall'
+  | 'absolute_safety_ceiling'
+  | 'operator_cancelled';
+
 function sleepSynchronously(milliseconds: number): void {
   if (milliseconds <= 0) {
     return;
@@ -255,6 +260,7 @@ function closeOwnedSmokeTerminal(handle: string, cwd: string): {
 export interface SmokePromptDeliveryResult {
   ok: boolean;
   cause?: SmokeChildWaitNonPassCause;
+  terminalReason?: Extract<SmokeLifecycleTerminalReason, 'absolute_safety_ceiling' | 'operator_cancelled'>;
   controlPlaneCause?: SmokeControlPlaneCause;
   controlPlaneDiagnostic?: SmokeControlPlaneDiagnostic;
   resendCount: number;
@@ -266,7 +272,7 @@ export interface SmokeChildCompletionResult {
   partial?: Partial<SmokeReport> | null;
   agentActivityObserved: boolean;
   nonPassCause?: SmokeChildWaitNonPassCause | SmokeControlPlaneCause;
-  terminalReason?: 'progress_stall' | 'absolute_safety_ceiling' | 'operator_cancelled';
+  terminalReason?: SmokeLifecycleTerminalReason;
   progress?: ReturnType<typeof inspectSmokeProgress>;
   controlPlaneDiagnostic?: SmokeControlPlaneDiagnostic;
   error?: { code: string; message: string };
@@ -277,6 +283,7 @@ export function establishSmokePromptDelivery(
   input: {
     readonly cwd?: string;
     readonly deadlineMs: number;
+    readonly absoluteDeadlineMs?: number;
     readonly runBinding: SmokeRunBinding;
     readonly prompt: string;
     readonly preSendBaselineText?: string;
@@ -285,11 +292,36 @@ export function establishSmokePromptDelivery(
     readonly now?: () => number;
     readonly sleepMs?: (milliseconds: number) => void;
     readonly allowDefiniteNondeliveryRetry?: boolean;
+    readonly abortReason?: () => string | undefined;
   },
 ): SmokePromptDeliveryResult {
   const now = input.now ?? (() => Date.now());
   const deadline = now() + input.deadlineMs;
   const sleepMs = input.sleepMs ?? sleepSynchronously;
+  const terminalInterruption = (): SmokePromptDeliveryResult | undefined => {
+    const currentNow = now();
+    if (input.absoluteDeadlineMs !== undefined && currentNow >= input.absoluteDeadlineMs) {
+      return {
+        ok: false,
+        terminalReason: 'absolute_safety_ceiling',
+        resendCount: 0,
+        composerSubmitCount: 0,
+      };
+    }
+    const abortReason = input.abortReason?.();
+    if (abortReason) {
+      return {
+        ok: false,
+        terminalReason: 'operator_cancelled',
+        resendCount: 0,
+        composerSubmitCount: 0,
+      };
+    }
+    return undefined;
+  };
+  const beforeSendInterruption = terminalInterruption();
+  if (beforeSendInterruption) return beforeSendInterruption;
+
   let resendCount = 0;
   const attemptSend = (): ReturnType<typeof sendOrcaTerminal> => sendOrcaTerminal(
     handle,
@@ -309,6 +341,8 @@ export function establishSmokePromptDelivery(
       };
     }
     if (input.allowDefiniteNondeliveryRetry && isDefinitePromptNonDelivery(sendResult.error?.code)) {
+      const retryInterruption = terminalInterruption();
+      if (retryInterruption) return retryInterruption;
       resendCount += 1;
       sendResult = attemptSend();
       if (!sendResult.ok) {
@@ -331,6 +365,10 @@ export function establishSmokePromptDelivery(
 
   let composerSubmitCount = 0;
   while (now() < deadline) {
+    const interruption = terminalInterruption();
+    if (interruption) {
+      return { ...interruption, resendCount, composerSubmitCount };
+    }
     if (observeSmokeDeliveryEstablished(input.runBinding)) {
       return { ok: true, resendCount, composerSubmitCount };
     }
@@ -369,12 +407,17 @@ export function establishSmokePromptDelivery(
         }
       }
     }
-    const remaining = deadline - now();
+    const remaining = Math.min(
+      deadline - now(),
+      input.absoluteDeadlineMs === undefined ? Number.POSITIVE_INFINITY : input.absoluteDeadlineMs - now(),
+    );
     if (remaining <= 0) {
       break;
     }
     sleepMs(Math.min(SMOKE_AGENT_POLL_MS, remaining));
   }
+  const finalInterruption = terminalInterruption();
+  if (finalInterruption) return { ...finalInterruption, resendCount, composerSubmitCount };
   return { ok: false, cause: 'prompt_delivery_unconfirmed', resendCount, composerSubmitCount };
 }
 
@@ -433,7 +476,7 @@ export function waitForSmokeChildCompletion(
     acceptedProgressCount = latestProgress.acceptedCount;
   }
 
-  let agentActivityObserved = false;
+  let agentActivityObserved = acceptedProgressCount > 0;
   let completionState = createSmokeCompletionObservationState();
   for (;;) {
     const read = readOrcaTerminal(handle, {
@@ -457,31 +500,6 @@ export function waitForSmokeChildCompletion(
       if (deltaText.trim()) {
         agentActivityObserved = true;
       }
-    }
-
-    const observed = observeSmokeCompletionEvidence(input.runBinding, completionState);
-    completionState = observed.state;
-    const outcome = classifySmokeChildWaitObservation({
-      completion: observed.observation,
-      childState: input.childStateWitness?.(),
-      deadlineReached: false,
-    });
-    if (outcome.status === 'completed') {
-      return {
-        ok: true,
-        partial: outcome.partial,
-        agentActivityObserved: true,
-        ...(latestProgress ? { progress: latestProgress } : {}),
-      };
-    }
-    if (outcome.status === 'non_pass' || outcome.status === 'control_plane') {
-      return {
-        ok: false,
-        agentActivityObserved,
-        nonPassCause: outcome.cause,
-        error: { code: outcome.cause, message: outcome.cause },
-        ...(latestProgress ? { progress: latestProgress } : {}),
-      };
     }
 
     const currentNow = now();
@@ -531,6 +549,34 @@ export function waitForSmokeChildCompletion(
           },
         };
       }
+    }
+
+    const observed = observeSmokeCompletionEvidence(input.runBinding, completionState);
+    completionState = observed.state;
+    const outcome = classifySmokeChildWaitObservation({
+      completion: observed.observation,
+      childState: input.childStateWitness?.(),
+      deadlineReached: false,
+    });
+    if (outcome.status === 'completed') {
+      return {
+        ok: true,
+        partial: outcome.partial,
+        agentActivityObserved: true,
+        ...(latestProgress ? { progress: latestProgress } : {}),
+      };
+    }
+    if (outcome.status === 'non_pass' || outcome.status === 'control_plane') {
+      return {
+        ok: false,
+        agentActivityObserved,
+        nonPassCause: outcome.cause,
+        error: { code: outcome.cause, message: outcome.cause },
+        ...(latestProgress ? { progress: latestProgress } : {}),
+      };
+    }
+
+    if (progressAware) {
       sleepMs(Math.min(
         SMOKE_AGENT_POLL_MS,
         Math.max(1, absoluteDeadline - currentNow),
@@ -1076,18 +1122,20 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
   const cleanup = (reason: string, requestCancellation: boolean): ReturnType<typeof cleanupSmokeLifecycle> => {
     let acknowledged = false;
     if (requestCancellation && handle) {
-      writeSmokeCancelRequest({ artifactDir, runId, reason });
-      acknowledged = waitForCooperativeShutdown({
-        handle,
-        cwd: options.cwd,
-        runBinding: { runId, artifactDir },
-      });
+      const cancellationRecorded = writeSmokeCancelRequest({ artifactDir, runId, reason });
+      if (cancellationRecorded) {
+        acknowledged = waitForCooperativeShutdown({
+          handle,
+          cwd: options.cwd,
+          runBinding: { runId, artifactDir },
+        });
+      }
     }
     const result = cleanupSmokeLifecycle({
       artifactDir,
       runId,
       reason,
-      requestCancellation: false,
+      requestCancellation,
       cooperativeAcknowledgementObserved: acknowledged,
       closeBoundHandle: (ownedHandle) => {
         const close = closeOwnedSmokeTerminal(ownedHandle, options.cwd);
@@ -1109,7 +1157,10 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       timeoutMs: SMOKE_CREATE_TIMEOUT_MS,
     });
     if (!created.ok) {
-      markSmokeCreateAmbiguous(artifactDir, `${created.errorCode}:${created.reason}`);
+      markSmokeCreateAmbiguous(
+        artifactDir,
+        scrubSmokeOutput(`${created.errorCode}:${created.reason}`),
+      );
       releaseSmokeAdmission(options.cwd, runId);
       const createOutcome = created.errorCode === 'orca_process_launch_failed'
         ? 'process_launch_failed'
@@ -1152,18 +1203,22 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       plan,
       runBinding: { runId, artifactDir },
     }), { runId, artifactDir }, plan.scenarios.length);
-    const absoluteRemaining = Math.max(
-      0,
-      lifecycleStartedAtMs + SMOKE_ABSOLUTE_CEILING_MS - Date.now(),
-    );
+    const absoluteDeadlineMs = lifecycleStartedAtMs + SMOKE_ABSOLUTE_CEILING_MS;
+    const absoluteRemaining = Math.max(0, absoluteDeadlineMs - Date.now());
     const deliveryResult = establishSmokePromptDelivery(handle, {
       cwd: options.cwd,
       deadlineMs: Math.min(SMOKE_DELIVERY_TIMEOUT_MS, absoluteRemaining),
+      absoluteDeadlineMs,
       runBinding: { runId, artifactDir },
       prompt,
+      abortReason: () => signalReason,
     });
     if (!deliveryResult.ok) {
-      const cleanupResult = cleanup('prompt_delivery_exhausted', false);
+      const reason = deliveryResult.terminalReason
+        ?? deliveryResult.controlPlaneCause
+        ?? deliveryResult.cause
+        ?? 'prompt_delivery_unconfirmed';
+      const cleanupResult = cleanup(reason, true);
       const diagnostic = deliveryResult.controlPlaneDiagnostic;
       const report = attachControlPlaneDiagnostic(buildOperationalSmokeReport(
         diagnostic ? 'BLOCKED' : 'FAIL',
@@ -1171,7 +1226,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
         {
           action: 'establish smoke prompt delivery',
           expected: 'publish-complete current-run delivery before bounded delivery deadline',
-          observed: diagnostic?.cause ?? deliveryResult.cause ?? 'prompt_delivery_unconfirmed',
+          observed: diagnostic?.cause ?? reason,
           terminalCleanup,
           environmentNotes: [
             `lifecycle-clean=${cleanupResult.clean}`,
@@ -1183,7 +1238,10 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
         report.nonPassCause = deliveryResult.cause;
       }
       publishSmokeReport(report, options);
-      emit(buildSmokeRunResult(report, !options.dryRun, { lifecycleCleanup: cleanupResult }), options.json);
+      emit(buildSmokeRunResult(report, !options.dryRun, {
+        terminalReason: deliveryResult.terminalReason,
+        lifecycleCleanup: cleanupResult,
+      }), options.json);
       return 1;
     }
 
@@ -1204,7 +1262,7 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
         ?? waitResult.error?.code
         ?? 'child_wait_failed';
       const diagnostic = waitResult.controlPlaneDiagnostic;
-      const cleanupResult = cleanup(reason, !diagnostic);
+      const cleanupResult = cleanup(reason, true);
       const report = attachControlPlaneDiagnostic(buildOperationalSmokeReport(
         diagnostic ? 'BLOCKED' : 'FAIL',
         options,
@@ -1360,7 +1418,10 @@ async function runSmokeAttempt(options: CliOptions): Promise<number> {
       emit(buildSmokeRunResult(report, !options.dryRun, { lifecycleCleanup: cleanupResult }), options.json);
     } else if (!handle) {
       try {
-        markSmokeCreateAmbiguous(artifactDir, `handled_exception:${reason}`);
+        markSmokeCreateAmbiguous(
+          artifactDir,
+          scrubSmokeOutput(`handled_exception:${reason}`),
+        );
       } catch {
         // Reservation write failure is already a blocking preflight condition.
       }
@@ -1417,6 +1478,7 @@ if (!isDirectInvocation && (process.env.VITEST === 'true' || process.env.VITEST_
     expect,
     it,
     vi,
+    establishSmokePromptDelivery,
     waitForSmokeChildCompletion,
   });
 }
