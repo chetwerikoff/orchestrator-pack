@@ -77,7 +77,7 @@ export function registerWorkerSmokeLifecycleRegressionTests(input: {
     status: 0,
   }));
 
-  describe('worker smoke finite progress deadlines', () => {
+  describe('worker smoke finite progress deadlines (#1138)', () => {
     it('continues beyond the former 30 minute wall while legal transitions advance', () => {
       const root = mkdtempSync(join(tmpdir(), 'worker-smoke-progressing-'));
       const runId = 'progressing';
@@ -175,7 +175,7 @@ export function registerWorkerSmokeLifecycleRegressionTests(input: {
     });
   });
 
-  describe('worker smoke spawn and cleanup lifecycle', () => {
+  describe('worker smoke spawn and cleanup lifecycle (#1138)', () => {
     it('bounds Orca terminal creation and treats timeout as ambiguous unbound', () => {
       const timeout = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
       const runner = vi.fn(() => ({ stdout: '', stderr: '', status: null, error: timeout }));
@@ -323,7 +323,7 @@ export function registerWorkerSmokeLifecycleRegressionTests(input: {
     });
   });
 
-  describe('progress lattice parser', () => {
+  describe('progress lattice parser (#1138)', () => {
     it('accepts only current-run declared-order started then terminal transitions', () => {
       const root = mkdtempSync(join(tmpdir(), 'worker-smoke-lattice-'));
       const artifactDir = runDir(root, 'lattice');
