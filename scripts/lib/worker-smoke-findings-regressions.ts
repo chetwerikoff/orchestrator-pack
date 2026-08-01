@@ -88,9 +88,23 @@ export function registerWorkerSmokeFindingsRegressionTests(input: FindingsRegres
       const payload = JSON.parse(output.split(/\r?\n/u).at(-1) ?? '{}') as {
         nonPassCause?: string;
       };
+      const admissionLockPath = path.join(
+        repoRoot,
+        '.orca-worker-smoke',
+        'admission.lock.json',
+      );
+      const admissionLock = fs.existsSync(admissionLockPath)
+        ? fs.readFileSync(admissionLockPath, 'utf8')
+        : '<missing>';
       expect(
         payload.nonPassCause,
-        JSON.stringify({ payload, stdout: result.stdout, stderr: result.stderr, result }),
+        JSON.stringify({
+          payload,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          admissionLock,
+          result,
+        }),
       ).toBe('orca_control_plane_unavailable_preflight');
       fs.rmSync(root, { recursive: true, force: true });
     });
