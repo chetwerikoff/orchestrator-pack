@@ -2344,10 +2344,11 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         if (admission.state === 'boundary_unresolved') {
           admissionStableReads = 0;
           admissionUnresolvedReads = 0;
+          admissionCandidateIdentity = undefined;
           admissionBoundaryUnresolvedReads += 1;
           if (admissionBoundaryUnresolvedReads >= OWNED_IDENTITY_UNRESOLVED_READS) {
             return returnOwnedMessageIdentityMismatch(
-              'owned_message_identity_changed', page, browser, invocationId, profileKey,
+              'owned_message_identity_unresolved', page, browser, invocationId, profileKey,
               sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
             );
           }
@@ -2358,13 +2359,12 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         admissionBoundaryUnresolvedReads = 0;
         if (admission.state === 'unresolved') {
           admissionStableReads = 0;
+          admissionCandidateIdentity = undefined;
+          admissionExactUnresolvedReads = 0;
           admissionUnresolvedReads += 1;
-          const cause = admissionCandidateIdentity
-            ? 'owned_message_identity_changed'
-            : 'owned_message_identity_unresolved';
           if (admission.immediate || admissionUnresolvedReads >= OWNED_IDENTITY_UNRESOLVED_READS) {
             return returnOwnedMessageIdentityMismatch(
-              cause, page, browser, invocationId, profileKey,
+              'owned_message_identity_unresolved', page, browser, invocationId, profileKey,
               sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
             );
           }
@@ -2376,12 +2376,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         if (admission.state === 'waiting') {
           admissionStableReads = 0;
           admissionExactUnresolvedReads = 0;
-          if (admissionCandidateIdentity) {
-            return returnOwnedMessageIdentityMismatch(
-              'owned_message_identity_changed', page, browser, invocationId, profileKey,
-              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
-            );
-          }
+          admissionCandidateIdentity = undefined;
           admissionIdentitylessReads = 0;
           if (
             config.newChat
@@ -2423,12 +2418,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         if (admission.state === 'identityless') {
           admissionStableReads = 0;
           admissionExactUnresolvedReads = 0;
-          if (admissionCandidateIdentity) {
-            return returnOwnedMessageIdentityMismatch(
-              'owned_message_identity_changed', page, browser, invocationId, profileKey,
-              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
-            );
-          }
+          admissionCandidateIdentity = undefined;
           admissionIdentitylessReads += 1;
           if (admissionIdentitylessReads < OWNED_IDENTITY_UNRESOLVED_READS) {
             const exhausted = await waitForIdentityResolution(messages);
@@ -2451,25 +2441,26 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
 
         admissionIdentitylessReads = 0;
         if (admissionCandidateIdentity && admissionCandidateIdentity !== admission.identity) {
-          return returnOwnedMessageIdentityMismatch(
-            'owned_message_identity_changed', page, browser, invocationId, profileKey,
-            sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
-          );
+          admissionCandidateIdentity = undefined;
+          admissionStableReads = 0;
+          admissionExactUnresolvedReads = 0;
         }
         admissionCandidateIdentity ??= admission.identity;
         const exactCandidate = await readExactOwnedIdentity(page, admission.identity);
         if (exactCandidate.state === 'changed' || exactCandidate.state === 'missing') {
-          return returnOwnedMessageIdentityMismatch(
-            'owned_message_identity_changed', page, browser, invocationId, profileKey,
-            sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
-          );
+          admissionCandidateIdentity = undefined;
+          admissionStableReads = 0;
+          admissionExactUnresolvedReads = 0;
+          const exhausted = await waitForIdentityResolution(messages);
+          if (exhausted) return exhausted;
+          continue;
         }
         if (exactCandidate.state === 'unresolved') {
           admissionStableReads = 0;
           admissionExactUnresolvedReads += 1;
           if (admissionExactUnresolvedReads >= OWNED_IDENTITY_UNRESOLVED_READS) {
             return returnOwnedMessageIdentityMismatch(
-              'owned_message_identity_changed', page, browser, invocationId, profileKey,
+              'owned_message_identity_unresolved', page, browser, invocationId, profileKey,
               sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
             );
           }

@@ -1150,6 +1150,29 @@ describe('Issue #1148 runtime identity binding', () => {
     expect(outcome.output).toBeUndefined();
   });
 
+
+  it('resets pre-binding admission streak after optimistic identity churn then binds stable continuation identity', async () => {
+    const optimisticIdentity: StateLightTestSnapshot = {
+      messages: [...preSend, { role: 'user', text: 'PROMPT', identity: 'optimistic-client-id' }],
+      generating: true,
+    };
+    const reconciliationWaiting: StateLightTestSnapshot = {
+      messages: preSend,
+      generating: true,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [
+      optimisticIdentity,
+      reconciliationWaiting,
+      ...identityRuntimeFrames('server-assigned-id', 'CONTINUATION-FINAL'),
+    ]);
+    const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
+
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).not.toContain('owned_message_identity_text_fallback');
+    expect(outcome.output).toBe('CONTINUATION-FINAL');
+    expect(fake.metrics.sends).toBe(1);
+  });
+
   it('does not rebind when the sole candidate identity churns before binding', async () => {
     const candidateA: StateLightTestSnapshot = {
       messages: [...preSend, { role: 'user', text: 'PROMPT', identity: 'candidate-a' }],
@@ -1159,12 +1182,13 @@ describe('Issue #1148 runtime identity binding', () => {
       messages: [...preSend, { role: 'user', text: 'PROMPT', identity: 'candidate-b' }],
       generating: true,
     };
-    const fake = makeIdentityRuntimePage(preSend, [candidateA, candidateB]);
-    const outcome = await runIdentityRuntimeTurn(fake.page);
+    const churning = [candidateA, candidateB, candidateA, candidateB, candidateA, candidateB];
+    const fake = makeIdentityRuntimePage(preSend, churning);
+    const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
 
     expect(outcome.result).toMatchObject({
-      state: 'ui_contract_mismatch',
-      cause: 'owned_message_identity_changed',
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
       send_count: 1,
     });
     expect(outcome.result.incidents).not.toContain('owned_message_identity_text_fallback');
@@ -1422,7 +1446,7 @@ it('uses a controlled identity-to-window swap for byte-identical prompts across 
     });
   });
 
-  it('bounds repeated exact-candidate unreadability as changed', async () => {
+  it('bounds repeated exact-candidate unreadability as unresolved during admission', async () => {
     const identity = 'exact-unreadable';
     const working: StateLightTestSnapshot = {
       messages: [
@@ -1438,7 +1462,7 @@ it('uses a controlled identity-to-window swap for byte-identical prompts across 
     const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
-      cause: 'owned_message_identity_changed',
+      cause: 'owned_message_identity_unresolved',
       send_count: 1,
     });
     expect(outcome.output).toBeUndefined();
@@ -1468,13 +1492,13 @@ it('uses a controlled identity-to-window swap for byte-identical prompts across 
     const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
-      cause: 'owned_message_identity_changed',
+      cause: 'owned_message_identity_unresolved',
       send_count: 1,
     });
     expect(outcome.output).toBeUndefined();
   });
 
-  it('reports admitted boundary unreadability as changed after bounded rereads', async () => {
+  it('reports admitted boundary unreadability as unresolved after bounded rereads', async () => {
     const unreadable: StateLightTestSnapshot = {
       messages: [],
       generating: false,
@@ -1484,7 +1508,7 @@ it('uses a controlled identity-to-window swap for byte-identical prompts across 
     const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
-      cause: 'owned_message_identity_changed',
+      cause: 'owned_message_identity_unresolved',
       send_count: 1,
     });
   });
