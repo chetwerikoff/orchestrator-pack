@@ -16,7 +16,7 @@ edits, typo/rename, and other small fixes carry no tier and no authoring ceremon
 Record-only work uses this skip line when it qualifies; otherwise it is T1. A
 record-only task can never be T3.
 
-### Binding T3 test (both prongs required)
+### Failure-type lens (apply first)
 
 A task is T3 only when **both** conditions hold:
 
@@ -86,7 +86,7 @@ Therefore:
 - live T3 final acceptance remains fail-closed until #1123 consumes this
   contract. A self-declared receipt field cannot activate it.
 
-### Per-tier pipeline
+### Fixed per-tier pipeline
 
 | Tier | Review sequence | Pre-lens #975 | Terminal lens |
 |------|-----------------|---------------|---------------|
