@@ -61,7 +61,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base64 -d .github/issue-1148-r4-fixes.py.gz.b64 | gzip -d > /tmp/issue-1148-r4-fixes.py
+          cat .github/issue-1148-r4.part{00..05} > /tmp/issue-1148-r4-fixes.py.gz.b64
+          echo 'de4d5cab3f90afd593030db1025b2cb6aa922a6921c047224bc7c19c5e3b4703  /tmp/issue-1148-r4-fixes.py.gz.b64' | sha256sum -c -
+          base64 -d /tmp/issue-1148-r4-fixes.py.gz.b64 | gzip -d > /tmp/issue-1148-r4-fixes.py
           python -m py_compile /tmp/issue-1148-r4-fixes.py
           python /tmp/issue-1148-r4-fixes.py
 
@@ -85,6 +87,7 @@ jobs:
           set -euo pipefail
           git checkout 801b8981f7c792e2b3c1b9aefdecb47cd38babeb -- .github/workflows/read-delegation-audit.yml
           rm -f .github/issue-1148-r4-fixes.py.gz.b64
+          rm -f .github/issue-1148-r4.part{00..05}
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
