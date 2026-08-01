@@ -188,24 +188,20 @@ describe('state-light prompt attribution classification', () => {
     )).toEqual({ state: 'waiting' });
   });
 
-  it('finds the last owned user node even when baseline count includes it', () => {
+  it('does not attribute a matching historical prompt before the send baseline', () => {
     const continuation = [
-      { role: 'user' as const, text: 'USER-ONE' },
-      { role: 'assistant' as const, text: 'ANSWER-ONE' },
-      { role: 'user' as const, text: 'USER-TWO' },
-      { role: 'assistant' as const, text: 'ANSWER-TWO' },
-      { role: 'user' as const, text: 'PROMPT' },
-      { role: 'assistant' as const, text: 'FINAL' },
+      { role: 'user' as const, text: 'PROMPT', domIndex: 0 },
+      { role: 'assistant' as const, text: 'HISTORICAL', domIndex: 1 },
     ];
-    const lateBaselineCount = continuation.length - 1;
 
     expect(classifyPageObservation(
       continuation,
-      lateBaselineCount,
+      continuation.length,
       'PROMPT',
       false,
-    )).toEqual({ state: 'ready', reply: 'FINAL' });
+    )).toEqual({ state: 'waiting' });
   });
+
 
   it('captures the owned reply before a later foreign user turn', () => {
     expect(classifyPageObservation(
@@ -492,6 +488,10 @@ describe('bounded pre-send tail observation', () => {
     const accessed: number[] = [];
     const page = {
       locator: vi.fn((selector: string) => {
+        const selectedIdentity = independentlyDecodeMessageIdentitySelector(selector);
+        if (selectedIdentity === 'tail-user') {
+          return collectionLocator([{ role: 'user', text: '', identity: 'tail-user' }]);
+        }
         if (selector !== MESSAGE_NODE_SELECTOR) return scalarLocator();
         return scalarLocator({
           count: vi.fn(async () => messageCount),
@@ -524,8 +524,12 @@ describe('bounded pre-send tail observation', () => {
 function identityObservation(
   nodes: readonly PageNodeObservation[],
   nodeListReadFailed = false,
+  tailAnchorExactState: 'ok' | 'missing' | 'unresolved' | 'changed' = 'ok',
 ): PageObservationResult {
   return {
+    ...(nodes.some((node) => node.role === 'user')
+      ? { tailAnchorExactResolution: { state: tailAnchorExactState } }
+      : {}),
     nodes: [...nodes],
     messages: nodes.flatMap((node) => node.role
       ? [{
@@ -788,12 +792,16 @@ describe('state-light owned message identity', () => {
 function makeIdentityRuntimePage(
   preSendMessages: StateLightTestMessage[],
   snapshots: StateLightTestSnapshot[],
+  options: {
+    exactStates?: Record<string, Array<'ok' | 'missing' | 'unresolved' | 'duplicate'>>;
+  } = {},
 ) {
   let sent = false;
   let closed = false;
   let filled = '';
   let observationIndex = 0;
   let activeSnapshot: StateLightTestSnapshot = { messages: preSendMessages, generating: false };
+  const exactReadIndex = new Map<string, number>();
   const metrics = { sends: 0, closes: 0, messageReads: 0, reloads: 0 };
 
   const composer = scalarLocator({
@@ -838,12 +846,30 @@ function makeIdentityRuntimePage(
           ?? { messages: [...preSendMessages, { role: 'user', text: filled }], generating: true };
         observationIndex += 1;
         metrics.messageReads += 1;
+        if (activeSnapshot.nodeListReadFailed) {
+          return scalarLocator({ count: vi.fn(async () => { throw new Error('node list unreadable'); }) });
+        }
         return collectionLocator(activeSnapshot.messages, activeSnapshot.generating);
       }
       const selectedIdentity = independentlyDecodeMessageIdentitySelector(selector);
       const exactIdentityMatches = selectedIdentity === undefined
         ? []
         : activeSnapshot.messages.filter((message) => message.identity === selectedIdentity);
+      if (selectedIdentity !== undefined && sent && options.exactStates?.[selectedIdentity]) {
+        const states = options.exactStates[selectedIdentity]!;
+        const index = exactReadIndex.get(selectedIdentity) ?? 0;
+        exactReadIndex.set(selectedIdentity, index + 1);
+        const state = states[Math.min(index, states.length - 1)] ?? 'ok';
+        if (state === 'missing') return scalarLocator();
+        if (state === 'unresolved') {
+          return scalarLocator({ count: vi.fn(async () => { throw new Error('exact identity unreadable'); }) });
+        }
+        if (state === 'duplicate') {
+          const seed = exactIdentityMatches[0]
+            ?? { role: 'user' as const, text: 'PROMPT', identity: selectedIdentity };
+          return collectionLocator([seed, { ...seed }], activeSnapshot.generating);
+        }
+      }
       if (exactIdentityMatches.length > 0) {
         return collectionLocator(exactIdentityMatches, activeSnapshot.generating);
       }
@@ -1034,12 +1060,9 @@ describe('Issue #1148 runtime identity binding', () => {
       partial,
       partial,
       partial,
-      final,
-      final,
-      final,
-      final,
+      ...Array.from({ length: 12 }, () => final),
     ]);
-    const outcome = await runIdentityRuntimeTurn(fake.page, '# Canonical prompt');
+    const outcome = await runIdentityRuntimeTurn(fake.page, '# Canonical prompt', '5000');
 
     expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
     expect(outcome.output).toBe('FINAL-AFTER-EXACT-COMPLETION');
@@ -1214,10 +1237,9 @@ it('treats a transient exact-selector miss after prefix materialization as bound
       ownedWorking,
       ownedReady,
       ownedReady,
-      absent,
-      absent,
+      ...Array.from({ length: 12 }, () => absent),
     ]);
-    const outcome = await runIdentityRuntimeTurn(fake.page);
+    const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
 
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
@@ -1289,23 +1311,32 @@ it('uses a controlled identity-to-window swap for byte-identical prompts across 
       ],
       generating: true,
     };
-    const ownedReady: StateLightTestSnapshot = {
+    const boundWorking: StateLightTestSnapshot = {
       messages: [
         ...preSend,
         { role: 'user', text: 'BYTE-IDENTICAL-PROMPT', identity: ownedIdentity },
-        { role: 'assistant', text: ownedReply, identity: `${ownedIdentity}-answer`, finalAction: true },
+        { role: 'assistant', text: 'working', identity: `${ownedIdentity}-working` },
       ],
-      generating: false,
+      generating: true,
     };
+    const ownedWindow: StateLightTestMessage[] = [
+      { role: 'user', text: 'BYTE-IDENTICAL-PROMPT', identity: ownedIdentity },
+      { role: 'assistant', text: ownedReply, identity: `${ownedIdentity}-answer`, finalAction: true },
+    ];
+    const decoyWindow: StateLightTestMessage[] = [
+      { role: 'user', text: 'BYTE-IDENTICAL-PROMPT', identity: decoyIdentity },
+      { role: 'assistant', text: decoyReply, identity: `${decoyIdentity}-answer`, finalAction: true },
+    ];
     const swappedReady: StateLightTestSnapshot = {
       messages: [
-        ...ownedReady.messages,
-        { role: 'user', text: 'BYTE-IDENTICAL-PROMPT', identity: decoyIdentity },
-        { role: 'assistant', text: decoyReply, identity: `${decoyIdentity}-answer`, finalAction: true },
+        ...preSend,
+        ...(ownedIdentity === 'owned-a'
+          ? [...decoyWindow, ...ownedWindow]
+          : [...ownedWindow, ...decoyWindow]),
       ],
       generating: false,
     };
-    return [working, ownedReady, swappedReady, swappedReady, swappedReady, swappedReady];
+    return [working, boundWorking, boundWorking, swappedReady, swappedReady, swappedReady, swappedReady];
   };
   const fakeA = makeIdentityRuntimePage(
     preSend,
@@ -1360,4 +1391,230 @@ it('uses a controlled identity-to-window swap for byte-identical prompts across 
     rmSync(outputB, { force: true });
   }
 });
+
+  it('falls back when the bounded tail anchor is globally duplicate outside the scanned suffix', async () => {
+    const messages: StateLightTestMessage[] = [
+      { role: 'user', text: 'OLDER', identity: 'tail-user', identityReadFailed: true },
+      { role: 'assistant', text: 'OLDER ANSWER', identity: 'older-answer' },
+      { role: 'user', text: 'TAIL', identity: 'tail-user' },
+      { role: 'assistant', text: 'TAIL ANSWER', identity: 'tail-answer' },
+    ];
+    const page = {
+      locator: vi.fn((selector: string) => {
+        const selectedIdentity = independentlyDecodeMessageIdentitySelector(selector);
+        if (selectedIdentity === 'tail-user') {
+          return collectionLocator([
+            { role: 'user', text: 'OLDER', identity: 'tail-user' },
+            { role: 'user', text: 'TAIL', identity: 'tail-user' },
+          ]);
+        }
+        if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(messages);
+        return scalarLocator();
+      }),
+    };
+
+    const first = await readTailPageObservation(page, false);
+    const second = await readTailPageObservation(page, false);
+    expect(first.nodes.map((node) => node.domIndex)).toEqual([2, 3]);
+    expect(establishOwnedTailBoundary(first, second, false)).toEqual({
+      kind: 'text_fallback',
+      cause: 'stable_tail_anchor_unavailable',
+    });
+  });
+
+  it('bounds repeated exact-candidate unreadability as changed', async () => {
+    const identity = 'exact-unreadable';
+    const working: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity },
+        { role: 'assistant', text: 'working', identity: 'working' },
+      ],
+      generating: true,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [working, working, working], {
+      exactStates: { [identity]: ['unresolved', 'unresolved'] },
+    });
+    const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_changed',
+      send_count: 1,
+    });
+    expect(outcome.output).toBeUndefined();
+  });
+
+  it('does not bind across exact success, unreadability, then success', async () => {
+    const identity = 'interrupted-stability';
+    const single: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity },
+        { role: 'assistant', text: 'working', identity: 'working' },
+      ],
+      generating: true,
+    };
+    const multiple: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity },
+        { role: 'user', text: 'PROMPT', identity: `${identity}-other` },
+      ],
+      generating: false,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [single, single, single, multiple], {
+      exactStates: { [identity]: ['ok', 'unresolved', 'ok'] },
+    });
+    const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_changed',
+      send_count: 1,
+    });
+    expect(outcome.output).toBeUndefined();
+  });
+
+  it('reports admitted boundary unreadability as changed after bounded rereads', async () => {
+    const unreadable: StateLightTestSnapshot = {
+      messages: [],
+      generating: false,
+      nodeListReadFailed: true,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [unreadable, unreadable]);
+    const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
+    expect(outcome.result).toMatchObject({
+      state: 'ui_contract_mismatch',
+      cause: 'owned_message_identity_changed',
+      send_count: 1,
+    });
+  });
+
+  it('ignores distant-history materialization while identity admission is deferred', async () => {
+    const prefix: StateLightTestMessage[] = [
+      { role: 'user', text: 'OLDER', identity: 'older-user' },
+      { role: 'assistant', text: 'OLDER ANSWER', identity: 'older-answer', finalAction: true },
+    ];
+    const deferred: StateLightTestSnapshot = {
+      messages: [...prefix, ...preSend],
+      generating: false,
+    };
+    const identity = 'deferred-owned';
+    const working: StateLightTestSnapshot = {
+      messages: [
+        ...prefix,
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity },
+        { role: 'assistant', text: 'working', identity: 'working' },
+      ],
+      generating: true,
+    };
+    const ready: StateLightTestSnapshot = {
+      messages: [
+        ...prefix,
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity },
+        { role: 'assistant', text: 'DEFERRED-FINAL', identity: 'answer', finalAction: true },
+      ],
+      generating: false,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [
+      ...Array.from({ length: 12 }, () => deferred),
+      working,
+      working,
+      ready,
+      ready,
+      ready,
+    ]);
+    const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).toContain('send_observation_deferred');
+    expect(outcome.output).toBe('DEFERRED-FINAL');
+  });
+
+  it('uses the pinned owned assistant for completion across a prefix virtualization race', async () => {
+    const identity = 'pinned-completion';
+    const working: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity },
+        { role: 'assistant', text: 'working', identity: 'working' },
+      ],
+      generating: true,
+    };
+    const partial: StateLightTestSnapshot = {
+      messages: [
+        ...preSend,
+        { role: 'user', text: 'PROMPT', identity },
+        { role: 'assistant', text: 'PARTIAL', identity: 'owned-answer' },
+      ],
+      generating: false,
+    };
+    const shifted: StateLightTestSnapshot = {
+      messages: [
+        { role: 'user', text: 'PROMPT', identity },
+        { role: 'assistant', text: 'PARTIAL', identity: 'owned-answer' },
+        { role: 'user', text: 'FOREIGN', identity: 'foreign-user' },
+        { role: 'assistant', text: 'FOREIGN-FINAL', identity: 'foreign-answer', finalAction: true },
+      ],
+      generating: false,
+    };
+    const final: StateLightTestSnapshot = {
+      messages: [
+        { role: 'user', text: 'PROMPT', identity },
+        { role: 'assistant', text: 'OWNED-FINAL', identity: 'owned-answer', finalAction: true },
+        { role: 'user', text: 'FOREIGN', identity: 'foreign-user' },
+        { role: 'assistant', text: 'FOREIGN-FINAL', identity: 'foreign-answer', finalAction: true },
+      ],
+      generating: false,
+    };
+    const fake = makeIdentityRuntimePage(preSend, [
+      working,
+      working,
+      working,
+      partial,
+      shifted,
+      shifted,
+      final,
+      final,
+      final,
+    ]);
+    const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.output).toBe('OWNED-FINAL');
+    expect(outcome.output).not.toBe('PARTIAL');
+    expect(outcome.output).not.toBe('FOREIGN-FINAL');
+  });
+
+  it('never publishes a historical equal-prompt reply while the sent fallback node is absent', async () => {
+    const fallbackPreSend: StateLightTestMessage[] = [
+      { role: 'user', text: 'PROMPT', identityReadFailed: true },
+      { role: 'assistant', text: 'HISTORICAL', identity: 'historical-answer', finalAction: true },
+    ];
+    const absent: StateLightTestSnapshot = {
+      messages: fallbackPreSend,
+      generating: false,
+    };
+    const laterReady: StateLightTestSnapshot = {
+      messages: [
+        ...fallbackPreSend,
+        { role: 'user', text: 'PROMPT' },
+        { role: 'assistant', text: 'CURRENT-FINAL', finalAction: true },
+      ],
+      generating: false,
+    };
+    const fake = makeIdentityRuntimePage(fallbackPreSend, [
+      absent,
+      absent,
+      absent,
+      laterReady,
+      laterReady,
+      laterReady,
+    ]);
+    const outcome = await runIdentityRuntimeTurn(fake.page, 'PROMPT', '5000');
+    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.result.incidents).toContain('owned_message_identity_text_fallback');
+    expect(outcome.output).toBe('CURRENT-FINAL');
+    expect(outcome.output).not.toBe('HISTORICAL');
+  });
+
 });

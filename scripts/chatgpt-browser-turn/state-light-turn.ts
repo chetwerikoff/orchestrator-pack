@@ -44,8 +44,11 @@ import {
 } from './state-light-fresh-conversation.ts';
 import { configuredProfileKey } from './storage-common.ts';
 import {
+  ASSISTANT_TURN_ACTION_SELECTOR,
+  ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
   classifyProductWall,
   COMPOSER_SELECTOR,
+  CONVERSATION_TURN_SECTION_SELECTOR,
   loadChromium,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_IDENTITY_ATTR,
@@ -113,6 +116,8 @@ export interface PageNodeObservation {
   readonly roleReadFailed: boolean;
   readonly identityReadFailed: boolean;
   readonly textReadFailed: boolean;
+  /** Pinned current-observation element; never reconstructed from a later DOM index. */
+  readonly elementHandle?: any;
 }
 
 export interface OwnedTailWitness {
@@ -163,11 +168,19 @@ export interface ObservationHeartbeat {
   readonly last_reply_sha256_head: string;
 }
 
+interface ExactOwnedIdentityResolution {
+  readonly state: 'ok' | 'missing' | 'unresolved' | 'changed';
+}
+
 export interface PageObservationResult {
   readonly messages: PageMessage[];
   readonly nodes: PageNodeObservation[];
   /** Total rendered node count, including nodes outside a bounded tail read. */
   readonly nodeCount?: number;
+  /** Exact global anchor resolution captured inside a bounded pre-send tail read. */
+  readonly tailAnchorExactResolution?: ExactOwnedIdentityResolution;
+  /** True only when assistant nodes carry pinned handles from this observation. */
+  readonly elementHandlesCaptured?: boolean;
   readonly nodeListReadFailed: boolean;
   readonly ownedWindowCompletionReady: boolean;
   readonly transcriptIncomplete: boolean;
@@ -609,21 +622,22 @@ export function resolveOwnedReplyWindow(
   readonly observedUserHeads?: readonly string[];
   readonly lastOwnedAssistantMessageIndex: number | null;
 } {
-  void baselineCount;
+  const minimumDomIndex = Math.max(0, baselineCount);
   const users = messages
     .map((message, index) => ({ message, index }))
-    .filter(({ message }) => message.role === 'user');
+    .filter(({ message, index }) => (message.domIndex ?? index) >= minimumDomIndex
+      && message.role === 'user');
 
   if (users.length === 0) {
     return { replyWindow: [], lastOwnedAssistantMessageIndex: null };
   }
 
   const ownedUsers = users.filter(({ message }) => ownedPromptMatches(message.text, prompt));
-  if (ownedUsers.length === 0) {
+  if (ownedUsers.length !== 1) {
     return { replyWindow: [], lastOwnedAssistantMessageIndex: null };
   }
 
-  const lastOwned = ownedUsers[ownedUsers.length - 1]!;
+  const lastOwned = ownedUsers[0]!;
   const afterOwned = messages.slice(lastOwned.index + 1);
 
   let replyWindow = afterOwned;
@@ -662,9 +676,8 @@ export function classifyPageObservation(
   prompt: string,
   inProgress: boolean,
 ): PageObservationDecision {
-  const users = messages.filter((message) => message.role === 'user');
-  if (users.length === 0) return { state: 'waiting' };
-  if (!hasOwnedUserMessage(messages, prompt)) return { state: 'waiting' };
+  const attributableUsers = strictPostBaselineOwnedUserCount(messages, baselineCount, prompt);
+  if (attributableUsers !== 1) return { state: 'waiting' };
 
   const { replyWindow, uncertainCause, observedUserHeads } = resolveOwnedReplyWindow(
     messages,
@@ -869,6 +882,7 @@ export async function readPageObservation(
   page: any,
   prompt?: string,
   baselineCount?: number,
+  captureElementHandles = false,
 ): Promise<PageObservationResult> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
   const countResult = await locatorCountResult(nodes);
@@ -889,6 +903,14 @@ export async function readPageObservation(
     const roleReadFailed = roleValue === null;
     const identityReadFailed = identityValue === null;
     const identity = identityReadFailed || identityValue === '' ? undefined : identityValue;
+    let elementHandle: any | undefined;
+    if (captureElementHandles && role === 'assistant' && typeof node.elementHandle === 'function') {
+      try {
+        elementHandle = await node.elementHandle({ timeout: MESSAGE_NODE_READ_TIMEOUT_MS });
+      } catch {
+        elementHandle = undefined;
+      }
+    }
     if (roleReadFailed || (role !== undefined && textReadFailed)) transcriptIncomplete = true;
     nodeObservations.push({
       domIndex: index,
@@ -898,6 +920,7 @@ export async function readPageObservation(
       roleReadFailed,
       identityReadFailed,
       textReadFailed,
+      ...(elementHandle ? { elementHandle } : {}),
     });
     if (!role) continue;
     messages.push({
@@ -920,8 +943,6 @@ export async function readPageObservation(
         nodes.nth(ownedAssistantDomIndex),
         MESSAGE_NODE_READ_TIMEOUT_MS,
       );
-    } else {
-      ownedWindowCompletionReady = await readAssistantTurnCompletionReady(page, MESSAGE_NODE_READ_TIMEOUT_MS);
     }
   }
 
@@ -929,6 +950,7 @@ export async function readPageObservation(
     messages,
     nodes: nodeObservations,
     nodeCount: countResult.count,
+    elementHandlesCaptured: captureElementHandles,
     ownedWindowCompletionReady,
     transcriptIncomplete,
     nodeListReadFailed: countResult.readFailed,
@@ -1012,10 +1034,20 @@ export async function readTailPageObservation(
     }
   }
 
+  const messages = reverseMessages.reverse();
+  const observations = reverseNodes.reverse();
+  const anchor = allowFreshSentinel
+    ? undefined
+    : observations.find((node) => node.role === 'user');
+  const tailAnchorExactResolution = anchor?.identity
+    ? await readExactOwnedIdentity(page, anchor.identity, deadline)
+    : undefined;
+
   return {
-    messages: reverseMessages.reverse(),
-    nodes: reverseNodes.reverse(),
+    messages,
+    nodes: observations,
     nodeCount: countResult.count,
+    ...(tailAnchorExactResolution ? { tailAnchorExactResolution } : {}),
     ownedWindowCompletionReady: false,
     transcriptIncomplete,
     nodeListReadFailed: countResult.readFailed,
@@ -1076,6 +1108,12 @@ export function establishOwnedTailBoundary(
   if (!candidate?.identity) {
     return { kind: 'text_fallback', cause: 'stable_tail_anchor_unavailable' };
   }
+  if (
+    first.tailAnchorExactResolution?.state !== 'ok'
+    || second.tailAnchorExactResolution?.state !== 'ok'
+  ) {
+    return { kind: 'text_fallback', cause: 'stable_tail_anchor_unavailable' };
+  }
   const firstIndex = uniqueIdentityNodeIndex(first.nodes, candidate.identity);
   const secondIndex = uniqueIdentityNodeIndex(second.nodes, candidate.identity);
   if (firstIndex === undefined || secondIndex === undefined) {
@@ -1118,6 +1156,7 @@ export function establishOwnedTailBoundary(
 export type PostTailResolution =
   | { readonly state: 'ok'; readonly nodes: readonly PageNodeObservation[] }
   | { readonly state: 'unresolved' }
+  | { readonly state: 'boundary_unresolved' }
   | { readonly state: 'changed' };
 
 export function resolvePostTailNodes(
@@ -1125,7 +1164,7 @@ export function resolvePostTailNodes(
   observation: PageObservationResult,
 ): PostTailResolution {
   if (boundary.kind === 'text_fallback') return { state: 'unresolved' };
-  if (observation.nodeListReadFailed) return { state: 'unresolved' };
+  if (observation.nodeListReadFailed) return { state: 'boundary_unresolved' };
   if (boundary.kind === 'fresh') return { state: 'ok', nodes: observation.nodes };
 
   const matching = observation.nodes
@@ -1134,7 +1173,7 @@ export function resolvePostTailNodes(
   if (matching.length > 1) return { state: 'changed' };
   if (matching.length === 0) {
     return observation.nodes.some((node) => node.identityReadFailed)
-      ? { state: 'unresolved' }
+      ? { state: 'boundary_unresolved' }
       : { state: 'changed' };
   }
   const { node: anchor, index: anchorIndex } = matching[0]!;
@@ -1148,7 +1187,7 @@ export function resolvePostTailNodes(
     const current = currentSuffix[index]!;
     const expected = boundary.suffix[index]!;
     const witness = readableTailWitness(current);
-    if (!witness) return { state: 'unresolved' };
+    if (!witness) return { state: 'boundary_unresolved' };
     if (!tailWitnessMatches(witness, expected)) return { state: 'changed' };
   }
   return {
@@ -1160,6 +1199,7 @@ export function resolvePostTailNodes(
 export type OwnedIdentityAdmissionDecision =
   | { readonly state: 'waiting' }
   | { readonly state: 'changed' }
+  | { readonly state: 'boundary_unresolved' }
   | { readonly state: 'identityless' }
   | { readonly state: 'unresolved'; readonly immediate: boolean }
   | { readonly state: 'candidate'; readonly identity: string };
@@ -1170,6 +1210,7 @@ export function classifyOwnedIdentityAdmission(
 ): OwnedIdentityAdmissionDecision {
   const postTail = resolvePostTailNodes(boundary, observation);
   if (postTail.state === 'changed') return { state: 'changed' };
+  if (postTail.state === 'boundary_unresolved') return { state: 'boundary_unresolved' };
   if (postTail.state === 'unresolved') return { state: 'unresolved', immediate: false };
   if (postTail.nodes.some((node) => node.roleReadFailed || node.role === undefined)) {
     return { state: 'unresolved', immediate: false };
@@ -1193,6 +1234,7 @@ export type BoundOwnedWindowResolution =
       readonly messages: readonly PageMessage[];
       readonly boundUserDomIndex: number;
       readonly lastAssistantDomIndex: number | null;
+      readonly lastAssistantHandle?: any;
     }
   | { readonly state: 'unresolved' }
   | { readonly state: 'changed' };
@@ -1202,10 +1244,12 @@ export function resolveBoundOwnedWindow(
   identity: string,
 ): BoundOwnedWindowResolution {
   if (observation.nodeListReadFailed) return { state: 'unresolved' };
-  const matches = observation.nodes.filter((node) => node.identity === identity);
+  const matches = observation.nodes
+    .map((node, index) => ({ node, index }))
+    .filter(({ node }) => node.identity === identity);
   if (matches.length > 1) return { state: 'changed' };
   if (matches.length === 0) return { state: 'unresolved' };
-  const user = matches[0]!;
+  const { node: user, index: userIndex } = matches[0]!;
   if (user.role !== 'user' || user.identityReadFailed) return { state: 'changed' };
 
   const messages: PageMessage[] = [{
@@ -1215,7 +1259,8 @@ export function resolveBoundOwnedWindow(
     domIndex: user.domIndex,
   }];
   let lastAssistantDomIndex: number | null = null;
-  for (const node of observation.nodes.slice(user.domIndex + 1)) {
+  let lastAssistantHandle: any | undefined;
+  for (const node of observation.nodes.slice(userIndex + 1)) {
     if (node.roleReadFailed || node.role === undefined) return { state: 'unresolved' };
     if (node.role === 'user') break;
     if (node.textReadFailed) return { state: 'unresolved' };
@@ -1226,18 +1271,68 @@ export function resolveBoundOwnedWindow(
       domIndex: node.domIndex,
     });
     lastAssistantDomIndex = node.domIndex;
+    lastAssistantHandle = node.elementHandle;
   }
-  return { state: 'ok', messages, boundUserDomIndex: user.domIndex, lastAssistantDomIndex };
+  if (
+    observation.elementHandlesCaptured
+    && lastAssistantDomIndex !== null
+    && !lastAssistantHandle
+  ) {
+    return { state: 'unresolved' };
+  }
+  return {
+    state: 'ok',
+    messages,
+    boundUserDomIndex: user.domIndex,
+    lastAssistantDomIndex,
+    ...(lastAssistantHandle ? { lastAssistantHandle } : {}),
+  };
 }
 
-interface ExactOwnedIdentityResolution {
-  readonly state: 'ok' | 'missing' | 'unresolved' | 'changed';
+async function readPinnedAssistantCompletionReady(
+  elementHandle: any,
+  waitMs = MAX_LOCAL_READ_WAIT_MS,
+): Promise<boolean> {
+  if (!elementHandle) return false;
+  // Locator-backed fixture handles use the same canonical turn-scoped probe.
+  if (typeof elementHandle.locator === 'function') {
+    return readAssistantNodeCompletionReady(elementHandle, waitMs);
+  }
+  if (typeof elementHandle.evaluate !== 'function') return false;
+  try {
+    return await Promise.race([
+      elementHandle.evaluate(
+        (node: Element, selectors: {
+          roleAttr: string;
+          turn: string;
+          inProgress: string;
+          actions: string;
+        }) => {
+          if (node.getAttribute(selectors.roleAttr) !== 'assistant') return false;
+          const turn = node.closest(selectors.turn) ?? node;
+          if (turn.querySelector(selectors.inProgress)) return false;
+          return Boolean(turn.querySelector(selectors.actions));
+        },
+        {
+          roleAttr: MESSAGE_AUTHOR_ROLE_ATTR,
+          turn: CONVERSATION_TURN_SECTION_SELECTOR,
+          inProgress: ASSISTANT_TURN_IN_PROGRESS_SELECTOR,
+          actions: ASSISTANT_TURN_ACTION_SELECTOR,
+        },
+      ),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), waitMs)),
+    ]);
+  } catch {
+    return false;
+  }
 }
 
 async function readExactOwnedIdentity(
   page: any,
   identity: string,
+  deadline?: number,
 ): Promise<ExactOwnedIdentityResolution> {
+  if (deadline !== undefined && Date.now() >= deadline) return { state: 'unresolved' };
   const locator = page.locator(messageIdentitySelector(identity));
   const count = await locatorCountResult(locator);
   if (count.readFailed) return { state: 'unresolved' };
@@ -1246,8 +1341,12 @@ async function readExactOwnedIdentity(
   const node = locator.first();
   const timeouts = [MESSAGE_NODE_READ_TIMEOUT_MS, MESSAGE_NODE_READ_RETRY_TIMEOUT_MS]
     .slice(0, MESSAGE_NODE_READ_ATTEMPTS);
-  const role = await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, timeouts);
-  const observedIdentity = await readLocatorAttribute(node, MESSAGE_IDENTITY_ATTR, timeouts);
+  const role = deadline === undefined
+    ? await readLocatorAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, timeouts)
+    : await readTailAttribute(node, MESSAGE_AUTHOR_ROLE_ATTR, deadline);
+  const observedIdentity = deadline === undefined
+    ? await readLocatorAttribute(node, MESSAGE_IDENTITY_ATTR, timeouts)
+    : await readTailAttribute(node, MESSAGE_IDENTITY_ATTR, deadline);
   if (role === null || observedIdentity === null) return { state: 'unresolved' };
   if (role !== 'user' || observedIdentity !== identity) return { state: 'changed' };
   return { state: 'ok' };
@@ -1291,10 +1390,16 @@ async function readPostSendObservation(
   page: any,
   prompt?: string,
   baselineCount?: number,
+  captureElementHandles = false,
 ): Promise<PageObservationResult & {
   readonly wall: ReturnType<typeof classifyProductWall>;
 }> {
-  const observation = await readPageObservation(page, prompt, baselineCount);
+  const observation = await readPageObservation(
+    page,
+    prompt,
+    baselineCount,
+    captureElementHandles,
+  );
   let wall: ReturnType<typeof classifyProductWall> = {};
   try {
     wall = classifyProductWall(await productStatusText(page, POST_SEND_PRODUCT_WALL_PROBE_MS));
@@ -1650,6 +1755,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let admissionCandidateIdentity: string | undefined;
     let admissionStableReads = 0;
     let admissionUnresolvedReads = 0;
+    let admissionBoundaryUnresolvedReads = 0;
+    let admissionExactUnresolvedReads = 0;
     let admissionIdentitylessReads = 0;
     let boundIdentity: string | undefined;
     let boundMissingReads = 0;
@@ -1668,6 +1775,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       admissionCandidateIdentity = undefined;
       admissionStableReads = 0;
       admissionUnresolvedReads = 0;
+      admissionBoundaryUnresolvedReads = 0;
+      admissionExactUnresolvedReads = 0;
       admissionIdentitylessReads = 0;
       boundIdentity = undefined;
       boundMissingReads = 0;
@@ -2153,6 +2262,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           page,
           observationMode === 'text_fallback' ? snapshot.text : undefined,
           observationMode === 'text_fallback' ? baselineCount : undefined,
+          observationMode === 'bound',
         );
       } catch (error) {
         if (browserOrPageDefinitelyLost(page, browser)) throw error;
@@ -2231,7 +2341,23 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
           );
         }
+        if (admission.state === 'boundary_unresolved') {
+          admissionStableReads = 0;
+          admissionUnresolvedReads = 0;
+          admissionBoundaryUnresolvedReads += 1;
+          if (admissionBoundaryUnresolvedReads >= OWNED_IDENTITY_UNRESOLVED_READS) {
+            return returnOwnedMessageIdentityMismatch(
+              'owned_message_identity_changed', page, browser, invocationId, profileKey,
+              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+            );
+          }
+          const exhausted = await waitForIdentityResolution(messages);
+          if (exhausted) return exhausted;
+          continue;
+        }
+        admissionBoundaryUnresolvedReads = 0;
         if (admission.state === 'unresolved') {
+          admissionStableReads = 0;
           admissionUnresolvedReads += 1;
           const cause = admissionCandidateIdentity
             ? 'owned_message_identity_changed'
@@ -2248,6 +2374,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         }
         admissionUnresolvedReads = 0;
         if (admission.state === 'waiting') {
+          admissionStableReads = 0;
+          admissionExactUnresolvedReads = 0;
           if (admissionCandidateIdentity) {
             return returnOwnedMessageIdentityMismatch(
               'owned_message_identity_changed', page, browser, invocationId, profileKey,
@@ -2262,25 +2390,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             && !readProjectConversationUrl(page, config.projectUrl ?? '')
           ) {
             return returnFreshConversationLandingMismatch(
-              page,
-              browser,
-              invocationId,
-              profileKey,
-              sendCount,
-              pollCount,
-              navigation,
-              incidents,
-              journalWriteFailed,
-              incident,
-            );
-          }
-          if (
-            targetChatUrl
-            && Date.now() >= dispatchDeadline
-            && hasPostSendTranscript(messages, baselineCount)
-            && await readAssistantTurnCompletionReady(page, MESSAGE_NODE_READ_TIMEOUT_MS)
-          ) {
-            return returnOwnedConversationRenderMismatch(
               page,
               browser,
               invocationId,
@@ -2312,6 +2421,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           continue;
         }
         if (admission.state === 'identityless') {
+          admissionStableReads = 0;
+          admissionExactUnresolvedReads = 0;
           if (admissionCandidateIdentity) {
             return returnOwnedMessageIdentityMismatch(
               'owned_message_identity_changed', page, browser, invocationId, profileKey,
@@ -2354,8 +2465,9 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           );
         }
         if (exactCandidate.state === 'unresolved') {
-          admissionUnresolvedReads += 1;
-          if (admissionUnresolvedReads >= OWNED_IDENTITY_UNRESOLVED_READS) {
+          admissionStableReads = 0;
+          admissionExactUnresolvedReads += 1;
+          if (admissionExactUnresolvedReads >= OWNED_IDENTITY_UNRESOLVED_READS) {
             return returnOwnedMessageIdentityMismatch(
               'owned_message_identity_changed', page, browser, invocationId, profileKey,
               sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
@@ -2365,6 +2477,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           if (exhausted) return exhausted;
           continue;
         }
+        admissionExactUnresolvedReads = 0;
         admissionStableReads += 1;
         if (admissionStableReads < OWNED_IDENTITY_STABLE_READS) {
           const exhausted = await waitForIdentityResolution(messages);
@@ -2442,12 +2555,12 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         boundUnresolvedReads = 0;
         messages = [...boundWindow.messages];
         transcriptIncomplete = false;
-        ownedWindowCompletionReady = boundWindow.lastAssistantDomIndex === null
-          ? false
-          : await readAssistantNodeCompletionReady(
-              page.locator(MESSAGE_NODE_SELECTOR).nth(boundWindow.lastAssistantDomIndex),
+        ownedWindowCompletionReady = boundWindow.lastAssistantHandle
+          ? await readPinnedAssistantCompletionReady(
+              boundWindow.lastAssistantHandle,
               MESSAGE_NODE_READ_TIMEOUT_MS,
-            );
+            )
+          : false;
         if (ownedWindowCompletionReady) completionReadySeen = true;
       }
 
@@ -2478,8 +2591,9 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         continue;
       }
 
+      let strictOwnedUsers: number | undefined;
       if (observationMode === 'text_fallback') {
-        const strictOwnedUsers = strictPostBaselineOwnedUserCount(
+        strictOwnedUsers = strictPostBaselineOwnedUserCount(
           messages,
           baselineCount,
           snapshot.text,
@@ -2490,11 +2604,19 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
           );
         }
-        if (strictOwnedUsers === 0 && Date.now() >= hardExhaustionDeadline) {
-          return returnOwnedMessageIdentityMismatch(
-            'owned_message_identity_unresolved', page, browser, invocationId, profileKey,
-            sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
-          );
+        if (strictOwnedUsers === 0) {
+          stableReads = 0;
+          lastReadyReply = '';
+          bestReadyReply = '';
+          if (Date.now() >= hardExhaustionDeadline) {
+            return returnOwnedMessageIdentityMismatch(
+              'owned_message_identity_unresolved', page, browser, invocationId, profileKey,
+              sendCount, pollCount, navigation, incidents, journalWriteFailed, incident,
+            );
+          }
+          const exhausted = await waitForIdentityResolution(messages);
+          if (exhausted) return exhausted;
+          continue;
         }
       }
 
@@ -2510,7 +2632,12 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         decision = classifyPageObservation(messages, baselineCount, snapshot.text, inProgress);
       }
 
-      if (identityOwnedPoll || hasOwnedUserMessage(messages, snapshot.text)) {
+      if (
+        identityOwnedPoll
+        || (observationMode === 'text_fallback'
+          ? strictOwnedUsers === 1
+          : hasOwnedUserMessage(messages, snapshot.text))
+      ) {
         ownedPromptEverSeen = true;
       }
 

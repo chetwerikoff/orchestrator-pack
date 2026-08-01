@@ -51,10 +51,12 @@ export type StateLightTestSnapshot = {
   messages: StateLightTestMessage[];
   generating: boolean;
   continuation?: boolean;
+  /** Make the generic message-node count unreadable for this observation. */
+  nodeListReadFailed?: boolean;
 };
 
 export function messageLocator(message: StateLightTestMessage, generating = false) {
-  return scalarLocator({
+  const locator = scalarLocator({
     count: vi.fn(async () => 1),
     getAttribute: vi.fn(async (name: string) => {
       if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role;
@@ -83,6 +85,8 @@ export function messageLocator(message: StateLightTestMessage, generating = fals
     innerText: vi.fn(async () => message.text),
     textContent: vi.fn(async () => message.domTextContent ?? message.text),
   });
+  locator.elementHandle = vi.fn(async () => locator);
+  return locator;
 }
 
 export function collectionLocator(messages: StateLightTestMessage[], generating = false) {

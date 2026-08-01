@@ -629,7 +629,7 @@ describe('Issue #1120 state-light turn lifecycle', () => {
       cause: 'owned_message_identity_unresolved',
     });
     expect(metrics.closes).toBe(1);
-    expect(metrics.polls).toBeGreaterThanOrEqual(3);
+    expect(metrics.polls).toBeGreaterThanOrEqual(2);
   });
 
   it('completes a long prompt with different line breaking without false foreign_activity', async () => {
@@ -1223,23 +1223,22 @@ ${body}`;
     expect(mocks.linkSync).not.toHaveBeenCalled();
   });
 
-  it('chat-url continuation finds owned prompt inside a late baseline capture', async () => {
+  it('chat-url continuation attributes only a genuinely post-send owned prompt', async () => {
     const continuationPre: StateLightTestMessage[] = [
       { role: 'user', text: 'USER-ONE' },
       { role: 'assistant', text: 'ANSWER-ONE', finalAction: true },
       { role: 'user', text: 'USER-TWO' },
       { role: 'assistant', text: 'ANSWER-TWO', finalAction: true },
-      { role: 'user', text: 'PROMPT' },
     ];
+    const working: StateLightTestSnapshot = {
+      messages: [...continuationPre, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'working' }],
+      generating: true,
+    };
     const ready: StateLightTestSnapshot = {
-      messages: [...continuationPre, { role: 'assistant', text: 'FINAL', finalAction: true }],
+      messages: [...continuationPre, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'FINAL', finalAction: true }],
       generating: false,
     };
-    const fake = makePage([
-      { messages: [...continuationPre, { role: 'assistant', text: 'working' }], generating: true },
-      ready,
-      ready,
-    ], { preSendMessages: continuationPre });
+    const fake = makePage([working, ready, ready, ready], { preSendMessages: continuationPre });
     const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
 
     expect(outcome.code).toBe(0);
@@ -1253,7 +1252,7 @@ ${body}`;
     expect((outcome.result.incidents ?? []).filter((entry) => entry === 'send_observation_deferred')).toHaveLength(0);
   });
 
-  it('chat-url defers owned_user_message_not_observed after send without send_failed', async () => {
+  it('chat-url exhausts bounded unobserved ownership without send_failed', async () => {
     const delayedUser: StateLightTestSnapshot = {
       messages: [...BASELINE],
       generating: false,
@@ -1263,19 +1262,20 @@ ${body}`;
       generating: false,
     };
     const fake = makePage([
-      ...Array.from({ length: 8 }, () => delayedUser),
+      ...Array.from({ length: 20 }, () => delayedUser),
       ready,
       ready,
     ]);
     const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
 
-    expect(outcome.code).toBe(0);
-    expect(outcome.result).toMatchObject({ state: 'ok', send_count: 1 });
+    expect(outcome.code).toBe(11);
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+      send_count: 1,
+    });
     expect(outcome.result.state).not.toBe('send_failed');
-    expect(outcome.result.incidents).toContain('send_observation_deferred');
-    expect((outcome.result.incidents ?? []).filter((entry) => entry === 'send_observation_deferred')).toHaveLength(1);
-    const deferredJournalRows = mocks.appendFileSync.mock.calls.filter((call) => String(call[1]).includes('send_observation_deferred'));
-    expect(deferredJournalRows).toHaveLength(1);
+    expect(outcome.result.incidents).toContain('observation_exhausted');
     expect(fake.metrics.polls).toBeGreaterThan(3);
   });
 
@@ -1288,10 +1288,9 @@ ${body}`;
       { role: 'assistant', text: 'ANSWER-TWO', finalAction: true },
       { role: 'user', text: 'USER-THREE' },
       { role: 'assistant', text: 'ANSWER-THREE', finalAction: true },
-      { role: 'user', text: 'PROMPT' },
     ];
     const ready: StateLightTestSnapshot = {
-      messages: [...history, { role: 'assistant', text: 'FINAL', finalAction: true, finalActionInTurnContainer: true }],
+      messages: [...history, { role: 'user', text: 'PROMPT' }, { role: 'assistant', text: 'FINAL', finalAction: true, finalActionInTurnContainer: true }],
       generating: false,
     };
     const fake = makePage([ready, ready, ready], {
@@ -1461,7 +1460,7 @@ describe('browser-turn recurrence journal fixture coverage', () => {
     });
   });
 
-  it('replays send_observation_deferred chat-url symptoms without send_failed', async () => {
+  it('replays bounded unobserved chat-url ownership without send_failed', async () => {
     const delayedUser: StateLightTestSnapshot = {
       messages: [...BASELINE],
       generating: false,
@@ -1471,13 +1470,17 @@ describe('browser-turn recurrence journal fixture coverage', () => {
       generating: false,
     };
     const fake = makePage([
-      ...Array.from({ length: 8 }, () => delayedUser),
+      ...Array.from({ length: 20 }, () => delayedUser),
       ready,
       ready,
     ]);
     const outcome = await runAndCapture(fake.page, { timeoutMs: '5000', pollMs: '1' });
-    expect(outcome.result.state).toBe('ok');
-    expect(outcome.result.incidents).toContain('send_observation_deferred');
+    expect(outcome.result).toMatchObject({
+      state: 'no_reply',
+      cause: 'observation_exhausted_no_resend',
+      send_count: 1,
+    });
+    expect(outcome.result.incidents).toContain('observation_exhausted');
     expect(outcome.result.state).not.toBe('send_failed');
   });
 
@@ -1683,10 +1686,10 @@ describe('browser-turn recurrence journal fixture coverage', () => {
     ]);
     expect(outcome.result).toMatchObject({
       state: 'ui_contract_mismatch',
-      cause: 'owned_conversation_render_mismatch',
+      cause: 'owned_message_identity_unresolved',
       send_count: 1,
     });
-    expect(outcome.result.incidents).toContain('conversation_render_mismatch');
+    expect(outcome.result.incidents).toContain('owned_message_identity_unresolved');
     expect(outcome.result.state).not.toBe('no_reply');
     expect(fake.metrics.polls).toBeLessThan(20);
     expect(outcome.result.cleanup).toBe('confirmed');

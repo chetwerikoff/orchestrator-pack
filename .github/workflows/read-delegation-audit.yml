@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   audit-policy:
@@ -39,97 +39,3 @@ jobs:
       - name: Verify read-delegation audit CI gate (meta-check)
         shell: pwsh
         run: ./scripts/check-read-delegation-audit-ci-gate.ps1
-
-  issue-1148-r4-fixes:
-    name: Issue 1148 current review fixes
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/issue-1148-message-identity' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: agent/issue-1148-message-identity
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-
-      - name: Decode and apply exact current-head fixes
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat \
-            .github/issue-1148-r4.part00 \
-            .github/issue-1148-r4.part01 \
-            .github/issue-1148-r4.part02{a,b,c,d} \
-            .github/issue-1148-r4.part03 \
-            .github/issue-1148-r4.part04 \
-            .github/issue-1148-r4.part05 \
-            > /tmp/issue-1148-r4-fixes.py.gz.b64
-          echo '546688a1fc9b82e44db66d88487e543ae5c14183dd243e2786ab6fa24285d427  /tmp/issue-1148-r4-fixes.py.gz.b64' | sha256sum -c -
-          base64 -d /tmp/issue-1148-r4-fixes.py.gz.b64 | gzip -d > /tmp/issue-1148-r4-fixes.py
-          python -m py_compile /tmp/issue-1148-r4-fixes.py
-          python /tmp/issue-1148-r4-fixes.py
-
-          cat .github/issue-1148-r4-followup.part{00..02} > /tmp/issue-1148-r4-followup.py.gz.b64
-          echo 'c2d5a06a0ad28b4eeaaaf51e5fb0d8af8ac1c9325fb87f0089442bd016ffc6e0  /tmp/issue-1148-r4-followup.py.gz.b64' | sha256sum -c -
-          base64 -d /tmp/issue-1148-r4-followup.py.gz.b64 | gzip -d > /tmp/issue-1148-r4-followup.py
-          python -m py_compile /tmp/issue-1148-r4-followup.py
-          python /tmp/issue-1148-r4-followup.py
-
-          echo 'ff6ad6868d935b0a5ff8b809bc8795d9b94f149664d15c9c8769c00cdf317ea2  .github/issue-1148-r4-followup2.b64' | sha256sum -c -
-          base64 -d .github/issue-1148-r4-followup2.b64 | gzip -d > /tmp/issue-1148-r4-followup2.py
-          python -m py_compile /tmp/issue-1148-r4-followup2.py
-          python /tmp/issue-1148-r4-followup2.py
-
-          echo 'f20a84e055cb3a71e580d1fb5f6d3bac279d974801f88940fc3bec4a66ae49b0  .github/issue-1148-r4-followup3.b64' | sha256sum -c -
-          base64 -d .github/issue-1148-r4-followup3.b64 | gzip -d > /tmp/issue-1148-r4-followup3.py
-          python -m py_compile /tmp/issue-1148-r4-followup3.py
-          python /tmp/issue-1148-r4-followup3.py
-
-          echo '45ac850191e162e173284d0b5f0aaeb6c831f2baa7a97fc5726b87a02c274c74  .github/issue-1148-r4-followup4.b64' | sha256sum -c -
-          base64 -d .github/issue-1148-r4-followup4.b64 | gzip -d > /tmp/issue-1148-r4-followup4.py
-          python -m py_compile /tmp/issue-1148-r4-followup4.py
-          python /tmp/issue-1148-r4-followup4.py
-
-          echo 'c9aa335d812eeaf6b245e9a42b0b502e21b1b70303077ed0f3e631352c0d707b  .github/issue-1148-r4-followup5.b64' | sha256sum -c -
-          base64 -d .github/issue-1148-r4-followup5.b64 | gzip -d > /tmp/issue-1148-r4-followup5.py
-          python -m py_compile /tmp/issue-1148-r4-followup5.py
-          python /tmp/issue-1148-r4-followup5.py
-
-          echo 'b6ca4d5c015b00f6029f0403c195a6d94c07b8c2b1d064af7dd3e9a10d0b8d12  .github/issue-1148-r4-followup6.b64' | sha256sum -c -
-          base64 -d .github/issue-1148-r4-followup6.b64 | gzip -d > /tmp/issue-1148-r4-followup6.py
-          python -m py_compile /tmp/issue-1148-r4-followup6.py
-          python /tmp/issue-1148-r4-followup6.py
-
-      - name: Install dependencies
-        run: npm ci --include=dev
-
-      - name: Run focused verification
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm run check:node-major --silent
-          npm run lint:foundation --silent
-          npm run typecheck:foundation --silent
-          node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 \
-            scripts/chatgpt-browser-turn/state-light-page-observation.test.ts \
-            scripts/stage-completeness-guard.test.ts
-
-      - name: Publish scoped fixes and restore workflow
-        shell: bash
-        run: |
-          set -euo pipefail
-          git checkout 801b8981f7c792e2b3c1b9aefdecb47cd38babeb -- .github/workflows/read-delegation-audit.yml
-          rm -f .github/issue-1148-r4-fixes.py.gz.b64
-          rm -f .github/issue-1148-r4.part00 .github/issue-1148-r4.part01 .github/issue-1148-r4.part02 .github/issue-1148-r4.part02{a,b,c,d} .github/issue-1148-r4.part03 .github/issue-1148-r4.part04 .github/issue-1148-r4.part05
-          rm -f .github/issue-1148-r4-followup.part{00..02} .github/issue-1148-r4-followup2.b64 .github/issue-1148-r4-followup3.b64 .github/issue-1148-r4-followup4.b64 .github/issue-1148-r4-followup5.b64 .github/issue-1148-r4-followup6.b64
-          git diff --check
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'fix(browser-turn): address current identity review findings'
-          git push origin HEAD:agent/issue-1148-message-identity
