@@ -10,7 +10,6 @@
     "active_scope_hash": "sha256:pending"
   },
   "declared_paths": [
-    "docs/declarations/1138.wrap-20260801T043600Z.json",
     "docs/worker-smoke-testing.md",
     "scripts/lib/worker-smoke-bounded-create.ts",
     "scripts/lib/worker-smoke-lifecycle-regressions.ts",
