@@ -13,9 +13,8 @@
     "docs/declarations/1138.wrap-20260801T043600Z.json",
     "docs/worker-smoke-testing.md",
     "scripts/lib/worker-smoke-bounded-create.ts",
-    "scripts/lib/worker-smoke-lifecycle.test.ts",
+    "scripts/lib/worker-smoke-lifecycle-regressions.ts",
     "scripts/lib/worker-smoke-lifecycle.ts",
-    "scripts/vitest-ci-lanes.config.json",
     "scripts/worker-smoke-run.ts"
   ],
   "declared_globs": [],
