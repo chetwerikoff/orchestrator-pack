@@ -22,7 +22,7 @@ export function registerWorkerSmokeFindingsRegressionTests(
   const runDir = (root: string, runId: string): string =>
     path.join(root, '.orca-worker-smoke', 'runs', runId);
 
-  function reserve(root: string, runId: string): string {
+  function reserve(root: string, runId: string, supervisorPid = process.pid): string {
     const artifactDir = runDir(root, runId);
     lifecycle.createSmokeLifecycleReservation({
       runId,
@@ -30,16 +30,29 @@ export function registerWorkerSmokeFindingsRegressionTests(
       issueNumber: 1138,
       prNumber: 1163,
       headSha: head,
+      supervisorPid,
       nowMs: 0,
       scenarioCount: 2,
     });
     return artifactDir;
   }
 
-  function seedBound(root: string, runId: string): string {
-    const artifactDir = reserve(root, runId);
+  function seedBound(root: string, runId: string, supervisorPid = process.pid): string {
+    const artifactDir = reserve(root, runId, supervisorPid);
     lifecycle.bindSmokeTerminalHandle(artifactDir, `term_${runId}`, 1);
     return artifactDir;
+  }
+
+  function rewriteRegistry(
+    artifactDir: string,
+    mutate: (registry: lifecycle.SmokeLifecycleRegistry) => lifecycle.SmokeLifecycleRegistry,
+  ): void {
+    const registry = lifecycle.readSmokeLifecycleRegistry(artifactDir)!;
+    fs.writeFileSync(
+      lifecycle.smokeLifecycleRegistryPath(artifactDir),
+      JSON.stringify(mutate(registry)),
+      'utf8',
+    );
   }
 
   function publishCompletion(artifactDir: string, runId: string, suffix = ''): void {
@@ -156,8 +169,15 @@ export function registerWorkerSmokeFindingsRegressionTests(
       fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it.each(['delivery', 'progress', 'completion'] as const)(
-      'blocks registryless %s execution evidence',
+    it.each([
+      'delivery',
+      'progress',
+      'completion',
+      'cancel-request',
+      'terminal-record',
+      'close-receipt',
+    ] as const)(
+      'blocks registryless %s lifecycle evidence',
       (kind) => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), `worker-smoke-registryless-${kind}-`));
         const artifactDir = runDir(root, `registryless-${kind}`);
@@ -166,8 +186,14 @@ export function registerWorkerSmokeFindingsRegressionTests(
           fs.writeFileSync(path.join(artifactDir, 'delivery.sealed.json'), '{}', 'utf8');
         } else if (kind === 'progress') {
           fs.writeFileSync(lifecycle.smokeProgressPath(artifactDir), '{"phase":"started"}\n', 'utf8');
-        } else {
+        } else if (kind === 'completion') {
           fs.writeFileSync(path.join(artifactDir, 'completion.pending.body'), 'partial', 'utf8');
+        } else if (kind === 'cancel-request') {
+          fs.writeFileSync(lifecycle.smokeCancelRequestPath(artifactDir), '{}', 'utf8');
+        } else if (kind === 'terminal-record') {
+          fs.writeFileSync(lifecycle.smokeTerminalRecordPath(artifactDir), '{}', 'utf8');
+        } else {
+          fs.writeFileSync(lifecycle.smokeCloseReceiptPath(artifactDir), '{}', 'utf8');
         }
         expect(lifecycle.evaluateSmokeLifecycleCleanliness(root).clean).toBe(false);
         const preflight = lifecycle.preflightSmokeLifecycle({
@@ -236,16 +262,51 @@ export function registerWorkerSmokeFindingsRegressionTests(
       fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('reconciles a crash after close side effect but before finalization', () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-close-crash-'));
-      const runId = 'close-crash';
-      const artifactDir = seedBound(root, runId);
-      const bound = lifecycle.readSmokeLifecycleRegistry(artifactDir)!;
-      fs.writeFileSync(lifecycle.smokeLifecycleRegistryPath(artifactDir), JSON.stringify({
+    it('keeps crash-before-close stale-handle recovery blocking without a receipt', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-before-close-crash-'));
+      const runId = 'before-close-crash';
+      const artifactDir = seedBound(root, runId, 9001);
+      rewriteRegistry(artifactDir, (bound) => ({
         ...bound,
         spawnState: 'cleanup_pending',
         closeAttemptedAtMs: 2,
         updatedAtMs: 2,
+      }));
+      const close = vi.fn(() => 'close_failed:channel_stale_handle');
+      const result = lifecycle.preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: 'next',
+        supervisorPid: 333,
+        nowMs: 3,
+        shutdownMs: 0,
+        isProcessAlive: () => false,
+        closeBoundHandle: close,
+      });
+      expect(result.admitted).toBe(false);
+      expect(close).toHaveBeenCalledWith(`term_${runId}`, artifactDir);
+      expect(lifecycle.readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
+        spawnState: 'cleanup_failed',
+        cleanup: { closeOutcome: 'close_failed:unproven_channel_stale_handle' },
+      });
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it('uses a durable post-close receipt after crash-before-finalization', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-after-close-crash-'));
+      const runId = 'after-close-crash';
+      const artifactDir = seedBound(root, runId, 9002);
+      rewriteRegistry(artifactDir, (bound) => ({
+        ...bound,
+        spawnState: 'cleanup_pending',
+        closeAttemptedAtMs: 2,
+        updatedAtMs: 2,
+      }));
+      fs.writeFileSync(lifecycle.smokeCloseReceiptPath(artifactDir), JSON.stringify({
+        version: 1,
+        runId,
+        terminalHandle: `term_${runId}`,
+        closeOutcome: 'closed_owned_handle',
+        recordedAtMs: 2,
       }), 'utf8');
       const close = vi.fn(() => 'close_failed:channel_stale_handle');
       const result = lifecycle.preflightSmokeLifecycle({
@@ -258,12 +319,57 @@ export function registerWorkerSmokeFindingsRegressionTests(
         closeBoundHandle: close,
       });
       expect(result.admitted).toBe(true);
-      expect(close).toHaveBeenCalledWith(`term_${runId}`, artifactDir);
+      expect(close).not.toHaveBeenCalled();
       expect(lifecycle.readSmokeLifecycleRegistry(artifactDir)).toMatchObject({
         spawnState: 'clean',
-        cleanup: { closeOutcome: 'closed_owned_handle_already_absent' },
+        cleanup: { closeOutcome: 'closed_owned_handle' },
       });
       lifecycle.releaseSmokeAdmission(root, 'next');
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it('does not recover a bound child while its recorded supervisor is alive', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-live-supervisor-'));
+      const runId = 'live-supervisor';
+      const artifactDir = seedBound(root, runId, 777);
+      const close = vi.fn(() => 'closed_owned_handle');
+      const result = lifecycle.preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: 'contender',
+        supervisorPid: 888,
+        nowMs: 10,
+        isProcessAlive: (pid) => pid === 777 || pid === 888,
+        closeBoundHandle: close,
+      });
+      expect(result).toMatchObject({
+        admitted: false,
+        reason: `active_smoke_supervisor:${runId}`,
+      });
+      expect(close).not.toHaveBeenCalled();
+      expect(fs.existsSync(lifecycle.smokeCancelRequestPath(artifactDir))).toBe(false);
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it('keeps a parent-crashed create phase blocking without a terminal outcome witness', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-smoke-create-parent-crash-'));
+      const runId = 'create-parent-crash';
+      const artifactDir = reserve(root, runId, 999);
+      lifecycle.markSmokeCreateInProgress(artifactDir, 1);
+      const close = vi.fn(() => 'closed_owned_handle');
+      const result = lifecycle.preflightSmokeLifecycle({
+        repoRoot: root,
+        runId: 'next',
+        supervisorPid: 1000,
+        nowMs: lifecycle.SMOKE_CREATE_TIMEOUT_MS + 10,
+        isProcessAlive: () => false,
+        closeBoundHandle: close,
+      });
+      expect(result).toMatchObject({
+        admitted: false,
+        reason: `blocking_create_phase:${runId}:create_in_progress`,
+      });
+      expect(lifecycle.readSmokeLifecycleRegistry(artifactDir)?.spawnState).toBe('create_in_progress');
+      expect(close).not.toHaveBeenCalled();
       fs.rmSync(root, { recursive: true, force: true });
     });
 
@@ -272,7 +378,7 @@ export function registerWorkerSmokeFindingsRegressionTests(
       (kind) => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), `worker-smoke-completion-${kind}-`));
         const runId = `completion-${kind}`;
-        const artifactDir = seedBound(root, runId);
+        const artifactDir = seedBound(root, runId, 5000);
         if (kind === 'missing-body') {
           const digest = '1'.repeat(64);
           fs.writeFileSync(
