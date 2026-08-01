@@ -84,6 +84,8 @@ function parseProtectedOccurrenceStates(row, rowIndex) {
   const result = [];
   for (let index = 0; index < raw.length; index += 1) {
     const state = raw[index];
+    // Sparse/null entries are treated as omitted so the semantic validator can
+    // report the exact missing occurrence identity.
     if (state === undefined || state === null) continue;
     if (!isRecord(state)) {
       throw new Error(`finding-ledger guard: findings[${rowIndex}].protectedOccurrences[${index}] must be an object`);
@@ -473,7 +475,8 @@ function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, p
   const current = records
     .filter((record) => record.revision === issueRevision)
     .sort((left, right) => left.timestampMs - right.timestampMs || left.captureIndex - right.captureIndex);
-  if (current.length > 1) {
+  const malformedOrDuplicate = current.length > 1;
+  if (malformedOrDuplicate) {
     errors.push(`review-economics: duplicate m3-protected records for ${occurrence.occurrenceId}`);
     return;
   }
@@ -513,6 +516,10 @@ function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, p
     return;
   }
   if (record) {
+    if (record.contest === 'contested') {
+      errors.push(`review-economics: protected finding ${occurrence.occurrenceId} remains under current contest`);
+      return;
+    }
     if (record.outcome === 'activate') {
       if (!record.evidence || !record.whyNow || !protectedEvidenceMatches(occurrence.type, record.evidence)) {
         errors.push(`review-economics: architect activation for ${occurrence.occurrenceId} lacks current real protected evidence + why-now provenance`);
@@ -529,6 +536,8 @@ function validateProtectedOccurrenceState({ row, occurrence, state, m3Records, p
       }
     }
   }
+  // A terminal GPT can introduce and author-activate a nomination on the same
+  // revision without a later Claude pass.
   if (terminalOnly && activationValid) {
     if (row.defectDisposition !== 'addressed') errors.push(`review-economics: activated protected finding ${occurrence.occurrenceId} must be addressed`);
     return;
@@ -577,6 +586,14 @@ function validateLegacyM3(rows, occurrences, captures, metadata, phase, issueRev
     const current = records
       .filter((record) => record.revision === issueRevision)
       .sort((left, right) => left.timestampMs - right.timestampMs || left.captureIndex - right.captureIndex);
+    const recordsByCapture = new Map();
+    for (const record of current) {
+      const count = recordsByCapture.get(record.captureIndex) ?? 0;
+      recordsByCapture.set(record.captureIndex, count + 1);
+    }
+    if ([...recordsByCapture.values()].some((count) => count > 1)) {
+      errors.push(`review-economics: duplicate m3-protected records for ${row.id}`);
+    }
     const terminalRecords = current.filter((record) => record.stage === 'architectural');
     if (terminalRecords.length > 1) {
       const captureIndices = new Set(terminalRecords.map((record) => record.captureIndex));
@@ -591,6 +608,7 @@ function validateLegacyM3(rows, occurrences, captures, metadata, phase, issueRev
       const terminal = terminalRecords.at(-1);
       const nonTerminal = current.filter((record) => record.stage !== 'architectural').at(-1);
       if (terminal && nonTerminal && (terminal.outcome !== nonTerminal.outcome || terminal.contest !== nonTerminal.contest)) {
+        // Terminal GPT may supersede Claude only when it is the latest capture.
         if (terminal.captureIndex <= nonTerminal.captureIndex) {
           errors.push(`review-economics: duplicate-conflicting terminal m3-protected state for ${row.id}`);
         }
@@ -629,6 +647,10 @@ function validateLegacyM3(rows, occurrences, captures, metadata, phase, issueRev
       continue;
     }
     if (latest) {
+      if (latest.contest === 'contested') {
+        errors.push(`review-economics: protected finding ${row.id} remains under current contest`);
+        continue;
+      }
       if (latest.outcome === 'activate') {
         if (!latest.evidence || !latest.whyNow || !protectedEvidenceMatches(row.type, latest.evidence)) {
           errors.push(`review-economics: architect activation for ${row.id} lacks current real protected evidence + why-now provenance`);
