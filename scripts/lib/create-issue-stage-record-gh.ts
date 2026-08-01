@@ -406,7 +406,7 @@ export function syncIssueProjectionLabels(
       applied: [],
       removed: [],
       pendingRepair: true,
-      diagnostics: [{ code: 'label-sync-failed' as LineageDiagnostic['code'], message: 'unable to read issue labels for projection synchronization' }],
+      diagnostics: [{ code: 'label-sync-failed', message: 'unable to read issue labels for projection synchronization' }],
     };
   }
   const unrelated = current.labels.filter(
@@ -428,7 +428,7 @@ export function syncIssueProjectionLabels(
       removed: [],
       pendingRepair: true,
       diagnostics: [{
-        code: 'label-sync-failed' as LineageDiagnostic['code'],
+        code: 'label-sync-failed',
         message: 'projection label synchronization failed',
       }],
     };
