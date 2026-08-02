@@ -24,5 +24,18 @@
     "scripts/stage-completeness-guard.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:58a1e8f2fefb253ac5b3e1e7b8ee1b77cc5c36ed2674ed9bfa24a50c8049553b",
+      "new_active_scope_hash": "sha256:58a1e8f2fefb253ac5b3e1e7b8ee1b77cc5c36ed2674ed9bfa24a50c8049553b",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "declare skill, docs and core paths touched by the fix",
+      "actor": "local",
+      "timestamp": "2026-08-02T10:22:41.367Z",
+      "applied": true
+    }
+  ]
 }
