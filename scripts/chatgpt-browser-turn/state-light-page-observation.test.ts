@@ -58,6 +58,45 @@ function runNoResendRefusalFixture(messages: StateLightTestMessage[]) {
   } as const;
 }
 
+async function runProductAttributeChurnFixture() {
+  const ids: Array<string | null> = [null, 'user-service-12345678', 'user-service-replaced-12345678'];
+  let idIndex = 0;
+  const ownedNode = {
+    getAttribute: vi.fn(async (name: string) => {
+      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return 'user';
+      if (name === 'data-message-id') return ids[Math.min(idIndex++, ids.length - 1)];
+      return null;
+    }),
+    innerText: vi.fn(async () => markedPrompt),
+    textContent: vi.fn(async () => markedPrompt),
+  };
+  const nodes = scalarLocator({
+    count: vi.fn(async () => 1),
+    nth: vi.fn(() => ownedNode),
+  });
+  const page = {
+    locator: vi.fn((selector: string) => selector === MESSAGE_NODE_SELECTOR
+      ? nodes
+      : scalarLocator()),
+  };
+  const observations: Array<{ messageId: string | null; markerHead: string; owned: boolean }> = [];
+  for (const expectedId of ids) {
+    const observation = await readPageObservation(page);
+    const messageId = await ownedNode.getAttribute('data-message-id');
+    const text = observation.messages[0]?.text ?? '';
+    const markerHead = text.split(/\s+/u, 1)[0] ?? '';
+    observations.push({
+      messageId,
+      markerHead,
+      owned: observation.messages.filter(
+        (message) => message.role === 'user' && ownedPromptMatches(message.text, marker),
+      ).length === 1,
+    });
+    expect(messageId).toBe(expectedId);
+  }
+  return { observations, send_count: 1, published: true };
+}
+
 describe('state-light completion probes', () => {
   function makeTurnContainerPage(actionButtons: boolean, generating = false) {
     const assistant = scalarLocator({
@@ -153,6 +192,19 @@ describe('marker ownership classification', () => {
       { role: 'user', text: 'foreign later user' },
       { role: 'assistant', text: 'foreign reply' },
     ])).toEqual({ state: 'ready', reply: 'FINAL' });
+  });
+
+  it('keeps marker ownership through absent, present, and replaced data-message-id values', async () => {
+    const result = await runProductAttributeChurnFixture();
+    expect(result).toEqual({
+      observations: [
+        { messageId: null, markerHead: marker, owned: true },
+        { messageId: 'user-service-12345678', markerHead: marker, owned: true },
+        { messageId: 'user-service-replaced-12345678', markerHead: marker, owned: true },
+      ],
+      send_count: 1,
+      published: true,
+    });
   });
 });
 
