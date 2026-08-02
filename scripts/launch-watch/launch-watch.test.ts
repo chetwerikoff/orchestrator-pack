@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   cleanupOverride,
   encodeLaunchCommand,
@@ -11,6 +15,8 @@ import {
 } from '../lib/launch-watch/contract.ts';
 import { runAggregateProof } from './aggregate.ts';
 import { emitResult, serializeResult } from '../lib/launch-watch/emission.ts';
+import { executeLaunchRequest } from './launch.ts';
+import type { ProcessResult } from '../kernel/subprocess.ts';
 
 const launch = (overrides: Record<string, unknown> = {}): Uint8Array => Buffer.from(JSON.stringify({
   requestVersion: 'launch-request/v1',
@@ -22,6 +28,80 @@ const launch = (overrides: Record<string, unknown> = {}): Uint8Array => Buffer.f
   initialInstruction: 'do the task',
   ...overrides,
 }));
+
+const processResult = (stdout = '', overrides: Partial<ProcessResult> = {}): ProcessResult => ({
+  outcome: 'exit',
+  ok: true,
+  exitCode: 0,
+  signal: null,
+  stdout,
+  stderr: '',
+  timedOut: false,
+  cancelled: false,
+  ...overrides,
+});
+
+function requestFor(cwd: string) {
+  const parsed = parseLaunchRequest(launch({ cwd, deadlineMs: 10_000 }));
+  if (!parsed.ok) throw new Error(`test request rejected: ${parsed.code}`);
+  return parsed.request;
+}
+
+function trustMarker(home: string, cwd: string): string {
+  const slug = cwd.replace(/^[/\\]+/u, '').split(/[/\\]+/u).map((part) => part.trim().replace(/^\.+/u, '')).filter(Boolean).join('-');
+  const candidate = join(home, '.cursor', 'projects', slug);
+  if (candidate.length <= 92) return join(candidate, '.workspace-trusted');
+  const hash = createHash('sha256').update(candidate).digest('hex').slice(0, 7);
+  return join(`${candidate.slice(0, 84)}-${hash}`, '.workspace-trusted');
+}
+
+function launchRunner(options: {
+  readonly cwd: string;
+  readonly home: string;
+  readonly postHead?: string;
+  readonly closeStdout?: string;
+  readonly nowMode?: 'stable' | 'cutoff' | 'cleanup-expired';
+}) {
+  const calls: Array<{ readonly command: string; readonly args: readonly string[]; readonly timeoutMs: number }> = [];
+  let trustCompleted = false;
+  let createCompleted = false;
+  const now = (): number => {
+    if (options.nowMode === 'cutoff' && trustCompleted) return 4_000;
+    if (options.nowMode === 'cleanup-expired' && createCompleted) return 9_000;
+    return 0;
+  };
+  const run = async (command: string, args: readonly string[], runOptions: { readonly timeoutMs: number }): Promise<ProcessResult> => {
+    calls.push({ command, args, timeoutMs: runOptions.timeoutMs });
+    if (command === 'git' && args[0] === 'branch') return processResult('main\n');
+    if (command === 'git' && args[0] === 'status') return processResult('');
+    if (command === 'git' && args[0] === 'fetch') return processResult('');
+    if (command === 'git' && args[0] === 'rev-parse' && args[1] === 'origin/main') return processResult('sha\n');
+    if (command === 'git' && args[0] === 'rev-parse' && args[1] === 'HEAD') {
+      return processResult(createCompleted ? options.postHead ?? 'sha\n' : 'sha\n');
+    }
+    if (command === 'git' && args[0] === 'merge-base' && args[1] === 'HEAD') return processResult('');
+    if (command === 'git' && args[0] === 'merge-base') return processResult('', { ok: false, exitCode: 1 });
+    if (command === 'orca' && args[0] === 'worktree') {
+      return processResult(JSON.stringify({ ok: true, result: { worktree: { path: options.cwd, id: 'wt' } } }));
+    }
+    if (command === 'pwsh') {
+      const marker = trustMarker(options.home, options.cwd);
+      mkdirSync(dirname(marker), { recursive: true });
+      writeFileSync(marker, JSON.stringify({ workspacePath: options.cwd }));
+      trustCompleted = true;
+      return processResult('');
+    }
+    if (command === 'orca' && args[0] === 'terminal' && args[1] === 'create') {
+      createCompleted = true;
+      return processResult(JSON.stringify({ ok: true, result: { terminal: { handle: 'term', worktreeId: 'wt' } } }));
+    }
+    if (command === 'orca' && args[0] === 'terminal' && args[1] === 'close') {
+      return processResult(options.closeStdout ?? '{"ok":true}');
+    }
+    throw new Error(`unexpected test command: ${command} ${args.join(' ')}`);
+  };
+  return { calls, now, run };
+}
 
 describe('launch/watch contract', () => {
   it('accepts defaults and preserves command data', () => {
@@ -89,5 +169,60 @@ describe('launch/watch contract', () => {
       removeListener: () => output,
     } as unknown as NodeJS.WritableStream;
     await expect(emitResult(invalidLaunchResult('launch_unknown_field', 120_000), output)).resolves.toMatchObject({ transportOk: false });
+  });
+
+  it('validates terminal close responses and bounds cleanup to the reserved remainder', async () => {
+    const cwd = '/tmp/launch-watch-close-test';
+    const home = mkdtempSync(join(tmpdir(), 'launch-watch-home-'));
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      for (const closeStdout of ['', '{"ok":false}', '{malformed']) {
+        const invalidClose = launchRunner({ cwd, home, postHead: 'other\n', closeStdout });
+        const result = await executeLaunchRequest(requestFor(cwd), { run: invalidClose.run, now: invalidClose.now });
+        expect(result.outcome).toBe('cleanup-failed');
+        expect(invalidClose.calls.find((call) => call.args[1] === 'close')?.timeoutMs).toBe(9_000);
+      }
+
+      const expiredCleanup = launchRunner({ cwd, home, nowMode: 'cleanup-expired' });
+      const expired = await executeLaunchRequest(requestFor(cwd), { run: expiredCleanup.run, now: expiredCleanup.now });
+      expect(expired.outcome).toBe('cleanup-failed');
+      expect(expiredCleanup.calls.some((call) => call.args[1] === 'close')).toBe(false);
+      expect(expired.containment?.closeAttempted).toBe(false);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('does not dispatch terminal creation after the work cutoff', async () => {
+    const cwd = '/tmp/launch-watch-cutoff-test';
+    const home = mkdtempSync(join(tmpdir(), 'launch-watch-home-'));
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const runner = launchRunner({ cwd, home, nowMode: 'cutoff' });
+      const result = await executeLaunchRequest(requestFor(cwd), { run: runner.run, now: runner.now });
+      expect(result.outcome).toBe('deadline-exceeded');
+      expect(result.phase).toBe('terminal-create');
+      expect(runner.calls.some((call) => call.args[1] === 'create')).toBe(false);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves process timeout and spawn-failure classifications before terminal creation', async () => {
+    const request = requestFor('/tmp/launch-watch-process-test');
+    const timeout = processResult('', { outcome: 'timeout', ok: false, timedOut: true, exitCode: null });
+    const timedOut = await executeLaunchRequest(request, { run: async () => timeout, now: () => 0 });
+    expect(timedOut.outcome).toBe('deadline-exceeded');
+    expect(timedOut.phase).toBe('preflight');
+
+    const failed = await executeLaunchRequest(request, { run: async () => { throw new Error('spawn failed'); }, now: () => 0 });
+    expect(failed.outcome).toBe('source-unavailable');
+    expect(failed.outcome).not.toBe('deadline-exceeded');
   });
 });

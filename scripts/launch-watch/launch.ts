@@ -7,6 +7,7 @@ import { processEvidence, runOwnedProcess, type ProcessRunner } from '../lib/lau
 import type { ProcessResult } from '../kernel/subprocess.ts';
 import {
   CLEANUP_RESERVE_MS,
+  EMISSION_RESERVE_MS,
   encodeLaunchCommand,
   invalidLaunchResult,
   launchResult,
@@ -106,12 +107,17 @@ async function closeTerminal(
   cwd: string,
   handle: string,
   timeoutMs: number,
-): Promise<{ readonly completed: boolean; readonly evidence: Record<string, unknown> }> {
+): Promise<{ readonly completed: boolean; readonly attempted: boolean; readonly evidence: Record<string, unknown> }> {
   try {
     const result = await run('orca', ['terminal', 'close', '--terminal', handle, '--json'], { cwd, timeoutMs, input: '' });
-    return { completed: result.ok, evidence: processEvidence(result) };
+    const response = result.stdout.length > 0 ? json(result.stdout) : null;
+    return {
+      completed: result.ok && response?.ok === true,
+      attempted: true,
+      evidence: { ...processEvidence(result), response },
+    };
   } catch (error) {
-    return { completed: false, evidence: { error: error instanceof Error ? error.message : String(error) } };
+    return { completed: false, attempted: true, evidence: { error: error instanceof Error ? error.message : String(error) } };
   }
 }
 
@@ -140,7 +146,8 @@ async function invoke(
   const remaining = Math.floor(state.workDeadline - state.now());
   if (remaining <= 0) return { expired: true };
   try {
-    return { result: await run(command, args, { cwd, timeoutMs: remaining, input: '' }), expired: false };
+    const result = await run(command, args, { cwd, timeoutMs: remaining, input: '' });
+    return { result, expired: result.timedOut || result.outcome === 'timeout' };
   } catch {
     return { result: undefined, expired: false };
   }
@@ -164,7 +171,8 @@ function targetClassification(
 
 async function gitText(run: Runner, args: readonly string[], cwd: string, state: { readonly now: () => number; readonly workDeadline: number }): Promise<{ readonly value?: string; readonly result?: ProcessResult; readonly expired: boolean }> {
   const invoked = await invoke(run, 'git', args, cwd, state);
-  if (invoked.expired || !invoked.result) return { expired: true };
+  if (invoked.expired) return { result: invoked.result, expired: true };
+  if (!invoked.result) return { expired: false };
   return { value: invoked.result.ok ? invoked.result.stdout.trim() : undefined, result: invoked.result, expired: false };
 }
 
@@ -255,7 +263,17 @@ export async function executeLaunchRequest(request: LaunchRequest, dependencies:
   const ancestorRemote = await invoke(run, 'git', ['merge-base', '--is-ancestor', 'HEAD', request.remoteRef], request.cwd, state);
   const ancestorHead = await invoke(run, 'git', ['merge-base', '--is-ancestor', request.remoteRef, 'HEAD'], request.cwd, state);
   if (head.expired || ancestorRemote.expired || ancestorHead.expired) return deadlineResult('target-verification', request.deadlineMs, ['pack.launch.git'], evidence);
-  const refusal = targetClassification(branch.value ?? '', status.value ?? '', head.value ?? '', frozenRemote, ancestorRemote.result ?? { ok: false } as ProcessResult, ancestorHead.result ?? { ok: false } as ProcessResult);
+  if (!head.result || !ancestorRemote.result || !ancestorHead.result) {
+    return launchResult('source-unavailable', {
+      phase: 'target-verification', reasonCode: 'target_read_failed', deadlineMs: request.deadlineMs,
+      sourceIds: ['pack.launch.git'], evidence: {
+        head: head.result ? gitFailure(head.result) : null,
+        ancestorRemote: ancestorRemote.result ? gitFailure(ancestorRemote.result) : null,
+        ancestorHead: ancestorHead.result ? gitFailure(ancestorHead.result) : null,
+      }, remediation: 'inspect-source',
+    });
+  }
+  const refusal = targetClassification(branch.value ?? '', status.value ?? '', head.value ?? '', frozenRemote, ancestorRemote.result, ancestorHead.result);
   if (refusal) {
     return launchResult('target-refused', {
       phase: 'target-verification', reasonCode: refusal, deadlineMs: request.deadlineMs, sourceIds: ['pack.launch.git'],
@@ -299,8 +317,12 @@ export async function executeLaunchRequest(request: LaunchRequest, dependencies:
   evidence.requestedCommand = commandValue;
   const createArgs = ['terminal', 'create', '--worktree', 'active', '--command', commandValue, '--json'];
   const createStarted = now();
+  const createRemaining = Math.floor(workDeadline - createStarted);
+  if (createRemaining <= 0) {
+    return deadlineResult('terminal-create', request.deadlineMs, ['orca.terminal-create'], evidence);
+  }
   let createResult: ProcessResult | undefined;
-  try { createResult = (await run('orca', createArgs, { cwd: request.cwd, timeoutMs: Math.max(1, Math.floor(workDeadline - createStarted)), input: '' })); }
+  try { createResult = (await run('orca', createArgs, { cwd: request.cwd, timeoutMs: createRemaining, input: '' })); }
   catch (error) {
     const primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_dispatched_thrown', deadlineMs: request.deadlineMs,
@@ -387,11 +409,16 @@ export async function executeLaunchRequest(request: LaunchRequest, dependencies:
     }
   }
   if (handle) {
-    const closed = dependencies.terminalClose === false ? { completed: false, evidence: { skipped: true } } : await closeTerminal(run, request.cwd, handle, Math.max(1, request.deadlineMs));
+    const cleanupRemaining = Math.floor(startedAt + request.deadlineMs - EMISSION_RESERVE_MS - now());
+    const closed = dependencies.terminalClose === false
+      ? { completed: false, attempted: false, evidence: { skipped: true } }
+      : cleanupRemaining <= 0
+        ? { completed: false, attempted: false, evidence: { cleanupBudgetExpired: true, cleanupRemainingMs: cleanupRemaining } }
+        : await closeTerminal(run, request.cwd, handle, cleanupRemaining);
     const contained = {
       ...primary,
       terminal: primary.terminal ?? { handle },
-      containment: { status: closed.completed ? 'closed' : 'failed', closeAttempted: true, closeCompleted: closed.completed, terminalHandle: handle, errorCode: closed.completed ? null : 'cleanup_termination_failed' },
+      containment: { status: closed.completed ? 'closed' : 'failed', closeAttempted: closed.attempted, closeCompleted: closed.completed, terminalHandle: handle, errorCode: closed.completed ? null : 'cleanup_termination_failed' },
       evidence: { ...primary.evidence, containmentClose: closed.evidence },
     };
     if (closed.completed) return cleanupOverride(contained, 'completed', cleanupResourceIds(handle)) as LaunchResult;
