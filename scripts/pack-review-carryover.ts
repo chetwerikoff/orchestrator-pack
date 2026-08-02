@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
 import { sha256, stableJson } from './pack-review-state.ts';
 
 export const PACK_REVIEW_CARRYOVER_HELPER_VERSION = 'pack-review-carryover/v2';
@@ -67,33 +67,52 @@ function fullSha(value: unknown, label: string): string {
   return sha;
 }
 
+function runGitResult(
+  repoRoot: string,
+  args: readonly string[],
+  options: { env?: NodeJS.ProcessEnv; encoding?: BufferEncoding } = {},
+): ProcessResult {
+  return runProcessSync({
+    command: 'git',
+    args,
+    cwd: repoRoot,
+    env: options.env,
+    inheritParentEnv: true,
+    encoding: options.encoding ?? 'utf8',
+    timeoutMs: 60_000,
+  });
+}
+
 function runGit(
   repoRoot: string,
   args: readonly string[],
-  options: { env?: NodeJS.ProcessEnv; allowFailure?: boolean; encoding?: BufferEncoding | 'buffer' } = {},
-): string | Buffer {
-  const encoding = options.encoding ?? 'utf8';
-  const result = spawnSync('git', [...args], {
-    cwd: repoRoot,
-    env: { ...process.env, ...options.env },
-    encoding: encoding === 'buffer' ? null : encoding,
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (result.error) {
-    throw new PackReviewCarryoverError('carryover_git_failed', result.error.message);
-  }
-  if (result.status !== 0 && !options.allowFailure) {
-    const stderr = Buffer.isBuffer(result.stderr)
-      ? result.stderr.toString('utf8')
-      : String(result.stderr ?? '');
+  options: {
+    env?: NodeJS.ProcessEnv;
+    allowFailure?: boolean;
+    encoding?: BufferEncoding;
+    preserveOutput?: boolean;
+  } = {},
+): string {
+  const result = runGitResult(repoRoot, args, options);
+  if (!result.ok && !options.allowFailure) {
     throw new PackReviewCarryoverError(
       'carryover_git_failed',
-      `git ${args.join(' ')} exited ${String(result.status)}: ${stderr.trim()}`,
+      `git ${args.join(' ')} exited ${String(result.exitCode)}: ${result.stderr.trim()}`,
     );
   }
-  return encoding === 'buffer'
-    ? Buffer.from(result.stdout as Buffer)
-    : String(result.stdout ?? '').trim();
+  return options.preserveOutput ? result.stdout : result.stdout.trim();
+}
+
+function runGitBytes(
+  repoRoot: string,
+  args: readonly string[],
+  options: { env?: NodeJS.ProcessEnv; allowFailure?: boolean } = {},
+): Buffer {
+  return Buffer.from(runGit(repoRoot, args, {
+    ...options,
+    encoding: 'latin1',
+    preserveOutput: true,
+  }), 'latin1');
 }
 
 function resolveCommit(repoRoot: string, value: string, label: string): string {
@@ -105,17 +124,13 @@ function resolveTree(repoRoot: string, commit: string): string {
 }
 
 function repositoryConfigCapture(repoRoot: string, sourceHeadSha: string, mainSha: string): unknown {
-  const gitVersion = String(runGit(repoRoot, ['--version']));
+  const gitVersion = runGit(repoRoot, ['--version']);
   const attrs = [sourceHeadSha, mainSha].map((commit) => {
-    const result = spawnSync('git', ['show', `${commit}:.gitattributes`], {
-      cwd: repoRoot,
-      encoding: 'buffer',
-      maxBuffer: 16 * 1024 * 1024,
-    });
+    const result = runGitResult(repoRoot, ['show', `${commit}:.gitattributes`], { encoding: 'latin1' });
     return {
       commit,
-      exists: result.status === 0,
-      digest: result.status === 0 ? sha256(Buffer.from(result.stdout)) : null,
+      exists: result.ok,
+      digest: result.ok ? sha256(Buffer.from(result.stdout, 'latin1')) : null,
     };
   });
   const configNames = [
@@ -126,12 +141,9 @@ function repositoryConfigCapture(repoRoot: string, sourceHeadSha: string, mainSh
     'merge.conflictstyle',
   ];
   const config = Object.fromEntries(configNames.map((name) => {
-    const result = spawnSync('git', ['config', '--local', '--get-all', name], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    });
-    return [name, result.status === 0
-      ? String(result.stdout).split(/\r?\n/).filter(Boolean)
+    const result = runGitResult(repoRoot, ['config', '--local', '--get-all', name]);
+    return [name, result.ok
+      ? result.stdout.split(/\r?\n/).filter(Boolean)
       : []];
   }));
   return { gitVersion, attrs, config };
@@ -175,7 +187,7 @@ function assertSupportedResolvedBlob(repoRoot: string, path: string, entry: GitT
       `${path} mode ${entry.mode}`,
     );
   }
-  const bytes = runGit(repoRoot, ['cat-file', 'blob', entry.oid], { encoding: 'buffer' }) as Buffer;
+  const bytes = runGitBytes(repoRoot, ['cat-file', 'blob', entry.oid]);
   if (bytes.includes(0)) {
     throw new PackReviewCarryoverError('carryover_object_unsupported', `${path} is binary`);
   }
@@ -225,7 +237,7 @@ export function replayMergeForCarryover(input: {
   const sourceHeadSha = resolveCommit(repoRoot, input.sourceHeadSha, 'sourceHeadSha');
   const mainSha = resolveCommit(repoRoot, input.mainSha, 'mainSha');
   const targetHeadSha = resolveCommit(repoRoot, input.targetHeadSha, 'targetHeadSha');
-  const parentLine = String(runGit(repoRoot, ['rev-list', '--parents', '-n', '1', targetHeadSha]));
+  const parentLine = runGit(repoRoot, ['rev-list', '--parents', '-n', '1', targetHeadSha]);
   const parents = parentLine.split(/\s+/).slice(1);
   if (parents.length !== 2 || parents[0] !== sourceHeadSha || parents[1] !== mainSha) {
     throw new PackReviewCarryoverError(
@@ -248,10 +260,7 @@ export function replayMergeForCarryover(input: {
   try {
     runGit(repoRoot, ['read-tree', '--empty'], { env });
     runGit(repoRoot, ['read-tree', '-i', '-m', mergeBaseSha, sourceHeadSha, mainSha], { env });
-    const unmergedBytes = runGit(repoRoot, ['ls-files', '-u', '-z'], {
-      env,
-      encoding: 'buffer',
-    }) as Buffer;
+    const unmergedBytes = runGitBytes(repoRoot, ['ls-files', '-u', '-z'], { env });
     const unmerged = parseUnmergedEntries(unmergedBytes);
     const conflictPaths = [...unmerged.keys()].sort((left, right) =>
       Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')),
@@ -277,7 +286,7 @@ export function replayMergeForCarryover(input: {
         }
       }
       const resolvedEntry = parseLsTreeEntry(
-        runGit(repoRoot, ['ls-tree', '-z', targetHeadSha, '--', path], { encoding: 'buffer' }) as Buffer,
+        runGitBytes(repoRoot, ['ls-tree', '-z', targetHeadSha, '--', path]),
         path,
       );
       if (!resolvedEntry) {
