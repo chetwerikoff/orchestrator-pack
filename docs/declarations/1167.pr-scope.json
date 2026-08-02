@@ -45,5 +45,5 @@
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "25802e377ad6a4f4863d5868f1592535172d8c57"
+  "source_revision": "caed7f009d7bd75dec058929057a43ad1440366a"
 }
