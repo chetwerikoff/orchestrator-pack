@@ -504,12 +504,26 @@ VERDICT: <...>
 COMMENT_URL: <...>
 ```
 
-That receipt is at most 5 lines. The Issue comment and URL are publication and
-receipt surfaces only; they are not a capture producer, evidence identity, or
-replacement for the browser-GPT source response. The source response remains
-saved verbatim, bound to its existing invocation envelope and stage receipt,
-included in the governed capture union, relayed with verified equality, and
-consumed by the existing finding ledger and final-acceptance path.
+That receipt is at most 5 lines. Immediately after it, the manager must
+harvest the published top-level comment through the GitHub API, using the pack
+wrapper and the comment id from `COMMENT_URL`:
+
+```bash
+scripts/gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body
+```
+
+The manager saves the returned comment body bytes verbatim, without
+normalization, as the immutable reviewer capture for that stage. Bind that
+capture to the comment URL and numeric comment id, the Issue revision marker,
+the reviewer invocation/envelope, and the stage receipt. These API-harvested
+comment bytes are the reviewer source bytes used for stage credentialing and
+admission, governed-capture union, verified relay, finding-ledger processing,
+and final acceptance. The five-line chat receipt remains transport-only and
+never substitutes for this capture.
+
+The original browser-GPT source response remains saved verbatim where the
+existing invocation capture contract requires it; the API-harvested comment is
+the immutable source artifact for the direct-publication reviewer path.
 
 Receipt-only applies to the response returned to the flow-manager after a
 GitHub write. It does not restrict invocation inputs or governed relay: a
