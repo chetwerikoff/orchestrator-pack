@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -521,6 +521,87 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.errors).toContain('author dispositions findings[0] must be an object');
+  });
+
+  it('returns a structured error when settlement evidence is missing', () => {
+    const input = fixture();
+    writeFileSync(input.stageEvidencePath, JSON.stringify({
+      ...input.evidence,
+      settlement: null,
+    }));
+    let result: ReturnType<typeof produceAcceptanceArtifacts> | undefined;
+    expect(() => {
+      result = produceAcceptanceArtifacts({
+        reviewDir: input.dir,
+        outputDir: join(input.dir, 'artifacts'),
+        tierIntakePath: input.intakePath,
+        stageEvidencePaths: [input.stageEvidencePath],
+        authorDispositionsPath: input.authorPath,
+      });
+    }).not.toThrow();
+    expect(result?.ok).toBe(false);
+    expect(result?.errors.join('\n')).toContain('settlement');
+  });
+
+  it('reports missing capture paths for completed browser and Claude branches', () => {
+    const input = fixture();
+    writeFileSync(input.stageEvidencePath, JSON.stringify({
+      ...input.evidence,
+      tier: 'T3',
+      stage: 'architectural-lens',
+      invocations: [{ terminalClassification: 'complete' }],
+      claude: { kind: 'capture' },
+    }));
+    writeFileSync(join(input.dir, 'verified-relay-evidence.json'), '[]');
+    writeFileSync(join(input.dir, 'finding-disposition-ledger.json'), '{}');
+    const status = inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: input.dir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(status.ok).toBe(false);
+    expect(status.missing.some((item) => item.reason.includes('completed invocation[0] is missing capturePath'))).toBe(true);
+    expect(status.missing.some((item) => item.reason.includes('Claude capture branch is missing capturePath'))).toBe(true);
+  });
+
+  it('does not recursively delete a foreign directory matching an artifact name', () => {
+    const input = fixture();
+    const foreignDir = join(input.dir, 'stage-completeness-receipt-old.json');
+    const sentinelPath = join(foreignDir, 'keep.txt');
+    mkdirSync(foreignDir);
+    writeFileSync(sentinelPath, 'keep');
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: input.dir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+    expect(existsSync(foreignDir)).toBe(true);
+    expect(readFileSync(sentinelPath, 'utf8')).toBe('keep');
+  });
+
+  it('rolls back a partial publication when an artifact target is a directory', () => {
+    const input = fixture();
+    const outputDir = join(input.dir, 'artifacts');
+    const foreignDir = join(outputDir, 'verified-relay-evidence.json');
+    mkdirSync(foreignDir, { recursive: true });
+    writeFileSync(join(foreignDir, 'keep.txt'), 'keep');
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('unable to publish acceptance artifacts');
+    expect(existsSync(join(outputDir, 'stage-completeness-receipt-attempt-001.json'))).toBe(false);
+    expect(existsSync(foreignDir)).toBe(true);
+    expect(readFileSync(join(foreignDir, 'keep.txt'), 'utf8')).toBe('keep');
   });
 
   it('rejects artifact-only flags on journal commands instead of ignoring them', () => {

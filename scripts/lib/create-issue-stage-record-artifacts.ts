@@ -3,11 +3,13 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  lstatSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -505,6 +507,18 @@ function buildReceipt(
   return receipt;
 }
 
+function isValidSettlement(
+  value: unknown,
+): value is StageCompletenessReceiptV1['settlement'] {
+  return isRecord(value)
+    && typeof value.allLaunchedTerminal === 'boolean'
+    && (value.retryState === 'none'
+      || value.retryState === 'eligible'
+      || value.retryState === 'exhausted'
+      || value.retryState === 'abandoned')
+    && typeof value.finalRevisionMatched === 'boolean';
+}
+
 function buildLedger(
   path: string,
   captures: readonly CaptureIdentityV1[],
@@ -578,8 +592,10 @@ function isProducedArtifactName(name: string): boolean {
 
 function invalidateOutputArtifacts(outputDir: string): void {
   if (!existsSync(outputDir)) return;
-  for (const name of readdirSync(outputDir)) {
-    if (isProducedArtifactName(name)) rmSync(join(outputDir, name), { force: true, recursive: true });
+  for (const entry of readdirSync(outputDir, { withFileTypes: true })) {
+    if (entry.isFile() && isProducedArtifactName(entry.name)) {
+      unlinkSync(join(outputDir, entry.name));
+    }
   }
 }
 
@@ -645,12 +661,33 @@ function publishArtifactSet(
   const parentDir = dirname(outputDir);
   mkdirSync(parentDir, { recursive: true });
   const stagingDir = mkdtempSync(join(parentDir, `.${basename(outputDir)}.tmp-`));
+  const movedTargets: string[] = [];
   try {
     for (const file of files) {
       writeFileSync(join(stagingDir, file), contents.get(file) ?? '');
     }
     mkdirSync(outputDir, { recursive: true });
-    for (const file of files) renameSync(join(stagingDir, file), join(outputDir, file));
+    for (const file of files) {
+      const target = join(outputDir, file);
+      if (existsSync(target)) {
+        const targetStat = lstatSync(target);
+        if (!targetStat.isFile()) {
+          throw new Error(`cannot replace non-file artifact target: ${target}`);
+        }
+        unlinkSync(target);
+      }
+      renameSync(join(stagingDir, file), target);
+      movedTargets.push(target);
+    }
+  } catch (error) {
+    for (const target of movedTargets.reverse()) {
+      try {
+        unlinkSync(target);
+      } catch {
+        // Preserve the original publication failure.
+      }
+    }
+    throw error;
   } finally {
     rmSync(stagingDir, { recursive: true, force: true });
   }
@@ -733,32 +770,41 @@ export function produceAcceptanceArtifacts(
     const state = deriveReviewEpisodeState(receipts, relay, authority);
     errors.push(...state.errors);
     errors.push(...validateReviewEpisodeTopology(state, options.phase ?? 'final-acceptance'));
-    const stageTerminalConfirmed = receipts.every((receipt) => (
+    const settlementsValid = receipts.every((receipt, index) => {
+      if (!isValidSettlement(receipt.settlement)) {
+        errors.push(`stage receipt[${index}] settlement is missing or malformed`);
+        return false;
+      }
+      return true;
+    });
+    const stageTerminalConfirmed = settlementsValid && receipts.every((receipt) => (
       receipt.settlement.allLaunchedTerminal === true
       && (receipt.invocations ?? []).every((invocation) => invocation.terminal === true)
     ));
     if (!stageTerminalConfirmed) {
       errors.push('stage evidence does not prove terminal settlement for every launched invocation');
     }
-    const ledgerResult = checkFindingLedgerGuard(
-      captures.map((capture) => captureTexts.get(capture.captureIdentity) ?? ''),
-      ledger,
-      {
-        reviewEconomics: true,
-        phase: options.phase ?? 'final-acceptance',
-        issueRevision: episodeFirstRevision,
-        stageTerminalConfirmed,
-        stageReceipts: receipts,
-        verifiedRelayEvidence: relay,
-        episodeAuthority: authority,
-        captureMetadata: captures.map((capture) => ({
-          name: capture.name,
-          timestampMs: captureTimestamps.get(capture.captureIdentity) ?? 0,
-          captureIdentity: capture.captureIdentity,
-        })),
-      },
-    );
-    if (!ledgerResult.ok) errors.push(...ledgerResult.errors);
+    if (settlementsValid) {
+      const ledgerResult = checkFindingLedgerGuard(
+        captures.map((capture) => captureTexts.get(capture.captureIdentity) ?? ''),
+        ledger,
+        {
+          reviewEconomics: true,
+          phase: options.phase ?? 'final-acceptance',
+          issueRevision: episodeFirstRevision,
+          stageTerminalConfirmed,
+          stageReceipts: receipts,
+          verifiedRelayEvidence: relay,
+          episodeAuthority: authority,
+          captureMetadata: captures.map((capture) => ({
+            name: capture.name,
+            timestampMs: captureTimestamps.get(capture.captureIdentity) ?? 0,
+            captureIdentity: capture.captureIdentity,
+          })),
+        },
+      );
+      if (!ledgerResult.ok) errors.push(...ledgerResult.errors);
+    }
   }
   if (errors.length > 0 || !ledger || !tier) {
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)], reviewEpisodeId: episodeId };
@@ -790,7 +836,19 @@ export function produceAcceptanceArtifacts(
   artifactContents.set('finding-disposition-ledger.json', ledger);
   artifactContents.set('review-episode-inventory.json', JSON.stringify(authority!.receiptInventory, null, 2) + '\n');
   artifactContents.set('acceptance-artifacts.json', JSON.stringify(manifest, null, 2) + '\n');
-  publishArtifactSet(outputDir, files, artifactContents);
+  try {
+    publishArtifactSet(outputDir, files, artifactContents);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      outputDir,
+      files: [],
+      missing: [],
+      errors: [`unable to publish acceptance artifacts: ${message}`],
+      reviewEpisodeId: episodeId,
+    };
+  }
   return { ok: true, outputDir, files, missing: [], errors: [], reviewEpisodeId: episodeId };
 }
 
@@ -825,10 +883,17 @@ export function inspectAcceptanceArtifacts(
     const value = readJson(path, 'stage evidence', []);
     if (!isRecord(value)) continue;
     if (Array.isArray(value.invocations)) {
-      for (const invocation of value.invocations) {
-        if (!isRecord(invocation) || invocation.capturePath === undefined) continue;
-        const capturePath = resolve(dirname(path), String(invocation.capturePath));
-        requirePath(capturePath, 'capture', 'stage evidence names a capture that is not present');
+      for (const [index, invocation] of value.invocations.entries()) {
+        if (!isRecord(invocation)) continue;
+        if (invocation.terminalClassification === 'complete' && invocation.capturePath === undefined) {
+          missing.push({
+            artifact: 'capture',
+            reason: `completed invocation[${index}] is missing capturePath: ${path}`,
+          });
+        } else if (invocation.capturePath !== undefined) {
+          const capturePath = resolve(dirname(path), String(invocation.capturePath));
+          requirePath(capturePath, 'capture', 'stage evidence names a capture that is not present');
+        }
       }
     }
     if (
@@ -839,9 +904,16 @@ export function inspectAcceptanceArtifacts(
     ) {
       requiresClaudeProducerEvidence = true;
     }
-    if (isRecord(value.claude) && value.claude.capturePath !== undefined) {
-      const capturePath = resolve(dirname(path), String(value.claude.capturePath));
-      requirePath(capturePath, 'capture', 'stage evidence names a Claude capture that is not present');
+    if (isRecord(value.claude)) {
+      if (value.claude.kind === 'capture' && value.claude.capturePath === undefined) {
+        missing.push({
+          artifact: 'capture',
+          reason: `Claude capture branch is missing capturePath: ${path}`,
+        });
+      } else if (value.claude.capturePath !== undefined) {
+        const capturePath = resolve(dirname(path), String(value.claude.capturePath));
+        requirePath(capturePath, 'capture', 'stage evidence names a Claude capture that is not present');
+      }
     }
   }
   const claudeProducerEvidencePaths = options.claudeProducerEvidencePaths ?? [];
