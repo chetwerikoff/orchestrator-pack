@@ -27,6 +27,11 @@ import {
 } from './contracts.ts';
 import { readStableInput } from './input.ts';
 import {
+  generateOwnedPromptMarker,
+  ownedPromptMarkerMatches,
+  wrapOwnedPromptPayload,
+} from './owned-prompt-marker.ts';
+import {
   acquireStateLightNewChatSendSlot,
   conversationUuidFromUrl,
   ownedConversationIdentityMatches,
@@ -261,20 +266,14 @@ function normalizeMarkdownEchoText(value: string): string {
   );
 }
 
-function normalizeOwnedEchoText(value: string): string {
-  return normalizeMarkdownEchoText(stripUiCollapseAffixes(value));
-}
-
 function boundedDiagnosticHead(value: string, maxChars = DIAGNOSTIC_HEAD_CHARS): string {
   const normalized = normalizeEchoComparisonText(value);
   if (normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, maxChars)}…`;
 }
 
-export function ownedPromptMatches(visibleText: string, promptText: string): boolean {
-  const visible = normalizeOwnedEchoText(visibleText);
-  const prompt = normalizeOwnedEchoText(promptText);
-  return visible.length > 0 && visible === prompt;
+export function ownedPromptMatches(visibleText: string, expectedMarker: string): boolean {
+  return ownedPromptMarkerMatches(visibleText, expectedMarker);
 }
 
 const REPLY_STABILITY_HEAD_CHARS = DIAGNOSTIC_HEAD_CHARS;
@@ -285,8 +284,8 @@ function normalizeReplyForStability(text: string): string {
 }
 
 
-export function hasOwnedUserMessage(messages: readonly PageMessage[], prompt: string): boolean {
-  return messages.some((message) => message.role === 'user' && ownedPromptMatches(message.text, prompt));
+export function hasOwnedUserMessage(messages: readonly PageMessage[], expectedMarker: string): boolean {
+  return messages.some((message) => message.role === 'user' && ownedPromptMatches(message.text, expectedMarker));
 }
 
 export function replyStabilityFingerprint(text: string): string {
@@ -466,6 +465,8 @@ function maybeReturnObservationExhausted(
   incidents: BrowserIncident[],
   journalWriteFailed: boolean,
   incident: (eventClass: string, symptom: string, action?: string) => void,
+  expectedMarker: string,
+  ownedPromptEverSeen: boolean,
 ): TurnRunOutcome | null {
   if (sendCount < 1) return null;
   const softDeadlineElapsed = now >= softDeadline;
@@ -478,6 +479,31 @@ function maybeReturnObservationExhausted(
     softDeadlineElapsed,
   );
   if (now >= hardExhaustionDeadline) {
+    const markerCurrentlyVisible = expectedMarker.length > 0
+      && messages.some((message) => message.role === 'user' && ownedPromptMatches(message.text, expectedMarker));
+    if (expectedMarker && !markerCurrentlyVisible) {
+      const cause = ownedPromptEverSeen
+        ? 'owned_prompt_marker_disappeared'
+        : 'owned_prompt_marker_unresolved';
+      incident('post_send_observation_error', cause, 'return_local_degraded');
+      return {
+        page,
+        browser,
+        result: compactResult(
+          'ui_contract_mismatch',
+          'invocation',
+          cause,
+          invocationId,
+          profileKey,
+          sendCount,
+          pollCount,
+          navigation,
+          incidents,
+          {},
+          journalWriteFailed,
+        ),
+      };
+    }
     incident('observation_exhausted', 'observation_exhausted_no_resend', 'retain_owned_page_no_resend');
     return {
       page,
@@ -614,7 +640,7 @@ function publishStateLightReply(
 export function resolveOwnedReplyWindow(
   messages: readonly PageMessage[],
   baselineCount: number,
-  prompt: string,
+  expectedMarker: string,
 ): {
   readonly replyWindow: readonly PageMessage[];
   readonly uncertainCause?: string;
@@ -630,12 +656,15 @@ export function resolveOwnedReplyWindow(
     return { replyWindow: [], lastOwnedAssistantMessageIndex: null };
   }
 
-  const ownedUsers = users.filter(({ message }) => ownedPromptMatches(message.text, prompt));
+  const ownedUsers = users.filter(({ message }) => ownedPromptMatches(message.text, expectedMarker));
   if (ownedUsers.length === 0) {
     return { replyWindow: [], lastOwnedAssistantMessageIndex: null };
   }
+  if (ownedUsers.length > 1) {
+    return { replyWindow: [], uncertainCause: 'owned_prompt_marker_ambiguous', lastOwnedAssistantMessageIndex: null };
+  }
 
-  const lastOwned = ownedUsers[ownedUsers.length - 1]!;
+  const lastOwned = ownedUsers[0]!;
   const afterOwned = messages.slice(lastOwned.index + 1);
 
   let replyWindow = afterOwned;
@@ -643,7 +672,7 @@ export function resolveOwnedReplyWindow(
   let observedUserHeads: string[] | undefined;
 
   const firstForeignUser = afterOwned.find(
-    (message) => message.role === 'user' && !ownedPromptMatches(message.text, prompt),
+    (message) => message.role === 'user' && !ownedPromptMatches(message.text, expectedMarker),
   );
   if (firstForeignUser) {
     const foreignIndex = afterOwned.indexOf(firstForeignUser);
@@ -671,17 +700,17 @@ export function resolveOwnedReplyWindow(
 export function classifyPageObservation(
   messages: readonly PageMessage[],
   baselineCount: number,
-  prompt: string,
+  expectedMarker: string,
   inProgress: boolean,
 ): PageObservationDecision {
   const users = messages.filter((message) => message.role === 'user');
   if (users.length === 0) return { state: 'waiting' };
-  if (!hasOwnedUserMessage(messages, prompt)) return { state: 'waiting' };
+  if (!hasOwnedUserMessage(messages, expectedMarker)) return { state: 'waiting' };
 
   const { replyWindow, uncertainCause, observedUserHeads } = resolveOwnedReplyWindow(
     messages,
     baselineCount,
-    prompt,
+    expectedMarker,
   );
   const assistants = replyWindow.filter((message) => message.role === 'assistant');
 
@@ -825,18 +854,10 @@ async function locatorCount(locator: any): Promise<number> {
 }
 
 async function locatorText(locator: any, timeoutMs = MAX_LOCAL_READ_WAIT_MS): Promise<string> {
-  // Prefer innerText for rendered-text semantics (owned-prompt matching). Playwright
-  // innerText is a plain DOM read and does not scroll; scroll hijack was from the
-  // continuation click path (fixed separately). textContent includes hidden/sr-only
-  // subtree text (e.g. "You said:") that strict ownedPromptMatches must not see.
+  // innerText is the complete rendered message boundary; textContent is not an
+  // ownership input because it can include screen-reader-only prefixes.
   try {
-    const innerText = normalizeVisibleText(String(await locator.innerText({ timeout: timeoutMs }) ?? ''));
-    if (innerText) return innerText;
-  } catch {
-    // Fall through to textContent for fixtures and nodes that only expose DOM text there.
-  }
-  try {
-    return normalizeVisibleText(String(await locator.textContent({ timeout: timeoutMs })));
+    return String(await locator.innerText({ timeout: timeoutMs }) ?? '');
   } catch {
     return '';
   }
@@ -875,7 +896,7 @@ async function readPageMessages(page: any): Promise<PageMessage[]> {
 
 export async function readPageObservation(
   page: any,
-  prompt?: string,
+  expectedMarker?: string,
   baselineCount?: number,
 ): Promise<PageObservationResult> {
   const nodes = page.locator(MESSAGE_NODE_SELECTOR);
@@ -902,8 +923,8 @@ export async function readPageObservation(
   }
 
   let ownedWindowCompletionReady = false;
-  if (prompt !== undefined && baselineCount !== undefined) {
-    const { lastOwnedAssistantMessageIndex } = resolveOwnedReplyWindow(messages, baselineCount, prompt);
+  if (expectedMarker !== undefined && baselineCount !== undefined) {
+    const { lastOwnedAssistantMessageIndex } = resolveOwnedReplyWindow(messages, baselineCount, expectedMarker);
     const ownedAssistantDomIndex = lastOwnedAssistantMessageIndex === null
       ? null
       : domIndices[lastOwnedAssistantMessageIndex] ?? null;
@@ -956,7 +977,7 @@ function recordProductWallAdvisory(
 
 async function readPostSendObservation(
   page: any,
-  prompt: string,
+  expectedMarker: string,
   baselineCount: number,
 ): Promise<{
   readonly messages: PageMessage[];
@@ -966,7 +987,7 @@ async function readPostSendObservation(
 }> {
   const { messages, ownedWindowCompletionReady, transcriptIncomplete } = await readPageObservation(
     page,
-    prompt,
+    expectedMarker,
     baselineCount,
   );
   let wall: ReturnType<typeof classifyProductWall> = {};
@@ -1398,6 +1419,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     let baselineCount = 0;
     let ownedConversationUrl: string | undefined;
 
+
     const returnComposerMutationFailure = (
       cause: PreSendComposerFailureCause,
     ): TurnRunOutcome => {
@@ -1419,23 +1441,27 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       };
     };
 
+    const marker = generateOwnedPromptMarker();
+    const markedPayload = wrapOwnedPromptPayload(marker, snapshot.text);
+
     const sendOwnedPrompt = async (): Promise<TurnRunOutcome | null> => {
       const insertionContext: { insertionDeadlineMs?: number } = {};
       const mutationFailure = await mutateComposerOrCause(
         page,
-        snapshot.text,
+        markedPayload,
+
         invocationDeadlineMs,
         insertionContext,
       );
       if (mutationFailure) return returnComposerMutationFailure(mutationFailure);
       const insertionDeadlineMs = insertionContext.insertionDeadlineMs ?? invocationDeadlineMs;
       let remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-      if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      if (remainingMs <= 0) return returnComposerMutationFailure("composer_mutation_budget_exhausted");
       if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
-        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+        return returnComposerMutationFailure("composer_mutation_budget_exhausted");
       }
       remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
-      if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      if (remainingMs <= 0) return returnComposerMutationFailure("composer_mutation_budget_exhausted");
       const composer = page.locator(COMPOSER_SELECTOR);
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
       const hasSendButton = await locatorCount(sendButton) > 0;
@@ -1544,7 +1570,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           if (recovery > 0) {
             const landingEvidence = await classifySendLandingEvidence(
               page,
-              snapshot.text,
+              markedPayload,
               lastAttemptConversationUrl,
             );
             if (landingEvidence === 'landed') {
@@ -1690,7 +1716,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           if (claim === 'contended') {
             const landingEvidence = await classifySendLandingEvidence(
               page,
-              snapshot.text,
+              markedPayload,
               conversationUrl,
             );
             if (landingEvidence === 'landed') {
@@ -1741,7 +1767,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         if (!claimed) {
           const landingEvidence = await classifySendLandingEvidence(
             page,
-            snapshot.text,
+            markedPayload,
             lastAttemptConversationUrl,
           );
           if (landingEvidence === 'landed') {
@@ -1936,7 +1962,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
       let observation: Awaited<ReturnType<typeof readPostSendObservation>>;
       try {
-        observation = await readPostSendObservation(page, snapshot.text, baselineCount);
+        observation = await readPostSendObservation(page, marker, baselineCount);
       } catch (error) {
         if (browserOrPageDefinitelyLost(page, browser)) throw error;
         const symptom = error instanceof Error ? error.message : String(error);
@@ -1964,6 +1990,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           incidents,
           journalWriteFailed,
           incident,
+          marker,
+          ownedPromptEverSeen,
         );
         if (readErrorExhausted) return readErrorExhausted;
         emitHeartbeatForPoll({ state: 'waiting' });
@@ -2034,6 +2062,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           incidents,
           journalWriteFailed,
           incident,
+          marker,
+          ownedPromptEverSeen,
         );
         if (incompleteExhausted) return incompleteExhausted;
         emitHeartbeatForPoll({ state: 'waiting' });
@@ -2042,10 +2072,15 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
 
       const inProgress = !ownedWindowCompletionReady && !completionReadySeen;
-      const decision = classifyPageObservation(messages, baselineCount, snapshot.text, inProgress);
+      const decision = classifyPageObservation(messages, baselineCount, marker, inProgress);
 
-      if (hasOwnedUserMessage(messages, snapshot.text)) {
+      if (hasOwnedUserMessage(messages, marker)) {
         ownedPromptEverSeen = true;
+      }
+
+      if (decision.state === 'uncertain' && decision.cause === 'owned_prompt_marker_ambiguous') {
+        incident('post_send_observation_error', 'owned_prompt_marker_ambiguous', 'return_local_degraded');
+        return { page, browser, result: compactResult('ui_contract_mismatch', 'invocation', 'owned_prompt_marker_ambiguous', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed) };
       }
 
       if (decision.state === 'uncertain') {
@@ -2093,6 +2128,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           incidents,
           journalWriteFailed,
           incident,
+          marker,
+          ownedPromptEverSeen,
         );
         if (uncertainWaitingExhausted) return uncertainWaitingExhausted;
         emitHeartbeatForPoll(decision);
@@ -2197,6 +2234,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           incidents,
           journalWriteFailed,
           incident,
+          marker,
+          ownedPromptEverSeen,
         );
         if (readyExhausted) return readyExhausted;
         emitHeartbeatForPoll(decision);
@@ -2243,27 +2282,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
       }
 
       if (Date.now() >= dispatchDeadline) {
-        if (!hasOwnedUserMessage(messages, snapshot.text)) {
+        if (!hasOwnedUserMessage(messages, marker)) {
           if (sendCount >= 1) {
-            if (
-              (targetChatUrl || config.newChat)
-              && completionReadySeen
-              && !ownedPromptEverSeen
-              && hasPostSendTranscript(messages, baselineCount)
-            ) {
-              return returnOwnedConversationRenderMismatch(
-                page,
-                browser,
-                invocationId,
-                profileKey,
-                sendCount,
-                pollCount,
-                navigation,
-                incidents,
-                journalWriteFailed,
-                incident,
-              );
-            }
             if (!sendObservationDeferredLogged) {
               incident(
                 'send_observation_deferred',
@@ -2331,6 +2351,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         incidents,
         journalWriteFailed,
         incident,
+        marker,
+        ownedPromptEverSeen,
       );
       if (waitingExhausted) return waitingExhausted;
 

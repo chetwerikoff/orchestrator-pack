@@ -756,7 +756,8 @@ projections, not workflow gates.
   PASS alone is never acceptance.
 - Start one v1 cycle before review work, publish one logical stage event per
   settled #1150 receipt, and run aggregate final acceptance only after every guard
-  in the shared contract is green for the frozen cycle head and revision.
+  in the shared contract is green for the canonical published predecessor-cycle
+  lineage and the current terminal body/revision.
 
 ```bash
 node scripts/create-issue-stage-finalize.ts start-cycle \

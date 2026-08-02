@@ -11,7 +11,10 @@ import {
   checkTierGateGuard,
   type TierTransitionEvidence,
 } from '../lib/tier-gate-core.ts';
-import { parseConsumableStageReceipt, validateReceiptMatchesCycle } from './create-issue-stage-record-receipt.ts';
+import {
+  validateHistoricalReceiptsAgainstLineage,
+} from './create-issue-stage-record-receipt.ts';
+import type { CanonicalLineage } from './create-issue-stage-record-types.ts';
 
 export const FINAL_ACCEPTANCE_CONTRACT_VERSION = 'create-issue-final-acceptance-contract/v1';
 
@@ -34,6 +37,7 @@ export interface FinalAcceptanceGuardInput {
   tierReceiptPath?: string;
   tierTransitionEvidence?: TierTransitionEvidence;
   episodeAuthority?: ReviewEpisodeDerivationAuthorityV1;
+  canonicalLineage?: CanonicalLineage;
   tierIntakePath?: string;
   externalPassReceiptPath?: string;
   readText?: (path: string) => string;
@@ -154,14 +158,6 @@ export function executeFinalAcceptanceGuards(
       const value = readJsonSafely(path, readJson, errors, 'stage-completeness');
       return value === null ? [] : [value];
     });
-  const consumableReceipts = stageReceipts.map((value, index) => {
-    const parsed = parseConsumableStageReceipt(value);
-    if (!parsed.receipt) {
-      errors.push(...parsed.errors.map((error) => `cycle-binding receipt ${index + 1}: ${error}`));
-    }
-    return parsed.receipt;
-  }).filter((receipt): receipt is NonNullable<typeof receipt> => receipt !== null);
-
   let episodeAuthority = input.episodeAuthority;
   if (!episodeAuthority) {
     const intakePath = input.tierIntakePath ?? join(input.reviewDir, 'tier-intake.json');
@@ -238,7 +234,17 @@ export function executeFinalAcceptanceGuards(
     if (!ledgerResult.ok) errors.push(...ledgerResult.errors.map((item) => `finding-ledger: ${item}`));
   }
 
-  for (const receipt of consumableReceipts) errors.push(...validateReceiptMatchesCycle(receipt, input.cycleId, input.issueRevision).map((item) => `cycle-binding: ${item}`));
+  if (!input.canonicalLineage) {
+    errors.push('cycle-binding: canonical Issue-comment lineage is required for final acceptance');
+  } else {
+    errors.push(...validateHistoricalReceiptsAgainstLineage({
+      receiptValues: stageReceipts,
+      receiptPaths: input.stageReceiptPaths,
+      cycleId: input.cycleId,
+      issueRevision: input.issueRevision,
+      lineage: input.canonicalLineage,
+    }).map((item) => `cycle-binding: ${item}`));
+  }
 
   if (!input.issueBody.includes(input.issueRevision)) {
     errors.push('issue revision drift detected before final acceptance');

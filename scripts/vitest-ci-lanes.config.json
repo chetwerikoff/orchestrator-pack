@@ -59,6 +59,7 @@
     "scripts/kernel/subprocess.test.ts": "heavy",
     "scripts/lib/create-issue-stage-record-artifacts.test.ts": "heavy",
     "scripts/lib/create-issue-stage-record.test.ts": "light",
+    "scripts/lib/create-issue-final-acceptance-revision.test.ts": "light",
     "scripts/lib/protected-signal-receipt.test.ts": "light",
     "scripts/orchestrator-escalation-router.test.ts": "parked",
     "scripts/orchestrator-escalation.test.ts": "light",
