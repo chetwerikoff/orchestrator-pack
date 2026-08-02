@@ -1,0 +1,17 @@
+{
+  "schema": "ci-preflight-fixture/v1",
+  "purpose": "closed-table-and-complement",
+  "selectedRows": [
+    "structure.verify",
+    "structure.reusable",
+    "structure.cheap-wins",
+    "structure.verify-runtime",
+    "typescript.typecheck",
+    "vitest.light-lane-all",
+    "pester.track"
+  ],
+  "requiredSelections": {
+    "callableOmissions": "not_selected",
+    "workflowOnly": "not_applicable"
+  }
+}
