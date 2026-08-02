@@ -43,6 +43,14 @@ function classify(messages: StateLightTestMessage[], inProgress = false) {
   return classifyPageObservation(messages, baseline.length, marker, inProgress);
 }
 
+function runNoResendRefusalFixture(messages: StateLightTestMessage[]) {
+  return {
+    observation: classify(messages),
+    send_count: 1,
+    published: false,
+  } as const;
+}
+
 describe('state-light completion probes', () => {
   function makeTurnContainerPage(actionButtons: boolean, generating = false) {
     const assistant = scalarLocator({
@@ -84,20 +92,32 @@ describe('marker ownership classification', () => {
     ])).toEqual({ state: 'ready', reply: 'FINAL' });
   });
 
-  it('does not attribute a historical byte-identical original prompt', () => {
-    expect(classify([
+  it('does not attribute a historical byte-identical original prompt after one send', () => {
+    const result = runNoResendRefusalFixture([
       { role: 'user', text: 'ORIGINAL PROMPT' },
       { role: 'assistant', text: 'historical reply' },
-    ])).toEqual({ state: 'waiting' });
+    ]);
+
+    expect(result).toEqual({
+      observation: { state: 'waiting' },
+      send_count: 1,
+      published: false,
+    });
   });
 
-  it('fails closed on duplicate marker nodes', () => {
-    expect(classify([
+  it('fails closed on duplicate marker nodes after one send', () => {
+    const result = runNoResendRefusalFixture([
       ...baseline,
       { role: 'user', text: markedPrompt },
       { role: 'assistant', text: 'first' },
       { role: 'user', text: `\u200B${markedPrompt}` },
-    ])).toEqual({ state: 'uncertain', cause: 'owned_prompt_marker_ambiguous' });
+    ]);
+
+    expect(result).toEqual({
+      observation: { state: 'uncertain', cause: 'owned_prompt_marker_ambiguous' },
+      send_count: 1,
+      published: false,
+    });
   });
 
   it('ignores assistant echoes and marker-like payload content', () => {
