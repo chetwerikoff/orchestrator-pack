@@ -47,7 +47,7 @@ function blockedProbe(probe_id: string, kind: string, attribution: 'global' | 'r
 function globalFailure(reason: string, path: string, expected: unknown, actual: unknown, remediation: string | null, probe?: Probe): GateFailure {
   return { reason, diagnostic: diagnostic(reason, path, expected, actual, remediation), probe };
 }
-function checkRuntime(): GateFailure | undefined {
+function checkRuntime(root = REPO): GateFailure | undefined {
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   const npm = spawnSync('npm', ['--version'], { cwd: REPO, encoding: 'utf8' });
   const npmMajor = Number(String(npm.stdout ?? '').trim().split('.')[0]);
@@ -59,50 +59,50 @@ function checkRuntime(): GateFailure | undefined {
     if (found.status !== 0) return globalFailure('unsupported_local_environment', command, 'executable available', String(found.stderr ?? ''), `Install or expose ${command}.`);
   }
   try {
-    const probe = join(REPO, `.ci-preflight-symlink-${process.pid}`);
-    spawnSync('bash', ['-lc', `ln -s . "${probe}" && rm -f "${probe}"`], { cwd: REPO });
+    const probe = join(root, `.ci-preflight-symlink-${process.pid}`);
+    spawnSync('bash', ['-lc', `ln -s . "${probe}" && rm -f "${probe}"`], { cwd: root });
   } catch (error) {
     return globalFailure('unsupported_local_environment', REPO, 'symlink-capable filesystem', String(error), 'Use a symlink-capable checkout.');
   }
   return undefined;
 }
-function checkPaths(): GateFailure | undefined {
+function checkPaths(root = REPO): GateFailure | undefined {
   for (const tableRow of TABLE) for (const path of tableRow.paths) {
-    const full = join(REPO, path);
+    const full = join(root, path);
     if (!existsSync(full)) return globalFailure('preflight_input_missing_or_invalid', path, 'existing accessible path', 'missing', 'Restore the checked-in prerequisite.');
     try { accessSync(full, constants.R_OK); } catch (error) { return globalFailure('preflight_input_missing_or_invalid', path, 'readable', String(error), 'Restore access to the checked-in prerequisite.'); }
   }
   for (const path of ['package.json', 'package-lock.json', 'node_modules/.package-lock.json', 'tsconfig.base.json', 'scripts/vitest-ci-lanes.config.json']) {
-    try { JSON.parse(readFileSync(join(REPO, path), 'utf8')); } catch (error) {
+    try { JSON.parse(readFileSync(join(root, path), 'utf8')); } catch (error) {
       if (path === 'tsconfig.base.json') continue;
       return globalFailure('preflight_input_missing_or_invalid', path, 'parseable checked-in configuration', String(error), 'Restore a valid configuration file.');
     }
   }
-  for (const output of outputMembers(REPO)) return globalFailure('caller_owned_output', output, 'absent', outputCensus(REPO)[output], 'Remove or move the caller-owned runtime output.');
+  for (const output of outputMembers(root)) return globalFailure('caller_owned_output', output, 'absent', outputCensus(root)[output], 'Remove or move the caller-owned runtime output.');
   return undefined;
 }
-function checkDependencies(): GateFailure | undefined {
+function checkDependencies(root = REPO): GateFailure | undefined {
   let pkg: any; let lock: any; let installed: any;
   try {
-    pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
-    lock = JSON.parse(readFileSync(join(REPO, 'package-lock.json'), 'utf8'));
-    installed = JSON.parse(readFileSync(join(REPO, 'node_modules/.package-lock.json'), 'utf8'));
+    pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
+    installed = JSON.parse(readFileSync(join(root, 'node_modules/.package-lock.json'), 'utf8'));
   } catch (error) { return globalFailure('dependency_installation_invalid', 'package-lock.json', 'valid package and lockfile metadata', String(error), 'Restore the pre-existing lockfile installation.'); }
   if (lock.name !== pkg.name || lock.version !== pkg.version || installed.lockfileVersion !== lock.lockfileVersion) return globalFailure('dependency_installation_invalid', 'package-lock.json', { name: pkg.name, version: pkg.version, lockfileVersion: lock.lockfileVersion }, { name: lock.name, version: lock.version, lockfileVersion: installed.lockfileVersion }, 'Restore the matching pre-existing installation.');
-  const census = spawnSync('npm', ['ls', '--all', '--include=dev', '--json', '--offline'], { cwd: REPO, encoding: 'utf8' });
+  const census = spawnSync('npm', ['ls', '--all', '--include=dev', '--json', '--offline'], { cwd: root, encoding: 'utf8' });
   if (census.status !== 0) return globalFailure('dependency_installation_invalid', 'npm ls --all --include=dev --json', 'complete valid integrity census', { status: census.status, stdout: census.stdout, stderr: census.stderr }, 'Restore dependencies without installing from this command.');
-  const pester = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty Version).ToString()'], { cwd: REPO, encoding: 'utf8' });
+  const pester = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty Version).ToString()'], { cwd: root, encoding: 'utf8' });
   if (pester.status !== 0 || !/^(?:5|[6-9]|[1-9]\d)\./.test(String(pester.stdout ?? '').trim())) return globalFailure('dependency_missing', 'Pester', '>= 5.0.0', { status: pester.status, stdout: pester.stdout, stderr: pester.stderr }, 'Install Pester >= 5 outside this command.');
   return undefined;
 }
-function checkDirectDependency(name: 'typescript' | 'vitest', rowId: '05' | '07'): GateFailure | undefined {
-  const pkgPath = join(REPO, 'node_modules', name, 'package.json');
-  const binPath = join(REPO, 'node_modules', '.bin', process.platform === 'win32' ? `${name}.cmd` : name);
+function checkDirectDependency(name: 'typescript' | 'vitest', rowId: '05' | '07', root = REPO): GateFailure | undefined {
+  const pkgPath = join(root, 'node_modules', name, 'package.json');
+  const binPath = join(root, 'node_modules', '.bin', process.platform === 'win32' ? `${name}.cmd` : name);
   try {
-    const declared = (JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).devDependencies ?? {})[name];
+    const declared = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).devDependencies ?? {})[name];
     const installed = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
     if (!declared || !installed || !existsSync(binPath)) return globalFailure('dependency_missing', `node_modules/${name}`, { declared, executable: true }, { installed, executable: existsSync(binPath) }, `Restore the local ${name} installation.`);
-    const version = spawnSync(binPath, ['--version'], { cwd: REPO, encoding: 'utf8' });
+    const version = spawnSync(binPath, ['--version'], { cwd: root, encoding: 'utf8' });
     if (version.status !== 0 || !String(version.stdout ?? '').trim()) return globalFailure('dependency_incompatible', `node_modules/${name}`, { declared, executable: true }, { installed, status: version.status, stderr: version.stderr }, `Restore a compatible local ${name} executable.`);
     return undefined;
   } catch (error) {
@@ -118,12 +118,12 @@ function processGroupObservation(pid: number | undefined): { pgid: number; obser
     return { pgid: pid, observation: 'probe_error', errno: error?.errno ?? null };
   }
 }
-async function execute(rowDef: typeof TABLE[number], env?: NodeJS.ProcessEnv): Promise<{ row: Row; pgid?: number }> {
+async function execute(rowDef: typeof TABLE[number], root = REPO, env?: NodeJS.ProcessEnv): Promise<{ row: Row; pgid?: number }> {
   const row = rowBase(rowDef.row_id);
   let pgid: number | undefined;
   let result: ProcessResult;
   try {
-    result = await runProcess({ command: rowDef.command, args: [...rowDef.args], cwd: REPO, env, inheritParentEnv: true, timeoutMs: rowDef.timeout, killGraceMs: rowDef.grace, allowEmptyStdout: true, onSpawn: pid => { pgid = pid; }, onStdoutChunk: () => undefined, onStderrChunk: () => undefined });
+    result = await runProcess({ command: rowDef.command, args: [...rowDef.args], cwd: root, env, inheritParentEnv: true, timeoutMs: rowDef.timeout, killGraceMs: rowDef.grace, allowEmptyStdout: true, onSpawn: pid => { pgid = pid; }, onStdoutChunk: () => undefined, onStderrChunk: () => undefined });
   } catch (error) {
     row.termination = 'spawn_failed'; row.reason_code = 'spawn_failed'; row.diagnostic = diagnostic('spawn_failed', rowDef.command, { outcome: 'exit' }, { outcome: 'spawn-failed', error: String(error) }, 'Restore the executable and retry.');
     return { row };
@@ -148,25 +148,25 @@ function applyBlock(rows: Row[], reason: string, d: Diagnostic): void { for (con
 export async function runPreflight(repoRoot = REPO): Promise<Record<string, unknown>> {
   const rows = TABLE.map(row => rowBase(row.row_id));
   const probes: Probe[] = [];
-  const global = checkRuntime();
+  const global = checkRuntime(repoRoot);
   probes.push(global ? blockedProbe('probe.platform-tools', 'platform-tools', 'global', [], global.diagnostic) : probeRecord('probe.platform-tools', 'platform-tools', 'global'));
   const hashes = (() => { try { return workflowHashes(repoRoot); } catch (error) { return { blob: '', content: String(error) }; } })();
   const hashFailure = hashes.blob !== WORKFLOW_BLOB_SHA || hashes.content !== WORKFLOW_CONTENT_SHA256;
   const hashDiagnostic = diagnostic('workflow_inventory_stale', '.github/workflows/scope-guard.yml', { git_blob_sha: WORKFLOW_BLOB_SHA, content_sha256: WORKFLOW_CONTENT_SHA256 }, hashes, 'Restore the bound workflow revision.');
   probes.push(hashFailure ? blockedProbe('probe.workflow-hashes', 'workflow-hashes', 'global', [], hashDiagnostic) : probeRecord('probe.workflow-hashes', 'workflow-hashes', 'global'));
-  const paths = global ?? (hashFailure ? globalFailure('workflow_inventory_stale', '.github/workflows/scope-guard.yml', hashDiagnostic.expected, hashDiagnostic.actual, hashDiagnostic.remediation) : checkPaths());
+  const paths = global ?? (hashFailure ? globalFailure('workflow_inventory_stale', '.github/workflows/scope-guard.yml', hashDiagnostic.expected, hashDiagnostic.actual, hashDiagnostic.remediation) : checkPaths(repoRoot));
   probes.push(paths ? blockedProbe('probe.global-paths', 'global-paths', 'global', [], paths.diagnostic) : probeRecord('probe.global-paths', 'global-paths', 'global'));
-  const outputs = paths ?? checkPaths();
+  const outputs = paths ?? checkPaths(repoRoot);
   probes.push(outputs ? blockedProbe('probe.caller-outputs', 'caller-outputs', 'global', [], outputs.diagnostic) : probeRecord('probe.caller-outputs', 'caller-outputs', 'global'));
   const baselineStatus = status(repoRoot);
   const baselineFailure = baselineStatus ? globalFailure('dirty_worktree', repoRoot, '', baselineStatus, 'Clean caller changes before running preflight.') : undefined;
   probes.push(baselineFailure ? blockedProbe('probe.baseline', 'baseline', 'global', [], baselineFailure.diagnostic) : probeRecord('probe.baseline', 'baseline', 'global'));
-  const deps = baselineFailure ?? paths ?? checkDependencies();
+  const deps = baselineFailure ?? paths ?? checkDependencies(repoRoot);
   probes.push(deps ? blockedProbe('probe.lockfile-root', 'lockfile-root', 'global', [], deps.diagnostic) : probeRecord('probe.lockfile-root', 'lockfile-root', 'global'));
   probes.push(deps ? blockedProbe('probe.npm-census', 'npm-integrity-census', 'global', [], deps.diagnostic) : probeRecord('probe.npm-census', 'npm-integrity-census', 'global'));
   probes.push(deps ? blockedProbe('probe.pester', 'pester-query', 'global', [], deps.diagnostic) : probeRecord('probe.pester', 'pester-query', 'global'));
-  const typescript = deps ? undefined : checkDirectDependency('typescript', '05');
-  const vitest = deps ? undefined : checkDirectDependency('vitest', '07');
+  const typescript = deps ? undefined : checkDirectDependency('typescript', '05', repoRoot);
+  const vitest = deps ? undefined : checkDirectDependency('vitest', '07', repoRoot);
   probes.push(typescript ? blockedProbe('probe.typescript-direct', 'typescript-direct', 'row_local', ['05'], typescript.diagnostic) : probeRecord('probe.typescript-direct', 'typescript-direct', 'row_local', ['05']));
   probes.push(vitest ? blockedProbe('probe.vitest-direct', 'vitest-direct', 'row_local', ['07'], vitest.diagnostic) : probeRecord('probe.vitest-direct', 'vitest-direct', 'row_local', ['07']));
   if (deps || global || hashFailure || paths || baselineFailure) {
@@ -181,7 +181,7 @@ export async function runPreflight(repoRoot = REPO): Promise<Record<string, unkn
   for (let i = 0; i < TABLE.length; i++) {
     if ((i === 4 && typescript) || (i === 5 && vitest)) continue;
     const env = TABLE[i].row_id === 'vitest.light-lane-all' ? Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPK_(?:VITEST_TOPOLOGY_PLAN_PATH|CHANGED_VITEST_FILES|VITEST_PR_SCOPE_MODE|.*PR.*|.*SCOPE.*)$/.test(key))) : undefined;
-    const executed = await execute(TABLE[i], env);
+    const executed = await execute(TABLE[i], repoRoot, env);
     rows[i] = executed.row; if (executed.row.termination !== 'not_started') finalIndex = i;
     const pg = processGroupObservation(executed.pgid);
     if (pg?.observation === 'present' || pg?.observation === 'probe_error') {
