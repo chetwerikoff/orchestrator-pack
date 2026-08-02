@@ -1,10 +1,10 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { runProcessSync } from './kernel/subprocess.ts';
 import {
   replayMergeForCarryover,
   validateFocusedResolutionReview,
@@ -12,7 +12,18 @@ import {
 
 const roots: string[] = [];
 function git(root: string, ...args: string[]): string {
-  return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const result = runProcessSync({
+    command: 'git',
+    args,
+    cwd: root,
+    inheritParentEnv: true,
+    encoding: 'utf8',
+    timeoutMs: 60_000,
+  });
+  if (!result.ok) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.stderr.trim()}`);
+  }
+  return result.stdout.trim();
 }
 function makeRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'pack-review-carryover-test-'));
