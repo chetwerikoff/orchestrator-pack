@@ -31,6 +31,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1122 focused read-only page-probe tests are fast light-lane coverage;
   // keep the pre-topology producer bounded until CI runtime history harvests them.
   'scripts/browser-gpt-page-probe.test.ts': 120,
+  'scripts/lib/create-issue-stage-record-artifacts.test.ts': 120,
   // Issue #1164 flow-manager long-running child launcher tests are fast fixture
   // coverage; fixed estimate keeps verify-pack topology guard within the 32-file bound.
   'scripts/flow-manager-long-running-child.test.ts': 120,
