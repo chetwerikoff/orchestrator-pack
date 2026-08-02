@@ -594,6 +594,8 @@ expiry do not create another class.
 
 The affected manager flow has exactly this closed wait inventory:
 
+bounded-wait-inventory: WI-01, WI-02, WI-03, WI-04, WI-05, WI-06
+
 | Wait ID and condition | Existing authoritative producer or observation surface | Deadline and terminal mapping |
 | --- | --- | --- |
 | `WI-01` — a named producer or artifact result becomes available | The named producer and its existing terminal-result surface | `deadline: 1_800_000 ms` from the producer invocation start, using the existing `state-light-turn --timeout-ms` / `DEFAULT_TIMEOUT_MS` budget; `owner: named producer`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` when proven, `blocked` with missing-result remediation when absent, or `refused` only for an authoritative refusal. |

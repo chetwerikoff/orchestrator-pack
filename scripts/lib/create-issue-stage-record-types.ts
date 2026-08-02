@@ -32,6 +32,7 @@ export interface GhInvocationResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  timedOut?: boolean;
 }
 
 export interface GhTransport {

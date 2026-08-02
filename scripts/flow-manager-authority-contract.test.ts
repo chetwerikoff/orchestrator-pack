@@ -67,6 +67,17 @@ describe('Issue #1197 flow-manager authority contract', () => {
     expect(authority).not.toContain('Two non-converging author-fix cycles escalate to the operator.');
   });
 
+  it('rejects wait references that have no bounded-wait table row', () => {
+    const inventory = authority.match(/^bounded-wait-inventory: (.+)$/m)?.[1]
+      .split(', ')
+      .filter(Boolean);
+    expect(inventory).toBeDefined();
+    const rowIds = [...authority.matchAll(/^\| `(WI-\d+)`/gm)].map((match) => match[1]);
+    const referencedIds = [...new Set([...authority.matchAll(/\bWI-\d+\b/g)].map((match) => match[0]))];
+    expect(inventory).toEqual([...rowIds].sort());
+    expect(referencedIds.sort()).toEqual([...rowIds].sort());
+  });
+
   it('enumerates every bounded wait with authoritative evidence and terminal mapping', () => {
     for (const waitId of ['WI-01', 'WI-02', 'WI-03', 'WI-04', 'WI-05', 'WI-06']) {
       expect(authority).toContain(waitId);

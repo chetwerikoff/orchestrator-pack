@@ -28,6 +28,16 @@ import {
 // Match the existing pack precedent in plugins/ao-codex-pr-reviewer/lib/scope_context.ts.
 export const GH_TIMEOUT_MS = 10_000;
 
+export class GhTransportError extends Error {
+  readonly timedOut: boolean;
+
+  constructor(message: string, timedOut: boolean) {
+    super(message);
+    this.name = 'GhTransportError';
+    this.timedOut = timedOut;
+  }
+}
+
 
 export function withGhDeadline(transport: GhTransport, deadlineMs: number): GhTransport {
   return {
@@ -38,6 +48,7 @@ export function withGhDeadline(transport: GhTransport, deadlineMs: number): GhTr
           exitCode: 124,
           stdout: '',
           stderr: 'publication_deadline_exhausted',
+          timedOut: true,
         };
       }
       return transport.runGh(argv, remainingMs);
@@ -65,6 +76,7 @@ export function defaultGhTransport(): GhTransport {
         exitCode: result.exitCode ?? 1,
         stdout: result.stdout ?? '',
         stderr: result.stderr ?? '',
+        timedOut: result.timedOut,
       };
     },
   };
@@ -326,7 +338,7 @@ export function fetchRepositoryOwnerLogin(transport: GhTransport, repo: string):
   const { owner, name } = parseRepo(repo);
   const response = transport.runGh(['gh', 'api', `repos/${owner}/${name}`, '--jq', '.owner.login']);
   if (response.exitCode !== 0 || !response.stdout.trim()) {
-    throw new Error('unable to resolve repository owner login');
+    throw new GhTransportError('unable to resolve repository owner login', response.timedOut === true);
   }
   return response.stdout.trim();
 }
@@ -345,7 +357,7 @@ export function fetchIssueRevision(transport: GhTransport, repo: string, issueNu
     '{title, body, labels: [.labels[].name]}',
   ]);
   if (response.exitCode !== 0) {
-    throw new Error('unable to read issue revision');
+    throw new GhTransportError('unable to read issue revision', response.timedOut === true);
   }
   const parsed = JSON.parse(response.stdout) as { title: string; body: string; labels: string[] };
   return parsed;
@@ -356,7 +368,7 @@ export function createIssueComment(
   repo: string,
   issueNumber: number,
   body: string,
-): { ok: boolean; commentId?: number; ambiguous?: boolean } {
+): { ok: boolean; commentId?: number; ambiguous?: boolean; timedOut?: boolean } {
   const { owner, name } = parseRepo(repo);
   const response = transport.runGh([
     'gh',
@@ -366,7 +378,7 @@ export function createIssueComment(
     `body=${body}`,
   ]);
   if (response.exitCode !== 0) {
-    return { ok: false };
+    return { ok: false, timedOut: response.timedOut === true };
   }
   try {
     const parsed = JSON.parse(response.stdout) as { id?: number };

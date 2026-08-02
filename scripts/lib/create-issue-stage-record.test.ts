@@ -91,6 +91,80 @@ describe('create-issue-stage-record marker and lineage', () => {
     }
   });
 
+  it('returns a blocked terminal diagnostic when start-cycle census times out', () => {
+    const transport = {
+      runGh(argv: string[]) {
+        if (argv[2]?.includes('/labels/')) return { exitCode: 0, stdout: '', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: 'ETIMEDOUT', timedOut: true };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = startReviewCycle(transport, {
+        repo: 'owner/repo',
+        issueNumber: 1197,
+        sourceRevision: 'r01',
+        tier: 'T2',
+        publicActor: 'cursor-flow-manager',
+        workdir,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics.some((item) => item.message.includes('terminal outcome: blocked'))).toBe(true);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a refused terminal diagnostic for a non-timeout census failure', () => {
+    const transport = {
+      runGh() {
+        return { exitCode: 1, stdout: '', stderr: 'authentication failed' };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = publishSettledStageRecord(transport, {
+        repo: 'owner/repo',
+        issueNumber: 1197,
+        receipt: sampleStageReceipt('cycle-1'),
+        workdir,
+      });
+      expect(result.ok).toBe(false);
+      const messages = result.diagnostics.map((item) => item.message).join('\n');
+      expect(messages).toContain('terminal outcome: refused');
+      expect(messages).not.toContain('publication-timeout');
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a publication census transport failure instead of relabeling it as timeout', () => {
+    const transport = {
+      runGh() {
+        return { exitCode: 1, stdout: '', stderr: 'authentication failed' };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = publishJournalEvent(
+        transport,
+        'owner/repo',
+        1197,
+        workdir,
+        'event body',
+        'stage-event/v1',
+        'event-transport-failure',
+        'fingerprint',
+      );
+      expect(result.ok).toBe(false);
+      const messages = result.diagnostics.map((item) => item.message).join('\n');
+      expect(messages).toContain('terminal outcome: refused');
+      expect(messages).not.toContain('publication-timeout');
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
   it('parses markers for all schemas and compares logical fingerprints without delivery metadata', () => {
     const cycle: CycleEventLogical = {
       schema: CYCLE_SCHEMA,

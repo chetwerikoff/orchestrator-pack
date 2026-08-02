@@ -9,6 +9,7 @@ import {
   createIssueComment,
   defaultWorkdir,
   GH_TIMEOUT_MS,
+  GhTransportError,
   ensureProjectionLabels,
   fetchIssueRevision,
   listPendingEvents,
@@ -88,6 +89,35 @@ function pendingFailure(
     deliveryFailureClass: failureClass,
     firstFailureAt: previous?.firstFailureAt ?? new Date().toISOString(),
   });
+}
+
+function censusFailureResult(
+  diagnostics: LineageDiagnostic[],
+  error: unknown,
+  context: string,
+  options: {
+    eventKey?: string;
+    workdir?: string;
+    event?: { schema: string; eventKey: string; body: string };
+    projectionPendingRepair?: boolean;
+  } = {},
+): OperationResult {
+  const timedOut = error instanceof GhTransportError && error.timedOut;
+  if (options.workdir && options.event) {
+    pendingFailure(options.workdir, options.event, timedOut ? 'publication-timeout' : 'census-transport');
+  }
+  const terminalOutcome = timedOut ? 'blocked' : 'refused';
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    ok: false,
+    diagnostics: [...diagnostics, {
+      code: 'comments-truncated',
+      message: `${context}; terminal outcome: ${terminalOutcome}: ${message}`,
+      ...(options.eventKey ? { eventKey: options.eventKey } : {}),
+    }],
+    ...(options.eventKey ? { eventKey: options.eventKey } : {}),
+    ...(options.projectionPendingRepair ? { projectionPendingRepair: true } : {}),
+  };
 }
 
 
@@ -186,13 +216,12 @@ export function publishJournalEvent(
   try {
     censusState = loadIssueJournalCensus(publicationTransport, repo, issueNumber, census);
   } catch (error) {
-    pendingFailure(workdir, { schema, eventKey, body }, 'publication-timeout');
-    diagnostics.push({
-      code: 'comments-truncated',
-      message: `publication census failed: ${error instanceof Error ? error.message : String(error)}`,
+    return censusFailureResult(diagnostics, error, 'publication census', {
       eventKey,
+      workdir,
+      event: { schema, eventKey, body },
+      projectionPendingRepair: true,
     });
-    return { ok: false, diagnostics, eventKey, projectionPendingRepair: true };
   }
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
@@ -225,10 +254,12 @@ export function publishJournalEvent(
   });
   const created = createIssueComment(publicationTransport, repo, issueNumber, body);
   if (!created.ok) {
-    pendingFailure(workdir, { schema, eventKey, body }, 'comment-create');
+    pendingFailure(workdir, { schema, eventKey, body }, created.timedOut ? 'publication-timeout' : 'comment-create');
     diagnostics.push({
       code: 'comments-truncated',
-      message: `comment create failed for ${eventKey}`,
+      message: created.timedOut
+        ? `comment create timed out; terminal outcome: blocked for ${eventKey}`
+        : `comment create failed for ${eventKey}; terminal outcome: refused`,
       eventKey,
     });
     return { ok: false, diagnostics, eventKey, projectionPendingRepair: true };
@@ -237,13 +268,12 @@ export function publishJournalEvent(
   try {
     confirmed = confirmCanonicalEvent(publicationTransport, repo, issueNumber, eventKey, fingerprint, census);
   } catch (error) {
-    pendingFailure(workdir, { schema, eventKey, body }, 'publication-timeout');
-    diagnostics.push({
-      code: 'comments-truncated',
-      message: `publication confirmation failed: ${error instanceof Error ? error.message : String(error)}`,
+    return censusFailureResult(diagnostics, error, 'publication confirmation', {
       eventKey,
+      workdir,
+      event: { schema, eventKey, body },
+      projectionPendingRepair: true,
     });
-    return { ok: false, diagnostics, eventKey, projectionPendingRepair: true };
   }
   diagnostics.push(...confirmed.diagnostics);
   if (!confirmed.confirmed) {
@@ -332,7 +362,12 @@ export function startReviewCycle(
   diagnostics.push(...bootstrapDiagnostics);
   if (bootstrapDiagnostics.length > 0) return { ok: false, diagnostics, projectionPendingRepair: true };
 
-  const censusState = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
+  let censusState: ReturnType<typeof loadIssueJournalCensus>;
+  try {
+    censusState = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
+  } catch (error) {
+    return censusFailureResult(diagnostics, error, 'start-cycle census');
+  }
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
     return { ok: false, diagnostics };
@@ -393,7 +428,16 @@ export function startReviewCycle(
     diagnostics.push({ code: 'comments-truncated', message: 'unable to confirm issue revision after cycle publication' });
     return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted, projectionPendingRepair: true };
   }
-  const head = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census).lineage.head;
+  let finalCensus: ReturnType<typeof loadIssueJournalCensus>;
+  try {
+    finalCensus = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
+  } catch (error) {
+    return censusFailureResult(diagnostics, error, 'cycle confirmation census', {
+      eventKey: persisted,
+      projectionPendingRepair: true,
+    });
+  }
+  const head = finalCensus.lineage.head;
   const headCycleId = head?.logical.schema === CYCLE_SCHEMA
     ? (head.logical as CycleEventLogical)['cycle-id']
     : persisted;
@@ -455,7 +499,12 @@ export function publishSettledStageRecord(
     return { ok: false, diagnostics };
   }
   const receipt = parsedReceipt.receipt;
-  const censusState = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
+  let censusState: ReturnType<typeof loadIssueJournalCensus>;
+  try {
+    censusState = loadIssueJournalCensus(transport, input.repo, input.issueNumber, input.census);
+  } catch (error) {
+    return censusFailureResult(diagnostics, error, 'stage publication census');
+  }
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
     return { ok: false, diagnostics };
