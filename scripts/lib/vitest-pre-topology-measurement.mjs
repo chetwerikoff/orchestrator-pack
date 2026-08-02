@@ -34,6 +34,8 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1164 flow-manager long-running child launcher tests are fast fixture
   // coverage; fixed estimate keeps verify-pack topology guard within the 32-file bound.
   'scripts/flow-manager-long-running-child.test.ts': 120,
+  // Issue #1197 flow-manager authority contract is a fast static contract suite.
+  'scripts/flow-manager-authority-contract.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains

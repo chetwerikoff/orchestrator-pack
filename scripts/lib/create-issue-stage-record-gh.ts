@@ -11,6 +11,8 @@ import {
 import type {
   CommentCensusOptions,
   CommentCensusResult,
+  GhFailure,
+  GhFailureKind,
   GhTransport,
   LineageDiagnostic,
   ParsedJournalEvent,
@@ -25,6 +27,52 @@ import {
   PROJECTION_LABELS,
 } from './create-issue-stage-record-types.ts';
 
+// Match the existing pack precedent in plugins/ao-codex-pr-reviewer/lib/scope_context.ts.
+export const GH_TIMEOUT_MS = 10_000;
+
+export class GhTransportError extends Error {
+  readonly failureKind: GhFailureKind;
+  readonly timedOut: boolean;
+
+  constructor(message: string, failureKind: GhFailureKind) {
+    super(message);
+    this.name = 'GhTransportError';
+    this.failureKind = failureKind;
+    this.timedOut = failureKind === 'timeout';
+  }
+}
+
+function classifyGhResponse(response: { stderr: string; timedOut?: boolean; terminalRefusal?: boolean }, fallback: string): GhFailure {
+  const kind: GhFailureKind = response.timedOut === true
+    ? 'timeout'
+    : response.terminalRefusal === true
+      ? 'terminal-refusal'
+      : 'transport';
+  return {
+    kind,
+    message: response.stderr.trim() || fallback,
+  };
+}
+
+
+export function withGhDeadline(transport: GhTransport, deadlineMs: number): GhTransport {
+  return {
+    runGh(argv: string[]) {
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) {
+        return {
+          exitCode: 124,
+          stdout: '',
+          stderr: 'publication_deadline_exhausted',
+          timedOut: true,
+        };
+      }
+      return transport.runGh(argv, remainingMs);
+    },
+  };
+}
+
+
 export function resolvePackGh(): string {
   const here = fileURLToPath(new URL('.', import.meta.url));
   return join(here, '..', 'gh');
@@ -33,16 +81,19 @@ export function resolvePackGh(): string {
 export function defaultGhTransport(): GhTransport {
   const gh = resolvePackGh();
   return {
-    runGh(argv: string[]) {
+    runGh(argv: string[], timeoutMs = GH_TIMEOUT_MS) {
       const result = runProcessSync({
         command: gh,
         args: argv.slice(1),
         inheritParentEnv: true,
+        timeoutMs,
       });
       return {
         exitCode: result.exitCode ?? 1,
         stdout: result.stdout ?? '',
         stderr: result.stderr ?? '',
+        timedOut: result.timedOut,
+        terminalRefusal: false,
       };
     },
   };
@@ -95,7 +146,12 @@ export function fetchIssueComments(
         code: 'comments-truncated',
         message: 'comment census transport failed',
       });
-      return { comments: collected, commentsComplete: false, diagnostics };
+      return {
+        comments: collected,
+        commentsComplete: false,
+        diagnostics,
+        failure: classifyGhResponse(response, 'comment census transport failed'),
+      };
     }
     let parsed: unknown;
     try {
@@ -174,7 +230,12 @@ export function fetchIssueComments(
           code: 'comments-truncated',
           message: 'comment census sentinel probe failed',
         });
-        return { comments: collected, commentsComplete: false, diagnostics };
+        return {
+          comments: collected,
+          commentsComplete: false,
+          diagnostics,
+          failure: classifyGhResponse(sentinel, 'comment census sentinel probe failed'),
+        };
       }
       let sentinelParsed: unknown;
       try {
@@ -304,7 +365,8 @@ export function fetchRepositoryOwnerLogin(transport: GhTransport, repo: string):
   const { owner, name } = parseRepo(repo);
   const response = transport.runGh(['gh', 'api', `repos/${owner}/${name}`, '--jq', '.owner.login']);
   if (response.exitCode !== 0 || !response.stdout.trim()) {
-    throw new Error('unable to resolve repository owner login');
+    const failure = classifyGhResponse(response, 'unable to resolve repository owner login');
+    throw new GhTransportError(failure.message, failure.kind);
   }
   return response.stdout.trim();
 }
@@ -323,7 +385,8 @@ export function fetchIssueRevision(transport: GhTransport, repo: string, issueNu
     '{title, body, labels: [.labels[].name]}',
   ]);
   if (response.exitCode !== 0) {
-    throw new Error('unable to read issue revision');
+    const failure = classifyGhResponse(response, 'unable to read issue revision');
+    throw new GhTransportError(failure.message, failure.kind);
   }
   const parsed = JSON.parse(response.stdout) as { title: string; body: string; labels: string[] };
   return parsed;
@@ -334,7 +397,7 @@ export function createIssueComment(
   repo: string,
   issueNumber: number,
   body: string,
-): { ok: boolean; commentId?: number; ambiguous?: boolean } {
+): { ok: boolean; commentId?: number; ambiguous?: boolean; timedOut?: boolean; terminalRefusal?: boolean } {
   const { owner, name } = parseRepo(repo);
   const response = transport.runGh([
     'gh',
@@ -344,7 +407,11 @@ export function createIssueComment(
     `body=${body}`,
   ]);
   if (response.exitCode !== 0) {
-    return { ok: false };
+    return {
+      ok: false,
+      timedOut: response.timedOut === true,
+      terminalRefusal: response.terminalRefusal === true,
+    };
   }
   try {
     const parsed = JSON.parse(response.stdout) as { id?: number };

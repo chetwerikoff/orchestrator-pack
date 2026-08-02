@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { runProcess } from '#opk-kernel/subprocess';
+import { runProcess, runProcessSync } from '#opk-kernel/subprocess';
 
 const cleanupPids = new Set<number>();
 
@@ -51,6 +51,18 @@ afterEach(async () => {
 });
 
 describe('sanctioned subprocess kernel', () => {
+  it('interrupts a synchronous child when its timeout expires', () => {
+    const result = runProcessSync({
+      command: process.execPath,
+      args: nodeArgs('setInterval(() => {}, 1000)'),
+      timeoutMs: 20,
+    });
+
+    expect(result.outcome).toBe('timeout');
+    expect(result.timedOut).toBe(true);
+    expect(result.ok).toBe(false);
+  });
+
   it('reports a real exit-code completion distinctly', async () => {
     const result = await runProcess({
       command: process.execPath,

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { executeFinalAcceptanceGuards, FINAL_ACCEPTANCE_CONTRACT_VERSION } from './create-issue-final-acceptance-contract.ts';
 import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
 import {
@@ -12,12 +12,14 @@ import {
 } from './create-issue-stage-record-marker.ts';
 import {
   fetchIssueComments,
+  withGhDeadline,
   parseJournalEvents,
   syncIssueProjectionLabels,
   readPendingEvent,
 } from './create-issue-stage-record-gh.ts';
 import {
   detectAcceptedRevisionDrift,
+  publishJournalEvent,
   publishSettledStageRecord,
   retryPendingEvents,
   startReviewCycle,
@@ -34,6 +36,226 @@ import type { CycleEventLogical, StageEventLogical, TrustedComment } from './cre
 import { CYCLE_SCHEMA, FINAL_SCHEMA, STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
 
 describe('create-issue-stage-record marker and lineage', () => {
+  it('propagates one publication deadline and stops before a post-deadline call', () => {
+    const calls: Array<{ argv: string[]; timeoutMs?: number }> = [];
+    const transport = {
+      runGh(argv: string[], timeoutMs?: number) {
+        calls.push({ argv, timeoutMs });
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    };
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValueOnce(1_000).mockReturnValueOnce(1_600).mockReturnValue(2_100);
+
+    const bounded = withGhDeadline(transport, 2_000);
+    expect(bounded.runGh(['gh', 'api', 'first']).exitCode).toBe(0);
+    expect(bounded.runGh(['gh', 'api', 'second']).exitCode).toBe(0);
+    expect(bounded.runGh(['gh', 'api', 'third'])).toMatchObject({
+      exitCode: 124,
+      stderr: 'publication_deadline_exhausted',
+    });
+    expect(calls.map((call) => call.timeoutMs)).toEqual([1_000, 400]);
+    now.mockRestore();
+  });
+  it('returns blocked when the shared publication deadline expires during confirmation', () => {
+    const calls: Array<{ argv: string[]; timeoutMs?: number }> = [];
+    const transport = {
+      runGh(argv: string[], timeoutMs?: number) {
+        calls.push({ argv, timeoutMs });
+        if (argv.includes('--jq')) return { exitCode: 0, stdout: 'owner', stderr: '' };
+        if (argv[2]?.includes('/comments?')) return { exitCode: 0, stdout: '[]', stderr: '' };
+        return { exitCode: 0, stdout: '{"id": 1}', stderr: '' };
+      },
+    };
+    const workdir = makeTempDir();
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValueOnce(1_000).mockReturnValueOnce(1_000).mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000).mockReturnValue(12_000);
+
+    try {
+      const result = publishJournalEvent(
+        transport,
+        'owner/repo',
+        1197,
+        workdir,
+        'event body',
+        'stage-event/v1',
+        'event-1',
+        'fingerprint',
+      );
+      expect(result.ok).toBe(false);
+      expect(result.terminal).toMatchObject({
+        outcome: 'blocked',
+        cause: 'publication-timeout',
+        remedy: expect.any(String),
+        owner: 'exception publisher',
+        deadline: 'GH_TIMEOUT_MS = 10_000 ms',
+      });
+      expect(calls).toHaveLength(3);
+    } finally {
+      now.mockRestore();
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a blocked terminal diagnostic when start-cycle census times out', () => {
+    const transport = {
+      runGh(argv: string[]) {
+        if (argv[2]?.includes('/labels/')) return { exitCode: 0, stdout: '', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: 'ETIMEDOUT', timedOut: true };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = startReviewCycle(transport, {
+        repo: 'owner/repo',
+        issueNumber: 1197,
+        sourceRevision: 'r01',
+        tier: 'T2',
+        publicActor: 'cursor-flow-manager',
+        workdir,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics.some((item) => item.message.includes('terminal outcome: blocked'))).toBe(true);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a blocked terminal diagnostic for a non-timeout census failure', () => {
+    const transport = {
+      runGh() {
+        return { exitCode: 1, stdout: '', stderr: 'authentication failed' };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = publishSettledStageRecord(transport, {
+        repo: 'owner/repo',
+        issueNumber: 1197,
+        receipt: sampleStageReceipt('cycle-1'),
+        workdir,
+      });
+      expect(result.ok).toBe(false);
+      const messages = result.diagnostics.map((item) => item.message).join('\n');
+      expect(messages).toContain('terminal outcome: blocked');
+      expect(messages).not.toContain('publication-timeout');
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a publication census transport failure as blocked instead of relabeling it as timeout', () => {
+    const transport = {
+      runGh() {
+        return { exitCode: 1, stdout: '', stderr: 'authentication failed' };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = publishJournalEvent(
+        transport,
+        'owner/repo',
+        1197,
+        workdir,
+        'event body',
+        'stage-event/v1',
+        'event-transport-failure',
+        'fingerprint',
+      );
+      expect(result.ok).toBe(false);
+      const messages = result.diagnostics.map((item) => item.message).join('\n');
+      expect(messages).toContain('terminal outcome: blocked');
+      expect(messages).not.toContain('publication-timeout');
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns structured blocked metadata when comments time out after owner lookup', () => {
+    const transport = {
+      runGh(argv: string[]) {
+        if (argv.includes('--jq')) return { exitCode: 0, stdout: 'owner', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: 'ETIMEDOUT', timedOut: true };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = publishSettledStageRecord(transport, {
+        repo: 'owner/repo',
+        issueNumber: 1197,
+        receipt: sampleStageReceipt('cycle-1'),
+        workdir,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.terminal).toMatchObject({
+        outcome: 'blocked',
+        cause: 'publication-timeout',
+        remedy: expect.any(String),
+        owner: expect.any(String),
+        deadline: 'GH_TIMEOUT_MS = 10_000 ms',
+      });
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a non-timeout comment transport failure blocked with structured metadata', () => {
+    const transport = {
+      runGh(argv: string[]) {
+        if (argv.includes('--jq')) return { exitCode: 0, stdout: 'owner', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: 'temporary API failure' };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = publishSettledStageRecord(transport, {
+        repo: 'owner/repo',
+        issueNumber: 1197,
+        receipt: sampleStageReceipt('cycle-1'),
+        workdir,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.terminal).toMatchObject({
+        outcome: 'blocked',
+        cause: 'transport-failure',
+        remedy: expect.any(String),
+        owner: expect.any(String),
+        deadline: 'GH_TIMEOUT_MS = 10_000 ms',
+      });
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns refused only when the comment transport marks an explicit terminal refusal', () => {
+    const transport = {
+      runGh(argv: string[]) {
+        if (argv.includes('--jq')) return { exitCode: 0, stdout: 'owner', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: 'policy refusal', terminalRefusal: true };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = publishSettledStageRecord(transport, {
+        repo: 'owner/repo',
+        issueNumber: 1197,
+        receipt: sampleStageReceipt('cycle-1'),
+        workdir,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.terminal).toMatchObject({
+        outcome: 'refused',
+        cause: 'terminal-refusal',
+        remedy: expect.any(String),
+        owner: expect.any(String),
+        deadline: 'GH_TIMEOUT_MS = 10_000 ms',
+      });
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
   it('parses markers for all schemas and compares logical fingerprints without delivery metadata', () => {
     const cycle: CycleEventLogical = {
       schema: CYCLE_SCHEMA,
