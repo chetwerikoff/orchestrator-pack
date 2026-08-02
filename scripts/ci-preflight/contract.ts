@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { runProcessSync } from '../kernel/subprocess.ts';
 
 export const WORKFLOW_BLOB_SHA = '0e1bd37903b58e3f44fb5e4b382332306893e885';
 export const WORKFLOW_CONTENT_SHA256 = '319ee89acbb45631cfe91c9981056c922d37589f32874cd9b37bd00106779b7d';
@@ -99,8 +99,8 @@ export function workflowHashes(repoRoot: string): { blob: string; content: strin
 }
 
 function requireGitBlob(repoRoot: string, path: string): string {
-  const result = spawnSync('git', ['hash-object', path], { cwd: repoRoot, encoding: 'utf8' });
-  return result.status === 0 ? String(result.stdout).trim() : '';
+  const result = runProcessSync({ command: 'git', args: ['hash-object', path], cwd: repoRoot, inheritParentEnv: true });
+  return result.ok ? String(result.stdout).trim() : '';
 }
 
 export function workflowCoverage() {

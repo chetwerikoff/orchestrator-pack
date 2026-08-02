@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, accessSync, constants } from 'node:fs';
 import { join, relative } from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
+import { runProcess, runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
 import { TABLE, INVENTORY, RUNTIME_OUTPUTS, WORKFLOW_BLOB_SHA, WORKFLOW_CONTENT_SHA256, nativeOutput, workflowCoverage, workflowHashes, type Diagnostic, type NativeOutput, type Row, type RowId } from './contract.ts';
 
 type Probe = Record<string, unknown>;
@@ -35,7 +34,7 @@ function outputCensus(root: string): Record<string, unknown> {
   return result;
 }
 function status(root: string): string {
-  const result = spawnSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: root, encoding: 'utf8' });
+  const result = runProcessSync({ command: 'git', args: ['status', '--porcelain=v1', '--untracked-files=all'], cwd: root, inheritParentEnv: true });
   return String(result.stdout ?? '');
 }
 function probeRecord(probe_id: string, kind: string, attribution: 'global' | 'row_local', affected_rows: string[] = []): Probe {
@@ -52,18 +51,19 @@ function globalFailure(reason: string, path: string, expected: unknown, actual: 
 }
 function checkRuntime(root = REPO): GateFailure | undefined {
   const nodeMajor = Number(process.versions.node.split('.')[0]);
-  const npm = spawnSync('npm', ['--version'], { cwd: REPO, encoding: 'utf8' });
+  const npm = runProcessSync({ command: 'npm', args: ['--version'], cwd: root, inheritParentEnv: true });
   const npmMajor = Number(String(npm.stdout ?? '').trim().split('.')[0]);
-  if (process.platform !== 'linux' || process.arch !== 'x64' || nodeMajor !== 22 || npm.status !== 0 || npmMajor !== 10) {
+  if (process.platform !== 'linux' || process.arch !== 'x64' || nodeMajor !== 22 || !npm.ok || npmMajor !== 10) {
     return globalFailure('unsupported_local_environment', 'node/npm runtime', { platform: 'linux', arch: 'x64', node_major: 22, npm_major: 10 }, { platform: process.platform, arch: process.arch, node_major: nodeMajor, npm_major: npmMajor }, 'Use Linux x86_64 with Node 22 and npm 10.');
   }
   for (const command of ['git', 'bash', 'pwsh']) {
-    const found = spawnSync('bash', ['-lc', `command -v ${command}`], { encoding: 'utf8' });
-    if (found.status !== 0) return globalFailure('unsupported_local_environment', command, 'executable available', String(found.stderr ?? ''), `Install or expose ${command}.`);
+    const found = runProcessSync({ command: 'bash', args: ['-lc', `command -v ${command}`], cwd: root, inheritParentEnv: true });
+    if (!found.ok) return globalFailure('unsupported_local_environment', command, 'executable available', String(found.stderr ?? ''), `Install or expose ${command}.`);
   }
   try {
     const probe = join(root, `.ci-preflight-symlink-${process.pid}`);
-    spawnSync('bash', ['-lc', `ln -s . "${probe}" && rm -f "${probe}"`], { cwd: root });
+    const link = runProcessSync({ command: 'bash', args: ['-lc', `ln -s . "${probe}" && rm -f "${probe}"`], cwd: root, inheritParentEnv: true });
+    if (!link.ok) return globalFailure('unsupported_local_environment', root, 'symlink-capable filesystem', String(link.stderr ?? ''), 'Use a symlink-capable checkout.');
   } catch (error) {
     return globalFailure('unsupported_local_environment', REPO, 'symlink-capable filesystem', String(error), 'Use a symlink-capable checkout.');
   }
@@ -92,10 +92,10 @@ function checkDependencies(root = REPO): GateFailure | undefined {
     installed = JSON.parse(readFileSync(join(root, 'node_modules/.package-lock.json'), 'utf8'));
   } catch (error) { return globalFailure('dependency_installation_invalid', 'package-lock.json', 'valid package and lockfile metadata', String(error), 'Restore the pre-existing lockfile installation.'); }
   if (lock.name !== pkg.name || lock.version !== pkg.version || installed.lockfileVersion !== lock.lockfileVersion) return globalFailure('dependency_installation_invalid', 'package-lock.json', { name: pkg.name, version: pkg.version, lockfileVersion: lock.lockfileVersion }, { name: lock.name, version: lock.version, lockfileVersion: installed.lockfileVersion }, 'Restore the matching pre-existing installation.');
-  const census = spawnSync('npm', ['ls', '--all', '--include=dev', '--json', '--offline'], { cwd: root, encoding: 'utf8' });
-  if (census.status !== 0) return globalFailure('dependency_installation_invalid', 'npm ls --all --include=dev --json', 'complete valid integrity census', { status: census.status, stdout: census.stdout, stderr: census.stderr }, 'Restore dependencies without installing from this command.');
-  const pester = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty Version).ToString()'], { cwd: root, encoding: 'utf8' });
-  if (pester.status !== 0 || !/^(?:5|[6-9]|[1-9]\d)\./.test(String(pester.stdout ?? '').trim())) return globalFailure('dependency_missing', 'Pester', '>= 5.0.0', { status: pester.status, stdout: pester.stdout, stderr: pester.stderr }, 'Install Pester >= 5 outside this command.');
+  const census = runProcessSync({ command: 'npm', args: ['ls', '--all', '--include=dev', '--json', '--offline'], cwd: root, inheritParentEnv: true });
+  if (!census.ok) return globalFailure('dependency_installation_invalid', 'npm ls --all --include=dev --json', 'complete valid integrity census', { status: census.exitCode, stdout: census.stdout, stderr: census.stderr }, 'Restore dependencies without installing from this command.');
+  const pester = runProcessSync({ command: 'pwsh', args: ['-NoProfile', '-NonInteractive', '-Command', '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty Version).ToString()'], cwd: root, inheritParentEnv: true });
+  if (!pester.ok || !/^(?:5|[6-9]|[1-9]\d)\./.test(String(pester.stdout ?? '').trim())) return globalFailure('dependency_missing', 'Pester', '>= 5.0.0', { status: pester.exitCode, stdout: pester.stdout, stderr: pester.stderr }, 'Install Pester >= 5 outside this command.');
   return undefined;
 }
 function checkDirectDependency(name: 'typescript' | 'vitest', rowId: '05' | '07', root = REPO): GateFailure | undefined {
@@ -107,8 +107,8 @@ function checkDirectDependency(name: 'typescript' | 'vitest', rowId: '05' | '07'
     const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')).packages?.[`node_modules/${name}`]?.version;
     if (!declared || !installed || !existsSync(binPath)) return globalFailure('dependency_missing', `node_modules/${name}`, { declared, lockfile: lock, executable: true }, { installed, lockfile: lock, executable: existsSync(binPath) }, `Restore the local ${name} installation.`);
     if (installed !== lock || !satisfiesRange(installed, declared)) return globalFailure('dependency_incompatible', `node_modules/${name}`, { declared, lockfile: lock }, { installed, lockfile: lock }, `Restore a compatible local ${name} executable.`);
-    const version = spawnSync(binPath, ['--version'], { cwd: root, encoding: 'utf8' });
-    if (version.status !== 0 || !String(version.stdout ?? '').trim()) return globalFailure('dependency_incompatible', `node_modules/${name}`, { declared, executable: true }, { installed, status: version.status, stderr: version.stderr }, `Restore a compatible local ${name} executable.`);
+    const version = runProcessSync({ command: binPath, args: ['--version'], cwd: root, inheritParentEnv: true });
+    if (!version.ok || !String(version.stdout ?? '').trim()) return globalFailure('dependency_incompatible', `node_modules/${name}`, { declared, executable: true }, { installed, status: version.exitCode, stderr: version.stderr }, `Restore a compatible local ${name} executable.`);
     return undefined;
   } catch (error) {
     return globalFailure('dependency_missing', `node_modules/${name}`, { row: rowId }, String(error), `Restore the local ${name} installation.`);
