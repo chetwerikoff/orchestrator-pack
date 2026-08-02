@@ -36,6 +36,12 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/flow-manager-long-running-child.test.ts': 120,
   // Issue #1197 flow-manager authority contract is a fast static contract suite.
   'scripts/flow-manager-authority-contract.test.ts': 120,
+  // Issue #1200 adds deterministic publication-authority unit suites; keep
+  // pre-topology measurement bounded until runtime-history harvest records them.
+  'scripts/create-issue-parked-migration.test.ts': 120,
+  'scripts/lib/create-issue-comment-census.test.ts': 120,
+  'scripts/lib/create-issue-completed-result.test.ts': 120,
+  'scripts/lib/create-issue-stage-topology.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
