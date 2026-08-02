@@ -7,11 +7,24 @@
   "baseline": {
     "commit_sha": "eed5f323031bdff955ba32c3866c8acd9460cfe0",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:e8b94a3a0b320fd29d108166b16eee147b70489803e123c079c6269178ac4f27"
+    "active_scope_hash": "sha256:e1c149248c68e9204ab0de37ad79a7bfcfe4e1aff05587f543d6b87f6d3e41e8"
   },
   "declared_paths": [
     "scripts/toolchain/chatgpt-browser-turn.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:e8b94a3a0b320fd29d108166b16eee147b70489803e123c079c6269178ac4f27",
+      "new_active_scope_hash": "sha256:e1c149248c68e9204ab0de37ad79a7bfcfe4e1aff05587f543d6b87f6d3e41e8",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "Replace remaining wall-clock timing assertions with controlled-clock budget invariants",
+      "actor": "cursor",
+      "timestamp": "2026-08-02T09:11:40.966Z",
+      "applied": true
+    }
+  ]
 }

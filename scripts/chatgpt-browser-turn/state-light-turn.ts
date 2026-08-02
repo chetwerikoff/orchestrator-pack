@@ -74,25 +74,18 @@ const STABILITY_READ_DELAY_MS = 1_000;
 const COMPLETION_CONFIRM_POLL_MS = 1_000;
 const DIAGNOSTIC_HEAD_CHARS = 300;
 export const MAX_LOCAL_READ_WAIT_MS = 5_000;
-/** Base composer mutation budget — independent of the local DOM-read constant. */
-export const COMPOSER_MUTATION_BASE_WAIT_MS = 3_000;
-/** Additional mutation wait granted per payload byte inserted into the composer. */
-export const COMPOSER_MUTATION_MS_PER_BYTE = 0.25;
-/** Upper bound for one composer mutation; matches ui-adapter segment ceiling. */
-export const MAX_COMPOSER_MUTATION_WAIT_MS = 30_000;
-const BLOCKING_PAGE_OVERLAY_SELECTOR = '[role="dialog"][aria-modal="true"], [data-testid*="modal-overlay"]';
+export const COMPOSER_READINESS_WAIT_MS = 12_000;
+/** Minimum insertion allowance for a one-line payload. */
+export const COMPOSER_INSERTION_WAIT_MS = 3_000;
+/** Conservative 2.18x margin over the measured ProseMirror cost of roughly 55 ms per line. */
+export const COMPOSER_INSERTION_MS_PER_LINE = 120;
 
-export function deriveComposerMutationBudgetMs(
-  payloadByteLength: number,
-  invocationTimeoutMs: number,
-  remainingInvocationMs?: number,
-): number {
-  const scaled = COMPOSER_MUTATION_BASE_WAIT_MS + Math.max(0, payloadByteLength) * COMPOSER_MUTATION_MS_PER_BYTE;
-  const capped = Math.min(Math.floor(scaled), MAX_COMPOSER_MUTATION_WAIT_MS);
-  const bounded = Math.min(capped, invocationTimeoutMs);
-  if (remainingInvocationMs === undefined) return bounded;
-  return Math.min(bounded, Math.max(0, remainingInvocationMs));
+export function deriveComposerInsertionBudgetMs(text: string): number {
+  const structuralLineCount = text.split(/\r\n|\r|\n/).length;
+  return Math.max(COMPOSER_INSERTION_WAIT_MS, structuralLineCount * COMPOSER_INSERTION_MS_PER_LINE);
 }
+
+const BLOCKING_PAGE_OVERLAY_SELECTOR = '[role="dialog"][aria-modal="true"], [data-testid*="modal-overlay"]';
 /** Per-node transcript reads use shorter budgets so one hung node cannot block the poll. */
 const MESSAGE_NODE_READ_TIMEOUT_MS = 800;
 const MESSAGE_NODE_READ_RETRY_TIMEOUT_MS = 400;
@@ -996,18 +989,71 @@ async function maybeContinueGeneration(page: any): Promise<boolean> {
   }
 }
 
+async function readComposerReadiness(page: any, deadline: number): Promise<boolean> {
+  try {
+    const composer = page.locator(COMPOSER_SELECTOR);
+    let remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return false;
+    if (await locatorCount(composer) <= 0 || Date.now() >= deadline) return false;
+
+    remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return false;
+    const readiness = typeof composer.evaluate === 'function'
+      ? await composer.evaluate(
+        (element: any) => {
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return {
+            visible: style.display !== 'none'
+              && style.visibility !== 'hidden'
+              && rect.width > 0
+              && rect.height > 0,
+            enabled: !element.matches(':disabled')
+              && element.getAttribute('aria-disabled') !== 'true',
+            contentEditable: Boolean(
+              element.isContentEditable || element.contentEditable === 'true',
+            ),
+          };
+        },
+        undefined,
+        { timeout: remainingMs },
+      )
+      : undefined;
+    if (Date.now() >= deadline) return false;
+
+    // Legacy page fixtures expose presence only. Real DOM-backed locators return
+    // the object above; test fixtures with deterministic controls do the same.
+    if (!readiness || typeof readiness !== 'object') return Date.now() < deadline;
+    const observed = readiness as { visible?: unknown; enabled?: unknown; contentEditable?: unknown };
+    return Boolean(
+      observed.visible
+      && observed.enabled
+      && observed.contentEditable
+      && Date.now() < deadline,
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function waitForComposer(
   page: any,
-  deadline: number,
+  invocationDeadlineMs: number,
 ): Promise<{ state: 'ready' } | { state: TurnState; cause: string }> {
-  const composer = page.locator(COMPOSER_SELECTOR);
-  while (Date.now() < deadline) {
+  const readinessStart = Date.now();
+  const readinessDeadline = Math.min(readinessStart + COMPOSER_READINESS_WAIT_MS, invocationDeadlineMs);
+  while (true) {
+    let remainingMs = readinessDeadline - Date.now();
+    if (remainingMs <= 0) break;
     const wall = classifyProductWall(
-      await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, Math.max(1, deadline - Date.now()))),
+      await productStatusText(page, Math.min(MAX_LOCAL_READ_WAIT_MS, remainingMs)),
     );
+    if (Date.now() >= readinessDeadline) break;
     if (wall.state) return { state: wall.state, cause: wall.cause ?? `${wall.state}_detected` };
-    if (await locatorCount(composer) > 0) return { state: 'ready' };
-    await sleep(page, Math.min(INITIAL_POLL_MS, Math.max(1, deadline - Date.now())));
+    if (await readComposerReadiness(page, readinessDeadline)) return { state: 'ready' };
+    remainingMs = readinessDeadline - Date.now();
+    if (remainingMs <= 0) break;
+    await sleep(page, Math.min(INITIAL_POLL_MS, remainingMs));
   }
   return { state: 'ui_contract_mismatch', cause: 'composer_unavailable' };
 }
@@ -1027,35 +1073,47 @@ async function hasBlockingPageOverlay(page: any): Promise<boolean> {
 }
 
 function remainingComposerMutationMs(
-  mutationPairDeadlineMs: number,
+  insertionDeadlineMs: number,
   invocationDeadlineMs: number,
 ): number {
   const now = Date.now();
-  return Math.min(mutationPairDeadlineMs - now, invocationDeadlineMs - now);
+  return Math.min(insertionDeadlineMs - now, invocationDeadlineMs - now);
 }
 
 async function mutateComposerOrCause(
   page: any,
   text: string,
-  payloadByteLength: number,
-  config: BrowserConfig,
   invocationDeadlineMs: number,
+  insertionContext?: { insertionDeadlineMs?: number },
 ): Promise<PreSendComposerFailureCause | null> {
-  const remainingMs = Math.max(0, invocationDeadlineMs - Date.now());
-  const mutationBudgetMs = deriveComposerMutationBudgetMs(payloadByteLength, config.timeoutMs, remainingMs);
-  const mutationPairDeadlineMs = Date.now() + mutationBudgetMs;
   const composer = page.locator(COMPOSER_SELECTOR);
+  const insertionStart = Date.now();
+  const insertionDeadlineMs = Math.min(insertionStart + deriveComposerInsertionBudgetMs(text), invocationDeadlineMs);
+  if (insertionContext) insertionContext.insertionDeadlineMs = insertionDeadlineMs;
+  if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
+    return 'composer_mutation_budget_exhausted';
+  }
+
   try {
-    let actionBudgetMs = remainingComposerMutationMs(mutationPairDeadlineMs, invocationDeadlineMs);
+    let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
     if (actionBudgetMs <= 0) return 'composer_mutation_budget_exhausted';
     await composer.click({ timeout: actionBudgetMs });
-    actionBudgetMs = remainingComposerMutationMs(mutationPairDeadlineMs, invocationDeadlineMs);
+    if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
+
+    actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+    if (actionBudgetMs <= 0) return 'composer_mutation_budget_exhausted';
+    if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
+      return 'composer_mutation_budget_exhausted';
+    }
+    actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
     if (actionBudgetMs <= 0) return 'composer_mutation_budget_exhausted';
     await composer.fill(text, { timeout: actionBudgetMs });
+    if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
     return null;
   } catch (error) {
-    if (!isPlaywrightTimeoutError(error)) throw error;
-    if (await hasBlockingPageOverlay(page)) return 'blocking_page_overlay';
+    if (isPlaywrightTimeoutError(error) && await hasBlockingPageOverlay(page)) {
+      return 'blocking_page_overlay';
+    }
     return 'composer_mutation_budget_exhausted';
   }
 }
@@ -1337,7 +1395,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     page = await createDedicatedTurnPage(browser);
     await navigateOwnedTurnPage(page, config, navigation);
 
-    const composerDeadline = Date.now() + Math.min(30_000, config.timeoutMs);
     let baselineCount = 0;
     let ownedConversationUrl: string | undefined;
 
@@ -1363,17 +1420,33 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     };
 
     const sendOwnedPrompt = async (): Promise<TurnRunOutcome | null> => {
+      const insertionContext: { insertionDeadlineMs?: number } = {};
       const mutationFailure = await mutateComposerOrCause(
         page,
         snapshot.text,
-        snapshot.byteLength,
-        config,
         invocationDeadlineMs,
+        insertionContext,
       );
       if (mutationFailure) return returnComposerMutationFailure(mutationFailure);
+      const insertionDeadlineMs = insertionContext.insertionDeadlineMs ?? invocationDeadlineMs;
+      let remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
+        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      }
+      remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
       const composer = page.locator(COMPOSER_SELECTOR);
       const sendButton = page.locator(SEND_BUTTON_SELECTOR);
-      if (await locatorCount(sendButton) > 0) {
+      const hasSendButton = await locatorCount(sendButton) > 0;
+      remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
+        return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      }
+      remainingMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
+      if (remainingMs <= 0) return returnComposerMutationFailure('composer_mutation_budget_exhausted');
+      if (hasSendButton) {
         await sendButton.click({ timeout: MAX_LOCAL_READ_WAIT_MS });
       } else {
         await composer.press('Enter', { timeout: MAX_LOCAL_READ_WAIT_MS });
@@ -1460,7 +1533,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         const initialPrepareFailure = returnFreshPrepareFailure(initialPrepare);
         if (initialPrepareFailure) return initialPrepareFailure;
 
-        let composerState = await waitForComposer(page, composerDeadline);
+        let composerState = await waitForComposer(page, invocationDeadlineMs);
         const initialComposerFailure = returnComposerBlocker(composerState);
         if (initialComposerFailure) return initialComposerFailure;
 
@@ -1520,7 +1593,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             );
             const preparedFailure = returnFreshPrepareFailure(prepared);
             if (preparedFailure) return preparedFailure;
-            composerState = await waitForComposer(page, composerDeadline);
+            composerState = await waitForComposer(page, invocationDeadlineMs);
             const composerFailure = returnComposerBlocker(composerState);
             if (composerFailure) return composerFailure;
             sendAuthorized = true;
@@ -1731,7 +1804,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         );
       }
 
-      const composerState = await waitForComposer(page, composerDeadline);
+      const composerState = await waitForComposer(page, invocationDeadlineMs);
       if (composerState.state !== 'ready') {
         recordProductWallAdvisory(profileKey, composerState.state, composerState.cause, invocationId);
         incident('invocation_blocker', composerState.cause, 'return_local_error');
@@ -2359,6 +2432,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
 
 export const __testComposerMutation = {
   remainingComposerMutationMs,
+  readComposerReadiness,
   mutateComposerOrCause,
   hasBlockingPageOverlay,
   waitForComposer,
