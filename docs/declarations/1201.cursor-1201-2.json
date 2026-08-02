@@ -7,9 +7,10 @@
   "baseline": {
     "commit_sha": "eb7c2e9b2a21f80afd0cd3165ac9e4161169f837",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:89e7d4c33e23649e17fd3502dccfa37c58e5b1ed0cb4d8056be7516521178c63"
+    "active_scope_hash": "sha256:1ba66235af9f46c3452cd1688c05048c3fa658b7e5c689a87ffaf25939f3137e"
   },
   "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
     "docs/tiering.md",
     "docs/review-lanes.md",
     "scripts/vitest-ci-lanes.config.json",
@@ -20,8 +21,33 @@
     "scripts/lib/review-lane-routing.test.ts",
     "scripts/lib/review-lane-selector.ts",
     "scripts/lib/create-issue-stage-record-receipt.ts",
-    "scripts/lib/create-issue-stage-record-types.ts"
+    "scripts/lib/create-issue-stage-record-types.ts",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record-marker.ts",
+    "scripts/lib/create-issue-stage-record-review-lane.ts",
+    "scripts/lib/create-issue-stage-record-review-lane.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:89e7d4c33e23649e17fd3502dccfa37c58e5b1ed0cb4d8056be7516521178c63",
+      "new_active_scope_hash": "sha256:1ba66235af9f46c3452cd1688c05048c3fa658b7e5c689a87ffaf25939f3137e",
+      "changed": {
+        "added": [
+          ".claude/skills/create-issue-draft/SKILL.md",
+          "scripts/lib/create-issue-stage-record-cli.ts",
+          "scripts/lib/create-issue-stage-record-core.ts",
+          "scripts/lib/create-issue-stage-record-marker.ts",
+          "scripts/lib/create-issue-stage-record-review-lane.test.ts",
+          "scripts/lib/create-issue-stage-record-review-lane.ts"
+        ],
+        "removed": []
+      },
+      "reason": "wire production caller for review-lane routing",
+      "actor": "local",
+      "timestamp": "2026-08-02T10:57:52.046Z",
+      "applied": true
+    }
+  ]
 }
