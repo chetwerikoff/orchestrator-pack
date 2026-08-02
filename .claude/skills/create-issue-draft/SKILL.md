@@ -488,6 +488,68 @@ read compatibility only; source-suffixed captures require receipts.
 
 ## Shared reviewer contract
 
+### Direct GitHub publication and manager receipts — Issue #1225
+
+The GPT author may create the target GitHub Issue and edit its title and body
+directly. After a successful write, the manager-facing chat response is a
+receipt only: the new revision marker and changed-section list, in at most
+15 lines. This grants no PR-surface or PR-finalization authority.
+
+A GPT reviewer publishes its verdict and findings as a top-level comment on
+the target Issue directly. After a successful write, its manager-facing chat
+response is a receipt only:
+
+```text
+VERDICT: <...>
+COMMENT_URL: <...>
+REVISION: <rNN>
+INVOCATION_ID: <...>
+FINDING_COUNT: <n>
+```
+
+The receipt is the terminal result of the reviewer turn and remains at most 5
+lines. Its `COMMENT_URL` supplies both the canonical URL and numeric comment id;
+its `REVISION` and `INVOCATION_ID` complete the required three-way binding:
+comment id + URL, Issue revision marker, and invocation id. `FINDING_COUNT` is
+the claimed finding count used for pre-credentialing verification. The receipt is not
+the stage capture.
+
+Immediately after the terminal receipt, the manager must harvest the published
+top-level comment through the GitHub API. Do not use `--jq .body`: jq framing
+can alter the byte stream. Use the exact-byte recipe below, replacing
+`OWNER/REPO` and `<id>` from `COMMENT_URL`:
+
+```bash
+scripts/gh api repos/OWNER/REPO/issues/comments/<id> | node -e 'const c=[];process.stdin.on("data",d=>c.push(d)).on("end",()=>process.stdout.write(JSON.parse(Buffer.concat(c)).body))' > capture.txt
+```
+
+The resulting `capture.txt` is the canonical reviewer source artifact: the
+comment body bytes are immutable capture bytes, with no added or removed
+newline. Bind the capture to comment id + URL, `REVISION`, and `INVOCATION_ID`;
+no equality with a chat assistant node is required. Before stage credentialing,
+record `sha256sum capture.txt` and the byte length, then parse the capture and
+compare its finding count with the number claimed in the terminal receipt. A
+missing binding, hash/length mismatch, or finding-count discrepancy means the
+stage is not credentialed; re-harvest the same published comment and repeat
+verification. Only the verified harvested bytes enter the governed-capture
+union, verified relay, finding ledger, and final acceptance.
+
+The original browser-GPT response remains governed evidence wherever the
+existing invocation contract requires it, but it is not the canonical source
+for this direct-publication path and need not equal the harvested comment.
+
+Receipt-only applies to the response returned to the flow-manager after a
+GitHub write. It does not restrict invocation inputs or governed relay: a
+fresh author or reviewer invocation may receive the full current Issue and
+required prior context, and the author still receives the full governed source
+union.
+
+Full Issue-body or full-findings text in manager-facing chat is an exceptional
+fallback only when the relevant GitHub write genuinely fails. Record the
+deviation and the failed write path in the existing `chats.md` audit surface;
+do not redefine that fallback text as governed evidence unless the existing
+capture contract already does so.
+
 Every browser-GPT source and Claude capture uses the rubric source
 `prompts/codex_draft_review_prompt.md` without invoking Codex as reviewer:
 
@@ -507,6 +569,20 @@ Save each source response verbatim before normalization. The reviewer-local id i
 not cross-source identity.
 
 ## Relay and author harvest
+
+After each receipt, the manager performs a fresh pull of the target Issue,
+preserves the next immutable `rNN` copy, and runs the mechanical guards from a
+trusted checkout. A guard failure is correction input, not terminal
+escalation: pass the verbatim guard-error lines to the next author invocation,
+which fixes the Issue directly. Escalate only after two failed author passes
+against the same verbatim error, or when a content-level conflict requires
+adjudication.
+
+The direct-write authority is limited to the target Issue: the author may
+create it and edit its title/body, and reviewers may publish top-level target
+Issue comments. This flow grants no authority to create or edit pull requests,
+publish PR comments or reviews, finalize PRs, apply labels or milestones, write
+repository files, or perform unrelated GitHub mutations.
 
 Every relay-eligible capture from every episode receipt remains governed,
 including settled incomplete-attempt evidence and Claude capture evidence. A
@@ -528,6 +604,12 @@ The flow-manager relays source evidence; it does not consolidate findings or mak
 content judgments. The author receives the full governed source union and returns
 Issue edits plus defect/remedy dispositions and one M4 update for the logical
 round.
+
+Concise receipts avoid browser insertion and rendering work that grows with
+manager-facing response size, and remove an avoidable relay step with loss
+risk. This transport optimization does not weaken authoritative invocation
+inputs, verbatim source capture, verified relay, finding-ledger processing, or
+final acceptance.
 
 ## Finding ledger and occurrence economics
 
