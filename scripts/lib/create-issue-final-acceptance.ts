@@ -19,6 +19,7 @@ import {
 } from './create-issue-final-acceptance-contract.ts';
 import { loadCanonicalReceiptInventory } from '../stage-completeness-guard.ts';
 import type {
+  CanonicalLineage,
   CommentCensusOptions,
   CycleEventLogical,
   FinalEventLogical,
@@ -59,7 +60,24 @@ export function parseCanonicalSourceRevisionMarker(body: string): {
   errors: string[];
 } {
   const errors: string[] = [];
-  const markerLines = body.split(/\r?\n/).filter((line) => line.includes('source-revision:'));
+  let fencedCode: '`' | '~' | null = null;
+  const markerLines: string[] = [];
+  for (const line of body.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (fencedCode !== null) {
+      if (trimmed.startsWith(fencedCode.repeat(3))) fencedCode = null;
+      continue;
+    }
+    if (trimmed.startsWith('```')) {
+      fencedCode = '`';
+      continue;
+    }
+    if (trimmed.startsWith('~~~')) {
+      fencedCode = '~';
+      continue;
+    }
+    if (line.includes('source-revision:')) markerLines.push(line);
+  }
   if (markerLines.length === 0) {
     return { errors: ['live Issue body is missing the canonical source-revision marker'] };
   }
@@ -117,6 +135,26 @@ export function validateCanonicalReceiptPathSet(
   const extra = requestedRealPaths.filter((path) => !canonicalSet.has(path));
   if (extra.length > 0) errors.push(`receipt inventory contains non-canonical paths: ${[...new Set(extra)].join(', ')}`);
   return [...new Set(errors)];
+}
+
+export function validateFinalAcceptanceReadbackHead(
+  lineage: CanonicalLineage,
+  cycleId: string,
+  sourceRevision: string,
+): string[] {
+  const head = lineage.head;
+  if (!head || head.logical.schema !== CYCLE_SCHEMA) {
+    return ['final acceptance readback has no canonical cycle head'];
+  }
+  const headCycle = head.logical as CycleEventLogical;
+  const errors: string[] = [];
+  if (headCycle['cycle-id'] !== cycleId) {
+    errors.push(`final acceptance readback cycle head changed: expected ${cycleId}, got ${headCycle['cycle-id']}`);
+  }
+  if (headCycle['source-revision'] !== sourceRevision) {
+    errors.push(`final acceptance readback cycle revision changed: expected ${sourceRevision}, got ${headCycle['source-revision']}`);
+  }
+  return errors;
 }
 
 export function runFinalAcceptance(
@@ -325,6 +363,20 @@ export function runFinalAcceptance(
       ok: false,
       diagnostics: [...diagnostics, ...refreshed.diagnostics],
       guardErrors: ['comment census incomplete after final event confirmation'],
+      eventKey,
+      projectionPendingRepair: true,
+    };
+  }
+  const readbackHeadErrors = validateFinalAcceptanceReadbackHead(
+    refreshed.lineage,
+    headCycle['cycle-id'],
+    headCycle['source-revision'],
+  );
+  if (readbackHeadErrors.length > 0) {
+    return {
+      ok: false,
+      diagnostics: [...diagnostics, ...refreshed.diagnostics],
+      guardErrors: readbackHeadErrors,
       eventKey,
       projectionPendingRepair: true,
     };

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   parseCanonicalSourceRevisionMarker,
+  validateFinalAcceptanceReadbackHead,
   validateCanonicalReceiptPathSet,
 } from './create-issue-final-acceptance.ts';
 import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
@@ -201,6 +202,29 @@ describe('revision-aware final acceptance', () => {
       '<!-- source-revision: r09 -->\n<!-- source-revision: r10 -->',
     ).errors.join('\n')).toContain('duplicate');
     expect(parseCanonicalSourceRevisionMarker('source-revision: r10').errors.join('\n')).toContain('malformed');
+    expect(parseCanonicalSourceRevisionMarker(
+      '```markdown\n<!-- source-revision: r10 -->\n```',
+    ).errors.join('\n')).toContain('missing');
+    expect(parseCanonicalSourceRevisionMarker(
+      '```markdown\n<!-- source-revision: r10 -->\n```\n<!-- source-revision: r11 -->',
+    )).toEqual({ revision: 'r11', errors: [] });
+  });
+
+  it('rejects a same-revision successor cycle during final readback', () => {
+    const input = validHistoricalInput();
+    const successor = cycle('cycle-r101', 'cycle-r100', 'r100', 4);
+    const refreshedLineage = buildCanonicalLineage([
+      ...input.lineage.eventsByKey.values(),
+      successor,
+    ]);
+
+    const errors = validateFinalAcceptanceReadbackHead(
+      refreshedLineage,
+      'cycle-r100',
+      'r100',
+    );
+
+    expect(errors.join('\n')).toContain('expected cycle-r100, got cycle-r101');
   });
 
   it('requires the requested receipt set to equal canonical real paths', () => {
