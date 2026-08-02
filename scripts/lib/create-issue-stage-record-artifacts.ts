@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { TURN_STATES } from '../chatgpt-browser-turn/contracts.ts';
 import {
   deriveReviewEpisodeId,
   deriveReviewEpisodeState,
@@ -309,6 +310,83 @@ function captureIdentity(name: string, digest: string): string {
   return `sha256:${digest}:${name}`;
 }
 
+function turnResultIdentity(name: string, digest: string): string {
+  return `sha256:${digest}:${name}`;
+}
+
+function readTurnResultForInvocation(
+  evidencePath: string,
+  invocation: JsonRecord,
+  index: number,
+  capture: CaptureIdentityV1 | null,
+  errors: string[],
+): string | null {
+  if (invocation.terminalClassification !== 'complete') return null;
+  const label = `stage evidence invocation[${index}]`;
+  const turnResultPath = requiredString(invocation.turnResultPath, `${label}.turnResultPath`, errors);
+  if (!turnResultPath) return null;
+  const resolved = resolve(dirname(evidencePath), turnResultPath);
+  let stat;
+  try {
+    stat = lstatSync(resolved);
+  } catch {
+    errors.push(`missing turn-result/v1 artifact for ${label}: ${resolved}`);
+    return null;
+  }
+  if (!stat.isFile()) {
+    errors.push(`turn-result/v1 artifact for ${label} is not a regular file: ${resolved}`);
+    return null;
+  }
+  let text: string;
+  try {
+    text = readFileSync(resolved, 'utf8');
+  } catch {
+    errors.push(`unable to read turn-result/v1 artifact for ${label}: ${resolved}`);
+    return null;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch {
+    errors.push(`turn-result/v1 artifact for ${label} is malformed: ${resolved}`);
+    return null;
+  }
+  if (!isRecord(value) || value.schema !== 'turn-result/v1') {
+    errors.push(`turn-result/v1 artifact for ${label} has an invalid schema: ${resolved}`);
+    return null;
+  }
+  if (!TURN_STATES.includes(value.state as (typeof TURN_STATES)[number])) {
+    errors.push(`turn-result/v1 artifact for ${label} has an invalid state: ${resolved}`);
+  } else if (value.state !== 'ok') {
+    errors.push(`turn-result/v1 artifact for ${label} is not a successful terminal result: ${resolved}`);
+  }
+  if (typeof value.scope !== 'string' || typeof value.cause !== 'string' || typeof value.configured_profile_key !== 'string') {
+    errors.push(`turn-result/v1 artifact for ${label} is missing required terminal fields: ${resolved}`);
+  }
+  if (value.invocation_id !== invocation.invocationId) {
+    errors.push(`turn-result/v1 artifact for ${label} invocation_id does not match stage evidence: ${resolved}`);
+  }
+  const output = isRecord(value.output) ? value.output : null;
+  if (
+    !output
+    || !Number.isInteger(output.byte_length)
+    || Number(output.byte_length) < 0
+    || typeof output.sha256 !== 'string'
+    || !/^[0-9a-f]{64}$/.test(output.sha256)
+  ) {
+    errors.push(`turn-result/v1 artifact for ${label} has invalid output metadata: ${resolved}`);
+  } else if (capture) {
+    if (Number(output.byte_length) !== capture.byteLength || output.sha256 !== capture.sha256) {
+      errors.push(`turn-result/v1 artifact for ${label} output does not match capture bytes: ${resolved}`);
+    }
+  }
+  const identity = turnResultIdentity(basename(resolved), sha256(text));
+  if (invocation.terminalResultIdentity !== identity) {
+    errors.push(`stage evidence ${label}.terminalResultIdentity is not derived from the referenced turn-result: ${resolved}`);
+  }
+  return identity;
+}
+
 function captureFromEvidence(
   evidencePath: string,
   capturePathValue: unknown,
@@ -435,10 +513,19 @@ function buildReceipt(
         ? null
         : captureFromEvidence(evidencePath, value.capturePath, value.captureIdentity, captureTexts, captureTimestamps, errors);
       if (capture) captures.push(capture);
+      const validatedTerminalResultIdentity = readTurnResultForInvocation(
+        evidencePath,
+        value,
+        index,
+        capture,
+        errors,
+      );
       assertDerived(value.reviewEpisodeId, episodeId, `invocation[${index}].reviewEpisodeId`, errors);
       if (receiptPolicyVersion !== null) {
         const invocation = buildInvocation(
-          value,
+          validatedTerminalResultIdentity
+            ? { ...value, terminalResultIdentity: validatedTerminalResultIdentity }
+            : value,
           index,
           {
             reviewEpisodeId: episodeId,
@@ -857,12 +944,44 @@ export function inspectAcceptanceArtifacts(
 ): AcceptanceArtifactStatus {
   const present: string[] = [];
   const missing: AcceptanceArtifactMissingInput[] = [];
-  const requirePath = (path: string, artifact: string, reason: string): void => {
-    if (existsSync(path)) present.push(path);
-    else missing.push({ artifact, reason: `${reason}: ${path}` });
+  const outputDir = options.outputDir ?? options.reviewDir;
+  const requireRegularFile = (path: string, artifact: string, reason: string): boolean => {
+    let stat;
+    try {
+      stat = lstatSync(path);
+    } catch {
+      missing.push({ artifact, reason: reason + ': ' + path });
+      return false;
+    }
+    if (!stat.isFile()) {
+      missing.push({ artifact, reason: artifact + ' is not a regular file: ' + path });
+      return false;
+    }
+    present.push(path);
+    return true;
   };
-  requirePath(options.tierIntakePath, 'tier-intake/v1', 'tier intake evidence is missing');
-  requirePath(options.authorDispositionsPath, 'author dispositions', 'author disposition evidence is missing');
+  const readArtifactJson = (path: string, artifact: string, reason: string): unknown | null => {
+    if (!requireRegularFile(path, artifact, reason)) return null;
+    try {
+      return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    } catch {
+      missing.push({ artifact, reason: artifact + ' is malformed JSON: ' + path });
+      return null;
+    }
+  };
+  const addInvalid = (artifact: string, path: string, detail: string): void => {
+    missing.push({ artifact, reason: detail + ': ' + path });
+  };
+
+  const intake = readArtifactJson(options.tierIntakePath, 'tier-intake/v1', 'tier intake evidence is missing');
+  if (!isRecord(intake) || intake.schema !== 'tier-intake/v1') {
+    addInvalid('tier-intake/v1', options.tierIntakePath, 'tier intake evidence is malformed');
+  }
+  const dispositions = readArtifactJson(options.authorDispositionsPath, 'author dispositions', 'author disposition evidence is missing');
+  if (!isRecord(dispositions) || dispositions.schema !== AUTHOR_DISPOSITIONS_SCHEMA || !Array.isArray(dispositions.findings)) {
+    addInvalid('author dispositions', options.authorDispositionsPath, 'author disposition evidence is malformed');
+  }
+
   const coverageErrors: string[] = [];
   const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(
     options.reviewDir,
@@ -876,25 +995,45 @@ export function inspectAcceptanceArtifacts(
     missing.push({ artifact: 'stage-completeness-receipt/v1', reason: 'no recorded stage evidence paths were supplied' });
   }
   const stageEvidencePaths = canonicalStageEvidencePaths ?? options.stageEvidencePaths;
+  const stageReceiptNames: string[] = [];
   let requiresClaudeProducerEvidence = false;
-  for (const path of stageEvidencePaths) requirePath(path, 'stage evidence', 'recorded stage result is missing');
   for (const path of stageEvidencePaths) {
-    if (!existsSync(path)) continue;
-    const value = readJson(path, 'stage evidence', []);
-    if (!isRecord(value)) continue;
+    const value = readArtifactJson(path, 'stage evidence', 'recorded stage result is missing');
+    if (!isRecord(value) || value.schema !== STAGE_EVIDENCE_SCHEMA) {
+      addInvalid('stage evidence', path, 'recorded stage result is malformed');
+      continue;
+    }
+    const stageAttemptId = typeof value.stageAttemptId === 'string' ? value.stageAttemptId.trim() : '';
+    if (isSafeFileComponent(stageAttemptId)) {
+      stageReceiptNames.push('stage-completeness-receipt-' + stageAttemptId + '.json');
+    } else {
+      missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence has no safe stageAttemptId: ' + path });
+    }
+    const captureTexts = new Map<string, string>();
+    const captureTimestamps = new Map<string, number>();
     if (Array.isArray(value.invocations)) {
       for (const [index, invocation] of value.invocations.entries()) {
-        if (!isRecord(invocation)) continue;
+        if (!isRecord(invocation)) {
+          missing.push({ artifact: 'stage evidence', reason: 'stage evidence invocation[' + index + '] must be an object: ' + path });
+          continue;
+        }
         if (invocation.terminalClassification === 'complete' && invocation.capturePath === undefined) {
           missing.push({
             artifact: 'capture',
-            reason: `completed invocation[${index}] is missing capturePath: ${path}`,
+            reason: 'completed invocation[' + index + '] is missing capturePath: ' + path,
           });
-        } else if (invocation.capturePath !== undefined) {
-          const capturePath = resolve(dirname(path), String(invocation.capturePath));
-          requirePath(capturePath, 'capture', 'stage evidence names a capture that is not present');
         }
+        const captureErrors: string[] = [];
+        const capture = invocation.capturePath === undefined
+          ? null
+          : captureFromEvidence(path, invocation.capturePath, invocation.captureIdentity, captureTexts, captureTimestamps, captureErrors);
+        for (const error of captureErrors) missing.push({ artifact: 'capture', reason: error });
+        const turnResultErrors: string[] = [];
+        readTurnResultForInvocation(path, invocation, index, capture, turnResultErrors);
+        for (const error of turnResultErrors) missing.push({ artifact: 'turn-result/v1', reason: error });
       }
+    } else if (value.stage !== 'architectural-lens') {
+      missing.push({ artifact: 'stage evidence', reason: 'stage evidence.invocations is missing: ' + path });
     }
     if (
       value.tier === 'T3'
@@ -908,17 +1047,18 @@ export function inspectAcceptanceArtifacts(
       if (value.claude.kind === 'capture' && value.claude.capturePath === undefined) {
         missing.push({
           artifact: 'capture',
-          reason: `Claude capture branch is missing capturePath: ${path}`,
+          reason: 'Claude capture branch is missing capturePath: ' + path,
         });
       } else if (value.claude.capturePath !== undefined) {
         const capturePath = resolve(dirname(path), String(value.claude.capturePath));
-        requirePath(capturePath, 'capture', 'stage evidence names a Claude capture that is not present');
+        requireRegularFile(capturePath, 'capture', 'Claude capture is missing; stage evidence names a capture that is not present');
       }
     }
   }
+
   const claudeProducerEvidencePaths = options.claudeProducerEvidencePaths ?? [];
   for (const path of claudeProducerEvidencePaths) {
-    requirePath(path, CLAUDE_PRODUCER_EVIDENCE_SCHEMA, 'Claude producer evidence is missing');
+    readArtifactJson(path, CLAUDE_PRODUCER_EVIDENCE_SCHEMA, 'Claude producer evidence is missing');
   }
   if (requiresClaudeProducerEvidence && claudeProducerEvidencePaths.length === 0) {
     missing.push({
@@ -926,7 +1066,73 @@ export function inspectAcceptanceArtifacts(
       reason: 'T3 architectural-lens capture requires --claude-producer-evidence <path>',
     });
   }
-  requirePath(join(options.outputDir ?? options.reviewDir, 'verified-relay-evidence.json'), 'verified relay evidence', 'relay manifest has not been produced');
-  requirePath(join(options.outputDir ?? options.reviewDir, 'finding-disposition-ledger.json'), 'finding ledger', 'finding ledger has not been produced');
+
+  const expectedOutputNames = [
+    ...new Set([
+      ...stageReceiptNames,
+      'verified-relay-evidence.json',
+      'finding-disposition-ledger.json',
+      'review-episode-inventory.json',
+      'acceptance-artifacts.json',
+    ]),
+  ];
+  const outputValues = new Map<string, unknown>();
+  for (const name of expectedOutputNames) {
+    const artifact = name.startsWith('stage-completeness-receipt-')
+      ? 'stage-completeness-receipt'
+      : name === 'verified-relay-evidence.json'
+        ? 'verified relay evidence'
+        : name === 'finding-disposition-ledger.json'
+          ? 'finding ledger'
+          : name === 'review-episode-inventory.json'
+            ? 'review-episode-inventory'
+            : 'acceptance-artifacts';
+    const artifactPath = join(outputDir, name);
+    const value = readArtifactJson(artifactPath, artifact, 'required acceptance artifact is missing');
+    if (value !== null) outputValues.set(name, value);
+    else if (present.includes(artifactPath)) addInvalid(artifact, artifactPath, artifact + ' is malformed JSON');
+  }
+  for (const name of stageReceiptNames) {
+    const value = outputValues.get(name);
+    if (value !== undefined && (!isRecord(value) || value.schema !== 'stage-completeness-receipt/v1')) {
+      addInvalid('stage-completeness-receipt', join(outputDir, name), 'stage receipt has an invalid schema');
+    }
+  }
+  const relay = outputValues.get('verified-relay-evidence.json');
+  if (relay !== undefined && !Array.isArray(relay)) {
+    addInvalid('verified-relay-evidence', join(outputDir, 'verified-relay-evidence.json'), 'verified relay evidence is malformed');
+  }
+  const ledger = outputValues.get('finding-disposition-ledger.json');
+  if (
+    ledger !== undefined
+    && (!isRecord(ledger) || ledger.version !== 2 || !isRecord(ledger.counts) || !Array.isArray(ledger.findings))
+  ) {
+    addInvalid('finding-disposition-ledger', join(outputDir, 'finding-disposition-ledger.json'), 'finding disposition ledger is malformed');
+  }
+  const inventory = outputValues.get('review-episode-inventory.json');
+  if (
+    inventory !== undefined
+    && (!isRecord(inventory)
+      || inventory.source !== 'canonical-review-directory'
+      || typeof inventory.taskIdentity !== 'string'
+      || typeof inventory.episodeFirstRevision !== 'string'
+      || typeof inventory.reviewEpisodeId !== 'string'
+      || !Array.isArray(inventory.stageReceiptIds))
+  ) {
+    addInvalid('review-episode-inventory', join(outputDir, 'review-episode-inventory.json'), 'review episode inventory is malformed');
+  }
+  const manifest = outputValues.get('acceptance-artifacts.json');
+  if (!isRecord(manifest) || manifest.schema !== ARTIFACT_MANIFEST_SCHEMA || !Array.isArray(manifest.files)) {
+    addInvalid('acceptance-artifacts', join(outputDir, 'acceptance-artifacts.json'), 'acceptance artifact manifest is malformed');
+  } else {
+    const declared = new Set(manifest.files.filter((value): value is string => typeof value === 'string'));
+    const expected = new Set(expectedOutputNames);
+    for (const name of expected) {
+      if (!declared.has(name)) missing.push({ artifact: 'acceptance-artifacts', reason: 'manifest omits required artifact ' + name + ': ' + join(outputDir, 'acceptance-artifacts.json') });
+    }
+    for (const name of declared) {
+      if (!expected.has(name)) missing.push({ artifact: 'acceptance-artifacts', reason: 'manifest names unexpected artifact ' + name + ': ' + join(outputDir, 'acceptance-artifacts.json') });
+    }
+  }
   return { ok: missing.length === 0, present, missing };
 }

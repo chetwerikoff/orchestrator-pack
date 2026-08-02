@@ -43,12 +43,20 @@ contains the stage facts already recorded by the flow-manager:
 - `cycleId` and the recorded `cycleBinding` witness;
 - `reviewerCardinality`, `cardinalityConfigIdentity`, `sourceRevision`;
 - `outcome`, `revisionChecks`, `settlement`;
-- `invocations`, with the recorded invocation envelope fields and a
-  `capturePath` for each successful capture.
+- `invocations`, with the recorded invocation envelope fields, a `capturePath`
+  for each successful capture, and a `turnResultPath` for each completed
+  browser invocation.
 
 The producer reads every `capturePath`. It computes the capture byte length,
 SHA-256, raw finding count, and capture identity from the bytes. A supplied
 capture object or mismatching asserted capture identity is rejected.
+
+For every completed browser invocation, the producer also reads the referenced
+`turnResultPath` as a `turn-result/v1` artifact. Its `invocation_id` must match
+the stage evidence, its state must be `ok`, and its committed output byte length
+and SHA-256 must match the capture bytes. The recorded
+`terminalResultIdentity` is derived from the referenced result file; a missing,
+malformed, stale, or mismatched result is a named input error.
 
 `author-dispositions.json` has this shape:
 
@@ -69,6 +77,12 @@ capture object or mismatching asserted capture identity is rejected.
 
 The producer computes the ledger counts from the capture bytes and disposition
 values, then runs the unchanged finding-ledger guard before writing it.
+
+`check-artifacts` validates the complete output set, not just two marker files:
+every stage receipt, `verified-relay-evidence.json`,
+`finding-disposition-ledger.json`, `review-episode-inventory.json`, and
+`acceptance-artifacts.json` must be regular, parseable files with the expected
+schemas and manifest coverage. Directories and malformed files are rejected.
 
 ## Produced files
 

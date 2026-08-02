@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import {
@@ -40,7 +40,21 @@ function fixture() {
   const stageEvidencePath = join(dir, 'attempt-001.json');
   const intakePath = join(dir, 'tier-intake.json');
   const authorPath = join(dir, 'author-dispositions.json');
+  const turnResultPath = join(dir, 'turn-result-001.json');
   writeFileSync(capturePath, CLEAN_CAPTURE);
+  const captureSha256 = createHash('sha256').update(CLEAN_CAPTURE).digest('hex');
+  const turnResult = {
+    schema: 'turn-result/v1',
+    state: 'ok',
+    scope: 'none',
+    cause: 'ok',
+    invocation_id: 'invocation-001',
+    configured_profile_key: 'fixture-profile',
+    output: { byte_length: Buffer.byteLength(CLEAN_CAPTURE), sha256: captureSha256 },
+  };
+  const turnResultText = JSON.stringify(turnResult);
+  writeFileSync(turnResultPath, turnResultText);
+  const terminalResultIdentity = 'sha256:' + createHash('sha256').update(turnResultText).digest('hex') + ':' + basename(turnResultPath);
   writeFileSync(intakePath, JSON.stringify({
     schema: 'tier-intake/v1',
     producer: 'flow-manager',
@@ -78,7 +92,8 @@ function fixture() {
       stage: 'architectural',
       sourceRevision: REVISION,
       invocationId: 'invocation-001',
-      terminalResultIdentity: 'result-001',
+      terminalResultIdentity,
+      turnResultPath,
       reviewerSource: 'terminal-gpt',
       reviewerSlot: '01',
       reviewerOrdinal: 1,
@@ -95,7 +110,7 @@ function fixture() {
     }],
   };
   writeFileSync(stageEvidencePath, JSON.stringify(evidence));
-  return { dir, capturePath, stageEvidencePath, intakePath, authorPath, evidence };
+  return { dir, capturePath, turnResultPath, stageEvidencePath, intakePath, authorPath, evidence };
 }
 
 function writeClaudeLensFixture(input: ReturnType<typeof fixture>) {
@@ -521,6 +536,118 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.errors).toContain('author dispositions findings[0] must be an object');
+  });
+
+  it('rejects completed stage evidence without a referenced turn-result artifact', () => {
+    const input = fixture();
+    rmSync(input.turnResultPath);
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: join(input.dir, 'artifacts'),
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('missing turn-result/v1 artifact');
+  });
+
+  it('rejects a turn-result whose invocation id does not match the stage evidence', () => {
+    const input = fixture();
+    writeFileSync(input.turnResultPath, JSON.stringify({
+      schema: 'turn-result/v1',
+      state: 'ok',
+      scope: 'none',
+      cause: 'ok',
+      invocation_id: 'wrong-invocation',
+      configured_profile_key: 'fixture-profile',
+      output: {
+        byte_length: Buffer.byteLength(CLEAN_CAPTURE),
+        sha256: createHash('sha256').update(CLEAN_CAPTURE).digest('hex'),
+      },
+    }));
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: join(input.dir, 'artifacts'),
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('invocation_id does not match');
+  });
+
+  it('rejects a turn-result whose output metadata does not match the capture', () => {
+    const input = fixture();
+    const turnResult = JSON.parse(readFileSync(input.turnResultPath, 'utf8'));
+    turnResult.output.sha256 = '0'.repeat(64);
+    writeFileSync(input.turnResultPath, JSON.stringify(turnResult));
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: join(input.dir, 'artifacts'),
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('output does not match capture bytes');
+  });
+
+  it('accepts the complete produced artifact set in check-artifacts', () => {
+    const input = fixture();
+    const outputDir = join(input.dir, 'artifacts');
+    const produced = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(produced.ok, produced.errors.join('\n')).toBe(true);
+    const status = inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(status.ok, status.missing.map((item) => item.reason).join('\n')).toBe(true);
+  });
+
+  it('rejects an incomplete artifact directory even when relay and ledger exist', () => {
+    const input = fixture();
+    const outputDir = join(input.dir, 'artifacts');
+    mkdirSync(outputDir);
+    writeFileSync(join(outputDir, 'verified-relay-evidence.json'), '[]');
+    writeFileSync(join(outputDir, 'finding-disposition-ledger.json'), '{}');
+    const status = inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(status.ok).toBe(false);
+    expect(status.missing.some((item) => item.artifact === 'stage-completeness-receipt')).toBe(true);
+    expect(status.missing.some((item) => item.artifact === 'review-episode-inventory')).toBe(true);
+    expect(status.missing.some((item) => item.artifact === 'acceptance-artifacts')).toBe(true);
+  });
+
+  it('rejects directory-backed and malformed output artifacts', () => {
+    const input = fixture();
+    const outputDir = join(input.dir, 'artifacts');
+    mkdirSync(join(outputDir, 'verified-relay-evidence.json'), { recursive: true });
+    writeFileSync(join(outputDir, 'finding-disposition-ledger.json'), '{');
+    const status = inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(status.ok).toBe(false);
+    expect(status.missing.some((item) => item.reason.includes('not a regular file'))).toBe(true);
+    expect(status.missing.some((item) => item.reason.includes('malformed JSON'))).toBe(true);
   });
 
   it('returns a structured error when settlement evidence is missing', () => {
