@@ -89,11 +89,10 @@ import {
 } from '../chatgpt-browser-turn/terminal-witness.ts';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import {
-  COMPOSER_MUTATION_BASE_WAIT_MS,
-  COMPOSER_MUTATION_MS_PER_BYTE,
-  MAX_COMPOSER_MUTATION_WAIT_MS,
-  MAX_LOCAL_READ_WAIT_MS,
-  deriveComposerMutationBudgetMs,
+  COMPOSER_INSERTION_MS_PER_LINE,
+  COMPOSER_INSERTION_WAIT_MS,
+  COMPOSER_READINESS_WAIT_MS,
+  deriveComposerInsertionBudgetMs,
   __testComposerMutation,
 } from '../chatgpt-browser-turn/state-light-turn.ts';
 import {
@@ -102,7 +101,6 @@ import {
   scalarLocator,
 } from '../chatgpt-browser-turn/state-light-turn.test-fixtures.ts';
 import { COMPOSER_SELECTOR, MESSAGE_NODE_SELECTOR, SEND_BUTTON_SELECTOR } from '../chatgpt-browser-turn/product-page-selectors.ts';
-import { PRE_SEND_COMPOSER_FAILURE_CAUSES } from '../chatgpt-browser-turn/contracts.ts';
 
 
 let root = '';
@@ -3482,314 +3480,223 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
   });
 });
 
-describe('issue 1174 composer mutation budget', () => {
-
-  const ISSUE_1174_PAYLOAD_BYTES = 36_906;
-  const MEASURED_LARGE_PROMPT = 'x'.repeat(ISSUE_1174_PAYLOAD_BYTES);
-
-  type ComposerMutationBudgetEvidence = {
-    timeout: number;
-    remainingBudget: number;
-  };
-
-  function composerMutationBudgetDiagnostic(evidence: ComposerMutationBudgetEvidence): string {
-    return `composer mutation budget invariant violated: timeout=${evidence.timeout}, remainingBudget=${evidence.remainingBudget}; fix timeout derivation or test clock control; do not raise constants, add slack, sleep, or retry`;
-  }
-
-  function assertComposerMutationBudget(evidence: ComposerMutationBudgetEvidence): void {
-    if (evidence.timeout <= 0 || evidence.timeout > evidence.remainingBudget) {
-      throw new Error(composerMutationBudgetDiagnostic(evidence));
-    }
-  }
-
-  function makeComposerPage(options: {
+describe('issue 1188 composer readiness and insertion timing', () => {
+  type ComposerOptions = {
+    composerPresent?: boolean;
+    visible?: boolean;
+    enabled?: boolean;
+    contentEditable?: boolean;
+    readinessSequence?: boolean[];
+    readinessDelayMs?: number;
     clickDelayMs?: number;
     fillDelayMs?: number;
-    composerPresent?: boolean;
     blockingOverlay?: boolean;
+    clickReject?: boolean;
+    fillReject?: boolean;
     onFillCall?: (timeoutMs: number) => void;
-    onFill?: () => void;
-    onClick?: () => void;
-    onPress?: () => void;
-  }) {
-    let filled = false;
-    let pressed = false;
-    const prompt = 'PROMPT';
-    const frames = readyTurnObservationFrames(prompt, 'reply body');
-    const messages = frames.at(-1)!.map((message) => ({ role: message.role as 'user' | 'assistant', text: message.text, finalAction: message.finalAction, finalActionInTurnContainer: message.finalActionInTurnContainer }));
+  };
+
+  async function settleAction(delayMs: number, timeoutMs: number): Promise<void> {
+    if (delayMs >= timeoutMs) {
+      await vi.advanceTimersByTimeAsync(timeoutMs);
+      throw Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' });
+    }
+    await vi.advanceTimersByTimeAsync(delayMs);
+  }
+
+  function makeComposerPage(options: ComposerOptions = {}) {
+    const frames = readyTurnObservationFrames('PROMPT', 'reply body');
+    const messages = frames.at(-1)!.map((message) => ({
+      role: message.role as 'user' | 'assistant',
+      text: message.text,
+      finalAction: message.finalAction,
+      finalActionInTurnContainer: message.finalActionInTurnContainer,
+    }));
+    let readinessProbe = 0;
     const composer = scalarLocator({
-      count: vi.fn(async () => (options.composerPresent === false ? 0 : 1)),
+      count: vi.fn(async () => options.composerPresent === false ? 0 : 1),
+      isVisible: vi.fn(async () => options.visible !== false),
+      isEnabled: vi.fn(async () => options.enabled !== false),
+      evaluate: vi.fn(async () => {
+        if (options.readinessDelayMs) await vi.advanceTimersByTimeAsync(options.readinessDelayMs);
+        const sequence = options.readinessSequence;
+        const ready = sequence?.[Math.min(readinessProbe, (sequence?.length ?? 1) - 1)]
+          ?? true;
+        readinessProbe += 1;
+        return {
+          visible: ready && options.visible !== false,
+          enabled: ready && options.enabled !== false,
+          contentEditable: ready && options.contentEditable !== false,
+        };
+      }),
       click: vi.fn(async (opts?: { timeout?: number }) => {
-        const delayMs = options.clickDelayMs ?? 0;
-        const timeoutMs = opts?.timeout ?? 30_000;
-        if (delayMs > 0) {
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(() => reject(Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' })), timeoutMs);
-            setTimeout(() => {
-              clearTimeout(timer);
-              options.onClick?.();
-              resolve();
-            }, delayMs);
-          });
-        } else {
-          options.onClick?.();
-        }
+        if (options.clickReject) throw new Error('click rejected');
+        await settleAction(options.clickDelayMs ?? 0, opts?.timeout ?? COMPOSER_INSERTION_WAIT_MS);
       }),
       fill: vi.fn(async (_text: string, opts?: { timeout?: number }) => {
-        const delayMs = options.fillDelayMs ?? 0;
-        const timeoutMs = opts?.timeout ?? 30_000;
-        options.onFillCall?.(timeoutMs);
-        if (delayMs > 0) {
-          await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(() => reject(Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' })), timeoutMs);
-            setTimeout(() => {
-              clearTimeout(timer);
-              filled = true;
-              options.onFill?.();
-              resolve();
-            }, delayMs);
-          });
-        } else {
-          filled = true;
-          options.onFill?.();
-        }
-      }),
-      press: vi.fn(async () => {
-        pressed = true;
-        options.onPress?.();
+        if (options.fillReject) throw new Error('fill rejected');
+        options.onFillCall?.(opts?.timeout ?? COMPOSER_INSERTION_WAIT_MS);
+        await settleAction(options.fillDelayMs ?? 0, opts?.timeout ?? COMPOSER_INSERTION_WAIT_MS);
       }),
     });
-    const page: any = {
+    const page = {
       __fakeBrowserGptPage: true,
-      goto: vi.fn(async () => undefined),
-      url: vi.fn(() => 'https://chatgpt.com/c/issue-1174'),
-      isClosed: vi.fn(() => false),
-      waitForTimeout: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-      getByRole: vi.fn(() => scalarLocator()),
-      getByText: vi.fn(() => scalarLocator()),
+      waitForTimeout: vi.fn(async (ms: number) => { await vi.advanceTimersByTimeAsync(ms); }),
       __productStatusText: () => (options.blockingOverlay ? 'settings modal open' : ''),
+      url: vi.fn(() => 'https://chatgpt.com/c/composer-test'),
+      goto: vi.fn(async () => undefined),
       locator: vi.fn((selector: string) => {
         if (selector === COMPOSER_SELECTOR) return composer;
         if (selector.includes('modal-overlay') || selector.includes('aria-modal')) {
-          return scalarLocator({ count: vi.fn(async () => (options.blockingOverlay ? 1 : 0)) });
+          return scalarLocator({ count: vi.fn(async () => options.blockingOverlay ? 1 : 0) });
         }
         if (selector === SEND_BUTTON_SELECTOR) return scalarLocator({ count: vi.fn(async () => 0) });
         if (selector === MESSAGE_NODE_SELECTOR) return collectionLocator(messages);
         return scalarLocator();
       }),
     };
-    return { page, composer, getFilled: () => filled, getPressed: () => pressed };
+    return { page, composer };
   }
 
-  it('composer mutation budget is independent of the local read budget', () => {
-    const mutationBudget = deriveComposerMutationBudgetMs(10_000, 1_800_000);
-    expect(mutationBudget).not.toBe(MAX_LOCAL_READ_WAIT_MS);
-    const readScaled = MAX_LOCAL_READ_WAIT_MS + 10_000;
-    expect(mutationBudget).not.toBe(readScaled);
-    expect(deriveComposerMutationBudgetMs(10_000, 1_800_000)).toBe(
-      COMPOSER_MUTATION_BASE_WAIT_MS + 10_000 * COMPOSER_MUTATION_MS_PER_BYTE,
-    );
+  beforeEach(() => {
+    vi.useFakeTimers({ now: 0 });
   });
 
-  it('derives the deterministic mutation budget at growth and clamp boundaries', () => {
-    const uncappedSamples = [0, 1, 3, 4, 100, 10_000, 107_998];
-    const uncappedBudgets = uncappedSamples.map((bytes) => (
-      deriveComposerMutationBudgetMs(bytes, 1_800_000)
-    ));
-    for (let index = 1; index < uncappedBudgets.length; index += 1) {
-      expect(uncappedBudgets[index]).toBeGreaterThanOrEqual(uncappedBudgets[index - 1]!);
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('derives insertion allowance from structural line count with a floor and invocation clamp', async () => {
+    expect(COMPOSER_READINESS_WAIT_MS).toBe(12_000);
+    expect(COMPOSER_INSERTION_WAIT_MS).toBe(3_000);
+    expect(COMPOSER_INSERTION_MS_PER_LINE).toBe(120);
+
+    const shortPayload = 'x';
+    const longOneLinePayload = 'x'.repeat(19_000);
+    const longMarkdownPayload = Array.from({ length: 382 }, (_, index) => `| ${index} | row |`).join('\n');
+    const shortBudget = deriveComposerInsertionBudgetMs(shortPayload);
+    const longOneLineBudget = deriveComposerInsertionBudgetMs(longOneLinePayload);
+    const longMarkdownBudget = deriveComposerInsertionBudgetMs(longMarkdownPayload);
+
+    expect(shortBudget).toBe(3_000);
+    expect(longOneLineBudget).toBe(3_000);
+    expect(longMarkdownBudget).toBe(45_840);
+    expect(longMarkdownBudget).toBeGreaterThan(21_168);
+    expect(shortBudget).toBeLessThanOrEqual(longOneLineBudget);
+    expect(longOneLineBudget).toBeLessThan(longMarkdownBudget);
+
+    const short = makeComposerPage();
+    const long = makeComposerPage();
+    const shortContext: { insertionDeadlineMs?: number } = {};
+    const longContext: { insertionDeadlineMs?: number } = {};
+    expect(await __testComposerMutation.mutateComposerOrCause(short.page, shortPayload, 100_000, shortContext)).toBeNull();
+    expect(await __testComposerMutation.mutateComposerOrCause(long.page, longMarkdownPayload, 100_000, longContext)).toBeNull();
+    expect(shortContext.insertionDeadlineMs).toBe(shortBudget);
+    expect(longContext.insertionDeadlineMs).toBe(longMarkdownBudget);
+    expect(short.composer.click.mock.calls[0]?.[0]?.timeout).toBe(shortBudget);
+    expect(long.composer.click.mock.calls[0]?.[0]?.timeout).toBe(longMarkdownBudget);
+
+    const clamped = makeComposerPage();
+    const clampedContext: { insertionDeadlineMs?: number } = {};
+    expect(await __testComposerMutation.mutateComposerOrCause(clamped.page, longMarkdownPayload, 250, clampedContext)).toBeNull();
+    expect(clampedContext.insertionDeadlineMs).toBe(250);
+    expect(clamped.composer.click.mock.calls[0]?.[0]?.timeout).toBe(250);
+  });
+
+  it('requires presence, visibility, enabled state, and contentEditable readiness', async () => {
+    for (const option of [
+      { composerPresent: false },
+      { visible: false },
+      { enabled: false },
+      { contentEditable: false },
+    ]) {
+      const result = await __testComposerMutation.waitForComposer(makeComposerPage(option).page, Date.now() + 100);
+      expect(result).toEqual({ state: 'ui_contract_mismatch', cause: 'composer_unavailable' });
     }
-    expect(uncappedBudgets[3]).toBeGreaterThan(uncappedBudgets[0]!);
-    expect(deriveComposerMutationBudgetMs(10_000, 1_800_000)).toBe(
-      Math.floor(COMPOSER_MUTATION_BASE_WAIT_MS + 10_000 * COMPOSER_MUTATION_MS_PER_BYTE),
-    );
-
-    expect(deriveComposerMutationBudgetMs(107_999, 1_800_000)).toBe(29_999);
-    expect(deriveComposerMutationBudgetMs(108_000, 1_800_000)).toBe(MAX_COMPOSER_MUTATION_WAIT_MS);
-    expect(deriveComposerMutationBudgetMs(500_000, 1_800_000)).toBe(MAX_COMPOSER_MUTATION_WAIT_MS);
-    expect(deriveComposerMutationBudgetMs(10_000, 4_000)).toBe(4_000);
-    expect(deriveComposerMutationBudgetMs(10_000, 1_800_000, 2_500)).toBe(2_500);
-    expect(deriveComposerMutationBudgetMs(10_000, 1_800_000, 0)).toBe(0);
-    expect(deriveComposerMutationBudgetMs(10_000, 1_800_000, -1)).toBe(0);
+    expect(await __testComposerMutation.waitForComposer(makeComposerPage().page, Date.now() + 100)).toEqual({ state: 'ready' });
   });
 
-  it('budget exhaustion fails before send with zero send count and cleanup', async () => {
-    const budget = deriveComposerMutationBudgetMs(100, 60_000);
-    const { page, getPressed } = makeComposerPage({ fillDelayMs: budget + 200 });
-    const failure = await __testComposerMutation.mutateComposerOrCause(page, 'payload', 100, {
-      cdp,
-      profile: join(root, 'profile'),
-      newChat: false,
-      timeoutMs: 60_000,
-    }, Date.now() + 60_000);
-    expect(failure).toBe('composer_mutation_budget_exhausted');
-    expect(PRE_SEND_COMPOSER_FAILURE_CAUSES).toContain('composer_mutation_budget_exhausted');
-    expect(getPressed()).toBe(false);
-    const cleanup = await boundedResourceCleanup(async () => undefined, 5_000);
-    expect(cleanup).toBe('confirmed');
+  it('caps readiness at 12 seconds and does not probe at deadline equality', async () => {
+    const result = await __testComposerMutation.waitForComposer(makeComposerPage({ composerPresent: false }).page, 30_000);
+    expect(result).toEqual({ state: 'ui_contract_mismatch', cause: 'composer_unavailable' });
+    expect(Date.now()).toBe(COMPOSER_READINESS_WAIT_MS);
   });
 
-  it('budget exhaustion composer unreadiness and blocking overlay report distinct causes', async () => {
-    const budget = deriveComposerMutationBudgetMs(100, 60_000);
-    const exhausted = await __testComposerMutation.mutateComposerOrCause(
-      makeComposerPage({ fillDelayMs: budget + 200 }).page,
-      'payload',
-      100,
-      { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 60_000 },
-      Date.now() + 60_000,
-    );
-    const overlay = await __testComposerMutation.mutateComposerOrCause(
-      makeComposerPage({ fillDelayMs: budget + 200, blockingOverlay: true }).page,
-      'payload',
-      100,
-      { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 60_000 },
-      Date.now() + 60_000,
-    );
-    const unreadable = await __testComposerMutation.waitForComposer(
-      makeComposerPage({ composerPresent: false }).page,
-      Date.now() + 50,
-    );
-    expect(exhausted).toBe('composer_mutation_budget_exhausted');
-    expect(overlay).toBe('blocking_page_overlay');
-    expect(unreadable).toEqual({ state: 'ui_contract_mismatch', cause: 'composer_unavailable' });
-    const unreadableCause = unreadable.state === 'ready' ? null : unreadable.cause;
-    expect(unreadableCause).toBe('composer_unavailable');
-    expect(new Set([exhausted, overlay, unreadableCause]).size).toBe(3);
-  });
+  it('keeps each action timeout within the remaining insertion budget on a controlled clock', async () => {
+    const invocationDeadlineMs = 10_000;
+    const insertionContext: { insertionDeadlineMs?: number } = {};
+    let evidence: { timeoutMs: number; remainingMs: number } | undefined;
+    const fixture = makeComposerPage({
+      fillDelayMs: COMPOSER_INSERTION_WAIT_MS + 1,
+      onFillCall: (timeoutMs) => {
+        const insertionDeadlineMs = insertionContext.insertionDeadlineMs;
+        if (insertionDeadlineMs === undefined) throw new Error('insertion deadline was not captured');
+        evidence = {
+          timeoutMs,
+          remainingMs: __testComposerMutation.remainingComposerMutationMs(
+            insertionDeadlineMs,
+            invocationDeadlineMs,
+          ),
+        };
+      },
+    });
 
-  it('attempts one mutation with the complete payload and never retries or sends after timeout', async () => {
-    const payload = 'payload with no truncation or retry';
-    const config = { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 100 };
-    const { page, composer, getPressed } = makeComposerPage({ fillDelayMs: 150 });
     const failure = await __testComposerMutation.mutateComposerOrCause(
-      page,
-      payload,
-      payload.length,
-      config,
-      Date.now() + 1_000,
-    );
-    expect(failure).toBe('composer_mutation_budget_exhausted');
-    expect(composer.click).toHaveBeenCalledTimes(1);
-    expect(composer.fill).toHaveBeenCalledTimes(1);
-    expect(composer.fill).toHaveBeenCalledWith(payload, expect.any(Object));
-    expect(getPressed()).toBe(false);
-  });
-
-  async function captureComposerBudgetEvidence(
-    clickDelayMs: number,
-    config: BrowserConfig,
-    payloadBytes: number,
-    pairBudget: number,
-  ): Promise<ComposerMutationBudgetEvidence> {
-    let evidence: ComposerMutationBudgetEvidence | undefined;
-    const invocationDeadlineMs = pairBudget;
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      const { page, composer } = makeComposerPage({
-        clickDelayMs,
-        fillDelayMs: pairBudget + 1,
-        onFillCall: (timeout) => {
-          evidence = {
-            timeout,
-            remainingBudget: __testComposerMutation.remainingComposerMutationMs(
-              pairBudget,
-              invocationDeadlineMs,
-            ),
-          };
-        },
-      });
-      const mutation = __testComposerMutation.mutateComposerOrCause(
-        page,
-        'payload',
-        payloadBytes,
-        config,
-        invocationDeadlineMs,
-      );
-      await vi.advanceTimersByTimeAsync(clickDelayMs);
-      await vi.advanceTimersByTimeAsync(pairBudget + 1);
-      const failure = await mutation;
-      expect(failure).toBe('composer_mutation_budget_exhausted');
-      expect(composer.click).toHaveBeenCalledTimes(1);
-      expect(composer.click.mock.calls[0]?.[0]?.timeout).toBeLessThanOrEqual(pairBudget);
-      expect(composer.fill).toHaveBeenCalledTimes(1);
-      if (!evidence) throw new Error('composer mutation budget evidence was not captured');
-      assertComposerMutationBudget(evidence);
-      return evidence;
-    } finally {
-      vi.useRealTimers();
-    }
-  }
-
-  it('click and fill share one derived mutation budget and respect the invocation deadline', async () => {
-    const config = { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 60_000 };
-    const payloadBytes = 100;
-    const pairBudget = deriveComposerMutationBudgetMs(payloadBytes, config.timeoutMs);
-    const scenarios = [
-      { name: 'normal runner', clickDelayMs: pairBudget - 40 },
-      { name: 'fast runner', clickDelayMs: 0 },
-      { name: 'slow runner', clickDelayMs: pairBudget - 120 },
-    ];
-    const evidence = [];
-    for (const scenario of scenarios) {
-      const observed = await captureComposerBudgetEvidence(
-        scenario.clickDelayMs,
-        config,
-        payloadBytes,
-        pairBudget,
-      );
-      assertComposerMutationBudget(observed);
-      evidence.push({ name: scenario.name, observed });
-    }
-    expect(evidence).toHaveLength(scenarios.length);
-    expect(evidence.map(({ observed }) => observed.timeout)).toEqual(
-      evidence.map(({ observed }) => observed.remainingBudget),
-    );
-  });
-
-  it('rejects controlled non-positive and logical-overrun budget evidence with exact diagnostics', () => {
-    const validRemainingBudget = deriveComposerMutationBudgetMs(100, 60_000, 5);
-    const violations: ComposerMutationBudgetEvidence[] = [
-      { timeout: 0, remainingBudget: validRemainingBudget },
-      { timeout: validRemainingBudget + 1, remainingBudget: validRemainingBudget },
-    ];
-    for (const evidence of violations) {
-      expect(() => assertComposerMutationBudget(evidence)).toThrow(
-        composerMutationBudgetDiagnostic(evidence),
-      );
-    }
-  });
-
-  it('late-start with an exhausted invocation deadline fails before click or fill', async () => {
-    const config = { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 60_000 };
-    const { page, composer } = makeComposerPage({ fillDelayMs: 5_000 });
-    const failure = await __testComposerMutation.mutateComposerOrCause(
-      page,
+      fixture.page,
       'payload',
-      100,
-      config,
-      Date.now() - 1,
+      invocationDeadlineMs,
+      insertionContext,
     );
+
     expect(failure).toBe('composer_mutation_budget_exhausted');
-    expect(composer.click).not.toHaveBeenCalled();
-    expect(composer.fill).not.toHaveBeenCalled();
+    expect(evidence).toBeDefined();
+    expect(evidence!.timeoutMs).toBeGreaterThan(0);
+    expect(evidence!.timeoutMs).toBeLessThanOrEqual(evidence!.remainingMs);
   });
 
-  it('does not start fill after click exhausts the shared budget', async () => {
-    const config = { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 60_000 };
-    const budget = deriveComposerMutationBudgetMs(100, config.timeoutMs);
-    const exhaustedAfterClick = makeComposerPage({ clickDelayMs: budget + 50 });
-    const lateFailure = await __testComposerMutation.mutateComposerOrCause(
-      exhaustedAfterClick.page,
-      'payload',
-      100,
-      config,
-      Date.now() + budget,
-    );
-    expect(lateFailure).toBe('composer_mutation_budget_exhausted');
-    expect(exhaustedAfterClick.composer.click).toHaveBeenCalledTimes(1);
-    expect(exhaustedAfterClick.composer.fill).not.toHaveBeenCalled();
+  it('bounds the first post-readiness probe by the insertion phase', async () => {
+    const fixture = makeComposerPage({ readinessDelayMs: COMPOSER_INSERTION_WAIT_MS });
+    const failure = await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 10_000);
+    expect(failure).toBe('composer_mutation_budget_exhausted');
+    expect(fixture.composer.click).not.toHaveBeenCalled();
+    expect(fixture.composer.fill).not.toHaveBeenCalled();
+  });
+
+  it('maps composer readiness loss after click to zero-send mutation exhaustion without fill or re-entry', async () => {
+    const fixture = makeComposerPage({ readinessSequence: [true, false] });
+    const failure = await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 10_000);
+    expect(failure).toBe('composer_mutation_budget_exhausted');
+    expect(fixture.composer.click).toHaveBeenCalledTimes(1);
+    expect(fixture.composer.fill).not.toHaveBeenCalled();
+  });
+
+  it('maps exact and late click/fill timeouts to mutation exhaustion', async () => {
+    const clickBoundary = makeComposerPage({ clickDelayMs: COMPOSER_INSERTION_WAIT_MS });
+    expect(await __testComposerMutation.mutateComposerOrCause(clickBoundary.page, 'payload', 10_000))
+      .toBe('composer_mutation_budget_exhausted');
+    expect(clickBoundary.composer.fill).not.toHaveBeenCalled();
+
+    const fillLate = makeComposerPage({ fillDelayMs: COMPOSER_INSERTION_WAIT_MS + 1 });
+    expect(await __testComposerMutation.mutateComposerOrCause(fillLate.page, 'payload', 10_000))
+      .toBe('composer_mutation_budget_exhausted');
+    expect(fillLate.composer.fill).toHaveBeenCalledTimes(1);
+
+    const immediateClickFailure = makeComposerPage({ clickReject: true });
+    expect(await __testComposerMutation.mutateComposerOrCause(immediateClickFailure.page, 'payload', 10_000))
+      .toBe('composer_mutation_budget_exhausted');
+    expect(immediateClickFailure.composer.fill).not.toHaveBeenCalled();
+
+    const immediateFillFailure = makeComposerPage({ fillReject: true });
+    expect(await __testComposerMutation.mutateComposerOrCause(immediateFillFailure.page, 'payload', 10_000))
+      .toBe('composer_mutation_budget_exhausted');
+  });
+
+  it('does not start click or fill when the invocation deadline is already exhausted', async () => {
+    const fixture = makeComposerPage();
+    const failure = await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 0);
+    expect(failure).toBe('composer_mutation_budget_exhausted');
+    expect(fixture.composer.click).not.toHaveBeenCalled();
+    expect(fixture.composer.fill).not.toHaveBeenCalled();
   });
 
   it('runTurn starts its invocation deadline before CDP connect and navigation', async () => {
@@ -3800,7 +3707,7 @@ describe('issue 1174 composer mutation budget', () => {
     const input = join(root, 'deadline-input.txt');
     const output = join(root, 'deadline-output.txt');
     writeFileSync(input, 'payload');
-    const fixture = makeComposerPage({});
+    const fixture = makeComposerPage();
     const originalLocator = fixture.page.locator;
     fixture.composer.count = vi.fn(async () => 1);
     fixture.page.locator = vi.fn((selector: string) => (
@@ -3853,8 +3760,8 @@ describe('issue 1174 composer mutation budget', () => {
     ]);
     const result = JSON.parse(writes.join(''));
 
-    expect(exitCode).toBe(13);
-    expect(result.cause).toBe('composer_mutation_budget_exhausted');
+    expect(exitCode).toBe(10);
+    expect(result.cause).toBe('composer_unavailable');
     expect(connectAt).toBeGreaterThanOrEqual(1_000);
     expect(connectAt).toBeLessThan(2_000);
     expect(navigateAt).toBeGreaterThanOrEqual(7_000);
@@ -3866,28 +3773,10 @@ describe('issue 1174 composer mutation budget', () => {
     vi.restoreAllMocks();
   });
 
-  it('measured 36906-byte payload completes mutation under derived budget and sends once', async () => {
-    const budget = deriveComposerMutationBudgetMs(ISSUE_1174_PAYLOAD_BYTES, 60_000);
-    expect(budget).toBeGreaterThan(MAX_LOCAL_READ_WAIT_MS);
-    const fillDelayMs = MAX_LOCAL_READ_WAIT_MS + 500;
-    expect(fillDelayMs).toBeLessThan(budget);
-    let sendCount = 0;
-    const { page, composer, getPressed } = makeComposerPage({
-      fillDelayMs,
-      onPress: () => { sendCount += 1; },
-    });
-    const failure = await __testComposerMutation.mutateComposerOrCause(
-      page,
-      MEASURED_LARGE_PROMPT,
-      ISSUE_1174_PAYLOAD_BYTES,
-      { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 60_000 },
-      Date.now() + 60_000,
-    );
-    expect(failure).toBeNull();
-    expect(composer.fill).toHaveBeenCalledWith(MEASURED_LARGE_PROMPT, expect.any(Object));
-    await composer.press('Enter', { timeout: MAX_LOCAL_READ_WAIT_MS });
-    expect(getPressed()).toBe(true);
-    expect(sendCount).toBe(1);
+  it('keeps blocking overlay as a distinct timeout cause', async () => {
+    const fixture = makeComposerPage({ clickDelayMs: COMPOSER_INSERTION_WAIT_MS, blockingOverlay: true });
+    expect(await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 10_000))
+      .toBe('blocking_page_overlay');
   });
 });
 

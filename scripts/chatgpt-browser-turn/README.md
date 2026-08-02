@@ -84,30 +84,31 @@ invocation.
 The input remains content-neutral. Existing stable-input validation and atomic
 publication primitives are reused; they do not become workflow admission state.
 
-### Composer mutation budget (Issue #1174)
+### Composer timing (Issue #1188)
 
-Inserting the caller prompt into the composer uses a **separate** timeout from
-local DOM reads and control clicks (`MAX_LOCAL_READ_WAIT_MS`, currently 5s).
-The mutation budget is derived from payload volume and is independent of that
-read constant — changing one does not change the other.
+Composer interaction uses two phases. The readiness phase starts immediately
+before its first probe and has a deadline of 12 seconds, bounded by the
+invocation deadline. A qualifying observation must find `#prompt-textarea`
+present, visible, enabled, and content-editable.
 
-For a payload of `B` bytes and invocation `--timeout-ms` of `T`:
+After a successful readiness observation, the insertion phase starts with a
+payload-structural allowance: `max(3,000 ms, structural_line_count × 120 ms)`.
+Structural line count is the number of newline-separated blocks, treating CRLF
+as one newline. The 3,000 ms floor covers trivial and one-line payloads; a
+382-line payload receives 45,840 ms, exceeding the measured 21,168 ms worst
+case by 24,672 ms (116.6%). The 120 ms coefficient is 2.18× the roughly 55 ms
+per-line measurement, leaving margin for shared-browser contention. The
+allowance is clamped by the remaining invocation deadline, and readiness time
+is never consumed by it. Remaining time is
+recomputed before each action and at the send boundary; actions are awaited
+directly and must settle strictly before the deadline. Composer readiness is
+rechecked before focus/click, before fill, and at the send boundary. Losing
+readiness before send fails locally with `send_count: 0`, `driver_error`, and
+cause `composer_mutation_budget_exhausted`; `blocking_page_overlay` remains a
+distinct confirmed timeout path.
 
-```text
-mutationMs = min(T, 30_000, 3_000 + B × 0.25)
-```
-
-- **Base:** 3_000 ms floor before byte scaling.
-- **Scale:** 0.25 ms per byte (≈250 ms per KiB). A payload an order of magnitude
-  larger receives a strictly larger budget.
-- **Cap:** 30_000 ms maximum for one composer click+fill pair.
-- **Invocation ceiling:** the derived budget never exceeds the remaining
-  `--timeout-ms` for the live invocation.
-
-When the mutation budget is exhausted the turn fails before the send boundary
-with `send_count: 0`, `driver_error`, cause `composer_mutation_budget_exhausted`,
-and confirmed owned-tab cleanup. `composer_unavailable` and
-`blocking_page_overlay` are reported as distinct causes on their own paths.
+Byte count alone does not derive a live composer deadline. `MAX_LOCAL_READ_WAIT_MS`
+continues to govern unrelated local DOM-read paths.
 
 ### Page completion is sufficient
 
