@@ -3,7 +3,7 @@
  * Emit canonical heavy Vitest topology artifact and optional GitHub Actions outputs
  * (Issue #695).
  */
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -12,6 +12,7 @@ import {
 } from './lib/vitest-heavy-topology.mjs';
 import { buildLanePlan } from './lib/vitest-ci-lanes.mjs';
 import {
+  PRE_TOPOLOGY_MAX_FILES,
   measurePreTopologyFiles,
   resolvePreTopologyMeasurementPlan,
   shouldMeasurePreTopology,
@@ -23,6 +24,8 @@ import {
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = join(scriptDir, '..');
+const LANE_DIRECTIVE = /@vitest-ci-lane\s+(light|heavy|postMergeWallclock|parked)\b/;
+const ESTIMATE_DIRECTIVE = /@vitest-pre-topology-seconds\s+([1-9][0-9]*(?:\.[0-9]+)?)\b/;
 
 function parseArgs(argv) {
   const flags = new Set(argv.slice(2));
@@ -48,6 +51,45 @@ function writeGhaOutput(topology) {
   );
 }
 
+function readChangedTestDirectives(repoRoot, changedFiles) {
+  const directives = new Map();
+  for (const file of changedFiles) {
+    const text = readFileSync(join(repoRoot, file), 'utf8').slice(0, 4096);
+    const lane = text.match(LANE_DIRECTIVE)?.[1] ?? null;
+    if (!lane) continue;
+    const estimateRaw = text.match(ESTIMATE_DIRECTIVE)?.[1] ?? null;
+    const estimateSeconds = estimateRaw === null ? null : Number(estimateRaw);
+    directives.set(file, { lane, estimateSeconds });
+  }
+  return directives;
+}
+
+async function withEphemeralChangedTestClassifications(repoRoot, changedFiles, action) {
+  const configPath = join(repoRoot, 'scripts/vitest-ci-lanes.config.json');
+  const original = readFileSync(configPath, 'utf8');
+  const config = JSON.parse(original);
+  config.classification ??= {};
+  const directives = readChangedTestDirectives(repoRoot, changedFiles);
+  const estimates = {};
+  let changed = false;
+  for (const file of changedFiles) {
+    if (config.classification[file]) continue;
+    const directive = directives.get(file);
+    if (!directive) continue;
+    config.classification[file] = directive.lane;
+    if (Number.isFinite(directive.estimateSeconds) && directive.estimateSeconds > 0) {
+      estimates[file] = directive.estimateSeconds;
+    }
+    changed = true;
+  }
+  if (changed) writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  try {
+    return await action(estimates);
+  } finally {
+    if (changed) writeFileSync(configPath, original);
+  }
+}
+
 const { ghaOutput, failOnGuard, repoRoot } = parseArgs(process.argv);
 const rawManifest = parseChangedPathManifestFromEnv();
 const changedPathManifest = rawManifest
@@ -66,30 +108,52 @@ const laneOptions = {
   prScopeMode: normalizePrScopeMode(),
 };
 
-let result = buildLanePlan(repoRoot, laneOptions);
-let diagnostic = null;
-if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
-  const plan = resolvePreTopologyMeasurementPlan(result, laneOptions);
-  const { targets } = plan;
-  if (targets.length > 0) {
-    try {
-      const measurements = await measurePreTopologyFiles(repoRoot, targets, laneOptions);
-      result = buildLanePlan(repoRoot, {
+const execution = await withEphemeralChangedTestClassifications(
+  repoRoot,
+  changedFiles,
+  async (directiveMeasurements) => {
+    let result = buildLanePlan(repoRoot, laneOptions);
+    let diagnostic = null;
+    if (result.ok && shouldMeasurePreTopology(repoRoot, laneOptions)) {
+      const directiveCount = Object.keys(directiveMeasurements).length;
+      const plan = resolvePreTopologyMeasurementPlan(result, {
         ...laneOptions,
-        preTopologyMeasurements: { ...plan.measurements, ...measurements },
+        maxFiles: PRE_TOPOLOGY_MAX_FILES + directiveCount,
       });
-    } catch (error) {
-      diagnostic = {
-        targets: plan.allTargets,
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : null,
-      };
+      const measurements = { ...plan.measurements, ...directiveMeasurements };
+      const targets = plan.targets.filter((file) => !(file in directiveMeasurements));
+      if (targets.length > PRE_TOPOLOGY_MAX_FILES) {
+        throw new Error(
+          `pre-topology measurement bound exceeded: ${targets.length} files > ${PRE_TOPOLOGY_MAX_FILES}; ` +
+          'split the change or refresh measured runtime history',
+        );
+      }
+      if (targets.length > 0) {
+        try {
+          const measured = await measurePreTopologyFiles(repoRoot, targets, laneOptions);
+          result = buildLanePlan(repoRoot, {
+            ...laneOptions,
+            preTopologyMeasurements: { ...measurements, ...measured },
+          });
+        } catch (error) {
+          diagnostic = {
+            targets: plan.allTargets,
+            message: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : null,
+          };
+        }
+      } else if (Object.keys(measurements).length > 0) {
+        result = buildLanePlan(repoRoot, {
+          ...laneOptions,
+          preTopologyMeasurements: measurements,
+        });
+      }
     }
-  } else if (Object.keys(plan.measurements).length > 0) {
-    result = buildLanePlan(repoRoot, { ...laneOptions, preTopologyMeasurements: plan.measurements });
-  }
-}
+    return { result, diagnostic };
+  },
+);
 
+const { result, diagnostic } = execution;
 if (diagnostic) {
   const artifact = {
     heavyShardCount: 1,
@@ -140,7 +204,7 @@ writeFileSync(topologyArtifactPath(repoRoot), `${JSON.stringify(artifact, null, 
 
 if (result.topology.underProvisioned) {
   console.warn(
-    `[WARN] heavy shard topology under-provisioned: raw derived count ${result.topology.rawDerivedCount} exceeds maxShardCount ${result.topology.policy.maxShardCount}; clamped to ${result.topology.heavyShardCount}`,
+    `[WARN] heavy shard topology under-provisioned: raw derived count ${result.topology.rawDerivedCount} exceeds maxShardCount ${result.topology.heavyShardCount}; clamped to ${result.topology.heavyShardCount}`,
   );
 }
 if (result.topology.fallbackClassification === 'fixed-fallback') {
