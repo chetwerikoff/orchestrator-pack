@@ -486,6 +486,15 @@ export function startReviewCycle(
   const persisted = !persistedCandidate || activeCycleIsAccepted || revisionChanged ? randomUUID() : persistedCandidate;
   persistCycleId(workdir, persisted);
 
+  if (input.stageAttemptId && input.tier !== 'T3') {
+    diagnostics.push({
+      code: 'malformed-marker',
+      message: 'routed review-lane attempts require T3 lane-controlled stages',
+      eventKey: persisted,
+    });
+    return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted };
+  }
+
   let predecessor = input.predecessorCycleId;
   if (!predecessor) {
     const existing = censusState.lineage.eventsByKey.get(persisted);

@@ -81,7 +81,7 @@ describe('review-lane production activation', () => {
       repo: 'chetwerikoff/orchestrator-pack',
       issueNumber: 1201,
       sourceRevision: 'r01',
-      tier: 'T2',
+      tier: 'T3',
       publicActor: 'cursor-flow-manager',
       stageAttemptId: 'attempt-1',
       workdir: makeTempDir(),
@@ -89,6 +89,28 @@ describe('review-lane production activation', () => {
     expect(result.ok).toBe(true);
     expect(result.reviewLaneRouting?.stageAttemptId).toBe('attempt-1');
     expect(state.comments[0]?.body).toContain('routed-lane');
+  });
+
+  it('accepts the canonical HTML source-revision marker', () => {
+    const canonicalBody = issueBody.replace('revision r01', '<!-- source-revision: r01 -->');
+    const state = createMockGhState({ issue: { title: 't', body: canonicalBody, labels: [] } });
+    const result = startReviewCycle(createMockTransport(state), {
+      repo: 'chetwerikoff/orchestrator-pack', issueNumber: 1201, sourceRevision: 'r01', tier: 'T3',
+      publicActor: 'cursor-flow-manager', stageAttemptId: 'attempt-canonical', workdir: makeTempDir(),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.reviewLaneRouting?.sourceRevision).toBe('r01');
+  });
+
+  it('rejects routed stage-attempt creation for T1/T2 architectural stages', () => {
+    const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
+    const result = startReviewCycle(createMockTransport(state), {
+      repo: 'chetwerikoff/orchestrator-pack', issueNumber: 1201, sourceRevision: 'r01', tier: 'T2',
+      publicActor: 'cursor-flow-manager', stageAttemptId: 'attempt-architectural', workdir: makeTempDir(),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map((item) => item.message).join('\n')).toContain('routed review-lane attempts require T3 lane-controlled stages');
+    expect(state.comments).toHaveLength(0);
   });
 
   it('rejects body drift after exactly two fresh Issue reads', () => {
@@ -125,7 +147,7 @@ describe('review-lane production activation', () => {
       repo: 'chetwerikoff/orchestrator-pack',
       issueNumber: 1201,
       sourceRevision: 'r00',
-      tier: 'T2',
+      tier: 'T3',
       publicActor: 'cursor-flow-manager',
       stageAttemptId: 'attempt-1',
       workdir: makeTempDir(),
@@ -141,7 +163,7 @@ describe('review-lane production activation', () => {
       repo: 'chetwerikoff/orchestrator-pack',
       issueNumber: 1201,
       sourceRevision: 'r01',
-      tier: 'T2',
+      tier: 'T3',
       publicActor: 'cursor-flow-manager',
       stageAttemptId: 'attempt-1',
       permittedLaneOverride: 'disputed',
@@ -578,7 +600,7 @@ describe('review-lane production activation', () => {
       repo: 'chetwerikoff/orchestrator-pack',
       issueNumber: 1201,
       sourceRevision: 'r01',
-      tier: 'T2',
+      tier: 'T3',
       publicActor: 'cursor-flow-manager',
       stageAttemptId: 'attempt-1',
       workdir: makeTempDir(),
@@ -614,7 +636,7 @@ describe('review-lane production activation', () => {
       repo: 'chetwerikoff/orchestrator-pack',
       issueNumber: 1201,
       sourceRevision: 'r01',
-      tier: 'T2',
+      tier: 'T3',
       publicActor: 'cursor-flow-manager',
       stageAttemptId: 'attempt-1',
       workdir: makeTempDir(),
