@@ -3,7 +3,6 @@ import {
   type ReviewLaneClassification,
   type ReviewLaneInput,
   type ReviewLaneRouting,
-  type ReviewLaneScopeClass,
   type UsableReviewLaneInput,
 } from './review-lane-routing.ts';
 
@@ -25,16 +24,6 @@ function normalOverrideAllowed(input: UsableReviewLaneInput, classification: Rev
     && input.blastRadius === 'high';
 }
 
-function fixedThreeClassification(scopeClass: ReviewLaneScopeClass): ReviewLaneClassification {
-  return {
-    schema: 'review-lane-classifier/v1',
-    policyStatus: 'available',
-    policyIdentity: 'operator-override',
-    scopeClass,
-    conservativeReasons: [],
-    paths: [],
-  };
-}
 
 export function selectReviewLane(
   input: ReviewLaneInput,
@@ -49,10 +38,10 @@ export function selectReviewLane(
   if (override === 'normal' && !normalOverrideAllowed(input, classification)) {
     return { ready: false, reason: 'normal override is permitted only for exact high safe scope' };
   }
-  if (override === 'disputed' && (classification.scopeClass === 'safe' && input.blastRadius === 'low')) {
+  if (override === 'disputed' && classification.scopeClass === 'safe' && input.blastRadius === 'low') {
     return {
       ready: true,
-      routing: buildReviewLaneRouting(input, fixedThreeClassification('security-sensitive'), sourceRevision, stageAttemptId),
+      routing: buildReviewLaneRouting({ ...input, blastRadius: 'high' }, classification, sourceRevision, stageAttemptId),
     };
   }
   if (override === 'normal') {

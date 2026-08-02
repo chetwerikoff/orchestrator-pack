@@ -32,19 +32,26 @@ export function prepareReviewLaneStageAttempt(
 ): PrepareReviewLaneStageAttemptResult {
   let first;
   let second;
-  try {
-    first = fetchIssueRevision(input.transport, input.repo, input.issueNumber);
-    second = fetchIssueRevision(input.transport, input.repo, input.issueNumber);
-  } catch {
-    return { ok: false, diagnostics: ['unable to obtain two live Issue reads for review-lane freeze'] };
+  let firstLiveRevision: string | null = null;
+  let secondLiveRevision: string | null = null;
+  for (let reread = 0; reread < 3; reread += 1) {
+    try {
+      first = fetchIssueRevision(input.transport, input.repo, input.issueNumber);
+      second = fetchIssueRevision(input.transport, input.repo, input.issueNumber);
+    } catch {
+      return { ok: false, diagnostics: ['unable to obtain two live Issue reads for review-lane freeze'] };
+    }
+    firstLiveRevision = parseReviewLaneSourceRevision(first.body);
+    secondLiveRevision = parseReviewLaneSourceRevision(second.body);
+    if (!firstLiveRevision || !secondLiveRevision) {
+      return { ok: false, diagnostics: ['live Issue body is missing its revision marker'] };
+    }
+    if (firstLiveRevision === secondLiveRevision) break;
+    if (reread === 2) {
+      return { ok: false, diagnostics: ['live Issue revision changed during review-lane freeze'] };
+    }
   }
-
-  const firstLiveRevision = parseReviewLaneSourceRevision(first.body);
-  const secondLiveRevision = parseReviewLaneSourceRevision(second.body);
-  if (!firstLiveRevision || !secondLiveRevision) {
-    return { ok: false, diagnostics: ['live Issue body is missing its revision marker'] };
-  }
-  if (firstLiveRevision !== secondLiveRevision) {
+  if (!first || !second || !firstLiveRevision || !secondLiveRevision || firstLiveRevision !== secondLiveRevision) {
     return { ok: false, diagnostics: ['live Issue revision changed during review-lane freeze'] };
   }
   if (input.sourceRevision !== secondLiveRevision) {

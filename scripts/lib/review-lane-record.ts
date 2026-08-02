@@ -111,6 +111,15 @@ function isSourceVerdictEvidence(value: unknown): value is ReviewLaneSourceVerdi
   if (value.captureVerified !== undefined && typeof value.captureVerified !== 'boolean') return false;
   if (value.digestMatches !== undefined && typeof value.digestMatches !== 'boolean') return false;
   if (value.captureIdentity !== undefined && !nonEmpty(value.captureIdentity)) return false;
+  const verdict = normalizeMaterialVerdict({
+    terminalClassification: value.terminalClassification,
+    captureVerified: typeof value.captureVerified === 'boolean' ? value.captureVerified : undefined,
+    digestMatches: typeof value.digestMatches === 'boolean' ? value.digestMatches : undefined,
+    verdictText: typeof value.verdictText === 'string' ? value.verdictText : undefined,
+    rawFindingCount: typeof value.rawFindingCount === 'number' ? value.rawFindingCount : undefined,
+    materialFindingBlocks: typeof value.materialFindingBlocks === 'number' ? value.materialFindingBlocks : undefined,
+  });
+  if ((verdict === 'accept' || verdict === 'material-findings') && !nonEmpty(value.captureIdentity)) return false;
   return true;
 }
 

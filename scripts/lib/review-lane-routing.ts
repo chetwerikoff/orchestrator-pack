@@ -236,6 +236,9 @@ export function normalizeReviewLaneDeclaration(value: unknown): ReviewLaneInput 
       return { status: 'author-revision-required', reason: 'declaration-malformed', message: 'declaration entry is malformed' };
     }
     const candidate = normalizedPath(entry.path);
+    if (entry.kind === 'exact' && /[*?{}\[\]]/.test(candidate.path)) {
+      return { status: 'author-revision-required', reason: 'declaration-malformed', entry: candidate.path, message: `exact declaration path cannot contain wildcard syntax: ${candidate.path}` };
+    }
     if (!candidate.relative) {
       return { status: 'author-revision-required', reason: 'path-not-repository-relative', entry: entry.path, message: `path is not repository-relative: ${entry.path}` };
     }

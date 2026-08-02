@@ -56,6 +56,13 @@ describe('review-lane declaration and blast-radius routing', () => {
     if (seven.status === 'usable') expect(seven.blastRadius).toBe('high');
   });
 
+  it('rejects wildcard syntax in exact declaration entries', () => {
+    const result = normalizeReviewLaneDeclaration(declaration([
+      { kind: 'exact', path: 'scripts/lib/review-lane-*.ts', behaviors: ['pure-review-lane-selection'] },
+    ]));
+    expect(result).toMatchObject({ status: 'author-revision-required', reason: 'declaration-malformed' });
+  });
+
   it('does not merge duplicate paths with different semantics', () => {
     const result = normalizeReviewLaneDeclaration(declaration([
       { kind: 'exact', path: 'docs/tiering.md', behaviors: ['documentation-only', 'tier-lane-orthogonality'] },

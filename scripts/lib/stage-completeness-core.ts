@@ -18,7 +18,7 @@ import {
 export { findLegacyReceiptPaths } from './canonical-review-directory.ts';
 import { isReviewLaneEvidence, isReviewLaneRouting, sameReviewLaneRouting } from './review-lane-record.ts';
 import type { ReviewLaneEvidence } from './create-issue-stage-record-types.ts';
-import { REVIEW_LANE_ROUTING_POLICY_VERSION, type ReviewLaneRouting } from './review-lane-routing.ts';
+import { REVIEW_LANE_ROUTING_POLICY_VERSION, normalizeMaterialVerdict, type ReviewLaneRouting } from './review-lane-routing.ts';
 
 export const GRANDFATHERED_REVIEW_DIR_BASENAMES = new Set([
   '206-ao-010-session-status-readers-migration',
@@ -501,8 +501,14 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
     if (receipt.reviewLane) {
       const evidence = receipt.reviewLane.sourceVerdictEvidence[slot];
       const finalCapture = attempts.at(-1)?.capture;
-      if (evidence?.captureIdentity !== undefined && evidence.captureIdentity !== finalCapture?.captureIdentity) {
-        errors.push(`stage ${receipt.stage} reviewLane producer evidence does not match capture for slot ${slot}`);
+      const evidenceVerdict = evidence ? normalizeMaterialVerdict(evidence) : 'unparseable';
+      if (evidenceVerdict === 'accept' || evidenceVerdict === 'material-findings') {
+        if (!finalCapture || evidence?.captureIdentity !== finalCapture.captureIdentity) {
+          errors.push(`stage ${receipt.stage} reviewLane producer evidence does not match capture for slot ${slot}`);
+        }
+        if (evidence?.rawFindingCount !== finalCapture?.rawFindingCount) {
+          errors.push(`stage ${receipt.stage} reviewLane producer evidence finding count does not match capture for slot ${slot}`);
+        }
       }
     }
     if (attempts.length === 2) {
@@ -897,6 +903,11 @@ export function validateReviewEpisodeTopology(state: ReviewEpisodeStateV1, phase
   const ordered = expected.map((stage) => state.credentialingReceiptsByStage[stage]).filter((receipt): receipt is StageCompletenessReceiptV1 => Boolean(receipt));
   for (let index = 1; index < ordered.length; index += 1) if (ordered[index]!.stageSequence <= ordered[index - 1]!.stageSequence) errors.push(`${ordered[index]!.stage} stage is out of order`);
   if (!state.relayComplete) errors.push('review episode relay is incomplete');
+  if (phase === 'final-acceptance'
+    && state.receipts.some((receipt) => receipt.policyVersion === TRIPLE_SOURCE_POLICY_VERSION || receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION)
+    && !state.activationReady) {
+    errors.push('review-lane-routing/v1 final acceptance is blocked until logical-round accounting is active');
+  }
   return errors;
 }
 
@@ -982,7 +993,11 @@ function checkReceiptBackedStageCompleteness(tier: ReviewTier, options: StageCom
   if (state.tier && state.tier !== tier) errors.push(`review episode tier ${state.tier} does not match task tier ${tier}`);
   errors.push(...validateReviewEpisodeTopology(state, phase));
   if (errors.length > 0 || !state.reviewEpisodeId || !state.tier) return { ok: false, errors: [...new Set(errors)], noop: false, receipt: null, episodeState: state };
-  const policyVersion = state.receipts.some((receipt) => receipt.policyVersion === TRIPLE_SOURCE_POLICY_VERSION) ? TRIPLE_SOURCE_POLICY_VERSION : SINGLE_SOURCE_POLICY_VERSION;
+  const policyVersion = state.receipts.some((receipt) => receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION)
+    ? REVIEW_LANE_ROUTING_POLICY_VERSION
+    : state.receipts.some((receipt) => receipt.policyVersion === TRIPLE_SOURCE_POLICY_VERSION)
+      ? TRIPLE_SOURCE_POLICY_VERSION
+      : SINGLE_SOURCE_POLICY_VERSION;
   return { ok: true, errors: [], noop: false, episodeState: state, receipt: { tier: state.tier, reviewEpisodeId: state.reviewEpisodeId, policyVersion, logicalRoundIds: state.logicalRoundIds, governedCaptureUnion: state.governedCaptureUnion, relayedCaptureUnion: state.relayedCaptureUnion, rawFindingCount: state.rawFindingCount, activationReady: state.activationReady } };
 }
 export function checkStageCompletenessGuard(draftText: string, options: StageCompletenessGuardOptions = {}): StageCompletenessGuardResult {

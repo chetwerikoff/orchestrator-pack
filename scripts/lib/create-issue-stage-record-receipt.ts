@@ -94,6 +94,12 @@ export function parseConsumableStageReceipt(value: unknown): {
     errors.push(...routed.errors);
     const routedRecord = isRecord(reviewLane) ? reviewLane : null;
     if (routedPolicy && routed.ok && routedRecord && isRecord(routedRecord.routing) && isRecord(routedRecord.sourceVerdicts)) {
+      if (routedRecord.routing.stageAttemptId !== stageAttemptId) {
+        errors.push('stageAttemptId disagrees with routed evidence');
+      }
+      if (routedRecord.routing.sourceRevision !== sourceRevision) {
+        errors.push('sourceRevision disagrees with routed evidence');
+      }
       if (reviewerCardinality !== routedRecord.routing.reviewerCardinality) {
         errors.push('reviewerCardinality disagrees with routed topology');
       }

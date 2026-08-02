@@ -3,13 +3,14 @@ import {
   buildReviewLaneRouting,
   classifyReviewLaneDeclaration,
   normalizeReviewLaneDeclaration,
+  reviewLaneClassifierPolicyIdentity,
   type ReviewLaneAuthorDeclaration,
 } from './review-lane-routing.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
 import { validateReviewLaneRecord } from './review-lane-record.ts';
 import { createMockGhState, createMockTransport, makeTempDir } from './create-issue-stage-record-test-helpers.ts';
 import { publishSettledStageRecord, startReviewCycle } from './create-issue-stage-record-core.ts';
-import { deriveReviewEpisodeState } from './stage-completeness-core.ts';
+import { deriveReviewEpisodeState, validateReviewEpisodeTopology } from './stage-completeness-core.ts';
 
 const declaration = (entries: ReviewLaneAuthorDeclaration['entries']): ReviewLaneAuthorDeclaration => ({
   schema: 'review-lane-change-set/v1',
@@ -89,6 +90,33 @@ describe('review-lane production activation', () => {
     expect(state.comments[0]?.body).toContain('routed-lane');
   });
 
+  it('retries the bounded freeze after inconsistent live Issue reads', () => {
+    const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
+    const base = createMockTransport(state);
+    let issueReads = 0;
+    const transport = {
+      runGh(argv: string[]) {
+        if (argv[1] === 'api' && argv.includes('--jq') && (argv[2] ?? '').includes('/issues/')) {
+          issueReads += 1;
+          if (issueReads === 1) {
+            return { exitCode: 0, stdout: JSON.stringify({ title: 't', body: issueBody, labels: [] }), stderr: '' };
+          }
+          if (issueReads === 2) {
+            const changed = issueBody.replace('revision r01', 'revision r02');
+            return { exitCode: 0, stdout: JSON.stringify({ title: 't', body: changed, labels: [] }), stderr: '' };
+          }
+        }
+        return base.runGh(argv);
+      },
+    };
+    const result = startReviewCycle(transport, {
+      repo: 'chetwerikoff/orchestrator-pack', issueNumber: 1201, sourceRevision: 'r01', tier: 'T2',
+      publicActor: 'cursor-flow-manager', stageAttemptId: 'attempt-1', workdir: makeTempDir(),
+    });
+    expect(result.ok).toBe(true);
+    expect(issueReads).toBeGreaterThanOrEqual(4);
+  });
+
   it('rejects a stale caller revision before publishing any cycle', () => {
     const state = createMockGhState({ issue: { title: 't', body: familyIssueBody, labels: [] } });
     const result = startReviewCycle(createMockTransport(state), {
@@ -119,6 +147,7 @@ describe('review-lane production activation', () => {
     });
     expect(result.ok).toBe(true);
     expect(result.reviewLaneRouting).toMatchObject({ lane: 'disputed', reviewerCardinality: 3 });
+    expect(result.reviewLaneRouting?.classifierIdentity).toBe(reviewLaneClassifierPolicyIdentity());
   });
 
   it('does not publish a cycle when pre-attempt routing cannot be produced', () => {
@@ -360,6 +389,7 @@ describe('review-lane production activation', () => {
     const episode = deriveReviewEpisodeState([stageReceipt], [], authority);
     expect(episode.errors.join('\n')).not.toContain('reviewLane');
     expect(episode.activationReady).toBe(false);
+    expect(validateReviewEpisodeTopology({ ...episode, activationReady: false }, 'final-acceptance').join('\n')).toContain('review-lane-routing/v1 final acceptance is blocked');
     const published = publishSettledStageRecord(transport, {
       repo: 'chetwerikoff/orchestrator-pack',
       issueNumber: 1201,
@@ -460,6 +490,19 @@ describe('review-lane production activation', () => {
     expect(parsed.errors.join('\n')).toContain('producer evidence');
   });
 
+  it('rejects a routed receipt whose outer stage attempt disagrees with routing evidence', () => {
+    const routed = routedFixture();
+    const parsed = parseConsumableStageReceipt({
+      tier: 'T3', stage: 'competitive', cycleId: 'cycle-1', stageAttemptId: 'attempt-2',
+      policyVersion: 'review-lane-routing/v1', sourceRevision: 'r01', outcome: 'complete',
+      reviewerCardinality: 3, completedSourceCount: 2,
+      cycleBinding: { cycleId: 'cycle-1', sourceRevision: 'r01', boundBeforeLaunch: true },
+      producerEvidence: 'not-applicable', tierTransition: 'none', reviewLane: routed,
+    });
+    expect(parsed.receipt).toBeNull();
+    expect(parsed.errors.join('\n')).toContain('stageAttemptId');
+  });
+
   it('rejects a legacy receipt on a routed cycle head', () => {
     const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
     const transport = createMockTransport(state);
@@ -532,6 +575,12 @@ describe('review-lane production activation', () => {
     });
     expect(publication.ok).toBe(false);
     expect(publication.diagnostics.map((item) => item.message).join('\n')).toContain('immutable cycle route');
+  });
+
+  it('requires capture identity on completed source verdict evidence', () => {
+    const routed = routedFixture();
+    const evidence = { ...routed.sourceVerdictEvidence, '01': { ...routed.sourceVerdictEvidence['01'], captureIdentity: undefined } };
+    expect(validateReviewLaneRecord({ ...routed, sourceVerdictEvidence: evidence })).toMatchObject({ ok: false });
   });
 
   it('rejects partial routed evidence and contradictory source counts', () => {
