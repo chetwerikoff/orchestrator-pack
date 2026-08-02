@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 120
 import { describe, expect, it } from 'vitest';
 import {
   MAX_EFFECTIVE_BUDGET_MS,
