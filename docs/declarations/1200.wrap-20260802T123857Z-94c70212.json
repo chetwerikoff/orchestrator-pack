@@ -7,18 +7,16 @@
   "baseline": {
     "commit_sha": "ab3fda1407d1899b716be13e75ec960f7dfdc7de",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:6ef4e62d32ec7070bfd4bc5406607b8acc71931922aaa8d314a8df23cb86c10a"
+    "active_scope_hash": "sha256:49f06b56aba6f504b7c2e7fe83e2921135ea7673f3cc810e5fefceffde0612cd"
   },
   "declared_paths": [
-    "scripts/create-issue-stage-finalize.ts",
+    "docs/migration_notes.md",
     "scripts/create-issue-final-acceptance.ts",
+    "scripts/create-issue-stage-finalize.ts",
     "scripts/stage-completeness-guard.ts",
-    "scripts/stage-completeness-guard.test.ts",
     "scripts/finding-ledger-guard.mjs",
-    "scripts/finding-ledger-guard.test.mjs",
     "scripts/lib/create-issue-stage-record.ts",
     "scripts/lib/create-issue-stage-record-gh.ts",
-    "scripts/lib/create-issue-stage-record.test.ts",
     "scripts/lib/create-issue-stage-topology.ts",
     "scripts/lib/create-issue-stage-topology.test.ts",
     "scripts/lib/create-issue-completed-result.ts",
@@ -28,14 +26,30 @@
     "scripts/create-issue-parked-migration.ts",
     "scripts/create-issue-parked-migration.test.ts",
     "scripts/compile-create-issue-parked-migration.ts",
-    "scripts/fixtures/create-issue-comment-history-counts.json",
     "scripts/fixtures/create-issue-parked-migration-1168.json",
     "scripts/fixtures/create-issue-parked-migration-1173.json",
-    "scripts/fixtures/create-issue-parked-migration-1188.json",
-    ".claude/skills/create-issue-draft/SKILL.md",
-    ".cursor/skills/create-issue-draft/SKILL.md",
-    "docs/migration_notes.md"
+    "scripts/fixtures/create-issue-parked-migration-1188.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:6ef4e62d32ec7070bfd4bc5406607b8acc71931922aaa8d314a8df23cb86c10a",
+      "new_active_scope_hash": "sha256:49f06b56aba6f504b7c2e7fe83e2921135ea7673f3cc810e5fefceffde0612cd",
+      "changed": {
+        "added": [],
+        "removed": [
+          ".claude/skills/create-issue-draft/SKILL.md",
+          ".cursor/skills/create-issue-draft/SKILL.md",
+          "scripts/finding-ledger-guard.test.mjs",
+          "scripts/fixtures/create-issue-comment-history-counts.json",
+          "scripts/lib/create-issue-stage-record.test.ts",
+          "scripts/stage-completeness-guard.test.ts"
+        ]
+      },
+      "reason": "Confirm the exact r15 implementation and test paths for Issue #1200 remote review publication authority",
+      "actor": "local",
+      "timestamp": "2026-08-02T13:55:39.343Z",
+      "applied": true
+    }
+  ]
 }
