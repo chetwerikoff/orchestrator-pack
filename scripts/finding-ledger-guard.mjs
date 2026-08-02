@@ -474,8 +474,10 @@ function legacyCheck(captures, ledger, errors) {
 
 export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options = {}) {
   const remoteInputs = options.remoteAuthorities ?? (options.remoteAuthority ? [options.remoteAuthority] : []);
-  if (options.requireRemoteAuthority === true && remoteInputs.length === 0) {
-    return { ok: false, errors: ['finding-ledger: remote authority is required for receipt-backed production validation'], ledger: { version: 1, draft: null, counts: null, findings: [] }, captureFindings: [], protectedSignals: [] };
+  if ((options.reviewEconomics === true && options.stageReceipts !== undefined) || options.requireRemoteAuthority === true) {
+    if (remoteInputs.length === 0) {
+      return { ok: false, errors: ['finding-ledger: remote authority is required for receipt-backed production validation'], ledger: { version: 1, draft: null, counts: null, findings: [] }, captureFindings: [], protectedSignals: [] };
+    }
   }
   if (remoteInputs.length > 0) {
     const authority = checkRemoteAuthorities(remoteInputs);
