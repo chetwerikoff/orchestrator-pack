@@ -16,6 +16,12 @@ import {
   type StageCompletenessReceiptV1,
   type VerifiedRelayEvidenceV1,
 } from './lib/stage-completeness-core.ts';
+import {
+  buildAuthorDisposition,
+  buildSourceRecords,
+  buildTopology,
+  deriveAdmission,
+} from './lib/create-issue-stage-topology.ts';
 
 const TASK = 'issue:1150';
 const REVISION = 'r09';
@@ -94,11 +100,42 @@ function preLens(cardinality = 3, reviewTexts?: string[]) {
 }
 
 function ledgerOptions(fixture: ReturnType<typeof preLens>) {
+  let textOffset = 0;
+  const remoteAuthorities = fixture.receipts.map((receipt) => {
+    const topology = buildTopology({
+      issueNumber: 1150,
+      cycleId: 'cycle-1150',
+      sourceRevision: REVISION,
+      stage: receipt.stage,
+      stageAttemptId: receipt.stageAttemptId,
+      policyVersion: receipt.policyVersion,
+    }, 'T3', receipt.reviewerCardinality, CONFIG);
+    const lifecycle = {
+      state: 'active' as const,
+      cycleId: topology.cycleId,
+      stageAttemptId: topology.stageAttemptId,
+      sourceRevision: topology.sourceRevision,
+    };
+    const texts = fixture.texts.slice(textOffset, textOffset + receipt.reviewerCardinality);
+    textOffset += receipt.reviewerCardinality;
+    const sourceRecords = receipt.relayEligibleCaptures.flatMap((capture, index) => buildSourceRecords(topology, String(index + 1).padStart(2, '0'), texts[index] ?? CLEAN));
+    const admission = deriveAdmission(topology, lifecycle, sourceRecords);
+    const disposition = buildAuthorDisposition(topology, admission, {
+      occurrenceIds: [],
+      distinctDefects: [],
+      defectDispositions: [],
+      remedyDispositions: [],
+      m4: 'keep',
+      unresolvedOccurrenceIds: [],
+      settlement: 'settled',
+    });
+    return { topology, lifecycle, sourceRecords, disposition };
+  });
   return {
     reviewEconomics: true, phase: 'pre-lens' as const, issueRevision: REVISION,
     stageTerminalConfirmed: true,
     captureMetadata: fixture.captures.map((item, index) => ({ name: item.name, timestampMs: index + 1, captureIdentity: item.captureIdentity })),
-    stageReceipts: fixture.receipts, verifiedRelayEvidence: fixture.relay, episodeAuthority: fixture.authority,
+    stageReceipts: fixture.receipts, verifiedRelayEvidence: fixture.relay, episodeAuthority: fixture.authority, remoteAuthorities,
   };
 }
 
@@ -181,6 +218,74 @@ describe('Issue #1150 stage authority', () => {
     expect(state.errors, state.errors.join('\n')).toEqual([]);
     expect(state.activationReady).toBe(true);
     expect(state.logicalRoundIds).toEqual(['competitive-attempt', 'architectural-review-attempt']);
+  });
+
+  it('rejects routed policy for a terminal architectural stage', () => {
+    const captures = [
+      capture('architectural-routed-01', 'pass-01-architectural.capture.txt'),
+      capture('architectural-routed-02', 'pass-02-architectural.capture.txt'),
+    ];
+    const attemptId = 'architectural-routed-attempt';
+    const routing = {
+      schema: 'review-lane-routing/v1' as const,
+      routingPolicyIdentity: 'review-lane-routing/v1' as const,
+      lane: 'disputed' as const,
+      topology: 'conditional-third/v1' as const,
+      policyVersion: 'review-lane-routing/v1' as const,
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: 'routed-config',
+      possibleSlots: ['01', '02', '03'],
+      initiallyActivatedSlots: ['01', '02'],
+      conditionalActivationRule: 'material-verdict-conflict/v1' as const,
+      sourceRevision: REVISION,
+      stageAttemptId: attemptId,
+      laneInputIdentity: 'routed-input',
+      classifierIdentity: 'routed-classifier',
+      permittedLaneOverride: null,
+    };
+    const evidence = (slot: string) => ({
+      producerEvidenceIdentity: `producer-${slot}`,
+      captureIdentity: `architectural-routed-${slot}`,
+      terminalClassification: 'complete' as const,
+      captureVerified: true,
+      digestMatches: true,
+      verdictText: 'NO_FINDINGS',
+      rawFindingCount: 0,
+    });
+    const reviewLane = {
+      routing,
+      finalRequiredSlots: ['01', '02'],
+      sourceVerdicts: { '01': 'accept' as const, '02': 'accept' as const },
+      sourceVerdictEvidence: { '01': evidence('01'), '02': evidence('02') },
+      conflictDecision: 'no-conflict' as const,
+      settlement: {
+        ok: true,
+        conflictDecision: 'no-conflict' as const,
+        finalRequiredSlots: ['01', '02'],
+        slotCensus: [
+          { slot: '01', state: 'activated' as const },
+          { slot: '02', state: 'activated' as const },
+          { slot: '03', state: 'not-activated' as const },
+        ],
+        errors: [],
+      },
+    };
+    const invocations = captures.map((item, index) => invocation(
+      'architectural',
+      attemptId,
+      index + 1,
+      3,
+      item,
+      { policyVersion: 'review-lane-routing/v1', cardinalityConfigIdentity: 'routed-config', reviewLaneRouting: routing },
+    ));
+    const routedReceipt = {
+      ...receipt('architectural', 1, attemptId, 3, captures, invocations),
+      policyVersion: 'review-lane-routing/v1' as const,
+      cardinalityConfigIdentity: 'routed-config',
+      reviewLane,
+    };
+    const state = deriveReviewEpisodeState([routedReceipt], relay(captures), authority([routedReceipt]));
+    expect(state.errors.join('\n')).toContain('review-lane-routing/v1 is limited to lane-controlled T3 stages');
   });
 
   it('binds receipt inventory to the canonical Issue root and blocks external receipts', () => {
@@ -356,7 +461,9 @@ describe('Issue #1150 receipt-backed ledger', () => {
       writeFileSync(join(dir, 'verified-relay-evidence.json'), JSON.stringify(fixture.relay));
       fixture.captures.forEach((item, index) => writeFileSync(join(dir, item.name), fixture.texts[index]!));
       writeFileSync(join(dir, 'ledger.json'), JSON.stringify({ version: 2, counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 }, findings: [] }));
-      expect(runFindingLedgerCli(['node', 'scripts/finding-ledger-guard.mjs', '--ledger', join(dir, 'ledger.json'), '--captures-dir', dir, '--phase', 'pre-lens', '--stage-terminal', '--receipt-directory', canonical, '--tier-intake', join(canonical, 'tier-intake.json'), '--verified-relay-evidence', join(dir, 'verified-relay-evidence.json')])).toBe(0);
+      const remoteAuthorityPath = join(dir, 'remote-authority.json');
+      writeFileSync(remoteAuthorityPath, JSON.stringify(ledgerOptions(fixture).remoteAuthorities));
+      expect(runFindingLedgerCli(['node', 'scripts/finding-ledger-guard.mjs', '--ledger', join(dir, 'ledger.json'), '--captures-dir', dir, '--phase', 'pre-lens', '--stage-terminal', '--receipt-directory', canonical, '--tier-intake', join(canonical, 'tier-intake.json'), '--verified-relay-evidence', join(dir, 'verified-relay-evidence.json'), '--remote-authority', remoteAuthorityPath])).toBe(0);
     } finally {
       if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
       else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;

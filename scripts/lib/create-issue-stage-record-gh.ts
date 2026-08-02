@@ -564,3 +564,10 @@ export function persistCycleId(workdir: string, cycleId: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, `${cycleId}\n`, 'utf8');
 }
+
+export function readIssueComment(transport: GhTransport, repo: string, commentId: number): TrustedComment | null {
+  const { owner, name } = parseRepo(repo);
+  const response = transport.runGh(['gh', 'api', 'repos/' + owner + '/' + name + '/issues/comments/' + commentId]);
+  if (response.exitCode !== 0) return null;
+  try { return normalizeComment(JSON.parse(response.stdout) as Record<string, unknown>); } catch { return null; }
+}

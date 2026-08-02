@@ -1,3 +1,11 @@
+import type {
+  ReviewLaneConflictDecision,
+  ReviewLaneRouting,
+  ReviewLaneSettlement,
+  ReviewLaneSourceVerdict,
+  ReviewLaneSourceVerdictEvidence,
+} from './review-lane-routing.ts';
+
 export const JOURNAL_MARKER_PREFIX = 'opk-create-issue-journal';
 
 export const CYCLE_SCHEMA = 'create-issue-review-cycle/v1' as const;
@@ -72,6 +80,7 @@ export interface CycleEventLogical {
   'source-revision': string;
   tier: string;
   'public-actor': PublicActor;
+  'routed-lane'?: ReviewLaneRouting;
 }
 
 export interface StageEventLogical {
@@ -88,6 +97,16 @@ export interface StageEventLogical {
   'required-source-count': number;
   'producer-evidence': ProducerEvidence;
   'tier-transition': string;
+  'routed-lane'?: ReviewLaneEvidence;
+}
+
+export interface ReviewLaneEvidence {
+  routing: ReviewLaneRouting;
+  finalRequiredSlots: string[];
+  sourceVerdicts: Record<string, ReviewLaneSourceVerdict>;
+  sourceVerdictEvidence: Record<string, ReviewLaneSourceVerdictEvidence>;
+  conflictDecision: ReviewLaneConflictDecision;
+  settlement: ReviewLaneSettlement;
 }
 
 export interface FinalEventLogical {
@@ -171,6 +190,7 @@ export interface ConsumableStageReceipt {
   cycleBinding: StageReceiptCycleBinding;
   producerEvidence: ProducerEvidence;
   tierTransition: string;
+  reviewLane?: ReviewLaneEvidence;
 }
 
 export interface PendingJournalEvent {

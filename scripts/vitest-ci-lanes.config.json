@@ -60,6 +60,8 @@
     "scripts/lib/create-issue-stage-record-artifacts.test.ts": "heavy",
     "scripts/lib/create-issue-stage-record.test.ts": "light",
     "scripts/lib/create-issue-final-acceptance-revision.test.ts": "light",
+    "scripts/lib/create-issue-stage-record-review-lane.test.ts": "light",
+    "scripts/lib/review-lane-routing.test.ts": "light",
     "scripts/lib/protected-signal-receipt.test.ts": "light",
     "scripts/orchestrator-escalation-router.test.ts": "parked",
     "scripts/orchestrator-escalation.test.ts": "light",
@@ -116,7 +118,11 @@
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light",
     "scripts/flow-manager-long-running-child.test.ts": "light",
-    "scripts/flow-manager-authority-contract.test.ts": "light"
+    "scripts/flow-manager-authority-contract.test.ts": "light",
+    "scripts/create-issue-parked-migration.test.ts": "light",
+    "scripts/lib/create-issue-comment-census.test.ts": "light",
+    "scripts/lib/create-issue-completed-result.test.ts": "light",
+    "scripts/lib/create-issue-stage-topology.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,
