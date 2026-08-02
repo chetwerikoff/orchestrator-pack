@@ -6,7 +6,7 @@
     "plugins/*"
   ],
   "scripts": {
-    "check:node-major": "node scripts/toolchain/check-node-major.mjs",
+    "check:node-major": "node scripts/toolchain/check-node-major.mjs 1>&2",
     "check:npm-major": "npm --version | awk -F. '$1 == 10 { ok = 1 } END { exit ok ? 0 : 1 }'",
     "ci:preflight": "npm run check:node-major --silent && npm run check:npm-major --silent && node --experimental-strip-types scripts/ci-preflight/cli.ts",
     "test": "node scripts/run-vitest-with-harness.mjs run",

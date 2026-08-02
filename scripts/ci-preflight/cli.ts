@@ -82,7 +82,12 @@ function checkPaths(root = REPO): GateFailure | undefined {
       return globalFailure('preflight_input_missing_or_invalid', path, 'parseable checked-in configuration', String(error), 'Restore a valid configuration file.');
     }
   }
-  for (const output of outputMembers(root)) return globalFailure('caller_owned_output', output, 'absent', outputCensus(root)[output], 'Remove or move the caller-owned runtime output.');
+  return undefined;
+}
+function checkCallerOutputs(root = REPO): GateFailure | undefined {
+  for (const output of outputMembers(root)) {
+    return globalFailure('caller_owned_output', output, 'absent', outputCensus(root)[output], 'Remove or move the caller-owned runtime output.');
+  }
   return undefined;
 }
 function checkDependencies(root = REPO): GateFailure | undefined {
@@ -185,9 +190,9 @@ export async function runPreflight(repoRoot = REPO): Promise<Record<string, unkn
   probes.push(hashFailure ? blockedProbe('probe.workflow-hashes', 'workflow-hashes', 'global', [], hashDiagnostic) : probeRecord('probe.workflow-hashes', 'workflow-hashes', 'global'));
   const paths = global ?? (hashFailure ? globalFailure('workflow_inventory_stale', '.github/workflows/scope-guard.yml', hashDiagnostic.expected, hashDiagnostic.actual, hashDiagnostic.remediation) : checkPaths(repoRoot));
   probes.push(global || hashFailure ? notStartedProbe('probe.global-paths', 'global-paths', 'global') : paths ? blockedProbe('probe.global-paths', 'global-paths', 'global', [], paths.diagnostic) : probeRecord('probe.global-paths', 'global-paths', 'global'));
-  const outputs = paths ?? checkPaths(repoRoot);
+  const outputs = global || hashFailure || paths ? undefined : checkCallerOutputs(repoRoot);
   probes.push(global || hashFailure || paths ? notStartedProbe('probe.caller-outputs', 'caller-outputs', 'global') : outputs ? blockedProbe('probe.caller-outputs', 'caller-outputs', 'global', [], outputs.diagnostic) : probeRecord('probe.caller-outputs', 'caller-outputs', 'global'));
-  const baselineStatus = status(repoRoot);
+  const baselineStatus = global || hashFailure || paths || outputs ? '' : status(repoRoot);
   const baselineFailure = baselineStatus ? globalFailure('dirty_worktree', repoRoot, '', baselineStatus, 'Clean caller changes before running preflight.') : undefined;
   probes.push(global || hashFailure || paths || outputs ? notStartedProbe('probe.baseline', 'baseline', 'global') : baselineFailure ? blockedProbe('probe.baseline', 'baseline', 'global', [], baselineFailure.diagnostic) : probeRecord('probe.baseline', 'baseline', 'global'));
   const deps = baselineFailure ?? paths ?? checkDependencies(repoRoot);
