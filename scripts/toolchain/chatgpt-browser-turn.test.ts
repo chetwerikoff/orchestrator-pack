@@ -3402,7 +3402,7 @@ describe('issue 1188 composer readiness and insertion timing', () => {
   it('derives insertion allowance from structural line count with a floor and invocation clamp', async () => {
     expect(COMPOSER_READINESS_WAIT_MS).toBe(12_000);
     expect(COMPOSER_INSERTION_WAIT_MS).toBe(3_000);
-    expect(COMPOSER_INSERTION_MS_PER_LINE).toBe(65);
+    expect(COMPOSER_INSERTION_MS_PER_LINE).toBe(120);
 
     const shortPayload = 'x';
     const longOneLinePayload = 'x'.repeat(19_000);
@@ -3413,7 +3413,8 @@ describe('issue 1188 composer readiness and insertion timing', () => {
 
     expect(shortBudget).toBe(3_000);
     expect(longOneLineBudget).toBe(3_000);
-    expect(longMarkdownBudget).toBe(24_830);
+    expect(longMarkdownBudget).toBe(45_840);
+    expect(longMarkdownBudget).toBeGreaterThan(21_168);
     expect(shortBudget).toBeLessThanOrEqual(longOneLineBudget);
     expect(longOneLineBudget).toBeLessThan(longMarkdownBudget);
 

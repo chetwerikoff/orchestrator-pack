@@ -92,12 +92,14 @@ invocation deadline. A qualifying observation must find `#prompt-textarea`
 present, visible, enabled, and content-editable.
 
 After a successful readiness observation, the insertion phase starts with a
-payload-structural allowance: `max(3,000 ms, structural_line_count × 65 ms)`.
+payload-structural allowance: `max(3,000 ms, structural_line_count × 120 ms)`.
 Structural line count is the number of newline-separated blocks, treating CRLF
 as one newline. The 3,000 ms floor covers trivial and one-line payloads; a
-382-line payload receives 24,830 ms, exceeding the measured 21,168 ms worst
-case by 3,662 ms. The allowance is clamped by the remaining invocation
-deadline, and readiness time is never consumed by it. Remaining time is
+382-line payload receives 45,840 ms, exceeding the measured 21,168 ms worst
+case by 24,672 ms (116.6%). The 120 ms coefficient is 2.18× the roughly 55 ms
+per-line measurement, leaving margin for shared-browser contention. The
+allowance is clamped by the remaining invocation deadline, and readiness time
+is never consumed by it. Remaining time is
 recomputed before each action and at the send boundary; actions are awaited
 directly and must settle strictly before the deadline. Composer readiness is
 rechecked before focus/click, before fill, and at the send boundary. Losing

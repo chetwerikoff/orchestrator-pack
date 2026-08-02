@@ -78,8 +78,8 @@ export const MAX_LOCAL_READ_WAIT_MS = 5_000;
 export const COMPOSER_READINESS_WAIT_MS = 12_000;
 /** Minimum insertion allowance for a one-line payload. */
 export const COMPOSER_INSERTION_WAIT_MS = 3_000;
-/** Calibrated against the measured ProseMirror cost of roughly 55 ms per line. */
-export const COMPOSER_INSERTION_MS_PER_LINE = 65;
+/** Conservative 2.18x margin over the measured ProseMirror cost of roughly 55 ms per line. */
+export const COMPOSER_INSERTION_MS_PER_LINE = 120;
 
 export function deriveComposerInsertionBudgetMs(text: string): number {
   const structuralLineCount = text.split(/\r\n|\r|\n/).length;
