@@ -411,7 +411,8 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
-      const budget = createTurnOperationBudget(200);
+      const startedAtMs = Date.now();
+      const budget = createTurnOperationBudget(200, startedAtMs);
       let nestedCountWait = -1;
       const page = {
         locator: () => ({
@@ -441,7 +442,7 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
       await expect(probe).resolves.toBe('absent');
       assertTimingBudgetInvariant({
         operation: 'nested parent probe',
-        startedAtMs: budget.endsAtMs - 200,
+        startedAtMs,
         observedAtMs: Date.now(),
         deadlineAtMs: budget.endsAtMs,
       });
@@ -3237,19 +3238,19 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
   ).href;
 
   function withControlledAdmissionClock<T>(callback: () => T): { value: T; waitCalls: number } {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    let controlledNowMs = 0;
     let waitCalls = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => controlledNowMs);
     const wait = vi.spyOn(Atomics, 'wait').mockImplementation((_typedArray, _index, _value, timeout) => {
       waitCalls++;
-      vi.setSystemTime(Date.now() + (timeout ?? 0));
+      controlledNowMs += timeout ?? 0;
       return 'timed-out';
     });
     try {
       return { value: callback(), waitCalls };
     } finally {
       wait.mockRestore();
-      vi.useRealTimers();
+      now.mockRestore();
     }
   }
 
