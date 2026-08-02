@@ -53,6 +53,12 @@ T1 and T2 use the same create-flow review pipeline: exactly one independent
 terminal browser-GPT `architectural` lens. Their classification is descriptive
 and calibrational, not a reason to buy a different review topology.
 
+Reviewer cardinality is a separate routing decision. The review-lane classifier
+uses the author-owned changed-path declaration and blast radius to select one
+source, a conditional disputed pair, or a fixed three-source safety set; it
+never changes the complexity tier, stage order, reviewer roles, or substantive
+review contract. See [`review-lanes.md`](review-lanes.md).
+
 Numeric magnitude may disqualify a task from a lower tier but never qualifies a
 task into T1. Smallness is necessary, not sufficient. Stable receipt rubric
 labels remain:

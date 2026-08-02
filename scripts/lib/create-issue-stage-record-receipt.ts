@@ -2,12 +2,15 @@ import type {
   CanonicalLineage,
   ConsumableStageReceipt,
   ProducerEvidence,
+  ReviewLaneEvidence,
   SettledOutcome,
   StageEventLogical,
   StageReceiptCycleBinding,
 } from './create-issue-stage-record-types.ts';
+import { validateReviewLaneRecord } from './review-lane-record.ts';
 import { STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
 import { deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
+import { REVIEW_LANE_ROUTING_POLICY_VERSION } from './review-lane-routing.ts';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -18,6 +21,7 @@ function nonEmpty(value: unknown): value is string {
 }
 
 const VALID_OUTCOMES = new Set<SettledOutcome>(['complete', 'partial', 'blocked', 'incident']);
+const LEGACY_POLICY_VERSIONS = new Set(['single-source/v1', 'triple-source/v1']);
 
 export function parseCycleBinding(value: unknown): StageReceiptCycleBinding | null {
   if (!isRecord(value)) return null;
@@ -58,6 +62,7 @@ export function parseConsumableStageReceipt(value: unknown): {
       ? (isRecord(value.claude) && value.claude.kind === 'capture' ? 'verified' : 'waived')
       : 'not-applicable');
   const tierTransition = nonEmpty(value.tierTransition) ? value.tierTransition.trim() : 'none';
+  const reviewLane = value.reviewLane === undefined ? undefined : value.reviewLane;
 
   if (!tier) errors.push('missing tier');
   if (!stage) errors.push('missing stage');
@@ -73,6 +78,38 @@ export function parseConsumableStageReceipt(value: unknown): {
   else if (cycleBinding.sourceRevision !== sourceRevision) errors.push('cycleBinding sourceRevision mismatch');
   if (producerEvidence !== 'verified' && producerEvidence !== 'waived' && producerEvidence !== 'not-applicable') {
     errors.push('invalid producerEvidence');
+  }
+  const routedPolicy = policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION;
+  if (!routedPolicy && reviewLane !== undefined) {
+    errors.push('legacy stage policy cannot carry reviewLane evidence');
+  }
+  if (!routedPolicy && !LEGACY_POLICY_VERSIONS.has(policyVersion)) {
+    errors.push(`unsupported stage policy version: ${policyVersion}`);
+  }
+  if (routedPolicy && reviewLane === undefined) {
+    errors.push('review-lane evidence is required for review-lane-routing/v1');
+  }
+  if (reviewLane !== undefined) {
+    const routed = validateReviewLaneRecord(reviewLane);
+    errors.push(...routed.errors);
+    const routedRecord = isRecord(reviewLane) ? reviewLane : null;
+    if (routedPolicy && routed.ok && routedRecord && isRecord(routedRecord.routing) && isRecord(routedRecord.sourceVerdicts)) {
+      if (routedRecord.routing.stageAttemptId !== stageAttemptId) {
+        errors.push('stageAttemptId disagrees with routed evidence');
+      }
+      if (routedRecord.routing.sourceRevision !== sourceRevision) {
+        errors.push('sourceRevision disagrees with routed evidence');
+      }
+      if (reviewerCardinality !== routedRecord.routing.reviewerCardinality) {
+        errors.push('reviewerCardinality disagrees with routed topology');
+      }
+      if (completedSourceCount !== Object.keys(routedRecord.sourceVerdicts).length) {
+        errors.push('completed source count disagrees with routed sourceVerdicts');
+      }
+      if (outcome === 'complete' && isRecord(routedRecord.settlement) && routedRecord.settlement.ok !== true) {
+        errors.push('complete receipt cannot contain an unsettled routed record');
+      }
+    }
   }
 
   if (errors.length > 0 || cycleBinding === null) return { receipt: null, errors };
@@ -91,6 +128,7 @@ export function parseConsumableStageReceipt(value: unknown): {
       cycleBinding,
       producerEvidence: producerEvidence as ProducerEvidence,
       tierTransition,
+      reviewLane: reviewLane as ReviewLaneEvidence | undefined,
     },
     errors: [],
   };

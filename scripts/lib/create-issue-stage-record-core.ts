@@ -44,6 +44,10 @@ import {
   PROJECTION_IN_PROGRESS,
   STAGE_SCHEMA,
 } from './create-issue-stage-record-types.ts';
+import { REVIEW_LANE_ROUTING_POLICY_VERSION, type ReviewLaneRouting } from './review-lane-routing.ts';
+import { sameReviewLaneRouting } from './review-lane-record.ts';
+import { prepareReviewLaneStageAttempt } from './create-issue-stage-record-review-lane.ts';
+import type { ReviewLaneOverride } from './review-lane-selector.ts';
 
 export interface StartCycleInput {
   repo: string;
@@ -52,6 +56,8 @@ export interface StartCycleInput {
   tier: string;
   publicActor: PublicActor;
   predecessorCycleId?: string;
+  stageAttemptId?: string;
+  permittedLaneOverride?: ReviewLaneOverride;
   workdir?: string;
   census?: CommentCensusOptions;
 }
@@ -73,6 +79,7 @@ export interface OperationResult {
   eventKey?: string;
   projectionPendingRepair?: boolean;
   terminal?: OperationTerminal;
+  reviewLaneRouting?: ReviewLaneRouting;
 }
 
 function resolveWorkdir(issueNumber: number, workdir?: string): string {
@@ -479,6 +486,15 @@ export function startReviewCycle(
   const persisted = !persistedCandidate || activeCycleIsAccepted || revisionChanged ? randomUUID() : persistedCandidate;
   persistCycleId(workdir, persisted);
 
+  if (input.stageAttemptId && input.tier !== 'T3') {
+    diagnostics.push({
+      code: 'malformed-marker',
+      message: 'routed review-lane attempts require T3 lane-controlled stages',
+      eventKey: persisted,
+    });
+    return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted };
+  }
+
   let predecessor = input.predecessorCycleId;
   if (!predecessor) {
     const existing = censusState.lineage.eventsByKey.get(persisted);
@@ -492,6 +508,26 @@ export function startReviewCycle(
     }
   }
 
+  let reviewLaneRouting: ReviewLaneRouting | undefined;
+  if (input.stageAttemptId) {
+    const prepared = prepareReviewLaneStageAttempt({
+      transport,
+      repo: input.repo,
+      issueNumber: input.issueNumber,
+      sourceRevision: input.sourceRevision,
+      stageAttemptId: input.stageAttemptId,
+      permittedLaneOverride: input.permittedLaneOverride,
+    });
+    diagnostics.push(...prepared.diagnostics.map((message) => ({
+      code: 'malformed-marker' as const,
+      message,
+    })));
+    if (!prepared.ok || !prepared.routing) {
+      return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted };
+    }
+    reviewLaneRouting = prepared.routing;
+  }
+
   const logical: CycleEventLogical = {
     schema: CYCLE_SCHEMA,
     'event-key': persisted,
@@ -500,6 +536,7 @@ export function startReviewCycle(
     'source-revision': input.sourceRevision,
     tier: input.tier,
     'public-actor': input.publicActor,
+    'routed-lane': reviewLaneRouting,
   };
   const published = appendPublishedLogicalJournalEvent(diagnostics, transport, input.repo, input.issueNumber, workdir, logical, input.census);
   if (!published.ok) {
@@ -562,6 +599,7 @@ export function startReviewCycle(
     cycleId: persisted,
     eventKey: persisted,
     projectionPendingRepair: projection.pendingRepair,
+    reviewLaneRouting,
   };
 }
 
@@ -613,6 +651,31 @@ export function publishSettledStageRecord(
     code: 'conflicting-remote-event' as const,
     message,
   })));
+  const cycleRoute = headCycle['routed-lane'];
+  if (receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION && !cycleRoute) {
+    diagnostics.push({
+      code: 'conflicting-remote-event',
+      message: 'review-lane-routing/v1 requires an immutable routed cycle head',
+    });
+  }
+  if (cycleRoute) {
+    if (receipt.policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) {
+      diagnostics.push({
+        code: 'conflicting-remote-event',
+        message: 'routed cycle head requires review-lane-routing/v1; legacy stage receipts cannot be published',
+      });
+    } else if (!receipt.reviewLane) {
+      diagnostics.push({
+        code: 'conflicting-remote-event',
+        message: 'routed cycle head requires reviewLane evidence in the stage receipt',
+      });
+    } else if (!sameReviewLaneRouting(cycleRoute, receipt.reviewLane.routing)) {
+      diagnostics.push({
+        code: 'conflicting-remote-event',
+        message: 'stage receipt reviewLane routing disagrees with the immutable cycle route',
+      });
+    }
+  }
   if (diagnostics.some((item) => item.code === 'conflicting-remote-event')) {
     return { ok: false, diagnostics, cycleId: headCycle['cycle-id'] };
   }
@@ -632,6 +695,7 @@ export function publishSettledStageRecord(
     'required-source-count': receipt.reviewerCardinality,
     'producer-evidence': receipt.producerEvidence,
     'tier-transition': receipt.tierTransition,
+    'routed-lane': receipt.reviewLane,
   };
   const published = publishLogicalJournalEvent(
     transport,
