@@ -1,3 +1,5 @@
+// @vitest-ci-lane light
+// @vitest-pre-topology-seconds 120
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
