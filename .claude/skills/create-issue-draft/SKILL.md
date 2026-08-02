@@ -568,6 +568,8 @@ watchdog, coordinator, transport state, or hidden recovery path.
 
 There are exactly three operator-only escalation classes:
 
+operator-only-escalation-classes: business-contract-change, material-reviewer-conflict, terminal-infrastructure-refusal
+
 1. `business-contract-change` — the requested resolution changes the goal,
    acceptance meaning, frozen scope, denylist/allowed roots, required
    acceptance or review evidence, or another task semantic.
@@ -592,18 +594,20 @@ The affected manager flow has exactly this closed wait inventory:
 
 | Wait ID and condition | Existing authoritative producer or observation surface | Deadline and terminal mapping |
 | --- | --- | --- |
-| `WI-01` — a named producer or artifact result becomes available | The named producer and its existing terminal-result surface | Exact declared deadline and time basis; `done` when proven, `blocked` with missing-result remediation when absent, or `refused` only for an authoritative refusal. |
-| `WI-02` — an already-authorized diagnostic page probe returns | The existing page-probe observation surface | Exact probe deadline and time basis; `done` with diagnostic evidence, or `blocked` with the exact observation/remediation gap. |
-| `WI-03` — the preceding stage is credentialed before transition | Existing stage receipt/completeness evidence | Exact stage deadline and time basis; `done` when credentialed, or local `refused` with missing predecessor evidence and exact fix when transition is premature. |
-| `WI-04` — required reviewer evidence reaches convergence | Existing reviewer verdict and evidence surfaces | Exact review deadline and time basis; `done` when converged, `blocked` for missing evidence, or `blocked` carrying `material-reviewer-conflict` when independent material verdicts still conflict after reconciliation. |
-| `WI-05` — an in-flight transport action reaches its terminal result | Existing transport/helper terminal-result surface | Exact transport deadline and time basis; `done` on proven delivery, `blocked` on ambiguity or missing result without resend, or `refused` carrying `terminal-infrastructure-refusal` only on authoritative terminal refusal. |
-| `WI-06` — a published procedural exception is visible before progression | Existing publication and audience-observation surface | Exact visibility deadline and time basis; `done` only with visibility proof, otherwise `blocked` with the exact publication/observation remedy. |
+| `WI-01` — a named producer or artifact result becomes available | The named producer and its existing terminal-result surface | `deadline: 1_800_000 ms` from the producer invocation start, using the existing `state-light-turn --timeout-ms` / `DEFAULT_TIMEOUT_MS` budget; `owner: named producer`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` when proven, `blocked` with missing-result remediation when absent, or `refused` only for an authoritative refusal. |
+| `WI-02` — an already-authorized diagnostic page probe returns | The existing page-probe observation surface | `deadline: CDP_REQUEST_TIMEOUT_MS = 10_000 ms` per probe request from request dispatch, using `scripts/browser-gpt-page-probe.ts`; `owner: page-probe`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` with diagnostic evidence, or `blocked` with the exact observation/remediation gap. |
+| `WI-03` — the preceding stage is credentialed before transition | Existing stage receipt/completeness evidence | `deadline: 1_800_000 ms` from each preceding-stage producer invocation start, using the existing `state-light-turn --timeout-ms` / `DEFAULT_TIMEOUT_MS` budget; `owner: preceding stage producer`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` when credentialed, or local `refused` with missing predecessor evidence and exact fix when transition is premature. |
+| `WI-04` — required reviewer evidence reaches convergence | Existing Browser-GPT reviewer verdict and evidence surfaces | `deadline: 1_800_000 ms` from each Browser-GPT reviewer invocation start, using the existing `state-light-turn --timeout-ms` / `DEFAULT_TIMEOUT_MS` budget; `owner: reviewer source`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` when converged, `blocked` for missing evidence, or `blocked` carrying `material-reviewer-conflict` when independent material verdicts still conflict after reconciliation. |
+| `WI-05` — an in-flight transport action reaches its terminal result | Existing transport/helper terminal-result surface | `deadline: 5_000 ms` from the flow-manager waiter start, using the existing `flow-manager-long-running-child wait --deadline-ms 5000`; `owner: launcher waiter`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` on proven delivery, `blocked` on ambiguity or missing result without resend, or `refused` carrying `terminal-infrastructure-refusal` only on authoritative terminal refusal. |
+| `WI-06` — a published procedural exception is visible before progression | The existing GitHub Issue comment publication and read-back surface | `deadline: GH_TIMEOUT_MS = 10_000 ms` from the comment-publication request dispatch, using the existing `plugins/ao-codex-pr-reviewer/lib/scope_context.ts` constant; `owner: exception publisher`; `deadline-miss-record: wait_id, publication_requested_at, call_outcome, comment_id_if_returned, observed_at, cause, remedy, owner, next_deadline`; `done` only after one API read by the returned comment id proves visibility with the comment id and URL, otherwise `blocked` naming the failed call and exactly what to re-publish. |
 
 Each row records the awaited condition, existing authoritative surface, exact
 deadline, time basis, terminal mapping, exact remediation, responsible actor,
-and visible deadline-miss metadata. An undeclared wait or a row naming a
-nonexistent producer/observation surface fails the completeness check. The
-inventory reuses existing producers and observation surfaces; it adds no
+and visible deadline-miss metadata. For WI-06, visibility means one successful
+read-back of the published comment by the API-returned identifier; it never
+waits for a human audience to notice the comment. An undeclared wait or a row
+naming a nonexistent producer/observation surface fails the completeness check.
+The inventory reuses existing producers and observation surfaces; it adds no
 coordination or persistence machinery.
 
 `done` means the awaited condition was proven and the next legal action is
@@ -660,6 +664,7 @@ reviewer findings or make content judgments.
 | normal completion | Complete the legal action and return `done`. |
 | mechanical repair | Repair, re-verify, return `done`, and change no business content. |
 | missing producer | Return `blocked` naming the missing producer and exact producer addition; do not fabricate an artifact. |
+| existing producer completion | Invoke the existing named producer, verify its bytes/evidence, and continue with `done`; do not create a substitute producer or artifact. |
 | legal retry | Perform the one existing pre-send zero-send retry under the same identity and record the result. |
 | post-send ambiguity | Do not resend; record incident metadata and return `blocked` with exact remediation and responsible actor. |
 | deadline expiry | Record deadline metadata and return `blocked` with remedy, owner, and next deadline; do not wait again. |

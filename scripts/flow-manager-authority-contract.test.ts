@@ -22,9 +22,16 @@ describe('Issue #1197 flow-manager authority contract', () => {
   });
 
   it('contains exactly the three operator-only escalation classes', () => {
-    expect(authority).toContain('business-contract-change');
-    expect(authority).toContain('material-reviewer-conflict');
-    expect(authority).toContain('terminal-infrastructure-refusal');
+    const expected = [
+      'business-contract-change',
+      'material-reviewer-conflict',
+      'terminal-infrastructure-refusal',
+    ];
+    const classes = authority.match(/^operator-only-escalation-classes: (.+)$/m)?.[1]
+      .split(', ')
+      .filter(Boolean);
+    expect(classes).toEqual(expected);
+    expect(classes).toHaveLength(3);
     expect(authority).toContain('There are exactly three operator-only escalation classes');
     expect(authority).not.toContain('Two non-converging author-fix cycles escalate to the operator.');
   });
@@ -33,9 +40,29 @@ describe('Issue #1197 flow-manager authority contract', () => {
     for (const waitId of ['WI-01', 'WI-02', 'WI-03', 'WI-04', 'WI-05', 'WI-06']) {
       expect(authority).toContain(waitId);
     }
-    expect(authority).toContain('Exact declared deadline');
-    expect(authority).toContain('time basis');
-    expect(authority).toContain('visible deadline-miss metadata');
+    const expectedRows = [
+      ['WI-01', '1_800_000 ms', 'owner: named producer'],
+      ['WI-02', '10_000 ms', 'owner: page-probe'],
+      ['WI-03', '1_800_000 ms', 'owner: preceding stage producer'],
+      ['WI-04', '1_800_000 ms', 'owner: reviewer source'],
+      ['WI-05', '5_000 ms', 'owner: launcher waiter'],
+      ['WI-06', 'GH_TIMEOUT_MS = 10_000 ms', 'owner: exception publisher'],
+    ];
+    for (const [waitId, deadline, owner] of expectedRows) {
+      const row = authority.split('\n').find((line) => line.includes(`\`${waitId}\``));
+      expect(row).toBeDefined();
+      expect(row).toContain(deadline);
+      expect(row).toContain(owner);
+      expect(row).toContain('deadline-miss-record:');
+    }
+    expect(authority).not.toContain('Exact declared deadline and time basis');
+    expect(authority).toContain('deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline');
+    const wi06 = authority.split('\n').find((line) => line.includes('`WI-06`'));
+    expect(wi06).toContain('one API read by the returned comment id');
+    expect(wi06).toContain('comment id and URL');
+    expect(wi06).toContain('publication_requested_at');
+    expect(wi06).toContain('call_outcome');
+    expect(wi06).toContain('comment_id_if_returned');
     expect(authority).toContain('undeclared wait');
     expect(authority).toContain('done');
     expect(authority).toContain('blocked');
@@ -46,7 +73,7 @@ describe('Issue #1197 flow-manager authority contract', () => {
     expect(authority).toContain('independently proven infeasible');
     expect(authority).toContain('underlying business invariant is already proven');
     expect(authority).toContain('required audience');
-    expect(authority).toContain('visibility proof');
+    expect(authority).toContain('proves visibility with the comment id and URL');
     expect(authority).toContain('existing authority basis');
     expect(authority).toContain('acceptance evidence');
     expect(authority).toContain('material\nreview evidence');
@@ -60,6 +87,7 @@ describe('Issue #1197 flow-manager authority contract', () => {
       'normal completion',
       'mechanical repair',
       'missing producer',
+      'existing producer completion',
       'legal retry',
       'post-send ambiguity',
       'deadline expiry',
