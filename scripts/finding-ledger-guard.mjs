@@ -7,6 +7,7 @@ import {
   CLAUDE_PRODUCER_EVIDENCE_SCHEMA,
   STAGE_COMPLETENESS_RECEIPT_SCHEMA,
   deriveReviewEpisodeState,
+  resolveCanonicalReviewDirectory,
   validateReviewEpisodeTopology,
 } from './lib/stage-completeness-core.ts';
 
@@ -308,6 +309,34 @@ function validateOccurrenceLedger(ledger, occurrences, errors) {
 }
 
 function sortM3(records) { return [...records].sort((a, b) => a.timestampMs - b.timestampMs || a.captureIndex - b.captureIndex); }
+function validateTerminalDispositionMatrix(ledger, occurrences, metadata, phase, errors) {
+  if (phase !== 'final-acceptance') return;
+  const terminalOccurrences = occurrences.filter((occurrence) => parseCaptureName(metadata[occurrence.captureIndex]?.name).stage === 'architectural');
+  if (terminalOccurrences.length === 0) return;
+  const terminalIds = new Set(terminalOccurrences.map((occurrence) => occurrence.occurrenceId));
+  const assigned = new Set();
+  for (const row of ledger.findings) {
+    const mappedTerminal = row.occurrences.filter((occurrenceId) => terminalIds.has(occurrenceId));
+    if (mappedTerminal.length === 0) continue;
+    for (const occurrenceId of mappedTerminal) assigned.add(occurrenceId);
+    if (row.defectDisposition === 'addressed' || row.defectDisposition === 'unresolved') {
+      errors.push(`blocked_terminal_findings: terminal defect ${row.id} has disposition ${row.defectDisposition}`);
+    } else if (row.defectDisposition === 'rejected-as-false' && !row.rejectReason) {
+      errors.push(`blocked_terminal_findings: rejected-as-false terminal defect ${row.id} requires defect-side reason/evidence`);
+    } else if (!DEFECT_DISPOSITIONS.has(row.defectDisposition)) {
+      errors.push(`blocked_terminal_findings: terminal defect ${row.id} has invalid defect disposition`);
+    }
+  }
+  for (const occurrence of terminalOccurrences) {
+    if (!assigned.has(occurrence.occurrenceId)) {
+      errors.push(`blocked_terminal_findings: terminal occurrence ${occurrence.occurrenceId} is unassigned`);
+    }
+  }
+  if (ledger.findings.some((row) => row.defectDisposition === 'unresolved')) {
+    errors.push('blocked_terminal_findings: a governed defect remains unresolved');
+  }
+}
+
 function contestRemainsOpen(records) {
   let open = false;
   for (const record of sortM3(records)) {
@@ -463,6 +492,7 @@ export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options =
   const occurrences = buildOccurrences(captures, metadata); validateGlobalProtectedFloor(captures, ledger.findings, errors); let economicsCounts;
   if (ledger.version >= 2 || options.stageReceipts !== undefined) {
     const occurrenceValidation = validateOccurrenceLedger(ledger, occurrences, errors); economicsCounts = occurrenceValidation.counts;
+    validateTerminalDispositionMatrix(ledger, occurrences, metadata, options.phase ?? 'final-acceptance', errors);
     validateOccurrenceM3(ledger, occurrenceValidation.occurrenceMap, captures, metadata, options.phase ?? 'final-acceptance', options.issueRevision ?? '', errors);
   } else {
     validateM2Legacy(ledger.findings, occurrences, metadata, Number(options.adoptionTimestampMs), errors);
@@ -484,8 +514,20 @@ function readJson(path) { return JSON.parse(readFileSync(path, 'utf8')); }
 function parseAdoptionTimestamp(value) { if (!value) return undefined; if (/^\d+$/.test(value)) return Number(value); const parsed = Date.parse(value); if (!Number.isFinite(parsed)) throw new Error('--adoption-timestamp must be epoch milliseconds or ISO-8601'); return parsed; }
 function canonicalReceiptInputs(args) {
   const explicit = repeatedArgs(args, '--stage-receipt').map((path) => resolve(path));
-  const directory = resolve(readArg(args, '--receipt-directory') ?? (explicit[0] ? dirname(explicit[0]) : ''));
-  if (!directory || !existsSync(directory)) throw new Error('--receipt-directory or an existing --stage-receipt directory is required');
+  const intakePath = readArg(args, '--tier-intake');
+  if (!intakePath) throw new Error('--tier-intake is required');
+  const intake = readJson(intakePath);
+  const canonical = resolveCanonicalReviewDirectory(intake);
+  const requestedDirectory = readArg(args, '--receipt-directory')
+    ? resolve(readArg(args, '--receipt-directory'))
+    : explicit[0]
+      ? dirname(explicit[0])
+      : canonical.directory;
+  if (requestedDirectory !== canonical.directory) {
+    throw new Error(`legacy_receipt_location_blocked: receipt authority must be ${canonical.directory}`);
+  }
+  const directory = canonical.directory;
+  if (!existsSync(directory)) throw new Error(`canonical receipt directory does not exist: ${directory}`);
   const receipts = [];
   for (const name of readdirSync(directory).filter((item) => item.endsWith('.json')).sort()) {
     const path = resolve(directory, name); let parsed;
@@ -495,7 +537,6 @@ function canonicalReceiptInputs(args) {
   for (const path of explicit) if (dirname(path) !== directory) throw new Error(`stage receipt outside canonical directory: ${path}`);
   receipts.sort((a, b) => a.stageSequence - b.stageSequence || String(a.stageReceiptId).localeCompare(String(b.stageReceiptId)));
   if (receipts.length === 0) throw new Error(`no ${STAGE_COMPLETENESS_RECEIPT_SCHEMA} found`);
-  const intakePath = readArg(args, '--tier-intake'); if (!intakePath) throw new Error('--tier-intake is required'); const intake = readJson(intakePath);
   const evidence = repeatedArgs(args, '--claude-producer-evidence').flatMap((path) => { const value = readJson(path); return Array.isArray(value) ? value : [value]; });
   return { receipts, authority: { tierIntake: intake, receiptInventory: { source: 'canonical-review-directory', taskIdentity: intake.taskIdentity, episodeFirstRevision: intake.firstRevision, reviewEpisodeId: `${intake.taskIdentity}@${intake.firstRevision}`, stageReceiptIds: receipts.map((receipt) => receipt.stageReceiptId) }, claudeProducerEvidence: evidence } };
 }

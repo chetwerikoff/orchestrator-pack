@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
@@ -16,6 +17,10 @@ export const FINAL_ACCEPTANCE_CONTRACT_VERSION = 'create-issue-final-acceptance-
 
 export interface FinalAcceptanceGuardInput {
   issueBody: string;
+  /** Immutable body artifact supplied to the terminal reviewer. */
+  terminalSourceBody?: string;
+  /** Fresh GitHub Issue body read for this acceptance attempt. */
+  currentIssueBody?: string;
   issueRevision: string;
   cycleId: string;
   tier?: string;
@@ -84,6 +89,28 @@ function tryReadJson(path: string, readJson: (path: string) => unknown): unknown
   }
 }
 
+function validateExactTerminalBodyBinding(
+  sourceBody: string,
+  currentBody: string | undefined,
+  errors: string[],
+): void {
+  if (currentBody === undefined) {
+    errors.push('terminal current Issue body is required for exact binding');
+    return;
+  }
+  const sourceBytes = Buffer.from(sourceBody, 'utf8');
+  const currentBytes = Buffer.from(currentBody, 'utf8');
+  if (sourceBytes.byteLength !== currentBytes.byteLength) {
+    errors.push(`terminal source body byteLength mismatch: reviewed=${sourceBytes.byteLength} current=${currentBytes.byteLength}`);
+    return;
+  }
+  const sourceSha256 = createHash('sha256').update(sourceBytes).digest('hex');
+  const currentSha256 = createHash('sha256').update(currentBytes).digest('hex');
+  if (sourceSha256 !== currentSha256) {
+    errors.push(`terminal source body sha256 mismatch: reviewed=${sourceSha256} current=${currentSha256}`);
+  }
+}
+
 export function executeFinalAcceptanceGuards(
   input: FinalAcceptanceGuardInput,
 ): FinalAcceptanceGuardResult {
@@ -102,6 +129,7 @@ export function executeFinalAcceptanceGuards(
 
   if (!input.cycleId.trim()) errors.push('cycleId is required');
   if (!input.issueRevision.trim()) errors.push('issueRevision is required');
+  validateExactTerminalBodyBinding(input.terminalSourceBody ?? input.issueBody, input.currentIssueBody, errors);
 
   const tierEvidence = input.tierTransitionEvidence
     ?? (input.tierReceiptPath

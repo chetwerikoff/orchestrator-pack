@@ -515,6 +515,21 @@ describe('create-issue-final-acceptance contract parity', () => {
   });
 });
 
+describe('Issue #1171 exact terminal body binding', () => {
+  it('rejects a one-byte terminal candidate drift instead of using semantic equivalence', () => {
+    const result = executeFinalAcceptanceGuards({
+      issueBody: 'reviewed body\n',
+      currentIssueBody: 'reviewed body',
+      issueRevision: 'r01',
+      cycleId: 'cycle-1',
+      reviewDir: '/tmp/review',
+      stageReceiptPaths: [],
+      capturePaths: [],
+    });
+    expect(result.errors.join('\n')).toContain('terminal source body byteLength mismatch');
+  });
+});
+
 describe('create-issue-stage-record receipt binding', () => {
   it('requires pre-launch cycle binding witness and rejects rebinding or revision mismatch', () => {
     const valid = parseConsumableStageReceipt({

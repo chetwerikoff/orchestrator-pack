@@ -25,8 +25,8 @@ Issue ownership retained here:
 - #1142: pre-capture adjacent tier correction and retired post-capture demotion;
 - #1150: configured plural pre-terminal source sets, episode derivation, relay,
   and occurrence accounting;
-- #1123: Issue-lifetime logical-round counting and activation of plural-source
-  final acceptance.
+- #1123: historical contract predecessor; Issue #1171 owns Issue-lifetime
+  logical-round counting and activation of plural-source final acceptance.
 
 ## Inputs and routing
 
@@ -166,11 +166,13 @@ revalidation, engine substitution, or sibling consolidation exists.
 
 ### #1123 activation seam
 
-#1150 may produce and validate exact plural source sets at pre-lens. It must not
-enable live T3 final acceptance while Issue-lifetime guards still count capture
-files. N sibling captures in one exact `stageAttemptId` are one logical round.
-Final T3 acceptance remains fail-closed until #1123 consumes that identity and
-changes the surrounding round counters. No receipt may self-declare activation.
+#1150 produces and validates exact plural source sets. N sibling captures in one
+exact `stageAttemptId` are one logical round. Issue #1171 consumes that identity
+for one Issue-lifetime budget per required stage: the first settled attempt
+(`complete`, `partial`, `blocked`, or `incident`) consumes the slot, and a later
+distinct attempt fails closed as a reopened round. Final T3 acceptance is active
+when the canonical receipt chain, topology, relay, ledger, Claude evidence/waiver,
+terminal disposition matrix, and exact body binding are green.
 
 ## Review episode, attempts, and receipts
 
@@ -197,9 +199,11 @@ pure derivation over:
 - verified relay evidence.
 
 A caller-selected self-consistent receipt subset or later-revision re-root is not
-authority. The derivation exposes per-stage credentialing sets, complete governed
-and relayed unions, stage/episode raw counts, logical round identities, relay
-completeness, and activation state.
+authority. Every supported workdir resolves the same numeric Issue root; an
+external legacy receipt location returns `legacy_receipt_location_blocked` and is
+not copied or merged. The derivation exposes per-stage credentialing sets,
+complete governed and relayed unions, stage/episode raw counts, unique logical
+round identities, relay completeness, and activation state.
 
 ### Issue journal passage records — Issue #1152
 
@@ -428,6 +432,10 @@ For each distinct defect record:
 - defect disposition: `addressed | rejected-as-false | unresolved`;
 - remedy disposition: `accepted | replaced-by-cheaper-sufficient |
   rejected-as-overengineering`;
+- at final acceptance, `addressed`, `unresolved`, malformed, unassigned, or
+  pending terminal defects produce `blocked_terminal_findings`; all valid
+  `rejected-as-false` rows require defect-side reason/evidence and may pass only
+  with complete remedies and exact unchanged reviewed bytes;
 - occurrence-local machinery and M3 facts when applicable.
 
 The `counts` object contains exactly three non-negative integers:
@@ -436,7 +444,9 @@ The `counts` object contains exactly three non-negative integers:
 - `distinctFindingCount`;
 - `processedDistinctCount`.
 
-Any unresolved defect or byte/hash/count/mapping mismatch blocks.
+Any unresolved defect or byte/hash/count/mapping mismatch blocks. Terminal body
+acceptance compares exact UTF-8 byte length and SHA-256; it does not normalize
+Markdown, whitespace, line endings, or Unicode.
 `NO_FINDINGS` from one source never erases another source's occurrence.
 
 After each full `stageAttemptId`, not each sibling capture, the author updates one
@@ -511,8 +521,8 @@ or unresolved protected state fails closed.
 Supply the canonical receipt directory, immutable tier intake, all episode
 receipts, independent Claude evidence when applicable, and verified relay
 evidence to both guards. T1/T2 may accept when their singular topology, ledger,
-body, tier, and M5 checks are green. T3 final acceptance remains deliberately
-blocked until #1123 changes Issue-lifetime round counting.
+body, tier, and M5 checks are green. T3 final acceptance is available after Issue #1171 activates Issue-lifetime
+round counting; `triple-source/v1` alone is not a blocker.
 
 When activation is available, acceptance requires:
 

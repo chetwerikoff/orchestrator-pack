@@ -77,8 +77,16 @@ export function runFinalAcceptance(
     return { ok: false, diagnostics, guardErrors: ['issue revision does not match canonical cycle head'] };
   }
 
+  let currentIssueBody: string;
+  try {
+    currentIssueBody = fetchIssueRevision(transport, input.repo, input.issueNumber).body;
+  } catch {
+    return { ok: false, diagnostics, guardErrors: ['unable to read current Issue body for exact terminal binding'] };
+  }
+
   const guard = executeFinalAcceptanceGuards({
     ...input,
+    currentIssueBody,
     cycleId: headCycle['cycle-id'],
     issueRevision: input.issueRevision,
   });

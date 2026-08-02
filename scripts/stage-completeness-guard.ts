@@ -6,6 +6,7 @@ import {
   checkStageCompletenessGuard,
   formatStageCompletenessPassMessage,
   STAGE_COMPLETENESS_RECEIPT_SCHEMA,
+  resolveCanonicalReviewDirectory,
   type ReviewEpisodeDerivationAuthorityV1,
   type StageCompletenessReceiptV1,
   type TierIntakeAuthorityV1,
@@ -40,20 +41,22 @@ function isStageReceipt(value: unknown): value is StageCompletenessReceiptV1 {
     && (value as { schema?: unknown }).schema === STAGE_COMPLETENESS_RECEIPT_SCHEMA;
 }
 
-function canonicalReceiptDirectory(opts: ReceiptCliOptions): string {
-  if (opts.receiptDirectory) return resolve(opts.receiptDirectory);
-  const first = opts.stageReceiptPaths?.[0];
-  if (!first) throw new Error('--receipt-directory or at least one --stage-receipt is required');
-  return dirname(resolve(first));
-}
-
 export function loadCanonicalReceiptInventory(opts: ReceiptCliOptions): {
   receipts: StageCompletenessReceiptV1[];
   authority: ReviewEpisodeDerivationAuthorityV1;
 } {
   if (!opts.tierIntakePath) throw new Error('--tier-intake is required for receipt-backed review episodes');
   const intake = readJson(opts.tierIntakePath) as TierIntakeAuthorityV1;
-  const directory = canonicalReceiptDirectory(opts);
+  const canonical = resolveCanonicalReviewDirectory(intake);
+  const requestedDirectory = opts.receiptDirectory
+    ? resolve(opts.receiptDirectory)
+    : opts.stageReceiptPaths?.[0]
+      ? dirname(resolve(opts.stageReceiptPaths[0]))
+      : canonical.directory;
+  if (requestedDirectory !== canonical.directory) {
+    throw new Error(`legacy_receipt_location_blocked: receipt authority must be ${canonical.directory}`);
+  }
+  const directory = canonical.directory;
   if (!existsSync(directory)) throw new Error(`receipt directory does not exist: ${directory}`);
   const explicit = new Set((opts.stageReceiptPaths ?? []).map((path) => resolve(path)));
   const candidates = readdirSync(directory)

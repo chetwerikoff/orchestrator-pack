@@ -8,7 +8,8 @@
  * supplied canonical receipt inventory and producer evidence.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { parseComplexityTierFence } from './tier-gate-core.ts';
 import { resolveReviewArtifacts } from './tier-gate-floor.ts';
 
@@ -206,6 +207,32 @@ export interface ReviewEpisodeDerivationAuthorityV1 {
   tierIntake: TierIntakeAuthorityV1;
   receiptInventory: StageReceiptInventoryAuthorityV1;
   claudeProducerEvidence?: readonly unknown[];
+}
+
+export interface CanonicalReviewDirectoryV1 {
+  stateRoot: string;
+  issueNumber: string;
+  directory: string;
+  intakePath: string;
+}
+
+function numericIssueFromTaskIdentity(taskIdentity: string): string | null {
+  const candidate = taskIdentity.trim().split(':').at(-1)?.trim() ?? '';
+  if (!candidate || [...candidate].some((character) => character < '0' || character > '9')) return null;
+  const normalized = candidate.replace(/^0+(?=\d)/, '');
+  return normalized === '0' ? null : normalized;
+}
+
+export function resolveCanonicalReviewDirectory(
+  intake: Pick<TierIntakeAuthorityV1, 'taskIdentity'>,
+  stateRootOverride?: string,
+): CanonicalReviewDirectoryV1 {
+  const issueNumber = numericIssueFromTaskIdentity(intake.taskIdentity);
+  if (!issueNumber) throw new Error('tier-intake/v1 taskIdentity must bind a numeric Issue identity');
+  const stateRoot = resolve(stateRootOverride ?? process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT
+    ?? join(process.env.HOME ?? homedir(), '.local', 'state', 'create-issue-draft'));
+  const directory = resolve(stateRoot, '.review', issueNumber);
+  return { stateRoot, issueNumber, directory, intakePath: join(directory, 'tier-intake.json') };
 }
 export interface ReviewEpisodeStateV1 {
   reviewEpisodeId: string | null;
@@ -765,8 +792,19 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
   const governedCaptureUnion = [...governed.keys()].sort(); const relayedCaptureUnion = [...relayed.keys()].sort();
   const relayComplete = governedCaptureUnion.length === relayedCaptureUnion.length && governedCaptureUnion.every((identity, index) => identity === relayedCaptureUnion[index]);
   if (!relayComplete) errors.push('relayedCaptureUnion must equal governedCaptureUnion exactly');
+  const attemptIdsByStage = new Map<ReviewStage, Set<string>>();
+  for (const receipt of receipts) {
+    const attemptIds = attemptIdsByStage.get(receipt.stage) ?? new Set<string>();
+    attemptIds.add(receipt.stageAttemptId);
+    attemptIdsByStage.set(receipt.stage, attemptIds);
+  }
+  for (const [stage, attemptIds] of attemptIdsByStage) {
+    if (attemptIds.size > 1) {
+      errors.push(`${stage} has a reopened logical round: multiple distinct stageAttemptId values`);
+    }
+  }
   const completeReceipts = receipts.filter((receipt) => receipt.outcome === 'complete');
-  const activationReady = completeReceipts.length > 0 && !completeReceipts.some((receipt) => receipt.policyVersion === TRIPLE_SOURCE_POLICY_VERSION);
+  const activationReady = completeReceipts.length > 0 && errors.length === 0;
   return {
     reviewEpisodeId: episodeIds.size === 1 ? [...episodeIds][0]! : null,
     taskIdentity: taskIdentities.size === 1 ? [...taskIdentities][0]! : null,
@@ -782,7 +820,7 @@ export function deriveReviewEpisodeState(stageReceiptsInput: readonly unknown[],
     relayedCaptureUnion,
     rawFindingCountByStage,
     rawFindingCount: Object.values(rawFindingCountByStage).reduce((sum, count) => sum + count, 0),
-    logicalRoundIds: receipts.map((receipt) => receipt.stageAttemptId),
+    logicalRoundIds: [...new Set(receipts.map((receipt) => receipt.stageAttemptId))],
     relayComplete,
     activationReady,
     errors,
@@ -817,7 +855,6 @@ export function validateReviewEpisodeTopology(state: ReviewEpisodeStateV1, phase
   const ordered = expected.map((stage) => state.credentialingReceiptsByStage[stage]).filter((receipt): receipt is StageCompletenessReceiptV1 => Boolean(receipt));
   for (let index = 1; index < ordered.length; index += 1) if (ordered[index]!.stageSequence <= ordered[index - 1]!.stageSequence) errors.push(`${ordered[index]!.stage} stage is out of order`);
   if (!state.relayComplete) errors.push('review episode relay is incomplete');
-  if (phase === 'final-acceptance' && state.receipts.some((receipt) => receipt.policyVersion === TRIPLE_SOURCE_POLICY_VERSION) && !state.activationReady) errors.push('triple-source/v1 final acceptance is blocked until #1123 logical-round accounting is active');
   return errors;
 }
 
