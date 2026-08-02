@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { logicalFingerprint } from './create-issue-stage-record-marker.ts';
 import {
   clearPendingEvent,
@@ -53,6 +54,71 @@ export function validatePublishBodyBinding(reviewedBody: string, currentBody: st
   return errors;
 }
 
+export function parseCanonicalSourceRevisionMarker(body: string): {
+  revision?: string;
+  errors: string[];
+} {
+  const errors: string[] = [];
+  const markerLines = body.split(/\r?\n/).filter((line) => line.includes('source-revision:'));
+  if (markerLines.length === 0) {
+    return { errors: ['live Issue body is missing the canonical source-revision marker'] };
+  }
+
+  const revisions: string[] = [];
+  for (const line of markerLines) {
+    const trimmed = line.trim();
+    const prefix = '<!-- source-revision:';
+    if (!trimmed.startsWith(prefix) || !trimmed.endsWith('-->')) {
+      errors.push(`malformed source-revision marker: ${trimmed}`);
+      continue;
+    }
+    const revision = trimmed.slice(prefix.length, -3).trim();
+    if (!revision || /\s/.test(revision)) {
+      errors.push(`malformed source-revision marker: ${trimmed}`);
+      continue;
+    }
+    revisions.push(revision);
+  }
+  if (revisions.length > 1) {
+    errors.push(`duplicate canonical source-revision markers: ${revisions.join(', ')}`);
+  }
+  return errors.length > 0 ? { errors } : { revision: revisions[0], errors: [] };
+}
+
+export function validateCanonicalReceiptPathSet(
+  canonicalPaths: readonly string[],
+  requestedPaths: readonly string[],
+): string[] {
+  const errors: string[] = [];
+  const resolveRealPath = (path: string): string | null => {
+    try {
+      return realpathSync(resolve(path));
+    } catch {
+      errors.push(`receipt path does not resolve to a canonical file: ${path}`);
+      return null;
+    }
+  };
+  const canonicalRealPaths = canonicalPaths.flatMap((path) => {
+    const resolved = resolveRealPath(path);
+    return resolved ? [resolved] : [];
+  });
+  const requestedRealPaths = requestedPaths.flatMap((path) => {
+    const resolved = resolveRealPath(path);
+    return resolved ? [resolved] : [];
+  });
+  const canonicalSet = new Set(canonicalRealPaths);
+  const requestedSet = new Set(requestedRealPaths);
+  const duplicateRequested = requestedRealPaths.filter((path, index) => requestedRealPaths.indexOf(path) !== index);
+  if (duplicateRequested.length > 0) {
+    errors.push(`duplicate canonical receipt path aliases: ${[...new Set(duplicateRequested)].join(', ')}`);
+  }
+  const missing = canonicalRealPaths.filter((path) => !requestedSet.has(path));
+  if (missing.length > 0) errors.push(`canonical receipt inventory omitted: ${[...new Set(missing)].join(', ')}`);
+  const extra = requestedRealPaths.filter((path) => !canonicalSet.has(path));
+  if (extra.length > 0) errors.push(`receipt inventory contains non-canonical paths: ${[...new Set(extra)].join(', ')}`);
+  return [...new Set(errors)];
+}
+
 export function runFinalAcceptance(
   transport: GhTransport,
   input: FinalAcceptanceInput,
@@ -73,6 +139,29 @@ export function runFinalAcceptance(
   if (censusState.diagnostics.some((item) => item.code === 'malformed-marker')) {
     return { ok: false, diagnostics, guardErrors: ['journal contains a malformed hidden marker'] };
   }
+  let liveIssue: ReturnType<typeof fetchIssueRevision>;
+  try {
+    liveIssue = fetchIssueRevision(transport, input.repo, input.issueNumber);
+  } catch {
+    return { ok: false, diagnostics, guardErrors: ['unable to read current Issue body before final acceptance'] };
+  }
+  const liveRevisionResult = parseCanonicalSourceRevisionMarker(liveIssue.body);
+  if (liveRevisionResult.errors.length > 0 || !liveRevisionResult.revision) {
+    return { ok: false, diagnostics, guardErrors: liveRevisionResult.errors };
+  }
+  const liveRevision = liveRevisionResult.revision;
+  if (input.issueRevision !== liveRevision) {
+    return {
+      ok: false,
+      diagnostics,
+      guardErrors: [`caller issue revision ${input.issueRevision} does not match live source-revision marker ${liveRevision}`],
+    };
+  }
+  const callerBodyErrors = validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, liveIssue.body);
+  if (callerBodyErrors.length > 0) {
+    return { ok: false, diagnostics, guardErrors: callerBodyErrors };
+  }
+
   const head = censusState.lineage.head;
   if (!head || head.logical.schema !== CYCLE_SCHEMA) {
     diagnostics.push({ code: 'orphan-cycle', message: 'no canonical cycle head for final acceptance' });
@@ -82,15 +171,8 @@ export function runFinalAcceptance(
   if (headCycle['cycle-id'] !== input.cycleId) {
     return { ok: false, diagnostics, guardErrors: ['cycle head mismatch'] };
   }
-  if (headCycle['source-revision'] !== input.issueRevision) {
+  if (headCycle['source-revision'] !== liveRevision) {
     return { ok: false, diagnostics, guardErrors: ['issue revision does not match canonical cycle head'] };
-  }
-
-  let currentIssueBody: string;
-  try {
-    currentIssueBody = fetchIssueRevision(transport, input.repo, input.issueNumber).body;
-  } catch {
-    return { ok: false, diagnostics, guardErrors: ['unable to read current Issue body for exact terminal binding'] };
   }
 
   let canonicalInventory: ReturnType<typeof loadCanonicalReceiptInventory>;
@@ -108,16 +190,25 @@ export function runFinalAcceptance(
       guardErrors: [error instanceof Error ? error.message : String(error)],
     };
   }
+  const inventoryErrors = validateCanonicalReceiptPathSet(
+    canonicalInventory.receiptPaths,
+    input.stageReceiptPaths,
+  );
+  if (inventoryErrors.length > 0) {
+    return { ok: false, diagnostics, guardErrors: inventoryErrors };
+  }
 
   const guard = executeFinalAcceptanceGuards({
     ...input,
-    currentIssueBody,
+    issueBody: liveIssue.body,
+    currentIssueBody: liveIssue.body,
     stageReceiptValues: canonicalInventory.receiptValues,
     stageReceiptPaths: canonicalInventory.receiptPaths,
     episodeAuthority: canonicalInventory.authority,
     tierIntakePath: canonicalInventory.intakePath,
     cycleId: headCycle['cycle-id'],
-    issueRevision: input.issueRevision,
+    issueRevision: liveRevision,
+    canonicalLineage: censusState.lineage,
   });
   if (!guard.ok) {
     return { ok: false, diagnostics, guardErrors: guard.errors };
@@ -135,10 +226,14 @@ export function runFinalAcceptance(
       projectionPendingRepair: true,
     };
   }
-  const publishBodyErrors = validatePublishBodyBinding(
-    input.terminalSourceBody ?? input.issueBody,
-    publishIssue.body,
-  );
+  const publishRevisionResult = parseCanonicalSourceRevisionMarker(publishIssue.body);
+  const publishBodyErrors = [
+    ...publishRevisionResult.errors,
+    ...(publishRevisionResult.revision !== liveRevision
+      ? [`live source-revision marker changed before final publication: expected ${liveRevision}, got ${publishRevisionResult.revision ?? '<missing>'}`]
+      : []),
+    ...validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, publishIssue.body),
+  ];
   if (publishBodyErrors.length > 0) {
     return {
       ok: false,
@@ -172,10 +267,14 @@ export function runFinalAcceptance(
     () => {
       try {
         const latest = fetchIssueRevision(transport, input.repo, input.issueNumber);
-        const errors = validatePublishBodyBinding(
-          input.terminalSourceBody ?? input.issueBody,
-          latest.body,
-        );
+        const latestRevisionResult = parseCanonicalSourceRevisionMarker(latest.body);
+        const errors = [
+          ...latestRevisionResult.errors,
+          ...(latestRevisionResult.revision !== liveRevision
+            ? [`live source-revision marker changed during final publication: expected ${liveRevision}, got ${latestRevisionResult.revision ?? '<missing>'}`]
+            : []),
+          ...validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, latest.body),
+        ];
         return errors.length === 0
           ? { ok: true }
           : {
@@ -240,11 +339,19 @@ export function runFinalAcceptance(
       projectionPendingRepair: true,
     };
   }
-  if (!issue.body.includes(headCycle['source-revision'])) {
+  const confirmedRevisionResult = parseCanonicalSourceRevisionMarker(issue.body);
+  const confirmedErrors = [
+    ...confirmedRevisionResult.errors,
+    ...(confirmedRevisionResult.revision !== liveRevision
+      ? [`live source-revision marker changed after final event confirmation: expected ${liveRevision}, got ${confirmedRevisionResult.revision ?? '<missing>'}`]
+      : []),
+    ...validatePublishBodyBinding(input.terminalSourceBody ?? input.issueBody, issue.body),
+  ];
+  if (confirmedErrors.length > 0) {
     return {
       ok: false,
       diagnostics,
-      guardErrors: ['issue revision drift after final event confirmation'],
+      guardErrors: confirmedErrors,
       eventKey,
       projectionPendingRepair: true,
     };

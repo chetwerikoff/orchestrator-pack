@@ -1,5 +1,6 @@
 import type {
   CanonicalLineage,
+  CycleEventLogical,
   LineageDiagnostic,
   ParsedJournalEvent,
 } from './create-issue-stage-record-types.ts';
@@ -8,6 +9,7 @@ import { CYCLE_SCHEMA } from './create-issue-stage-record-types.ts';
 function cyclePayload(event: ParsedJournalEvent): {
   cycleId: string;
   predecessor: string;
+  sourceRevision: string;
 } | null {
   if (event.schema !== CYCLE_SCHEMA) return null;
   const logical = event.logical;
@@ -15,7 +17,16 @@ function cyclePayload(event: ParsedJournalEvent): {
   return {
     cycleId: logical['cycle-id'],
     predecessor: logical['predecessor-cycle-id'],
+    sourceRevision: logical['source-revision'],
   };
+}
+
+export interface CanonicalCycleLineageEntry {
+  cycleId: string;
+  predecessorCycleId: string;
+  sourceRevision: string;
+  event: ParsedJournalEvent;
+  position: number;
 }
 
 function sortEvents(events: ParsedJournalEvent[]): ParsedJournalEvent[] {
@@ -219,4 +230,58 @@ export function hasBlockingLineageConflict(lineage: CanonicalLineage, eventKey: 
     if (item.eventKey !== eventKey) return false;
     return item.code !== 'duplicate-remote-event';
   });
+}
+
+export function deriveCanonicalCycleLineage(
+  lineage: CanonicalLineage,
+  headCycleId: string,
+): {
+  entries: CanonicalCycleLineageEntry[];
+  errors: string[];
+} {
+  const errors: string[] = [];
+  const cyclesById = new Map<string, { event: ParsedJournalEvent; logical: CycleEventLogical }>();
+
+  for (const event of lineage.eventsByKey.values()) {
+    if (event.schema !== CYCLE_SCHEMA || event.logical.schema !== CYCLE_SCHEMA) continue;
+    const logical = event.logical as CycleEventLogical;
+    const existing = cyclesById.get(logical['cycle-id']);
+    if (existing && existing.event.eventKey !== event.eventKey) {
+      errors.push(
+        `cycle ${logical['cycle-id']} has conflicting canonical owners ${existing.event.eventKey} and ${event.eventKey}`,
+      );
+      continue;
+    }
+    cyclesById.set(logical['cycle-id'], { event, logical });
+  }
+
+  const reversed: CanonicalCycleLineageEntry[] = [];
+  const visited = new Set<string>();
+  let current = headCycleId;
+  while (current !== 'none') {
+    if (visited.has(current)) {
+      errors.push(`cycle lineage repeats cycle ${current}`);
+      break;
+    }
+    visited.add(current);
+    const found = cyclesById.get(current);
+    if (!found) {
+      errors.push(`cycle lineage is missing canonical cycle ${current}`);
+      break;
+    }
+    reversed.push({
+      cycleId: found.logical['cycle-id'],
+      predecessorCycleId: found.logical['predecessor-cycle-id'],
+      sourceRevision: found.logical['source-revision'],
+      event: found.event,
+      position: 0,
+    });
+    current = found.logical['predecessor-cycle-id'];
+  }
+
+  const entries = reversed.reverse().map((entry, index) => ({ ...entry, position: index }));
+  if (entries.length > 0 && entries[0]!.predecessorCycleId !== 'none') {
+    errors.push(`cycle lineage root ${entries[0]!.cycleId} has predecessor ${entries[0]!.predecessorCycleId}`);
+  }
+  return { entries, errors };
 }
