@@ -3,7 +3,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { emitResult } from '../lib/launch-watch/emission.ts';
-import { runOwnedProcess, type ProcessRunner } from '../lib/launch-watch/process.ts';
+import { processEvidence, runOwnedProcess, type ProcessRunner } from '../lib/launch-watch/process.ts';
 import type { ProcessResult } from '../kernel/subprocess.ts';
 import {
   CLEANUP_RESERVE_MS,
@@ -34,17 +34,6 @@ function json(value: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-function outputEvidence(result: ProcessResult): Record<string, unknown> {
-  return {
-    processOutcome: result.outcome,
-    exitCode: result.exitCode,
-    signal: result.signal,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    ...(result.error ? { error: result.error } : {}),
-  };
 }
 
 function rootForPath(path: string): string {
@@ -101,7 +90,7 @@ function statusResult(result: ProcessResult): string {
 }
 
 function gitFailure(result: ProcessResult): Record<string, unknown> {
-  return outputEvidence(result);
+  return processEvidence(result);
 }
 
 function cleanupResourceIds(handle: string | null): {
@@ -120,7 +109,7 @@ async function closeTerminal(
 ): Promise<{ readonly completed: boolean; readonly evidence: Record<string, unknown> }> {
   try {
     const result = await run('orca', ['terminal', 'close', '--terminal', handle, '--json'], { cwd, timeoutMs, input: '' });
-    return { completed: result.ok, evidence: outputEvidence(result) };
+    return { completed: result.ok, evidence: processEvidence(result) };
   } catch (error) {
     return { completed: false, evidence: { error: error instanceof Error ? error.message : String(error) } };
   }
@@ -225,7 +214,7 @@ export async function executeLaunchRequest(request: LaunchRequest, dependencies:
   if (!worktree) {
     return launchResult('source-unavailable', {
       phase: 'binding-verification', reasonCode: 'launch_worktree_current_invalid_response_shape', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.worktree'], evidence: current.result ? outputEvidence(current.result) : {}, remediation: 'inspect-source',
+      sourceIds: ['orca.worktree'], evidence: current.result ? processEvidence(current.result) : {}, remediation: 'inspect-source',
     });
   }
   const requestedRoot = rootForPath(request.cwd);
@@ -302,7 +291,7 @@ export async function executeLaunchRequest(request: LaunchRequest, dependencies:
   if (!trust.result?.ok || markerPayload?.workspacePath !== requestedRoot) {
     return launchResult('trusted-start-failed', {
       phase: 'trust', reasonCode: 'trust_marker_invalid', deadlineMs: request.deadlineMs, sourceIds: ['pack.launch.trust'],
-      evidence: { process: trust.result ? outputEvidence(trust.result) : null, marker, markerPayload }, remediation: 'verify-trust',
+      evidence: { process: trust.result ? processEvidence(trust.result) : null, marker, markerPayload }, remediation: 'verify-trust',
     });
   }
 
@@ -329,49 +318,49 @@ export async function executeLaunchRequest(request: LaunchRequest, dependencies:
   if (handle && !validHandleShape) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_invalid_response_shape', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...outputEvidence(createResult), argv: createArgs, response },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs, response },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: { handle, worktreeId: responseWorktreeId },
     });
   } else if (createResult.timedOut || createResult.outcome === 'timeout') {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_timeout', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...outputEvidence(createResult), argv: createArgs },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: handle ? { handle } : null,
     });
   } else if (createResult.outcome === 'spawn-failure') {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_dispatched_thrown', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...outputEvidence(createResult), argv: createArgs },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: handle ? { handle } : null,
     });
   } else if (createResult.exitCode !== 0) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_dispatched_nonzero', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...outputEvidence(createResult), argv: createArgs, response },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs, response },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: handle ? { handle } : null,
     });
   } else if (!createResult.stdout.trim()) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_empty', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...outputEvidence(createResult), argv: createArgs },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal',
     });
   } else if (!response) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_malformed', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...outputEvidence(createResult), argv: createArgs },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal',
     });
   } else if (response.ok !== true) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_dispatched_ok_false', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...outputEvidence(createResult), argv: createArgs, response },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs, response },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: handle ? { handle, worktreeId: responseWorktreeId } : null,
     });
   } else if (!handle) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_missing_handle', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...outputEvidence(createResult), argv: createArgs, response },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs, response },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal',
     });
   } else {

@@ -15,3 +15,14 @@ export const runOwnedProcess: ProcessRunner = (command, args, options) => runPro
   allowEmptyStdout: true,
   inheritParentEnv: true,
 });
+
+export function processEvidence(result: ProcessResult): Record<string, unknown> {
+  return {
+    processOutcome: result.outcome,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    ...(result.error ? { error: result.error } : {}),
+  };
+}

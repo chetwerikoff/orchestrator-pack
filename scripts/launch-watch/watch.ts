@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { emitResult } from '../lib/launch-watch/emission.ts';
-import { runOwnedProcess, type ProcessRunner } from '../lib/launch-watch/process.ts';
+import { processEvidence, runOwnedProcess, type ProcessRunner } from '../lib/launch-watch/process.ts';
 import type { ProcessResult } from '../kernel/subprocess.ts';
 import {
   CLEANUP_RESERVE_MS,
@@ -30,17 +30,6 @@ function object(value: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-function evidence(result: ProcessResult): Record<string, unknown> {
-  return {
-    processOutcome: result.outcome,
-    exitCode: result.exitCode,
-    signal: result.signal,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    ...(result.error ? { error: result.error } : {}),
-  };
 }
 
 function deadlineResult(
@@ -97,24 +86,24 @@ export async function executeWatchRequest(request: WatchRequest, dependencies: W
     const invoked = await invoke(run, 'orca', ['terminal', 'read', '--terminal', request.terminalHandle ?? '', '--json'], root, now, workDeadline);
     if (invoked.expired) return deadlineResult(request, operation, 'orca_read_deadline');
     const result = invoked.result;
-    if (!result || result.timedOut || result.outcome === 'timeout') return deadlineResult(request, operation, 'orca_read_deadline', result ? evidence(result) : {});
+    if (!result || result.timedOut || result.outcome === 'timeout') return deadlineResult(request, operation, 'orca_read_deadline', result ? processEvidence(result) : {});
     if (!result.ok) {
       return watchResult('source-unavailable', {
         operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: 'orca_read_command_failed',
-        deadlineMs: request.deadlineMs, evidence: evidence(result), remediation: 'inspect-source',
+        deadlineMs: request.deadlineMs, evidence: processEvidence(result), remediation: 'inspect-source',
       });
     }
     const payload = result.stdout.length > 0 ? object(result.stdout) : null;
     if (!payload) {
       return watchResult('source-unavailable', {
         operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: result.stdout.length === 0 ? 'orca_read_empty_stdout' : 'orca_read_malformed_json',
-        deadlineMs: request.deadlineMs, evidence: result ? evidence(result) : {}, remediation: 'inspect-source',
+        deadlineMs: request.deadlineMs, evidence: result ? processEvidence(result) : {}, remediation: 'inspect-source',
       });
     }
     if (payload.ok === false) {
       return watchResult('source-unavailable', {
         operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: 'orca_read_ok_false',
-        deadlineMs: request.deadlineMs, evidence: { ...evidence(result), response: payload }, remediation: 'inspect-source',
+        deadlineMs: request.deadlineMs, evidence: { ...processEvidence(result), response: payload }, remediation: 'inspect-source',
       });
     }
     const resultObject = payload.result !== null && typeof payload.result === 'object' && !Array.isArray(payload.result)
@@ -125,7 +114,7 @@ export async function executeWatchRequest(request: WatchRequest, dependencies: W
     if (payload.ok !== true || !resultObject || !Array.isArray(lines) || !('nextCursor' in resultObject) || (nextCursor !== null && typeof nextCursor !== 'string')) {
       return watchResult('source-unavailable', {
         operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: 'orca_read_invalid_response_shape',
-        deadlineMs: request.deadlineMs, evidence: { ...evidence(result), response: payload }, remediation: 'inspect-source',
+        deadlineMs: request.deadlineMs, evidence: { ...processEvidence(result), response: payload }, remediation: 'inspect-source',
       });
     }
     return watchResult('matched', {
@@ -140,18 +129,18 @@ export async function executeWatchRequest(request: WatchRequest, dependencies: W
     const invoked = await invoke(run, gh, args, root, now, workDeadline);
     if (invoked.expired) return deadlineResult(request, operation, 'github_read_deadline', { reads });
     const result = invoked.result;
-    if (!result || result.timedOut || result.outcome === 'timeout') return deadlineResult(request, operation, 'github_read_deadline', { reads, ...(result ? evidence(result) : {}) });
+    if (!result || result.timedOut || result.outcome === 'timeout') return deadlineResult(request, operation, 'github_read_deadline', { reads, ...(result ? processEvidence(result) : {}) });
     if (!result.ok) {
       return watchResult('source-unavailable', {
         operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: 'github_command_failed',
-        deadlineMs: request.deadlineMs, evidence: { reads, ...evidence(result), argv: [gh, ...args] }, remediation: 'inspect-source',
+        deadlineMs: request.deadlineMs, evidence: { reads, ...processEvidence(result), argv: [gh, ...args] }, remediation: 'inspect-source',
       });
     }
     const payload = result.stdout.length > 0 ? object(result.stdout) : null;
     if (!payload) {
       return watchResult('source-unavailable', {
         operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: result.stdout.length === 0 ? 'github_empty_stdout' : 'github_malformed_json',
-        deadlineMs: request.deadlineMs, evidence: { reads, ...evidence(result), argv: [gh, ...args] }, remediation: 'inspect-source',
+        deadlineMs: request.deadlineMs, evidence: { reads, ...processEvidence(result), argv: [gh, ...args] }, remediation: 'inspect-source',
       });
     }
     const state = payload.state;
@@ -159,7 +148,7 @@ export async function executeWatchRequest(request: WatchRequest, dependencies: W
     if ((state !== 'OPEN' && state !== 'CLOSED' && state !== 'MERGED') || !('mergedAt' in payload) || (mergedAt !== null && typeof mergedAt !== 'string')) {
       return watchResult('source-unavailable', {
         operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: 'github_invalid_response_shape',
-        deadlineMs: request.deadlineMs, evidence: { reads, ...evidence(result), response: payload }, remediation: 'inspect-source',
+        deadlineMs: request.deadlineMs, evidence: { reads, ...processEvidence(result), response: payload }, remediation: 'inspect-source',
       });
     }
     if (state === 'MERGED' && mergedAt !== null) {
