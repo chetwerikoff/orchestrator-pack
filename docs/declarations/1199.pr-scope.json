@@ -7,6 +7,7 @@
     "scripts/ci-preflight/contract.test.ts",
     "scripts/ci-preflight/contract.ts",
     "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json",
     "tests/external-output-references/ci-preflight/contract-fixture.json"
   ],
   "denylist": [
@@ -37,5 +38,5 @@
     "scripts/vitest-runtime-history.json",
     "tests/external-output-references/ci-preflight/"
   ],
-  "source_revision": "86007de7f3d324168cbfdf7f6bf752ee1af398c6"
+  "source_revision": "3d8c04e42798a153726d5a8f503a9f16234eb80d"
 }
