@@ -1,0 +1,31 @@
+{
+  "issue_number": 1171,
+  "iteration_id": "wrap-20260802T105301Z-f422efa0",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "wrap-20260802T102143Z-a979f95d",
+  "created_at": "2026-08-02T10:53:01.488Z",
+  "baseline": {
+    "commit_sha": "a888dbc8feadd1d74c266fad7e1ed4c24c8627a9",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:f849d49dc2c1c08226046b7c0f73e072f1f4cc20879150cd90a0eff0c68e0293"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/migration_notes.md",
+    "docs/tiering.md",
+    "scripts/finding-ledger-guard.mjs",
+    "scripts/finding-ledger-guard.test.ts",
+    "scripts/lib/canonical-review-directory.ts",
+    "scripts/lib/create-issue-final-acceptance-contract.ts",
+    "scripts/lib/create-issue-final-acceptance.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts",
+    "scripts/stage-completeness-guard.ts",
+    "scripts/lib/tier-gate-core.ts",
+    "scripts/tier-gate-guard.test.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
