@@ -1,7 +1,7 @@
 {
   "issue": 556,
   "source": "ci-measured",
-  "dataChangedAt": "2026-08-01T20:49:37.561Z",
+  "dataChangedAt": "2026-08-02T07:10:03.502Z",
   "smoothingRule": "median-of-last-5-samples",
   "files": {
     "plugins/_shared/tests/declaration_schema.test.ts": 45000,
@@ -197,7 +197,8 @@
     "scripts/pr2-foundation/mutation-external-ci.test.ts": 490,
     "scripts/pr2-foundation/foundation.test.ts": 54,
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 42962,
-    "scripts/lib/create-issue-stage-record.test.ts": 22
+    "scripts/lib/create-issue-stage-record.test.ts": 22,
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": 36
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -393,7 +394,8 @@
     "scripts/pr2-foundation/mutation-external-ci.test.ts": "measured",
     "scripts/pr2-foundation/foundation.test.ts": "measured",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "measured",
-    "scripts/lib/create-issue-stage-record.test.ts": "measured"
+    "scripts/lib/create-issue-stage-record.test.ts": "measured",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": "measured"
   },
   "recentSamples": {
     "scripts/contract-evidence-legacy-list-guard.test.ts": [
@@ -573,6 +575,9 @@
     ],
     "scripts/lib/create-issue-stage-record.test.ts": [
       22
+    ],
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": [
+      36
     ]
   },
   "fileChangedAt": {
@@ -601,6 +606,7 @@
     "scripts/review-wake-trigger.test.ts": "2026-08-01T19:55:47.387Z",
     "scripts/worker-message-submit-reconcile.test.ts": "2026-08-01T17:16:10.556Z",
     "scripts/review-cycle-cap.test.ts": "2026-08-01T16:46:17.748Z",
-    "scripts/lib/create-issue-stage-record.test.ts": "2026-08-01T16:58:55.741Z"
+    "scripts/lib/create-issue-stage-record.test.ts": "2026-08-01T16:58:55.741Z",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": "2026-08-02T07:10:03.502Z"
   }
 }

@@ -57,7 +57,7 @@
     "scripts/kernel/json-artifact.test.ts": "light",
     "scripts/kernel/json-contract.test.ts": "light",
     "scripts/kernel/subprocess.test.ts": "heavy",
-    "scripts/lib/create-issue-stage-record-artifacts.test.ts": "light",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": "heavy",
     "scripts/lib/create-issue-stage-record.test.ts": "light",
     "scripts/lib/protected-signal-receipt.test.ts": "light",
     "scripts/orchestrator-escalation-router.test.ts": "parked",
