@@ -19,12 +19,15 @@ import { isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.ts
 
 const GUARD_LABEL = 'stage-completeness guard';
 
-type ReceiptCliOptions = DraftTextGuardBaseOptions & {
+export type CanonicalReceiptInventoryOptions = {
   stageReceiptPaths?: string[];
   receiptDirectory?: string;
-  relayEvidencePath?: string;
-  claudeProducerEvidencePaths?: string[];
   tierIntakePath?: string;
+  claudeProducerEvidencePaths?: string[];
+};
+
+type ReceiptCliOptions = DraftTextGuardBaseOptions & CanonicalReceiptInventoryOptions & {
+  relayEvidencePath?: string;
   phase?: 'pre-lens' | 'final-acceptance';
 };
 
@@ -41,13 +44,18 @@ function isStageReceipt(value: unknown): value is StageCompletenessReceiptV1 {
     && (value as { schema?: unknown }).schema === STAGE_COMPLETENESS_RECEIPT_SCHEMA;
 }
 
-export function loadCanonicalReceiptInventory(opts: ReceiptCliOptions): {
+export function loadCanonicalReceiptInventory(opts: CanonicalReceiptInventoryOptions): {
   receipts: StageCompletenessReceiptV1[];
+  receiptPaths: string[];
+  intakePath: string;
   authority: ReviewEpisodeDerivationAuthorityV1;
 } {
   if (!opts.tierIntakePath) throw new Error('--tier-intake is required for receipt-backed review episodes');
   const intake = readJson(opts.tierIntakePath) as TierIntakeAuthorityV1;
   const canonical = resolveCanonicalReviewDirectory(intake);
+  if (resolve(opts.tierIntakePath) !== canonical.intakePath) {
+    throw new Error(`legacy_receipt_location_blocked: tier intake authority must be ${canonical.intakePath}`);
+  }
   const requestedDirectory = opts.receiptDirectory
     ? resolve(opts.receiptDirectory)
     : opts.stageReceiptPaths?.[0]
@@ -63,6 +71,7 @@ export function loadCanonicalReceiptInventory(opts: ReceiptCliOptions): {
     .filter((name) => name.endsWith('.json'))
     .map((name) => resolve(directory, name));
   const receipts: StageCompletenessReceiptV1[] = [];
+  const receiptPaths: string[] = [];
   for (const path of candidates) {
     let parsed: unknown;
     try {
@@ -77,6 +86,7 @@ export function loadCanonicalReceiptInventory(opts: ReceiptCliOptions): {
       continue;
     }
     receipts.push(...found);
+    receiptPaths.push(path);
   }
   for (const path of explicit) {
     if (!candidates.includes(path)) throw new Error(`explicit stage receipt is outside canonical receipt directory: ${path}`);
@@ -86,6 +96,8 @@ export function loadCanonicalReceiptInventory(opts: ReceiptCliOptions): {
   const evidence = (opts.claudeProducerEvidencePaths ?? []).flatMap((path) => asObjects(readJson(path)));
   return {
     receipts,
+    receiptPaths,
+    intakePath: canonical.intakePath,
     authority: {
       tierIntake: intake,
       receiptInventory: {

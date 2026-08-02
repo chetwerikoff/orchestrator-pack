@@ -8,6 +8,7 @@ import { loadCanonicalReceiptInventory } from './stage-completeness-guard.ts';
 import {
   deriveReviewEpisodeState,
   parseReviewerCardinalityControl,
+  resolveCanonicalReviewDirectory,
   validateReviewEpisodeTopology,
   type CaptureIdentityV1,
   type ReviewEpisodeDerivationAuthorityV1,
@@ -209,6 +210,10 @@ describe('Issue #1150 stage authority', () => {
       else process.env.HOME = previousHome;
       rmSync(tempHome, { recursive: true, force: true });
     }
+  });
+
+  it('derives the Issue number from supported replay workdir identities', () => {
+    expect(resolveCanonicalReviewDirectory({ taskIdentity: '1142-replay' }).issueNumber).toBe('1142');
   });
 
   it('requires independent immutable Claude producer evidence', () => {

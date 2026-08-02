@@ -89,7 +89,7 @@ function tryReadJson(path: string, readJson: (path: string) => unknown): unknown
   }
 }
 
-function validateExactTerminalBodyBinding(
+export function validateExactTerminalBodyBinding(
   sourceBody: string,
   currentBody: string | undefined,
   errors: string[],

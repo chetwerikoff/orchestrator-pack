@@ -218,8 +218,9 @@ export interface CanonicalReviewDirectoryV1 {
 
 function numericIssueFromTaskIdentity(taskIdentity: string): string | null {
   const candidate = taskIdentity.trim().split(':').at(-1)?.trim() ?? '';
-  if (!candidate || [...candidate].some((character) => character < '0' || character > '9')) return null;
-  const normalized = candidate.replace(/^0+(?=\d)/, '');
+  const issueMatch = /^(\d+)(?:-|$)/.exec(candidate);
+  if (!issueMatch?.[1]) return null;
+  const normalized = issueMatch[1].replace(/^0+(?=\d)/, '');
   return normalized === '0' ? null : normalized;
 }
 
