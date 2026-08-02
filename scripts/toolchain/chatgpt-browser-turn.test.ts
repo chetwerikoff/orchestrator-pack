@@ -3320,6 +3320,7 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     enabled?: boolean;
     contentEditable?: boolean;
     readinessSequence?: boolean[];
+    readinessDelayMs?: number;
     clickDelayMs?: number;
     fillDelayMs?: number;
     blockingOverlay?: boolean;
@@ -3349,6 +3350,7 @@ describe('issue 1188 composer readiness and insertion timing', () => {
       isVisible: vi.fn(async () => options.visible !== false),
       isEnabled: vi.fn(async () => options.enabled !== false),
       evaluate: vi.fn(async () => {
+        if (options.readinessDelayMs) await vi.advanceTimersByTimeAsync(options.readinessDelayMs);
         const sequence = options.readinessSequence;
         const ready = sequence?.[Math.min(readinessProbe, (sequence?.length ?? 1) - 1)]
           ?? true;
@@ -3435,6 +3437,14 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     expect(Date.now()).toBe(COMPOSER_READINESS_WAIT_MS);
   });
 
+  it('bounds the first post-readiness probe by the insertion phase', async () => {
+    const fixture = makeComposerPage({ readinessDelayMs: COMPOSER_INSERTION_WAIT_MS });
+    const failure = await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 10_000);
+    expect(failure).toBe('composer_mutation_budget_exhausted');
+    expect(fixture.composer.click).not.toHaveBeenCalled();
+    expect(fixture.composer.fill).not.toHaveBeenCalled();
+  });
+
   it('maps composer readiness loss after click to zero-send mutation exhaustion without fill or re-entry', async () => {
     const fixture = makeComposerPage({ readinessSequence: [true, false] });
     const failure = await __testComposerMutation.mutateComposerOrCause(fixture.page, 'payload', 10_000);
@@ -3443,7 +3453,7 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     expect(fixture.composer.fill).not.toHaveBeenCalled();
   });
 
-  it('maps exact and late click/fill action rejection', async () => {
+  it('maps exact and late click/fill timeouts to mutation exhaustion', async () => {
     const clickBoundary = makeComposerPage({ clickDelayMs: COMPOSER_INSERTION_WAIT_MS });
     expect(await __testComposerMutation.mutateComposerOrCause(clickBoundary.page, 'payload', 10_000))
       .toBe('composer_mutation_budget_exhausted');
@@ -3453,15 +3463,17 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     expect(await __testComposerMutation.mutateComposerOrCause(fillLate.page, 'payload', 10_000))
       .toBe('composer_mutation_budget_exhausted');
     expect(fillLate.composer.fill).toHaveBeenCalledTimes(1);
+  });
 
-    const immediateClickFailure = makeComposerPage({ clickReject: true });
-    expect(await __testComposerMutation.mutateComposerOrCause(immediateClickFailure.page, 'payload', 10_000))
-      .toBe('composer_mutation_budget_exhausted');
-    expect(immediateClickFailure.composer.fill).not.toHaveBeenCalled();
+  it('propagates non-timeout composer action errors instead of relabeling them as budget exhaustion', async () => {
+    const clickFailure = makeComposerPage({ clickReject: true });
+    await expect(__testComposerMutation.mutateComposerOrCause(clickFailure.page, 'payload', 10_000))
+      .rejects.toThrow('click rejected');
+    expect(clickFailure.composer.fill).not.toHaveBeenCalled();
 
-    const immediateFillFailure = makeComposerPage({ fillReject: true });
-    expect(await __testComposerMutation.mutateComposerOrCause(immediateFillFailure.page, 'payload', 10_000))
-      .toBe('composer_mutation_budget_exhausted');
+    const fillFailure = makeComposerPage({ fillReject: true });
+    await expect(__testComposerMutation.mutateComposerOrCause(fillFailure.page, 'payload', 10_000))
+      .rejects.toThrow('fill rejected');
   });
 
   it('does not start click or fill when the invocation deadline is already exhausted', async () => {

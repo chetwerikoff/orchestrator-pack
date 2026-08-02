@@ -1023,7 +1023,8 @@ async function readComposerReadiness(page: any, deadline: number): Promise<boole
       && observed.contentEditable
       && Date.now() < deadline,
     );
-  } catch {
+  } catch (error) {
+    if (!isPlaywrightTimeoutError(error)) throw error;
     return false;
   }
 }
@@ -1079,12 +1080,12 @@ async function mutateComposerOrCause(
   insertionContext?: { insertionDeadlineMs?: number },
 ): Promise<PreSendComposerFailureCause | null> {
   const composer = page.locator(COMPOSER_SELECTOR);
-  if (!(await readComposerReadiness(page, invocationDeadlineMs))) {
-    return 'composer_mutation_budget_exhausted';
-  }
   const insertionStart = Date.now();
   const insertionDeadlineMs = Math.min(insertionStart + COMPOSER_INSERTION_WAIT_MS, invocationDeadlineMs);
   if (insertionContext) insertionContext.insertionDeadlineMs = insertionDeadlineMs;
+  if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
+    return 'composer_mutation_budget_exhausted';
+  }
 
   try {
     let actionBudgetMs = remainingComposerMutationMs(insertionDeadlineMs, invocationDeadlineMs);
@@ -1103,7 +1104,8 @@ async function mutateComposerOrCause(
     if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
     return null;
   } catch (error) {
-    if (isPlaywrightTimeoutError(error) && await hasBlockingPageOverlay(page)) {
+    if (!isPlaywrightTimeoutError(error)) throw error;
+    if (await hasBlockingPageOverlay(page)) {
       return 'blocking_page_overlay';
     }
     return 'composer_mutation_budget_exhausted';
