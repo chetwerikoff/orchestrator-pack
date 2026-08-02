@@ -70,11 +70,8 @@
     "scripts/pack-gpt-browser-path.test.ts": "light",
     "scripts/pack-gpt-reviewer.test.ts": "light",
     "scripts/pack-pr-review-contract.test.ts": "light",
-    "scripts/pack-review-carryover.test.ts": "light",
     "scripts/pack-review-runner-gpt.test.ts": "light",
-    "scripts/pack-review-runner-issue-898.test.ts": "light",
     "scripts/pack-review-runner-severity.test.ts": "light",
-    "scripts/pack-review-state.test.ts": "light",
     "scripts/pr-scope-declaration.test.ts": "light",
     "scripts/pr-session-binding-cache.test.ts": "light",
     "scripts/pr2-foundation/binding-cache.test.ts": "light",
@@ -128,8 +125,7 @@
     "scripts/lib/create-issue-completed-result.test.ts": "light",
     "scripts/lib/create-issue-stage-topology.test.ts": "light",
     "scripts/launch-watch/launch-watch.test.ts": "light",
-    "scripts/launch-watch/watch.test.ts": "light",
-    "scripts/merge-triage-evidence.test.ts": "light"
+    "scripts/launch-watch/watch.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,
