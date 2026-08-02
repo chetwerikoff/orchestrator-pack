@@ -204,8 +204,8 @@ export async function runPreflight(repoRoot = REPO): Promise<Record<string, unkn
   const preflightBlocked = Boolean(global || hashFailure || paths || outputs || baselineFailure || deps);
   probes.push(preflightBlocked ? notStartedProbe('probe.typescript-direct', 'typescript-direct', 'row_local', ['05']) : typescript ? blockedProbe('probe.typescript-direct', 'typescript-direct', 'row_local', ['05'], typescript.diagnostic) : probeRecord('probe.typescript-direct', 'typescript-direct', 'row_local', ['05']));
   probes.push(preflightBlocked ? notStartedProbe('probe.vitest-direct', 'vitest-direct', 'row_local', ['07']) : vitest ? blockedProbe('probe.vitest-direct', 'vitest-direct', 'row_local', ['07'], vitest.diagnostic) : probeRecord('probe.vitest-direct', 'vitest-direct', 'row_local', ['07']));
-  if (deps || global || hashFailure || paths || baselineFailure) {
-    const failure = deps ?? global ?? (hashFailure ? globalFailure('workflow_inventory_stale', '.github/workflows/scope-guard.yml', hashDiagnostic.expected, hashDiagnostic.actual, hashDiagnostic.remediation) : paths ?? baselineFailure)!;
+  if (deps || global || hashFailure || paths || outputs || baselineFailure) {
+    const failure = deps ?? global ?? (hashFailure ? globalFailure('workflow_inventory_stale', '.github/workflows/scope-guard.yml', hashDiagnostic.expected, hashDiagnostic.actual, hashDiagnostic.remediation) : paths ?? outputs ?? baselineFailure)!;
     applyBlock(rows, failure.reason, failure.diagnostic);
     return result(rows, probes, 'blocked', failure.reason, undefined, repoRoot);
   }
