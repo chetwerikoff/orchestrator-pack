@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -9,6 +8,7 @@ import {
   selectDeclarationArtifact,
   validatePrScopeDeclaration,
 } from './pr-scope-declaration.ts';
+import { runProcessSync } from './kernel/subprocess.ts';
 import { checkPrScope } from './pr-scope-check.ts';
 
 const issueBody = [
@@ -200,8 +200,18 @@ describe('AO-free PR scope declaration contract', () => {
   it('runs the real producer-to-required-check contract', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
     roots.push(root);
-    const git = (args: string[]) =>
-      execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+    const git = (args: string[]) => {
+      const result = runProcessSync({
+        command: 'git',
+        args,
+        cwd: root,
+        inheritParentEnv: true,
+      });
+      if (!result.ok) {
+        throw new Error(result.stderr || result.error || `git ${args.join(' ')} failed`);
+      }
+      return result.stdout.trim();
+    };
 
     git(['init', '--quiet']);
     git(['config', 'user.name', 'opk-test']);
