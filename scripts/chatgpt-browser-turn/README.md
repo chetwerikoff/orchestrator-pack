@@ -92,7 +92,7 @@ readiness phase starts immediately before its first probe and has a deadline of
 find `#prompt-textarea` present, visible, enabled, and content-editable.
 
 After a successful readiness observation, the insertion phase starts with one
-shared 7,500 ms deadline for focus/click and fill. Remaining time is recomputed
+shared 3,000 ms deadline for focus/click and fill. Remaining time is recomputed
 before each action and at the send boundary; actions are awaited directly and
 must settle strictly before the deadline. Composer readiness is rechecked
 before focus/click, before fill, and at the send boundary. Losing readiness

@@ -3399,15 +3399,15 @@ describe('issue 1188 composer readiness and insertion timing', () => {
 
   it('uses fixed readiness and insertion phases independent of payload size', async () => {
     expect(COMPOSER_READINESS_WAIT_MS).toBe(12_000);
-    expect(COMPOSER_INSERTION_WAIT_MS).toBe(7_500);
+    expect(COMPOSER_INSERTION_WAIT_MS).toBe(3_000);
     const short = makeComposerPage();
     const long = makeComposerPage();
     const shortContext: { insertionDeadlineMs?: number } = {};
     const longContext: { insertionDeadlineMs?: number } = {};
     expect(await __testComposerMutation.mutateComposerOrCause(short.page, 'x', 10_000, shortContext)).toBeNull();
     expect(await __testComposerMutation.mutateComposerOrCause(long.page, 'x'.repeat(100_000), 10_000, longContext)).toBeNull();
-    expect(shortContext.insertionDeadlineMs).toBe(7_500);
-    expect(longContext.insertionDeadlineMs).toBe(7_500);
+    expect(shortContext.insertionDeadlineMs).toBe(3_000);
+    expect(longContext.insertionDeadlineMs).toBe(3_000);
     expect(short.composer.click.mock.calls[0]?.[0]?.timeout).toBe(COMPOSER_INSERTION_WAIT_MS);
     expect(long.composer.click.mock.calls[0]?.[0]?.timeout).toBe(COMPOSER_INSERTION_WAIT_MS);
 
