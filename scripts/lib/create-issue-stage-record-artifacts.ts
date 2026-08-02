@@ -13,9 +13,12 @@ import {
   deriveStageReceiptId,
   validateReviewEpisodeTopology,
   type CaptureIdentityV1,
+  type ReviewerInvocationEnvelopeV1,
+  type ReviewEpisodeDerivationAuthorityV1,
   type ReviewStage,
   type ReviewTier,
   type StageCompletenessReceiptV1,
+  type TierIntakeAuthorityV1,
   type VerifiedRelayEvidenceV1,
 } from './stage-completeness-core.ts';
 import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
@@ -78,6 +81,176 @@ function requiredString(value: unknown, label: string, errors: string[]): string
     return '';
   }
   return value.trim();
+}
+
+function reviewTier(value: unknown): ReviewTier | null {
+  return value === 'T1' || value === 'T2' || value === 'T3' ? value : null;
+}
+
+function reviewStage(value: unknown): ReviewStage | null {
+  return value === 'competitive'
+    || value === 'architectural-review'
+    || value === 'architectural-lens'
+    || value === 'architectural'
+    ? value
+    : null;
+}
+
+function reviewerStage(value: unknown): Exclude<ReviewStage, 'architectural-lens'> | null {
+  return value === 'competitive'
+    || value === 'architectural-review'
+    || value === 'architectural'
+    ? value
+    : null;
+}
+
+function policyVersion(value: unknown): ReviewerInvocationEnvelopeV1['policyVersion'] | null {
+  return value === 'triple-source/v1' || value === 'single-source/v1' ? value : null;
+}
+
+function terminalClassification(value: unknown): ReviewerInvocationEnvelopeV1['terminalClassification'] | null {
+  return value === 'complete'
+    || value === 'quota'
+    || value === 'composer-refusal'
+    || value === 'fill-timeout'
+    || value === 'post-send-failure'
+    || value === 'output-conflict'
+    || value === 'incident'
+    ? value
+    : null;
+}
+
+function retryClass(value: unknown): ReviewerInvocationEnvelopeV1['retryClass'] | null {
+  return value === 'none'
+    || value === 'eligible-zero-send'
+    || value === 'retry'
+    || value === 'retry-forbidden'
+    ? value
+    : null;
+}
+
+function capacityOutcome(value: unknown): ReviewerInvocationEnvelopeV1['capacityOutcome'] | null {
+  return value === 'admitted' || value === 'rejected-after-local-wait' ? value : null;
+}
+
+function buildInvocation(
+  value: JsonRecord,
+  index: number,
+  context: Pick<
+    StageCompletenessReceiptV1,
+    | 'reviewEpisodeId'
+    | 'stageAttemptId'
+    | 'policyVersion'
+    | 'reviewerCardinality'
+    | 'cardinalityConfigIdentity'
+    | 'stage'
+    | 'sourceRevision'
+  >,
+  capture: CaptureIdentityV1 | undefined,
+  errors: string[],
+): ReviewerInvocationEnvelopeV1 | null {
+  const label = `stage ${context.stage} invocation[${index}]`;
+  const schema = value.schema === 'reviewer-invocation-envelope/v1' ? value.schema : null;
+  const reviewEpisodeId = requiredString(value.reviewEpisodeId, `${label}.reviewEpisodeId`, errors);
+  const stageAttemptId = requiredString(value.stageAttemptId, `${label}.stageAttemptId`, errors);
+  const invocationPolicyVersion = policyVersion(value.policyVersion);
+  const cardinalityConfigIdentity = requiredString(
+    value.cardinalityConfigIdentity,
+    `${label}.cardinalityConfigIdentity`,
+    errors,
+  );
+  const stage = reviewerStage(value.stage);
+  const sourceRevision = requiredString(value.sourceRevision, `${label}.sourceRevision`, errors);
+  const invocationId = requiredString(value.invocationId, `${label}.invocationId`, errors);
+  const terminalResultIdentity = requiredString(
+    value.terminalResultIdentity,
+    `${label}.terminalResultIdentity`,
+    errors,
+  );
+  const reviewerSource = requiredString(value.reviewerSource, `${label}.reviewerSource`, errors);
+  const reviewerSlot = requiredString(value.reviewerSlot, `${label}.reviewerSlot`, errors);
+  const reviewerOrdinal = Number.isInteger(value.reviewerOrdinal) && Number(value.reviewerOrdinal) >= 1
+    ? Number(value.reviewerOrdinal)
+    : null;
+  const attemptOrdinal = value.attemptOrdinal === 1 || value.attemptOrdinal === 2
+    ? value.attemptOrdinal
+    : null;
+  const retryAttempt = typeof value.retryAttempt === 'boolean' ? value.retryAttempt : null;
+  const terminal = typeof value.terminal === 'boolean' ? value.terminal : null;
+  const invocationTerminalClassification = terminalClassification(value.terminalClassification);
+  const sendCount = value.sendCount === 0 || value.sendCount === 1 ? value.sendCount : null;
+  const invocationRetryClass = retryClass(value.retryClass);
+  const revisionCheck = value.revisionCheck === 'matched' ? value.revisionCheck : null;
+  const invocationCapacityOutcome = capacityOutcome(value.capacityOutcome);
+  const capacityWaitMs = Number.isInteger(value.capacityWaitMs) && Number(value.capacityWaitMs) >= 0
+    ? Number(value.capacityWaitMs)
+    : null;
+  const contextMatches = reviewEpisodeId === context.reviewEpisodeId
+    && stageAttemptId === context.stageAttemptId
+    && invocationPolicyVersion === context.policyVersion
+    && value.reviewerCardinality === context.reviewerCardinality
+    && cardinalityConfigIdentity === context.cardinalityConfigIdentity
+    && stage === context.stage
+    && sourceRevision === context.sourceRevision;
+
+  if (schema === null) errors.push(`${label} has unknown schema`);
+  if (invocationPolicyVersion === null) errors.push(`${label} has unknown policyVersion`);
+  if (stage === null) errors.push(`${label} has unknown stage`);
+  if (reviewerOrdinal === null) errors.push(`${label}.reviewerOrdinal must be a positive integer`);
+  if (attemptOrdinal === null) errors.push(`${label}.attemptOrdinal must be 1 or 2`);
+  if (retryAttempt === null) errors.push(`${label}.retryAttempt must be boolean`);
+  if (terminal === null) errors.push(`${label}.terminal must be boolean`);
+  if (invocationTerminalClassification === null) errors.push(`${label} has unknown terminalClassification`);
+  if (sendCount === null) errors.push(`${label}.sendCount must be 0 or 1`);
+  if (invocationRetryClass === null) errors.push(`${label} has unknown retryClass`);
+  if (revisionCheck === null) errors.push(`${label}.revisionCheck must be matched`);
+  if (invocationCapacityOutcome === null) errors.push(`${label} has unknown capacityOutcome`);
+  if (capacityWaitMs === null) errors.push(`${label}.capacityWaitMs must be a non-negative integer`);
+  if (!contextMatches) errors.push(`${label} does not match its stage receipt`);
+
+  if (
+    schema === null
+    || invocationPolicyVersion === null
+    || stage === null
+    || reviewerOrdinal === null
+    || attemptOrdinal === null
+    || retryAttempt === null
+    || terminal === null
+    || invocationTerminalClassification === null
+    || sendCount === null
+    || invocationRetryClass === null
+    || revisionCheck === null
+    || invocationCapacityOutcome === null
+    || capacityWaitMs === null
+    || !contextMatches
+  ) {
+    return null;
+  }
+  return {
+    schema,
+    reviewEpisodeId,
+    stageAttemptId,
+    policyVersion: invocationPolicyVersion,
+    reviewerCardinality: context.reviewerCardinality,
+    cardinalityConfigIdentity,
+    stage,
+    sourceRevision,
+    invocationId,
+    terminalResultIdentity,
+    reviewerSource,
+    reviewerSlot,
+    reviewerOrdinal,
+    attemptOrdinal,
+    retryAttempt,
+    terminal,
+    terminalClassification: invocationTerminalClassification,
+    sendCount,
+    retryClass: invocationRetryClass,
+    revisionCheck,
+    capacityOutcome: invocationCapacityOutcome,
+    capacityWaitMs,
+    ...(capture ? { capture } : {}),
+  };
 }
 
 function readJson(path: string, label: string, errors: string[]): unknown | null {
@@ -154,17 +327,21 @@ function captureFromEvidence(
   };
 }
 
-function loadTierIntake(path: string, errors: string[]): JsonRecord | null {
+function loadTierIntake(path: string, errors: string[]): TierIntakeAuthorityV1 | null {
   const value = readJson(path, 'tier-intake/v1 evidence', errors);
   if (!isRecord(value) || value.schema !== 'tier-intake/v1') {
     errors.push(`tier-intake/v1 evidence is malformed: ${path}`);
     return null;
   }
-  requiredString(value.taskIdentity, 'tier-intake.taskIdentity', errors);
-  requiredString(value.firstRevision, 'tier-intake.firstRevision', errors);
-  if (value.kind !== 'fresh' && value.kind !== 'compatibility') errors.push('tier-intake.kind is invalid');
-  if (!['T1', 'T2', 'T3'].includes(String(value.priorTier))) errors.push('tier-intake.priorTier is invalid');
-  return value;
+  const producer = requiredString(value.producer, 'tier-intake.producer', errors);
+  const taskIdentity = requiredString(value.taskIdentity, 'tier-intake.taskIdentity', errors);
+  const firstRevision = requiredString(value.firstRevision, 'tier-intake.firstRevision', errors);
+  const kind = value.kind === 'fresh' || value.kind === 'compatibility' ? value.kind : null;
+  const priorTier = reviewTier(value.priorTier);
+  if (kind === null) errors.push('tier-intake.kind is invalid');
+  if (priorTier === null) errors.push('tier-intake.priorTier is invalid');
+  if (!producer || !taskIdentity || !firstRevision || kind === null || priorTier === null) return null;
+  return { schema: 'tier-intake/v1', producer, taskIdentity, kind, priorTier, firstRevision };
 }
 
 function assertDerived(
@@ -190,8 +367,11 @@ function buildReceipt(
     errors.push(`stage evidence has unknown schema: ${evidencePath}`);
     return null;
   }
-  const stage = requiredString(raw.stage, 'stage evidence.stage', errors) as ReviewStage;
-  const tier = requiredString(raw.tier, 'stage evidence.tier', errors) as ReviewTier;
+  const stage = reviewStage(raw.stage);
+  const tier = reviewTier(raw.tier);
+  if (stage === null) errors.push('stage evidence.stage is invalid');
+  if (tier === null) errors.push('stage evidence.tier is invalid');
+  if (stage === null || tier === null) return null;
   const stageAttemptId = requiredString(raw.stageAttemptId, 'stage evidence.stageAttemptId', errors);
   const sourceRevision = requiredString(raw.sourceRevision, 'stage evidence.sourceRevision', errors);
   const cycleId = requiredString(raw.cycleId, 'stage evidence.cycleId', errors);
@@ -207,7 +387,9 @@ function buildReceipt(
   assertDerived(raw.stageReceiptId, deriveStageReceiptId(episodeId, sequence), 'stage evidence stageReceiptId', errors);
 
   const invocationValues = raw.invocations;
-  const invocations: JsonRecord[] = [];
+  const invocations: ReviewerInvocationEnvelopeV1[] = [];
+  const receiptPolicyVersion = policyVersion(raw.policyVersion);
+  if (receiptPolicyVersion === null) errors.push('stage evidence.policyVersion is invalid');
   const captures: CaptureIdentityV1[] = [];
   if (Array.isArray(invocationValues)) {
     for (const [index, value] of invocationValues.entries()) {
@@ -219,18 +401,33 @@ function buildReceipt(
       if (value.terminalClassification === 'complete' && value.capturePath === undefined) {
         errors.push(`missing capture file evidence for completed invocation[${index}]`);
       }
-      const invocation = { ...value };
       const capture = value.capturePath === undefined
         ? null
         : captureFromEvidence(evidencePath, value.capturePath, value.captureIdentity, captureTexts, captureTimestamps, errors);
-      delete invocation.capturePath;
-      delete invocation.captureIdentity;
-      if (capture) {
-        invocation.capture = capture;
-        captures.push(capture);
-      }
+      if (capture) captures.push(capture);
       assertDerived(value.reviewEpisodeId, episodeId, `invocation[${index}].reviewEpisodeId`, errors);
-      invocations.push(invocation);
+      if (receiptPolicyVersion !== null) {
+        const invocation = buildInvocation(
+          value,
+          index,
+          {
+            reviewEpisodeId: episodeId,
+            stageAttemptId,
+            policyVersion: receiptPolicyVersion,
+            reviewerCardinality: Number(raw.reviewerCardinality),
+            cardinalityConfigIdentity: requiredString(
+              raw.cardinalityConfigIdentity,
+              'stage evidence.cardinalityConfigIdentity',
+              errors,
+            ),
+            stage,
+            sourceRevision,
+          },
+          capture ?? undefined,
+          errors,
+        );
+        if (invocation) invocations.push(invocation);
+      }
     }
   } else if (stage !== 'architectural-lens') {
     errors.push('stage evidence.invocations is missing');
@@ -263,7 +460,7 @@ function buildReceipt(
     stageAttemptId,
     stageSequence: sequence,
     stage,
-    policyVersion: raw.policyVersion as StageCompletenessReceiptV1['policyVersion'],
+    policyVersion: receiptPolicyVersion ?? 'single-source/v1',
     reviewerCardinality: Number(raw.reviewerCardinality),
     cardinalityConfigIdentity: requiredString(raw.cardinalityConfigIdentity, 'stage evidence.cardinalityConfigIdentity', errors),
     sourceRevision,
@@ -272,7 +469,7 @@ function buildReceipt(
     outcome: raw.outcome as StageCompletenessReceiptV1['outcome'],
     revisionChecks: raw.revisionChecks as StageCompletenessReceiptV1['revisionChecks'],
     settlement: raw.settlement as StageCompletenessReceiptV1['settlement'],
-    ...(invocations.length > 0 ? { invocations: invocations as StageCompletenessReceiptV1['invocations'] } : {}),
+    ...(invocations.length > 0 ? { invocations } : {}),
     ...(claude ? { claude: claude as unknown as StageCompletenessReceiptV1['claude'] } : {}),
     credentialingCaptures: raw.outcome === 'complete' ? captures : [],
     relayEligibleCaptures: captures,
@@ -338,7 +535,7 @@ export function produceAcceptanceArtifacts(
   const intake = loadTierIntake(options.tierIntakePath, errors);
   const taskIdentity = intake && requiredString(intake.taskIdentity, 'tier-intake.taskIdentity', errors);
   const episodeFirstRevision = intake && requiredString(intake.firstRevision, 'tier-intake.firstRevision', errors);
-  if (!taskIdentity || !episodeFirstRevision) {
+  if (!intake || !taskIdentity || !episodeFirstRevision) {
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)] };
   }
   const episodeId = deriveReviewEpisodeId(taskIdentity, episodeFirstRevision);
@@ -349,9 +546,9 @@ export function produceAcceptanceArtifacts(
       const value = readJson(path, 'stage evidence', errors);
       return isRecord(value) ? buildReceipt(path, value, taskIdentity, episodeFirstRevision, episodeId, captureTexts, captureTimestamps, errors) : null;
     })
-    .filter((value): value is StageCompletenessReceiptV1 => Boolean(value))
+    .filter((r): r is ProducedStageReceipt => r !== null)
     .sort((left, right) => left.stageSequence - right.stageSequence);
-  const tier = receipts[0]?.tier as ReviewTier | undefined;
+  const tier = receipts[0]?.tier;
   const cycleIds = new Set(receipts.map((receipt) => receipt.cycleId));
   if (cycleIds.size > 1) errors.push('stage evidence mixes cycle identities');
   if (!tier) errors.push('no completed-stage evidence was supplied');
@@ -371,16 +568,18 @@ export function produceAcceptanceArtifacts(
   const captures = receipts.flatMap((receipt) => receipt.relayEligibleCaptures);
   const relay = relayEvidence(episodeId, captures);
   const ledger = buildLedger(options.authorDispositionsPath, captures, errors);
-  const authority = tier && {
-    tierIntake: intake,
-    receiptInventory: {
-      source: 'canonical-review-directory' as const,
-      taskIdentity,
-      episodeFirstRevision,
-      reviewEpisodeId: episodeId,
-      stageReceiptIds: receipts.map((receipt) => receipt.stageReceiptId),
-    },
-  };
+  const authority: ReviewEpisodeDerivationAuthorityV1 | undefined = tier
+    ? {
+        tierIntake: intake,
+        receiptInventory: {
+          source: 'canonical-review-directory',
+          taskIdentity,
+          episodeFirstRevision,
+          reviewEpisodeId: episodeId,
+          stageReceiptIds: receipts.map((receipt) => receipt.stageReceiptId),
+        },
+      }
+    : undefined;
   if (ledger && tier) {
     const state = deriveReviewEpisodeState(receipts, relay, authority);
     errors.push(...state.errors);
