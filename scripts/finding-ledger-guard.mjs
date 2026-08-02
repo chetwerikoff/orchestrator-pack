@@ -474,6 +474,9 @@ function legacyCheck(captures, ledger, errors) {
 
 export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options = {}) {
   const remoteInputs = options.remoteAuthorities ?? (options.remoteAuthority ? [options.remoteAuthority] : []);
+  if (options.reviewEconomics === true && remoteInputs.length === 0) {
+    return { ok: false, errors: ['finding-ledger: remote authority is required for receipt-backed production validation'], ledger: { version: 1, draft: null, counts: null, findings: [] }, captureFindings: [], protectedSignals: [] };
+  }
   if (remoteInputs.length > 0) {
     const authority = checkRemoteAuthorities(remoteInputs);
     if (!authority.ok) return { ok: false, errors: authority.errors.map((error) => 'finding-ledger: remote authority ' + error), ledger: { version: 1, draft: null, counts: null, findings: [] }, captureFindings: [], protectedSignals: [] };
@@ -555,6 +558,15 @@ function canonicalReceiptInputs(args) {
   return { receipts, authority: { tierIntake: intake, receiptInventory: { source: 'canonical-review-directory', taskIdentity: intake.taskIdentity, episodeFirstRevision: intake.firstRevision, reviewEpisodeId: `${intake.taskIdentity}@${intake.firstRevision}`, stageReceiptIds: receipts.map((receipt) => receipt.stageReceiptId) }, claudeProducerEvidence: evidence } };
 }
 function loadRelayEvidence(path) { if (!path) return []; const value = readJson(path); if (Array.isArray(value)) return value; if (isRecord(value) && Array.isArray(value.evidence)) return value.evidence; throw new Error('--verified-relay-evidence must contain an array or {evidence:[...]}'); }
+function loadRemoteAuthorities(args) {
+  const paths = repeatedArgs(args, '--remote-authority');
+  return paths.flatMap((path) => {
+    const value = readJson(path);
+    if (Array.isArray(value)) return value;
+    if (isRecord(value)) return [value];
+    throw new Error('--remote-authority must contain an object or array');
+  });
+}
 function loadCaptures(args) {
   const explicit = repeatedArgs(args, '--capture-file'); const directory = readArg(args, '--captures-dir');
   const files = explicit.length > 0 ? explicit : directory ? readdirSync(directory).filter((name) => name.endsWith('.capture.txt')).sort().map((name) => join(directory, name)) : [];
@@ -582,6 +594,7 @@ export function runCli(argv) {
       stageReceipts: receiptInputs?.receipts,
       episodeAuthority: receiptInputs?.authority,
       verifiedRelayEvidence: receiptInputs ? loadRelayEvidence(readArg(args, '--verified-relay-evidence')) : undefined,
+      remoteAuthorities: loadRemoteAuthorities(args),
     });
     if (!result.ok) { for (const error of result.errors) console.error(error); return 1; }
     console.log('finding-ledger guard: PASS'); return 0;

@@ -14,6 +14,7 @@ export const ISSUE_COMMENT_PAGE_SIZE = 100;
 export const MAX_ISSUE_COMMENT_PAGES = 10;
 export const MAX_ISSUE_COMMENT_CENSUS = ISSUE_COMMENT_PAGE_SIZE * MAX_ISSUE_COMMENT_PAGES;
 export const MAX_OUTPUT_UTF8_BYTES = MAX_RAW_PART_BYTES * MAX_PART_COUNT;
+const SHA256_RE = /^[a-f0-9]{64}$/;
 export const MAX_REPRESENTABLE_REVIEWER_CARDINALITY =
   Math.floor(MAX_STAGE_SOURCE_RECORDS / MAX_PART_COUNT);
 
@@ -270,23 +271,30 @@ export function validateTopology(
   if (!topology.cardinalityConfigIdentity || typeof topology.cardinalityConfigIdentity !== 'string') {
     errors.push('invalid cardinality config identity');
   }
+  if (!Array.isArray(topology.requiredSlots)) errors.push('required slots must be an array');
+  if (topology.claudeUnavailableWaiverRef !== null
+    && (!topology.claudeUnavailableWaiverRef || typeof topology.claudeUnavailableWaiverRef !== 'object')) {
+    errors.push('invalid-waiver');
+  }
   const waiverOnly = topology.stage === 'architectural-lens' && topology.claudeUnavailableWaiverRef !== null;
   if (waiverOnly) {
-    if (topology.reviewerCardinality !== 0 || topology.requiredSlots.length !== 0) {
+    if (topology.reviewerCardinality !== 0 || !Array.isArray(topology.requiredSlots) || topology.requiredSlots.length !== 0) {
       errors.push('waiver-only lens must have cardinality 0 and no required slots');
     }
-    if (!topology.claudeUnavailableWaiverRef?.waiverId) errors.push('invalid-waiver');
+    errors.push(...validateClaudeUnavailableWaiverRef(topology.claudeUnavailableWaiverRef, topology.sourceRevision));
   } else {
     if (!isRepresentableCardinality(topology.reviewerCardinality)) errors.push('cardinality is not representable');
-    if (topology.requiredSlots.length * MAX_PART_COUNT > MAX_STAGE_SOURCE_RECORDS) {
+    if (Array.isArray(topology.requiredSlots) && topology.requiredSlots.length * MAX_PART_COUNT > MAX_STAGE_SOURCE_RECORDS) {
       errors.push('topology exceeds stage source record bound');
     }
-    const expected = [...topology.requiredSlots].sort();
-    if (expected.some((slot, index) => slot !== String(index + 1).padStart(2, '0'))) {
-      errors.push('required slots are not exact sorted 01..N');
-    }
-    if (topology.requiredSlots.length !== topology.reviewerCardinality) {
-      errors.push('reviewerCardinality does not equal required slot count');
+    if (Array.isArray(topology.requiredSlots)) {
+      const expected = [...topology.requiredSlots].sort();
+      if (expected.some((slot, index) => slot !== String(index + 1).padStart(2, '0'))) {
+        errors.push('required slots are not exact sorted 01..N');
+      }
+      if (topology.requiredSlots.length !== topology.reviewerCardinality) {
+        errors.push('reviewerCardinality does not equal required slot count');
+      }
     }
   }
   if (tier && policyForStage(tier, topology.stage) !== topology.policyVersion) {
@@ -398,6 +406,28 @@ function jsonBody(marker: ParsedRecordMarker, payload: Record<string, unknown>):
   return `${buildRecordMarker(marker)}\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``;
 }
 
+function validateClaudeUnavailableWaiverRef(
+  waiver: ClaudeUnavailableWaiverRef | null,
+  sourceRevision: string,
+): string[] {
+  if (!waiver || typeof waiver !== 'object') return ['invalid-waiver'];
+  const errors: string[] = [];
+  if (waiver.schema !== 'claude-unavailable-waiver/v1') errors.push('invalid-waiver-schema');
+  if (!waiver.waiverId || typeof waiver.waiverId !== 'string') errors.push('invalid-waiver-id');
+  if (waiver.sourceRevision !== sourceRevision) errors.push('invalid-waiver-revision');
+  if (waiver.reason !== 'claude-unavailable') errors.push('invalid-waiver-reason');
+  if (waiver.producer !== 'claude-cli') errors.push('invalid-waiver-producer');
+  if (!SHA256_RE.test(waiver.digest)) errors.push('invalid-waiver-digest');
+  else if (waiver.digest !== sha256(canonicalJson({
+    schema: waiver.schema,
+    waiverId: waiver.waiverId,
+    sourceRevision: waiver.sourceRevision,
+    reason: waiver.reason,
+    producer: waiver.producer,
+  }))) errors.push('invalid-waiver-digest');
+  return errors;
+}
+
 export function splitRawOutput(rawOutput: string, maxBytes = MAX_RAW_PART_BYTES): Uint8Array[] {
   const bytes = new TextEncoder().encode(rawOutput);
   if (bytes.length === 0) throw new Error('empty-output');
@@ -480,10 +510,61 @@ export function parseSourceRecord(body: string): SourceRecord | null {
   if (required.some((key) => payload[key] === undefined)) return null;
   if (payload.eventKey !== marker.eventKey || payload.recordKey !== marker.recordKey || payload.slot !== marker.slotOrRecordKind) return null;
   if (payload.partIndex !== marker.partIndex || payload.partCount !== marker.partCount) return null;
-  if (typeof payload.rawOutputPartBase64 !== 'string') return null;
-  let bytes: Uint8Array;
-  try { bytes = new Uint8Array(Buffer.from(payload.rawOutputPartBase64, 'base64')); } catch { return null; }
+  if (typeof payload.rawOutputPartBase64 !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(payload.rawOutputPartBase64)) return null;
+  try {
+    const bytes = Buffer.from(payload.rawOutputPartBase64, 'base64');
+    if (bytes.toString('base64') !== payload.rawOutputPartBase64) return null;
+  } catch {
+    return null;
+  }
   return { ...payload, body } as unknown as SourceRecord;
+}
+
+function sourceRecordBindingError(topology: ReviewTopology, record: SourceRecord): PublicationConflictReason | null {
+  if (!topology.requiredSlots.includes(record.slot)
+    || !Number.isInteger(record.partIndex) || record.partIndex < 1
+    || !Number.isInteger(record.partCount) || record.partCount < 1
+    || !Number.isInteger(record.byteOffset) || record.byteOffset < 0
+    || !Number.isInteger(record.byteLength) || record.byteLength < 1
+    || !Number.isInteger(record.totalByteLength) || record.totalByteLength < record.byteLength
+    || !SHA256_RE.test(record.outputId) || !SHA256_RE.test(record.partSha256)) {
+    return 'incompatible-identity';
+  }
+  const keys = buildRecordKeys(topology, 'source', record.slot, record.outputId, record.partIndex, record.partCount);
+  if (record.eventKey !== keys.eventKey || record.recordKey !== keys.recordKey) return 'incompatible-identity';
+  const bytes = Buffer.from(record.rawOutputPartBase64, 'base64');
+  if (bytes.byteLength !== record.byteLength || sha256(bytes) !== record.partSha256) return 'malformed-payload';
+  const expectedBody = jsonBody({
+    schema: RECORD_MARKER_SCHEMA,
+    recordKind: 'source',
+    eventKey: keys.eventKey,
+    recordKey: keys.recordKey,
+    slotOrRecordKind: record.slot,
+    partIndex: record.partIndex,
+    partCount: record.partCount,
+  }, {
+    schema: SOURCE_SCHEMA,
+    issueNumber: record.issueNumber,
+    cycleId: record.cycleId,
+    sourceRevision: record.sourceRevision,
+    stage: record.stage,
+    stageAttemptId: record.stageAttemptId,
+    policyVersion: record.policyVersion,
+    reviewerCardinality: record.reviewerCardinality,
+    cardinalityConfigIdentity: record.cardinalityConfigIdentity,
+    slot: record.slot,
+    outputId: record.outputId,
+    eventKey: keys.eventKey,
+    recordKey: keys.recordKey,
+    partIndex: record.partIndex,
+    partCount: record.partCount,
+    byteOffset: record.byteOffset,
+    byteLength: record.byteLength,
+    totalByteLength: record.totalByteLength,
+    partSha256: record.partSha256,
+    rawOutputPartBase64: record.rawOutputPartBase64,
+  });
+  return record.body === expectedBody ? null : 'incompatible-identity';
 }
 
 export function assembleSourceRecords(
@@ -545,6 +626,8 @@ export function deriveAdmission(
   if (records.length === 0) return { state: 'pending-publication', reasons: ['missing-raw-bytes'], sourceRecords: [] };
   const seenKeys = new Map<string, SourceRecord>();
   for (const record of records) {
+    const bindingError = sourceRecordBindingError(topology, record);
+    if (bindingError) return { state: 'terminal-publication-conflict', reasons: [bindingError], sourceRecords: records.slice() };
     const prior = seenKeys.get(record.recordKey);
     if (prior && prior.body !== record.body) return { state: 'terminal-publication-conflict', reasons: ['duplicate-conflicting'], sourceRecords: records.slice() };
     seenKeys.set(record.recordKey, record);
@@ -601,22 +684,32 @@ export function buildAuthorDisposition(
 }
 
 
-export interface RemoteAuthorityInput { topology: ReviewTopology | null; lifecycle: LifecycleBinding | null; sourceRecords: readonly SourceRecord[]; disposition?: AuthorDisposition | null; requireDisposition?: boolean; }
+export interface RemoteAuthorityInput {
+  topology: ReviewTopology | null;
+  lifecycle: LifecycleBinding | null;
+  sourceRecords: readonly SourceRecord[];
+  disposition: AuthorDisposition | null;
+  waiverAuthority?: ClaudeUnavailableWaiverRef | null;
+}
 
 export interface RemoteAuthorityResult { ok: boolean; errors: string[]; admission: AdmissionResult | null; }
 
 export function checkRemoteAuthority(input: RemoteAuthorityInput): RemoteAuthorityResult {
   if (!input.topology) return { ok: false, errors: ['missing-topology'], admission: null };
   if (!input.lifecycle) return { ok: false, errors: ['stale-active-attempt'], admission: null };
+  const topologyErrors = validateTopology(input.topology);
+  if (topologyErrors.length > 0) return { ok: false, errors: topologyErrors, admission: null };
   const admission = deriveAdmission(input.topology, input.lifecycle, input.sourceRecords);
   const errors: string[] = admission.reasons.slice();
   if (admission.state !== 'admitted' && admission.state !== 'waived-not-required') errors.push(admission.state);
-  if (input.requireDisposition && admission.state === 'admitted') {
-    const disposition = input.disposition;
-    if (!disposition) errors.push('disposition-required');
-    else if (disposition.cycleId !== input.topology.cycleId || disposition.stageAttemptId !== input.topology.stageAttemptId || disposition.sourceRevision !== input.topology.sourceRevision) errors.push('stale-active-attempt');
-    else if (disposition.sourceRecordKeys.join(',') !== admission.sourceRecords.map((record) => record.recordKey).sort().join(',')) errors.push('incompatible-identity');
-    else if (disposition.settlement !== 'settled' || disposition.unresolvedOccurrenceIds.length > 0) errors.push('unresolved-disposition');
+  if (admission.state === 'admitted') {
+    errors.push(...validateAuthorDisposition(input.topology, admission, input.disposition));
+  } else if (admission.state === 'waived-not-required') {
+    const waiver = input.topology.claudeUnavailableWaiverRef;
+    const authority = input.waiverAuthority;
+    if (!authority) errors.push('waiver-authority-required');
+    else if (canonicalJson(authority) !== canonicalJson(waiver)) errors.push('invalid-waiver-authority');
+    else errors.push(...validateClaudeUnavailableWaiverRef(authority, input.topology.sourceRevision));
   }
   return { ok: errors.length === 0, errors, admission };
 }
@@ -637,6 +730,8 @@ export function foldSourceRecordBodies(topology: ReviewTopology, bodies: readonl
     if (!marker || marker.recordKind !== 'source') continue;
     const parsed = parseSourceRecord(body);
     if (!parsed) { conflicts.push('malformed-payload'); continue; }
+    const bindingError = sourceRecordBindingError(topology, parsed);
+    if (bindingError) { conflicts.push(bindingError); continue; }
     if (parsed.issueNumber !== topology.issueNumber || parsed.cycleId !== topology.cycleId || parsed.sourceRevision !== topology.sourceRevision || parsed.stageAttemptId !== topology.stageAttemptId || parsed.policyVersion !== topology.policyVersion || parsed.reviewerCardinality !== topology.reviewerCardinality || parsed.cardinalityConfigIdentity !== topology.cardinalityConfigIdentity) { conflicts.push('incompatible-identity'); continue; }
     const prior = byKey.get(parsed.recordKey);
     if (prior) { if (prior.body !== parsed.body) conflicts.push('duplicate-conflicting'); continue; }
@@ -649,22 +744,54 @@ export function validateAuthorDisposition(topology: ReviewTopology, admission: A
   const errors: string[] = [];
   if (admission.state !== 'admitted') errors.push('disposition-before-admission');
   if (!disposition || disposition.schema !== DISPOSITION_SCHEMA) return [...errors, 'missing-disposition'];
-  if (disposition.issueNumber !== topology.issueNumber || disposition.cycleId !== topology.cycleId || disposition.sourceRevision !== topology.sourceRevision || disposition.stageAttemptId !== topology.stageAttemptId) errors.push('stale-active-attempt');
-  const expected = admission.sourceRecords.map((record) => record.recordKey).sort().join(',');
-  if (disposition.sourceRecordKeys.join(',') !== expected) errors.push('incompatible-identity');
-  if (disposition.settlement !== 'settled' || disposition.unresolvedOccurrenceIds.length > 0) errors.push('unresolved-disposition');
+  if (disposition.issueNumber !== topology.issueNumber || disposition.cycleId !== topology.cycleId || disposition.sourceRevision !== topology.sourceRevision || disposition.stageAttemptId !== topology.stageAttemptId || disposition.stage !== topology.stage || disposition.policyVersion !== topology.policyVersion) errors.push('stale-active-attempt');
+  const topologyKeys = buildRecordKeys(topology, 'topology', 'topology', topologyPayloadDigest(topology));
+  if (disposition.topologyEventKey !== topologyKeys.eventKey || disposition.topologyRecordKey !== topologyKeys.recordKey) errors.push('incompatible-identity');
+  const expectedSourceKeys = admission.sourceRecords.map((record) => record.recordKey).sort();
+  const expectedOutputIds = [...new Set(admission.sourceRecords.map((record) => record.outputId))].sort();
+  if (!Array.isArray(disposition.sourceRecordKeys) || canonicalJson(disposition.sourceRecordKeys) !== canonicalJson(expectedSourceKeys)) errors.push('incompatible-identity');
+  if (!Array.isArray(disposition.outputIds) || canonicalJson(disposition.outputIds) !== canonicalJson(expectedOutputIds)) errors.push('incompatible-identity');
+  if (!Array.isArray(disposition.occurrenceIds) || new Set(disposition.occurrenceIds).size !== disposition.occurrenceIds.length || disposition.occurrenceIds.some((id) => typeof id !== 'string' || id.length === 0)) errors.push('incomplete-disposition');
+  const defects = Array.isArray(disposition.distinctDefects) ? disposition.distinctDefects : [];
+  const defectIds = defects.map((item) => item?.defectId);
+  if (!Array.isArray(disposition.distinctDefects) || defectIds.some((id) => typeof id !== 'string' || id.length === 0) || new Set(defectIds).size !== defectIds.length) errors.push('incomplete-disposition');
+  const coveredOccurrences = defects.flatMap((item) => Array.isArray(item?.occurrenceIds) ? item.occurrenceIds : []);
+  if (coveredOccurrences.some((id) => typeof id !== 'string' || id.length === 0) || new Set(coveredOccurrences).size !== coveredOccurrences.length || canonicalJson([...coveredOccurrences].sort()) !== canonicalJson([...(disposition.occurrenceIds ?? [])].sort())) errors.push('incomplete-disposition');
+  const dispositions = Array.isArray(disposition.defectDispositions) ? disposition.defectDispositions : [];
+  const remedies = Array.isArray(disposition.remedyDispositions) ? disposition.remedyDispositions : [];
+  if (dispositions.length !== defectIds.length || remedies.length !== defectIds.length) errors.push('incomplete-disposition');
+  if (new Set(dispositions.map((item) => item?.defectId)).size !== dispositions.length || dispositions.some((item) => !defectIds.includes(item?.defectId) || item.disposition === 'unresolved')) errors.push('unresolved-disposition');
+  if (new Set(remedies.map((item) => item?.defectId)).size !== remedies.length || remedies.some((item) => !defectIds.includes(item?.defectId))) errors.push('incomplete-disposition');
+  if (!['keep', 'simplify', 'defer', 'cut'].includes(disposition.m4) || disposition.settlement !== 'settled' || !Array.isArray(disposition.unresolvedOccurrenceIds) || disposition.unresolvedOccurrenceIds.length > 0) errors.push('unresolved-disposition');
+  if (errors.length === 0) {
+    try {
+      const expected = buildAuthorDisposition(topology, admission, {
+        occurrenceIds: disposition.occurrenceIds,
+        distinctDefects: disposition.distinctDefects,
+        defectDispositions: disposition.defectDispositions,
+        remedyDispositions: disposition.remedyDispositions,
+        m4: disposition.m4,
+        unresolvedOccurrenceIds: disposition.unresolvedOccurrenceIds,
+        settlement: disposition.settlement,
+      });
+      if (disposition.eventKey !== expected.eventKey || disposition.recordKey !== expected.recordKey || disposition.body !== expected.body) errors.push('incompatible-identity');
+    } catch {
+      errors.push('incomplete-disposition');
+    }
+  }
   return errors;
 }
 
 export function parseAuthorDisposition(body: string): AuthorDisposition | null {
   const marker = parseRecordMarker(body);
   const payload = parseJsonPayload(body);
-  if (!marker || marker.recordKind !== 'disposition' || !payload || payload.schema !== DISPOSITION_SCHEMA) return null;
+  if (!marker || marker.recordKind !== 'disposition' || marker.slotOrRecordKind !== 'disposition' || marker.partIndex !== 1 || marker.partCount !== 1 || !payload || payload.schema !== DISPOSITION_SCHEMA) return null;
+  if (payload.eventKey !== marker.eventKey || payload.recordKey !== marker.recordKey) return null;
   return { ...payload, body } as unknown as AuthorDisposition;
 }
 
 export function checkRemoteAuthorities(inputs: readonly RemoteAuthorityInput[]): RemoteAuthorityResult {
-  const results = inputs.map((input) => checkRemoteAuthority({ ...input, requireDisposition: input.requireDisposition ?? true }));
+  const results = inputs.map((input) => checkRemoteAuthority(input));
   const errors = results.flatMap((result) => result.errors);
   return { ok: errors.length === 0, errors, admission: results.at(-1)?.admission ?? null };
 }

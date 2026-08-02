@@ -3,6 +3,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkFindingLedgerGuard, runCli } from './finding-ledger-guard.mjs';
+import {
+  buildAuthorDisposition,
+  buildSourceRecords,
+  buildTopology,
+  deriveAdmission,
+} from './lib/create-issue-stage-topology.ts';
 
 type Capture = { name: string; timestampMs: number; text: string };
 type Row = Record<string, unknown> & {
@@ -949,6 +955,35 @@ ${currentLens('S1', { contest: 'none', outcome: 'non-activate' })}`),
   });
 
 describe('Issue #1171 terminal disposition matrix', () => {
+  function remoteAuthority(capture: Capture) {
+    const topology = buildTopology({
+      issueNumber: 1200,
+      cycleId: 'terminal-cycle',
+      sourceRevision: 'r3',
+      stage: 'architectural',
+      stageAttemptId: 'terminal-attempt',
+      policyVersion: 'single-source/v1',
+    }, 'T2', 1, 'env:OPK_GPT_REVIEWER_CARDINALITY');
+    const lifecycle = {
+      state: 'active' as const,
+      cycleId: topology.cycleId,
+      stageAttemptId: topology.stageAttemptId,
+      sourceRevision: topology.sourceRevision,
+    };
+    const sourceRecords = buildSourceRecords(topology, '01', capture.text);
+    const admission = deriveAdmission(topology, lifecycle, sourceRecords);
+    const disposition = buildAuthorDisposition(topology, admission, {
+      occurrenceIds: ['F1'],
+      distinctDefects: [{ defectId: 'D1', occurrenceIds: ['F1'] }],
+      defectDispositions: [{ defectId: 'D1', disposition: 'addressed' }],
+      remedyDispositions: [{ defectId: 'D1', disposition: 'accepted' }],
+      m4: 'keep',
+      unresolvedOccurrenceIds: [],
+      settlement: 'settled',
+    });
+    return { topology, lifecycle, sourceRecords, disposition };
+  }
+
   function terminalLedger(rowValue: Row) {
     const capture = cap('pass-03-architectural.capture.txt', 1_300, markedFinding('F1'));
     return checkFindingLedgerGuard(capture.text, JSON.stringify({
@@ -961,6 +996,7 @@ describe('Issue #1171 terminal disposition matrix', () => {
       issueRevision: 'r3',
       stageTerminalConfirmed: true,
       captureMetadata: [{ name: capture.name, timestampMs: capture.timestampMs }],
+      remoteAuthorities: [remoteAuthority(capture)],
     } as never);
   }
 
@@ -989,6 +1025,18 @@ describe('Issue #1171 terminal disposition matrix', () => {
     }));
     expect(result.ok).toBe(false);
     expect(result.errors.join('\n')).toContain('rejected-as-false');
+  });
+});
+
+describe('remote authority is mandatory for receipt-backed production paths', () => {
+  it('fails closed when receipt-backed validation has no remote authority input', () => {
+    const result = checkFindingLedgerGuard('review-economics-contract: v1\nid: F1\ntype: quality\n', JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 },
+      findings: [],
+    }), { reviewEconomics: true });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('remote authority is required');
   });
 });
 

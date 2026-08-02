@@ -23,12 +23,20 @@ export interface ParkedMigrationComment {
   sha256: string;
 }
 
+export interface ParkedMigrationCapture {
+  path: string;
+  byteLength: number;
+  sha256: string;
+  bytesBase64: string;
+}
+
 export interface ParkedMigrationManifest {
   schema: typeof MIGRATION_SCHEMA;
   issueNumber: ParkedMigrationIssue;
   sourceRevision: string;
   migrationKind: 'field-complete' | 'legacy-cycle-settled' | 'cross-revision-lineage';
   pinnedComments: ParkedMigrationComment[];
+  pinnedCaptures?: ParkedMigrationCapture[];
   issueBody?: string;
   issueBodySha256?: string;
   dependency?: string;
@@ -93,6 +101,28 @@ export function validateParkedMigrationManifest(value: unknown): ParkedMigration
   }
   if (fixed.dependency && manifest.dependency !== fixed.dependency) manifestError('dependency changed');
   if (fixed.closure && manifest.closure !== fixed.closure) manifestError('closure changed');
+  if (manifest.issueNumber === 1173) {
+    if (!Array.isArray(manifest.pinnedCaptures) || manifest.pinnedCaptures.length === 0) {
+      manifestError('fixed Issue-1173 captures are required');
+    }
+    const paths = manifest.pinnedCaptures.map((capture) => capture.path).sort();
+    const expectedPaths = [
+      'author/round-01-author-reply.txt',
+      'author/round-02-author-reply.md',
+      'author/round-03-author-reply.txt',
+      'pass-01-architectural-reply.md',
+      'terminal-architectural-reply.txt',
+    ];
+    if (canonicalJson(paths) !== canonicalJson(expectedPaths)) manifestError('fixed Issue-1173 capture set mismatch');
+    for (const capture of manifest.pinnedCaptures) {
+      if (!capture.path || capture.path.startsWith('/') || capture.path.includes('..')) manifestError('fixed Issue-1173 capture path is unsafe');
+      let bytes: Buffer;
+      try { bytes = Buffer.from(capture.bytesBase64, 'base64'); } catch { manifestError(`capture ${capture.path} is not base64`); }
+      if (bytes.toString('base64') !== capture.bytesBase64 || capture.byteLength !== bytes.byteLength || capture.sha256 !== sha256(bytes)) {
+        manifestError(`capture ${capture.path} digest mismatch`);
+      }
+    }
+  }
   if (manifest.issueNumber === 1188) {
     if (typeof manifest.issueBody !== 'string' || manifest.issueBody.length === 0) manifestError('Issue-1188 correction body is required');
     if (manifest.issueBodySha256 !== sha256(Buffer.from(manifest.issueBody, 'utf8'))) manifestError('Issue-1188 correction body digest mismatch');

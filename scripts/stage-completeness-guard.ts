@@ -26,7 +26,7 @@ import {
 const GUARD_LABEL = 'stage-completeness guard';
 
 export function checkRemoteStageAuthority(input: RemoteAuthorityInput): RemoteAuthorityResult {
-  return checkRemoteAuthority({ ...input, requireDisposition: input.requireDisposition ?? true });
+  return checkRemoteAuthority(input);
 }
 
 export type CanonicalReceiptInventoryOptions = {

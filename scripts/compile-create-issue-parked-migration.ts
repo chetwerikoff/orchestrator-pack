@@ -34,13 +34,52 @@ export function compile1173(input: CompilerInput = {}): ParkedMigrationManifest 
   const outputPath = input.outputPath ?? PARKED_1173_MANIFEST_PATH;
   if (root !== PARKED_1173_REVIEW_ROOT) throw new Error('compiler root is fixed to the operator review root');
   if (!existsSync(root)) throw new Error(`fixed Issue-1173 review root is unavailable: ${root}`);
+  const proof = readJson(join(root, 'completion-proof.json')) as {
+    audit_artifacts?: { stage_captures?: unknown };
+  };
+  const capturePaths = proof.audit_artifacts?.stage_captures;
+  if (!Array.isArray(capturePaths) || capturePaths.some((item) => typeof item !== 'string')) {
+    throw new Error('fixed Issue-1173 completion proof does not enumerate stage captures');
+  }
+  const pinnedCaptures = capturePaths.map((relativePath) => {
+    if (relativePath.startsWith('/') || relativePath.includes('..')) {
+      throw new Error(`unsafe fixed Issue-1173 capture path: ${relativePath}`);
+    }
+    const path = join(root, relativePath);
+    if (!existsSync(path)) throw new Error(`missing fixed Issue-1173 capture input: ${path}`);
+    const bytes = readFileSync(path);
+    return {
+      path: relativePath,
+      byteLength: bytes.byteLength,
+      sha256: sha256(bytes),
+      bytesBase64: bytes.toString('base64'),
+    };
+  });
+  const diagnostic = readJson(join(root, 'comment-census-diagnostic.json'));
+  const diagnosticComments = Array.isArray(diagnostic)
+    ? new Map(diagnostic.flatMap((item) => (
+      item && typeof item === 'object' && Number.isSafeInteger((item as { id?: unknown }).id) && typeof (item as { body?: unknown }).body === 'string'
+        ? [[Number((item as { id: number }).id), (item as { body: string }).body] as const]
+        : []
+    )))
+    : new Map<number, string>();
+  const existingComments = existsSync(outputPath)
+    ? new Map(
+      ((readJson(outputPath) as { pinnedComments?: Array<{ id?: unknown; body?: unknown }> }).pinnedComments ?? []).flatMap((item) => (
+        Number.isSafeInteger(item.id) && typeof item.body === 'string'
+          ? [[Number(item.id), item.body] as const]
+          : []
+      )),
+    )
+    : new Map<number, string>();
   const sourceComments = [5152880935, 5152950548].map((id) => {
     const path = join(root, `comment-${id}.json`);
-    if (!existsSync(path)) throw new Error(`missing fixed Issue-1173 comment input: ${path}`);
-    const parsed = readJson(path) as { body?: unknown };
-    if (typeof parsed.body !== 'string') throw new Error(`invalid fixed Issue-1173 comment input: ${path}`);
-    const bytes = Buffer.from(parsed.body, 'utf8');
-    return { id, body: parsed.body, byteLength: bytes.byteLength, sha256: sha256(bytes) };
+    const body = existsSync(path)
+      ? (readJson(path) as { body?: unknown }).body
+      : diagnosticComments.get(id) ?? existingComments.get(id);
+    if (typeof body !== 'string') throw new Error(`missing fixed Issue-1173 comment input: ${path}`);
+    const bytes = Buffer.from(body, 'utf8');
+    return { id, body, byteLength: bytes.byteLength, sha256: sha256(bytes) };
   });
   const manifest: ParkedMigrationManifest = {
     schema: 'create-issue-parked-review-import/v1',
@@ -48,6 +87,7 @@ export function compile1173(input: CompilerInput = {}): ParkedMigrationManifest 
     sourceRevision: 'r01',
     migrationKind: 'legacy-cycle-settled',
     pinnedComments: sourceComments,
+    pinnedCaptures,
     dependency: '#1186',
     closure: 'completed-cycle-status;final-acceptance-outstanding',
     compiledAt: new Date().toISOString(),
