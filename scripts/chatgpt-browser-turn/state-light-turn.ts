@@ -32,7 +32,6 @@ import {
   ownedConversationIdentityMatches,
   prepareStateLightFreshConversation,
   projectConversationPrefix,
-  readStateLightAdvisoryWall,
   recordStateLightAdvisoryWall,
   releaseStateLightFreshConversationClaim,
   releaseStateLightNewChatSendSlot,
@@ -1379,24 +1378,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           state,
           'invocation',
           profile.cause,
-          invocationId,
-          profileKey,
-          sendCount,
-          pollCount, navigation, incidents,
-          {},
-          journalWriteFailed,
-        ),
-      };
-    }
-
-    const advisoryWall = readStateLightAdvisoryWall(profileKey);
-    if (advisoryWall) {
-      incident('invocation_blocker', advisoryWall.cause, 'return_local_error');
-      return {
-        result: compactResult(
-          advisoryWall.state,
-          'invocation',
-          advisoryWall.cause,
           invocationId,
           profileKey,
           sendCount,
