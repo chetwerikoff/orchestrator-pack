@@ -1,9 +1,11 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   PR_SCOPE_DECLARATION_SCHEMA,
+  producePrScopeDeclaration,
   selectDeclarationArtifact,
   validatePrScopeDeclaration,
 } from './pr-scope-declaration.ts';
@@ -58,6 +60,13 @@ describe('AO-free PR scope declaration contract', () => {
       validatePrScopeDeclaration({
         ...declaration(),
         declared_paths: ['./scripts/allowed.ts'],
+      }),
+    ).toMatchObject({ ok: false, kind: 'invalid-normalization' });
+
+    expect(
+      validatePrScopeDeclaration({
+        ...declaration(),
+        declared_paths: ['scripts/allowed '],
       }),
     ).toMatchObject({ ok: false, kind: 'invalid-normalization' });
   });
@@ -191,31 +200,57 @@ describe('AO-free PR scope declaration contract', () => {
   it('runs the real producer-to-required-check contract', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
     roots.push(root);
+    const git = (args: string[]) =>
+      execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+
+    git(['init', '--quiet']);
+    git(['config', 'user.name', 'opk-test']);
+    git(['config', 'user.email', 'opk-test@example.invalid']);
+    mkdirSync(join(root, 'scripts'), { recursive: true });
     mkdirSync(join(root, 'docs', 'declarations'), { recursive: true });
-    writeFileSync(
-      join(root, 'docs', 'declarations', '42.pr-scope.json'),
-      `${JSON.stringify(declaration())}\n`,
-      'utf8',
-    );
+    writeFileSync(join(root, 'scripts', 'allowed.ts'), 'export const allowed = "base";\n');
+    git(['add', 'scripts/allowed.ts']);
+    git(['commit', '--quiet', '-m', 'base']);
+    const baseSha = git(['rev-parse', 'HEAD']);
+
+    writeFileSync(join(root, 'scripts', 'allowed.ts'), 'export const allowed = "head";\n');
+    const issueBodyFile = join(root, 'issue-body.md');
+    writeFileSync(issueBodyFile, issueBody, 'utf8');
+    producePrScopeDeclaration([
+      '--issue',
+      '42',
+      '--declared-paths',
+      'scripts/allowed.ts',
+      '--issue-body-file',
+      issueBodyFile,
+      '--repo-root',
+      root,
+    ]);
+    git(['add', 'scripts/allowed.ts', 'docs/declarations/42.pr-scope.json']);
+    git(['commit', '--quiet', '-m', 'head']);
+    const headSha = git(['rev-parse', 'HEAD']);
 
     const base = {
       repoRoot: root,
       prBody: 'Closes #42',
       issueBody,
-      prPaths: ['docs/declarations/42.pr-scope.json', 'scripts/allowed.ts'],
+      prPaths: [],
       degradedMode: false,
       forkPr: false,
+      baseSha,
+      headSha,
     };
     expect(checkPrScope(base)).toMatchObject({ ok: true, mode: 'implementation' });
 
+    const manualPaths = { ...base, baseSha: undefined, headSha: undefined };
     expect(
-      checkPrScope({ ...base, prPaths: ['scripts/other.ts'] }),
+      checkPrScope({ ...manualPaths, prPaths: ['scripts/other.ts'] }),
     ).toMatchObject({ ok: false, reason: 'scope_violation' });
     expect(
-      checkPrScope({ ...base, prPaths: ['README.md'] }),
+      checkPrScope({ ...manualPaths, prPaths: ['README.md'] }),
     ).toMatchObject({ ok: false, reason: 'scope_violation' });
     expect(
-      checkPrScope({ ...base, prPaths: ['vendor/secret.ts'] }),
+      checkPrScope({ ...manualPaths, prPaths: ['vendor/secret.ts'] }),
     ).toMatchObject({ ok: false, reason: 'scope_violation' });
   });
 });

@@ -97,10 +97,17 @@ function canonicalizeEntry(
     return { ok: false, error: `${field}[${index}] must be a string` };
   }
 
-  let value = raw.trim();
-  if (!value) {
+  if (raw.length === 0) {
     return { ok: false, error: `${field}[${index}] is empty` };
   }
+  if (raw !== raw.trim()) {
+    return {
+      ok: false,
+      error: `${field}[${index}] must not have leading or trailing whitespace`,
+    };
+  }
+
+  let value = raw;
   if (value.includes('\0')) {
     return { ok: false, error: `${field}[${index}] contains NUL` };
   }
@@ -669,8 +676,7 @@ function parseListArg(argv: string[], index: number): string[] {
   if (!value) throw new Error(`missing value for ${argv[index]}`);
   return value
     .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+    .filter((entry) => entry.length > 0);
 }
 
 export function producePrScopeDeclaration(argv: string[]): PrScopeDeclaration {
