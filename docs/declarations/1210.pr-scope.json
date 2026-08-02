@@ -12,7 +12,8 @@
     "scripts/pr-scope-check.ts",
     "scripts/pr-scope-declaration.test.ts",
     "scripts/pr-scope-declaration.ts",
-    "scripts/toolchain/typescript-launch-inventory.json"
+    "scripts/toolchain/typescript-launch-inventory.json",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     "credentials/",
@@ -29,5 +30,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "ab3fda1407d1899b716be13e75ec960f7dfdc7de"
+  "source_revision": "00ef1b0ec98026679e8d4796ee1a73aa060d4de8"
 }
