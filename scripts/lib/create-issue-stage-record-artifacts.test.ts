@@ -14,7 +14,15 @@ import {
 } from './create-issue-stage-record-artifacts.ts';
 import { executeFinalAcceptanceGuards } from './create-issue-final-acceptance-contract.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
+import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
+import { logicalFingerprint } from './create-issue-stage-record-marker.ts';
 import { runStageFinalizeCli } from './create-issue-stage-record-cli.ts';
+import {
+  CYCLE_SCHEMA,
+  STAGE_SCHEMA,
+  type CycleEventLogical,
+  type StageEventLogical,
+} from './create-issue-stage-record-types.ts';
 
 vi.mock('../finding-ledger-guard.mjs', () => ({
   checkFindingLedgerGuard: vi.fn(() => ({ ok: true, errors: [] })),
@@ -244,10 +252,54 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
       '```allowed-roots', 'scripts/**', '```',
       '## Acceptance criteria', '1. The fixture is deterministic.', '',
       '## Verification', 'Run the focused test.', '',
-      '```contract-evidence', 'none', '```', 'r01',
+      '```contract-evidence', 'none', '```', '<!-- source-revision: r01 -->',
     ].join('\n');
+    const cycle: CycleEventLogical = {
+      schema: CYCLE_SCHEMA,
+      'event-key': 'cycle-1192',
+      'cycle-id': 'cycle-1192',
+      'predecessor-cycle-id': 'none',
+      'source-revision': REVISION,
+      tier: 'T2',
+      'public-actor': 'cursor-flow-manager',
+    };
+    const parsedReceipt = parseConsumableStageReceipt(receipt).receipt!;
+    const stage: StageEventLogical = {
+      schema: STAGE_SCHEMA,
+      'event-key': `${parsedReceipt.cycleId}:${parsedReceipt.stage}:${parsedReceipt.stageAttemptId}`,
+      'cycle-id': parsedReceipt.cycleId,
+      stage: parsedReceipt.stage,
+      tier: parsedReceipt.tier,
+      'source-revision': parsedReceipt.sourceRevision,
+      'stage-attempt-id': parsedReceipt.stageAttemptId,
+      'policy-version': parsedReceipt.policyVersion,
+      'settled-outcome': parsedReceipt.outcome,
+      'source-count': parsedReceipt.completedSourceCount,
+      'required-source-count': parsedReceipt.reviewerCardinality,
+      'producer-evidence': parsedReceipt.producerEvidence,
+      'tier-transition': parsedReceipt.tierTransition,
+    };
+    const canonicalLineage = buildCanonicalLineage([
+      {
+        schema: CYCLE_SCHEMA,
+        eventKey: cycle['event-key'],
+        logical: cycle,
+        fingerprint: logicalFingerprint(cycle),
+        commentId: 1,
+        createdAt: '2026-08-02T00:00:00.000Z',
+      },
+      {
+        schema: STAGE_SCHEMA,
+        eventKey: stage['event-key'],
+        logical: stage,
+        fingerprint: logicalFingerprint(stage),
+        commentId: 2,
+        createdAt: '2026-08-02T00:01:00.000Z',
+      },
+    ]);
     const acceptance = executeFinalAcceptanceGuards({
       issueBody,
+      currentIssueBody: issueBody,
       issueRevision: REVISION,
       cycleId: 'cycle-1192',
       tier: 'T2',
@@ -257,6 +309,7 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
       capturePaths: [input.capturePath],
       ledgerPath: join(outputDir, 'finding-disposition-ledger.json'),
       relayEvidencePaths: [join(outputDir, 'verified-relay-evidence.json')],
+      canonicalLineage,
       tierTransitionEvidence: {
         taskIdentity: TASK,
         currentRevision: REVISION,
