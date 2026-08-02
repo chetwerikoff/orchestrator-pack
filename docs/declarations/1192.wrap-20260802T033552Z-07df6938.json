@@ -7,7 +7,7 @@
   "baseline": {
     "commit_sha": "386aa34ec2021f8e148613686f049070beed50ce",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:ca9a19b804414d1e47019e06de0c115282b37c065b65325ea57c9675d6de6582"
+    "active_scope_hash": "sha256:c70362db392cb519fad40ca3b299b3389ecb343d4bf652ed9044f24907384a59"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
@@ -16,11 +16,27 @@
     "scripts/lib/stage-completeness-core.ts",
     "scripts/create-issue-stage-finalize.ts",
     "scripts/vitest-ci-lanes.config.json",
-    "scripts/lib/vitest-pre-topology-measurement.mjs"
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-runtime-history.json"
   ],
   "declared_globs": [
     "scripts/lib/create-issue-stage-record*.ts",
     "scripts/lib/create-issue-*.test.ts"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:ca9a19b804414d1e47019e06de0c115282b37c065b65325ea57c9675d6de6582",
+      "new_active_scope_hash": "sha256:c70362db392cb519fad40ca3b299b3389ecb343d4bf652ed9044f24907384a59",
+      "changed": {
+        "added": [
+          "scripts/vitest-runtime-history.json"
+        ],
+        "removed": []
+      },
+      "reason": "Declare the generated runtime-history artifact while retaining the topology estimate source",
+      "actor": "local",
+      "timestamp": "2026-08-02T07:15:12.165Z",
+      "applied": true
+    }
+  ]
 }
