@@ -3322,11 +3322,27 @@ describe('issue 1174 composer mutation budget', () => {
   const ISSUE_1174_PAYLOAD_BYTES = 36_906;
   const MEASURED_LARGE_PROMPT = 'x'.repeat(ISSUE_1174_PAYLOAD_BYTES);
 
+  type ComposerMutationBudgetEvidence = {
+    timeout: number;
+    remainingBudget: number;
+  };
+
+  function composerMutationBudgetDiagnostic(evidence: ComposerMutationBudgetEvidence): string {
+    return `composer mutation budget invariant violated: timeout=${evidence.timeout}, remainingBudget=${evidence.remainingBudget}; fix timeout derivation or test clock control; do not raise constants, add slack, sleep, or retry`;
+  }
+
+  function assertComposerMutationBudget(evidence: ComposerMutationBudgetEvidence): void {
+    if (evidence.timeout <= 0 || evidence.timeout > evidence.remainingBudget) {
+      throw new Error(composerMutationBudgetDiagnostic(evidence));
+    }
+  }
+
   function makeComposerPage(options: {
     clickDelayMs?: number;
     fillDelayMs?: number;
     composerPresent?: boolean;
     blockingOverlay?: boolean;
+    onFillCall?: (timeoutMs: number) => void;
     onFill?: () => void;
     onClick?: () => void;
     onPress?: () => void;
@@ -3357,6 +3373,7 @@ describe('issue 1174 composer mutation budget', () => {
       fill: vi.fn(async (_text: string, opts?: { timeout?: number }) => {
         const delayMs = options.fillDelayMs ?? 0;
         const timeoutMs = opts?.timeout ?? 30_000;
+        options.onFillCall?.(timeoutMs);
         if (delayMs > 0) {
           await new Promise<void>((resolve, reject) => {
             const timer = setTimeout(() => reject(Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' })), timeoutMs);
@@ -3494,32 +3511,89 @@ describe('issue 1174 composer mutation budget', () => {
     expect(getPressed()).toBe(false);
   });
 
+  async function captureComposerBudgetEvidence(
+    clickDelayMs: number,
+    config: BrowserConfig,
+    payloadBytes: number,
+    pairBudget: number,
+  ): Promise<ComposerMutationBudgetEvidence> {
+    let evidence: ComposerMutationBudgetEvidence | undefined;
+    const invocationDeadlineMs = pairBudget;
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const { page, composer } = makeComposerPage({
+        clickDelayMs,
+        fillDelayMs: pairBudget + 1,
+        onFillCall: (timeout) => {
+          evidence = {
+            timeout,
+            remainingBudget: __testComposerMutation.remainingComposerMutationMs(
+              pairBudget,
+              invocationDeadlineMs,
+            ),
+          };
+        },
+      });
+      const mutation = __testComposerMutation.mutateComposerOrCause(
+        page,
+        'payload',
+        payloadBytes,
+        config,
+        invocationDeadlineMs,
+      );
+      await vi.advanceTimersByTimeAsync(clickDelayMs);
+      await vi.advanceTimersByTimeAsync(pairBudget + 1);
+      const failure = await mutation;
+      expect(failure).toBe('composer_mutation_budget_exhausted');
+      expect(composer.click).toHaveBeenCalledTimes(1);
+      expect(composer.click.mock.calls[0]?.[0]?.timeout).toBeLessThanOrEqual(pairBudget);
+      expect(composer.fill).toHaveBeenCalledTimes(1);
+      if (!evidence) throw new Error('composer mutation budget evidence was not captured');
+      assertComposerMutationBudget(evidence);
+      return evidence;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
   it('click and fill share one derived mutation budget and respect the invocation deadline', async () => {
     const config = { cdp, profile: join(root, 'profile'), newChat: false, timeoutMs: 60_000 };
     const payloadBytes = 100;
     const pairBudget = deriveComposerMutationBudgetMs(payloadBytes, config.timeoutMs);
-    const clickDelayMs = pairBudget - 40;
-    const { page, composer } = makeComposerPage({ clickDelayMs, fillDelayMs: 200 });
-    const invocationDeadlineMs = Date.now() + pairBudget;
-    const failure = await __testComposerMutation.mutateComposerOrCause(
-      page,
-      'payload',
-      payloadBytes,
-      config,
-      invocationDeadlineMs,
+    const scenarios = [
+      { name: 'normal runner', clickDelayMs: pairBudget - 40 },
+      { name: 'fast runner', clickDelayMs: 0 },
+      { name: 'slow runner', clickDelayMs: pairBudget - 120 },
+    ];
+    const evidence = [];
+    for (const scenario of scenarios) {
+      const observed = await captureComposerBudgetEvidence(
+        scenario.clickDelayMs,
+        config,
+        payloadBytes,
+        pairBudget,
+      );
+      assertComposerMutationBudget(observed);
+      evidence.push({ name: scenario.name, observed });
+    }
+    expect(evidence).toHaveLength(scenarios.length);
+    expect(evidence.map(({ observed }) => observed.timeout)).toEqual(
+      evidence.map(({ observed }) => observed.remainingBudget),
     );
-    expect(failure).toBe('composer_mutation_budget_exhausted');
-    expect(composer.click).toHaveBeenCalledTimes(1);
-    expect(composer.click.mock.calls[0]?.[0]?.timeout).toBeLessThanOrEqual(pairBudget);
-    expect(composer.fill).toHaveBeenCalledTimes(1);
-    const fillTimeout = composer.fill.mock.calls[0]?.[1]?.timeout as number;
-    expect(fillTimeout).toBeGreaterThan(0);
-    expect(fillTimeout).toBeLessThanOrEqual(40);
-    const elapsedBudget = __testComposerMutation.remainingComposerMutationMs(
-      Date.now() - 1,
-      invocationDeadlineMs,
-    );
-    expect(elapsedBudget).toBeLessThanOrEqual(0);
+  });
+
+  it('rejects controlled non-positive and logical-overrun budget evidence with exact diagnostics', () => {
+    const validRemainingBudget = deriveComposerMutationBudgetMs(100, 60_000, 5);
+    const violations: ComposerMutationBudgetEvidence[] = [
+      { timeout: 0, remainingBudget: validRemainingBudget },
+      { timeout: validRemainingBudget + 1, remainingBudget: validRemainingBudget },
+    ];
+    for (const evidence of violations) {
+      expect(() => assertComposerMutationBudget(evidence)).toThrow(
+        composerMutationBudgetDiagnostic(evidence),
+      );
+    }
   });
 
   it('late-start with an exhausted invocation deadline fails before click or fill', async () => {
