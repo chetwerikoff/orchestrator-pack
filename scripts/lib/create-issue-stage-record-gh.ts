@@ -25,6 +25,10 @@ import {
   PROJECTION_LABELS,
 } from './create-issue-stage-record-types.ts';
 
+// Match the existing pack precedent in plugins/ao-codex-pr-reviewer/lib/scope_context.ts.
+export const GH_TIMEOUT_MS = 10_000;
+
+
 export function resolvePackGh(): string {
   const here = fileURLToPath(new URL('.', import.meta.url));
   return join(here, '..', 'gh');
@@ -38,6 +42,7 @@ export function defaultGhTransport(): GhTransport {
         command: gh,
         args: argv.slice(1),
         inheritParentEnv: true,
+        timeoutMs: GH_TIMEOUT_MS,
       });
       return {
         exitCode: result.exitCode ?? 1,

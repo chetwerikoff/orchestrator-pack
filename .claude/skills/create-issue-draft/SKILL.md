@@ -558,6 +558,8 @@ Within those existing boundaries, the flow-manager may:
 9. Publish a bounded exception and proceed only when its closed exception
    contract is satisfied and no operator-only escalation class applies.
 
+self-authorized-action-set: reread-authority, mechanical-repair, invoke-existing-producer, verify-evidence, diagnostic-page-probe, bounded-wait, legal-zero-send-retry, settle-terminal-outcome, publish-procedural-exception
+
 The flow-manager must not author or rewrite substantive Issue content, choose
 a finding disposition, change the business contract, expand frozen scope,
 denylist, or allowed roots, fabricate evidence or a producer, or resend after
@@ -599,7 +601,7 @@ The affected manager flow has exactly this closed wait inventory:
 | `WI-03` — the preceding stage is credentialed before transition | Existing stage receipt/completeness evidence | `deadline: 1_800_000 ms` from each preceding-stage producer invocation start, using the existing `state-light-turn --timeout-ms` / `DEFAULT_TIMEOUT_MS` budget; `owner: preceding stage producer`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` when credentialed, or local `refused` with missing predecessor evidence and exact fix when transition is premature. |
 | `WI-04` — required reviewer evidence reaches convergence | Existing Browser-GPT reviewer verdict and evidence surfaces | `deadline: 1_800_000 ms` from each Browser-GPT reviewer invocation start, using the existing `state-light-turn --timeout-ms` / `DEFAULT_TIMEOUT_MS` budget; `owner: reviewer source`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` when converged, `blocked` for missing evidence, or `blocked` carrying `material-reviewer-conflict` when independent material verdicts still conflict after reconciliation. |
 | `WI-05` — an in-flight transport action reaches its terminal result | Existing transport/helper terminal-result surface | `deadline: 5_000 ms` from the flow-manager waiter start, using the complete existing waiter invocation below; `owner: launcher waiter`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` on proven delivery, `blocked` on ambiguity or missing result without resend, or `refused` carrying `terminal-infrastructure-refusal` only on authoritative terminal refusal. |
-| `WI-06` — a published procedural exception is visible before progression | The existing `publishJournalEvent` path: `createIssueComment` followed by `confirmCanonicalEvent` and its full comment census | `deadline: inherited from the enclosing stage deadline; no own timeout`; `basis: publication request dispatch`; `owner: exception publisher`; `deadline-miss-record: wait_id, publication_requested_at, call_outcome, census_result, observed_at, cause, remedy, owner, next_deadline`; `done` only when the existing full comment-census confirmation succeeds; `blocked` when the census has no exception or a publication/census call fails, with remediation naming that failed call; no automatic publication retry. |
+| `WI-06` — a published procedural exception is visible before progression | The existing `publishJournalEvent` path: `createIssueComment` followed by `confirmCanonicalEvent` and its full comment census | `deadline: GH_TIMEOUT_MS = 10_000 ms` from publication request dispatch, using the named timeout in `scripts/lib/create-issue-stage-record-gh.ts`; `owner: exception publisher`; `deadline-miss-record: wait_id, publication_requested_at, call_outcome, census_result, observed_at, cause, remedy, owner, next_deadline`; `done` only when the existing full comment-census confirmation succeeds; `blocked` when the census has no exception, a publication/census call fails, or `GH_TIMEOUT_MS` fires, with remediation naming the failed call; no automatic publication retry. |
 
 The complete WI-05 waiter invocation uses the run and attempt identities plus
 both paths already held by the manager; it adds no new state or identifier:
@@ -615,8 +617,8 @@ npm run --silent flow-manager-long-running-child -- wait \
 
 Each row records the awaited condition, existing authoritative surface, exact
 deadline, time basis, terminal mapping, exact remediation, responsible actor,
-and visible deadline-miss metadata. For WI-06, the deadline is inherited
-from the enclosing stage and starts at publication request dispatch. Confirmation
+and visible deadline-miss metadata. For WI-06, `GH_TIMEOUT_MS` is the
+named executable boundary and starts at publication request dispatch. Confirmation
 means the existing `publishJournalEvent` flow's complete comment census after
 creation; it does not use the optional comment id, infer a URL, wait for a human
 audience, or automatically publish again after ambiguous delivery. An undeclared

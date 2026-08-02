@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const contract = readFileSync(new URL('../.claude/skills/create-issue-draft/SKILL.md', import.meta.url), 'utf8');
+const ghTransport = readFileSync(new URL('./lib/create-issue-stage-record-gh.ts', import.meta.url), 'utf8');
 const authorityStart = contract.indexOf('## Flow-manager authority and bounded terminal outcomes — Issue #1197');
 const authorityEnd = contract.indexOf('## Mechanical parity edits', authorityStart);
 const authority = authorityStart >= 0 && authorityEnd > authorityStart
@@ -10,6 +11,35 @@ const authority = authorityStart >= 0 && authorityEnd > authorityStart
 
 describe('Issue #1197 flow-manager authority contract', () => {
   it('defines a closed self-authorized action list and explicit prohibitions', () => {
+    const expectedActions = [
+      'reread-authority',
+      'mechanical-repair',
+      'invoke-existing-producer',
+      'verify-evidence',
+      'diagnostic-page-probe',
+      'bounded-wait',
+      'legal-zero-send-retry',
+      'settle-terminal-outcome',
+      'publish-procedural-exception',
+    ];
+    const actionSet = authority.match(/^self-authorized-action-set: (.+)$/m)?.[1]
+      .split(', ')
+      .filter(Boolean);
+    expect(actionSet).toEqual(expectedActions);
+    expect(actionSet).toHaveLength(9);
+    for (const action of [
+      '1. Reread the authoritative Issue/revision',
+      '2. Repair mechanical formatting',
+      '3. Invoke or re-invoke an already named producer',
+      '4. Verify evidence and recompute hashes',
+      '5. Perform an already-authorized bounded page probe',
+      '6. Wait for a named local or external result',
+      '7. Retry only an invocation whose existing transport contract',
+      '8. Settle `done`, `blocked`, or `refused`',
+      '9. Publish a bounded exception',
+    ]) {
+      expect(authority).toContain(action);
+    }
     expect(authority).toContain('### Closed self-authorized actions');
     expect(authority).toContain('Repair mechanical');
     expect(authority).toContain('Verify evidence');
@@ -41,19 +71,22 @@ describe('Issue #1197 flow-manager authority contract', () => {
       expect(authority).toContain(waitId);
     }
     const expectedRows = [
-      ['WI-01', '1_800_000 ms', 'owner: named producer'],
-      ['WI-02', '10_000 ms', 'owner: page-probe'],
-      ['WI-03', '1_800_000 ms', 'owner: preceding stage producer'],
-      ['WI-04', '1_800_000 ms', 'owner: reviewer source'],
-      ['WI-05', '5_000 ms', 'owner: launcher waiter'],
-      ['WI-06', 'inherited from the enclosing stage deadline', 'owner: exception publisher'],
-    ];
-    for (const [waitId, deadline, owner] of expectedRows) {
+      ['WI-01', '1_800_000 ms', 'owner: named producer', ['done', 'blocked', 'refused']],
+      ['WI-02', '10_000 ms', 'owner: page-probe', ['done', 'blocked']],
+      ['WI-03', '1_800_000 ms', 'owner: preceding stage producer', ['done', 'refused']],
+      ['WI-04', '1_800_000 ms', 'owner: reviewer source', ['done', 'blocked']],
+      ['WI-05', '5_000 ms', 'owner: launcher waiter', ['done', 'blocked', 'refused']],
+      ['WI-06', 'GH_TIMEOUT_MS = 10_000 ms', 'owner: exception publisher', ['done', 'blocked']],
+    ] as const;
+    for (const [waitId, deadline, owner, terminalStates] of expectedRows) {
       const row = authority.split('\n').find((line) => line.includes(`\`${waitId}\``));
       expect(row).toBeDefined();
       expect(row).toContain(deadline);
       expect(row).toContain(owner);
       expect(row).toContain('deadline-miss-record:');
+      for (const terminalState of terminalStates) {
+        expect(row).toContain(`\`${terminalState}\``);
+      }
     }
     expect(authority).not.toContain('Exact declared deadline and time basis');
     expect(authority).toContain('deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline');
@@ -74,9 +107,11 @@ describe('Issue #1197 flow-manager authority contract', () => {
     expect(wi06).toContain('publication_requested_at');
     expect(wi06).toContain('call_outcome');
     expect(wi06).toContain('census_result');
-    expect(wi06).not.toContain('GH_TIMEOUT_MS');
+    expect(wi06).toContain('GH_TIMEOUT_MS');
     expect(wi06).not.toContain('comment id and URL');
     expect(wi06).not.toContain('exactly what to re-publish');
+    expect(ghTransport).toContain('export const GH_TIMEOUT_MS = 10_000;');
+    expect(ghTransport).toContain('timeoutMs: GH_TIMEOUT_MS');
     expect(authority).toContain('undeclared');
     expect(authority).toContain('done');
     expect(authority).toContain('blocked');
