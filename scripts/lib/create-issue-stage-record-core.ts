@@ -44,7 +44,8 @@ import {
   PROJECTION_IN_PROGRESS,
   STAGE_SCHEMA,
 } from './create-issue-stage-record-types.ts';
-import type { ReviewLaneRouting } from './review-lane-routing.ts';
+import { REVIEW_LANE_ROUTING_POLICY_VERSION, type ReviewLaneRouting } from './review-lane-routing.ts';
+import { sameReviewLaneRouting } from './review-lane-record.ts';
 import { prepareReviewLaneStageAttempt } from './create-issue-stage-record-review-lane.ts';
 
 export interface StartCycleInput {
@@ -638,6 +639,25 @@ export function publishSettledStageRecord(
     code: 'conflicting-remote-event' as const,
     message,
   })));
+  const cycleRoute = headCycle['routed-lane'];
+  if (cycleRoute) {
+    if (receipt.policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) {
+      diagnostics.push({
+        code: 'conflicting-remote-event',
+        message: 'routed cycle head requires review-lane-routing/v1; legacy stage receipts cannot be published',
+      });
+    } else if (!receipt.reviewLane) {
+      diagnostics.push({
+        code: 'conflicting-remote-event',
+        message: 'routed cycle head requires reviewLane evidence in the stage receipt',
+      });
+    } else if (!sameReviewLaneRouting(cycleRoute, receipt.reviewLane.routing)) {
+      diagnostics.push({
+        code: 'conflicting-remote-event',
+        message: 'stage receipt reviewLane routing disagrees with the immutable cycle route',
+      });
+    }
+  }
   if (diagnostics.some((item) => item.code === 'conflicting-remote-event')) {
     return { ok: false, diagnostics, cycleId: headCycle['cycle-id'] };
   }

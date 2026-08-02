@@ -260,6 +260,17 @@ export function normalizeReviewLaneDeclaration(value: unknown): ReviewLaneInput 
       };
     }
   }
+  const uniqueEntries: NormalizedReviewLaneEntry[] = [];
+  for (const entry of entries) {
+    const previous = uniqueEntries.at(-1);
+    if (previous && previous.path === entry.path && previous.kind === entry.kind
+      && canonical(previous.behaviors) === canonical(entry.behaviors)) {
+      continue;
+    }
+    uniqueEntries.push(entry);
+  }
+  entries.length = 0;
+  entries.push(...uniqueEntries);
   const blastRadius: ReviewLaneBlastRadius = entries.some((entry) => entry.kind === 'family')
     ? 'high-or-uncertain' : entries.length >= 7 ? 'high' : 'low';
   return { status: 'usable', identity: digest(canonical(entries)), entries, blastRadius };

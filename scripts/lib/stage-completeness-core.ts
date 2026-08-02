@@ -16,6 +16,8 @@ import {
   resolveCanonicalReviewDirectory as resolveCanonicalReviewDirectoryShared,
 } from './canonical-review-directory.ts';
 export { findLegacyReceiptPaths } from './canonical-review-directory.ts';
+import { isReviewLaneRouting, sameReviewLaneRouting } from './review-lane-record.ts';
+import type { ReviewLaneRouting } from './review-lane-routing.ts';
 
 export const GRANDFATHERED_REVIEW_DIR_BASENAMES = new Set([
   '206-ao-010-session-status-readers-migration',
@@ -112,6 +114,7 @@ export interface ReviewerInvocationEnvelopeV1 {
   capacityOutcome: 'admitted' | 'rejected-after-local-wait';
   capacityWaitMs: number;
   capture?: CaptureIdentityV1;
+  reviewLaneRouting?: ReviewLaneRouting;
 }
 export interface ClaudeCaptureBranchV1 {
   kind: 'capture';
@@ -179,6 +182,7 @@ export interface StageCompletenessReceiptV1 {
   claude?: ClaudeCaptureBranchV1 | ClaudeWaiverBranchV1;
   credentialingCaptures: CaptureIdentityV1[];
   relayEligibleCaptures: CaptureIdentityV1[];
+  reviewLaneRouting?: ReviewLaneRouting;
 }
 export interface VerifiedRelayPartV1 {
   part: number;
@@ -389,7 +393,7 @@ function expectedCaptureName(stage: ReviewStage, capture: CaptureIdentityV1, slo
 }
 function parseInvocation(
   value: unknown,
-  receipt: Pick<StageCompletenessReceiptV1, 'reviewEpisodeId' | 'stageAttemptId' | 'policyVersion' | 'reviewerCardinality' | 'cardinalityConfigIdentity' | 'stage' | 'sourceRevision'>,
+  receipt: Pick<StageCompletenessReceiptV1, 'reviewEpisodeId' | 'stageAttemptId' | 'policyVersion' | 'reviewerCardinality' | 'cardinalityConfigIdentity' | 'stage' | 'sourceRevision' | 'reviewLaneRouting'>,
   index: number,
   errors: string[],
 ): ReviewerInvocationEnvelopeV1 | null {
@@ -416,6 +420,12 @@ function parseInvocation(
   if (value.cardinalityConfigIdentity !== receipt.cardinalityConfigIdentity) errors.push(`${label} cardinalityConfigIdentity mismatch`);
   if (stage !== receipt.stage) errors.push(`${label} stage mismatch`);
   if (value.sourceRevision !== receipt.sourceRevision) errors.push(`${label} sourceRevision mismatch`);
+  if (receipt.reviewLaneRouting !== undefined) {
+    if (!isReviewLaneRouting(value.reviewLaneRouting)) errors.push(`${label} is missing immutable reviewLaneRouting evidence`);
+    else if (!sameReviewLaneRouting(receipt.reviewLaneRouting, value.reviewLaneRouting)) errors.push(`${label} reviewLaneRouting disagrees with the stage-attempt route`);
+  } else if (value.reviewLaneRouting !== undefined) {
+    errors.push(`${label} carries reviewLaneRouting without a routed stage attempt`);
+  }
   if (!REVIEWER_SLOT_RE.test(slot) || !expectedSlots(receipt.reviewerCardinality).includes(slot)) errors.push(`${label} reviewerSlot must be within configured 01..${slotForOrdinal(receipt.reviewerCardinality)}`);
   if (attemptOrdinal !== 1 && attemptOrdinal !== 2) errors.push(`${label} attemptOrdinal must be 1 or 2`);
   if (value.retryAttempt !== true && value.retryAttempt !== false) errors.push(`${label} retryAttempt must be boolean`);
@@ -464,6 +474,7 @@ function parseInvocation(
     capacityOutcome: value.capacityOutcome as 'admitted' | 'rejected-after-local-wait',
     capacityWaitMs: Number(value.capacityWaitMs),
     capture,
+    ...(receipt.reviewLaneRouting ? { reviewLaneRouting: receipt.reviewLaneRouting } : {}),
   };
 }
 function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: string[]): void {
@@ -587,6 +598,8 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   const previousStageReceiptId = value.previousStageReceiptId === null ? null : nonEmpty(value.previousStageReceiptId) ? value.previousStageReceiptId.trim() : '';
   const reviewerCardinality = value.reviewerCardinality;
   const cardinalityConfigIdentity = nonEmpty(value.cardinalityConfigIdentity) ? value.cardinalityConfigIdentity.trim() : '';
+  const reviewLaneRouting = value.reviewLaneRouting;
+  if (reviewLaneRouting !== undefined && !isReviewLaneRouting(reviewLaneRouting)) errors.push(`${label} reviewLaneRouting must be a complete immutable route`);
   if (tier !== 'T1' && tier !== 'T2' && tier !== 'T3') errors.push(`${label} has unknown tier`);
   if (!COUNTED_STAGE_TOKENS.has(stage as ReviewStage)) errors.push(`${label} has unknown stage`);
   if (policyVersion !== TRIPLE_SOURCE_POLICY_VERSION && policyVersion !== SINGLE_SOURCE_POLICY_VERSION) errors.push(`${label} has unknown policyVersion`);
@@ -613,6 +626,12 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   }
   const credentialingCaptures = validateCaptureArray(value.credentialingCaptures, `${label}.credentialingCaptures`, errors);
   const relayEligibleCaptures = validateCaptureArray(value.relayEligibleCaptures, `${label}.relayEligibleCaptures`, errors);
+  if (isReviewLaneRouting(reviewLaneRouting)) {
+    if (reviewLaneRouting.stageAttemptId !== String(value.stageAttemptId).trim()) errors.push(`${label} reviewLaneRouting stageAttemptId mismatch`);
+    if (reviewLaneRouting.sourceRevision !== String(value.sourceRevision).trim()) errors.push(`${label} reviewLaneRouting sourceRevision mismatch`);
+    if (reviewLaneRouting.reviewerCardinality !== Number(reviewerCardinality)) errors.push(`${label} reviewLaneRouting reviewerCardinality mismatch`);
+    if (reviewLaneRouting.cardinalityConfigIdentity !== cardinalityConfigIdentity) errors.push(`${label} reviewLaneRouting cardinalityConfigIdentity mismatch`);
+  }
   if (errors.some((error) => error.startsWith(label))) return null;
   const receipt: StageCompletenessReceiptV1 = {
     schema: STAGE_COMPLETENESS_RECEIPT_SCHEMA,
@@ -637,6 +656,7 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
     claude: isRecord(value.claude) ? value.claude as unknown as StageCompletenessReceiptV1['claude'] : undefined,
     credentialingCaptures,
     relayEligibleCaptures,
+    ...(isReviewLaneRouting(reviewLaneRouting) ? { reviewLaneRouting } : {}),
   };
   if (receipt.stage === 'competitive' || receipt.stage === 'architectural-review') {
     if (receipt.tier !== 'T3') errors.push(`${receipt.stage} is valid only for T3`);

@@ -1,5 +1,5 @@
 import type { ReviewLaneEvidence } from './create-issue-stage-record-types.ts';
-import type { ReviewLaneRouting, ReviewLaneSettlement } from './review-lane-routing.ts';
+import { settleReviewLane, type ReviewLaneRouting, type ReviewLaneSettlement, type ReviewLaneSourceVerdict } from './review-lane-routing.ts';
 
 export interface ReviewLaneRecordValidation {
   ok: boolean;
@@ -18,6 +18,23 @@ export function isReviewLaneRouting(value: unknown): value is ReviewLaneRouting 
 
 export function isReviewLaneEvidence(value: unknown): value is ReviewLaneEvidence {
   return validateReviewLaneRecord(value).ok;
+}
+
+export function sameReviewLaneRouting(left: ReviewLaneRouting, right: ReviewLaneRouting): boolean {
+  return left.schema === right.schema
+    && left.routingPolicyIdentity === right.routingPolicyIdentity
+    && left.lane === right.lane
+    && left.topology === right.topology
+    && left.policyVersion === right.policyVersion
+    && left.reviewerCardinality === right.reviewerCardinality
+    && left.cardinalityConfigIdentity === right.cardinalityConfigIdentity
+    && left.sourceRevision === right.sourceRevision
+    && left.stageAttemptId === right.stageAttemptId
+    && left.laneInputIdentity === right.laneInputIdentity
+    && left.classifierIdentity === right.classifierIdentity
+    && left.conditionalActivationRule === right.conditionalActivationRule
+    && sameSlots(left.possibleSlots, right.possibleSlots)
+    && sameSlots(left.initiallyActivatedSlots, right.initiallyActivatedSlots);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -103,6 +120,16 @@ export function validateReviewLaneRecord(value: unknown): ReviewLaneRecordValida
     const finalRequiredSlots = value.finalRequiredSlots;
     const sourceVerdicts = value.sourceVerdicts;
     const conflictDecision = value.conflictDecision;
+    let parsedSourceVerdicts: Record<string, ReviewLaneSourceVerdict> | null = null;
+    if (isRecord(sourceVerdicts)
+      && !Object.values(sourceVerdicts).some((verdict) => !['accept', 'material-findings', 'blocked', 'refused', 'unparseable'].includes(String(verdict)))) {
+      parsedSourceVerdicts = {};
+      for (const [slot, verdict] of Object.entries(sourceVerdicts)) {
+        if (verdict === 'accept' || verdict === 'material-findings' || verdict === 'blocked' || verdict === 'refused' || verdict === 'unparseable') {
+          parsedSourceVerdicts[slot] = verdict;
+        }
+      }
+    }
     if (!isSettlement(settlement, routing)) errors.push('routed review record has malformed or inconsistent settlement');
     if (!Array.isArray(finalRequiredSlots) || !finalRequiredSlots.every((slot) => typeof slot === 'string')) {
       errors.push('routed review record has malformed finalRequiredSlots');
@@ -120,6 +147,19 @@ export function validateReviewLaneRecord(value: unknown): ReviewLaneRecordValida
       const actualVerdictSlots = Object.keys(sourceVerdicts).sort();
       if (!sameSlots(actualVerdictSlots, [...expectedVerdictSlots].sort())) {
         errors.push('routed review record sourceVerdicts disagree with activated slots');
+      }
+    }
+    if (parsedSourceVerdicts && isSettlement(settlement, routing)) {
+      const expected = settleReviewLane(routing, parsedSourceVerdicts);
+      const actual = settlement;
+      const sameCensus = actual.slotCensus.length === expected.slotCensus.length
+        && actual.slotCensus.every((row, index) => row.slot === expected.slotCensus[index]?.slot && row.state === expected.slotCensus[index]?.state);
+      if (actual.ok !== expected.ok
+        || actual.conflictDecision !== expected.conflictDecision
+        || !sameSlots(actual.finalRequiredSlots, expected.finalRequiredSlots)
+        || !sameCensus
+        || !sameSlots(actual.errors, expected.errors)) {
+        errors.push('routed review record settlement is not the exact result of routing and source verdicts');
       }
     }
     if (conflictDecision !== 'no-conflict'

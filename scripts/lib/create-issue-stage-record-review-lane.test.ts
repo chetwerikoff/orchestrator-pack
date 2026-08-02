@@ -8,7 +8,8 @@ import {
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
 import { validateReviewLaneRecord } from './review-lane-record.ts';
 import { createMockGhState, createMockTransport, makeTempDir } from './create-issue-stage-record-test-helpers.ts';
-import { startReviewCycle } from './create-issue-stage-record-core.ts';
+import { publishSettledStageRecord, startReviewCycle } from './create-issue-stage-record-core.ts';
+import { deriveReviewEpisodeState } from './stage-completeness-core.ts';
 
 const declaration = (entries: ReviewLaneAuthorDeclaration['entries']): ReviewLaneAuthorDeclaration => ({
   schema: 'review-lane-change-set/v1',
@@ -104,6 +105,173 @@ describe('review-lane production activation', () => {
       tierTransition: 'none',
     };
     expect(parseConsumableStageReceipt(receipt).receipt).toBeNull();
+  });
+
+  it('rejects a claimed successful settlement when a source is blocked', () => {
+    const routed = routedFixture();
+    expect(validateReviewLaneRecord({
+      ...routed,
+      sourceVerdicts: { '01': 'blocked' as const, '02': 'accept' as const },
+    })).toMatchObject({ ok: false });
+  });
+
+  it('collapses identical declaration entries before blast-radius counting', () => {
+    const duplicateEntries = Array.from({ length: 7 }, () => ({
+      kind: 'exact' as const,
+      path: 'docs/review-lanes.md',
+      behaviors: ['documentation-only'],
+    }));
+    const normalized = normalizeReviewLaneDeclaration(declaration(duplicateEntries));
+    expect(normalized.status).toBe('usable');
+    if (normalized.status === 'usable') expect(normalized.blastRadius).toBe('low');
+  });
+
+  it('requires the immutable route on every invocation envelope of a routed receipt', () => {
+    const routed = routedFixture();
+    const capture = (slot: string) => ({
+      captureIdentity: `capture-${slot}`,
+      name: `pass-1-competitive-${slot}.capture.txt`,
+      byteLength: 1,
+      sha256: '0'.repeat(64),
+      rawFindingCount: 0,
+    });
+    const invocations = ['01', '02', '03'].map((slot) => ({
+      schema: 'reviewer-invocation-envelope/v1',
+      reviewEpisodeId: 'task@r00',
+      stageAttemptId: 'attempt-1',
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: routed.routing.cardinalityConfigIdentity,
+      stage: 'competitive',
+      sourceRevision: 'r01',
+      invocationId: `invocation-${slot}`,
+      terminalResultIdentity: `terminal-${slot}`,
+      reviewerSource: `source-${slot}`,
+      reviewerSlot: slot,
+      reviewerOrdinal: Number(slot),
+      attemptOrdinal: 1,
+      retryAttempt: false,
+      terminal: true,
+      terminalClassification: 'complete',
+      sendCount: 1,
+      retryClass: 'none',
+      revisionCheck: 'matched',
+      capacityOutcome: 'admitted',
+      capacityWaitMs: 0,
+      capture: capture(slot),
+      reviewLaneRouting: routed.routing,
+    }));
+    const receipt = {
+      schema: 'stage-completeness-receipt/v1',
+      tier: 'T3',
+      taskIdentity: 'task',
+      episodeFirstRevision: 'r00',
+      reviewEpisodeId: 'task@r00',
+      stageReceiptId: 'task@r00:stage-receipt:0001',
+      previousStageReceiptId: null,
+      receiptCensus: ['task@r00:stage-receipt:0001'],
+      stageAttemptId: 'attempt-1',
+      stageSequence: 1,
+      stage: 'competitive',
+      policyVersion: 'triple-source/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: routed.routing.cardinalityConfigIdentity,
+      sourceRevision: 'r01',
+      outcome: 'complete',
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      invocations,
+      credentialingCaptures: invocations.map((invocation) => invocation.capture),
+      relayEligibleCaptures: invocations.map((invocation) => invocation.capture),
+      reviewLaneRouting: routed.routing,
+    };
+    const withoutRoute = { ...receipt, invocations: invocations.map((invocation, index) => index === 0 ? (() => {
+      const { reviewLaneRouting: _ignored, ...legacy } = invocation;
+      return legacy;
+    })() : invocation) };
+    const result = deriveReviewEpisodeState([withoutRoute], [], {
+      tierIntake: { schema: 'tier-intake/v1', producer: 'test', taskIdentity: 'task', kind: 'fresh', priorTier: 'T3', firstRevision: 'r00' },
+      receiptInventory: { source: 'canonical-review-directory', taskIdentity: 'task', episodeFirstRevision: 'r00', reviewEpisodeId: 'task@r00', stageReceiptIds: ['task@r00:stage-receipt:0001'] },
+    });
+    expect(result.errors.join('\n')).toContain('missing immutable reviewLaneRouting evidence');
+    expect(deriveReviewEpisodeState([receipt], [], {
+      tierIntake: { schema: 'tier-intake/v1', producer: 'test', taskIdentity: 'task', kind: 'fresh', priorTier: 'T3', firstRevision: 'r00' },
+      receiptInventory: { source: 'canonical-review-directory', taskIdentity: 'task', episodeFirstRevision: 'r00', reviewEpisodeId: 'task@r00', stageReceiptIds: ['task@r00:stage-receipt:0001'] },
+    }).errors.join('\n')).not.toContain('reviewLaneRouting');
+  });
+
+  it('rejects a legacy receipt on a routed cycle head', () => {
+    const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
+    const transport = createMockTransport(state);
+    const cycle = startReviewCycle(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      stageAttemptId: 'attempt-1',
+      workdir: makeTempDir(),
+    });
+    expect(cycle.ok).toBe(true);
+    const publication = publishSettledStageRecord(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      receipt: {
+        tier: 'T2',
+        stage: 'architectural',
+        cycleId: cycle.cycleId,
+        stageAttemptId: 'attempt-1',
+        policyVersion: 'single-source/v1',
+        sourceRevision: 'r01',
+        outcome: 'complete',
+        reviewerCardinality: 1,
+        completedSourceCount: 1,
+        cycleBinding: { cycleId: cycle.cycleId, sourceRevision: 'r01', boundBeforeLaunch: true },
+        producerEvidence: 'not-applicable',
+        tierTransition: 'none',
+      },
+      workdir: makeTempDir(),
+    });
+    expect(publication.ok).toBe(false);
+    expect(publication.diagnostics.map((item) => item.message).join('\n')).toMatch(/routed cycle head requires/);
+  });
+
+  it('rejects publication when receipt routing disagrees with the cycle route', () => {
+    const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
+    const transport = createMockTransport(state);
+    const cycle = startReviewCycle(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      stageAttemptId: 'attempt-1',
+      workdir: makeTempDir(),
+    });
+    expect(cycle.ok).toBe(true);
+    const routed = routedFixture();
+    const publication = publishSettledStageRecord(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      receipt: {
+        tier: 'T2',
+        stage: 'architectural',
+        cycleId: cycle.cycleId,
+        stageAttemptId: 'attempt-1',
+        policyVersion: 'review-lane-routing/v1',
+        sourceRevision: 'r01',
+        outcome: 'complete',
+        reviewerCardinality: 3,
+        completedSourceCount: 2,
+        cycleBinding: { cycleId: cycle.cycleId, sourceRevision: 'r01', boundBeforeLaunch: true },
+        producerEvidence: 'not-applicable',
+        tierTransition: 'none',
+        reviewLane: routed,
+      },
+      workdir: makeTempDir(),
+    });
+    expect(publication.ok).toBe(false);
+    expect(publication.diagnostics.map((item) => item.message).join('\n')).toContain('immutable cycle route');
   });
 
   it('rejects partial routed evidence and contradictory source counts', () => {
