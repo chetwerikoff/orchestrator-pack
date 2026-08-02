@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { sha256, stableJson } from './pack-review-state.ts';
 
 export const PACK_REVIEW_CARRYOVER_HELPER_VERSION = 'pack-review-carryover/v2';
 export const MERGE_RESOLUTION_BUNDLE_SCHEMA = 'merge-resolution-bundle/v2';
@@ -57,21 +57,6 @@ export class PackReviewCarryoverError extends Error {
     this.code = code;
     this.name = 'PackReviewCarryoverError';
   }
-}
-
-function sha256(value: string | Uint8Array): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value as Record<string, unknown>)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function fullSha(value: unknown, label: string): string {
