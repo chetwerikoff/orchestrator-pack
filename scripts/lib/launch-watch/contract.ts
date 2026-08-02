@@ -192,13 +192,13 @@ function deadline(record: JsonRecord, fallback: number, prefix: 'launch' | 'watc
 }
 
 function parseUtf8(raw: Uint8Array, prefix: 'launch' | 'watch'): { ok: true; text: string } | { ok: false; code: LaunchValidationCode | WatchValidationCode } {
-  for (const byte of raw) if (byte === 0) return { ok: false, code: `${prefix}_nul_byte` as LaunchValidationCode & WatchValidationCode };
   let text: string;
   try {
     text = new TextDecoder('utf-8', { fatal: true }).decode(raw);
   } catch {
     return { ok: false, code: `${prefix}_invalid_utf8` as LaunchValidationCode & WatchValidationCode };
   }
+  for (const byte of raw) if (byte === 0) return { ok: false, code: `${prefix}_nul_byte` as LaunchValidationCode & WatchValidationCode };
   if (hasNul(text)) return { ok: false, code: `${prefix}_nul_byte` as LaunchValidationCode & WatchValidationCode };
   return { ok: true, text };
 }
@@ -260,25 +260,24 @@ export function parseWatchRequest(raw: Uint8Array): { ok: true; request: WatchRe
     || (value.sourceId === 'orca.terminal' && value.predicateId === 'terminal.read');
   if (!supportedPair) return { ok: false, code: 'watch_unsupported_predicate', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
   if (value.sourceId === 'github.pull-request') {
-    if ('terminalHandle' in value)
-      return { ok: false, code: 'watch_field_not_applicable', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
     if (byteLength(value.sourceId as string) > MAX_WATCH_ID_BYTES || byteLength(value.predicateId as string) > MAX_WATCH_ID_BYTES)
       return { ok: false, code: 'watch_value_too_large', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
-    if ('terminalHandle' in value) return { ok: false, code: 'watch_field_not_applicable', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
     if (!('repo' in value)) return { ok: false, code: 'watch_missing_repo', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
     if (!('prNumber' in value)) return { ok: false, code: 'watch_missing_pr', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
+    if ('terminalHandle' in value) return { ok: false, code: 'watch_field_not_applicable', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
     const repo = value.repo as string;
     if ([repo, String(value.prNumber)].some(hasNul)) return { ok: false, code: 'watch_nul_byte', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
-    if (byteLength(repo) > MAX_REPO_BYTES || !/^[^/\s]+\/[^/\s]+$/u.test(repo)) return { ok: false, code: 'watch_invalid_repo', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
+    if (byteLength(repo) > MAX_REPO_BYTES) return { ok: false, code: 'watch_value_too_large', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
+    if (!/^[^/\s]+\/[^/\s]+$/u.test(repo)) return { ok: false, code: 'watch_invalid_repo', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
     const pr = value.prNumber as number;
     if (!Number.isInteger(pr) || pr <= 0 || pr > 2_147_483_647) return { ok: false, code: 'watch_invalid_pr', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
     const d = deadline(value, WATCH_DEFAULT_DEADLINE_MS, 'watch');
     if (!d.ok) return { ok: false, code: d.code as WatchValidationCode, deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
     return { ok: true, request: { requestVersion: 'watch-request/v1', sourceId: 'github.pull-request', predicateId: 'pr.merged', repo, prNumber: pr, deadlineMs: d.value } };
   }
-  if ('repo' in value || 'prNumber' in value) return { ok: false, code: 'watch_field_not_applicable', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
   if (byteLength(value.sourceId as string) > MAX_WATCH_ID_BYTES || byteLength(value.predicateId as string) > MAX_WATCH_ID_BYTES) return { ok: false, code: 'watch_value_too_large', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
   if (!('terminalHandle' in value)) return { ok: false, code: 'watch_missing_terminal_handle', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
+  if ('repo' in value || 'prNumber' in value) return { ok: false, code: 'watch_field_not_applicable', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
   const terminalHandle = value.terminalHandle as string;
   if (hasNul(terminalHandle)) return { ok: false, code: 'watch_nul_byte', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };
   if (byteLength(terminalHandle) > MAX_HANDLE_BYTES) return { ok: false, code: 'watch_value_too_large', deadlineMs: WATCH_DEFAULT_DEADLINE_MS };

@@ -336,24 +336,31 @@ export async function executeLaunchRequest(request: LaunchRequest, dependencies:
   const handle = terminalHandle(terminal);
   const responseWorktreeId = worktreeId(terminal);
   const validHandleShape = handle !== null && responseWorktreeId === worktree.id;
-  const postHead = handle ? await gitText(run, ['rev-parse', 'HEAD'], request.cwd, state) : undefined;
-  const postBranch = handle ? await gitText(run, ['branch', '--show-current'], request.cwd, state) : undefined;
+  const postHead = handle && validHandleShape ? await gitText(run, ['rev-parse', 'HEAD'], request.cwd, state) : undefined;
+  const postBranch = handle && validHandleShape ? await gitText(run, ['branch', '--show-current'], request.cwd, state) : undefined;
   const bindingEvidence = handle ? {
     postCreateHead: postHead?.result ? gitFailure(postHead.result) : null,
     postCreateBranch: postBranch?.result ? gitFailure(postBranch.result) : null,
     postCreateHeadExpired: postHead?.expired ?? false,
     postCreateBranchExpired: postBranch?.expired ?? false,
+    postCreateVerificationSkipped: handle !== null && !validHandleShape,
   } : {};
   let primary: LaunchResult;
-  if (handle && (postHead?.expired || postBranch?.expired)) {
-    primary = deadlineResult('binding-verification', request.deadlineMs, ['pack.launch.git', 'orca.terminal-create'], {
-      ...bindingEvidence, argv: createArgs, response, terminalHandle: handle,
-    }, handle);
-  } else if (handle && !validHandleShape) {
+  if (handle && !validHandleShape) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_invalid_response_shape', deadlineMs: request.deadlineMs,
       sourceIds: ['orca.terminal-create', 'pack.launch.git'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs, response },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: { handle, worktreeId: responseWorktreeId },
+    });
+  } else if (handle && (postHead?.expired || postBranch?.expired)) {
+    primary = deadlineResult('binding-verification', request.deadlineMs, ['pack.launch.git', 'orca.terminal-create'], {
+      ...bindingEvidence, argv: createArgs, response, terminalHandle: handle,
+    }, handle);
+  } else if (response?.ok === false) {
+    primary = launchResult('terminal-create-ambiguous', {
+      phase: 'terminal-create', reasonCode: 'terminal_create_dispatched_ok_false', deadlineMs: request.deadlineMs,
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs, response },
+      remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: handle ? { handle, worktreeId: responseWorktreeId } : null,
     });
   } else if (createResult.timedOut || createResult.outcome === 'timeout') {
     primary = launchResult('terminal-create-ambiguous', {
@@ -385,12 +392,6 @@ export async function executeLaunchRequest(request: LaunchRequest, dependencies:
       phase: 'terminal-create', reasonCode: 'terminal_create_malformed', deadlineMs: request.deadlineMs,
       sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal',
-    });
-  } else if (response.ok !== true) {
-    primary = launchResult('terminal-create-ambiguous', {
-      phase: 'terminal-create', reasonCode: 'terminal_create_dispatched_ok_false', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs, response },
-      remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: handle ? { handle, worktreeId: responseWorktreeId } : null,
     });
   } else if (!handle) {
     primary = launchResult('terminal-create-ambiguous', {

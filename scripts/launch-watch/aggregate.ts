@@ -1,6 +1,8 @@
 import '../toolchain/native-entrypoint-preflight.ts';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   ACCEPTANCE_SCENARIO_MAP,
   ACCEPTANCE_SCENARIOS,
@@ -18,8 +20,10 @@ import {
   workBudgetMs,
 } from '../lib/launch-watch/contract.ts';
 import { emitResult, serializeResult } from '../lib/launch-watch/emission.ts';
+import { executeLaunchRequest } from './launch.ts';
 import { executeWatchRequest } from './watch.ts';
-import type { WatchRequest } from '../lib/launch-watch/contract.ts';
+import type { LaunchRequest, LaunchResult, WatchRequest } from '../lib/launch-watch/contract.ts';
+import type { ProcessResult } from '../kernel/subprocess.ts';
 
 export type AggregateProof = {
   readonly ok: boolean;
@@ -82,12 +86,90 @@ function processResult(stdout: string, ok = true): {
   return { outcome: 'exit', ok, exitCode: ok ? 0 : 1, signal: null, stdout, stderr: '', timedOut: false, cancelled: false };
 }
 
+type LaunchCoverageMode =
+  | 'stale-target'
+  | 'remote-advance-after-fetch'
+  | 'target-race'
+  | 'typed-outcome'
+  | 'worktree-binding'
+  | 'trust-marker'
+  | 'terminal-create-binding'
+  | 'deadline-barrier';
+
+function coverageLaunchRequest(cwd: string, deadlineMs = 10_000): LaunchRequest {
+  return {
+    requestVersion: 'launch-request/v1', cwd, targetRef: 'main', remoteRef: 'origin/main',
+    model: 'cursor-agent', effort: 'high', initialInstruction: 'run coverage', deadlineMs,
+  };
+}
+
+function coverageProcess(stdout = '', overrides: Partial<ProcessResult> = {}): ProcessResult {
+  return {
+    outcome: 'exit', ok: true, exitCode: 0, signal: null, stdout, stderr: '', timedOut: false, cancelled: false, ...overrides,
+  };
+}
+
+function coverageTrustMarker(home: string, cwd: string): string {
+  const slug = cwd.replace(/^[/\\]+/u, '').split(/[/\\]+/u).map((part) => part.trim().replace(/^\.+/u, '')).filter(Boolean).join('-');
+  const candidate = join(home, '.cursor', 'projects', slug);
+  if (candidate.length <= 92) return join(candidate, '.workspace-trusted');
+  const hash = createHash('sha256').update(candidate).digest('hex').slice(0, 7);
+  return join(`${candidate.slice(0, 84)}-${hash}`, '.workspace-trusted');
+}
+
+async function runLaunchCoverage(mode: LaunchCoverageMode): Promise<LaunchResult> {
+  const cwd = mkdtempSync(join(tmpdir(), 'launch-watch-aggregate-'));
+  const home = mkdtempSync(join(tmpdir(), 'launch-watch-aggregate-home-'));
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  mkdirSync(join(home, '.cursor', 'projects'), { recursive: true });
+  const marker = coverageTrustMarker(home, cwd);
+  mkdirSync(dirname(marker), { recursive: true });
+  writeFileSync(marker, JSON.stringify({ workspacePath: cwd }));
+  let trustCompleted = false;
+  let createCompleted = false;
+  const now = (): number => mode === 'deadline-barrier' && trustCompleted ? 4_000 : 0;
+  const run = async (command: string, args: readonly string[]): Promise<ProcessResult> => {
+    if (command === 'git' && args[0] === 'branch') {
+      if (mode === 'typed-outcome') return coverageProcess('', { ok: false, outcome: 'timeout', timedOut: true, exitCode: null });
+      return coverageProcess(mode === 'stale-target' ? 'feature\n' : 'main\n');
+    }
+    if (command === 'git' && args[0] === 'status') return coverageProcess('');
+    if (command === 'git' && args[0] === 'fetch') return mode === 'remote-advance-after-fetch' ? coverageProcess('', { ok: false, exitCode: 1 }) : coverageProcess('');
+    if (command === 'git' && args[0] === 'rev-parse' && args[1] === 'origin/main') return coverageProcess('sha\n');
+    if (command === 'git' && args[0] === 'rev-parse' && args[1] === 'HEAD') return coverageProcess(mode === 'target-race' ? 'other\n' : 'sha\n');
+    if (command === 'git' && args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+      return mode === 'target-race' ? coverageProcess('', { ok: false, exitCode: 1 }) : coverageProcess('');
+    }
+    if (command === 'orca' && args[0] === 'worktree') {
+      const path = mode === 'worktree-binding' ? join(cwd, 'different') : cwd;
+      return coverageProcess(JSON.stringify({ ok: true, result: { worktree: { path, id: 'wt' } } }));
+    }
+    if (command === 'pwsh') {
+      trustCompleted = true;
+      return mode === 'trust-marker' ? coverageProcess('', { ok: false, exitCode: 1 }) : coverageProcess('');
+    }
+    if (command === 'orca' && args[0] === 'terminal' && args[1] === 'create') {
+      createCompleted = true;
+      if (mode === 'typed-outcome') return coverageProcess('', { ok: false, outcome: 'timeout', timedOut: true, exitCode: null });
+      const worktreeId = mode === 'terminal-create-binding' ? 'wrong' : 'wt';
+      return coverageProcess(JSON.stringify({ ok: true, result: { terminal: { handle: 'coverage-terminal', worktreeId } } }));
+    }
+    if (command === 'orca' && args[0] === 'terminal' && args[1] === 'close') return coverageProcess('{"ok":true}');
+    throw new Error(`unexpected coverage command: ${command} ${args.join(' ')}`);
+  };
+  try {
+    return await executeLaunchRequest(coverageLaunchRequest(cwd), { run, now });
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
 async function executeScenario(scenarioId: string, repoRoot: string): Promise<ScenarioEvidence> {
   const validResult = invalidLaunchResult('launch_unknown_field', 120_000);
-  const generic = (): ScenarioEvidence => ({
-    negative: !validateResult({ ...validResult, extra: true }).ok,
-    positive: validateResult(validResult).ok,
-  });
   switch (scenarioId) {
     case 'launch-request-validation':
       return {
@@ -107,8 +189,14 @@ async function executeScenario(scenarioId: string, repoRoot: string): Promise<Sc
     }
     case 'watch-producer-mapping': {
       const request: WatchRequest = { requestVersion: 'watch-request/v1', sourceId: 'orca.terminal', predicateId: 'terminal.read', terminalHandle: 'h', deadlineMs: 10_000 };
-      const matched = await executeWatchRequest(request, { root: repoRoot, now: () => 0, run: async () => processResult('{"ok":true,"result":{"lines":[],"nextCursor":null}}') });
+      const matched = await executeWatchRequest(request, { root: repoRoot, now: () => 0, run: async () => coverageProcess('{"ok":true,"result":{"lines":[],"nextCursor":null}}') });
       return { negative: matched.outcome !== 'source-unavailable', positive: matched.outcome === 'matched' };
+    }
+    case 'watch-catalogue': {
+      const request: WatchRequest = { requestVersion: 'watch-request/v1', sourceId: 'orca.terminal', predicateId: 'terminal.read', terminalHandle: 'h', deadlineMs: 10_000 };
+      const invalid = parseWatchRequest(Buffer.from(JSON.stringify({ ...request, predicateId: 'unsupported' }))).ok;
+      const matched = await executeWatchRequest(request, { root: repoRoot, now: () => 0, run: async () => coverageProcess('{"ok":true,"result":{"lines":[],"nextCursor":null}}') });
+      return { negative: !invalid, positive: matched.outcome === 'matched' };
     }
     case 'cleanup-precedence':
       return { negative: selectCleanupError(['cleanup_timeout', 'cleanup_termination_failed']) !== 'cleanup_termination_failed', positive: selectCleanupError(['cleanup_timeout', 'cleanup_termination_failed']) === 'cleanup_timeout' };
@@ -137,17 +225,42 @@ async function executeScenario(scenarioId: string, repoRoot: string): Promise<Sc
     }
     case 'zero-coverage':
       return { negative: CLEANUP_FIXTURE_IDS.length > 0, positive: REQUIRED_SCENARIO_IDS.length > 0 };
-    case 'stale-target':
-    case 'remote-advance-after-fetch':
-    case 'target-race':
-    case 'typed-outcome':
-    case 'worktree-binding':
-    case 'trust-marker':
-    case 'terminal-create-binding':
-    case 'watch-catalogue':
-    case 'cleanup-denominator':
-    case 'deadline-barrier':
-      return generic();
+    case 'stale-target': {
+      const result = await runLaunchCoverage('stale-target');
+      return { negative: result.outcome === 'target-refused' && result.reasonCode === 'target_non_main', positive: result.outcome !== 'launched' };
+    }
+    case 'remote-advance-after-fetch': {
+      const result = await runLaunchCoverage('remote-advance-after-fetch');
+      return { negative: result.outcome === 'source-unavailable' && result.reasonCode === 'refresh_failed', positive: result.outcome !== 'launched' };
+    }
+    case 'target-race': {
+      const result = await runLaunchCoverage('target-race');
+      return { negative: result.outcome === 'target-refused' && result.reasonCode === 'target_diverged', positive: result.outcome !== 'launched' };
+    }
+    case 'typed-outcome': {
+      const result = await runLaunchCoverage('typed-outcome');
+      return { negative: result.outcome === 'deadline-exceeded', positive: result.reasonCode === 'launch_deadline_preflight' };
+    }
+    case 'worktree-binding': {
+      const result = await runLaunchCoverage('worktree-binding');
+      return { negative: result.outcome === 'invalid-request', positive: result.reasonCode === 'launch_workspace_path_mismatch' };
+    }
+    case 'trust-marker': {
+      const result = await runLaunchCoverage('trust-marker');
+      return { negative: result.outcome === 'trusted-start-failed', positive: result.reasonCode === 'trust_marker_invalid' };
+    }
+    case 'terminal-create-binding': {
+      const result = await runLaunchCoverage('terminal-create-binding');
+      return { negative: result.outcome === 'partial-cleanup', positive: result.primaryReasonCode === 'terminal_create_invalid_response_shape' };
+    }
+    case 'cleanup-denominator': {
+      const fixture = executeFixture(CLEANUP_FIXTURE_IDS[0] ?? 'cleanup.coverage.sink.failed');
+      return { negative: fixture.valid, positive: fixture.valid };
+    }
+    case 'deadline-barrier': {
+      const result = await runLaunchCoverage('deadline-barrier');
+      return { negative: result.outcome === 'deadline-exceeded', positive: result.reasonCode === 'launch_deadline_terminal_create' };
+    }
     default:
       return { negative: false, positive: false };
   }

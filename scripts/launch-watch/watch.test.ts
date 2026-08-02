@@ -54,6 +54,23 @@ describe('watch wrapper producers', () => {
     expect(output).toMatchObject({ outcome: 'predicate-failed', reasonCode: 'github_pr_not_merged', sourceId: 'github.pull-request' });
   });
 
+  it('preserves explicit missing GitHub fields', async () => {
+    const request: WatchRequest = {
+      requestVersion: 'watch-request/v1', sourceId: 'github.pull-request', predicateId: 'pr.merged',
+      repo: 'owner/repo', prNumber: 5, deadlineMs: 10_000,
+    };
+    const missingState = await executeWatchRequest(request, {
+      now: () => 0,
+      run: async () => result('{"mergedAt":null}'),
+    });
+    const missingMergedAt = await executeWatchRequest(request, {
+      now: () => 0,
+      run: async () => result('{"state":"OPEN"}'),
+    });
+    expect(missingState.primaryReasonCode).toBe('github_missing_state');
+    expect(missingMergedAt.primaryReasonCode).toBe('github_missing_mergedAt');
+  });
+
   it('accepts an empty terminal read and treats ok:false as source unavailable', async () => {
     const request: WatchRequest = {
       requestVersion: 'watch-request/v1', sourceId: 'orca.terminal', predicateId: 'terminal.read',
@@ -66,7 +83,7 @@ describe('watch wrapper producers', () => {
     expect(matched.outcome).toBe('matched');
     const unavailable = await executeWatchRequest(request, {
       now: () => 0,
-      run: async () => result('{"ok":false,"error":{"opaque":"keep"}}'),
+      run: async () => result('{"ok":false,"error":{"opaque":"keep"}}', false),
     });
     expect(unavailable).toMatchObject({
       outcome: 'partial-cleanup',

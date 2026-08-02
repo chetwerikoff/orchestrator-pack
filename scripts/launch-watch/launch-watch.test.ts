@@ -143,6 +143,16 @@ describe('launch/watch contract', () => {
     expect(invalidLaunchResult('launch_unknown_field', 120_000).outcome).toBe('invalid-request');
   });
 
+  it('keeps watch validation errors ordered and closed', () => {
+    const githubBase = { requestVersion: 'watch-request/v1', sourceId: 'github.pull-request', predicateId: 'pr.merged' };
+    expect(parseWatchRequest(Buffer.from(JSON.stringify({ ...githubBase, terminalHandle: 'unexpected' }))).code).toBe('watch_missing_repo');
+    expect(parseWatchRequest(Buffer.from(JSON.stringify({ ...githubBase, repo: `owner/${'r'.repeat(260)}`, prNumber: 1 }))).code).toBe('watch_value_too_large');
+    expect(parseWatchRequest(Buffer.from(JSON.stringify({
+      requestVersion: 'watch-request/v1', sourceId: 'orca.terminal', predicateId: 'terminal.read', repo: 'owner/repo',
+    }))).code).toBe('watch_missing_terminal_handle');
+    expect(parseLaunchRequest(Uint8Array.from([0x7b, 0x00, 0xc3])).code).toBe('launch_invalid_utf8');
+  });
+
   it('applies cleanup precedence and preserves primary fields', () => {
     expect(selectCleanupError(['cleanup_sink_close_failed', 'cleanup_reap_failed'])).toBe('cleanup_reap_failed');
     const primary = invalidLaunchResult('launch_unknown_field', 120_000);
@@ -187,6 +197,12 @@ describe('launch/watch contract', () => {
       removeListener: () => output,
     } as unknown as NodeJS.WritableStream;
     await expect(emitResult(invalidLaunchResult('launch_unknown_field', 120_000), output)).resolves.toMatchObject({ transportOk: false });
+    const stalled = {
+      write: () => true,
+      once: () => stalled,
+      removeListener: () => stalled,
+    } as unknown as NodeJS.WritableStream;
+    await expect(emitResult(invalidLaunchResult('launch_unknown_field', 120_000), stalled, 1)).resolves.toMatchObject({ transportOk: false });
   });
 
   it('validates terminal close responses and bounds cleanup to the reserved remainder', async () => {
@@ -251,6 +267,51 @@ describe('launch/watch contract', () => {
     }
   });
 
+  it('prioritizes terminal ok:false over a nonzero create exit', async () => {
+    const cwd = '/tmp/launch-watch-create-response-priority-test';
+    const home = mkdtempSync(join(tmpdir(), 'launch-watch-home-'));
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const runner = launchRunner({
+        cwd,
+        home,
+        createResult: processResult('{"ok":false,"error":{"opaque":"keep"}}', { ok: false, exitCode: 1 }),
+      });
+      const result = await executeLaunchRequest(requestFor(cwd), { run: runner.run, now: runner.now });
+      expect(result.reasonCode).toBe('terminal_create_dispatched_ok_false');
+      expect(result.outcome).toBe('terminal-create-ambiguous');
+      expect(result.evidence).toHaveProperty('response.error');
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('latches invalid terminal binding before cutoff post-create reads', async () => {
+    const cwd = '/tmp/launch-watch-invalid-binding-cutoff-test';
+    const home = mkdtempSync(join(tmpdir(), 'launch-watch-home-'));
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const runner = launchRunner({
+        cwd,
+        home,
+        nowMode: 'post-create-expired',
+        createStdout: JSON.stringify({ ok: true, result: { terminal: { handle: 'term' } } }),
+      });
+      const result = await executeLaunchRequest(requestFor(cwd), { run: runner.run, now: runner.now });
+      expect(result.primaryReasonCode).toBe('terminal_create_invalid_response_shape');
+      expect(result.evidence).toMatchObject({ containmentClose: { cleanupBudgetExpired: true } });
+      expect(runner.calls.filter((call) => call.args[0] === 'rev-parse' && call.args[1] === 'HEAD')).toHaveLength(2);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('preserves process timeout and spawn-failure classifications before terminal creation', async () => {
     const request = requestFor('/tmp/launch-watch-process-test');
     const timeout = processResult('', { outcome: 'timeout', ok: false, timedOut: true, exitCode: null });
@@ -281,7 +342,7 @@ describe('launch/watch contract', () => {
     }
   });
 
-  it('binds every obtained handle before cleanup, including invalid response shapes', async () => {
+  it('classifies invalid terminal bindings before post-create reads', async () => {
     const cwd = '/tmp/launch-watch-invalid-handle-test';
     const home = mkdtempSync(join(tmpdir(), 'launch-watch-home-'));
     const previousHome = process.env.HOME;
@@ -294,7 +355,7 @@ describe('launch/watch contract', () => {
       });
       const result = await executeLaunchRequest(requestFor(cwd), { run: runner.run, now: runner.now });
       expect(result.outcome).toBe('partial-cleanup');
-      expect(runner.calls.filter((call) => call.args[0] === 'rev-parse' && call.args[1] === 'HEAD').length).toBeGreaterThanOrEqual(2);
+      expect(runner.calls.filter((call) => call.args[0] === 'rev-parse' && call.args[1] === 'HEAD')).toHaveLength(2);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;

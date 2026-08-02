@@ -1,4 +1,4 @@
-import { once } from 'node:events';
+import { EMISSION_RESERVE_MS } from './contract.ts';
 import type { AnyResult } from './contract.ts';
 
 export type EmissionResult = {
@@ -51,19 +51,30 @@ export function serializeResult(result: AnyResult | unknown): EmissionResult {
 export async function emitResult(
   result: AnyResult | unknown,
   output: NodeJS.WritableStream = process.stdout,
+  timeoutMs = EMISSION_RESERVE_MS,
 ): Promise<{ readonly transportOk: boolean; readonly serializationFallback: boolean }> {
   const serialized = serializeResult(result);
   try {
     const data = `${serialized.serialized}\n`;
+    if (timeoutMs <= 0) throw new Error('emission_timeout');
     await new Promise<void>((resolvePromise, reject) => {
-      const onError = (error: Error): void => reject(error);
-      output.once('error', onError);
-      const callback = (error?: Error | null): void => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (error?: Error | null): void => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
         output.removeListener('error', onError);
         if (error) reject(error); else resolvePromise();
       };
-      const accepted = output.write(data, callback);
-      if (!accepted && typeof output.once === 'function') void once(output, 'drain').catch(() => undefined);
+      const onError = (error: Error): void => finish(error);
+      timer = setTimeout(() => finish(new Error('emission_timeout')), timeoutMs);
+      output.once('error', onError);
+      try {
+        output.write(data, finish);
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
     });
     return { transportOk: true, serializationFallback: serialized.serializationFallback };
   } catch {
