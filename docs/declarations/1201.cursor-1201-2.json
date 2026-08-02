@@ -1,0 +1,27 @@
+{
+  "issue_number": 1201,
+  "iteration_id": "cursor-1201-2",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "cursor-1201-1",
+  "created_at": "2026-08-02T08:25:47.422Z",
+  "baseline": {
+    "commit_sha": "eb7c2e9b2a21f80afd0cd3165ac9e4161169f837",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:89e7d4c33e23649e17fd3502dccfa37c58e5b1ed0cb4d8056be7516521178c63"
+  },
+  "declared_paths": [
+    "docs/tiering.md",
+    "docs/review-lanes.md",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/review-lane-input.ts",
+    "scripts/lib/review-lane-record.ts",
+    "scripts/lib/review-lane-routing.ts",
+    "scripts/lib/review-lane-routing.test.ts",
+    "scripts/lib/review-lane-selector.ts",
+    "scripts/lib/create-issue-stage-record-receipt.ts",
+    "scripts/lib/create-issue-stage-record-types.ts"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
