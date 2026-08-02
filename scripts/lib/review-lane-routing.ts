@@ -257,6 +257,7 @@ export function normalizeReviewLaneDeclaration(value: unknown): ReviewLaneInput 
   for (let index = 1; index < entries.length; index += 1) {
     const previous = entries[index - 1];
     const current = entries[index];
+    if (!previous || !current) continue;
     if (previous.path === current.path && previous.kind === current.kind
       && canonical(previous.behaviors) !== canonical(current.behaviors)) {
       return {
@@ -403,6 +404,7 @@ export function freezeConsistentReviewLaneBody(reads: readonly ReviewLaneBodyRea
   for (let index = 1; index < reads.length; index += 1) {
     const previous = reads[index - 1];
     const current = reads[index];
+    if (!previous || !current) continue;
     if (previous.sourceRevision === current.sourceRevision && digest(previous.body) === digest(current.body)) {
       return { status: 'frozen', sourceRevision: current.sourceRevision, body: current.body, bodyIdentity: digest(current.body), reads: reads.slice(0, index + 1) };
     }
