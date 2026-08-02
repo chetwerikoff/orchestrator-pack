@@ -514,6 +514,8 @@ evidence to both guards. T1/T2 may accept when their singular topology, ledger,
 body, tier, and M5 checks are green. T3 final acceptance remains deliberately
 blocked until #1123 changes Issue-lifetime round counting.
 
+Before invoking final acceptance, follow [`docs/create-issue-draft-acceptance-artifacts.md`](../../../docs/create-issue-draft-acceptance-artifacts.md). Run its `check-artifacts` command to obtain a precise missing-input report, then run `produce-artifacts` only after all required recorded stage results and author dispositions exist. The producer computes canonical receipt identifiers and capture bytes/hashes; it does not accept caller assertions that a stage or capture exists.
+
 When activation is available, acceptance requires:
 
 1. singular terminal GPT is sole M5 anchor;

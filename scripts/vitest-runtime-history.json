@@ -197,7 +197,9 @@
     "scripts/pr2-foundation/mutation-external-ci.test.ts": 474,
     "scripts/pr2-foundation/foundation.test.ts": 55,
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 43865,
-    "scripts/lib/create-issue-stage-record.test.ts": 22
+    "scripts/lib/create-issue-stage-record.test.ts": 22,
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": 36,
+    "scripts/toolchain/create-issue-final-acceptance.test.ts": 6
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -393,7 +395,9 @@
     "scripts/pr2-foundation/mutation-external-ci.test.ts": "measured",
     "scripts/pr2-foundation/foundation.test.ts": "measured",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "measured",
-    "scripts/lib/create-issue-stage-record.test.ts": "measured"
+    "scripts/lib/create-issue-stage-record.test.ts": "measured",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": "measured",
+    "scripts/toolchain/create-issue-final-acceptance.test.ts": "measured"
   },
   "recentSamples": {
     "scripts/contract-evidence-legacy-list-guard.test.ts": [
@@ -573,6 +577,12 @@
     ],
     "scripts/lib/create-issue-stage-record.test.ts": [
       22
+    ],
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": [
+      36
+    ],
+    "scripts/toolchain/create-issue-final-acceptance.test.ts": [
+      6
     ]
   },
   "fileChangedAt": {
@@ -601,6 +611,8 @@
     "scripts/review-wake-trigger.test.ts": "2026-08-02T08:10:32.272Z",
     "scripts/worker-message-submit-reconcile.test.ts": "2026-08-02T10:16:53.624Z",
     "scripts/review-cycle-cap.test.ts": "2026-08-02T10:16:53.624Z",
-    "scripts/lib/create-issue-stage-record.test.ts": "2026-08-01T16:58:55.741Z"
+    "scripts/lib/create-issue-stage-record.test.ts": "2026-08-01T16:58:55.741Z",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": "2026-08-02T07:10:03.502Z",
+    "scripts/toolchain/create-issue-final-acceptance.test.ts": "2026-08-02T11:02:18.128Z"
   }
 }

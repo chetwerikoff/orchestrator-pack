@@ -667,7 +667,7 @@ function captureRevision(text: string): string | null {
     ...text.matchAll(/\bsourceRevision\s*["']?\s*:\s*["']?(r\d+)\b/gi),
   ].map((match) => match[1]?.toLowerCase()).filter((value): value is string => Boolean(value));
   const unique = [...new Set(candidates)];
-  return unique.length === 1 ? unique[0] : null;
+  return unique.length === 1 ? unique[0] ?? null : null;
 }
 
 function correctionWindowClosedBefore(
