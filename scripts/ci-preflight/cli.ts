@@ -44,6 +44,9 @@ function probeRecord(probe_id: string, kind: string, attribution: 'global' | 'ro
 function blockedProbe(probe_id: string, kind: string, attribution: 'global' | 'row_local', affected_rows: string[], d: Diagnostic): Probe {
   return { probe_id, kind, attribution, affected_rows, execution_kind: 'in_process', execution: 'completed', probe_verdict: 'failed', diagnostic: { reason_code: 'preflight_probe_failed', subject: d.path, expected: d.expected, actual: d.actual, remediation: d.remediation } };
 }
+function notStartedProbe(probe_id: string, kind: string, attribution: 'global' | 'row_local', affected_rows: string[] = []): Probe {
+  return { probe_id, kind, attribution, affected_rows, execution_kind: 'in_process', execution: 'not_started', probe_verdict: 'blocked', diagnostic: null };
+}
 function globalFailure(reason: string, path: string, expected: unknown, actual: unknown, remediation: string | null, probe?: Probe): GateFailure {
   return { reason, diagnostic: diagnostic(reason, path, expected, actual, remediation), probe };
 }
@@ -169,20 +172,21 @@ export async function runPreflight(repoRoot = REPO): Promise<Record<string, unkn
   const hashDiagnostic = diagnostic('workflow_inventory_stale', '.github/workflows/scope-guard.yml', { git_blob_sha: WORKFLOW_BLOB_SHA, content_sha256: WORKFLOW_CONTENT_SHA256 }, hashes, 'Restore the bound workflow revision.');
   probes.push(hashFailure ? blockedProbe('probe.workflow-hashes', 'workflow-hashes', 'global', [], hashDiagnostic) : probeRecord('probe.workflow-hashes', 'workflow-hashes', 'global'));
   const paths = global ?? (hashFailure ? globalFailure('workflow_inventory_stale', '.github/workflows/scope-guard.yml', hashDiagnostic.expected, hashDiagnostic.actual, hashDiagnostic.remediation) : checkPaths(repoRoot));
-  probes.push(paths ? blockedProbe('probe.global-paths', 'global-paths', 'global', [], paths.diagnostic) : probeRecord('probe.global-paths', 'global-paths', 'global'));
+  probes.push(global || hashFailure ? notStartedProbe('probe.global-paths', 'global-paths', 'global') : paths ? blockedProbe('probe.global-paths', 'global-paths', 'global', [], paths.diagnostic) : probeRecord('probe.global-paths', 'global-paths', 'global'));
   const outputs = paths ?? checkPaths(repoRoot);
-  probes.push(outputs ? blockedProbe('probe.caller-outputs', 'caller-outputs', 'global', [], outputs.diagnostic) : probeRecord('probe.caller-outputs', 'caller-outputs', 'global'));
+  probes.push(global || hashFailure || paths ? notStartedProbe('probe.caller-outputs', 'caller-outputs', 'global') : outputs ? blockedProbe('probe.caller-outputs', 'caller-outputs', 'global', [], outputs.diagnostic) : probeRecord('probe.caller-outputs', 'caller-outputs', 'global'));
   const baselineStatus = status(repoRoot);
   const baselineFailure = baselineStatus ? globalFailure('dirty_worktree', repoRoot, '', baselineStatus, 'Clean caller changes before running preflight.') : undefined;
-  probes.push(baselineFailure ? blockedProbe('probe.baseline', 'baseline', 'global', [], baselineFailure.diagnostic) : probeRecord('probe.baseline', 'baseline', 'global'));
+  probes.push(global || hashFailure || paths || outputs ? notStartedProbe('probe.baseline', 'baseline', 'global') : baselineFailure ? blockedProbe('probe.baseline', 'baseline', 'global', [], baselineFailure.diagnostic) : probeRecord('probe.baseline', 'baseline', 'global'));
   const deps = baselineFailure ?? paths ?? checkDependencies(repoRoot);
-  probes.push(deps ? blockedProbe('probe.lockfile-root', 'lockfile-root', 'global', [], deps.diagnostic) : probeRecord('probe.lockfile-root', 'lockfile-root', 'global'));
-  probes.push(deps ? blockedProbe('probe.npm-census', 'npm-integrity-census', 'global', [], deps.diagnostic) : probeRecord('probe.npm-census', 'npm-integrity-census', 'global'));
-  probes.push(deps ? blockedProbe('probe.pester', 'pester-query', 'global', [], deps.diagnostic) : probeRecord('probe.pester', 'pester-query', 'global'));
+  probes.push(global || hashFailure || paths || outputs || baselineFailure ? notStartedProbe('probe.lockfile-root', 'lockfile-root', 'global') : deps ? blockedProbe('probe.lockfile-root', 'lockfile-root', 'global', [], deps.diagnostic) : probeRecord('probe.lockfile-root', 'lockfile-root', 'global'));
+  probes.push(global || hashFailure || paths || outputs || baselineFailure || deps ? notStartedProbe('probe.npm-census', 'npm-integrity-census', 'global') : probeRecord('probe.npm-census', 'npm-integrity-census', 'global'));
+  probes.push(global || hashFailure || paths || outputs || baselineFailure || deps ? notStartedProbe('probe.pester', 'pester-query', 'global') : probeRecord('probe.pester', 'pester-query', 'global'));
   const typescript = deps ? undefined : checkDirectDependency('typescript', '05', repoRoot);
   const vitest = deps ? undefined : checkDirectDependency('vitest', '07', repoRoot);
-  probes.push(typescript ? blockedProbe('probe.typescript-direct', 'typescript-direct', 'row_local', ['05'], typescript.diagnostic) : probeRecord('probe.typescript-direct', 'typescript-direct', 'row_local', ['05']));
-  probes.push(vitest ? blockedProbe('probe.vitest-direct', 'vitest-direct', 'row_local', ['07'], vitest.diagnostic) : probeRecord('probe.vitest-direct', 'vitest-direct', 'row_local', ['07']));
+  const preflightBlocked = Boolean(global || hashFailure || paths || outputs || baselineFailure || deps);
+  probes.push(preflightBlocked ? notStartedProbe('probe.typescript-direct', 'typescript-direct', 'row_local', ['05']) : typescript ? blockedProbe('probe.typescript-direct', 'typescript-direct', 'row_local', ['05'], typescript.diagnostic) : probeRecord('probe.typescript-direct', 'typescript-direct', 'row_local', ['05']));
+  probes.push(preflightBlocked ? notStartedProbe('probe.vitest-direct', 'vitest-direct', 'row_local', ['07']) : vitest ? blockedProbe('probe.vitest-direct', 'vitest-direct', 'row_local', ['07'], vitest.diagnostic) : probeRecord('probe.vitest-direct', 'vitest-direct', 'row_local', ['07']));
   if (deps || global || hashFailure || paths || baselineFailure) {
     const failure = deps ?? global ?? (hashFailure ? globalFailure('workflow_inventory_stale', '.github/workflows/scope-guard.yml', hashDiagnostic.expected, hashDiagnostic.actual, hashDiagnostic.remediation) : paths ?? baselineFailure)!;
     applyBlock(rows, failure.reason, failure.diagnostic);
