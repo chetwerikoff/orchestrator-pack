@@ -136,6 +136,10 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
     json: false,
     stageEvidencePaths: [],
   };
+  const artifactCommand = command === 'produce-artifacts' || command === 'check-artifacts';
+  const requireArtifactCommand = (arg: string): void => {
+    if (!artifactCommand) throw new Error(`${arg} is only valid with produce-artifacts or check-artifacts`);
+  };
   for (let i = 3; i < argv.length; i += 1) {
     const arg = argv[i]!;
     switch (arg) {
@@ -161,21 +165,27 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
         opts.waiverPath = String(argv[++i] ?? '');
         break;
       case '--review-dir':
+        requireArtifactCommand(arg);
         opts.reviewDir = String(argv[++i] ?? '');
         break;
       case '--output-dir':
+        requireArtifactCommand(arg);
         opts.outputDir = String(argv[++i] ?? '');
         break;
       case '--tier-intake':
+        requireArtifactCommand(arg);
         opts.tierIntakePath = String(argv[++i] ?? '');
         break;
       case '--stage-evidence':
+        requireArtifactCommand(arg);
         opts.stageEvidencePaths.push(String(argv[++i] ?? ''));
         break;
       case '--author-dispositions':
+        requireArtifactCommand(arg);
         opts.authorDispositionsPath = String(argv[++i] ?? '');
         break;
       case '--phase': {
+        requireArtifactCommand(arg);
         const phase = String(argv[++i] ?? '');
         if (phase !== 'pre-lens' && phase !== 'final-acceptance') throw new Error('--phase must be pre-lens or final-acceptance');
         opts.phase = phase;

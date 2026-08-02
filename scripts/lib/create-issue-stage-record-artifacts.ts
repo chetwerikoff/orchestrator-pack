@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -114,6 +115,7 @@ function captureFromEvidence(
   capturePathValue: unknown,
   assertedIdentity: unknown,
   captureTexts: Map<string, string>,
+  captureTimestamps: Map<string, number>,
   errors: string[],
 ): CaptureIdentityV1 | null {
   const capturePath = requiredString(capturePathValue, 'capturePath', errors);
@@ -134,6 +136,12 @@ function captureFromEvidence(
   const digest = sha256(text);
   const identity = captureIdentity(name, digest);
   captureTexts.set(identity, text);
+  try {
+    captureTimestamps.set(identity, statSync(resolved).mtimeMs);
+  } catch {
+    errors.push(`unable to stat capture file: ${resolved}`);
+    return null;
+  }
   if (assertedIdentity !== undefined && assertedIdentity !== identity) {
     errors.push(`capture identity assertion does not match bytes for ${resolved}`);
   }
@@ -175,6 +183,7 @@ function buildReceipt(
   episodeFirstRevision: string,
   episodeId: string,
   captureTexts: Map<string, string>,
+  captureTimestamps: Map<string, number>,
   errors: string[],
 ): ProducedStageReceipt | null {
   if (raw.schema !== STAGE_EVIDENCE_SCHEMA) {
@@ -213,7 +222,7 @@ function buildReceipt(
       const invocation = { ...value };
       const capture = value.capturePath === undefined
         ? null
-        : captureFromEvidence(evidencePath, value.capturePath, value.captureIdentity, captureTexts, errors);
+        : captureFromEvidence(evidencePath, value.capturePath, value.captureIdentity, captureTexts, captureTimestamps, errors);
       delete invocation.capturePath;
       delete invocation.captureIdentity;
       if (capture) {
@@ -233,7 +242,7 @@ function buildReceipt(
     claude = { ...raw.claude };
     const capture = raw.claude.capturePath === undefined
       ? null
-      : captureFromEvidence(evidencePath, raw.claude.capturePath, raw.claude.captureIdentity, captureTexts, errors);
+      : captureFromEvidence(evidencePath, raw.claude.capturePath, raw.claude.captureIdentity, captureTexts, captureTimestamps, errors);
     delete claude.capturePath;
     delete claude.captureIdentity;
     if (capture) {
@@ -334,10 +343,11 @@ export function produceAcceptanceArtifacts(
   }
   const episodeId = deriveReviewEpisodeId(taskIdentity, episodeFirstRevision);
   const captureTexts = new Map<string, string>();
+  const captureTimestamps = new Map<string, number>();
   const receipts = options.stageEvidencePaths
     .map((path) => {
       const value = readJson(path, 'stage evidence', errors);
-      return isRecord(value) ? buildReceipt(path, value, taskIdentity, episodeFirstRevision, episodeId, captureTexts, errors) : null;
+      return isRecord(value) ? buildReceipt(path, value, taskIdentity, episodeFirstRevision, episodeId, captureTexts, captureTimestamps, errors) : null;
     })
     .filter((value): value is StageCompletenessReceiptV1 => Boolean(value))
     .sort((left, right) => left.stageSequence - right.stageSequence);
@@ -375,6 +385,13 @@ export function produceAcceptanceArtifacts(
     const state = deriveReviewEpisodeState(receipts, relay, authority);
     errors.push(...state.errors);
     errors.push(...validateReviewEpisodeTopology(state, options.phase ?? 'final-acceptance'));
+    const stageTerminalConfirmed = receipts.every((receipt) => (
+      receipt.settlement.allLaunchedTerminal === true
+      && (receipt.invocations ?? []).every((invocation) => invocation.terminal === true)
+    ));
+    if (!stageTerminalConfirmed) {
+      errors.push('stage evidence does not prove terminal settlement for every launched invocation');
+    }
     const ledgerResult = checkFindingLedgerGuard(
       captures.map((capture) => captureTexts.get(capture.captureIdentity) ?? ''),
       ledger,
@@ -382,11 +399,15 @@ export function produceAcceptanceArtifacts(
         reviewEconomics: true,
         phase: options.phase ?? 'final-acceptance',
         issueRevision: episodeFirstRevision,
-        stageTerminalConfirmed: true,
+        stageTerminalConfirmed,
         stageReceipts: receipts,
         verifiedRelayEvidence: relay,
         episodeAuthority: authority,
-        captureMetadata: captures.map((capture, index) => ({ name: capture.name, timestampMs: index + 1, captureIdentity: capture.captureIdentity })),
+        captureMetadata: captures.map((capture) => ({
+          name: capture.name,
+          timestampMs: captureTimestamps.get(capture.captureIdentity) ?? 0,
+          captureIdentity: capture.captureIdentity,
+        })),
       },
     );
     if (!ledgerResult.ok) errors.push(...ledgerResult.errors);

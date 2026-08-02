@@ -1,7 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 import {
   AUTHOR_DISPOSITIONS_SCHEMA,
   DEFECT_DISPOSITION_VALUES,
@@ -12,6 +13,11 @@ import {
 } from './create-issue-stage-record-artifacts.ts';
 import { executeFinalAcceptanceGuards } from './create-issue-final-acceptance-contract.ts';
 import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt.ts';
+import { runStageFinalizeCli } from './create-issue-stage-record-cli.ts';
+
+vi.mock('../finding-ledger-guard.mjs', () => ({
+  checkFindingLedgerGuard: vi.fn(() => ({ ok: true, errors: [] })),
+}));
 import { deriveReviewEpisodeId, deriveStageReceiptId, deriveReviewEpisodeState } from './stage-completeness-core.ts';
 
 const TASK = 'issue:1192';
@@ -22,6 +28,7 @@ const CLEAN_CAPTURE = 'review-economics-contract: v1\nNO_FINDINGS\nSIMPLIFICATIO
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.clearAllMocks();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -93,6 +100,8 @@ function fixture() {
 describe('Issue #1192 evidence-derived acceptance artifacts', () => {
   it('computes canonical identifiers and produces validator-valid artifacts', () => {
     const input = fixture();
+    const captureTime = new Date('2026-08-02T02:00:00.000Z');
+    utimesSync(input.capturePath, captureTime, captureTime);
     const outputDir = join(input.dir, 'artifacts');
     const result = produceAcceptanceArtifacts({
       reviewDir: input.dir,
@@ -109,6 +118,12 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     const relay = JSON.parse(readFileSync(join(outputDir, 'verified-relay-evidence.json'), 'utf8'));
     expect(relay[0].byteLength).toBe(Buffer.byteLength(CLEAN_CAPTURE));
     expect(relay[0].sha256).toBe(receipt.credentialingCaptures[0].sha256);
+    const guardOptions = vi.mocked(checkFindingLedgerGuard).mock.calls.at(-1)?.[2] as {
+      stageTerminalConfirmed: boolean;
+      captureMetadata: Array<{ timestampMs: number }>;
+    };
+    expect(guardOptions.stageTerminalConfirmed).toBe(true);
+    expect(guardOptions.captureMetadata[0]?.timestampMs).toBe(statSync(input.capturePath).mtimeMs);
     expect(deriveReviewEpisodeState(
       [receipt],
       relay,
@@ -221,6 +236,27 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     expect(existsSync(outputDir)).toBe(false);
   });
 
+  it('passes a false terminal assurance when recorded settlement is not terminal', () => {
+    const input = fixture();
+    writeFileSync(input.stageEvidencePath, JSON.stringify({
+      ...input.evidence,
+      settlement: { allLaunchedTerminal: false, retryState: 'none', finalRevisionMatched: true },
+    }));
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: join(input.dir, 'artifacts'),
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(result.ok).toBe(false);
+    const guardOptions = vi.mocked(checkFindingLedgerGuard).mock.calls.at(-1)?.[2] as {
+      stageTerminalConfirmed: boolean;
+    };
+    expect(guardOptions.stageTerminalConfirmed).toBe(false);
+    expect(result.errors.join('\n')).toContain('terminal settlement');
+  });
+
   it('reports missing stage evidence before acceptance runs', () => {
     const input = fixture();
     const produced = produceAcceptanceArtifacts({
@@ -243,6 +279,19 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     expect(status.ok).toBe(false);
     expect(status.missing.some((item) => item.reason.includes('no recorded stage evidence paths'))).toBe(true);
     expect(status.missing.some((item) => item.artifact === 'verified relay evidence')).toBe(true);
+  });
+
+  it('rejects artifact-only flags on journal commands instead of ignoring them', () => {
+    for (const [flag, value] of [
+      ['--review-dir', '/tmp/review'],
+      ['--tier-intake', '/tmp/intake.json'],
+      ['--stage-evidence', '/tmp/evidence.json'],
+      ['--author-dispositions', '/tmp/dispositions.json'],
+      ['--output-dir', '/tmp/output'],
+      ['--phase', 'pre-lens'],
+    ]) {
+      expect(runStageFinalizeCli(['node', 'create-issue-stage-finalize.ts', 'start-cycle', flag, value])).toBe(2);
+    }
   });
 
   it('keeps the documented disposition vocabularies equal to validator source sets', () => {
