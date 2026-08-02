@@ -97,6 +97,51 @@ async function runProductAttributeChurnFixture() {
   return { observations, send_count: 1, published: true };
 }
 
+async function runCollapsedDuplicateFixture() {
+  const payload = `# byte-identical collapsed payload\n\n${'| cell | value |\n|---|---|\n| same | payload |\n'.repeat(400)}`;
+  const historicalMarker = `OPKTURNV1${'22'.repeat(16)}`;
+  const historicalText = wrapOwnedPromptPayload(historicalMarker, payload);
+  const currentText = wrapOwnedPromptPayload(marker, payload);
+  const makeCollapsedNode = (text: string) => ({
+    collapsed: true,
+    showMore: true,
+    getAttribute: vi.fn(async (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user' : null),
+    innerText: vi.fn(async () => text),
+    textContent: vi.fn(async () => 'collapsed preview'),
+  });
+  const nodesData = [makeCollapsedNode(historicalText), makeCollapsedNode(currentText)];
+  const nodes = scalarLocator({
+    count: vi.fn(async () => nodesData.length),
+    nth: vi.fn((index: number) => nodesData[index]),
+  });
+  const page = {
+    locator: vi.fn((selector: string) => selector === MESSAGE_NODE_SELECTOR
+      ? nodes
+      : scalarLocator()),
+  };
+  const observation = await readPageObservation(page);
+  const userTexts = observation.messages
+    .filter((message) => message.role === 'user')
+    .map((message) => message.text);
+  const classification = classify([
+    ...baseline,
+    { role: 'user', text: historicalText },
+    { role: 'assistant', text: 'historical reply' },
+    { role: 'user', text: currentText },
+    { role: 'assistant', text: 'owned reply' },
+  ]);
+  return {
+    payload,
+    userTexts,
+    markerHeads: userTexts.map((text) => text.split(/\s+/u, 1)[0] ?? ''),
+    collapsedShapes: nodesData.map((node) => ({ collapsed: node.collapsed, showMore: node.showMore })),
+    expectedMarkerMatches: userTexts.filter((text) => ownedPromptMatches(text, marker)).length,
+    classification,
+    send_count: 1,
+    published: true,
+  } as const;
+}
+
 describe('state-light completion probes', () => {
   function makeTurnContainerPage(actionButtons: boolean, generating = false) {
     const assistant = scalarLocator({
@@ -205,6 +250,23 @@ describe('marker ownership classification', () => {
       send_count: 1,
       published: true,
     });
+  });
+
+  it('uses complete innerText to exclude a collapsed byte-identical historical duplicate', async () => {
+    const result = await runCollapsedDuplicateFixture();
+    expect(result.payload.length).toBeGreaterThan(18_000);
+    expect(result.userTexts).toHaveLength(2);
+    expect(result.userTexts[0]?.slice(result.userTexts[0].indexOf('\n\n') + 2))
+      .toBe(result.userTexts[1]?.slice(result.userTexts[1].indexOf('\n\n') + 2));
+    expect(result.markerHeads).toEqual([`OPKTURNV1${'22'.repeat(16)}`, marker]);
+    expect(result.collapsedShapes).toEqual([
+      { collapsed: true, showMore: true },
+      { collapsed: true, showMore: true },
+    ]);
+    expect(result.expectedMarkerMatches).toBe(1);
+    expect(result.classification).toEqual({ state: 'ready', reply: 'owned reply' });
+    expect(result.send_count).toBe(1);
+    expect(result.published).toBe(true);
   });
 });
 
