@@ -76,7 +76,7 @@ const COMPLETION_CONFIRM_POLL_MS = 1_000;
 const DIAGNOSTIC_HEAD_CHARS = 300;
 export const MAX_LOCAL_READ_WAIT_MS = 5_000;
 export const COMPOSER_READINESS_WAIT_MS = 12_000;
-export const COMPOSER_INSERTION_WAIT_MS = 1_000;
+export const COMPOSER_INSERTION_WAIT_MS = 3_000;
 const BLOCKING_PAGE_OVERLAY_SELECTOR = '[role="dialog"][aria-modal="true"], [data-testid*="modal-overlay"]';
 /** Per-node transcript reads use shorter budgets so one hung node cannot block the poll. */
 const MESSAGE_NODE_READ_TIMEOUT_MS = 800;
