@@ -5,6 +5,7 @@
     "scripts/chatgpt-browser-turn/state-light-entry.ts",
     "scripts/chatgpt-browser-turn/state-light-session.test.ts",
     "scripts/chatgpt-browser-turn/state-light-session.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
@@ -44,5 +45,5 @@
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "dc03cff93859e00ec4efd2f5af00d46bfe0e6ab6"
+  "source_revision": "25802e377ad6a4f4863d5868f1592535172d8c57"
 }

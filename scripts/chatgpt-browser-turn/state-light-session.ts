@@ -9,13 +9,13 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { Writable } from 'node:stream';
+import { destinationIdentity } from './coordination.ts';
 import {
   boundedResourceCleanup,
   releaseCdpBrowser,
   RESOURCE_CLEANUP_BOUND_MS,
   type ResourceCleanupOutcome,
 } from './browser-session.ts';
-import { destinationIdentity } from './coordination.ts';
 import {
   turnExitCode,
   type FailureScope,
@@ -47,6 +47,7 @@ import {
   POST_SEND_OBSERVATION_POLL_MS,
   readPageObservation,
   replyStabilityMatches,
+  type CompactTurnResult,
   type PageObservationDecision,
   type PageObservationResult,
 } from './state-light-turn.ts';
@@ -128,16 +129,6 @@ export interface SessionResultV1 {
   readonly new_chat_click_count: number;
   readonly navigation_count: number;
   readonly payloads: readonly SessionPayloadSummary[];
-}
-
-interface CompactTurnResult extends TurnResultV1 {
-  readonly send_count: number;
-  readonly poll_count: number;
-  readonly goto_count: number;
-  readonly new_chat_click_count: number;
-  readonly navigation_count: number;
-  readonly cleanup: ResourceCleanupOutcome;
-  readonly incidents: readonly string[];
 }
 
 interface SessionManifestItem {

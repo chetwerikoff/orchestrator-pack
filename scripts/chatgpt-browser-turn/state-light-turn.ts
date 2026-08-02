@@ -161,7 +161,7 @@ interface BrowserIncident {
   readonly uncertaintyDiagnostics?: ObservationUncertaintyDiagnostics;
 }
 
-interface CompactTurnResult extends TurnResultV1 {
+export interface CompactTurnResult extends TurnResultV1 {
   readonly send_count: number;
   readonly poll_count: number;
   readonly goto_count: number;
