@@ -15,6 +15,8 @@ export interface CanonicalTaskIdentity {
   taskIdentity: string;
 }
 
+export type ReviewDirectoryMode = 'authority' | 'history';
+
 function numericIssueFromTaskIdentity(taskIdentity: string): string | null {
   const candidate = taskIdentity.trim().split(':').at(-1)?.trim() ?? '';
   const issueMatch = /^(\d+)(?:-|$)/.exec(candidate);
@@ -37,6 +39,16 @@ export function resolveCanonicalReviewDirectory(
   const stateRoot = canonicalReviewStateRoot(stateRootOverride);
   const directory = resolve(stateRoot, '.review', issueNumber);
   return { stateRoot, issueNumber, directory, intakePath: join(directory, 'tier-intake.json') };
+}
+
+export function resolveReviewDirectories(
+  intake: CanonicalTaskIdentity,
+  mode: ReviewDirectoryMode,
+  legacyDirectories: readonly string[] = [],
+): string[] {
+  const canonical = resolveCanonicalReviewDirectory(intake);
+  if (mode === 'authority') return [canonical.directory];
+  return [...new Set([canonical.directory, ...legacyDirectories.map((directory) => resolve(directory))])];
 }
 
 function containsStageReceipt(path: string): boolean {

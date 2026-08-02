@@ -8,7 +8,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { checkNeverSkippedFloors } from './tier-gate-floor.ts';
-import { canonicalReviewStateRoot, resolveCanonicalReviewDirectory } from './canonical-review-directory.ts';
+import { canonicalReviewStateRoot, resolveReviewDirectories } from './canonical-review-directory.ts';
 
 export { checkWorkerSafetyFloor } from './tier-gate-floor.ts';
 
@@ -462,7 +462,7 @@ interface WorkdirLayout {
   workdir: string;
   stem: string;
   taskIdentity: string;
-  reviewDir: string;
+  reviewDirs: string[];
   canonicalIssueWorkdir: boolean;
 }
 
@@ -487,7 +487,11 @@ function deriveWorkdir(draftPath: string): WorkdirLayout | null {
     workdir,
     stem,
     taskIdentity,
-    reviewDir: resolveCanonicalReviewDirectory({ taskIdentity }).directory,
+    reviewDirs: resolveReviewDirectories(
+      { taskIdentity },
+      'history',
+      [join(issueDraftsDir, '.review', taskIdentity)],
+    ),
     canonicalIssueWorkdir,
   };
 }
@@ -510,7 +514,7 @@ function loadTransitionEvidenceFromWorkdir(
   if (!layout) return { evidence: null, errors: [] };
 
   const errors: string[] = [];
-  const intakePath = join(layout.reviewDir, 'tier-intake.json');
+  const intakePath = join(layout.reviewDirs[0]!, 'tier-intake.json');
   let intake: TierIntakeRecord | null = null;
   if (existsSync(intakePath)) {
     try {
@@ -573,9 +577,10 @@ function loadTransitionEvidenceFromWorkdir(
     revalidationMatches: 0,
     invalidRevalidationMatches: 0,
   };
-  if (existsSync(layout.reviewDir)) {
-    for (const captureName of readdirSync(layout.reviewDir).filter((name) => name.endsWith('.capture.txt')).sort()) {
-      const captureText = readFileSync(join(layout.reviewDir, captureName), 'utf8');
+  for (const reviewDir of layout.reviewDirs) {
+    if (!existsSync(reviewDir)) continue;
+    for (const captureName of readdirSync(reviewDir).filter((name) => name.endsWith('.capture.txt')).sort()) {
+      const captureText = readFileSync(join(reviewDir, captureName), 'utf8');
       captures.push({ captureName, captureText });
       const inspection = inspectRetiredDemotionCapture(captureText);
       retiredDemotionFences.eventMatches += inspection.fences.eventMatches;

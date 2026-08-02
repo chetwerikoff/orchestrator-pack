@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use for GPT-authored orchestrator-pack task specs. The GitHub Issue is the live spec. T1/T2 use one terminal GPT architectural source. T3 competitive and architectural-review use the configured independent 01..N source set in one triple-source/v1 stageAttemptId; the default N is 3. Claude and terminal architectural remain singular. Canonical receipt inventory, immutable tier-intake authority, verified relay equality, occurrence accounting, bounded zero-send retry, and the #1123 activation seam are binding.
+description: Use for GPT-authored orchestrator-pack task specs. The GitHub Issue is the live spec. T1/T2 use one terminal GPT architectural source. T3 competitive and architectural-review use the configured independent 01..N source set in one triple-source/v1 stageAttemptId; the default N is 3. Claude and terminal architectural remain singular. Canonical receipt inventory, immutable tier-intake authority, verified relay equality, occurrence accounting, bounded zero-send retry, and the #1171 Issue-lifetime activation contract is binding.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -25,8 +25,8 @@ Issue ownership retained here:
 - #1142: pre-capture adjacent tier correction and retired post-capture demotion;
 - #1150: configured plural pre-terminal source sets, episode derivation, relay,
   and occurrence accounting;
-- #1123: historical contract predecessor; Issue #1171 owns Issue-lifetime
-  logical-round counting and activation of plural-source final acceptance.
+- #1171: Issue-lifetime logical-round counting and activation of plural-source
+  final acceptance.
 
 ## Inputs and routing
 
@@ -164,7 +164,7 @@ competitive[01..N] → architectural-review[01..N] → architectural-lens (or va
 No `architectural-final`, post-capture tier transition, narrow demotion
 revalidation, engine substitution, or sibling consolidation exists.
 
-### #1123 activation seam
+### #1171 activation contract
 
 #1150 produces and validates exact plural source sets. N sibling captures in one
 exact `stageAttemptId` are one logical round. Issue #1171 consumes that identity
@@ -608,7 +608,8 @@ node scripts/create-issue-final-acceptance.ts \
 - Let clean/no-findings from one source erase another source.
 - Let the flow-manager decide defects or remedies.
 - Treat a Claude receipt self-assertion or waiver as producer/M3 evidence.
-- Enable T3 final acceptance before #1123.
+- Enable T3 final acceptance without #1171's canonical receipt, topology, and
+  exact-body guards.
 - Persist a review-episode authority record.
 - Reopen tier correction after capture or create post-capture demotion machinery.
 - Add account-wide capacity caps, leases, queues, second monitors, or transport
