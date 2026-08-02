@@ -46,7 +46,7 @@ describe('Issue #1197 flow-manager authority contract', () => {
       ['WI-03', '1_800_000 ms', 'owner: preceding stage producer'],
       ['WI-04', '1_800_000 ms', 'owner: reviewer source'],
       ['WI-05', '5_000 ms', 'owner: launcher waiter'],
-      ['WI-06', 'GH_TIMEOUT_MS = 10_000 ms', 'owner: exception publisher'],
+      ['WI-06', 'inherited from the enclosing stage deadline', 'owner: exception publisher'],
     ];
     for (const [waitId, deadline, owner] of expectedRows) {
       const row = authority.split('\n').find((line) => line.includes(`\`${waitId}\``));
@@ -58,12 +58,26 @@ describe('Issue #1197 flow-manager authority contract', () => {
     expect(authority).not.toContain('Exact declared deadline and time basis');
     expect(authority).toContain('deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline');
     const wi06 = authority.split('\n').find((line) => line.includes('`WI-06`'));
-    expect(wi06).toContain('one API read by the returned comment id');
-    expect(wi06).toContain('comment id and URL');
+    for (const argument of [
+      '--run-identity "$runIdentity"',
+      '--attempt-identity "$attemptIdentity"',
+      '--handoff-receipt "$handoffReceipt"',
+      '--terminal-envelope "$terminalEnvelope"',
+      '--deadline-ms 5000',
+    ]) {
+      expect(authority).toContain(argument);
+    }
+    expect(wi06).toContain('publishJournalEvent');
+    expect(wi06).toContain('createIssueComment');
+    expect(wi06).toContain('confirmCanonicalEvent');
+    expect(wi06).toContain('full comment census');
     expect(wi06).toContain('publication_requested_at');
     expect(wi06).toContain('call_outcome');
-    expect(wi06).toContain('comment_id_if_returned');
-    expect(authority).toContain('undeclared wait');
+    expect(wi06).toContain('census_result');
+    expect(wi06).not.toContain('GH_TIMEOUT_MS');
+    expect(wi06).not.toContain('comment id and URL');
+    expect(wi06).not.toContain('exactly what to re-publish');
+    expect(authority).toContain('undeclared');
     expect(authority).toContain('done');
     expect(authority).toContain('blocked');
     expect(authority).toContain('refused');
@@ -73,7 +87,7 @@ describe('Issue #1197 flow-manager authority contract', () => {
     expect(authority).toContain('independently proven infeasible');
     expect(authority).toContain('underlying business invariant is already proven');
     expect(authority).toContain('required audience');
-    expect(authority).toContain('proves visibility with the comment id and URL');
+    expect(authority).toContain('full comment-census confirmation succeeds');
     expect(authority).toContain('existing authority basis');
     expect(authority).toContain('acceptance evidence');
     expect(authority).toContain('material\nreview evidence');

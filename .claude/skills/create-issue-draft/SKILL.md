@@ -598,15 +598,30 @@ The affected manager flow has exactly this closed wait inventory:
 | `WI-02` — an already-authorized diagnostic page probe returns | The existing page-probe observation surface | `deadline: CDP_REQUEST_TIMEOUT_MS = 10_000 ms` per probe request from request dispatch, using `scripts/browser-gpt-page-probe.ts`; `owner: page-probe`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` with diagnostic evidence, or `blocked` with the exact observation/remediation gap. |
 | `WI-03` — the preceding stage is credentialed before transition | Existing stage receipt/completeness evidence | `deadline: 1_800_000 ms` from each preceding-stage producer invocation start, using the existing `state-light-turn --timeout-ms` / `DEFAULT_TIMEOUT_MS` budget; `owner: preceding stage producer`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` when credentialed, or local `refused` with missing predecessor evidence and exact fix when transition is premature. |
 | `WI-04` — required reviewer evidence reaches convergence | Existing Browser-GPT reviewer verdict and evidence surfaces | `deadline: 1_800_000 ms` from each Browser-GPT reviewer invocation start, using the existing `state-light-turn --timeout-ms` / `DEFAULT_TIMEOUT_MS` budget; `owner: reviewer source`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` when converged, `blocked` for missing evidence, or `blocked` carrying `material-reviewer-conflict` when independent material verdicts still conflict after reconciliation. |
-| `WI-05` — an in-flight transport action reaches its terminal result | Existing transport/helper terminal-result surface | `deadline: 5_000 ms` from the flow-manager waiter start, using the existing `flow-manager-long-running-child wait --deadline-ms 5000`; `owner: launcher waiter`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` on proven delivery, `blocked` on ambiguity or missing result without resend, or `refused` carrying `terminal-infrastructure-refusal` only on authoritative terminal refusal. |
-| `WI-06` — a published procedural exception is visible before progression | The existing GitHub Issue comment publication and read-back surface | `deadline: GH_TIMEOUT_MS = 10_000 ms` from the comment-publication request dispatch, using the existing `plugins/ao-codex-pr-reviewer/lib/scope_context.ts` constant; `owner: exception publisher`; `deadline-miss-record: wait_id, publication_requested_at, call_outcome, comment_id_if_returned, observed_at, cause, remedy, owner, next_deadline`; `done` only after one API read by the returned comment id proves visibility with the comment id and URL, otherwise `blocked` naming the failed call and exactly what to re-publish. |
+| `WI-05` — an in-flight transport action reaches its terminal result | Existing transport/helper terminal-result surface | `deadline: 5_000 ms` from the flow-manager waiter start, using the complete existing waiter invocation below; `owner: launcher waiter`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` on proven delivery, `blocked` on ambiguity or missing result without resend, or `refused` carrying `terminal-infrastructure-refusal` only on authoritative terminal refusal. |
+| `WI-06` — a published procedural exception is visible before progression | The existing `publishJournalEvent` path: `createIssueComment` followed by `confirmCanonicalEvent` and its full comment census | `deadline: inherited from the enclosing stage deadline; no own timeout`; `basis: publication request dispatch`; `owner: exception publisher`; `deadline-miss-record: wait_id, publication_requested_at, call_outcome, census_result, observed_at, cause, remedy, owner, next_deadline`; `done` only when the existing full comment-census confirmation succeeds; `blocked` when the census has no exception or a publication/census call fails, with remediation naming that failed call; no automatic publication retry. |
+
+The complete WI-05 waiter invocation uses the run and attempt identities plus
+both paths already held by the manager; it adds no new state or identifier:
+
+```bash
+npm run --silent flow-manager-long-running-child -- wait \
+  --run-identity "$runIdentity" \
+  --attempt-identity "$attemptIdentity" \
+  --handoff-receipt "$handoffReceipt" \
+  --terminal-envelope "$terminalEnvelope" \
+  --deadline-ms 5000
+```
 
 Each row records the awaited condition, existing authoritative surface, exact
 deadline, time basis, terminal mapping, exact remediation, responsible actor,
-and visible deadline-miss metadata. For WI-06, visibility means one successful
-read-back of the published comment by the API-returned identifier; it never
-waits for a human audience to notice the comment. An undeclared wait or a row
-naming a nonexistent producer/observation surface fails the completeness check.
+and visible deadline-miss metadata. For WI-06, the deadline is inherited
+from the enclosing stage and starts at publication request dispatch. Confirmation
+means the existing `publishJournalEvent` flow's complete comment census after
+creation; it does not use the optional comment id, infer a URL, wait for a human
+audience, or automatically publish again after ambiguous delivery. An undeclared
+wait or a row naming a nonexistent producer/observation surface fails the
+completeness check.
 The inventory reuses existing producers and observation surfaces; it adds no
 coordination or persistence machinery.
 
