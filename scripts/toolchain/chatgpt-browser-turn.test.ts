@@ -377,7 +377,7 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
         operation: 'absent parent service attributes',
         startedAtMs,
         observedAtMs: Date.now(),
-        deadlineAtMs: startedAtMs + budget.remainingMs(),
+        deadlineAtMs: budget.endsAtMs,
       });
       expect(nestedFirstCalls).toBe(0);
     } finally {
