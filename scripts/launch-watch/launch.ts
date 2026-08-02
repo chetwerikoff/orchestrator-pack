@@ -2,8 +2,9 @@ import '../toolchain/native-entrypoint-preflight.ts';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { emitResult } from '../lib/launch-watch/emission.ts';
+import { runOwnedProcess, type ProcessRunner } from '../lib/launch-watch/process.ts';
+import type { ProcessResult } from '../kernel/subprocess.ts';
 import {
   CLEANUP_RESERVE_MS,
   encodeLaunchCommand,
@@ -16,7 +17,7 @@ import {
   cleanupOverride,
 } from '../lib/launch-watch/contract.ts';
 
-type Runner = (command: string, args: readonly string[], options: { readonly cwd?: string; readonly timeoutMs: number; readonly input?: string }) => Promise<ProcessResult>;
+type Runner = ProcessRunner;
 
 export type LaunchDependencies = {
   readonly run?: Runner;
@@ -25,16 +26,6 @@ export type LaunchDependencies = {
   readonly trustScript?: string;
   readonly terminalClose?: boolean;
 };
-
-const defaultRun: Runner = (command, args, options) => runProcess({
-  command: process.platform === 'win32' ? command : 'setsid',
-  args: process.platform === 'win32' ? args : [command, ...args],
-  cwd: options.cwd,
-  timeoutMs: options.timeoutMs,
-  input: options.input,
-  allowEmptyStdout: true,
-  inheritParentEnv: true,
-});
 
 function json(value: string): Record<string, unknown> | null {
   try {
@@ -195,7 +186,7 @@ export async function executeLaunch(raw: Uint8Array, dependencies: LaunchDepende
 }
 
 export async function executeLaunchRequest(request: LaunchRequest, dependencies: LaunchDependencies = {}): Promise<LaunchResult> {
-  const run = dependencies.run ?? defaultRun;
+  const run = dependencies.run ?? runOwnedProcess;
   const now = dependencies.now ?? (() => performance.now());
   const startedAt = now();
   const workDeadline = startedAt + request.deadlineMs - CLEANUP_RESERVE_MS - 1_000;

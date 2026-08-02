@@ -122,7 +122,9 @@
     "scripts/create-issue-parked-migration.test.ts": "light",
     "scripts/lib/create-issue-comment-census.test.ts": "light",
     "scripts/lib/create-issue-completed-result.test.ts": "light",
-    "scripts/lib/create-issue-stage-topology.test.ts": "light"
+    "scripts/lib/create-issue-stage-topology.test.ts": "light",
+    "scripts/launch-watch/launch-watch.test.ts": "light",
+    "scripts/launch-watch/watch.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,

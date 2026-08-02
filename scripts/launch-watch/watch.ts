@@ -2,8 +2,9 @@ import '../toolchain/native-entrypoint-preflight.ts';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
 import { emitResult } from '../lib/launch-watch/emission.ts';
+import { runOwnedProcess, type ProcessRunner } from '../lib/launch-watch/process.ts';
+import type { ProcessResult } from '../kernel/subprocess.ts';
 import {
   CLEANUP_RESERVE_MS,
   invalidWatchResult,
@@ -13,7 +14,7 @@ import {
   type WatchResult,
 } from '../lib/launch-watch/contract.ts';
 
-type Runner = (command: string, args: readonly string[], options: { readonly cwd?: string; readonly timeoutMs: number; readonly input?: string }) => Promise<ProcessResult>;
+type Runner = ProcessRunner;
 
 export type WatchDependencies = {
   readonly run?: Runner;
@@ -21,16 +22,6 @@ export type WatchDependencies = {
   readonly sleep?: (milliseconds: number) => Promise<void>;
   readonly root?: string;
 };
-
-const defaultRun: Runner = (command, args, options) => runProcess({
-  command: process.platform === 'win32' ? command : 'setsid',
-  args: process.platform === 'win32' ? args : [command, ...args],
-  cwd: options.cwd,
-  timeoutMs: options.timeoutMs,
-  input: options.input,
-  allowEmptyStdout: true,
-  inheritParentEnv: true,
-});
 
 function object(value: string): Record<string, unknown> | null {
   try {
@@ -94,7 +85,7 @@ export async function executeWatch(raw: Uint8Array, dependencies: WatchDependenc
 }
 
 export async function executeWatchRequest(request: WatchRequest, dependencies: WatchDependencies = {}): Promise<WatchResult> {
-  const run = dependencies.run ?? defaultRun;
+  const run = dependencies.run ?? runOwnedProcess;
   const now = dependencies.now ?? (() => performance.now());
   const sleep = dependencies.sleep ?? ((milliseconds) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)));
   const root = dependencies.root ?? process.cwd();
