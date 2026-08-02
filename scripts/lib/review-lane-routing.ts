@@ -98,7 +98,6 @@ export interface ReviewLaneProducerUnavailable {
   message: string;
 }
 export type ReviewLaneInput = UsableReviewLaneInput | ReviewLaneAuthorRevisionRequired | ReviewLaneProducerUnavailable;
-
 export interface ReviewLanePathClassification {
   path: string;
   scopeClass: ReviewLaneScopeClass;
@@ -170,10 +169,12 @@ function declaration(value: unknown): value is ReviewLaneAuthorDeclaration {
 }
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (!record(value)) return JSON.stringify(value);
+  if (!record(value)) return JSON.stringify(value) ?? 'null';
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
 }
-function digest(value: string): string { return createHash('sha256').update(value, 'utf8').digest('hex'); }
+function digest(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
 function glob(globText: string): RegExp {
   return new RegExp(`^${globText.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('**', '.*').replaceAll('*', '[^/]*')}$`);
 }
@@ -192,10 +193,22 @@ function normalizedPath(value: string): { path: string; relative: boolean } {
   };
 }
 function denied(path: string): boolean {
-  return DENYLIST.some((pattern) => matches(path, pattern) || matches(path.toLowerCase(), pattern.toLowerCase()));
+  const lower = path.toLowerCase();
+  const segments = lower.split('/').filter(Boolean);
+  const file = segments.at(-1) ?? '';
+  const stem = file.includes('.') ? file.slice(0, file.lastIndexOf('.')) : file;
+  const sensitiveSegment = segments.some((segment) =>
+    segment.includes('secret') || segment.includes('credential') || segment.startsWith('.env'));
+  const sensitiveStem = stem.includes('secret') || stem.includes('credential') || stem.startsWith('.env');
+  return sensitiveSegment || sensitiveStem
+    || DENYLIST.some((pattern) => matches(path, pattern) || matches(lower, pattern.toLowerCase()));
 }
-function allowed(path: string): boolean { return ALLOWED_ROOTS.some((pattern) => matches(path, pattern)); }
-function uniqueSorted(values: readonly string[]): string[] { return [...new Set(values)].sort((a, b) => a.localeCompare(b)); }
+function allowed(path: string): boolean {
+  return ALLOWED_ROOTS.some((pattern) => matches(path, pattern));
+}
+function uniqueSorted(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b));
+}
 
 export function parseReviewLaneAuthorDeclaration(value: unknown): ReviewLaneAuthorDeclaration | null {
   return declaration(value) ? value : null;
@@ -231,22 +244,21 @@ export function normalizeReviewLaneDeclaration(value: unknown): ReviewLaneInput 
     if (entry.behaviors.length === 0 || entry.behaviors.some((tag) => typeof tag !== 'string' || tag.trim().length === 0)) {
       return { status: 'author-revision-required', reason: 'declaration-malformed', entry: candidate.path, message: `behaviors are malformed: ${candidate.path}` };
     }
-    entries.push({
-      kind: entry.kind,
-      path: candidate.path,
-      behaviors: uniqueSorted(entry.behaviors.map((tag) => tag.trim())),
-    });
+    entries.push({ kind: entry.kind, path: candidate.path, behaviors: uniqueSorted(entry.behaviors.map((tag) => tag.trim())) });
   }
   entries.sort((a, b) => a.path.localeCompare(b.path) || a.kind.localeCompare(b.kind));
   for (let index = 1; index < entries.length; index += 1) {
     const previous = entries[index - 1];
     const current = entries[index];
-    if (previous.path !== current.path || previous.kind !== current.kind) continue;
-    if (canonical(previous.behaviors) !== canonical(current.behaviors)) {
-      return { status: 'author-revision-required', reason: 'declaration-contradictory', entry: current.path, message: `duplicate entries disagree: ${current.path}` };
+    if (previous.path === current.path && previous.kind === current.kind
+      && canonical(previous.behaviors) !== canonical(current.behaviors)) {
+      return {
+        status: 'author-revision-required',
+        reason: 'declaration-contradictory',
+        entry: current.path,
+        message: `duplicate declaration has conflicting semantics: ${current.path}`,
+      };
     }
-    entries.splice(index, 1);
-    index -= 1;
   }
   const blastRadius: ReviewLaneBlastRadius = entries.some((entry) => entry.kind === 'family')
     ? 'high-or-uncertain' : entries.length >= 7 ? 'high' : 'low';
@@ -275,7 +287,23 @@ const SAFE_RULES: readonly SafeRule[] = [
   { pattern: 'scripts/review-lane-*.test.ts', required: ['test-only'], allowed: ['test-only'] },
 ];
 
-function tokens(path: string): Set<string> { return new Set(path.toLowerCase().split(/[\/._-]+/).filter(Boolean)); }
+export function reviewLaneClassifierPolicyIdentity(): string {
+  return digest(canonical({
+    schema: REVIEW_LANE_CLASSIFIER_POLICY_VERSION,
+    allowedRoots: ALLOWED_ROOTS,
+    denylist: DENYLIST,
+    safeBehaviorTags: [...SAFE_BEHAVIOR_TAGS],
+    securityBehaviorTags: [...SECURITY_BEHAVIOR_TAGS],
+    destructiveBehaviorTags: [...DESTRUCTIVE_BEHAVIOR_TAGS],
+    securityTokens: [...SECURITY_TOKENS].sort(),
+    destructiveTokens: [...DESTRUCTIVE_TOKENS].sort(),
+    safeRules: SAFE_RULES,
+  }));
+}
+
+function tokens(path: string): Set<string> {
+  return new Set(path.toLowerCase().split(/[\/._-]+/).filter(Boolean));
+}
 function hasToken(actual: Set<string>, wanted: Set<string>): boolean {
   for (const token of wanted) if (actual.has(token)) return true;
   return false;
@@ -299,7 +327,9 @@ function classifyPath(entry: ReviewLaneAuthorEntry): ReviewLanePathClassificatio
     return { path, scopeClass: 'security-sensitive', conservativeReasons: [], matchedRule: securityByCompound ? 'access-control' : null };
   }
   const unknown = entry.behaviors.filter((tag) => !SAFE_BEHAVIOR_TAGS.includes(tag as typeof SAFE_BEHAVIOR_TAGS[number]));
-  const rule = SAFE_RULES.find((candidate) => matches(path, candidate.pattern));
+  const rule = [...SAFE_RULES]
+    .sort((left, right) => right.pattern.replaceAll('*', '').length - left.pattern.replaceAll('*', '').length)
+    .find((candidate) => matches(path, candidate.pattern));
   if (!rule) {
     return {
       path,
@@ -320,55 +350,34 @@ function classifyPath(entry: ReviewLaneAuthorEntry): ReviewLanePathClassificatio
 
 export function classifyReviewLaneDeclaration(
   value: ReviewLaneAuthorDeclaration,
-  policyIdentity = digest(REVIEW_LANE_CLASSIFIER_POLICY_VERSION),
+  policyIdentity = reviewLaneClassifierPolicyIdentity(),
 ): ReviewLaneClassification {
   const paths = value.entries.map(classifyPath);
   const ranks: Record<ReviewLaneScopeClass, number> = { safe: 0, 'conservative-invalid': 1, 'security-sensitive': 2, destructive: 3 };
   const scopeClass = paths.reduce<ReviewLaneScopeClass>((current, item) => ranks[item.scopeClass] > ranks[current] ? item.scopeClass : current, 'safe');
-  return {
-    schema: REVIEW_LANE_CLASSIFIER_POLICY_VERSION,
-    policyStatus: 'available',
-    policyIdentity,
-    scopeClass,
-    conservativeReasons: uniqueSorted(paths.flatMap((item) => item.conservativeReasons)) as ReviewLaneConservativeReason[],
-    paths,
-  };
+  const conservativeReasons = uniqueSorted(paths.flatMap((item) => item.conservativeReasons)) as ReviewLaneConservativeReason[];
+  if (policyIdentity !== reviewLaneClassifierPolicyIdentity()) {
+    return { schema: REVIEW_LANE_CLASSIFIER_POLICY_VERSION, policyStatus: 'unavailable', policyIdentity,
+      unavailableReason: 'classifier-identity-mismatch', scopeClass, conservativeReasons, paths };
+  }
+  return { schema: REVIEW_LANE_CLASSIFIER_POLICY_VERSION, policyStatus: 'available', policyIdentity, scopeClass, conservativeReasons, paths };
 }
 
-export function buildReviewLaneRouting(
-  input: UsableReviewLaneInput,
-  classification: ReviewLaneClassification,
-  sourceRevision: string,
-  stageAttemptId: string,
-): ReviewLaneRouting {
-  if (classification.policyStatus !== 'available') {
-    throw new Error(`classifier unavailable: ${classification.unavailableReason ?? 'unknown'}`);
-  }
+export function buildReviewLaneRouting(input: UsableReviewLaneInput, classification: ReviewLaneClassification, sourceRevision: string, stageAttemptId: string): ReviewLaneRouting {
+  if (classification.policyStatus !== 'available') throw new Error(`classifier unavailable: ${classification.unavailableReason ?? 'unknown'}`);
   const disputed = classification.scopeClass !== 'safe' || input.blastRadius !== 'low';
   const lane: ReviewLaneName = disputed ? 'disputed' : 'normal';
-  const topology: ReviewLaneTopology = lane === 'disputed'
-    && classification.scopeClass === 'safe' && input.blastRadius === 'high' ? 'conditional-third/v1' : 'fixed/v1';
+  const topology: ReviewLaneTopology = lane === 'disputed' && classification.scopeClass === 'safe'
+    && (input.blastRadius === 'high' || input.blastRadius === 'high-or-uncertain') ? 'conditional-third/v1' : 'fixed/v1';
   const possibleSlots = lane === 'normal' ? ['01'] : ['01', '02', '03'];
   const initiallyActivatedSlots = topology === 'conditional-third/v1' ? ['01', '02'] : [...possibleSlots];
   const conditionalActivationRule = topology === 'conditional-third/v1' ? MATERIAL_VERDICT_CONFLICT_RULE : null;
-  const cardinalityConfigIdentity = digest(canonical({
-    policyVersion: REVIEW_LANE_ROUTING_POLICY_VERSION, topology, possibleSlots, initiallyActivatedSlots, conditionalActivationRule,
-  }));
+  const cardinalityConfigIdentity = digest(canonical({ policyVersion: REVIEW_LANE_ROUTING_POLICY_VERSION, topology, possibleSlots, initiallyActivatedSlots, conditionalActivationRule }));
   return {
-    schema: REVIEW_LANE_ROUTING_POLICY_VERSION,
-    routingPolicyIdentity: REVIEW_LANE_ROUTING_POLICY_VERSION,
-    lane,
-    topology,
-    policyVersion: REVIEW_LANE_ROUTING_POLICY_VERSION,
-    reviewerCardinality: possibleSlots.length,
-    cardinalityConfigIdentity,
-    possibleSlots,
-    initiallyActivatedSlots,
-    conditionalActivationRule,
-    sourceRevision,
-    stageAttemptId,
-    laneInputIdentity: input.identity,
-    classifierIdentity: classification.policyIdentity,
+    schema: REVIEW_LANE_ROUTING_POLICY_VERSION, routingPolicyIdentity: REVIEW_LANE_ROUTING_POLICY_VERSION,
+    lane, topology, policyVersion: REVIEW_LANE_ROUTING_POLICY_VERSION, reviewerCardinality: possibleSlots.length,
+    cardinalityConfigIdentity, possibleSlots, initiallyActivatedSlots, conditionalActivationRule,
+    sourceRevision, stageAttemptId, laneInputIdentity: input.identity, classifierIdentity: classification.policyIdentity,
   };
 }
 
@@ -380,77 +389,53 @@ export function freezeConsistentReviewLaneBody(reads: readonly ReviewLaneBodyRea
       return { status: 'frozen', sourceRevision: current.sourceRevision, body: current.body, bodyIdentity: digest(current.body), reads: reads.slice(0, index + 1) };
     }
   }
-  return {
-    status: 'producer-unavailable',
-    reason: 'consistent-revision-body-identity-unavailable',
-    observed: [...reads],
-    message: 'two consecutive reads did not expose the same revision and body identity',
-  };
+  return { status: 'producer-unavailable', reason: 'consistent-revision-body-identity-unavailable', observed: [...reads], message: 'two consecutive reads did not expose the same revision and body identity' };
 }
 
 export function normalizeMaterialVerdict(evidence: MaterialVerdictEvidence): ReviewLaneSourceVerdict {
   if (evidence.terminalClassification === 'composer-refusal') return 'refused';
   if (['quota', 'fill-timeout', 'post-send-failure', 'output-conflict', 'incident'].includes(evidence.terminalClassification)) return 'blocked';
-  if (evidence.terminalClassification !== 'complete' || evidence.captureVerified !== true || evidence.digestMatches === false) return 'unparseable';
+  if (evidence.terminalClassification !== 'complete' || evidence.captureVerified !== true || evidence.digestMatches !== true) return 'unparseable';
   const noFindings = evidence.verdictText?.trim() === 'NO_FINDINGS';
   const hasFindings = (evidence.materialFindingBlocks ?? evidence.rawFindingCount ?? 0) > 0;
   if (noFindings === hasFindings) return 'unparseable';
   return noFindings ? 'accept' : 'material-findings';
 }
-
-export function evaluateMaterialVerdictConflict(
-  left: ReviewLaneSourceVerdict,
-  right: ReviewLaneSourceVerdict,
-): ReviewLaneConflictDecision {
+export function evaluateMaterialVerdictConflict(left: ReviewLaneSourceVerdict, right: ReviewLaneSourceVerdict): ReviewLaneConflictDecision {
   const valid = (value: ReviewLaneSourceVerdict): boolean => value === 'accept' || value === 'material-findings';
   if (!valid(left) || !valid(right)) return 'blocked-initial-source';
   return left === right ? 'no-conflict' : 'conflict-requires-slot-03';
 }
-
-export function settleReviewLane(
-  routing: ReviewLaneRouting,
-  verdicts: Readonly<Record<string, ReviewLaneSourceVerdict>>,
-): ReviewLaneSettlement {
+export function settleReviewLane(routing: ReviewLaneRouting, verdicts: Readonly<Record<string, ReviewLaneSourceVerdict>>): ReviewLaneSettlement {
   const errors: string[] = [];
   const possible = new Set(routing.possibleSlots);
   for (const slot of Object.keys(verdicts)) if (!possible.has(slot)) errors.push(`slot ${slot} is outside possibleSlots`);
   const value = (slot: string): ReviewLaneSourceVerdict | undefined => verdicts[slot];
-  let decision: ReviewLaneConflictDecision = 'no-conflict';
+  let conflictDecision: ReviewLaneConflictDecision = 'no-conflict';
   let finalRequiredSlots = [...routing.initiallyActivatedSlots];
-  let slotCensus = routing.possibleSlots.map((slot) => ({
-    slot,
-    state: routing.initiallyActivatedSlots.includes(slot) ? 'activated' as const : 'not-activated' as const,
-  }));
+  let slotCensus = routing.possibleSlots.map((slot) => ({ slot, state: routing.initiallyActivatedSlots.includes(slot) ? 'activated' as const : 'not-activated' as const }));
   if (routing.topology === 'conditional-third/v1') {
     const first = value('01');
     const second = value('02');
     if (!first || !second) {
-      decision = 'blocked-initial-source';
+      conflictDecision = 'blocked-initial-source';
       errors.push('conditional-third requires terminal verdicts for slots 01 and 02');
     } else {
-      decision = evaluateMaterialVerdictConflict(first, second);
-      if (decision === 'conflict-requires-slot-03') {
+      conflictDecision = evaluateMaterialVerdictConflict(first, second);
+      if (conflictDecision === 'conflict-requires-slot-03') {
         finalRequiredSlots = ['01', '02', '03'];
         slotCensus = slotCensus.map((row) => row.slot === '03' ? { slot: row.slot, state: 'activated' as const } : row);
-      } else if (decision === 'blocked-initial-source') {
+      } else if (conflictDecision === 'blocked-initial-source') {
         errors.push('an initial source did not produce a usable material verdict');
-      } else if (value('03') !== undefined) {
-        errors.push('slot 03 must not have an envelope when no conflict activates it');
-      }
+      } else if (value('03') !== undefined) errors.push('slot 03 must not have an envelope when no conflict activates it');
     }
   }
   for (const slot of finalRequiredSlots) {
     const sourceVerdict = value(slot);
     if (sourceVerdict !== 'accept' && sourceVerdict !== 'material-findings') {
       errors.push(`required slot ${slot} did not settle to accept or material-findings`);
-      decision = 'blocked-initial-source';
+      conflictDecision = 'blocked-initial-source';
     }
   }
-  return {
-    ok: errors.length === 0,
-    conflictDecision: decision,
-    finalRequiredSlots: errors.length === 0 ? finalRequiredSlots : [],
-    slotCensus,
-    errors,
-  };
+  return { ok: errors.length === 0, conflictDecision, finalRequiredSlots: errors.length === 0 ? finalRequiredSlots : [], slotCensus, errors };
 }

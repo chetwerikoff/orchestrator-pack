@@ -15,6 +15,10 @@ author declaration
   -> reviewer invocation
 ```
 
+The canonical Issue fence is the YAML-like `review-lane-change-set/v1` format
+used in Issue #1201. The parser accepts the older JSON representation as a
+compatibility form, but it never repairs or broadens either representation.
+
 The manager may normalize separators, repository-relative paths, explicitly
 case-insensitive comparisons, ordering, exact duplicate entries with identical
 semantics, and derived identities. It may not add paths, broaden families,
@@ -29,7 +33,8 @@ equal revision/body pairs are required before freezing.
 | --- | --- | --- | --- |
 | safe, one–six exact paths | `fixed/v1` | `01` | `01` |
 | safe, seven or more exact paths | `conditional-third/v1` | `01..03` | `01,02` |
-| family, sensitive, destructive, or conservative scope | `fixed/v1` | `01..03` | `01,02,03` |
+| safe family | `conditional-third/v1` | `01..03` | `01,02` |
+| sensitive, destructive, or conservative scope | `fixed/v1` | `01..03` | `01,02,03` |
 
 Every attempt uses `review-lane-routing/v1`, freezes the source revision,
 cardinality, possible slots, initial slots, topology, and

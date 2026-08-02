@@ -7,10 +7,13 @@ import {
   evaluateMaterialVerdictConflict,
   freezeConsistentReviewLaneBody,
   normalizeReviewLaneDeclaration,
+  normalizeMaterialVerdict,
+  reviewLaneClassifierPolicyIdentity,
   settleReviewLane,
   type ReviewLaneAuthorDeclaration,
   type ReviewLaneBodyRead,
 } from './review-lane-routing.ts';
+import { produceReviewLaneInput } from './review-lane-input.ts';
 
 const declaration = (entries: ReviewLaneAuthorDeclaration['entries']): ReviewLaneAuthorDeclaration => ({
   schema: 'review-lane-change-set/v1',
@@ -76,6 +79,18 @@ describe('review-lane declaration and blast-radius routing', () => {
       { kind: 'exact', path: '../scripts/new.ts', behaviors: ['pure-review-lane-selection'] },
     ])).reason).toBe('path-not-repository-relative');
   });
+
+  it('rejects nested secret names and case variants before allowed-root checks', () => {
+    for (const path of [
+      'scripts/lib/my-secret.ts',
+      'scripts/lib/nested/SECRET.config.ts',
+      'scripts/lib/review-lane-safe/secret-policy.ts',
+    ]) {
+      expect(normalizeReviewLaneDeclaration(declaration([
+        { kind: 'exact', path, behaviors: ['pure-review-lane-selection'] },
+      ])).reason).toBe('declared-path-denied');
+    }
+  });
 });
 
 describe('review-lane classifier v1', () => {
@@ -138,6 +153,27 @@ describe('review-lane classifier v1', () => {
       scopeClass: 'conservative-invalid',
     }, 'r1', 'attempt-3').initiallyActivatedSlots).toEqual(['01', '02', '03']);
   });
+
+  it('keeps safe high-or-uncertain families on the conditional third-source topology', () => {
+    const input = normalizeReviewLaneDeclaration(declaration([
+      { kind: 'family', path: 'scripts/lib/review-lane-*.ts', behaviors: ['pure-review-lane-selection'] },
+    ]));
+    const classification = classifyReviewLaneDeclaration(declaration([
+      { kind: 'family', path: 'scripts/lib/review-lane-*.ts', behaviors: ['pure-review-lane-selection'] },
+    ]));
+    expect(input.status).toBe('usable');
+    if (input.status !== 'usable') return;
+    expect(input.blastRadius).toBe('high-or-uncertain');
+    expect(buildReviewLaneRouting(input, classification, 'r1', 'attempt-family').topology).toBe('conditional-third/v1');
+  });
+
+  it('selects the specific test rule before the broad review-lane production rule', () => {
+    const result = classifyReviewLaneDeclaration(declaration([
+      { kind: 'exact', path: 'scripts/lib/review-lane-routing.test.ts', behaviors: ['test-only'] },
+    ]));
+    expect(result.scopeClass).toBe('safe');
+    expect(result.paths[0]?.matchedRule).toBe('scripts/lib/review-lane-*.test.ts');
+  });
 });
 
 describe('body identity and material verdicts', () => {
@@ -159,6 +195,50 @@ describe('body identity and material verdicts', () => {
     expect(evaluateMaterialVerdictConflict('material-findings', 'material-findings')).toBe('no-conflict');
     expect(evaluateMaterialVerdictConflict('accept', 'material-findings')).toBe('conflict-requires-slot-03');
     expect(evaluateMaterialVerdictConflict('blocked', 'accept')).toBe('blocked-initial-source');
+  });
+
+  it('requires a verified digest before accepting a clean verdict', () => {
+    expect(normalizeMaterialVerdict({
+      terminalClassification: 'complete',
+      captureVerified: true,
+      verdictText: 'NO_FINDINGS',
+    })).toBe('unparseable');
+    expect(normalizeMaterialVerdict({
+      terminalClassification: 'complete',
+      captureVerified: true,
+      digestMatches: true,
+      verdictText: 'NO_FINDINGS',
+    })).toBe('accept');
+  });
+
+  it('binds classifier identity to canonical policy bytes', () => {
+    const current = classifyReviewLaneDeclaration(declaration([
+        { kind: 'exact', path: 'docs/review-lanes.md', behaviors: ['documentation-only'] },
+      ]));
+    expect(reviewLaneClassifierPolicyIdentity()).toBe(current.policyIdentity);
+    expect(reviewLaneClassifierPolicyIdentity()).not.toBe(REVIEW_LANE_CLASSIFIER_POLICY_VERSION);
+    expect(classifyReviewLaneDeclaration(declaration([
+      { kind: 'exact', path: 'docs/review-lanes.md', behaviors: ['documentation-only'] },
+    ]), REVIEW_LANE_CLASSIFIER_POLICY_VERSION)).toMatchObject({
+      policyStatus: 'unavailable',
+      unavailableReason: 'classifier-identity-mismatch',
+    });
+  });
+
+  it('normalizes the live YAML-like declaration fence', () => {
+    const result = produceReviewLaneInput(`before
+
+\`\`\`review-lane-change-set/v1
+schema: review-lane-change-set/v1
+owner: issue-author
+entries:
+  - kind: exact
+    path: docs/tiering.md
+    behaviors: [documentation-only, tier-lane-orthogonality]
+\`\`\`
+after`, 'r7');
+    expect(result.status).toBe('usable');
+    if (result.status === 'usable') expect(result.entries[0]?.path).toBe('docs/tiering.md');
   });
 });
 
