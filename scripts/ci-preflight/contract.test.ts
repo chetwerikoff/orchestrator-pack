@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TABLE, INVENTORY, WORKFLOW_BLOB_SHA, WORKFLOW_CONTENT_SHA256, workflowCoverage, nativeOutput } from './contract.ts';
+import { directDependencyExecutable, pesterProbeEnvironment } from './cli.ts';
 
 describe('ci preflight contract', () => {
   it('keeps the exact seven-row fixed table', () => {
@@ -24,5 +25,14 @@ describe('ci preflight contract', () => {
     expect(WORKFLOW_BLOB_SHA).toMatch(/^[0-9a-f]{40}$/);
     expect(WORKFLOW_CONTENT_SHA256).toMatch(/^[0-9a-f]{64}$/);
     expect(nativeOutput('preflight-probe').stdout.sha256).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+  });
+
+  it('probes the real TypeScript executable and preserves Pester discovery variables', () => {
+    expect(directDependencyExecutable('typescript')).toBe('tsc');
+    expect(directDependencyExecutable('vitest')).toBe('vitest');
+    expect(pesterProbeEnvironment({ HOME: '/home/tester', PSModulePath: '/home/tester/modules', CI: 'true' })).toEqual({
+      HOME: '/home/tester',
+      PSModulePath: '/home/tester/modules',
+    });
   });
 });

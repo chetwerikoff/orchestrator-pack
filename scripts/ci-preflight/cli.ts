@@ -95,13 +95,20 @@ function checkDependencies(root = REPO): GateFailure | undefined {
   if (lock.name !== pkg.name || lock.version !== pkg.version || installed.lockfileVersion !== lock.lockfileVersion) return globalFailure('dependency_installation_invalid', 'package-lock.json', { name: pkg.name, version: pkg.version, lockfileVersion: lock.lockfileVersion }, { name: lock.name, version: lock.version, lockfileVersion: installed.lockfileVersion }, 'Restore the matching pre-existing installation.');
   const census = runProcessSync({ command: 'npm', args: ['ls', '--all', '--include=dev', '--json', '--offline'], cwd: root, inheritParentEnv: true });
   if (!census.ok) return globalFailure('dependency_installation_invalid', 'npm ls --all --include=dev --json', 'complete valid integrity census', { status: census.exitCode, stdout: census.stdout, stderr: census.stderr }, 'Restore dependencies without installing from this command.');
-  const pester = runProcessSync({ command: 'pwsh', args: ['-NoProfile', '-NonInteractive', '-Command', '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty Version).ToString()'], cwd: root, inheritParentEnv: true });
+  const pester = runProcessSync({ command: 'pwsh', args: ['-NoProfile', '-NonInteractive', '-Command', '(Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1 -ExpandProperty Version).ToString()'], cwd: root, inheritParentEnv: true, env: pesterProbeEnvironment() });
   if (!pester.ok || !/^(?:5|[6-9]|[1-9]\d)\./.test(String(pester.stdout ?? '').trim())) return globalFailure('dependency_missing', 'Pester', '>= 5.0.0', { status: pester.exitCode, stdout: pester.stdout, stderr: pester.stderr }, 'Install Pester >= 5 outside this command.');
   return undefined;
 }
+export function pesterProbeEnvironment(parent: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(['PSModulePath', 'HOME'].flatMap(key => parent[key] === undefined ? [] : [[key, parent[key]!]]));
+}
+export function directDependencyExecutable(name: 'typescript' | 'vitest'): string {
+  return name === 'typescript' ? 'tsc' : name;
+}
 function checkDirectDependency(name: 'typescript' | 'vitest', rowId: '05' | '07', root = REPO): GateFailure | undefined {
   const pkgPath = join(root, 'node_modules', name, 'package.json');
-  const binPath = join(root, 'node_modules', '.bin', process.platform === 'win32' ? `${name}.cmd` : name);
+  const executable = directDependencyExecutable(name);
+  const binPath = join(root, 'node_modules', '.bin', process.platform === 'win32' ? `${executable}.cmd` : executable);
   try {
     const declared = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).devDependencies ?? {})[name];
     const installed = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
