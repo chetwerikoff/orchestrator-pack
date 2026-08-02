@@ -2740,3 +2740,7 @@ Record positive evidence in the PR or operator log before merge when available:
 
 Until those live checks are recorded, treat AC5 as operator-pending; do not substitute additional unit fixtures.
 "
+
+## Issue #1200 remote review publication authority
+
+The create-issue-draft publication path now treats the source Issue as the authority for immutable review topology and exact raw reviewer records. Retry a completed turn by re-harvesting the durable result; do not resend a reviewer turn. The three parked migrations are fixed to Issues #1168, #1173, and #1188 and must be confirmed before strict consumer cutover.

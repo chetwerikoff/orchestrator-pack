@@ -201,7 +201,11 @@
     "scripts/pr-scope-declaration.test.ts": 100,
     "scripts/lib/create-issue-stage-record-artifacts.test.ts": 88,
     "scripts/toolchain/create-issue-final-acceptance.test.ts": 6,
-    "scripts/toolchain/create-issue-authoring-contract.test.ts": 3
+    "scripts/toolchain/create-issue-authoring-contract.test.ts": 3,
+    "scripts/create-issue-parked-migration.test.ts": 120,
+    "scripts/lib/create-issue-comment-census.test.ts": 120,
+    "scripts/lib/create-issue-completed-result.test.ts": 120,
+    "scripts/lib/create-issue-stage-topology.test.ts": 120
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -401,7 +405,11 @@
     "scripts/pr-scope-declaration.test.ts": "measured",
     "scripts/lib/create-issue-stage-record-artifacts.test.ts": "measured",
     "scripts/toolchain/create-issue-final-acceptance.test.ts": "measured",
-    "scripts/toolchain/create-issue-authoring-contract.test.ts": "measured"
+    "scripts/toolchain/create-issue-authoring-contract.test.ts": "measured",
+    "scripts/create-issue-parked-migration.test.ts": "measured",
+    "scripts/lib/create-issue-comment-census.test.ts": "measured",
+    "scripts/lib/create-issue-completed-result.test.ts": "measured",
+    "scripts/lib/create-issue-stage-topology.test.ts": "measured"
   },
   "contentSha": {
     "scripts/pr-scope-declaration.test.ts": "2a3c5250ad55dbb2da3e34d082a03b7739361a6704ee2fed7fd8392e03485ed7"
@@ -603,6 +611,18 @@
     ],
     "scripts/toolchain/create-issue-authoring-contract.test.ts": [
       3
+    ],
+    "scripts/create-issue-parked-migration.test.ts": [
+      120
+    ],
+    "scripts/lib/create-issue-comment-census.test.ts": [
+      120
+    ],
+    "scripts/lib/create-issue-completed-result.test.ts": [
+      120
+    ],
+    "scripts/lib/create-issue-stage-topology.test.ts": [
+      120
     ]
   },
   "fileChangedAt": {
@@ -635,6 +655,10 @@
     "scripts/pr-scope-declaration.test.ts": "2026-08-02T14:54:18.508Z",
     "scripts/lib/create-issue-stage-record-artifacts.test.ts": "2026-08-02T14:35:47.608Z",
     "scripts/toolchain/create-issue-final-acceptance.test.ts": "2026-08-02T11:02:18.128Z",
-    "scripts/toolchain/create-issue-authoring-contract.test.ts": "2026-08-02T14:14:16.197Z"
+    "scripts/toolchain/create-issue-authoring-contract.test.ts": "2026-08-02T14:14:16.197Z",
+    "scripts/create-issue-parked-migration.test.ts": "2026-08-02T14:30:00.000Z",
+    "scripts/lib/create-issue-comment-census.test.ts": "2026-08-02T14:30:00.000Z",
+    "scripts/lib/create-issue-completed-result.test.ts": "2026-08-02T14:30:00.000Z",
+    "scripts/lib/create-issue-stage-topology.test.ts": "2026-08-02T14:30:00.000Z"
   }
 }

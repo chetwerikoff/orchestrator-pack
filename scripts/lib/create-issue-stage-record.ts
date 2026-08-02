@@ -5,3 +5,6 @@ export * from './create-issue-stage-record-gh.ts';
 export * from './create-issue-stage-record-receipt.ts';
 export * from './create-issue-stage-record-core.ts';
 export * from './create-issue-stage-record-artifacts.ts';
+export * from './create-issue-stage-topology.ts';
+export * from './create-issue-completed-result.ts';
+export * from './create-issue-comment-census.ts';

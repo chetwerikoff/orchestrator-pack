@@ -16,6 +16,12 @@ import {
   type StageCompletenessReceiptV1,
   type VerifiedRelayEvidenceV1,
 } from './lib/stage-completeness-core.ts';
+import {
+  buildAuthorDisposition,
+  buildSourceRecords,
+  buildTopology,
+  deriveAdmission,
+} from './lib/create-issue-stage-topology.ts';
 
 const TASK = 'issue:1150';
 const REVISION = 'r09';
@@ -94,11 +100,42 @@ function preLens(cardinality = 3, reviewTexts?: string[]) {
 }
 
 function ledgerOptions(fixture: ReturnType<typeof preLens>) {
+  let textOffset = 0;
+  const remoteAuthorities = fixture.receipts.map((receipt) => {
+    const topology = buildTopology({
+      issueNumber: 1150,
+      cycleId: 'cycle-1150',
+      sourceRevision: REVISION,
+      stage: receipt.stage,
+      stageAttemptId: receipt.stageAttemptId,
+      policyVersion: receipt.policyVersion,
+    }, 'T3', receipt.reviewerCardinality, CONFIG);
+    const lifecycle = {
+      state: 'active' as const,
+      cycleId: topology.cycleId,
+      stageAttemptId: topology.stageAttemptId,
+      sourceRevision: topology.sourceRevision,
+    };
+    const texts = fixture.texts.slice(textOffset, textOffset + receipt.reviewerCardinality);
+    textOffset += receipt.reviewerCardinality;
+    const sourceRecords = receipt.relayEligibleCaptures.flatMap((capture, index) => buildSourceRecords(topology, String(index + 1).padStart(2, '0'), texts[index] ?? CLEAN));
+    const admission = deriveAdmission(topology, lifecycle, sourceRecords);
+    const disposition = buildAuthorDisposition(topology, admission, {
+      occurrenceIds: [],
+      distinctDefects: [],
+      defectDispositions: [],
+      remedyDispositions: [],
+      m4: 'keep',
+      unresolvedOccurrenceIds: [],
+      settlement: 'settled',
+    });
+    return { topology, lifecycle, sourceRecords, disposition };
+  });
   return {
     reviewEconomics: true, phase: 'pre-lens' as const, issueRevision: REVISION,
     stageTerminalConfirmed: true,
     captureMetadata: fixture.captures.map((item, index) => ({ name: item.name, timestampMs: index + 1, captureIdentity: item.captureIdentity })),
-    stageReceipts: fixture.receipts, verifiedRelayEvidence: fixture.relay, episodeAuthority: fixture.authority,
+    stageReceipts: fixture.receipts, verifiedRelayEvidence: fixture.relay, episodeAuthority: fixture.authority, remoteAuthorities,
   };
 }
 
@@ -424,7 +461,9 @@ describe('Issue #1150 receipt-backed ledger', () => {
       writeFileSync(join(dir, 'verified-relay-evidence.json'), JSON.stringify(fixture.relay));
       fixture.captures.forEach((item, index) => writeFileSync(join(dir, item.name), fixture.texts[index]!));
       writeFileSync(join(dir, 'ledger.json'), JSON.stringify({ version: 2, counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 }, findings: [] }));
-      expect(runFindingLedgerCli(['node', 'scripts/finding-ledger-guard.mjs', '--ledger', join(dir, 'ledger.json'), '--captures-dir', dir, '--phase', 'pre-lens', '--stage-terminal', '--receipt-directory', canonical, '--tier-intake', join(canonical, 'tier-intake.json'), '--verified-relay-evidence', join(dir, 'verified-relay-evidence.json')])).toBe(0);
+      const remoteAuthorityPath = join(dir, 'remote-authority.json');
+      writeFileSync(remoteAuthorityPath, JSON.stringify(ledgerOptions(fixture).remoteAuthorities));
+      expect(runFindingLedgerCli(['node', 'scripts/finding-ledger-guard.mjs', '--ledger', join(dir, 'ledger.json'), '--captures-dir', dir, '--phase', 'pre-lens', '--stage-terminal', '--receipt-directory', canonical, '--tier-intake', join(canonical, 'tier-intake.json'), '--verified-relay-evidence', join(dir, 'verified-relay-evidence.json'), '--remote-authority', remoteAuthorityPath])).toBe(0);
     } finally {
       if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
       else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
