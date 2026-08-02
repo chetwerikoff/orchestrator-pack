@@ -1,3 +1,4 @@
+import '../toolchain/native-entrypoint-preflight.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, accessSync, constants } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -215,9 +216,10 @@ export async function runPreflight(repoRoot = REPO): Promise<Record<string, unkn
   const changed = status(repoRoot) !== baselineStatus || outputMembers(repoRoot).some(name => !baselineOutputs.has(name));
   if (finalIndex >= 0) rows[finalIndex].snapshot_status = changed ? 'changed' : 'unchanged';
   const blocked = rows.find(row => row.command_verdict === 'blocked');
-  const failed = rows.some(row => row.command_verdict === 'failed' || row.snapshot_status === 'changed');
+  const incomplete = rows.find(row => row.command_verdict !== 'passed' || !['clean', 'not_required'].includes(row.cleanup_status));
+  const failed = rows.some(row => row.command_verdict === 'failed' || row.snapshot_status === 'changed') || Boolean(incomplete);
   const summary = blocked ? 'blocked' : failed ? 'failed' : 'passed';
-  return result(rows, probes, summary, blocked?.reason_code ?? rows.find(row => row.reason_code)?.reason_code ?? (changed ? 'snapshot_changed' : null), finalIndex >= 0 ? rows[finalIndex] : undefined, repoRoot, changed);
+  return result(rows, probes, summary, blocked?.reason_code ?? incomplete?.reason_code ?? rows.find(row => row.reason_code)?.reason_code ?? (changed ? 'snapshot_changed' : null), finalIndex >= 0 ? rows[finalIndex] : undefined, repoRoot, changed);
 }
 function result(rows: Row[], probes: Probe[], summary: 'passed' | 'failed' | 'blocked', reason: string | null, carrier?: Row, repoRoot = REPO, changed = false): Record<string, unknown> {
   const entries = rows.filter(row => row.diagnostic).map(row => ({ row_id: row.row_id, phase: 'row', diagnostic: row.diagnostic }));
