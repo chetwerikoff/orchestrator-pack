@@ -1,5 +1,5 @@
 import type { ReviewLaneEvidence } from './create-issue-stage-record-types.ts';
-import { settleReviewLane, type ReviewLaneRouting, type ReviewLaneSettlement, type ReviewLaneSourceVerdict } from './review-lane-routing.ts';
+import { normalizeMaterialVerdict, settleReviewLane, type ReviewLaneRouting, type ReviewLaneSettlement, type ReviewLaneSourceVerdict, type ReviewLaneSourceVerdictEvidence } from './review-lane-routing.ts';
 
 export interface ReviewLaneRecordValidation {
   ok: boolean;
@@ -90,7 +90,7 @@ function isSettlement(value: unknown, routing: ReviewLaneRouting): value is Revi
     || !value.errors.every((error) => typeof error === 'string')) return false;
   if (value.ok !== (value.errors.length === 0)) return false;
   const expectedFinal = value.conflictDecision === 'conflict-requires-slot-03'
-    ? routing.possibleSlots : value.conflictDecision === 'no-conflict' ? routing.initiallyActivatedSlots : [];
+    ? routing.possibleSlots : routing.initiallyActivatedSlots;
   if (!sameSlots(value.finalRequiredSlots, expectedFinal)) return false;
   if (value.slotCensus.length !== routing.possibleSlots.length) return false;
   const activated = new Set([
@@ -106,10 +106,30 @@ function isSettlement(value: unknown, routing: ReviewLaneRouting): value is Revi
     && (row.state === 'activated' || row.state === 'not-activated'));
 }
 
+function isSourceVerdictEvidence(value: unknown): value is ReviewLaneSourceVerdictEvidence {
+  if (!isRecord(value) || !nonEmpty(value.producerEvidenceIdentity) || !nonEmpty(value.terminalClassification)) return false;
+  if (value.captureVerified !== undefined && typeof value.captureVerified !== 'boolean') return false;
+  if (value.digestMatches !== undefined && typeof value.digestMatches !== 'boolean') return false;
+  if (value.captureIdentity !== undefined && !nonEmpty(value.captureIdentity)) return false;
+  return true;
+}
+
+function sourceVerdictEvidenceMap(value: unknown): Record<string, ReviewLaneSourceVerdict> | null {
+  if (!isRecord(value)) return null;
+  const derived: Record<string, ReviewLaneSourceVerdict> = {};
+  const producerIdentities = new Set<string>();
+  for (const [slot, evidence] of Object.entries(value)) {
+    if (!isSourceVerdictEvidence(evidence) || producerIdentities.has(evidence.producerEvidenceIdentity)) return null;
+    producerIdentities.add(evidence.producerEvidenceIdentity);
+    derived[slot] = normalizeMaterialVerdict(evidence);
+  }
+  return derived;
+}
+
 export function validateReviewLaneRecord(value: unknown): ReviewLaneRecordValidation {
   const errors: string[] = [];
   if (!isRecord(value)) return { ok: false, errors: ['routed review record must be an object'] };
-  for (const field of ['routing', 'finalRequiredSlots', 'sourceVerdicts', 'conflictDecision', 'settlement']) {
+  for (const field of ['routing', 'finalRequiredSlots', 'sourceVerdicts', 'sourceVerdictEvidence', 'conflictDecision', 'settlement']) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) errors.push(`routed review record is missing ${field}`);
   }
   const routing = value.routing;
@@ -128,6 +148,16 @@ export function validateReviewLaneRecord(value: unknown): ReviewLaneRecordValida
         if (verdict === 'accept' || verdict === 'material-findings' || verdict === 'blocked' || verdict === 'refused' || verdict === 'unparseable') {
           parsedSourceVerdicts[slot] = verdict;
         }
+      }
+    }
+    const derivedSourceVerdicts = sourceVerdictEvidenceMap(value.sourceVerdictEvidence);
+    if (!derivedSourceVerdicts) {
+      errors.push('routed review record has malformed source verdict producer evidence');
+    } else if (parsedSourceVerdicts) {
+      const evidenceSlots = Object.keys(derivedSourceVerdicts).sort();
+      const verdictSlots = Object.keys(parsedSourceVerdicts).sort();
+      if (evidenceSlots.length !== verdictSlots.length || evidenceSlots.some((slot, index) => slot !== verdictSlots[index] || derivedSourceVerdicts[slot] !== parsedSourceVerdicts[slot])) {
+        errors.push('routed review record sourceVerdicts disagree with producer evidence');
       }
     }
     if (!isSettlement(settlement, routing)) errors.push('routed review record has malformed or inconsistent settlement');

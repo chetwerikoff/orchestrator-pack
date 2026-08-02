@@ -3,6 +3,7 @@ import type {
   ReviewLaneRouting,
   ReviewLaneSettlement,
   ReviewLaneSourceVerdict,
+  ReviewLaneSourceVerdictEvidence,
 } from './review-lane-routing.ts';
 
 export const JOURNAL_MARKER_PREFIX = 'opk-create-issue-journal';
@@ -103,6 +104,7 @@ export interface ReviewLaneEvidence {
   routing: ReviewLaneRouting;
   finalRequiredSlots: string[];
   sourceVerdicts: Record<string, ReviewLaneSourceVerdict>;
+  sourceVerdictEvidence: Record<string, ReviewLaneSourceVerdictEvidence>;
   conflictDecision: ReviewLaneConflictDecision;
   settlement: ReviewLaneSettlement;
 }

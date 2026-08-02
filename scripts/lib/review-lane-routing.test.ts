@@ -295,10 +295,12 @@ describe('conditional topology settlement', () => {
       '02': 'material-findings',
       '03': 'material-findings',
     }).finalRequiredSlots).toEqual(['01', '02', '03']);
-    expect(settleReviewLane(routing, {
+    const blocked = settleReviewLane(routing, {
       '01': 'blocked',
       '02': 'accept',
-    })).toMatchObject({ ok: false, conflictDecision: 'blocked-initial-source' });
+    });
+    expect(blocked).toMatchObject({ ok: false, conflictDecision: 'blocked-initial-source' });
+    expect(blocked.finalRequiredSlots).toEqual(['01', '02']);
   });
 });
 

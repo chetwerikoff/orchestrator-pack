@@ -80,6 +80,9 @@ export function parseConsumableStageReceipt(value: unknown): {
     errors.push('invalid producerEvidence');
   }
   const routedPolicy = policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION;
+  if (!routedPolicy && reviewLane !== undefined) {
+    errors.push('legacy stage policy cannot carry reviewLane evidence');
+  }
   if (!routedPolicy && !LEGACY_POLICY_VERSIONS.has(policyVersion)) {
     errors.push(`unsupported stage policy version: ${policyVersion}`);
   }

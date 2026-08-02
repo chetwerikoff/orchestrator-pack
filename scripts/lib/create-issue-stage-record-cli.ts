@@ -119,7 +119,7 @@ function runParsedCli<T>(
 function stageFinalizeUsage(): string {
   return [
     'Usage:',
-    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage-attempt-id <id> --tier <T1|T2|T3> [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
+    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> [--stage-attempt-id <id>] --tier <T1|T2|T3> [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> --tier-intake <path> --stage-evidence <path>... --author-dispositions <path> [--claude-producer-evidence <path>...] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--json]',
@@ -321,7 +321,7 @@ export function runStageFinalizeCli(argv: string[]): number {
         repo: opts.repo,
         issueNumber,
         sourceRevision,
-        stageAttemptId: parseRequiredNonEmptyString(opts.stageAttemptId, '--stage-attempt-id'),
+        stageAttemptId: opts.stageAttemptId ? parseRequiredNonEmptyString(opts.stageAttemptId, '--stage-attempt-id') : undefined,
         permittedLaneOverride: opts.permittedLaneOverride,
         tier,
         publicActor: opts.publicActor,

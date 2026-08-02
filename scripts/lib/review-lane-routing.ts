@@ -152,6 +152,10 @@ export interface MaterialVerdictEvidence {
   rawFindingCount?: number;
   materialFindingBlocks?: number;
 }
+export interface ReviewLaneSourceVerdictEvidence extends MaterialVerdictEvidence {
+  producerEvidenceIdentity: string;
+  captureIdentity?: string;
+}
 export interface ReviewLaneSettlement {
   ok: boolean;
   conflictDecision: ReviewLaneConflictDecision;
@@ -448,5 +452,5 @@ export function settleReviewLane(routing: ReviewLaneRouting, verdicts: Readonly<
       conflictDecision = 'blocked-initial-source';
     }
   }
-  return { ok: errors.length === 0, conflictDecision, finalRequiredSlots: errors.length === 0 ? finalRequiredSlots : [], slotCensus, errors };
+  return { ok: errors.length === 0, conflictDecision, finalRequiredSlots, slotCensus, errors };
 }

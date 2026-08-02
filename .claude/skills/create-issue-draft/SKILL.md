@@ -208,7 +208,9 @@ round identities, relay completeness, and activation state.
 ### Issue journal passage records — Issue #1152
 
 The flow-manager uses the TypeScript journal commands as the only writers for the
-Issue-bound passage record:
+Issue-bound passage record. Omitting `--stage-attempt-id` preserves the legacy
+single/triple-source rollout; supplying it opts into review-lane-routing/v1 only
+when the routed receipt producer is available:
 
 - `node --experimental-strip-types scripts/create-issue-stage-finalize.ts start-cycle`
   admits one closed `create-issue-review-cycle/v1` root/continuation and bootstraps
@@ -762,7 +764,7 @@ projections, not workflow gates.
 ```bash
 node scripts/create-issue-stage-finalize.ts start-cycle \
   --repo <owner/name> --issue-number <N> --source-revision <rNN> \
-  --stage-attempt-id <stageAttemptId> --tier <T1|T2|T3>
+  [--stage-attempt-id <stageAttemptId>] --tier <T1|T2|T3> [--permitted-lane-override <normal|disputed>]
 
 node scripts/create-issue-stage-finalize.ts publish-stage \
   --repo <owner/name> --issue-number <N> --receipt "$REVIEW_DIR/<stage-receipt>.json"

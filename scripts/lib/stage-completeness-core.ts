@@ -498,6 +498,13 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
     if (attempts.length === 0) { errors.push(`stage ${receipt.stage} missing reviewer slot ${slot}`); allFinalComplete = false; continue; }
     if (attempts.length > 2) errors.push(`stage ${receipt.stage} slot ${slot} exceeds one retry`);
     if (attempts[0]?.attemptOrdinal !== 1) errors.push(`stage ${receipt.stage} slot ${slot} must begin at attemptOrdinal 1`);
+    if (receipt.reviewLane) {
+      const evidence = receipt.reviewLane.sourceVerdictEvidence[slot];
+      const finalCapture = attempts.at(-1)?.capture;
+      if (evidence?.captureIdentity !== undefined && evidence.captureIdentity !== finalCapture?.captureIdentity) {
+        errors.push(`stage ${receipt.stage} reviewLane producer evidence does not match capture for slot ${slot}`);
+      }
+    }
     if (attempts.length === 2) {
       const first = attempts[0]!; const retry = attempts[1]!;
       if (retry.attemptOrdinal !== 2 || !retry.retryAttempt) errors.push(`stage ${receipt.stage} slot ${slot} retry envelope is malformed`);
@@ -610,6 +617,7 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   const reviewLane = value.reviewLane;
   const routedPolicy = policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION;
   if (reviewLane !== undefined && !isReviewLaneEvidence(reviewLane)) errors.push(`${label} reviewLane must be complete immutable evidence`);
+  if (!routedPolicy && reviewLane !== undefined) errors.push(`${label} legacy policy cannot carry routed reviewLane evidence`);
   if (routedPolicy && !isReviewLaneEvidence(reviewLane)) errors.push(`${label} review-lane-routing/v1 requires full reviewLane evidence`);
   if (tier !== 'T1' && tier !== 'T2' && tier !== 'T3') errors.push(`${label} has unknown tier`);
   if (!COUNTED_STAGE_TOKENS.has(stage as ReviewStage)) errors.push(`${label} has unknown stage`);

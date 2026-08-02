@@ -63,6 +63,10 @@ function routedFixture() {
     routing,
     finalRequiredSlots: ['01', '02'],
     sourceVerdicts: { '01': 'accept' as const, '02': 'accept' as const },
+    sourceVerdictEvidence: {
+      '01': { producerEvidenceIdentity: 'producer-01', captureIdentity: 'capture-01', terminalClassification: 'complete', captureVerified: true, digestMatches: true, verdictText: 'NO_FINDINGS', rawFindingCount: 0 },
+      '02': { producerEvidenceIdentity: 'producer-02', captureIdentity: 'capture-02', terminalClassification: 'complete', captureVerified: true, digestMatches: true, verdictText: 'NO_FINDINGS', rawFindingCount: 0 },
+    },
     conflictDecision: 'no-conflict' as const,
     settlement,
   };
@@ -243,6 +247,41 @@ describe('review-lane production activation', () => {
     }).errors.join('\n')).not.toContain('reviewLaneRouting');
   });
 
+  it('keeps a legacy cycle and triple-source receipt publishable', () => {
+    const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
+    const transport = createMockTransport(state);
+    const cycle = startReviewCycle(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      workdir: makeTempDir(),
+    });
+    expect(cycle.ok).toBe(true);
+    const published = publishSettledStageRecord(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      receipt: {
+        tier: 'T3',
+        stage: 'competitive',
+        cycleId: cycle.cycleId,
+        stageAttemptId: 'legacy-attempt-1',
+        policyVersion: 'triple-source/v1',
+        sourceRevision: 'r01',
+        outcome: 'complete',
+        reviewerCardinality: 3,
+        completedSourceCount: 3,
+        cycleBinding: { cycleId: cycle.cycleId, sourceRevision: 'r01', boundBeforeLaunch: true },
+        producerEvidence: 'not-applicable',
+        tierTransition: 'none',
+      },
+      workdir: makeTempDir(),
+    });
+    expect(published.ok).toBe(true);
+    expect(state.comments.some((comment) => comment.body.includes('create-issue-stage-record/v1'))).toBe(true);
+  });
+
   it('accepts one full routed receipt through both parsers and publishes the stage event', () => {
     const state = createMockGhState({ issue: { title: 't', body: familyIssueBody, labels: [] } });
     const transport = createMockTransport(state);
@@ -318,7 +357,9 @@ describe('review-lane production activation', () => {
       tierIntake: { schema: 'tier-intake/v1' as const, producer: 'test', taskIdentity: 'task', kind: 'fresh' as const, priorTier: 'T3' as const, firstRevision: 'r00' },
       receiptInventory: { source: 'canonical-review-directory' as const, taskIdentity: 'task', episodeFirstRevision: 'r00', reviewEpisodeId: 'task@r00', stageReceiptIds: ['task@r00:stage-receipt:0001'] },
     };
-    expect(deriveReviewEpisodeState([stageReceipt], [], authority).errors.join('\n')).not.toContain('reviewLane');
+    const episode = deriveReviewEpisodeState([stageReceipt], [], authority);
+    expect(episode.errors.join('\n')).not.toContain('reviewLane');
+    expect(episode.activationReady).toBe(false);
     const published = publishSettledStageRecord(transport, {
       repo: 'chetwerikoff/orchestrator-pack',
       issueNumber: 1201,
@@ -341,6 +382,82 @@ describe('review-lane production activation', () => {
     });
     expect(published.ok).toBe(true);
     expect(state.comments.some((comment) => comment.body.includes('create-issue-stage-record/v1'))).toBe(true);
+  });
+
+  it('rejects full reviewLane evidence on a legacy policy receipt', () => {
+    const routed = routedFixture();
+    const parsed = parseConsumableStageReceipt({
+      tier: 'T3',
+      stage: 'competitive',
+      cycleId: 'cycle-1',
+      stageAttemptId: 'attempt-1',
+      policyVersion: 'triple-source/v1',
+      sourceRevision: 'r01',
+      outcome: 'complete',
+      reviewerCardinality: 3,
+      completedSourceCount: 2,
+      cycleBinding: { cycleId: 'cycle-1', sourceRevision: 'r01', boundBeforeLaunch: true },
+      producerEvidence: 'not-applicable',
+      tierTransition: 'none',
+      reviewLane: routed,
+    });
+    expect(parsed.receipt).toBeNull();
+    expect(parsed.errors.join('\n')).toContain('legacy');
+  });
+
+  it('rejects a routed receipt when the cycle has no immutable route', () => {
+    const state = createMockGhState({ issue: { title: 't', body: familyIssueBody, labels: [] } });
+    const transport = createMockTransport(state);
+    const cycle = startReviewCycle(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      workdir: makeTempDir(),
+    });
+    expect(cycle.ok).toBe(true);
+    const routed = routedFixture();
+    const published = publishSettledStageRecord(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      receipt: {
+        tier: 'T3',
+        stage: 'competitive',
+        cycleId: cycle.cycleId,
+        stageAttemptId: 'attempt-1',
+        policyVersion: 'review-lane-routing/v1',
+        sourceRevision: 'r01',
+        outcome: 'complete',
+        reviewerCardinality: 3,
+        completedSourceCount: 2,
+        cycleBinding: { cycleId: cycle.cycleId, sourceRevision: 'r01', boundBeforeLaunch: true },
+        producerEvidence: 'not-applicable',
+        tierTransition: 'none',
+        reviewLane: routed,
+      },
+      workdir: makeTempDir(),
+    });
+    expect(published.ok).toBe(false);
+    expect(published.diagnostics.map((item) => item.message).join('\n')).toContain('requires an immutable routed cycle');
+  });
+
+  it('rejects source verdicts that disagree with independently supplied producer evidence', () => {
+    const routed = routedFixture();
+    const evidence = {
+      '01': { producerEvidenceIdentity: 'producer-01', captureIdentity: 'capture-01', terminalClassification: 'complete', captureVerified: true, digestMatches: true, verdictText: 'NO_FINDINGS', rawFindingCount: 0 },
+      '02': { producerEvidenceIdentity: 'producer-02', captureIdentity: 'capture-02', terminalClassification: 'complete', captureVerified: true, digestMatches: true, verdictText: 'NO_FINDINGS', rawFindingCount: 0 },
+    };
+    const parsed = parseConsumableStageReceipt({
+      tier: 'T3', stage: 'competitive', cycleId: 'cycle-1', stageAttemptId: 'attempt-1',
+      policyVersion: 'review-lane-routing/v1', sourceRevision: 'r01', outcome: 'complete',
+      reviewerCardinality: 3, completedSourceCount: 2,
+      cycleBinding: { cycleId: 'cycle-1', sourceRevision: 'r01', boundBeforeLaunch: true },
+      producerEvidence: 'not-applicable', tierTransition: 'none',
+      reviewLane: { ...routed, sourceVerdicts: { '01': 'material-findings', '02': 'material-findings' }, sourceVerdictEvidence: evidence },
+    });
+    expect(parsed.receipt).toBeNull();
+    expect(parsed.errors.join('\n')).toContain('producer evidence');
   });
 
   it('rejects a legacy receipt on a routed cycle head', () => {

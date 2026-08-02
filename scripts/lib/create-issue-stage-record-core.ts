@@ -643,6 +643,12 @@ export function publishSettledStageRecord(
     message,
   })));
   const cycleRoute = headCycle['routed-lane'];
+  if (receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION && !cycleRoute) {
+    diagnostics.push({
+      code: 'conflicting-remote-event',
+      message: 'review-lane-routing/v1 requires an immutable routed cycle head',
+    });
+  }
   if (cycleRoute) {
     if (receipt.policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) {
       diagnostics.push({
