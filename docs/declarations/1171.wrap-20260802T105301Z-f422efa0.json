@@ -7,10 +7,11 @@
   "baseline": {
     "commit_sha": "a888dbc8feadd1d74c266fad7e1ed4c24c8627a9",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:f849d49dc2c1c08226046b7c0f73e072f1f4cc20879150cd90a0eff0c68e0293"
+    "active_scope_hash": "sha256:3aee2079666ea823cccf9ae2faf579d0f8a72dddbcdff7f8ae86d9becc479ec7"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/create-issue-draft/SKILL.md",
     "docs/migration_notes.md",
     "docs/tiering.md",
     "scripts/finding-ledger-guard.mjs",
@@ -27,5 +28,20 @@
     "scripts/tier-gate-guard.test.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:f849d49dc2c1c08226046b7c0f73e072f1f4cc20879150cd90a0eff0c68e0293",
+      "new_active_scope_hash": "sha256:3aee2079666ea823cccf9ae2faf579d0f8a72dddbcdff7f8ae86d9becc479ec7",
+      "changed": {
+        "added": [
+          ".cursor/skills/create-issue-draft/SKILL.md"
+        ],
+        "removed": []
+      },
+      "reason": "preserve correction history across replay workdirs and remove stale activation policy",
+      "actor": "local",
+      "timestamp": "2026-08-02T11:26:11.699Z",
+      "applied": true
+    }
+  ]
 }
