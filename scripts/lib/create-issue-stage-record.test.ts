@@ -717,7 +717,7 @@ describe('create-issue-final-acceptance contract parity', () => {
   });
 
   it('rejects an external receipt chain before final acceptance guards run', () => {
-    const state = createMockGhState({ issue: { title: 't', body: 'issue revision r01 body', labels: [] } });
+    const state = createMockGhState({ issue: { title: 't', body: '<!-- source-revision: r01 -->\nissue body', labels: [] } });
     const transport = createMockTransport(state);
     const workdir = makeTempDir();
     const started = startReviewCycle(transport, {
