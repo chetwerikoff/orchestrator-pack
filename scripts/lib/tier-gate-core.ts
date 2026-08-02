@@ -6,9 +6,9 @@
  * read-old/write-none census is the only legacy demotion compatibility surface.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { checkNeverSkippedFloors } from './tier-gate-floor.ts';
+import { canonicalReviewStateRoot, resolveCanonicalReviewDirectory } from './canonical-review-directory.ts';
 
 export { checkWorkerSafetyFloor } from './tier-gate-floor.ts';
 
@@ -471,7 +471,7 @@ function issueNumberFromStem(stem: string): string | null {
 }
 
 function canonicalIssueStateRoot(): string {
-  return resolve(process.env.HOME ?? homedir(), '.local', 'state', 'create-issue-draft');
+  return canonicalReviewStateRoot();
 }
 
 function deriveWorkdir(draftPath: string): WorkdirLayout | null {
@@ -487,9 +487,7 @@ function deriveWorkdir(draftPath: string): WorkdirLayout | null {
     workdir,
     stem,
     taskIdentity,
-    reviewDir: canonicalIssueWorkdir
-      ? join(canonicalIssueStateRoot(), '.review', taskNumber)
-      : join(issueDraftsDir, '.review', taskIdentity),
+    reviewDir: resolveCanonicalReviewDirectory({ taskIdentity }).directory,
     canonicalIssueWorkdir,
   };
 }
@@ -636,7 +634,7 @@ type CanonicalCaptureKind = 'competitive' | 'architectural-review' | 'architectu
 
 function canonicalCaptureKind(name: string): CanonicalCaptureKind | null {
   if (/^pass-\d+-competitive(?:-\d+)?\.capture\.txt$/i.test(name)) return 'competitive';
-  if (/^pass-\d+-architectural-review\.capture\.txt$/i.test(name)) return 'architectural-review';
+  if (/^pass-\d+-architectural-review(?:-\d{2})?\.capture\.txt$/i.test(name)) return 'architectural-review';
   if (/^pass-\d+-architectural-lens\.capture\.txt$/i.test(name)) return 'architectural-lens';
   if (/^pass-\d+-(?:light-)?architectural\.capture\.txt$/i.test(name)) return 'architectural';
   return null;

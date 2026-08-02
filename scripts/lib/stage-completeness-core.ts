@@ -8,10 +8,14 @@
  * supplied canonical receipt inventory and producer evidence.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { basename, join } from 'node:path';
 import { parseComplexityTierFence } from './tier-gate-core.ts';
 import { resolveReviewArtifacts } from './tier-gate-floor.ts';
+import {
+  findLegacyReceiptPaths,
+  resolveCanonicalReviewDirectory as resolveCanonicalReviewDirectoryShared,
+} from './canonical-review-directory.ts';
+export { findLegacyReceiptPaths } from './canonical-review-directory.ts';
 
 export const GRANDFATHERED_REVIEW_DIR_BASENAMES = new Set([
   '206-ao-010-session-status-readers-migration',
@@ -216,24 +220,11 @@ export interface CanonicalReviewDirectoryV1 {
   intakePath: string;
 }
 
-function numericIssueFromTaskIdentity(taskIdentity: string): string | null {
-  const candidate = taskIdentity.trim().split(':').at(-1)?.trim() ?? '';
-  const issueMatch = /^(\d+)(?:-|$)/.exec(candidate);
-  if (!issueMatch?.[1]) return null;
-  const normalized = issueMatch[1].replace(/^0+(?=\d)/, '');
-  return normalized === '0' ? null : normalized;
-}
-
 export function resolveCanonicalReviewDirectory(
   intake: Pick<TierIntakeAuthorityV1, 'taskIdentity'>,
   stateRootOverride?: string,
 ): CanonicalReviewDirectoryV1 {
-  const issueNumber = numericIssueFromTaskIdentity(intake.taskIdentity);
-  if (!issueNumber) throw new Error('tier-intake/v1 taskIdentity must bind a numeric Issue identity');
-  const stateRoot = resolve(stateRootOverride ?? process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT
-    ?? join(process.env.HOME ?? homedir(), '.local', 'state', 'create-issue-draft'));
-  const directory = resolve(stateRoot, '.review', issueNumber);
-  return { stateRoot, issueNumber, directory, intakePath: join(directory, 'tier-intake.json') };
+  return resolveCanonicalReviewDirectoryShared(intake, stateRootOverride);
 }
 export interface ReviewEpisodeStateV1 {
   reviewEpisodeId: string | null;

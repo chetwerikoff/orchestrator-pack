@@ -248,6 +248,33 @@ describe('Issue #1150 stage authority', () => {
     }
   });
 
+  it('rejects a valid receipt left in a finite legacy workdir layout', () => {
+    const tempHome = mkdtempSync(join(tmpdir(), 'opk-legacy-receipt-'));
+    const previousHome = process.env.HOME;
+    try {
+      process.env.HOME = tempHome;
+      const fixture = preLens();
+      const stateRoot = join(tempHome, '.local', 'state', 'create-issue-draft');
+      const canonical = join(stateRoot, '.review', '1150');
+      const legacy = join(stateRoot, '1150-replay', 'docs', 'issues_drafts', '.review', '1150-replay');
+      mkdirSync(canonical, { recursive: true });
+      mkdirSync(legacy, { recursive: true });
+      const intakePath = join(canonical, 'tier-intake.json');
+      writeFileSync(intakePath, JSON.stringify(fixture.authority.tierIntake));
+      writeFileSync(join(canonical, 'stage-completeness-receipt-1.json'), JSON.stringify(fixture.receipts[0]));
+      writeFileSync(join(legacy, 'stage-completeness-receipt-legacy.json'), JSON.stringify(fixture.receipts[0]));
+
+      expect(() => loadCanonicalReceiptInventory({
+        tierIntakePath: intakePath,
+        receiptDirectory: canonical,
+      })).toThrow(/legacy_receipt_location_blocked/);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
   it('preserves array-backed stage receipts as parsed values for final acceptance', () => {
     const tempHome = mkdtempSync(join(tmpdir(), 'opk-array-receipts-'));
     const previousHome = process.env.HOME;

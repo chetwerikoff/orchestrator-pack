@@ -251,6 +251,13 @@ describe('Issue #1142 free pre-capture adjacent correction', () => {
     expect(run(current, transitionEvidence).errors.join('\n')).toContain('first authoritative receipt');
   });
 
+  it('rejects correction after a source-suffixed canonical reviewer capture', () => {
+    const fixture = correction('T3', 'T2', {
+      captures: [{ captureName: 'pass-02-architectural-review-01.capture.txt', captureText: 'issue_revision: r01\nNO_FINDINGS' }],
+    });
+    expect(run(fixture.current, fixture.transitionEvidence).errors.join('\n')).toContain('already closed');
+  });
+
   it('rejects correction after a selected canonical reviewer capture', () => {
     const fixture = correction('T3', 'T2', {
       captures: [{ captureName: 'pass-01-competitive.capture.txt', captureText: 'issue_revision: r01\nNO_FINDINGS' }],

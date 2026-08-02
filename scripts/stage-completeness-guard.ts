@@ -6,6 +6,7 @@ import {
   checkStageCompletenessGuard,
   formatStageCompletenessPassMessage,
   STAGE_COMPLETENESS_RECEIPT_SCHEMA,
+  findLegacyReceiptPaths,
   resolveCanonicalReviewDirectory,
   type ReviewEpisodeDerivationAuthorityV1,
   type StageCompletenessReceiptV1,
@@ -54,6 +55,10 @@ export function loadCanonicalReceiptInventory(opts: CanonicalReceiptInventoryOpt
   if (!opts.tierIntakePath) throw new Error('--tier-intake is required for receipt-backed review episodes');
   const intake = readJson(opts.tierIntakePath) as TierIntakeAuthorityV1;
   const canonical = resolveCanonicalReviewDirectory(intake);
+  const legacyReceiptPath = findLegacyReceiptPaths(intake)[0];
+  if (legacyReceiptPath) {
+    throw new Error(`legacy_receipt_location_blocked: receipt found outside canonical authority at ${legacyReceiptPath}`);
+  }
   if (resolve(opts.tierIntakePath) !== canonical.intakePath) {
     throw new Error(`legacy_receipt_location_blocked: tier intake authority must be ${canonical.intakePath}`);
   }
