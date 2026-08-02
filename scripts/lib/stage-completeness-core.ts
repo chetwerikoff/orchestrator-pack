@@ -7,6 +7,7 @@
  * state is recomputed for every guard invocation against an independently
  * supplied canonical receipt inventory and producer evidence.
  */
+import { checkRemoteAuthorities, type RemoteAuthorityInput } from './create-issue-stage-topology.ts';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { parseComplexityTierFence } from './tier-gate-core.ts';
@@ -255,6 +256,8 @@ export interface StageCompletenessGuardOptions {
   verifiedRelayEvidence?: unknown[];
   episodeAuthority?: ReviewEpisodeDerivationAuthorityV1;
   phase?: 'pre-lens' | 'final-acceptance';
+  remoteAuthority?: RemoteAuthorityInput;
+  remoteAuthorities?: readonly RemoteAuthorityInput[];
 }
 export type LegacyStageCompletenessReceipt = {
   tier: string;
@@ -946,6 +949,11 @@ function checkReceiptBackedStageCompleteness(tier: ReviewTier, options: StageCom
   return { ok: true, errors: [], noop: false, episodeState: state, receipt: { tier: state.tier, reviewEpisodeId: state.reviewEpisodeId, policyVersion, logicalRoundIds: state.logicalRoundIds, governedCaptureUnion: state.governedCaptureUnion, relayedCaptureUnion: state.relayedCaptureUnion, rawFindingCount: state.rawFindingCount, activationReady: state.activationReady } };
 }
 export function checkStageCompletenessGuard(draftText: string, options: StageCompletenessGuardOptions = {}): StageCompletenessGuardResult {
+  const remoteInputs = options.remoteAuthorities ?? (options.remoteAuthority ? [options.remoteAuthority] : []);
+  if (remoteInputs.length > 0) {
+    const authority = checkRemoteAuthorities(remoteInputs);
+    if (!authority.ok) return { ok: false, errors: authority.errors.map((error) => 'remote authority: ' + error), noop: false, receipt: null };
+  }
   const fence = parseComplexityTierFence(draftText);
   if (fence.kind !== 'tier-fence') return { ok: true, errors: [], noop: true, receipt: null };
   if (options.stageReceipts !== undefined) return checkReceiptBackedStageCompleteness(fence.tier as ReviewTier, options);

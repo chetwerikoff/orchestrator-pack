@@ -11,6 +11,7 @@ import {
   resolveCanonicalReviewDirectory,
   validateReviewEpisodeTopology,
 } from './lib/stage-completeness-core.ts';
+import { checkRemoteAuthorities } from './lib/create-issue-stage-topology.ts';
 
 export const PROTECTED_TYPES = new Set(['security', 'scope-violation']);
 const REVIEW_ECONOMICS_MARKER = 'review-economics-contract: v1';
@@ -472,6 +473,11 @@ function legacyCheck(captures, ledger, errors) {
 }
 
 export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options = {}) {
+  const remoteInputs = options.remoteAuthorities ?? (options.remoteAuthority ? [options.remoteAuthority] : []);
+  if (remoteInputs.length > 0) {
+    const authority = checkRemoteAuthorities(remoteInputs);
+    if (!authority.ok) return { ok: false, errors: authority.errors.map((error) => 'finding-ledger: remote authority ' + error), ledger: { version: 1, draft: null, counts: null, findings: [] }, captureFindings: [], protectedSignals: [] };
+  }
   const captures = Array.isArray(captureOrCaptures) ? captureOrCaptures.map(String) : [String(captureOrCaptures ?? '')];
   let metadata = Array.isArray(options.captureMetadata) ? options.captureMetadata : captures.map((_, index) => ({ name: `pass-${String(index + 1).padStart(2, '0')}-architectural.capture.txt`, timestampMs: index + 1 }));
   const errors = []; let ledger;

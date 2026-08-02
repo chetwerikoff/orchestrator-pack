@@ -1,0 +1,22 @@
+{
+  "schema": "create-issue-parked-review-import/v1",
+  "issueNumber": 1173,
+  "sourceRevision": "r01",
+  "migrationKind": "legacy-cycle-settled",
+  "dependency": "#1186",
+  "closure": "completed-cycle-status;final-acceptance-outstanding",
+  "pinnedComments": [
+    {
+      "id": 5152880935,
+      "body": "## Review acceptance history\n\n- Initial architectural lens: rejected with AR1173-R01-01 through AR1173-R01-07.\n- Author continuation r02 corrected the design: explicit single-variable millisecond contract, migration/operator-adoption scope, deterministic timeout/page-loss behavior, fixed delay instead of jitter, and AC-aligned evidence.\n- Mechanical guards then exposed missing producer-emission mappings; author continuation r03 added the AC1–AC13 mappings.\n- Author continuation r03 added explicit dispositions for all seven findings; each is addressed in the live Issue body.\n- Current guard result: positive-outcome PASS; parked-root PASS; contract-evidence PASS; smoke-test-plan PASS. Tier remains T1.\n- Collision recorded: open PR #1180 touches `scripts/chatgpt-browser-turn/state-light-turn.ts`, `state-light-turn.test-fixtures.ts`, and `README.md`; implementation ordering must account for that overlap.\n- Transport incident recorded: round-02 helper stalled at poll 500 with `completion_ready=true` and empty reply metadata; the architect performed a read-only rescue harvest. No resend or duplicate chat occurred.\n\nNext required stage: fresh terminal architectural review, followed by final acceptance if the terminal source is clean or its findings are dispositioned.",
+      "byteLength": 1282,
+      "sha256": "e2c34a959eeb78ff5865320244eb401a582dcd18c8eb6b21d77e4fba49fc0e6b"
+    },
+    {
+      "id": 5152950548,
+      "body": "Cycle complete except final acceptance. Final acceptance is blocked by Issue #1186, which owns the canonical comment-census defect. The seven AR1173-R01-01 through AR1173-R01-07 dispositions are already published in the preceding acceptance-history comment; no further review stage will start until #1186 lands.",
+      "byteLength": 311,
+      "sha256": "b64813de9a39a0d163fc3d9a3f1a2dca17c507137c553ac572c7e1ef2f2878a0"
+    }
+  ]
+}
