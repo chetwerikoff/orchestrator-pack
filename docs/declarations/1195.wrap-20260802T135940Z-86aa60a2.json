@@ -7,14 +7,30 @@
   "baseline": {
     "commit_sha": "d3df2fb75663c4d0eefb19b293e8474a67122675",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:06908836a83ad0d5abb2bb4eecd042de485bdeddf63d65ac95144980a2ea2d32"
+    "active_scope_hash": "sha256:6086080575b1fae60e40267941d039d221eec7f52569e2d640edcac2783f835b"
   },
   "declared_paths": [
     ".claude/skills/create-issue-draft/SKILL.md",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
   ],
   "declared_globs": [
     "scripts/toolchain/create-issue-*.test.ts"
   ],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:06908836a83ad0d5abb2bb4eecd042de485bdeddf63d65ac95144980a2ea2d32",
+      "new_active_scope_hash": "sha256:6086080575b1fae60e40267941d039d221eec7f52569e2d640edcac2783f835b",
+      "changed": {
+        "added": [
+          "scripts/vitest-runtime-history.json"
+        ],
+        "removed": []
+      },
+      "reason": "Add measured runtime history for the new focused authoring contract test",
+      "actor": "local",
+      "timestamp": "2026-08-02T14:14:38.002Z",
+      "applied": true
+    }
+  ]
 }
