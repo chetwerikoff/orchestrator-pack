@@ -341,6 +341,7 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
   });
 
   it('classifies absent parent service attributes as absent without service_attribute timeout (#1077)', async () => {
+    let budget: ReturnType<typeof createTurnOperationBudget>;
     let nestedFirstCalls = 0;
     const hangingNestedFirst = () => ({
       getAttribute: async () => {
@@ -369,7 +370,7 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
-      const budget = createTurnOperationBudget(5_000);
+      budget = createTurnOperationBudget(5_000);
       const startedAtMs = Date.now();
       await expect(runtimeWitnessSurfaceAvailable(page, budget)).resolves.toBe('absent');
       assertTimingBudgetInvariant({
