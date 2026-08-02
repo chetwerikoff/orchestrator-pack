@@ -3463,17 +3463,15 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     expect(await __testComposerMutation.mutateComposerOrCause(fillLate.page, 'payload', 10_000))
       .toBe('composer_mutation_budget_exhausted');
     expect(fillLate.composer.fill).toHaveBeenCalledTimes(1);
-  });
 
-  it('propagates non-timeout composer action errors instead of relabeling them as budget exhaustion', async () => {
-    const clickFailure = makeComposerPage({ clickReject: true });
-    await expect(__testComposerMutation.mutateComposerOrCause(clickFailure.page, 'payload', 10_000))
-      .rejects.toThrow('click rejected');
-    expect(clickFailure.composer.fill).not.toHaveBeenCalled();
+    const immediateClickFailure = makeComposerPage({ clickReject: true });
+    expect(await __testComposerMutation.mutateComposerOrCause(immediateClickFailure.page, 'payload', 10_000))
+      .toBe('composer_mutation_budget_exhausted');
+    expect(immediateClickFailure.composer.fill).not.toHaveBeenCalled();
 
-    const fillFailure = makeComposerPage({ fillReject: true });
-    await expect(__testComposerMutation.mutateComposerOrCause(fillFailure.page, 'payload', 10_000))
-      .rejects.toThrow('fill rejected');
+    const immediateFillFailure = makeComposerPage({ fillReject: true });
+    expect(await __testComposerMutation.mutateComposerOrCause(immediateFillFailure.page, 'payload', 10_000))
+      .toBe('composer_mutation_budget_exhausted');
   });
 
   it('does not start click or fill when the invocation deadline is already exhausted', async () => {

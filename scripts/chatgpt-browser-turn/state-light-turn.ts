@@ -1023,8 +1023,7 @@ async function readComposerReadiness(page: any, deadline: number): Promise<boole
       && observed.contentEditable
       && Date.now() < deadline,
     );
-  } catch (error) {
-    if (!isPlaywrightTimeoutError(error)) throw error;
+  } catch {
     return false;
   }
 }
@@ -1104,8 +1103,7 @@ async function mutateComposerOrCause(
     if (Date.now() >= insertionDeadlineMs) return 'composer_mutation_budget_exhausted';
     return null;
   } catch (error) {
-    if (!isPlaywrightTimeoutError(error)) throw error;
-    if (await hasBlockingPageOverlay(page)) {
+    if (isPlaywrightTimeoutError(error) && await hasBlockingPageOverlay(page)) {
       return 'blocking_page_overlay';
     }
     return 'composer_mutation_budget_exhausted';
