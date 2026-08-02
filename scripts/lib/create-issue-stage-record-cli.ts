@@ -39,6 +39,7 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   tierIntakePath?: string;
   stageEvidencePaths: string[];
   authorDispositionsPath?: string;
+  claudeProducerEvidencePaths: string[];
   phase?: 'pre-lens' | 'final-acceptance';
 }
 
@@ -118,8 +119,8 @@ function stageFinalizeUsage(): string {
     '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --tier <T1|T2|T3> [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
-    '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> --tier-intake <path> --stage-evidence <path>... --author-dispositions <path> [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--json]',
-    '  create-issue-stage-finalize.ts check-artifacts --review-dir <path> --tier-intake <path> --stage-evidence <path>... --author-dispositions <path> [--output-dir <path>] [--json]',
+    '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> --tier-intake <path> --stage-evidence <path>... --author-dispositions <path> [--claude-producer-evidence <path>...] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--json]',
+    '  create-issue-stage-finalize.ts check-artifacts --review-dir <path> --tier-intake <path> --stage-evidence <path>... --author-dispositions <path> [--claude-producer-evidence <path>...] [--output-dir <path>] [--json]',
   ].join('\n');
 }
 
@@ -135,6 +136,7 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
     publicActor: 'cursor-flow-manager',
     json: false,
     stageEvidencePaths: [],
+    claudeProducerEvidencePaths: [],
   };
   const artifactCommand = command === 'produce-artifacts' || command === 'check-artifacts';
   const requireArtifactCommand = (arg: string): void => {
@@ -183,6 +185,10 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
       case '--author-dispositions':
         requireArtifactCommand(arg);
         opts.authorDispositionsPath = String(argv[++i] ?? '');
+        break;
+      case '--claude-producer-evidence':
+        requireArtifactCommand(arg);
+        opts.claudeProducerEvidencePaths.push(String(argv[++i] ?? ''));
         break;
       case '--phase': {
         requireArtifactCommand(arg);
@@ -279,6 +285,7 @@ export function runStageFinalizeCli(argv: string[]): number {
         tierIntakePath,
         stageEvidencePaths: opts.stageEvidencePaths,
         authorDispositionsPath,
+        claudeProducerEvidencePaths: opts.claudeProducerEvidencePaths,
         outputDir: opts.outputDir,
         phase: opts.phase,
       };

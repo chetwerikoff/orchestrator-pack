@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -95,6 +96,77 @@ function fixture() {
   };
   writeFileSync(stageEvidencePath, JSON.stringify(evidence));
   return { dir, capturePath, stageEvidencePath, intakePath, authorPath, evidence };
+}
+
+function writeClaudeLensFixture(input: ReturnType<typeof fixture>) {
+  const capturePath = join(input.dir, 'pass-03-architectural-lens.capture.txt');
+  const producerEvidencePath = join(input.dir, 'claude-producer-evidence.json');
+  writeFileSync(capturePath, CLEAN_CAPTURE);
+  writeFileSync(input.intakePath, JSON.stringify({
+    schema: 'tier-intake/v1',
+    producer: 'flow-manager',
+    taskIdentity: TASK,
+    kind: 'fresh',
+    priorTier: 'T2',
+    firstRevision: REVISION,
+  }));
+  const stageAttemptId = 'attempt-lens';
+  const invocationId = 'claude-invocation';
+  const producingRunIdentity = 'claude-run';
+  const terminalResultIdentity = 'claude-result';
+  const producerEvidenceIdentity = 'claude-evidence';
+  writeFileSync(input.stageEvidencePath, JSON.stringify({
+    schema: STAGE_EVIDENCE_SCHEMA,
+    tier: 'T3',
+    stage: 'architectural-lens',
+    stageAttemptId,
+    stageSequence: 1,
+    cycleId: 'cycle-1192',
+    cycleBinding: { cycleId: 'cycle-1192', sourceRevision: REVISION, boundBeforeLaunch: true },
+    policyVersion: 'single-source/v1',
+    reviewerCardinality: 1,
+    cardinalityConfigIdentity: CONFIG,
+    sourceRevision: REVISION,
+    outcome: 'complete',
+    revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+    settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+    claude: {
+      kind: 'capture',
+      provider: 'claude-cli',
+      invocationId,
+      producingRunIdentity,
+      terminalResultIdentity,
+      producerEvidenceIdentity,
+      terminal: true,
+      terminalClassification: 'complete',
+      exitCode: 0,
+      m3Status: 'recorded',
+      capturePath,
+    },
+  }));
+  const sha256 = createHash('sha256').update(CLEAN_CAPTURE).digest('hex');
+  writeFileSync(producerEvidencePath, JSON.stringify({
+    schema: 'claude-producer-evidence/v1',
+    evidenceIdentity: producerEvidenceIdentity,
+    reviewEpisodeId: EPISODE,
+    stageAttemptId,
+    sourceRevision: REVISION,
+    invocationId,
+    producingRunIdentity,
+    terminalResultIdentity,
+    terminal: true,
+    terminalClassification: 'complete',
+    exitCode: 0,
+    capture: {
+      captureIdentity: `sha256:${sha256}:${capturePath.split('/').at(-1)}`,
+      name: capturePath.split('/').at(-1),
+      byteLength: Buffer.byteLength(CLEAN_CAPTURE),
+      sha256,
+      rawFindingCount: 0,
+    },
+    m3Status: 'recorded',
+  }));
+  return { capturePath, producerEvidencePath };
 }
 
 describe('Issue #1192 evidence-derived acceptance artifacts', () => {
@@ -387,12 +459,77 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     ))).toBe(true);
   });
 
+  it('requires Claude producer evidence for a T3 Claude lens in both artifact commands', () => {
+    const input = fixture();
+    writeClaudeLensFixture(input);
+    const options = {
+      reviewDir: input.dir,
+      outputDir: join(input.dir, 'artifacts'),
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    };
+    const produced = produceAcceptanceArtifacts(options);
+    expect(produced.ok).toBe(false);
+    expect(produced.errors.join('\n')).toContain('missing claude-producer-evidence/v1 input');
+    const status = inspectAcceptanceArtifacts(options);
+    expect(status.missing.some((item) => (
+      item.artifact === 'claude-producer-evidence/v1'
+      && item.reason.includes('--claude-producer-evidence')
+    ))).toBe(true);
+  });
+
+  it('derives supplied Claude producer evidence into authority', () => {
+    const input = fixture();
+    const claude = writeClaudeLensFixture(input);
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: join(input.dir, 'artifacts'),
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      claudeProducerEvidencePaths: [claude.producerEvidencePath],
+    });
+    expect(result.errors.join('\n')).not.toContain('not independently supplied');
+    const guardOptions = vi.mocked(checkFindingLedgerGuard).mock.calls.at(-1)?.[2] as {
+      episodeAuthority?: { claudeProducerEvidence?: Array<{ evidenceIdentity: string }> };
+    };
+    expect(guardOptions.episodeAuthority?.claudeProducerEvidence).toEqual([
+      expect.objectContaining({ evidenceIdentity: 'claude-evidence' }),
+    ]);
+  });
+
+  it('returns a structured indexed error for a non-object author finding', () => {
+    const input = fixture();
+    writeFileSync(input.authorPath, JSON.stringify({
+      schema: AUTHOR_DISPOSITIONS_SCHEMA,
+      findings: [null],
+    }));
+    expect(() => produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: join(input.dir, 'artifacts'),
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    })).not.toThrow();
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: join(input.dir, 'artifacts'),
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain('author dispositions findings[0] must be an object');
+  });
+
   it('rejects artifact-only flags on journal commands instead of ignoring them', () => {
     for (const [flag, value] of [
       ['--review-dir', '/tmp/review'],
       ['--tier-intake', '/tmp/intake.json'],
       ['--stage-evidence', '/tmp/evidence.json'],
       ['--author-dispositions', '/tmp/dispositions.json'],
+      ['--claude-producer-evidence', '/tmp/claude.json'],
       ['--output-dir', '/tmp/output'],
       ['--phase', 'pre-lens'],
     ]) {

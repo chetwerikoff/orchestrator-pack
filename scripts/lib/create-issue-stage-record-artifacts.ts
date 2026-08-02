@@ -16,6 +16,7 @@ import {
   deriveReviewEpisodeState,
   deriveStageReceiptId,
   validateReviewEpisodeTopology,
+  CLAUDE_PRODUCER_EVIDENCE_SCHEMA,
   type CaptureIdentityV1,
   type ReviewerInvocationEnvelopeV1,
   type ReviewEpisodeDerivationAuthorityV1,
@@ -51,6 +52,7 @@ export interface ProduceAcceptanceArtifactsOptions {
   tierIntakePath: string;
   stageEvidencePaths: string[];
   authorDispositionsPath: string;
+  claudeProducerEvidencePaths?: string[];
   outputDir?: string;
   phase?: 'pre-lens' | 'final-acceptance';
 }
@@ -283,6 +285,24 @@ function rawFindingCount(text: string): number {
     .length;
 }
 
+function readClaudeProducerEvidence(
+  path: string,
+  errors: string[],
+): unknown[] {
+  if (!existsSync(path)) {
+    errors.push(`missing ${CLAUDE_PRODUCER_EVIDENCE_SCHEMA}: ${path}`);
+    return [];
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch {
+    errors.push(`unable to read ${CLAUDE_PRODUCER_EVIDENCE_SCHEMA}: ${path}`);
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+
 function captureIdentity(name: string, digest: string): string {
   return `sha256:${digest}:${name}`;
 }
@@ -495,6 +515,15 @@ function buildLedger(
     errors.push(`author dispositions must use ${AUTHOR_DISPOSITIONS_SCHEMA}: ${path}`);
     return null;
   }
+  const invalidFindingIndexes = raw.findings.flatMap((finding, index) => (
+    isRecord(finding) ? [] : [index]
+  ));
+  if (invalidFindingIndexes.length > 0) {
+    for (const index of invalidFindingIndexes) {
+      errors.push(`author dispositions findings[${index}] must be an object`);
+    }
+    return null;
+  }
   const findings = raw.findings as JsonRecord[];
   const ledger = {
     version: 2,
@@ -677,6 +706,16 @@ export function produceAcceptanceArtifacts(
   const captures = receipts.flatMap((receipt) => receipt.relayEligibleCaptures);
   const relay = relayEvidence(episodeId, captures);
   const ledger = buildLedger(options.authorDispositionsPath, captures, errors);
+  const claudeProducerEvidence = (options.claudeProducerEvidencePaths ?? [])
+    .flatMap((path) => readClaudeProducerEvidence(path, errors));
+  const requiresClaudeProducerEvidence = tier === 'T3' && receipts.some((receipt) => (
+    receipt.stage === 'architectural-lens'
+    && isRecord(receipt.claude)
+    && receipt.claude.kind === 'capture'
+  ));
+  if (requiresClaudeProducerEvidence && (options.claudeProducerEvidencePaths ?? []).length === 0) {
+    errors.push(`missing ${CLAUDE_PRODUCER_EVIDENCE_SCHEMA} input for T3 architectural-lens capture: --claude-producer-evidence <path>`);
+  }
   const authority: ReviewEpisodeDerivationAuthorityV1 | undefined = tier
     ? {
         tierIntake: intake,
@@ -687,6 +726,7 @@ export function produceAcceptanceArtifacts(
           reviewEpisodeId: episodeId,
           stageReceiptIds: receipts.map((receipt) => receipt.stageReceiptId),
         },
+        claudeProducerEvidence,
       }
     : undefined;
   if (ledger && tier) {
@@ -778,6 +818,7 @@ export function inspectAcceptanceArtifacts(
     missing.push({ artifact: 'stage-completeness-receipt/v1', reason: 'no recorded stage evidence paths were supplied' });
   }
   const stageEvidencePaths = canonicalStageEvidencePaths ?? options.stageEvidencePaths;
+  let requiresClaudeProducerEvidence = false;
   for (const path of stageEvidencePaths) requirePath(path, 'stage evidence', 'recorded stage result is missing');
   for (const path of stageEvidencePaths) {
     if (!existsSync(path)) continue;
@@ -790,10 +831,28 @@ export function inspectAcceptanceArtifacts(
         requirePath(capturePath, 'capture', 'stage evidence names a capture that is not present');
       }
     }
+    if (
+      value.tier === 'T3'
+      && value.stage === 'architectural-lens'
+      && isRecord(value.claude)
+      && value.claude.kind === 'capture'
+    ) {
+      requiresClaudeProducerEvidence = true;
+    }
     if (isRecord(value.claude) && value.claude.capturePath !== undefined) {
       const capturePath = resolve(dirname(path), String(value.claude.capturePath));
       requirePath(capturePath, 'capture', 'stage evidence names a Claude capture that is not present');
     }
+  }
+  const claudeProducerEvidencePaths = options.claudeProducerEvidencePaths ?? [];
+  for (const path of claudeProducerEvidencePaths) {
+    requirePath(path, CLAUDE_PRODUCER_EVIDENCE_SCHEMA, 'Claude producer evidence is missing');
+  }
+  if (requiresClaudeProducerEvidence && claudeProducerEvidencePaths.length === 0) {
+    missing.push({
+      artifact: CLAUDE_PRODUCER_EVIDENCE_SCHEMA,
+      reason: 'T3 architectural-lens capture requires --claude-producer-evidence <path>',
+    });
   }
   requirePath(join(options.outputDir ?? options.reviewDir, 'verified-relay-evidence.json'), 'verified relay evidence', 'relay manifest has not been produced');
   requirePath(join(options.outputDir ?? options.reviewDir, 'finding-disposition-ledger.json'), 'finding ledger', 'finding ledger has not been produced');
