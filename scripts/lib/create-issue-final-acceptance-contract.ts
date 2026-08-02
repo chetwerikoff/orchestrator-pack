@@ -12,7 +12,6 @@ import {
   type TierTransitionEvidence,
 } from '../lib/tier-gate-core.ts';
 import { parseConsumableStageReceipt, validateReceiptMatchesCycle } from './create-issue-stage-record-receipt.ts';
-import { checkRemoteAuthorities, type RemoteAuthorityInput } from './create-issue-stage-topology.ts';
 
 export const FINAL_ACCEPTANCE_CONTRACT_VERSION = 'create-issue-final-acceptance-contract/v1';
 
@@ -39,8 +38,6 @@ export interface FinalAcceptanceGuardInput {
   externalPassReceiptPath?: string;
   readText?: (path: string) => string;
   readJson?: (path: string) => unknown;
-  remoteAuthority?: RemoteAuthorityInput;
-  remoteAuthorities?: readonly RemoteAuthorityInput[];
 }
 
 export interface FinalAcceptanceGuardResult {
@@ -121,18 +118,6 @@ export function executeFinalAcceptanceGuards(
   const errors: string[] = [];
   const readText = input.readText ?? defaultReadText;
   const readJson = input.readJson ?? defaultReadJson;
-
-  const remoteInputs = input.remoteAuthorities ?? (input.remoteAuthority ? [input.remoteAuthority] : []);
-  if (remoteInputs.length > 0) {
-    const remote = checkRemoteAuthorities(remoteInputs);
-    if (!remote.ok) {
-      return {
-        ok: false,
-        contractVersion: FINAL_ACCEPTANCE_CONTRACT_VERSION,
-        errors: remote.errors.map((error) => `remote authority: ${error}`),
-      };
-    }
-  }
 
   if (input.externalPassReceiptPath) {
     errors.push('external PASS receipt consumption is forbidden; execute shared guards directly');

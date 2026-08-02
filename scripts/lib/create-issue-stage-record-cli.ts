@@ -335,9 +335,6 @@ export function runStageFinalizeCli(argv: string[]): number {
       return result.ok ? 0 : 1;
     }
 
-    if (opts.command === 'retry-pending' && opts.workdir) {
-      throw new Error('retry-pending resolves the flow-owned root internally; --workdir is forbidden');
-    }
     const results = retryPendingEvents(transport, opts.repo, issueNumber, opts.workdir);
     const ok = results.every((item) => item.ok);
     if (opts.json) console.log(JSON.stringify(results));

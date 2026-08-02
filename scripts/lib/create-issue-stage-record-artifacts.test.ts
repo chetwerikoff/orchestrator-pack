@@ -248,7 +248,6 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     ].join('\n');
     const acceptance = executeFinalAcceptanceGuards({
       issueBody,
-      currentIssueBody: issueBody,
       issueRevision: REVISION,
       cycleId: 'cycle-1192',
       tier: 'T2',
