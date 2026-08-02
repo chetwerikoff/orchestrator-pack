@@ -68,7 +68,34 @@ describe('watch wrapper producers', () => {
       now: () => 0,
       run: async () => result('{"ok":false,"error":{"opaque":"keep"}}'),
     });
-    expect(unavailable).toMatchObject({ outcome: 'source-unavailable', reasonCode: 'orca_read_ok_false' });
+    expect(unavailable).toMatchObject({
+      outcome: 'partial-cleanup',
+      primaryOutcome: 'source-unavailable',
+      reasonCode: 'orca_read_ok_false',
+      cleanup: { cleanupOutcome: 'completed', cleanupErrorCode: null },
+    });
     expect(unavailable.evidence).toHaveProperty('response.error');
+  });
+
+  it('bounds and records cleanup for failed watch helpers', async () => {
+    const request: WatchRequest = {
+      requestVersion: 'watch-request/v1', sourceId: 'orca.terminal', predicateId: 'terminal.read',
+      terminalHandle: 'h', deadlineMs: 10_000,
+    };
+    let timeoutMs = 0;
+    const failed = await executeWatchRequest(request, {
+      now: () => 0,
+      run: async () => result('{"ok":false}'),
+      cleanupHelpers: async (options) => {
+        timeoutMs = options.timeoutMs;
+        return { completed: false, evidence: { processOutcome: 'timeout' } };
+      },
+    });
+    expect(timeoutMs).toBe(5_000);
+    expect(failed).toMatchObject({
+      outcome: 'cleanup-failed',
+      primaryOutcome: 'source-unavailable',
+      cleanup: { cleanupOutcome: 'failed', cleanupErrorCode: 'cleanup_timeout' },
+    });
   });
 });

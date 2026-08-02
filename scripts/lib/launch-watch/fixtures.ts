@@ -67,22 +67,39 @@ export const ACCEPTANCE_SCENARIOS = [
   'AC8:scope-and-zero-coverage-proof',
 ] as const;
 
-export type ImplementationEvidence = {
-  readonly acceptanceId: string;
-  readonly scenarioIds: readonly string[];
-  readonly fixtureIds?: readonly string[];
-  readonly redThenGreen: boolean;
-};
+export const ACCEPTANCE_SCENARIO_MAP = [
+  { acceptanceId: 'AC1', scenarioIds: ['stale-target', 'remote-advance-after-fetch', 'target-race', 'typed-outcome'] },
+  { acceptanceId: 'AC2', scenarioIds: ['launch-request-validation', 'command-encoding', 'deadline-budget'] },
+  { acceptanceId: 'AC3', scenarioIds: ['worktree-binding', 'trust-marker', 'terminal-create-binding'] },
+  { acceptanceId: 'AC4', scenarioIds: ['watch-catalogue', 'watch-validation', 'watch-producer-mapping'] },
+  { acceptanceId: 'AC5', scenarioIds: ['typed-result-schema', 'cleanup-denominator', 'cleanup-precedence'] },
+  { acceptanceId: 'AC6', scenarioIds: ['deadline-barrier', 'fallback-emission', 'transport-failure'] },
+  { acceptanceId: 'AC7', scenarioIds: ['recommended-safe-path', 'direct-path-boundary'] },
+  { acceptanceId: 'AC8', scenarioIds: ['scope-check', 'zero-coverage'] },
+] as const;
 
-export const IMPLEMENTATION_EVIDENCE: readonly ImplementationEvidence[] = [
-  { acceptanceId: 'AC1', scenarioIds: ['stale-target', 'remote-advance-after-fetch', 'target-race', 'typed-outcome'], redThenGreen: true },
-  { acceptanceId: 'AC2', scenarioIds: ['launch-request-validation', 'command-encoding', 'deadline-budget'], redThenGreen: true },
-  { acceptanceId: 'AC3', scenarioIds: ['worktree-binding', 'trust-marker', 'terminal-create-binding'], redThenGreen: true },
-  { acceptanceId: 'AC4', scenarioIds: ['watch-catalogue', 'watch-validation', 'watch-producer-mapping'], redThenGreen: true },
-  { acceptanceId: 'AC5', scenarioIds: ['typed-result-schema', 'cleanup-denominator', 'cleanup-precedence'], fixtureIds: CLEANUP_FIXTURE_IDS, redThenGreen: true },
-  { acceptanceId: 'AC6', scenarioIds: ['deadline-barrier', 'fallback-emission', 'transport-failure'], redThenGreen: true },
-  { acceptanceId: 'AC7', scenarioIds: ['recommended-safe-path', 'direct-path-boundary'], redThenGreen: true },
-  { acceptanceId: 'AC8', scenarioIds: ['scope-check', 'zero-coverage'], redThenGreen: true },
-];
-
-export const REQUIRED_SCENARIO_IDS = IMPLEMENTATION_EVIDENCE.flatMap((entry) => entry.scenarioIds);
+export const REQUIRED_SCENARIO_IDS = [
+  'stale-target',
+  'remote-advance-after-fetch',
+  'target-race',
+  'typed-outcome',
+  'launch-request-validation',
+  'command-encoding',
+  'deadline-budget',
+  'worktree-binding',
+  'trust-marker',
+  'terminal-create-binding',
+  'watch-catalogue',
+  'watch-validation',
+  'watch-producer-mapping',
+  'typed-result-schema',
+  'cleanup-denominator',
+  'cleanup-precedence',
+  'deadline-barrier',
+  'fallback-emission',
+  'transport-failure',
+  'recommended-safe-path',
+  'direct-path-boundary',
+  'scope-check',
+  'zero-coverage',
+] as const;

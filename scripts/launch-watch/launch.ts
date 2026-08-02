@@ -345,7 +345,11 @@ export async function executeLaunchRequest(request: LaunchRequest, dependencies:
     postCreateBranchExpired: postBranch?.expired ?? false,
   } : {};
   let primary: LaunchResult;
-  if (handle && !validHandleShape) {
+  if (handle && (postHead?.expired || postBranch?.expired)) {
+    primary = deadlineResult('binding-verification', request.deadlineMs, ['pack.launch.git', 'orca.terminal-create'], {
+      ...bindingEvidence, argv: createArgs, response, terminalHandle: handle,
+    }, handle);
+  } else if (handle && !validHandleShape) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_invalid_response_shape', deadlineMs: request.deadlineMs,
       sourceIds: ['orca.terminal-create', 'pack.launch.git'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs, response },

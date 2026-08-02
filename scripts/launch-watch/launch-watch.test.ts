@@ -63,7 +63,7 @@ function launchRunner(options: {
   readonly closeStdout?: string;
   readonly createStdout?: string;
   readonly createResult?: ProcessResult;
-  readonly nowMode?: 'stable' | 'cutoff' | 'cleanup-expired';
+  readonly nowMode?: 'stable' | 'cutoff' | 'cleanup-expired' | 'post-create-expired';
 }) {
   const calls: Array<{ readonly command: string; readonly args: readonly string[]; readonly timeoutMs: number }> = [];
   let trustCompleted = false;
@@ -71,6 +71,7 @@ function launchRunner(options: {
   const now = (): number => {
     if (options.nowMode === 'cutoff' && trustCompleted) return 4_000;
     if (options.nowMode === 'cleanup-expired' && createCompleted) return 9_000;
+    if (options.nowMode === 'post-create-expired' && createCompleted) return 114_000;
     return 0;
   };
   const run = async (command: string, args: readonly string[], runOptions: { readonly timeoutMs: number }): Promise<ProcessResult> => {
@@ -155,9 +156,9 @@ describe('launch/watch contract', () => {
     expect(validateResult({ ...primary, extra: true }).ok).toBe(false);
   });
 
-  it('passes the executable aggregate proof and fails its zero-coverage negative', () => {
-    expect(runAggregateProof().ok).toBe(true);
-    expect(runAggregateProof({ zeroCoverage: true }).ok).toBe(false);
+  it('passes the executable aggregate proof and fails its zero-coverage negative', async () => {
+    expect((await runAggregateProof()).ok).toBe(true);
+    expect((await runAggregateProof({ zeroCoverage: true })).ok).toBe(false);
   });
 
   it('executes every spec-owned aggregate coverage row', () => {
@@ -225,6 +226,24 @@ describe('launch/watch contract', () => {
       expect(result.outcome).toBe('deadline-exceeded');
       expect(result.phase).toBe('terminal-create');
       expect(runner.calls.some((call) => call.args[1] === 'create')).toBe(false);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('emits a binding deadline when post-create verification cannot start', async () => {
+    const cwd = '/tmp/launch-watch-post-create-deadline-test';
+    const home = mkdtempSync(join(tmpdir(), 'launch-watch-home-'));
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const runner = launchRunner({ cwd, home, nowMode: 'post-create-expired' });
+      const result = await executeLaunchRequest(requestFor(cwd), { run: runner.run, now: runner.now });
+      expect(result.outcome).toBe('cleanup-failed');
+      expect(result.primaryOutcome).toBe('deadline-exceeded');
+      expect(result.primaryReasonCode).toBe('launch_deadline_binding_verification');
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
