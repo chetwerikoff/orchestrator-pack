@@ -33,6 +33,12 @@ Use `--phase pre-lens` when only the T3 pre-lens stages are complete. The
 command returns a non-zero status and a named missing input when evidence is
 absent. It writes no acceptance artifact on failure.
 
+`check-artifacts` applies the same tier/phase stage matrix as final acceptance:
+T1 and T2 require `architectural`; T3 pre-lens requires `competitive` and
+`architectural-review`; T3 final acceptance additionally requires
+`architectural-lens` and `architectural`. It reports every missing completed
+stage even when stale output markers are already present.
+
 ## Evidence inputs
 
 `tier-intake.json` is the existing immutable `tier-intake/v1` record. Each

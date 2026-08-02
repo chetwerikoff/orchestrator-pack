@@ -996,6 +996,8 @@ export function inspectAcceptanceArtifacts(
   }
   const stageEvidencePaths = canonicalStageEvidencePaths ?? options.stageEvidencePaths;
   const stageReceiptNames: string[] = [];
+  const completedStages = new Set<ReviewStage>();
+  let evidenceTier: ReviewTier | null = null;
   let requiresClaudeProducerEvidence = false;
   for (const path of stageEvidencePaths) {
     const value = readArtifactJson(path, 'stage evidence', 'recorded stage result is missing');
@@ -1003,6 +1005,14 @@ export function inspectAcceptanceArtifacts(
       addInvalid('stage evidence', path, 'recorded stage result is malformed');
       continue;
     }
+    const stageTier = reviewTier(value.tier);
+    const stage = reviewStage(value.stage);
+    if (stageTier && evidenceTier && stageTier !== evidenceTier) {
+      missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence mixes tier values: ' + path });
+    } else if (stageTier) {
+      evidenceTier = stageTier;
+    }
+    if (stage && value.outcome === 'complete') completedStages.add(stage);
     const stageAttemptId = typeof value.stageAttemptId === 'string' ? value.stageAttemptId.trim() : '';
     if (isSafeFileComponent(stageAttemptId)) {
       stageReceiptNames.push('stage-completeness-receipt-' + stageAttemptId + '.json');
@@ -1052,6 +1062,18 @@ export function inspectAcceptanceArtifacts(
       } else if (value.claude.capturePath !== undefined) {
         const capturePath = resolve(dirname(path), String(value.claude.capturePath));
         requireRegularFile(capturePath, 'capture', 'Claude capture is missing; stage evidence names a capture that is not present');
+      }
+    }
+  }
+
+  if (evidenceTier) {
+    const requiredStages = expectedStages(evidenceTier, options.phase ?? 'final-acceptance');
+    for (const stage of requiredStages) {
+      if (!completedStages.has(stage)) {
+        missing.push({
+          artifact: 'stage-completeness-receipt',
+          reason: 'missing completed stage evidence for ' + stage + ' at ' + (options.phase ?? 'final-acceptance'),
+        });
       }
     }
   }

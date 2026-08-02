@@ -426,6 +426,27 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     expect(result.errors.join('\n')).toContain('terminal settlement');
   });
 
+  it('reports missing T3 final-acceptance stages instead of trusting stale markers', () => {
+    const input = fixture();
+    writeFileSync(input.stageEvidencePath, JSON.stringify({
+      ...input.evidence,
+      tier: 'T3',
+      stage: 'architectural',
+    }));
+    const status = inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: input.dir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+      phase: 'final-acceptance',
+    });
+    expect(status.ok).toBe(false);
+    expect(status.missing.some((item) => item.reason.includes('missing completed stage evidence for competitive'))).toBe(true);
+    expect(status.missing.some((item) => item.reason.includes('missing completed stage evidence for architectural-review'))).toBe(true);
+    expect(status.missing.some((item) => item.reason.includes('missing completed stage evidence for architectural-lens'))).toBe(true);
+  });
+
   it('reports missing stage evidence before acceptance runs', () => {
     const input = fixture();
     const produced = produceAcceptanceArtifacts({
