@@ -269,7 +269,7 @@ describe('state-light explicit session mode', () => {
     const harness = makeHarness(['one', 'two', 'three'], { profileState: 'unavailable' });
     const exit = await runStateLightSession(harness.argv, harness.dependencies);
 
-    expect(exit).toBe(10);
+    expect(exit).toBe(12);
     expect(records(harness.stream)).toEqual([
       expect.objectContaining({ ordinal: 1, phase: 'terminal', delivery_state: 'not_sent', send_count: 0, state: 'chrome_not_running' }),
       expect.objectContaining({ ordinal: 2, phase: 'terminal', delivery_state: 'not_attempted', send_count: 0 }),
@@ -306,7 +306,7 @@ describe('state-light explicit session mode', () => {
     };
 
     const exit = await runStateLightSession(harness.argv, dependencies);
-    expect(exit).toBe(10);
+    expect(exit).toBe(11);
     const terminal = records(stream).filter((record) => record.phase === 'terminal');
     expect(terminal[1]).toMatchObject({
       ordinal: 2,
@@ -325,7 +325,7 @@ describe('state-light explicit session mode', () => {
     const harness = makeHarness(['one', 'two'], { stream });
     const exit = await runStateLightSession(harness.argv, harness.dependencies);
 
-    expect(exit).toBe(10);
+    expect(exit).toBe(13);
     expect(harness.metrics.sends).toBe(0);
     expect(stream.destroyed).toBe(true);
     expect(aggregate(stream)).toBeUndefined();
@@ -339,7 +339,7 @@ describe('state-light explicit session mode', () => {
     const harness = makeHarness(['one', 'two'], { stream });
     const exit = await runStateLightSession(harness.argv, harness.dependencies);
 
-    expect(exit).toBe(10);
+    expect(exit).toBe(13);
     expect(harness.metrics.sends).toBe(1);
     expect(aggregate(stream)).toBeUndefined();
     expect(records(stream).map((record) => record.phase)).toEqual(['dispatch-latched', 'delivery-bound']);
@@ -351,6 +351,27 @@ describe('state-light explicit session mode', () => {
     expect(exit).toBe(0);
     expect(aggregate(harness.stream)).toMatchObject({
       state: 'ok', scope: 'none', cause: 'completed_page_only', cleanup: 'unconfirmed', exit_code: 0,
+    });
+  });
+
+  it('preserves output-conflict state and exit semantics during preflight', async () => {
+    const harness = makeHarness(['one']);
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      resolveDestination: () => { throw new Error('output_conflict:output_exists'); },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(10);
+    expect(harness.metrics.pages).toBe(0);
+    expect(harness.stream.lines[0]).toMatchObject({
+      schema: 'turn-result/v1',
+      state: 'output_conflict',
+      scope: 'invocation',
+      cause: 'output_conflict:output_exists',
+      send_count: 0,
+      cleanup: 'skipped',
     });
   });
 

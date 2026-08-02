@@ -1,0 +1,48 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1167,
+  "declared_paths": [
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "denylist": [
+    ".claude/",
+    ".cursor/",
+    ".github/workflows/",
+    "AGENTS.md",
+    "credentials/",
+    "docs/issue_queue_index.md",
+    "docs/issues_drafts/",
+    "docs/tiering.md",
+    "packages/core/",
+    "prompts/",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/coordination.ts",
+    "scripts/chatgpt-browser-turn/owned-prompt-marker.ts",
+    "scripts/chatgpt-browser-turn/product-page-selectors.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.ts",
+    "scripts/chatgpt-browser-turn/storage-common.ts",
+    "scripts/chatgpt-browser-turn/ui-adapter.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/declarations/",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/input.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-session.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "dc03cff93859e00ec4efd2f5af00d46bfe0e6ab6"
+}

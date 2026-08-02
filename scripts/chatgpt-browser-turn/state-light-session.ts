@@ -314,12 +314,15 @@ function streamOpen(stream: SessionWritable): boolean {
 export class SessionStdoutWriter {
   private usable = true;
   private waitingForDrain = false;
+  private readonly stream: SessionWritable;
+  private readonly deadline: number;
+  private readonly now: () => number;
 
-  constructor(
-    private readonly stream: SessionWritable,
-    private readonly deadline: number,
-    private readonly now: () => number = Date.now,
-  ) {}
+  constructor(stream: SessionWritable, deadline: number, now: () => number = Date.now) {
+    this.stream = stream;
+    this.deadline = deadline;
+    this.now = now;
+  }
 
   isUsable(): boolean {
     return this.usable && streamOpen(this.stream);
@@ -517,9 +520,10 @@ function compactPreflightRefusal(
   invocationId: string,
   profileKey: string,
 ): CompactTurnResult {
+  const isOutputConflict = cause.startsWith('output_conflict:');
   return {
     schema: 'turn-result/v1',
-    state: 'input_invalid',
+    state: isOutputConflict ? 'output_conflict' : 'input_invalid',
     scope: 'invocation',
     cause,
     invocation_id: invocationId,
@@ -639,6 +643,9 @@ function predecessorContinuity(
   }
   const marker = predecessor.expectedMarker;
   if (!marker) return tuple('ui_contract_mismatch', 'invocation', 'predecessor_marker_missing');
+  if (observation.transcriptIncomplete) {
+    return tuple('ui_contract_mismatch', 'conversation', 'predecessor_observation_incomplete');
+  }
   const matches = countExpectedMarker(observation.messages, marker);
   if (matches === 0) return tuple('ui_contract_mismatch', 'invocation', 'predecessor_marker_unresolved');
   if (matches > 1) return tuple('ui_contract_mismatch', 'invocation', 'predecessor_marker_ambiguous');
@@ -783,10 +790,10 @@ async function observeAndPublish(
         markerCount,
       };
     }
-    if (markerCount === 1 && hasLaterUserAfterMarker(observation.messages, marker)) {
+    if (!observation.transcriptIncomplete && markerCount === 1 && hasLaterUserAfterMarker(observation.messages, marker)) {
       return { terminal: tuple('foreign_activity', 'conversation', 'foreign_user_after_owned_send'), markerCount };
     }
-    if (!deliveryBound && markerCount === 1) {
+    if (!observation.transcriptIncomplete && !deliveryBound && markerCount === 1) {
       payload.deliveryState = 'delivered';
       payload.conversationId = state.conversationId;
       const bound: SessionPayloadRecord = {
