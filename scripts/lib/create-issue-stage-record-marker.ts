@@ -12,6 +12,10 @@ import type {
   PublicActor,
   StageEventLogical,
 } from './create-issue-stage-record-types.ts';
+import {
+  isReviewLaneEvidence,
+  isReviewLaneRouting,
+} from './review-lane-record.ts';
 
 const MARKER_RE = new RegExp(
   `<!--\\s*${JOURNAL_MARKER_PREFIX}:([^:]+):([^\\s]+)\\s*-->`,
@@ -50,7 +54,8 @@ function isJournalPayload(value: Record<string, unknown>): boolean {
       && isNonEmptyString(value['predecessor-cycle-id'])
       && isNonEmptyString(value['source-revision'])
       && isNonEmptyString(value.tier)
-      && isPublicActor(value['public-actor']);
+      && isPublicActor(value['public-actor'])
+      && (value['routed-lane'] === undefined || isReviewLaneRouting(value['routed-lane']));
   }
   if (value.schema === STAGE_SCHEMA) {
     return isNonEmptyString(value['cycle-id'])
@@ -84,6 +89,7 @@ function buildJournalLogical(parsed: Record<string, unknown>): JournalLogical | 
     const sourceRevision = parsed['source-revision'];
     const tier = parsed.tier;
     const publicActor = parsed['public-actor'];
+    const routedLane = parsed['routed-lane'];
     if (!isNonEmptyString(cycleId)
       || !isNonEmptyString(predecessorCycleId)
       || !isNonEmptyString(sourceRevision)
@@ -91,6 +97,7 @@ function buildJournalLogical(parsed: Record<string, unknown>): JournalLogical | 
       || !isPublicActor(publicActor)) {
       return null;
     }
+    if (routedLane !== undefined && !isReviewLaneRouting(routedLane)) return null;
     const logical: CycleEventLogical = {
       schema: CYCLE_SCHEMA,
       'event-key': eventKey,
@@ -99,6 +106,7 @@ function buildJournalLogical(parsed: Record<string, unknown>): JournalLogical | 
       'source-revision': sourceRevision,
       tier,
       'public-actor': publicActor,
+      'routed-lane': routedLane,
     };
     return logical;
   }
@@ -114,6 +122,7 @@ function buildJournalLogical(parsed: Record<string, unknown>): JournalLogical | 
     const sourceCount = parsed['source-count'];
     const requiredSourceCount = parsed['required-source-count'];
     const producerEvidence = parsed['producer-evidence'];
+    const routedLane = parsed['routed-lane'];
     if (!isNonEmptyString(cycleId)
       || !isNonEmptyString(stage)
       || !isNonEmptyString(tier)
@@ -125,6 +134,11 @@ function buildJournalLogical(parsed: Record<string, unknown>): JournalLogical | 
       || typeof sourceCount !== 'number' || !Number.isInteger(sourceCount)
       || typeof requiredSourceCount !== 'number' || !Number.isInteger(requiredSourceCount)
       || (producerEvidence !== 'verified' && producerEvidence !== 'waived' && producerEvidence !== 'not-applicable')) {
+      return null;
+    }
+    if (policyVersion === 'review-lane-routing/v1') {
+      if (!isReviewLaneEvidence(routedLane)) return null;
+    } else if (routedLane !== undefined && !isReviewLaneEvidence(routedLane)) {
       return null;
     }
     const logical: StageEventLogical = {
@@ -141,6 +155,7 @@ function buildJournalLogical(parsed: Record<string, unknown>): JournalLogical | 
       'required-source-count': requiredSourceCount,
       'producer-evidence': producerEvidence,
       'tier-transition': tierTransition,
+      'routed-lane': routedLane,
     };
     return logical;
   }
@@ -232,6 +247,7 @@ function canonicalizeLogicalRecord(logical: JournalLogical): Record<string, unkn
         'source-revision': logical['source-revision'],
         tier: logical.tier,
         'public-actor': logical['public-actor'],
+        'routed-lane': logical['routed-lane'],
       };
     case STAGE_SCHEMA:
       return {
@@ -248,6 +264,7 @@ function canonicalizeLogicalRecord(logical: JournalLogical): Record<string, unkn
         'required-source-count': logical['required-source-count'],
         'producer-evidence': logical['producer-evidence'],
         'tier-transition': logical['tier-transition'],
+        'routed-lane': logical['routed-lane'],
       };
     case FINAL_SCHEMA:
       return {

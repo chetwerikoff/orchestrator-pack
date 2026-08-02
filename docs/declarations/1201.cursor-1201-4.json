@@ -1,0 +1,35 @@
+{
+  "issue_number": 1201,
+  "iteration_id": "cursor-1201-4",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "cursor-1201-3",
+  "created_at": "2026-08-02T14:22:37.567Z",
+  "baseline": {
+    "commit_sha": "6772351de8fdb59d39297a33dff96aa5daee5e21",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:5ba974a3a32b9fafc25b3ab07ab4a521ee3d0e3c2623b2571f68150ea1f4f46e"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    "docs/review-lanes.md",
+    "docs/tiering.md",
+    "scripts/lib/create-issue-stage-record-cli.ts",
+    "scripts/lib/create-issue-stage-record-core.ts",
+    "scripts/lib/create-issue-stage-record-marker.ts",
+    "scripts/lib/create-issue-stage-record-receipt.ts",
+    "scripts/lib/create-issue-stage-record-review-lane.test.ts",
+    "scripts/lib/create-issue-stage-record-review-lane.ts",
+    "scripts/lib/create-issue-stage-record-types.ts",
+    "scripts/lib/review-lane-input.ts",
+    "scripts/lib/review-lane-record.ts",
+    "scripts/lib/review-lane-routing.test.ts",
+    "scripts/lib/review-lane-routing.ts",
+    "scripts/lib/review-lane-selector.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/stage-completeness-guard.test.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
