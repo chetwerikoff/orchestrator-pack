@@ -135,12 +135,12 @@ function processGroupObservation(pid: number | undefined): { pgid: number; obser
     return { pgid: pid, observation: 'probe_error', errno: error?.errno ?? null };
   }
 }
-async function execute(rowDef: typeof TABLE[number], root = REPO, env?: NodeJS.ProcessEnv): Promise<{ row: Row; pgid?: number }> {
+async function execute(rowDef: typeof TABLE[number], root = REPO, env?: NodeJS.ProcessEnv, inheritParentEnv = true): Promise<{ row: Row; pgid?: number }> {
   const row = rowBase(rowDef.row_id);
   let pgid: number | undefined;
   let result: ProcessResult;
   try {
-    result = await runProcess({ command: rowDef.command, args: [...rowDef.args], cwd: root, env, inheritParentEnv: true, timeoutMs: rowDef.timeout, killGraceMs: rowDef.grace, allowEmptyStdout: true, onSpawn: pid => { pgid = pid; }, onStdoutChunk: () => undefined, onStderrChunk: () => undefined });
+    result = await runProcess({ command: rowDef.command, args: [...rowDef.args], cwd: root, env, inheritParentEnv, timeoutMs: rowDef.timeout, killGraceMs: rowDef.grace, allowEmptyStdout: true, onSpawn: pid => { pgid = pid; }, onStdoutChunk: () => undefined, onStderrChunk: () => undefined });
   } catch (error) {
     row.termination = 'spawn_failed'; row.reason_code = 'spawn_failed'; row.diagnostic = diagnostic('spawn_failed', rowDef.command, { outcome: 'exit' }, { outcome: 'spawn-failed', error: String(error) }, 'Restore the executable and retry.');
     return { row };
@@ -162,6 +162,10 @@ async function execute(rowDef: typeof TABLE[number], root = REPO, env?: NodeJS.P
   return { row, pgid };
 }
 function applyBlock(rows: Row[], reason: string, d: Diagnostic): void { for (const row of rows) rowBlock(row, reason, d); }
+function vitestChildEnvironment(): NodeJS.ProcessEnv {
+  const allowed = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'TEMP', 'TMP', 'PSModulePath', 'POWERSHELL_TELEMETRY_OPTOUT', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT'];
+  return Object.fromEntries(allowed.flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]!]]));
+}
 export async function runPreflight(repoRoot = REPO): Promise<Record<string, unknown>> {
   const rows = TABLE.map(row => rowBase(row.row_id));
   const probes: Probe[] = [];
@@ -198,8 +202,9 @@ export async function runPreflight(repoRoot = REPO): Promise<Record<string, unkn
   let finalIndex = -1;
   for (let i = 0; i < TABLE.length; i++) {
     if ((i === 4 && typescript) || (i === 5 && vitest)) continue;
-    const env = TABLE[i].row_id === 'vitest.light-lane-all' ? Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^OPK_(?:VITEST_TOPOLOGY_PLAN_PATH|CHANGED_VITEST_FILES|VITEST_PR_SCOPE_MODE|.*PR.*|.*SCOPE.*)$/.test(key))) : undefined;
-    const executed = await execute(TABLE[i], repoRoot, env);
+    const env = TABLE[i].row_id === 'vitest.light-lane-all' ? vitestChildEnvironment() : undefined;
+    const inheritParentEnv = TABLE[i].row_id !== 'vitest.light-lane-all';
+    const executed = await execute(TABLE[i], repoRoot, env, inheritParentEnv);
     rows[i] = executed.row; if (executed.row.termination !== 'not_started') finalIndex = i;
     const pg = processGroupObservation(executed.pgid);
     if (pg?.observation === 'present' || pg?.observation === 'probe_error') {
