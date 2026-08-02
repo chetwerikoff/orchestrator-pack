@@ -1,0 +1,33 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 898,
+  "declared_paths": [
+    "docs/merge-triage-primary-paths.v1.json",
+    "docs/pack-review-issue-898.md",
+    "plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts",
+    "scripts/lib/Merge-TriageGate.ps1",
+    "scripts/merge-triage-evidence.test.ts",
+    "scripts/merge-triage-evidence.ts",
+    "scripts/pack-review-carryover.test.ts",
+    "scripts/pack-review-carryover.ts",
+    "scripts/pack-review-runner-issue-898.test.ts",
+    "scripts/pack-review-state.test.ts",
+    "scripts/pack-review-state.ts"
+  ],
+  "denylist": [
+    ".github/workflows/",
+    "credentials/",
+    "docs/declarations/",
+    "docs/issues_drafts/",
+    "packages/core/",
+    "scripts/kernel/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/",
+    "plugins/",
+    "scripts/"
+  ],
+  "source_revision": "r07"
+}
