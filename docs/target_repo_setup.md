@@ -1,9 +1,9 @@
 # Target repository setup
 
-End-to-end checklist for adopting `orchestrator-pack` in a repository that AO
-will plan and code against. This documents the user-facing flow implemented by
-issues #4–#6: issue-body constraints, `ao-declare` snapshots, runtime scope
-guard, and PR-level CI.
+End-to-end checklist for adopting `orchestrator-pack` in a repository that
+Orca will plan and code against. This documents the user-facing flow for
+issue-body constraints, AO-free declarations, runtime scope guard, and PR-level
+CI.
 
 ## Before you start
 
@@ -20,14 +20,13 @@ at the repo root:
 The pack itself lives at [chetwerikoff/orchestrator-pack](https://github.com/chetwerikoff/orchestrator-pack).
 Treat upstream AO as an npm install only — never clone or patch AO core.
 
-Scope model (issue body vs declaration snapshot vs runtime mirror) is defined in
-architecture decision **#3.A** (`docs/issues_drafts/00-architecture-decisions.md`):
+Scope model (Issue body vs committed declaration) is defined in architecture
+decision **#3.A** (`docs/issues_drafts/00-architecture-decisions.md`):
 
 - **Issue body** — authoritative task constraints (`denylist`, optional
   `allowed-roots`).
-- **Committed snapshot** — `docs/declarations/{issue_number}.{iteration_id}.json`
-  produced by `ao-declare`.
-- **Runtime mirror** — gitignored `.ao/declarations/` for local guards only.
+- **Committed declaration** — `docs/declarations/{issue_number}.pr-scope.json`
+  produced by `scripts/pr-scope-declaration.ts`.
 
 ---
 
@@ -163,36 +162,29 @@ gh issue create --title "First AO scoped task" --body-file docs/issue_template_e
 
 Note the issue number (`<n>`) for the next steps.
 
-### 8. Run `ao-declare`
+### 8. Produce the AO-free declaration
 
 With a clean worktree, produce the declaration snapshot from the issue constraints
 and your planned paths:
 
 ```powershell
-$env:AO_ISSUE_NUMBER = '<n>'
-npx ao-declare --issue <n> `
-  --declared-paths src/example.ts `
-  --declared-globs src/**/*
+npm run check:node-major --silent && node --experimental-strip-types scripts/pr-scope-declaration.ts --issue <n> --declared-paths src/example.ts --declared-prefixes 'src/tests/**'
 ```
-
-Under AO, `iteration_id` comes from `AO_SESSION_ID`. Locally, the CLI generates
-a wrapper id when the session variable is unset.
 
 The command writes:
 
-- committed artifact: `docs/declarations/<n>.<iteration_id>.json`
-- runtime mirror: `.ao/declarations/<n>.<iteration_id>.json` (gitignored)
+- committed artifact: `docs/declarations/<n>.pr-scope.json`
 
-### 9. Commit the declaration snapshot
+### 9. Commit the declaration artifact
 
 Stage and commit only the snapshot (and any in-scope work):
 
 ```powershell
-git add docs/declarations/<n>.<iteration_id>.json
-git commit -m "chore: add declaration snapshot for issue #<n>"
+git add docs/declarations/<n>.pr-scope.json
+git commit -m "chore: add declaration artifact for issue #<n>"
 ```
 
-Do not commit `.ao/` mirror files or `agent-orchestrator.yaml`.
+Do not commit AO runtime files or `agent-orchestrator.yaml`.
 
 ### 10. Smoke test — scope-guard blocks out-of-scope edits
 
@@ -219,9 +211,8 @@ git commit -m "should be blocked"
 ```
 
 Expect the pre-commit hook to block the commit. To proceed after a legitimate
-scope change, amend the declaration once per iteration (`ao-declare --amend`) or
-start a new iteration — do not bypass except for documented emergencies
-(`AO_SCOPE_GUARD_BYPASS`).
+scope change, produce a fresh declaration and open a new PR. The guard has no
+legacy amendment or bypass path.
 
 ### 11. Push a PR and verify CI scope-guard
 
@@ -247,6 +238,6 @@ merging.
 - `docs/issue_template_example.md` — minimal parseable issue body
 - `docs/github_issues_cursor_codex_setup.md` — Cursor planner/worker + Codex review
 - `docs/repository_policy.md` — what not to commit
-- `plugins/ao-task-declaration/README.md` — `ao-declare` contract
+- `docs/pr-scope-declaration.md` — AO-free declaration contract
 - `plugins/ao-scope-guard/README.md` — runtime guard and hook
 - `plugins/ao-codex-pr-reviewer/README.md` — `CODEX_AUTH_JSON` and CI review

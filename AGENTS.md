@@ -141,7 +141,7 @@ PACK_REVIEWER path MUST NOT go through coworker).
 - Final status **states the delegation outcome** or closed-list reason.
 
 You remain responsible for verifying coworker output, scope, commits, and AO transitions.
-`coworker` must not run `ao-declare`, `pack-worker-report`, or open PRs.
+`coworker` must not run the producer, report, or open PRs.
 
 ## RTK read-exploration
 
@@ -216,7 +216,7 @@ After reading the initial task prompt, your **mandatory first action** is live-s
 ao session get "$env:AO_SESSION_ID" --json
 ```
 
-Run within **60 seconds** of session start — before `ao-declare`, file edits, research, commits, or
+Run within **60 seconds** of session start — before edits, research, commits, or
 PR work. Missing session verification marks the session `stuck`. See
 [`docs/orchestrator-recovery-runbook.md`](docs/orchestrator-recovery-runbook.md).
 

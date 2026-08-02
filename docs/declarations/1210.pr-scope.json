@@ -1,0 +1,35 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1210,
+  "declared_paths": [
+    ".github/workflows/scope-guard.yml",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/pr-scope-declaration.md",
+    "docs/repository_policy.md",
+    "docs/target_repo_setup.md",
+    "scripts/pr-scope-check.ps1",
+    "scripts/pr-scope-check.ts",
+    "scripts/pr-scope-declaration.test.ts",
+    "scripts/pr-scope-declaration.ts",
+    "scripts/toolchain/typescript-launch-inventory.json",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".github/workflows/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/",
+    "docs/declarations/",
+    "scripts/",
+    "tests/external-output-references/"
+  ],
+  "source_revision": "dac6085bd03e0b1b465bb03b3edb258b38818866"
+}
