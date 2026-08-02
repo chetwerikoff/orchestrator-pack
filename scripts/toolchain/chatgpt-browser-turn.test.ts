@@ -3328,6 +3328,7 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     blockingOverlay?: boolean;
     clickReject?: boolean;
     fillReject?: boolean;
+    onFillCall?: (timeoutMs: number) => void;
   };
 
   async function settleAction(delayMs: number, timeoutMs: number): Promise<void> {
@@ -3369,6 +3370,7 @@ describe('issue 1188 composer readiness and insertion timing', () => {
       }),
       fill: vi.fn(async (_text: string, opts?: { timeout?: number }) => {
         if (options.fillReject) throw new Error('fill rejected');
+        options.onFillCall?.(opts?.timeout ?? COMPOSER_INSERTION_WAIT_MS);
         await settleAction(options.fillDelayMs ?? 0, opts?.timeout ?? COMPOSER_INSERTION_WAIT_MS);
       }),
     });
@@ -3453,6 +3455,38 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     const result = await __testComposerMutation.waitForComposer(makeComposerPage({ composerPresent: false }).page, 30_000);
     expect(result).toEqual({ state: 'ui_contract_mismatch', cause: 'composer_unavailable' });
     expect(Date.now()).toBe(COMPOSER_READINESS_WAIT_MS);
+  });
+
+  it('keeps each action timeout within the remaining insertion budget on a controlled clock', async () => {
+    const invocationDeadlineMs = 10_000;
+    const insertionContext: { insertionDeadlineMs?: number } = {};
+    let evidence: { timeoutMs: number; remainingMs: number } | undefined;
+    const fixture = makeComposerPage({
+      fillDelayMs: COMPOSER_INSERTION_WAIT_MS + 1,
+      onFillCall: (timeoutMs) => {
+        const insertionDeadlineMs = insertionContext.insertionDeadlineMs;
+        if (insertionDeadlineMs === undefined) throw new Error('insertion deadline was not captured');
+        evidence = {
+          timeoutMs,
+          remainingMs: __testComposerMutation.remainingComposerMutationMs(
+            insertionDeadlineMs,
+            invocationDeadlineMs,
+          ),
+        };
+      },
+    });
+
+    const failure = await __testComposerMutation.mutateComposerOrCause(
+      fixture.page,
+      'payload',
+      invocationDeadlineMs,
+      insertionContext,
+    );
+
+    expect(failure).toBe('composer_mutation_budget_exhausted');
+    expect(evidence).toBeDefined();
+    expect(evidence!.timeoutMs).toBeGreaterThan(0);
+    expect(evidence!.timeoutMs).toBeLessThanOrEqual(evidence!.remainingMs);
   });
 
   it('bounds the first post-readiness probe by the insertion phase', async () => {
