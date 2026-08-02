@@ -113,7 +113,6 @@
     "scripts/worker-smoke.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light",
-    "scripts/chatgpt-browser-turn/owned-prompt-marker.test.ts": "light",
     "scripts/flow-manager-long-running-child.test.ts": "light",
     "scripts/flow-manager-authority-contract.test.ts": "light"
   },
