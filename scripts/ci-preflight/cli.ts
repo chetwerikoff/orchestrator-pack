@@ -101,13 +101,27 @@ function checkDirectDependency(name: 'typescript' | 'vitest', rowId: '05' | '07'
   try {
     const declared = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).devDependencies ?? {})[name];
     const installed = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
-    if (!declared || !installed || !existsSync(binPath)) return globalFailure('dependency_missing', `node_modules/${name}`, { declared, executable: true }, { installed, executable: existsSync(binPath) }, `Restore the local ${name} installation.`);
+    const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')).packages?.[`node_modules/${name}`]?.version;
+    if (!declared || !installed || !existsSync(binPath)) return globalFailure('dependency_missing', `node_modules/${name}`, { declared, lockfile: lock, executable: true }, { installed, lockfile: lock, executable: existsSync(binPath) }, `Restore the local ${name} installation.`);
+    if (installed !== lock || !satisfiesRange(installed, declared)) return globalFailure('dependency_incompatible', `node_modules/${name}`, { declared, lockfile: lock }, { installed, lockfile: lock }, `Restore a compatible local ${name} executable.`);
     const version = spawnSync(binPath, ['--version'], { cwd: root, encoding: 'utf8' });
     if (version.status !== 0 || !String(version.stdout ?? '').trim()) return globalFailure('dependency_incompatible', `node_modules/${name}`, { declared, executable: true }, { installed, status: version.status, stderr: version.stderr }, `Restore a compatible local ${name} executable.`);
     return undefined;
   } catch (error) {
     return globalFailure('dependency_missing', `node_modules/${name}`, { row: rowId }, String(error), `Restore the local ${name} installation.`);
   }
+}
+function satisfiesRange(version: string, range: string): boolean {
+  const actual = version.split('.').map(Number);
+  const match = range.match(/([~^]?)(\d+)\.(\d+)\.(\d+)/);
+  if (!match || actual.some(Number.isNaN)) return range === '*' || range === version;
+  const [, operator, major, minor, patch] = match;
+  const expected = [Number(major), Number(minor), Number(patch)];
+  const compare = actual[0] - expected[0] || actual[1] - expected[1] || actual[2] - expected[2];
+  if (compare < 0) return false;
+  if (operator === '^') return actual[0] === expected[0];
+  if (operator === '~') return actual[0] === expected[0] && actual[1] === expected[1];
+  return actual.every((part, index) => part === expected[index]);
 }
 function processGroupObservation(pid: number | undefined): { pgid: number; observation: 'absent' | 'present' | 'probe_error'; errno: number | null } | null {
   if (!pid || process.platform === 'win32') return null;
@@ -188,7 +202,6 @@ export async function runPreflight(repoRoot = REPO): Promise<Record<string, unkn
       rows[i].cleanup_status = pg.observation === 'present' ? 'process_group_member_survived' : 'process_group_probe_error';
     }
   }
-  for (const name of outputMembers(repoRoot)) baselineOutputs.add(name);
   for (const name of outputMembers(repoRoot)) if (!baselineOutputs.has(name)) unlinkSync(join(repoRoot, name));
   const changed = status(repoRoot) !== baselineStatus || outputMembers(repoRoot).some(name => !baselineOutputs.has(name));
   if (finalIndex >= 0) rows[finalIndex].snapshot_status = changed ? 'changed' : 'unchanged';
