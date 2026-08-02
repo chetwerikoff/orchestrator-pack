@@ -17,5 +17,18 @@
     "tests/external-output-references/ci-preflight/contract-fixture.json"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:9126d06ccabc43f9281c0d83f79b3797de0789a07be61ac52fe830d563f6ea55",
+      "new_active_scope_hash": "sha256:9126d06ccabc43f9281c0d83f79b3797de0789a07be61ac52fe830d563f6ea55",
+      "changed": {
+        "added": [],
+        "removed": []
+      },
+      "reason": "Honor the caller-supplied repository root for isolated preflight execution and fixtures.",
+      "actor": "local",
+      "timestamp": "2026-08-02T15:32:48.635Z",
+      "applied": true
+    }
+  ]
 }
