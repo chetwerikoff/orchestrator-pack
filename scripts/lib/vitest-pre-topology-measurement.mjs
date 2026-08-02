@@ -20,6 +20,8 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/pack-pr-review-contract.test.ts': 120,
   'scripts/pack-review-runner-gpt.test.ts': 120,
   'scripts/lib/protected-signal-receipt.test.ts': 120,
+  // Issue #1201 review-lane routing is a deterministic light-lane contract suite.
+  'scripts/lib/review-lane-routing.test.ts': 120,
   'scripts/worker-smoke.test.ts': 120,
   'scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts': 120,
   'scripts/chatgpt-browser-turn/state-light-page-observation.test.ts': 120,
