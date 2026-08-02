@@ -213,6 +213,32 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     expect(existsSync(join(input.dir, 'artifacts'))).toBe(false);
   });
 
+  it('rejects omitted recorded stage evidence by naming the missing file', () => {
+    const input = fixture();
+    const omittedPath = join(input.dir, 'attempt-002.json');
+    writeFileSync(omittedPath, JSON.stringify({
+      ...input.evidence,
+      stageAttemptId: 'attempt-002',
+    }));
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: join(input.dir, 'artifacts'),
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain(omittedPath);
+    const status = inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: join(input.dir, 'artifacts'),
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(status.missing.some((item) => item.reason.includes(omittedPath))).toBe(true);
+  });
+
   it('does not produce any artifact when a recorded stage names a missing capture', () => {
     const input = fixture();
     writeFileSync(input.stageEvidencePath, JSON.stringify({
@@ -234,6 +260,62 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     expect(result.errors.join('\n')).toContain('missing capture file');
     expect(result.errors.join('\n')).toContain('never-ran.capture.txt');
     expect(existsSync(outputDir)).toBe(false);
+  });
+
+  it('invalidates stale artifacts before a replacement run fails', () => {
+    const input = fixture();
+    const outputDir = join(input.dir, 'artifacts');
+    const first = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(first.ok, first.errors.join('\n')).toBe(true);
+    writeFileSync(input.stageEvidencePath, JSON.stringify({
+      ...input.evidence,
+      invocations: input.evidence.invocations.map((invocation) => ({
+        ...invocation,
+        capturePath: join(input.dir, 'missing-after-success.capture.txt'),
+      })),
+    }));
+    const failed = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(failed.ok).toBe(false);
+    expect(existsSync(join(outputDir, 'acceptance-artifacts.json'))).toBe(false);
+    expect(inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    }).ok).toBe(false);
+  });
+
+  it('rejects stage attempt ids that could escape the output directory', () => {
+    const input = fixture();
+    const outputDir = join(input.dir, 'artifacts');
+    const outsidePath = join(input.dir, 'outside.json');
+    writeFileSync(input.stageEvidencePath, JSON.stringify({
+      ...input.evidence,
+      stageAttemptId: 'x/../../outside',
+    }));
+    const result = produceAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir,
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [input.stageEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('safe output filename component');
+    expect(existsSync(outsidePath)).toBe(false);
   });
 
   it('passes a false terminal assurance when recorded settlement is not terminal', () => {
@@ -267,7 +349,7 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
       authorDispositionsPath: input.authorPath,
     });
     expect(produced.ok).toBe(false);
-    expect(produced.errors.join('\n')).toContain('no completed-stage evidence');
+    expect(produced.errors.join('\n')).toContain(input.stageEvidencePath);
     expect(existsSync(join(input.dir, 'artifacts'))).toBe(false);
     const status = inspectAcceptanceArtifacts({
       reviewDir: input.dir,
@@ -279,6 +361,30 @@ describe('Issue #1192 evidence-derived acceptance artifacts', () => {
     expect(status.ok).toBe(false);
     expect(status.missing.some((item) => item.reason.includes('no recorded stage evidence paths'))).toBe(true);
     expect(status.missing.some((item) => item.artifact === 'verified relay evidence')).toBe(true);
+  });
+
+  it('preflights missing Claude capture files for architectural-lens evidence', () => {
+    const input = fixture();
+    const lensEvidencePath = join(input.dir, 'attempt-lens.json');
+    const missingCapturePath = join(input.dir, 'missing-lens.capture.txt');
+    writeFileSync(lensEvidencePath, JSON.stringify({
+      schema: STAGE_EVIDENCE_SCHEMA,
+      stage: 'architectural-lens',
+      claude: { capturePath: 'missing-lens.capture.txt' },
+    }));
+    const status = inspectAcceptanceArtifacts({
+      reviewDir: input.dir,
+      outputDir: join(input.dir, 'artifacts'),
+      tierIntakePath: input.intakePath,
+      stageEvidencePaths: [lensEvidencePath],
+      authorDispositionsPath: input.authorPath,
+    });
+    expect(status.ok).toBe(false);
+    expect(status.missing.some((item) => (
+      item.artifact === 'capture'
+      && item.reason.includes('Claude capture')
+      && item.reason.includes(missingCapturePath)
+    ))).toBe(true);
   });
 
   it('rejects artifact-only flags on journal commands instead of ignoring them', () => {

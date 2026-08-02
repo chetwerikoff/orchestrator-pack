@@ -2,7 +2,11 @@ import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -373,6 +377,10 @@ function buildReceipt(
   if (tier === null) errors.push('stage evidence.tier is invalid');
   if (stage === null || tier === null) return null;
   const stageAttemptId = requiredString(raw.stageAttemptId, 'stage evidence.stageAttemptId', errors);
+  if (!isSafeFileComponent(stageAttemptId)) {
+    errors.push('stage evidence.stageAttemptId must be a safe output filename component');
+    return null;
+  }
   const sourceRevision = requiredString(raw.sourceRevision, 'stage evidence.sourceRevision', errors);
   const cycleId = requiredString(raw.cycleId, 'stage evidence.cycleId', errors);
   const cycleBinding = isRecord(raw.cycleBinding) ? raw.cycleBinding : null;
@@ -527,10 +535,103 @@ function expectedStages(tier: ReviewTier, phase: 'pre-lens' | 'final-acceptance'
   return ['architectural'];
 }
 
+const PRODUCED_ARTIFACT_NAMES = new Set([
+  'verified-relay-evidence.json',
+  'finding-disposition-ledger.json',
+  'review-episode-inventory.json',
+  'acceptance-artifacts.json',
+]);
+
+function isProducedArtifactName(name: string): boolean {
+  return PRODUCED_ARTIFACT_NAMES.has(name)
+    || /^stage-completeness-receipt-[^/\\]+\.json$/.test(name);
+}
+
+function invalidateOutputArtifacts(outputDir: string): void {
+  if (!existsSync(outputDir)) return;
+  for (const name of readdirSync(outputDir)) {
+    if (isProducedArtifactName(name)) rmSync(join(outputDir, name), { force: true, recursive: true });
+  }
+}
+
+function isRecordedStageEvidenceFile(path: string): boolean {
+  const name = basename(path);
+  if (/^attempt-[^/\\]+\.json$/i.test(name)) return true;
+  try {
+    const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    return isRecord(value) && value.schema === STAGE_EVIDENCE_SCHEMA;
+  } catch {
+    return false;
+  }
+}
+
+function stageEvidenceFilesInReviewDir(reviewDir: string): string[] {
+  if (!existsSync(reviewDir)) return [];
+  try {
+    return readdirSync(reviewDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => join(reviewDir, entry.name))
+      .filter((path) => isRecordedStageEvidenceFile(path))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+function resolveCanonicalStageEvidencePaths(
+  reviewDir: string,
+  requestedPaths: readonly string[],
+  errors: string[],
+): string[] | null {
+  const canonicalPaths = stageEvidenceFilesInReviewDir(reviewDir);
+  const canonicalSet = new Set(canonicalPaths.map((path) => resolve(path)));
+  const requestedSet = new Set(requestedPaths.map((path) => resolve(path)));
+  const missing = canonicalPaths.filter((path) => !requestedSet.has(resolve(path)));
+  const unexpected = requestedPaths
+    .map((path) => resolve(path))
+    .filter((path) => !canonicalSet.has(path));
+  if (missing.length > 0) {
+    errors.push(`--stage-evidence omitted canonical stage evidence files: ${missing.join(', ')}`);
+  }
+  if (unexpected.length > 0) {
+    errors.push(`--stage-evidence includes files outside the canonical review directory: ${[...new Set(unexpected)].join(', ')}`);
+  }
+  return missing.length === 0 && unexpected.length === 0 ? canonicalPaths : null;
+}
+
+function isSafeFileComponent(value: string): boolean {
+  return value.length > 0
+    && value !== '.'
+    && value !== '..'
+    && !value.includes('/')
+    && !value.includes('\\')
+    && !value.includes('..');
+}
+
+function publishArtifactSet(
+  outputDir: string,
+  files: readonly string[],
+  contents: ReadonlyMap<string, string>,
+): void {
+  const parentDir = dirname(outputDir);
+  mkdirSync(parentDir, { recursive: true });
+  const stagingDir = mkdtempSync(join(parentDir, `.${basename(outputDir)}.tmp-`));
+  try {
+    for (const file of files) {
+      writeFileSync(join(stagingDir, file), contents.get(file) ?? '');
+    }
+    mkdirSync(outputDir, { recursive: true });
+    for (const file of files) renameSync(join(stagingDir, file), join(outputDir, file));
+  } finally {
+    rmSync(stagingDir, { recursive: true, force: true });
+  }
+}
+
 export function produceAcceptanceArtifacts(
   options: ProduceAcceptanceArtifactsOptions,
 ): AcceptanceArtifactResult {
   const outputDir = options.outputDir ?? options.reviewDir;
+  invalidateOutputArtifacts(outputDir);
   const errors: string[] = [];
   const intake = loadTierIntake(options.tierIntakePath, errors);
   const taskIdentity = intake && requiredString(intake.taskIdentity, 'tier-intake.taskIdentity', errors);
@@ -539,9 +640,17 @@ export function produceAcceptanceArtifacts(
     return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)] };
   }
   const episodeId = deriveReviewEpisodeId(taskIdentity, episodeFirstRevision);
+  const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(
+    options.reviewDir,
+    options.stageEvidencePaths,
+    errors,
+  );
+  if (canonicalStageEvidencePaths === null) {
+    return { ok: false, outputDir, files: [], missing: [], errors: [...new Set(errors)], reviewEpisodeId: episodeId };
+  }
   const captureTexts = new Map<string, string>();
   const captureTimestamps = new Map<string, number>();
-  const receipts = options.stageEvidencePaths
+  const receipts = canonicalStageEvidencePaths
     .map((path) => {
       const value = readJson(path, 'stage evidence', errors);
       return isRecord(value) ? buildReceipt(path, value, taskIdentity, episodeFirstRevision, episodeId, captureTexts, captureTimestamps, errors) : null;
@@ -628,16 +737,20 @@ export function produceAcceptanceArtifacts(
     files,
     derivedFrom: {
       tierIntake: resolve(options.tierIntakePath),
-      stageEvidence: options.stageEvidencePaths.map((path) => resolve(path)),
+      stageEvidence: canonicalStageEvidencePaths.map((path) => resolve(path)),
       authorDispositions: resolve(options.authorDispositionsPath),
     },
   };
-  mkdirSync(outputDir, { recursive: true });
-  receipts.forEach((receipt) => writeFileSync(join(outputDir, `stage-completeness-receipt-${receipt.stageAttemptId}.json`), JSON.stringify(receipt, null, 2) + '\n'));
-  writeFileSync(join(outputDir, 'verified-relay-evidence.json'), JSON.stringify(relay, null, 2) + '\n');
-  writeFileSync(join(outputDir, 'finding-disposition-ledger.json'), ledger);
-  writeFileSync(join(outputDir, 'review-episode-inventory.json'), JSON.stringify(authority!.receiptInventory, null, 2) + '\n');
-  writeFileSync(join(outputDir, 'acceptance-artifacts.json'), JSON.stringify(manifest, null, 2) + '\n');
+  const artifactContents = new Map<string, string>();
+  receipts.forEach((receipt) => artifactContents.set(
+    `stage-completeness-receipt-${receipt.stageAttemptId}.json`,
+    JSON.stringify(receipt, null, 2) + '\n',
+  ));
+  artifactContents.set('verified-relay-evidence.json', JSON.stringify(relay, null, 2) + '\n');
+  artifactContents.set('finding-disposition-ledger.json', ledger);
+  artifactContents.set('review-episode-inventory.json', JSON.stringify(authority!.receiptInventory, null, 2) + '\n');
+  artifactContents.set('acceptance-artifacts.json', JSON.stringify(manifest, null, 2) + '\n');
+  publishArtifactSet(outputDir, files, artifactContents);
   return { ok: true, outputDir, files, missing: [], errors: [], reviewEpisodeId: episodeId };
 }
 
@@ -652,18 +765,34 @@ export function inspectAcceptanceArtifacts(
   };
   requirePath(options.tierIntakePath, 'tier-intake/v1', 'tier intake evidence is missing');
   requirePath(options.authorDispositionsPath, 'author dispositions', 'author disposition evidence is missing');
+  const coverageErrors: string[] = [];
+  const canonicalStageEvidencePaths = resolveCanonicalStageEvidencePaths(
+    options.reviewDir,
+    options.stageEvidencePaths,
+    coverageErrors,
+  );
+  for (const error of coverageErrors) {
+    missing.push({ artifact: 'stage-completeness-receipt/v1', reason: error });
+  }
   if (options.stageEvidencePaths.length === 0) {
     missing.push({ artifact: 'stage-completeness-receipt/v1', reason: 'no recorded stage evidence paths were supplied' });
   }
-  for (const path of options.stageEvidencePaths) requirePath(path, 'stage evidence', 'recorded stage result is missing');
-  for (const path of options.stageEvidencePaths) {
+  const stageEvidencePaths = canonicalStageEvidencePaths ?? options.stageEvidencePaths;
+  for (const path of stageEvidencePaths) requirePath(path, 'stage evidence', 'recorded stage result is missing');
+  for (const path of stageEvidencePaths) {
     if (!existsSync(path)) continue;
     const value = readJson(path, 'stage evidence', []);
-    if (!isRecord(value) || !Array.isArray(value.invocations)) continue;
-    for (const invocation of value.invocations) {
-      if (!isRecord(invocation) || invocation.capturePath === undefined) continue;
-      const capturePath = resolve(dirname(path), String(invocation.capturePath));
-      requirePath(capturePath, 'capture', 'stage evidence names a capture that is not present');
+    if (!isRecord(value)) continue;
+    if (Array.isArray(value.invocations)) {
+      for (const invocation of value.invocations) {
+        if (!isRecord(invocation) || invocation.capturePath === undefined) continue;
+        const capturePath = resolve(dirname(path), String(invocation.capturePath));
+        requirePath(capturePath, 'capture', 'stage evidence names a capture that is not present');
+      }
+    }
+    if (isRecord(value.claude) && value.claude.capturePath !== undefined) {
+      const capturePath = resolve(dirname(path), String(value.claude.capturePath));
+      requirePath(capturePath, 'capture', 'stage evidence names a Claude capture that is not present');
     }
   }
   requirePath(join(options.outputDir ?? options.reviewDir, 'verified-relay-evidence.json'), 'verified relay evidence', 'relay manifest has not been produced');
