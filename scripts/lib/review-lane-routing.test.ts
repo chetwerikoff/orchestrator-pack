@@ -14,6 +14,7 @@ import {
   type ReviewLaneBodyRead,
 } from './review-lane-routing.ts';
 import { produceReviewLaneInput } from './review-lane-input.ts';
+import { selectReviewLane } from './review-lane-selector.ts';
 
 const declaration = (entries: ReviewLaneAuthorDeclaration['entries']): ReviewLaneAuthorDeclaration => ({
   schema: 'review-lane-change-set/v1',
@@ -98,6 +99,22 @@ describe('review-lane declaration and blast-radius routing', () => {
       ])).reason).toBe('declared-path-denied');
     }
   });
+
+  it('accepts every Issue-bound infrastructure root before classification', () => {
+    const paths = [
+      'scripts/vitest-ci-lanes.config.json',
+      'scripts/lib/vitest-pre-topology-measurement.mjs',
+      'scripts/vitest-runtime-history.json',
+      'agent-orchestrator.yaml.example',
+      'docs/migration_notes.md',
+      'scripts/lib/any-new-helper.ts',
+    ];
+    for (const path of paths) {
+      expect(normalizeReviewLaneDeclaration(declaration([
+        { kind: path === 'scripts/lib/any-new-helper.ts' ? 'family' : 'exact', path, behaviors: ['pure-review-lane-selection'] },
+      ]), `path should be within the Issue allowed roots: ${path}`)).toMatchObject({ status: 'usable' });
+    }
+  });
 });
 
 describe('review-lane classifier v1', () => {
@@ -114,6 +131,25 @@ describe('review-lane classifier v1', () => {
       ]));
       expect(result.policyStatus).toBe('available');
       expect(result.scopeClass).toBe('security-sensitive');
+    }
+  });
+
+  it('keeps access-control security precedence across every broad safe family', () => {
+    const fixtures = [
+      ['docs/declarations/access-control.ts', ['scope-declaration-only']],
+      ['.claude/skills/create-issue-draft/access-control.ts', ['author-declaration-validation', 'review-source-cardinality-only']],
+      ['.claude/skills/discuss-with-gpt/access-control.ts', ['review-source-cardinality-only']],
+      ['.cursor/skills/create-issue-draft/access-control.ts', ['generated-parity-only', 'review-source-cardinality-only']],
+      ['.cursor/skills/discuss-with-gpt/access-control.ts', ['generated-parity-only', 'review-source-cardinality-only']],
+      ['scripts/lib/create-issue-stage-record-access-control.ts', ['additive-existing-receipt-evidence', 'routing-policy-epoch']],
+      ['scripts/lib/review-lane-access-control.ts', ['pure-review-lane-selection']],
+      ['scripts/lib/review-lane-access-control.test.ts', ['test-only']],
+    ] as const;
+    for (const [path, behaviors] of fixtures) {
+      const result = classifyReviewLaneDeclaration(declaration([
+        { kind: 'exact', path, behaviors: [...behaviors] },
+      ]));
+      expect(result.scopeClass, path).toBe('security-sensitive');
     }
   });
 
@@ -172,6 +208,18 @@ describe('review-lane classifier v1', () => {
     if (input.status !== 'usable') return;
     expect(input.blastRadius).toBe('high-or-uncertain');
     expect(buildReviewLaneRouting(input, classification, 'r1', 'attempt-family').topology).toBe('conditional-third/v1');
+  });
+
+  it('persists the permitted lane override in immutable routing evidence', () => {
+    const input = normalizeReviewLaneDeclaration(declaration([
+      { kind: 'exact', path: 'docs/review-lanes.md', behaviors: ['documentation-only'] },
+    ]));
+    const classification = classifyReviewLaneDeclaration(declaration([
+      { kind: 'exact', path: 'docs/review-lanes.md', behaviors: ['documentation-only'] },
+    ]));
+    if (input.status !== 'usable') throw new Error('override fixture input must be usable');
+    const selected = selectReviewLane(input, classification, 'r1', 'attempt-override', 'disputed');
+    expect(selected.routing?.permittedLaneOverride).toBe('disputed');
   });
 
   it('selects the specific test rule before the broad review-lane production rule', () => {

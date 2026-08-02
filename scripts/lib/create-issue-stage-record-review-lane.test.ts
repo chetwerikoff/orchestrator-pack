@@ -10,6 +10,7 @@ import { parseConsumableStageReceipt } from './create-issue-stage-record-receipt
 import { validateReviewLaneRecord } from './review-lane-record.ts';
 import { createMockGhState, createMockTransport, makeTempDir } from './create-issue-stage-record-test-helpers.ts';
 import { publishSettledStageRecord, startReviewCycle } from './create-issue-stage-record-core.ts';
+import { prepareReviewLaneStageAttempt } from './create-issue-stage-record-review-lane.ts';
 import { deriveReviewEpisodeState, validateReviewEpisodeTopology } from './stage-completeness-core.ts';
 
 const declaration = (entries: ReviewLaneAuthorDeclaration['entries']): ReviewLaneAuthorDeclaration => ({
@@ -90,7 +91,7 @@ describe('review-lane production activation', () => {
     expect(state.comments[0]?.body).toContain('routed-lane');
   });
 
-  it('retries the bounded freeze after inconsistent live Issue reads', () => {
+  it('rejects body drift after exactly two fresh Issue reads', () => {
     const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
     const base = createMockTransport(state);
     let issueReads = 0;
@@ -102,19 +103,20 @@ describe('review-lane production activation', () => {
             return { exitCode: 0, stdout: JSON.stringify({ title: 't', body: issueBody, labels: [] }), stderr: '' };
           }
           if (issueReads === 2) {
-            const changed = issueBody.replace('revision r01', 'revision r02');
+            const changed = `${issueBody}\nbody drift`;
             return { exitCode: 0, stdout: JSON.stringify({ title: 't', body: changed, labels: [] }), stderr: '' };
           }
         }
         return base.runGh(argv);
       },
     };
-    const result = startReviewCycle(transport, {
-      repo: 'chetwerikoff/orchestrator-pack', issueNumber: 1201, sourceRevision: 'r01', tier: 'T2',
-      publicActor: 'cursor-flow-manager', stageAttemptId: 'attempt-1', workdir: makeTempDir(),
+    const result = prepareReviewLaneStageAttempt({
+      transport, repo: 'chetwerikoff/orchestrator-pack', issueNumber: 1201,
+      sourceRevision: 'r01', stageAttemptId: 'attempt-1',
     });
-    expect(result.ok).toBe(true);
-    expect(issueReads).toBeGreaterThanOrEqual(4);
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.join('\n')).toContain('review-lane input is not usable');
+    expect(issueReads).toBe(2);
   });
 
   it('rejects a stale caller revision before publishing any cycle', () => {
@@ -148,6 +150,72 @@ describe('review-lane production activation', () => {
     expect(result.ok).toBe(true);
     expect(result.reviewLaneRouting).toMatchObject({ lane: 'disputed', reviewerCardinality: 3 });
     expect(result.reviewLaneRouting?.classifierIdentity).toBe(reviewLaneClassifierPolicyIdentity());
+  });
+
+  it('preserves override provenance when invocation evidence is compared', () => {
+    const routed = routedFixture();
+    const captures = ['01', '02'].map((slot) => ({
+      captureIdentity: `capture-${slot}`,
+      name: `pass-1-competitive-${slot}.capture.txt`,
+      byteLength: 1,
+      sha256: '0'.repeat(64),
+      rawFindingCount: 0,
+    }));
+    const invocations = captures.map((item, index) => ({
+      schema: 'reviewer-invocation-envelope/v1',
+      reviewEpisodeId: 'task@r00',
+      stageAttemptId: 'attempt-1',
+      policyVersion: 'review-lane-routing/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: routed.routing.cardinalityConfigIdentity,
+      stage: 'competitive',
+      sourceRevision: 'r01',
+      invocationId: `override-invocation-${index + 1}`,
+      terminalResultIdentity: `override-terminal-${index + 1}`,
+      reviewerSource: `override-source-${index + 1}`,
+      reviewerSlot: String(index + 1).padStart(2, '0'),
+      reviewerOrdinal: index + 1,
+      attemptOrdinal: 1,
+      retryAttempt: false,
+      terminal: true,
+      terminalClassification: 'complete',
+      sendCount: 1,
+      retryClass: 'none',
+      revisionCheck: 'matched',
+      capacityOutcome: 'admitted',
+      capacityWaitMs: 0,
+      capture: item,
+      reviewLaneRouting: { ...routed.routing, permittedLaneOverride: 'disputed' },
+    }));
+    const receipt = {
+      schema: 'stage-completeness-receipt/v1' as const,
+      tier: 'T3' as const,
+      taskIdentity: 'task',
+      episodeFirstRevision: 'r00',
+      reviewEpisodeId: 'task@r00',
+      stageReceiptId: 'task@r00:stage-receipt:0001',
+      previousStageReceiptId: null,
+      receiptCensus: ['task@r00:stage-receipt:0001'],
+      stageAttemptId: 'attempt-1',
+      stageSequence: 1,
+      stage: 'competitive' as const,
+      policyVersion: 'review-lane-routing/v1' as const,
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: routed.routing.cardinalityConfigIdentity,
+      sourceRevision: 'r01',
+      outcome: 'complete' as const,
+      revisionChecks: { attemptCreation: 'matched' as const, beforeLaunch: 'matched' as const, settlement: 'matched' as const },
+      settlement: { allLaunchedTerminal: true, retryState: 'none' as const, finalRevisionMatched: true },
+      invocations,
+      credentialingCaptures: captures,
+      relayEligibleCaptures: captures,
+      reviewLane: routed,
+    };
+    const state = deriveReviewEpisodeState([receipt], [], {
+      tierIntake: { schema: 'tier-intake/v1', producer: 'test', taskIdentity: 'task', kind: 'fresh', priorTier: 'T3', firstRevision: 'r00' },
+      receiptInventory: { source: 'canonical-review-directory', taskIdentity: 'task', episodeFirstRevision: 'r00', reviewEpisodeId: 'task@r00', stageReceiptIds: ['task@r00:stage-receipt:0001'] },
+    });
+    expect(state.errors.join('\n')).toContain('reviewLaneRouting disagrees with the full stage evidence');
   });
 
   it('does not publish a cycle when pre-attempt routing cannot be produced', () => {

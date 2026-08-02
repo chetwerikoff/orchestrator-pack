@@ -687,7 +687,9 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   if (receipt.stage === 'competitive' || receipt.stage === 'architectural-review') {
     if (receipt.tier !== 'T3') errors.push(`${receipt.stage} is valid only for T3`);
     if (receipt.policyVersion !== TRIPLE_SOURCE_POLICY_VERSION && receipt.policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) errors.push(`${receipt.stage} must use triple-source/v1 or review-lane-routing/v1`);
-  } else if (receipt.policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) {
+  } else if (receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION) {
+    errors.push(`${receipt.stage} review-lane-routing/v1 is limited to lane-controlled T3 stages`);
+  } else {
     if (receipt.policyVersion !== SINGLE_SOURCE_POLICY_VERSION) errors.push(`${receipt.stage} must remain singular`);
     if (receipt.reviewerCardinality !== 1) errors.push(`${receipt.stage} must use reviewerCardinality 1`);
   }

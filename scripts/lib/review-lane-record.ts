@@ -32,6 +32,7 @@ export function sameReviewLaneRouting(left: ReviewLaneRouting, right: ReviewLane
     && left.stageAttemptId === right.stageAttemptId
     && left.laneInputIdentity === right.laneInputIdentity
     && left.classifierIdentity === right.classifierIdentity
+    && left.permittedLaneOverride === right.permittedLaneOverride
     && left.conditionalActivationRule === right.conditionalActivationRule
     && sameSlots(left.possibleSlots, right.possibleSlots)
     && sameSlots(left.initiallyActivatedSlots, right.initiallyActivatedSlots);
@@ -55,6 +56,7 @@ function isRouting(value: unknown): value is ReviewLaneRouting {
   if (value.topology !== 'fixed/v1' && value.topology !== 'conditional-third/v1') return false;
   if (value.lane !== 'normal' && value.lane !== 'disputed') return false;
   if (value.policyVersion !== 'review-lane-routing/v1') return false;
+  if (value.permittedLaneOverride !== null && value.permittedLaneOverride !== 'normal' && value.permittedLaneOverride !== 'disputed') return false;
   const reviewerCardinality = value.reviewerCardinality;
   if (typeof reviewerCardinality !== 'number' || !Number.isInteger(reviewerCardinality) || reviewerCardinality < 1) return false;
   if (!nonEmpty(value.cardinalityConfigIdentity) || !nonEmpty(value.sourceRevision) || !nonEmpty(value.stageAttemptId)) return false;

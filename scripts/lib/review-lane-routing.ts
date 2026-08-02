@@ -27,6 +27,9 @@ const ALLOWED_ROOTS = [
   'scripts/stage-completeness-guard.test.ts', 'scripts/lib/create-issue-stage-record*.ts',
   'scripts/lib/create-issue-stage-record*.test.ts', 'scripts/create-issue-stage-finalize.ts',
   'scripts/lib/review-lane-*.ts', 'scripts/review-lane-*.ts',
+  'scripts/vitest-ci-lanes.config.json', 'scripts/lib/vitest-pre-topology-measurement.mjs',
+  'scripts/vitest-runtime-history.json', 'agent-orchestrator.yaml.example', 'docs/migration_notes.md',
+  'scripts/lib/**',
 ] as const;
 const DENYLIST = [
   'vendor/**', 'packages/core/**', '.ao/**', '.github/workflows/**', 'prompts/**',
@@ -128,6 +131,7 @@ export interface ReviewLaneRouting {
   stageAttemptId: string;
   laneInputIdentity: string;
   classifierIdentity: string;
+  permittedLaneOverride: 'normal' | 'disputed' | null;
 }
 export interface ReviewLaneBodyRead { sourceRevision: string; body: string; }
 export interface FrozenReviewLaneBody {
@@ -333,7 +337,10 @@ function classifyPath(entry: ReviewLaneAuthorEntry): ReviewLanePathClassificatio
   const parts = lower.split('/');
   const file = parts.at(-1) ?? '';
   const stem = file.includes('.') ? file.slice(0, file.lastIndexOf('.')) : file;
-  const securityByCompound = parts.includes('access-control') || stem === 'access-control';
+  const stemTokens = stem.toLowerCase().split(/[-_.]+/).filter(Boolean);
+  const securityByCompound = parts.some((part) => part.toLowerCase() === 'access-control')
+    || stem.toLowerCase() === 'access-control'
+    || stemTokens.some((token, index) => token === 'access' && stemTokens[index + 1] === 'control');
   const securityByPath = lower.startsWith('scripts/chatgpt-browser-turn/')
     || lower === 'agent-orchestrator.yaml' || /^agent-orchestrator\..+\.yaml$/i.test(path);
   const securityByTag = entry.behaviors.some((tag) => SECURITY_BEHAVIOR_TAGS.includes(tag as typeof SECURITY_BEHAVIOR_TAGS[number]));
@@ -382,7 +389,13 @@ export function classifyReviewLaneDeclaration(
   return { schema: REVIEW_LANE_CLASSIFIER_POLICY_VERSION, policyStatus: 'available', policyIdentity, scopeClass, conservativeReasons, paths };
 }
 
-export function buildReviewLaneRouting(input: UsableReviewLaneInput, classification: ReviewLaneClassification, sourceRevision: string, stageAttemptId: string): ReviewLaneRouting {
+export function buildReviewLaneRouting(
+  input: UsableReviewLaneInput,
+  classification: ReviewLaneClassification,
+  sourceRevision: string,
+  stageAttemptId: string,
+  permittedLaneOverride: 'normal' | 'disputed' | null = null,
+): ReviewLaneRouting {
   if (classification.policyStatus !== 'available') throw new Error(`classifier unavailable: ${classification.unavailableReason ?? 'unknown'}`);
   const disputed = classification.scopeClass !== 'safe' || input.blastRadius !== 'low';
   const lane: ReviewLaneName = disputed ? 'disputed' : 'normal';
@@ -397,6 +410,7 @@ export function buildReviewLaneRouting(input: UsableReviewLaneInput, classificat
     lane, topology, policyVersion: REVIEW_LANE_ROUTING_POLICY_VERSION, reviewerCardinality: possibleSlots.length,
     cardinalityConfigIdentity, possibleSlots, initiallyActivatedSlots, conditionalActivationRule,
     sourceRevision, stageAttemptId, laneInputIdentity: input.identity, classifierIdentity: classification.policyIdentity,
+    permittedLaneOverride,
   };
 }
 

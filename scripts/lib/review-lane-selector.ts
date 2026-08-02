@@ -41,11 +41,11 @@ export function selectReviewLane(
   if (override === 'disputed' && classification.scopeClass === 'safe' && input.blastRadius === 'low') {
     return {
       ready: true,
-      routing: buildReviewLaneRouting({ ...input, blastRadius: 'high' }, classification, sourceRevision, stageAttemptId),
+      routing: buildReviewLaneRouting({ ...input, blastRadius: 'high' }, classification, sourceRevision, stageAttemptId, 'disputed'),
     };
   }
   if (override === 'normal') {
-    const routing = buildReviewLaneRouting({ ...input, blastRadius: 'low' }, classification, sourceRevision, stageAttemptId);
+    const routing = buildReviewLaneRouting({ ...input, blastRadius: 'low' }, classification, sourceRevision, stageAttemptId, 'normal');
     return { ready: true, routing };
   }
   return { ready: true, routing: buildReviewLaneRouting(input, classification, sourceRevision, stageAttemptId) };
