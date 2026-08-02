@@ -12,7 +12,8 @@
     "scripts/pack-review-carryover.ts",
     "scripts/pack-review-runner-issue-898.test.ts",
     "scripts/pack-review-state.test.ts",
-    "scripts/pack-review-state.ts"
+    "scripts/pack-review-state.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     ".github/workflows/",
