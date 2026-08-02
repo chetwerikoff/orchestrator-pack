@@ -8,6 +8,7 @@ import {
   clearPendingEvent,
   createIssueComment,
   defaultWorkdir,
+  GH_TIMEOUT_MS,
   ensureProjectionLabels,
   fetchIssueRevision,
   listPendingEvents,
@@ -17,6 +18,7 @@ import {
   readPendingEvent,
   readPersistedCycleId,
   syncIssueProjectionLabels,
+  withGhDeadline,
   writePendingEvent,
 } from './create-issue-stage-record-gh.ts';
 import {
@@ -178,7 +180,20 @@ export function publishJournalEvent(
   census?: CommentCensusOptions,
 ): OperationResult {
   const diagnostics: LineageDiagnostic[] = [];
-  const censusState = loadIssueJournalCensus(transport, repo, issueNumber, census);
+  const publicationDeadline = Date.now() + GH_TIMEOUT_MS;
+  const publicationTransport = withGhDeadline(transport, publicationDeadline);
+  let censusState: ReturnType<typeof loadIssueJournalCensus>;
+  try {
+    censusState = loadIssueJournalCensus(publicationTransport, repo, issueNumber, census);
+  } catch (error) {
+    pendingFailure(workdir, { schema, eventKey, body }, 'publication-timeout');
+    diagnostics.push({
+      code: 'comments-truncated',
+      message: `publication census failed: ${error instanceof Error ? error.message : String(error)}`,
+      eventKey,
+    });
+    return { ok: false, diagnostics, eventKey, projectionPendingRepair: true };
+  }
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
     pendingFailure(workdir, { schema, eventKey, body }, 'census-incomplete');
@@ -208,7 +223,7 @@ export function publishJournalEvent(
     createdAt: new Date().toISOString(),
     delivery: 'immediate',
   });
-  const created = createIssueComment(transport, repo, issueNumber, body);
+  const created = createIssueComment(publicationTransport, repo, issueNumber, body);
   if (!created.ok) {
     pendingFailure(workdir, { schema, eventKey, body }, 'comment-create');
     diagnostics.push({
@@ -218,7 +233,18 @@ export function publishJournalEvent(
     });
     return { ok: false, diagnostics, eventKey, projectionPendingRepair: true };
   }
-  const confirmed = confirmCanonicalEvent(transport, repo, issueNumber, eventKey, fingerprint, census);
+  let confirmed: ReturnType<typeof confirmCanonicalEvent>;
+  try {
+    confirmed = confirmCanonicalEvent(publicationTransport, repo, issueNumber, eventKey, fingerprint, census);
+  } catch (error) {
+    pendingFailure(workdir, { schema, eventKey, body }, 'publication-timeout');
+    diagnostics.push({
+      code: 'comments-truncated',
+      message: `publication confirmation failed: ${error instanceof Error ? error.message : String(error)}`,
+      eventKey,
+    });
+    return { ok: false, diagnostics, eventKey, projectionPendingRepair: true };
+  }
   diagnostics.push(...confirmed.diagnostics);
   if (!confirmed.confirmed) {
     pendingFailure(workdir, { schema, eventKey, body }, 'confirmation');

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { executeFinalAcceptanceGuards, FINAL_ACCEPTANCE_CONTRACT_VERSION } from './create-issue-final-acceptance-contract.ts';
 import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
 import {
@@ -12,12 +12,14 @@ import {
 } from './create-issue-stage-record-marker.ts';
 import {
   fetchIssueComments,
+  withGhDeadline,
   parseJournalEvents,
   syncIssueProjectionLabels,
   readPendingEvent,
 } from './create-issue-stage-record-gh.ts';
 import {
   detectAcceptedRevisionDrift,
+  publishJournalEvent,
   publishSettledStageRecord,
   retryPendingEvents,
   startReviewCycle,
@@ -34,6 +36,61 @@ import type { CycleEventLogical, StageEventLogical, TrustedComment } from './cre
 import { CYCLE_SCHEMA, FINAL_SCHEMA, STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
 
 describe('create-issue-stage-record marker and lineage', () => {
+  it('propagates one publication deadline and stops before a post-deadline call', () => {
+    const calls: Array<{ argv: string[]; timeoutMs?: number }> = [];
+    const transport = {
+      runGh(argv: string[], timeoutMs?: number) {
+        calls.push({ argv, timeoutMs });
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    };
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValueOnce(1_000).mockReturnValueOnce(1_600).mockReturnValue(2_100);
+
+    const bounded = withGhDeadline(transport, 2_000);
+    expect(bounded.runGh(['gh', 'api', 'first']).exitCode).toBe(0);
+    expect(bounded.runGh(['gh', 'api', 'second']).exitCode).toBe(0);
+    expect(bounded.runGh(['gh', 'api', 'third'])).toMatchObject({
+      exitCode: 124,
+      stderr: 'publication_deadline_exhausted',
+    });
+    expect(calls.map((call) => call.timeoutMs)).toEqual([1_000, 400]);
+    now.mockRestore();
+  });
+  it('returns blocked when the shared publication deadline expires during confirmation', () => {
+    const calls: Array<{ argv: string[]; timeoutMs?: number }> = [];
+    const transport = {
+      runGh(argv: string[], timeoutMs?: number) {
+        calls.push({ argv, timeoutMs });
+        if (argv.includes('--jq')) return { exitCode: 0, stdout: 'owner', stderr: '' };
+        if (argv[2]?.includes('/comments?')) return { exitCode: 0, stdout: '[]', stderr: '' };
+        return { exitCode: 0, stdout: '{"id": 1}', stderr: '' };
+      },
+    };
+    const workdir = makeTempDir();
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValueOnce(1_000).mockReturnValueOnce(1_000).mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000).mockReturnValue(12_000);
+
+    try {
+      const result = publishJournalEvent(
+        transport,
+        'owner/repo',
+        1197,
+        workdir,
+        'event body',
+        'stage-event/v1',
+        'event-1',
+        'fingerprint',
+      );
+      expect(result.ok).toBe(false);
+      expect(calls).toHaveLength(3);
+    } finally {
+      now.mockRestore();
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
   it('parses markers for all schemas and compares logical fingerprints without delivery metadata', () => {
     const cycle: CycleEventLogical = {
       schema: CYCLE_SCHEMA,

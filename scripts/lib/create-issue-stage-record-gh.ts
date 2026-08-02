@@ -29,6 +29,23 @@ import {
 export const GH_TIMEOUT_MS = 10_000;
 
 
+export function withGhDeadline(transport: GhTransport, deadlineMs: number): GhTransport {
+  return {
+    runGh(argv: string[]) {
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) {
+        return {
+          exitCode: 124,
+          stdout: '',
+          stderr: 'publication_deadline_exhausted',
+        };
+      }
+      return transport.runGh(argv, remainingMs);
+    },
+  };
+}
+
+
 export function resolvePackGh(): string {
   const here = fileURLToPath(new URL('.', import.meta.url));
   return join(here, '..', 'gh');
@@ -37,12 +54,12 @@ export function resolvePackGh(): string {
 export function defaultGhTransport(): GhTransport {
   const gh = resolvePackGh();
   return {
-    runGh(argv: string[]) {
+    runGh(argv: string[], timeoutMs = GH_TIMEOUT_MS) {
       const result = runProcessSync({
         command: gh,
         args: argv.slice(1),
         inheritParentEnv: true,
-        timeoutMs: GH_TIMEOUT_MS,
+        timeoutMs,
       });
       return {
         exitCode: result.exitCode ?? 1,

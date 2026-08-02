@@ -35,7 +35,7 @@ export interface GhInvocationResult {
 }
 
 export interface GhTransport {
-  runGh(argv: string[]): GhInvocationResult;
+  runGh(argv: string[], timeoutMs?: number): GhInvocationResult;
 }
 
 export interface TrustedComment {
