@@ -224,4 +224,3 @@ describe('create-issue remote review topology', () => {
     expect(rebuilt).toBe(raw);
   });
 });
-

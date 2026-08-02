@@ -52,4 +52,3 @@ describe('bounded comment census and targeted confirmation', () => {
     expect(readTargetedComment(transport, 'chetwerikoff/orchestrator-pack', 9, 'expected').reason).toBe('body-mismatch');
   });
 });
-

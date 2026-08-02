@@ -25,4 +25,3 @@ describe('fixed parked review migrations', () => {
     expect(() => validateParkedMigrationManifest({ ...original, pinnedComments: comments.slice(1) })).toThrow(/fixed comment set/);
   });
 });
-

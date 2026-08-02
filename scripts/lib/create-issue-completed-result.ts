@@ -179,4 +179,3 @@ export function recoverCompletedTurn(
     return { state: 'terminal-producer-failed', reason: error instanceof Error ? error.message : String(error), result: harvested.result, sendCount: 0 };
   }
 }
-
