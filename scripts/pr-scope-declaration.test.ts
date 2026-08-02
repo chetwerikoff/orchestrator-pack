@@ -24,6 +24,20 @@ const issueBody = [
   '```',
 ].join('\n');
 
+const firstPartySurfaceIssueBody = [
+  '```denylist',
+  'vendor/**',
+  'packages/core/**',
+  '```',
+  '```allowed-roots',
+  '.claude/**',
+  '.cursor/**',
+  'plugins/**',
+  'tests/**',
+  'prompts/**',
+  '```',
+].join('\n');
+
 function declaration(issueNumber = 42): Record<string, unknown> {
   return {
     schema_version: PR_SCOPE_DECLARATION_SCHEMA,
@@ -85,6 +99,76 @@ describe('AO-free PR scope declaration contract', () => {
         allowed_roots: ['README.md'],
       }),
     ).toMatchObject({ ok: false, kind: 'policy-violation' });
+  });
+
+  it('produces and verifies skills-fenced first-party declarations', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+    const git = (args: string[]) => {
+      const result = runProcessSync({
+        command: 'git',
+        args,
+        cwd: root,
+        inheritParentEnv: true,
+      });
+      if (!result.ok) {
+        throw new Error(result.stderr || result.error || `git ${args.join(' ')} failed`);
+      }
+      return result.stdout.trim();
+    };
+
+    git(['init', '--quiet']);
+    git(['config', 'user.name', 'opk-test']);
+    git(['config', 'user.email', 'opk-test@example.invalid']);
+    mkdirSync(join(root, '.claude', 'skills'), { recursive: true });
+    mkdirSync(join(root, '.cursor', 'skills'), { recursive: true });
+    mkdirSync(join(root, 'plugins'), { recursive: true });
+    mkdirSync(join(root, 'docs', 'declarations'), { recursive: true });
+    writeFileSync(join(root, '.claude', 'skills', 'fixture.md'), 'claude fixture\n');
+    writeFileSync(join(root, '.cursor', 'skills', 'fixture.md'), 'cursor fixture\n');
+    writeFileSync(join(root, 'plugins', 'fixture.ts'), 'export const fixture = true;\n');
+    git(['add', '.claude', '.cursor', 'plugins']);
+    git(['commit', '--quiet', '-m', 'base']);
+    const baseSha = git(['rev-parse', 'HEAD']);
+
+    const issueBodyFile = join(root, 'issue-body.md');
+    writeFileSync(issueBodyFile, firstPartySurfaceIssueBody, 'utf8');
+    producePrScopeDeclaration([
+      '--issue',
+      '1228',
+      '--declared-paths',
+      '.claude/skills/fixture.md,.cursor/skills/fixture.md,plugins/fixture.ts',
+      '--issue-body-file',
+      issueBodyFile,
+      '--repo-root',
+      root,
+    ]);
+    git(['add', 'docs/declarations/1228.pr-scope.json']);
+    git(['commit', '--quiet', '-m', 'head']);
+    const headSha = git(['rev-parse', 'HEAD']);
+
+    expect(
+      checkPrScope({
+        repoRoot: root,
+        prBody: 'Closes #1228',
+        issueBody: firstPartySurfaceIssueBody,
+        prPaths: [],
+        degradedMode: false,
+        forkPr: false,
+        baseSha,
+        headSha,
+      }),
+    ).toMatchObject({ ok: true, mode: 'implementation' });
+
+    for (const path of ['vendor/**', 'packages/core/**']) {
+      expect(
+        validatePrScopeDeclaration({
+          ...declaration(1228),
+          allowed_roots: [path.replace('/**', '/')],
+          declared_paths: [path.replace('/**', '/secret.ts')],
+        }),
+      ).toMatchObject({ ok: false, kind: 'policy-violation' });
+    }
   });
 
   it('requires exactly one current-Issue new-schema candidate', () => {

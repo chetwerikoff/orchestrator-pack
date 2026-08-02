@@ -36,13 +36,22 @@ export const REPOSITORY_DENYLIST = [
 ] as const;
 
 export const REPOSITORY_ALLOWED_ROOTS = [
+  '.claude/**',
+  '.cursor/**',
   'scripts/**',
   'tests/external-output-references/**',
+  'tests/**',
+  'plugins/**',
+  'prompts/**',
   'docs/declarations/**',
   'AGENTS.md',
   'CLAUDE.md',
   'docs/**',
   '.github/workflows/**',
+  'README.md',
+  'package.json',
+  'package-lock.json',
+  'agent-orchestrator.yaml.example',
 ] as const;
 
 export type CanonicalEntry = {
