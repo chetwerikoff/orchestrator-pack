@@ -1,0 +1,26 @@
+{
+  "issue_number": 1202,
+  "iteration_id": "wrap-20260802T122039Z-01676000",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": null,
+  "created_at": "2026-08-02T12:20:39.797Z",
+  "baseline": {
+    "commit_sha": "18778b8386d745f92e6ba09e724cab3dca7e0af8",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:9445871fea6eb9ba16198b48e3f68d8cc7f760ca15632ad0818298f6e8b58527"
+  },
+  "declared_paths": [
+    "scripts/lib/create-issue-final-acceptance-contract.ts",
+    "scripts/lib/create-issue-final-acceptance.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-lineage.ts",
+    "scripts/lib/create-issue-stage-record-receipt.ts",
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "scripts/lib/create-issue-final-acceptance-revision.test.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/vitest-ci-lanes.config.json",
+    ".claude/skills/create-issue-draft/SKILL.md"
+  ],
+  "declared_globs": [],
+  "amendments": []
+}
