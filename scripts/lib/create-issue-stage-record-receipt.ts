@@ -2,10 +2,13 @@ import type {
   CanonicalLineage,
   ConsumableStageReceipt,
   ProducerEvidence,
+  ReviewLaneEvidence,
   SettledOutcome,
   StageEventLogical,
   StageReceiptCycleBinding,
 } from './create-issue-stage-record-types.ts';
+<<<<<<< HEAD
+import { validateReviewLaneRecord } from './review-lane-record.ts';
 import { STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
 import { deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
 
@@ -58,6 +61,7 @@ export function parseConsumableStageReceipt(value: unknown): {
       ? (isRecord(value.claude) && value.claude.kind === 'capture' ? 'verified' : 'waived')
       : 'not-applicable');
   const tierTransition = nonEmpty(value.tierTransition) ? value.tierTransition.trim() : 'none';
+  const reviewLane = value.reviewLane === undefined ? undefined : value.reviewLane;
 
   if (!tier) errors.push('missing tier');
   if (!stage) errors.push('missing stage');
@@ -73,6 +77,10 @@ export function parseConsumableStageReceipt(value: unknown): {
   else if (cycleBinding.sourceRevision !== sourceRevision) errors.push('cycleBinding sourceRevision mismatch');
   if (producerEvidence !== 'verified' && producerEvidence !== 'waived' && producerEvidence !== 'not-applicable') {
     errors.push('invalid producerEvidence');
+  }
+  if (reviewLane !== undefined) {
+    const routed = validateReviewLaneRecord(reviewLane);
+    errors.push(...routed.errors);
   }
 
   if (errors.length > 0 || cycleBinding === null) return { receipt: null, errors };
@@ -91,6 +99,7 @@ export function parseConsumableStageReceipt(value: unknown): {
       cycleBinding,
       producerEvidence: producerEvidence as ProducerEvidence,
       tierTransition,
+      reviewLane: reviewLane as ReviewLaneEvidence | undefined,
     },
     errors: [],
   };
