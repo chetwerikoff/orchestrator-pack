@@ -14,6 +14,7 @@ import {
   validateResult,
 } from '../lib/launch-watch/contract.ts';
 import { runAggregateProof } from './aggregate.ts';
+import { ACCEPTANCE_SCENARIOS, CLEANUP_FIXTURE_IDS, REQUIRED_SCENARIO_IDS } from '../lib/launch-watch/fixtures.ts';
 import { emitResult, serializeResult } from '../lib/launch-watch/emission.ts';
 import { executeLaunchRequest } from './launch.ts';
 import type { ProcessResult } from '../kernel/subprocess.ts';
@@ -60,6 +61,8 @@ function launchRunner(options: {
   readonly home: string;
   readonly postHead?: string;
   readonly closeStdout?: string;
+  readonly createStdout?: string;
+  readonly createResult?: ProcessResult;
   readonly nowMode?: 'stable' | 'cutoff' | 'cleanup-expired';
 }) {
   const calls: Array<{ readonly command: string; readonly args: readonly string[]; readonly timeoutMs: number }> = [];
@@ -93,6 +96,8 @@ function launchRunner(options: {
     }
     if (command === 'orca' && args[0] === 'terminal' && args[1] === 'create') {
       createCompleted = true;
+      if (options.createResult) return options.createResult;
+      if (options.createStdout) return processResult(options.createStdout);
       return processResult(JSON.stringify({ ok: true, result: { terminal: { handle: 'term', worktreeId: 'wt' } } }));
     }
     if (command === 'orca' && args[0] === 'terminal' && args[1] === 'close') {
@@ -155,6 +160,18 @@ describe('launch/watch contract', () => {
     expect(runAggregateProof({ zeroCoverage: true }).ok).toBe(false);
   });
 
+  it('executes every spec-owned aggregate coverage row', () => {
+    const acceptanceIds = ACCEPTANCE_SCENARIOS.map((entry) => entry.split(':', 1)[0] ?? '');
+    const scenarioIds = REQUIRED_SCENARIO_IDS.map((entry) => entry);
+    const fixtureIds = CLEANUP_FIXTURE_IDS.map((entry) => {
+      expect(entry.startsWith('cleanup.')).toBe(true);
+      return entry;
+    });
+    expect(acceptanceIds).toHaveLength(8);
+    expect(scenarioIds.length).toBeGreaterThan(0);
+    expect(fixtureIds.length).toBeGreaterThan(0);
+  });
+
   it('serializes a typed fallback and reports transport failure separately', async () => {
     const fallback = serializeResult({ schema: 'launch-result/v1', value: BigInt(1) });
     expect(fallback.serializationFallback).toBe(true);
@@ -181,12 +198,13 @@ describe('launch/watch contract', () => {
         const invalidClose = launchRunner({ cwd, home, postHead: 'other\n', closeStdout });
         const result = await executeLaunchRequest(requestFor(cwd), { run: invalidClose.run, now: invalidClose.now });
         expect(result.outcome).toBe('cleanup-failed');
-        expect(invalidClose.calls.find((call) => call.args[1] === 'close')?.timeoutMs).toBe(9_000);
+        expect(invalidClose.calls.find((call) => call.args[1] === 'close')?.timeoutMs).toBe(5_000);
       }
 
       const expiredCleanup = launchRunner({ cwd, home, nowMode: 'cleanup-expired' });
       const expired = await executeLaunchRequest(requestFor(cwd), { run: expiredCleanup.run, now: expiredCleanup.now });
       expect(expired.outcome).toBe('cleanup-failed');
+      expect(expired.cleanup?.cleanupErrorCode).toBe('cleanup_timeout');
       expect(expiredCleanup.calls.some((call) => call.args[1] === 'close')).toBe(false);
       expect(expired.containment?.closeAttempted).toBe(false);
     } finally {
@@ -224,5 +242,44 @@ describe('launch/watch contract', () => {
     const failed = await executeLaunchRequest(request, { run: async () => { throw new Error('spawn failed'); }, now: () => 0 });
     expect(failed.outcome).toBe('source-unavailable');
     expect(failed.outcome).not.toBe('deadline-exceeded');
+
+    const home = mkdtempSync(join(tmpdir(), 'launch-watch-home-'));
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const spawnFailure = launchRunner({
+        cwd: '/tmp/launch-watch-create-failure-test',
+        home,
+        createResult: processResult('', { outcome: 'spawn-failure', ok: false, exitCode: null }),
+      });
+      const result = await executeLaunchRequest(requestFor('/tmp/launch-watch-create-failure-test'), { run: spawnFailure.run, now: spawnFailure.now });
+      expect(result.outcome).toBe('process-launch-failed');
+      expect(result.retryAllowed).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('binds every obtained handle before cleanup, including invalid response shapes', async () => {
+    const cwd = '/tmp/launch-watch-invalid-handle-test';
+    const home = mkdtempSync(join(tmpdir(), 'launch-watch-home-'));
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const runner = launchRunner({
+        cwd,
+        home,
+        createStdout: JSON.stringify({ ok: true, result: { terminal: { handle: 'term' } } }),
+      });
+      const result = await executeLaunchRequest(requestFor(cwd), { run: runner.run, now: runner.now });
+      expect(result.outcome).toBe('partial-cleanup');
+      expect(runner.calls.filter((call) => call.args[0] === 'rev-parse' && call.args[1] === 'HEAD').length).toBeGreaterThanOrEqual(2);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

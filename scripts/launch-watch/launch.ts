@@ -336,47 +336,56 @@ export async function executeLaunchRequest(request: LaunchRequest, dependencies:
   const handle = terminalHandle(terminal);
   const responseWorktreeId = worktreeId(terminal);
   const validHandleShape = handle !== null && responseWorktreeId === worktree.id;
+  const postHead = handle ? await gitText(run, ['rev-parse', 'HEAD'], request.cwd, state) : undefined;
+  const postBranch = handle ? await gitText(run, ['branch', '--show-current'], request.cwd, state) : undefined;
+  const bindingEvidence = handle ? {
+    postCreateHead: postHead?.result ? gitFailure(postHead.result) : null,
+    postCreateBranch: postBranch?.result ? gitFailure(postBranch.result) : null,
+    postCreateHeadExpired: postHead?.expired ?? false,
+    postCreateBranchExpired: postBranch?.expired ?? false,
+  } : {};
   let primary: LaunchResult;
   if (handle && !validHandleShape) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_invalid_response_shape', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs, response },
+      sourceIds: ['orca.terminal-create', 'pack.launch.git'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs, response },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: { handle, worktreeId: responseWorktreeId },
     });
   } else if (createResult.timedOut || createResult.outcome === 'timeout') {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_timeout', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: handle ? { handle } : null,
     });
   } else if (createResult.outcome === 'spawn-failure') {
-    primary = launchResult('terminal-create-ambiguous', {
-      phase: 'terminal-create', reasonCode: 'terminal_create_dispatched_thrown', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs },
-      remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: handle ? { handle } : null,
+    primary = launchResult('process-launch-failed', {
+      phase: 'process-creation', reasonCode: 'process_pre_dispatch_failed', deadlineMs: request.deadlineMs,
+      sourceIds: ['pack.launch.process'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs },
+      remediation: 'retry-safe', owner: 'wrapper', detail: 'pre-dispatch spawn failure', operatorDisposition: 'retry-pre-dispatch',
+      terminal: handle ? { handle, worktreeId: responseWorktreeId } : null,
     });
   } else if (createResult.exitCode !== 0) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_dispatched_nonzero', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs, response },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs, response },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: handle ? { handle } : null,
     });
   } else if (!createResult.stdout.trim()) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_empty', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal',
     });
   } else if (!response) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_malformed', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal',
     });
   } else if (response.ok !== true) {
     primary = launchResult('terminal-create-ambiguous', {
       phase: 'terminal-create', reasonCode: 'terminal_create_dispatched_ok_false', deadlineMs: request.deadlineMs,
-      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs, response },
+      sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), ...bindingEvidence, argv: createArgs, response },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal', terminal: handle ? { handle, worktreeId: responseWorktreeId } : null,
     });
   } else if (!handle) {
@@ -385,44 +394,48 @@ export async function executeLaunchRequest(request: LaunchRequest, dependencies:
       sourceIds: ['orca.terminal-create'], evidence: { ...processEvidence(createResult), argv: createArgs, response },
       remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal',
     });
+  } else if (postHead?.expired || postBranch?.expired || !postHead?.result?.ok || !postBranch?.result?.ok || postHead?.value !== frozenRemote || postBranch?.value !== 'main') {
+    const postBindingReadFailed = postHead?.expired || postBranch?.expired || !postHead?.result?.ok || !postBranch?.result?.ok;
+    primary = launchResult('target-refused', {
+      phase: postBindingReadFailed ? 'binding-verification' : 'target-verification',
+      reasonCode: postBindingReadFailed ? 'target_post_create_read_failed' : 'target_post_create_mismatch',
+      deadlineMs: request.deadlineMs, sourceIds: ['pack.launch.git', 'orca.terminal-create'],
+      evidence: { expected: frozenRemote, actual: postHead?.value, branch: postBranch?.value, terminalHandle: handle, ...bindingEvidence },
+      remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal',
+      terminal: { handle, worktreeId: responseWorktreeId },
+    });
   } else {
-    const postHead = await gitText(run, ['rev-parse', 'HEAD'], request.cwd, state);
-    const postBranch = await gitText(run, ['branch', '--show-current'], request.cwd, state);
-    if (postHead.expired || postBranch.expired || postHead.value !== frozenRemote || postBranch.value !== 'main') {
-      primary = launchResult('target-refused', {
-        phase: postHead.expired || postBranch.expired ? 'binding-verification' : 'target-verification',
-        reasonCode: postHead.expired || postBranch.expired ? 'target_post_create_read_failed' : 'target_post_create_mismatch',
-        deadlineMs: request.deadlineMs, sourceIds: ['pack.launch.git', 'orca.terminal-create'],
-        evidence: { expected: frozenRemote, actual: postHead.value, branch: postBranch.value, terminalHandle: handle },
-        remediation: 'close-and-investigate', owner: 'wrapper', operatorDisposition: 'investigate-possible-terminal',
-        terminal: { handle, worktreeId: responseWorktreeId },
-      });
-    } else {
-      return launchResult('launched', {
-        phase: 'binding-verification', reasonCode: 'launched', deadlineMs: request.deadlineMs,
-        sourceIds: ['pack.launch.request', 'pack.launch.git', 'orca.worktree', 'pack.launch.trust', 'orca.terminal-create'],
-        evidence: { ...evidence, terminalCreateArgv: createArgs, frozenRemote, preCreateHead: boundHead.value, postCreateHead: postHead.value },
-        remediation: 'none', owner: 'wrapper', operatorDisposition: 'none',
-        terminal: { handle, worktreeId: responseWorktreeId, command: commandValue },
-        containment: { status: 'not-needed', closeAttempted: false, closeCompleted: false, terminalHandle: handle },
-      });
-    }
+    return launchResult('launched', {
+      phase: 'binding-verification', reasonCode: 'launched', deadlineMs: request.deadlineMs,
+      sourceIds: ['pack.launch.request', 'pack.launch.git', 'orca.worktree', 'pack.launch.trust', 'orca.terminal-create'],
+      evidence: { ...evidence, ...bindingEvidence, terminalCreateArgv: createArgs, frozenRemote, preCreateHead: boundHead.value, postCreateHead: postHead.value },
+      remediation: 'none', owner: 'wrapper', operatorDisposition: 'none',
+      terminal: { handle, worktreeId: responseWorktreeId, command: commandValue },
+      containment: { status: 'not-needed', closeAttempted: false, closeCompleted: false, terminalHandle: handle },
+    });
   }
   if (handle) {
-    const cleanupRemaining = Math.floor(startedAt + request.deadlineMs - EMISSION_RESERVE_MS - now());
+    const cleanupRemaining = Math.min(
+      CLEANUP_RESERVE_MS,
+      Math.floor(startedAt + request.deadlineMs - EMISSION_RESERVE_MS - now()),
+    );
     const closed = dependencies.terminalClose === false
       ? { completed: false, attempted: false, evidence: { skipped: true } }
       : cleanupRemaining <= 0
         ? { completed: false, attempted: false, evidence: { cleanupBudgetExpired: true, cleanupRemainingMs: cleanupRemaining } }
         : await closeTerminal(run, request.cwd, handle, cleanupRemaining);
+    const cleanupTimedOut = closed.evidence.cleanupBudgetExpired === true
+      || closed.evidence.processOutcome === 'timeout'
+      || closed.evidence.timedOut === true;
+    const cleanupErrorCode = cleanupTimedOut ? 'cleanup_timeout' : 'cleanup_termination_failed';
     const contained = {
       ...primary,
       terminal: primary.terminal ?? { handle },
-      containment: { status: closed.completed ? 'closed' : 'failed', closeAttempted: closed.attempted, closeCompleted: closed.completed, terminalHandle: handle, errorCode: closed.completed ? null : 'cleanup_termination_failed' },
+      containment: { status: closed.completed ? 'closed' : 'failed', closeAttempted: closed.attempted, closeCompleted: closed.completed, terminalHandle: handle, errorCode: closed.completed ? null : cleanupErrorCode },
       evidence: { ...primary.evidence, containmentClose: closed.evidence },
     };
     if (closed.completed) return cleanupOverride(contained, 'completed', cleanupResourceIds(handle)) as LaunchResult;
-    return cleanupOverride(contained, 'failed', cleanupResourceIds(handle), 'cleanup_termination_failed') as LaunchResult;
+    return cleanupOverride(contained, 'failed', cleanupResourceIds(handle), cleanupErrorCode) as LaunchResult;
   }
   return primary;
 }

@@ -35,5 +35,5 @@
     "scripts/vitest-runtime-history.json",
     "tests/external-output-references/launch-watch/"
   ],
-  "source_revision": "afb2a9c04e14c159b760a5243333e84516eca5e1"
+  "source_revision": "fc97d042123a3568c5b248a1fdfc207c135711d7"
 }

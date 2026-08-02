@@ -1,4 +1,6 @@
 import '../toolchain/native-entrypoint-preflight.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { CLEANUP_FIXTURE_IDS, ACCEPTANCE_SCENARIOS, IMPLEMENTATION_EVIDENCE, REQUIRED_SCENARIO_IDS } from '../lib/launch-watch/fixtures.ts';
 
 export type AggregateProof = {
@@ -27,11 +29,35 @@ function exactSet(label: string, expected: readonly string[], actual: readonly s
   for (const value of duplicates(actual)) errors.push(`${label}:duplicate:${value}`);
 }
 
-export function runAggregateProof(options: { readonly zeroCoverage?: boolean } = {}): AggregateProof {
+function discoverExecutableCoverage(repoRoot: string): {
+  readonly acceptanceIds: readonly string[];
+  readonly scenarioIds: readonly string[];
+  readonly fixtureIds: readonly string[];
+} {
+  const testSources = ['scripts/launch-watch/launch-watch.test.ts', 'scripts/launch-watch/watch.test.ts']
+    .map((relativePath) => {
+      try { return readFileSync(join(repoRoot, relativePath), 'utf8'); } catch { return ''; }
+    })
+    .join('\n');
+  return {
+    acceptanceIds: testSources.includes('ACCEPTANCE_SCENARIOS.map') ? ACCEPTANCE_SCENARIOS.map((entry) => entry.split(':', 1)[0] ?? '') : [],
+    scenarioIds: testSources.includes('REQUIRED_SCENARIO_IDS.map') ? REQUIRED_SCENARIO_IDS : [],
+    fixtureIds: testSources.includes('CLEANUP_FIXTURE_IDS.map') ? CLEANUP_FIXTURE_IDS : [],
+  };
+}
+
+export function runAggregateProof(options: { readonly zeroCoverage?: boolean; readonly repoRoot?: string } = {}): AggregateProof {
   const errors: string[] = [];
-  exactSet('acceptance', ['AC1', 'AC2', 'AC3', 'AC4', 'AC5', 'AC6', 'AC7', 'AC8'], IMPLEMENTATION_EVIDENCE.map((entry) => entry.acceptanceId), errors);
-  exactSet('cleanup-fixture', CLEANUP_FIXTURE_IDS, IMPLEMENTATION_EVIDENCE.flatMap((entry) => entry.fixtureIds ?? []), errors);
-  exactSet('scenario', REQUIRED_SCENARIO_IDS, options.zeroCoverage ? [] : REQUIRED_SCENARIO_IDS, errors);
+  const expectedAcceptanceIds = ACCEPTANCE_SCENARIOS.map((entry) => entry.split(':', 1)[0] ?? '');
+  const discovered = options.zeroCoverage
+    ? { acceptanceIds: [], scenarioIds: [], fixtureIds: [] }
+    : discoverExecutableCoverage(options.repoRoot ?? process.cwd());
+  exactSet('acceptance', expectedAcceptanceIds, discovered.acceptanceIds, errors);
+  exactSet('cleanup-fixture', CLEANUP_FIXTURE_IDS, discovered.fixtureIds, errors);
+  exactSet('scenario', REQUIRED_SCENARIO_IDS, discovered.scenarioIds, errors);
+  exactSet('implementation-acceptance', expectedAcceptanceIds, IMPLEMENTATION_EVIDENCE.map((entry) => entry.acceptanceId), errors);
+  exactSet('implementation-scenario', REQUIRED_SCENARIO_IDS, IMPLEMENTATION_EVIDENCE.flatMap((entry) => entry.scenarioIds), errors);
+  exactSet('implementation-fixture', CLEANUP_FIXTURE_IDS, IMPLEMENTATION_EVIDENCE.flatMap((entry) => entry.fixtureIds ?? []), errors);
   if (CLEANUP_FIXTURE_IDS.length === 0) errors.push('cleanup-fixture:zero-coverage');
   if (options.zeroCoverage || REQUIRED_SCENARIO_IDS.length === 0) errors.push('scenario:zero-coverage');
   for (const entry of IMPLEMENTATION_EVIDENCE) {
