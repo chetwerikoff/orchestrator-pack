@@ -54,6 +54,7 @@ import {
 import {
   classifyProductWall,
   COMPOSER_SELECTOR,
+  createTurnOperationBudget,
   loadChromium,
   locateContinueGeneratingControl,
   normalizeConversationUrl,
@@ -62,6 +63,7 @@ import {
   verifyProfile,
   type BrowserConfig,
   type ProfileVerification,
+  type TurnOperationBudget,
 } from './ui-adapter.ts';
 
 const MAX_SESSION_PAYLOADS = 32;
@@ -195,7 +197,10 @@ export interface StateLightSessionDependencies {
   readonly readInput: typeof readStableInput;
   readonly resolveDestination: typeof destinationIdentity;
   readonly profileKey: typeof configuredProfileKey;
-  readonly verifyProfile: (config: BrowserConfig) => Promise<ProfileVerification>;
+  readonly verifyProfile: (
+    config: BrowserConfig,
+    segmentBudget?: TurnOperationBudget,
+  ) => Promise<ProfileVerification>;
   readonly prepareFresh: typeof prepareStateLightFreshConversation;
   readonly loadChromium: typeof loadChromium;
   readonly marker: typeof generateOwnedPromptMarker;
@@ -557,6 +562,31 @@ function deadlineOpen(state: SessionExecutionState, deps: StateLightSessionDepen
   return remainingMs(state, deps) > 0;
 }
 
+async function readObservationWithinDeadline(
+  state: SessionExecutionState,
+  deps: StateLightSessionDependencies,
+  expectedMarker?: string,
+  baselineCount?: number,
+): Promise<PageObservationResult> {
+  const remaining = remainingMs(state, deps);
+  if (remaining <= 0) throw new Error('whole_session_deadline_exhausted');
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('whole_session_deadline_exhausted')), remaining);
+    });
+    const observation = await Promise.race([
+      deps.readObservation(state.page, expectedMarker, baselineCount),
+      timeout,
+    ]);
+    if (!deadlineOpen(state, deps)) throw new Error('whole_session_deadline_exhausted');
+    return observation;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 function tuple(state: TurnState, scope: FailureScope, cause: string): SessionTerminalTuple {
   return { state, scope, cause };
 }
@@ -744,9 +774,12 @@ async function observeAndPublish(
     pollCount += 1;
     let observation: PageObservationResult;
     try {
-      observation = await deps.readObservation(state.page, marker, baselineCount);
+      observation = await readObservationWithinDeadline(state, deps, marker, baselineCount);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      if (!deadlineOpen(state, deps) || detail === 'whole_session_deadline_exhausted') {
+        return { terminal: tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted') };
+      }
       return { terminal: tuple('driver_error', 'invocation', `observation_failed:${detail}`) };
     }
     try {
@@ -757,6 +790,9 @@ async function observeAndPublish(
       }
     } catch {
       // Product-wall diagnostics stay advisory when the transcript remains readable.
+    }
+    if (!deadlineOpen(state, deps)) {
+      return { terminal: tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted') };
     }
 
     const currentConversation = pageConversationId(state.page);
@@ -889,7 +925,9 @@ function classifySetupError(error: unknown): SessionTerminalTuple {
   const message = error instanceof Error ? error.message : String(error);
   if (message.startsWith('ui_contract_mismatch:')) return tuple('ui_contract_mismatch', 'invocation', message.slice('ui_contract_mismatch:'.length));
   if (message.startsWith('output_conflict:')) return tuple('output_conflict', 'invocation', message.slice('output_conflict:'.length));
-  if (message === 'whole_session_deadline_exhausted') return tuple('stream_timeout', 'invocation', message);
+  if (message === 'whole_session_deadline_exhausted' || message.startsWith('browser_operation_timeout:')) {
+    return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+  }
   return tuple('driver_error', 'invocation', message);
 }
 
@@ -898,7 +936,16 @@ async function setupOwnedPage(
   deps: StateLightSessionDependencies,
 ): Promise<SessionTerminalTuple | null> {
   if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-  const profile = await deps.verifyProfile(state.config.browser);
+  let profile: ProfileVerification;
+  try {
+    profile = await deps.verifyProfile(
+      state.config.browser,
+      createTurnOperationBudget(Math.max(0, remainingMs(state, deps)), deps.now()),
+    );
+  } catch (error) {
+    return classifySetupError(error);
+  }
+  if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
   if (profile.state !== 'verified') {
     return tuple(profile.state === 'unavailable' ? 'chrome_not_running' : 'profile_mismatch', 'invocation', profile.cause);
   }
@@ -959,9 +1006,13 @@ async function preactivationCheck(
   const predecessor = state.payloads[ordinalIndex - 1]!;
   let observation: PageObservationResult;
   try {
-    observation = await deps.readObservation(state.page);
+    observation = await readObservationWithinDeadline(state, deps);
   } catch (error) {
-    return tuple('driver_error', 'invocation', `continuity_observation_failed:${error instanceof Error ? error.message : String(error)}`);
+    const detail = error instanceof Error ? error.message : String(error);
+    if (!deadlineOpen(state, deps) || detail === 'whole_session_deadline_exhausted') {
+      return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+    }
+    return tuple('driver_error', 'invocation', `continuity_observation_failed:${detail}`);
   }
   return predecessorContinuity(state, predecessor, observation);
 }
@@ -998,7 +1049,16 @@ async function runActivePayload(
     return tuple('driver_error', 'invocation', 'composer_mutation_budget_exhausted');
   }
 
-  const baseline = await deps.readObservation(state.page);
+  let baseline: PageObservationResult;
+  try {
+    baseline = await readObservationWithinDeadline(state, deps);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (!deadlineOpen(state, deps) || detail === 'whole_session_deadline_exhausted') {
+      return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+    }
+    return tuple('driver_error', 'invocation', `baseline_observation_failed:${detail}`);
+  }
   const dispatchFailure = await dispatchOnce(state, payload, wrapped, insertionDeadline, deps);
   if (dispatchFailure) return dispatchFailure;
 
@@ -1105,45 +1165,55 @@ async function executeSession(
   };
 
   let decisiveIndex: number | null = null;
-  const setupFailure = await setupOwnedPage(state, deps);
-  if (setupFailure) {
-    payloads[0]!.terminal = setupFailure;
-    decisiveIndex = 0;
-  } else {
-    for (let index = 0; index < payloads.length; index++) {
-      const payload = payloads[index]!;
-      if (index > 0) {
-        const continuity = await preactivationCheck(state, index, deps);
-        if (continuity) {
-          payload.deliveryState = 'not_attempted';
-          payload.terminal = continuity;
+  let activeIndex = 0;
+  try {
+    const setupFailure = await setupOwnedPage(state, deps);
+    if (setupFailure) {
+      payloads[0]!.terminal = setupFailure;
+      decisiveIndex = 0;
+    } else {
+      for (let index = 0; index < payloads.length; index++) {
+        activeIndex = index;
+        const payload = payloads[index]!;
+        if (index > 0) {
+          const continuity = await preactivationCheck(state, index, deps);
+          if (continuity) {
+            payload.deliveryState = 'not_attempted';
+            payload.terminal = continuity;
+            decisiveIndex = index;
+            break;
+          }
+          payload.deliveryState = 'not_sent';
+        }
+
+        const terminal = await runActivePayload(state, payload, index, deps);
+        payload.terminal = terminal;
+        if (!(await writePayloadRecord(state, payload, activeTerminalRecord(payload)))) {
+          decisiveIndex = index;
+          state.stopped = true;
+          break;
+        }
+        if (terminal.state !== 'ok') {
           decisiveIndex = index;
           break;
         }
-        payload.deliveryState = 'not_sent';
-      }
-
-      const terminal = await runActivePayload(state, payload, index, deps);
-      payload.terminal = terminal;
-      if (!(await writePayloadRecord(state, payload, activeTerminalRecord(payload)))) {
-        decisiveIndex = index;
-        state.stopped = true;
-        break;
-      }
-      if (terminal.state !== 'ok') {
-        decisiveIndex = index;
-        break;
-      }
-      if (config.browser.newChat && index === 0 && !payload.latestWrittenRecord?.conversation_id) {
-        // A fresh conversation identity must be caller-visible before ordinal 2 can activate.
-        if (payloads.length > 1) {
-          const next = payloads[1]!;
-          next.terminal = tuple('ui_contract_mismatch', 'invocation', 'fresh_conversation_identity_unavailable');
-          decisiveIndex = 1;
+        if (config.browser.newChat && index === 0 && !payload.latestWrittenRecord?.conversation_id) {
+          // A fresh conversation identity must be caller-visible before ordinal 2 can activate.
+          if (payloads.length > 1) {
+            const next = payloads[1]!;
+            next.terminal = tuple('ui_contract_mismatch', 'invocation', 'fresh_conversation_identity_unavailable');
+            decisiveIndex = 1;
+          }
+          break;
         }
-        break;
       }
     }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    payloads[activeIndex]!.terminal = !deadlineOpen(state, deps) || detail === 'whole_session_deadline_exhausted'
+      ? tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted')
+      : tuple('driver_error', 'invocation', `active_operation_failed:${detail}`);
+    decisiveIndex = activeIndex;
   }
 
   let sequenceComplete = !state.stopped;

@@ -375,6 +375,69 @@ describe('state-light explicit session mode', () => {
     });
   });
 
+  it('emits session-result and cleans up when the active baseline observation throws', async () => {
+    const harness = makeHarness(['one', 'two']);
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async () => { throw new Error('page_gone'); },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(13);
+    expect(harness.metrics).toMatchObject({ sends: 0, pages: 1, gotos: 1, closes: 1, releases: 1 });
+    expect(records(harness.stream)).toEqual([
+      expect.objectContaining({ ordinal: 1, phase: 'terminal', send_count: 0, state: 'driver_error', cause: 'baseline_observation_failed:page_gone' }),
+      expect.objectContaining({ ordinal: 2, phase: 'terminal', delivery_state: 'not_attempted', send_count: 0 }),
+    ]);
+    expect(aggregate(harness.stream)).toMatchObject({
+      state: 'driver_error',
+      cause: 'baseline_observation_failed:page_gone',
+      cleanup: 'confirmed',
+      terminal_stop_ordinal: 1,
+    });
+  });
+
+  it('passes the remaining session deadline to profile verification', async () => {
+    const harness = makeHarness(['one'], { timeoutMs: 1_000 });
+    const start = harness.nowMs;
+    let observedBudget: { endsAtMs: number; clampOperationWaitMs: (now?: number) => number } | undefined;
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      verifyProfile: async (_config, budget) => {
+        observedBudget = budget;
+        return { state: 'verified', cause: 'verified', evidence: 'test' };
+      },
+    };
+
+    await runStateLightSession(harness.argv, dependencies);
+
+    expect(observedBudget).toBeDefined();
+    expect(observedBudget!.endsAtMs).toBe(start + 1_000);
+    expect(observedBudget!.clampOperationWaitMs(start)).toBe(1_000);
+  });
+
+  it('settles immediately when an observation returns after the session deadline', async () => {
+    const harness = makeHarness(['one'], { timeoutMs: 10 });
+    const dependencies: Partial<StateLightSessionDependencies> = {
+      ...harness.dependencies,
+      readObservation: async () => {
+        harness.nowMs += 11;
+        return {
+          messages: [...harness.messages],
+          ownedWindowCompletionReady: false,
+          transcriptIncomplete: false,
+        };
+      },
+    };
+
+    const exit = await runStateLightSession(harness.argv, dependencies);
+
+    expect(exit).toBe(11);
+    expect(harness.metrics.sends).toBe(0);
+    expect(aggregate(harness.stream)).toMatchObject({ state: 'stream_timeout', cause: 'whole_session_deadline_exhausted' });
+  });
+
   it('rejects duplicate output identities and the 33-payload ceiling before browser setup', async () => {
     const duplicate = makeHarness(['one', 'two']);
     duplicate.argv.splice(duplicate.argv.lastIndexOf('/out/2.txt'), 1, '/out/1.txt');
