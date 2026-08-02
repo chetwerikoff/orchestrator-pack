@@ -6,413 +6,344 @@ import {
 } from './ui-adapter.ts';
 import {
   ASSISTANT_MESSAGE_SELECTOR,
+  ASSISTANT_TURN_ANCESTOR_XPATH,
   MESSAGE_AUTHOR_ROLE_ATTR,
   MESSAGE_NODE_SELECTOR,
   matchesStopButtonSelector,
 } from './product-page-selectors.ts';
-import { messageLocator, scalarLocator } from './state-light-turn.test-fixtures.ts';
 import {
   buildObservationHeartbeat,
   classifyPageObservation,
   ownedPromptMatches,
   readPageObservation,
-  replyStabilityMatches,
   replyStabilityFingerprint,
+  replyStabilityMatches,
 } from './state-light-turn.ts';
+import {
+  generateOwnedPromptMarker,
+  isOwnedPromptMarker,
+  wrapOwnedPromptPayload,
+} from './owned-prompt-marker.ts';
+import {
+  collectionLocator,
+  messageLocator,
+  scalarLocator,
+  TEST_OWNED_MARKER,
+  type StateLightTestMessage,
+} from './state-light-turn.test-fixtures.ts';
 
-function makeTurnContainerPage(options: {
-  assistantText: string;
-  actionButtonsInTurn: boolean;
-  generating?: boolean;
-}) {
-  const assistant = scalarLocator({
-    count: vi.fn(async () => 1),
-    getAttribute: vi.fn(async (name: string) => {
-      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return 'assistant';
-      if (name === 'data-is-streaming') return options.generating ? 'true' : null;
-      return null;
-    }),
-    innerText: vi.fn(async () => options.assistantText),
-    locator: vi.fn((selector: string) => {
-      if (selector.startsWith('xpath=')) {
-        return options.actionButtonsInTurn
-          ? scalarLocator({ turnActionButtons: true, count: vi.fn(async () => 1) })
-          : scalarLocator({ count: vi.fn(async () => 0) });
-      }
-      return scalarLocator();
-    }),
-  });
-  const assistants = scalarLocator({
-    count: vi.fn(async () => 1),
-    nth: vi.fn(() => assistant),
-  });
-  return {
-    locator: vi.fn((selector: string) => {
-      if (selector === ASSISTANT_MESSAGE_SELECTOR) return assistants;
-      if (matchesStopButtonSelector(selector)) return scalarLocator();
-      return scalarLocator();
-    }),
-    getByText: vi.fn(() => scalarLocator()),
-    getByRole: vi.fn(() => scalarLocator()),
-  };
+const marker = TEST_OWNED_MARKER;
+const markedPrompt = `${marker}\n\nORIGINAL PROMPT`;
+const baseline: StateLightTestMessage[] = [
+  { role: 'user', text: 'historical prompt' },
+  { role: 'assistant', text: 'historical reply' },
+];
+
+function classify(messages: StateLightTestMessage[], inProgress = false) {
+  return classifyPageObservation(messages, baseline.length, marker, inProgress);
 }
 
-describe('state-light page observation driver', () => {
-  it('treats turn-container action buttons as completion-ready even when absent from the assistant node', async () => {
-    const page = makeTurnContainerPage({
-      assistantText: 'RETRY-OK',
-      actionButtonsInTurn: true,
+function runNoResendRefusalFixture(messages: StateLightTestMessage[]) {
+  const observation = classify(messages);
+  const terminal = observation.state === 'waiting'
+    ? { state: 'ui_contract_mismatch', cause: 'owned_prompt_marker_unresolved' }
+    : observation.state === 'uncertain'
+      ? { state: 'ui_contract_mismatch', cause: observation.cause }
+      : { state: 'unexpected_owned_reply', cause: 'fixture_invalid' };
+  return {
+    observation,
+    terminal,
+    send_count: 1,
+    published: false,
+  } as const;
+}
+
+async function runProductAttributeChurnFixture() {
+  const ids: Array<string | null> = [null, 'user-service-12345678', 'user-service-replaced-12345678'];
+  let idIndex = 0;
+  const ownedNode = {
+    getAttribute: vi.fn(async (name: string) => {
+      if (name === MESSAGE_AUTHOR_ROLE_ATTR) return 'user';
+      if (name === 'data-message-id') return ids[Math.min(idIndex++, ids.length - 1)];
+      return null;
+    }),
+    innerText: vi.fn(async () => markedPrompt),
+    textContent: vi.fn(async () => markedPrompt),
+  };
+  const nodes = scalarLocator({
+    count: vi.fn(async () => 1),
+    nth: vi.fn(() => ownedNode),
+  });
+  const page = {
+    locator: vi.fn((selector: string) => selector === MESSAGE_NODE_SELECTOR
+      ? nodes
+      : scalarLocator()),
+  };
+  const observations: Array<{ messageId: string | null; markerHead: string; owned: boolean }> = [];
+  for (const expectedId of ids) {
+    const observation = await readPageObservation(page);
+    const messageId = await ownedNode.getAttribute('data-message-id');
+    const text = observation.messages[0]?.text ?? '';
+    const markerHead = text.split(/\s+/u, 1)[0] ?? '';
+    observations.push({
+      messageId,
+      markerHead,
+      owned: observation.messages.filter(
+        (message) => message.role === 'user' && ownedPromptMatches(message.text, marker),
+      ).length === 1,
     });
+    expect(messageId).toBe(expectedId);
+  }
+  return { observations, send_count: 1, published: true };
+}
 
-    await expect(readAssistantTurnGenerating(page)).resolves.toBe(false);
-    await expect(readAssistantTurnCompletionReady(page)).resolves.toBe(true);
+async function runCollapsedDuplicateFixture() {
+  const payload = `# byte-identical collapsed payload\n\n${'| cell | value |\n|---|---|\n| same | payload |\n'.repeat(400)}`;
+  const historicalMarker = `OPKTURNV1${'22'.repeat(16)}`;
+  const historicalText = wrapOwnedPromptPayload(historicalMarker, payload);
+  const currentText = wrapOwnedPromptPayload(marker, payload);
+  const makeCollapsedNode = (text: string) => ({
+    collapsed: true,
+    showMore: true,
+    getAttribute: vi.fn(async (name: string) => name === MESSAGE_AUTHOR_ROLE_ATTR ? 'user' : null),
+    innerText: vi.fn(async () => text),
+    textContent: vi.fn(async () => 'collapsed preview'),
   });
-
-  it('stays waiting when action buttons are missing from both assistant and turn container', async () => {
-    const page = makeTurnContainerPage({
-      assistantText: 'RETRY-OK',
-      actionButtonsInTurn: false,
-    });
-
-    await expect(readAssistantTurnCompletionReady(page)).resolves.toBe(false);
+  const nodesData = [makeCollapsedNode(historicalText), makeCollapsedNode(currentText)];
+  const nodes = scalarLocator({
+    count: vi.fn(async () => nodesData.length),
+    nth: vi.fn((index: number) => nodesData[index]),
   });
-});
+  const page = {
+    locator: vi.fn((selector: string) => selector === MESSAGE_NODE_SELECTOR
+      ? nodes
+      : scalarLocator()),
+  };
+  const observation = await readPageObservation(page);
+  const userTexts = observation.messages
+    .filter((message) => message.role === 'user')
+    .map((message) => message.text);
+  const classification = classify([
+    ...baseline,
+    { role: 'user', text: historicalText },
+    { role: 'assistant', text: 'historical reply' },
+    { role: 'user', text: currentText },
+    { role: 'assistant', text: 'owned reply' },
+  ]);
+  return {
+    payload,
+    userTexts,
+    markerHeads: userTexts.map((text) => text.split(/\s+/u, 1)[0] ?? ''),
+    collapsedShapes: nodesData.map((node) => ({ collapsed: node.collapsed, showMore: node.showMore })),
+    expectedMarkerMatches: userTexts.filter((text) => ownedPromptMatches(text, marker)).length,
+    classification,
+    send_count: 1,
+    published: true,
+  } as const;
+}
 
-describe('state-light prompt attribution classification', () => {
-  const baseline = [
-    { role: 'user' as const, text: 'OLD' },
-    { role: 'assistant' as const, text: 'OLD ANSWER' },
-  ];
-
-  it('waits on truncated lazy-render of the owned prompt until the full echo appears', () => {
-    const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
-    const truncatedEcho = `${'A'.repeat(20)}`;
-
-    expect(ownedPromptMatches(truncatedEcho, longPrompt)).toBe(false);
-    expect(classifyPageObservation(
-      [...baseline, { role: 'user', text: truncatedEcho }, { role: 'assistant', text: 'working' }],
-      baseline.length,
-      longPrompt,
-      true,
-    )).toEqual({ state: 'waiting' });
-
-    const fullEcho = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
-    expect(ownedPromptMatches(fullEcho, longPrompt)).toBe(true);
-    expect(classifyPageObservation(
-      [...baseline, { role: 'user', text: fullEcho }, { role: 'assistant', text: 'FINAL', }],
-      baseline.length,
-      longPrompt,
-      false,
-    )).toEqual({ state: 'ready', reply: 'FINAL' });
-  });
-
-  it('treats a transient duplicate owned user render as waiting, not uncertain', () => {
-    expect(classifyPageObservation(
-      [
-        ...baseline,
-        { role: 'user', text: 'PROMPT' },
-        { role: 'user', text: 'PROMPT' },
-        { role: 'assistant', text: 'working' },
-      ],
-      baseline.length,
-      'PROMPT',
-      true,
-    )).toEqual({ state: 'waiting' });
-  });
-
-  it('finds the last owned user node even when baseline count includes it', () => {
-    const continuation = [
-      { role: 'user' as const, text: 'USER-ONE' },
-      { role: 'assistant' as const, text: 'ANSWER-ONE' },
-      { role: 'user' as const, text: 'USER-TWO' },
-      { role: 'assistant' as const, text: 'ANSWER-TWO' },
-      { role: 'user' as const, text: 'PROMPT' },
-      { role: 'assistant' as const, text: 'FINAL' },
-    ];
-    const lateBaselineCount = continuation.length - 1;
-
-    expect(classifyPageObservation(
-      continuation,
-      lateBaselineCount,
-      'PROMPT',
-      false,
-    )).toEqual({ state: 'ready', reply: 'FINAL' });
-  });
-
-  it('captures the owned reply before a later foreign user turn', () => {
-    expect(classifyPageObservation(
-      [
-        ...baseline,
-        { role: 'user', text: 'PROMPT' },
-        { role: 'assistant', text: 'OWNED ANSWER' },
-        { role: 'user', text: 'FOREIGN' },
-        { role: 'assistant', text: 'FOREIGN ANSWER' },
-      ],
-      baseline.length,
-      'PROMPT',
-      false,
-    )).toEqual({ state: 'ready', reply: 'OWNED ANSWER' });
-  });
-
-  it('flags genuinely foreign user text as uncertain when no owned reply is ready', () => {
-    expect(classifyPageObservation(
-      [
-        ...baseline,
-        { role: 'user', text: 'PROMPT' },
-        { role: 'assistant', text: 'partial' },
-        { role: 'user', text: 'FOREIGN' },
-      ],
-      baseline.length,
-      'PROMPT',
-      true,
-    )).toEqual({
-      state: 'uncertain',
-      cause: 'foreign_user_after_owned_send',
-      observedUserHeads: ['FOREIGN'],
-    });
-  });
-
-  it('never publishes a partial owned reply when a later foreign turn completed', () => {
-    expect(classifyPageObservation(
-      [
-        ...baseline,
-        { role: 'user', text: 'PROMPT' },
-        { role: 'assistant', text: 'PARTIAL' },
-        { role: 'user', text: 'FOREIGN' },
-        { role: 'assistant', text: 'FOREIGN COMPLETE' },
-      ],
-      baseline.length,
-      'PROMPT',
-      true,
-    )).toEqual({
-      state: 'uncertain',
-      cause: 'foreign_user_after_owned_send',
-      observedUserHeads: ['FOREIGN'],
-    });
-  });
-
-  it('matches owned text when visible echo uses Unicode whitespace separators', () => {
-    const prompt = 'helper healthy -> helper-only fast path';
-    const withNbsp = 'helper healthy\n\u00A0-> helper-only fast path';
-    const withIdeographic = 'helper healthy\u3000-> helper-only fast path';
-    const combined = 'helper healthy\n\u00A0\u202F-> helper-only fast path';
-
-    expect(ownedPromptMatches(withNbsp, prompt)).toBe(true);
-    expect(ownedPromptMatches(withIdeographic, prompt)).toBe(true);
-    expect(ownedPromptMatches(combined, prompt)).toBe(true);
-    expect(ownedPromptMatches('helper broken -> other path', prompt)).toBe(false);
-  });
-
-  it('matches owned text when markdown and line breaking normalize to the same string', () => {
-    const longPrompt = `Problem:\nFlow-manager misclassifies.\n\nGoal:\nFix echo matching.\n${'detail '.repeat(80)}`;
-    const rendered = `Problem: Flow-manager misclassifies. Goal: Fix echo matching. ${'detail '.repeat(80)}`.trim();
-
-    expect(ownedPromptMatches(rendered, longPrompt)).toBe(true);
-    expect(classifyPageObservation(
-      [...baseline, { role: 'user', text: rendered }, { role: 'assistant', text: 'working' }],
-      baseline.length,
-      longPrompt,
-      true,
-    )).toEqual({ state: 'waiting' });
-  });
-
-  it('rejects partial windows that are not the full normalized prompt', () => {
-    const longPrompt = `PREFIX ${'alpha '.repeat(100)}MIDDLE ${'beta '.repeat(100)}SUFFIX`;
-    const middleWindow = 'MIDDLE beta beta beta';
-
-    expect(ownedPromptMatches(middleWindow, longPrompt)).toBe(false);
-  });
-
-  it('matches owned text only after UI collapse affixes are stripped', () => {
-    const prompt = 'Line one. Line two with enough content to exceed minimum overlap requirements for the matcher.';
-    const visible = 'Line one. Line two with enough content to exceed minimum overlap requirements for the matcher.';
-
-    expect(ownedPromptMatches(visible, prompt)).toBe(true);
-    expect(ownedPromptMatches('Line one. Line two with enough content show more', prompt)).toBe(false);
-  });
-
-  it('returns promptly for long genuinely foreign visible text', () => {
-    const prompt = `owned ${'detail '.repeat(500)}`;
-    const foreign = `FOREIGN ${'noise '.repeat(300)}`;
-    const started = performance.now();
-    expect(ownedPromptMatches(foreign, prompt)).toBe(false);
-    expect(performance.now() - started).toBeLessThan(500);
-  });
-
-  it('accepts a long markdown prompt when the rendered visible text normalizes to the same string', () => {
-    const body = Array.from({ length: 520 }, () => 'detail').join(' ');
-    const longPrompt = `# Issue #1120 pulse\n\n## OUTPUT CONSTRAINTS\n- Keep answer under 500 words\n- Use \`backticks\` sparingly\n\n${body}`;
-    const renderedVisible = `Issue #1120 pulse OUTPUT CONSTRAINTS Keep answer under 500 words Use backticks sparingly ${body}`;
-
-    expect(longPrompt.length).toBeGreaterThanOrEqual(3000);
-    expect(renderedVisible.length).toBeGreaterThanOrEqual(3000);
-    expect(ownedPromptMatches(renderedVisible, longPrompt)).toBe(true);
-    expect(classifyPageObservation(
-      [...baseline, { role: 'user', text: renderedVisible }, { role: 'assistant', text: 'working' }],
-      baseline.length,
-      longPrompt,
-      true,
-    )).toEqual({ state: 'waiting' });
-  });
-
-  it('does not treat genuinely foreign long markdown-adjacent text as owned', () => {
-    const prompt = `# Owned\n\n${'owned detail '.repeat(300)}`;
-    const foreign = `FOREIGN INTERLOPER ${'noise '.repeat(500)}`;
-
-    expect(prompt.length).toBeGreaterThanOrEqual(3000);
-    expect(foreign.length).toBeGreaterThanOrEqual(3000);
-    expect(ownedPromptMatches(foreign, prompt)).toBe(false);
-    expect(classifyPageObservation(
-      [...baseline, { role: 'user', text: foreign }, { role: 'assistant', text: 'working' }],
-      baseline.length,
-      prompt,
-      true,
-    )).toEqual({ state: 'waiting' });
-  });
-
-  it('rejects textContent with sr-only prefix while rendered innerText matches', () => {
-    const prompt = 'Issue #1120 strict-matcher smoke cell OUTPUT CONSTRAINTS Keep answer under 500 words';
-    const rendered = prompt;
-    const textContentWithSrOnly = `You said: ${rendered}`;
-
-    expect(ownedPromptMatches(rendered, prompt)).toBe(true);
-    expect(ownedPromptMatches(textContentWithSrOnly, prompt)).toBe(false);
-    expect(classifyPageObservation(
-      [...baseline, { role: 'user', text: rendered }, { role: 'assistant', text: 'working' }],
-      baseline.length,
-      prompt,
-      true,
-    )).toEqual({ state: 'waiting' });
-  });
-
-  it('keeps short prompt strict equality unchanged', () => {
-    const prompt = 'PROMPT-SHORT owned echo baseline';
-    const visible = 'PROMPT-SHORT owned echo baseline';
-
-    expect(ownedPromptMatches(visible, prompt)).toBe(true);
-  });
-
-  it('keeps genuinely unrelated text non-owned', () => {
-    const prompt = `owned ${'detail '.repeat(80)}`;
-    expect(ownedPromptMatches('FOREIGN INTERLOPER TEXT', prompt)).toBe(false);
-  });
-
-  it('does not classify owned truncated renderings as uncertain', () => {
-    const longPrompt = `${'A'.repeat(120)} ${'detail '.repeat(40)}`;
-    const truncA = `${'A'.repeat(20)}`;
-    const truncB = `${'A'.repeat(30)}`;
-
-    expect(classifyPageObservation(
-      [...baseline, { role: 'user', text: truncA }, { role: 'assistant', text: 'working' }],
-      baseline.length,
-      longPrompt,
-      true,
-    )).toEqual({ state: 'waiting' });
-    expect(classifyPageObservation(
-      [...baseline, { role: 'user', text: truncB }, { role: 'assistant', text: 'working' }],
-      baseline.length,
-      longPrompt,
-      true,
-    )).toEqual({ state: 'waiting' });
-  });
-
-  it('never publishes a foreign answer when the owned prompt is not recognized', () => {
-    expect(classifyPageObservation(
-      [
-        ...baseline,
-        { role: 'user', text: 'PARTIAL-OWNED' },
-        { role: 'user', text: 'FOREIGN' },
-        { role: 'assistant', text: 'FOREIGN ANSWER' },
-      ],
-      baseline.length,
-      'FULL-OWNED-PROMPT',
-      false,
-    )).toEqual({ state: 'waiting' });
-  });
-
-  it('treats render-different assistant reads as stable when normalized text matches', () => {
-    const body = `${'detail '.repeat(60)} Section footer with enough words.`;
-    const renderA = `Intro paragraph.\n\n${body}`;
-    const renderB = `Intro paragraph. ${body} show more`;
-
-    expect(replyStabilityMatches(renderB, renderA)).toBe(true);
-    expect(replyStabilityMatches(`${renderA} extra tail`, renderA)).toBe(false);
-  });
-
-  it('treats large mid-body length swings as stable when head and tail fingerprints match', () => {
-    const head = `INTRO ${'A'.repeat(180)}`;
-    const tail = `${'Z'.repeat(180)} OUTRO`;
-    const longRead = `${head}${'M'.repeat(4500)}${tail}`;
-    const shortRead = `${head}${'M'.repeat(200)}${tail}`;
-
-    expect(replyStabilityFingerprint(longRead)).toBe(replyStabilityFingerprint(shortRead));
-    expect(replyStabilityMatches(longRead, shortRead)).toBe(true);
-    expect(longRead.length - shortRead.length).toBeGreaterThan(1000);
-  });
-});
-
-describe('observation heartbeat', () => {
-  it('builds a machine-greppable heartbeat payload', () => {
-    const heartbeat = buildObservationHeartbeat(
-      { state: 'ready', reply: 'FINAL' },
-      1,
-      4,
-      true,
-      'FINAL',
-    );
-    expect(heartbeat).toMatchObject({
-      schema: 'observation-heartbeat/v1',
-      poll_count: 4,
-      observation_state: 'ready_unstable',
-      stable_reads: 1,
-      completion_ready: true,
-      last_reply_length: 5,
-    });
-    expect(heartbeat.last_reply_sha256_head).toMatch(/^[a-f0-9]{16}$/);
-  });
-});
-
-describe('readPageObservation transcript reads', () => {
-  it('marks transcript incomplete when a mid-list node read throws but still returns later nodes', async () => {
-    const messages = [
-      { role: 'user' as const, text: 'ONE' },
-      { role: 'assistant' as const, text: 'A1' },
-      { role: 'user' as const, text: 'PROMPT' },
-      { role: 'assistant' as const, text: 'FINAL' },
-    ];
-    let observationPass = 0;
-    const page = {
-      locator: vi.fn((selector: string) => {
-        if (selector !== MESSAGE_NODE_SELECTOR) return scalarLocator();
-        return scalarLocator({
-          count: vi.fn(async () => messages.length),
-          nth: vi.fn((index: number) => {
-            const message = messages[index]!;
-            if (index === 1) {
-              return scalarLocator({
-                count: vi.fn(async () => 1),
-                getAttribute: vi.fn(async (name: string) => {
-                  if (observationPass === 0) throw new Error('locator.getAttribute: Timeout');
-                  if (name === MESSAGE_AUTHOR_ROLE_ATTR) return message.role;
-                  return null;
-                }),
-                innerText: vi.fn(async () => message.text),
-                textContent: vi.fn(async () => message.text),
-              });
-            }
-            return messageLocator(message);
-          }),
-        });
+describe('state-light completion probes', () => {
+  function makeTurnContainerPage(actionButtons: boolean, generating = false) {
+    const assistant = scalarLocator({
+      count: vi.fn(async () => 1),
+      getAttribute: vi.fn(async (name: string) => {
+        if (name === MESSAGE_AUTHOR_ROLE_ATTR) return 'assistant';
+        if (name === 'data-is-streaming') return generating ? 'true' : null;
+        return null;
       }),
+      innerText: vi.fn(async () => 'FINAL'),
+      locator: vi.fn((selector: string) => {
+        if (selector === ASSISTANT_TURN_ANCESTOR_XPATH || selector.startsWith('xpath=')) {
+          return scalarLocator({ count: vi.fn(async () => actionButtons ? 1 : 0) });
+        }
+        if (matchesStopButtonSelector(selector)) return scalarLocator({ count: vi.fn(async () => generating ? 1 : 0) });
+        return scalarLocator();
+      }),
+    });
+    return {
+      locator: vi.fn((selector: string) => selector === ASSISTANT_MESSAGE_SELECTOR
+        ? collectionLocator([{ role: 'assistant', text: 'FINAL' }], generating)
+        : assistant),
+      getByRole: vi.fn(() => scalarLocator({ count: vi.fn(async () => actionButtons ? 1 : 0) })),
     };
+  }
 
-    const first = await readPageObservation(page);
-    observationPass += 1;
-    expect(first.transcriptIncomplete).toBe(true);
-    expect(first.messages.some((m) => m.role === 'user' && m.text === 'PROMPT')).toBe(true);
+  it('requires completion actions and rejects an in-progress assistant', async () => {
+    await expect(readAssistantTurnGenerating(makeTurnContainerPage(true, true))).resolves.toBe(true);
+    await expect(readAssistantTurnCompletionReady(makeTurnContainerPage(false))).resolves.toBe(false);
+  });
+});
 
-    const second = await readPageObservation(page);
-    expect(second.transcriptIncomplete).toBe(false);
-    expect(second.messages).toHaveLength(4);
+describe('marker ownership classification', () => {
+  it('admits exactly one current user marker and publishes its reply window', () => {
+    expect(classify([
+      ...baseline,
+      { role: 'user', text: markedPrompt },
+      { role: 'assistant', text: 'FINAL' },
+    ])).toEqual({ state: 'ready', reply: 'FINAL' });
+  });
+
+  it('does not attribute a historical byte-identical original prompt after one send', () => {
+    const result = runNoResendRefusalFixture([
+      { role: 'user', text: 'ORIGINAL PROMPT' },
+      { role: 'assistant', text: 'historical reply' },
+    ]);
+
+    expect(result).toEqual({
+      observation: { state: 'waiting' },
+      terminal: { state: 'ui_contract_mismatch', cause: 'owned_prompt_marker_unresolved' },
+      send_count: 1,
+      published: false,
+    });
+  });
+
+  it('fails closed on duplicate marker nodes after one send', () => {
+    const result = runNoResendRefusalFixture([
+      ...baseline,
+      { role: 'user', text: markedPrompt },
+      { role: 'assistant', text: 'first' },
+      { role: 'user', text: `\u200B${markedPrompt}` },
+    ]);
+
+    expect(result).toEqual({
+      observation: { state: 'uncertain', cause: 'owned_prompt_marker_ambiguous' },
+      terminal: { state: 'ui_contract_mismatch', cause: 'owned_prompt_marker_ambiguous' },
+      send_count: 1,
+      published: false,
+    });
+  });
+
+  it('ignores assistant echoes and marker-like payload content', () => {
+    expect(classify([
+      ...baseline,
+      { role: 'assistant', text: `echo ${marker}` },
+      { role: 'user', text: 'The payload mentions OPKTURNV1 but is not prefixed' },
+    ])).toEqual({ state: 'waiting' });
+  });
+
+  it('uses the closed prefix scan and exact comparison', () => {
+    expect(ownedPromptMatches(` \uFEFF\u200B\t${marker} body`, marker)).toBe(true);
+    expect(ownedPromptMatches(`\u200B\uFEFF \u200B${marker}`, marker)).toBe(true);
+    expect(ownedPromptMatches(`.${marker}`, marker)).toBe(false);
+    expect(ownedPromptMatches(`**${marker}**`, marker)).toBe(false);
+    expect(ownedPromptMatches(`wrong-${marker}`, marker)).toBe(false);
+  });
+
+  it('closes publication at the next user node', () => {
+    expect(classify([
+      ...baseline,
+      { role: 'user', text: markedPrompt },
+      { role: 'assistant', text: 'FINAL' },
+      { role: 'user', text: 'foreign later user' },
+      { role: 'assistant', text: 'foreign reply' },
+    ])).toEqual({ state: 'ready', reply: 'FINAL' });
+  });
+
+  it('keeps marker ownership through absent, present, and replaced data-message-id values', async () => {
+    const result = await runProductAttributeChurnFixture();
+    expect(result).toEqual({
+      observations: [
+        { messageId: null, markerHead: marker, owned: true },
+        { messageId: 'user-service-12345678', markerHead: marker, owned: true },
+        { messageId: 'user-service-replaced-12345678', markerHead: marker, owned: true },
+      ],
+      send_count: 1,
+      published: true,
+    });
+  });
+
+  it('uses complete innerText to exclude a collapsed byte-identical historical duplicate', async () => {
+    const result = await runCollapsedDuplicateFixture();
+    expect(result.payload.length).toBeGreaterThan(18_000);
+    expect(result.userTexts).toHaveLength(2);
+    expect(result.userTexts[0]?.slice(result.userTexts[0].indexOf('\n\n') + 2))
+      .toBe(result.userTexts[1]?.slice(result.userTexts[1].indexOf('\n\n') + 2));
+    expect(result.markerHeads).toEqual([`OPKTURNV1${'22'.repeat(16)}`, marker]);
+    expect(result.collapsedShapes).toEqual([
+      { collapsed: true, showMore: true },
+      { collapsed: true, showMore: true },
+    ]);
+    expect(result.expectedMarkerMatches).toBe(1);
+    expect(result.classification).toEqual({ state: 'ready', reply: 'owned reply' });
+    expect(result.send_count).toBe(1);
+    expect(result.published).toBe(true);
+  });
+});
+
+describe('owned marker primitive', () => {
+  it('generates the fixed version-1 grammar with one source call', () => {
+    const source = vi.fn(() => Uint8Array.from({ length: 16 }, (_, index) => index));
+    const generated = generateOwnedPromptMarker(source);
+
+    expect(generated).toMatch(/^OPKTURNV1[0-9a-f]{32}$/);
+    expect(isOwnedPromptMarker(generated)).toBe(true);
+    expect(source).toHaveBeenCalledOnce();
+    expect(source).toHaveBeenCalledWith(16);
+  });
+
+  it('generates distinct valid markers for byte-identical payloads', () => {
+    const source = vi.fn()
+      .mockReturnValueOnce(Uint8Array.from({ length: 16 }, () => 0x11))
+      .mockReturnValueOnce(Uint8Array.from({ length: 16 }, () => 0x22));
+    const payload = 'same payload bytes';
+    const first = generateOwnedPromptMarker(source);
+    const second = generateOwnedPromptMarker(source);
+
+    expect(first).not.toBe(second);
+    expect(isOwnedPromptMarker(first)).toBe(true);
+    expect(isOwnedPromptMarker(second)).toBe(true);
+    expect(wrapOwnedPromptPayload(first, payload).endsWith(`\n\n${payload}`)).toBe(true);
+    expect(wrapOwnedPromptPayload(second, payload).endsWith(`\n\n${payload}`)).toBe(true);
+    expect(source).toHaveBeenCalledTimes(2);
+    expect(source).toHaveBeenNthCalledWith(1, 16);
+    expect(source).toHaveBeenNthCalledWith(2, 16);
+  });
+
+  it('places the marker at the payload head without rewriting the payload', () => {
+    const payload = '# table\n\n| a | b |\n|---|---|\n| 1 | 2 |';
+    const wrapped = wrapOwnedPromptPayload(marker, payload);
+
+    expect(wrapped).toBe(`${marker}\n\n${payload}`);
+  });
+});
+
+describe('DOM observation boundary', () => {
+  it('reads complete rendered innerText and never textContent', async () => {
+    const user = {
+      ...({ role: 'user', text: markedPrompt } as const),
+      domTextContent: `You said: ${markedPrompt}`,
+    };
+    const page = {
+      locator: vi.fn((selector: string) => selector === MESSAGE_NODE_SELECTOR
+        ? collectionLocator([user])
+        : scalarLocator()),
+    };
+    const result = await readPageObservation(page);
+    expect(result.messages).toEqual([{ role: 'user', text: markedPrompt }]);
+    expect(result.transcriptIncomplete).toBe(false);
+  });
+
+  it('keeps later nodes while marking an unreadable node as incomplete', async () => {
+    const unreadable = messageLocator({ role: 'user', text: markedPrompt });
+    unreadable.innerText = vi.fn(async () => { throw new Error('read failed'); });
+    const readable = messageLocator({ role: 'assistant', text: 'FINAL' });
+    let index = 0;
+    const nodes = scalarLocator({
+      count: vi.fn(async () => 2),
+      nth: vi.fn(() => index++ === 0 ? unreadable : readable),
+    });
+    const page = { locator: vi.fn((selector: string) => selector === MESSAGE_NODE_SELECTOR ? nodes : scalarLocator()) };
+    const result = await readPageObservation(page);
+    expect(result.transcriptIncomplete).toBe(true);
+    expect(result.messages.at(-1)).toEqual({ role: 'assistant', text: 'FINAL' });
+  });
+});
+
+describe('unchanged observation diagnostics', () => {
+  it('retains heartbeat and stability contracts', () => {
+    const heartbeat = buildObservationHeartbeat({ state: 'ready', reply: 'FINAL' }, 1, 4, true, 'FINAL');
+    expect(heartbeat).toMatchObject({ schema: 'observation-heartbeat/v1', poll_count: 4, stable_reads: 1 });
+    expect(replyStabilityMatches('same', 'same')).toBe(true);
+    expect(replyStabilityFingerprint('same')).toContain('same');
   });
 });

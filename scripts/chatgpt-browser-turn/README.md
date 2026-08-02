@@ -412,3 +412,22 @@ Repository CI additionally runs Node 22 policy, strict TypeScript, foundation
 Vitest, scope/declaration checks, and current-head review gates. Real automation-
 Chrome smoke remains necessary for browser/UI behavior that cannot be proven by
 unit tests alone.
+
+### Owned-turn marker (#1172)
+
+Each state-light payload is sent as a visible `OPKTURNV1` plus 128-bit hexadecimal
+marker prefix, followed by one blank line and the unchanged caller payload. The
+marker is generated once from an invocation-local cryptographically strong source
+for that payload.
+
+Ownership is established only when exactly one current `user` message has the
+expected marker as its first token after the closed prefix scan over Unicode
+`White_Space`, U+FEFF, and U+200B. The helper reads complete rendered `innerText`
+at the user-role message boundary; product attributes such as `data-message-id`
+are diagnostic-only and cannot grant, deny, or terminate ownership.
+
+If the marker is unresolved, ambiguous, or disappears after binding, the helper
+returns `ui_contract_mismatch` with the corresponding marker cause, publishes no
+reply, and keeps `send_count` at one. It never falls back to prompt text, product
+identity, or a second send.
+This marker contract is shared by future per-payload session adoption.
