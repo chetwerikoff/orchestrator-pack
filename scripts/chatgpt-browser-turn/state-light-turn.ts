@@ -76,7 +76,16 @@ const COMPLETION_CONFIRM_POLL_MS = 1_000;
 const DIAGNOSTIC_HEAD_CHARS = 300;
 export const MAX_LOCAL_READ_WAIT_MS = 5_000;
 export const COMPOSER_READINESS_WAIT_MS = 12_000;
+/** Minimum insertion allowance for a one-line payload. */
 export const COMPOSER_INSERTION_WAIT_MS = 3_000;
+/** Calibrated against the measured ProseMirror cost of roughly 55 ms per line. */
+export const COMPOSER_INSERTION_MS_PER_LINE = 65;
+
+export function deriveComposerInsertionBudgetMs(text: string): number {
+  const structuralLineCount = text.split(/\r\n|\r|\n/).length;
+  return Math.max(COMPOSER_INSERTION_WAIT_MS, structuralLineCount * COMPOSER_INSERTION_MS_PER_LINE);
+}
+
 const BLOCKING_PAGE_OVERLAY_SELECTOR = '[role="dialog"][aria-modal="true"], [data-testid*="modal-overlay"]';
 /** Per-node transcript reads use shorter budgets so one hung node cannot block the poll. */
 const MESSAGE_NODE_READ_TIMEOUT_MS = 800;
@@ -1080,7 +1089,7 @@ async function mutateComposerOrCause(
 ): Promise<PreSendComposerFailureCause | null> {
   const composer = page.locator(COMPOSER_SELECTOR);
   const insertionStart = Date.now();
-  const insertionDeadlineMs = Math.min(insertionStart + COMPOSER_INSERTION_WAIT_MS, invocationDeadlineMs);
+  const insertionDeadlineMs = Math.min(insertionStart + deriveComposerInsertionBudgetMs(text), invocationDeadlineMs);
   if (insertionContext) insertionContext.insertionDeadlineMs = insertionDeadlineMs;
   if (!(await readComposerReadiness(page, insertionDeadlineMs))) {
     return 'composer_mutation_budget_exhausted';

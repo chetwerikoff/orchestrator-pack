@@ -88,8 +88,10 @@ import {
 } from '../chatgpt-browser-turn/terminal-witness.ts';
 import { runProcessSync } from '../kernel/subprocess.ts';
 import {
+  COMPOSER_INSERTION_MS_PER_LINE,
   COMPOSER_INSERTION_WAIT_MS,
   COMPOSER_READINESS_WAIT_MS,
+  deriveComposerInsertionBudgetMs,
   __testComposerMutation,
 } from '../chatgpt-browser-turn/state-light-turn.ts';
 import {
@@ -3397,23 +3399,38 @@ describe('issue 1188 composer readiness and insertion timing', () => {
     vi.useRealTimers();
   });
 
-  it('uses fixed readiness and insertion phases independent of payload size', async () => {
+  it('derives insertion allowance from structural line count with a floor and invocation clamp', async () => {
     expect(COMPOSER_READINESS_WAIT_MS).toBe(12_000);
     expect(COMPOSER_INSERTION_WAIT_MS).toBe(3_000);
+    expect(COMPOSER_INSERTION_MS_PER_LINE).toBe(65);
+
+    const shortPayload = 'x';
+    const longOneLinePayload = 'x'.repeat(19_000);
+    const longMarkdownPayload = Array.from({ length: 382 }, (_, index) => `| ${index} | row |`).join('\n');
+    const shortBudget = deriveComposerInsertionBudgetMs(shortPayload);
+    const longOneLineBudget = deriveComposerInsertionBudgetMs(longOneLinePayload);
+    const longMarkdownBudget = deriveComposerInsertionBudgetMs(longMarkdownPayload);
+
+    expect(shortBudget).toBe(3_000);
+    expect(longOneLineBudget).toBe(3_000);
+    expect(longMarkdownBudget).toBe(24_830);
+    expect(shortBudget).toBeLessThanOrEqual(longOneLineBudget);
+    expect(longOneLineBudget).toBeLessThan(longMarkdownBudget);
+
     const short = makeComposerPage();
     const long = makeComposerPage();
     const shortContext: { insertionDeadlineMs?: number } = {};
     const longContext: { insertionDeadlineMs?: number } = {};
-    expect(await __testComposerMutation.mutateComposerOrCause(short.page, 'x', 10_000, shortContext)).toBeNull();
-    expect(await __testComposerMutation.mutateComposerOrCause(long.page, 'x'.repeat(100_000), 10_000, longContext)).toBeNull();
-    expect(shortContext.insertionDeadlineMs).toBe(3_000);
-    expect(longContext.insertionDeadlineMs).toBe(3_000);
-    expect(short.composer.click.mock.calls[0]?.[0]?.timeout).toBe(COMPOSER_INSERTION_WAIT_MS);
-    expect(long.composer.click.mock.calls[0]?.[0]?.timeout).toBe(COMPOSER_INSERTION_WAIT_MS);
+    expect(await __testComposerMutation.mutateComposerOrCause(short.page, shortPayload, 100_000, shortContext)).toBeNull();
+    expect(await __testComposerMutation.mutateComposerOrCause(long.page, longMarkdownPayload, 100_000, longContext)).toBeNull();
+    expect(shortContext.insertionDeadlineMs).toBe(shortBudget);
+    expect(longContext.insertionDeadlineMs).toBe(longMarkdownBudget);
+    expect(short.composer.click.mock.calls[0]?.[0]?.timeout).toBe(shortBudget);
+    expect(long.composer.click.mock.calls[0]?.[0]?.timeout).toBe(longMarkdownBudget);
 
     const clamped = makeComposerPage();
     const clampedContext: { insertionDeadlineMs?: number } = {};
-    expect(await __testComposerMutation.mutateComposerOrCause(clamped.page, 'payload', 250, clampedContext)).toBeNull();
+    expect(await __testComposerMutation.mutateComposerOrCause(clamped.page, longMarkdownPayload, 250, clampedContext)).toBeNull();
     expect(clampedContext.insertionDeadlineMs).toBe(250);
     expect(clamped.composer.click.mock.calls[0]?.[0]?.timeout).toBe(250);
   });

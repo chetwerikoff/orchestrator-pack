@@ -86,22 +86,26 @@ publication primitives are reused; they do not become workflow admission state.
 
 ### Composer timing (Issue #1188)
 
-Composer interaction uses two fixed, payload-size-independent phases. The
-readiness phase starts immediately before its first probe and has a deadline of
-12 seconds, bounded by the invocation deadline. A qualifying observation must
-find `#prompt-textarea` present, visible, enabled, and content-editable.
+Composer interaction uses two phases. The readiness phase starts immediately
+before its first probe and has a deadline of 12 seconds, bounded by the
+invocation deadline. A qualifying observation must find `#prompt-textarea`
+present, visible, enabled, and content-editable.
 
-After a successful readiness observation, the insertion phase starts with one
-shared 3,000 ms deadline for focus/click and fill. Remaining time is recomputed
-before each action and at the send boundary; actions are awaited directly and
-must settle strictly before the deadline. Composer readiness is rechecked
-before focus/click, before fill, and at the send boundary. Losing readiness
-before send fails locally with `send_count: 0`, `driver_error`, and cause
-`composer_mutation_budget_exhausted`; `blocking_page_overlay` remains a distinct
-confirmed timeout path.
+After a successful readiness observation, the insertion phase starts with a
+payload-structural allowance: `max(3,000 ms, structural_line_count × 65 ms)`.
+Structural line count is the number of newline-separated blocks, treating CRLF
+as one newline. The 3,000 ms floor covers trivial and one-line payloads; a
+382-line payload receives 24,830 ms, exceeding the measured 21,168 ms worst
+case by 3,662 ms. The allowance is clamped by the remaining invocation
+deadline, and readiness time is never consumed by it. Remaining time is
+recomputed before each action and at the send boundary; actions are awaited
+directly and must settle strictly before the deadline. Composer readiness is
+rechecked before focus/click, before fill, and at the send boundary. Losing
+readiness before send fails locally with `send_count: 0`, `driver_error`, and
+cause `composer_mutation_budget_exhausted`; `blocking_page_overlay` remains a
+distinct confirmed timeout path.
 
-Payload size is calibration-only diagnostic information. It must never derive,
-extend, or otherwise alter a live composer deadline. `MAX_LOCAL_READ_WAIT_MS`
+Byte count alone does not derive a live composer deadline. `MAX_LOCAL_READ_WAIT_MS`
 continues to govern unrelated local DOM-read paths.
 
 ### Page completion is sufficient
