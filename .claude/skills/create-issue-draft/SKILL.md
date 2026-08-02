@@ -502,28 +502,41 @@ response is a receipt only:
 ```text
 VERDICT: <...>
 COMMENT_URL: <...>
+REVISION: <rNN>
+INVOCATION_ID: <...>
+FINDING_COUNT: <n>
 ```
 
-That receipt is at most 5 lines. Immediately after it, the manager must
-harvest the published top-level comment through the GitHub API, using the pack
-wrapper and the comment id from `COMMENT_URL`:
+The receipt is the terminal result of the reviewer turn and remains at most 5
+lines. Its `COMMENT_URL` supplies both the canonical URL and numeric comment id;
+its `REVISION` and `INVOCATION_ID` complete the required three-way binding:
+comment id + URL, Issue revision marker, and invocation id. `FINDING_COUNT` is
+the claimed finding count used for pre-credentialing verification. The receipt is not
+the stage capture.
+
+Immediately after the terminal receipt, the manager must harvest the published
+top-level comment through the GitHub API. Do not use `--jq .body`: jq framing
+can alter the byte stream. Use the exact-byte recipe below, replacing
+`OWNER/REPO` and `<id>` from `COMMENT_URL`:
 
 ```bash
-scripts/gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body
+scripts/gh api repos/OWNER/REPO/issues/comments/<id> | node -e 'const c=[];process.stdin.on("data",d=>c.push(d)).on("end",()=>process.stdout.write(JSON.parse(Buffer.concat(c)).body))' > capture.txt
 ```
 
-The manager saves the returned comment body bytes verbatim, without
-normalization, as the immutable reviewer capture for that stage. Bind that
-capture to the comment URL and numeric comment id, the Issue revision marker,
-the reviewer invocation/envelope, and the stage receipt. These API-harvested
-comment bytes are the reviewer source bytes used for stage credentialing and
-admission, governed-capture union, verified relay, finding-ledger processing,
-and final acceptance. The five-line chat receipt remains transport-only and
-never substitutes for this capture.
+The resulting `capture.txt` is the canonical reviewer source artifact: the
+comment body bytes are immutable capture bytes, with no added or removed
+newline. Bind the capture to comment id + URL, `REVISION`, and `INVOCATION_ID`;
+no equality with a chat assistant node is required. Before stage credentialing,
+record `sha256sum capture.txt` and the byte length, then parse the capture and
+compare its finding count with the number claimed in the terminal receipt. A
+missing binding, hash/length mismatch, or finding-count discrepancy means the
+stage is not credentialed; re-harvest the same published comment and repeat
+verification. Only the verified harvested bytes enter the governed-capture
+union, verified relay, finding ledger, and final acceptance.
 
-The original browser-GPT source response remains saved verbatim where the
-existing invocation capture contract requires it; the API-harvested comment is
-the immutable source artifact for the direct-publication reviewer path.
+The original browser-GPT response remains governed evidence wherever the
+existing invocation contract requires it, but it is not the canonical source
+for this direct-publication path and need not equal the harvested comment.
 
 Receipt-only applies to the response returned to the flow-manager after a
 GitHub write. It does not restrict invocation inputs or governed relay: a
