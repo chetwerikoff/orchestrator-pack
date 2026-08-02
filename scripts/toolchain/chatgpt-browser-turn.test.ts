@@ -127,6 +127,19 @@ function assertTimingBudgetInvariant(evidence: TimingBudgetEvidence): void {
   }
 }
 
+function assertTimingBudgetConsumed(
+  evidence: TimingBudgetEvidence,
+  minimumObservedAtMs = evidence.deadlineAtMs,
+): void {
+  if (evidence.observedAtMs < minimumObservedAtMs) {
+    throw new Error(
+      `${evidence.operation} timing budget ended early: observedAt=${evidence.observedAtMs}, `
+      + `minimumObservedAt=${minimumObservedAtMs}, deadlineAt=${evidence.deadlineAtMs}; `
+      + 'fix clock control or budget handling; do not raise constants, add slack, sleep, or retry',
+    );
+  }
+}
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'opk-964-'));
   process.env.CHATGPT_BROWSER_TURN_STATE_DIR = join(root, 'state');
@@ -328,7 +341,6 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
   });
 
   it('classifies absent parent service attributes as absent without service_attribute timeout (#1077)', async () => {
-    const budget = createTurnOperationBudget(5_000);
     let nestedFirstCalls = 0;
     const hangingNestedFirst = () => ({
       getAttribute: async () => {
@@ -357,6 +369,7 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
+      const budget = createTurnOperationBudget(5_000);
       const startedAtMs = Date.now();
       await expect(runtimeWitnessSurfaceAvailable(page, budget)).resolves.toBe('absent');
       assertTimingBudgetInvariant({
@@ -3444,7 +3457,15 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
       observedAtMs: observation.value.observedAtMs,
       deadlineAtMs: observation.value.deadlineAtMs,
     });
-    expect(observation.value.observedAtMs).toBeGreaterThan(observation.value.startedAtMs);
+    assertTimingBudgetConsumed(
+      {
+        operation: 'admission retry ceiling',
+        startedAtMs: observation.value.startedAtMs,
+        observedAtMs: observation.value.observedAtMs,
+        deadlineAtMs: observation.value.deadlineAtMs,
+      },
+      observation.value.deadlineAtMs - 100,
+    );
     expect(observation.waitCalls).toBeGreaterThan(0);
     gate!.release();
   });
