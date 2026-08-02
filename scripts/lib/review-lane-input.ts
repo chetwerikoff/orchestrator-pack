@@ -1,7 +1,9 @@
 import {
   freezeConsistentReviewLaneBody,
   normalizeReviewLaneDeclaration,
+  parseReviewLaneAuthorDeclaration,
   type ReviewLaneBodyRead,
+  type ReviewLaneAuthorDeclaration,
   type ReviewLaneInput,
 } from './review-lane-routing.ts';
 
@@ -49,6 +51,10 @@ export function parseReviewLaneDeclarationFromBody(body: string): unknown {
   } catch {
     return parseYamlLikeDeclaration(match[1]);
   }
+}
+
+export function parseReviewLaneAuthorDeclarationFromBody(body: string): ReviewLaneAuthorDeclaration | null {
+  return parseReviewLaneAuthorDeclaration(parseReviewLaneDeclarationFromBody(body));
 }
 
 export function produceReviewLaneInput(

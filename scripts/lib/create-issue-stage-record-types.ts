@@ -79,6 +79,7 @@ export interface CycleEventLogical {
   'source-revision': string;
   tier: string;
   'public-actor': PublicActor;
+  'routed-lane'?: ReviewLaneRouting;
 }
 
 export interface StageEventLogical {
@@ -100,10 +101,10 @@ export interface StageEventLogical {
 
 export interface ReviewLaneEvidence {
   routing: ReviewLaneRouting;
-  finalRequiredSlots?: string[];
-  sourceVerdicts?: Record<string, ReviewLaneSourceVerdict>;
-  conflictDecision?: ReviewLaneConflictDecision;
-  settlement?: ReviewLaneSettlement;
+  finalRequiredSlots: string[];
+  sourceVerdicts: Record<string, ReviewLaneSourceVerdict>;
+  conflictDecision: ReviewLaneConflictDecision;
+  settlement: ReviewLaneSettlement;
 }
 
 export interface FinalEventLogical {

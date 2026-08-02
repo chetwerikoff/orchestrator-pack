@@ -7,10 +7,10 @@ import type {
   StageEventLogical,
   StageReceiptCycleBinding,
 } from './create-issue-stage-record-types.ts';
-<<<<<<< HEAD
 import { validateReviewLaneRecord } from './review-lane-record.ts';
 import { STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
 import { deriveCanonicalCycleLineage } from './create-issue-stage-record-lineage.ts';
+import { REVIEW_LANE_ROUTING_POLICY_VERSION } from './review-lane-routing.ts';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -21,6 +21,7 @@ function nonEmpty(value: unknown): value is string {
 }
 
 const VALID_OUTCOMES = new Set<SettledOutcome>(['complete', 'partial', 'blocked', 'incident']);
+const LEGACY_POLICY_VERSIONS = new Set(['single-source/v1', 'triple-source/v1']);
 
 export function parseCycleBinding(value: unknown): StageReceiptCycleBinding | null {
   if (!isRecord(value)) return null;
@@ -78,9 +79,28 @@ export function parseConsumableStageReceipt(value: unknown): {
   if (producerEvidence !== 'verified' && producerEvidence !== 'waived' && producerEvidence !== 'not-applicable') {
     errors.push('invalid producerEvidence');
   }
+  const routedPolicy = policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION;
+  if (!routedPolicy && !LEGACY_POLICY_VERSIONS.has(policyVersion)) {
+    errors.push(`unsupported stage policy version: ${policyVersion}`);
+  }
+  if (routedPolicy && reviewLane === undefined) {
+    errors.push('review-lane evidence is required for review-lane-routing/v1');
+  }
   if (reviewLane !== undefined) {
     const routed = validateReviewLaneRecord(reviewLane);
     errors.push(...routed.errors);
+    const routedRecord = isRecord(reviewLane) ? reviewLane : null;
+    if (routedPolicy && routed.ok && routedRecord && isRecord(routedRecord.routing) && isRecord(routedRecord.sourceVerdicts)) {
+      if (reviewerCardinality !== routedRecord.routing.reviewerCardinality) {
+        errors.push('reviewerCardinality disagrees with routed topology');
+      }
+      if (completedSourceCount !== Object.keys(routedRecord.sourceVerdicts).length) {
+        errors.push('completed source count disagrees with routed sourceVerdicts');
+      }
+      if (outcome === 'complete' && isRecord(routedRecord.settlement) && routedRecord.settlement.ok !== true) {
+        errors.push('complete receipt cannot contain an unsettled routed record');
+      }
+    }
   }
 
   if (errors.length > 0 || cycleBinding === null) return { receipt: null, errors };

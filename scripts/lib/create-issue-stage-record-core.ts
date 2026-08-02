@@ -44,6 +44,8 @@ import {
   PROJECTION_IN_PROGRESS,
   STAGE_SCHEMA,
 } from './create-issue-stage-record-types.ts';
+import type { ReviewLaneRouting } from './review-lane-routing.ts';
+import { prepareReviewLaneStageAttempt } from './create-issue-stage-record-review-lane.ts';
 
 export interface StartCycleInput {
   repo: string;
@@ -52,6 +54,7 @@ export interface StartCycleInput {
   tier: string;
   publicActor: PublicActor;
   predecessorCycleId?: string;
+  stageAttemptId?: string;
   workdir?: string;
   census?: CommentCensusOptions;
 }
@@ -73,6 +76,7 @@ export interface OperationResult {
   eventKey?: string;
   projectionPendingRepair?: boolean;
   terminal?: OperationTerminal;
+  reviewLaneRouting?: ReviewLaneRouting;
 }
 
 function resolveWorkdir(issueNumber: number, workdir?: string): string {
@@ -492,6 +496,25 @@ export function startReviewCycle(
     }
   }
 
+  let reviewLaneRouting: ReviewLaneRouting | undefined;
+  if (input.stageAttemptId) {
+    const prepared = prepareReviewLaneStageAttempt({
+      transport,
+      repo: input.repo,
+      issueNumber: input.issueNumber,
+      sourceRevision: input.sourceRevision,
+      stageAttemptId: input.stageAttemptId,
+    });
+    diagnostics.push(...prepared.diagnostics.map((message) => ({
+      code: 'malformed-marker' as const,
+      message,
+    })));
+    if (!prepared.ok || !prepared.routing) {
+      return { ok: false, diagnostics, cycleId: persisted, eventKey: persisted };
+    }
+    reviewLaneRouting = prepared.routing;
+  }
+
   const logical: CycleEventLogical = {
     schema: CYCLE_SCHEMA,
     'event-key': persisted,
@@ -500,6 +523,7 @@ export function startReviewCycle(
     'source-revision': input.sourceRevision,
     tier: input.tier,
     'public-actor': input.publicActor,
+    'routed-lane': reviewLaneRouting,
   };
   const published = appendPublishedLogicalJournalEvent(diagnostics, transport, input.repo, input.issueNumber, workdir, logical, input.census);
   if (!published.ok) {
@@ -562,6 +586,7 @@ export function startReviewCycle(
     cycleId: persisted,
     eventKey: persisted,
     projectionPendingRepair: projection.pendingRepair,
+    reviewLaneRouting,
   };
 }
 
@@ -632,6 +657,7 @@ export function publishSettledStageRecord(
     'required-source-count': receipt.reviewerCardinality,
     'producer-evidence': receipt.producerEvidence,
     'tier-transition': receipt.tierTransition,
+    'routed-lane': receipt.reviewLane,
   };
   const published = publishLogicalJournalEvent(
     transport,

@@ -30,6 +30,7 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   repo: string;
   issueNumber: number;
   sourceRevision?: string;
+  stageAttemptId?: string;
   tier?: string;
   predecessorCycleId?: string;
   receiptPath?: string;
@@ -116,7 +117,7 @@ function runParsedCli<T>(
 function stageFinalizeUsage(): string {
   return [
     'Usage:',
-    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --tier <T1|T2|T3> [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
+    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage-attempt-id <id> --tier <T1|T2|T3> [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> --tier-intake <path> --stage-evidence <path>... --author-dispositions <path> [--claude-producer-evidence <path>...] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--json]',
@@ -153,6 +154,9 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
         break;
       case '--source-revision':
         opts.sourceRevision = String(argv[++i] ?? '');
+        break;
+      case '--stage-attempt-id':
+        opts.stageAttemptId = String(argv[++i] ?? '');
         break;
       case '--tier':
         opts.tier = String(argv[++i] ?? '');
@@ -309,6 +313,7 @@ export function runStageFinalizeCli(argv: string[]): number {
         repo: opts.repo,
         issueNumber,
         sourceRevision,
+        stageAttemptId: parseRequiredNonEmptyString(opts.stageAttemptId, '--stage-attempt-id'),
         tier,
         publicActor: opts.publicActor,
         predecessorCycleId: opts.predecessorCycleId,

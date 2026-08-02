@@ -761,7 +761,8 @@ projections, not workflow gates.
 
 ```bash
 node scripts/create-issue-stage-finalize.ts start-cycle \
-  --repo <owner/name> --issue-number <N> --source-revision <rNN> --tier <T1|T2|T3>
+  --repo <owner/name> --issue-number <N> --source-revision <rNN> \
+  --stage-attempt-id <stageAttemptId> --tier <T1|T2|T3>
 
 node scripts/create-issue-stage-finalize.ts publish-stage \
   --repo <owner/name> --issue-number <N> --receipt "$REVIEW_DIR/<stage-receipt>.json"
