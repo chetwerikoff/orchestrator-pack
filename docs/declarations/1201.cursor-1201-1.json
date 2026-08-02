@@ -7,14 +7,43 @@
   "baseline": {
     "commit_sha": "d5ddfef32081c4227ce7f2db91a2b1944ea3a527",
     "worktree_dirty": false,
-    "active_scope_hash": "sha256:890e42d70da72f1da7c56f5316783c4e7441a0736516cd0448bd1fb4e3a05085"
+    "active_scope_hash": "sha256:1e8e264c228b06ed0e63d0dc5b41df2705a8fe38a823b23b81d62963c25ba34c"
   },
   "declared_paths": [
-    "docs/tiering.md",
-    "docs/review-lanes.md",
-    "scripts/vitest-ci-lanes.config.json",
-    "scripts/lib/vitest-pre-topology-measurement.mjs"
+    "scripts/lib/review-lane-input.ts",
+    "scripts/lib/review-lane-record.ts",
+    "scripts/lib/review-lane-routing.ts",
+    "scripts/lib/review-lane-routing.test.ts",
+    "scripts/lib/review-lane-selector.ts",
+    "scripts/lib/create-issue-stage-record-receipt.ts",
+    "scripts/lib/create-issue-stage-record-types.ts"
   ],
   "declared_globs": [],
-  "amendments": []
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:890e42d70da72f1da7c56f5316783c4e7441a0736516cd0448bd1fb4e3a05085",
+      "new_active_scope_hash": "sha256:1e8e264c228b06ed0e63d0dc5b41df2705a8fe38a823b23b81d62963c25ba34c",
+      "changed": {
+        "added": [
+          "scripts/lib/create-issue-stage-record-receipt.ts",
+          "scripts/lib/create-issue-stage-record-types.ts",
+          "scripts/lib/review-lane-input.ts",
+          "scripts/lib/review-lane-record.ts",
+          "scripts/lib/review-lane-routing.test.ts",
+          "scripts/lib/review-lane-routing.ts",
+          "scripts/lib/review-lane-selector.ts"
+        ],
+        "removed": [
+          "docs/review-lanes.md",
+          "docs/tiering.md",
+          "scripts/lib/vitest-pre-topology-measurement.mjs",
+          "scripts/vitest-ci-lanes.config.json"
+        ]
+      },
+      "reason": "declare review-lane and stage-record sources",
+      "actor": "local",
+      "timestamp": "2026-08-02T08:24:16.055Z",
+      "applied": true
+    }
+  ]
 }
