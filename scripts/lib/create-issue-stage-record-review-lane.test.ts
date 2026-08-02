@@ -28,6 +28,17 @@ entries:
   behaviors: [documentation-only]
 \`\`\``;
 
+const familyIssueBody = `revision r01
+
+\`\`\`review-lane-change-set
+schema: review-lane-change-set/v1
+owner: issue-author
+entries:
+- kind: family
+  path: scripts/lib/review-lane-*.ts
+  behaviors: [pure-review-lane-selection]
+\`\`\``;
+
 function routedFixture() {
   const input = normalizeReviewLaneDeclaration(declaration([
     { kind: 'family', path: 'scripts/lib/review-lane-*.ts', behaviors: ['pure-review-lane-selection'] },
@@ -36,7 +47,7 @@ function routedFixture() {
     { kind: 'family', path: 'scripts/lib/review-lane-*.ts', behaviors: ['pure-review-lane-selection'] },
   ]));
   if (input.status !== 'usable') throw new Error('routing fixture input must be usable');
-  const routing = buildReviewLaneRouting(input, classification, 'r01', 'attempt-1');
+  const routing = buildReviewLaneRouting({ ...input, identity: `r01:${input.identity}` }, classification, 'r01', 'attempt-1');
   const settlement = {
     ok: true,
     conflictDecision: 'no-conflict' as const,
@@ -72,6 +83,38 @@ describe('review-lane production activation', () => {
     expect(result.ok).toBe(true);
     expect(result.reviewLaneRouting?.stageAttemptId).toBe('attempt-1');
     expect(state.comments[0]?.body).toContain('routed-lane');
+  });
+
+  it('rejects a stale caller revision before publishing any cycle', () => {
+    const state = createMockGhState({ issue: { title: 't', body: familyIssueBody, labels: [] } });
+    const result = startReviewCycle(createMockTransport(state), {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      sourceRevision: 'r00',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      stageAttemptId: 'attempt-1',
+      workdir: makeTempDir(),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map((item) => item.message).join('\n')).toContain('disagrees with live Issue revision');
+    expect(state.comments).toHaveLength(0);
+  });
+
+  it('passes a permitted lane override through start-cycle routing', () => {
+    const state = createMockGhState({ issue: { title: 't', body: issueBody, labels: [] } });
+    const result = startReviewCycle(createMockTransport(state), {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      sourceRevision: 'r01',
+      tier: 'T2',
+      publicActor: 'cursor-flow-manager',
+      stageAttemptId: 'attempt-1',
+      permittedLaneOverride: 'disputed',
+      workdir: makeTempDir(),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.reviewLaneRouting).toMatchObject({ lane: 'disputed', reviewerCardinality: 3 });
   });
 
   it('does not publish a cycle when pre-attempt routing cannot be produced', () => {
@@ -135,11 +178,11 @@ describe('review-lane production activation', () => {
       sha256: '0'.repeat(64),
       rawFindingCount: 0,
     });
-    const invocations = ['01', '02', '03'].map((slot) => ({
+    const invocations = ['01', '02'].map((slot) => ({
       schema: 'reviewer-invocation-envelope/v1',
       reviewEpisodeId: 'task@r00',
       stageAttemptId: 'attempt-1',
-      policyVersion: 'triple-source/v1',
+      policyVersion: 'review-lane-routing/v1',
       reviewerCardinality: 3,
       cardinalityConfigIdentity: routed.routing.cardinalityConfigIdentity,
       stage: 'competitive',
@@ -173,7 +216,7 @@ describe('review-lane production activation', () => {
       stageAttemptId: 'attempt-1',
       stageSequence: 1,
       stage: 'competitive',
-      policyVersion: 'triple-source/v1',
+      policyVersion: 'review-lane-routing/v1',
       reviewerCardinality: 3,
       cardinalityConfigIdentity: routed.routing.cardinalityConfigIdentity,
       sourceRevision: 'r01',
@@ -183,7 +226,7 @@ describe('review-lane production activation', () => {
       invocations,
       credentialingCaptures: invocations.map((invocation) => invocation.capture),
       relayEligibleCaptures: invocations.map((invocation) => invocation.capture),
-      reviewLaneRouting: routed.routing,
+      reviewLane: routed,
     };
     const withoutRoute = { ...receipt, invocations: invocations.map((invocation, index) => index === 0 ? (() => {
       const { reviewLaneRouting: _ignored, ...legacy } = invocation;
@@ -198,6 +241,106 @@ describe('review-lane production activation', () => {
       tierIntake: { schema: 'tier-intake/v1', producer: 'test', taskIdentity: 'task', kind: 'fresh', priorTier: 'T3', firstRevision: 'r00' },
       receiptInventory: { source: 'canonical-review-directory', taskIdentity: 'task', episodeFirstRevision: 'r00', reviewEpisodeId: 'task@r00', stageReceiptIds: ['task@r00:stage-receipt:0001'] },
     }).errors.join('\n')).not.toContain('reviewLaneRouting');
+  });
+
+  it('accepts one full routed receipt through both parsers and publishes the stage event', () => {
+    const state = createMockGhState({ issue: { title: 't', body: familyIssueBody, labels: [] } });
+    const transport = createMockTransport(state);
+    const cycle = startReviewCycle(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      sourceRevision: 'r01',
+      tier: 'T3',
+      publicActor: 'cursor-flow-manager',
+      stageAttemptId: 'attempt-1',
+      workdir: makeTempDir(),
+    });
+    expect(cycle.ok).toBe(true);
+    const routed = routedFixture();
+    const capture = (slot: string) => ({
+      captureIdentity: `capture-${slot}`,
+      name: `pass-1-competitive-${slot}.capture.txt`,
+      byteLength: 1,
+      sha256: '0'.repeat(64),
+      rawFindingCount: 0,
+    });
+    const invocations = ['01', '02'].map((slot) => ({
+      schema: 'reviewer-invocation-envelope/v1',
+      reviewEpisodeId: 'task@r00',
+      stageAttemptId: 'attempt-1',
+      policyVersion: 'review-lane-routing/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: routed.routing.cardinalityConfigIdentity,
+      stage: 'competitive',
+      sourceRevision: 'r01',
+      invocationId: `end-to-end-invocation-${slot}`,
+      terminalResultIdentity: `end-to-end-terminal-${slot}`,
+      reviewerSource: `source-${slot}`,
+      reviewerSlot: slot,
+      reviewerOrdinal: Number(slot),
+      attemptOrdinal: 1,
+      retryAttempt: false,
+      terminal: true,
+      terminalClassification: 'complete',
+      sendCount: 1,
+      retryClass: 'none',
+      revisionCheck: 'matched',
+      capacityOutcome: 'admitted',
+      capacityWaitMs: 0,
+      capture: capture(slot),
+      reviewLaneRouting: routed.routing,
+    }));
+    const stageReceipt = {
+      schema: 'stage-completeness-receipt/v1',
+      tier: 'T3',
+      taskIdentity: 'task',
+      episodeFirstRevision: 'r00',
+      reviewEpisodeId: 'task@r00',
+      stageReceiptId: 'task@r00:stage-receipt:0001',
+      previousStageReceiptId: null,
+      receiptCensus: ['task@r00:stage-receipt:0001'],
+      stageAttemptId: 'attempt-1',
+      stageSequence: 1,
+      stage: 'competitive',
+      policyVersion: 'review-lane-routing/v1',
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: routed.routing.cardinalityConfigIdentity,
+      sourceRevision: 'r01',
+      outcome: 'complete',
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      invocations,
+      credentialingCaptures: invocations.map((invocation) => invocation.capture),
+      relayEligibleCaptures: invocations.map((invocation) => invocation.capture),
+      reviewLane: routed,
+    };
+    const authority = {
+      tierIntake: { schema: 'tier-intake/v1' as const, producer: 'test', taskIdentity: 'task', kind: 'fresh' as const, priorTier: 'T3' as const, firstRevision: 'r00' },
+      receiptInventory: { source: 'canonical-review-directory' as const, taskIdentity: 'task', episodeFirstRevision: 'r00', reviewEpisodeId: 'task@r00', stageReceiptIds: ['task@r00:stage-receipt:0001'] },
+    };
+    expect(deriveReviewEpisodeState([stageReceipt], [], authority).errors.join('\n')).not.toContain('reviewLane');
+    const published = publishSettledStageRecord(transport, {
+      repo: 'chetwerikoff/orchestrator-pack',
+      issueNumber: 1201,
+      receipt: {
+        tier: 'T3',
+        stage: 'competitive',
+        cycleId: cycle.cycleId,
+        stageAttemptId: 'attempt-1',
+        policyVersion: 'review-lane-routing/v1',
+        sourceRevision: 'r01',
+        outcome: 'complete',
+        reviewerCardinality: 3,
+        completedSourceCount: 2,
+        cycleBinding: { cycleId: cycle.cycleId, sourceRevision: 'r01', boundBeforeLaunch: true },
+        producerEvidence: 'not-applicable',
+        tierTransition: 'none',
+        reviewLane: routed,
+      },
+      workdir: makeTempDir(),
+    });
+    expect(published.ok).toBe(true);
+    expect(state.comments.some((comment) => comment.body.includes('create-issue-stage-record/v1'))).toBe(true);
   });
 
   it('rejects a legacy receipt on a routed cycle head', () => {

@@ -47,6 +47,7 @@ import {
 import { REVIEW_LANE_ROUTING_POLICY_VERSION, type ReviewLaneRouting } from './review-lane-routing.ts';
 import { sameReviewLaneRouting } from './review-lane-record.ts';
 import { prepareReviewLaneStageAttempt } from './create-issue-stage-record-review-lane.ts';
+import type { ReviewLaneOverride } from './review-lane-selector.ts';
 
 export interface StartCycleInput {
   repo: string;
@@ -56,6 +57,7 @@ export interface StartCycleInput {
   publicActor: PublicActor;
   predecessorCycleId?: string;
   stageAttemptId?: string;
+  permittedLaneOverride?: ReviewLaneOverride;
   workdir?: string;
   census?: CommentCensusOptions;
 }
@@ -505,6 +507,7 @@ export function startReviewCycle(
       issueNumber: input.issueNumber,
       sourceRevision: input.sourceRevision,
       stageAttemptId: input.stageAttemptId,
+      permittedLaneOverride: input.permittedLaneOverride,
     });
     diagnostics.push(...prepared.diagnostics.map((message) => ({
       code: 'malformed-marker' as const,

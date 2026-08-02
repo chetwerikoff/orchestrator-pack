@@ -8,6 +8,12 @@ import {
 } from './review-lane-routing.ts';
 
 const DECLARATION_FENCE = /```review-lane-change-set(?:\/v1)?\s*\n([\s\S]*?)```/i;
+const SOURCE_REVISION_MARKER = /^\s*revision\s*:?\s*(\S+)\s*$/im;
+
+export function parseReviewLaneSourceRevision(body: string): string | null {
+  const match = SOURCE_REVISION_MARKER.exec(body);
+  return match?.[1]?.trim() || null;
+}
 
 function scalar(value: string): string {
   const trimmed = value.trim();

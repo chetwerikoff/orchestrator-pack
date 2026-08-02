@@ -11,6 +11,7 @@ import {
   produceAcceptanceArtifacts,
 } from './create-issue-stage-record-artifacts.ts';
 import type { PublicActor } from './create-issue-stage-record-types.ts';
+import type { ReviewLaneOverride } from './review-lane-selector.ts';
 import {
   dispatchDefaultCliArg,
   isDirectCliExecution,
@@ -31,6 +32,7 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   issueNumber: number;
   sourceRevision?: string;
   stageAttemptId?: string;
+  permittedLaneOverride?: ReviewLaneOverride;
   tier?: string;
   predecessorCycleId?: string;
   receiptPath?: string;
@@ -117,7 +119,7 @@ function runParsedCli<T>(
 function stageFinalizeUsage(): string {
   return [
     'Usage:',
-    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage-attempt-id <id> --tier <T1|T2|T3> [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
+    '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --stage-attempt-id <id> --tier <T1|T2|T3> [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> --tier-intake <path> --stage-evidence <path>... --author-dispositions <path> [--claude-producer-evidence <path>...] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--json]',
@@ -158,6 +160,12 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
       case '--stage-attempt-id':
         opts.stageAttemptId = String(argv[++i] ?? '');
         break;
+      case '--permitted-lane-override': {
+        const override = String(argv[++i] ?? '');
+        if (override !== 'normal' && override !== 'disputed') throw new Error('--permitted-lane-override must be normal or disputed');
+        opts.permittedLaneOverride = override;
+        break;
+      }
       case '--tier':
         opts.tier = String(argv[++i] ?? '');
         break;
@@ -314,6 +322,7 @@ export function runStageFinalizeCli(argv: string[]): number {
         issueNumber,
         sourceRevision,
         stageAttemptId: parseRequiredNonEmptyString(opts.stageAttemptId, '--stage-attempt-id'),
+        permittedLaneOverride: opts.permittedLaneOverride,
         tier,
         publicActor: opts.publicActor,
         predecessorCycleId: opts.predecessorCycleId,
