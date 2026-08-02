@@ -6,6 +6,8 @@ import {
   checkStageCompletenessGuard,
   formatStageCompletenessPassMessage,
   STAGE_COMPLETENESS_RECEIPT_SCHEMA,
+  findLegacyReceiptPaths,
+  resolveCanonicalReviewDirectory,
   type ReviewEpisodeDerivationAuthorityV1,
   type StageCompletenessReceiptV1,
   type TierIntakeAuthorityV1,
@@ -18,12 +20,15 @@ import { isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.ts
 
 const GUARD_LABEL = 'stage-completeness guard';
 
-type ReceiptCliOptions = DraftTextGuardBaseOptions & {
+export type CanonicalReceiptInventoryOptions = {
   stageReceiptPaths?: string[];
   receiptDirectory?: string;
-  relayEvidencePath?: string;
-  claudeProducerEvidencePaths?: string[];
   tierIntakePath?: string;
+  claudeProducerEvidencePaths?: string[];
+};
+
+type ReceiptCliOptions = DraftTextGuardBaseOptions & CanonicalReceiptInventoryOptions & {
+  relayEvidencePath?: string;
   phase?: 'pre-lens' | 'final-acceptance';
 };
 
@@ -40,26 +45,39 @@ function isStageReceipt(value: unknown): value is StageCompletenessReceiptV1 {
     && (value as { schema?: unknown }).schema === STAGE_COMPLETENESS_RECEIPT_SCHEMA;
 }
 
-function canonicalReceiptDirectory(opts: ReceiptCliOptions): string {
-  if (opts.receiptDirectory) return resolve(opts.receiptDirectory);
-  const first = opts.stageReceiptPaths?.[0];
-  if (!first) throw new Error('--receipt-directory or at least one --stage-receipt is required');
-  return dirname(resolve(first));
-}
-
-export function loadCanonicalReceiptInventory(opts: ReceiptCliOptions): {
+export function loadCanonicalReceiptInventory(opts: CanonicalReceiptInventoryOptions): {
   receipts: StageCompletenessReceiptV1[];
+  receiptValues: StageCompletenessReceiptV1[];
+  receiptPaths: string[];
+  intakePath: string;
   authority: ReviewEpisodeDerivationAuthorityV1;
 } {
   if (!opts.tierIntakePath) throw new Error('--tier-intake is required for receipt-backed review episodes');
   const intake = readJson(opts.tierIntakePath) as TierIntakeAuthorityV1;
-  const directory = canonicalReceiptDirectory(opts);
+  const canonical = resolveCanonicalReviewDirectory(intake);
+  const legacyReceiptPath = findLegacyReceiptPaths(intake)[0];
+  if (legacyReceiptPath) {
+    throw new Error(`legacy_receipt_location_blocked: receipt found outside canonical authority at ${legacyReceiptPath}`);
+  }
+  if (resolve(opts.tierIntakePath) !== canonical.intakePath) {
+    throw new Error(`legacy_receipt_location_blocked: tier intake authority must be ${canonical.intakePath}`);
+  }
+  const requestedDirectory = opts.receiptDirectory
+    ? resolve(opts.receiptDirectory)
+    : opts.stageReceiptPaths?.[0]
+      ? dirname(resolve(opts.stageReceiptPaths[0]))
+      : canonical.directory;
+  if (requestedDirectory !== canonical.directory) {
+    throw new Error(`legacy_receipt_location_blocked: receipt authority must be ${canonical.directory}`);
+  }
+  const directory = canonical.directory;
   if (!existsSync(directory)) throw new Error(`receipt directory does not exist: ${directory}`);
   const explicit = new Set((opts.stageReceiptPaths ?? []).map((path) => resolve(path)));
   const candidates = readdirSync(directory)
     .filter((name) => name.endsWith('.json'))
     .map((name) => resolve(directory, name));
   const receipts: StageCompletenessReceiptV1[] = [];
+  const receiptPaths: string[] = [];
   for (const path of candidates) {
     let parsed: unknown;
     try {
@@ -74,6 +92,7 @@ export function loadCanonicalReceiptInventory(opts: ReceiptCliOptions): {
       continue;
     }
     receipts.push(...found);
+    receiptPaths.push(path);
   }
   for (const path of explicit) {
     if (!candidates.includes(path)) throw new Error(`explicit stage receipt is outside canonical receipt directory: ${path}`);
@@ -83,6 +102,9 @@ export function loadCanonicalReceiptInventory(opts: ReceiptCliOptions): {
   const evidence = (opts.claudeProducerEvidencePaths ?? []).flatMap((path) => asObjects(readJson(path)));
   return {
     receipts,
+    receiptValues: receipts,
+    receiptPaths,
+    intakePath: canonical.intakePath,
     authority: {
       tierIntake: intake,
       receiptInventory: {

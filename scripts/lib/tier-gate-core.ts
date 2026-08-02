@@ -6,9 +6,9 @@
  * read-old/write-none census is the only legacy demotion compatibility surface.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { checkNeverSkippedFloors } from './tier-gate-floor.ts';
+import { canonicalReviewStateRoot, resolveReviewDirectories } from './canonical-review-directory.ts';
 
 export { checkWorkerSafetyFloor } from './tier-gate-floor.ts';
 
@@ -462,7 +462,7 @@ interface WorkdirLayout {
   workdir: string;
   stem: string;
   taskIdentity: string;
-  reviewDir: string;
+  reviewDirs: string[];
   canonicalIssueWorkdir: boolean;
 }
 
@@ -471,7 +471,7 @@ function issueNumberFromStem(stem: string): string | null {
 }
 
 function canonicalIssueStateRoot(): string {
-  return resolve(process.env.HOME ?? homedir(), '.local', 'state', 'create-issue-draft');
+  return canonicalReviewStateRoot();
 }
 
 function deriveWorkdir(draftPath: string): WorkdirLayout | null {
@@ -487,9 +487,11 @@ function deriveWorkdir(draftPath: string): WorkdirLayout | null {
     workdir,
     stem,
     taskIdentity,
-    reviewDir: canonicalIssueWorkdir
-      ? join(canonicalIssueStateRoot(), '.review', taskNumber)
-      : join(issueDraftsDir, '.review', taskIdentity),
+    reviewDirs: resolveReviewDirectories(
+      { taskIdentity },
+      'history',
+      [join(issueDraftsDir, '.review', taskIdentity)],
+    ),
     canonicalIssueWorkdir,
   };
 }
@@ -512,7 +514,7 @@ function loadTransitionEvidenceFromWorkdir(
   if (!layout) return { evidence: null, errors: [] };
 
   const errors: string[] = [];
-  const intakePath = join(layout.reviewDir, 'tier-intake.json');
+  const intakePath = join(layout.reviewDirs[0]!, 'tier-intake.json');
   let intake: TierIntakeRecord | null = null;
   if (existsSync(intakePath)) {
     try {
@@ -575,9 +577,10 @@ function loadTransitionEvidenceFromWorkdir(
     revalidationMatches: 0,
     invalidRevalidationMatches: 0,
   };
-  if (existsSync(layout.reviewDir)) {
-    for (const captureName of readdirSync(layout.reviewDir).filter((name) => name.endsWith('.capture.txt')).sort()) {
-      const captureText = readFileSync(join(layout.reviewDir, captureName), 'utf8');
+  for (const reviewDir of layout.reviewDirs) {
+    if (!existsSync(reviewDir)) continue;
+    for (const captureName of readdirSync(reviewDir).filter((name) => name.endsWith('.capture.txt')).sort()) {
+      const captureText = readFileSync(join(reviewDir, captureName), 'utf8');
       captures.push({ captureName, captureText });
       const inspection = inspectRetiredDemotionCapture(captureText);
       retiredDemotionFences.eventMatches += inspection.fences.eventMatches;
@@ -636,7 +639,7 @@ type CanonicalCaptureKind = 'competitive' | 'architectural-review' | 'architectu
 
 function canonicalCaptureKind(name: string): CanonicalCaptureKind | null {
   if (/^pass-\d+-competitive(?:-\d+)?\.capture\.txt$/i.test(name)) return 'competitive';
-  if (/^pass-\d+-architectural-review\.capture\.txt$/i.test(name)) return 'architectural-review';
+  if (/^pass-\d+-architectural-review(?:-\d{2})?\.capture\.txt$/i.test(name)) return 'architectural-review';
   if (/^pass-\d+-architectural-lens\.capture\.txt$/i.test(name)) return 'architectural-lens';
   if (/^pass-\d+-(?:light-)?architectural\.capture\.txt$/i.test(name)) return 'architectural';
   return null;

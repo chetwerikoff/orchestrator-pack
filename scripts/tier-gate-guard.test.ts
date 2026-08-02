@@ -251,6 +251,13 @@ describe('Issue #1142 free pre-capture adjacent correction', () => {
     expect(run(current, transitionEvidence).errors.join('\n')).toContain('first authoritative receipt');
   });
 
+  it('rejects correction after a source-suffixed canonical reviewer capture', () => {
+    const fixture = correction('T3', 'T2', {
+      captures: [{ captureName: 'pass-02-architectural-review-01.capture.txt', captureText: 'issue_revision: r01\nNO_FINDINGS' }],
+    });
+    expect(run(fixture.current, fixture.transitionEvidence).errors.join('\n')).toContain('already closed');
+  });
+
   it('rejects correction after a selected canonical reviewer capture', () => {
     const fixture = correction('T3', 'T2', {
       captures: [{ captureName: 'pass-01-competitive.capture.txt', captureText: 'issue_revision: r01\nNO_FINDINGS' }],
@@ -323,7 +330,6 @@ describe('Issue #1142 free pre-capture adjacent correction', () => {
       const issueReviewDir = join(stateRoot, '.review', '1142');
       mkdirSync(issueReviewDir, { recursive: true });
       writeFileSync(join(issueReviewDir, 'tier-intake.json'), JSON.stringify({ schema: 'tier-intake/v1', producer: 'cursor-flow-manager', taskIdentity: '1142', kind: 'fresh', priorTier: 'T3', firstRevision: 'r01' }));
-      writeFileSync(join(issueReviewDir, 'pass-01-competitive.capture.txt'), 'issue_revision: r01\nNO_FINDINGS');
 
       const replayFirst = draft('T3', 'T3', { behavior: 'action-producing' });
       const replayCurrent = draft('T2', 'T3', { behavior: 'action-producing' });
@@ -331,6 +337,7 @@ describe('Issue #1142 free pre-capture adjacent correction', () => {
         { revision: 'r01', text: replayFirst, receipt: receipt('r01', 'T3') },
         { revision: 'r02', text: replayCurrent, receipt: receipt('r02', 'T2', { correctedFrom: 'T3', reason: 'replay attempt' }) },
       ], '1142-replay');
+      writeFileSync(join(replayWorkdir, 'docs', 'issues_drafts', '.review', '1142-replay', 'pass-02-architectural-review-01.capture.txt'), 'issue_revision: r01\nNO_FINDINGS');
 
       const stderr: string[] = [];
       const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { stderr.push(String(chunk)); return true; }) as typeof process.stderr.write);
@@ -338,6 +345,7 @@ describe('Issue #1142 free pre-capture adjacent correction', () => {
       try {
         expect(runCli(['node', 'tier-gate-guard.ts', '--text-file', replayAnchor, '--draft-path', replayAnchor])).toBe(1);
         expect(stderr.join('')).toContain('canonical Issue-number workdir history');
+        expect(stderr.join('')).toContain('already closed');
       } finally {
         stderrSpy.mockRestore();
         stdoutSpy.mockRestore();

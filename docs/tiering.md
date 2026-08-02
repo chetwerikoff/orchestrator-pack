@@ -84,8 +84,9 @@ owns the exact procedure and layout.
 
 Stage completeness and finding-ledger behavior must match the fixed topology
 below. Issue #1150 owns source-preserving cardinality inside T3 pre-terminal
-rounds; Issue #1123 owns migration of Issue-lifetime round caps from capture-file
-counting to `stageAttemptId` logical-round counting.
+rounds; Issue #1171 owns the Issue-lifetime cap: one settled `stageAttemptId` per
+required stage, canonical Issue-root receipt authority, and fail-closed
+non-reopening.
 
 Therefore:
 
@@ -94,8 +95,9 @@ Therefore:
 - one configured N-capture `stageAttemptId` is one full stage and one logical
   round, never N rounds;
 - flow-manager consolidation is forbidden;
-- live T3 final acceptance remains fail-closed until #1123 consumes this
-  contract. A self-declared receipt field cannot activate it.
+- live T3 final acceptance accepts configured plural rounds once #1171
+  validates canonical history, topology, relay, ledger, and terminal binding;
+  `triple-source/v1` alone is not a blocker.
 
 ### Per-tier pipeline (ceilings, not quotas)
 
@@ -103,7 +105,7 @@ Therefore:
 |------|-----------------|---------------|---------------|
 | **T1** | Exactly one independent browser-GPT `architectural` source → acceptance | **No** | Same source owns aggregate cut + M5 |
 | **T2** | Exactly one independent browser-GPT `architectural` source → acceptance | **No** | Same source owns aggregate cut + M5 |
-| **T3** | Configured N-source `competitive` stage → configured N-source `architectural-review` stage → pre-lens guard → one Claude `architectural-lens` (or valid waiver) → one terminal GPT `architectural` → acceptance after #1123 activation | **Yes** | Terminal GPT owns final aggregate cut + M5 |
+| **T3** | Configured N-source `competitive` stage → configured N-source `architectural-review` stage → pre-lens guard → one Claude `architectural-lens` (or valid waiver) → one terminal GPT `architectural` → acceptance after #1171 canonical round and terminal checks | **Yes** | Terminal GPT owns final aggregate cut + M5 |
 
 The canonical T3 order is:
 
@@ -332,8 +334,8 @@ Pre-lens N-source aggregation is a progression gate only:
 - **`pre-lens`** — T3 only, after configured-N `competitive` and configured-N
   `architectural-review` are settled, fully relayed, and occurrence-accounted.
 - **`final-acceptance`** — all tiers, requiring terminal GPT M5 and all applicable
-  M2/M3/relay/count evidence. T3 plural-source activation remains blocked until
-  #1123.
+  M2/M3/relay/count evidence. T3 plural-source activation is governed by #1171's
+  canonical logical-round and terminal acceptance checks.
 
 The production CLI reads `--receipt-directory`, immutable `--tier-intake`, all
 `--stage-receipt` files, optional independent `--claude-producer-evidence`, and

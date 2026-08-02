@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use for GPT-authored orchestrator-pack task specs. The GitHub Issue is the live spec. T1/T2 use one terminal GPT architectural source. T3 competitive and architectural-review use the configured independent 01..N source set in one triple-source/v1 stageAttemptId; the default N is 3. Claude and terminal architectural remain singular. Canonical receipt inventory, immutable tier-intake authority, verified relay equality, occurrence accounting, bounded zero-send retry, and the #1123 activation seam are binding.
+description: Use for GPT-authored orchestrator-pack task specs. The GitHub Issue is the live spec. T1/T2 use one terminal GPT architectural source. T3 competitive and architectural-review use the configured independent 01..N source set in one triple-source/v1 stageAttemptId; the default N is 3. Claude and terminal architectural remain singular. Canonical receipt inventory, immutable tier-intake authority, verified relay equality, occurrence accounting, bounded zero-send retry, and the #1171 Issue-lifetime activation contract is binding.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -25,7 +25,7 @@ Issue ownership retained here:
 - #1142: pre-capture adjacent tier correction and retired post-capture demotion;
 - #1150: configured plural pre-terminal source sets, episode derivation, relay,
   and occurrence accounting;
-- #1123: Issue-lifetime logical-round counting and activation of plural-source
+- #1171: Issue-lifetime logical-round counting and activation of plural-source
   final acceptance.
 
 ## Inputs and routing
@@ -164,13 +164,15 @@ competitive[01..N] → architectural-review[01..N] → architectural-lens (or va
 No `architectural-final`, post-capture tier transition, narrow demotion
 revalidation, engine substitution, or sibling consolidation exists.
 
-### #1123 activation seam
+### #1171 activation contract
 
-#1150 may produce and validate exact plural source sets at pre-lens. It must not
-enable live T3 final acceptance while Issue-lifetime guards still count capture
-files. N sibling captures in one exact `stageAttemptId` are one logical round.
-Final T3 acceptance remains fail-closed until #1123 consumes that identity and
-changes the surrounding round counters. No receipt may self-declare activation.
+#1150 produces and validates exact plural source sets. N sibling captures in one
+exact `stageAttemptId` are one logical round. Issue #1171 consumes that identity
+for one Issue-lifetime budget per required stage: the first settled attempt
+(`complete`, `partial`, `blocked`, or `incident`) consumes the slot, and a later
+distinct attempt fails closed as a reopened round. Final T3 acceptance is active
+when the canonical receipt chain, topology, relay, ledger, Claude evidence/waiver,
+terminal disposition matrix, and exact body binding are green.
 
 ## Review episode, attempts, and receipts
 
@@ -197,9 +199,11 @@ pure derivation over:
 - verified relay evidence.
 
 A caller-selected self-consistent receipt subset or later-revision re-root is not
-authority. The derivation exposes per-stage credentialing sets, complete governed
-and relayed unions, stage/episode raw counts, logical round identities, relay
-completeness, and activation state.
+authority. Every supported workdir resolves the same numeric Issue root; an
+external legacy receipt location returns `legacy_receipt_location_blocked` and is
+not copied or merged. The derivation exposes per-stage credentialing sets,
+complete governed and relayed unions, stage/episode raw counts, unique logical
+round identities, relay completeness, and activation state.
 
 ### Issue journal passage records — Issue #1152
 
@@ -428,6 +432,10 @@ For each distinct defect record:
 - defect disposition: `addressed | rejected-as-false | unresolved`;
 - remedy disposition: `accepted | replaced-by-cheaper-sufficient |
   rejected-as-overengineering`;
+- at final acceptance, `addressed`, `unresolved`, malformed, unassigned, or
+  pending terminal defects produce `blocked_terminal_findings`; all valid
+  `rejected-as-false` rows require defect-side reason/evidence and may pass only
+  with complete remedies and exact unchanged reviewed bytes;
 - occurrence-local machinery and M3 facts when applicable.
 
 The `counts` object contains exactly three non-negative integers:
@@ -436,7 +444,9 @@ The `counts` object contains exactly three non-negative integers:
 - `distinctFindingCount`;
 - `processedDistinctCount`.
 
-Any unresolved defect or byte/hash/count/mapping mismatch blocks.
+Any unresolved defect or byte/hash/count/mapping mismatch blocks. Terminal body
+acceptance compares exact UTF-8 byte length and SHA-256; it does not normalize
+Markdown, whitespace, line endings, or Unicode.
 `NO_FINDINGS` from one source never erases another source's occurrence.
 
 After each full `stageAttemptId`, not each sibling capture, the author updates one
@@ -511,8 +521,8 @@ or unresolved protected state fails closed.
 Supply the canonical receipt directory, immutable tier intake, all episode
 receipts, independent Claude evidence when applicable, and verified relay
 evidence to both guards. T1/T2 may accept when their singular topology, ledger,
-body, tier, and M5 checks are green. T3 final acceptance remains deliberately
-blocked until #1123 changes Issue-lifetime round counting.
+body, tier, and M5 checks are green. T3 final acceptance is available after Issue #1171 activates Issue-lifetime
+round counting; `triple-source/v1` alone is not a blocker.
 
 Before invoking final acceptance, follow [`docs/create-issue-draft-acceptance-artifacts.md`](../../../docs/create-issue-draft-acceptance-artifacts.md). Run its `check-artifacts` command to obtain a precise missing-input report, then run `produce-artifacts` only after all required recorded stage results and author dispositions exist. The producer computes canonical receipt identifiers and capture bytes/hashes; it does not accept caller assertions that a stage or capture exists.
 
@@ -772,7 +782,8 @@ node scripts/create-issue-final-acceptance.ts \
 - Let clean/no-findings from one source erase another source.
 - Let the flow-manager decide defects or remedies.
 - Treat a Claude receipt self-assertion or waiver as producer/M3 evidence.
-- Enable T3 final acceptance before #1123.
+- Enable T3 final acceptance without #1171's canonical receipt, topology, and
+  exact-body guards.
 - Persist a review-episode authority record.
 - Reopen tier correction after capture or create post-capture demotion machinery.
 - Add account-wide capacity caps, leases, queues, second monitors, or transport

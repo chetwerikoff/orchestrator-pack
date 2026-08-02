@@ -1,3 +1,18 @@
+## 2026-08-02 — Issue-lifetime review rounds and terminal binding (Issue #1171)
+
+Issue #1171 activates the landed #1150 plural-source topology for final T3
+acceptance. A `stageAttemptId` is one logical round; all settled outcomes consume
+the stage slot, and a later distinct attempt is rejected as a reopened round.
+All workdirs resolve the existing canonical Issue-root receipt chain. External
+legacy receipt locations return `legacy_receipt_location_blocked` without copy,
+merge, or rewrite. Terminal acceptance now requires exact UTF-8 byte length and
+SHA-256 equality with the reviewed Issue body; valid `rejected-as-false` terminal
+dispositions may pass with complete evidence, while `addressed` or `unresolved`
+terminal defects return `blocked_terminal_findings`.
+
+Operator adoption: No operator adoption required; this is tracked guard and
+policy behavior with no runtime service, store, or configuration migration.
+
 ## 2026-08-01 — Flow-manager long-running Browser-GPT child launcher (Issue #1164)
 
 **What changed.** Applicable create-issue-draft long Browser-GPT turns launch through

@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { executeFinalAcceptanceGuards, FINAL_ACCEPTANCE_CONTRACT_VERSION } from './create-issue-final-acceptance-contract.ts';
+import { runFinalAcceptance, validatePublishBodyBinding } from './create-issue-final-acceptance.ts';
 import { buildCanonicalLineage } from './create-issue-stage-record-lineage.ts';
 import {
   logicalEventsEqual,
@@ -19,6 +20,7 @@ import {
 } from './create-issue-stage-record-gh.ts';
 import {
   detectAcceptedRevisionDrift,
+  publishLogicalJournalEvent,
   publishJournalEvent,
   publishSettledStageRecord,
   retryPendingEvents,
@@ -714,6 +716,79 @@ describe('create-issue-final-acceptance contract parity', () => {
     expect(result.errors[0]).toMatch(/external PASS receipt/);
   });
 
+  it('rejects an external receipt chain before final acceptance guards run', () => {
+    const state = createMockGhState({ issue: { title: 't', body: 'issue revision r01 body', labels: [] } });
+    const transport = createMockTransport(state);
+    const workdir = makeTempDir();
+    const started = startReviewCycle(transport, {
+      repo,
+      issueNumber,
+      sourceRevision: 'r01',
+      tier: 'T1',
+      publicActor: 'cursor-flow-manager',
+      workdir,
+    });
+    const external = join(workdir, 'external');
+    mkdirSync(external, { recursive: true });
+    writeFileSync(join(external, 'tier-intake.json'), JSON.stringify({
+      schema: 'tier-intake/v1',
+      producer: 'flow-manager',
+      taskIdentity: String(issueNumber),
+      kind: 'fresh',
+      priorTier: 'T1',
+      firstRevision: 'r01',
+    }));
+    const receiptPath = join(external, 'stage-completeness-receipt-1.json');
+    writeFileSync(receiptPath, '{}');
+
+    const result = runFinalAcceptance(transport, {
+      repo,
+      issueNumber,
+      publicActor: 'cursor-flow-manager',
+      workdir,
+      issueBody: state.issue.body,
+      issueRevision: 'r01',
+      cycleId: started.cycleId!,
+      tier: 'T1',
+      reviewDir: external,
+      stageReceiptPaths: [receiptPath],
+      capturePaths: [],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.guardErrors.join('\n')).toContain('legacy_receipt_location_blocked');
+  });
+
+  it('refuses journal publication when exact body validation fails at the write boundary', () => {
+    const state = createMockGhState({ issue: { title: 't', body: 'issue revision r01 body', labels: [] } });
+    const reviewedBody = state.issue.body;
+    const logical: CycleEventLogical = {
+      schema: CYCLE_SCHEMA,
+      'event-key': 'cycle-publication-race',
+      'cycle-id': 'cycle-publication-race',
+      'predecessor-cycle-id': 'none',
+      'source-revision': 'r01',
+      tier: 'T1',
+      'public-actor': 'cursor-flow-manager',
+    };
+
+    const result = publishLogicalJournalEvent(
+      createMockTransport(state),
+      repo,
+      issueNumber,
+      makeTempDir(),
+      logical,
+      undefined,
+      () => {
+        state.issue.body += ' ';
+        return { ok: validatePublishBodyBinding(reviewedBody, state.issue.body).length === 0, diagnostics: [] };
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(state.comments).toHaveLength(0);
+  });
+
   it('runs the three acceptance guards and cycle witness validation directly', () => {
     const result = executeFinalAcceptanceGuards({
       issueBody: '```complexity-tier\ntier: T1\nadvisory-prior: T1\n```\nr01',
@@ -734,6 +809,31 @@ describe('create-issue-final-acceptance contract parity', () => {
     expect(result.errors.some((error) => error.startsWith('stage-completeness:'))).toBe(true);
     expect(result.errors.some((error) => error.startsWith('finding-ledger:'))).toBe(true);
     expect(result.errors.some((error) => error.startsWith('cycle-binding:'))).toBe(true);
+  });
+});
+
+describe('Issue #1171 exact terminal body binding', () => {
+  it('rejects exact body drift introduced between the initial read and publication', () => {
+    let issueBody = 'issue revision r01 body';
+    const reviewedBody = issueBody;
+    issueBody += ' ';
+
+    const errors = validatePublishBodyBinding(reviewedBody, issueBody);
+
+    expect(errors.join('\n')).toContain('terminal source body byteLength mismatch');
+  });
+
+  it('rejects a one-byte terminal candidate drift instead of using semantic equivalence', () => {
+    const result = executeFinalAcceptanceGuards({
+      issueBody: 'reviewed body\n',
+      currentIssueBody: 'reviewed body',
+      issueRevision: 'r01',
+      cycleId: 'cycle-1',
+      reviewDir: '/tmp/review',
+      stageReceiptPaths: [],
+      capturePaths: [],
+    });
+    expect(result.errors.join('\n')).toContain('terminal source body byteLength mismatch');
   });
 });
 

@@ -948,6 +948,50 @@ ${currentLens('S1', { contest: 'none', outcome: 'non-activate' })}`),
     });
   });
 
+describe('Issue #1171 terminal disposition matrix', () => {
+  function terminalLedger(rowValue: Row) {
+    const capture = cap('pass-03-architectural.capture.txt', 1_300, markedFinding('F1'));
+    return checkFindingLedgerGuard(capture.text, JSON.stringify({
+      version: 2,
+      counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 },
+      findings: [{ ...rowValue, occurrences: ['F1@0:1'] }],
+    }), {
+      reviewEconomics: true,
+      phase: 'final-acceptance',
+      issueRevision: 'r3',
+      stageTerminalConfirmed: true,
+      captureMetadata: [{ name: capture.name, timestampMs: capture.timestampMs }],
+    } as never);
+  }
+
+  it('accepts an exact terminal capture when every defect is validly rejected-as-false', () => {
+    const result = terminalLedger(row('F1', {
+      defectDisposition: 'rejected-as-false',
+      rejectReason: 'the report misread the existing contract',
+      remedyDisposition: 'accepted',
+    }));
+    expect(result.ok, result.errors.join('\n')).toBe(true);
+  });
+
+  it('blocks a terminal defect marked addressed instead of certifying corrected bytes', () => {
+    const result = terminalLedger(row('F1', {
+      defectDisposition: 'addressed',
+      remedyDisposition: 'accepted',
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('blocked_terminal_findings');
+  });
+
+  it('requires defect-side evidence for rejected-as-false terminal disposition', () => {
+    const result = terminalLedger(row('F1', {
+      defectDisposition: 'rejected-as-false',
+      remedyDisposition: 'accepted',
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.errors.join('\n')).toContain('rejected-as-false');
+  });
+});
+
 describe('legacy finding-ledger behavior remains default', () => {
   it('still rejects protected finding disposition rejected without #975 phase', () => {
     const result = checkFindingLedgerGuard(

@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkFindingLedgerGuard, runCli as runFindingLedgerCli } from './finding-ledger-guard.mjs';
+import { loadCanonicalReceiptInventory } from './stage-completeness-guard.ts';
 import {
   deriveReviewEpisodeState,
   parseReviewerCardinalityControl,
+  resolveCanonicalReviewDirectory,
   validateReviewEpisodeTopology,
   type CaptureIdentityV1,
   type ReviewEpisodeDerivationAuthorityV1,
@@ -134,6 +136,170 @@ describe('Issue #1150 stage authority', () => {
     expect(validateReviewEpisodeTopology(state, 'pre-lens').join('\n')).toMatch(/started before competitive credentialed/);
   });
 
+  it('does not allow a distinct attempt after a settled incomplete round', () => {
+    const first = sourceStage('competitive', 1, 3);
+    const firstInvocations = first.receipt.invocations!.map((item) => ({ ...item }));
+    firstInvocations[0] = {
+      ...firstInvocations[0]!,
+      terminalClassification: 'quota',
+      sendCount: 0,
+      retryClass: 'eligible-zero-send',
+      capture: undefined,
+    };
+    first.receipt.invocations = firstInvocations;
+    first.receipt.outcome = 'partial';
+    first.receipt.credentialingCaptures = [];
+    first.receipt.relayEligibleCaptures = first.captures.slice(1);
+    first.receipt.settlement.retryState = 'abandoned';
+
+    const second = sourceStage('competitive', 2, 3);
+    second.receipt.stageAttemptId = 'competitive-attempt-2';
+    second.captures.forEach((capture, index) => {
+      capture.captureIdentity = `competitive-attempt-2-${index + 1}`;
+    });
+    second.receipt.invocations = second.receipt.invocations!.map((item, index) => ({
+      ...item,
+      stageAttemptId: 'competitive-attempt-2',
+      invocationId: `inv-competitive-attempt-2-${item.reviewerSlot}`,
+      terminalResultIdentity: `result-competitive-attempt-2-${item.reviewerSlot}`,
+      reviewerSource: `source-competitive-attempt-2-${item.reviewerSlot}`,
+      capture: second.captures[index],
+    }));
+    const receipts = [first.receipt, second.receipt];
+    const state = deriveReviewEpisodeState(
+      receipts,
+      relay([...first.receipt.relayEligibleCaptures, ...second.captures]),
+      authority(receipts),
+    );
+
+    expect(state.errors.join('\n')).toMatch(/reopened logical round/);
+  });
+
+  it('activates configured plural-source rounds instead of rejecting triple-source policy', () => {
+    const fixture = preLens(3);
+    const state = deriveReviewEpisodeState(fixture.receipts, fixture.relay, fixture.authority);
+    expect(state.errors, state.errors.join('\n')).toEqual([]);
+    expect(state.activationReady).toBe(true);
+    expect(state.logicalRoundIds).toEqual(['competitive-attempt', 'architectural-review-attempt']);
+  });
+
+  it('binds receipt inventory to the canonical Issue root and blocks external receipts', () => {
+    const tempHome = mkdtempSync(join(tmpdir(), 'opk-canonical-review-'));
+    const previousHome = process.env.HOME;
+    try {
+      process.env.HOME = tempHome;
+      const fixture = preLens();
+      const canonical = join(tempHome, '.local', 'state', 'create-issue-draft', '.review', '1150');
+      const external = join(tempHome, 'other-workdir', '.review', 'issue-1150');
+      mkdirSync(canonical, { recursive: true });
+      mkdirSync(external, { recursive: true });
+      const intakePath = join(canonical, 'tier-intake.json');
+      writeFileSync(intakePath, JSON.stringify(fixture.authority.tierIntake));
+      fixture.receipts.forEach((item, index) => {
+        writeFileSync(join(canonical, `stage-completeness-receipt-${index + 1}.json`), JSON.stringify(item));
+      });
+
+      const loaded = loadCanonicalReceiptInventory({ tierIntakePath: intakePath, receiptDirectory: canonical });
+      expect(loaded.receipts).toHaveLength(2);
+      expect(() => loadCanonicalReceiptInventory({
+        tierIntakePath: intakePath,
+        receiptDirectory: external,
+      })).toThrow(/legacy_receipt_location_blocked/);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an external intake path even when its contents resolve to the canonical directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'opk-intake-path-'));
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    const stateRoot = join(dir, 'state');
+    const canonical = join(stateRoot, '.review', '1150');
+    const external = join(dir, 'external');
+    try {
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+      const fixture = preLens();
+      mkdirSync(canonical, { recursive: true });
+      mkdirSync(external, { recursive: true });
+      writeFileSync(join(canonical, 'tier-intake.json'), JSON.stringify(fixture.authority.tierIntake));
+      fixture.receipts.forEach((item, index) => writeFileSync(join(canonical, `stage-completeness-receipt-${index + 1}.json`), JSON.stringify(item)));
+      fixture.captures.forEach((item, index) => writeFileSync(join(external, item.name), fixture.texts[index]!));
+      writeFileSync(join(external, 'ledger.json'), JSON.stringify({ version: 2, counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 }, findings: [] }));
+      writeFileSync(join(external, 'relay.json'), JSON.stringify(fixture.relay));
+      const externalIntakePath = join(external, 'tier-intake.json');
+      writeFileSync(externalIntakePath, JSON.stringify(fixture.authority.tierIntake));
+
+      expect(runFindingLedgerCli([
+        'node', 'scripts/finding-ledger-guard.mjs',
+        '--ledger', join(external, 'ledger.json'),
+        '--captures-dir', external,
+        '--phase', 'pre-lens',
+        '--stage-terminal',
+        '--receipt-directory', canonical,
+        '--tier-intake', externalIntakePath,
+        '--verified-relay-evidence', join(external, 'relay.json'),
+      ])).toBe(1);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a valid receipt left in a finite legacy workdir layout', () => {
+    const tempHome = mkdtempSync(join(tmpdir(), 'opk-legacy-receipt-'));
+    const previousHome = process.env.HOME;
+    try {
+      process.env.HOME = tempHome;
+      const fixture = preLens();
+      const stateRoot = join(tempHome, '.local', 'state', 'create-issue-draft');
+      const canonical = join(stateRoot, '.review', '1150');
+      const legacy = join(stateRoot, '1150-replay', 'docs', 'issues_drafts', '.review', '1150-replay');
+      mkdirSync(canonical, { recursive: true });
+      mkdirSync(legacy, { recursive: true });
+      const intakePath = join(canonical, 'tier-intake.json');
+      writeFileSync(intakePath, JSON.stringify(fixture.authority.tierIntake));
+      writeFileSync(join(canonical, 'stage-completeness-receipt-1.json'), JSON.stringify(fixture.receipts[0]));
+      writeFileSync(join(legacy, 'stage-completeness-receipt-legacy.json'), JSON.stringify(fixture.receipts[0]));
+
+      expect(() => loadCanonicalReceiptInventory({
+        tierIntakePath: intakePath,
+        receiptDirectory: canonical,
+      })).toThrow(/legacy_receipt_location_blocked/);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves array-backed stage receipts as parsed values for final acceptance', () => {
+    const tempHome = mkdtempSync(join(tmpdir(), 'opk-array-receipts-'));
+    const previousHome = process.env.HOME;
+    try {
+      process.env.HOME = tempHome;
+      const fixture = preLens();
+      const canonical = join(tempHome, '.local', 'state', 'create-issue-draft', '.review', '1150');
+      mkdirSync(canonical, { recursive: true });
+      const intakePath = join(canonical, 'tier-intake.json');
+      writeFileSync(intakePath, JSON.stringify(fixture.authority.tierIntake));
+      writeFileSync(join(canonical, 'stage-completeness-receipts.json'), JSON.stringify(fixture.receipts));
+
+      const loaded = loadCanonicalReceiptInventory({ tierIntakePath: intakePath, receiptDirectory: canonical });
+      expect(loaded.receiptValues).toEqual(fixture.receipts);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it('derives the Issue number from supported replay workdir identities', () => {
+    expect(resolveCanonicalReviewDirectory({ taskIdentity: '1142-replay' }).issueNumber).toBe('1142');
+  });
+
   it('requires independent immutable Claude producer evidence', () => {
     const fixture = preLens();
     const text = 'm3-protected: id=x | revision=r09 | contest=none | outcome=non-activate\n';
@@ -178,14 +344,23 @@ describe('Issue #1150 receipt-backed ledger', () => {
 
   it('executes the documented receipt-backed CLI', () => {
     const dir = mkdtempSync(join(tmpdir(), 'opk-1150-'));
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    const stateRoot = join(dir, 'state');
+    const canonical = join(stateRoot, '.review', '1150');
     try {
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
       const fixture = preLens();
-      writeFileSync(join(dir, 'tier-intake.json'), JSON.stringify(fixture.authority.tierIntake));
-      fixture.receipts.forEach((item, index) => writeFileSync(join(dir, `stage-completeness-receipt-${index + 1}.json`), JSON.stringify(item)));
+      mkdirSync(canonical, { recursive: true });
+      writeFileSync(join(canonical, 'tier-intake.json'), JSON.stringify(fixture.authority.tierIntake));
+      fixture.receipts.forEach((item, index) => writeFileSync(join(canonical, `stage-completeness-receipt-${index + 1}.json`), JSON.stringify(item)));
       writeFileSync(join(dir, 'verified-relay-evidence.json'), JSON.stringify(fixture.relay));
       fixture.captures.forEach((item, index) => writeFileSync(join(dir, item.name), fixture.texts[index]!));
       writeFileSync(join(dir, 'ledger.json'), JSON.stringify({ version: 2, counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 }, findings: [] }));
-      expect(runFindingLedgerCli(['node', 'scripts/finding-ledger-guard.mjs', '--ledger', join(dir, 'ledger.json'), '--captures-dir', dir, '--phase', 'pre-lens', '--stage-terminal', '--receipt-directory', dir, '--tier-intake', join(dir, 'tier-intake.json'), '--verified-relay-evidence', join(dir, 'verified-relay-evidence.json')])).toBe(0);
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+      expect(runFindingLedgerCli(['node', 'scripts/finding-ledger-guard.mjs', '--ledger', join(dir, 'ledger.json'), '--captures-dir', dir, '--phase', 'pre-lens', '--stage-terminal', '--receipt-directory', canonical, '--tier-intake', join(canonical, 'tier-intake.json'), '--verified-relay-evidence', join(dir, 'verified-relay-evidence.json')])).toBe(0);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

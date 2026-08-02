@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { logicalFingerprint } from './create-issue-stage-record-marker.ts';
 import {
   clearPendingEvent,
@@ -12,8 +13,10 @@ import { appendPublishedLogicalJournalEvent } from './create-issue-stage-record-
 import {
   executeFinalAcceptanceGuards,
   FINAL_ACCEPTANCE_CONTRACT_VERSION,
+  validateExactTerminalBodyBinding,
   type FinalAcceptanceGuardInput,
 } from './create-issue-final-acceptance-contract.ts';
+import { loadCanonicalReceiptInventory } from '../stage-completeness-guard.ts';
 import type {
   CommentCensusOptions,
   CycleEventLogical,
@@ -42,6 +45,12 @@ export interface FinalAcceptanceResult {
   guardErrors: string[];
   eventKey?: string;
   projectionPendingRepair?: boolean;
+}
+
+export function validatePublishBodyBinding(reviewedBody: string, currentBody: string): string[] {
+  const errors: string[] = [];
+  validateExactTerminalBodyBinding(reviewedBody, currentBody, errors);
+  return errors;
 }
 
 export function runFinalAcceptance(
@@ -77,13 +86,67 @@ export function runFinalAcceptance(
     return { ok: false, diagnostics, guardErrors: ['issue revision does not match canonical cycle head'] };
   }
 
+  let currentIssueBody: string;
+  try {
+    currentIssueBody = fetchIssueRevision(transport, input.repo, input.issueNumber).body;
+  } catch {
+    return { ok: false, diagnostics, guardErrors: ['unable to read current Issue body for exact terminal binding'] };
+  }
+
+  let canonicalInventory: ReturnType<typeof loadCanonicalReceiptInventory>;
+  try {
+    canonicalInventory = loadCanonicalReceiptInventory({
+      tierIntakePath: input.tierIntakePath ?? join(input.reviewDir, 'tier-intake.json'),
+      receiptDirectory: input.reviewDir,
+      stageReceiptPaths: input.stageReceiptPaths,
+      claudeProducerEvidencePaths: input.claudeProducerEvidencePaths,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      diagnostics,
+      guardErrors: [error instanceof Error ? error.message : String(error)],
+    };
+  }
+
   const guard = executeFinalAcceptanceGuards({
     ...input,
+    currentIssueBody,
+    stageReceiptValues: canonicalInventory.receiptValues,
+    stageReceiptPaths: canonicalInventory.receiptPaths,
+    episodeAuthority: canonicalInventory.authority,
+    tierIntakePath: canonicalInventory.intakePath,
     cycleId: headCycle['cycle-id'],
     issueRevision: input.issueRevision,
   });
   if (!guard.ok) {
     return { ok: false, diagnostics, guardErrors: guard.errors };
+  }
+
+  let publishIssue: ReturnType<typeof fetchIssueRevision>;
+  try {
+    publishIssue = fetchIssueRevision(transport, input.repo, input.issueNumber);
+  } catch {
+    return {
+      ok: false,
+      diagnostics,
+      guardErrors: ['unable to re-read current Issue body before final event publication'],
+      eventKey: `${headCycle['cycle-id']}:final-acceptance:${headCycle['source-revision']}`,
+      projectionPendingRepair: true,
+    };
+  }
+  const publishBodyErrors = validatePublishBodyBinding(
+    input.terminalSourceBody ?? input.issueBody,
+    publishIssue.body,
+  );
+  if (publishBodyErrors.length > 0) {
+    return {
+      ok: false,
+      diagnostics,
+      guardErrors: publishBodyErrors,
+      eventKey: `${headCycle['cycle-id']}:final-acceptance:${headCycle['source-revision']}`,
+      projectionPendingRepair: true,
+    };
   }
 
   const eventKey = `${headCycle['cycle-id']}:final-acceptance:${headCycle['source-revision']}`;
@@ -98,12 +161,48 @@ export function runFinalAcceptance(
     'public-actor': input.publicActor,
   };
   const fingerprint = logicalFingerprint(logical);
-  const published = appendPublishedLogicalJournalEvent(diagnostics, transport, input.repo, input.issueNumber, workdir, logical, input.census);
+  const published = appendPublishedLogicalJournalEvent(
+    diagnostics,
+    transport,
+    input.repo,
+    input.issueNumber,
+    workdir,
+    logical,
+    input.census,
+    () => {
+      try {
+        const latest = fetchIssueRevision(transport, input.repo, input.issueNumber);
+        const errors = validatePublishBodyBinding(
+          input.terminalSourceBody ?? input.issueBody,
+          latest.body,
+        );
+        return errors.length === 0
+          ? { ok: true }
+          : {
+            ok: false,
+            diagnostics: [{
+              code: 'public-journal-gap',
+              message: errors.join('; '),
+              eventKey,
+            }],
+          };
+      } catch {
+        return {
+          ok: false,
+          diagnostics: [{
+            code: 'public-journal-gap',
+            message: 'unable to re-read current Issue body before final event publication',
+            eventKey,
+          }],
+        };
+      }
+    },
+  );
   if (!published.ok) {
     return {
       ok: false,
       diagnostics,
-      guardErrors: [],
+      guardErrors: published.diagnostics.map((item) => item.message),
       eventKey,
       projectionPendingRepair: true,
     };
