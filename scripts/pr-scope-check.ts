@@ -2,6 +2,7 @@
 
 import './toolchain/native-entrypoint-preflight.ts';
 import { readFileSync } from 'node:fs';
+import { runProcessSync } from './kernel/subprocess.ts';
 import { join } from 'node:path';
 import {
   validateDeclarationSnapshot,
@@ -15,6 +16,14 @@ import {
 import { classifyScopedPaths } from '../plugins/ao-scope-guard/lib/check.ts';
 import { pathMatchesAnyPattern } from '../plugins/ao-task-declaration/lib/glob_match.ts';
 import { partitionControlArtifacts } from '../plugins/ao-scope-guard/lib/control_artifacts.ts';
+import {
+  REPOSITORY_DENYLIST,
+  normalizeRepositoryPath,
+  pathMatchesEntries,
+  policySubset,
+  selectDeclarationArtifact,
+  type PrScopeDeclaration,
+} from './pr-scope-declaration.ts';
 import { listIssueSnapshots } from '../plugins/ao-task-declaration/lib/snapshot.ts';
 import {
   normalizeIssueConstraints,
@@ -108,6 +117,9 @@ export interface PrScopeCheckInput {
   forkPr: boolean;
   prHeadRef?: string;
   sameRepo?: boolean;
+  /** Required by the CI entrypoint; direct callers may provide prPaths for unit tests. */
+  baseSha?: string;
+  headSha?: string;
 }
 
 export type PrScopeCheckResult =
@@ -115,6 +127,7 @@ export type PrScopeCheckResult =
       ok: true;
       mode: 'implementation' | 'spec-only' | 'no-ceremony' | 'runtime-history-delivery';
       snapshot?: DeclarationSnapshot;
+      declarationPath?: string;
       issueNumber?: number;
       checkedPaths: string[];
       skippedControlArtifacts: string[];
@@ -136,7 +149,9 @@ export type PrScopeCheckResult =
         | 'issue_unreadable'
         | 'issue_parse_error'
         | 'scope_violation'
-        | 'invalid_path';
+        | 'invalid_path'
+        | 'diff-incomplete'
+        | 'declaration-selection-failed';
       message: string;
       violations?: {
         outOfScope: string[];
@@ -544,160 +559,166 @@ function checkSpecOnlyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
   };
 }
 
+function checkDeclarationPaths(
+  paths: string[],
+  declaration: PrScopeDeclaration,
+  selectedArtifactPath: string,
+): PrPathSnapshotCheckResult {
+  const outOfScope: string[] = [];
+  const denied: string[] = [];
+  const invalidPaths: Array<{ path: string; reason: string }> = [];
+  const checkedPaths: string[] = [];
+  const effectiveDenylist = [
+    ...REPOSITORY_DENYLIST,
+    ...declaration.denylist,
+  ];
+
+  for (const rawPath of paths) {
+    const normalized = normalizeRepositoryPath(rawPath);
+    if (!normalized.ok) {
+      invalidPaths.push({ path: rawPath, reason: normalized.reason });
+      continue;
+    }
+    checkedPaths.push(normalized.path);
+    // Only the selected artifact is managed by this guard. Every other file
+    // under docs/declarations is an ordinary changed path.
+    if (normalized.path === selectedArtifactPath) continue;
+
+    if (pathMatchesEntries(normalized.path, effectiveDenylist)) {
+      denied.push(normalized.path);
+      continue;
+    }
+    if (!pathMatchesEntries(normalized.path, declaration.allowed_roots)) {
+      outOfScope.push(
+        `${normalized.path} (outside allowed roots: ${declaration.allowed_roots.join(', ')})`,
+      );
+      continue;
+    }
+    if (!pathMatchesEntries(normalized.path, declaration.declared_paths)) {
+      outOfScope.push(`${normalized.path} (outside declaration)`);
+    }
+  }
+
+  if (invalidPaths.length > 0) {
+    return {
+      ok: false,
+      reason: 'invalid_path',
+      message: 'artifact-diff-mismatch: invalid changed path normalization',
+      violations: { outOfScope, denied, declarationErrors: [], invalidPaths },
+      checkedPaths,
+      skippedControlArtifacts: [selectedArtifactPath],
+    };
+  }
+  if (denied.length > 0) {
+    return {
+      ok: false,
+      reason: 'scope_violation',
+      message: `denylisted-path: ${denied.join(', ')}; exact path and denylist reason; remove or relocate`,
+      violations: { outOfScope, denied, declarationErrors: [], invalidPaths: [] },
+      checkedPaths,
+      skippedControlArtifacts: [selectedArtifactPath],
+    };
+  }
+  if (outOfScope.length > 0) {
+    const hasRoot = outOfScope.some((path) => path.includes('(outside allowed roots:'));
+    return {
+      ok: false,
+      reason: 'scope_violation',
+      message: `${hasRoot ? 'out-of-root' : 'artifact-diff-mismatch'}: ${outOfScope.join(', ')}; exact path and reason; fix artifact or diff`,
+      violations: { outOfScope, denied: [], declarationErrors: [], invalidPaths: [] },
+      checkedPaths,
+      skippedControlArtifacts: [selectedArtifactPath],
+    };
+  }
+  return {
+    ok: true,
+    checkedPaths,
+    skippedControlArtifacts: [selectedArtifactPath],
+  };
+}
+
 function checkImplementationPrScope(
   input: PrScopeCheckInput,
   issueNumber: number,
 ): PrScopeCheckResult {
-  const snapshotResult = resolveLatestCommittedSnapshot(input.repoRoot, issueNumber);
-  const warnings: string[] = [];
-  let unverifiedIssueConstraints = false;
-  let useIssueFenceScope = false;
-  let snapshot: DeclarationSnapshot | undefined;
-  let issueFenceConstraints: ReturnType<typeof normalizeIssueConstraints> | undefined;
-
-  if (snapshotResult.ok) {
-    snapshot = snapshotResult.snapshot;
-  } else if (
-    snapshotResult.reason === 'missing_snapshot' &&
-    input.issueBody !== null &&
-    !input.degradedMode
-  ) {
-    try {
-      issueFenceConstraints = normalizeIssueConstraints(parseIssueBody(input.issueBody));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        ok: false,
-        reason: 'issue_parse_error',
-        message: `failed to parse linked issue constraints: ${message}`,
-      };
-    }
-
-    if (
-      issueFenceConstraints.allowed_roots !== undefined &&
-      issueBlocksCommittedDeclarationSnapshots(issueFenceConstraints)
-    ) {
-      useIssueFenceScope = true;
-      warnings.push(
-        'issue-fence scope: linked issue denylist blocks docs/declarations/**; validating PR diff against issue allowed_roots instead of a committed snapshot',
-      );
-    } else {
-      return {
-        ok: false,
-        reason: snapshotResult.reason,
-        message: snapshotResult.message,
-      };
-    }
-  } else {
+  if (input.issueBody === null) {
     return {
       ok: false,
-      reason: snapshotResult.reason,
-      message: snapshotResult.message,
+      reason: 'issue_unreadable',
+      message: 'issue_unreadable: linked issue body could not be read; retry command',
     };
   }
 
-  if (input.issueBody === null) {
-    if (input.forkPr && !input.degradedMode) {
-      return {
-        ok: false,
-        reason: 'issue_unreadable',
-        message:
-          'fork PR: linked issue body could not be read with workflow permissions; apply label scope-guard-degraded (by a maintainer with write access) for snapshot-only validation',
-      };
-    }
-
-    if (input.forkPr && input.degradedMode) {
-      unverifiedIssueConstraints = true;
-      warnings.push(
-        'degraded mode: denylist and allowed_roots constraints were not verified against the linked issue body',
-      );
-    } else {
-      return {
-        ok: false,
-        reason: 'issue_unreadable',
-        message: 'linked issue body could not be read',
-      };
-    }
+  let issueConstraints: ReturnType<typeof normalizeIssueConstraints>;
+  try {
+    issueConstraints = normalizeIssueConstraints(parseIssueBody(input.issueBody));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      reason: 'issue_parse_error',
+      message: `issue_parse_error: failed to parse linked issue constraints: ${message}`,
+    };
   }
 
-  let issueConstraints: ReturnType<typeof normalizeIssueConstraints> | undefined;
-  if (input.issueBody !== null && !input.degradedMode) {
-    try {
-      issueConstraints =
-        issueFenceConstraints ?? normalizeIssueConstraints(parseIssueBody(input.issueBody));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        ok: false,
-        reason: 'issue_parse_error',
-        message: `failed to parse linked issue constraints: ${message}`,
-      };
-    }
-
-    if (!useIssueFenceScope) {
-      const declarationCheck = validateDeclaredScope(
-        {
-          declared_paths: snapshot!.declared_paths,
-          declared_globs: snapshot!.declared_globs,
-        },
-        issueConstraints,
-      );
-
-      if (!declarationCheck.ok) {
-        return {
-          ok: false,
-          reason: 'scope_violation',
-          message: 'committed declaration snapshot violates linked issue constraints',
-          violations: {
-            outOfScope: [],
-            denied: [],
-            declarationErrors: declarationCheck.errors,
-            invalidPaths: [],
-          },
-        };
-      }
-    }
-  } else if (input.degradedMode) {
-    unverifiedIssueConstraints = true;
-    warnings.push(
-      'degraded mode: denylist and allowed_roots constraints were not verified against the linked issue body',
-    );
+  const selected = selectDeclarationArtifact(input.repoRoot, issueNumber);
+  if (!selected.ok) {
+    return {
+      ok: false,
+      reason: 'declaration-selection-failed',
+      message: selected.message,
+      violations: {
+        outOfScope: [],
+        denied: [],
+        declarationErrors: [selected.message],
+        invalidPaths: [],
+      },
+    };
   }
 
-  const issueDenylist = issueConstraints?.denylist ?? [];
-  const pathCheck = useIssueFenceScope
-    ? (() => {
-        const { declared_paths, declared_globs } = splitIssueAllowedRootsToDeclaredScope(
-          issueFenceConstraints!.allowed_roots!,
-        );
-        return checkPrPathsAgainstDeclaredScope(input.prPaths, {
-          declaredPaths: declared_paths,
-          declaredGlobs: declared_globs,
-          denylist: issueDenylist,
-          outOfScopeMessage:
-            'PR diff includes paths outside linked issue allowed_roots constraints',
-        });
-      })()
-    : checkPrPathsAgainstSnapshot(input.prPaths, snapshot!, issueDenylist);
+  const declaration = selected.declaration;
+  if (
+    !policySubset(issueConstraints.denylist, declaration.denylist) ||
+    (issueConstraints.allowed_roots !== undefined &&
+      !policySubset(declaration.allowed_roots, issueConstraints.allowed_roots))
+  ) {
+    return {
+      ok: false,
+      reason: 'declaration-selection-failed',
+      message:
+        'policy-violation: declaration does not preserve the linked Issue denylist/root ceiling; remediation: fresh declaration',
+      violations: {
+        outOfScope: [],
+        denied: [],
+        declarationErrors: ['artifact policy is inconsistent with Issue fences'],
+        invalidPaths: [],
+      },
+    };
+  }
+
+  const pathCheck = checkDeclarationPaths(
+    input.prPaths,
+    declaration,
+    selected.path,
+  );
   if (!pathCheck.ok) {
     return {
       ok: false,
       reason: pathCheck.reason,
       message: pathCheck.message,
       violations: pathCheck.violations,
-      unverifiedIssueConstraints,
     };
   }
 
   return {
     ok: true,
     mode: 'implementation',
-    snapshot,
+    declarationPath: selected.path,
     issueNumber,
     checkedPaths: pathCheck.checkedPaths,
     skippedControlArtifacts: pathCheck.skippedControlArtifacts,
-    unverifiedIssueConstraints,
-    warnings,
+    unverifiedIssueConstraints: false,
+    warnings: [],
   };
 }
 
@@ -769,20 +790,117 @@ export function checkRuntimeHistoryDeliveryPrScope(
   };
 }
 
+function acquireRequiredDiff(input: PrScopeCheckInput):
+  | { ok: true; paths: string[] }
+  | { ok: false; message: string } {
+  const base = input.baseSha?.trim();
+  const head = input.headSha?.trim();
+  if (!base && !head) {
+    if (input.prPaths.length > 0) return { ok: true, paths: input.prPaths };
+    return {
+      ok: false,
+      message: 'diff-incomplete: merge-base and PR head are unavailable; retry command',
+    };
+  }
+  if (!base || !head) {
+    return {
+      ok: false,
+      message: 'diff-incomplete: both verified base SHA and PR head SHA are required; retry command',
+    };
+  }
+
+  const runGit = (args: string[]): string => {
+    const result = runProcessSync({
+      command: 'git',
+      args,
+      cwd: input.repoRoot,
+      inheritParentEnv: true,
+    });
+    if (!result.ok) throw new Error(result.stderr || result.error || result.outcome);
+    return result.stdout;
+  };
+  try {
+    const mergeBases = runGit(['merge-base', '--all', base, head])
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (mergeBases.length !== 1) {
+      return {
+        ok: false,
+        message: `diff-incomplete: expected one merge base for ${base} and ${head}, found ${mergeBases.length}; retry command`,
+      };
+    }
+    const mergeBase = mergeBases[0]!;
+    const ancestry = runProcessSync({
+      command: 'git',
+      args: ['merge-base', '--is-ancestor', mergeBase, head],
+      cwd: input.repoRoot,
+      inheritParentEnv: true,
+    });
+    if (!ancestry.ok) {
+      throw new Error(ancestry.stderr || ancestry.error || ancestry.outcome);
+    }
+    const output = runGit([
+      'diff',
+      '--name-status',
+      '--find-renames',
+      mergeBase,
+      head,
+    ]).trim();
+    if (!output) return { ok: true, paths: [] };
+
+    const paths: string[] = [];
+    for (const line of output.split(/\r?\n/)) {
+      const fields = line.split('\t');
+      const status = fields[0] ?? '';
+      if (/^[Rr]\d+$/.test(status)) {
+        if (fields.length !== 3) {
+          return { ok: false, message: `diff-incomplete: ambiguous rename row "${line}"; retry command` };
+        }
+        paths.push(fields[1]!, fields[2]!);
+      } else if (/^[Cc]\d+$/.test(status)) {
+        if (fields.length !== 3) {
+          return { ok: false, message: `diff-incomplete: ambiguous copy row "${line}"; retry command` };
+        }
+        paths.push(fields[2]!);
+      } else if (/^[AMD]$/.test(status)) {
+        if (fields.length !== 2 || !fields[1]) {
+          return { ok: false, message: `diff-incomplete: malformed status row "${line}"; retry command` };
+        }
+        paths.push(fields[1]);
+      } else {
+        return { ok: false, message: `diff-incomplete: unsupported status row "${line}"; retry command` };
+      }
+    }
+    return { ok: true, paths };
+  } catch (error) {
+    return {
+      ok: false,
+      message: `diff-incomplete: git diff acquisition failed: ${error instanceof Error ? error.message : String(error)}; retry command`,
+    };
+  }
+}
+
 export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
+  const diff = acquireRequiredDiff(input);
+  if (!diff.ok) {
+    return { ok: false, reason: 'diff-incomplete', message: diff.message };
+  }
+  const effectiveInput = { ...input, prPaths: diff.paths };
+
   // Path-based no-ceremony wins over the spec-only signal: a markdown-only union diff
   // must reject issue links even when the body also carries <!-- pr-type: spec-only --> and Refs #N.
-  if (isNoCeremonyPr(input.prPaths)) {
-    return checkNoCeremonyPrScope(input);
+  if (isNoCeremonyPr(effectiveInput.prPaths)) {
+    return checkNoCeremonyPrScope(effectiveInput);
   }
 
-  if (hasSpecOnlySignal(input.prBody)) {
-    return checkSpecOnlyPrScope(input);
+  if (hasSpecOnlySignal(effectiveInput.prBody)) {
+    return checkSpecOnlyPrScope(effectiveInput);
   }
 
-  const issueNumber = extractClosingIssueNumber(input.prBody);
+  const issueNumber = extractClosingIssueNumber(effectiveInput.prBody);
   if (issueNumber === null) {
-    const runtimeHistoryDeliveryResult = checkRuntimeHistoryDeliveryPrScope(input);
+    const runtimeHistoryDeliveryResult = checkRuntimeHistoryDeliveryPrScope(effectiveInput);
     if (runtimeHistoryDeliveryResult !== null) {
       return runtimeHistoryDeliveryResult;
     }
@@ -794,7 +912,7 @@ export function checkPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
     };
   }
 
-  return checkImplementationPrScope(input, issueNumber);
+  return checkImplementationPrScope(effectiveInput, issueNumber);
 }
 
 export function formatScopeCheckComment(result: PrScopeCheckResult): string {
@@ -841,11 +959,11 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
     const lines = [
       '## Scope guard — passed',
       '',
-      ...(result.snapshot
-        ? [
-            `Active snapshot: \`docs/declarations/${result.snapshot.issue_number}.${result.snapshot.iteration_id}.json\``,
-          ]
-        : ['Active snapshot: _none (issue-fence scope via allowed_roots)_']),
+      ...(result.declarationPath
+        ? [`Active declaration: \`${result.declarationPath}\``]
+        : result.snapshot
+          ? [`Active snapshot: \`docs/declarations/${result.snapshot.issue_number}.${result.snapshot.iteration_id}.json\``]
+          : ['Active declaration: _none_']),
       `Checked paths: ${result.checkedPaths.length}`,
     ];
     if (result.skippedControlArtifacts.length > 0) {
@@ -979,6 +1097,8 @@ function readJsonInput(): PrScopeCheckInput {
     forkPr: Boolean(parsed.forkPr),
     prHeadRef: typeof parsed.prHeadRef === 'string' ? parsed.prHeadRef : '',
     sameRepo: Boolean(parsed.sameRepo),
+    baseSha: typeof parsed.baseSha === 'string' ? parsed.baseSha : undefined,
+    headSha: typeof parsed.headSha === 'string' ? parsed.headSha : undefined,
   };
 }
 

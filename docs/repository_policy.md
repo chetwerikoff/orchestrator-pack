@@ -194,5 +194,7 @@ ignored). No-ceremony PRs must not reference an issue in the description.
 ### Implementation PRs (unchanged)
 
 Worker and direct-fix PRs still require `Closes #N` / `Fixes #N` /
-`Resolves #N`, a committed snapshot under `docs/declarations/<N>.*.json`, and
-validation against the issue-body fences.
+`Resolves #N`, exactly one committed AO-free artifact under
+`docs/declarations/<N>.pr-scope.json`, and validation against the issue-body
+fences. AO-era or ambiguous candidates fail closed and require a fresh
+declaration.

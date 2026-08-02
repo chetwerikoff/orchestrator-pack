@@ -142,6 +142,8 @@ jobs:
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Checkout trusted scope guard (base ref)
         uses: actions/checkout@v4
@@ -160,6 +162,8 @@ jobs:
         shell: pwsh
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_SCOPE_REPO_ROOT: ${{ github.workspace }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_HEAD_REPO_FORK: ${{ github.event.pull_request.head.repo.fork }}
@@ -177,11 +181,12 @@ jobs:
 
           $trustedRoot = Join-Path $env:GITHUB_WORKSPACE 'trusted-scope-guard'
           $trustedChecker = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
-          if (Test-Path -LiteralPath $trustedChecker) {
+          $trustedDeclarationContract = Join-Path $trustedRoot 'scripts/pr-scope-declaration.ts'
+          if ((Test-Path -LiteralPath $trustedChecker) -and (Test-Path -LiteralPath $trustedDeclarationContract)) {
             $guardScript = $trustedChecker
           }
           else {
-            Write-Warning 'scope guard bootstrap: checker not on base ref yet; using PR head scripts (one-time until merge)'
+            Write-Warning 'scope guard bootstrap: AO-free declaration contract is not on base ref yet; using PR head scripts for this migration PR'
             $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'
           }
 

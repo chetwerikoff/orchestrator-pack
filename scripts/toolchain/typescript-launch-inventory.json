@@ -87,6 +87,10 @@
       "classification": "native-node-22"
     },
     {
+      "path": "scripts/pr-scope-declaration.ts",
+      "classification": "native-node-22"
+    },
+    {
       "path": "scripts/invoke-reviewer-contract-mapping.ts",
       "classification": "native-node-22"
     },

@@ -87,8 +87,8 @@ what gets built, in what order, with what boundaries. The planner
   - config examples (`agent-orchestrator.yaml.example`);
   - GitHub workflow YAML (`.github/workflows/**`);
   - `README.md` and other docs a worker would normally author;
-  - declaration snapshots (`docs/declarations/**` — produced by
-    `ao-declare`, never hand-edited).
+  - declaration artifacts (`docs/declarations/**` — produced by the AO-free
+    `scripts/pr-scope-declaration.ts` command, never hand-edited).
   - **Enforcement:** CI runs `scripts/pr-scope-check.ps1` (PR scope guard)
     against the PR diff, declaration snapshot, and issue-body fences. Direct
     architect PRs that skip the worker flow fail here by design.
@@ -98,8 +98,8 @@ what gets built, in what order, with what boundaries. The planner
 - Write implementation code, tests, or run AO workers (except the
   declaration-only spawn path documented in `direct-fix-checklist`).
 - Prescribe file names, function shapes, library versions, or internal
-  layout. The planner's `ao-declare` declares files; you bound via
-  `denylist` + `allowed_roots`.
+  layout. The planner's AO-free `scripts/pr-scope-declaration.ts` producer
+  declares files; you bound via `denylist` + `allowed_roots`.
 - Bypass the review loop (`gh pr merge` without Codex review completing).
 - Touch `packages/core/**` or `vendor/**`.
 - Edit `agent-orchestrator.yaml` or reactions to compensate for a bad spec.

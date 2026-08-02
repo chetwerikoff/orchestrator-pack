@@ -227,48 +227,18 @@ if ($isFork -and $issueReadFailed) {
     }
 }
 
-function Get-PrChangedPaths {
-    param(
-        [string]$Repository,
-        [int]$PrNumber,
-        [string]$WorkingDirectory
-    )
-
-    $pageSize = 100
-    $maxPages = 30
-    $page = 1
-    $paths = [System.Collections.Generic.List[string]]::new()
-
-    while ($true) {
-        $endpoint = "repos/$Repository/pulls/$PrNumber/files?per_page=$pageSize&page=$page"
-        $filesRead = Invoke-GhSignalJsonCommand `
-            -Arguments @('api', $endpoint, '--jq', '[.[].filename]') `
-            -ExpectedRoot 'array' `
-            -WorkingDirectory $WorkingDirectory
-        if (-not $filesRead.ok) {
-            Write-Error "failed to enumerate PR files page $page for PR #${PrNumber}: $(Format-GhSignalFailureDetail -Result $filesRead)"
+$prPaths = @()
+if ($env:PR_BASE_SHA -and $env:PR_HEAD_SHA) {
+    try {
+        $mergeBase = (& git -C $PrRoot merge-base $env:PR_BASE_SHA $env:PR_HEAD_SHA 2>$null).Trim()
+        if ($LASTEXITCODE -eq 0 -and $mergeBase) {
+            $prPaths = @((& git -C $PrRoot diff --name-only --find-renames $mergeBase $env:PR_HEAD_SHA 2>$null) | Where-Object { $_ })
         }
-
-        $pagePaths = @($filesRead.value)
-        foreach ($filenameValue in $pagePaths) {
-            $filename = [string]$filenameValue
-            if ([string]::IsNullOrWhiteSpace($filename)) {
-                Write-Error "PR files response contained an entry without filename for PR #$PrNumber on page $page"
-            }
-            $paths.Add($filename)
-        }
-
-        if ($pagePaths.Count -lt $pageSize) { break }
-        if ($page -ge $maxPages) {
-            Write-Error "PR files response reached the 3000-file API ceiling for PR #$PrNumber; refusing a possibly truncated scope"
-        }
-        $page += 1
     }
-
-    return @($paths)
+    catch {
+        $prPaths = @()
+    }
 }
-
-$prPaths = @(Get-PrChangedPaths -Repository $repository -PrNumber $prNumber -WorkingDirectory $TrustedRoot)
 
 $operatorAdoptionCheck = Join-Path $PSScriptRoot 'check-operator-adoption-example.ps1'
 if (Test-Path -LiteralPath $operatorAdoptionCheck -PathType Leaf) {
@@ -289,7 +259,10 @@ $input = @{
     repoRoot     = $PrRoot
     prBody       = $prBody
     issueBody    = if ($issueReadFailed) { $null } else { $issueBody }
+    # TypeScript acquires the authoritative verified merge-base diff.
     prPaths      = $prPaths
+    baseSha      = [string]($env:PR_BASE_SHA ?? '')
+    headSha      = [string]($env:PR_HEAD_SHA ?? '')
     degradedMode = $degradedMode
     forkPr       = $isFork
     prHeadRef    = $prHeadRef
