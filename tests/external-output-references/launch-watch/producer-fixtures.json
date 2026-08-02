@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "issue": 1198,
+  "captures": [
+    {
+      "id": "github-pr-merged",
+      "sourceCommand": "scripts/gh pr view 42 --repo owner/repo --json state,mergedAt",
+      "response": {
+        "state": "MERGED",
+        "mergedAt": "2026-08-02T00:00:00Z"
+      }
+    },
+    {
+      "id": "github-pr-open",
+      "sourceCommand": "scripts/gh pr view 42 --repo owner/repo --json state,mergedAt",
+      "response": {
+        "state": "OPEN",
+        "mergedAt": null
+      }
+    },
+    {
+      "id": "orca-terminal-read-empty",
+      "sourceCommand": "orca terminal read --terminal owned-handle --json",
+      "response": {
+        "ok": true,
+        "result": {
+          "lines": [],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "id": "orca-terminal-create",
+      "sourceCommand": "orca terminal create --worktree active --command cursor-agent --json",
+      "response": {
+        "ok": true,
+        "result": {
+          "terminal": {
+            "handle": "owned-handle",
+            "worktreeId": "worktree-id"
+          }
+        }
+      }
+    }
+  ]
+}

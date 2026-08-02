@@ -1,0 +1,118 @@
+import { describe, expect, it } from 'vitest';
+import { executeWatchRequest } from './watch.ts';
+import type { WatchRequest } from '../lib/launch-watch/contract.ts';
+
+type FakeResult = {
+  readonly outcome: 'exit';
+  readonly ok: boolean;
+  readonly exitCode: number | null;
+  readonly signal: null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly timedOut: boolean;
+  readonly cancelled: boolean;
+};
+
+function result(stdout: string, ok = true): FakeResult {
+  return { outcome: 'exit', ok, exitCode: ok ? 0 : 1, signal: null, stdout, stderr: '', timedOut: false, cancelled: false };
+}
+
+describe('watch wrapper producers', () => {
+  it('uses the requested repository and PR number and returns matched', async () => {
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    const request: WatchRequest = {
+      requestVersion: 'watch-request/v1', sourceId: 'github.pull-request', predicateId: 'pr.merged',
+      repo: 'other/repo', prNumber: 42, deadlineMs: 10_000,
+    };
+    const output = await executeWatchRequest(request, {
+      root: '/pack',
+      now: (() => {
+        let time = 0;
+        return () => time;
+      })(),
+      run: async (command, args) => {
+        calls.push({ command, args });
+        return result('{"state":"MERGED","mergedAt":"2026-08-02T00:00:00Z"}');
+      },
+    });
+    expect(output.outcome).toBe('matched');
+    expect(calls[0]).toEqual({
+      command: '/pack/scripts/gh',
+      args: ['pr', 'view', '42', '--repo', 'other/repo', '--json', 'state,mergedAt'],
+    });
+  });
+
+  it('returns predicate-failed for a closed but unmerged PR', async () => {
+    const request: WatchRequest = {
+      requestVersion: 'watch-request/v1', sourceId: 'github.pull-request', predicateId: 'pr.merged',
+      repo: 'owner/repo', prNumber: 5, deadlineMs: 10_000,
+    };
+    const output = await executeWatchRequest(request, {
+      now: () => 0,
+      run: async () => result('{"state":"CLOSED","mergedAt":null}'),
+    });
+    expect(output).toMatchObject({ outcome: 'predicate-failed', reasonCode: 'github_pr_not_merged', sourceId: 'github.pull-request' });
+  });
+
+  it('preserves explicit missing GitHub fields', async () => {
+    const request: WatchRequest = {
+      requestVersion: 'watch-request/v1', sourceId: 'github.pull-request', predicateId: 'pr.merged',
+      repo: 'owner/repo', prNumber: 5, deadlineMs: 10_000,
+    };
+    const missingState = await executeWatchRequest(request, {
+      now: () => 0,
+      run: async () => result('{"mergedAt":null}'),
+    });
+    const missingMergedAt = await executeWatchRequest(request, {
+      now: () => 0,
+      run: async () => result('{"state":"OPEN"}'),
+    });
+    expect(missingState.primaryReasonCode).toBe('github_missing_state');
+    expect(missingMergedAt.primaryReasonCode).toBe('github_missing_mergedAt');
+  });
+
+  it('accepts an empty terminal read and treats ok:false as source unavailable', async () => {
+    const request: WatchRequest = {
+      requestVersion: 'watch-request/v1', sourceId: 'orca.terminal', predicateId: 'terminal.read',
+      terminalHandle: 'h', deadlineMs: 10_000,
+    };
+    const matched = await executeWatchRequest(request, {
+      now: () => 0,
+      run: async () => result('{"ok":true,"result":{"lines":[],"nextCursor":null}}'),
+    });
+    expect(matched.outcome).toBe('matched');
+    const unavailable = await executeWatchRequest(request, {
+      now: () => 0,
+      run: async () => result('{"ok":false,"error":{"opaque":"keep"}}', false),
+    });
+    expect(unavailable).toMatchObject({
+      outcome: 'partial-cleanup',
+      primaryOutcome: 'source-unavailable',
+      reasonCode: 'orca_read_ok_false',
+      cleanup: { cleanupOutcome: 'completed', cleanupErrorCode: null },
+    });
+    expect(unavailable.evidence).toHaveProperty('response.error');
+  });
+
+  it('bounds and records cleanup for failed watch helpers', async () => {
+    const request: WatchRequest = {
+      requestVersion: 'watch-request/v1', sourceId: 'orca.terminal', predicateId: 'terminal.read',
+      terminalHandle: 'h', deadlineMs: 10_000,
+    };
+    let timeoutMs = 0;
+    const failed = await executeWatchRequest(request, {
+      now: () => 0,
+      run: async () => result('{"ok":false}'),
+      cleanupHelpers: async (options) => {
+        timeoutMs = options.timeoutMs;
+        return { completed: false, evidence: { processOutcome: 'timeout' } };
+      },
+    });
+    expect(timeoutMs).toBe(5_000);
+    expect(failed).toMatchObject({
+      outcome: 'cleanup-failed',
+      primaryOutcome: 'source-unavailable',
+      cleanup: { cleanupOutcome: 'failed', cleanupErrorCode: 'cleanup_timeout' },
+    });
+  });
+});
