@@ -1,7 +1,7 @@
 {
   "issue": 556,
   "source": "ci-measured",
-  "dataChangedAt": "2026-08-02T11:41:35.897Z",
+  "dataChangedAt": "2026-08-02T14:02:47.723Z",
   "smoothingRule": "median-of-last-5-samples",
   "files": {
     "plugins/_shared/tests/declaration_schema.test.ts": 45000,
@@ -198,6 +198,7 @@
     "scripts/pr2-foundation/foundation.test.ts": 55,
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": 43865,
     "scripts/lib/create-issue-stage-record.test.ts": 22,
+    "scripts/pr-scope-declaration.test.ts": 35,
     "scripts/lib/create-issue-stage-record-artifacts.test.ts": 62,
     "scripts/toolchain/create-issue-final-acceptance.test.ts": 6
   },
@@ -396,8 +397,12 @@
     "scripts/pr2-foundation/foundation.test.ts": "measured",
     "scripts/estate-cut/task-311-tests/task-311-assembly.test.ts": "measured",
     "scripts/lib/create-issue-stage-record.test.ts": "measured",
+    "scripts/pr-scope-declaration.test.ts": "measured",
     "scripts/lib/create-issue-stage-record-artifacts.test.ts": "measured",
     "scripts/toolchain/create-issue-final-acceptance.test.ts": "measured"
+  },
+  "contentSha": {
+    "scripts/pr-scope-declaration.test.ts": "f372bfb5f8d01b4509b0a3ef39a3b899707d969c6b5b49c6ba76741a538db35a"
   },
   "recentSamples": {
     "scripts/contract-evidence-legacy-list-guard.test.ts": [
@@ -578,6 +583,9 @@
     "scripts/lib/create-issue-stage-record.test.ts": [
       22
     ],
+    "scripts/pr-scope-declaration.test.ts": [
+      35
+    ],
     "scripts/lib/create-issue-stage-record-artifacts.test.ts": [
       36,
       88
@@ -613,6 +621,7 @@
     "scripts/worker-message-submit-reconcile.test.ts": "2026-08-02T11:41:35.897Z",
     "scripts/review-cycle-cap.test.ts": "2026-08-02T11:41:35.897Z",
     "scripts/lib/create-issue-stage-record.test.ts": "2026-08-01T16:58:55.741Z",
+    "scripts/pr-scope-declaration.test.ts": "2026-08-02T14:02:47.723Z",
     "scripts/lib/create-issue-stage-record-artifacts.test.ts": "2026-08-02T11:41:35.897Z",
     "scripts/toolchain/create-issue-final-acceptance.test.ts": "2026-08-02T11:02:18.128Z"
   }
