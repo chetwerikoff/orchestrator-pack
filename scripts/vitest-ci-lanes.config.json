@@ -119,7 +119,6 @@
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light",
     "scripts/flow-manager-long-running-child.test.ts": "light",
     "scripts/flow-manager-authority-contract.test.ts": "light",
-    "scripts/ci-preflight/contract.test.ts": "light",
     "scripts/create-issue-parked-migration.test.ts": "light",
     "scripts/lib/create-issue-comment-census.test.ts": "light",
     "scripts/lib/create-issue-completed-result.test.ts": "light",
