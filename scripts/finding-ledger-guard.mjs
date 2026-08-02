@@ -518,6 +518,9 @@ function canonicalReceiptInputs(args) {
   if (!intakePath) throw new Error('--tier-intake is required');
   const intake = readJson(intakePath);
   const canonical = resolveCanonicalReviewDirectory(intake);
+  if (resolve(intakePath) !== canonical.intakePath) {
+    throw new Error(`legacy_receipt_location_blocked: tier intake authority must be ${canonical.intakePath}`);
+  }
   const requestedDirectory = readArg(args, '--receipt-directory')
     ? resolve(readArg(args, '--receipt-directory'))
     : explicit[0]

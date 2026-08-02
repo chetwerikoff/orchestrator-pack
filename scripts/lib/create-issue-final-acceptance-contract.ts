@@ -26,6 +26,7 @@ export interface FinalAcceptanceGuardInput {
   tier?: string;
   reviewDir: string;
   stageReceiptPaths: string[];
+  stageReceiptValues?: readonly unknown[];
   capturePaths: string[];
   ledgerPath?: string;
   relayEvidencePaths?: string[];
@@ -147,10 +148,12 @@ export function executeFinalAcceptanceGuards(
   });
   if (!tierResult.ok) errors.push(...tierResult.errors.map((item) => `tier-gate: ${item}`));
 
-  const stageReceipts = input.stageReceiptPaths.flatMap((path) => {
-    const value = readJsonSafely(path, readJson, errors, 'stage-completeness');
-    return value === null ? [] : [value];
-  });
+  const stageReceipts = input.stageReceiptValues
+    ? [...input.stageReceiptValues]
+    : input.stageReceiptPaths.flatMap((path) => {
+      const value = readJsonSafely(path, readJson, errors, 'stage-completeness');
+      return value === null ? [] : [value];
+    });
   const consumableReceipts = stageReceipts.map((value, index) => {
     const parsed = parseConsumableStageReceipt(value);
     if (!parsed.receipt) {

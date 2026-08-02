@@ -98,8 +98,9 @@ export function appendPublishedLogicalJournalEvent(
   workdir: string,
   logical: JournalLogical,
   census?: CommentCensusOptions,
+  beforeCreate?: () => { ok: boolean; diagnostics?: LineageDiagnostic[] },
 ): OperationResult {
-  const published = publishLogicalJournalEvent(transport, repo, issueNumber, workdir, logical, census);
+  const published = publishLogicalJournalEvent(transport, repo, issueNumber, workdir, logical, census, beforeCreate);
   diagnostics.push(...published.diagnostics);
   return published;
 }
@@ -111,6 +112,7 @@ export function publishLogicalJournalEvent(
   workdir: string,
   logical: JournalLogical,
   census?: CommentCensusOptions,
+  beforeCreate?: () => { ok: boolean; diagnostics?: LineageDiagnostic[] },
 ): OperationResult {
   const body = serializeCommentBody(logical);
   const fingerprint = logicalFingerprint(logical);
@@ -124,6 +126,7 @@ export function publishLogicalJournalEvent(
     logical['event-key'],
     fingerprint,
     census,
+    beforeCreate,
   );
 }
 
@@ -176,6 +179,7 @@ export function publishJournalEvent(
   eventKey: string,
   fingerprint: string,
   census?: CommentCensusOptions,
+  beforeCreate?: () => { ok: boolean; diagnostics?: LineageDiagnostic[] },
 ): OperationResult {
   const diagnostics: LineageDiagnostic[] = [];
   const censusState = loadIssueJournalCensus(transport, repo, issueNumber, census);
@@ -199,6 +203,12 @@ export function publishJournalEvent(
       eventKey,
     });
     return { ok: false, diagnostics, eventKey };
+  }
+
+  if (beforeCreate) {
+    const check = beforeCreate();
+    diagnostics.push(...(check.diagnostics ?? []));
+    if (!check.ok) return { ok: false, diagnostics, eventKey, projectionPendingRepair: true };
   }
 
   writePendingEvent(workdir, {

@@ -212,6 +212,63 @@ describe('Issue #1150 stage authority', () => {
     }
   });
 
+  it('rejects an external intake path even when its contents resolve to the canonical directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'opk-intake-path-'));
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    const stateRoot = join(dir, 'state');
+    const canonical = join(stateRoot, '.review', '1150');
+    const external = join(dir, 'external');
+    try {
+      process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = stateRoot;
+      const fixture = preLens();
+      mkdirSync(canonical, { recursive: true });
+      mkdirSync(external, { recursive: true });
+      writeFileSync(join(canonical, 'tier-intake.json'), JSON.stringify(fixture.authority.tierIntake));
+      fixture.receipts.forEach((item, index) => writeFileSync(join(canonical, `stage-completeness-receipt-${index + 1}.json`), JSON.stringify(item)));
+      fixture.captures.forEach((item, index) => writeFileSync(join(external, item.name), fixture.texts[index]!));
+      writeFileSync(join(external, 'ledger.json'), JSON.stringify({ version: 2, counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 }, findings: [] }));
+      writeFileSync(join(external, 'relay.json'), JSON.stringify(fixture.relay));
+      const externalIntakePath = join(external, 'tier-intake.json');
+      writeFileSync(externalIntakePath, JSON.stringify(fixture.authority.tierIntake));
+
+      expect(runFindingLedgerCli([
+        'node', 'scripts/finding-ledger-guard.mjs',
+        '--ledger', join(external, 'ledger.json'),
+        '--captures-dir', external,
+        '--phase', 'pre-lens',
+        '--stage-terminal',
+        '--receipt-directory', canonical,
+        '--tier-intake', externalIntakePath,
+        '--verified-relay-evidence', join(external, 'relay.json'),
+      ])).toBe(1);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves array-backed stage receipts as parsed values for final acceptance', () => {
+    const tempHome = mkdtempSync(join(tmpdir(), 'opk-array-receipts-'));
+    const previousHome = process.env.HOME;
+    try {
+      process.env.HOME = tempHome;
+      const fixture = preLens();
+      const canonical = join(tempHome, '.local', 'state', 'create-issue-draft', '.review', '1150');
+      mkdirSync(canonical, { recursive: true });
+      const intakePath = join(canonical, 'tier-intake.json');
+      writeFileSync(intakePath, JSON.stringify(fixture.authority.tierIntake));
+      writeFileSync(join(canonical, 'stage-completeness-receipts.json'), JSON.stringify(fixture.receipts));
+
+      const loaded = loadCanonicalReceiptInventory({ tierIntakePath: intakePath, receiptDirectory: canonical });
+      expect(loaded.receiptValues).toEqual(fixture.receipts);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
   it('derives the Issue number from supported replay workdir identities', () => {
     expect(resolveCanonicalReviewDirectory({ taskIdentity: '1142-replay' }).issueNumber).toBe('1142');
   });

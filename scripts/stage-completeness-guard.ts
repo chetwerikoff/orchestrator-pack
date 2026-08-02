@@ -46,6 +46,7 @@ function isStageReceipt(value: unknown): value is StageCompletenessReceiptV1 {
 
 export function loadCanonicalReceiptInventory(opts: CanonicalReceiptInventoryOptions): {
   receipts: StageCompletenessReceiptV1[];
+  receiptValues: StageCompletenessReceiptV1[];
   receiptPaths: string[];
   intakePath: string;
   authority: ReviewEpisodeDerivationAuthorityV1;
@@ -96,6 +97,7 @@ export function loadCanonicalReceiptInventory(opts: CanonicalReceiptInventoryOpt
   const evidence = (opts.claudeProducerEvidencePaths ?? []).flatMap((path) => asObjects(readJson(path)));
   return {
     receipts,
+    receiptValues: receipts,
     receiptPaths,
     intakePath: canonical.intakePath,
     authority: {

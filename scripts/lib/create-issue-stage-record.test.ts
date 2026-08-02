@@ -19,6 +19,7 @@ import {
 } from './create-issue-stage-record-gh.ts';
 import {
   detectAcceptedRevisionDrift,
+  publishLogicalJournalEvent,
   publishSettledStageRecord,
   retryPendingEvents,
   startReviewCycle,
@@ -534,6 +535,36 @@ describe('create-issue-final-acceptance contract parity', () => {
 
     expect(result.ok).toBe(false);
     expect(result.guardErrors.join('\n')).toContain('legacy_receipt_location_blocked');
+  });
+
+  it('refuses journal publication when exact body validation fails at the write boundary', () => {
+    const state = createMockGhState({ issue: { title: 't', body: 'issue revision r01 body', labels: [] } });
+    const reviewedBody = state.issue.body;
+    const logical: CycleEventLogical = {
+      schema: CYCLE_SCHEMA,
+      'event-key': 'cycle-publication-race',
+      'cycle-id': 'cycle-publication-race',
+      'predecessor-cycle-id': 'none',
+      'source-revision': 'r01',
+      tier: 'T1',
+      'public-actor': 'cursor-flow-manager',
+    };
+
+    const result = publishLogicalJournalEvent(
+      createMockTransport(state),
+      repo,
+      issueNumber,
+      makeTempDir(),
+      logical,
+      undefined,
+      () => {
+        state.issue.body += ' ';
+        return { ok: validatePublishBodyBinding(reviewedBody, state.issue.body).length === 0, diagnostics: [] };
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(state.comments).toHaveLength(0);
   });
 
   it('runs the three acceptance guards and cycle witness validation directly', () => {

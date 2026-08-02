@@ -112,6 +112,7 @@ export function runFinalAcceptance(
   const guard = executeFinalAcceptanceGuards({
     ...input,
     currentIssueBody,
+    stageReceiptValues: canonicalInventory.receiptValues,
     stageReceiptPaths: canonicalInventory.receiptPaths,
     episodeAuthority: canonicalInventory.authority,
     tierIntakePath: canonicalInventory.intakePath,
@@ -160,12 +161,48 @@ export function runFinalAcceptance(
     'public-actor': input.publicActor,
   };
   const fingerprint = logicalFingerprint(logical);
-  const published = appendPublishedLogicalJournalEvent(diagnostics, transport, input.repo, input.issueNumber, workdir, logical, input.census);
+  const published = appendPublishedLogicalJournalEvent(
+    diagnostics,
+    transport,
+    input.repo,
+    input.issueNumber,
+    workdir,
+    logical,
+    input.census,
+    () => {
+      try {
+        const latest = fetchIssueRevision(transport, input.repo, input.issueNumber);
+        const errors = validatePublishBodyBinding(
+          input.terminalSourceBody ?? input.issueBody,
+          latest.body,
+        );
+        return errors.length === 0
+          ? { ok: true }
+          : {
+            ok: false,
+            diagnostics: [{
+              code: 'public-journal-gap',
+              message: errors.join('; '),
+              eventKey,
+            }],
+          };
+      } catch {
+        return {
+          ok: false,
+          diagnostics: [{
+            code: 'public-journal-gap',
+            message: 'unable to re-read current Issue body before final event publication',
+            eventKey,
+          }],
+        };
+      }
+    },
+  );
   if (!published.ok) {
     return {
       ok: false,
       diagnostics,
-      guardErrors: [],
+      guardErrors: published.diagnostics.map((item) => item.message),
       eventKey,
       projectionPendingRepair: true,
     };
