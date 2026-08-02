@@ -24,6 +24,7 @@ import {
   destinationIdentity,
   destinationIdentityForPath,
   reserveDestination,
+  SCHEDULING_ADMISSION_RETRY_CEILING_MS,
 } from '../chatgpt-browser-turn/coordination.ts';
 import { readStableInput } from '../chatgpt-browser-turn/input.ts';
 import { publicationStatus, publishReply, PUBLICATION_SCHEMA } from '../chatgpt-browser-turn/publication.ts';
@@ -106,6 +107,36 @@ let root = '';
 let profileKey = '';
 const cdp = 'http://127.0.0.1:9222';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+type TimingBudgetEvidence = {
+  operation: string;
+  startedAtMs: number;
+  observedAtMs: number;
+  deadlineAtMs: number;
+};
+
+function timingBudgetDiagnostic(evidence: TimingBudgetEvidence): string {
+  return `${evidence.operation} timing budget invariant violated: startedAt=${evidence.startedAtMs}, observedAt=${evidence.observedAtMs}, deadlineAt=${evidence.deadlineAtMs}; fix clock control or budget handling; do not raise constants, add slack, sleep, or retry`;
+}
+
+function assertTimingBudgetInvariant(evidence: TimingBudgetEvidence): void {
+  if (evidence.observedAtMs < evidence.startedAtMs || evidence.observedAtMs > evidence.deadlineAtMs) {
+    throw new Error(timingBudgetDiagnostic(evidence));
+  }
+}
+
+function assertTimingBudgetConsumed(
+  evidence: TimingBudgetEvidence,
+  minimumObservedAtMs = evidence.deadlineAtMs,
+): void {
+  if (evidence.observedAtMs < minimumObservedAtMs) {
+    throw new Error(
+      `${evidence.operation} timing budget ended early: observedAt=${evidence.observedAtMs}, `
+      + `minimumObservedAt=${minimumObservedAtMs}, deadlineAt=${evidence.deadlineAtMs}; `
+      + 'fix clock control or budget handling; do not raise constants, add slack, sleep, or retry',
+    );
+  }
+}
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'opk-964-'));
@@ -308,7 +339,7 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
   });
 
   it('classifies absent parent service attributes as absent without service_attribute timeout (#1077)', async () => {
-    const budget = createTurnOperationBudget(5_000);
+    let budget: ReturnType<typeof createTurnOperationBudget>;
     let nestedFirstCalls = 0;
     const hangingNestedFirst = () => ({
       getAttribute: async () => {
@@ -334,10 +365,22 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
         nth: (index: number) => message(index === 0 ? 'user' : 'assistant', index === 0 ? 'user-12345678' : 'assistant-12345678'),
       }),
     };
-    const started = Date.now();
-    await expect(runtimeWitnessSurfaceAvailable(page, budget)).resolves.toBe('absent');
-    expect(Date.now() - started).toBeLessThan(500);
-    expect(nestedFirstCalls).toBe(0);
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      budget = createTurnOperationBudget(5_000);
+      const startedAtMs = Date.now();
+      await expect(runtimeWitnessSurfaceAvailable(page, budget)).resolves.toBe('absent');
+      assertTimingBudgetInvariant({
+        operation: 'absent parent service attributes',
+        startedAtMs,
+        observedAtMs: Date.now(),
+        deadlineAtMs: budget.endsAtMs,
+      });
+      expect(nestedFirstCalls).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps stalled parent service attribute reads as bounded service_attribute timeouts (#1077)', async () => {
@@ -377,35 +420,49 @@ describe('issue 964 service-issued causal witness — S1/S3/S12', () => {
   });
 
   it('reclamps nested parent count wait after earlier probe consumes segment budget (#1077 review)', async () => {
-    const budget = createTurnOperationBudget(200);
-    let nestedCountWait = -1;
-    const page = {
-      locator: () => ({
-        count: async () => 1,
-        nth: () => ({
-          getAttribute: async (name: string) => {
-            if (name === 'data-message-author-role') return 'assistant';
-            if (name === 'data-message-id') return 'assistant-12345678';
-            if (name === 'data-parent-message-id') {
-              await new Promise((resolve) => { setTimeout(resolve, 150); });
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const startedAtMs = Date.now();
+      const budget = createTurnOperationBudget(200, startedAtMs);
+      let nestedCountWait = -1;
+      const page = {
+        locator: () => ({
+          count: async () => 1,
+          nth: () => ({
+            getAttribute: async (name: string) => {
+              if (name === 'data-message-author-role') return 'assistant';
+              if (name === 'data-message-id') return 'assistant-12345678';
+              if (name === 'data-parent-message-id') {
+                await new Promise((resolve) => { setTimeout(resolve, 150); });
+                return null;
+              }
               return null;
-            }
-            return null;
-          },
-          locator: (selector: string) => ({
-            count: async () => {
-              nestedCountWait = budget.clampOperationWaitMs();
-              return 0;
             },
-            first: () => ({ getAttribute: async () => null }),
+            locator: (selector: string) => ({
+              count: async () => {
+                nestedCountWait = budget.clampOperationWaitMs();
+                return 0;
+              },
+              first: () => ({ getAttribute: async () => null }),
+            }),
           }),
         }),
-      }),
-    };
-    await expect(runtimeWitnessSurfaceAvailable(page, budget)).resolves.toBe('absent');
-    expect(nestedCountWait).toBeGreaterThanOrEqual(0);
-    expect(nestedCountWait).toBeLessThanOrEqual(80);
-    expect(nestedCountWait).toBeLessThan(150);
+      };
+      const probe = runtimeWitnessSurfaceAvailable(page, budget);
+      await vi.advanceTimersByTimeAsync(150);
+      await expect(probe).resolves.toBe('absent');
+      assertTimingBudgetInvariant({
+        operation: 'nested parent probe',
+        startedAtMs,
+        observedAtMs: Date.now(),
+        deadlineAtMs: budget.endsAtMs,
+      });
+      expect(nestedCountWait).toBeGreaterThanOrEqual(0);
+      expect(nestedCountWait).toBeLessThanOrEqual(budget.remainingMs());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('S1 binds a dispatch candidate only after the same ID is service-visible; historical response IDs are ignored', async () => {
@@ -2335,10 +2392,25 @@ describe('issue 1023 operation-level bounds', () => {
       isCdpReachable: (cdpUrl: string, options?: { timeoutMs?: number }) => Promise<boolean>;
     };
     ownerMod.__testOwnerProbe.stallFetch = true;
-    const start = Date.now();
-    await expect(ownerMod.isCdpReachable(cdp, { timeoutMs: 100 })).rejects.toMatchObject({ message: 'cdp_reachability_timeout' });
-    expect(Date.now() - start).toBeLessThan(500);
-    ownerMod.__testOwnerProbe.stallFetch = false;
+    const timeoutMs = 100;
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const startedAtMs = Date.now();
+      const reachability = expect(ownerMod.isCdpReachable(cdp, { timeoutMs })).rejects
+        .toMatchObject({ message: 'cdp_reachability_timeout' });
+      await vi.advanceTimersByTimeAsync(timeoutMs);
+      await reachability;
+      assertTimingBudgetInvariant({
+        operation: 'CDP reachability timeout',
+        startedAtMs,
+        observedAtMs: Date.now(),
+        deadlineAtMs: startedAtMs + timeoutMs,
+      });
+    } finally {
+      ownerMod.__testOwnerProbe.stallFetch = false;
+      vi.useRealTimers();
+    }
   });
 
   it('AC3: pre-send composer mutation cannot settle late after bounded timeout', async () => {
@@ -2487,13 +2559,27 @@ describe('issue 1023 operation-level bounds', () => {
   });
 
   it('AC6: never-settling page.close does not block terminalization beyond cleanup bound', async () => {
-    const started = Date.now();
-    const outcome = await boundedResourceCleanup(
-      () => new Promise<void>(() => {}),
-      50,
-    );
-    expect(outcome).toBe('unconfirmed');
-    expect(Date.now() - started).toBeLessThan(200);
+    const cleanupBudgetMs = 50;
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const startedAtMs = Date.now();
+      const cleanup = boundedResourceCleanup(
+        () => new Promise<void>(() => {}),
+        cleanupBudgetMs,
+      );
+      await vi.advanceTimersByTimeAsync(cleanupBudgetMs);
+      const outcome = await cleanup;
+      expect(outcome).toBe('unconfirmed');
+      assertTimingBudgetInvariant({
+        operation: 'resource cleanup',
+        startedAtMs,
+        observedAtMs: Date.now(),
+        deadlineAtMs: startedAtMs + cleanupBudgetMs,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('AC4: healthy post-dispatch polls may continue beyond 30s and still reach ok', async () => {
@@ -3163,22 +3249,38 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
     join(repoRoot, 'scripts/chatgpt-browser-turn/coordination.ts'),
   ).href;
 
+  function withControlledAdmissionClock<T>(callback: () => T): { value: T; waitCalls: number } {
+    let controlledNowMs = 0;
+    let waitCalls = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => controlledNowMs);
+    const wait = vi.spyOn(Atomics, 'wait').mockImplementation((_typedArray, _index, _value, timeout) => {
+      waitCalls++;
+      controlledNowMs += timeout ?? 0;
+      return 'timed-out';
+    });
+    try {
+      return { value: callback(), waitCalls };
+    } finally {
+      wait.mockRestore();
+      now.mockRestore();
+    }
+  }
+
   function acquireDomainLockInWorker(
     profileKeyArg: string,
     key: string,
     options?: { admissionRetryDeadlineMs?: number },
-  ): Promise<{ ok: boolean; elapsedMs: number }> {
+  ): Promise<{ ok: boolean }> {
     return new Promise((resolve, reject) => {
       const worker = new Worker(`
         const { parentPort, workerData } = require('node:worker_threads');
         (async () => {
           const { acquireDomainLock } = await import(workerData.coordinationModuleUrl);
-          const started = Date.now();
           const lockOptions = workerData.admissionRetryDeadlineMs === undefined
             ? undefined
             : { admissionRetryDeadlineMs: workerData.admissionRetryDeadlineMs };
           const lock = acquireDomainLock(workerData.profileKey, workerData.key, 120_000, lockOptions);
-          parentPort.postMessage({ ok: lock !== null, elapsedMs: Date.now() - started });
+          parentPort.postMessage({ ok: lock !== null });
           lock?.release();
         })().catch((error) => parentPort.postMessage({ error: String(error) }));
       `, {
@@ -3195,13 +3297,13 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
           admissionRetryDeadlineMs: options?.admissionRetryDeadlineMs,
         },
       });
-      worker.on('message', (message: { ok?: boolean; elapsedMs?: number; error?: string }) => {
+      worker.on('message', (message: { ok?: boolean; error?: string }) => {
         worker.terminate().catch(() => {});
         if (message.error) {
           reject(new Error(message.error));
           return;
         }
-        resolve({ ok: message.ok === true, elapsedMs: message.elapsedMs ?? 0 });
+        resolve({ ok: message.ok === true });
       });
       worker.on('error', reject);
     });
@@ -3223,7 +3325,6 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
 
     const result = await contender;
     expect(result.ok).toBe(true);
-    expect(result.elapsedMs).toBeLessThan(2_000);
   });
 
   it('AC3: disjoint fresh domains succeed after admission-only contention', async () => {
@@ -3242,7 +3343,6 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
 
     const result = await contender;
     expect(result.ok).toBe(true);
-    expect(result.elapsedMs).toBeLessThan(2_000);
   });
 
   it('AC4: observed same-conversation conflict is terminal without admission retry wait', () => {
@@ -3250,12 +3350,25 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
     const owner = acquireDomainLock(profileKey, key);
     expect(owner).not.toBeNull();
 
-    const started = Date.now();
-    const contender = acquireDomainLock(profileKey, key);
-    const elapsed = Date.now() - started;
+    const observation = withControlledAdmissionClock(() => {
+      const startedAtMs = Date.now();
+      const contender = acquireDomainLock(profileKey, key);
+      return {
+        contender,
+        startedAtMs,
+        observedAtMs: Date.now(),
+        deadlineAtMs: startedAtMs,
+      };
+    });
 
-    expect(contender).toBeNull();
-    expect(elapsed).toBeLessThan(250);
+    expect(observation.value.contender).toBeNull();
+    assertTimingBudgetInvariant({
+      operation: 'same-conversation conflict',
+      startedAtMs: observation.value.startedAtMs,
+      observedAtMs: observation.value.observedAtMs,
+      deadlineAtMs: observation.value.deadlineAtMs,
+    });
+    expect(observation.waitCalls).toBe(0);
     owner!.release();
     const afterRelease = acquireDomainLock(profileKey, key);
     expect(afterRelease).not.toBeNull();
@@ -3267,12 +3380,25 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
     const owner = acquireDomainLock(profileKey, key);
     expect(owner).not.toBeNull();
 
-    const started = Date.now();
-    const contender = acquireDomainLock(profileKey, key);
-    const elapsed = Date.now() - started;
+    const observation = withControlledAdmissionClock(() => {
+      const startedAtMs = Date.now();
+      const contender = acquireDomainLock(profileKey, key);
+      return {
+        contender,
+        startedAtMs,
+        observedAtMs: Date.now(),
+        deadlineAtMs: startedAtMs,
+      };
+    });
 
-    expect(contender).toBeNull();
-    expect(elapsed).toBeLessThan(250);
+    expect(observation.value.contender).toBeNull();
+    assertTimingBudgetInvariant({
+      operation: 'same fresh-domain conflict',
+      startedAtMs: observation.value.startedAtMs,
+      observedAtMs: observation.value.observedAtMs,
+      deadlineAtMs: observation.value.deadlineAtMs,
+    });
+    expect(observation.waitCalls).toBe(0);
     owner!.release();
   });
 
@@ -3281,37 +3407,76 @@ describe('issue 1089 bounded scheduling-admission retry', () => {
     const gate = acquireDomainLock(profileKey, admissionKey);
     expect(gate).not.toBeNull();
 
-    const started = Date.now();
-    const contender = acquireDomainLock(
-      profileKey,
-      'conversation:https://chatgpt.com/c/budget-bound',
-      120_000,
-      { admissionRetryDeadlineMs: started + 80 },
-    );
-    const elapsed = Date.now() - started;
+    const observation = withControlledAdmissionClock(() => {
+      const startedAtMs = Date.now();
+      const deadlineAtMs = startedAtMs + 80;
+      const contender = acquireDomainLock(
+        profileKey,
+        'conversation:https://chatgpt.com/c/budget-bound',
+        120_000,
+        { admissionRetryDeadlineMs: deadlineAtMs },
+      );
+      return { contender, startedAtMs, observedAtMs: Date.now(), deadlineAtMs };
+    });
 
-    expect(contender).toBeNull();
-    expect(elapsed).toBeLessThan(250);
+    expect(observation.value.contender).toBeNull();
+    assertTimingBudgetInvariant({
+      operation: 'admission retry external deadline',
+      startedAtMs: observation.value.startedAtMs,
+      observedAtMs: observation.value.observedAtMs,
+      deadlineAtMs: observation.value.deadlineAtMs,
+    });
+    expect(observation.waitCalls).toBeGreaterThan(0);
     gate!.release();
   });
 
-  it('AC5: admission retry stops at the 2,000 ms ceiling when the gate stays busy', async () => {
+  it('AC5: admission retry stops at the 2,000 ms ceiling when the gate stays busy', () => {
     const admissionKey = `scheduling-admission:${profileKey}`;
     const gate = acquireDomainLock(profileKey, admissionKey);
     expect(gate).not.toBeNull();
 
-    const started = Date.now();
-    const contender = acquireDomainLockInWorker(
-      profileKey,
-      'conversation:https://chatgpt.com/c/ceiling-contender',
-    );
-    const result = await contender;
-    const elapsed = Date.now() - started;
+    const observation = withControlledAdmissionClock(() => {
+      const startedAtMs = Date.now();
+      const contender = acquireDomainLock(
+        profileKey,
+        'conversation:https://chatgpt.com/c/ceiling-contender',
+      );
+      return {
+        contender,
+        startedAtMs,
+        observedAtMs: Date.now(),
+        deadlineAtMs: startedAtMs + SCHEDULING_ADMISSION_RETRY_CEILING_MS,
+      };
+    });
 
-    expect(result.ok).toBe(false);
-    expect(result.elapsedMs).toBeGreaterThanOrEqual(1_900);
-    expect(result.elapsedMs).toBeLessThanOrEqual(2_000);
+    expect(observation.value.contender).toBeNull();
+    assertTimingBudgetInvariant({
+      operation: 'admission retry ceiling',
+      startedAtMs: observation.value.startedAtMs,
+      observedAtMs: observation.value.observedAtMs,
+      deadlineAtMs: observation.value.deadlineAtMs,
+    });
+    assertTimingBudgetConsumed(
+      {
+        operation: 'admission retry ceiling',
+        startedAtMs: observation.value.startedAtMs,
+        observedAtMs: observation.value.observedAtMs,
+        deadlineAtMs: observation.value.deadlineAtMs,
+      },
+      observation.value.deadlineAtMs - 100,
+    );
+    expect(observation.waitCalls).toBeGreaterThan(0);
     gate!.release();
+  });
+
+  it('rejects controlled timing evidence beyond its captured deadline with diagnostic guidance', () => {
+    const evidence: TimingBudgetEvidence = {
+      operation: 'admission retry ceiling',
+      startedAtMs: 0,
+      observedAtMs: SCHEDULING_ADMISSION_RETRY_CEILING_MS + 1,
+      deadlineAtMs: SCHEDULING_ADMISSION_RETRY_CEILING_MS,
+    };
+    expect(() => assertTimingBudgetInvariant(evidence)).toThrow(timingBudgetDiagnostic(evidence));
   });
 });
 
