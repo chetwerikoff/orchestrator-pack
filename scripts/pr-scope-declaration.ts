@@ -36,11 +36,11 @@ export const REPOSITORY_DENYLIST = [
 ] as const;
 
 export const REPOSITORY_ALLOWED_ROOTS = [
-  '.claude/**',
-  '.cursor/**',
+  '.claude/skills/**',
+  '.cursor/rules/**',
+  '.cursor/skills/**',
   'scripts/**',
   'tests/external-output-references/**',
-  'tests/**',
   'plugins/**',
   'prompts/**',
   'docs/declarations/**',

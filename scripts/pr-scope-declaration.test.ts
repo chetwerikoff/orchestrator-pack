@@ -30,10 +30,10 @@ const firstPartySurfaceIssueBody = [
   'packages/core/**',
   '```',
   '```allowed-roots',
-  '.claude/**',
-  '.cursor/**',
+  '.claude/skills/**',
+  '.cursor/skills/**',
   'plugins/**',
-  'tests/**',
+  'tests/external-output-references/**',
   'prompts/**',
   '```',
 ].join('\n');
@@ -160,7 +160,7 @@ describe('AO-free PR scope declaration contract', () => {
       }),
     ).toMatchObject({ ok: true, mode: 'implementation' });
 
-    for (const path of ['vendor/**', 'packages/core/**']) {
+    for (const path of ['vendor/**', 'packages/core/**', '.claude/settings/**']) {
       expect(
         validatePrScopeDeclaration({
           ...declaration(1228),
