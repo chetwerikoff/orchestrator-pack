@@ -1,0 +1,31 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1198,
+  "declared_paths": [
+    "docs/launch-watch-wrappers.md",
+    "scripts/launch-watch/aggregate.ts",
+    "scripts/launch-watch/launch-watch.test.ts",
+    "scripts/launch-watch/launch.ts",
+    "scripts/launch-watch/watch.test.ts",
+    "scripts/launch-watch/watch.ts",
+    "scripts/lib/launch-watch/contract.ts",
+    "scripts/lib/launch-watch/emission.ts",
+    "scripts/lib/launch-watch/fixtures.ts",
+    "tests/external-output-references/launch-watch/producer-fixtures.json"
+  ],
+  "denylist": [
+    ".ao/",
+    "agent-orchestrator.yaml",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/launch-watch-wrappers.md",
+    "scripts/launch-watch/",
+    "scripts/lib/launch-watch/",
+    "tests/external-output-references/launch-watch/"
+  ],
+  "source_revision": "374c2fc64a717076d8e094642c6124eb7b7bd07d"
+}
