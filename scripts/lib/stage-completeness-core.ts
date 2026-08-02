@@ -16,6 +16,9 @@ import {
   resolveCanonicalReviewDirectory as resolveCanonicalReviewDirectoryShared,
 } from './canonical-review-directory.ts';
 export { findLegacyReceiptPaths } from './canonical-review-directory.ts';
+import { isReviewLaneEvidence, isReviewLaneRouting, sameReviewLaneRouting } from './review-lane-record.ts';
+import type { ReviewLaneEvidence } from './create-issue-stage-record-types.ts';
+import { REVIEW_LANE_ROUTING_POLICY_VERSION, normalizeMaterialVerdict, type ReviewLaneRouting } from './review-lane-routing.ts';
 
 export const GRANDFATHERED_REVIEW_DIR_BASENAMES = new Set([
   '206-ao-010-session-status-readers-migration',
@@ -92,7 +95,7 @@ export interface ReviewerInvocationEnvelopeV1 {
   schema: typeof REVIEWER_INVOCATION_ENVELOPE_SCHEMA;
   reviewEpisodeId: string;
   stageAttemptId: string;
-  policyVersion: typeof TRIPLE_SOURCE_POLICY_VERSION | typeof SINGLE_SOURCE_POLICY_VERSION;
+  policyVersion: typeof TRIPLE_SOURCE_POLICY_VERSION | typeof SINGLE_SOURCE_POLICY_VERSION | typeof REVIEW_LANE_ROUTING_POLICY_VERSION;
   reviewerCardinality: number;
   cardinalityConfigIdentity: string;
   stage: Exclude<ReviewStage, 'architectural-lens'>;
@@ -112,6 +115,7 @@ export interface ReviewerInvocationEnvelopeV1 {
   capacityOutcome: 'admitted' | 'rejected-after-local-wait';
   capacityWaitMs: number;
   capture?: CaptureIdentityV1;
+  reviewLaneRouting?: ReviewLaneRouting;
 }
 export interface ClaudeCaptureBranchV1 {
   kind: 'capture';
@@ -168,7 +172,7 @@ export interface StageCompletenessReceiptV1 {
   stageAttemptId: string;
   stageSequence: number;
   stage: ReviewStage;
-  policyVersion: typeof TRIPLE_SOURCE_POLICY_VERSION | typeof SINGLE_SOURCE_POLICY_VERSION;
+  policyVersion: typeof TRIPLE_SOURCE_POLICY_VERSION | typeof SINGLE_SOURCE_POLICY_VERSION | typeof REVIEW_LANE_ROUTING_POLICY_VERSION;
   reviewerCardinality: number;
   cardinalityConfigIdentity: string;
   sourceRevision: string;
@@ -179,6 +183,7 @@ export interface StageCompletenessReceiptV1 {
   claude?: ClaudeCaptureBranchV1 | ClaudeWaiverBranchV1;
   credentialingCaptures: CaptureIdentityV1[];
   relayEligibleCaptures: CaptureIdentityV1[];
+  reviewLane?: ReviewLaneEvidence;
 }
 export interface VerifiedRelayPartV1 {
   part: number;
@@ -267,7 +272,7 @@ export type LegacyStageCompletenessReceipt = {
 export type ReceiptBackedStageCompletenessReceipt = {
   tier: ReviewTier;
   reviewEpisodeId: string;
-  policyVersion: typeof TRIPLE_SOURCE_POLICY_VERSION | typeof SINGLE_SOURCE_POLICY_VERSION;
+  policyVersion: typeof TRIPLE_SOURCE_POLICY_VERSION | typeof SINGLE_SOURCE_POLICY_VERSION | typeof REVIEW_LANE_ROUTING_POLICY_VERSION;
   logicalRoundIds: string[];
   governedCaptureUnion: string[];
   relayedCaptureUnion: string[];
@@ -389,7 +394,7 @@ function expectedCaptureName(stage: ReviewStage, capture: CaptureIdentityV1, slo
 }
 function parseInvocation(
   value: unknown,
-  receipt: Pick<StageCompletenessReceiptV1, 'reviewEpisodeId' | 'stageAttemptId' | 'policyVersion' | 'reviewerCardinality' | 'cardinalityConfigIdentity' | 'stage' | 'sourceRevision'>,
+  receipt: Pick<StageCompletenessReceiptV1, 'reviewEpisodeId' | 'stageAttemptId' | 'policyVersion' | 'reviewerCardinality' | 'cardinalityConfigIdentity' | 'stage' | 'sourceRevision' | 'reviewLane'>,
   index: number,
   errors: string[],
 ): ReviewerInvocationEnvelopeV1 | null {
@@ -416,6 +421,12 @@ function parseInvocation(
   if (value.cardinalityConfigIdentity !== receipt.cardinalityConfigIdentity) errors.push(`${label} cardinalityConfigIdentity mismatch`);
   if (stage !== receipt.stage) errors.push(`${label} stage mismatch`);
   if (value.sourceRevision !== receipt.sourceRevision) errors.push(`${label} sourceRevision mismatch`);
+  if (receipt.reviewLane !== undefined) {
+    if (!isReviewLaneRouting(value.reviewLaneRouting)) errors.push(`${label} is missing immutable reviewLaneRouting evidence`);
+    else if (!sameReviewLaneRouting(receipt.reviewLane.routing, value.reviewLaneRouting)) errors.push(`${label} reviewLaneRouting disagrees with the full stage evidence`);
+  } else if (value.reviewLaneRouting !== undefined) {
+    errors.push(`${label} carries reviewLaneRouting without a routed stage attempt`);
+  }
   if (!REVIEWER_SLOT_RE.test(slot) || !expectedSlots(receipt.reviewerCardinality).includes(slot)) errors.push(`${label} reviewerSlot must be within configured 01..${slotForOrdinal(receipt.reviewerCardinality)}`);
   if (attemptOrdinal !== 1 && attemptOrdinal !== 2) errors.push(`${label} attemptOrdinal must be 1 or 2`);
   if (value.retryAttempt !== true && value.retryAttempt !== false) errors.push(`${label} retryAttempt must be boolean`);
@@ -464,10 +475,11 @@ function parseInvocation(
     capacityOutcome: value.capacityOutcome as 'admitted' | 'rejected-after-local-wait',
     capacityWaitMs: Number(value.capacityWaitMs),
     capture,
+    ...(receipt.reviewLane ? { reviewLaneRouting: receipt.reviewLane.routing } : {}),
   };
 }
 function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: string[]): void {
-  const requiredSlots = expectedSlots(receipt.reviewerCardinality);
+  const requiredSlots = receipt.reviewLane?.finalRequiredSlots ?? expectedSlots(receipt.reviewerCardinality);
   if (!Array.isArray(receipt.invocations)) { errors.push(`stage ${receipt.stage} requires invocation envelopes`); return; }
   const invocations = receipt.invocations.map((value, index) => parseInvocation(value, receipt, index, errors)).filter((value): value is ReviewerInvocationEnvelopeV1 => Boolean(value));
   const bySlot = new Map<ReviewerSlot, ReviewerInvocationEnvelopeV1[]>();
@@ -486,6 +498,19 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
     if (attempts.length === 0) { errors.push(`stage ${receipt.stage} missing reviewer slot ${slot}`); allFinalComplete = false; continue; }
     if (attempts.length > 2) errors.push(`stage ${receipt.stage} slot ${slot} exceeds one retry`);
     if (attempts[0]?.attemptOrdinal !== 1) errors.push(`stage ${receipt.stage} slot ${slot} must begin at attemptOrdinal 1`);
+    if (receipt.reviewLane) {
+      const evidence = receipt.reviewLane.sourceVerdictEvidence[slot];
+      const finalCapture = attempts.at(-1)?.capture;
+      const evidenceVerdict = evidence ? normalizeMaterialVerdict(evidence) : 'unparseable';
+      if (evidenceVerdict === 'accept' || evidenceVerdict === 'material-findings') {
+        if (!finalCapture || evidence?.captureIdentity !== finalCapture.captureIdentity) {
+          errors.push(`stage ${receipt.stage} reviewLane producer evidence does not match capture for slot ${slot}`);
+        }
+        if (evidence?.rawFindingCount !== finalCapture?.rawFindingCount) {
+          errors.push(`stage ${receipt.stage} reviewLane producer evidence finding count does not match capture for slot ${slot}`);
+        }
+      }
+    }
     if (attempts.length === 2) {
       const first = attempts[0]!; const retry = attempts[1]!;
       if (retry.attemptOrdinal !== 2 || !retry.retryAttempt) errors.push(`stage ${receipt.stage} slot ${slot} retry envelope is malformed`);
@@ -509,6 +534,13 @@ function validateBrowserReceipt(receipt: StageCompletenessReceiptV1, errors: str
   if (!receipt.settlement.allLaunchedTerminal) errors.push(`stage ${receipt.stage} settlement requires every launched invocation terminal`);
   if (!receipt.settlement.finalRevisionMatched) errors.push(`stage ${receipt.stage} settlement revision mismatch`);
   const allInvocationCaptures = invocations.flatMap((invocation) => invocation.capture ? [invocation.capture] : []);
+  if (receipt.reviewLane) {
+    const evidenceSlots = Object.keys(receipt.reviewLane.sourceVerdicts).sort();
+    const requiredEvidenceSlots = [...requiredSlots].sort();
+    if (evidenceSlots.length !== requiredEvidenceSlots.length || evidenceSlots.some((slot, index) => slot !== requiredEvidenceSlots[index])) {
+      errors.push(`stage ${receipt.stage} reviewLane source verdicts do not match final required slots`);
+    }
+  }
   if (receipt.policyVersion === TRIPLE_SOURCE_POLICY_VERSION) {
     const passNumbers = new Set(allInvocationCaptures.map(sourceCapturePass).filter((pass): pass is number => pass !== null));
     if (allInvocationCaptures.length > 0 && passNumbers.size !== 1) errors.push(`stage ${receipt.stage} sibling captures must share one pass-NN prefix`);
@@ -554,6 +586,7 @@ function parseClaudeProducerEvidence(input: readonly unknown[], errors: string[]
 }
 function validateClaudeReceipt(receipt: StageCompletenessReceiptV1, producerEvidence: Map<string, ClaudeProducerEvidenceV1>, errors: string[]): void {
   if (receipt.policyVersion !== SINGLE_SOURCE_POLICY_VERSION) errors.push('architectural-lens must use single-source/v1');
+  if (receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION) errors.push('architectural-lens cannot use review-lane-routing/v1');
   if (receipt.reviewerCardinality !== 1) errors.push('architectural-lens must remain singular');
   if (receipt.invocations && receipt.invocations.length > 0) errors.push('architectural-lens cannot contain Browser-GPT invocation envelopes');
   if (!receipt.claude) { errors.push('architectural-lens requires a capture or claude-unavailable waiver branch'); return; }
@@ -587,9 +620,14 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   const previousStageReceiptId = value.previousStageReceiptId === null ? null : nonEmpty(value.previousStageReceiptId) ? value.previousStageReceiptId.trim() : '';
   const reviewerCardinality = value.reviewerCardinality;
   const cardinalityConfigIdentity = nonEmpty(value.cardinalityConfigIdentity) ? value.cardinalityConfigIdentity.trim() : '';
+  const reviewLane = value.reviewLane;
+  const routedPolicy = policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION;
+  if (reviewLane !== undefined && !isReviewLaneEvidence(reviewLane)) errors.push(`${label} reviewLane must be complete immutable evidence`);
+  if (!routedPolicy && reviewLane !== undefined) errors.push(`${label} legacy policy cannot carry routed reviewLane evidence`);
+  if (routedPolicy && !isReviewLaneEvidence(reviewLane)) errors.push(`${label} review-lane-routing/v1 requires full reviewLane evidence`);
   if (tier !== 'T1' && tier !== 'T2' && tier !== 'T3') errors.push(`${label} has unknown tier`);
   if (!COUNTED_STAGE_TOKENS.has(stage as ReviewStage)) errors.push(`${label} has unknown stage`);
-  if (policyVersion !== TRIPLE_SOURCE_POLICY_VERSION && policyVersion !== SINGLE_SOURCE_POLICY_VERSION) errors.push(`${label} has unknown policyVersion`);
+  if (policyVersion !== TRIPLE_SOURCE_POLICY_VERSION && policyVersion !== SINGLE_SOURCE_POLICY_VERSION && policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) errors.push(`${label} has unknown policyVersion`);
   if (!validCardinality(reviewerCardinality)) errors.push(`${label} reviewerCardinality must be 1..99`);
   if (!cardinalityConfigIdentity) errors.push(`${label} missing cardinalityConfigIdentity`);
   if (!['complete', 'partial', 'blocked', 'incident'].includes(String(outcome))) errors.push(`${label} has unknown outcome`);
@@ -613,6 +651,13 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
   }
   const credentialingCaptures = validateCaptureArray(value.credentialingCaptures, `${label}.credentialingCaptures`, errors);
   const relayEligibleCaptures = validateCaptureArray(value.relayEligibleCaptures, `${label}.relayEligibleCaptures`, errors);
+  if (isReviewLaneEvidence(reviewLane)) {
+    const reviewLaneRouting = reviewLane.routing;
+    if (reviewLaneRouting.stageAttemptId !== String(value.stageAttemptId).trim()) errors.push(`${label} reviewLane stageAttemptId mismatch`);
+    if (reviewLaneRouting.sourceRevision !== String(value.sourceRevision).trim()) errors.push(`${label} reviewLane sourceRevision mismatch`);
+    if (reviewLaneRouting.reviewerCardinality !== Number(reviewerCardinality)) errors.push(`${label} reviewLane reviewerCardinality mismatch`);
+    if (reviewLaneRouting.cardinalityConfigIdentity !== cardinalityConfigIdentity) errors.push(`${label} reviewLane cardinalityConfigIdentity mismatch`);
+  }
   if (errors.some((error) => error.startsWith(label))) return null;
   const receipt: StageCompletenessReceiptV1 = {
     schema: STAGE_COMPLETENESS_RECEIPT_SCHEMA,
@@ -626,7 +671,7 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
     stageAttemptId: String(value.stageAttemptId).trim(),
     stageSequence: Number(value.stageSequence),
     stage: stage as ReviewStage,
-    policyVersion: policyVersion as typeof TRIPLE_SOURCE_POLICY_VERSION | typeof SINGLE_SOURCE_POLICY_VERSION,
+    policyVersion: policyVersion as typeof TRIPLE_SOURCE_POLICY_VERSION | typeof SINGLE_SOURCE_POLICY_VERSION | typeof REVIEW_LANE_ROUTING_POLICY_VERSION,
     reviewerCardinality: Number(reviewerCardinality),
     cardinalityConfigIdentity,
     sourceRevision: String(value.sourceRevision).trim(),
@@ -637,10 +682,13 @@ function parseStageReceipt(value: unknown, index: number, errors: string[]): Sta
     claude: isRecord(value.claude) ? value.claude as unknown as StageCompletenessReceiptV1['claude'] : undefined,
     credentialingCaptures,
     relayEligibleCaptures,
+    ...(isReviewLaneEvidence(reviewLane) ? { reviewLane } : {}),
   };
   if (receipt.stage === 'competitive' || receipt.stage === 'architectural-review') {
     if (receipt.tier !== 'T3') errors.push(`${receipt.stage} is valid only for T3`);
-    if (receipt.policyVersion !== TRIPLE_SOURCE_POLICY_VERSION) errors.push(`${receipt.stage} must use triple-source/v1`);
+    if (receipt.policyVersion !== TRIPLE_SOURCE_POLICY_VERSION && receipt.policyVersion !== REVIEW_LANE_ROUTING_POLICY_VERSION) errors.push(`${receipt.stage} must use triple-source/v1 or review-lane-routing/v1`);
+  } else if (receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION) {
+    errors.push(`${receipt.stage} review-lane-routing/v1 is limited to lane-controlled T3 stages`);
   } else {
     if (receipt.policyVersion !== SINGLE_SOURCE_POLICY_VERSION) errors.push(`${receipt.stage} must remain singular`);
     if (receipt.reviewerCardinality !== 1) errors.push(`${receipt.stage} must use reviewerCardinality 1`);
@@ -857,6 +905,11 @@ export function validateReviewEpisodeTopology(state: ReviewEpisodeStateV1, phase
   const ordered = expected.map((stage) => state.credentialingReceiptsByStage[stage]).filter((receipt): receipt is StageCompletenessReceiptV1 => Boolean(receipt));
   for (let index = 1; index < ordered.length; index += 1) if (ordered[index]!.stageSequence <= ordered[index - 1]!.stageSequence) errors.push(`${ordered[index]!.stage} stage is out of order`);
   if (!state.relayComplete) errors.push('review episode relay is incomplete');
+  if (phase === 'final-acceptance'
+    && state.receipts.some((receipt) => receipt.policyVersion === TRIPLE_SOURCE_POLICY_VERSION || receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION)
+    && !state.activationReady) {
+    errors.push('review-lane-routing/v1 final acceptance is blocked until logical-round accounting is active');
+  }
   return errors;
 }
 
@@ -942,7 +995,11 @@ function checkReceiptBackedStageCompleteness(tier: ReviewTier, options: StageCom
   if (state.tier && state.tier !== tier) errors.push(`review episode tier ${state.tier} does not match task tier ${tier}`);
   errors.push(...validateReviewEpisodeTopology(state, phase));
   if (errors.length > 0 || !state.reviewEpisodeId || !state.tier) return { ok: false, errors: [...new Set(errors)], noop: false, receipt: null, episodeState: state };
-  const policyVersion = state.receipts.some((receipt) => receipt.policyVersion === TRIPLE_SOURCE_POLICY_VERSION) ? TRIPLE_SOURCE_POLICY_VERSION : SINGLE_SOURCE_POLICY_VERSION;
+  const policyVersion = state.receipts.some((receipt) => receipt.policyVersion === REVIEW_LANE_ROUTING_POLICY_VERSION)
+    ? REVIEW_LANE_ROUTING_POLICY_VERSION
+    : state.receipts.some((receipt) => receipt.policyVersion === TRIPLE_SOURCE_POLICY_VERSION)
+      ? TRIPLE_SOURCE_POLICY_VERSION
+      : SINGLE_SOURCE_POLICY_VERSION;
   return { ok: true, errors: [], noop: false, episodeState: state, receipt: { tier: state.tier, reviewEpisodeId: state.reviewEpisodeId, policyVersion, logicalRoundIds: state.logicalRoundIds, governedCaptureUnion: state.governedCaptureUnion, relayedCaptureUnion: state.relayedCaptureUnion, rawFindingCount: state.rawFindingCount, activationReady: state.activationReady } };
 }
 export function checkStageCompletenessGuard(draftText: string, options: StageCompletenessGuardOptions = {}): StageCompletenessGuardResult {

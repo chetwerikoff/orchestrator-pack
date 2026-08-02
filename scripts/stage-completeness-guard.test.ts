@@ -220,6 +220,74 @@ describe('Issue #1150 stage authority', () => {
     expect(state.logicalRoundIds).toEqual(['competitive-attempt', 'architectural-review-attempt']);
   });
 
+  it('rejects routed policy for a terminal architectural stage', () => {
+    const captures = [
+      capture('architectural-routed-01', 'pass-01-architectural.capture.txt'),
+      capture('architectural-routed-02', 'pass-02-architectural.capture.txt'),
+    ];
+    const attemptId = 'architectural-routed-attempt';
+    const routing = {
+      schema: 'review-lane-routing/v1' as const,
+      routingPolicyIdentity: 'review-lane-routing/v1' as const,
+      lane: 'disputed' as const,
+      topology: 'conditional-third/v1' as const,
+      policyVersion: 'review-lane-routing/v1' as const,
+      reviewerCardinality: 3,
+      cardinalityConfigIdentity: 'routed-config',
+      possibleSlots: ['01', '02', '03'],
+      initiallyActivatedSlots: ['01', '02'],
+      conditionalActivationRule: 'material-verdict-conflict/v1' as const,
+      sourceRevision: REVISION,
+      stageAttemptId: attemptId,
+      laneInputIdentity: 'routed-input',
+      classifierIdentity: 'routed-classifier',
+      permittedLaneOverride: null,
+    };
+    const evidence = (slot: string) => ({
+      producerEvidenceIdentity: `producer-${slot}`,
+      captureIdentity: `architectural-routed-${slot}`,
+      terminalClassification: 'complete' as const,
+      captureVerified: true,
+      digestMatches: true,
+      verdictText: 'NO_FINDINGS',
+      rawFindingCount: 0,
+    });
+    const reviewLane = {
+      routing,
+      finalRequiredSlots: ['01', '02'],
+      sourceVerdicts: { '01': 'accept' as const, '02': 'accept' as const },
+      sourceVerdictEvidence: { '01': evidence('01'), '02': evidence('02') },
+      conflictDecision: 'no-conflict' as const,
+      settlement: {
+        ok: true,
+        conflictDecision: 'no-conflict' as const,
+        finalRequiredSlots: ['01', '02'],
+        slotCensus: [
+          { slot: '01', state: 'activated' as const },
+          { slot: '02', state: 'activated' as const },
+          { slot: '03', state: 'not-activated' as const },
+        ],
+        errors: [],
+      },
+    };
+    const invocations = captures.map((item, index) => invocation(
+      'architectural',
+      attemptId,
+      index + 1,
+      3,
+      item,
+      { policyVersion: 'review-lane-routing/v1', cardinalityConfigIdentity: 'routed-config', reviewLaneRouting: routing },
+    ));
+    const routedReceipt = {
+      ...receipt('architectural', 1, attemptId, 3, captures, invocations),
+      policyVersion: 'review-lane-routing/v1' as const,
+      cardinalityConfigIdentity: 'routed-config',
+      reviewLane,
+    };
+    const state = deriveReviewEpisodeState([routedReceipt], relay(captures), authority([routedReceipt]));
+    expect(state.errors.join('\n')).toContain('review-lane-routing/v1 is limited to lane-controlled T3 stages');
+  });
+
   it('binds receipt inventory to the canonical Issue root and blocks external receipts', () => {
     const tempHome = mkdtempSync(join(tmpdir(), 'opk-canonical-review-'));
     const previousHome = process.env.HOME;
