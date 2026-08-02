@@ -84,6 +84,13 @@ describe('create-issue-stage-record marker and lineage', () => {
         'fingerprint',
       );
       expect(result.ok).toBe(false);
+      expect(result.terminal).toMatchObject({
+        outcome: 'blocked',
+        cause: 'publication-timeout',
+        remedy: expect.any(String),
+        owner: 'exception publisher',
+        deadline: 'GH_TIMEOUT_MS = 10_000 ms',
+      });
       expect(calls).toHaveLength(3);
     } finally {
       now.mockRestore();
@@ -115,7 +122,7 @@ describe('create-issue-stage-record marker and lineage', () => {
     }
   });
 
-  it('returns a refused terminal diagnostic for a non-timeout census failure', () => {
+  it('returns a blocked terminal diagnostic for a non-timeout census failure', () => {
     const transport = {
       runGh() {
         return { exitCode: 1, stdout: '', stderr: 'authentication failed' };
@@ -131,14 +138,14 @@ describe('create-issue-stage-record marker and lineage', () => {
       });
       expect(result.ok).toBe(false);
       const messages = result.diagnostics.map((item) => item.message).join('\n');
-      expect(messages).toContain('terminal outcome: refused');
+      expect(messages).toContain('terminal outcome: blocked');
       expect(messages).not.toContain('publication-timeout');
     } finally {
       rmSync(workdir, { recursive: true, force: true });
     }
   });
 
-  it('preserves a publication census transport failure instead of relabeling it as timeout', () => {
+  it('preserves a publication census transport failure as blocked instead of relabeling it as timeout', () => {
     const transport = {
       runGh() {
         return { exitCode: 1, stdout: '', stderr: 'authentication failed' };
@@ -158,8 +165,92 @@ describe('create-issue-stage-record marker and lineage', () => {
       );
       expect(result.ok).toBe(false);
       const messages = result.diagnostics.map((item) => item.message).join('\n');
-      expect(messages).toContain('terminal outcome: refused');
+      expect(messages).toContain('terminal outcome: blocked');
       expect(messages).not.toContain('publication-timeout');
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns structured blocked metadata when comments time out after owner lookup', () => {
+    const transport = {
+      runGh(argv: string[]) {
+        if (argv.includes('--jq')) return { exitCode: 0, stdout: 'owner', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: 'ETIMEDOUT', timedOut: true };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = publishSettledStageRecord(transport, {
+        repo: 'owner/repo',
+        issueNumber: 1197,
+        receipt: sampleStageReceipt('cycle-1'),
+        workdir,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.terminal).toMatchObject({
+        outcome: 'blocked',
+        cause: 'publication-timeout',
+        remedy: expect.any(String),
+        owner: expect.any(String),
+        deadline: 'GH_TIMEOUT_MS = 10_000 ms',
+      });
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a non-timeout comment transport failure blocked with structured metadata', () => {
+    const transport = {
+      runGh(argv: string[]) {
+        if (argv.includes('--jq')) return { exitCode: 0, stdout: 'owner', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: 'temporary API failure' };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = publishSettledStageRecord(transport, {
+        repo: 'owner/repo',
+        issueNumber: 1197,
+        receipt: sampleStageReceipt('cycle-1'),
+        workdir,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.terminal).toMatchObject({
+        outcome: 'blocked',
+        cause: 'transport-failure',
+        remedy: expect.any(String),
+        owner: expect.any(String),
+        deadline: 'GH_TIMEOUT_MS = 10_000 ms',
+      });
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns refused only when the comment transport marks an explicit terminal refusal', () => {
+    const transport = {
+      runGh(argv: string[]) {
+        if (argv.includes('--jq')) return { exitCode: 0, stdout: 'owner', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: 'policy refusal', terminalRefusal: true };
+      },
+    };
+    const workdir = makeTempDir();
+    try {
+      const result = publishSettledStageRecord(transport, {
+        repo: 'owner/repo',
+        issueNumber: 1197,
+        receipt: sampleStageReceipt('cycle-1'),
+        workdir,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.terminal).toMatchObject({
+        outcome: 'refused',
+        cause: 'terminal-refusal',
+        remedy: expect.any(String),
+        owner: expect.any(String),
+        deadline: 'GH_TIMEOUT_MS = 10_000 ms',
+      });
     } finally {
       rmSync(workdir, { recursive: true, force: true });
     }

@@ -27,12 +27,28 @@ export type PublicActor =
 export type SettledOutcome = 'complete' | 'partial' | 'blocked' | 'incident';
 export type ProducerEvidence = 'verified' | 'waived' | 'not-applicable';
 export type DeliveryClass = 'immediate' | 'delayed';
+export type GhFailureKind = 'timeout' | 'transport' | 'terminal-refusal';
+export type TerminalOutcome = 'done' | 'blocked' | 'refused';
+
+export interface GhFailure {
+  kind: GhFailureKind;
+  message: string;
+}
+
+export interface OperationTerminal {
+  outcome: TerminalOutcome;
+  cause: string;
+  remedy: string;
+  owner: string;
+  deadline: string;
+}
 
 export interface GhInvocationResult {
   exitCode: number;
   stdout: string;
   stderr: string;
   timedOut?: boolean;
+  terminalRefusal?: boolean;
 }
 
 export interface GhTransport {
@@ -133,6 +149,7 @@ export interface CommentCensusResult {
   comments: TrustedComment[];
   commentsComplete: boolean;
   diagnostics: LineageDiagnostic[];
+  failure?: GhFailure;
 }
 
 export interface StageReceiptCycleBinding {

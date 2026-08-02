@@ -11,6 +11,8 @@ import {
 import type {
   CommentCensusOptions,
   CommentCensusResult,
+  GhFailure,
+  GhFailureKind,
   GhTransport,
   LineageDiagnostic,
   ParsedJournalEvent,
@@ -29,13 +31,27 @@ import {
 export const GH_TIMEOUT_MS = 10_000;
 
 export class GhTransportError extends Error {
+  readonly failureKind: GhFailureKind;
   readonly timedOut: boolean;
 
-  constructor(message: string, timedOut: boolean) {
+  constructor(message: string, failureKind: GhFailureKind) {
     super(message);
     this.name = 'GhTransportError';
-    this.timedOut = timedOut;
+    this.failureKind = failureKind;
+    this.timedOut = failureKind === 'timeout';
   }
+}
+
+function classifyGhResponse(response: { stderr: string; timedOut?: boolean; terminalRefusal?: boolean }, fallback: string): GhFailure {
+  const kind: GhFailureKind = response.timedOut === true
+    ? 'timeout'
+    : response.terminalRefusal === true
+      ? 'terminal-refusal'
+      : 'transport';
+  return {
+    kind,
+    message: response.stderr.trim() || fallback,
+  };
 }
 
 
@@ -77,6 +93,7 @@ export function defaultGhTransport(): GhTransport {
         stdout: result.stdout ?? '',
         stderr: result.stderr ?? '',
         timedOut: result.timedOut,
+        terminalRefusal: false,
       };
     },
   };
@@ -129,7 +146,12 @@ export function fetchIssueComments(
         code: 'comments-truncated',
         message: 'comment census transport failed',
       });
-      return { comments: collected, commentsComplete: false, diagnostics };
+      return {
+        comments: collected,
+        commentsComplete: false,
+        diagnostics,
+        failure: classifyGhResponse(response, 'comment census transport failed'),
+      };
     }
     let parsed: unknown;
     try {
@@ -208,7 +230,12 @@ export function fetchIssueComments(
           code: 'comments-truncated',
           message: 'comment census sentinel probe failed',
         });
-        return { comments: collected, commentsComplete: false, diagnostics };
+        return {
+          comments: collected,
+          commentsComplete: false,
+          diagnostics,
+          failure: classifyGhResponse(sentinel, 'comment census sentinel probe failed'),
+        };
       }
       let sentinelParsed: unknown;
       try {
@@ -338,7 +365,8 @@ export function fetchRepositoryOwnerLogin(transport: GhTransport, repo: string):
   const { owner, name } = parseRepo(repo);
   const response = transport.runGh(['gh', 'api', `repos/${owner}/${name}`, '--jq', '.owner.login']);
   if (response.exitCode !== 0 || !response.stdout.trim()) {
-    throw new GhTransportError('unable to resolve repository owner login', response.timedOut === true);
+    const failure = classifyGhResponse(response, 'unable to resolve repository owner login');
+    throw new GhTransportError(failure.message, failure.kind);
   }
   return response.stdout.trim();
 }
@@ -357,7 +385,8 @@ export function fetchIssueRevision(transport: GhTransport, repo: string, issueNu
     '{title, body, labels: [.labels[].name]}',
   ]);
   if (response.exitCode !== 0) {
-    throw new GhTransportError('unable to read issue revision', response.timedOut === true);
+    const failure = classifyGhResponse(response, 'unable to read issue revision');
+    throw new GhTransportError(failure.message, failure.kind);
   }
   const parsed = JSON.parse(response.stdout) as { title: string; body: string; labels: string[] };
   return parsed;
@@ -368,7 +397,7 @@ export function createIssueComment(
   repo: string,
   issueNumber: number,
   body: string,
-): { ok: boolean; commentId?: number; ambiguous?: boolean; timedOut?: boolean } {
+): { ok: boolean; commentId?: number; ambiguous?: boolean; timedOut?: boolean; terminalRefusal?: boolean } {
   const { owner, name } = parseRepo(repo);
   const response = transport.runGh([
     'gh',
@@ -378,7 +407,11 @@ export function createIssueComment(
     `body=${body}`,
   ]);
   if (response.exitCode !== 0) {
-    return { ok: false, timedOut: response.timedOut === true };
+    return {
+      ok: false,
+      timedOut: response.timedOut === true,
+      terminalRefusal: response.terminalRefusal === true,
+    };
   }
   try {
     const parsed = JSON.parse(response.stdout) as { id?: number };

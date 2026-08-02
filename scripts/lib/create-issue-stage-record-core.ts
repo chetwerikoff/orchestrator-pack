@@ -31,8 +31,10 @@ import type {
   CommentCensusOptions,
   ConsumableStageReceipt,
   CycleEventLogical,
+  GhFailure,
   GhTransport,
   JournalLogical,
+  OperationTerminal,
   LineageDiagnostic,
   PublicActor,
   StageEventLogical,
@@ -70,6 +72,7 @@ export interface OperationResult {
   cycleId?: string;
   eventKey?: string;
   projectionPendingRepair?: boolean;
+  terminal?: OperationTerminal;
 }
 
 function resolveWorkdir(issueNumber: number, workdir?: string): string {
@@ -91,6 +94,43 @@ function pendingFailure(
   });
 }
 
+function failureFromError(error: unknown): GhFailure {
+  if (error instanceof GhTransportError) {
+    return { kind: error.failureKind, message: error.message };
+  }
+  return {
+    kind: 'transport',
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function terminalForCensusFailure(
+  failure: GhFailure | undefined,
+  remedy: string,
+  owner: string,
+): OperationTerminal {
+  const kind = failure?.kind ?? 'transport';
+  return {
+    outcome: kind === 'terminal-refusal' ? 'refused' : 'blocked',
+    cause: !failure
+      ? 'census-incomplete'
+      : kind === 'timeout'
+        ? 'publication-timeout'
+        : kind === 'terminal-refusal'
+          ? 'terminal-refusal'
+          : 'transport-failure',
+    remedy,
+    owner,
+    deadline: 'GH_TIMEOUT_MS = 10_000 ms',
+  };
+}
+
+function pendingFailureClass(failure: GhFailure | undefined): string {
+  if (failure?.kind === 'timeout') return 'publication-timeout';
+  if (failure?.kind === 'terminal-refusal') return 'terminal-refusal';
+  return failure ? 'census-transport' : 'census-incomplete';
+}
+
 function censusFailureResult(
   diagnostics: LineageDiagnostic[],
   error: unknown,
@@ -100,23 +140,31 @@ function censusFailureResult(
     workdir?: string;
     event?: { schema: string; eventKey: string; body: string };
     projectionPendingRepair?: boolean;
+    failure?: GhFailure;
+    owner?: string;
+    remedy?: string;
   } = {},
 ): OperationResult {
-  const timedOut = error instanceof GhTransportError && error.timedOut;
+  const failure = options.failure ?? (error === undefined ? undefined : failureFromError(error));
   if (options.workdir && options.event) {
-    pendingFailure(options.workdir, options.event, timedOut ? 'publication-timeout' : 'census-transport');
+    pendingFailure(options.workdir, options.event, pendingFailureClass(failure));
   }
-  const terminalOutcome = timedOut ? 'blocked' : 'refused';
-  const message = error instanceof Error ? error.message : String(error);
+  const terminal = terminalForCensusFailure(
+    failure,
+    options.remedy ?? 'Record the named census failure and repair the existing GitHub transport or observation surface before retrying.',
+    options.owner ?? 'flow-manager',
+  );
+  const message = failure?.message ?? 'comment census did not complete';
   return {
     ok: false,
     diagnostics: [...diagnostics, {
       code: 'comments-truncated',
-      message: `${context}; terminal outcome: ${terminalOutcome}: ${message}`,
+      message: `${context}; terminal outcome: ${terminal.outcome}: ${message}`,
       ...(options.eventKey ? { eventKey: options.eventKey } : {}),
     }],
     ...(options.eventKey ? { eventKey: options.eventKey } : {}),
     ...(options.projectionPendingRepair ? { projectionPendingRepair: true } : {}),
+    terminal,
   };
 }
 
@@ -166,7 +214,7 @@ function confirmCanonicalEvent(
   eventKey: string,
   fingerprint: string,
   census?: CommentCensusOptions,
-): { confirmed: boolean; diagnostics: LineageDiagnostic[] } {
+): { confirmed: boolean; diagnostics: LineageDiagnostic[]; failure?: GhFailure } {
   const censusState = loadIssueJournalCensus(transport, repo, issueNumber, census);
   if (!censusState.fetched.commentsComplete) {
     return {
@@ -176,6 +224,7 @@ function confirmCanonicalEvent(
         message: 'cannot confirm event without complete comment census',
         eventKey,
       }],
+      failure: censusState.fetched.failure,
     };
   }
   const event = censusState.lineage.eventsByKey.get(eventKey);
@@ -221,12 +270,19 @@ export function publishJournalEvent(
       workdir,
       event: { schema, eventKey, body },
       projectionPendingRepair: true,
+      owner: 'exception publisher',
     });
   }
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
-    pendingFailure(workdir, { schema, eventKey, body }, 'census-incomplete');
-    return { ok: false, diagnostics, eventKey };
+    return censusFailureResult(diagnostics, undefined, 'publication census', {
+      eventKey,
+      workdir,
+      event: { schema, eventKey, body },
+      projectionPendingRepair: true,
+      failure: censusState.fetched.failure,
+      owner: 'exception publisher',
+    });
   }
   if (censusState.parsed.diagnostics.some((item) => item.code === 'malformed-marker')) {
     return { ok: false, diagnostics, eventKey };
@@ -254,15 +310,31 @@ export function publishJournalEvent(
   });
   const created = createIssueComment(publicationTransport, repo, issueNumber, body);
   if (!created.ok) {
-    pendingFailure(workdir, { schema, eventKey, body }, created.timedOut ? 'publication-timeout' : 'comment-create');
+    const failure: GhFailure = created.timedOut
+      ? { kind: 'timeout', message: 'comment creation timed out' }
+      : created.terminalRefusal
+        ? { kind: 'terminal-refusal', message: 'comment creation was explicitly refused' }
+        : { kind: 'transport', message: 'comment creation transport failed' };
+    pendingFailure(
+      workdir,
+      { schema, eventKey, body },
+      failure.kind === 'timeout'
+        ? 'publication-timeout'
+        : failure.kind === 'terminal-refusal'
+          ? 'terminal-refusal'
+          : 'comment-create',
+    );
+    const terminal = terminalForCensusFailure(
+      failure,
+      'Repair the existing comment publication transport before retrying; do not resend ambiguous delivery.',
+      'exception publisher',
+    );
     diagnostics.push({
       code: 'comments-truncated',
-      message: created.timedOut
-        ? `comment create timed out; terminal outcome: blocked for ${eventKey}`
-        : `comment create failed for ${eventKey}; terminal outcome: refused`,
+      message: `comment create; terminal outcome: ${terminal.outcome}: ${failure.message}`,
       eventKey,
     });
-    return { ok: false, diagnostics, eventKey, projectionPendingRepair: true };
+    return { ok: false, diagnostics, eventKey, projectionPendingRepair: true, terminal };
   }
   let confirmed: ReturnType<typeof confirmCanonicalEvent>;
   try {
@@ -273,12 +345,18 @@ export function publishJournalEvent(
       workdir,
       event: { schema, eventKey, body },
       projectionPendingRepair: true,
+      owner: 'exception publisher',
     });
   }
   diagnostics.push(...confirmed.diagnostics);
   if (!confirmed.confirmed) {
-    pendingFailure(workdir, { schema, eventKey, body }, 'confirmation');
-    return { ok: false, diagnostics, eventKey, projectionPendingRepair: true };
+    const terminal = terminalForCensusFailure(
+      confirmed.failure,
+      'Repair or complete the existing comment census confirmation before retrying.',
+      'exception publisher',
+    );
+    pendingFailure(workdir, { schema, eventKey, body }, pendingFailureClass(confirmed.failure));
+    return { ok: false, diagnostics, eventKey, projectionPendingRepair: true, terminal };
   }
   clearPendingEvent(workdir, eventKey);
   return { ok: true, diagnostics, eventKey };
@@ -370,7 +448,10 @@ export function startReviewCycle(
   }
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
-    return { ok: false, diagnostics };
+    return censusFailureResult(diagnostics, undefined, 'start-cycle census', {
+      failure: censusState.fetched.failure,
+      owner: 'flow-manager',
+    });
   }
 
   let issueBefore: ReturnType<typeof fetchIssueRevision>;
@@ -507,7 +588,10 @@ export function publishSettledStageRecord(
   }
   diagnostics.push(...censusState.diagnostics);
   if (!censusState.fetched.commentsComplete) {
-    return { ok: false, diagnostics };
+    return censusFailureResult(diagnostics, undefined, 'stage publication census', {
+      failure: censusState.fetched.failure,
+      owner: 'stage publisher',
+    });
   }
   const head = censusState.lineage.head;
   if (!head || head.logical.schema !== CYCLE_SCHEMA) {
