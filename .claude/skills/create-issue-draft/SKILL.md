@@ -524,6 +524,8 @@ evidence to both guards. T1/T2 may accept when their singular topology, ledger,
 body, tier, and M5 checks are green. T3 final acceptance is available after Issue #1171 activates Issue-lifetime
 round counting; `triple-source/v1` alone is not a blocker.
 
+Before invoking final acceptance, follow [`docs/create-issue-draft-acceptance-artifacts.md`](../../../docs/create-issue-draft-acceptance-artifacts.md). Run its `check-artifacts` command to obtain a precise missing-input report, then run `produce-artifacts` only after all required recorded stage results and author dispositions exist. The producer computes canonical receipt identifiers and capture bytes/hashes; it does not accept caller assertions that a stage or capture exists.
+
 When activation is available, acceptance requires:
 
 1. singular terminal GPT is sole M5 anchor;
@@ -538,7 +540,179 @@ When activation is available, acceptance requires:
 9. final report with Issue, episode/attempt/source counts, chats, handoff, workdir,
    correction/L4 state, M4, residual risks, and direct incidents.
 
-Two non-converging author-fix cycles escalate to the operator.
+## Flow-manager authority and bounded terminal outcomes — Issue #1197
+
+The flow-manager operates under the frozen Issue contract, immutable revision,
+declared scope, existing producer/transport rules, and existing audit
+surfaces. Its authority is a closed list. “Do what is needed” is not an
+additional permission.
+
+### Closed self-authorized actions
+
+Within those existing boundaries, the flow-manager may:
+
+1. Reread the authoritative Issue/revision and reconcile its audit state.
+2. Repair mechanical formatting, metadata, path, identifier, hash, count, or
+   receipt-shape defects when the repair cannot change business meaning or a
+   finding disposition.
+3. Invoke or re-invoke an already named producer when that producer exists,
+   the required input is available, and the invocation is legal.
+4. Verify evidence and recompute hashes, counts, identifiers, and
+   completeness from bytes already held.
+5. Perform an already-authorized bounded page probe on suspicion and use it
+   only diagnostically.
+6. Wait for a named local or external result until its declared deadline.
+7. Retry only an invocation whose existing transport contract proves a
+   pre-send zero-send retry is legal. Post-send, ambiguous, missing-result,
+   and output-conflict cases remain non-retryable.
+8. Settle `done`, `blocked`, or `refused`, and move to the next stage only
+   after the preceding stage is credentialed.
+9. Publish a bounded exception and proceed only when its closed exception
+   contract is satisfied and no operator-only escalation class applies.
+
+self-authorized-action-set: reread-authority, mechanical-repair, invoke-existing-producer, verify-evidence, diagnostic-page-probe, bounded-wait, legal-zero-send-retry, settle-terminal-outcome, publish-procedural-exception
+
+The flow-manager must not author or rewrite substantive Issue content, choose
+a finding disposition, change the business contract, expand frozen scope,
+denylist, or allowed roots, fabricate evidence or a producer, or resend after
+possible delivery. It must not add a lease, heartbeat, service, durable store,
+watchdog, coordinator, transport state, or hidden recovery path.
+
+### Operator-only escalation classes
+
+There are exactly three operator-only escalation classes:
+
+operator-only-escalation-classes: business-contract-change, material-reviewer-conflict, terminal-infrastructure-refusal
+
+1. `business-contract-change` — the requested resolution changes the goal,
+   acceptance meaning, frozen scope, denylist/allowed roots, required
+   acceptance or review evidence, or another task semantic.
+2. `material-reviewer-conflict` — two independent material reviewer verdicts
+   still disagree after mechanical reconciliation of the same authoritative
+   evidence.
+3. `terminal-infrastructure-refusal` — an authoritative infrastructure or
+   transport surface reports terminal refusal and no existing local remedy is
+   legal.
+
+Every other path settles locally as `done`, `blocked`, or `refused`. An
+escalation class is routing metadata on that result, never a fourth result.
+The first applicable class wins in the order above. Ambiguous authority,
+missing reports, post-send ambiguity, output conflict, premature stage
+requests, overlapping continuation pressure, transient failure, missing
+mechanical artifacts, eligible zero-send failure, and ordinary deadline
+expiry do not create another class.
+
+### Bounded waits and terminal results
+
+The affected manager flow has exactly this closed wait inventory:
+
+bounded-wait-inventory: WI-01, WI-02, WI-03, WI-04, WI-05, WI-06
+
+| Wait ID and condition | Existing authoritative producer or observation surface | Deadline and terminal mapping |
+| --- | --- | --- |
+| `WI-01` — a named producer or artifact result becomes available | The named producer and its existing terminal-result surface | `deadline: 1_800_000 ms` from the producer invocation start, using the existing `state-light-turn --timeout-ms` / `DEFAULT_TIMEOUT_MS` budget; `owner: named producer`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` when proven, `blocked` with missing-result remediation when absent, or `refused` only for an authoritative refusal. |
+| `WI-02` — an already-authorized diagnostic page probe returns | The existing page-probe observation surface | `deadline: CDP_REQUEST_TIMEOUT_MS = 10_000 ms` per probe request from request dispatch, using `scripts/browser-gpt-page-probe.ts`; `owner: page-probe`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` with diagnostic evidence, or `blocked` with the exact observation/remediation gap. |
+| `WI-03` — the preceding stage is credentialed before transition | Existing stage receipt/completeness evidence | `deadline: 1_800_000 ms` from each preceding-stage producer invocation start, using the existing `state-light-turn --timeout-ms` / `DEFAULT_TIMEOUT_MS` budget; `owner: preceding stage producer`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` when credentialed; `blocked` on deadline without a predecessor terminal report, with the missing receipt and exact remediation; or local `refused` with missing predecessor evidence and exact fix when transition is premature. |
+| `WI-04` — required reviewer evidence reaches convergence | Existing Browser-GPT reviewer verdict and evidence surfaces | `deadline: 1_800_000 ms` from each Browser-GPT reviewer invocation start, using the existing `state-light-turn --timeout-ms` / `DEFAULT_TIMEOUT_MS` budget; `owner: reviewer source`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` when converged, `blocked` for missing evidence, or `blocked` carrying `material-reviewer-conflict` when independent material verdicts still conflict after reconciliation. |
+| `WI-05` — an in-flight transport action reaches its terminal result | Existing transport/helper terminal-result surface | `deadline: 5_000 ms` from the flow-manager waiter start, using the complete existing waiter invocation below; `owner: launcher waiter`; `deadline-miss-record: wait_id, condition, started_at, deadline_at, observed_at, terminal_result, cause, remedy, owner, next_deadline`; `done` on proven delivery, `blocked` on ambiguity or missing result without resend, or `refused` carrying `terminal-infrastructure-refusal` only on authoritative terminal refusal. |
+| `WI-06` — a published procedural exception is visible before progression | The existing `publishJournalEvent` path: `createIssueComment` followed by `confirmCanonicalEvent` and its full comment census | `deadline: GH_TIMEOUT_MS = 10_000 ms` from publication request dispatch, using the named timeout in `scripts/lib/create-issue-stage-record-gh.ts`; `owner: exception publisher`; `deadline-miss-record: wait_id, publication_requested_at, call_outcome, census_result, observed_at, cause, remedy, owner, next_deadline`; `done` only when the existing full comment-census confirmation succeeds; `blocked` when the census has no exception, a publication/census call fails, or `GH_TIMEOUT_MS` fires, with remediation naming the failed call; no automatic publication retry. |
+
+The complete WI-05 waiter invocation uses the run and attempt identities plus
+both paths already held by the manager; it adds no new state or identifier:
+
+```bash
+npm run --silent flow-manager-long-running-child -- wait \
+  --run-identity "$runIdentity" \
+  --attempt-identity "$attemptIdentity" \
+  --handoff-receipt "$handoffReceipt" \
+  --terminal-envelope "$terminalEnvelope" \
+  --deadline-ms 5000
+```
+
+Each row records the awaited condition, existing authoritative surface, exact
+deadline, time basis, terminal mapping, exact remediation, responsible actor,
+and visible deadline-miss metadata. For WI-06, `GH_TIMEOUT_MS` is the
+named executable boundary and starts at publication request dispatch. Confirmation
+means the existing `publishJournalEvent` flow's complete comment census after
+creation; it does not use the optional comment id, infer a URL, wait for a human
+audience, or automatically publish again after ambiguous delivery. An undeclared
+wait or a row naming a nonexistent producer/observation surface fails the
+completeness check.
+The inventory reuses existing producers and observation surfaces; it adds no
+coordination or persistence machinery.
+
+`done` means the awaited condition was proven and the next legal action is
+clear. `blocked` means progress is not legal or evidence is missing and the
+record includes a concrete cause, exact proposed fix, evidence needed to
+retry, responsible actor, and next deadline. `refused` means the action or
+transition is locally illegal or an authoritative producer/infrastructure
+path refused it and the record includes the refusal cause, exact next
+remediation, and responsible actor.
+
+If a deadline expires without a terminal producer report, record the missing
+report and deadline as incident metadata, then return `blocked` with the exact
+remedy, owner, evidence needed, and next deadline. Deadline expiry alone never
+returns a fourth result, authorizes waiting again, proves infeasibility,
+creates an escalation, or makes an exception eligible.
+
+### Published exception
+
+A published exception is limited to a non-business procedural gate about
+publication, observation, formatting, or mechanical receipt/reconciliation
+whose underlying business invariant is already proven by existing
+authoritative evidence. It is not available for acceptance evidence, material
+review evidence, frozen scope, or any business-contract requirement.
+
+The gate must be independently proven infeasible under the current contract;
+deadline expiry alone proves only non-production. Before progression, publish
+an exception containing the gate identity, independent infeasibility evidence
+and deadline, impact/risk, proposed remedy, expiration or recheck condition,
+existing publication/observation surface, required audience, visibility
+proof, and existing authority basis. If no existing authority basis authorizes
+the procedural exception, progression requires one of the three escalation
+classes. The exception never fabricates evidence, changes business meaning,
+closes a material reviewer conflict, bypasses binding evidence, or adds a
+service or store.
+
+### Producer-before-validator and role boundary
+
+Every new gate must arrive with its producer in the same change, the
+producer's authoritative input and terminal failure, and an error message
+naming the exact fix. Prefer automatic correction where it is within existing
+manager/worker authority. A validator with a missing producer is `blocked`
+with the missing producer and exact producer addition required; an
+orchestrator-only remedy is forbidden.
+
+The flow-manager transports and verifies evidence and performs mechanical
+checks. The GPT author owns substantive Issue edits, defect/remedy
+dispositions, and finding dispositions. The flow-manager does not consolidate
+reviewer findings or make content judgments.
+
+### Complete scenario matrix
+
+| Scenario | Required result |
+| --- | --- |
+| normal completion | Complete the legal action and return `done`. |
+| mechanical repair | Repair, re-verify, return `done`, and change no business content. |
+| missing producer | Return `blocked` naming the missing producer and exact producer addition; do not fabricate an artifact. |
+| existing producer completion | Invoke the existing named producer, verify its bytes/evidence, and continue with `done`; do not create a substitute producer or artifact. |
+| legal retry | Perform the one existing pre-send zero-send retry under the same identity and record the result. |
+| post-send ambiguity | Do not resend; record incident metadata and return `blocked` with exact remediation and responsible actor. |
+| deadline expiry | Record deadline metadata and return `blocked` with remedy, owner, and next deadline; do not wait again. |
+| published exception | Publish and prove visibility of every required field, then proceed only for the closed procedural class. |
+| business-contract change | Escalate with `business-contract-change`. |
+| material reviewer conflict | Escalate with `material-reviewer-conflict` only after mechanical reconciliation. |
+| terminal infrastructure refusal | Return `refused` with cause, exact remediation, responsible actor, and `terminal-infrastructure-refusal`. |
+| no legal action | Return `blocked` with a concrete remedy, owner, and deadline rather than remaining silently idle. |
+| premature stage transition | Return local `refused` with missing predecessor evidence, exact fix, and responsible actor. |
+| ambiguous authority | Preserve existing handoff evidence and return local `blocked` or `refused` with the authority gap, owner, and deadline. |
+| two non-converging author-fix cycles | Ordinarily return `blocked` with the unresolved author-owned correction or disposition, evidence required, responsible actor, and next remediation. Use `material-reviewer-conflict` or `business-contract-change` only when its exact predicate is independently present. |
+
+The matrix also covers feasible gates, acceptance-evidence gates, missing
+terminal results, output conflicts, and overlapping continuation pressure.
+None of these cases adds a second retry, monitor, continuation path, lease,
+heartbeat, service, watchdog, coordinator, transport state, or durable store.
+
 
 ## Mechanical parity edits
 

@@ -1,0 +1,45 @@
+{
+  "issue_number": 1192,
+  "iteration_id": "wrap-20260802T110430Z-6651b336",
+  "iteration_id_source": "wrapper_generated",
+  "supersedes": "wrap-20260802T033552Z-07df6938",
+  "created_at": "2026-08-02T11:04:30.129Z",
+  "baseline": {
+    "commit_sha": "091d998305594ab5ec03a09a3c9267f3eda1b8f6",
+    "worktree_dirty": false,
+    "active_scope_hash": "sha256:428bcc2afabf5c34da7c3630ecd49a7df5b2386b8dca1be98f37ccd04e0c67b0"
+  },
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/lib/tier-gate-core.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
+  ],
+  "declared_globs": [
+    "scripts/lib/create-issue-stage-record*.ts",
+    "scripts/lib/create-issue-*.test.ts",
+    "scripts/toolchain/create-issue-*.test.ts"
+  ],
+  "amendments": [
+    {
+      "previous_active_scope_hash": "sha256:f8d1013719c1f5ddbac0fdffc86bc265ea9c310bf2b663604225918bff6775b8",
+      "new_active_scope_hash": "sha256:428bcc2afabf5c34da7c3630ecd49a7df5b2386b8dca1be98f37ccd04e0c67b0",
+      "changed": {
+        "added": [
+          "scripts/lib/tier-gate-core.ts"
+        ],
+        "removed": [
+          "scripts/create-issue-stage-finalize.ts",
+          "scripts/lib/vitest-pre-topology-measurement.mjs"
+        ]
+      },
+      "reason": "Declare the complete current PR scope, including the merged main strict-nullability fix",
+      "actor": "local",
+      "timestamp": "2026-08-02T11:14:35.846Z",
+      "applied": true
+    }
+  ]
+}

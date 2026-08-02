@@ -292,8 +292,18 @@ function parseAfterPassAnchor(value: unknown): number | null {
 }
 function nonEmpty(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
-function canonicalEpisodeId(taskIdentity: string, episodeFirstRevision: string): string { return `${taskIdentity}@${episodeFirstRevision}`; }
-function canonicalStageReceiptId(reviewEpisodeId: string, stageSequence: number): string { return `${reviewEpisodeId}:stage-receipt:${String(stageSequence).padStart(4, '0')}`; }
+export function deriveReviewEpisodeId(taskIdentity: string, episodeFirstRevision: string): string {
+  return `${taskIdentity}@${episodeFirstRevision}`;
+}
+export function deriveStageReceiptId(reviewEpisodeId: string, stageSequence: number): string {
+  return `${reviewEpisodeId}:stage-receipt:${String(stageSequence).padStart(4, '0')}`;
+}
+function canonicalEpisodeId(taskIdentity: string, episodeFirstRevision: string): string {
+  return deriveReviewEpisodeId(taskIdentity, episodeFirstRevision);
+}
+function canonicalStageReceiptId(reviewEpisodeId: string, stageSequence: number): string {
+  return deriveStageReceiptId(reviewEpisodeId, stageSequence);
+}
 function canonicalSourceLabel(capture: CaptureIdentityV1): string { return `${capture.name}|${capture.captureIdentity}`; }
 function validCardinality(value: unknown): value is number { return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= MAX_REVIEWER_CARDINALITY; }
 function slotForOrdinal(ordinal: number): ReviewerSlot { return String(ordinal).padStart(2, '0'); }

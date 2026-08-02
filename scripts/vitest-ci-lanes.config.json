@@ -57,6 +57,7 @@
     "scripts/kernel/json-artifact.test.ts": "light",
     "scripts/kernel/json-contract.test.ts": "light",
     "scripts/kernel/subprocess.test.ts": "heavy",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts": "heavy",
     "scripts/lib/create-issue-stage-record.test.ts": "light",
     "scripts/lib/protected-signal-receipt.test.ts": "light",
     "scripts/orchestrator-escalation-router.test.ts": "parked",
@@ -106,11 +107,13 @@
     "scripts/toolchain/chatgpt-browser-turn.issue-1010.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts": "light",
     "scripts/toolchain/chatgpt-browser-turn.test.ts": "light",
+    "scripts/toolchain/create-issue-final-acceptance.test.ts": "heavy",
     "scripts/worker-message-submit-reconcile.test.ts": "heavy",
     "scripts/worker-smoke.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light",
-    "scripts/flow-manager-long-running-child.test.ts": "light"
+    "scripts/flow-manager-long-running-child.test.ts": "light",
+    "scripts/flow-manager-authority-contract.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,

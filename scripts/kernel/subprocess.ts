@@ -47,6 +47,7 @@ export interface RunProcessSyncOptions {
   readonly inheritParentEnv?: boolean;
   readonly encoding?: BufferEncoding;
   readonly input?: string | Uint8Array;
+  readonly timeoutMs?: number;
 }
 
 interface TerminalIntent {
@@ -336,6 +337,9 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
 export function runProcessSync(options: RunProcessSyncOptions): ProcessResult {
   if (!options.command.trim()) throw new TypeError('command must be a non-empty executable path or name');
   if (options.args && !Array.isArray(options.args)) throw new TypeError('args must be an argument array');
+  if (options.timeoutMs !== undefined && options.timeoutMs < 0) {
+    throw new RangeError('timeoutMs must be non-negative');
+  }
 
   const encoding = options.encoding ?? 'utf8';
   const env = options.inheritParentEnv
@@ -351,30 +355,35 @@ export function runProcessSync(options: RunProcessSyncOptions): ProcessResult {
       windowsHide: true,
       encoding,
       input: options.input,
+      timeout: options.timeoutMs,
     });
   } catch (error) {
+    const timedOut = error instanceof Error
+      && 'code' in error
+      && error.code === 'ETIMEDOUT';
     return {
-      outcome: 'spawn-failure',
+      outcome: timedOut ? 'timeout' : 'spawn-failure',
       ok: false,
       exitCode: null,
       signal: null,
       stdout: '',
       stderr: '',
-      timedOut: false,
+      timedOut,
       cancelled: false,
       error: describeError(error),
     };
   }
 
   if (child.error) {
+    const timedOut = 'code' in child.error && child.error.code === 'ETIMEDOUT';
     return {
-      outcome: 'spawn-failure',
+      outcome: timedOut ? 'timeout' : 'spawn-failure',
       ok: false,
       exitCode: null,
       signal: null,
       stdout: child.stdout ?? '',
       stderr: child.stderr ?? '',
-      timedOut: false,
+      timedOut,
       cancelled: false,
       error: describeError(child.error),
     };

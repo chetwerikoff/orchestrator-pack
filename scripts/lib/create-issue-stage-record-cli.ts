@@ -6,6 +6,10 @@ import {
   startReviewCycle,
 } from './create-issue-stage-record-core.ts';
 import { runFinalAcceptance } from './create-issue-final-acceptance.ts';
+import {
+  inspectAcceptanceArtifacts,
+  produceAcceptanceArtifacts,
+} from './create-issue-stage-record-artifacts.ts';
 import type { PublicActor } from './create-issue-stage-record-types.ts';
 import {
   dispatchDefaultCliArg,
@@ -22,7 +26,7 @@ interface JournalTailCliOptions {
 }
 
 interface StageFinalizeCliOptions extends JournalTailCliOptions {
-  command: 'start-cycle' | 'publish-stage' | 'retry-pending';
+  command: 'start-cycle' | 'publish-stage' | 'retry-pending' | 'produce-artifacts' | 'check-artifacts';
   repo: string;
   issueNumber: number;
   sourceRevision?: string;
@@ -30,6 +34,13 @@ interface StageFinalizeCliOptions extends JournalTailCliOptions {
   predecessorCycleId?: string;
   receiptPath?: string;
   waiverPath?: string;
+  reviewDir?: string;
+  outputDir?: string;
+  tierIntakePath?: string;
+  stageEvidencePaths: string[];
+  authorDispositionsPath?: string;
+  claudeProducerEvidencePaths: string[];
+  phase?: 'pre-lens' | 'final-acceptance';
 }
 
 interface FinalAcceptanceCliOptions extends JournalTailCliOptions {
@@ -108,12 +119,14 @@ function stageFinalizeUsage(): string {
     '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> --tier <T1|T2|T3> [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
+    '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> --tier-intake <path> --stage-evidence <path>... --author-dispositions <path> [--claude-producer-evidence <path>...] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--json]',
+    '  create-issue-stage-finalize.ts check-artifacts --review-dir <path> --tier-intake <path> --stage-evidence <path>... --author-dispositions <path> [--claude-producer-evidence <path>...] [--output-dir <path>] [--json]',
   ].join('\n');
 }
 
 function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
   const command = argv[2];
-  if (command !== 'start-cycle' && command !== 'publish-stage' && command !== 'retry-pending') {
+  if (command !== 'start-cycle' && command !== 'publish-stage' && command !== 'retry-pending' && command !== 'produce-artifacts' && command !== 'check-artifacts') {
     throw new Error(`unknown command\n${stageFinalizeUsage()}`);
   }
   const opts: StageFinalizeCliOptions = {
@@ -122,6 +135,12 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
     issueNumber: 0,
     publicActor: 'cursor-flow-manager',
     json: false,
+    stageEvidencePaths: [],
+    claudeProducerEvidencePaths: [],
+  };
+  const artifactCommand = command === 'produce-artifacts' || command === 'check-artifacts';
+  const requireArtifactCommand = (arg: string): void => {
+    if (!artifactCommand) throw new Error(`${arg} is only valid with produce-artifacts or check-artifacts`);
   };
   for (let i = 3; i < argv.length; i += 1) {
     const arg = argv[i]!;
@@ -147,6 +166,37 @@ function parseStageFinalizeArgs(argv: string[]): StageFinalizeCliOptions {
       case '--waiver':
         opts.waiverPath = String(argv[++i] ?? '');
         break;
+      case '--review-dir':
+        requireArtifactCommand(arg);
+        opts.reviewDir = String(argv[++i] ?? '');
+        break;
+      case '--output-dir':
+        requireArtifactCommand(arg);
+        opts.outputDir = String(argv[++i] ?? '');
+        break;
+      case '--tier-intake':
+        requireArtifactCommand(arg);
+        opts.tierIntakePath = String(argv[++i] ?? '');
+        break;
+      case '--stage-evidence':
+        requireArtifactCommand(arg);
+        opts.stageEvidencePaths.push(String(argv[++i] ?? ''));
+        break;
+      case '--author-dispositions':
+        requireArtifactCommand(arg);
+        opts.authorDispositionsPath = String(argv[++i] ?? '');
+        break;
+      case '--claude-producer-evidence':
+        requireArtifactCommand(arg);
+        opts.claudeProducerEvidencePaths.push(String(argv[++i] ?? ''));
+        break;
+      case '--phase': {
+        requireArtifactCommand(arg);
+        const phase = String(argv[++i] ?? '');
+        if (phase !== 'pre-lens' && phase !== 'final-acceptance') throw new Error('--phase must be pre-lens or final-acceptance');
+        opts.phase = phase;
+        break;
+      }
       default:
         i = finalizeJournalArgvIndex(arg, argv, i, opts, stageFinalizeUsage());
         break;
@@ -226,6 +276,29 @@ function parseFinalAcceptanceArgs(argv: string[]): FinalAcceptanceCliOptions {
 
 export function runStageFinalizeCli(argv: string[]): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
+    if (opts.command === 'produce-artifacts' || opts.command === 'check-artifacts') {
+      const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
+      const tierIntakePath = parseRequiredNonEmptyString(opts.tierIntakePath, '--tier-intake');
+      const authorDispositionsPath = parseRequiredNonEmptyString(opts.authorDispositionsPath, '--author-dispositions');
+      const artifactOptions = {
+        reviewDir,
+        tierIntakePath,
+        stageEvidencePaths: opts.stageEvidencePaths,
+        authorDispositionsPath,
+        claudeProducerEvidencePaths: opts.claudeProducerEvidencePaths,
+        outputDir: opts.outputDir,
+        phase: opts.phase,
+      };
+      const result = opts.command === 'produce-artifacts'
+        ? produceAcceptanceArtifacts(artifactOptions)
+        : inspectAcceptanceArtifacts(artifactOptions);
+      if (opts.json) console.log(JSON.stringify(result));
+      else if (!result.ok) {
+        const messages = 'errors' in result ? result.errors : result.missing.map((item) => item.reason);
+        process.stderr.write(`${messages.join('\n')}\n`);
+      }
+      return result.ok ? 0 : 1;
+    }
     const issueNumber = parseRequiredPositiveInt(String(opts.issueNumber || ''), '--issue-number');
     const transport = defaultGhTransport();
 
