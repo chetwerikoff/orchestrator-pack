@@ -44,8 +44,15 @@ function classify(messages: StateLightTestMessage[], inProgress = false) {
 }
 
 function runNoResendRefusalFixture(messages: StateLightTestMessage[]) {
+  const observation = classify(messages);
+  const terminal = observation.state === 'waiting'
+    ? { state: 'ui_contract_mismatch', cause: 'owned_prompt_marker_unresolved' }
+    : observation.state === 'uncertain'
+      ? { state: 'ui_contract_mismatch', cause: observation.cause }
+      : { state: 'unexpected_owned_reply', cause: 'fixture_invalid' };
   return {
-    observation: classify(messages),
+    observation,
+    terminal,
     send_count: 1,
     published: false,
   } as const;
@@ -100,6 +107,7 @@ describe('marker ownership classification', () => {
 
     expect(result).toEqual({
       observation: { state: 'waiting' },
+      terminal: { state: 'ui_contract_mismatch', cause: 'owned_prompt_marker_unresolved' },
       send_count: 1,
       published: false,
     });
@@ -115,6 +123,7 @@ describe('marker ownership classification', () => {
 
     expect(result).toEqual({
       observation: { state: 'uncertain', cause: 'owned_prompt_marker_ambiguous' },
+      terminal: { state: 'ui_contract_mismatch', cause: 'owned_prompt_marker_ambiguous' },
       send_count: 1,
       published: false,
     });
