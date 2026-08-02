@@ -488,6 +488,41 @@ read compatibility only; source-suffixed captures require receipts.
 
 ## Shared reviewer contract
 
+### Direct GitHub publication and manager receipts — Issue #1225
+
+The GPT author may create the target GitHub Issue and edit its title and body
+directly. After a successful write, the manager-facing chat response is a
+receipt only: the new revision marker and changed-section list, in at most
+15 lines. This grants no PR-surface or PR-finalization authority.
+
+A GPT reviewer publishes its verdict and findings as a top-level comment on
+the target Issue directly. After a successful write, its manager-facing chat
+response is a receipt only:
+
+```text
+VERDICT: <...>
+COMMENT_URL: <...>
+```
+
+That receipt is at most 5 lines. The Issue comment and URL are publication and
+receipt surfaces only; they are not a capture producer, evidence identity, or
+replacement for the browser-GPT source response. The source response remains
+saved verbatim, bound to its existing invocation envelope and stage receipt,
+included in the governed capture union, relayed with verified equality, and
+consumed by the existing finding ledger and final-acceptance path.
+
+Receipt-only applies to the response returned to the flow-manager after a
+GitHub write. It does not restrict invocation inputs or governed relay: a
+fresh author or reviewer invocation may receive the full current Issue and
+required prior context, and the author still receives the full governed source
+union.
+
+Full Issue-body or full-findings text in manager-facing chat is an exceptional
+fallback only when the relevant GitHub write genuinely fails. Record the
+deviation and the failed write path in the existing `chats.md` audit surface;
+do not redefine that fallback text as governed evidence unless the existing
+capture contract already does so.
+
 Every browser-GPT source and Claude capture uses the rubric source
 `prompts/codex_draft_review_prompt.md` without invoking Codex as reviewer:
 
@@ -507,6 +542,20 @@ Save each source response verbatim before normalization. The reviewer-local id i
 not cross-source identity.
 
 ## Relay and author harvest
+
+After each receipt, the manager performs a fresh pull of the target Issue,
+preserves the next immutable `rNN` copy, and runs the mechanical guards from a
+trusted checkout. A guard failure is correction input, not terminal
+escalation: pass the verbatim guard-error lines to the next author invocation,
+which fixes the Issue directly. Escalate only after two failed author passes
+against the same verbatim error, or when a content-level conflict requires
+adjudication.
+
+The direct-write authority is limited to the target Issue: the author may
+create it and edit its title/body, and reviewers may publish top-level target
+Issue comments. This flow grants no authority to create or edit pull requests,
+publish PR comments or reviews, finalize PRs, apply labels or milestones, write
+repository files, or perform unrelated GitHub mutations.
 
 Every relay-eligible capture from every episode receipt remains governed,
 including settled incomplete-attempt evidence and Claude capture evidence. A
@@ -528,6 +577,12 @@ The flow-manager relays source evidence; it does not consolidate findings or mak
 content judgments. The author receives the full governed source union and returns
 Issue edits plus defect/remedy dispositions and one M4 update for the logical
 round.
+
+Concise receipts avoid browser insertion and rendering work that grows with
+manager-facing response size, and remove an avoidable relay step with loss
+risk. This transport optimization does not weaken authoritative invocation
+inputs, verbatim source capture, verified relay, finding-ledger processing, or
+final acceptance.
 
 ## Finding ledger and occurrence economics
 
