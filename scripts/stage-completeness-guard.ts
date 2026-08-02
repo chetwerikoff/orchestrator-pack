@@ -17,8 +17,17 @@ import {
   runDraftTextGuardCli,
 } from './lib/draft-text-guard-cli.ts';
 import { isDirectCliExecution, runReviewerTsCli } from './lib/reviewer-ts-cli.ts';
+import {
+  checkRemoteAuthority,
+  type RemoteAuthorityInput,
+  type RemoteAuthorityResult,
+} from './lib/create-issue-stage-topology.ts';
 
 const GUARD_LABEL = 'stage-completeness guard';
+
+export function checkRemoteStageAuthority(input: RemoteAuthorityInput): RemoteAuthorityResult {
+  return checkRemoteAuthority(input);
+}
 
 export type CanonicalReceiptInventoryOptions = {
   stageReceiptPaths?: string[];
