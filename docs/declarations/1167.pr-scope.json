@@ -6,7 +6,8 @@
     "scripts/chatgpt-browser-turn/state-light-session.test.ts",
     "scripts/chatgpt-browser-turn/state-light-session.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
   ],
   "denylist": [
     ".claude/",
@@ -43,7 +44,8 @@
     "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
   ],
-  "source_revision": "caed7f009d7bd75dec058929057a43ad1440366a"
+  "source_revision": "3252e1282233a0774522e359f31982ae8b7eeb34"
 }
