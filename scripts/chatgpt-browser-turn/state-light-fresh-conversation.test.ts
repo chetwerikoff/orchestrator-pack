@@ -302,7 +302,7 @@ describe('state-light fresh conversation collision recovery', () => {
     releaseStateLightFreshConversationClaim(profileKey, SHARED_CONV, 'winner-invocation');
   });
 
-  it('returns advisory wall state without navigating when a fresh marker exists', async () => {
+  it('proceeds through its owned page when a prior invocation recorded an unexpired wall', async () => {
     const profileKey = 'collision-profile';
     recordStateLightAdvisoryWall(profileKey, 'rate_limit', 'rate_limit_detected', 'prior-invocation');
 
@@ -310,16 +310,31 @@ describe('state-light fresh conversation collision recovery', () => {
     const loser = makeLoserPage('PROMPT-LOSER', 'LOSER-OK');
     const outcome = await runNewChatTurn(loser.page, '/tmp/advisory.txt');
 
-    expect(outcome.code).toBe(12);
+    expect(outcome.code).toBe(0);
     expect(outcome.result).toMatchObject({
-      state: 'rate_limit',
-      cause: 'rate_limit_detected',
-      send_count: 0,
-      goto_count: 0,
-      new_chat_click_count: 0,
-      navigation_count: 0,
+      state: 'ok',
+      cause: 'completed_page_only',
+      send_count: 1,
     });
-    expect(loser.page.goto).not.toHaveBeenCalled();
+    expect(outcome.result.goto_count).toBeGreaterThan(0);
+    expect(loser.page.goto).toHaveBeenCalled();
+  });
+
+  it('regresses if a stored wall becomes an invocation refusal again', async () => {
+    const profileKey = 'collision-profile';
+    recordStateLightAdvisoryWall(profileKey, 'quota', 'quota_detected', 'prior-invocation', 1_000_000, mocks.nowMs);
+
+    mocks.readStableInput.mockImplementationOnce(() => stableTurnInput('PROMPT-QUOTA'));
+    const page = makeLoserPage('PROMPT-QUOTA', 'QUOTA-OK');
+    const outcome = await runNewChatTurn(page.page, '/tmp/advisory-regression.txt');
+
+    expect(outcome.code).toBe(0);
+    expect(outcome.result.state).toBe('ok');
+    expect(outcome.result.send_count).toBe(1);
+    expect(readStateLightAdvisoryWall(profileKey)).toMatchObject({
+      state: 'quota',
+      cause: 'quota_detected',
+    });
   });
 
   it('ignores expired advisory wall markers fail-open', () => {
