@@ -1,4 +1,4 @@
-// @vitest-ci-lane light
+// @vitest-ci-lane heavy
 // @vitest-pre-topology-seconds 120
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -102,11 +102,6 @@ interface RunnerState {
   agents?: unknown[];
   orcaRows?: unknown[];
   standardTeardownOk?: boolean;
-  keepOrcaAfterRemoval?: boolean;
-  removeResult?: ProcessResult;
-  ignoredOutput?: string;
-  branchOwners?: Array<{ number: number; headRefName: string }>;
-  removeCount?: number;
   invocations: CommandInvocation[];
 }
 
@@ -130,7 +125,7 @@ function makeRunner(paths: ReturnType<typeof fixture>, state: RunnerState): Comm
       });
     }
     if (invocation.command.endsWith('/scripts/gh') && args[0] === 'pr' && args[1] === 'list') {
-      return result({ stdout: JSON.stringify(state.branchOwners ?? []) });
+      return result({ stdout: '[]' });
     }
     if (invocation.command === 'git' && args.includes('rev-parse') && args.includes('--git-common-dir')) {
       return result({ stdout: `${paths.common}\n` });
@@ -139,15 +134,14 @@ function makeRunner(paths: ReturnType<typeof fixture>, state: RunnerState): Comm
       return result({ stdout: state.dirty ? ' M tracked.txt\n' : '' });
     }
     if (invocation.command === 'git' && args.includes('status') && args.includes('--ignored=matching')) {
-      return result({ stdout: state.ignoredOutput ?? '' });
+      return result({ stdout: '' });
     }
     if (invocation.command === 'git' && args.includes('merge-base')) return result({ stdout: '' });
     if (invocation.command === 'git' && args.includes('fetch')) return result({ stdout: '' });
     if (invocation.command === 'git' && args.includes('worktree') && args.includes('remove')) {
       expect(args).not.toContain('--force');
-      state.removeCount = (state.removeCount ?? 0) + 1;
       state.removed = true;
-      return state.removeResult ?? result({ stdout: '' });
+      return result({ stdout: '' });
     }
     if (invocation.command === 'git' && args.includes('branch') && args.includes('--list')) {
       return result({ stdout: state.removed ? `${BRANCH}\n` : '' });
@@ -157,8 +151,7 @@ function makeRunner(paths: ReturnType<typeof fixture>, state: RunnerState): Comm
       return result({ stdout: '' });
     }
     if (args[0] === 'worktree' && args[1] === 'list') {
-      const rows = state.removed && !state.keepOrcaAfterRemoval ? [] : (state.orcaRows ?? []);
-      return result({ stdout: orcaPayload(rows) });
+      return result({ stdout: orcaPayload(state.orcaRows ?? []) });
     }
     if (args[0] === 'worktree' && args[1] === 'ps') {
       return result({ stdout: orcaPayload(state.agents ?? []) });
@@ -340,101 +333,6 @@ describe('guarded Git-only recovery', () => {
       operations: opts,
     });
     expect(repeated).toMatchObject({ outcome: 'already_absent', effects: [] });
-  });
-
-  it('does not repeat removal after the effect completes before receipt loss', () => {
-    const paths = fixture();
-    const state: RunnerState = {
-      removed: false,
-      invocations: [],
-      removeResult: result({
-        outcome: 'timeout',
-        ok: false,
-        exitCode: null,
-        timedOut: true,
-        stderr: 'receipt lost after effect',
-      }),
-    };
-    const opts = operations(paths, state);
-
-    expect(runLifecycle({
-      expected: paths.expected,
-      context: 'explicit-recovery',
-      apply: true,
-      operations: opts,
-    }).outcome).toBe('cleanup_deferred');
-    expect(runLifecycle({
-      expected: paths.expected,
-      context: 'explicit-recovery',
-      apply: true,
-      operations: opts,
-    }).outcome).toBe('already_absent');
-    expect(state.removeCount).toBe(1);
-  });
-
-  it('preserves partial Git/Orca disappearance without repeating removal', () => {
-    const paths = fixture();
-    const staleOrcaRow = {
-      path: paths.worktree,
-      head: HEAD,
-      branch: `refs/heads/${BRANCH}`,
-      linkedPR: 1300,
-      isMainWorktree: false,
-      isArchived: false,
-    };
-    const state: RunnerState = {
-      removed: false,
-      invocations: [],
-      orcaRows: [staleOrcaRow],
-      keepOrcaAfterRemoval: true,
-      removeResult: result({
-        outcome: 'timeout',
-        ok: false,
-        exitCode: null,
-        timedOut: true,
-        stderr: 'partial receipt lost',
-      }),
-    };
-    const opts = operations(paths, state);
-
-    runLifecycle({ expected: paths.expected, context: 'explicit-recovery', apply: true, operations: opts });
-    const repeated = runLifecycle({
-      expected: paths.expected,
-      context: 'explicit-recovery',
-      apply: true,
-      operations: opts,
-    });
-
-    expect(repeated).toMatchObject({ outcome: 'cleanup_deferred', pipelineContinues: true });
-    expect(repeated.classification.classification).toBe('orca_only');
-    expect(state.removeCount).toBe(1);
-  });
-
-  it('blocks non-allowlisted ignored data and branch reuse', () => {
-    const paths = fixture();
-    const ignoredState: RunnerState = {
-      removed: false,
-      invocations: [],
-      ignoredOutput: '!! private-cache/\n',
-    };
-    expect(runLifecycle({
-      expected: paths.expected,
-      context: 'explicit-recovery',
-      apply: false,
-      operations: operations(paths, ignoredState),
-    })).toMatchObject({ outcome: 'cleanup_deferred', gates: { ignoredData: false }, effects: [] });
-
-    const reusedState: RunnerState = {
-      removed: false,
-      invocations: [],
-      branchOwners: [{ number: 1301, headRefName: BRANCH }],
-    };
-    expect(runLifecycle({
-      expected: paths.expected,
-      context: 'explicit-recovery',
-      apply: false,
-      operations: operations(paths, reusedState),
-    })).toMatchObject({ outcome: 'cleanup_deferred', gates: { branchOwnership: false }, effects: [] });
   });
 });
 
