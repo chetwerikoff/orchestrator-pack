@@ -97,15 +97,20 @@ what gets built, in what order, with what boundaries. The planner
     against the PR diff, declaration snapshot, and issue-body fences. Direct
     architect PRs that skip the worker flow fail here by design.
   - **Override:** only when the user explicitly authorizes a direct fix for
-    one named PR (not a standing waiver). Invoke **`direct-fix-checklist`**
-    and follow it end-to-end before pushing.
-- Write implementation code, tests, or run workers (except the standalone
-  declaration producer documented in `direct-fix-checklist`, which needs no
-  worker and no runtime session).
+    one specific change, for that one run (not a standing waiver). The PR need
+    not exist yet. Invoke **`direct-fix-checklist`** and follow it end-to-end
+    before pushing.
+- Write implementation code or tests, or act as the worker yourself — do not
+  implement inside a worker's session. Starting a worker and observing it is the
+  bounded handoff procedure in `direct-fix-checklist` and **is** permitted; so is
+  the standalone declaration producer, which needs no worker and no runtime
+  session at all.
 - Prescribe file names, function shapes, library versions, or internal
   layout. The planner's AO-free `scripts/pr-scope-declaration.ts` producer
   declares files; you bound via `denylist` + `allowed_roots`.
-- Bypass the review loop (`gh pr merge` without Codex review completing).
+- Bypass the review loop — no `gh pr merge` until an operator-requested pack
+  review at the current head has completed under the configured `PACK_REVIEWER`.
+  The requirement is the review, not any one engine.
 - Touch `packages/core/**` or `vendor/**`.
 - Edit `agent-orchestrator.yaml` or reactions to compensate for a bad spec.
   Fix the spec or `AGENTS.md` instead.
