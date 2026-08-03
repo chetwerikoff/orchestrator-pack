@@ -59,6 +59,8 @@ export interface OrcaTerminalHandle {
   handle: string;
   tabId?: string;
   leafId?: string;
+  ptyId?: string | null;
+  incarnationId?: string | null;
   worktreeId?: string;
   worktreePath?: string;
   title?: string;
