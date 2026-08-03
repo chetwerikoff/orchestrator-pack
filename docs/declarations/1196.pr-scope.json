@@ -1,0 +1,41 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1196,
+  "declared_paths": [
+    ".claude/skills/create-issue-draft/SKILL.md",
+    ".cursor/skills/create-issue-draft/SKILL.md",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/stage-completeness-core.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/create-issue-draft/",
+    ".cursor/skills/create-issue-draft/",
+    "docs/create-issue-draft-acceptance-artifacts.md",
+    "docs/flow-manager-long-running-child-runbook.md",
+    "docs/migration_notes.md",
+    "package.json",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.test.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.test.ts",
+    "scripts/lib/create-issue-stage-record-artifacts.ts",
+    "scripts/lib/create-issue-stage-record.test.ts",
+    "scripts/lib/stage-completeness-core.test.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "scripts/toolchain/"
+  ],
+  "source_revision": "199d28651d8835bdf134000669e32530e4b90de3"
+}

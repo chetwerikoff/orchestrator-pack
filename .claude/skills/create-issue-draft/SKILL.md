@@ -495,48 +495,44 @@ directly. After a successful write, the manager-facing chat response is a
 receipt only: the new revision marker and changed-section list, in at most
 15 lines. This grants no PR-surface or PR-finalization authority.
 
-A GPT reviewer publishes its verdict and findings as a top-level comment on
-the target Issue directly. After a successful write, its manager-facing chat
-response is a receipt only:
+A GPT reviewer publishes its verdict and findings as one top-level comment on the
+expected target Issue directly. Governed direct-publication invocations use a
+short link-first prompt and must carry one caller-minted UUID both as
+`--invocation-id <UUID>` and as the exact line `INVOCATION_ID_TO_ECHO: <UUID>`.
+The reviewer comment begins with exactly one first non-empty line:
+`Read revision: #<ISSUE_NUMBER> rNN`.
+
+Before send, the invocation freezes one reviewer-source identity with the
+closed policy suffix `#capture=direct-publication/v1`. The tracked observer
+must retain exactly one owned-turn `add_comment_to_issue` invocation and its
+matching authoritative result. A successful result selects
+`service-observed-issue-comment/v1`; the source artifact is the exact UTF-8
+encoding of the decoded `comment` argument, never a refetched or rendered
+comment. The manager-facing output is exactly:
 
 ```text
 VERDICT: <...>
 COMMENT_URL: <...>
 REVISION: <rNN>
-INVOCATION_ID: <...>
+INVOCATION_ID: <UUID>
 FINDING_COUNT: <n>
 ```
 
-The receipt is the terminal result of the reviewer turn and remains at most 5
-lines. Its `COMMENT_URL` supplies both the canonical URL and numeric comment id;
-its `REVISION` and `INVOCATION_ID` complete the required three-way binding:
-comment id + URL, Issue revision marker, and invocation id. `FINDING_COUNT` is
-the claimed finding count used for pre-credentialing verification. The receipt is not
-the stage capture.
+A definitive no-commit result selects `failed-write-final-assistant/v1` only
+for an adapter result that explicitly proves no request was dispatched, or a
+complete bound GitHub create-comment response with status `401`, `403`, `404`,
+`410`, or `422`. In that exceptional branch, the source and manager output
+are the exact full final-assistant bytes and publication fields are absent;
+there is no fabricated successful receipt. Timeout, transport ambiguity,
+connection loss, `5xx`, missing/unbound result, generic error, and observation
+loss are possible delivery and produce no capture, fallback, retry, or resend.
 
-Immediately after the terminal receipt, the manager must harvest the published
-top-level comment through the GitHub API. Do not use `--jq .body`: jq framing
-can alter the byte stream. Use the exact-byte recipe below, replacing
-`OWNER/REPO` and `<id>` from `COMMENT_URL`:
-
-```bash
-scripts/gh api repos/OWNER/REPO/issues/comments/<id> | node -e 'const c=[];process.stdin.on("data",d=>c.push(d)).on("end",()=>process.stdout.write(JSON.parse(Buffer.concat(c)).body))' > capture.txt
-```
-
-The resulting `capture.txt` is the canonical reviewer source artifact: the
-comment body bytes are immutable capture bytes, with no added or removed
-newline. Bind the capture to comment id + URL, `REVISION`, and `INVOCATION_ID`;
-no equality with a chat assistant node is required. Before stage credentialing,
-record `sha256sum capture.txt` and the byte length, then parse the capture and
-compare its finding count with the number claimed in the terminal receipt. A
-missing binding, hash/length mismatch, or finding-count discrepancy means the
-stage is not credentialed; re-harvest the same published comment and repeat
-verification. Only the verified harvested bytes enter the governed-capture
-union, verified relay, finding ledger, and final acceptance.
-
-The original browser-GPT response remains governed evidence wherever the
-existing invocation contract requires it, but it is not the canonical source
-for this direct-publication path and need not equal the harvested comment.
+The `turn-result/v1` `output` identifies manager-facing output bytes and its
+optional `reviewer_source` identifies the dedicated source bytes. Stage
+credentialing uses the source artifact, parses its leading Issue/revision
+line, and counts findings from those bytes. A mutable GitHub read-back remains
+only diagnostic/compatibility evidence for completed historical API-harvest
+captures; it cannot create, repair, replace, or credential new-mode source.
 
 Receipt-only applies to the response returned to the flow-manager after a
 GitHub write. It does not restrict invocation inputs or governed relay: a

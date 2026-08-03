@@ -53,6 +53,14 @@ import {
 } from './chatgpt-browser-turn/dispatch-observation.ts';
 import { recordSwallowedDriverException } from './chatgpt-browser-turn/diagnostics.ts';
 import { readStableInput } from './chatgpt-browser-turn/input.ts';
+import { publishStateLightReply } from './chatgpt-browser-turn/state-light-turn.ts';
+import {
+  directPublicationReceipt,
+  reviewerSourceMetadata,
+  DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN,
+  validateDirectPublicationInputs,
+  type DirectPublicationConfig,
+} from './chatgpt-browser-turn/terminal-witness.ts';
 import {
   BrowserOperationTimeoutError,
   browserOperationClassFromError,
@@ -355,6 +363,32 @@ function browserConfig(args: ParsedArgs): BrowserConfig {
   return { cdp, profile, newChat, timeoutMs, ...(chatUrl ? { chatUrl } : {}), ...(projectUrl ? { projectUrl } : {}) };
 }
 
+function directPublicationConfig(
+  args: ParsedArgs,
+  invocationId: string,
+  prompt: string,
+): DirectPublicationConfig | undefined {
+  const sourceOutput = option(args, 'reviewer-source-output');
+  const directKeys = ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision'];
+  if (!sourceOutput) {
+    if (directKeys.some((key) => args.options.has(key))) throw new Error('input_invalid:direct_publication_requires_source_output');
+    return undefined;
+  }
+  const repositoryFullName = required(args, 'repository');
+  const issueNumber = parseInteger(required(args, 'issue-number'), 1);
+  const sourceRevision = required(args, 'source-revision');
+  const reviewerSource = required(args, 'reviewer-source');
+  if (!DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN) {
+    throw new Error('input_invalid:direct_publication_capability_witness_unproven');
+  }
+  const validation = validateDirectPublicationInputs({ invocationId, prompt, reviewerSource, repositoryFullName, issueNumber, sourceRevision });
+  if (validation) throw new Error(`input_invalid:${validation}`);
+  return {
+    target: { repositoryFullName, issueNumber, sourceRevision, invocationId },
+    reviewerSource,
+    reviewerSourceOutput: sourceOutput,
+  };
+}
 
 function canonicalConversationFromOpenedPage(
   config: BrowserConfig,
@@ -378,8 +412,11 @@ function emitTurnAndCode(result: TurnResultV1): number {
 }
 
 async function runTurn(args: ParsedArgs): Promise<number> {
-  assertAllowedOptions(args, ['profile', 'cdp', 'input', 'output', 'chat-url', 'new-chat', 'project-url', 'timeout-ms']);
-  const invocationId = randomUUID();
+  assertAllowedOptions(args, [
+    'profile', 'cdp', 'input', 'output', 'chat-url', 'new-chat', 'project-url', 'timeout-ms',
+    'invocation-id', 'reviewer-source-output', 'reviewer-source', 'repository', 'issue-number', 'source-revision',
+  ]);
+  const invocationId = option(args, 'invocation-id') ?? randomUUID();
   let profileKey = 'profile-unresolved';
   let reservation: DestinationReservation | null = null;
   let scheduleLock: DomainLock | null = null;
@@ -397,7 +434,11 @@ async function runTurn(args: ParsedArgs): Promise<number> {
   let retainedUserMessageId: string | undefined;
 
   try {
-    config = browserConfig(args);
+    const baseConfig = browserConfig(args);
+    const snapshot = readStableInput(required(args, 'input'));
+    const direct = directPublicationConfig(args, invocationId, snapshot.text);
+    const directDestination = direct ? destinationIdentity(direct.reviewerSourceOutput) : undefined;
+    config = direct ? { ...baseConfig, directPublication: direct } : baseConfig;
     profileKey = configuredProfileKey(config.profile, config.cdp);
     const startupCompatibility = profileStartupCompatibility(config.profile, config.cdp);
     if (startupCompatibility) {
@@ -413,8 +454,10 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         },
       ));
     }
-    const snapshot = readStableInput(required(args, 'input'));
     const destination = destinationIdentity(required(args, 'output'));
+    if (direct && directDestination?.finalPath === destination.finalPath) {
+      throw new Error('input_invalid:direct_publication_artifact_alias');
+    }
     const conversationId = config.chatUrl ? normalizeConversationUrl(config.chatUrl) : undefined;
 
     reclaimSafePreSend(profileKey);
@@ -640,24 +683,70 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       service_assistant_id: result.assistantMessageId,
       cause: 'reply_complete',
     });
-    const publication = publishReply(profileKey, invocationId, reservation.finalPath, reservation.identity, result.reply);
-    if (publication.state !== 'committed_ok') {
-      const incident = updateIncident(profileKey, incidentId, {
+    let publication: { state: string; cause?: string; output_bytes?: number; output_sha256?: string };
+    let directReviewerSource = null as ReturnType<typeof reviewerSourceMetadata>;
+    const finishPublicationFailure = async (cause: string): Promise<number> => {
+      if (!incidentId || !opened) throw new Error('publication_cleanup_without_active_owner');
+      const activeIncidentId = incidentId;
+      const ownedTurn = opened;
+      const publicationIncident = updateIncident(profileKey, activeIncidentId, {
         kind: 'publication_incident',
         phase: 'publication_prepared',
-        cause: publication.cause ?? publication.state,
+        cause,
         owner: undefined,
       });
+      await closeOwnedTurnPage(ownedTurn, { retainPage: false });
       safeRelease(scheduleLock);
       scheduleLock = null;
       safeReleaseDestination(reservation);
       reservation = null;
-      return emitTurnAndCode(turnResult('recovery_required', 'blocking_domain', publication.cause ?? publication.state, invocationId, profileKey, {
+      return emitTurnAndCode(turnResult('recovery_required', 'blocking_domain', cause, invocationId, profileKey, {
         conversation_id: canonicalConversation,
-        ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
-        incident_id: incidentId,
-        generation: incident.generation,
+        ...(ownedTurn.provisionalId ? { provisional_id: ownedTurn.provisionalId } : {}),
+        incident_id: activeIncidentId,
+        generation: publicationIncident.generation,
       }));
+    };
+    if (config.directPublication) {
+      const settlement = result.directPublication;
+      if (!settlement || settlement.state === 'possible-delivery') {
+        updateIncident(profileKey, incidentId, {
+          kind: 'conversation_incident',
+          phase: 'possible_delivery',
+          cause: settlement?.cause ?? 'direct_publication_observation_missing',
+          owner: undefined,
+        });
+        return emitTurnAndCode(turnResult('recovery_required', 'conversation', settlement?.cause ?? 'direct_publication_observation_missing', invocationId, profileKey, {
+          conversation_id: canonicalConversation,
+          incident_id: incidentId,
+        }));
+      }
+      directReviewerSource = reviewerSourceMetadata(settlement, config.directPublication.target);
+      const managerReply = settlement.state === 'success'
+        ? directPublicationReceipt(settlement, config.directPublication.target)
+        : result.reply;
+      if (!directReviewerSource || !managerReply || !settlement.sourceBytes) {
+        updateIncident(profileKey, incidentId, {
+          kind: 'conversation_incident',
+          phase: 'possible_delivery',
+          cause: 'direct_publication_source_or_receipt_invalid',
+          owner: undefined,
+        });
+        return emitTurnAndCode(turnResult('recovery_required', 'conversation', 'direct_publication_source_or_receipt_invalid', invocationId, profileKey, {
+          conversation_id: canonicalConversation,
+          incident_id: incidentId,
+        }));
+      }
+      const sourcePublication = publishStateLightReply(config.directPublication.reviewerSourceOutput, invocationId, settlement.sourceBytes);
+      if (sourcePublication.state !== 'committed_ok') {
+        return await finishPublicationFailure(sourcePublication.cause ?? sourcePublication.state);
+      }
+      publication = publishStateLightReply(reservation.finalPath, invocationId, managerReply);
+    } else {
+      publication = publishReply(profileKey, invocationId, reservation.finalPath, reservation.identity, result.reply);
+    }
+    if (publication.state !== 'committed_ok') {
+      return await finishPublicationFailure(publication.cause ?? publication.state);
     }
 
     updateIncident(profileKey, incidentId, { phase: 'committed', cause: 'committed' });
@@ -700,6 +789,7 @@ async function runTurn(args: ParsedArgs): Promise<number> {
         relation: 'reply_to',
         source: 'service',
       },
+      ...(directReviewerSource ? { reviewer_source: directReviewerSource } : {}),
     }));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'driver_error';

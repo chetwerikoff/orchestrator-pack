@@ -340,6 +340,38 @@ function parseTurnResult(line: string): ParsedTurnResult | null {
       };
     }
 
+    const reviewerSource = body.reviewer_source;
+    if (reviewerSource && typeof reviewerSource === 'object') {
+      const source = reviewerSource as Record<string, unknown>;
+      const kind = source.kind;
+      const validKind = kind === 'service-observed-issue-comment/v1' || kind === 'failed-write-final-assistant/v1';
+      if (
+        validKind
+        && Number.isInteger(source.byte_length) && Number(source.byte_length) >= 0
+        && typeof source.sha256 === 'string' && /^[0-9a-f]{64}$/.test(source.sha256)
+        && typeof source.tool_call_id === 'string' && source.tool_call_id.length > 0
+        && typeof source.repository_full_name === 'string' && source.repository_full_name.length > 0
+        && Number.isInteger(source.issue_number) && Number(source.issue_number) > 0
+        && typeof source.source_revision === 'string' && /^r[0-9]+$/.test(source.source_revision)
+        && Number.isInteger(source.finding_count) && Number(source.finding_count) >= 0
+        && (source.comment_id === undefined || typeof source.comment_id === 'string')
+        && (source.comment_url === undefined || typeof source.comment_url === 'string')
+      ) {
+        result.reviewer_source = {
+          kind: kind as 'service-observed-issue-comment/v1' | 'failed-write-final-assistant/v1',
+          byte_length: Number(source.byte_length),
+          sha256: source.sha256 as string,
+          tool_call_id: source.tool_call_id as string,
+          repository_full_name: source.repository_full_name as string,
+          issue_number: Number(source.issue_number),
+          source_revision: source.source_revision as string,
+          finding_count: Number(source.finding_count),
+          ...(typeof source.comment_id === 'string' ? { comment_id: source.comment_id } : {}),
+          ...(typeof source.comment_url === 'string' ? { comment_url: source.comment_url } : {}),
+        };
+      }
+    }
+
     const witness = body.witness;
     if (
       witness &&
@@ -473,6 +505,7 @@ export interface LaunchConfig {
   readonly handoffReceiptPath: string;
   readonly terminalEnvelopePath: string;
   readonly browserOutputPath: string;
+  readonly reviewerSourceOutputPath?: string;
   readonly cwd: string;
   readonly childCommand: string;
   readonly childArgs: readonly string[];
@@ -592,16 +625,24 @@ export async function runLaunch(config: LaunchConfig): Promise<number> {
     refuse('invalid_cwd', { cwd: config.cwd });
     return 2;
   }
-  for (const path of [config.handoffReceiptPath, config.terminalEnvelopePath]) {
-    if (existsSync(path) && statSync(path).size > 0) {
+  const launcherArtifacts = [
+    config.handoffReceiptPath,
+    config.terminalEnvelopePath,
+    config.browserOutputPath,
+    ...(config.reviewerSourceOutputPath ? [config.reviewerSourceOutputPath] : []),
+  ];
+  for (const path of launcherArtifacts) {
+    if (existsSync(path)) {
       refuse('occupied_launcher_owned_path', { path });
       return 2;
     }
   }
   try {
-    assertPairwiseDistinct([config.handoffReceiptPath, config.terminalEnvelopePath, config.browserOutputPath]);
+    assertPairwiseDistinct(launcherArtifacts);
     ensureParentWritable(config.handoffReceiptPath);
     ensureParentWritable(config.terminalEnvelopePath);
+    ensureParentWritable(config.browserOutputPath);
+    if (config.reviewerSourceOutputPath) ensureParentWritable(config.reviewerSourceOutputPath);
   } catch (error) {
     refuse('preflight_failed', { message: error instanceof Error ? error.message : String(error) });
     return 2;
@@ -873,12 +914,20 @@ async function launchFromCli(argv: readonly string[]): Promise<number> {
     refuse('forbidden_authority_selector');
     return 2;
   }
+  const childUsesReviewerSource = parsed.childArgs.some((arg) => arg === '--reviewer-source-output');
+  if (childUsesReviewerSource && typeof options.get('reviewer-source-output') !== 'string') {
+    refuse('reviewer_source_output_required_for_direct_mode');
+    return 2;
+  }
   const config: LaunchConfig = {
     runIdentity: requiredOption(options, 'run-identity'),
     attemptIdentity: requiredOption(options, 'attempt-identity'),
     handoffReceiptPath: requiredOption(options, 'handoff-receipt'),
     terminalEnvelopePath: requiredOption(options, 'terminal-envelope'),
     browserOutputPath: requiredOption(options, 'browser-output'),
+    ...(typeof options.get('reviewer-source-output') === 'string'
+      ? { reviewerSourceOutputPath: options.get('reviewer-source-output') as string }
+      : {}),
     cwd: requiredOption(options, 'cwd'),
     childCommand: requiredOption(options, 'child-command'),
     childArgs: parsed.childArgs,

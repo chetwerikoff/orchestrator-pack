@@ -107,6 +107,19 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
   const handoffReceipt = requiredOption(options, 'handoff-receipt');
   const terminalEnvelope = requiredOption(options, 'terminal-envelope');
   const browserOutput = requiredOption(options, 'output');
+  const reviewerSourceOutput = typeof options.get('reviewer-source-output') === 'string'
+    ? options.get('reviewer-source-output') as string
+    : undefined;
+  const directArgumentKeys = ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision'];
+  const directRequested = reviewerSourceOutput !== undefined
+    || directArgumentKeys.some((key) => options.has(key));
+  if (directRequested && (
+    reviewerSourceOutput === undefined
+    || directArgumentKeys.some((key) => typeof options.get(key) !== 'string')
+  )) {
+    refuse('direct_publication_arguments_required');
+    return 2;
+  }
   const profile = requiredOption(options, 'profile');
   const cdp = requiredOption(options, 'cdp');
   const input = requiredOption(options, 'input');
@@ -119,6 +132,10 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     '--input', input,
     '--output', browserOutput,
   ];
+  if (reviewerSourceOutput) browserArgs.push('--reviewer-source-output', reviewerSourceOutput);
+  for (const key of ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision', 'timeout-ms', 'poll-ms']) {
+    if (typeof options.get(key) === 'string') browserArgs.push(`--${key}`, options.get(key) as string);
+  }
   if (typeof options.get('chat-url') === 'string') browserArgs.push('--chat-url', options.get('chat-url') as string);
   if (options.get('new-chat') === true) browserArgs.push('--new-chat');
   if (typeof options.get('project-url') === 'string') browserArgs.push('--project-url', options.get('project-url') as string);
@@ -130,6 +147,7 @@ export async function runBrowserAdapter(argv: readonly string[]): Promise<number
     '--handoff-receipt', handoffReceipt,
     '--terminal-envelope', terminalEnvelope,
     '--browser-output', browserOutput,
+    ...(reviewerSourceOutput ? ['--reviewer-source-output', reviewerSourceOutput] : []),
     '--cwd', cwd,
     ...(typeof options.get('chat-url') === 'string'
       ? ['--conversation-locator', options.get('chat-url') as string]

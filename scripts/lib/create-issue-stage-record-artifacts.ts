@@ -20,6 +20,7 @@ import {
   deriveStageReceiptId,
   validateReviewEpisodeTopology,
   CLAUDE_PRODUCER_EVIDENCE_SCHEMA,
+  parseReviewerSourcePolicy,
   type CaptureIdentityV1,
   type ReviewerInvocationEnvelopeV1,
   type ReviewEpisodeDerivationAuthorityV1,
@@ -288,6 +289,21 @@ function rawFindingCount(text: string): number {
     .length;
 }
 
+const CANONICAL_REVISION_LINE_RE = /^Read revision: #([1-9][0-9]*) (r[0-9]+)$/;
+
+function parseCanonicalCaptureRevision(text: string): { issueNumber: number; sourceRevision: string; findingCount: number } | null {
+  const lines = text.split(/\n/).map((line) => line.replace(/\r$/, ''));
+  const firstNonEmpty = lines.find((line) => line.trim().length > 0);
+  const match = firstNonEmpty ? CANONICAL_REVISION_LINE_RE.exec(firstNonEmpty) : null;
+  const declarations = lines.filter((line) => CANONICAL_REVISION_LINE_RE.test(line)).length;
+  if (!match || declarations !== 1) return null;
+  return {
+    issueNumber: Number(match[1]),
+    sourceRevision: match[2]!,
+    findingCount: rawFindingCount(text),
+  };
+}
+
 function readClaudeProducerEvidence(
   path: string,
   errors: string[],
@@ -319,6 +335,7 @@ function readTurnResultForInvocation(
   invocation: JsonRecord,
   index: number,
   capture: CaptureIdentityV1 | null,
+  captureText: string | null,
   errors: string[],
 ): string | null {
   if (invocation.terminalClassification !== 'complete') return null;
@@ -375,10 +392,59 @@ function readTurnResultForInvocation(
     || !/^[0-9a-f]{64}$/.test(output.sha256)
   ) {
     errors.push(`turn-result/v1 artifact for ${label} has invalid output metadata: ${resolved}`);
-  } else if (capture) {
-    if (Number(output.byte_length) !== capture.byteLength || output.sha256 !== capture.sha256) {
-      errors.push(`turn-result/v1 artifact for ${label} output does not match capture bytes: ${resolved}`);
+  }
+  const reviewerSource = isRecord(value.reviewer_source) ? value.reviewer_source : null;
+  const reviewerSourceKind = reviewerSource?.kind;
+  const directSuccess = reviewerSourceKind === 'service-observed-issue-comment/v1';
+  const directFailure = reviewerSourceKind === 'failed-write-final-assistant/v1';
+  const frozenPolicy = parseReviewerSourcePolicy(
+    typeof invocation.reviewerSource === 'string' ? invocation.reviewerSource : '',
+  )?.capturePolicy;
+  if (frozenPolicy === 'direct-publication/v1' && !directSuccess && !directFailure) {
+    errors.push(`turn-result/v1 artifact for ${label} direct-publication policy requires terminal reviewer_source metadata: ${resolved}`);
+  }
+  if (frozenPolicy !== 'direct-publication/v1' && (directSuccess || directFailure)) {
+    errors.push(`turn-result/v1 artifact for ${label} direct reviewer_source kind conflicts with frozen policy: ${resolved}`);
+  }
+  if (directSuccess || directFailure) {
+    if (!capture) errors.push(`turn-result/v1 artifact for ${label} direct reviewer_source requires capture bytes: ${resolved}`);
+    if (
+      !reviewerSource
+      || !Number.isInteger(reviewerSource.byte_length)
+      || Number(reviewerSource.byte_length) !== capture?.byteLength
+      || typeof reviewerSource.sha256 !== 'string'
+      || reviewerSource.sha256 !== capture?.sha256
+      || typeof reviewerSource.tool_call_id !== 'string'
+      || typeof reviewerSource.repository_full_name !== 'string'
+      || reviewerSource.repository_full_name.length === 0
+      || !Number.isInteger(reviewerSource.issue_number)
+      || Number(reviewerSource.issue_number) < 1
+      || typeof reviewerSource.source_revision !== 'string'
+      || reviewerSource.source_revision !== invocation.sourceRevision
+      || !Number.isInteger(reviewerSource.finding_count)
+      || (directSuccess && (typeof reviewerSource.comment_id !== 'string' || typeof reviewerSource.comment_url !== 'string'))
+      || (directFailure && (reviewerSource.comment_id !== undefined || reviewerSource.comment_url !== undefined))
+    ) {
+      errors.push(`turn-result/v1 artifact for ${label} has invalid reviewer_source metadata: ${resolved}`);
     }
+    if (capture && captureText !== null) {
+      const parsed = parseCanonicalCaptureRevision(captureText);
+      if (
+        !parsed
+        || parsed.issueNumber !== Number(reviewerSource?.issue_number)
+        || parsed.sourceRevision !== reviewerSource?.source_revision
+        || parsed.sourceRevision !== invocation.sourceRevision
+        || parsed.findingCount !== Number(reviewerSource?.finding_count)
+        || parsed.findingCount !== capture.rawFindingCount
+      ) {
+        errors.push(`turn-result/v1 artifact for ${label} reviewer_source does not match canonical capture bytes: ${resolved}`);
+      }
+    }
+  }
+  if (directFailure && capture && output && (Number(output.byte_length) !== capture.byteLength || output.sha256 !== capture.sha256)) {
+    errors.push(`turn-result/v1 artifact for ${label} output does not match failed-write source bytes: ${resolved}`);
+  } else if (!directSuccess && !directFailure && capture && output && (Number(output.byte_length) !== capture.byteLength || output.sha256 !== capture.sha256)) {
+    errors.push(`turn-result/v1 artifact for ${label} output does not match capture bytes: ${resolved}`);
   }
   const identity = turnResultIdentity(basename(resolved), sha256(text));
   if (invocation.terminalResultIdentity !== identity) {
@@ -518,6 +584,7 @@ function buildReceipt(
         value,
         index,
         capture,
+        capture ? captureTexts.get(capture.captureIdentity) ?? null : null,
         errors,
       );
       assertDerived(value.reviewEpisodeId, episodeId, `invocation[${index}].reviewEpisodeId`, errors);
@@ -1039,7 +1106,14 @@ export function inspectAcceptanceArtifacts(
           : captureFromEvidence(path, invocation.capturePath, invocation.captureIdentity, captureTexts, captureTimestamps, captureErrors);
         for (const error of captureErrors) missing.push({ artifact: 'capture', reason: error });
         const turnResultErrors: string[] = [];
-        readTurnResultForInvocation(path, invocation, index, capture, turnResultErrors);
+        readTurnResultForInvocation(
+          path,
+          invocation,
+          index,
+          capture,
+          capture ? captureTexts.get(capture.captureIdentity) ?? null : null,
+          turnResultErrors,
+        );
         for (const error of turnResultErrors) missing.push({ artifact: 'turn-result/v1', reason: error });
       }
     } else if (value.stage !== 'architectural-lens') {
