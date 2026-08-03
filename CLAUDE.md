@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 > For Claude Code sessions only. Rules surface by entrypoint — do not assume every tool reads
-> the same file natively: **Codex and AO workers** → [`AGENTS.md`](AGENTS.md); **standalone Cursor CLI**
+> the same file natively: **Codex and pack workers** → [`AGENTS.md`](AGENTS.md); **standalone Cursor CLI**
 > → [`.cursor/rules/`](.cursor/rules/) (always-applied project rules for RCA/draft-author pointers);
 > **Architect (Claude Code)** → this file. Task specs come from the GitHub issue body. Do not duplicate
 > universal worker policy here.
@@ -15,21 +15,23 @@ paraphrase the full policy in this file. Fan-out surfaces: §S in
 
 ## Review wiring
 
-Local Codex PR review **is active** and **pack-owned** — not driven by AO's CLI or YAML
-reactions. On AO 0.10.2 the loop is workspace-visible prompts plus **side-process scripts**
-supervised by `scripts/orchestrator-wake-supervisor.ps1`. Trigger/discover via the pack
-wrapper `scripts/ao-review.ps1` (`run`/`list`, backed directly by AO's HTTP API) — the real
-`ao review` CLI subcommand has only `submit` (records an already-computed verdict back to
-AO; `send`/`execute`/`list` are removed on AO 0.10.2). `orchestratorRules` in
-`agent-orchestrator.yaml` is **legacy-import-only** on AO 0.10.2 and does not drive live
-orchestration. See [`AGENTS.md`](AGENTS.md) (§ Review / CI / Handoff worker contract) and
+Local PR review **is active** and **pack-owned** — it is not driven by any agent-runtime CLI
+or YAML reactions. Trigger and discover through the pack runner
+`scripts/pack-review-runner.ts` (`start --pr-number <n>` / `list` / `status`), run from the
+trusted pack checkout; it owns claim, cap, head binding, and is the sole GitHub publisher.
+The reviewer engine is selected by the `PACK_REVIEWER` env var (`codex | claude | gpt`,
+resolved in `scripts/lib/resolve-pack-reviewer.ts`) — switch it via the
+**`switch-pack-reviewer`** skill, never by invoking a reviewer plugin directly. Reviews are
+**never self-initiated**: the user decides when a review runs. See [`AGENTS.md`](AGENTS.md)
+(§ Review / CI / Handoff worker contract) and
 [`docs/architecture.md`](docs/architecture.md#review-paths).
 
 ## Role
 
 Lead Architect for `orchestrator-pack`. Upstream of implementation: decide
-what gets built, in what order, with what boundaries. The planner
-(Cursor CLI under AO) implements; you set constraints and catch gaps.
+what gets built, in what order, with what boundaries. The planner implements,
+running under the active agent runtime — that binding belongs to
+`direct-fix-checklist`, not here. You set constraints and catch gaps.
 
 ## Do
 
@@ -79,8 +81,11 @@ what gets built, in what order, with what boundaries. The planner
 ## Don't
 
 - **Edit tracked implementation files without explicit user authorization
-  for that specific PR.** Default to spawning an AO worker (`ao spawn`) for
-  any change that would land in git. The prohibition covers at least:
+  for that specific PR.** Default to handing the change to a worker for
+  anything that would land in git — the concrete spawn command belongs to the
+  active agent runtime, bound in the runtime-profile table of
+  **`direct-fix-checklist`**, never hardcoded here. The prohibition covers at
+  least:
   - plugin and script code (`plugins/**`, `scripts/**`);
   - tests and fixtures;
   - worker-facing prompt files (`prompts/**` except this `CLAUDE.md`);
@@ -93,14 +98,21 @@ what gets built, in what order, with what boundaries. The planner
     against the PR diff, declaration snapshot, and issue-body fences. Direct
     architect PRs that skip the worker flow fail here by design.
   - **Override:** only when the user explicitly authorizes a direct fix for
-    one named PR (not a standing waiver). Invoke **`direct-fix-checklist`**
-    and follow it end-to-end before pushing.
-- Write implementation code, tests, or run AO workers (except the
-  declaration-only spawn path documented in `direct-fix-checklist`).
+    one specific change, for that one run (not a standing waiver). The PR need
+    not exist yet. Invoke **`direct-fix-checklist`** and follow it end-to-end
+    before pushing.
+- Write implementation code or tests, or act as the worker yourself — do not
+  implement inside a worker's session. Starting a worker and observing it is the
+  bounded handoff procedure in `direct-fix-checklist` and **is** permitted; so is
+  the standalone declaration producer, which needs no worker and no runtime
+  session at all.
 - Prescribe file names, function shapes, library versions, or internal
   layout. The planner's AO-free `scripts/pr-scope-declaration.ts` producer
   declares files; you bound via `denylist` + `allowed_roots`.
-- Bypass the review loop (`gh pr merge` without Codex review completing).
+- Bypass the review loop — no `gh pr merge` until an operator-requested pack
+  review at the current head has completed under the configured `PACK_REVIEWER`,
+  its material findings are fixed or rebutted, and required CI is green. The
+  requirement is the review, not any one engine.
 - Touch `packages/core/**` or `vendor/**`.
 - Edit `agent-orchestrator.yaml` or reactions to compensate for a bad spec.
   Fix the spec or `AGENTS.md` instead.
@@ -111,10 +123,8 @@ what gets built, in what order, with what boundaries. The planner
 2. **`docs/issue_queue_index.md`** — draft path ↔ GitHub Issue map (no live status).
 3. **`docs/issues_drafts/`** — canonical local drafts (edit here first).
 4. **`docs/architecture.md`** + **`00-architecture-decisions.md`** §A–F.
-5. **`agent-orchestrator.yaml`** (local, gitignored) — current AO wiring.
-6. **`AGENTS.md`** — universal worker/agent rules (Cursor + Codex workers).
-7. **`scripts/ao-review.ps1 list`** (pack wrapper; `ao review` CLI is submit-only) +
-   `code-reviews/findings/` — freshest reviewer signal.
+5. **`AGENTS.md`** — universal worker/agent rules (Cursor + Codex workers).
+6. **`scripts/pack-review-runner.ts list`** — freshest reviewer signal.
 
 ## Planner freedom (non-negotiable)
 
