@@ -48,8 +48,6 @@
     "scripts/orca-runtime/",
     "scripts/runtime/",
     "scripts/worker-smoke-run.ts",
-    "scripts/worker-smoke.test.ts",
-    "tests/orca-runtime/",
-    "tests/runtime/"
+    "scripts/worker-smoke.test.ts"
   ]
 }
