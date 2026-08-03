@@ -13,17 +13,16 @@
     "scripts/pack-review-carryover.ts",
     "scripts/pack-review-runner-issue-898.test.ts",
     "scripts/pack-review-state.test.ts",
-    "scripts/pack-review-state.ts"
+    "scripts/pack-review-state.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
-    ".github/workflows/",
-    "credentials/",
-    "docs/declarations/",
-    "docs/issues_drafts/",
-    "packages/core/",
-    "scripts/kernel/",
-    "secrets/",
-    "vendor/"
+    "vendor/**",
+    "packages/core/**",
+    ".github/workflows/**",
+    "scripts/kernel/**",
+    "docs/issues_drafts/**",
+    "docs/declarations/**"
   ],
   "allowed_roots": [
     "docs/merge-triage-primary-paths.v1.json",
@@ -37,7 +36,8 @@
     "scripts/pack-review-carryover.ts",
     "scripts/pack-review-runner-issue-898.test.ts",
     "scripts/pack-review-state.test.ts",
-    "scripts/pack-review-state.ts"
+    "scripts/pack-review-state.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "source_revision": "r07"
 }
