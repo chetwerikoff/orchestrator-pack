@@ -459,9 +459,11 @@ git -C "$WP" status --porcelain --untracked-files=all     # G2a: must be EMPTY
 git -C "$WP" status --porcelain --ignored=matching \
   | grep '^!! ' | grep -vE '^!! (node_modules|\.venv|venv|dist|build|\.turbo|\.next|coverage|__pycache__)/' \
                                                           # G2b: must be EMPTY (see below)
-git -C "$WP" log --oneline origin/main..HEAD              # G3: must be EMPTY (no unmerged commits)
 git fetch origin
-git merge-base --is-ancestor "refs/heads/$HEAD_REF" origin/main   # G5: must exit 0 — see G5 note
+git -C "$WP" merge-base --is-ancestor HEAD origin/main     # G3 proof (a): exit 0 ⇒ contained, PASS
+# if (a) fails, try proof (b) — squash/rebase — before concluding anything:
+gh pr view <PR> --json state,headRefOid -q '.state, .headRefOid'
+git -C "$WP" rev-parse HEAD          # (b) passes iff state==MERGED and headRefOid==this SHA
 RUNTIME.agents                                            # G6: agent state all "done"; interrupted false
 ```
 
@@ -483,18 +485,33 @@ running**. No `--force`, no retry, no partial teardown:
    row's `head` recorded at 9a, and that commit must be contained in `origin/main`. Record in the
    report that the detached path was used.
 2. **G2** uncommitted or untracked work exists in the worktree. (Rule zero.)
-3. **G3** commits exist locally that are not on `origin/main`. Test the **worktree's
-   branch**, not the PR: a squash/rebase merge or a post-merge commit in the worktree
-   breaks containment even though `MERGE_SHA` is on `origin/main`.
-4. **G5** the branch is not an ancestor of `origin/main`.
-   **Squash/rebase caveat:** if Step 5 used `--squash`/`--rebase` (only ever on explicit user
-   request), the branch's commits are *not* ancestors of the resulting commit, so G5 fails by
-   design — and `git branch -d` in 9f would fail too, leaving worktree and branch behind and
-   defeating this cleanup. Do **not** loosen G5. Instead prove equivalence: `gh pr view P --json
-   state` must be `MERGED` **and** the worktree's tree must already be contained in `origin/main`
-   (`git -C "$WP" diff --quiet origin/main` exits 0). Only then continue, use `git branch -D` in
-   9f for this case alone, and name the squash/rebase path verbatim in the report. Tree not
-   contained → **stop**.
+3. **G3 — is every commit in this worktree already merged?** Two accepted proofs; try them in
+   order, and **stop only if both fail**:
+
+   ```bash
+   # (a) ordinary merge commit — the branch is literally contained in main
+   git -C "$WP" merge-base --is-ancestor HEAD origin/main            # exit 0 ⇒ PASS
+
+   # (b) squash/rebase — the branch's commits were rewritten, so (a) can never pass.
+   #     Proof of containment is that HEAD is EXACTLY the head that got merged.
+   gh pr view <PR-that-owned-this-branch> --json state,headRefOid -q '.state, .headRefOid'
+   #     state must be MERGED  AND  headRefOid must equal `git -C "$WP" rev-parse HEAD`
+   ```
+
+   **Do not test this by comparing trees.** `git diff origin/main` fires whenever the worktree is
+   merely *behind* main — verified live 2026-08-03 on a worktree whose 13 commits were fully
+   squash-merged: the tree diff showed 12 changed files purely because `main` had advanced past
+   it. A tree comparison cannot tell "I am behind" from "I hold unmerged work", so it both blocks
+   safe teardowns and could wave through real work. Commit identity against the merged PR head
+   distinguishes them exactly.
+
+   If (b) is what passed, the branch's SHAs are absent from `main` by construction — so `git
+   branch -d` in 9f will refuse, and `-D` is the sanctioned form for this case alone (name it in
+   the report). Any commit in the worktree **newer** than the merged head is genuine post-merge
+   work → **stop**.
+4. **G5** — folded into G3 above. There is no separate ancestry gate: ancestry is proof (a), and
+   the merged-PR-head identity is proof (b). Requiring ancestry *on its own* would permanently
+   block every squash-merged worktree, which is the common case, not an edge case.
 5. **G6** any agent `state !== "done"`, or `interrupted: true`. **Never kill a running agent as a
    merge side effect** — stop and ask. Select the row **exactly**: the single `RUNTIME.agents`
    row whose worktree path equals `WP` (the command is global across repos — filtering is
@@ -581,7 +598,7 @@ cleanliness *after* it:
 ```bash
 git -C "$WP" symbolic-ref -q --short HEAD                 # must STILL equal $HEAD_REF (re-check G1)
 git -C "$WP" status --porcelain --untracked-files=all     # must still be EMPTY
-git -C "$WP" log --oneline origin/main..HEAD              # must still be EMPTY
+git -C "$WP" rev-parse HEAD                               # must still be the SHA G3 accepted
 RUNTIME.worktrees                                         # row for $WP must still exist, same branch
 ```
 
@@ -608,12 +625,19 @@ flag even if one appears.
 
 ### 9f — Delete the local branch
 
-`gh pr merge --delete-branch` removed only the remote ref. Git refuses to delete a branch
-still checked out in a worktree, so this must come after 9e:
+`gh pr merge --delete-branch` removes only the *remote* ref, and git refuses to delete a branch
+still checked out in a worktree — so this comes after 9e:
 
 ```bash
-git branch -d "$HEAD_REF"
+git branch --list "$HEAD_REF"        # empty ⇒ already gone, this step is DONE, not failed
+git branch -d "$HEAD_REF"            # only when the list above was non-empty
 ```
+
+**`branch -d` failing with `branch … not found` is a SUCCESS, not an error** (verified live
+2026-08-03): the active runtime may delete the local branch itself during `remove_worktree` when
+it was the one that created it. Check first and skip; never retry, never escalate to `-D` because
+of this message. Conversely, older branches created outside the runtime **do** survive — so the
+step cannot be dropped either. Report which of the two happened.
 
 **`-d`, never `-D`** — `-d` performs its own merged-ness check, so a divergence appearing
 between G5 and here still fails safe.
