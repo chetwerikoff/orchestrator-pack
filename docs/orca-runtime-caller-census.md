@@ -1,24 +1,48 @@
 # Orca runtime caller census (#1248)
 
-Source revision: `#1248` as read on 2026-08-03. Machine-readable authority: `scripts/runtime/caller-census.ts`.
+Source revision: `#1248-hard-cut-r2`, 2026-08-03. Machine-readable authority: `scripts/runtime/caller-census.ts`.
 
 ## Classification rule
 
-A call belongs on `RuntimeAdapter` only when it controls or observes a worker/terminal lifecycle: readiness, workspace selection for a task, spawn, input dispatch, bounded output, liveness, stop, or worker recovery. AO review triggering, review reports, config/plugin reads, and operator daemon lifecycle are service operations and remain owned by #1250.
+A call belongs on `RuntimeAdapter` when it controls or observes worker/runtime lifecycle: readiness, workspace selection, spawn, input dispatch, bounded output, liveness, stop, workspace removal, or recovery. AO review triggering, review reports, config/plugin reads, and operator daemon lifecycle are service operations and remain #1250 work.
 
-## Runtime-port work
+Compatibility with AO-era callers, PowerShell bridges, old result envelopes, and fixture-only identities is not preserved. Active runtime rows finish as `use-runtime-interface` or `already-runtime-neutral`; replaced files finish as `delete-dead`.
 
-| Surface | Operations | Disposition | Current consumer / note |
+## Active runtime surfaces
+
+| Surface | Operations | Disposition | Result |
 |---|---|---|---|
-| `scripts/launch-watch/watch.ts` | readiness, list/find, read, liveness | `already-runtime-neutral` | Reference caller from #1245. |
-| `scripts/worker-smoke-run.ts` | current workspace, spawn, send, read, liveness, stop | `legacy-only` | Consumer: worker-smoke CLI and run-level control-plane matrix. Removal owner: #1248 generation-aware caller cut. It stays native until the whole lifecycle has an exact runtime incarnation. |
-| `scripts/lib/worker-smoke-bounded-create.ts` | spawn | `legacy-only` | Consumer: `scripts/worker-smoke-run.ts`. Removal owner: the same #1248 worker-smoke cut; create cannot move alone while later destructive cleanup lacks a bound generation. |
-| `scripts/lib/Worker-Recovery.ps1` | list/find/spawn/recovery | `port-to-ts-here` | Live consumers: `dead-worker-reconcile.ps1`, `invoke-worker-recovery.ps1`. Split review-service calls from lifecycle calls before deletion. |
-| `scripts/journaled-worker-send.ps1` | send | `port-to-ts-here` | Preserve `dispatched | send_failed | dispatch_unknown`; ambiguous delivery is terminal for that attempt. |
-| `scripts/lib/Orchestrator-WakeSupervisorLease.ps1` | supervisor startup, singleton lease | `port-to-ts-here` | Mandatory runtime-neutral invariant currently consumed by the wake supervisor. |
-| `scripts/lib/Orchestrator-SideEffectFence.ps1` | side-effect fence | `port-to-ts-here` | Mandatory invariant used by review wake/reeval and supervised children. |
-| `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | crash backoff, degraded rearm | `port-to-ts-here` | Mandatory invariant. AO daemon-health classification inside the file is service usage and must be separated rather than put on `RuntimeAdapter`. |
-| `scripts/lib/Review-StartClaimLifecycle.ps1` | claim TOCTOU | `port-to-ts-here` | Mandatory invariant. The TypeScript claim store is already authoritative; the PowerShell bridge is the replacement target. |
+| `scripts/launch-watch/watch.ts` | readiness, list/find, read, liveness | `already-runtime-neutral` | Reference observation caller from #1245. |
+| `scripts/worker-smoke-run.ts` | readiness, spawn, send, read, liveness, stop | `use-runtime-interface` | Selected adapter, composite identity, one dispatch attempt, exact-generation stop. |
+| `scripts/invoke-gated-worker-nudge.ts` | find, send | `use-runtime-interface` | Issue/PR keyed claim and journal admission before one dispatch. |
+| `scripts/lib/pack-review-worker-notification.ts` | find, send | `use-runtime-interface` | Preserves `dispatched | send_failed | dispatch_unknown`; unknown is terminal and never resent. |
+| `scripts/invoke-worker-recovery.ts` | list/find, liveness, workspace remove, spawn | `use-runtime-interface` | One claim spans exact cleanup and spawn; cleanup target is not reused as the spawn target. |
+| `scripts/runtime/worker-recovery.ts` | list/find, liveness, workspace remove, spawn | `use-runtime-interface` | Reobserves every exact-workspace worker after claim; live or unknown ownership blocks cleanup. |
+| `scripts/orchestrator-wake-supervisor.ts` | supervisor startup | `already-runtime-neutral` | Node-only supervisor entrypoint. |
+| `scripts/lib/orchestrator-side-process-supervisor.ts` | singleton lease, crash backoff, terminal circuit | `already-runtime-neutral` | Uses TypeScript invariants and launches only the Node scheduler. |
+| `scripts/runtime/side-effect-fence.ts` | side-effect fence | `already-runtime-neutral` | Exact owner release and inode-bound stale reclamation. |
+| `scripts/runtime/crash-backoff.ts` | crash backoff, degraded rearm | `already-runtime-neutral` | Pure transition; no AO-health authority or retry scheduler. |
+| `scripts/runtime/single-instance-lease.ts` | singleton lease | `already-runtime-neutral` | PID + process start ticks + generation ownership. |
+| `scripts/lib/review-start-claim-store.ts` | claim TOCTOU | `already-runtime-neutral` | Sole TypeScript claim lifecycle authority. |
+| `scripts/orchestrator-side-process-registry.json` | child selection | `already-runtime-neutral` | Contains only `pr2-scheduler` with Node runtime. |
+
+## Deleted runtime surfaces
+
+| Deleted surface | Replacement |
+|---|---|
+| `scripts/lib/worker-smoke-bounded-create.ts` | `worker-smoke-run.ts` through `RuntimeAdapter.spawnWorker` |
+| `scripts/invoke-gated-worker-nudge.ps1` | `scripts/invoke-gated-worker-nudge.ts` |
+| `scripts/journaled-worker-send.ps1` | `scripts/lib/pack-review-worker-notification.ts` |
+| `scripts/invoke-worker-recovery.ps1` | `scripts/invoke-worker-recovery.ts` |
+| `scripts/lib/Worker-Recovery.ps1` | `scripts/runtime/worker-recovery.ts` |
+| `scripts/lib/Worker-RecoveryClaim.ps1` | `scripts/runtime/worker-recovery-claim.ts` |
+| `scripts/lib/Orchestrator-WakeSupervisorLease.ps1` | `scripts/runtime/single-instance-lease.ts` |
+| `scripts/lib/Orchestrator-SideEffectFence.ps1` | `scripts/runtime/side-effect-fence.ts` |
+| `scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1` | `scripts/runtime/crash-backoff.ts` |
+| `scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1` | `scripts/runtime/crash-backoff.ts` explicit healthy-replacement rearm |
+| `scripts/lib/Review-StartClaimLifecycle.ps1` | `scripts/lib/review-start-claim-store.ts` |
+
+The old worker-smoke compatibility/regression seams were also deleted rather than adapted to synthetic generations.
 
 ## Non-runtime AO service usage deferred to #1250
 
@@ -28,16 +52,14 @@ A call belongs on `RuntimeAdapter` only when it controls or observes a worker/te
 | `scripts/pack-review-runner.ts` | scripted review service | `defer-1250` |
 | `scripts/lib/Invoke-AoCliJson.ps1` service branches | config, status, plugin hooks, operator daemon lifecycle | `defer-1250` |
 
-Session/worker operations reached through `Invoke-AoCliJson.ps1` are not covered by that defer row; their owning callers are runtime-port rows above.
+Those rows do not own worker lifecycle, dispatch, cleanup, recovery claims, supervisor leases, fences, or crash backoff.
 
-## Boundary mechanics in this change
+## Safety properties
 
-`RuntimeTaskCompatibilityFacade` is caller policy expressed only against `RuntimeAdapter`. The default facade is composed once through `scripts/runtime/registry.ts`. The focused test invokes the same caller function with `OrcaTaskRuntimeAdapter` and `DeterministicRuntimeAdapter` without an adapter-type branch.
-
-The Orca task adapter performs one close attempt only after exact owned `id + generation` revalidation. The current upstream Orca CLI exposes handle-only close; therefore the adapter does not claim atomic compare-and-close. It preserves the existing close transport while refusing external or stale-generation workers and treating ambiguous close transport as a failure with no resend/retry.
-
-The worker-smoke production caller is deliberately not switched in this draft. Its existing run-level fixture creates a handle without an incarnation and does not model the generation lookup required before send/read/close. Synthesizing a generation or bypassing the lookup would make the test green by weakening the production contract, so the native seam remains explicitly owned legacy work.
-
-## Remaining deletion cut
-
-The worker-smoke lifecycle, four mandatory PowerShell invariant rows, and mixed recovery/send callers remain explicit owned work. The invariant rows are not reclassified as #1250 service work, but their current consumers are embedded in the review/supervisor service layer that #1248 simultaneously defers. The Issue needs one coherent ownership decision before those files can be safely replaced and deleted.
+- Claims are acquired before workspace or terminal side effects.
+- Runtime-reported linkage such as Orca `linkedPR` is never claim authority.
+- Worker identities are composite `runtime + id + generation`.
+- Stop and workspace removal are prevalidated and attempted once.
+- `dispatch_unknown` is journaled as uncertain and never automatically resent.
+- The same direct lifecycle caller runs with Orca and deterministic adapters without adapter-type branches.
+- Canonical side-process topology is Node supervisor → Node `pr2-scheduler`; no PowerShell child remains in the registry.
