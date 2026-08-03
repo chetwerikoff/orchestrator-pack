@@ -79,6 +79,7 @@
     "scripts/pr-session-binding-cache.test.ts": "light",
     "scripts/pr2-foundation/binding-cache.test.ts": "light",
     "scripts/pr2-foundation/foundation.test.ts": "heavy",
+    "scripts/pr2-foundation/fleet-observer.test.ts": "light",
     "scripts/pr2-foundation/migration-symlink.test.ts": "light",
     "scripts/pr2-foundation/mutation-catalog.test.ts": "light",
     "scripts/pr2-foundation/mutation-external-ci.test.ts": "heavy",

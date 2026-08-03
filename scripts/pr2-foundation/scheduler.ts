@@ -5,6 +5,8 @@ import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateHeadReadyForReview } from './review-head-ready.ts';
 import { listPackReviewRuns } from '../lib/pack-review-run-store.ts';
 import { startPackReview } from '../pack-review-runner.ts';
+import { FleetObserver, type FleetObserverResult } from './fleet-observer.ts';
+import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import {
   isRowStale,
   readWorkerStatusStoreFile,
@@ -45,6 +47,16 @@ export interface SchedulerBoundary {
   readChecks(candidate: ActivatedSchedulerCandidate): Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>;
   listReviewRuns(): ReturnType<typeof listPackReviewRuns>;
   start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
+  schedulerIntervalMs?: number;
+  fleetObserver?: Pick<FleetObserver, 'tick'>;
+}
+
+const schedulerTickSequences = new WeakMap<object, number>();
+
+function nextSchedulerTickSequence(boundary: SchedulerBoundary): number {
+  const next = (schedulerTickSequences.get(boundary) ?? 0) + 1;
+  schedulerTickSequences.set(boundary, next);
+  return next;
 }
 
 function requiredEnv(name: string, env: NodeJS.ProcessEnv): string {
@@ -147,6 +159,8 @@ export function productionSchedulerBoundary(input: {
   repoRoot: string;
   projectId?: string;
   env?: NodeJS.ProcessEnv;
+  fleetObserver?: Pick<FleetObserver, 'tick'>;
+  schedulerIntervalMs?: number;
 }): SchedulerBoundary {
   const env = input.env ?? process.env;
   const projectId = input.projectId ?? 'orchestrator-pack';
@@ -161,6 +175,8 @@ export function productionSchedulerBoundary(input: {
       '--json', 'name,state,conclusion,status',
     ]) as Promise<Array<{ name?: string; state?: string; conclusion?: string; status?: string }>>,
     listReviewRuns: () => listPackReviewRuns({ projectId }),
+    ...(input.fleetObserver ? { fleetObserver: input.fleetObserver } : {}),
+    ...(input.schedulerIntervalMs === undefined ? {} : { schedulerIntervalMs: input.schedulerIntervalMs }),
     start: async (candidate, freshHeadSha) => {
       const result = await startPackReview({
         projectId,
@@ -180,8 +196,27 @@ export function productionSchedulerBoundary(input: {
   };
 }
 
-export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.ProcessEnv = process.env): Promise<{ attempted: number; started: number; skipped: number }> {
+export async function runSchedulerTick(
+  boundary: SchedulerBoundary,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{
+  attempted: number;
+  started: number;
+  skipped: number;
+  observer?: FleetObserverResult;
+}> {
   assertSchedulerEpoch(env);
+  let observer: FleetObserverResult | undefined;
+  if (boundary.fleetObserver) {
+    try {
+      observer = await boundary.fleetObserver.tick({
+        schedulerIntervalMs: boundary.schedulerIntervalMs ?? 5_000,
+        tickSequence: nextSchedulerTickSequence(boundary),
+      });
+    } catch {
+      // Observer failure is evidence only; the existing action phase remains authoritative.
+    }
+  }
   let attempted = 0;
   let started = 0;
   let skipped = 0;
@@ -212,27 +247,36 @@ export async function runSchedulerTick(boundary: SchedulerBoundary, env: NodeJS.
     const result = await boundary.start(candidate, freshHead);
     if (result.ok) started += 1; else skipped += 1;
   }
-  return { attempted, started, skipped };
+  return observer
+    ? { attempted, started, skipped, observer }
+    : { attempted, started, skipped };
 }
 
-function loadProductionBoundary(): { boundary: SchedulerBoundary; cadence: number } {
+async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; cadence: number }> {
   const parsed = parseFoundationConfig({});
   if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
   const repoRoot = process.cwd();
+  const cadence = parsed.config.scheduler.pollIntervalMs;
+  const runtime = await selectRuntimeAdapter();
+  const fleetObserver = new FleetObserver({ source: runtime });
   return {
-    boundary: productionSchedulerBoundary({ repoRoot }),
-    cadence: parsed.config.scheduler.pollIntervalMs,
+    boundary: productionSchedulerBoundary({
+      repoRoot,
+      fleetObserver,
+      schedulerIntervalMs: cadence,
+    }),
+    cadence,
   };
 }
 
 async function runSingleTick(): Promise<void> {
-  const { boundary } = loadProductionBoundary();
+  const { boundary } = await loadProductionBoundary();
   const result = await runSchedulerTick(boundary);
   process.stdout.write(`${JSON.stringify({ scheduler: { result: 'epoch-gated-tick', ...result } })}\n`);
 }
 
 async function runLoop(): Promise<void> {
-  const { boundary, cadence } = loadProductionBoundary();
+  const { boundary, cadence } = await loadProductionBoundary();
   for (;;) {
     try {
       const result = await runSchedulerTick(boundary);
