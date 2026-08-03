@@ -22,6 +22,8 @@ export type TerminalRow = {
   readonly title?: string;
   readonly tabId?: string;
   readonly leafId?: string;
+  readonly ptyId?: string;
+  readonly incarnationId?: string;
 };
 
 export function object(value: unknown): Record<string, unknown> | null {
@@ -105,6 +107,8 @@ export function parseTerminalRows(payload: unknown):
       ...(typeof row?.title === 'string' ? { title: row.title } : {}),
       ...(typeof row?.tabId === 'string' ? { tabId: row.tabId } : {}),
       ...(typeof row?.leafId === 'string' ? { leafId: row.leafId } : {}),
+      ...(typeof row?.ptyId === 'string' ? { ptyId: row.ptyId } : {}),
+      ...(typeof row?.incarnationId === 'string' ? { incarnationId: row.incarnationId } : {}),
     });
   }
   return { ok: true, rows };
