@@ -11,7 +11,8 @@
     "scripts/runtime/caller-census.ts",
     "scripts/runtime/registry.ts",
     "scripts/runtime/task-compat.test.ts",
-    "scripts/runtime/task-compat.ts"
+    "scripts/runtime/task-compat.ts",
+    "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
     "credentials/**",
