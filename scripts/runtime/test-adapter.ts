@@ -1,5 +1,6 @@
 import {
   runtimeFailure,
+  runtimeUnsupported,
   sameRuntimeWorker,
   type RuntimeAdapter,
   type RuntimeBoundedOutput,
@@ -21,10 +22,23 @@ interface TestWorkerState {
   liveness: RuntimeLiveness;
 }
 
+interface TestObservationBinding {
+  readonly workerKey: string;
+  readonly version: number;
+}
+
+const TEST_OBSERVATION_TOKEN_PREFIX = 'opk-test-output-v1.';
+
+function identityKey(identity: RuntimeWorkerIdentity): string {
+  return `${identity.runtime}\u0000${identity.id}\u0000${identity.generation}`;
+}
+
 export class DeterministicRuntimeAdapter implements RuntimeAdapter {
   readonly id = 'test' as const;
   readonly #workers = new Map<string, TestWorkerState>();
+  readonly #observations = new Map<string, TestObservationBinding>();
   #generation = 0;
+  #observationSequence = 0;
 
   readiness(_options: RuntimeCallOptions = {}): RuntimeResult<RuntimeReadiness> {
     return {
@@ -100,14 +114,41 @@ export class DeterministicRuntimeAdapter implements RuntimeAdapter {
     if (!state || !sameRuntimeWorker(state.worker.identity, input.worker)) {
       return runtimeFailure('read_bounded_output', 'worker_not_found');
     }
-    const token: RuntimeObservationToken = { opaque: `v${state.version}` };
+
+    let changed = state.lines.length > 0;
+    let observationToken = input.previousToken ?? null;
+    if (input.previousToken) {
+      if (!input.previousToken.opaque.startsWith(TEST_OBSERVATION_TOKEN_PREFIX)) {
+        return runtimeUnsupported('read_bounded_output', 'observation_token_unsupported');
+      }
+      const previous = this.#observations.get(input.previousToken.opaque);
+      if (!previous) {
+        return runtimeUnsupported('read_bounded_output', 'observation_token_unsupported');
+      }
+      if (previous.workerKey !== identityKey(input.worker)) {
+        return runtimeFailure('read_bounded_output', 'observation_token_scope_mismatch');
+      }
+      changed = previous.version !== state.version;
+    }
+
+    if (!observationToken || changed) {
+      this.#observationSequence += 1;
+      observationToken = {
+        opaque: `${TEST_OBSERVATION_TOKEN_PREFIX}${this.#observationSequence}`,
+      };
+      this.#observations.set(observationToken.opaque, {
+        workerKey: identityKey(input.worker),
+        version: state.version,
+      });
+    }
+
     return {
       status: 'ok',
       value: {
         worker: state.worker.identity,
         lines: state.lines.slice(-(input.limit ?? state.lines.length)),
-        observationToken: token,
-        changed: input.previousToken?.opaque !== token.opaque,
+        observationToken,
+        changed,
         terminalState: state.liveness === 'gone' ? 'exited' : 'running',
       },
     };
@@ -133,6 +174,10 @@ export class DeterministicRuntimeAdapter implements RuntimeAdapter {
       return runtimeFailure('stop_worker', 'worker_not_found');
     }
     this.#workers.delete(worker.id);
+    const workerKey = identityKey(worker);
+    for (const [token, binding] of this.#observations) {
+      if (binding.workerKey === workerKey) this.#observations.delete(token);
+    }
     return { status: 'ok', value: { stopped: true } };
   }
 
