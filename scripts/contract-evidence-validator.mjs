@@ -696,7 +696,7 @@ export function checkContractEvidence(markdown, options = {}) {
       const bindingProducer = canonicalBindingIdProducer(row);
       if (bindingProducer !== producer) {
         errors.push(
-          `${rowLabel}: producer ${producer} does not match binding-id producer ${bindingProducer}; binding-id must be <producer>:<datum>:<expected> — mechanical fix: correct the row and rerun this validator, no architectural adjudication required`,
+          `${rowLabel}: producer ${producer} does not match binding-id producer prefix ${bindingProducer}; the binding-id prefix before the first ":" must match producer. Canonical form: <producer>:<datum>:<expected>; the accepted two-component form is <producer>:<datum> with expected in a separate field — mechanical fix: correct the row and rerun this validator, no architectural adjudication required`,
         );
         continue;
       }
@@ -718,7 +718,7 @@ export function checkContractEvidence(markdown, options = {}) {
       if (!criterionHasMatchingProducerEmission(markdown, acNumber, row)) {
         const expectation = extractRowProducerEmissionExpectation(row);
         errors.push(
-          `${rowLabel}: NEW(produced-by AC#${acNumber}) must name a matching producer-emission assertion for this binding; add a producer-emission block under AC#${acNumber} with producer: ${expectation.producer}, datum: ${expectation.datum}, expected: ${expectation.expected} — mechanical fix: edit the Issue text and rerun this validator, no architectural adjudication required`,
+          `${rowLabel}: NEW(produced-by AC#${acNumber}) must name a matching producer-emission assertion for this binding; add this minimal producer-emission block under AC#${acNumber}: producer: ${expectation.producer || '<missing>'}, datum: ${expectation.datum || '<missing>'}, expected: ${expectation.expected || '<missing>'}, proof-command: <command> OR proof-capture: <capture>. If datum or expected is <missing>, fix the binding-id first; adding a block cannot match it — mechanical fix: edit the Issue text and rerun this validator, no architectural adjudication required`,
         );
         continue;
       }
