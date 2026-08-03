@@ -17,9 +17,9 @@
       "localProgressMode": "bounded-typescript-tick",
       "evidence": [
         "scripts/pr2-foundation/scheduler.ts",
-        "scripts/pr2-foundation/scheduler.test.ts",
         "scripts/lib/orchestrator-side-process-supervisor.ts",
-        "scripts/lib/orchestrator-side-process-supervisor.test.ts"
+        "scripts/fleet-liveness.cases.ts",
+        "scripts/fleet-liveness-census.cases.ts"
       ],
       "externalCallKinds": [
         "gh"
