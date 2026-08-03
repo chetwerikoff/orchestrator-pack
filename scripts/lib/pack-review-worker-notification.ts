@@ -39,13 +39,17 @@ import {
 export interface WorkerNotificationOptions {
   trustedPackRoot: string;
   workerId?: string;
-  /** Deprecated name at the call site; interpreted only as a runtime worker id. */
+  /** Transitional parameter name at old call sites; interpreted only as a runtime worker id. */
   sessionId?: string;
   request: PackReviewWorkerNotificationRequest;
   repoRoot?: string;
   projectId?: string;
   prNumber?: number;
+  issueNumber?: number;
   headSha?: string;
+  intentClass?: string;
+  cycleKey?: string;
+  surface?: string;
   adapter?: RuntimeAdapter;
   journalPath?: string;
   claimNamespace?: string;
@@ -112,6 +116,7 @@ async function admitNotification(input: {
   worker: RuntimeWorker;
   request: PackReviewWorkerNotificationRequest;
   journalPath: string;
+  source: string;
 }): Promise<JournalAdmission> {
   const deliveryKey = trim(input.request.idempotencyKey);
   const findingsHash = hashed(input.request.message);
@@ -146,7 +151,7 @@ async function admitNotification(input: {
       targetGeneration: input.worker.identity.generation,
       runtime: input.worker.identity.runtime,
       deliveredAtMs: Date.now(),
-      source: 'pack-review-runtime-notification',
+      source: input.source,
       sourceKey: hashed(deliveryKey).slice(0, 32),
       deliveryPath: shape.deliveryPath,
       messageShape: { charLength: shape.charLength, lineCount: shape.lineCount },
@@ -248,18 +253,34 @@ export async function sendPackReviewWorkerNotification(
 
   const projectId = trim(options.projectId) || 'orchestrator-pack';
   const prNumber = Number(options.prNumber ?? 0);
+  const issueNumber = Number(options.issueNumber ?? 0);
+  const intentClass = trim(options.intentClass) || 'review-findings';
+  if (intentClass === 'task-continuation') {
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+      return { state: 'escalated', reason: 'task_continuation_issue_required' };
+    }
+  } else if (!Number.isInteger(prNumber) || prNumber <= 0) {
+    return { state: 'escalated', reason: 'pr_number_required' };
+  }
+
   const workerTarget = `${worker.identity.runtime}:${worker.identity.id}:${worker.identity.generation}`;
-  const cycleKey = `review:${hashed(options.request.message)}`;
+  const cycleKey = trim(options.cycleKey)
+    || `${intentClass}:${hashed(options.request.idempotencyKey)}`;
+  const tupleKey = intentClass === 'task-continuation'
+    ? `${projectId}|${issueNumber}|${cycleKey}|${intentClass}|${workerTarget}`
+    : `${prNumber}|${cycleKey}|${intentClass}|${workerTarget}`;
   const claimNamespace = options.claimNamespace ?? join(stateRoot, 'worker-nudge-claims', projectId);
   const claim = await acquireWorkerNudgeClaim({
-    prNumber: Number.isInteger(prNumber) && prNumber > 0 ? prNumber : 1,
+    prNumber: Number.isInteger(prNumber) && prNumber > 0 ? prNumber : 0,
+    issueNumber: Number.isInteger(issueNumber) && issueNumber > 0 ? issueNumber : undefined,
     cycleKey,
-    intentClass: 'review-findings',
+    intentClass,
     workerTarget,
     sessionId: worker.identity.id,
     targetId: worker.identity.id,
     targetGeneration: worker.identity.generation,
-    surface: 'pack-review-runtime-notification',
+    tupleKey,
+    surface: trim(options.surface) || 'runtime-worker-notification',
     projectId,
     message: options.request.message,
     namespace: claimNamespace,
@@ -275,6 +296,7 @@ export async function sendPackReviewWorkerNotification(
       worker,
       request: options.request,
       journalPath: options.journalPath ?? resolveWorkerMessageDispatchJournalPath(),
+      source: `runtime-worker-notification:${intentClass}`,
     });
   } catch (error) {
     await finalizeWorkerNudgeClaim(claim, 'FAILED_DEFINITIVE', {
@@ -292,6 +314,7 @@ export async function sendPackReviewWorkerNotification(
     path: options.sideEffectFencePath ?? join(stateRoot, 'side-effects', 'worker-notification.lock'),
     metadata: {
       operation: 'worker-notification',
+      intentClass,
       targetId: worker.identity.id,
       targetGeneration: worker.identity.generation,
     },
