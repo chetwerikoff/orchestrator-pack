@@ -2,11 +2,12 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1168,
   "declared_paths": [
-    "docs/declarations/1168.phase-a-source-tooling.json",
     "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/diagnostics.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
-    "scripts/chatgpt-browser-turn/too-many-requests-source.ts",
-    "scripts/vitest-runtime-history.json"
+    "scripts/chatgpt-browser-turn/too-many-requests-capture.test-cases.ts",
+    "scripts/chatgpt-browser-turn/too-many-requests-capture.test.ts",
+    "scripts/chatgpt-browser-turn/too-many-requests-capture.ts"
   ],
   "denylist": [
     ".ao/",
@@ -28,6 +29,7 @@
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/",
     "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/chatgpt-browser-turn/diagnostics.ts",
     "scripts/chatgpt-browser-turn/fixtures/browser-turn-recurrence-journal-symptoms.json",
     "scripts/chatgpt-browser-turn/fixtures/browser-turn-recurrence-replay-kinds.ts",
     "scripts/chatgpt-browser-turn/fixtures/too-many-requests-modal-v2.production-shape.json",
@@ -55,5 +57,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json"
   ],
-  "source_revision": "8bd765cd8efdbb6140da50563a04d60d16c1d8a4"
+  "source_revision": "db8c2b23f769855b8f1ce24e96fed5a23fde1e15"
 }

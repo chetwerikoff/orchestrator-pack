@@ -79,10 +79,8 @@ import {
   type WitnessSurfaceProbe,
   verifyProfile,
 } from './chatgpt-browser-turn/ui-adapter.ts';
-import {
-  captureTooManyRequestsSource,
-  writeCapturedSource,
-} from './chatgpt-browser-turn/too-many-requests-source.ts';
+import { captureTooManyRequestsSourceWithWait } from './chatgpt-browser-turn/too-many-requests-capture.ts';
+import { writeCapturedSource } from './chatgpt-browser-turn/too-many-requests-source.ts';
 
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 const STALE_PRE_SEND_MS = 120_000;
@@ -979,7 +977,10 @@ async function runTooManyRequestsSourceCapture(args: ParsedArgs): Promise<number
     browser = await connectCdpBrowser(loadChromium(), cdp);
     opened = await openTurnPage(browser, config, { segmentBudget });
     if (!opened.owned) throw new Error('capture_page_not_owned');
-    const source = await captureTooManyRequestsSource(opened.page);
+    const source = await captureTooManyRequestsSourceWithWait(
+      opened.page,
+      segmentBudget.remainingMs(),
+    );
     writeCapturedSource(outputPath, source);
     emit(source);
     return 0;
@@ -1181,6 +1182,11 @@ function resolvedControlProfileKey(args: ParsedArgs): string {
   }
 }
 
+function captureFailureCause(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  return /^[a-z][a-z0-9_:-]{0,127}$/.test(message) ? message : 'capture_failed';
+}
+
 export async function runCli(argv: readonly string[]): Promise<number> {
   let args: ParsedArgs;
   try {
@@ -1204,21 +1210,33 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     return 22;
   } catch (error) {
     const operation = controlOperation(args);
+    const captureMode = Boolean(option(args, 'capture-too-many-requests-source'));
     const resolvedProfileKey = resolvedControlProfileKey(args);
-    const diagnosticIdentity = resolvedProfileKey !== 'profile-unresolved' ? randomUUID() : undefined;
+    const cause = captureMode ? captureFailureCause(error) : 'command_failed';
+    const diagnosticIdentity = captureMode || resolvedProfileKey !== 'profile-unresolved'
+      ? randomUUID()
+      : undefined;
+    const diagnosticProfileKey = resolvedProfileKey !== 'profile-unresolved'
+      ? resolvedProfileKey
+      : captureMode
+        ? 'profile-unresolved'
+        : undefined;
     const driverDiagnosticId = recordSwallowedDriverException(
-      resolvedProfileKey !== 'profile-unresolved' ? resolvedProfileKey : undefined,
+      diagnosticProfileKey,
       diagnosticIdentity,
-      'command_failed',
+      cause,
       error,
-      { operation },
+      {
+        operation,
+        allowUnresolvedProfile: captureMode && resolvedProfileKey === 'profile-unresolved',
+      },
     );
     emit({
       schema: 'control-result/v1',
       operation,
       state: 'driver_error',
       configured_profile_key: 'profile-unresolved',
-      cause: 'command_failed',
+      cause,
       ...(driverDiagnosticId ? { driver_diagnostic_id: driverDiagnosticId } : {}),
     });
     return 22;

@@ -80,10 +80,13 @@ export function recordSwallowedDriverException(
   identity: string | undefined,
   cause: string,
   error: unknown,
-  extra: { invocation_id?: string; operation?: string } = {},
+  extra: { invocation_id?: string; operation?: string; allowUnresolvedProfile?: boolean } = {},
 ): string | undefined {
   const detail = exceptionDetail(error);
-  const resolvedProfile = profileKey && profileKey !== 'profile-unresolved' ? profileKey : undefined;
+  const resolvedProfile = profileKey
+    && (profileKey !== 'profile-unresolved' || extra.allowUnresolvedProfile)
+    ? profileKey
+    : undefined;
   const record: DriverDiagnosticV1 = {
     schema: DRIVER_DIAGNOSTIC_SCHEMA,
     version: DRIVER_DIAGNOSTIC_VERSION,

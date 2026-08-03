@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import './too-many-requests-capture.test-cases.ts';
 import {
   readAssistantTurnCompletionReady,
   readAssistantTurnGenerating,
