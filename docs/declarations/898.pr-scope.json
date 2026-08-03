@@ -48,5 +48,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json"
   ],
-  "source_revision": "6924e275d945169063bcbc85027bfb77cf25a9c2"
+  "source_revision": "52377c6a17058435cf15bbd3eef678e7268664a4"
 }
