@@ -6,7 +6,6 @@
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
     "scripts/chatgpt-browser-turn/too-many-requests-source.ts",
-    "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json"
   ],
   "denylist": [
@@ -17,8 +16,6 @@
     "docs/tiering.md",
     "packages/core/",
     "scripts/chatgpt-browser-turn/owned-prompt-marker.ts",
-    "scripts/create-issue-draft-continuity*.ts",
-    "scripts/lib/create-issue-draft-continuation-intent*.ts",
     "secrets/",
     "vendor/"
   ],
@@ -26,11 +23,10 @@
     ".claude/skills/create-issue-draft/SKILL.md",
     ".cursor/rules/flow-manager-browser-turn-monitoring.mdc",
     "docs/declarations/",
-    "docs/declarations/1168*.json",
     "docs/flow-manager-long-running-child-runbook.md",
     "docs/migration_notes.md",
     "scripts/chatgpt-browser-turn.ts",
-    "scripts/chatgpt-browser-turn/**/*.test.ts",
+    "scripts/chatgpt-browser-turn/",
     "scripts/chatgpt-browser-turn/contracts.ts",
     "scripts/chatgpt-browser-turn/fixtures/browser-turn-recurrence-journal-symptoms.json",
     "scripts/chatgpt-browser-turn/fixtures/browser-turn-recurrence-replay-kinds.ts",
@@ -59,5 +55,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json"
   ],
-  "source_revision": "96e1940b8f55cec45e4fff29845338f38487952a"
+  "source_revision": "8bd765cd8efdbb6140da50563a04d60d16c1d8a4"
 }
