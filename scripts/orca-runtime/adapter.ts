@@ -53,6 +53,7 @@ type WorkerBinding = {
 type ObservationBinding = {
   readonly identityKey: string;
   readonly nativeCursor: NativeCursor;
+  readonly outputFingerprint: string;
 };
 
 export interface OrcaRuntimeAdapterOptions extends OrcaRunOptions {
@@ -273,15 +274,18 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const parsed = parseBoundedOutputPayload(response.result);
     if (!parsed.ok) return failure('unsupported', parsed.reason);
+    const outputFingerprint = opaqueHash('output', parsed.lines.join('\u0000'));
     const changed = previous === undefined
       ? parsed.lines.length > 0
-      : parsed.lines.length > 0 || parsed.nativeCursor !== previous.nativeCursor;
+      : parsed.nativeCursor !== previous.nativeCursor
+        || outputFingerprint !== previous.outputFingerprint;
     const observationToken = !changed && input.previousObservationToken
       ? input.previousObservationToken
       : asRuntimeObservationToken(`observation_${randomUUID()}`);
     this.observationByToken.set(observationToken, {
       identityKey: identityKey(input.identity),
       nativeCursor: parsed.nativeCursor,
+      outputFingerprint,
     });
     return success({ lines: parsed.lines, observationToken, changed });
   }
