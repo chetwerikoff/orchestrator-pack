@@ -347,3 +347,164 @@ describe('unchanged observation diagnostics', () => {
     expect(replyStabilityFingerprint('same')).toContain('same');
   });
 });
+
+describe('issue 1168 source tooling', () => {
+  const sourceMarker = '<!-- issue-1168-too-many-requests-production-shape:v2 -->';
+
+  function exactShape() {
+    return {
+      schema: 'too-many-requests-dialog-shape/v2',
+      dialog: {
+        page_dialog_ordinal: 0,
+        tag_name: 'div',
+        role_attribute_class: 'dialog',
+        aria_modal_attribute_class: 'true',
+        aria_owns_attribute_class: 'absent',
+      },
+      heading: {
+        child_index_path: [0],
+        tag_name: 'h2',
+        role_attribute_class: 'heading',
+      },
+      acknowledgement: {
+        child_index_path: [1],
+        tag_name: 'button',
+        role_attribute_class: 'button',
+      },
+    } as const;
+  }
+
+  it('rejects duplicate keys and accepts only canonical compact source bytes', async () => {
+    const {
+      parseJsonRejectingDuplicateKeys,
+      parseSourceCommentBody,
+      shapeSha256,
+    } = await import('./too-many-requests-source.ts');
+    expect(() => parseJsonRejectingDuplicateKeys('{"a":1,"a":2}')).toThrow('json_duplicate_key');
+    const shape = exactShape();
+    const source = {
+      schema: 'issue-1168-too-many-requests-production-shape/v2',
+      issue: 1168,
+      observation_kind: 'natural',
+      observed_at: '2026-08-03T00:00:00.000Z',
+      source_local_occurrence: 'capture:test',
+      operator_attestation: 'scrubbed-no-private-data',
+      shape_sha256: shapeSha256(shape),
+      shape,
+    } as const;
+    const body = `${sourceMarker}\n${JSON.stringify(source)}`;
+    expect(parseSourceCommentBody(body)).toEqual(source);
+    expect(() => parseSourceCommentBody(`${body}\n`)).toThrow('body_grammar_invalid');
+    expect(() => parseSourceCommentBody(body.replace('"issue":1168', '"issue":1168,"issue":1168')))
+      .toThrow('body_grammar_invalid');
+  });
+
+  it('binds live identity, exact body bytes, canonical shape, and fixture bytes', async () => {
+    const { createHash } = await import('node:crypto');
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { shapeSha256, verifyLiveSource } = await import('./too-many-requests-source.ts');
+    const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+    const shape = exactShape();
+    const source = {
+      schema: 'issue-1168-too-many-requests-production-shape/v2',
+      issue: 1168,
+      observation_kind: 'natural',
+      observed_at: '2026-08-03T00:00:00.000Z',
+      source_local_occurrence: 'capture:test',
+      operator_attestation: 'scrubbed-no-private-data',
+      shape_sha256: shapeSha256(shape),
+      shape,
+    } as const;
+    const body = `${sourceMarker}\n${JSON.stringify(source)}`;
+    const root = mkdtempSync(join(tmpdir(), 'issue-1168-source-'));
+    const fixturePath = join(root, 'fixture.json');
+    const bindingPath = join(root, 'binding.json');
+    const commentId = 5161000000;
+    const commentUrl = `https://github.com/chetwerikoff/orchestrator-pack/issues/1168#issuecomment-${commentId}`;
+    writeFileSync(fixturePath, JSON.stringify(shape));
+    writeFileSync(bindingPath, JSON.stringify({
+      schema: 'issue-1168-source-binding/v1',
+      comment_id: commentId,
+      comment_url: commentUrl,
+      updated_at: '2026-08-03T00:00:00Z',
+      body_sha256: hash(body),
+      shape_sha256: source.shape_sha256,
+    }));
+    const result = await verifyLiveSource({
+      bindingPath,
+      fixturePath,
+      selector: 'too-many-requests-source-verifier',
+    }, {
+      transport: {
+        runGh: () => ({
+          exitCode: 0,
+          stdout: JSON.stringify({
+            id: commentId,
+            html_url: commentUrl,
+            updated_at: '2026-08-03T00:00:00Z',
+            body,
+          }),
+          stderr: '',
+        }),
+      },
+    });
+    expect(result).toMatchObject({
+      status: 'verified',
+      selector: 'too-many-requests-source-verifier',
+      body_sha256: hash(body),
+      shape_sha256: source.shape_sha256,
+      fixture_sha256: source.shape_sha256,
+    });
+  });
+
+  it('captures only the minimized exact public surface and fails closed on ambiguity', async () => {
+    const { captureTooManyRequestsSource } = await import('./too-many-requests-source.ts');
+    class ElementNode {
+      parentElement: ElementNode | null = null;
+      readonly children: ElementNode[] = [];
+      constructor(readonly tagName: string) {}
+      append(child: ElementNode) {
+        child.parentElement = this;
+        this.children.push(child);
+        return this;
+      }
+    }
+    class Locator {
+      constructor(readonly elements: ElementNode[], readonly attributes: Record<string, string | null> = {}, readonly enabled = true) {}
+      async count() { return this.elements.length; }
+      nth(index: number) { return new Locator(this.elements[index] ? [this.elements[index]!] : [], this.attributes, this.enabled); }
+      async isVisible() { return this.elements.length === 1; }
+      async isEnabled() { return this.enabled; }
+      async getAttribute(name: string) { return this.attributes[name] ?? null; }
+      async elementHandle() { return this.elements[0] ?? null; }
+      async evaluate<T, A>(callback: (element: Element, arg: A) => T, arg?: A) {
+        const element = this.elements[0];
+        if (!element) throw new Error('missing_element');
+        return callback(element as unknown as Element, arg as A);
+      }
+      getByRole(role: string, options: { name: string; exact: boolean }) {
+        const dialog = this.elements[0];
+        if (!dialog || !options.exact) return new Locator([]);
+        const target = role === 'heading' && options.name === 'Too many requests'
+          ? dialog.children[0]
+          : role === 'button' && options.name === 'Got it'
+            ? dialog.children[1]
+            : undefined;
+        return new Locator(target ? [target] : [], {}, true);
+      }
+    }
+    const dialog = new ElementNode('DIV').append(new ElementNode('H2')).append(new ElementNode('BUTTON'));
+    const page = {
+      locator: vi.fn(() => new Locator([dialog], { role: 'dialog', 'aria-modal': 'true', 'aria-owns': null })),
+    };
+    const captured = await captureTooManyRequestsSource(page, {
+      observedAt: '2026-08-03T00:00:00.000Z',
+      sourceLocalOccurrence: 'capture:test',
+    });
+    expect(captured.shape).toEqual(exactShape());
+    const ambiguousPage = { locator: vi.fn(() => new Locator([dialog, dialog], { role: 'dialog', 'aria-modal': 'true' })) };
+    await expect(captureTooManyRequestsSource(ambiguousPage)).rejects.toThrow('capture_ambiguous_visible_match');
+  });
+});
