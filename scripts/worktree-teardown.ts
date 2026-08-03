@@ -777,14 +777,35 @@ function stopAndCloseTerminals(worktreePath: string): {
     };
   }
 
+  // Re-census AFTER the stop. On this runtime `stop_terminals` already removes the rows, so the
+  // pre-stop handles are stale and closing by them fails for every tab. Close only what actually
+  // survived; nothing left is success, not an error.
+  const postStopCensus = runtimeTerminals(RUNTIME.terminals_all());
+  if (!postStopCensus.ok) {
+    return {
+      ok: false,
+      outcome: 'terminal_stop_failed',
+      report: { stopped: targetRows.length, closed_panes: 0, closed_tabs: 0, mixed_tab_found: false },
+      error: postStopCensus.error ?? 'terminal census unavailable after stop',
+    };
+  }
+  const survivingRows = postStopCensus.value!.filter((terminal) => terminalBelongsTo(terminal, worktreePath));
+  const survivingByTab = new Map<string, RuntimeTerminal[]>();
+  for (const terminal of survivingRows) {
+    const key = terminal.tabId?.trim() || `pane:${terminal.handle ?? ''}`;
+    const rows = survivingByTab.get(key) ?? [];
+    rows.push(terminal);
+    survivingByTab.set(key, rows);
+  }
+
   let closedPanes = 0;
   let closedTabs = 0;
   let mixedTabFound = false;
   const errors: string[] = [];
-  for (const [tabKey, rowsForTarget] of targetByTab) {
+  for (const [tabKey, rowsForTarget] of survivingByTab) {
     const tabId = rowsForTarget[0]?.tabId?.trim();
     const allRowsForTab = tabId
-      ? globalCensus.value!.filter((terminal) => terminal.tabId?.trim() === tabId)
+      ? postStopCensus.value!.filter((terminal) => terminal.tabId?.trim() === tabId)
       : rowsForTarget;
     const tabIsTargetOnly = tabId !== undefined
       && allRowsForTab.length > 0
@@ -826,9 +847,13 @@ function stopAndCloseTerminals(worktreePath: string): {
     mixed_tab_found: mixedTabFound,
   };
   if (!finalGlobal.ok || residual.length > 0 || errors.length > 0) {
+    // A genuine mixed tab that could not be reduced is `blocked_mixed_tab`; anything else
+    // (census unavailable, close command failed, unexplained residual) is a stop/close failure.
+    // Collapsing both into `blocked_mixed_tab` mislabels the incident and sent operators looking
+    // for a tab conflict that does not exist.
     return {
       ok: false,
-      outcome: 'blocked_mixed_tab',
+      outcome: mixedTabFound ? 'blocked_mixed_tab' : 'terminal_stop_failed',
       report,
       error: [finalGlobal.error, ...errors, residual.length > 0 ? `${residual.length} target terminals remain` : undefined]
         .filter((value): value is string => Boolean(value))
