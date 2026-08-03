@@ -252,7 +252,7 @@ describe('state-light explicit session mode', () => {
       schema: 'turn-result/v1',
       state: 'input_invalid',
       scope: 'invocation',
-      cause: 'payload_pair_count_mismatch',
+      cause: 'input_invalid:payload_pair_count_mismatch',
       invocation_id: 'session-invocation',
       configured_profile_key: 'profile-key',
       send_count: 0,
@@ -442,12 +442,12 @@ describe('state-light explicit session mode', () => {
     const duplicate = makeHarness(['one', 'two']);
     duplicate.argv.splice(duplicate.argv.lastIndexOf('/out/2.txt'), 1, '/out/1.txt');
     await runStateLightSession(duplicate.argv, duplicate.dependencies);
-    expect((duplicate.stream.lines[0] as any).cause).toBe('duplicate_output_destination');
+    expect((duplicate.stream.lines[0] as any).cause).toBe('input_invalid:duplicate_output_destination');
     expect(duplicate.metrics.pages).toBe(0);
 
     const tooMany = makeHarness(Array.from({ length: 33 }, (_, index) => String(index)));
     await runStateLightSession(tooMany.argv, tooMany.dependencies);
-    expect((tooMany.stream.lines[0] as any).cause).toBe('payload_count_out_of_range');
+    expect((tooMany.stream.lines[0] as any).cause).toBe('input_invalid:payload_count_out_of_range');
     expect(tooMany.metrics.pages).toBe(0);
   });
 });

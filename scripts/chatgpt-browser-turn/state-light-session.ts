@@ -43,6 +43,7 @@ import {
   __testComposerMutation,
   buildObservationHeartbeat,
   classifyPageObservation,
+  compactResult,
   MAX_LOCAL_READ_WAIT_MS,
   OBSERVATION_HEARTBEAT_MS,
   ownedPromptMatches,
@@ -70,7 +71,7 @@ import {
 
 const MAX_SESSION_PAYLOADS = 32;
 const MAX_SESSION_INPUT_BYTES = 8_388_608;
-const DEFAULT_SESSION_POLL_MS = 500;
+const DEFAULT_SESSION_POLL_MS = POST_SEND_OBSERVATION_POLL_MS;
 const HEARTBEAT_POLL_INTERVAL = 2;
 
 export const STATE_LIGHT_SESSION_HELP = `Usage:
@@ -518,21 +519,20 @@ function compactPreflightRefusal(
   invocationId: string,
   profileKey: string,
 ): CompactTurnResult {
-  const isOutputConflict = cause.startsWith('output_conflict:');
+  const state = cause.startsWith('output_conflict:') ? 'output_conflict' : 'input_invalid';
   return {
-    schema: 'turn-result/v1',
-    state: isOutputConflict ? 'output_conflict' : 'input_invalid',
-    scope: 'invocation',
-    cause,
-    invocation_id: invocationId,
-    configured_profile_key: profileKey,
-    send_count: 0,
-    poll_count: 0,
-    goto_count: 0,
-    new_chat_click_count: 0,
-    navigation_count: 0,
+    ...compactResult(
+      state,
+      'invocation',
+      cause,
+      invocationId,
+      profileKey,
+      0,
+      0,
+      new StateLightNavigationCounter(),
+      [],
+    ),
     cleanup: 'skipped',
-    incidents: [],
   };
 }
 
@@ -650,6 +650,15 @@ function hasLaterUserAfterMarker(
   return ownedIndex >= 0 && messages.slice(ownedIndex + 1).some((message) => message.role === 'user');
 }
 
+function conversationIdentityContinuity(state: SessionExecutionState): SessionTerminalTuple | null {
+  if (!state.conversationId) return null;
+  const current = pageConversationId(state.page);
+  if (!current || !ownedConversationIdentityMatches(current, state.conversationId)) {
+    return tuple('ui_contract_mismatch', 'invocation', 'conversation_identity_changed');
+  }
+  return null;
+}
+
 function predecessorContinuity(
   state: SessionExecutionState,
   predecessor: MutablePayloadState,
@@ -658,12 +667,8 @@ function predecessorContinuity(
   if (!predecessor.terminalWritten || predecessor.latestWrittenRecord?.phase !== 'terminal') {
     return tuple('driver_error', 'invocation', 'predecessor_terminal_not_written');
   }
-  if (state.conversationId) {
-    const current = pageConversationId(state.page);
-    if (!current || !ownedConversationIdentityMatches(current, state.conversationId)) {
-      return tuple('ui_contract_mismatch', 'invocation', 'conversation_identity_changed');
-    }
-  }
+  const identityFailure = conversationIdentityContinuity(state);
+  if (identityFailure) return identityFailure;
   const marker = predecessor.expectedMarker;
   if (!marker) return tuple('ui_contract_mismatch', 'invocation', 'predecessor_marker_missing');
   if (observation.transcriptIncomplete) {
@@ -704,6 +709,7 @@ async function dispatchOnce(
   payload: MutablePayloadState,
   wrapped: string,
   insertionDeadline: number,
+  ordinalIndex: number,
   deps: StateLightSessionDependencies,
 ): Promise<SessionTerminalTuple | null> {
   const composerVerified = await verifyComposerExact(state.page, wrapped, insertionDeadline, deps);
@@ -711,6 +717,10 @@ async function dispatchOnce(
   if (!composerVerified) {
     return tuple('driver_error', 'invocation', 'composer_mutation_budget_exhausted');
   }
+  const dispatchContinuity = ordinalIndex > 0
+    ? await preactivationCheck(state, ordinalIndex, deps)
+    : conversationIdentityContinuity(state);
+  if (dispatchContinuity) return dispatchContinuity;
   payload.sendCount = 1;
   payload.deliveryState = 'delivery_unknown';
   const latched: SessionPayloadRecord = {
@@ -908,7 +918,7 @@ async function observeAndPublish(
     }
 
     const delay = Math.min(
-      payload.deliveryState === 'delivered' ? state.config.pollMs : Math.min(state.config.pollMs, 500),
+      state.config.pollMs,
       Math.max(0, remainingMs(state, deps)),
       POST_SEND_OBSERVATION_POLL_MS,
     );
@@ -1067,7 +1077,7 @@ async function runActivePayload(
     }
     return tuple('driver_error', 'invocation', `baseline_observation_failed:${detail}`);
   }
-  const dispatchFailure = await dispatchOnce(state, payload, wrapped, insertionDeadline, deps);
+  const dispatchFailure = await dispatchOnce(state, payload, wrapped, insertionDeadline, ordinalIndex, deps);
   if (dispatchFailure) return dispatchFailure;
 
   const observed = await observeAndPublish(state, payload, baseline.messages.length, deps);
@@ -1286,8 +1296,7 @@ export async function runStateLightSession(
   } catch (error) {
     const invocationId = deps.uuid();
     const raw = error instanceof Error ? error.message : String(error);
-    const cause = raw.startsWith('input_invalid:') ? raw.slice('input_invalid:'.length) : raw;
-    const refusal = compactPreflightRefusal(cause, invocationId, safeProfileKey(argv, deps));
+    const refusal = compactPreflightRefusal(raw, invocationId, safeProfileKey(argv, deps));
     try { deps.stdout.write(`${JSON.stringify(refusal)}\n`); } catch { /* no alternate channel */ }
     return turnExitCode(refusal.state);
   }

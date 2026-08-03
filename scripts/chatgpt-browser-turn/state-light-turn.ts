@@ -764,7 +764,7 @@ function browserConfig(args: ParsedTurnArgs): BrowserConfig & { pollMs: number }
   };
 }
 
-function compactResult(
+export function compactResult(
   state: TurnState,
   scope: FailureScope,
   cause: string,
