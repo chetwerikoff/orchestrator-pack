@@ -43,6 +43,7 @@ import {
   __testComposerMutation,
   buildObservationHeartbeat,
   classifyPageObservation,
+  compactInputInvalidRefusal,
   compactResult,
   MAX_LOCAL_READ_WAIT_MS,
   OBSERVATION_HEARTBEAT_MS,
@@ -176,6 +177,7 @@ interface SessionExecutionState {
   readonly navigation: StateLightNavigationCounter;
   readonly writer: SessionStdoutWriter;
   readonly wholeSessionDeadline: number;
+  releaseFreshSlot?: () => void;
   browser?: any;
   page?: any;
   conversationId?: string;
@@ -519,6 +521,9 @@ function compactPreflightRefusal(
   invocationId: string,
   profileKey: string,
 ): CompactTurnResult {
+  if (cause === 'input_invalid:timeout_ms_exceeds_maximum') {
+    return compactInputInvalidRefusal(cause, invocationId, profileKey);
+  }
   const state = cause.startsWith('output_conflict:') ? 'output_conflict' : 'input_invalid';
   return {
     ...compactResult(
@@ -578,12 +583,17 @@ async function readObservationWithinDeadline(
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error('whole_session_deadline_exhausted')), remaining);
     });
-    const observation = await Promise.race([
-      deps.readObservation(state.page, expectedMarker, baselineCount),
-      timeout,
-    ]);
-    if (!deadlineOpen(state, deps)) throw new Error('whole_session_deadline_exhausted');
-    return observation;
+    const observationPromise = deps.readObservation(state.page, expectedMarker, baselineCount);
+    try {
+      const observation = await Promise.race([observationPromise, timeout]);
+      if (!deadlineOpen(state, deps)) throw new Error('whole_session_deadline_exhausted');
+      return observation;
+    } catch (error) {
+      if (error instanceof Error && error.message === 'whole_session_deadline_exhausted') {
+        try { await observationPromise; } catch { /* settle the in-flight browser read before cleanup */ }
+      }
+      throw error;
+    }
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
@@ -746,6 +756,7 @@ async function dispatchOnce(
     if (count > 0) await sendButton.click({ timeout });
     else await composer.press('Enter', { timeout });
   } catch (error) {
+    if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
     const detail = error instanceof Error ? error.message : String(error);
     return tuple('send_failed', 'invocation', `dispatch_failed:${detail}`);
   }
@@ -900,6 +911,9 @@ async function observeAndPublish(
         previousReply = '';
       }
       await maybeContinue(state.page, state.wholeSessionDeadline, deps);
+      if (!deadlineOpen(state, deps)) {
+        return { terminal: tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted') };
+      }
 
       const now = deps.now();
       const dueByPoll = pollCount % HEARTBEAT_POLL_INTERVAL === 0;
@@ -956,6 +970,7 @@ async function setupOwnedPage(
       createTurnOperationBudget(Math.max(0, remainingMs(state, deps)), deps.now()),
     );
   } catch (error) {
+    if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
     return classifySetupError(error);
   }
   if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
@@ -1007,6 +1022,7 @@ async function setupOwnedPage(
     }
     return null;
   } catch (error) {
+    if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
     return classifySetupError(error);
   }
 }
@@ -1038,47 +1054,51 @@ async function runActivePayload(
   ordinalIndex: number,
   deps: StateLightSessionDependencies,
 ): Promise<SessionTerminalTuple> {
-  if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-  const composerState = await deps.waitForComposer(state.page, state.wholeSessionDeadline);
-  if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-  if (composerState.state !== 'ready') return tuple(composerState.state, 'invocation', composerState.cause);
-
-  payload.expectedMarker = deps.marker();
-  const wrapped = deps.wrapPayload(payload.expectedMarker, payload.item.snapshot.text);
-  const insertionContext: { insertionDeadlineMs?: number } = {};
-  const mutationFailure = await deps.mutateComposer(
-    state.page,
-    wrapped,
-    state.wholeSessionDeadline,
-    insertionContext,
-  );
-  if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-  if (mutationFailure) return tuple('driver_error', 'invocation', mutationFailure);
-  const insertionDeadline = insertionContext.insertionDeadlineMs ?? state.wholeSessionDeadline;
-
-  if (ordinalIndex > 0) {
-    const continuity = await preactivationCheck(state, ordinalIndex, deps);
-    if (continuity) return continuity;
-  }
-  if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-  const composerReady = await deps.readComposerReady(state.page, insertionDeadline);
-  if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-  if (!composerReady) {
-    return tuple('driver_error', 'invocation', 'composer_mutation_budget_exhausted');
-  }
-
   let baseline: PageObservationResult;
   try {
-    baseline = await readObservationWithinDeadline(state, deps);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    if (!deadlineOpen(state, deps) || detail === 'whole_session_deadline_exhausted') {
-      return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+    if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+    const composerState = await deps.waitForComposer(state.page, state.wholeSessionDeadline);
+    if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+    if (composerState.state !== 'ready') return tuple(composerState.state, 'invocation', composerState.cause);
+
+    payload.expectedMarker = deps.marker();
+    const wrapped = deps.wrapPayload(payload.expectedMarker, payload.item.snapshot.text);
+    const insertionContext: { insertionDeadlineMs?: number } = {};
+    const mutationFailure = await deps.mutateComposer(
+      state.page,
+      wrapped,
+      state.wholeSessionDeadline,
+      insertionContext,
+    );
+    if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+    if (mutationFailure) return tuple('driver_error', 'invocation', mutationFailure);
+    const insertionDeadline = insertionContext.insertionDeadlineMs ?? state.wholeSessionDeadline;
+
+    if (ordinalIndex > 0) {
+      const continuity = await preactivationCheck(state, ordinalIndex, deps);
+      if (continuity) return continuity;
     }
-    return tuple('driver_error', 'invocation', `baseline_observation_failed:${detail}`);
+    if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+    const composerReady = await deps.readComposerReady(state.page, insertionDeadline);
+    if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+    if (!composerReady) {
+      return tuple('driver_error', 'invocation', 'composer_mutation_budget_exhausted');
+    }
+
+    try {
+      baseline = await readObservationWithinDeadline(state, deps);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (!deadlineOpen(state, deps) || detail === 'whole_session_deadline_exhausted') {
+        return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+      }
+      return tuple('driver_error', 'invocation', `baseline_observation_failed:${detail}`);
+    }
+    const dispatchFailure = await dispatchOnce(state, payload, wrapped, insertionDeadline, ordinalIndex, deps);
+    if (dispatchFailure) return dispatchFailure;
+  } finally {
+    state.releaseFreshSlot?.();
   }
-  const dispatchFailure = await dispatchOnce(state, payload, wrapped, insertionDeadline, ordinalIndex, deps);
-  if (dispatchFailure) return dispatchFailure;
 
   const observed = await observeAndPublish(state, payload, baseline.messages.length, deps);
   if (observed.markerCount !== undefined) payload.markerMatchCount = observed.markerCount;
@@ -1186,6 +1206,12 @@ async function executeSession(
     ? deps.profileKey(config.browser.profile, config.browser.cdp)
     : undefined;
   let freshSlotAcquired = false;
+  const releaseFreshSlot = (): void => {
+    if (!freshSlotAcquired || !freshSlotProfileKey) return;
+    freshSlotAcquired = false;
+    releaseStateLightNewChatSendSlot(freshSlotProfileKey, invocationId);
+  };
+  state.releaseFreshSlot = releaseFreshSlot;
   let decisiveIndex: number | null = null;
   let activeIndex = 0;
 
@@ -1214,6 +1240,7 @@ async function executeSession(
       try {
         const setupFailure = await setupOwnedPage(state, deps);
         if (setupFailure) {
+          releaseFreshSlot();
           payloads[0]!.terminal = setupFailure;
           decisiveIndex = 0;
         } else {
@@ -1275,9 +1302,7 @@ async function executeSession(
     if (!(await state.writer.write(aggregate))) return aggregate.exit_code === 0 ? 10 : aggregate.exit_code;
     return aggregate.exit_code;
   } finally {
-    if (freshSlotAcquired && freshSlotProfileKey) {
-      releaseStateLightNewChatSendSlot(freshSlotProfileKey, invocationId);
-    }
+    releaseFreshSlot();
   }
 }
 

@@ -795,6 +795,36 @@ export function compactResult(
   };
 }
 
+export function compactInputInvalidRefusal(
+  cause: string,
+  invocationId: string,
+  profileKey: string,
+): CompactTurnResult {
+  const navigation = new StateLightNavigationCounter();
+  const incidents: BrowserIncident[] = [{
+    eventClass: 'input_invalid',
+    symptom: cause.startsWith('input_invalid:') ? cause.slice('input_invalid:'.length) : cause,
+    action: 'return_local_error',
+  }];
+  const journalWriteFailed = !appendIncident(incidents[0]!, invocationId);
+  return {
+    ...compactResult(
+      'input_invalid',
+      'invocation',
+      cause,
+      invocationId,
+      profileKey,
+      0,
+      0,
+      navigation,
+      incidents,
+      {},
+      journalWriteFailed,
+    ),
+    cleanup: 'skipped',
+  };
+}
+
 function appendIncident(
   incident: BrowserIncident,
   invocationId: string,
