@@ -3,7 +3,8 @@
   "issue_number": 1280,
   "declared_paths": [
     ".claude/skills/merge-with-local-adoption/reap-worktree.mjs",
-    ".claude/skills/merge-with-local-adoption/SKILL.md"
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    "scripts/worktree-teardown.ts"
   ],
   "denylist": [
     "credentials/",
@@ -29,5 +30,5 @@
     "scripts/",
     "tests/external-output-references/"
   ],
-  "source_revision": "c74a8fe4328535478429e22ac9f597d545230b74"
+  "source_revision": "f27a75c66ab59bdd5521e674d9ea4f97ab95ce42"
 }
