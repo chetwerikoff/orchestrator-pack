@@ -35,12 +35,17 @@ import { checkFindingLedgerGuard } from '../finding-ledger-guard.mjs';
 export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
 export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
 export const ARTIFACT_MANIFEST_SCHEMA = 'create-issue-acceptance-artifacts/v1' as const;
+export const TURN_RESULT_SCHEMA = 'turn-result/v1' as const;
 
 export const ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS = [
-  { flag: '--tier-intake', file: 'tier-intake.json', schema: 'tier-intake/v1', classification: 'flow-manager-authored input' },
-  { flag: '--stage-evidence', file: 'attempt-NNN.json', schema: STAGE_EVIDENCE_SCHEMA, classification: 'flow-manager-authored input' },
-  { flag: '--author-dispositions', file: 'author-dispositions.json', schema: AUTHOR_DISPOSITIONS_SCHEMA, classification: 'flow-manager-authored input' },
+  { property: 'tierIntakePath', flag: '--tier-intake', file: 'tier-intake.json', schema: 'tier-intake/v1', classification: 'flow-manager-authored input', repeatable: false },
+  { property: 'stageEvidencePaths', flag: '--stage-evidence', file: 'attempt-NNN.json', schema: STAGE_EVIDENCE_SCHEMA, classification: 'flow-manager-authored input', repeatable: true },
+  { property: 'authorDispositionsPath', flag: '--author-dispositions', file: 'author-dispositions.json', schema: AUTHOR_DISPOSITIONS_SCHEMA, classification: 'flow-manager-authored input', repeatable: false },
 ] as const;
+
+export function stageCompletenessReceiptFileName(stageAttemptId: string): string {
+  return `stage-completeness-receipt-${stageAttemptId}.json`;
+}
 
 export const ACCEPTANCE_ARTIFACT_OUTPUT_NAMES = [
   'verified-relay-evidence.json',
@@ -381,7 +386,7 @@ function readTurnResultForInvocation(
     errors.push(`turn-result/v1 artifact for ${label} is malformed: ${resolved}`);
     return null;
   }
-  if (!isRecord(value) || value.schema !== 'turn-result/v1') {
+  if (!isRecord(value) || value.schema !== TURN_RESULT_SCHEMA) {
     errors.push(`turn-result/v1 artifact for ${label} has an invalid schema: ${resolved}`);
     return null;
   }
@@ -973,7 +978,7 @@ export function produceAcceptanceArtifacts(
   }
 
   const files = [
-    ...receipts.map((receipt) => `stage-completeness-receipt-${receipt.stageAttemptId}.json`),
+    ...receipts.map((receipt) => stageCompletenessReceiptFileName(receipt.stageAttemptId)),
     ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
   ];
   const manifest = {
@@ -988,7 +993,7 @@ export function produceAcceptanceArtifacts(
   };
   const artifactContents = new Map<string, string>();
   receipts.forEach((receipt) => artifactContents.set(
-    `stage-completeness-receipt-${receipt.stageAttemptId}.json`,
+    stageCompletenessReceiptFileName(receipt.stageAttemptId),
     JSON.stringify(receipt, null, 2) + '\n',
   ));
   artifactContents.set('verified-relay-evidence.json', JSON.stringify(relay, null, 2) + '\n');
@@ -1087,7 +1092,7 @@ export function inspectAcceptanceArtifacts(
     if (stage && value.outcome === 'complete') completedStages.add(stage);
     const stageAttemptId = typeof value.stageAttemptId === 'string' ? value.stageAttemptId.trim() : '';
     if (isSafeFileComponent(stageAttemptId)) {
-      stageReceiptNames.push('stage-completeness-receipt-' + stageAttemptId + '.json');
+      stageReceiptNames.push(stageCompletenessReceiptFileName(stageAttemptId));
     } else {
       missing.push({ artifact: 'stage-completeness-receipt', reason: 'stage evidence has no safe stageAttemptId: ' + path });
     }

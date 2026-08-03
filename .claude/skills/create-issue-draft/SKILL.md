@@ -940,11 +940,13 @@ an optional explicit validation input when supplied.
 ### Conditional evidence/waiver
 
 - `reviewer-invocation-envelope-<stage>-<slot>-<attempt>.json`
+- `turn-result-<invocation>.json` (`turn-result/v1`), required for every completed browser invocation
 - `pass-NN-competitive-SS.capture.txt`
 - `pass-NN-architectural-review-SS.capture.txt`
 - `pass-NN-architectural-lens.capture.txt`
 - `pass-NN-architectural.capture.txt`
-- `claude-producer-evidence.json` OR `claude-unavailable-waiver.json`
+- `claude-producer-evidence.json`
+- `claude-unavailable-waiver.json`
 
 ### Audit-only records
 

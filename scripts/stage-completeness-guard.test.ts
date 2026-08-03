@@ -2,11 +2,11 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { checkFindingLedgerGuard, runCli as runFindingLedgerCli } from './finding-ledger-guard.mjs';
 import { loadCanonicalReceiptInventory } from './stage-completeness-guard.ts';
-import { stageFinalizeUsage } from './lib/create-issue-stage-record-cli.ts';
-import { ACCEPTANCE_ARTIFACT_OUTPUT_NAMES, ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS } from './lib/create-issue-stage-record-artifacts.ts';
+import { runStageFinalizeCli, stageFinalizeUsage } from './lib/create-issue-stage-record-cli.ts';
+import { ACCEPTANCE_ARTIFACT_OUTPUT_NAMES, ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS, TURN_RESULT_SCHEMA, stageCompletenessReceiptFileName } from './lib/create-issue-stage-record-artifacts.ts';
 import {
   deriveReviewEpisodeState,
   parseReviewerCardinalityControl,
@@ -32,6 +32,83 @@ const CONFIG = 'env:OPK_GPT_REVIEWER_CARDINALITY';
 const CLEAN = 'review-economics-contract: v1\nNO_FINDINGS\nSIMPLIFICATION_CLEAN\n';
 
 function hash(text: string): string { return createHash('sha256').update(text).digest('hex'); }
+
+function documentedFindingLedgerFlags(skill: string): string[] {
+  const block = skill.match(/```bash\n(node scripts\/finding-ledger-guard\.mjs[\s\S]*?)\n```/)?.[1];
+  if (!block) return [];
+  return [...block.matchAll(/^\s+(--[a-z-]+)/gm)].map((match) => match[1]!);
+}
+
+function writeT3AcceptanceFixture() {
+  const stateRoot = mkdtempSync(join(tmpdir(), 'opk-1287-artifacts-'));
+  const dir = join(stateRoot, '.review', '1287');
+  mkdirSync(dir, { recursive: true });
+  const taskIdentity = 'issue:1287';
+  const sourceRevision = 'r01';
+  const reviewEpisodeId = `${taskIdentity}@${sourceRevision}`;
+  const cardinalityConfigIdentity = 'env:OPK_GPT_REVIEWER_CARDINALITY';
+  const tierIntakePath = join(dir, 'tier-intake.json');
+  const authorDispositionsPath = join(dir, 'author-dispositions.json');
+  const stageEvidencePaths: string[] = [];
+  const stageAttemptIds: string[] = [];
+  writeFileSync(tierIntakePath, JSON.stringify({
+    schema: 'tier-intake/v1', producer: 'flow-manager', taskIdentity, kind: 'fresh', priorTier: 'T3', firstRevision: sourceRevision,
+  }));
+  for (const spec of [
+    { stage: 'competitive', sequence: 1 },
+    { stage: 'architectural-review', sequence: 2 },
+  ] as const) {
+    const stageAttemptId = `${spec.stage}-attempt`;
+    const invocations = Array.from({ length: 3 }, (_, index) => {
+      const ordinal = index + 1;
+      const captureName = `pass-${String(spec.sequence).padStart(2, '0')}-${spec.stage}-${String(ordinal).padStart(2, '0')}.capture.txt`;
+      const capturePath = join(dir, captureName);
+      writeFileSync(capturePath, CLEAN);
+      const invocationId = `${stageAttemptId}-invocation-${ordinal}`;
+      const turnResultName = `turn-result-${stageAttemptId}-${ordinal}.json`;
+      const turnResultPath = join(dir, turnResultName);
+      const turnResult = {
+        schema: TURN_RESULT_SCHEMA, state: 'ok', scope: 'conversation', cause: 'ok', invocation_id: invocationId,
+        configured_profile_key: 'fixture-profile',
+        output: { byte_length: Buffer.byteLength(CLEAN), sha256: hash(CLEAN) },
+      };
+      const turnResultText = JSON.stringify(turnResult);
+      writeFileSync(turnResultPath, turnResultText);
+      return {
+        schema: 'reviewer-invocation-envelope/v1', reviewEpisodeId, stageAttemptId,
+        policyVersion: 'triple-source/v1', reviewerCardinality: 3, cardinalityConfigIdentity,
+        stage: spec.stage, sourceRevision, invocationId,
+        terminalResultIdentity: `sha256:${hash(turnResultText)}:${turnResultName}`,
+        turnResultPath, reviewerSource: `source-${stageAttemptId}-${String(ordinal).padStart(2, '0')}`, reviewerSlot: String(ordinal).padStart(2, '0'),
+        reviewerOrdinal: ordinal, attemptOrdinal: 1, retryAttempt: false, terminal: true,
+        terminalClassification: 'complete', sendCount: 1, retryClass: 'none', revisionCheck: 'matched',
+        capacityOutcome: 'admitted', capacityWaitMs: 0, capturePath,
+      };
+    });
+    const stageEvidencePath = join(dir, `attempt-${String(spec.sequence).padStart(3, '0')}.json`);
+    stageEvidencePaths.push(stageEvidencePath);
+    stageAttemptIds.push(stageAttemptId);
+    writeFileSync(stageEvidencePath, JSON.stringify({
+      schema: 'create-issue-stage-evidence/v1', tier: 'T3', stage: spec.stage, stageAttemptId,
+      stageSequence: spec.sequence, cycleId: 'cycle-1287-fixture',
+      cycleBinding: { cycleId: 'cycle-1287-fixture', sourceRevision, boundBeforeLaunch: true },
+      policyVersion: 'triple-source/v1', reviewerCardinality: 3, cardinalityConfigIdentity,
+      sourceRevision, outcome: 'complete',
+      revisionChecks: { attemptCreation: 'matched', beforeLaunch: 'matched', settlement: 'matched' },
+      settlement: { allLaunchedTerminal: true, retryState: 'none', finalRevisionMatched: true },
+      invocations, credentialingCaptures: invocations.map((invocation) => ({
+        captureIdentity: `sha256:${hash(CLEAN)}:${invocation.capturePath.split(/[\/]/).at(-1)}`,
+        name: invocation.capturePath.split(/[\/]/).at(-1), byteLength: Buffer.byteLength(CLEAN), sha256: hash(CLEAN), rawFindingCount: 0,
+      })),
+      relayEligibleCaptures: invocations.map((invocation) => ({
+        captureIdentity: `sha256:${hash(CLEAN)}:${invocation.capturePath.split(/[\/]/).at(-1)}`,
+        name: invocation.capturePath.split(/[\/]/).at(-1), byteLength: Buffer.byteLength(CLEAN), sha256: hash(CLEAN), rawFindingCount: 0,
+      })),
+    }));
+  }
+  writeFileSync(authorDispositionsPath, JSON.stringify({ schema: 'create-issue-author-dispositions/v1', findings: [] }));
+  return { stateRoot, dir, tierIntakePath, authorDispositionsPath, stageEvidencePaths, stageAttemptIds, sourceRevision };
+}
 function capture(id: string, name: string, text = CLEAN): CaptureIdentityV1 {
   return { captureIdentity: id, name, byteLength: Buffer.byteLength(text), sha256: hash(text), rawFindingCount: (text.match(/^id:\s*/gm) ?? []).length };
 }
@@ -466,10 +543,56 @@ describe('Issue #1150 receipt-backed ledger', () => {
       writeFileSync(join(dir, 'verified-relay-evidence.json'), JSON.stringify(fixture.relay));
       fixture.captures.forEach((item, index) => writeFileSync(join(dir, item.name), fixture.texts[index]!));
       writeFileSync(join(dir, 'ledger.json'), JSON.stringify({ version: 2, counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 }, findings: [] }));
-      expect(runFindingLedgerCli(['node', 'scripts/finding-ledger-guard.mjs', '--ledger', join(dir, 'ledger.json'), '--captures-dir', dir, '--phase', 'pre-lens', '--stage-terminal', '--receipt-directory', canonical, '--tier-intake', join(canonical, 'tier-intake.json'), '--verified-relay-evidence', join(dir, 'verified-relay-evidence.json')])).toBe(0);
+      const stageReceiptPaths = fixture.receipts.map((_, index) => join(canonical, `stage-completeness-receipt-${index + 1}.json`));
+      const argv = [
+        'node', 'scripts/finding-ledger-guard.mjs',
+        '--ledger', join(dir, 'ledger.json'),
+        '--captures-dir', dir,
+        '--phase', 'pre-lens',
+        '--adoption-timestamp', '0',
+        '--issue-revision', REVISION,
+        '--stage-terminal',
+        '--receipt-directory', canonical,
+        '--tier-intake', join(canonical, 'tier-intake.json'),
+        '--stage-receipt', stageReceiptPaths[0]!,
+        '--stage-receipt', stageReceiptPaths[1]!,
+        '--verified-relay-evidence', join(dir, 'verified-relay-evidence.json'),
+      ];
+      const skill = readFileSync(join(process.cwd(), '.claude/skills/create-issue-draft/SKILL.md'), 'utf8');
+      expect(argv.filter((value) => value.startsWith('--'))).toEqual(documentedFindingLedgerFlags(skill));
+      expect(runFindingLedgerCli(argv)).toBe(0);
+      const validRemoteAuthorityPath = join(dir, 'remote-authority-valid.json');
+      writeFileSync(validRemoteAuthorityPath, JSON.stringify(ledgerOptions(fixture).remoteAuthorities));
+      expect(runFindingLedgerCli([...argv, '--remote-authority', validRemoteAuthorityPath])).toBe(0);
+      const emptyRemoteAuthorityPath = join(dir, 'remote-authority-empty.json');
+      writeFileSync(emptyRemoteAuthorityPath, '[]');
+      expect(runFindingLedgerCli([...argv, '--remote-authority', emptyRemoteAuthorityPath])).toBe(1);
+      expect(runFindingLedgerCli([...argv, '--remote-authority'])).toBe(1);
+      expect(runFindingLedgerCli([...argv, '--remote-authority', validRemoteAuthorityPath, '--remote-authority', emptyRemoteAuthorityPath])).toBe(1);
     } finally {
       if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
       else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects review economics without canonical receipt authority', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'opk-1150-missing-authority-'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const capturePath = join(dir, 'pass-01-architectural.capture.txt');
+      writeFileSync(capturePath, CLEAN);
+      const ledgerPath = join(dir, 'ledger.json');
+      writeFileSync(ledgerPath, JSON.stringify({ version: 2, counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 }, findings: [] }));
+      expect(runFindingLedgerCli([
+        'node', 'scripts/finding-ledger-guard.mjs',
+        '--ledger', ledgerPath,
+        '--captures-dir', dir,
+        '--review-economics',
+      ])).toBe(1);
+      expect(error).toHaveBeenCalledWith('finding-ledger: canonical receipt authority is required for --review-economics');
+    } finally {
+      error.mockRestore();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -477,23 +600,81 @@ describe('Issue #1150 receipt-backed ledger', () => {
 
 
 describe('Issue #1287 acceptance inventory parity', () => {
-  it('keeps the Skill inventory aligned with acceptance inputs and outputs', () => {
+  it('keeps the Skill inventory aligned with acceptance inputs and outputs in both directions', () => {
     const skill = readFileSync(join(process.cwd(), '.claude/skills/create-issue-draft/SKILL.md'), 'utf8');
     const start = skill.indexOf('## Review artifacts');
     const end = skill.indexOf('## GitHub issue journal', start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const inventory = skill.slice(start, end);
-    const producerOutputs = inventory.slice(inventory.indexOf('### Producer outputs'), inventory.indexOf('### Conditional evidence/waiver'));
+    const actualInventory = new Set([...inventory.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]!));
+    const expectedInventory = new Set([
+      ...ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => input.file),
+      'stage-completeness-receipt-<stageAttemptId>.json',
+      ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
+      'reviewer-invocation-envelope-<stage>-<slot>-<attempt>.json',
+      'turn-result-<invocation>.json',
+      'pass-NN-competitive-SS.capture.txt',
+      'pass-NN-architectural-review-SS.capture.txt',
+      'pass-NN-architectural-lens.capture.txt',
+      'pass-NN-architectural.capture.txt',
+      'claude-producer-evidence.json',
+      'claude-unavailable-waiver.json',
+      'chats.md',
+      'round-NN-author-reply.md',
+      'rNN/tier-gate-receipt.json',
+    ]);
+    expect(actualInventory).toEqual(expectedInventory);
+    expect(inventory).toContain(`(\`${TURN_RESULT_SCHEMA}\`), required for every completed browser invocation`);
 
-    for (const input of ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS) {
-      expect(inventory).toContain(input.file);
-      expect(inventory).toContain(`(\`${input.schema}\`)`);
-      expect(inventory).toContain(input.classification);
-      expect(stageFinalizeUsage()).toContain(input.flag);
+    const requiredFlags = ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => input.flag);
+    for (const command of ['produce-artifacts', 'check-artifacts']) {
+      const line = stageFinalizeUsage().split('\n').find((value) => value.includes(` ${command} `));
+      expect(line).toBeDefined();
+      const flags = [...(line ?? '').matchAll(/(--[a-z-]+)/g)].map((match) => match[1]!);
+      expect(flags.slice(0, requiredFlags.length + 1)).toEqual(['--review-dir', ...requiredFlags]);
     }
-    expect(producerOutputs).toContain('stage-completeness-receipt-<stageAttemptId>.json');
-    for (const output of ACCEPTANCE_ARTIFACT_OUTPUT_NAMES) expect(producerOutputs).toContain(output);
-    expect(inventory).toContain('Do not persist an episode receipt or consolidated reviewer output.');
+  });
+});
+
+
+describe('Issue #1287 real acceptance chain', () => {
+  it('runs check-artifacts, produce-artifacts, check-artifacts, and the Skill ledger command with the real guard', () => {
+    const fixture = writeT3AcceptanceFixture();
+    const previousStateRoot = process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+    process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = fixture.stateRoot;
+    const artifactArgs = (command: 'check-artifacts' | 'produce-artifacts') => [
+      'node', 'scripts/create-issue-stage-finalize.ts', command,
+      '--review-dir', fixture.dir,
+      '--tier-intake', fixture.tierIntakePath,
+      ...fixture.stageEvidencePaths.flatMap((path) => ['--stage-evidence', path]),
+      '--author-dispositions', fixture.authorDispositionsPath,
+      '--output-dir', fixture.dir,
+      '--phase', 'pre-lens',
+    ];
+    try {
+      expect(runStageFinalizeCli(artifactArgs('check-artifacts'))).toBe(1);
+      expect(runStageFinalizeCli(artifactArgs('produce-artifacts'))).toBe(0);
+      expect(runStageFinalizeCli(artifactArgs('check-artifacts'))).toBe(0);
+      const receiptPaths = fixture.stageAttemptIds.map((stageAttemptId) => join(fixture.dir, stageCompletenessReceiptFileName(stageAttemptId)));
+      expect(runFindingLedgerCli([
+        'node', 'scripts/finding-ledger-guard.mjs',
+        '--ledger', join(fixture.dir, 'finding-disposition-ledger.json'),
+        '--captures-dir', fixture.dir,
+        '--phase', 'pre-lens',
+        '--adoption-timestamp', '0',
+        '--issue-revision', fixture.sourceRevision,
+        '--stage-terminal',
+        '--receipt-directory', fixture.dir,
+        '--tier-intake', fixture.tierIntakePath,
+        '--stage-receipt', receiptPaths[0]!,
+        '--stage-receipt', receiptPaths[1]!,
+        '--verified-relay-evidence', join(fixture.dir, 'verified-relay-evidence.json'),
+      ])).toBe(0);
+    } finally {
+      if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
+      else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
+      rmSync(fixture.stateRoot, { recursive: true, force: true });
+    }
   });
 });

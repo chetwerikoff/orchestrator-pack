@@ -7,6 +7,7 @@ import {
 } from './create-issue-stage-record-core.ts';
 import { runFinalAcceptance } from './create-issue-final-acceptance.ts';
 import {
+  ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS,
   inspectAcceptanceArtifacts,
   produceAcceptanceArtifacts,
 } from './create-issue-stage-record-artifacts.ts';
@@ -99,6 +100,22 @@ function finalizeJournalArgvIndex<T extends JournalTailCliOptions>(
   return next > index ? next : index;
 }
 
+type AcceptanceArtifactInputProperty = typeof ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS[number]['property'];
+
+function requiredAcceptanceArtifactInput(
+  opts: StageFinalizeCliOptions,
+  property: AcceptanceArtifactInputProperty,
+): string | string[] {
+  const descriptor = ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.find((item) => item.property === property);
+  if (!descriptor) throw new Error(`acceptance artifact input descriptor is missing for ${property}`);
+  const value = (opts as unknown as Record<string, unknown>)[descriptor.property];
+  if (descriptor.repeatable) {
+    if (!Array.isArray(value) || value.length === 0) throw new Error(`${descriptor.flag} is required`);
+    return value.map((item) => parseRequiredNonEmptyString(typeof item === 'string' ? item : undefined, descriptor.flag));
+  }
+  return parseRequiredNonEmptyString(typeof value === 'string' ? value : undefined, descriptor.flag);
+}
+
 function runParsedCli<T>(
   argv: string[],
   toolName: string,
@@ -122,8 +139,8 @@ export function stageFinalizeUsage(): string {
     '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> [--stage-attempt-id <id>] --tier <T1|T2|T3> [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts publish-stage --repo <owner/name> --issue-number <n> --receipt <path> [--waiver <path>] [--workdir <path>] [--json]',
     '  create-issue-stage-finalize.ts retry-pending --repo <owner/name> --issue-number <n> [--workdir <path>] [--json]',
-    '  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> --tier-intake <path> --stage-evidence <path>... --author-dispositions <path> [--claude-producer-evidence <path>...] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--json]',
-    '  create-issue-stage-finalize.ts check-artifacts --review-dir <path> --tier-intake <path> --stage-evidence <path>... --author-dispositions <path> [--claude-producer-evidence <path>...] [--output-dir <path>] [--json]',
+    `  create-issue-stage-finalize.ts produce-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--output-dir <path>] [--phase <pre-lens|final-acceptance>] [--json]`,
+    `  create-issue-stage-finalize.ts check-artifacts --review-dir <path> ${ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS.map((input) => `${input.flag} <path>${input.repeatable ? '...' : ''}`).join(' ')} [--claude-producer-evidence <path>...] [--output-dir <path>] [--json]`,
   ].join('\n');
 }
 
@@ -290,12 +307,13 @@ export function runStageFinalizeCli(argv: string[]): number {
   return runParsedCli(argv, 'create-issue-stage-finalize', parseStageFinalizeArgs, (opts) => {
     if (opts.command === 'produce-artifacts' || opts.command === 'check-artifacts') {
       const reviewDir = parseRequiredNonEmptyString(opts.reviewDir, '--review-dir');
-      const tierIntakePath = parseRequiredNonEmptyString(opts.tierIntakePath, '--tier-intake');
-      const authorDispositionsPath = parseRequiredNonEmptyString(opts.authorDispositionsPath, '--author-dispositions');
+      const tierIntakePath = requiredAcceptanceArtifactInput(opts, 'tierIntakePath') as string;
+      const stageEvidencePaths = requiredAcceptanceArtifactInput(opts, 'stageEvidencePaths') as string[];
+      const authorDispositionsPath = requiredAcceptanceArtifactInput(opts, 'authorDispositionsPath') as string;
       const artifactOptions = {
         reviewDir,
         tierIntakePath,
-        stageEvidencePaths: opts.stageEvidencePaths,
+        stageEvidencePaths,
         authorDispositionsPath,
         claudeProducerEvidencePaths: opts.claudeProducerEvidencePaths,
         outputDir: opts.outputDir,
