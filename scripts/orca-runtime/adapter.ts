@@ -152,8 +152,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       if (input.workspacePath && row.worktreePath !== input.workspacePath) continue;
       const known = [...this.bindingByGeneration.values()].find((binding) => binding.handle === row.handle);
       const nativeGeneration = row.incarnationId ?? row.ptyId ?? row.handle;
-      const worker = known?.nativeGeneration === nativeGeneration
-        ? known.worker
+      const preserveKnown = known?.nativeGeneration === nativeGeneration
+        || (known?.worker.provenance === 'internal' && known.nativeGeneration === undefined);
+      const worker = preserveKnown
+        ? known!.worker
         : {
           identity: {
             id: opaqueHash('worker', [row.worktreePath, row.title ?? '', row.tabId ?? '', row.leafId ?? ''].join('\u0000')),
@@ -182,10 +184,6 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     readonly workspacePath?: string;
     readonly timeoutMs?: number;
   }): RuntimeResult<RuntimeWorker> {
-    const known = this.bindingByGeneration.get(input.identity.generation);
-    if (known && identityKey(known.worker.identity) === identityKey(input.identity)) {
-      return success(known.worker);
-    }
     const listed = this.listWorkers(input);
     if (listed.status !== 'ok') return listed as RuntimeResult<RuntimeWorker>;
     const found = listed.value.find((worker) => identityKey(worker.identity) === identityKey(input.identity));
@@ -218,7 +216,9 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     this.bindingByGeneration.set(generation, {
       worker,
       handle: created.terminal.handle,
-      nativeGeneration: created.terminal.handle,
+      nativeGeneration: created.terminal.incarnationId
+        ?? created.terminal.ptyId
+        ?? undefined,
     });
     return success(worker);
   }
@@ -341,10 +341,15 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
 
   private resolveBinding(identity: RuntimeWorkerIdentity, timeoutMs?: number): WorkerBinding | undefined {
     const known = this.bindingByGeneration.get(identity.generation);
-    if (known && identityKey(known.worker.identity) === identityKey(identity)) return known;
-    const listed = this.listWorkers({ timeoutMs });
+    const listed = this.listWorkers({
+      workspacePath: known?.worker.workspacePath,
+      timeoutMs,
+    });
     if (listed.status !== 'ok') return undefined;
-    return this.bindingByGeneration.get(identity.generation);
+    const refreshed = this.bindingByGeneration.get(identity.generation);
+    return refreshed && identityKey(refreshed.worker.identity) === identityKey(identity)
+      ? refreshed
+      : undefined;
   }
 }
 
