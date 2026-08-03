@@ -5,6 +5,7 @@
     "docs/declarations/1248.json",
     "docs/orca-runtime-caller-census.md",
     "scripts/lib/orca-cli.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/lib/worker-smoke-bounded-create.ts",
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/runtime/caller-census.test.ts",
@@ -15,18 +16,21 @@
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
-    "credentials/**",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    ".ao/",
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     "AGENTS.md",
     "CLAUDE.md",
-    "docs/**",
+    "docs/",
     "package-lock.json",
     "package.json",
-    "scripts/**"
+    "scripts/",
+    "tests/"
   ],
   "source_revision": "#1248"
 }
