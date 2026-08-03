@@ -100,6 +100,7 @@ import {
   type PackReviewerLayerOverrides,
 } from './lib/resolve-pack-reviewer.ts';
 import { resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
+import { loadValidatedBoundSnapshotBody } from './lib/reverify-bound-issue-snapshot.ts';
 export { resolveRepositorySlug };
 
 interface StartInput {
@@ -184,6 +185,7 @@ interface ReviewPayload {
   verdict: 'clean' | 'findings';
   findingCount: number;
   findings: ReviewPayloadFinding[];
+  bundleDigest?: string;
 }
 
 interface ClaimLease {
@@ -740,6 +742,8 @@ async function invokeReviewer(options: {
   }
   if (options.carryoverBundlePath) {
     env.PACK_REVIEW_CARRYOVER_BUNDLE_PATH = options.carryoverBundlePath;
+  } else {
+    delete env.PACK_REVIEW_CARRYOVER_BUNDLE_PATH;
   }
 
   const result = await runProcess({
@@ -955,6 +959,8 @@ async function resolveCarryoverReplay(input: {
   target: { prNumber: number; headSha: string; sourceRepoRoot: string };
   projectId: string;
   storeRoot: string;
+  baseRef: string;
+  priorAuthority?: PackReviewAuthorityDocument;
 }): Promise<{ replay: CarryoverReplayResult; sourceCleanRunId: string } | null> {
   if (input.input.fixtureCarryoverReplay) {
     return {
@@ -963,22 +969,51 @@ async function resolveCarryoverReplay(input: {
     };
   }
   if (process.env.OPK_VITEST_HARNESS === '1') return null;
-  const parents = (await runGit(input.target.sourceRepoRoot, ['rev-list', '--parents', '-n', '1', input.target.headSha], 'merge parents'))
-    .split(/\s+/).slice(1);
-  if (parents.length !== 2) return null;
-  const sourceRun = listPackReviewRuns({ projectId: input.projectId, storeRoot: input.storeRoot })
-    .find((candidate) => candidate.prNumber === input.target.prNumber
-      && candidate.targetSha === parents[0]
-      && candidate.reviewVerdict === 'clean'
-      && candidate.findingCount === 0);
-  if (!sourceRun) return null;
-  const replay = replayMergeForCarryover({
-    repoRoot: input.target.sourceRepoRoot,
-    sourceHeadSha: parents[0]!,
-    mainSha: parents[1]!,
-    targetHeadSha: input.target.headSha,
-  });
-  return { replay, sourceCleanRunId: sourceRun.id };
+
+  try {
+    const parents = (await runGit(input.target.sourceRepoRoot, ['rev-list', '--parents', '-n', '1', input.target.headSha], 'merge parents'))
+      .split(/\s+/).slice(1);
+    if (parents.length !== 2) return null;
+    const sourceHeadSha = parents[0]!;
+    const configuredBaseSha = await runGit(
+      input.target.sourceRepoRoot,
+      ['rev-parse', `${input.baseRef}^{commit}`],
+      'configured review base',
+    );
+    // A merge's second parent is usable only when it is exactly the configured base.
+    if (parents[1]!.toLowerCase() !== configuredBaseSha.toLowerCase()) return null;
+
+    const priorTerminal = input.priorAuthority?.terminal;
+    const authorityAuthorizesSource = priorTerminal?.targetSha.toLowerCase() === sourceHeadSha.toLowerCase()
+      && input.priorAuthority?.currentHeadSha.toLowerCase() === sourceHeadSha.toLowerCase()
+      && priorTerminal.reviewVerdict === 'clean';
+    if (!authorityAuthorizesSource) return null;
+
+    const sourceRun = listPackReviewRuns({ projectId: input.projectId, storeRoot: input.storeRoot })
+      .find((candidate) => candidate.id === priorTerminal.runId
+        && candidate.prNumber === input.target.prNumber
+        && candidate.targetSha === sourceHeadSha
+        && candidate.reviewVerdict === 'clean'
+        && candidate.findingCount === 0);
+    if (!sourceRun) return null;
+
+    let replay: CarryoverReplayResult;
+    try {
+      replay = replayMergeForCarryover({
+        repoRoot: input.target.sourceRepoRoot,
+        sourceHeadSha,
+        mainSha: configuredBaseSha,
+        targetHeadSha: input.target.headSha,
+      });
+    } catch {
+      // Replay rejection is a carry-over rejection, not a failed full-head review.
+      return null;
+    }
+    return { replay, sourceCleanRunId: sourceRun.id };
+  } catch {
+    // Missing git/base/authority evidence must fall back to ordinary review.
+    return null;
+  }
 }
 
 async function commitAtCapTriage(input: {
@@ -1007,19 +1042,19 @@ async function commitAtCapTriage(input: {
     let boundIssueSnapshotBytes = input.start.fixtureBoundIssueSnapshotBytes;
     if (issueBody === undefined) {
       const snapshotPath = trim(process.env.OPK_BOUND_ISSUE_SNAPSHOT_PATH);
-      if (snapshotPath && existsSync(snapshotPath)) {
-        boundIssueSnapshotBytes = readFileSync(snapshotPath, 'utf8');
-        issueBody = boundIssueSnapshotBytes;
-      } else if (input.target.issueNumber) {
-        issueBody = await runProcess({
-          command: 'gh',
-          args: ['issue', 'view', String(input.target.issueNumber), '--repo', input.target.repoSlug, '--json', 'body', '--jq', '.body'],
-          cwd: input.target.sourceRepoRoot,
-          inheritParentEnv: true,
-          allowEmptyStdout: false,
-          timeoutMs: 30_000,
-        }).then((result) => requireProcess(result, 'gh issue view'));
+      if (!snapshotPath || !existsSync(snapshotPath) || !input.target.issueNumber) {
+        throw new Error('bound issue snapshot unavailable');
       }
+      const snapshot = loadValidatedBoundSnapshotBody({
+        projectId: input.projectId,
+        prNumber: input.target.prNumber,
+        prHeadSha: input.target.headSha,
+        issueNumber: input.target.issueNumber,
+        snapshotFilePath: snapshotPath,
+        storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+      });
+      issueBody = snapshot.body;
+      boundIssueSnapshotBytes = snapshot.body;
     }
     if (boundIssueSnapshotBytes === undefined) boundIssueSnapshotBytes = issueBody;
     if (issueBody === undefined || boundIssueSnapshotBytes === undefined) throw new Error('bound issue snapshot unavailable');
@@ -1099,6 +1134,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     retainedOpenCycle,
     options: authorityOptions,
   });
+  // Preserve the H0 authority record before observing H1; carry-over may use only
+  // this exact authoritative terminal, never an older clean run selected by history.
+  const priorAuthority = authority.currentHeadSha === target.headSha ? undefined : authority;
   if (authority.currentHeadSha !== target.headSha) {
     authority = observePackReviewHead({
       prNumber: target.prNumber,
@@ -1355,7 +1393,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       worktree = await createReviewWorktree(target.sourceRepoRoot, storeRoot, run.id, target.headSha);
     }
     updatePackReviewRun(run.id, { reviewTargetRoot: worktree }, { projectId, storeRoot });
-    carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot });
+    carryover = await resolveCarryoverReplay({ input, target, projectId, storeRoot, baseRef, priorAuthority });
     if (carryover?.replay.kind === 'merge_composite' && carryover.replay.bundle) {
       carryoverBundlePath = join(worktree, 'pack-review-carryover-bundle.json');
       writeFileSync(carryoverBundlePath, `${JSON.stringify(carryover.replay.bundle)}\n`, { encoding: 'utf8', mode: 0o600 });
@@ -1467,14 +1505,51 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     }
 
     if (carryover?.replay.kind === 'merge_composite' && carryover.replay.bundle) {
-      validateFocusedResolutionReview({
-        replay: carryover.replay,
-        reviewedTargetHeadSha: target.headSha,
-        reviewedBundleDigest: input.fixtureFocusedResolutionBundleDigest
-          || carryover.replay.bundle.bundleDigest,
-        verdict: payload.verdict,
-        findingCount: payload.findingCount,
-      });
+      try {
+        validateFocusedResolutionReview({
+          replay: carryover.replay,
+          reviewedTargetHeadSha: target.headSha,
+          reviewedBundleDigest: payload.bundleDigest
+            || (process.env.OPK_VITEST_HARNESS === '1'
+              ? input.fixtureFocusedResolutionBundleDigest
+              : undefined)
+            || '',
+
+          verdict: payload.verdict,
+          findingCount: payload.findingCount,
+        });
+      } catch {
+        // A rejected focused replay must fall back to the normal full-head reviewer.
+        // Do not turn a carry-over-specific rejection into a failed review run.
+        carryover = null;
+        carryoverBundlePath = '';
+        const fallback = await invokeReviewer({
+          reviewerPath: trusted.reviewerPath,
+          trustedPackRoot: trusted.trustedPackRoot,
+          reviewTargetRoot: worktree,
+          baseRef,
+          prNumber: target.prNumber,
+          issueNumber: target.issueNumber,
+          sessionId: target.sessionId,
+          budgetLedger,
+          runId: run.id,
+          projectId,
+          storeRoot,
+          fixtureReviewStdout: input.fixtureReviewStdout,
+          fixtureReviewExitCode: input.fixtureReviewExitCode,
+          fixtureReviewTimedOut: input.fixtureReviewTimedOut,
+          fixtureReviewerLayerOverrides: input.fixtureReviewerLayerOverrides,
+          fixtureEmulateWin32Selector: input.fixtureEmulateWin32Selector,
+          headSha: target.headSha,
+        });
+        result = fallback.result;
+        resolvedReviewer = fallback.resolvedReviewer;
+        writeRunLogs(storeRoot, run.id, result.stdout, result.stderr);
+        if (result.timedOut || !result.ok) {
+          throw new Error(`normal reviewer fallback failed (exit ${String(result.exitCode)})`);
+        }
+        payload = parseReviewPayload(result.stdout);
+      }
     }
 
     if (resolvedReviewer === 'gpt') {
