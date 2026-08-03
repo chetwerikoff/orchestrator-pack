@@ -19,6 +19,11 @@ export type BoundedOrcaCreateResult =
     elapsedMs: number;
   };
 
+function compatibilityCreateErrorCode(value: string | undefined): string {
+  if (value === 'runtime_timeout') return 'orca_create_timeout';
+  return value ?? 'terminal_create_failed';
+}
+
 /**
  * Preserve the worker-smoke bounded-create contract while routing the side
  * effect through the selected runtime adapter. The caller still reserves its
@@ -45,10 +50,11 @@ export function createBoundedOrcaTerminal(input: {
   });
   const elapsedMs = Math.max(0, now() - startedAt);
   if (!created.ok) {
+    const sourceCode = created.errorCode ?? created.reason;
     return {
       ok: false,
       reason: created.reason,
-      errorCode: created.errorCode ?? created.reason ?? 'terminal_create_failed',
+      errorCode: compatibilityCreateErrorCode(sourceCode),
       ambiguousUnbound: true,
       elapsedMs,
     };
