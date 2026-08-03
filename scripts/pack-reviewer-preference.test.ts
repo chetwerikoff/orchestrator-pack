@@ -1,13 +1,13 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { runProcessSync } from './kernel/subprocess.js';
 import {
   getPackReviewerPreferencePath,
   readPackReviewerPreference,
   writePackReviewerPreference,
 } from './lib/pack-reviewer-preference.ts';
 import {
-  resolvePackReviewerFromEnv,
   resolvePackReviewerResolution,
 } from './lib/resolve-pack-reviewer.ts';
 
@@ -22,20 +22,19 @@ afterEach(() => {
 function preferenceFixture(): { root: string; filePath: string } {
   const root = mkdtempSync(join('/tmp', 'opk-reviewer-preference-'));
   temporaryRoots.push(root);
-  return { root, filePath: join(root, 'reviewer.json') };
+  return { root, filePath: join(root, 'pack-reviewer.json') };
 }
 
 describe('persistent pack reviewer preference', () => {
-  it('uses XDG_CONFIG_HOME and falls back to the user config directory', () => {
+  it('uses the canonical XDG/HOME path and rejects missing roots', () => {
     expect(getPackReviewerPreferencePath({
       XDG_CONFIG_HOME: '/tmp/opk-xdg',
       HOME: '/tmp/opk-home',
-    })).toBe('/tmp/opk-xdg/orchestrator-pack/reviewer.json');
+    })).toBe('/tmp/opk-xdg/orchestrator-pack/pack-reviewer.json');
     expect(getPackReviewerPreferencePath({
       HOME: '/tmp/opk-home',
-    })).toBe('/tmp/opk-home/.config/orchestrator-pack/reviewer.json');
-    expect(getPackReviewerPreferencePath({}, '/tmp/opk-homedir'))
-      .toBe('/tmp/opk-homedir/.config/orchestrator-pack/reviewer.json');
+    })).toBe('/tmp/opk-home/.config/orchestrator-pack/pack-reviewer.json');
+    expect(() => getPackReviewerPreferencePath({})).toThrow(/CONFIG_ROOT_MISSING/);
   });
 
   it('persists a valid reviewer and rereads it', () => {
@@ -48,7 +47,12 @@ describe('persistent pack reviewer preference', () => {
       status: 'valid',
       reviewer: 'gpt',
     });
+    expect(JSON.parse(readFileSync(filePath, 'utf8'))).toEqual({
+      schema: 'orchestrator-pack/pack-reviewer-preference/v1',
+      reviewer: 'gpt',
+    });
     if (process.platform !== 'win32') {
+      expect(statSync(dirname(filePath)).mode & 0o777).toBe(0o700);
       expect(statSync(filePath).mode & 0o777).toBe(0o600);
     }
   });
@@ -57,32 +61,38 @@ describe('persistent pack reviewer preference', () => {
     const { filePath } = preferenceFixture();
     writePackReviewerPreference('gpt', filePath);
 
-    expect(resolvePackReviewerFromEnv(
+    const resolution = resolvePackReviewerResolution(
       { PACK_REVIEWER: 'codex' },
       { preferenceFilePath: filePath },
-    )).toBe('gpt');
+    );
+    expect(resolution.reviewer).toBe('gpt');
+    expect(resolution.source).toBe('persistent-preference');
   });
 
   it('prefers an explicit invocation binding over the saved reviewer', () => {
     const { filePath } = preferenceFixture();
     writePackReviewerPreference('gpt', filePath);
 
-    expect(resolvePackReviewerFromEnv(
+    const resolution = resolvePackReviewerResolution(
       {
         PACK_REVIEWER: 'codex',
         PACK_REVIEW_BOUND_REVIEWER: 'claude',
       },
       { preferenceFilePath: filePath },
-    )).toBe('claude');
+    );
+    expect(resolution.reviewer).toBe('claude');
+    expect(resolution.source).toBe('invocation-bound');
   });
 
   it('uses legacy environment state only when no preference exists', () => {
     const { filePath } = preferenceFixture();
 
-    expect(resolvePackReviewerFromEnv(
+    const resolution = resolvePackReviewerResolution(
       { PACK_REVIEWER: 'codex' },
       { preferenceFilePath: filePath },
-    )).toBe('codex');
+    );
+    expect(resolution.reviewer).toBe('codex');
+    expect(resolution.source).toBe('legacy-env');
   });
 
   it('fails closed on malformed persistent state instead of falling back', () => {
@@ -96,5 +106,67 @@ describe('persistent pack reviewer preference', () => {
 
     expect(resolution.reviewer).toBeNull();
     expect(resolution.errorMessage).toMatch(/Invalid persistent reviewer preference/);
+  });
+
+  it('does not read lower layers when the invocation binding is invalid', () => {
+    const { filePath } = preferenceFixture();
+    writePackReviewerPreference('gpt', filePath);
+    const readPreference = vi.fn(() => readPackReviewerPreference(filePath));
+
+    const resolution = resolvePackReviewerResolution(
+      {
+        PACK_REVIEWER: 'codex',
+        PACK_REVIEW_BOUND_REVIEWER: 'not-a-reviewer',
+      },
+      { preferenceFilePath: filePath, readPreference },
+    );
+
+    expect(resolution.reviewer).toBeNull();
+    expect(resolution.source).toBe('none');
+    expect(readPreference).not.toHaveBeenCalled();
+  });
+
+  it('rejects additional schema keys instead of accepting them', () => {
+    const { filePath } = preferenceFixture();
+    writeFileSync(filePath, JSON.stringify({
+      schema: 'orchestrator-pack/pack-reviewer-preference/v1',
+      reviewer: 'gpt',
+      extra: 'must-reject',
+    }));
+
+    expect(readPackReviewerPreference(filePath)).toMatchObject({
+      status: 'invalid',
+    });
+  });
+
+  it('supports the canonical set/status CLI and JSON status contract', () => {
+    const { root } = preferenceFixture();
+    const script = join(process.cwd(), 'scripts/pack-reviewer-config.ts');
+    const env = { ...process.env, XDG_CONFIG_HOME: root, HOME: '', PACK_REVIEWER: 'codex' };
+    delete env.PACK_REVIEW_BOUND_REVIEWER;
+
+    const set = runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types', script, 'set', 'gpt'],
+      cwd: process.cwd(),
+      env,
+      encoding: 'utf8',
+    });
+    expect(set.exitCode, set.stderr).toBe(0);
+
+    const status = runProcessSync({
+      command: process.execPath,
+      args: ['--experimental-strip-types', script, 'status', '--json'],
+      cwd: process.cwd(),
+      env,
+      encoding: 'utf8',
+    });
+    expect(status.exitCode, status.stderr).toBe(0);
+    expect(JSON.parse(status.stdout)).toMatchObject({
+      schema: 'pack-reviewer-status/v1',
+      savedReviewer: 'gpt',
+      effectiveReviewer: 'gpt',
+      source: 'persistent-preference',
+    });
   });
 });

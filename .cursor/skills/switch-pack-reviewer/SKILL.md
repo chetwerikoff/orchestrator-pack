@@ -25,11 +25,12 @@ The canonical precedence is:
 The persistent preference is stored at:
 
 ```text
-$XDG_CONFIG_HOME/orchestrator-pack/reviewer.json
+$XDG_CONFIG_HOME/orchestrator-pack/pack-reviewer.json
 ```
 
-When `XDG_CONFIG_HOME` is unset, the store uses the platform user config
-location, normally `$HOME/.config/orchestrator-pack/reviewer.json`.
+When `XDG_CONFIG_HOME` is unset, the store uses
+`$HOME/.config/orchestrator-pack/pack-reviewer.json`. If neither
+`XDG_CONFIG_HOME` nor `HOME` is usable, status and resolution fail closed.
 The file is pack-owned, user-scoped, atomically replaced, and contains only
 the schema and selected reviewer.
 
@@ -53,7 +54,7 @@ change the machine preference, skip this skill.
 From the pack repository root:
 
 ```bash
-npm run --silent pack-reviewer-status
+npm run --silent pack-reviewer-config -- status
 ```
 
 Record the saved reviewer, effective reviewer, preference path, and whether
@@ -65,9 +66,9 @@ stale `PACK_REVIEWER` inherited from a shell, IDE, or runtime.
 Use exactly one of:
 
 ```bash
-npm run --silent pack-reviewer-set -- --reviewer gpt
-npm run --silent pack-reviewer-set -- --reviewer codex
-npm run --silent pack-reviewer-set -- --reviewer claude
+npm run --silent pack-reviewer-config -- set gpt
+npm run --silent pack-reviewer-config -- set codex
+npm run --silent pack-reviewer-config -- set claude
 ```
 
 The command validates the value, writes the user preference, and verifies that
@@ -77,7 +78,7 @@ process variable, edit a shell profile, or require a runtime restart.
 ### 3. Verify
 
 ```bash
-npm run --silent pack-reviewer-status -- --expected <gpt|codex|claude>
+npm run --silent pack-reviewer-config -- status --expect <gpt|codex|claude>
 ```
 
 `[PASS]` is required. If it fails, preserve the diagnostic output and stop;
@@ -114,6 +115,6 @@ retried according to the review runner contract.
 ## Related commands
 
 ```bash
-npm run --silent pack-reviewer-status
-npm run --silent pack-reviewer-set -- --reviewer gpt
+npm run --silent pack-reviewer-config -- status
+npm run --silent pack-reviewer-config -- set gpt
 ```

@@ -14,16 +14,15 @@ The review entrypoint resolves the reviewer in this order:
 The persistent preference is stored at:
 
 ```text
-$XDG_CONFIG_HOME/orchestrator-pack/reviewer.json
+$XDG_CONFIG_HOME/orchestrator-pack/pack-reviewer.json
 ```
 
-If `XDG_CONFIG_HOME` is unset, the platform user config directory is used,
-normally `$HOME/.config/orchestrator-pack/reviewer.json`.
+If `XDG_CONFIG_HOME` is unset, `$HOME/.config/orchestrator-pack/pack-reviewer.json`
+is used. If neither variable is usable, access fails closed.
 
-The document schema is `pack-reviewer-preference/v1` and the only selectable
-values are `gpt`, `codex`, and `claude`. Writes replace the file atomically
-where the host filesystem supports atomic rename and use user-only file
-permissions where supported.
+The document schema is `orchestrator-pack/pack-reviewer-preference/v1` and the
+only selectable values are `gpt`, `codex`, and `claude`. Writes replace the
+file atomically and enforce user-only permissions on POSIX filesystems.
 
 An invalid preference fails closed. The legacy environment is not used to hide
 a corrupted saved choice.
@@ -45,7 +44,7 @@ silently switch to another adapter.
 From the pack repository root:
 
 ```bash
-npm run --silent pack-reviewer-status
+npm run --silent pack-reviewer-config -- status
 ```
 
 The output includes the preference path, saved value, legacy environment value,
@@ -56,9 +55,9 @@ effective reviewer, and selected wrapper.
 Use the pack command:
 
 ```bash
-npm run --silent pack-reviewer-set -- --reviewer gpt
-npm run --silent pack-reviewer-set -- --reviewer codex
-npm run --silent pack-reviewer-set -- --reviewer claude
+npm run --silent pack-reviewer-config -- set gpt
+npm run --silent pack-reviewer-config -- set codex
+npm run --silent pack-reviewer-config -- set claude
 ```
 
 The command validates, writes, rereads, and resolves the requested reviewer.
@@ -72,7 +71,7 @@ It does not:
 Verify the result:
 
 ```bash
-npm run --silent pack-reviewer-status -- --expected gpt
+npm run --silent pack-reviewer-config -- status --expect gpt
 ```
 
 The next review invocation reads the saved value automatically.
@@ -104,9 +103,9 @@ reviewer skill.
 
 | Symptom | Cause | Action |
 |---|---|---|
-| Effective reviewer is wrong | Saved preference is different | Run `pack-reviewer-set` with the intended value |
+| Effective reviewer is wrong | Saved preference is different | Run `pack-reviewer-config -- set` with the intended value |
 | Effective reviewer is unset | No saved or valid legacy value | Persist `gpt`, `codex`, or `claude` |
-| Saved file is invalid | Manual edit or interrupted write | Run `pack-reviewer-set` to replace it |
+| Saved file is invalid | Manual edit or interrupted write | Run `pack-reviewer-config -- set` to replace it |
 | Old shell still exports another value | Legacy fallback is stale | Saved preference should win; verify with status |
 | Review used another adapter | Invocation binding or stale review evidence | Check the invocation binding and current-head runner evidence |
 

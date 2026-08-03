@@ -5,7 +5,7 @@ Use this checklist for a persistent reviewer change.
 ## 1. Inspect
 
 ```bash
-npm run --silent pack-reviewer-status
+npm run --silent pack-reviewer-config -- status
 ```
 
 Confirm the preference path, saved reviewer, effective reviewer, and any
@@ -14,7 +14,7 @@ legacy `PACK_REVIEWER` value.
 ## 2. Persist
 
 ```bash
-npm run --silent pack-reviewer-set -- --reviewer <gpt|codex|claude>
+npm run --silent pack-reviewer-config -- set <gpt|codex|claude>
 ```
 
 The command validates and verifies the persistent user preference. It does not
@@ -23,7 +23,7 @@ set a temporary environment override or restart a runtime.
 ## 3. Verify
 
 ```bash
-npm run --silent pack-reviewer-status -- --expected <gpt|codex|claude>
+npm run --silent pack-reviewer-config -- status --expect <gpt|codex|claude>
 ```
 
 Require `[PASS]` before starting a review.

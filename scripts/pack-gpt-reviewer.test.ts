@@ -12,7 +12,6 @@ import {
   normalizePackReviewer,
   packReviewerSelectorErrorMessage,
   resolvePackReviewerFromEnv,
-  resolvePackReviewerSelectorValue,
 } from './lib/resolve-pack-reviewer.ts';
 
 const originalEnv = { ...process.env };
@@ -49,22 +48,6 @@ describe('PACK_REVIEWER selector (Issue #1031)', () => {
     })).toBe('gpt');
   });
 
-  it('matches persistent-layer stale-process clearing when User layer is configured', () => {
-    expect(resolvePackReviewerSelectorValue(
-      { PACK_REVIEWER: 'codex' },
-      {
-        emulateWin32: true,
-        layerOverrides: { Process: 'codex', User: 'gpt', Machine: null },
-      },
-    )).toBe('gpt');
-    expect(resolvePackReviewerFromEnv(
-      { PACK_REVIEWER: 'codex' },
-      {
-        emulateWin32: true,
-        layerOverrides: { Process: 'codex', User: 'gpt', Machine: null },
-      },
-    )).toBe('gpt');
-  });
 });
 
 describe('GPT pack reviewer adapter', () => {
