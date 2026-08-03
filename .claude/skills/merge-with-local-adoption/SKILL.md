@@ -26,7 +26,45 @@ from inside the worktree you are about to tear down.
 
 `N` in the trigger («мерж 385») is an issue **or** PR number — resolve in Step 2.
 
-## Orca runtime facts (steps rely on these; stated once)
+## Runtime profile (the ONLY runtime-specific surface — swap this, not the steps)
+
+The agent runtime is pluggable. Steps 3b and 9 are written against **capability names**, never
+against a vendor CLI. To move to a different runtime, replace the right-hand column here and the
+inventory command below; **do not edit the procedure steps**.
+
+| Capability | Active runtime = `orca` |
+|---|---|
+| `RUNTIME.worktrees` | `orca worktree list --json` → `result.worktrees[]` |
+| `RUNTIME.worktree_current` | `orca worktree current --json` → `result.worktree` |
+| `RUNTIME.agents` | `orca worktree ps --json` → `result.worktrees[].agents[]` |
+| `RUNTIME.terminals(wt)` | `orca terminal list --worktree "path:<wt>" --json` → `result.terminals[]` |
+| `RUNTIME.send(h,text)` | `orca terminal send --terminal <h> --text "…" --enter` |
+| `RUNTIME.stop_terminals(wt)` | `orca terminal stop --worktree "path:<wt>" --json` |
+| `RUNTIME.close_tab(h)` | `orca terminal close --terminal <h> --tab --json` |
+| `RUNTIME.remove_worktree(wt)` | `orca worktree rm --worktree "path:<wt>" --json` |
+
+Field mapping for the active runtime: worktree rows expose `path`, `head`, `branch` (**full ref**,
+empty when detached), `isMainWorktree`, `isArchived`, `displayName`, `repoId`; agent rows expose
+`state` and `interrupted`; terminal rows expose `handle`, `worktreePath`, `tabId`.
+
+**Neutral inventory for the reaper** — the reaper never calls a runtime CLI. Produce its input by
+normalising `RUNTIME.worktrees` to `[{path, isMain}]`:
+
+```bash
+orca worktree list --json | node -e '
+let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+  const w=JSON.parse(s).result.worktrees.map(x=>({path:x.path,isMain:!!x.isMainWorktree}));
+  process.stdout.write(JSON.stringify(w));})' > /tmp/rt-worktrees.json
+```
+
+**Why a profile table and not the pack adapter:** the repo's runtime-neutral contract
+(`scripts/runtime/contracts.ts`, composition root `selectRuntimeAdapter` in
+`scripts/runtime/registry.ts`) covers workers/terminals only and has **no worktree lifecycle
+operations** — and it deliberately refuses destructive close. Extending it to cover teardown is the
+durable fix (follow-up 3); until then this table is the single swap point, and this skill must not
+grow a second, rival runtime abstraction beside the pack's.
+
+## Active-runtime facts (steps rely on these; stated once)
 
 The agent runtime is **Orca**. **AO is retired** — the `ao` binary may still sit on PATH,
 but the daemon does not run and every `ao` call fails. Do not port AO procedures: there is
@@ -105,7 +143,7 @@ If `git status --short` is non-empty: **dirty tree — safe pull only (Step 6c)*
 Assert you are on the live checkout — the whole of Step 6 targets the wrong tree otherwise:
 
 ```bash
-orca worktree current --json   # .result.worktree.path must be /home/che/projects/orchestrator-pack
+RUNTIME.worktree_current      # .path must be /home/che/projects/orchestrator-pack
 ```
 
 Not the main checkout → **stop and report** before any merge.
@@ -203,7 +241,7 @@ Everywhere else `BEHIND` still stops and delegates.
    then its live terminals:
 
    ```bash
-   orca terminal list --worktree "path:$WP" --json     # → result.terminals[].handle
+   RUNTIME.terminals("$WP")      # → handles
    ```
 
    No worktree or no live terminal → report the blocker; offer to spawn a worker only if
@@ -212,8 +250,8 @@ Everywhere else `BEHIND` still stops and delegates.
    --log-failed`):
 
    ```bash
-   orca terminal send --terminal "$H" --text "<task>" --enter
-   orca terminal read --terminal "$H"                 # verify the text actually landed
+   RUNTIME.send("$H", "<task>")
+   # then read that terminal back — verify the text actually landed
    ```
 
    Include PR `P`, branch, issue `I`, failing checks + top log lines, the sync-with-main
@@ -347,7 +385,7 @@ because `orca worktree rm` alone leaks: it stops nothing and reaps nothing.
 ### 9a — Resolve the worktree (branch is the only join key)
 
 ```bash
-orca worktree list --json > /tmp/wt.json
+RUNTIME.worktrees > /tmp/wt.json          # active runtime: orca worktree list --json
 node -e '
 const r=JSON.parse(require("fs").readFileSync("/tmp/wt.json","utf8")).result.worktrees, ref=process.argv[1];
 const repo=r.find(w=>w.path==="/home/che/projects/orchestrator-pack").repoId;
@@ -356,6 +394,9 @@ const m=r.filter(w=>w.repoId===repo && !w.isMainWorktree && !w.isArchived &&
 console.log(JSON.stringify(m.map(w=>({path:w.path,name:w.displayName,branch:w.branch})),null,2));
 ' "$HEAD_REF"
 ```
+
+(The parsing above reads the active runtime's field names — if you swap runtimes, re-map
+them from the Runtime profile table; the *ladder* below is runtime-independent.)
 
 Ladder — stop at the first rung that resolves:
 
@@ -402,7 +443,7 @@ git -C "$WP" log --oneline origin/main..HEAD              # G3: must be EMPTY (n
 git -C "$WP" stash list                                   # G4: must be EMPTY
 git fetch origin
 git merge-base --is-ancestor "refs/heads/$HEAD_REF" origin/main   # G5: must exit 0
-orca worktree ps --json                                   # G6: agents[].state all "done"; interrupted:false
+RUNTIME.agents                                            # G6: agent state all "done"; interrupted false
 ```
 
 **G2b exists because `--untracked-files=all` does not show ignored files, and in this repo
@@ -430,11 +471,11 @@ running**. No `--force`, no retry, no partial teardown:
 ### 9c — Stop terminals, then close tabs
 
 ```bash
-orca terminal stop --worktree "path:$WP" --json
-orca terminal list --worktree "path:$WP" --json          # → remaining handles
-# For each handle H, ONLY IF every terminal sharing its tabId belongs to $WP:
-orca terminal close --terminal "$H" --tab --json
-orca terminal list --worktree "path:$WP" --json          # must be [] before 9d
+RUNTIME.stop_terminals("$WP")
+RUNTIME.terminals("$WP")            # → remaining handles
+# For each handle H, ONLY IF every terminal sharing its tab belongs to $WP:
+RUNTIME.close_tab("$H")
+RUNTIME.terminals("$WP")            # must be empty before 9d
 ```
 
 The tab guard is load-bearing: `--tab` closes the whole tab, so a tab holding panes from
@@ -451,14 +492,19 @@ carry `incarnationId` and `orphaned`, which implies respawn semantics).
 *previous* worktree at this same path left orphans behind, they are indistinguishable from
 the current one's processes:
 
+Build the neutral inventory once (see Runtime profile), then:
+
 ```bash
-node .claude/skills/merge-with-local-adoption/reap-worktree.mjs --scan-orphans --json \
+REAP=".claude/skills/merge-with-local-adoption/reap-worktree.mjs"
+RT=/tmp/rt-worktrees.json          # produced by the Runtime profile snippet
+
+node "$REAP" --runtime-worktrees "$RT" --scan-orphans --json \
   | grep -F "$WP"     # any hit ⇒ a dead namesake's orphans share this path ⇒ STOP, ask the operator
 ```
 
 ```bash
-node .claude/skills/merge-with-local-adoption/reap-worktree.mjs --path "$WP"           # DRY RUN first
-node .claude/skills/merge-with-local-adoption/reap-worktree.mjs --path "$WP" --apply --json
+node "$REAP" --runtime-worktrees "$RT" --path "$WP"                  # DRY RUN first
+node "$REAP" --runtime-worktrees "$RT" --path "$WP" --apply --json
 ```
 
 **Show the dry-run set to the operator before applying.** The reaper selects by CWD +
@@ -486,13 +532,13 @@ Dirty now → **leave the worktree in place** with its processes already stopped
 The merge stands; only teardown is blocked.
 
 ```bash
-orca worktree rm --worktree "path:$WP" --json
+RUNTIME.remove_worktree("$WP")
 ```
 
-No `--force` (the 9b gate is what authorizes this; `--force` would paper over a gate you
+No force flag (the 9b gate is what authorizes this; forcing would paper over a gate you
 should have obeyed).
 
-**Never `--run-hooks`.** It executes `orca.yaml` archive hooks — repo-defined code from a
+**Never run the runtime's archive/removal hooks** (`--run-hooks` on the active runtime). It executes `orca.yaml` archive hooks — repo-defined code from a
 branch-local checkout — as the operator, immediately after merging that branch. That is an
 arbitrary-code-execution path a PR author could control. The repo has no `orca.yaml` today,
 but the prohibition is about the trust boundary, not the current file list: do not pass the
@@ -513,10 +559,10 @@ between G5 and here still fails safe.
 ### 9g — Post-check and orphan census
 
 ```bash
-orca worktree list --json                                  # no row for $WP
-orca terminal list --json                                  # no terminal with worktreePath $WP
+RUNTIME.worktrees                        # no row for $WP
+RUNTIME.terminals("$WP")                 # empty
 ls -d "$WP" 2>/dev/null && echo "RESIDUE: directory still present"
-node .claude/skills/merge-with-local-adoption/reap-worktree.mjs --scan-orphans
+node "$REAP" --runtime-worktrees "$RT" --scan-orphans     # refresh $RT first
 ```
 
 The census is **report-only — never sweep as part of a merge.** Pre-existing orphans belong
@@ -609,7 +655,12 @@ Never claim CI/adoption/teardown succeeded without the commands actually run.
    ownership instead of CWD inference, and would catch a process that chdir'd away before
    teardown. Only Orca's spawn path can do this; the reaper is a best-effort cleanup for
    agents it did not launch.
-3. **The pack's typed Orca boundary (`scripts/orca-runtime/native.ts`, `OrcaOperationName`)
-   covers only `worktree_current` and terminal verbs** — not `worktree_list/ps/rm` or
-   `terminal_stop`. This skill uses the raw `orca` CLI for those, which is fine for an
-   operator procedure but leaves pack scripts without a sanctioned teardown path.
+3. **The runtime-neutral contract has no worktree lifecycle.**
+   `scripts/runtime/contracts.ts` (`RuntimeAdapter`, composition root `selectRuntimeAdapter`
+   in `scripts/runtime/registry.ts`) exposes only worker/terminal operations, and deliberately
+   refuses destructive close (`runtime_generation_bound_stop_unsupported`). Teardown therefore
+   cannot route through it yet, which is why this skill carries a Runtime profile table.
+   **Durable fix:** extend `RuntimeAdapter` with worktree list/inspect/remove plus a
+   generation-bound terminal stop, implement them in the Orca adapter, and collapse the profile
+   table to `selectRuntimeAdapter()`. Until then the profile table is the single swap point —
+   do not let a rival runtime abstraction grow inside this skill.

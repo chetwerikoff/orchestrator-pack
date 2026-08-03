@@ -22,8 +22,12 @@
 // NEVER match on command line. `pkill -f 'synto serve'` would kill three independent per-agent MCP
 // servers plus the operator's own. Ownership comes from CWD + process ancestry, never from a name.
 
+// RUNTIME-NEUTRAL: this script never invokes a runtime CLI. The caller supplies the workspace
+// inventory as JSON (`--runtime-worktrees <file>`), so swapping Orca for another runtime means
+// changing only how that file is produced — see the "Runtime profile" section of SKILL.md.
+// Expected shape (extra fields ignored):
+//   [ { "path": "/abs/path", "isMain": true|false }, ... ]
 import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 
 const argv = process.argv.slice(2);
 const arg = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : null; };
@@ -35,25 +39,30 @@ const WS_ROOT = (arg('--workspaces-root') || '').replace(/\/+$/, '');
 const norm = (c) => (c ? c.replace(/ \(deleted\)$/, '') : null);
 const under = (c, root) => { const n = norm(c); return !!n && (n === root || n.startsWith(root + '/')); };
 
-// ---------------------------------------------------------------- safety sets (derived from Orca)
+// ---------------------------------------------------------------- safety sets (caller-supplied)
 // PROTECTED = every main checkout (never a target, never a victim).
-// ROOTS     = the workspaces directories Orca actually manages worktrees in.
-// Both come from the live runtime rather than a hardcoded path, and we fail CLOSED if Orca cannot
-// be reached — acting on an unverified target is exactly the mistake this script exists to prevent.
+// ROOTS     = the workspace directories the runtime manages worktrees in.
+// Both come from the runtime inventory the caller passes in. We fail CLOSED when it is missing,
+// empty, or unparseable — acting on an unverified target is the exact mistake this script prevents.
 const PROTECTED = new Set();
 const ROOTS = new Set();
+const inventoryPath = arg('--runtime-worktrees');
+if (!inventoryPath) {
+  console.error('REFUSE: --runtime-worktrees <file> is required (neutral runtime inventory JSON).');
+  process.exit(2);
+}
 try {
-  const raw = execFileSync('orca', ['worktree', 'list', '--json'], { encoding: 'utf8', timeout: 20000 });
-  const rows = JSON.parse(raw)?.result?.worktrees ?? [];
-  if (!rows.length) throw new Error('empty worktree list');
+  const rows = JSON.parse(fs.readFileSync(inventoryPath, 'utf8'));
+  if (!Array.isArray(rows) || !rows.length) throw new Error('inventory is not a non-empty array');
   for (const w of rows) {
-    if (!w.path) continue;
+    if (!w || typeof w.path !== 'string' || !w.path.startsWith('/')) continue;
     const p = w.path.replace(/\/+$/, '');
-    if (w.isMainWorktree) PROTECTED.add(p);
+    if (w.isMain) PROTECTED.add(p);
     else ROOTS.add(p.slice(0, p.lastIndexOf('/')));
   }
+  if (!PROTECTED.size) throw new Error('inventory lists no main worktree — refusing to run unprotected');
 } catch (e) {
-  console.error(`REFUSE: could not enumerate Orca worktrees to build the safety set (${e.message}).`);
+  console.error(`REFUSE: could not read the runtime worktree inventory (${e.message}).`);
   process.exit(2);
 }
 // Explicit override, for reaping an orphan whose every live sibling is already gone.
