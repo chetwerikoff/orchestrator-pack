@@ -21,10 +21,12 @@
   ],
   "denylist": [
     ".github/workflows/",
+    "credentials/",
     "docs/declarations/",
     "docs/issues_drafts/",
     "packages/core/",
     "scripts/kernel/",
+    "secrets/",
     "vendor/"
   ],
   "allowed_roots": [
