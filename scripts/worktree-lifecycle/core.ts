@@ -309,7 +309,6 @@ function gitIdentityCollision(row: GitWorktreeRow, expected: ExpectedWorktreeIde
 function orcaIdentityCollision(row: OrcaWorktreeRow, expected: ExpectedWorktreeIdentity): boolean {
   if (row.path === expected.path) return !orcaIdentityMatches(row, expected);
   if (expected.mode === 'branch-bound' && row.branchName === expected.branchName) return true;
-  if (expected.bindingKind === 'issue' && row.linkedIssue === expected.bindingNumber) return true;
   return expected.bindingKind === 'pr' && row.linkedPR === expected.bindingNumber;
 }
 
