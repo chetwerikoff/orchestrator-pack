@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   buildDeterministicDeliveryId,
   evaluateDeterministicJournalAdmission,
@@ -12,6 +12,7 @@ import type {
 import { runProcess } from '../kernel/subprocess.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import type { RuntimeAdapter, RuntimeWorker } from '../runtime/contracts.ts';
+import { withSideEffectFence } from '../runtime/side-effect-fence.ts';
 import { withJournalLock } from '../pr2-foundation/journal-lock.ts';
 import {
   admitDispatchJournalRecord,
@@ -28,10 +29,12 @@ import {
   acquireWorkerNudgeClaim,
   finalizeWorkerNudgeClaim,
   markWorkerNudgeSendAttempted,
-  withWorkerNudgeSideEffectFence,
   type WorkerNudgeClaimHandle,
 } from '../pr2-foundation/worker-nudge-claim-store.ts';
-import { resolveWorkerMessageDispatchJournalPath } from '../pr2-foundation/wake-supervisor-state-root.ts';
+import {
+  resolveWakeSupervisorStateRoot,
+  resolveWorkerMessageDispatchJournalPath,
+} from '../pr2-foundation/wake-supervisor-state-root.ts';
 
 export interface WorkerNotificationOptions {
   trustedPackRoot: string;
@@ -46,6 +49,7 @@ export interface WorkerNotificationOptions {
   adapter?: RuntimeAdapter;
   journalPath?: string;
   claimNamespace?: string;
+  sideEffectFencePath?: string;
 }
 
 interface JournalAdmission {
@@ -227,6 +231,7 @@ export async function sendPackReviewWorkerNotification(
     return { state: 'escalated', reason: 'worker_notification_delivery_key_missing' };
   }
 
+  const stateRoot = resolveWakeSupervisorStateRoot();
   const adapter = options.adapter ?? await selectRuntimeAdapter({}, {
     cwd: resolve(options.repoRoot || options.trustedPackRoot),
   });
@@ -245,6 +250,7 @@ export async function sendPackReviewWorkerNotification(
   const prNumber = Number(options.prNumber ?? 0);
   const workerTarget = `${worker.identity.runtime}:${worker.identity.id}:${worker.identity.generation}`;
   const cycleKey = `review:${hashed(options.request.message)}`;
+  const claimNamespace = options.claimNamespace ?? join(stateRoot, 'worker-nudge-claims', projectId);
   const claim = await acquireWorkerNudgeClaim({
     prNumber: Number.isInteger(prNumber) && prNumber > 0 ? prNumber : 1,
     cycleKey,
@@ -256,7 +262,7 @@ export async function sendPackReviewWorkerNotification(
     surface: 'pack-review-runtime-notification',
     projectId,
     message: options.request.message,
-    ...(options.claimNamespace ? { namespace: options.claimNamespace } : {}),
+    namespace: claimNamespace,
   });
   if (!claim.acquired) {
     if (claim.reason === 'already_served') return { state: 'delivered', reason: 'claim_duplicate_no_op' };
@@ -282,14 +288,22 @@ export async function sendPackReviewWorkerNotification(
     return { state: 'delivered', reason: 'journal_duplicate_no_op' };
   }
 
-  const fenced = await withWorkerNudgeSideEffectFence(async () => {
-    const marked = await markWorkerNudgeSendAttempted(claim);
-    if (!marked.ok) return { marked: false as const, reason: marked.reason ?? 'send_attempt_mark_failed' };
-    const result = adapter.dispatchInput({
-      worker: worker.identity,
-      text: options.request.message,
-    }, { cwd: worker.workspacePath });
-    return { marked: true as const, result };
+  const fenced = await withSideEffectFence({
+    path: options.sideEffectFencePath ?? join(stateRoot, 'side-effects', 'worker-notification.lock'),
+    metadata: {
+      operation: 'worker-notification',
+      targetId: worker.identity.id,
+      targetGeneration: worker.identity.generation,
+    },
+    action: async () => {
+      const marked = await markWorkerNudgeSendAttempted(claim);
+      if (!marked.ok) return { marked: false as const, reason: marked.reason ?? 'send_attempt_mark_failed' };
+      const result = adapter.dispatchInput({
+        worker: worker.identity,
+        text: options.request.message,
+      }, { cwd: worker.workspacePath });
+      return { marked: true as const, result };
+    },
   });
   if (!fenced.ok) {
     const completed = await finalizeBoth({
