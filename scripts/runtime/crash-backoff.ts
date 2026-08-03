@@ -51,6 +51,9 @@ export function isRapidExit(input: {
   readonly policy: CrashBackoffPolicy;
   readonly progressObserved?: boolean;
 }): boolean {
+  // A successful one-shot scheduler tick is progress, not a crash, even when it
+  // completes faster than the crash threshold.
+  if (input.progressObserved === true) return false;
   if (input.startedAtMs <= 0 || input.exitedAtMs <= input.startedAtMs) return true;
   if (input.progressObserved === false) return true;
   return input.exitedAtMs - input.startedAtMs < input.policy.rapidExitThresholdMs;
