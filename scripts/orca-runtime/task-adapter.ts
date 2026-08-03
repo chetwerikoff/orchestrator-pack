@@ -1,32 +1,27 @@
 import {
   runtimeFailure,
   sameRuntimeWorker,
+  type RuntimeBoundedOutput,
   type RuntimeCallOptions,
+  type RuntimeDispatchResult,
+  type RuntimeReadiness,
   type RuntimeResult,
   type RuntimeWorker,
   type RuntimeWorkerIdentity,
 } from '../runtime/contracts.ts';
+import { encodeRuntimeCompatibilityDiagnostic } from '../runtime/compat-diagnostic.ts';
 import {
   OrcaRuntimeAdapter,
   type OrcaRuntimeAdapterOptions,
 } from './adapter.ts';
-import { runOrcaJson, type OrcaJsonResponse } from './native.ts';
+import {
+  runOrcaJson,
+  type OrcaJsonResponse,
+  type OrcaRunOptions,
+} from './native.ts';
 
-function stopFailureReason(response: OrcaJsonResponse): string {
-  if (response.error?.code === 'orca_operation_timeout'
-    || response.outcomeCategory === 'empty_stdout'
-    || response.outcomeCategory === 'invalid_json') {
-    return 'runtime_stop_outcome_unknown';
-  }
-  switch (response.outcomeCategory) {
-    case 'process_launch_failed':
-      return 'runtime_unavailable';
-    case 'recognized_control_plane_code':
-      return 'runtime_control_unavailable';
-    case 'supported_operation_failure':
-    default:
-      return response.error?.code ?? 'runtime_operation_failed';
-  }
+interface DiagnosticState {
+  lastFailure: OrcaJsonResponse | null;
 }
 
 /**
@@ -43,10 +38,48 @@ function stopFailureReason(response: OrcaJsonResponse): string {
 export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
   readonly #options: OrcaRuntimeAdapterOptions;
   readonly #ownedForStop = new Map<string, RuntimeWorkerIdentity>();
+  readonly #diagnosticState: DiagnosticState;
+  readonly #runJson: typeof runOrcaJson;
 
   constructor(options: OrcaRuntimeAdapterOptions = {}) {
-    super(options);
+    const diagnosticState: DiagnosticState = { lastFailure: null };
+    const nativeRun = options.runJson ?? runOrcaJson;
+    const diagnosticRun = (<T>(
+      args: readonly string[],
+      runOptions: OrcaRunOptions = {},
+    ): OrcaJsonResponse<T> => {
+      const response = nativeRun<T>(args, runOptions);
+      diagnosticState.lastFailure = response.ok ? null : response;
+      return response;
+    }) as typeof runOrcaJson;
+    super({ ...options, runJson: diagnosticRun });
     this.#options = options;
+    this.#diagnosticState = diagnosticState;
+    this.#runJson = diagnosticRun;
+  }
+
+  #beginOperation(): void {
+    this.#diagnosticState.lastFailure = null;
+  }
+
+  #failureReason(fallback: string): string {
+    const response = this.#diagnosticState.lastFailure;
+    this.#diagnosticState.lastFailure = null;
+    return response
+      ? encodeRuntimeCompatibilityDiagnostic(response) ?? fallback
+      : fallback;
+  }
+
+  override readiness(
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<RuntimeReadiness> {
+    this.#beginOperation();
+    const result = super.readiness(options);
+    if (result.status === 'ok') {
+      this.#diagnosticState.lastFailure = null;
+      return result;
+    }
+    return { ...result, reason: this.#failureReason(result.reason) };
   }
 
   override spawnWorker(
@@ -57,17 +90,55 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     },
     options: RuntimeCallOptions = {},
   ): RuntimeResult<RuntimeWorker> {
+    this.#beginOperation();
     const result = super.spawnWorker(input, options);
     if (result.status === 'ok') {
+      this.#diagnosticState.lastFailure = null;
       this.#ownedForStop.set(result.value.identity.id, result.value.identity);
+      return result;
     }
-    return result;
+    return { ...result, reason: this.#failureReason(result.reason) };
+  }
+
+  override dispatchInput(
+    input: {
+      readonly worker: RuntimeWorkerIdentity;
+      readonly text?: string;
+      readonly submitOnly?: boolean;
+    },
+    options: RuntimeCallOptions = {},
+  ): RuntimeDispatchResult {
+    this.#beginOperation();
+    const result = super.dispatchInput(input, options);
+    if (result.status === 'dispatched') {
+      this.#diagnosticState.lastFailure = null;
+      return result;
+    }
+    return { ...result, reason: this.#failureReason(result.reason) };
+  }
+
+  override readBoundedOutput(
+    input: {
+      readonly worker: RuntimeWorkerIdentity;
+      readonly previousToken?: { readonly opaque: string } | null;
+      readonly limit?: number;
+    },
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<RuntimeBoundedOutput> {
+    this.#beginOperation();
+    const result = super.readBoundedOutput(input, options);
+    if (result.status === 'ok') {
+      this.#diagnosticState.lastFailure = null;
+      return result;
+    }
+    return { ...result, reason: this.#failureReason(result.reason) };
   }
 
   override stopWorker(
     worker: RuntimeWorkerIdentity,
     options: RuntimeCallOptions = {},
   ): RuntimeResult<{ readonly stopped: true }> {
+    this.#beginOperation();
     const owned = this.#ownedForStop.get(worker.id);
     if (!owned || !sameRuntimeWorker(owned, worker)) {
       return runtimeFailure('stop_worker', 'worker_not_owned_by_runtime_instance');
@@ -75,15 +146,15 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
 
     const current = super.findWorker(worker, options);
     if (current.status !== 'ok') {
-      return runtimeFailure('stop_worker', current.reason);
+      return runtimeFailure('stop_worker', this.#failureReason(current.reason));
     }
     if (current.value === null) {
       this.#ownedForStop.delete(worker.id);
       return runtimeFailure('stop_worker', 'worker_generation_not_found');
     }
 
-    const run = this.#options.runJson ?? runOrcaJson;
-    const response = run(
+    this.#diagnosticState.lastFailure = null;
+    const response = this.#runJson(
       ['terminal', 'close', '--terminal', worker.id],
       {
         cwd: options.cwd ?? this.#options.cwd,
@@ -95,9 +166,13 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       },
     );
     if (!response.ok) {
-      return runtimeFailure('stop_worker', stopFailureReason(response));
+      return runtimeFailure(
+        'stop_worker',
+        this.#failureReason(response.error?.code ?? 'runtime_operation_failed'),
+      );
     }
 
+    this.#diagnosticState.lastFailure = null;
     this.#ownedForStop.delete(worker.id);
     return { status: 'ok', value: { stopped: true } };
   }
