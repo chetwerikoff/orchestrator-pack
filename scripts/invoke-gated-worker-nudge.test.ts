@@ -34,6 +34,7 @@ describe('TypeScript gated worker nudge', () => {
       if (worker.status !== 'ok') return;
       const options = parseWorkerNudgeArgs([
         '--worker-id', worker.value.identity.id,
+        '--worker-generation', worker.value.identity.generation,
         '--issue', '1248',
         '--intent-class', 'task-continuation',
         '--repo-root', root,
@@ -73,8 +74,10 @@ describe('TypeScript gated worker nudge', () => {
       });
       const options = parseWorkerNudgeArgs([
         '--worker-id', worker.value.identity.id,
+        '--worker-generation', worker.value.identity.generation,
         '--pr', '1281',
         '--intent-class', 'review-findings',
+        '--review-run-id', 'run-1281',
         '--repo-root', root,
       ]);
       const result = await runGatedWorkerNudge({
@@ -96,8 +99,18 @@ describe('TypeScript gated worker nudge', () => {
   it('rejects PR-keyed intents without a PR number', () => {
     const options = parseWorkerNudgeArgs([
       '--worker-id', 'worker-1',
+      '--worker-generation', 'generation-1',
       '--intent-class', 'review-findings',
+      '--review-run-id', 'run-1',
     ]);
     expect(() => resolveWorkerNudgeIdentity(options, 'message')).toThrow('pr_number_required');
+  });
+
+  it('rejects a nudge without an invocation-bound generation', () => {
+    expect(() => parseWorkerNudgeArgs([
+      '--worker-id', 'worker-1',
+      '--issue', '1248',
+      '--intent-class', 'task-continuation',
+    ])).toThrow('--worker-generation is required');
   });
 });
