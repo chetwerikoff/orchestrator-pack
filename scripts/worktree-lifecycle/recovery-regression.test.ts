@@ -1,221 +1,229 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterAll, describe, expect, test } from 'vitest';
 import type { ProcessResult } from '../kernel/subprocess.ts';
-import {
-  runLifecycle,
-  type CommandInvocation,
-  type CommandRunner,
-  type LifecycleOperations,
-} from './operations.ts';
 import type { ExpectedWorktreeIdentity } from './core.ts';
+import { runLifecycle, type CommandRunner } from './operations.ts';
 
-const HEAD = 'a'.repeat(40);
-const OTHER_HEAD = 'b'.repeat(40);
-const BRANCH = 'agent/issue-1298';
-const roots: string[] = [];
+const TARGET_SHA = 'a'.repeat(40);
+const MERGE_SHA = 'b'.repeat(40);
+const TARGET_BRANCH = 'agent/issue-1298';
+const temporaryRoots = new Set<string>();
 
-const processResult = (overrides: Partial<ProcessResult> = {}): ProcessResult => ({
-  outcome: 'exit', ok: true, exitCode: 0, signal: null, stdout: '', stderr: '',
-  timedOut: false, cancelled: false, ...overrides,
+const completed = (stdout = ''): ProcessResult => ({
+  outcome: 'exit',
+  ok: true,
+  exitCode: 0,
+  signal: null,
+  stdout,
+  stderr: '',
+  timedOut: false,
+  cancelled: false,
 });
 
-interface Fixture {
+const lostReceipt = (detail: string): ProcessResult => ({
+  ...completed(),
+  outcome: 'timeout',
+  ok: false,
+  exitCode: null,
+  timedOut: true,
+  stderr: detail,
+});
+
+type OpenPr = { number: number; headRefName: string };
+
+interface Scenario {
   root: string;
   repo: string;
-  worktree: string;
-  common: string;
-  expected: ExpectedWorktreeIdentity;
-  removed: boolean;
-  keepOrcaAfterRemoval: boolean;
-  removeCount: number;
-  ignoredOutput: string;
-  branchOwners: Array<{ number: number; headRefName: string }>;
-  removalResult: ProcessResult;
-  operations: LifecycleOperations;
+  target: string;
+  commonDir: string;
+  identity: ExpectedWorktreeIdentity;
+  gitTargetPresent: boolean;
+  orcaTargetPresent: boolean;
+  removalAttempts: number;
+  removalResponse: ProcessResult;
+  ignoredStatus: string;
+  openPrs: OpenPr[];
+  runner: CommandRunner;
 }
 
-function orcaPayload(rows: readonly object[]): string {
+function inventoryJson(rows: object[]): string {
   return JSON.stringify({ ok: true, result: { worktrees: rows } });
 }
 
-function fixture(): Fixture {
-  const root = mkdtempSync(join(tmpdir(), 'opk-recovery-regression-'));
-  roots.push(root);
-  const repo = join(root, 'repo');
-  const worktree = join(root, 'worktrees', 'issue-1298');
-  const common = join(repo, '.git');
-  const gitdir = join(common, 'worktrees', 'issue-1298');
-  mkdirSync(gitdir, { recursive: true });
-  mkdirSync(worktree, { recursive: true });
-  writeFileSync(join(worktree, '.git'), `gitdir: ${gitdir}\n`, 'utf8');
-  const value: Fixture = {
+function buildScenario(): Scenario {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'opk-interrupted-recovery-'));
+  temporaryRoots.add(root);
+  const repo = path.join(root, 'repository');
+  const target = path.join(root, 'worktrees', 'issue-1298');
+  const commonDir = path.join(repo, '.git');
+  const targetGitDir = path.join(commonDir, 'worktrees', 'issue-1298');
+  fs.mkdirSync(targetGitDir, { recursive: true });
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, '.git'), `gitdir: ${targetGitDir}\n`, 'utf8');
+
+  const scenario = {
     root,
     repo,
-    worktree,
-    common,
-    expected: {
+    target,
+    commonDir,
+    identity: {
       repositoryRoot: repo,
-      path: worktree,
-      headSha: HEAD,
-      mode: 'branch-bound',
-      branchName: BRANCH,
-      bindingKind: 'pr',
+      path: target,
+      headSha: TARGET_SHA,
+      mode: 'branch-bound' as const,
+      branchName: TARGET_BRANCH,
+      bindingKind: 'pr' as const,
       bindingNumber: 1300,
     },
-    removed: false,
-    keepOrcaAfterRemoval: false,
-    removeCount: 0,
-    ignoredOutput: '',
-    branchOwners: [],
-    removalResult: processResult(),
-    operations: {},
-  };
-  const runner: CommandRunner = (invocation: CommandInvocation) => {
-    const args = [...invocation.args];
-    if (invocation.command === 'git' && args.includes('worktree') && args.includes('list')) {
-      const target = value.removed ? [] : [
-        `worktree ${worktree}`,
-        `HEAD ${HEAD}`,
-        `branch refs/heads/${BRANCH}`,
+    gitTargetPresent: true,
+    orcaTargetPresent: false,
+    removalAttempts: 0,
+    removalResponse: completed(),
+    ignoredStatus: '',
+    openPrs: [] as OpenPr[],
+    runner: (() => completed()) as CommandRunner,
+  } satisfies Scenario;
+
+  scenario.runner = (call) => {
+    const argv = [...call.args];
+    const git = call.command === 'git';
+    if (git && argv.includes('worktree') && argv.includes('list')) {
+      const primary = [
+        `worktree ${repo}`,
+        `HEAD ${MERGE_SHA}`,
+        'branch refs/heads/main',
         '',
       ];
-      return processResult({
-        stdout: [`worktree ${repo}`, `HEAD ${OTHER_HEAD}`, 'branch refs/heads/main', '', ...target].join('\n'),
-      });
+      const secondary = scenario.gitTargetPresent
+        ? [`worktree ${target}`, `HEAD ${TARGET_SHA}`, `branch refs/heads/${TARGET_BRANCH}`, '']
+        : [];
+      return completed([...primary, ...secondary].join('\n'));
     }
-    if (args[0] === 'worktree' && args[1] === 'list') {
-      const rows = value.removed && value.keepOrcaAfterRemoval
+    if (argv[0] === 'worktree' && argv[1] === 'list') {
+      const rows = scenario.orcaTargetPresent
         ? [{
-            path: worktree,
-            head: HEAD,
-            branch: `refs/heads/${BRANCH}`,
+            path: target,
+            head: TARGET_SHA,
+            branch: `refs/heads/${TARGET_BRANCH}`,
             linkedPR: 1300,
             isMainWorktree: false,
             isArchived: false,
           }]
         : [];
-      return processResult({ stdout: orcaPayload(rows) });
+      return completed(inventoryJson(rows));
     }
-    if (args[0] === 'worktree' && args[1] === 'ps') {
-      return processResult({ stdout: orcaPayload([]) });
+    if (argv[0] === 'worktree' && argv[1] === 'ps') return completed(inventoryJson([]));
+    if (argv[0] === 'terminal' && argv[1] === 'list') {
+      return completed(JSON.stringify({ ok: true, result: { terminals: [] } }));
     }
-    if (args[0] === 'terminal' && args[1] === 'list') {
-      return processResult({ stdout: JSON.stringify({ ok: true, result: { terminals: [] } }) });
+    if (call.command.endsWith('/scripts/gh') && argv[0] === 'pr' && argv[1] === 'view') {
+      return completed(JSON.stringify({
+        headRefName: TARGET_BRANCH,
+        state: 'MERGED',
+        headRefOid: TARGET_SHA,
+        mergeCommit: { oid: MERGE_SHA },
+        headRepository: { nameWithOwner: 'chetwerikoff/orchestrator-pack' },
+        baseRefName: 'main',
+      }));
     }
-    if (invocation.command.endsWith('/scripts/gh') && args[0] === 'pr' && args[1] === 'view') {
-      return processResult({
-        stdout: JSON.stringify({
-          headRefName: BRANCH,
-          state: 'MERGED',
-          headRefOid: HEAD,
-          mergeCommit: { oid: OTHER_HEAD },
-          headRepository: { nameWithOwner: 'chetwerikoff/orchestrator-pack' },
-          baseRefName: 'main',
-        }),
-      });
+    if (call.command.endsWith('/scripts/gh') && argv[0] === 'pr' && argv[1] === 'list') {
+      return completed(JSON.stringify(scenario.openPrs));
     }
-    if (invocation.command.endsWith('/scripts/gh') && args[0] === 'pr' && args[1] === 'list') {
-      return processResult({ stdout: JSON.stringify(value.branchOwners) });
+    if (git && argv.includes('rev-parse') && argv.includes('--git-common-dir')) {
+      return completed(`${commonDir}\n`);
     }
-    if (invocation.command === 'git' && args.includes('rev-parse') && args.includes('--git-common-dir')) {
-      return processResult({ stdout: `${common}\n` });
+    if (git && argv.includes('status') && argv.includes('--untracked-files=all')) return completed();
+    if (git && argv.includes('status') && argv.includes('--ignored=matching')) {
+      return completed(scenario.ignoredStatus);
     }
-    if (invocation.command === 'git' && args.includes('status') && args.includes('--untracked-files=all')) {
-      return processResult();
+    if (git && (argv.includes('merge-base') || argv.includes('fetch'))) return completed();
+    if (git && argv.includes('worktree') && argv.includes('remove')) {
+      scenario.removalAttempts += 1;
+      scenario.gitTargetPresent = false;
+      return scenario.removalResponse;
     }
-    if (invocation.command === 'git' && args.includes('status') && args.includes('--ignored=matching')) {
-      return processResult({ stdout: value.ignoredOutput });
-    }
-    if (invocation.command === 'git' && (args.includes('merge-base') || args.includes('fetch'))) {
-      return processResult();
-    }
-    if (invocation.command === 'git' && args.includes('worktree') && args.includes('remove')) {
-      value.removeCount += 1;
-      value.removed = true;
-      return value.removalResult;
-    }
-    if (invocation.command === 'git' && args.includes('branch') && args.includes('--list')) {
-      return processResult();
-    }
-    throw new Error(`unexpected invocation: ${invocation.command} ${args.join(' ')}`);
+    if (git && argv.includes('branch') && argv.includes('--list')) return completed();
+    throw new Error(`unexpected recovery call: ${call.command} ${argv.join(' ')}`);
   };
-  value.operations = {
-    runner,
-    orcaExecutable: 'orca-fixture',
-    lockPath: join(root, 'lifecycle.lock'),
-    processCensus: () => [],
-  };
-  return value;
+  return scenario;
 }
 
-function recover(value: Fixture, apply: boolean): ReturnType<typeof runLifecycle> {
+function invoke(scenario: Scenario, apply: boolean) {
   return runLifecycle({
-    expected: value.expected,
+    expected: scenario.identity,
     context: 'explicit-recovery',
     apply,
-    operations: value.operations,
+    operations: {
+      runner: scenario.runner,
+      orcaExecutable: 'orca-fixture',
+      lockPath: path.join(scenario.root, 'lifecycle.lock'),
+      processCensus: () => [],
+    },
   });
 }
 
-afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+afterAll(() => {
+  for (const root of temporaryRoots) fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe('interrupted recovery', () => {
-  it('does not repeat a removal whose effect completed before receipt loss', () => {
-    const value = fixture();
-    value.removalResult = processResult({
-      outcome: 'timeout', ok: false, exitCode: null, timedOut: true, stderr: 'receipt lost after effect',
-    });
+describe('unknown recovery outcomes', () => {
+  test('settles effect-before-receipt as already absent without another removal', () => {
+    const scenario = buildScenario();
+    scenario.removalResponse = lostReceipt('response lost after Git removed the target');
 
-    expect(recover(value, true).outcome).toBe('cleanup_deferred');
-    expect(recover(value, true).outcome).toBe('already_absent');
-    expect(value.removeCount).toBe(1);
+    expect(invoke(scenario, true).outcome).toBe('cleanup_deferred');
+    expect(invoke(scenario, true).outcome).toBe('already_absent');
+    expect(scenario.removalAttempts).toBe(1);
   });
 
-  it('preserves partial Git/Orca disappearance and does not repeat removal', () => {
-    const value = fixture();
-    value.keepOrcaAfterRemoval = true;
-    value.removalResult = processResult({
-      outcome: 'timeout', ok: false, exitCode: null, timedOut: true, stderr: 'partial receipt lost',
-    });
+  test('preserves an Orca-only remainder after partial deletion', () => {
+    const scenario = buildScenario();
+    scenario.removalResponse = lostReceipt('response lost during cross-inventory transition');
+    const originalRunner = scenario.runner;
+    scenario.runner = (call) => {
+      const response = originalRunner(call);
+      if (call.command === 'git' && call.args.includes('worktree') && call.args.includes('remove')) {
+        scenario.orcaTargetPresent = true;
+      }
+      return response;
+    };
 
-    recover(value, true);
-    const second = recover(value, true);
+    invoke(scenario, true);
+    const settlement = invoke(scenario, true);
 
-    expect(second).toMatchObject({ outcome: 'cleanup_deferred', pipelineContinues: true });
-    expect(second.classification.classification).toBe('orca_only');
-    expect(value.removeCount).toBe(1);
+    expect(settlement).toMatchObject({ outcome: 'cleanup_deferred', pipelineContinues: true });
+    expect(settlement.classification.classification).toBe('orca_only');
+    expect(scenario.removalAttempts).toBe(1);
   });
 });
 
-describe('historical target preservation', () => {
-  it('blocks non-allowlisted ignored data', () => {
-    const value = fixture();
-    value.ignoredOutput = '!! private-cache/\n';
+describe('historical recovery preservation', () => {
+  test('refuses non-allowlisted ignored data', () => {
+    const scenario = buildScenario();
+    scenario.ignoredStatus = '!! private-cache/\n';
 
-    expect(recover(value, false)).toMatchObject({
+    expect(invoke(scenario, false)).toMatchObject({
       outcome: 'cleanup_deferred',
       gates: { ignoredData: false },
       effects: [],
     });
-    expect(value.removeCount).toBe(0);
+    expect(scenario.removalAttempts).toBe(0);
   });
 
-  it('blocks a branch reused by another open PR', () => {
-    const value = fixture();
-    value.branchOwners = [{ number: 1301, headRefName: BRANCH }];
+  test('refuses a branch reused by another open pull request', () => {
+    const scenario = buildScenario();
+    scenario.openPrs = [{ number: 1301, headRefName: TARGET_BRANCH }];
 
-    expect(recover(value, false)).toMatchObject({
+    expect(invoke(scenario, false)).toMatchObject({
       outcome: 'cleanup_deferred',
       gates: { branchOwnership: false },
       effects: [],
     });
-    expect(value.removeCount).toBe(0);
+    expect(scenario.removalAttempts).toBe(0);
   });
 });
