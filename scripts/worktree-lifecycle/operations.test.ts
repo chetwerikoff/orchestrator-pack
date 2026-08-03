@@ -1,4 +1,4 @@
-// @vitest-ci-lane light
+// @vitest-ci-lane heavy
 // @vitest-pre-topology-seconds 120
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
