@@ -4,9 +4,10 @@
   "declared_paths": [
     "docs/declarations/1168.phase-a-source-tooling.json",
     "scripts/chatgpt-browser-turn.ts",
-    "scripts/chatgpt-browser-turn/too-many-requests-source.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
     "scripts/chatgpt-browser-turn/too-many-requests-source.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
   ],
   "denylist": [
     ".ao/",

@@ -117,7 +117,6 @@
     "scripts/worker-smoke.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light",
-    "scripts/chatgpt-browser-turn/too-many-requests-source.test.ts": "heavy",
     "scripts/flow-manager-long-running-child.test.ts": "light",
     "scripts/flow-manager-authority-contract.test.ts": "light",
     "scripts/ci-preflight/contract.test.ts": "light",
