@@ -1,0 +1,47 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1238,
+  "declared_paths": [
+    "package.json",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle-subprocess-fixture.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts"
+  ],
+  "denylist": [
+    ".claude/",
+    ".cursor/",
+    "credentials/",
+    "packages/core/",
+    "plugins/",
+    "scripts/browser-gpt-page-probe.ts",
+    "scripts/chatgpt-browser-turn.ts",
+    "scripts/chatgpt-browser-turn/contracts.ts",
+    "scripts/create-issue-final-acceptance.ts",
+    "scripts/create-issue-stage-finalize.ts",
+    "scripts/flow-manager-browser-gpt-long-run.ts",
+    "scripts/flow-manager-long-running-child.ts",
+    "scripts/lib/stage-completeness-core.ts",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "package.json",
+    "scripts/chatgpt-browser-turn/browser-session.ts",
+    "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-fixtures.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.test-support.ts",
+    "scripts/chatgpt-browser-turn/state-light-turn.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle-subprocess-fixture.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
+    "scripts/toolchain/chatgpt-browser-turn.test.ts",
+    "scripts/vitest-ci-lanes.config.json"
+  ],
+  "source_revision": "d8802f66b3a699dedcb671b3171c4ace6510d39b"
+}
