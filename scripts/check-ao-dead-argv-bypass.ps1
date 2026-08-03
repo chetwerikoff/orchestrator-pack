@@ -10,21 +10,17 @@ $SessionStatusInScopeRelativePaths = @(
     'scripts/lib/Invoke-AoCliJson.ps1',
     'scripts/wait-orchestrator-launch.ps1',
     'scripts/lib/Autonomous-ClaimPrResumeGate.ps1',
-    'scripts/lib/Worker-Recovery.ps1',
     'scripts/dead-worker-reconcile.ps1',
     'scripts/lib/Worker-NudgeClaim.ps1',
     'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1',
-    'scripts/invoke-gated-worker-nudge.ps1',
     'scripts/lib/Invoke-ReviewWakeTrigger.ps1',
     'scripts/ci-failure-notification-reconcile.ps1',
     'scripts/ci-green-wake-reconcile.ps1'
 )
 
 $SendTransportInScopeRelativePaths = @(
-    'scripts/journaled-worker-send.ps1',
     'scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1',
     'scripts/worker-message-send-adoption-preflight.ps1',
-    'scripts/invoke-gated-worker-nudge.ps1',
     'scripts/ci-failure-notification-reconcile.ps1',
     'scripts/ci-green-wake-reconcile.ps1'
 )
