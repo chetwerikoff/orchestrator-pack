@@ -33,5 +33,5 @@
     "scripts/worktree-teardown-runtime-profile.ts",
     "scripts/worktree-teardown.ts"
   ],
-  "source_revision": "97d119bd514dba7680c7107975699ebd94c4fc5c"
+  "source_revision": "b481fef6a399f16830f44a4037939c5ce827daa0"
 }
