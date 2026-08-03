@@ -47,6 +47,10 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1198 launch/watch contract tests are fast deterministic coverage.
   'scripts/launch-watch/launch-watch.test.ts': 120,
   'scripts/launch-watch/watch.test.ts': 120,
+  // Issue #1298 lifecycle suites are deterministic unit/fixture coverage. Fixed estimates
+  // keep the bounded pre-topology plan at its existing 32-file ceiling until harvest lands.
+  'scripts/worktree-lifecycle/core.test.ts': 120,
+  'scripts/worktree-lifecycle/operations.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
