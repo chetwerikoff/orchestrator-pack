@@ -28,6 +28,7 @@ import {
 import {
   createDirectPublicationObservationState,
   directPublicationReceipt,
+  DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN,
   observeDirectPublicationPayload,
   reviewerSourceMetadata,
   settleDirectPublication,
@@ -790,6 +791,9 @@ function directPublicationConfig(
   const issueNumber = parseInteger(requireOption(args, 'issue-number'), 1);
   const sourceRevision = requireOption(args, 'source-revision');
   const reviewerSource = requireOption(args, 'reviewer-source');
+  if (!DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN) {
+    throw new Error('input_invalid:direct_publication_capability_witness_unproven');
+  }
   const validation = validateDirectPublicationInputs({
     invocationId,
     prompt,
@@ -2279,10 +2283,20 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             );
           }
           const captureReply = bestReadyReply.length >= decision.reply.length ? bestReadyReply : decision.reply;
+          const ownedParentIds = new Set(
+            directObservation.invocations
+              .filter((item) => (
+                item.repositoryFullName === config.directPublication?.target.repositoryFullName
+                && item.issueNumber === config.directPublication?.target.issueNumber
+              ))
+              .map((item) => item.parentUserMessageId)
+              .filter((parent): parent is string => typeof parent === 'string' && parent.length > 0),
+          );
+          const ownedParentId = ownedParentIds.size === 1 ? [...ownedParentIds][0] : undefined;
           const directSettlement = config.directPublication
             ? settleDirectPublication(
               directObservation,
-              { ...config.directPublication.target, userMessageId: undefined },
+              { ...config.directPublication.target, userMessageId: ownedParentId },
               captureReply,
             )
             : undefined;
@@ -2330,7 +2344,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               return {
                 page,
                 browser,
-                preserveOwnedPage: true,
+                preserveOwnedPage: false,
                 result: compactResult('recovery_required', 'conversation', sourcePublication.cause ?? sourcePublication.state, invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
               };
             }

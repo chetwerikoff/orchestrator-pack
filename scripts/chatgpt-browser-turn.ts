@@ -57,6 +57,7 @@ import { publishStateLightReply } from './chatgpt-browser-turn/state-light-turn.
 import {
   directPublicationReceipt,
   reviewerSourceMetadata,
+  DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN,
   validateDirectPublicationInputs,
   type DirectPublicationConfig,
 } from './chatgpt-browser-turn/terminal-witness.ts';
@@ -373,6 +374,9 @@ function directPublicationConfig(
   const issueNumber = parseInteger(required(args, 'issue-number'), 1);
   const sourceRevision = required(args, 'source-revision');
   const reviewerSource = required(args, 'reviewer-source');
+  if (!DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN) {
+    throw new Error('input_invalid:direct_publication_capability_witness_unproven');
+  }
   const validation = validateDirectPublicationInputs({ invocationId, prompt, reviewerSource, repositoryFullName, issueNumber, sourceRevision });
   if (validation) throw new Error(`input_invalid:${validation}`);
   return {
@@ -677,6 +681,28 @@ async function runTurn(args: ParsedArgs): Promise<number> {
     });
     let publication: { state: string; cause?: string; output_bytes?: number; output_sha256?: string };
     let directReviewerSource = null as ReturnType<typeof reviewerSourceMetadata>;
+    const finishPublicationFailure = async (cause: string): Promise<number> => {
+      if (!incidentId || !opened) throw new Error('publication_cleanup_without_active_owner');
+      const activeIncidentId = incidentId;
+      const ownedTurn = opened;
+      const publicationIncident = updateIncident(profileKey, activeIncidentId, {
+        kind: 'publication_incident',
+        phase: 'publication_prepared',
+        cause,
+        owner: undefined,
+      });
+      await closeOwnedTurnPage(ownedTurn, { retainPage: false });
+      safeRelease(scheduleLock);
+      scheduleLock = null;
+      safeReleaseDestination(reservation);
+      reservation = null;
+      return emitTurnAndCode(turnResult('recovery_required', 'blocking_domain', cause, invocationId, profileKey, {
+        conversation_id: canonicalConversation,
+        ...(ownedTurn.provisionalId ? { provisional_id: ownedTurn.provisionalId } : {}),
+        incident_id: activeIncidentId,
+        generation: publicationIncident.generation,
+      }));
+    };
     if (config.directPublication) {
       const settlement = result.directPublication;
       if (!settlement || settlement.state === 'possible-delivery') {
@@ -709,29 +735,14 @@ async function runTurn(args: ParsedArgs): Promise<number> {
       }
       const sourcePublication = publishStateLightReply(config.directPublication.reviewerSourceOutput, invocationId, settlement.sourceBytes);
       if (sourcePublication.state !== 'committed_ok') {
-        return emitTurnAndCode(turnResult('recovery_required', 'blocking_domain', sourcePublication.cause ?? sourcePublication.state, invocationId, profileKey));
+        return await finishPublicationFailure(sourcePublication.cause ?? sourcePublication.state);
       }
       publication = publishStateLightReply(reservation.finalPath, invocationId, managerReply);
     } else {
       publication = publishReply(profileKey, invocationId, reservation.finalPath, reservation.identity, result.reply);
     }
     if (publication.state !== 'committed_ok') {
-      const incident = updateIncident(profileKey, incidentId, {
-        kind: 'publication_incident',
-        phase: 'publication_prepared',
-        cause: publication.cause ?? publication.state,
-        owner: undefined,
-      });
-      safeRelease(scheduleLock);
-      scheduleLock = null;
-      safeReleaseDestination(reservation);
-      reservation = null;
-      return emitTurnAndCode(turnResult('recovery_required', 'blocking_domain', publication.cause ?? publication.state, invocationId, profileKey, {
-        conversation_id: canonicalConversation,
-        ...(opened.provisionalId ? { provisional_id: opened.provisionalId } : {}),
-        incident_id: incidentId,
-        generation: incident.generation,
-      }));
+      return await finishPublicationFailure(publication.cause ?? publication.state);
     }
 
     updateIncident(profileKey, incidentId, { phase: 'committed', cause: 'committed' });

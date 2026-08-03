@@ -493,6 +493,7 @@ const target = {
   issueNumber: 1196,
   sourceRevision: 'r18',
   invocationId: '550e8400-e29b-41d4-a716-446655440000',
+  userMessageId: 'user-01',
 } as const;
 
 const successComment = [
@@ -521,6 +522,7 @@ function observeSuccess() {
     type: 'tool_result',
     action: 'add_comment_to_issue',
     tool_call_id: 'call-01',
+    parent_user_message_id: 'user-01',
     repository: target.repositoryFullName,
     issue_number: target.issueNumber,
     response: {
@@ -558,6 +560,7 @@ describe('direct-publication terminal matrix', () => {
     observeDirectPublicationPayload(state, {
       action: 'add_comment_to_issue',
       tool_call_id: `call-${status}`,
+      parent_user_message_id: 'user-01',
       arguments: {
         repository: target.repositoryFullName,
         issue_number: target.issueNumber,
@@ -567,6 +570,7 @@ describe('direct-publication terminal matrix', () => {
     observeDirectPublicationPayload(state, {
       action: 'add_comment_to_issue',
       tool_call_id: `call-${status}`,
+      parent_user_message_id: 'user-01',
       repository: target.repositoryFullName,
       issue_number: target.issueNumber,
       response_complete: true,
@@ -585,6 +589,7 @@ describe('direct-publication terminal matrix', () => {
     observeDirectPublicationPayload(noDispatch, {
       action: 'add_comment_to_issue',
       tool_call_id: 'call-adapter',
+      parent_user_message_id: 'user-01',
       arguments: {
         repository: target.repositoryFullName,
         issue_number: target.issueNumber,
@@ -594,6 +599,7 @@ describe('direct-publication terminal matrix', () => {
     observeDirectPublicationPayload(noDispatch, {
       action: 'add_comment_to_issue',
       tool_call_id: 'call-adapter',
+      parent_user_message_id: 'user-01',
       repository: target.repositoryFullName,
       issue_number: target.issueNumber,
       no_external_request: true,
@@ -620,7 +626,21 @@ describe('direct-publication terminal matrix', () => {
       response: { status: 503 },
     });
     expect(settleDirectPublication(ambiguous, target).state).toBe('possible-delivery');
+
+    const unpaired = observeSuccess();
+    observeDirectPublicationPayload(unpaired, {
+      action: 'add_comment_to_issue',
+      tool_call_id: 'call-unpaired',
+      parent_user_message_id: 'user-01',
+      repository: target.repositoryFullName,
+      issue_number: target.issueNumber,
+      response_complete: true,
+      response: { status: 201, comment_id: '988', comment_url: 'https://github.com/example/unpaired' },
+      success: true,
+    });
+    expect(settleDirectPublication(unpaired, target).cause).toBe('direct_publication_result_ambiguous');
   });
+
 });
 
 describe('direct-publication input and source bindings', () => {

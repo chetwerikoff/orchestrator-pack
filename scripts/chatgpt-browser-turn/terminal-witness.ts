@@ -389,6 +389,8 @@ export function registerLegacyObservation(
 export const DIRECT_PUBLICATION_POLICY = 'direct-publication/v1' as const;
 export const SERVICE_OBSERVED_ISSUE_COMMENT = 'service-observed-issue-comment/v1' as const;
 export const FAILED_WRITE_FINAL_ASSISTANT = 'failed-write-final-assistant/v1' as const;
+// AC#4 is not satisfied in this checkout: never admit the parser from fixtures or self-certifying tests.
+export const DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN = false;
 
 export interface DirectPublicationTarget {
   readonly repositoryFullName: string;
@@ -688,6 +690,12 @@ export function observeDirectPublicationPayload(
     ...(toolCallId(record) ? { tool_call_id: toolCallId(record) } : {}),
     ...(targetFields(record).repositoryFullName ? { repository: targetFields(record).repositoryFullName } : {}),
     ...(targetFields(record).issueNumber !== undefined ? { issue_number: targetFields(record).issueNumber } : {}),
+    ...(stringValue(record.assistant_message_id, record.assistantMessageId, record.message_id)
+      ? { assistant_message_id: stringValue(record.assistant_message_id, record.assistantMessageId, record.message_id) }
+      : {}),
+    ...(stringValue(record.parent_user_message_id, record.parentUserMessageId, record.parent)
+      ? { parent_user_message_id: stringValue(record.parent_user_message_id, record.parentUserMessageId, record.parent) }
+      : {}),
   };
   for (const child of Object.values(record)) {
     if (child && typeof child === 'object' && !Array.isArray(child) && Object.keys(inherited).length > 0) {
@@ -711,8 +719,7 @@ function matchingDirectPublicationPairs(
 ): { invocations: DirectPublicationInvocation[]; results: DirectPublicationResult[] } {
   const invocations = state.invocations.filter((item) =>
     item.repositoryFullName === target.repositoryFullName
-    && item.issueNumber === target.issueNumber
-    && (!target.userMessageId || !item.parentUserMessageId || item.parentUserMessageId === target.userMessageId));
+    && item.issueNumber === target.issueNumber);
   const results = state.results.filter((item) =>
     item.repositoryFullName === target.repositoryFullName && item.issueNumber === target.issueNumber);
   return { invocations, results };
@@ -724,12 +731,29 @@ export function settleDirectPublication(
   finalAssistantOutput?: string,
 ): DirectPublicationSettlement {
   const matching = matchingDirectPublicationPairs(state, target);
+  if (!target.userMessageId) {
+    return { state: 'possible-delivery', cause: 'direct_publication_owned_parent_missing' };
+  }
   if (matching.invocations.length !== 1) {
     return { state: 'possible-delivery', cause: 'direct_publication_invocation_ambiguous' };
   }
   const invocation = matching.invocations[0]!;
+  if (invocation.parentUserMessageId !== target.userMessageId) {
+    return {
+      state: 'possible-delivery',
+      cause: 'direct_publication_owned_parent_mismatch',
+      invocation,
+    };
+  }
+  if (matching.results.some((item) => item.parentUserMessageId !== target.userMessageId)) {
+    return {
+      state: 'possible-delivery',
+      cause: 'direct_publication_result_parent_ambiguous',
+      invocation,
+    };
+  }
   const results = matching.results.filter((item) => item.toolCallId === invocation.toolCallId);
-  if (results.length !== 1) {
+  if (matching.results.length !== 1 || results.length !== 1) {
     return {
       state: 'possible-delivery',
       cause: results.length === 0 ? 'direct_publication_result_missing' : 'direct_publication_result_ambiguous',
