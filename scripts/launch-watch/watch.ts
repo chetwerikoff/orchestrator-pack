@@ -138,8 +138,11 @@ async function observeOrcaThroughRuntime(
 ): Promise<WatchResult> {
   const remaining = Math.floor(workDeadline - now());
   if (remaining <= 0) return deadlineResult(request, 'orca-terminal-read', 'orca_read_deadline');
-  const listed = runtime.listWorkers({ workspace: 'active' }, { cwd: root, timeoutMs: remaining });
+  const listed = runtime.listWorkers({ workspace: root }, { cwd: root, timeoutMs: remaining });
   if (listed.status !== 'ok') {
+    if (listed.reason === 'runtime_timeout') {
+      return deadlineResult(request, 'orca-terminal-read', 'orca_read_deadline');
+    }
     return watchResult('source-unavailable', {
       operation: 'orca-terminal-read', sourceId: request.sourceId, predicateId: request.predicateId,
       reasonCode: `runtime_${listed.status}`, deadlineMs: request.deadlineMs,
@@ -151,14 +154,21 @@ async function observeOrcaThroughRuntime(
     return watchResult('source-unavailable', {
       operation: 'orca-terminal-read', sourceId: request.sourceId, predicateId: request.predicateId,
       reasonCode: 'runtime_worker_not_found', deadlineMs: request.deadlineMs,
-      evidence: { runtime: runtime.id }, remediation: 'inspect-source',
+      evidence: { runtime: runtime.id, workspace: root }, remediation: 'inspect-source',
     });
+  }
+  const outputRemaining = Math.floor(workDeadline - now());
+  if (outputRemaining <= 0) {
+    return deadlineResult(request, 'orca-terminal-read', 'orca_read_deadline');
   }
   const output = runtime.readBoundedOutput(
     { worker: worker.identity },
-    { cwd: root, timeoutMs: Math.max(1, Math.floor(workDeadline - now())) },
+    { cwd: root, timeoutMs: outputRemaining },
   );
   if (output.status !== 'ok') {
+    if (output.reason === 'runtime_timeout') {
+      return deadlineResult(request, 'orca-terminal-read', 'orca_read_deadline');
+    }
     return watchResult('source-unavailable', {
       operation: 'orca-terminal-read', sourceId: request.sourceId, predicateId: request.predicateId,
       reasonCode: `runtime_${output.status}`, deadlineMs: request.deadlineMs,
