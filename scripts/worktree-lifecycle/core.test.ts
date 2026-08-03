@@ -74,15 +74,16 @@ const evidence = (
 });
 
 function commandResult(input: Partial<ProcessResult> = {}): ProcessResult {
+  const ok = input.ok ?? true;
   return {
-    outcome: input.outcome ?? 'exit',
-    ok: input.ok ?? true,
-    exitCode: input.exitCode ?? 0,
-    signal: input.signal ?? null,
     stdout: input.stdout ?? '',
     stderr: input.stderr ?? '',
-    timedOut: input.timedOut ?? false,
+    outcome: input.outcome ?? 'exit',
+    signal: input.signal ?? null,
+    exitCode: input.exitCode ?? (ok ? 0 : 1),
     cancelled: input.cancelled ?? false,
+    timedOut: input.timedOut ?? false,
+    ok,
     ...(input.error ? { error: input.error } : {}),
   };
 }
