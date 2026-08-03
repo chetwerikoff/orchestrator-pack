@@ -606,7 +606,7 @@ export function checkContractEvidence(markdown, options = {}) {
       const bindingProducer = canonicalBindingIdProducer(row);
       if (bindingProducer !== producer) {
         errors.push(
-          `${rowLabel}: producer ${producer} does not match binding-id producer ${bindingProducer}; binding-id must be <producer>:<datum>:<expected> — mechanical fix: correct the row and rerun this validator, no architectural adjudication required`,
+          `${rowLabel}: producer ${producer} does not match binding-id producer ${bindingProducer}`,
         );
         continue;
       }
@@ -615,9 +615,7 @@ export function checkContractEvidence(markdown, options = {}) {
         continue;
       }
       if (!repoOwned.includes(bindingProducer)) {
-        errors.push(
-          `${rowLabel}: producer ${bindingProducer} is not in the repo-owned registry; accepted values: ${repoOwned.join(', ')} — mechanical fix: correct the row and rerun this validator, no architectural adjudication required`,
-        );
+        errors.push(`${rowLabel}: producer ${bindingProducer} is not in the repo-owned registry`);
         continue;
       }
       const newIdentity = canonicalBindingIdentity(row, 'structured');
@@ -626,9 +624,8 @@ export function checkContractEvidence(markdown, options = {}) {
         continue;
       }
       if (!criterionHasMatchingProducerEmission(markdown, acNumber, row)) {
-        const expectation = extractRowProducerEmissionExpectation(row);
         errors.push(
-          `${rowLabel}: NEW(produced-by AC#${acNumber}) must name a matching producer-emission assertion for this binding; add a producer-emission block under AC#${acNumber} with producer: ${expectation.producer}, datum: ${expectation.datum}, expected: ${expectation.expected} — mechanical fix: edit the Issue text and rerun this validator, no architectural adjudication required`,
+          `${rowLabel}: NEW(produced-by AC#${acNumber}) must name a matching producer-emission assertion for this binding`,
         );
         continue;
       }
