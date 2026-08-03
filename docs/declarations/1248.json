@@ -4,9 +4,7 @@
   "declared_paths": [
     "docs/declarations/1248.json",
     "docs/orca-runtime-caller-census.md",
-    "scripts/lib/orca-cli.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
-    "scripts/lib/worker-smoke-bounded-create.ts",
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/runtime/caller-census.test.ts",
     "scripts/runtime/caller-census.ts",
