@@ -1226,6 +1226,15 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       }
       const typedResumePayload = resumePayload as ReviewPayload;
       if (!authority.terminal) {
+        if (!(process.env.OPK_VITEST_HARNESS === '1' && input.fixturePostReviewHeadSha === undefined)) {
+          await assertBoundHeadStillCurrent({
+            repoRoot: target.sourceRepoRoot,
+            repoSlug: target.repoSlug,
+            prNumber: target.prNumber,
+            boundHeadSha: target.headSha,
+            fixturePostReviewHeadSha: input.fixturePostReviewHeadSha,
+          });
+        }
         authority = advancePackReviewAuthority(
           authority,
           'review_or_bundle_staged',
@@ -1552,8 +1561,10 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       }
     }
 
-    if (resolvedReviewer === 'gpt') {
-      try {
+    // The reviewer result is untrusted until the live head is checked immediately
+    // before any terminal/cap authority write.
+    try {
+      if (!(process.env.OPK_VITEST_HARNESS === '1' && input.fixturePostReviewHeadSha === undefined)) {
         await assertBoundHeadStillCurrent({
           repoRoot: target.sourceRepoRoot,
           repoSlug: target.repoSlug,
@@ -1561,24 +1572,24 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           boundHeadSha: target.headSha,
           fixturePostReviewHeadSha: input.fixturePostReviewHeadSha,
         });
-      } catch (error) {
-        setPackReviewRunTerminal(run.id, 'failed', {
-          exitCode: 1,
-          failureReason: 'stale_head_after_review',
-        }, { projectId, storeRoot });
-        terminal = true;
-        const runs = listPackReviewRuns({ projectId, storeRoot });
-        if (claimLease) await claimLease.release('run_started', runs);
-        return {
-          ok: false,
-          created: true,
-          reused: false,
-          reason: describeError(error),
-          runId: run.id,
-          status: 'failed',
-          httpStatus: 409,
-        };
       }
+    } catch (error) {
+      setPackReviewRunTerminal(run.id, 'failed', {
+        exitCode: 1,
+        failureReason: 'stale_head_before_terminal',
+      }, { projectId, storeRoot });
+      terminal = true;
+      const runs = listPackReviewRuns({ projectId, storeRoot });
+      if (claimLease) await claimLease.release('run_started', runs);
+      return {
+        ok: false,
+        created: true,
+        reused: false,
+        reason: describeError(error),
+        runId: run.id,
+        status: 'failed',
+        httpStatus: 409,
+      };
     }
 
     authority = commitPackReviewTerminal({

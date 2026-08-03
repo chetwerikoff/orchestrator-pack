@@ -522,7 +522,13 @@ export function observePackReviewHead(input: {
       current.evidence = undefined;
       current.triage = undefined;
       current.publication = undefined;
-      if (current.cycle?.state === 'at_cap_open_findings'
+      if (current.cycle?.state === 'closed') {
+        // A clean terminal closes only the old head's cycle. The next head
+        // starts a fresh budget rather than inheriting a consumed clean slot.
+        current.cycle = createNewPackReviewCycle(current.cycle.frozenTier, {
+          now: input.options.now,
+        });
+      } else if (current.cycle?.state === 'at_cap_open_findings'
           || current.cycle?.state === 'at_cap_continuation_required') {
         current.cycle.state = 'at_cap_continuation_required';
       }

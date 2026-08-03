@@ -72,6 +72,50 @@ describe('Issue #898 authority and cap state', () => {
     });
   });
 
+  it('opens a fresh cycle when a clean head changes', () => {
+    const storeOptions = options();
+    let state = initializePackReviewAuthority({
+      prNumber: 898,
+      headSha: sha('a'),
+      tier: 'T1',
+      options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber: 898,
+      expectedTransitionSeq: state.transitionSeq,
+      terminal: {
+        schemaVersion: 1,
+        terminalContractVersion: 2,
+        terminalSource: 'normal',
+        runId: 'clean-run-a',
+        targetSha: sha('a'),
+        reviewVerdict: 'clean',
+        findingCount: 0,
+        findingsDigest: 'clean',
+      },
+      status: 'clean',
+      findingCount: 0,
+      options: storeOptions,
+    });
+    const closedCycleId = state.cycle!.cycleId;
+    expect(state.cycle?.state).toBe('closed');
+
+    state = observePackReviewHead({
+      prNumber: 898,
+      expectedTransitionSeq: state.transitionSeq,
+      headSha: sha('b'),
+      options: storeOptions,
+    });
+
+    expect(state.cycle).toMatchObject({
+      state: 'open',
+      frozenTier: 'T1',
+      frozenCap: 1,
+      consumedHeadShas: [],
+    });
+    expect(state.cycle?.cycleId).not.toBe(closedCycleId);
+  });
+
   it('latches at cap, denies an extra consuming terminal, and keeps the latch after head shift', () => {
     const storeOptions = options();
     let state = initializePackReviewAuthority({

@@ -111,5 +111,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json"
   ],
-  "source_revision": "bf1703a4321463e1d0d0a55e63af54450537fd5b"
+  "source_revision": "0e069bd7e7b4a82b66ef3e55e17c943c8be55266"
 }
