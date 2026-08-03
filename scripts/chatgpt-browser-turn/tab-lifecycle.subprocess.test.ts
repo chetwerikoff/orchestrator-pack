@@ -1,31 +1,37 @@
-import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { once } from 'node:events';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+
+import { runProcess } from '../kernel/subprocess.ts';
 
 const fixture = join(import.meta.dirname, 'tab-lifecycle-subprocess-fixture.ts');
 
 async function killAtBarrier(mode: 'before-link' | 'after-link') {
   const root = mkdtempSync(join(tmpdir(), `opk-1238-${mode}-`));
   const barrier = join(root, `${mode}.barrier`);
-  const child = spawn(process.execPath, ['--experimental-strip-types', fixture, mode, root], {
-    stdio: 'ignore',
+  const controller = new AbortController();
+  const child = runProcess({
+    command: process.execPath,
+    args: ['--experimental-strip-types', fixture, mode, root],
+    cwd: resolve(import.meta.dirname, '../..'),
+    inheritParentEnv: true,
+    signal: controller.signal,
+    killGraceMs: 100,
   });
   try {
     const deadline = Date.now() + 5_000;
     while (!existsSync(barrier)) {
-      if (child.exitCode !== null) throw new Error(`fixture_exited_before_barrier:${child.exitCode}`);
       if (Date.now() >= deadline) throw new Error('fixture_barrier_timeout');
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    child.kill('SIGKILL');
-    await once(child, 'close');
+    controller.abort();
+    const result = await child;
+    expect(result.outcome).toBe('cancelled');
     return root;
   } catch (error) {
-    child.kill('SIGKILL');
-    await once(child, 'close').catch(() => undefined);
+    controller.abort();
+    await child.catch(() => undefined);
     rmSync(root, { recursive: true, force: true });
     throw error;
   }
