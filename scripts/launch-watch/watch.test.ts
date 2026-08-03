@@ -358,7 +358,7 @@ describe('Orca runtime adapter', () => {
     if (first.status !== 'ok') return;
     expect(first.value.lines).toEqual(['line']);
     expect(first.value.changed).toBe(true);
-    expect(first.value.observationToken.opaque).toMatch(/^opk-orca-output-v2\./);
+    expect(first.value.observationToken.opaque).toMatch(/^opk-orca-output-v2\.[0-9a-f-]{36}$/);
     expect(first.value).not.toHaveProperty('nextCursor');
 
     const second = adapter.readBoundedOutput({
@@ -396,7 +396,7 @@ describe('Orca runtime adapter', () => {
     expect(first.status).toBe('ok');
     if (first.status !== 'ok') return;
     expect(first.value.changed).toBe(false);
-    expect(first.value.observationToken.opaque).toMatch(/^opk-orca-output-v2\./);
+    expect(first.value.observationToken.opaque).toMatch(/^opk-orca-output-v2\.[0-9a-f-]{36}$/);
 
     const unchanged = adapter.readBoundedOutput({
       worker: orcaIdentity,
