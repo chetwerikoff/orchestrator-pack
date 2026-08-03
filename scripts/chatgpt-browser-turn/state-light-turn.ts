@@ -190,6 +190,7 @@ export interface TurnRunOutcome {
   readonly browser?: any;
   /** Process-local publication fact; not part of turn-result/v1. */
   readonly publicationState?: StateLightPublicationResult['state'];
+  readonly cleanupAction?: PageCleanupAction;
   readonly ownedConversationUrl?: string;
   readonly profileKey?: string;
   readonly ownershipForfeited?: boolean;
@@ -2333,7 +2334,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               return {
                 page,
                 browser,
-                preserveOwnedPage: false,
+                publicationState: sourcePublication.state,
+                cleanupAction: 'close',
                 result: compactResult('driver_error', 'invocation', sourcePublication.cause ?? sourcePublication.state, invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
               };
             }
@@ -2344,7 +2346,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             return {
               page,
               browser,
-              preserveOwnedPage: false,
+              publicationState: sourcePublication.state,
+              cleanupAction: 'close',
               result: compactResult(complete ? 'ok' : 'recovery_required', 'invocation', complete ? 'capability_probe_captured' : 'capability_probe_incomplete', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
             };
           }
@@ -2373,7 +2376,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               return {
                 page,
                 browser,
-                preserveOwnedPage: true,
+                cleanupAction: 'preserve',
                 result: compactResult('recovery_required', 'conversation', directSettlement?.cause ?? 'direct_publication_observation_missing', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
               };
             }
@@ -2383,7 +2386,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               return {
                 page,
                 browser,
-                preserveOwnedPage: true,
+                cleanupAction: 'preserve',
                 result: compactResult('recovery_required', 'conversation', 'direct_publication_source_invalid', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
               };
             }
@@ -2395,7 +2398,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               return {
                 page,
                 browser,
-                preserveOwnedPage: true,
+                cleanupAction: 'preserve',
                 result: compactResult('recovery_required', 'conversation', 'direct_publication_receipt_invalid', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
               };
             }
@@ -2409,7 +2412,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
               return {
                 page,
                 browser,
-                preserveOwnedPage: false,
+                publicationState: sourcePublication.state,
+                cleanupAction: 'close',
                 result: compactResult('recovery_required', 'conversation', sourcePublication.cause ?? sourcePublication.state, invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
               };
             }
@@ -2676,7 +2680,7 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let cleanup: ResourceCleanupOutcome = 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   const incidents = [...outcome.result.incidents];
-  const pageAction = decidePageCleanupAction({
+  const pageAction = outcome.cleanupAction ?? decidePageCleanupAction({
     sendCount: outcome.result.send_count,
     publicationState: outcome.publicationState,
     pagePresent: Boolean(outcome.page),
