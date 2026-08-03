@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 
 export type WorktreeIdentityMode = 'branch-bound' | 'detached-confirmed';
+export type WorktreeBindingKind = 'issue' | 'pr';
 
 export interface ExpectedWorktreeIdentity {
   readonly repositoryRoot: string;
@@ -8,7 +9,8 @@ export interface ExpectedWorktreeIdentity {
   readonly headSha: string;
   readonly mode: WorktreeIdentityMode;
   readonly branchName?: string;
-  readonly prNumber: number;
+  readonly bindingKind: WorktreeBindingKind;
+  readonly bindingNumber: number;
 }
 
 export interface GitWorktreeRow {
@@ -118,8 +120,11 @@ export function normalizeHeadSha(value: string): string {
 }
 
 export function normalizeExpectedIdentity(input: ExpectedWorktreeIdentity): ExpectedWorktreeIdentity {
-  if (!Number.isInteger(input.prNumber) || input.prNumber <= 0) {
-    throw new TypeError('prNumber must be a positive integer');
+  if (!Number.isInteger(input.bindingNumber) || input.bindingNumber <= 0) {
+    throw new TypeError('bindingNumber must be a positive integer');
+  }
+  if (input.bindingKind !== 'issue' && input.bindingKind !== 'pr') {
+    throw new TypeError('bindingKind must be issue or pr');
   }
   const branchName = normalizeBranchName(input.branchName);
   if (input.mode === 'branch-bound' && !branchName) {
@@ -134,7 +139,8 @@ export function normalizeExpectedIdentity(input: ExpectedWorktreeIdentity): Expe
     headSha: normalizeHeadSha(input.headSha),
     mode: input.mode,
     ...(branchName ? { branchName } : {}),
-    prNumber: input.prNumber,
+    bindingKind: input.bindingKind,
+    bindingNumber: input.bindingNumber,
   };
 }
 
@@ -277,8 +283,18 @@ function gitIdentityMatches(row: GitWorktreeRow, expected: ExpectedWorktreeIdent
   return !row.detached && row.branchName === expected.branchName;
 }
 
+function orcaBindingMatches(row: OrcaWorktreeRow, expected: ExpectedWorktreeIdentity): boolean {
+  if (expected.bindingKind === 'issue') return row.linkedIssue === expected.bindingNumber;
+  return row.linkedPR === undefined || row.linkedPR === null || row.linkedPR === expected.bindingNumber;
+}
+
 function orcaIdentityMatches(row: OrcaWorktreeRow, expected: ExpectedWorktreeIdentity): boolean {
-  if (row.path !== expected.path || row.headSha !== expected.headSha || row.malformedFields.length > 0) {
+  if (
+    row.path !== expected.path
+    || row.headSha !== expected.headSha
+    || row.malformedFields.length > 0
+    || !orcaBindingMatches(row, expected)
+  ) {
     return false;
   }
   if (expected.mode === 'detached-confirmed') return !row.branchName;
@@ -294,7 +310,9 @@ function gitIdentityCollision(row: GitWorktreeRow, expected: ExpectedWorktreeIde
 function orcaIdentityCollision(row: OrcaWorktreeRow, expected: ExpectedWorktreeIdentity): boolean {
   if (row.path === expected.path) return !orcaIdentityMatches(row, expected);
   if (row.headSha === expected.headSha) return true;
-  return expected.mode === 'branch-bound' && row.branchName === expected.branchName;
+  if (expected.mode === 'branch-bound' && row.branchName === expected.branchName) return true;
+  if (expected.bindingKind === 'issue' && row.linkedIssue === expected.bindingNumber) return true;
+  return expected.bindingKind === 'pr' && row.linkedPR === expected.bindingNumber;
 }
 
 function disagreementFields(
@@ -314,6 +332,9 @@ function disagreementFields(
     if (row.headSha !== expected.headSha) fields.add('orca.head');
     if (expected.mode === 'branch-bound' && row.branchName !== expected.branchName) fields.add('orca.branch');
     if (expected.mode === 'detached-confirmed' && row.branchName) fields.add('orca.detached');
+    if (!orcaBindingMatches(row, expected)) {
+      fields.add(expected.bindingKind === 'issue' ? 'orca.linkedIssue' : 'orca.linkedPR');
+    }
     for (const malformed of row.malformedFields) fields.add(`orca.${malformed}`);
   }
   return [...fields].sort();
