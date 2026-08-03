@@ -25,27 +25,35 @@ to a worker; this skill is the only supported bypass).
 
 ## The direct-PR spine
 
-Run these in order. The sections below expand the numbered steps.
+The order that matters. Sections after it cover the steps that need detail;
+CI and review are separate concerns and have their own sections.
 
 1. **Confirm authorization** covers this change (§ When to invoke).
-2. **Open or identify the issue.** Implementation PRs need one; note its number `N`.
-3. **Work off a clean base.** Never commit from a shared checkout you did not
-   verify: confirm the current branch, and check whether another session has
-   uncommitted work in it. If the checkout is shared or dirty, create a separate
-   worktree from `origin/main` and do everything there.
-4. **Branch** from `origin/main`.
+2. **Open or identify the issue** and note its number `N`. Implementation PRs
+   need one. If you create it, the body **must** carry a fenced `denylist` block
+   or step 8 will refuse to run (§ Declaration snapshot).
+3. **Work off a base you control.** Confirm the current branch and whether the
+   checkout holds anyone's uncommitted work: `git branch --show-current` and
+   `git status --porcelain=v1`. If it is shared, dirty, or not yours, create a
+   separate worktree from `origin/main` and do everything there.
+4. **Branch** from `origin/main` (fetch first — `origin/main` must be current).
 5. **Edit** only the paths you intend to declare.
-6. **Inspect the diff** — `git diff --name-only origin/main..HEAD` must list
-   exactly your paths and nothing else. Anything unexpected means you branched
-   off someone else's work; rebuild the branch before continuing.
-7. **Commit the edits** — the declaration producer needs a clean tree.
+6. **Audit the pending change before committing.** The union of
+   `git status --porcelain=v1` (staged, unstaged, untracked) and
+   `git diff --name-only origin/main` must equal exactly the paths you intend.
+   Anything else present is someone else's work or a stray artifact — find out
+   which before you commit. Do **not** use `origin/main..HEAD` here: it compares
+   committed trees and cannot see the edits you just made.
+7. **Commit the edits.** Do this before step 8 so the snapshot's
+   `source_revision` pins the tree being reviewed.
 8. **Produce the declaration snapshot** (§ Declaration snapshot).
-9. **Commit the snapshot.**
+9. **Commit the snapshot** on its own — the edits are already in step 7.
 10. **Pre-push self-check** (§ Pre-push local self-check).
 11. **Push**, then **open the PR** with the right body contract (§ PR body issue
     reference).
-12. **Read the PR back** — confirm it exists, targets `main`, and its diff is
-    what you pushed.
+12. **Read the PR back** — it exists, targets `main`, and
+    `git diff --name-only origin/main...HEAD` lists exactly your paths plus the
+    snapshot.
 
 ## Declaration snapshot
 
@@ -57,21 +65,20 @@ Run these in order. The sections below expand the numbered steps.
 - **Owner:** `scripts/pr-scope-declaration.ts` — never hand-edit or forge the JSON.
 - **No worker, no session, no runtime needed.** The producer is standalone.
 
-**Prerequisite:** the repository's own `scripts/gh` wrapper must exist and its
-GitHub transport must work — the producer executes `<repo-root>/scripts/gh`
-directly to read the issue body and parse its `allowed_roots` / `denylist`
-fences. It resolves the wrapper by path, so the wrapper does **not** need to be
-on `PATH`. Pass `--issue-body-file <file>` to skip the lookup entirely.
-
-The issue body **must** contain a fenced `denylist` block, or the producer
-refuses to run. An `allowed-roots` fence is optional and narrows the repository
-ceiling when present.
+**Prerequisites.** The issue body must contain a fenced `denylist` block or the
+producer refuses to run; an `allowed-roots` fence is optional and narrows the
+repository ceiling when present. The repository's own `scripts/gh` wrapper must
+exist and work — the producer executes `<repo-root>/scripts/gh` directly to read
+that body, resolving it by path, so it does **not** need to be on `PATH`. Pass
+`--issue-body-file <file>` to skip the lookup entirely.
 
 ```bash
 node --experimental-strip-types scripts/pr-scope-declaration.ts \
   --issue <N> \
   --declared-paths path/one.ts,path/two.md \
   --declared-prefixes 'plugins/foo/**'
+
+git add docs/declarations/<N>.pr-scope.json
 ```
 
 Canonical flags: `--issue`, `--declared-paths`, `--declared-prefixes`,
@@ -81,35 +88,30 @@ that only prints a notice. Unknown arguments are rejected, so do not invent
 flags. At least one of paths/prefixes is required, and any `--output` must stay
 under `docs/declarations/`.
 
-Stage the snapshot **together with the edited paths**, then re-read what is
-staged before committing — staging the snapshot alone produces a
-declaration-only commit and leaves the actual fix behind:
-
-```bash
-git add docs/declarations/<N>.pr-scope.json path/one.ts path/two.md
-git diff --cached --name-only
-```
-
-**Scope changed ⇒ re-run the producer.** There is no amendment budget and no
-once-per-iteration rule.
+**Scope changed ⇒ re-run the producer** — unless a pivot trigger applies, in
+which case stop instead of re-declaring (§ When to pivot). Regenerating is for
+changes still inside the authorized change; it is not a way to absorb growth the
+operator never authorized. There is no amendment budget.
 
 ## PR body issue reference
 
-**Implementation** direct PRs **must** include a closing reference the scope
-guard parses:
+Three shapes exist, and the diff decides which one you are in —
+[`docs/repository_policy.md`](../../../docs/repository_policy.md) is the authority.
 
-- `Closes #N`, `Fixes #N`, or `Resolves #N` (case-insensitive, `#` required).
+- **Implementation** — any path outside the markdown union (`CLAUDE.md`,
+  `scripts/**`, `.github/**`, `docs/declarations/**`). Needs a declaration
+  snapshot and a closing reference the guard parses: `Closes #N`, `Fixes #N`, or
+  `Resolves #N` (case-insensitive, `#` required).
+- **Spec-only docs** — whole diff inside the markdown union, signalled with
+  `<!-- pr-type: spec-only -->` alone on one line plus a non-closing `Refs #N`.
+  No snapshot; the issue stays open. Closing keywords are forbidden.
+- **No-ceremony markdown** — whole diff inside the markdown union, detected from
+  diff content alone. No snapshot, no signal, and the body must reference **no**
+  issue at all; any issue link fails the guard.
 
-**Spec-only docs** direct PRs use the lighter path documented in
-[`docs/repository_policy.md`](../../../docs/repository_policy.md#spec-only-docs-prs):
-`<!-- pr-type: spec-only -->` alone on one line plus a non-closing `Refs #N` (no
-snapshot, issue stays open). That path covers `docs/issues_drafts/**`,
-`docs/issue_queue_index.md`, and `.claude/skills/**/*.md`. Do not use closing
-keywords on spec-only PRs.
-
-**Check the allowlist before choosing.** A single path outside the markdown
-union — `CLAUDE.md`, `scripts/**`, `.github/**` — drops the whole PR back to the
-implementation path, snapshot and closing keyword included.
+The markdown union is `docs/issues_drafts/**/*.md`, `docs/issue_queue_index.md`,
+`docs/architecture.md`, `.claude/skills/**/*.md`, and `.cursor/skills/**/*.md`.
+A single path outside it drops the whole PR to the implementation shape.
 
 ## Pre-push local self-check
 
@@ -127,12 +129,8 @@ that is scope creep the guard will reject. Do not use CI as the first scope chec
 
 ## CI checks the PR must pass
 
-The authority is the **required checks reported for the PR's current head**, not
-this list — read them from the PR rather than trusting prose that can go stale.
-As of writing, `.github/workflows/scope-guard.yml` contributes: change
-classification, repository-structure verification, the PR scope guard,
-type-checking, Vitest light and heavy lanes with their topology planner, Pester
-regression, a fail-closed contract-test aggregate, and self-architect lint.
+The authority is the **required checks reported for the PR's current head** —
+read them from the PR rather than from any list here, which goes stale.
 
 **The scope guard runs from the trusted _base_ checkout, not your branch.** A fix
 to the guard itself does not take effect on the PR that introduces it.
@@ -158,8 +156,9 @@ reviewer child by the runner. To change it, use the `switch-pack-reviewer` skill
 do not invoke a reviewer plugin directly; the runner owns claim, cap, head
 binding, and is the sole GitHub publisher.
 
-Merging requires an operator-requested pack review at the **current head** from
-the configured `PACK_REVIEWER`. The requirement is the review, not any one engine.
+Merging requires an operator-requested pack review at the **current head** under
+the configured `PACK_REVIEWER`, with material findings fixed or rebutted and
+required CI green. The requirement is the review, not any one engine.
 
 **Verdict contract** — the runner needs a valid verdict JSON object, either as
 the whole stdout or on one parseable non-empty line (it scans lines in reverse
@@ -181,16 +180,14 @@ P0/P1 before merge; P2 may be tracked in the issue if accepted.
 
 ## Hand off to a worker
 
-### Runtime profile (the ONLY runtime-specific surface)
+### Vendor command bindings
 
-**What this table does and does not deliver.** It centralizes the vendor commands
-so they live in one place instead of scattered through the steps. It does **not**
-by itself deliver runtime portability: the capability set below is shaped like the
-active runtime's worktree/terminal model, so a runtime built on a different
-lifecycle (remote jobs, containers, no persistent terminals) needs the steps
-rewritten, not just this column. The durable fix is an executable seam over
-`selectRuntimeAdapter`, which does not exist yet. Vocabulary is kept identical to
-`merge-with-local-adoption` so the two skills do not drift apart.
+This table is where the vendor commands live, so they are in one place instead of
+scattered through the steps. It is **not** a runtime-neutral seam: the
+capabilities are shaped like the active runtime's worktree/terminal lifecycle, so
+a runtime built on remote jobs or containers needs these steps rewritten, not
+just this column. The durable fix is an executable seam over
+`selectRuntimeAdapter`; it does not exist yet.
 
 **Before any effect, confirm the active runtime matches this table's header.**
 Read the authoritative selection (`OPK_RUNTIME_ADAPTER`, default `orca`) rather
@@ -199,24 +196,26 @@ will otherwise succeed against the wrong fleet, silently.
 
 | Capability | Active runtime = `orca` |
 |---|---|
-| `RUNTIME.workspace_for(issue)` | `orca worktree create --name <name> --repo "path:<repo-root>" --base-branch origin/main --issue <N> --setup skip --activate` |
-| `RUNTIME.spawn_worker(wt)` | `orca terminal create --worktree "path:<wt>" --title "<role> #<N>" --command "<agent-cli> --model <model>" --focus` |
-| `RUNTIME.agents` | `orca worktree ps --json` → `result.worktrees[].agents[]` (`state`, `interrupted`) |
-| `RUNTIME.terminals(wt)` | `orca terminal list --worktree "path:<wt>" --json` → `result.terminals[]` (`handle`, `worktreePath`) |
-| `RUNTIME.stop_terminals(wt)` | `orca terminal stop --worktree "path:<wt>" --json` |
+| `workspace_for(issue)` | `orca worktree create --name <name> --repo "path:<repo-root>" --base-branch origin/main --issue <N> --setup skip --activate` |
+| `spawn_worker(wt)` | `orca terminal create --worktree "path:<wt>" --title "<role> #<N>" --command "<agent-cli> --model <model>" --focus` |
+| `agents` | `orca worktree ps --json` → `result.worktrees[].agents[]` (`state`, `interrupted`) |
+| `terminals(wt)` | `orca terminal list --worktree "path:<wt>" --json` → `result.terminals[]` (`handle`, `worktreePath`) |
+| `close_terminal(handle)` | `orca terminal close --terminal <handle> --json` |
+| `stop_terminals(wt)` | `orca terminal stop --worktree "path:<wt>" --json` |
 
-Left-column names are identifiers, not commands — only the mapped right-hand
-command is executable. Postconditions the mapping must preserve on any runtime:
-the workspace is created from `origin/main` and bound to the issue; the worker is
-**visible to the operator**; the agent starts **as part of creating its session**,
-with its model passed explicitly — never typed into a shell afterwards.
+Left-column names are identifiers, not commands. Every step below means: look up
+the capability in this table, then execute the command it maps to. Postconditions
+the mapping must preserve on any runtime: the workspace is created from
+`origin/main` and bound to the issue; the worker is **visible to the operator**;
+the agent starts **as part of creating its session**, with its model passed
+explicitly — never typed into a shell afterwards.
 
 **Resolve every placeholder before acting, and fail closed if you cannot:**
-`<N>` = the issue number from spine step 2; `<repo-root>` = the repository root;
-`<name>` = a workspace name naming the issue; `<role>` = what the worker is for;
+`<N>` = the issue number; `<repo-root>` = `git rev-parse --show-toplevel`;
+`<name>` = a workspace name containing `N`; `<role>` = what the worker is for;
 `<agent-cli>` and `<model>` = the worker agent and model the operator's standing
 routing prescribes — if that is unstated, **ask**, do not guess; `<wt>` = the
-workspace path returned by `RUNTIME.workspace_for`.
+workspace path returned by `workspace_for`.
 
 **Fail closed.** If the active runtime has no row for a capability a step needs,
 or a placeholder has no authoritative value, **stop and report blocked**. Never
@@ -229,32 +228,38 @@ branch/PR/head state, and confirmation that no substitute command was run.
 
 Stop the direct path and hand the change over when:
 
-- Scope grows so the declared scope no longer matches the diff.
+- Scope grows beyond the change the operator authorized.
 - Implementation touches plugins/scripts/tests you did not declare.
 - The reviewer or scope guard reports repeated scope violations.
 - The user did not actually authorize a direct PR.
 
-**Pivot boundary — do not silently start a second implementation.** Before you
-have made edits, hand off freely. Once edits exist, **stop and report** the exact
-branch, commit, and diff, and let the operator decide whether the worker adopts
-that branch or restarts. Creating a fresh workspace from `origin/main` while your
-edits sit on another branch produces lost work or two diverging PRs.
+**Pivot boundary.** Before you have made edits, hand off freely. **Once edits
+exist, stop and report** the exact branch, commit, and pending diff, then wait.
+Do not start a handoff on top of live edits: the bindings above only create a
+workspace from `origin/main`, so there is no way to hand an existing branch to a
+worker from here — proceeding would leave your edits stranded and produce a
+second, diverging implementation. Adopting an existing branch is an operator
+decision carried out by hand, not a step in this procedure.
 
 ### Handoff steps
 
-1. `RUNTIME.workspace_for(issue)` → note the returned workspace path as `<wt>`.
-2. `RUNTIME.spawn_worker(wt)` → note the returned terminal handle.
-3. **Read back before standing down.** Confirm via `RUNTIME.agents` that exactly
-   one agent is running **in `<wt>`** — match on the workspace path, not on a
-   global list. Zero means the spawn did not take; more than one means a previous
-   attempt also succeeded.
-4. **Never blindly retry a spawn whose outcome is unknown.** A timeout does not
-   mean failure — read back first. Retrying a spawn that actually succeeded
-   leaves two workers in one workspace, and a later workspace-wide stop kills both.
+1. **Census first.** Execute `terminals(wt)` for the target workspace, or note
+   that the workspace does not exist yet. Keep the set of existing handles — the
+   whole read-back depends on knowing the "before" state.
+2. Execute `workspace_for(issue)`; note the returned workspace path as `<wt>`.
+3. Execute `spawn_worker(wt)`; note the returned terminal handle.
+4. **Read back and bind.** Execute `terminals(wt)` again: there must be **exactly
+   one handle that was not in the step-1 set**, and that handle is your worker.
+   Zero new handles means the spawn did not take. More than one means something
+   else is also creating terminals — stop and report rather than guess. Use
+   `agents` to confirm the bound handle is running.
+5. **Never blindly retry a spawn whose outcome is unknown.** A timeout does not
+   mean failure — read back first. Counting agents alone cannot tell your worker
+   from one that was already there, which is why step 1 is not optional.
 
-To stop a worker, identify it first through step 3. `RUNTIME.stop_terminals(wt)`
-stops **every** terminal in that workspace — when more than one is present, stop
-by handle via `RUNTIME.terminals(wt)` instead, or report rather than guess.
+To stop a worker, use `close_terminal(handle)` with the handle bound in step 4.
+`stop_terminals(wt)` stops **every** terminal in the workspace — use it only when
+you have confirmed the workspace holds nothing else.
 
 ## Don't
 
@@ -264,5 +269,5 @@ by handle via `RUNTIME.terminals(wt)` instead, or report rather than guess.
 - Put `declared_paths` in the issue body — only `denylist` / `allowed-roots`
   fences + snapshot.
 - Invent producer flags — unknown arguments are rejected.
-- Commit from a shared checkout without first confirming whose branch and whose
+- Commit from a checkout without first confirming whose branch and whose
   uncommitted work is in it.

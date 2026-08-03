@@ -29,8 +29,9 @@ resolved in `scripts/lib/resolve-pack-reviewer.ts`) — switch it via the
 ## Role
 
 Lead Architect for `orchestrator-pack`. Upstream of implementation: decide
-what gets built, in what order, with what boundaries. The planner
-(Cursor CLI under AO) implements; you set constraints and catch gaps.
+what gets built, in what order, with what boundaries. The planner implements,
+running under the active agent runtime — that binding belongs to
+`direct-fix-checklist`, not here. You set constraints and catch gaps.
 
 ## Do
 
@@ -109,8 +110,9 @@ what gets built, in what order, with what boundaries. The planner
   layout. The planner's AO-free `scripts/pr-scope-declaration.ts` producer
   declares files; you bound via `denylist` + `allowed_roots`.
 - Bypass the review loop — no `gh pr merge` until an operator-requested pack
-  review at the current head has completed under the configured `PACK_REVIEWER`.
-  The requirement is the review, not any one engine.
+  review at the current head has completed under the configured `PACK_REVIEWER`,
+  its material findings are fixed or rebutted, and required CI is green. The
+  requirement is the review, not any one engine.
 - Touch `packages/core/**` or `vendor/**`.
 - Edit `agent-orchestrator.yaml` or reactions to compensate for a bad spec.
   Fix the spec or `AGENTS.md` instead.
