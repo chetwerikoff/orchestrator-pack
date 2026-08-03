@@ -7,12 +7,14 @@ import {
   normalizeWorktreePath,
   type ExpectedWorktreeIdentity,
   type LifecycleContext,
+  type WorktreeBindingKind,
 } from './core.ts';
 
 interface ParsedArgs {
   readonly context: LifecycleContext | null;
   readonly repositoryRoot: string | null;
   readonly worktree: string | null;
+  readonly issueNumber: number | null;
   readonly prNumber: number | null;
   readonly expectedHead: string | null;
   readonly expectedBranch: string | null;
@@ -32,17 +34,22 @@ function valueAfter(argv: readonly string[], name: string): string | null {
   return index === -1 ? null : argv[index + 1] ?? null;
 }
 
+function positiveInteger(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function parseArgs(argv = process.argv.slice(2)): ParsedArgs {
   const contextValue = valueAfter(argv, '--context');
-  const prValue = valueAfter(argv, '--pr');
-  const parsedPr = prValue === null ? Number.NaN : Number.parseInt(prValue, 10);
   return {
     context: contextValue && CONTEXTS.has(contextValue as LifecycleContext)
       ? contextValue as LifecycleContext
       : null,
     repositoryRoot: valueAfter(argv, '--repo-root'),
     worktree: valueAfter(argv, '--worktree'),
-    prNumber: Number.isInteger(parsedPr) && parsedPr > 0 ? parsedPr : null,
+    issueNumber: positiveInteger(valueAfter(argv, '--issue')),
+    prNumber: positiveInteger(valueAfter(argv, '--pr')),
     expectedHead: valueAfter(argv, '--expected-head'),
     expectedBranch: valueAfter(argv, '--expected-branch'),
     detached: argv.includes('--detached'),
@@ -55,7 +62,12 @@ function usageError(args: ParsedArgs): string | null {
   if (!args.context) return '--context must be post-create, post-merge-cleanup, or explicit-recovery';
   if (!args.repositoryRoot) return '--repo-root is required';
   if (!args.worktree) return '--worktree is required';
-  if (!args.prNumber) return '--pr must be a positive integer';
+  if (Boolean(args.issueNumber) === Boolean(args.prNumber)) {
+    return 'choose exactly one authority: --issue <number> or --pr <number>';
+  }
+  if (args.context !== 'post-create' && !args.prNumber) {
+    return `${args.context} requires --pr authority`;
+  }
   if (!args.expectedHead) return '--expected-head is required and must be a full 40-hex SHA';
   if (args.detached === Boolean(args.expectedBranch)) {
     return 'choose exactly one of --expected-branch <name> or --detached';
@@ -97,6 +109,8 @@ function main(): void {
   }
 
   try {
+    const bindingKind: WorktreeBindingKind = args.issueNumber ? 'issue' : 'pr';
+    const bindingNumber = args.issueNumber ?? args.prNumber!;
     const expected: ExpectedWorktreeIdentity = {
       repositoryRoot: normalizeWorktreePath(args.repositoryRoot!),
       path: normalizeWorktreePath(args.worktree!),
@@ -105,7 +119,8 @@ function main(): void {
       ...(args.expectedBranch
         ? { branchName: normalizeBranchName(args.expectedBranch) }
         : {}),
-      prNumber: args.prNumber!,
+      bindingKind,
+      bindingNumber,
     };
     const report = runLifecycle({
       expected,
@@ -114,8 +129,8 @@ function main(): void {
     });
     if (args.json) console.log(JSON.stringify(report, null, 2));
     else emitHuman(report);
-    // A valid terminal lifecycle report never blocks the global scheduler. Unsafe target
-    // mutation is represented by cleanup_deferred/task_degraded inside the report.
+    // Valid lifecycle results do not block the global scheduler. Unsafe target mutation is
+    // represented by cleanup_deferred/replacement_required/task_degraded in the report.
     process.exitCode = 0;
   } catch (caught) {
     const payload = {
