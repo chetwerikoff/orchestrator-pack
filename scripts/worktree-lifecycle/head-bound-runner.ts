@@ -13,15 +13,13 @@ export interface LivePrBinding {
   readonly state: string;
 }
 
-function defaultRunner(invocation: CommandInvocation): ProcessResult {
-  return runProcessSync({
-    command: invocation.command,
-    args: invocation.args,
-    cwd: invocation.cwd,
-    inheritParentEnv: true,
-    timeoutMs: invocation.timeoutMs,
-  });
-}
+const defaultRunner: CommandRunner = ({ command, args, cwd, timeoutMs }) => runProcessSync({
+  command,
+  args,
+  cwd,
+  timeoutMs,
+  inheritParentEnv: true,
+});
 
 function failedResult(message: string): ProcessResult {
   return {
