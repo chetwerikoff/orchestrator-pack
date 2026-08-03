@@ -28,13 +28,13 @@
     "vendor/"
   ],
   "allowed_roots": [
-    ".claude/skills/switch-pack-reviewer/**",
-    ".cursor/skills/switch-pack-reviewer/**",
+    ".claude/skills/switch-pack-reviewer/",
+    ".cursor/skills/switch-pack-reviewer/",
     "AGENTS.md",
     "CLAUDE.md",
     "README.md",
     "agent-orchestrator.yaml.example",
-    "docs/**",
+    "docs/",
     "plugins/ao-codex-pr-reviewer/README.md",
     "plugins/ao-codex-pr-reviewer/lib/review_core.ts",
     "plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts",
