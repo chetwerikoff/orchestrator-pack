@@ -107,7 +107,7 @@ export const BROWSER_TURN_RECURRENCE_PATH = join(
   'browser-turn-recurrence.jsonl',
 );
 
-interface ParsedTurnArgs {
+export interface ParsedTurnArgs {
   readonly options: Map<string, string | true>;
 }
 
@@ -172,7 +172,7 @@ export interface CompactTurnResult extends TurnResultV1 {
   readonly journal_write_failed?: boolean;
 }
 
-interface TurnRunOutcome {
+export interface TurnRunOutcome {
   readonly result: Omit<CompactTurnResult, 'cleanup'>;
   readonly page?: any;
   readonly browser?: any;
@@ -2521,7 +2521,14 @@ export const __testComposerMutation = {
   waitForComposer,
 };
 
-export async function runStateLightTurn(argv: readonly string[]): Promise<number> {
+export type StateLightTurnDependencies = {
+  readonly runTurn?: (args: ParsedTurnArgs) => Promise<TurnRunOutcome>;
+};
+
+export async function runStateLightTurn(
+  argv: readonly string[],
+  dependencies: StateLightTurnDependencies = {},
+): Promise<number> {
   let args: ParsedTurnArgs;
   try {
     args = parseTurnArgs(argv);
@@ -2544,7 +2551,7 @@ export async function runStateLightTurn(argv: readonly string[]): Promise<number
     return 22;
   }
 
-  const result = await finalizeTurn(await runTurn(args));
+  const result = await finalizeTurn(await (dependencies.runTurn ?? runTurn)(args));
   emit(result);
   return turnExitCode(result.state);
 }

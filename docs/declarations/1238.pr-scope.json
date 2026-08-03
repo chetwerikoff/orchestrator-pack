@@ -4,6 +4,7 @@
   "declared_paths": [
     "package.json",
     "scripts/chatgpt-browser-turn/README.md",
+    "scripts/chatgpt-browser-turn/state-light-entry.ts",
     "scripts/chatgpt-browser-turn/state-light-turn.ts",
     "scripts/chatgpt-browser-turn/tab-lifecycle-subprocess-fixture.ts",
     "scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts",
@@ -45,5 +46,5 @@
     "scripts/toolchain/chatgpt-browser-turn.test.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "eae9a12585bfcc5a934ce9efb1d8b54da458731f"
+  "source_revision": "08b1244b1f206e4e34ea844a2b35d5200e32fdf0"
 }

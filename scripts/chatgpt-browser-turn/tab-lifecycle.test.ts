@@ -2,14 +2,17 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import * as ts from 'typescript';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   __testFinalizeTurn,
   __testPublishStateLightReply,
   type CompactTurnResult,
+  runStateLightTurn,
 } from './state-light-turn.ts';
 import { releaseCdpBrowser } from './browser-session.ts';
+import { runStateLightEntry } from './state-light-entry.ts';
+import { loadChromium } from './ui-adapter.ts';
 
 type CleanupCase = {
   readonly id: string;
@@ -134,6 +137,47 @@ describe('Issue #1238 page cleanup equivalence', () => {
 });
 
 describe('Issue #1238 publication boundary', () => {
+  const liveCdpEndpoint = process.env.OPK_1238_LIVE_CDP;
+
+  it.skipIf(!liveCdpEndpoint)('characterizes live CDP release without closing foreign targets', async () => {
+    const endpoint = liveCdpEndpoint;
+    if (!endpoint) throw new Error('OPK_1238_LIVE_CDP is required for live characterization');
+    const chromium = loadChromium();
+    let browser: any;
+    let reconnected: any;
+    let foreign: any;
+    try {
+      try {
+        browser = await chromium.connectOverCDP(endpoint, { timeout: 10_000 });
+      } catch (error) {
+        throw new Error(`live CDP unavailable at ${endpoint}: ${String(error)}`);
+      }
+      const contexts = browser.contexts();
+      if (contexts.length !== 1) throw new Error(`live CDP context contract failed: ${contexts.length}`);
+      const context = contexts[0];
+      foreign = await context.newPage();
+      const foreignUrl = 'about:blank#issue-1238-foreign';
+      await foreign.goto(foreignUrl);
+      const owned = await context.newPage();
+      const beforeRelease = context.pages().map((page: any) => String(page.url())).sort();
+      expect(beforeRelease).toContain(foreignUrl);
+      await owned.close();
+      await releaseCdpBrowser(browser);
+      browser = undefined;
+
+      reconnected = await chromium.connectOverCDP(endpoint, { timeout: 10_000 });
+      const afterRelease = reconnected.contexts()[0].pages().map((page: any) => String(page.url()));
+      expect(afterRelease).toContain(foreignUrl);
+    } finally {
+      if (foreign && reconnected) {
+        await foreign.close().catch(() => {});
+        foreign = undefined;
+      }
+      await releaseCdpBrowser(reconnected);
+      await releaseCdpBrowser(browser);
+    }
+  });
+
   it('observes exact final bytes before the real retained-page close', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-1238-publish-'));
     const output = join(root, 'reply.txt');
@@ -219,6 +263,72 @@ describe('Issue #1238 publication boundary', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('drives the committed publication boundary through the production entrypoint', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-1238-entrypoint-'));
+    const input = join(root, 'prompt.txt');
+    const output = join(root, 'reply.txt');
+    const reply = 'production entrypoint publication';
+    writeFileSync(input, 'prompt', 'utf8');
+    let pageCloseCalls = 0;
+    let browserCloseCalls = 0;
+    let foreignTargetOpen = true;
+    const page = {
+      close: async () => {
+        pageCloseCalls++;
+      },
+      isClosed: () => false,
+    };
+    const browser = {
+      close: async () => {
+        expect(foreignTargetOpen).toBe(true);
+        browserCloseCalls++;
+      },
+      isConnected: () => true,
+    };
+    const publication = __testPublishStateLightReply(
+      output,
+      '123e4567-e89b-12d3-a456-426614174003',
+      reply,
+    );
+    const writes: string[] = [];
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      const exitCode = await runStateLightEntry([
+        'turn',
+        '--profile', join(root, 'profile'),
+        '--cdp', 'http://127.0.0.1:9222',
+        '--input', input,
+        '--output', output,
+        '--chat-url', 'https://chatgpt.com/c/123e4567-e89b-12d3-a456-426614174003',
+        '--timeout-ms', '1000',
+        '--poll-ms', '1',
+      ], {
+        runTurn: (argv) => runStateLightTurn(argv, {
+          runTurn: async () => ({
+            result: makeTurnResult({ send_count: 1 }),
+            page,
+            browser,
+            publicationState: publication.state,
+          }),
+        }),
+      });
+      const result = JSON.parse(writes.at(-1) ?? '{}') as CompactTurnResult;
+      expect(exitCode).toBe(0);
+      expect(result.cleanup).toBe('confirmed');
+      expect(result.send_count).toBe(1);
+      expect(pageCloseCalls).toBe(1);
+      expect(browserCloseCalls).toBe(1);
+      expect(readFileSync(output, 'utf8')).toBe(reply);
+    } finally {
+      foreignTargetOpen = true;
+      stdout.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('Issue #1238 mechanically derived production graph', () => {
@@ -263,7 +373,9 @@ describe('Issue #1238 mechanically derived production graph', () => {
       }
     }
 
-    const sinks: Array<{ kind: string; file: string; receiver: string }> = [];
+    const sinks: Array<{ kind: string; file: string; receiver: string; owner: string; category: string }> = [];
+    const functionNames = new Set<string>();
+    const functionCalls = new Map<string, Set<string>>();
     const unknownSinks: string[] = [];
     for (const filePath of files) {
       const source = ts.createSourceFile(
@@ -273,28 +385,90 @@ describe('Issue #1238 mechanically derived production graph', () => {
         true,
         ts.ScriptKind.TS,
       );
-      const visit = (node: ts.Node) => {
-        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
-          const kind = node.expression.name.text;
-          if (['close', 'contexts', 'newContext', 'newPage', 'pages'].includes(kind)) {
-            const receiver = node.expression.expression.getText(source);
-            sinks.push({ kind, file: relative(repoRoot, filePath), receiver });
-            if (!/(page|browser|context|ctx|opened|state|outcome)/i.test(receiver)) {
-              unknownSinks.push(`${relative(repoRoot, filePath)}: ${receiver}.${kind}()`);
+      const classifySink = (kind: string, receiver: string): string => {
+        if (kind === 'newContext') return 'forbidden-context-create';
+        if (kind === 'contexts' && /(?:^|\.)browser$|state\.browser$|browser as/.test(receiver)) return 'browser-contexts';
+        if (kind === 'pages' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-pages';
+        if (kind === 'newPage' && /^(?:ctx|context|contexts\[0\])$|contexts\[0\] as/.test(receiver)) return 'context-new-page';
+        if (kind === 'close' && /browser as/.test(receiver)) return 'browser-release';
+        if (kind === 'close' && /(?:page|opened\.page|outcome\.page|state\.page|secondaryPage)/.test(receiver)) return 'owned-page-close';
+        return 'unknown';
+      };
+      const visit = (node: ts.Node, owner = 'MODULE') => {
+        let nextOwner = owner;
+        if (ts.isFunctionDeclaration(node) && node.name) nextOwner = node.name.text;
+        else if (ts.isMethodDeclaration(node) && node.name) nextOwner = node.name.getText(source);
+        else if (ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
+          nextOwner = node.name.getText(source);
+        }
+        if (nextOwner !== 'MODULE') {
+          functionNames.add(nextOwner);
+          if (!functionCalls.has(nextOwner)) functionCalls.set(nextOwner, new Set());
+        }
+        if (ts.isCallExpression(node)) {
+          const expression = node.expression;
+          if (ts.isIdentifier(expression)) functionCalls.get(nextOwner)?.add(expression.text);
+          if (ts.isPropertyAccessExpression(expression)) {
+            const kind = expression.name.text;
+            if (['close', 'contexts', 'newContext', 'newPage', 'pages'].includes(kind)) {
+              const receiver = expression.expression.getText(source);
+              const category = classifySink(kind, receiver);
+              sinks.push({ kind, file: relative(repoRoot, filePath), receiver, owner: nextOwner, category });
+              if (category === 'unknown') unknownSinks.push(`${relative(repoRoot, filePath)}: ${receiver}.${kind}()`);
             }
           }
         }
-        node.forEachChild(visit);
+        node.forEachChild((child) => visit(child, nextOwner));
       };
       visit(source);
     }
 
+    const reachableOwners = new Set(['runStateLightEntry', 'runStateLightTurn', 'runStateLightSession', 'runCli']);
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const owner of reachableOwners) {
+        for (const callee of functionCalls.get(owner) ?? []) {
+          if (functionNames.has(callee) && !reachableOwners.has(callee)) {
+            reachableOwners.add(callee);
+            expanded = true;
+          }
+        }
+      }
+    }
+    const unreachableSinks = sinks.filter(({ owner }) => !reachableOwners.has(owner));
+    const sinkInventory = sinks
+      .map(({ kind, receiver, owner, category }) => `${kind}:${category}:${receiver}:${owner}`)
+      .sort();
     expect(unresolved).toEqual([]);
     expect(files.size).toBeGreaterThan(1);
-    expect(sinks.filter(({ kind }) => kind === 'close')).not.toHaveLength(0);
-    expect(sinks.filter(({ kind }) => kind === 'contexts')).not.toHaveLength(0);
-    expect(sinks.filter(({ kind }) => kind === 'newPage')).not.toHaveLength(0);
-    expect(sinks.filter(({ kind }) => kind === 'newContext')).toEqual([]);
+    expect(unreachableSinks).toEqual([]);
     expect(unknownSinks).toEqual([]);
+    expect(sinkInventory).toEqual([
+      'close:browser-release:(browser as { close: () => Promise<void> }):releaseCdpBrowser',
+      'close:owned-page-close:(opened.page as { close: () => Promise<void> }):closeOwnedTurnPage',
+      'close:owned-page-close:(page as { close: () => Promise<void> }):abandonLatePageHandle',
+      'close:owned-page-close:opened.page:runGateBCharacterizationCommand',
+      'close:owned-page-close:outcome.page:finalizeTurn',
+      'close:owned-page-close:page:adoptNewPageWithBudget',
+      'close:owned-page-close:secondaryPage:runGateBCharacterization',
+      'close:owned-page-close:state.page:cleanupSession',
+      'contexts:browser-contexts:browser:openGateBCharacterizationPage',
+      'contexts:browser-contexts:browser:createDedicatedTurnPage',
+      'contexts:browser-contexts:browser:openTurnPage',
+      'contexts:browser-contexts:(browser as { contexts: () => unknown[] }):probeProfileReady',
+      'contexts:browser-contexts:state.browser:setupOwnedPage',
+      'newPage:context-new-page:contexts[0]:createDedicatedTurnPage',
+      'newPage:context-new-page:contexts[0]:setupOwnedPage',
+      'newPage:context-new-page:context:runGateBCharacterization',
+      'newPage:context-new-page:ctx:adoptNewPageWithBudget',
+      'newPage:context-new-page:ctx:openGateBCharacterizationPage',
+      'pages:context-pages:(contexts[0] as { pages: () => unknown[] }):probeProfileReady',
+      'pages:context-pages:context:attachGateBWebSocketObservers',
+      'pages:context-pages:context:attachPlaywrightContextCdpObservers',
+      'pages:context-pages:context:runGateBCharacterization',
+      'pages:context-pages:ctx:openGateBCharacterizationPage',
+      'pages:context-pages:ctx:openTurnPage',
+    ].sort());
   });
 });
