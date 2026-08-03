@@ -10,7 +10,7 @@ import {
 import { sendPackReviewWorkerNotification } from './lib/pack-review-worker-notification.ts';
 import type { RuntimeAdapter } from './runtime/contracts.ts';
 
-interface CliOptions {
+export interface WorkerNudgeCliOptions {
   workerId: string;
   prNumber: number;
   issueNumber: number;
@@ -32,8 +32,8 @@ function parsePositiveInteger(value: string | undefined): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 
-export function parseWorkerNudgeArgs(argv: readonly string[]): CliOptions {
-  const options: CliOptions = {
+export function parseWorkerNudgeArgs(argv: readonly string[]): WorkerNudgeCliOptions {
+  const options: WorkerNudgeCliOptions = {
     workerId: '',
     prNumber: 0,
     issueNumber: 0,
@@ -73,7 +73,7 @@ export function parseWorkerNudgeArgs(argv: readonly string[]): CliOptions {
   return options;
 }
 
-function buildClassificationInput(options: CliOptions, message: string): Record<string, unknown> {
+function buildClassificationInput(options: WorkerNudgeCliOptions, message: string): Record<string, unknown> {
   return {
     source: options.source,
     surface: options.surface,
@@ -92,7 +92,7 @@ function buildClassificationInput(options: CliOptions, message: string): Record<
 }
 
 export function resolveWorkerNudgeIdentity(
-  options: CliOptions,
+  options: WorkerNudgeCliOptions,
   message: string,
 ): { intentClass: string; cycleKey: string; idempotencyKey: string } {
   const classified = options.intentClass || classifyIntent(buildClassificationInput(options, message));
@@ -118,7 +118,7 @@ export function resolveWorkerNudgeIdentity(
 }
 
 export async function runGatedWorkerNudge(input: {
-  options: CliOptions;
+  options: WorkerNudgeCliOptions;
   message: string;
   adapter?: RuntimeAdapter;
   journalPath?: string;
