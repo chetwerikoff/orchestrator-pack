@@ -1,14 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import * as fs from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { processAlive, readProcessIdentity } from '../lib/cutover/activation-cordon.ts';
@@ -58,7 +49,7 @@ function terminalPath(namespace: string, claimKey: string, outcome: string): str
 
 function readRecord(path: string): WorkerRecoveryClaimRecord | null {
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as WorkerRecoveryClaimRecord;
+    const parsed = JSON.parse(fs.readFileSync(path, 'utf8')) as WorkerRecoveryClaimRecord;
     if (parsed.schemaVersion !== 1
       || !parsed.claimKey
       || !parsed.workspacePath
@@ -79,12 +70,12 @@ function holderAlive(record: WorkerRecoveryClaimRecord): boolean {
 }
 
 function writeExclusive(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const descriptor = openSync(path, 'wx', 0o600);
+  fs.mkdirSync(dirname(path), { recursive: true });
+  const descriptor = fs.openSync(path, 'wx', 0o600);
   try {
-    writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
   } finally {
-    closeSync(descriptor);
+    fs.closeSync(descriptor);
   }
 }
 
@@ -94,14 +85,14 @@ function terminalizeExisting(
   record: WorkerRecoveryClaimRecord,
   outcome: string,
 ): void {
-  mkdirSync(join(namespace, 'terminal'), { recursive: true });
+  fs.mkdirSync(join(namespace, 'terminal'), { recursive: true });
   const terminal = terminalPath(namespace, record.claimKey, outcome);
   writeExclusive(terminal, {
     ...record,
     outcome,
     completedAtMs: Date.now(),
   });
-  rmSync(path, { force: true });
+  fs.rmSync(path, { force: true });
 }
 
 /**
@@ -120,8 +111,8 @@ export function acquireWorkerRecoveryClaim(input: {
   const identity = readProcessIdentity(process.pid);
   if (!identity) return { acquired: false, reason: 'claim_untrusted' };
   const path = claimPath(input.namespace, input.claimKey);
-  mkdirSync(dirname(path), { recursive: true });
-  mkdirSync(join(input.namespace, 'terminal'), { recursive: true });
+  fs.mkdirSync(dirname(path), { recursive: true });
+  fs.mkdirSync(join(input.namespace, 'terminal'), { recursive: true });
   const record: WorkerRecoveryClaimRecord = {
     schemaVersion: 1,
     claimKey: safeKey(input.claimKey),
@@ -174,13 +165,13 @@ export function finalizeWorkerRecoveryClaim(
     details,
     completedAtMs: Date.now(),
   });
-  rmSync(handle.path, { force: true });
+  fs.rmSync(handle.path, { force: true });
   return true;
 }
 
 export function releaseWorkerRecoveryClaim(handle: WorkerRecoveryClaimHandle): boolean {
   const current = readRecord(handle.path);
   if (!current || current.holder.processGuid !== handle.record.holder.processGuid) return false;
-  rmSync(handle.path, { force: true });
+  fs.rmSync(handle.path, { force: true });
   return true;
 }

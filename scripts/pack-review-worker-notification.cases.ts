@@ -1,5 +1,4 @@
 import {
-  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -31,6 +30,7 @@ import {
   type PackReviewRunRecord,
 } from './lib/pack-review-run-store.js';
 import { startPackReview } from './pack-review-runner.js';
+import { DeterministicRuntimeAdapter } from './runtime/test-adapter.ts';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const HEAD_SHA = '8'.repeat(40);
@@ -440,70 +440,50 @@ describe('pack review worker notification admission (Issue #894)', () => {
     expect(after[0]?.deliveryOutcomes.requiredStatus).toEqual(recordedFailure);
   });
 
-  it.skipIf(process.platform === 'win32')(
-    'uses gated deterministic send and suppresses a crash retry after dispatch',
-    async () => {
-      const root = tempRoot('opk-worker-notification-gated-');
-      const fakeBin = path.join(root, 'bin');
-      const aoLog = path.join(root, 'ao-send.log');
-      const dispatchJournal = path.join(root, 'worker-message-dispatch.json');
-      mkdirSync(fakeBin, { recursive: true });
-      const fakeAo = path.join(fakeBin, 'ao');
-      writeFileSync(fakeAo, [
-        '#!/usr/bin/env node',
-        "const { appendFileSync } = require('node:fs');",
-        "appendFileSync(process.env.PACK_REVIEW_FAKE_AO_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');",
-        '',
-      ].join('\n'), 'utf8');
-      chmodSync(fakeAo, 0o755);
+  it('uses gated deterministic send and suppresses a crash retry after dispatch', async () => {
+    const root = tempRoot('opk-worker-notification-gated-');
+    const dispatchJournal = path.join(root, 'worker-message-dispatch.json');
+    const adapter = new DeterministicRuntimeAdapter();
+    const spawned = adapter.spawnWorker({
+      title: 'worker-894-gated',
+      command: 'test-worker',
+      workspace: repoRoot,
+    });
+    if (spawned.status !== 'ok') throw new Error('fixture_worker_spawn_failed');
 
-      const sessionId = 'worker-894-gated';
-      const runId = 'prr-worker-notification-crash-boundary';
-      const deliveryKey = `worker-notification:${runId}:${HEAD_SHA}`;
-      const message = [
-        'Pack review completed for PR #894.',
-        `Run: ${runId}`,
-        `Head: ${HEAD_SHA}`,
-        'Verdict: findings',
-        'Findings: 1',
-        'Merge status: failure',
-      ].join('\n');
+    const worker = spawned.value;
+    const runId = 'prr-worker-notification-crash-boundary';
+    const deliveryKey = `worker-notification:${runId}:${HEAD_SHA}`;
+    const message = [
+      'Pack review completed for PR #894.',
+      `Run: ${runId}`,
+      `Head: ${HEAD_SHA}`,
+      'Verdict: findings',
+      'Findings: 1',
+      'Merge status: failure',
+    ].join('\n');
 
-      Object.assign(process.env, {
-        OPK_VITEST_HARNESS: '1',
-        PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER: '1',
-        PACK_REVIEW_WORKER_NOTIFICATION_FIXTURE_TARGET: `${sessionId}:${sessionId}`,
-        AO_SESSION_ID: 'orchestrator-autonomous-surface',
-        AO_BASE_DIR: path.join(root, 'ao-base'),
-        AO_JOURNALED_SEND_ASSUME_CONTRACT: '1',
-        AO_WORKER_MESSAGE_DISPATCH_JOURNAL: dispatchJournal,
-        PACK_REVIEW_FAKE_AO_LOG: aoLog,
-        PATH: `${fakeBin}:${originalEnv.PATH ?? ''}`,
-      });
+    const notify = () => sendPackReviewWorkerNotification({
+      trustedPackRoot: repoRoot,
+      workerId: worker.identity.id,
+      expectedWorkerGeneration: worker.identity.generation,
+      prNumber: 894,
+      projectId: 'orchestrator-pack',
+      adapter,
+      journalPath: dispatchJournal,
+      claimNamespace: path.join(root, 'claims'),
+      sideEffectFencePath: path.join(root, 'worker-notification.lock'),
+      request: { message, idempotencyKey: deliveryKey, reviewRunId: runId },
+    });
+    expect(await notify()).toMatchObject({
+      state: 'delivered',
+      reason: 'runtime_dispatch_dispatched',
+    });
+    expect(await notify()).toMatchObject({
+      state: 'delivered',
+      reason: 'claim_duplicate_no_op',
+    });
 
-      const notify = () => sendPackReviewWorkerNotification({
-        trustedPackRoot: repoRoot,
-        sessionId,
-        request: { message, idempotencyKey: deliveryKey },
-      });
-      expect(await notify()).toMatchObject({
-        state: 'delivered',
-        reason: 'explicit_send_dispatched',
-      });
-      expect(await notify()).toMatchObject({
-        state: 'delivered',
-        reason: 'journal_duplicate_no_op',
-      });
-
-      const invocations = readFileSync(aoLog, 'utf8')
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as string[]);
-      const sends = invocations.filter((args) => args[0] === 'send'
-        && args.includes('--session')
-        && args.includes('--message'));
-      expect(sends).toHaveLength(1);
-      expect(readFileSync(dispatchJournal, 'utf8')).toContain(deliveryKey);
-    },
-  );
+    expect(readFileSync(dispatchJournal, 'utf8')).toContain(deliveryKey);
+  });
 });

@@ -9,6 +9,7 @@ import {
   type RuntimeWorkerIdentity,
 } from '../runtime/contracts.ts';
 import {
+  neutralFailureReason,
   OrcaRuntimeAdapter,
   type OrcaRuntimeAdapterOptions,
 } from './adapter.ts';
@@ -18,22 +19,6 @@ import {
   type OrcaWorktreeRemoveResult,
   type OrcaWorktreeShow,
 } from './native.ts';
-
-function neutralDestructiveFailure(response: OrcaJsonResponse): string {
-  if (response.error?.code === 'orca_operation_timeout') return 'runtime_timeout';
-  switch (response.outcomeCategory) {
-    case 'process_launch_failed':
-      return 'runtime_unavailable';
-    case 'empty_stdout':
-    case 'invalid_json':
-      return 'runtime_response_invalid';
-    case 'recognized_control_plane_code':
-      return 'runtime_control_unavailable';
-    case 'supported_operation_failure':
-    default:
-      return 'runtime_operation_failed';
-  }
-}
 
 /**
  * Production Orca adapter for task lifecycle callers.
@@ -102,7 +87,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       options,
     );
     if (!response.ok) {
-      return runtimeFailure('stop_worker', neutralDestructiveFailure(response));
+      return runtimeFailure('stop_worker', neutralFailureReason(response));
     }
 
     this.#ownedForStop.delete(worker.id);
@@ -127,7 +112,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       options,
     );
     if (!shown.ok) {
-      return runtimeFailure('remove_workspace', neutralDestructiveFailure(shown));
+      return runtimeFailure('remove_workspace', neutralFailureReason(shown));
     }
     const worktree = shown.result?.worktree;
     const observedPath = worktree?.path?.trim();
@@ -149,7 +134,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       options,
     );
     if (!removed.ok) {
-      return runtimeFailure('remove_workspace', neutralDestructiveFailure(removed));
+      return runtimeFailure('remove_workspace', neutralFailureReason(removed));
     }
     if (removed.result?.removed === false) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_not_removed');

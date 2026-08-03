@@ -208,7 +208,8 @@ async function finalizeBoth(input: {
 }
 
 function fixture(options: WorkerNotificationOptions, workerId: string): PackReviewWorkerNotificationResult | null {
-  if (process.env.OPK_VITEST_HARNESS !== '1'
+  if (options.adapter
+    || process.env.OPK_VITEST_HARNESS !== '1'
     || process.env.PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER === '1') return null;
   const capturePath = trim(process.env.PACK_REVIEW_WORKER_NOTIFICATION_CAPTURE_FILE);
   if (capturePath) {

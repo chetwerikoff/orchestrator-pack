@@ -10,8 +10,9 @@ import {
   writeFileSync,
   type Stats,
 } from 'node:fs';
-import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
+import { processAlive } from '../lib/cutover/activation-cordon.ts';
 
 export interface SideEffectFenceOwner {
   readonly schemaVersion: 1;
@@ -32,16 +33,6 @@ export type SideEffectFenceAcquireResult =
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function processAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function parseOwner(path: string): SideEffectFenceOwner | null {
