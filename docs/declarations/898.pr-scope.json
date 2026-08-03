@@ -19,12 +19,12 @@
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
-    "vendor/**",
-    "packages/core/**",
     ".github/workflows/**",
-    "scripts/kernel/**",
+    "docs/declarations/**",
     "docs/issues_drafts/**",
-    "docs/declarations/**"
+    "packages/core/**",
+    "scripts/kernel/**",
+    "vendor/**"
   ],
   "allowed_roots": [
     "docs/merge-triage-primary-paths.v1.json",
