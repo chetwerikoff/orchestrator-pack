@@ -87,6 +87,19 @@ export async function runWorkerRecovery(input: {
     };
   }
 
+  // Adapter selection is read-only and occurs before claim ownership so a
+  // composition-root failure cannot strand an active recovery claim.
+  let adapter: RuntimeAdapter;
+  try {
+    adapter = input.adapter ?? await selectRuntimeAdapter({}, { cwd: options.repoRoot });
+  } catch (error) {
+    return {
+      outcome: 'runtime_failed',
+      reason: error instanceof Error ? error.message : 'runtime_adapter_selection_failed',
+      claimKey: options.claimKey,
+    };
+  }
+
   const claimNamespace = input.claimNamespace
     ?? join(resolveWakeSupervisorStateRoot(), 'worker-recovery', options.projectId);
   const claim = acquireWorkerRecoveryClaim({
@@ -100,7 +113,6 @@ export async function runWorkerRecovery(input: {
     return { outcome: 'spawn_denied', reason: claim.reason, claimKey: options.claimKey };
   }
 
-  const adapter = input.adapter ?? await selectRuntimeAdapter({}, { cwd: options.repoRoot });
   try {
     const result = recoverRuntimeWorker({
       adapter,
