@@ -2,7 +2,6 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 898,
   "declared_paths": [
-    "docs/declarations/898.pr-scope.json",
     "docs/merge-triage-primary-paths.v1.json",
     "docs/pack-review-issue-898.md",
     "plugins/ao-codex-pr-reviewer/lib/review_core.ts",
@@ -30,7 +29,6 @@
     "vendor/"
   ],
   "allowed_roots": [
-    "docs/declarations/898.pr-scope.json",
     "docs/merge-triage-primary-paths.v1.json",
     "docs/pack-review-issue-898.md",
     "plugins/ao-codex-pr-reviewer/lib/review_core.ts",
@@ -48,5 +46,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json"
   ],
-  "source_revision": "52377c6a17058435cf15bbd3eef678e7268664a4"
+  "source_revision": "49e8ed4adea655b61be9f35a22d856f342b16073"
 }
