@@ -47,6 +47,10 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1198 launch/watch contract tests are fast deterministic coverage.
   'scripts/launch-watch/launch-watch.test.ts': 120,
   'scripts/launch-watch/watch.test.ts': 120,
+  // Issue #1248 adds two fast runtime-boundary contract suites. Fixed estimates
+  // keep the bounded topology producer stable until runtime history is refreshed.
+  'scripts/runtime/caller-census.test.ts': 120,
+  'scripts/runtime/task-compat.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
