@@ -110,6 +110,23 @@ describe('worktree lifecycle classifier', () => {
       .toBe('absent');
   });
 
+  it('allows another worktree to share the source SHA without sharing identity', () => {
+    const otherGit = git({ path: '/tmp/orca/workspaces/orchestrator-pack/issue-1299', branch: 'agent/issue-1299' });
+    const otherOrca = orca({
+      path: '/tmp/orca/workspaces/orchestrator-pack/issue-1299',
+      branch: 'agent/issue-1299',
+      linkedIssue: 1299,
+    });
+    const report = classifyWorktree({
+      expected: expected(),
+      evidence: evidence([...git(), ...otherGit], [...orca(), ...otherOrca]),
+    });
+
+    expect(report.classification).toBe('exact_dual');
+    expect(report.conflictingGitRows).toHaveLength(0);
+    expect(report.conflictingOrcaRows).toHaveLength(0);
+  });
+
   it('rejects the right path/head/branch when Orca links another issue', () => {
     const report = classifyWorktree({
       expected: expected(),
