@@ -57,7 +57,6 @@ import { publishStateLightReply } from './chatgpt-browser-turn/state-light-turn.
 import {
   directPublicationReceipt,
   reviewerSourceMetadata,
-  DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN,
   validateDirectPublicationInputs,
   type DirectPublicationConfig,
 } from './chatgpt-browser-turn/terminal-witness.ts';
@@ -376,9 +375,6 @@ function directPublicationConfig(
   const issueNumber = parseInteger(required(args, 'issue-number'), 1);
   const sourceRevision = required(args, 'source-revision');
   const reviewerSource = required(args, 'reviewer-source');
-  if (!DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN) {
-    throw new Error('input_invalid:direct_publication_capability_witness_unproven');
-  }
   const validation = validateDirectPublicationInputs({ invocationId, prompt, reviewerSource, repositoryFullName, issueNumber, sourceRevision });
   if (validation) throw new Error(`input_invalid:${validation}`);
   return {
