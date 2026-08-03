@@ -84,12 +84,15 @@ export function reclaimStaleSideEffectFence(
   options: { readonly nowMs?: number; readonly ownerlessMaxAgeMs?: number } = {},
 ): boolean {
   if (!existsSync(path)) return false;
-  let before: ReturnType<typeof statSync>;
-  try {
-    before = statSync(path);
-  } catch {
-    return false;
-  }
+  const before = (() => {
+    try {
+      return statSync(path);
+    } catch {
+      return null;
+    }
+  })();
+  if (!before) return false;
+
   const owner = parseOwner(path);
   const nowMs = options.nowMs ?? Date.now();
   const ownerlessMaxAgeMs = options.ownerlessMaxAgeMs ?? 3 * 60 * 60 * 1_000;
