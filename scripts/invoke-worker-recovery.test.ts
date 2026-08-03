@@ -7,6 +7,10 @@ import {
   parseWorkerRecoveryArgs,
   runWorkerRecovery,
 } from './invoke-worker-recovery.ts';
+import {
+  acquireWorkerRecoveryClaim,
+  releaseWorkerRecoveryClaim,
+} from './runtime/worker-recovery-claim.ts';
 
 describe('TypeScript worker recovery entrypoint', () => {
   it('holds one claim across exact cleanup and spawn', async () => {
@@ -39,23 +43,31 @@ describe('TypeScript worker recovery entrypoint', () => {
     }
   });
 
-  it('fails closed when another live recovery claim exists', async () => {
+  it('fails closed while another live recovery claim exists', async () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-recovery-cli-'));
     try {
       const adapter = new DeterministicRuntimeAdapter();
+      const cleanupWorkspace = join(root, 'stale-worktree');
       const options = parseWorkerRecoveryArgs([
-        '--cleanup-workspace', join(root, 'stale-worktree'),
+        '--cleanup-workspace', cleanupWorkspace,
         '--claim-key', 'shared-claim',
         '--repo-root', root,
       ]);
       const namespace = join(root, 'claims');
-      const first = await runWorkerRecovery({ options, adapter, claimNamespace: namespace });
-      expect(first.outcome).toBe('spawn_started');
-
-      // A terminalized first run permits a later independent recovery. The
-      // duplicate protection is the active claim, not permanent compatibility state.
-      const second = await runWorkerRecovery({ options, adapter, claimNamespace: namespace });
-      expect(second.outcome).toBe('spawn_started');
+      const held = acquireWorkerRecoveryClaim({
+        namespace,
+        claimKey: options.claimKey,
+        workspacePath: cleanupWorkspace,
+        surface: 'test-holder',
+      });
+      expect(held.acquired).toBe(true);
+      if (!held.acquired) return;
+      try {
+        const result = await runWorkerRecovery({ options, adapter, claimNamespace: namespace });
+        expect(result).toMatchObject({ outcome: 'spawn_denied', reason: 'claim_held' });
+      } finally {
+        releaseWorkerRecoveryClaim(held.handle);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
