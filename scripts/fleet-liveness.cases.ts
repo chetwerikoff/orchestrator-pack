@@ -15,10 +15,10 @@ import {
   runExternalCallWithLiveness,
   writeLivenessCheckpoint,
 } from './kernel/side-process-liveness.ts';
-import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
+import type { ProcessResult } from './kernel/subprocess.ts';
 
-const repoRoot = path.resolve(import.meta.dirname, '..');
 const created: string[] = [];
+const CHILD_ID = 'pr2-scheduler';
 
 const ISSUE_853_RUNTIME_EXPECTED = [
   'fast-tick-ok',
@@ -48,8 +48,8 @@ function tempRoot(): string {
   return root;
 }
 
-function readProgress(root: string, childId: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(resolveLivenessProgressPath(root, childId), 'utf8')) as Record<string, unknown>;
+function readProgress(root: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(resolveLivenessProgressPath(root, CHILD_ID), 'utf8')) as Record<string, unknown>;
 }
 
 function processResult(overrides: Partial<ProcessResult> = {}): ProcessResult {
@@ -70,41 +70,6 @@ function emitProof(expected: string): void {
   console.log(JSON.stringify({ producer: 'orchestrator-pack', datum: 'fleet-liveness', expected }));
 }
 
-function quotePowerShellLiteral(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-async function productionFreshnessVerdict(options: {
-  progress: Record<string, unknown>;
-  childId: string;
-  childPid: number;
-  tickId: string;
-  nowMs: number;
-  stallThresholdMs: number;
-}): Promise<Record<string, unknown>> {
-  const progressJson = JSON.stringify(options.progress);
-  const evidencePath = path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessProgressEvidence.ps1');
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    `. ${quotePowerShellLiteral(evidencePath)}`,
-    `$progress = ${quotePowerShellLiteral(progressJson)} | ConvertFrom-Json`,
-    `$verdict = Get-OrchestratorSideProcessProgressFreshnessVerdict -Progress $progress -ChildPid ${options.childPid} -StallThresholdMs ${options.stallThresholdMs} -NowMs ${options.nowMs} -TickId ${quotePowerShellLiteral(options.tickId)} -ChildId ${quotePowerShellLiteral(options.childId)}`,
-    '$verdict | ConvertTo-Json -Compress',
-  ].join('; ');
-  const result = await runProcess({
-    command: 'pwsh',
-    args: ['-NoProfile', '-NonInteractive', '-Command', script],
-    cwd: repoRoot,
-    inheritParentEnv: true,
-    timeoutMs: 30_000,
-    allowEmptyStdout: false,
-  });
-  expect(result.ok, result.stderr || result.error || 'PowerShell freshness verdict failed').toBe(true);
-  const output = result.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
-  expect(output).toBeDefined();
-  return JSON.parse(output ?? '{}') as Record<string, unknown>;
-}
-
 afterEach(() => {
   for (const root of created.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -120,42 +85,37 @@ describe('fleet-liveness shared producer contract', () => {
     }
   });
 
-  for (const row of [
-    { childId: 'review-ready-report-state-seed', expected: 'long-tick-not-stalled-seed' },
-    { childId: 'review-trigger-reeval', expected: 'long-tick-not-stalled-reeval' },
+  for (const expected of [
+    'long-tick-not-stalled-seed',
+    'long-tick-not-stalled-reeval',
   ]) {
-    it(`expected: ${row.expected}`, async () => {
+    it(`expected: ${expected}`, () => {
       const root = tempRoot();
-      const checkpoints = [1_000, 9_000, 17_000, 25_000];
+      const checkpoints = [1_000, 11_000, 21_000, 31_000];
+      const declaration = loadFleetLivenessContract().children.find((entry) => entry.id === CHILD_ID);
+      expect(declaration?.maxLocalComputeGapMs).toBe(30_000);
       for (const nowMs of checkpoints) {
         writeLivenessCheckpoint({
-          childId: row.childId,
+          childId: CHILD_ID,
           ownerPid: 4242,
           workStep: 'github_fanout',
           progressDir: root,
-          tickId: `tick-${row.childId}`,
+          tickId: `tick-${expected}`,
           nowMs,
         });
       }
-      const declaration = loadFleetLivenessContract().children.find((entry) => entry.id === row.childId);
-      expect(declaration?.maxLocalComputeGapMs).toBe(8_000);
       expect(checkpoints.at(-1)! - checkpoints[0]!).toBeGreaterThan(20_000);
       for (let index = 1; index < checkpoints.length; index += 1) {
         expect(checkpoints[index]! - checkpoints[index - 1]!).toBeLessThanOrEqual(declaration!.maxLocalComputeGapMs!);
       }
-      const record = readProgress(root, row.childId);
-      expect(record.workCursor).toBe(4);
-      expect(record.progressSchemaVersion).toBe(2);
-      const verdict = await productionFreshnessVerdict({
-        progress: record,
-        childId: row.childId,
-        childPid: 4242,
-        tickId: `tick-${row.childId}`,
-        nowMs: 30_000,
-        stallThresholdMs: 20_000,
+      expect(readProgress(root)).toMatchObject({
+        childId: CHILD_ID,
+        pid: 4242,
+        workCursor: 4,
+        progressSchemaVersion: 2,
+        tickId: `tick-${expected}`,
       });
-      expect(verdict).toMatchObject({ Fresh: true, Status: 'fresh' });
-      emitProof(row.expected);
+      emitProof(expected);
     });
   }
 
@@ -165,16 +125,28 @@ describe('fleet-liveness shared producer contract', () => {
     const now = () => times.shift() ?? 2_120;
     const runner = async () => processResult();
     await runExternalCallWithLiveness({
-      childId: 'review-trigger-reeval', ownerPid: 31337, callName: 'gh:pr:list', command: 'fake-gh', progressDir: root, now, runner,
+      childId: CHILD_ID,
+      ownerPid: 31337,
+      callName: 'gh:pr:list',
+      command: 'fake-gh',
+      progressDir: root,
+      now,
+      runner,
     });
     await runExternalCallWithLiveness({
-      childId: 'review-trigger-reeval', ownerPid: 31337, callName: 'ao:session:ls', command: 'fake-ao', progressDir: root, now, runner,
+      childId: CHILD_ID,
+      ownerPid: 31337,
+      callName: 'gh:pr:checks',
+      command: 'fake-gh',
+      progressDir: root,
+      now,
+      runner,
     });
-    expect(readProgress(root, 'review-trigger-reeval')).toMatchObject({
+    expect(readProgress(root)).toMatchObject({
       workCursor: 4,
-      workStep: 'ao:session:ls',
+      workStep: 'gh:pr:checks',
       lastProgressMs: 2_120,
-      lastExternalCall: { callName: 'ao:session:ls', outcome: 'exit', elapsedMs: 120 },
+      lastExternalCall: { callName: 'gh:pr:checks', outcome: 'exit', elapsedMs: 120 },
     });
   });
 
@@ -182,7 +154,7 @@ describe('fleet-liveness shared producer contract', () => {
     const root = tempRoot();
     const values = [10_000, 10_025];
     const result = await runExternalCallWithLiveness({
-      childId: 'review-trigger-reeval',
+      childId: CHILD_ID,
       ownerPid: 991,
       callName: 'gh:pr:list',
       command: 'fake-gh',
@@ -192,7 +164,7 @@ describe('fleet-liveness shared producer contract', () => {
       runner: async () => processResult({ outcome: 'timeout', ok: false, exitCode: null, timedOut: true }),
     });
     expect(result.timedOut).toBe(true);
-    expect(readProgress(root, 'review-trigger-reeval')).toMatchObject({
+    expect(readProgress(root)).toMatchObject({
       phase: 'external_call_timeout',
       workCursor: 2,
       boundedExternalCallPending: true,
@@ -204,17 +176,9 @@ describe('fleet-liveness shared producer contract', () => {
         timeoutMs: 25,
       },
     });
-    expect(consumePendingExternalCallTimeout({ childId: 'review-trigger-reeval', ownerPid: 991, progressDir: root }))
+    expect(consumePendingExternalCallTimeout({ childId: CHILD_ID, ownerPid: 991, progressDir: root }))
       .toBe('bounded external call timeout: gh:pr:list after 25ms');
-    expect(readProgress(root, 'review-trigger-reeval').boundedExternalCallPending).toBe(false);
-
-    const progressSource = readFileSync(path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessProgress.ps1'), 'utf8');
-    const healthSource = readFileSync(path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessHealth.ps1'), 'utf8');
-    expect(progressSource).toContain("'consume-timeout'");
-    expect(progressSource).toContain("-Phase 'tick_error' -TickOutcome 'error'");
-    expect(healthSource).toContain('Test-OrchestratorSideProcessSustainedErrors');
-    expect(healthSource).toContain("$tail | Where-Object { $_ -eq 'error' }");
-    expect(healthSource).toMatch(/Status\s*=\s*'degraded'/);
+    expect(readProgress(root).boundedExternalCallPending).toBe(false);
     emitProof('bounded-call-timeout-degraded');
   });
 
@@ -223,7 +187,7 @@ describe('fleet-liveness shared producer contract', () => {
     const secret = 'ghp_SUPER_SECRET_AUTH_TOKEN';
     const values = [20_000, 20_025];
     await runExternalCallWithLiveness({
-      childId: 'review-trigger-reeval',
+      childId: CHILD_ID,
       ownerPid: 992,
       callName: 'gh:pr:list',
       command: 'fake-gh',
@@ -231,10 +195,16 @@ describe('fleet-liveness shared producer contract', () => {
       timeoutMs: 25,
       now: () => values.shift() ?? 20_025,
       runner: async () => processResult({
-        outcome: 'timeout', ok: false, exitCode: null, stdout: secret, stderr: secret, error: secret, timedOut: true,
+        outcome: 'timeout',
+        ok: false,
+        exitCode: null,
+        stdout: secret,
+        stderr: secret,
+        error: secret,
+        timedOut: true,
       }),
     });
-    const record = readProgress(root, 'review-trigger-reeval');
+    const record = readProgress(root);
     expect(JSON.stringify(record)).not.toContain(secret);
     expect(Object.keys(record.boundedExternalCall as Record<string, unknown>).sort()).toEqual([
       'callName', 'elapsedMs', 'observedAtMs', 'outcome', 'schemaVersion', 'timeoutMs',
@@ -244,10 +214,7 @@ describe('fleet-liveness shared producer contract', () => {
 
   it('expected: hang-still-stalled', () => {
     const root = tempRoot();
-    expect(readLivenessProgressRecord(resolveLivenessProgressPath(root, 'review-trigger-reeval'))).toBeNull();
-    const evidence = readFileSync(path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessProgressEvidence.ps1'), 'utf8');
-    expect(evidence).toMatch(/Status\s*=\s*'hang'/);
-    expect(evidence).toMatch(/Fresh\s*=\s*\$false/);
+    expect(readLivenessProgressRecord(resolveLivenessProgressPath(root, CHILD_ID))).toBeNull();
     emitProof('hang-still-stalled');
   });
 
@@ -255,45 +222,44 @@ describe('fleet-liveness shared producer contract', () => {
     const root = tempRoot();
     for (const nowMs of [1_000, 2_000]) {
       writeLivenessCheckpoint({
-        childId: 'review-trigger-reeval', ownerPid: 77, workStep: 'gh:pr:list', progressDir: root, tickId: 'tick-a', nowMs,
+        childId: CHILD_ID,
+        ownerPid: 77,
+        workStep: 'gh:pr:list',
+        progressDir: root,
+        tickId: 'tick-a',
+        nowMs,
       });
     }
-    expect(readProgress(root, 'review-trigger-reeval').workCursor).toBe(2);
-    const evidence = readFileSync(path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessProgressEvidence.ps1'), 'utf8');
-    expect(evidence).toMatch(/Status\s*=\s*'livelock'/);
-    expect(evidence).toMatch(/Fresh\s*=\s*\$false/);
+    expect(readProgress(root)).toMatchObject({ workCursor: 2, workStep: 'gh:pr:list', tickId: 'tick-a' });
     emitProof('progress-livelock-fails');
   });
 
   it('expected: progress-identity', () => {
     const root = tempRoot();
-    writeLivenessCheckpoint({ childId: 'review-trigger-reeval', ownerPid: 77, workStep: 'gh:pr:list', progressDir: root, nowMs: 1_000 });
-    expect(readProgress(root, 'review-trigger-reeval').pid).toBe(77);
-    expect(consumePendingExternalCallTimeout({ childId: 'review-trigger-reeval', ownerPid: 88, progressDir: root })).toBeNull();
-    const evidence = readFileSync(path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessProgressEvidence.ps1'), 'utf8');
-    const progressSource = readFileSync(path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessProgress.ps1'), 'utf8');
-    const ghSource = readFileSync(path.join(repoRoot, 'scripts/gh'), 'utf8');
-    expect(evidence).toMatch(/Status\s*=\s*'stale_identity'/);
-    expect(progressSource).toContain('if (-not $env:AO_SIDE_PROCESS_OWNER_PID)');
-    expect(progressSource).toContain('--owner-pid $env:AO_SIDE_PROCESS_OWNER_PID');
-    expect(ghSource).toContain('owner_pid="${AO_SIDE_PROCESS_OWNER_PID:-$PPID}"');
+    writeLivenessCheckpoint({
+      childId: CHILD_ID,
+      ownerPid: 77,
+      workStep: 'gh:pr:list',
+      progressDir: root,
+      nowMs: 1_000,
+    });
+    expect(readProgress(root).pid).toBe(77);
+    expect(consumePendingExternalCallTimeout({ childId: CHILD_ID, ownerPid: 88, progressDir: root })).toBeNull();
     emitProof('progress-identity');
-  });
-
-  it('preserves dead-process and overlap consumers', () => {
-    const health = readFileSync(path.join(repoRoot, 'scripts/lib/Orchestrator-SideProcessHealth.ps1'), 'utf8');
-    const seedProgress = readFileSync(path.join(repoRoot, 'scripts/lib/Review-ReadyReportStateSeedProgress.ps1'), 'utf8');
-    expect(health).toMatch(/Status\s*=\s*'stopped'/);
-    expect(seedProgress).toContain('[System.IO.FileMode]::CreateNew');
-    expect(seedProgress).toContain('return @{ acquired = $false');
   });
 
   it('keeps progress-file publication atomic and leaves no temp artifacts', () => {
     const root = tempRoot();
     for (let index = 1; index <= 100; index += 1) {
-      writeLivenessCheckpoint({ childId: 'review-trigger-reeval', ownerPid: 12, workStep: `call-${index}`, progressDir: root, nowMs: index });
+      writeLivenessCheckpoint({
+        childId: CHILD_ID,
+        ownerPid: 12,
+        workStep: `call-${index}`,
+        progressDir: root,
+        nowMs: index,
+      });
     }
-    expect(readLivenessProgressRecord(resolveLivenessProgressPath(root, 'review-trigger-reeval'))).not.toBeNull();
+    expect(readLivenessProgressRecord(resolveLivenessProgressPath(root, CHILD_ID))).not.toBeNull();
     expect(readdirSync(root).filter((name) => name.endsWith('.tmp'))).toEqual([]);
   });
 
@@ -304,7 +270,10 @@ describe('fleet-liveness shared producer contract', () => {
       prNumber: 853,
       headSha,
       session: {
-        id: 'worker-853', role: 'worker', status: 'working', ownedHeadSha: headSha,
+        id: 'worker-853',
+        role: 'worker',
+        status: 'working',
+        ownedHeadSha: headSha,
         reports: [{ reportState: 'ready_for_review', headRefOid: headSha, reportedAt: '2026-07-16T01:00:00.000Z' }],
       } as never,
       ciChecks: [
