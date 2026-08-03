@@ -13,6 +13,7 @@ import { STAGE_SCHEMA } from './create-issue-stage-record-types.ts';
 export interface MockGhState {
   ownerLogin: string;
   comments: TrustedComment[];
+  commentCreateAttempts: Array<{ body: string; succeeded: boolean }>;
   labels: Set<string>;
   issue: {
     title: string;
@@ -30,6 +31,7 @@ export function createMockGhState(overrides: Partial<MockGhState> = {}): MockGhS
   return {
     ownerLogin: 'chetwerikoff',
     comments: [],
+    commentCreateAttempts: [],
     labels: new Set(),
     issue: {
       title: 'test issue',
@@ -82,13 +84,15 @@ export function createMockTransport(state: MockGhState): GhTransport {
         const [path, query = ''] = requestPath.split('?', 2);
         const owner = path.match(/^repos\/([^/]+)\/([^/]+)/);
         if (path.endsWith('/comments') && argv.includes('-f') && readFormValue(argv, 'body')) {
+          const body = readFormValue(argv, 'body') ?? '';
           if (state.failCreate) {
+            state.commentCreateAttempts.push({ body, succeeded: false });
             return { exitCode: 1, stdout: '', stderr: 'create failed' };
           }
-          const body = readFormValue(argv, 'body') ?? '';
           if (state.ambiguousCreate) {
             return { exitCode: 0, stdout: '{}', stderr: '' };
           }
+          state.commentCreateAttempts.push({ body, succeeded: true });
           const comment: TrustedComment = {
             id: state.nextCommentId,
             body,
