@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import type { spawnSync } from 'node:child_process';
 import {
   asRuntimeObservationToken,
   type RuntimeAdapter,
@@ -48,6 +47,7 @@ const ORCA_RUNTIME_NAME = 'orca';
 type WorkerBinding = {
   readonly worker: RuntimeWorker;
   readonly handle: string;
+  readonly nativeGeneration?: string;
 };
 
 type ObservationBinding = {
@@ -151,18 +151,27 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     for (const row of parsed.rows) {
       if (input.workspacePath && row.worktreePath !== input.workspacePath) continue;
       const known = [...this.bindingByGeneration.values()].find((binding) => binding.handle === row.handle);
-      const generation = opaqueHash('generation', row.handle);
-      const worker = known?.worker ?? {
-        identity: {
-          id: opaqueHash('worker', [row.worktreePath, row.title ?? '', row.tabId ?? '', row.leafId ?? ''].join('\u0000')),
-          generation,
-        },
-        workspacePath: row.worktreePath,
-        provenance: this.ownedGenerations.has(generation) ? 'internal' : 'external',
-        runtime: this.name,
-        ...(row.title === undefined ? {} : { title: row.title }),
-      } satisfies RuntimeWorker;
-      this.bindingByGeneration.set(worker.identity.generation, { worker, handle: row.handle });
+      const nativeGeneration = row.incarnationId ?? row.ptyId ?? row.handle;
+      const worker = known?.nativeGeneration === nativeGeneration
+        ? known.worker
+        : {
+          identity: {
+            id: opaqueHash('worker', [row.worktreePath, row.title ?? '', row.tabId ?? '', row.leafId ?? ''].join('\u0000')),
+            generation: opaqueHash('generation', `${nativeGeneration}\u0000${randomUUID()}`),
+          },
+          workspacePath: row.worktreePath,
+          provenance: 'external',
+          runtime: this.name,
+          ...(row.title === undefined ? {} : { title: row.title }),
+        } satisfies RuntimeWorker;
+      if (known && known.worker.identity.generation !== worker.identity.generation) {
+        this.bindingByGeneration.delete(known.worker.identity.generation);
+      }
+      this.bindingByGeneration.set(worker.identity.generation, {
+        worker,
+        handle: row.handle,
+        nativeGeneration,
+      });
       workers.push(worker);
     }
     return success(workers);
@@ -197,7 +206,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       timeoutMs: input.timeoutMs,
     });
     if (!created.ok) return failure('unavailable', created.reason);
-    const generation = opaqueHash('generation', created.terminal.handle);
+    const generation = opaqueHash('generation', randomUUID());
     const worker: RuntimeWorker = {
       identity: { id: opaqueHash('worker', randomUUID()), generation },
       workspacePath: input.workspacePath,
@@ -206,7 +215,11 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       title: input.title,
     };
     this.ownedGenerations.add(generation);
-    this.bindingByGeneration.set(generation, { worker, handle: created.terminal.handle });
+    this.bindingByGeneration.set(generation, {
+      worker,
+      handle: created.terminal.handle,
+      nativeGeneration: created.terminal.handle,
+    });
     return success(worker);
   }
 
