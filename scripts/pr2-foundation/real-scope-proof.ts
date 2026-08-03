@@ -166,7 +166,7 @@ export function runRealFoundationScopeProof(repoRoot = path.resolve('.')): RealS
   git(repoRoot, ['merge-base', '--is-ancestor', FOUNDATION_IMPLEMENTATION_BASE_SHA, FOUNDATION_TERMINAL_SHA]);
   git(repoRoot, ['merge-base', '--is-ancestor', FOUNDATION_TERMINAL_SHA, FOUNDATION_MERGE_SHA]);
   git(repoRoot, ['merge-base', '--is-ancestor', FOUNDATION_MERGE_SHA, currentBaseSha]);
-  git(repoRoot, ['merge-base', '--is-ancestor', currentBaseSha, 'HEAD']);
+  git(repoRoot, ['merge-base', '--is-ancestor', FOUNDATION_MERGE_SHA, 'HEAD']);
 
   const declarationCommits = git(repoRoot, [
     'log',
