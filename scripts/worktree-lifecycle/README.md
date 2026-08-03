@@ -19,10 +19,61 @@ watcher, daemon, or background reconciler.
 - A target-level mutation block never stops the global work pipeline. The terminal report
   carries `cleanup_deferred`, `replacement_required`, or `task_degraded`,
   `pipelineContinues: true`, and an actionable continuation decision.
+- Multiple worktrees may legitimately start from the same source commit. A shared HEAD SHA is
+  not itself an identity collision; path, branch, binding, and the complete row decide identity.
 
-## Commands
+## Mechanical create and bounded continuation
 
-Post-create read-back, before any terminal or agent spawn:
+The canonical create path is one executable operation. Resolve the exact intended source SHA,
+choose one safe unique primary name, and run:
+
+```bash
+node --experimental-strip-types scripts/worktree-lifecycle/create-continuation.ts \
+  --repo-root "$(git rev-parse --show-toplevel)" \
+  --issue <number> \
+  --expected-head <40-hex-source-head> \
+  --name <unique-primary-name> \
+  --apply \
+  --json
+```
+
+The command:
+
+1. acquires the same process-local exclusion path used by guarded teardown/recovery;
+2. reads Git and Orca before any create;
+3. resumes one already exact-dual Issue-bound worktree without recreating it;
+4. otherwise performs at most one primary `orca worktree create` attempt;
+5. reads both authorities even when the create response is missing, invalid, or timed out;
+6. preserves disputed state and performs at most one isolated replacement create with a fresh
+   name, rooted at the exact source SHA;
+7. performs two fresh exact-dual reads before returning one selected worktree;
+8. returns `task_degraded` with `pipelineContinues: true` when no safe candidate exists.
+
+A dead local lock owner may be recovered using PID/start-time evidence. A live, malformed, or
+changed lock remains fail-closed. The command never creates a third worktree attempt and never
+spawns a terminal itself.
+
+Terminal creation is allowed only when the report says:
+
+```json
+{
+  "outcome": "ready_to_spawn",
+  "terminalSpawnAuthorized": true,
+  "selected": { "path": "/absolute/verified/worktree" },
+  "selectedReadBack": {
+    "classification": { "classification": "exact_dual" },
+    "decision": { "terminalSpawnAuthorized": true }
+  }
+}
+```
+
+Use `selected.path` as the only worktree eligible for the subsequent terminal create. A second
+concurrent caller receives a no-effect degraded result rather than another create or spawn.
+
+## Read-only post-create classification
+
+For diagnostics of an already known worktree, the lower-level read-only command remains
+available:
 
 ```bash
 node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
@@ -35,16 +86,10 @@ node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
   --json
 ```
 
-For a detached worktree, replace `--expected-branch ...` with `--detached`.
-Terminal creation is allowed only when the report says:
+For a detached worktree, replace `--expected-branch ...` with `--detached`. This command does not
+own create or replacement effects; canonical handoff uses `create-continuation.ts`.
 
-```json
-{
-  "outcome": "ready_to_spawn",
-  "classification": { "classification": "exact_dual" },
-  "decision": { "terminalSpawnAuthorized": true }
-}
-```
+## Guarded Git-only recovery
 
 Guarded recovery for one exact Git-only merged-PR candidate is dry-run by default:
 
@@ -63,7 +108,7 @@ Review every gate. Re-run the same command with `--apply` only when the dry-run 
 `git_only_recovery_eligible`. Apply uses Git's non-force `worktree remove`, never
 `orca worktree rm --force`, `rm -rf`, or branch `-D`.
 
-Nonblocking post-merge cleanup:
+## Nonblocking post-merge cleanup
 
 ```bash
 node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
@@ -81,21 +126,6 @@ A valid lifecycle terminal report exits zero even when its target result is
 `cleanup_deferred`, `replacement_required`, or `task_degraded`. This is intentional: the report
 blocks unsafe mutation of that target, not the scheduler or an already successful merge/adoption.
 Invalid CLI arguments exit 2.
-
-## Replacement rule
-
-When post-create read-back is not exact dual:
-
-1. Read the report; never blindly repeat an unknown create attempt.
-2. If a PR already exists and the report is `exact_git_only`, the PR-bound guarded recovery path
-   may be used. A pre-PR issue-bound worktree is never destructively recovered by issue number.
-3. Preserve every disputed target that cannot be proven safe. Perform at most one isolated
-   replacement create using a unique path and a fresh local continuation branch rooted at the
-   exact expected source SHA.
-4. Read back the replacement through this command with the same issue authority. Spawn only after
-   exact dual agreement, including the exact Orca `linkedIssue`.
-5. If the replacement also cannot become exact dual, return task-level degraded control to the
-   scheduler/operator. Do not loop and do not stop unrelated tasks.
 
 Publication from a continuation branch still uses the repository's normal current-head and
 expected-head checks; it must not overwrite an advanced PR branch.
