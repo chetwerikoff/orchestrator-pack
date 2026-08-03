@@ -29,8 +29,7 @@
     "docs/",
     "package-lock.json",
     "package.json",
-    "scripts/",
-    "tests/"
+    "scripts/"
   ],
   "source_revision": "#1248"
 }
