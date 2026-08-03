@@ -452,11 +452,14 @@ function relatedExistingRows(input: {
       .filter((row) => row.linkedIssue === input.issueNumber)
       .map((row) => row.path),
   );
+  const replacementPrefix = `${input.primaryName}-replacement-`;
   return input.snapshot.gitRows.filter((row) => row.path !== input.repositoryRoot
     && row.headSha === input.expectedHead
     && (issuePaths.has(row.path)
       || row.branchName === input.primaryName
-      || basename(row.path) === input.primaryName));
+      || row.branchName?.startsWith(replacementPrefix)
+      || basename(row.path) === input.primaryName
+      || basename(row.path).startsWith(replacementPrefix)));
 }
 
 export function runCreateContinuation(input: {
@@ -526,10 +529,18 @@ export function runCreateContinuation(input: {
       });
     }
 
+    const issueOrcaRows = snapshot.orcaRows.filter((row) => row.linkedIssue === input.issueNumber);
+    if (relatedRows.length > 1 || issueOrcaRows.length > 1) {
+      return degraded({
+        issueNumber: input.issueNumber,
+        expectedHead,
+        error: 'multiple pre-existing primary/replacement candidates are disputed; no third create is authorized',
+      });
+    }
+
     const attempts: CreateAttemptReport[] = [];
     const effects: string[] = [];
-    const hasIssueOrPrimaryState = relatedRows.length > 0
-      || snapshot.orcaRows.some((row) => row.linkedIssue === input.issueNumber);
+    const hasIssueOrPrimaryState = relatedRows.length > 0 || issueOrcaRows.length > 0;
     if (!hasIssueOrPrimaryState) {
       const initial = runCreateAttempt({
         kind: 'initial',
