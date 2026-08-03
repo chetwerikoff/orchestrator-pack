@@ -14,19 +14,18 @@
     "scripts/runtime/task-compat.ts"
   ],
   "denylist": [
-    ".ao/",
-    ".orca/",
-    "packages/core/",
-    "vendor/"
+    "credentials/**",
+    "packages/core/**",
+    "secrets/**",
+    "vendor/**"
   ],
   "allowed_roots": [
     "AGENTS.md",
     "CLAUDE.md",
-    "docs/",
+    "docs/**",
     "package-lock.json",
     "package.json",
-    "scripts/",
-    "tests/"
+    "scripts/**"
   ],
   "source_revision": "#1248"
 }
