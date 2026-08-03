@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/issue-1248-runtime-callers
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
