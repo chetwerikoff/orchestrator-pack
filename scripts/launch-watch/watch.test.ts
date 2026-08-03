@@ -30,17 +30,22 @@ function spawned(adapter: DeterministicRuntimeAdapter) {
 
 const orcaIdentity = { runtime: 'orca', id: 'term-1', generation: 'pty-1' } as const;
 
+function terminalList(
+  handle = 'term-1',
+  generation = 'pty-1',
+  workspacePath = '/repo',
+  title = 'worker',
+): OrcaJsonResponse {
+  return {
+    ok: true,
+    result: {
+      terminals: [{ handle, ptyId: generation, worktreePath: workspacePath, title }],
+    },
+  };
+}
+
 function orcaResponseFor(args: readonly string[]): OrcaJsonResponse {
-  if (args[0] === 'terminal' && args[1] === 'list') {
-    return {
-      ok: true,
-      result: {
-        terminals: [{
-          handle: 'term-1', ptyId: 'pty-1', worktreePath: '/repo', title: 'worker',
-        }],
-      },
-    };
-  }
+  if (args[0] === 'terminal' && args[1] === 'list') return terminalList();
   if (args[0] === 'terminal' && args[1] === 'wait') {
     return { ok: true, result: { wait: { satisfied: false, status: 'running' } } };
   }
@@ -184,10 +189,7 @@ describe('runtime-neutral boundary', () => {
     const worker = spawned(adapter);
     expect(adapter.listWorkers()).toEqual({
       status: 'ok',
-      value: [expect.objectContaining({
-        identity: worker.identity,
-        provenance: 'internal',
-      })],
+      value: [expect.objectContaining({ identity: worker.identity, provenance: 'internal' })],
     });
 
     const first = adapter.readBoundedOutput({ worker: worker.identity });
@@ -260,37 +262,93 @@ describe('Orca runtime adapter', () => {
     });
   });
 
-  it('maps bounded tui-idle observation to busy and idle, not process existence', () => {
-    const busyRun = vi.fn(orcaResponseFor);
-    const busy = new OrcaRuntimeAdapter({
-      runJson: busyRun as unknown as typeof runOrcaJson,
-    });
-    expect(busy.liveness({ worker: orcaIdentity, observationWindowMs: 50 }).status).toBe('busy');
-    const waitCall = busyRun.mock.calls.find(([args]) => args[1] === 'wait');
-    expect(waitCall?.[0]).toEqual([
-      'terminal', 'wait', '--terminal', 'term-1', '--for', 'tui-idle', '--timeout-ms', '50',
+  it('uses one total deadline for lookup and tui-idle observation', () => {
+    let now = 0;
+    const calls: Array<{ args: readonly string[]; timeoutMs?: number }> = [];
+    const runJson = ((args: readonly string[], options: { readonly timeoutMs?: number } = {}) => {
+      calls.push({ args, timeoutMs: options.timeoutMs });
+      if (args[1] === 'list') {
+        now += 20;
+        return terminalList();
+      }
+      if (args[1] === 'wait') {
+        return { ok: true, result: { wait: { satisfied: false, status: 'running' } } };
+      }
+      return { ok: true, result: {} };
+    }) as typeof runOrcaJson;
+    const adapter = new OrcaRuntimeAdapter({ runJson, now: () => now });
+
+    expect(adapter.liveness({ worker: orcaIdentity, observationWindowMs: 50 }).status).toBe('busy');
+    expect(calls[0]).toMatchObject({ timeoutMs: 50 });
+    expect(calls[1]?.args).toEqual([
+      'terminal', 'wait', '--terminal', 'term-1', '--for', 'tui-idle', '--timeout-ms', '30',
     ]);
-    expect(waitCall?.[1]).toMatchObject({ timeoutMs: 1_050 });
+    expect(calls[1]).toMatchObject({ timeoutMs: 30 });
+  });
 
-    const idle = new OrcaRuntimeAdapter({
-      runJson: (args) => args[1] === 'wait'
-        ? { ok: true, result: { wait: { satisfied: true, status: 'running' } } }
-        : orcaResponseFor(args),
-    });
-    expect(idle.liveness({ worker: orcaIdentity, observationWindowMs: 50 }).status).toBe('idle');
+  it('returns unknown within the total bound when lookup exhausts the budget', () => {
+    let now = 0;
+    const calls: Array<{ args: readonly string[]; timeoutMs?: number }> = [];
+    const runJson = ((args: readonly string[], options: { readonly timeoutMs?: number } = {}) => {
+      calls.push({ args, timeoutMs: options.timeoutMs });
+      now += 50;
+      return { ok: false, error: { code: 'orca_operation_timeout' } };
+    }) as typeof runOrcaJson;
+    const adapter = new OrcaRuntimeAdapter({ runJson, now: () => now });
 
-    const gone = new OrcaRuntimeAdapter({
-      runJson: () => ({ ok: true, result: { terminals: [] } }),
-    });
-    expect(gone.liveness({ worker: orcaIdentity, observationWindowMs: 50 }).status).toBe('gone');
+    expect(adapter.liveness({ worker: orcaIdentity, observationWindowMs: 50 }).status).toBe('unknown');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ timeoutMs: 50 });
+  });
 
-    const unknown = new OrcaRuntimeAdapter({
-      runJson: (args) => args[1] === 'wait'
-        ? { ok: false, error: { code: 'orca_operation_timeout' } }
-        : orcaResponseFor(args),
-    });
-    expect(unknown.liveness({ worker: orcaIdentity, observationWindowMs: 50 }).status).toBe('unknown');
-    expect(unknown.liveness({ worker: orcaIdentity, observationWindowMs: 0 }).status).toBe('unknown');
+  it('finds a worker in its explicitly selected non-active workspace', () => {
+    const calls: string[][] = [];
+    const runJson = ((args: readonly string[]) => {
+      calls.push([...args]);
+      if (args[1] === 'create') {
+        return { ok: true, result: { terminal: { handle: 'term-other', ptyId: 'pty-other', title: 'worker' } } };
+      }
+      if (args[1] === 'list') return terminalList('term-other', 'pty-other', '/other');
+      if (args[1] === 'wait') {
+        return { ok: true, result: { wait: { satisfied: false, status: 'running' } } };
+      }
+      return { ok: true, result: {} };
+    }) as typeof runOrcaJson;
+    const adapter = new OrcaRuntimeAdapter({ runJson });
+    const created = adapter.spawnWorker({ title: 'worker', command: 'codex', workspace: '/other' });
+    expect(created.status).toBe('ok');
+    if (created.status !== 'ok') return;
+
+    expect(adapter.findWorker(created.value.identity).status).toBe('ok');
+    expect(adapter.liveness({ worker: created.value.identity, observationWindowMs: 25 }).status).toBe('busy');
+    expect(calls.filter((args) => args[1] === 'list').every((args) => args.includes('/other'))).toBe(true);
+  });
+
+  it('invalidates ownership and blocks effects when Orca reuses a handle with a new generation', () => {
+    const calls: string[][] = [];
+    const runJson = ((args: readonly string[]) => {
+      calls.push([...args]);
+      if (args[1] === 'create') {
+        return { ok: true, result: { terminal: { handle: 'same', ptyId: 'pty-1', title: 'worker' } } };
+      }
+      if (args[1] === 'list') return terminalList('same', 'pty-2', '/repo');
+      throw new Error(`stale identity reached effect: ${args.join(' ')}`);
+    }) as typeof runOrcaJson;
+    const adapter = new OrcaRuntimeAdapter({ runJson });
+    const created = adapter.spawnWorker({ title: 'worker', command: 'codex', workspace: '/repo' });
+    expect(created.status).toBe('ok');
+    if (created.status !== 'ok') return;
+
+    expect(adapter.findWorker(created.value.identity)).toEqual({ status: 'ok', value: null });
+    expect(adapter.readBoundedOutput({ worker: created.value.identity }))
+      .toMatchObject({ status: 'failed', reason: 'worker_generation_not_found' });
+    expect(adapter.dispatchInput({ worker: created.value.identity, text: 'work' }))
+      .toMatchObject({ status: 'send_failed', reason: 'worker_generation_not_found' });
+    expect(adapter.liveness({ worker: created.value.identity, observationWindowMs: 25 }).status)
+      .toBe('gone');
+    expect(adapter.stopWorker(created.value.identity))
+      .toMatchObject({ status: 'failed', reason: 'worker_not_owned_by_runtime_instance' });
+    expect(calls.some((args) => ['read', 'send', 'close'].includes(args[1] ?? ''))).toBe(false);
   });
 
   it('normalizes current Orca output into a generation-scoped opaque token', () => {
@@ -299,7 +357,8 @@ describe('Orca runtime adapter', () => {
     expect(first.status).toBe('ok');
     if (first.status !== 'ok') return;
     expect(first.value.lines).toEqual(['line']);
-    expect(first.value.observationToken?.opaque).toMatch(/^opk-orca-output-v1\./);
+    expect(first.value.changed).toBe(true);
+    expect(first.value.observationToken.opaque).toMatch(/^opk-orca-output-v2\./);
     expect(first.value).not.toHaveProperty('nextCursor');
 
     const second = adapter.readBoundedOutput({
@@ -315,6 +374,52 @@ describe('Orca runtime adapter', () => {
     expect(wrongGeneration).toMatchObject({
       status: 'failed', reason: 'observation_token_scope_mismatch',
     });
+  });
+
+  it('keeps no-cursor observations opaque and detects empty, unchanged, and changed output', () => {
+    let reads = 0;
+    const runJson = ((args: readonly string[]) => {
+      if (args[1] === 'list') return terminalList();
+      if (args[1] === 'read') {
+        const lines = reads < 2 ? [] : ['new'];
+        reads += 1;
+        return {
+          ok: true,
+          result: { terminal: { handle: 'term-1', status: 'running', tail: lines, nextCursor: null } },
+        };
+      }
+      return { ok: true, result: {} };
+    }) as typeof runOrcaJson;
+    const adapter = new OrcaRuntimeAdapter({ runJson });
+
+    const first = adapter.readBoundedOutput({ worker: orcaIdentity });
+    expect(first.status).toBe('ok');
+    if (first.status !== 'ok') return;
+    expect(first.value.changed).toBe(false);
+    expect(first.value.observationToken.opaque).toMatch(/^opk-orca-output-v2\./);
+
+    const unchanged = adapter.readBoundedOutput({
+      worker: orcaIdentity,
+      previousToken: first.value.observationToken,
+    });
+    expect(unchanged.status).toBe('ok');
+    if (unchanged.status !== 'ok') return;
+    expect(unchanged.value.changed).toBe(false);
+    expect(unchanged.value.observationToken).toEqual(first.value.observationToken);
+
+    const changed = adapter.readBoundedOutput({
+      worker: orcaIdentity,
+      previousToken: unchanged.value.observationToken,
+    });
+    expect(changed.status).toBe('ok');
+    if (changed.status !== 'ok') return;
+    expect(changed.value.changed).toBe(true);
+    expect(changed.value.observationToken).not.toEqual(unchanged.value.observationToken);
+
+    expect(adapter.readBoundedOutput({
+      worker: { ...orcaIdentity, generation: 'pty-2' },
+      previousToken: first.value.observationToken,
+    })).toMatchObject({ status: 'failed', reason: 'observation_token_scope_mismatch' });
   });
 
   it('keeps the existing numeric smoke cursor facade over current string cursors', () => {
@@ -349,7 +454,9 @@ describe('Orca runtime adapter', () => {
 
   it('fails closed when a consumed Orca response field drifts', () => {
     const adapter = new OrcaRuntimeAdapter({
-      runJson: () => ({ ok: true, result: { terminal: { status: 'running', nextCursor: 'c' } } }),
+      runJson: (args) => args[1] === 'list'
+        ? terminalList()
+        : { ok: true, result: { terminal: { status: 'running', nextCursor: 'c' } } },
     });
     expect(adapter.readBoundedOutput({ worker: orcaIdentity })).toMatchObject({
       status: 'unsupported',
@@ -358,15 +465,17 @@ describe('Orca runtime adapter', () => {
   });
 
   it('attempts dispatch exactly once and preserves ambiguity', () => {
-    const runJson = vi.fn(() => ({
-      ok: false,
-      error: { code: 'orca_operation_timeout' },
-      outcomeCategory: 'supported_operation_failure',
-    } as const));
-    const adapter = new OrcaRuntimeAdapter({ runJson });
+    const runJson = vi.fn((args: readonly string[]) => args[1] === 'list'
+      ? terminalList()
+      : {
+        ok: false,
+        error: { code: 'orca_operation_timeout' },
+        outcomeCategory: 'supported_operation_failure',
+      } as const);
+    const adapter = new OrcaRuntimeAdapter({ runJson: runJson as typeof runOrcaJson });
     expect(adapter.dispatchInput({ worker: orcaIdentity, text: 'hello' })).toEqual({
       status: 'dispatch_unknown', reason: 'orca_operation_timeout',
     });
-    expect(runJson).toHaveBeenCalledTimes(1);
+    expect(runJson.mock.calls.filter(([args]) => args[1] === 'send')).toHaveLength(1);
   });
 });
