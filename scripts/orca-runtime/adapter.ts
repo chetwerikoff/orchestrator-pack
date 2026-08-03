@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import {
   runtimeFailure,
   runtimeUnsupported,
@@ -44,22 +44,20 @@ interface KnownWorkspaceRecord {
 
 interface NormalizedTerminalRead {
   readonly lines: readonly string[];
-  readonly nativeCursor: string | null;
+  readonly nativeCursor: string;
   readonly terminalState: 'running' | 'exited' | 'unknown';
 }
 
 interface ObservationBinding {
   readonly workerKey: string;
-  readonly nativeCursor: string | null;
-  readonly fingerprint: string;
+  readonly nativeCursor: string;
 }
 
 interface DecodedObservation {
-  readonly nativeCursor: string | null;
-  readonly fingerprint: string;
+  readonly nativeCursor: string;
 }
 
-const OBSERVATION_TOKEN_PREFIX = 'opk-orca-output-v2.';
+const OBSERVATION_TOKEN_PREFIX = 'opk-orca-output-v3.';
 
 function isNativeTimeout(response: OrcaJsonResponse): boolean {
   return response.error?.code === 'orca_operation_timeout';
@@ -96,15 +94,6 @@ function identityKey(identity: RuntimeWorkerIdentity): string {
   return `${identity.runtime}\u0000${identity.id}\u0000${identity.generation}`;
 }
 
-function outputFingerprint(
-  lines: readonly string[],
-  terminalState: NormalizedTerminalRead['terminalState'],
-): string {
-  return createHash('sha256')
-    .update(JSON.stringify({ lines, terminalState }), 'utf8')
-    .digest('base64url');
-}
-
 function normalizeTerminalRead(
   result: OrcaTerminalReadResult | undefined,
 ): RuntimeResult<NormalizedTerminalRead> {
@@ -113,14 +102,19 @@ function normalizeTerminalRead(
     if (!Array.isArray(current.tail)
       || !current.tail.every((line) => typeof line === 'string')
       || (current.nextCursor !== null && typeof current.nextCursor !== 'string')
+      || (current.latestCursor !== undefined && typeof current.latestCursor !== 'string')
       || !['running', 'exited', 'unknown'].includes(current.status ?? '')) {
       return runtimeUnsupported('read_bounded_output', 'runtime_output_shape_unsupported');
+    }
+    const nativeCursor = current.nextCursor ?? current.latestCursor ?? null;
+    if (nativeCursor === null) {
+      return runtimeUnsupported('read_bounded_output', 'runtime_output_progress_unavailable');
     }
     return {
       status: 'ok',
       value: {
         lines: current.tail,
-        nativeCursor: current.nextCursor,
+        nativeCursor,
         terminalState: current.status!,
       },
     };
@@ -134,11 +128,14 @@ function normalizeTerminalRead(
       && typeof result.nextCursor !== 'number')) {
     return runtimeUnsupported('read_bounded_output', 'runtime_output_shape_unsupported');
   }
+  if (result.nextCursor === null) {
+    return runtimeUnsupported('read_bounded_output', 'runtime_output_progress_unavailable');
+  }
   return {
     status: 'ok',
     value: {
       lines: result.lines,
-      nativeCursor: result.nextCursor === null ? null : String(result.nextCursor),
+      nativeCursor: String(result.nextCursor),
       terminalState: 'unknown',
     },
   };
@@ -213,16 +210,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     if (binding.workerKey !== identityKey(worker)) {
       return runtimeFailure('read_bounded_output', 'observation_token_scope_mismatch');
     }
-    return {
-      status: 'ok',
-      value: { nativeCursor: binding.nativeCursor, fingerprint: binding.fingerprint },
-    };
+    return { status: 'ok', value: { nativeCursor: binding.nativeCursor } };
   }
 
   #observationToken(
     worker: RuntimeWorkerIdentity,
-    nativeCursor: string | null,
-    fingerprint: string,
+    nativeCursor: string,
     changed: boolean,
     previousToken?: RuntimeObservationToken | null,
   ): RuntimeObservationToken {
@@ -231,7 +224,6 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     this.#observations.set(token.opaque, {
       workerKey: identityKey(worker),
       nativeCursor,
-      fingerprint,
     });
     return token;
   }
@@ -241,6 +233,41 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     for (const [token, binding] of this.#observations) {
       if (binding.workerKey === workerKey) this.#observations.delete(token);
     }
+  }
+
+  #workerFromTerminal(
+    terminal: OrcaTerminalSummary,
+    workspaceSelector: 'active' | string,
+    operation: 'list_workers' | 'find_worker_by_id',
+  ): RuntimeResult<RuntimeWorker> {
+    const handle = terminal.handle?.trim();
+    const workspacePath = terminal.worktreePath?.trim();
+    if (!handle || !workspacePath) {
+      return runtimeUnsupported(operation, 'runtime_worker_identity_missing');
+    }
+    const generation = nativeGeneration(terminal);
+    if (!generation) {
+      return runtimeUnsupported(operation, 'runtime_worker_generation_missing');
+    }
+
+    const owned = this.#owned.get(handle);
+    if (owned && generation !== owned.identity.generation) {
+      this.#owned.delete(handle);
+      this.#knownWorkspace.delete(identityKey(owned.identity));
+      this.#dropObservations(owned.identity);
+    }
+    const currentOwned = this.#owned.get(handle);
+    const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: handle, generation };
+    const worker: RuntimeWorker = {
+      identity,
+      workspacePath,
+      title: typeof terminal.title === 'string' ? terminal.title : null,
+      provenance: currentOwned && sameRuntimeWorker(currentOwned.identity, identity)
+        ? 'internal'
+        : 'external',
+    };
+    this.#rememberWorkspace(identity, workspaceSelector, workspacePath);
+    return { status: 'ok', value: worker };
   }
 
   readiness(options: RuntimeCallOptions = {}): RuntimeResult<RuntimeReadiness> {
@@ -282,34 +309,37 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const workers: RuntimeWorker[] = [];
     for (const terminal of terminals) {
-      const handle = terminal.handle?.trim();
-      const workspacePath = terminal.worktreePath?.trim();
-      if (!handle || !workspacePath) {
-        return runtimeUnsupported('list_workers', 'runtime_worker_identity_missing');
-      }
-      const owned = this.#owned.get(handle);
-      const reportedGeneration = nativeGeneration(terminal);
-      if (owned && reportedGeneration && reportedGeneration !== owned.identity.generation) {
-        this.#owned.delete(handle);
-        this.#knownWorkspace.delete(identityKey(owned.identity));
-        this.#dropObservations(owned.identity);
-      }
-      const currentOwned = this.#owned.get(handle);
-      const generation = reportedGeneration;
-      if (!generation) {
-        return runtimeUnsupported('list_workers', 'runtime_worker_generation_missing');
-      }
-      const identity: RuntimeWorkerIdentity = { runtime: 'orca', id: handle, generation };
-      const worker: RuntimeWorker = {
-        identity,
-        workspacePath,
-        title: typeof terminal.title === 'string' ? terminal.title : null,
-        provenance: currentOwned ? 'internal' : 'external',
-      };
-      this.#rememberWorkspace(identity, workspace, workspacePath);
-      workers.push(worker);
+      const normalized = this.#workerFromTerminal(terminal, workspace, 'list_workers');
+      if (normalized.status !== 'ok') return normalized;
+      workers.push(normalized.value);
     }
     return { status: 'ok', value: workers };
+  }
+
+  findWorkerById(
+    id: string,
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<RuntimeWorker | null> {
+    const handle = id.trim();
+    if (!handle) {
+      return runtimeFailure('find_worker_by_id', 'runtime_worker_id_missing');
+    }
+    const response = this.#run<{ terminal?: OrcaTerminalSummary }>(
+      ['terminal', 'show', '--terminal', handle],
+      options,
+    );
+    if (!response.ok) {
+      return runtimeFailure('find_worker_by_id', neutralFailureReason(response));
+    }
+    const terminal = response.result?.terminal;
+    if (!terminal) {
+      return runtimeUnsupported('find_worker_by_id', 'runtime_worker_show_shape_unsupported');
+    }
+    return this.#workerFromTerminal(
+      terminal,
+      terminal.worktreePath?.trim() || 'active',
+      'find_worker_by_id',
+    );
   }
 
   findWorker(
@@ -321,12 +351,22 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const known = this.#knownWorkspace.get(identityKey(identity));
     const owned = this.#owned.get(identity.id);
-    const workspace = known?.workspaceSelector ?? owned?.workspaceSelector ?? 'active';
-    const listed = this.listWorkers({ workspace }, options);
-    if (listed.status !== 'ok') return listed;
+    const workspace = known?.workspaceSelector ?? owned?.workspaceSelector;
+    if (workspace) {
+      const listed = this.listWorkers({ workspace }, options);
+      if (listed.status !== 'ok') return listed;
+      return {
+        status: 'ok',
+        value: listed.value.find((worker) => sameRuntimeWorker(worker.identity, identity)) ?? null,
+      };
+    }
+    const current = this.findWorkerById(identity.id, options);
+    if (current.status !== 'ok') return current;
     return {
       status: 'ok',
-      value: listed.value.find((worker) => sameRuntimeWorker(worker.identity, identity)) ?? null,
+      value: current.value && sameRuntimeWorker(current.value.identity, identity)
+        ? current.value
+        : null,
     };
   }
 
@@ -453,7 +493,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
 
     const args = ['terminal', 'read', '--terminal', input.worker.id];
-    if (previous?.status === 'ok' && previous.value.nativeCursor !== null) {
+    if (previous?.status === 'ok') {
       args.push('--cursor', previous.value.nativeCursor);
     }
     if (input.limit !== undefined) args.push('--limit', String(input.limit));
@@ -465,16 +505,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     const normalized = normalizeTerminalRead(response.result);
     if (normalized.status !== 'ok') return normalized;
-    const fingerprint = outputFingerprint(normalized.value.lines, normalized.value.terminalState);
     const changed = previous?.status === 'ok'
-      ? previous.value.nativeCursor !== null || normalized.value.nativeCursor !== null
-        ? previous.value.nativeCursor !== normalized.value.nativeCursor
-        : previous.value.fingerprint !== fingerprint
+      ? previous.value.nativeCursor !== normalized.value.nativeCursor
       : normalized.value.lines.length > 0;
     const observationToken = this.#observationToken(
       input.worker,
       normalized.value.nativeCursor,
-      fingerprint,
       changed,
       input.previousToken,
     );
@@ -529,29 +565,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
 
   stopWorker(
     worker: RuntimeWorkerIdentity,
-    options: RuntimeCallOptions = {},
+    _options: RuntimeCallOptions = {},
   ): RuntimeResult<{ readonly stopped: true }> {
     const owned = this.#owned.get(worker.id);
     if (!owned || !sameRuntimeWorker(owned.identity, worker)) {
       return runtimeFailure('stop_worker', 'worker_not_owned_by_runtime_instance');
     }
-    const current = this.findWorker(worker, options);
-    if (current.status !== 'ok') {
-      return runtimeFailure('stop_worker', current.reason);
-    }
-    const refreshedOwned = this.#owned.get(worker.id);
-    if (current.value === null
-      || !refreshedOwned
-      || !sameRuntimeWorker(refreshedOwned.identity, worker)) {
-      return runtimeFailure('stop_worker', 'worker_generation_not_found');
-    }
-    const response = this.#run(['terminal', 'close', '--terminal', worker.id], options);
-    if (!response.ok) {
-      return runtimeFailure('stop_worker', neutralFailureReason(response));
-    }
-    this.#owned.delete(worker.id);
-    this.#knownWorkspace.delete(identityKey(worker));
-    this.#dropObservations(worker);
-    return { status: 'ok', value: { stopped: true } };
+    return runtimeUnsupported('stop_worker', 'runtime_generation_bound_stop_unsupported');
   }
 }
