@@ -1,4 +1,4 @@
-// @vitest-ci-lane heavy
+// @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
 
 import { describe, expect, it } from 'vitest';
