@@ -34,6 +34,7 @@ const arg = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : nu
 const APPLY = argv.includes('--apply');
 const JSONOUT = argv.includes('--json');
 const SCAN = argv.includes('--scan-orphans');
+const ORPHAN_MODE = argv.includes('--orphan');
 const WS_ROOT = (arg('--workspaces-root') || '').replace(/\/+$/, '');
 
 const norm = (c) => (c ? c.replace(/ \(deleted\)$/, '') : null);
@@ -46,6 +47,7 @@ const under = (c, root) => { const n = norm(c); return !!n && (n === root || n.s
 // empty, or unparseable — acting on an unverified target is the exact mistake this script prevents.
 const PROTECTED = new Set();
 const ROOTS = new Set();
+const KNOWN = new Set();          // exact non-main worktree paths the runtime currently manages
 const inventoryPath = arg('--runtime-worktrees');
 if (!inventoryPath) {
   console.error('REFUSE: --runtime-worktrees <file> is required (neutral runtime inventory JSON).');
@@ -58,7 +60,7 @@ try {
     if (!w || typeof w.path !== 'string' || !w.path.startsWith('/')) continue;
     const p = w.path.replace(/\/+$/, '');
     if (w.isMain) PROTECTED.add(p);
-    else ROOTS.add(p.slice(0, p.lastIndexOf('/')));
+    else { KNOWN.add(p); ROOTS.add(p.slice(0, p.lastIndexOf('/'))); }
   }
   if (!PROTECTED.size) throw new Error('inventory lists no main worktree — refusing to run unprotected');
 } catch (e) {
@@ -111,10 +113,45 @@ const WT = (arg('--path') || '').replace(/\/+$/, '');
 if (!WT) { console.error('REFUSE: --path is required (or use --scan-orphans)'); process.exit(2); }
 if (!WT.startsWith('/') || WT.includes('/..')) { console.error('REFUSE: --path must be a clean absolute path'); process.exit(2); }
 
-if (PROTECTED.has(WT)) { console.error('REFUSE: target is a main checkout'); process.exit(2); }
-if (ROOTS.has(WT) || !inAnyRoot(WT)) {
-  console.error(`REFUSE: --path is not a worktree inside a known Orca workspaces root (${[...ROOTS].join(', ')})`);
-  process.exit(2);
+// --- UNFORGEABLE GUARD (must come first; the inventory above is caller-supplied and may lie) ---
+// A primary checkout has `.git` as a DIRECTORY; a linked worktree has `.git` as a FILE containing
+// "gitdir: ...". That is a filesystem fact no caller-supplied JSON can fake, and it needs no
+// subprocess. A path that no longer exists is an already-removed worktree (orphan reaping).
+try {
+  const st = fs.statSync(`${WT}/.git`);
+  if (st.isDirectory()) {
+    console.error('REFUSE: target has a .git DIRECTORY — that is a primary checkout, not a linked worktree.');
+    process.exit(2);
+  }
+  if (!st.isFile()) { console.error('REFUSE: target .git is neither a gitfile nor absent'); process.exit(2); }
+} catch (e) {
+  if (e.code !== 'ENOENT') { console.error(`REFUSE: cannot stat target .git (${e.message})`); process.exit(2); }
+  // ENOENT = the worktree directory is already gone; reaping its leftover processes is the point.
+}
+
+// The inventory may only NARROW what is allowed — it can never authorize a target on its own.
+if ([...PROTECTED].some((p) => WT === p || WT.startsWith(p + '/'))) {
+  console.error('REFUSE: target is inside a main checkout'); process.exit(2);
+}
+// Root membership alone is NOT enough: a typo or an unmanaged directory nested under a root would
+// pass it and then have its processes killed. A live target must be an EXACT managed worktree.
+// An already-removed worktree cannot be in the inventory, so it takes the explicit orphan mode,
+// which additionally requires that the path really is gone from disk.
+const targetExists = fs.existsSync(WT);
+if (targetExists) {
+  if (!KNOWN.has(WT)) {
+    console.error(`REFUSE: --path is not an exact non-main worktree in the runtime inventory: ${WT}`);
+    process.exit(2);
+  }
+} else {
+  if (!ORPHAN_MODE) {
+    console.error(`REFUSE: ${WT} does not exist. To reap a removed worktree's leftovers pass --orphan.`);
+    process.exit(2);
+  }
+  if (!inAnyRoot(WT) || ROOTS.has(WT)) {
+    console.error(`REFUSE: orphan --path is not inside a known workspaces root (${[...ROOTS].join(', ')})`);
+    process.exit(2);
+  }
 }
 
 const inWt = (c) => under(c, WT);
@@ -132,18 +169,14 @@ function computeKillSet(I) {
   const kids = new Map();
   for (const p of I.values()) { if (!kids.has(p.ppid)) kids.set(p.ppid, []); kids.get(p.ppid).push(p.pid); }
 
-  // Seed: CWD rooted in the worktree, an exe resident in it, or an fd still holding it open
-  // (the chdir'd-away case).
+  // Seed: CWD rooted in the worktree — nothing else.
+  // Deliberately NOT seeding on executable-path or open file descriptors: an editor, language
+  // server, indexer or backup tool merely holding a file open under the worktree would be seeded
+  // and then have its ENTIRE process tree taken by the descendant closure below. That risks the
+  // operator's unsaved work and contradicts the documented "CWD + descendants" model. Measured on
+  // this host, the fd/exe rungs added ZERO processes across five worktrees, so they bought nothing.
   const seed = [];
-  for (const p of I.values()) {
-    if (inWt(p.cwd) || (p.exe && inWt(p.exe))) { seed.push(p.pid); continue; }
-    try {
-      for (const fd of fs.readdirSync(`/proc/${p.pid}/fd`)) {
-        let t; try { t = fs.readlinkSync(`/proc/${p.pid}/fd/${fd}`); } catch { continue; }
-        if (inWt(t)) { seed.push(p.pid); break; }
-      }
-    } catch { }
-  }
+  for (const p of I.values()) if (inWt(p.cwd)) seed.push(p.pid);
 
   // Closure over descendants: catches a live child that chdir'd elsewhere while its parent stayed.
   const set = new Set(seed); const stack = [...seed];
@@ -155,8 +188,13 @@ function computeKillSet(I) {
     const p = I.get(pid); if (!p) continue;
     if (pid <= 1 || immune.has(pid)) continue;                                  // never us, never init
     const n = norm(p.cwd);
-    if (n && PROTECTED.has(n)) continue;                                        // parked in a main checkout
-    if (n && inAnyRoot(n) && !inWt(p.cwd)) continue;                            // belongs to a sibling worktree
+    // Prefix match, not exact equality: a process sitting in a SUBDIRECTORY of a main checkout
+    // (e.g. .../orchestrator-pack/scripts) must be just as protected as one at its root.
+    if (n && [...PROTECTED].some((q) => n === q || n.startsWith(q + '/'))) continue;
+    // Exclude only processes inside a REAL sibling worktree — not anything that merely sits under
+    // a workspaces root. Excluding by root would spare a descendant of our own agent that chdir'd
+    // into a shared cache/tmp dir under that root, which is exactly how the original leak survives.
+    if (n && !inWt(p.cwd) && [...KNOWN].some((q) => q !== WT && (n === q || n.startsWith(q + '/')))) continue;
     out.push(p);
   }
   return out.sort((a, b) => b.pid - a.pid);                                     // leaves before supervisors
