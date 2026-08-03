@@ -29,10 +29,12 @@ import {
   wrapOwnedPromptPayload,
 } from './owned-prompt-marker.ts';
 import {
+  acquireStateLightNewChatSendSlot,
   conversationUuidFromUrl,
   ownedConversationIdentityMatches,
   prepareStateLightFreshConversation,
   projectConversationPrefix,
+  releaseStateLightNewChatSendSlot,
   StateLightNavigationCounter,
   STATE_LIGHT_MAX_TIMEOUT_MS,
 } from './state-light-fresh-conversation.ts';
@@ -704,10 +706,11 @@ async function dispatchOnce(
   insertionDeadline: number,
   deps: StateLightSessionDependencies,
 ): Promise<SessionTerminalTuple | null> {
-  if (!(await verifyComposerExact(state.page, wrapped, insertionDeadline, deps))) {
+  const composerVerified = await verifyComposerExact(state.page, wrapped, insertionDeadline, deps);
+  if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+  if (!composerVerified) {
     return tuple('driver_error', 'invocation', 'composer_mutation_budget_exhausted');
   }
-  if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
   payload.sendCount = 1;
   payload.deliveryState = 'delivery_unknown';
   const latched: SessionPayloadRecord = {
@@ -970,6 +973,7 @@ async function setupOwnedPage(
       waitUntil: 'domcontentloaded',
       timeout: Math.min(MAX_LOCAL_READ_WAIT_MS * 6, Math.max(1, remainingMs(state, deps))),
     });
+    if (!deadlineOpen(state, deps)) throw new Error('whole_session_deadline_exhausted');
     if (!state.config.browser.newChat) {
       if (!ownedConversationIdentityMatches(String(state.page.url()), target)) {
         throw new Error('ui_contract_mismatch:conversation_redirect');
@@ -987,6 +991,7 @@ async function setupOwnedPage(
         state.invocationId,
         state.navigation,
       );
+      if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
       if (prepared.state === 'wall') return tuple(prepared.wallState, 'invocation', prepared.cause);
       if (prepared.state !== 'ready') return tuple('ui_contract_mismatch', 'invocation', prepared.cause);
     }
@@ -1025,8 +1030,8 @@ async function runActivePayload(
 ): Promise<SessionTerminalTuple> {
   if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
   const composerState = await deps.waitForComposer(state.page, state.wholeSessionDeadline);
-  if (composerState.state !== 'ready') return tuple(composerState.state, 'invocation', composerState.cause);
   if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+  if (composerState.state !== 'ready') return tuple(composerState.state, 'invocation', composerState.cause);
 
   payload.expectedMarker = deps.marker();
   const wrapped = deps.wrapPayload(payload.expectedMarker, payload.item.snapshot.text);
@@ -1037,6 +1042,7 @@ async function runActivePayload(
     state.wholeSessionDeadline,
     insertionContext,
   );
+  if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
   if (mutationFailure) return tuple('driver_error', 'invocation', mutationFailure);
   const insertionDeadline = insertionContext.insertionDeadlineMs ?? state.wholeSessionDeadline;
 
@@ -1045,7 +1051,9 @@ async function runActivePayload(
     if (continuity) return continuity;
   }
   if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
-  if (!(await deps.readComposerReady(state.page, insertionDeadline))) {
+  const composerReady = await deps.readComposerReady(state.page, insertionDeadline);
+  if (!deadlineOpen(state, deps)) return tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted');
+  if (!composerReady) {
     return tuple('driver_error', 'invocation', 'composer_mutation_budget_exhausted');
   }
 
@@ -1164,69 +1172,103 @@ async function executeSession(
     stopped: false,
   };
 
+  const freshSlotProfileKey = config.browser.newChat
+    ? deps.profileKey(config.browser.profile, config.browser.cdp)
+    : undefined;
+  let freshSlotAcquired = false;
   let decisiveIndex: number | null = null;
   let activeIndex = 0;
-  try {
-    const setupFailure = await setupOwnedPage(state, deps);
-    if (setupFailure) {
-      payloads[0]!.terminal = setupFailure;
-      decisiveIndex = 0;
-    } else {
-      for (let index = 0; index < payloads.length; index++) {
-        activeIndex = index;
-        const payload = payloads[index]!;
-        if (index > 0) {
-          const continuity = await preactivationCheck(state, index, deps);
-          if (continuity) {
-            payload.deliveryState = 'not_attempted';
-            payload.terminal = continuity;
-            decisiveIndex = index;
-            break;
-          }
-          payload.deliveryState = 'not_sent';
-        }
 
-        const terminal = await runActivePayload(state, payload, index, deps);
-        payload.terminal = terminal;
-        if (!(await writePayloadRecord(state, payload, activeTerminalRecord(payload)))) {
-          decisiveIndex = index;
-          state.stopped = true;
-          break;
-        }
-        if (terminal.state !== 'ok') {
-          decisiveIndex = index;
-          break;
-        }
-        if (config.browser.newChat && index === 0 && !payload.latestWrittenRecord?.conversation_id) {
-          // A fresh conversation identity must be caller-visible before ordinal 2 can activate.
-          if (payloads.length > 1) {
-            const next = payloads[1]!;
-            next.terminal = tuple('ui_contract_mismatch', 'invocation', 'fresh_conversation_identity_unavailable');
-            decisiveIndex = 1;
-          }
-          break;
-        }
+  try {
+    let slotFailure: SessionTerminalTuple | null = null;
+    if (freshSlotProfileKey) {
+      try {
+        await acquireStateLightNewChatSendSlot(
+          freshSlotProfileKey,
+          invocationId,
+          Math.max(1, remainingMs(state, deps)),
+        );
+        freshSlotAcquired = true;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        slotFailure = !deadlineOpen(state, deps)
+          ? tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted')
+          : tuple('driver_error', 'invocation', `fresh_chat_send_slot_failed:${detail}`);
       }
     }
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    payloads[activeIndex]!.terminal = !deadlineOpen(state, deps) || detail === 'whole_session_deadline_exhausted'
-      ? tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted')
-      : tuple('driver_error', 'invocation', `active_operation_failed:${detail}`);
-    decisiveIndex = activeIndex;
-  }
 
-  let sequenceComplete = !state.stopped;
-  if (sequenceComplete) sequenceComplete = await writeNormalTermination(state, decisiveIndex);
-  const cleanup = await cleanupSession(state, deps);
-  if (!sequenceComplete) {
-    const decisiveState = decisiveIndex === null ? 'driver_error' : (payloads[decisiveIndex]!.terminal?.state ?? 'driver_error');
-    return turnExitCode(decisiveState);
-  }
+    if (slotFailure) {
+      payloads[0]!.terminal = slotFailure;
+      decisiveIndex = 0;
+    } else {
+      try {
+        const setupFailure = await setupOwnedPage(state, deps);
+        if (setupFailure) {
+          payloads[0]!.terminal = setupFailure;
+          decisiveIndex = 0;
+        } else {
+          for (let index = 0; index < payloads.length; index++) {
+            activeIndex = index;
+            const payload = payloads[index]!;
+            if (index > 0) {
+              const continuity = await preactivationCheck(state, index, deps);
+              if (continuity) {
+                payload.deliveryState = 'not_attempted';
+                payload.terminal = continuity;
+                decisiveIndex = index;
+                break;
+              }
+              payload.deliveryState = 'not_sent';
+            }
 
-  const aggregate = buildSessionResult(state, cleanup);
-  if (!(await state.writer.write(aggregate))) return aggregate.exit_code === 0 ? 10 : aggregate.exit_code;
-  return aggregate.exit_code;
+            const terminal = await runActivePayload(state, payload, index, deps);
+            payload.terminal = terminal;
+            if (!(await writePayloadRecord(state, payload, activeTerminalRecord(payload)))) {
+              payload.terminal = tuple('driver_error', 'invocation', 'stdout_terminal_record_failed');
+              decisiveIndex = index;
+              state.stopped = true;
+              break;
+            }
+            if (terminal.state !== 'ok') {
+              decisiveIndex = index;
+              break;
+            }
+            if (config.browser.newChat && index === 0 && !payload.latestWrittenRecord?.conversation_id) {
+              // A fresh conversation identity must be caller-visible before ordinal 2 can activate.
+              if (payloads.length > 1) {
+                const next = payloads[1]!;
+                next.terminal = tuple('ui_contract_mismatch', 'invocation', 'fresh_conversation_identity_unavailable');
+                decisiveIndex = 1;
+              }
+              break;
+            }
+          }
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        payloads[activeIndex]!.terminal = !deadlineOpen(state, deps) || detail === 'whole_session_deadline_exhausted'
+          ? tuple('stream_timeout', 'invocation', 'whole_session_deadline_exhausted')
+          : tuple('driver_error', 'invocation', `active_operation_failed:${detail}`);
+        decisiveIndex = activeIndex;
+      }
+    }
+
+    let sequenceComplete = !state.stopped;
+    if (sequenceComplete) sequenceComplete = await writeNormalTermination(state, decisiveIndex);
+    const cleanup = await cleanupSession(state, deps);
+    if (!sequenceComplete) {
+      const decisiveState = decisiveIndex === null ? 'driver_error' : (payloads[decisiveIndex]!.terminal?.state ?? 'driver_error');
+      return turnExitCode(decisiveState === 'ok' ? 'driver_error' : decisiveState);
+    }
+
+    const aggregate = buildSessionResult(state, cleanup);
+    if (!(await state.writer.write(aggregate))) return aggregate.exit_code === 0 ? 10 : aggregate.exit_code;
+    return aggregate.exit_code;
+  } finally {
+    if (freshSlotAcquired && freshSlotProfileKey) {
+      releaseStateLightNewChatSendSlot(freshSlotProfileKey, invocationId);
+    }
+  }
 }
 
 export async function runStateLightSession(
