@@ -4,6 +4,9 @@
   "declared_paths": [
     "docs/declarations/1248.json",
     "docs/orca-runtime-caller-census.md",
+    "scripts/fleet-liveness-census.cases.ts",
+    "scripts/fleet-liveness.cases.ts",
+    "scripts/gate-runner/fleet-liveness-census.ts",
     "scripts/invoke-gated-worker-nudge.ps1",
     "scripts/invoke-gated-worker-nudge.test.ts",
     "scripts/invoke-gated-worker-nudge.ts",
@@ -30,6 +33,7 @@
     "scripts/orca-runtime/native.ts",
     "scripts/orca-runtime/task-adapter.test.ts",
     "scripts/orca-runtime/task-adapter.ts",
+    "scripts/orchestrator-side-process-liveness-contract.json",
     "scripts/orchestrator-side-process-registry.json",
     "scripts/pr2-foundation/runtime-catalog.ts",
     "scripts/review-ready-report-state-seed.ps1",
