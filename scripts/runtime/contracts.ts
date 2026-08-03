@@ -41,7 +41,7 @@ export interface RuntimeObservationToken {
 export interface RuntimeBoundedOutput {
   readonly worker: RuntimeWorkerIdentity;
   readonly lines: readonly string[];
-  readonly observationToken: RuntimeObservationToken | null;
+  readonly observationToken: RuntimeObservationToken;
   readonly changed: boolean;
   readonly terminalState: 'running' | 'exited' | 'unknown';
 }
