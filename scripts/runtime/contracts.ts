@@ -55,7 +55,8 @@ export type RuntimeOperationName =
   | 'dispatch_input'
   | 'read_bounded_output'
   | 'liveness'
-  | 'stop_worker';
+  | 'stop_worker'
+  | 'remove_workspace';
 
 export interface RuntimeOperationFailure {
   readonly status: 'failed' | 'unsupported';
@@ -143,6 +144,19 @@ export interface RuntimeAdapter {
     worker: RuntimeWorkerIdentity,
     options?: RuntimeCallOptions,
   ): RuntimeResult<{ readonly stopped: true }>;
+
+  /**
+   * Remove one exact runtime workspace after caller-owned policy and claims have
+   * admitted cleanup. The adapter only validates path/head and performs the
+   * native operation; it never derives cleanup authority from runtime metadata.
+   */
+  removeWorkspace(
+    input: {
+      readonly workspacePath: string;
+      readonly expectedHeadSha?: string;
+    },
+    options?: RuntimeCallOptions,
+  ): RuntimeResult<{ readonly removed: true }>;
 }
 
 export function runtimeFailure(
