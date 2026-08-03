@@ -121,6 +121,9 @@ function assertReviewDependencies(repoRoot: string): void {
 }
 
 export function executeReview(options: ReviewOptions): ReviewResult {
+  // Budget syntax/range must fail before dependency probes, issue/scope reads, prompt
+  // construction, claims, subprocesses, or any durable/external effect.
+  const budgetLedger = createReviewerBudgetLedger();
   const source = options.source ?? defaultSourceFromEnv();
   const logLines: string[] = [];
 
@@ -150,8 +153,6 @@ export function executeReview(options: ReviewOptions): ReviewResult {
       structuredFindings: [],
     };
   }
-
-  const budgetLedger = createReviewerBudgetLedger();
 
   const codex = runCodexReview({
     repoRoot: options.repoRoot,
