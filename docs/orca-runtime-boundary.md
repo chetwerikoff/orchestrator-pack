@@ -38,19 +38,31 @@ current production problem is disagreement between two native authorities:
 The seam performs a bounded dual census and emits one exact classification:
 `exact_dual`, `exact_git_only`, `orca_only`, `conflict`, or `absent`. Runtime-specific commands and
 response validation stay at the edge; normalized identity and continuation decisions stay in the
-pure classifier.
+pure classifier. Multiple worktrees may legitimately share the same source commit, so equality of
+HEAD SHA alone is not a collision. Canonical path, branch or detached mode, Issue/PR binding, and
+the complete validated row establish identity.
+
+The canonical create/handoff surface is
+`scripts/worktree-lifecycle/create-continuation.ts`. One invocation owns the process-local
+exclusion, pre-create dual census, one primary create attempt, authoritative read-back after known
+or unknown command outcome, at most one isolated same-source replacement, and two fresh exact-dual
+reads before returning a terminal-spawn-authorized path. It does not create a terminal. A
+concurrent or exhausted caller receives a no-effect task-level degraded result and returns control
+to the scheduler.
 
 The lifecycle seam does not become a universal registry and stores no durable state. Discovery
 never grants mutation authority. Terminal spawn is allowed only after exact Git/Orca agreement on
-repository, canonical path, PR, branch-or-detached mode, and full HEAD SHA. Unsupported or
-malformed Orca output is a conflict.
+repository, canonical path, Issue binding, branch-or-detached mode, and full HEAD SHA. Unsupported
+or malformed Orca output is a conflict.
 
 For cleanup, mutation safety and work continuity are separate decisions. Existing teardown gates
 remain fail-closed for the target. A blocked or ambiguous cleanup returns a structured
 `cleanup_deferred` result with `pipelineContinues: true`; it does not invalidate an already
 successful merge/adoption or stop unrelated scheduler work. Exact Git-only recovery is explicit,
 dry-run-first, and permits only Git's non-force worktree removal after the complete identity,
-cleanliness, merge, ownership, terminal, process, exclusion, and fresh-read-back checks pass.
+cleanliness, merge, ownership, terminal, process, exclusion, live merged-PR binding, and
+fresh-read-back checks pass. The PR head and branch are checked again immediately before each
+destructive effect.
 
 No watcher, daemon, lease service, second state store, bulk orphan sweep, private Orca persistence
 edit, force removal, or path-only delete is introduced. A future native Orca adopt/register branch
