@@ -116,10 +116,11 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     },
     options: RuntimeCallOptions = {},
   ): RuntimeResult<{ readonly removed: true }> {
-    const requestedPath = resolve(input.workspacePath.trim());
-    if (!input.workspacePath.trim()) {
+    const rawPath = input.workspacePath.trim();
+    if (!rawPath) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_path_missing');
     }
+    const requestedPath = resolve(rawPath);
 
     const shown = this.#run<OrcaWorktreeShow>(
       ['worktree', 'show', '--worktree', `path:${requestedPath}`],
@@ -138,7 +139,7 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('remove_workspace', 'runtime_workspace_path_mismatch');
     }
     const expectedHeadSha = input.expectedHeadSha?.trim().toLowerCase();
-    const observedHeadSha = worktree.head?.trim().toLowerCase();
+    const observedHeadSha = worktree?.head?.trim().toLowerCase();
     if (expectedHeadSha && observedHeadSha !== expectedHeadSha) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_head_mismatch');
     }
