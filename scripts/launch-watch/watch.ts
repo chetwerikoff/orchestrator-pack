@@ -5,6 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { emitResult } from '../lib/launch-watch/emission.ts';
 import { processEvidence, runOwnedProcess, type ProcessRunner } from '../lib/launch-watch/process.ts';
 import type { ProcessResult } from '../kernel/subprocess.ts';
+import { readLegacyOrcaBoundedOutputWithRunner } from '../orca-runtime/legacy-watch.ts';
 import {
   CLEANUP_RESERVE_MS,
   cleanupOverride,
@@ -135,43 +136,38 @@ export async function executeWatchRequest(request: WatchRequest, dependencies: W
   const fail = (primary: WatchResult): Promise<WatchResult> => finalizeWatchFailure(request, primary, startedAt, now, cleanupHelpers);
 
   if (request.sourceId === 'orca.terminal') {
-    const invoked = await invoke(run, 'orca', ['terminal', 'read', '--terminal', request.terminalHandle ?? '', '--json'], root, now, workDeadline);
-    if (invoked.expired) return fail(deadlineResult(request, operation, 'orca_read_deadline'));
-    const result = invoked.result;
-    if (!result || result.timedOut || result.outcome === 'timeout') return fail(deadlineResult(request, operation, 'orca_read_deadline', result ? processEvidence(result) : {}));
-    const payload = result.stdout.length > 0 ? object(result.stdout) : null;
-    if (payload?.ok === false) {
-      return fail(watchResult('source-unavailable', {
-        operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: 'orca_read_ok_false',
-        deadlineMs: request.deadlineMs, evidence: { ...processEvidence(result), response: payload }, remediation: 'inspect-source',
-      }));
+    const remaining = Math.floor(workDeadline - now());
+    if (remaining <= 0) return fail(deadlineResult(request, operation, 'orca_read_deadline'));
+    const read = await readLegacyOrcaBoundedOutputWithRunner({
+      handle: request.terminalHandle ?? '',
+      cwd: root,
+      timeoutMs: remaining,
+      runner: run,
+    });
+    if (read.status === 'deadline') {
+      return fail(deadlineResult(request, operation, 'orca_read_deadline', read.evidence));
     }
-    if (!result.ok) {
+    if (read.status === 'source-unavailable') {
       return fail(watchResult('source-unavailable', {
-        operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: 'orca_read_command_failed',
-        deadlineMs: request.deadlineMs, evidence: processEvidence(result), remediation: 'inspect-source',
-      }));
-    }
-    if (!payload) {
-      return fail(watchResult('source-unavailable', {
-        operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: result.stdout.length === 0 ? 'orca_read_empty_stdout' : 'orca_read_malformed_json',
-        deadlineMs: request.deadlineMs, evidence: result ? processEvidence(result) : {}, remediation: 'inspect-source',
-      }));
-    }
-    const resultObject = payload.result !== null && typeof payload.result === 'object' && !Array.isArray(payload.result)
-      ? payload.result as Record<string, unknown>
-      : null;
-    const lines = resultObject?.lines;
-    const nextCursor = resultObject?.nextCursor;
-    if (payload.ok !== true || !resultObject || !Array.isArray(lines) || !('nextCursor' in resultObject) || (nextCursor !== null && typeof nextCursor !== 'string')) {
-      return fail(watchResult('source-unavailable', {
-        operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: 'orca_read_invalid_response_shape',
-        deadlineMs: request.deadlineMs, evidence: { ...processEvidence(result), response: payload }, remediation: 'inspect-source',
+        operation,
+        sourceId: request.sourceId,
+        predicateId: request.predicateId,
+        reasonCode: read.reasonCode,
+        deadlineMs: request.deadlineMs,
+        evidence: read.evidence,
+        remediation: 'inspect-source',
       }));
     }
     return watchResult('matched', {
-      operation, sourceId: request.sourceId, predicateId: request.predicateId, reasonCode: 'matched',
-      deadlineMs: request.deadlineMs, evidence: { response: payload }, remediation: 'none', owner: 'wrapper', operatorDisposition: 'none',
+      operation,
+      sourceId: request.sourceId,
+      predicateId: request.predicateId,
+      reasonCode: 'matched',
+      deadlineMs: request.deadlineMs,
+      evidence: read.evidence,
+      remediation: 'none',
+      owner: 'wrapper',
+      operatorDisposition: 'none',
     });
   }
 
