@@ -49,6 +49,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/launch-watch/watch.test.ts': 120,
   // Issue #1298 worktree lifecycle tests are deterministic fixture coverage.
   // Keep the pre-topology plan bounded until runtime-history harvest records them.
+  'scripts/worktree-lifecycle/create-continuation.test.ts': 120,
   'scripts/worktree-lifecycle/core.test.ts': 120,
   'scripts/worktree-lifecycle/operations.test.ts': 120,
 });
