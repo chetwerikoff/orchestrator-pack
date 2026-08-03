@@ -1,0 +1,39 @@
+name: PR 1281 source snapshot
+
+on:
+  push:
+    branches:
+      - agent/issue-1248-runtime-callers
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          path: head
+      - name: Checkout PR base
+        uses: actions/checkout@v4
+        with:
+          ref: 5fe7e0fd1d7c09654d3121e6dfab46dc330672cc
+          path: base
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: head/package-lock.json
+      - name: Install head dependencies
+        working-directory: head
+        run: npm ci
+      - name: Pack source, dependencies, and base
+        run: tar --exclude='head/.git' --exclude='base/.git' -czf /tmp/pr1281-source.tar.gz head base
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr1281-source
+          path: /tmp/pr1281-source.tar.gz
+          compression-level: 0
+          retention-days: 1
