@@ -1,144 +1,119 @@
 ---
 name: switch-pack-reviewer
 description: >-
-  Switch local pack PR reviewer between GPT, Codex, and Claude via PACK_REVIEWER.
-  Use when the user asks to switch reviewer, set gpt/codex/claude for review,
-  fix wrong reviewer running, or avoid Process overriding User env — e.g.
-  «переключи ревьюера», «поставь codex», «используется claude вместо codex»,
-  «PACK_REVIEWER», «switch reviewer», «reviewer codex/claude».
-  Runs checklist, applies User scope, clears Process override, restarts AO,
-  and verifies effective reviewer with show-pack-reviewer-status.ps1.
+  Switch the pack PR reviewer between GPT, Codex, and Claude and persist the
+  choice for future review invocations. Use when the user asks to switch the
+  reviewer, set gpt/codex/claude, fix a reviewer mismatch, or inspect the
+  saved reviewer preference.
 ---
 
-# Switch pack reviewer (PACK_REVIEWER)
+# Switch pack reviewer
 
-Operator workflow for **local** AO pack review (`invoke-pack-review.ps1`).  
-**REVIEW_COMMAND in YAML does not change** when switching — only `PACK_REVIEWER`.
+This skill changes the pack-owned reviewer preference. It does not start,
+stop, reload, or inspect an agent runtime. The review runner reads the saved
+choice when the next review invocation starts, so the procedure is portable
+across runtime modules.
 
-Canonical docs: [`docs/reviewer-switch-runbook.md`](../../../docs/reviewer-switch-runbook.md).
+## Reviewer authority
+
+The canonical precedence is:
+
+1. `PACK_REVIEW_BOUND_REVIEWER` — an explicit reviewer bound to one invocation.
+2. The persistent user preference.
+3. Legacy `PACK_REVIEWER` — compatibility fallback only when no preference is saved.
+
+The persistent preference is stored at:
+
+```text
+$XDG_CONFIG_HOME/orchestrator-pack/reviewer.json
+```
+
+When `XDG_CONFIG_HOME` is unset, the store uses the platform user config
+location, normally `$HOME/.config/orchestrator-pack/reviewer.json`.
+The file is pack-owned, user-scoped, atomically replaced, and contains only
+the schema and selected reviewer.
+
+An invalid saved file fails closed. It must be repaired with this skill; an
+ambient environment value must not silently select a different reviewer.
 
 ## Triggers
 
-- User names target: **gpt**, **codex**, or **claude**
-- User reports mismatch: global User is one value, reviews use another
-- User asks to «переключить ревьюера», «поставь codex/claude», «fix PACK_REVIEWER»
+- The user names `gpt`, `codex`, or `claude`.
+- The user reports that the wrong reviewer ran.
+- The user asks to make a reviewer choice permanent.
+- The user asks for the current reviewer or reviewer status.
 
-**Skip** when the ask is only architectural (issue draft) with no machine change.
+If the request is only about reviewing an issue draft and does not ask to
+change the machine preference, skip this skill.
 
-## Core rule (tell the user if confused)
+## Procedure
 
-- **User** = permanent operator choice (User-level env var / shell profile).
-- **Process** = sticker on this terminal/session; **wins over User** while set.
-- **Do not** copy User → Process on every boot — clear Process instead.
-- **Do not** set `$env:PACK_REVIEWER` in profiles/IDE unless intentional one-shot override.
+### 1. Record the current state
 
-## Checklist — apply switch
+From the pack repository root:
 
-Target reviewer: `gpt`, `codex`, or `claude` (from user message; if unclear, ask once).
-
-**GPT note:** `PACK_REVIEWER=gpt` uses browser ChatGPT to inspect the PR and
-return a terminal review payload. The pack runner still publishes the GitHub
-review. GPT failures do not auto-failover to Codex.
-
-### 1. Record baseline
-
-From pack repo root:
-
-```powershell
-pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1
+```bash
+npm run --silent pack-reviewer-status
 ```
 
-Note Process / User / Machine and **Effective**. If Process differs from User, warn before proceeding.
+Record the saved reviewer, effective reviewer, preference path, and whether
+the legacy environment is present. A saved preference takes precedence over a
+stale `PACK_REVIEWER` inherited from a shell, IDE, or runtime.
 
-### 2. Apply (preferred — one command)
+### 2. Persist the requested reviewer
 
-```powershell
-pwsh -NoProfile -File scripts/set-pack-reviewer.ps1 -Reviewer <gpt|codex|claude> -RestartAo
+Use exactly one of:
+
+```bash
+npm run --silent pack-reviewer-set -- --reviewer gpt
+npm run --silent pack-reviewer-set -- --reviewer codex
+npm run --silent pack-reviewer-set -- --reviewer claude
 ```
 
-This script:
+The command validates the value, writes the user preference, and verifies that
+the effective reviewer is the requested one. It does not export a temporary
+process variable, edit a shell profile, or require a runtime restart.
 
-- Sets **User** `PACK_REVIEWER` via `[Environment]::SetEnvironmentVariable(..., 'User')`
-- Clears **Process** in the current session (`Remove-Item Env:PACK_REVIEWER`)
-- Restarts AO (`ao stop` → `ao start orchestrator-pack`) when `-RestartAo` is passed
+### 3. Verify
 
-**Manual equivalent** (only if scripts unavailable):
-
-```powershell
-[Environment]::SetEnvironmentVariable('PACK_REVIEWER', '<gpt|codex|claude>', 'User')
-Remove-Item Env:PACK_REVIEWER -ErrorAction SilentlyContinue
-ao stop
-ao start orchestrator-pack
+```bash
+npm run --silent pack-reviewer-status -- --expected <gpt|codex|claude>
 ```
 
-### 3. Session hygiene (prevent recurrence)
+`[PASS]` is required. If it fails, preserve the diagnostic output and stop;
+do not compensate by setting `PACK_REVIEWER` in another shell or by invoking a
+reviewer wrapper directly.
 
-- Do **not** leave `$env:PACK_REVIEWER = 'claude'` after a Codex quota workaround — remove when done.
-- Do **not** add `PACK_REVIEWER` to PowerShell profile, Cursor `terminal.integrated.env`, or project `.env`.
-- Tell the user to **close and reopen** other IDE terminals still open from before the switch (they keep old Process env until closed).
+### 4. Report
 
-### 4. Verify effective reviewer (required)
+Tell the user:
 
-`set-pack-reviewer.ps1` verifies in a child `pwsh` with process scope cleared (Cursor/agent parents often inject `PACK_REVIEWER`).
+- saved reviewer and preference file;
+- effective reviewer and wrapper;
+- whether a legacy `PACK_REVIEWER` exists and is being ignored;
+- that the next pack review will use the saved reviewer automatically.
 
-Standalone check:
+## Runtime boundary
 
-```powershell
-pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1 -Expected <gpt|codex|claude>
+This skill has no vendor runtime commands. Runtime selection belongs to the
+pack's runtime composition root and is controlled by its configured adapter
+selection. A future runtime module can replace the current one without
+changing this skill because reviewer selection is resolved at review
+invocation time.
+
+## One-shot exceptions
+
+For a deliberate one-review exception, use the runner's invocation-bound
+reviewer mechanism. Do not overwrite the persistent preference and do not
+leave a shell-level `PACK_REVIEWER` override behind.
+
+GPT uses the browser review adapter and does not silently fail over to Codex or
+Claude. A failed review is a failed invocation that must be diagnosed or
+retried according to the review runner contract.
+
+## Related commands
+
+```bash
+npm run --silent pack-reviewer-status
+npm run --silent pack-reviewer-set -- --reviewer gpt
 ```
-
-The status script clears process scope before resolving so **User** wins when global is set.
-
-**PASS** = exit code 0, line `Effective` matches target, no override warning.
-
-If FAIL:
-
-| Symptom | Fix |
-|---------|-----|
-| Process still set to other value | `Remove-Item Env:PACK_REVIEWER`; re-run status |
-| Effective unset | Set User again; new shell from `set-pack-reviewer.ps1` |
-| User wrong | Re-run `set-pack-reviewer.ps1` |
-
-### 5. Verify AO path (when `ao` on PATH)
-
-After `-RestartAo`, optional smoke:
-
-```powershell
-ao review list orchestrator-pack --json
-```
-
-On next review failure, `terminationReason` should name:
-
-| Target | Wrapper in terminationReason |
-|--------|------------------------------|
-| gpt | `run-pack-review-gpt.ts` |
-| codex | `run-pack-review.ps1` |
-| claude | `run-pack-review-claude.ps1` |
-
-Strict gate (optional):
-
-```powershell
-pwsh -NoProfile -File scripts/orchestrator-diagnose.ps1 -Strict
-```
-
-### 6. Report to user
-
-Include:
-
-- Table: Process / User / Machine / **Effective**
-- Whether AO was restarted
-- PASS or FAIL from step 4
-- Reminder: other open terminals may still override until reopened
-
-## Quick reference
-
-| Goal | Command |
-|------|---------|
-| Status only | `pwsh -NoProfile -File scripts/show-pack-reviewer-status.ps1` |
-| Switch + verify + restart AO | `pwsh -NoProfile -File scripts/set-pack-reviewer.ps1 -Reviewer codex -RestartAo` |
-| Clear session override only | `Remove-Item Env:PACK_REVIEWER` then status script |
-
-## Related
-
-- [`docs/reviewer-switch-runbook.md`](../../../docs/reviewer-switch-runbook.md)
-- [`scripts/lib/Resolve-PackReviewer.ps1`](../../../scripts/lib/Resolve-PackReviewer.ps1)
