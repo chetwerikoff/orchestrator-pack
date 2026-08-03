@@ -14,6 +14,7 @@
     "scripts/lib/Orchestrator-SideEffectFence.ps1",
     "scripts/lib/Orchestrator-SideProcessCrashBackoff.ps1",
     "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
+    "scripts/lib/Orchestrator-WakeSupervisor.ps1",
     "scripts/lib/Orchestrator-WakeSupervisorLease.ps1",
     "scripts/lib/Review-StartClaimLifecycle.ps1",
     "scripts/lib/Worker-Recovery.ps1",
@@ -31,6 +32,9 @@
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/orchestrator-side-process-registry.json",
     "scripts/pr2-foundation/runtime-catalog.ts",
+    "scripts/review-ready-report-state-seed.ps1",
+    "scripts/review-trigger-reconcile.ps1",
+    "scripts/review-trigger-reeval.ps1",
     "scripts/runtime/caller-census.test.ts",
     "scripts/runtime/caller-census.ts",
     "scripts/runtime/contracts.ts",
@@ -67,5 +71,5 @@
     "package.json",
     "scripts/"
   ],
-  "source_revision": "#1248-hard-cut-r2"
+  "source_revision": "#1248-hard-cut-r3"
 }
