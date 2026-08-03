@@ -4,15 +4,18 @@
   "declared_paths": [
     "docs/declarations/1248.json",
     "docs/orca-runtime-caller-census.md",
+    "scripts/lib/pack-review-worker-notification.ts",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
+    "scripts/lib/worker-smoke-bounded-create.ts",
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/runtime/caller-census.test.ts",
     "scripts/runtime/caller-census.ts",
-    "scripts/runtime/compat-diagnostic.ts",
     "scripts/runtime/registry.ts",
-    "scripts/runtime/task-compat.test.ts",
-    "scripts/runtime/task-compat.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/runtime/task-lifecycle.test.ts",
+    "scripts/runtime/task-lifecycle.ts",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
     ".ao/",
@@ -30,5 +33,5 @@
     "package.json",
     "scripts/"
   ],
-  "source_revision": "#1248"
+  "source_revision": "#1248-hard-cut"
 }
