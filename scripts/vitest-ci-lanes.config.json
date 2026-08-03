@@ -104,6 +104,8 @@
     "scripts/review-trigger-reconcile.test.ts": "heavy",
     "scripts/review-trigger-reeval.test.ts": "heavy",
     "scripts/review-wake-trigger.test.ts": "heavy",
+    "scripts/runtime/caller-census.test.ts": "light",
+    "scripts/runtime/task-compat.test.ts": "light",
     "scripts/session-pr-binding-resolver.test.ts": "light",
     "scripts/session-runtime-liveness.test.ts": "heavy",
     "scripts/stage-completeness-guard.test.ts": "light",
