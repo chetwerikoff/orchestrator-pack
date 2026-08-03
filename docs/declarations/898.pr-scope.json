@@ -19,12 +19,14 @@
     "scripts/vitest-ci-lanes.config.json"
   ],
   "denylist": [
-    ".github/workflows/**",
-    "docs/declarations/**",
-    "docs/issues_drafts/**",
-    "packages/core/**",
-    "scripts/kernel/**",
-    "vendor/**"
+    ".github/workflows/",
+    "credentials/",
+    "docs/declarations/",
+    "docs/issues_drafts/",
+    "packages/core/",
+    "scripts/kernel/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
     "docs/merge-triage-primary-paths.v1.json",
@@ -43,5 +45,5 @@
     "scripts/pack-review-state.ts",
     "scripts/vitest-ci-lanes.config.json"
   ],
-  "source_revision": "r07"
+  "source_revision": "514fa6b837cec4d273f9480043d6d478aff8386b"
 }
