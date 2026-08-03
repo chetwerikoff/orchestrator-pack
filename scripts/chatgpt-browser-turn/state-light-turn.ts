@@ -171,7 +171,7 @@ interface BrowserIncident {
   readonly uncertaintyDiagnostics?: ObservationUncertaintyDiagnostics;
 }
 
-interface CompactTurnResult extends TurnResultV1 {
+export interface CompactTurnResult extends TurnResultV1 {
   readonly send_count: number;
   readonly poll_count: number;
   readonly goto_count: number;
@@ -831,7 +831,7 @@ function installDirectPublicationObserver(
   });
 }
 
-function compactResult(
+export function compactResult(
   state: TurnState,
   scope: FailureScope,
   cause: string,
@@ -859,6 +859,36 @@ function compactResult(
     incidents: incidents.map((incident) => incident.eventClass),
     ...(journalWriteFailed ? { journal_write_failed: true } : {}),
     ...extra,
+  };
+}
+
+export function compactInputInvalidRefusal(
+  cause: string,
+  invocationId: string,
+  profileKey: string,
+): CompactTurnResult {
+  const navigation = new StateLightNavigationCounter();
+  const incidents: BrowserIncident[] = [{
+    eventClass: 'input_invalid',
+    symptom: cause.startsWith('input_invalid:') ? cause.slice('input_invalid:'.length) : cause,
+    action: 'return_local_error',
+  }];
+  const journalWriteFailed = !appendIncident(incidents[0]!, invocationId);
+  return {
+    ...compactResult(
+      'input_invalid',
+      'invocation',
+      cause,
+      invocationId,
+      profileKey,
+      0,
+      0,
+      navigation,
+      incidents,
+      {},
+      journalWriteFailed,
+    ),
+    cleanup: 'skipped',
   };
 }
 

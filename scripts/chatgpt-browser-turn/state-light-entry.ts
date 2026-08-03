@@ -6,6 +6,9 @@ const [command, ...turnArgs] = argv;
 
 if (command === 'turn') {
   process.exitCode = await runStateLightTurn(turnArgs);
+} else if (command === 'session') {
+  const { runStateLightSession } = await import('./state-light-session.ts');
+  process.exitCode = await runStateLightSession(turnArgs);
 } else if (command?.startsWith('--')) {
   // Accept the simplified direct turn shape for new callers as well.
   process.exitCode = await runStateLightTurn(argv);
