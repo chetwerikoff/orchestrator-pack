@@ -1,0 +1,37 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1298,
+  "declared_paths": [
+    ".claude/skills/direct-fix-checklist/SKILL.md",
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    "docs/investigations/orca-worktree-lifecycle/2026-08-04-executor-observations.md",
+    "docs/orca-runtime-boundary.md",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worktree-lifecycle/README.md",
+    "scripts/worktree-lifecycle/cli.ts",
+    "scripts/worktree-lifecycle/core.test.ts",
+    "scripts/worktree-lifecycle/core.ts",
+    "scripts/worktree-lifecycle/operations.test.ts",
+    "scripts/worktree-lifecycle/operations.ts"
+  ],
+  "denylist": [
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "scripts/runtime/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/direct-fix-checklist/SKILL.md",
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    "docs/investigations/orca-worktree-lifecycle/",
+    "docs/migration_notes.md",
+    "docs/orca-runtime-boundary.md",
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/worktree-lifecycle/",
+    "scripts/worktree-teardown-runtime-profile.ts",
+    "scripts/worktree-teardown.ts"
+  ],
+  "source_revision": "97d119bd514dba7680c7107975699ebd94c4fc5c"
+}
