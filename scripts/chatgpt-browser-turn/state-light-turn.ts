@@ -119,7 +119,7 @@ export const BROWSER_TURN_RECURRENCE_PATH = join(
   'browser-turn-recurrence.jsonl',
 );
 
-interface ParsedTurnArgs {
+export interface ParsedTurnArgs {
   readonly options: Map<string, string | true>;
 }
 
@@ -184,11 +184,12 @@ export interface CompactTurnResult extends TurnResultV1 {
   readonly journal_write_failed?: boolean;
 }
 
-interface TurnRunOutcome {
+export interface TurnRunOutcome {
   readonly result: Omit<CompactTurnResult, 'cleanup'>;
   readonly page?: any;
   readonly browser?: any;
-  readonly preserveOwnedPage?: boolean;
+  /** Process-local publication fact; not part of turn-result/v1. */
+  readonly publicationState?: StateLightPublicationResult['state'];
   readonly ownedConversationUrl?: string;
   readonly profileKey?: string;
   readonly ownershipForfeited?: boolean;
@@ -199,6 +200,24 @@ export interface StateLightPublicationResult {
   readonly cause?: string;
   readonly output_bytes?: number;
   readonly output_sha256?: string;
+}
+
+interface StateLightPublicationHooks {
+  readonly beforeFinalLink?: () => void;
+  readonly afterFinalLink?: () => void;
+}
+
+export type PageCleanupAction = 'close' | 'preserve' | 'skip';
+
+export function decidePageCleanupAction(input: {
+  readonly sendCount: number;
+  readonly publicationState?: StateLightPublicationResult['state'];
+  readonly pagePresent: boolean;
+  readonly pageLost: boolean;
+}): PageCleanupAction {
+  if (!input.pagePresent || input.pageLost) return 'skip';
+  if (input.sendCount >= 1 && input.publicationState !== 'committed_ok') return 'preserve';
+  return 'close';
 }
 
 function parseTurnArgs(argv: readonly string[]): ParsedTurnArgs {
@@ -520,7 +539,6 @@ function maybeReturnObservationExhausted(
     return {
       page,
       browser,
-      preserveOwnedPage: true,
       result: compactResult(
         'no_reply',
         'invocation',
@@ -559,7 +577,6 @@ function returnOwnerFenceLostAfterSend(
   return {
     page,
     browser,
-    preserveOwnedPage: true,
     ownershipForfeited: true,
     result: compactResult(
       'driver_error',
@@ -610,6 +627,7 @@ export function publishStateLightReply(
   outputPath: string,
   invocationId: string,
   reply: string,
+  hooks: StateLightPublicationHooks = {},
 ): StateLightPublicationResult {
   const finalPath = resolve(outputPath);
   const parent = dirname(finalPath);
@@ -626,7 +644,9 @@ export function publishStateLightReply(
     // Atomic hard-link creation is the no-clobber commit boundary: it fails when
     // the caller-selected final path already exists and needs no legacy durable
     // publication record, witness, or recovery state.
+    hooks.beforeFinalLink?.();
     linkSync(tempPath, finalPath);
+    hooks.afterFinalLink?.();
 
     const outputBytes = Buffer.byteLength(reply, 'utf8');
     const outputSha256 = createHash('sha256').update(reply, 'utf8').digest('hex');
@@ -648,6 +668,8 @@ export function publishStateLightReply(
     return { state: 'error', cause: `output_write_failed:${detail}` };
   }
 }
+
+export const __testPublishStateLightReply = publishStateLightReply;
 
 export function resolveOwnedReplyWindow(
   messages: readonly PageMessage[],
@@ -2403,6 +2425,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             return {
               page,
               browser,
+              publicationState: publication.state,
               result: compactResult(
                 publicationState,
                 'invocation',
@@ -2419,6 +2442,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           return {
             page,
             browser,
+            publicationState: publication.state,
             ...(ownedConversationUrl ? { profileKey, ownedConversationUrl } : {}),
             ...(ownershipForfeited ? { ownershipForfeited: true } : {}),
             result: compactResult(
@@ -2626,7 +2650,6 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     return {
       ...(page ? { page } : {}),
       ...(browser ? { browser } : {}),
-      ...(afterSend && !lostAfterSend ? { preserveOwnedPage: true } : {}),
       result: compactResult(
         state,
         'invocation',
@@ -2653,7 +2676,13 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   let cleanup: ResourceCleanupOutcome = 'skipped';
   let journalWriteFailed = outcome.result.journal_write_failed === true;
   const incidents = [...outcome.result.incidents];
-  if (outcome.page && !outcome.preserveOwnedPage) {
+  const pageAction = decidePageCleanupAction({
+    sendCount: outcome.result.send_count,
+    publicationState: outcome.publicationState,
+    pagePresent: Boolean(outcome.page),
+    pageLost: browserOrPageDefinitelyLost(outcome.page, outcome.browser),
+  });
+  if (pageAction === 'close') {
     cleanup = await boundedResourceCleanup(
       () => outcome.page.close(),
       RESOURCE_CLEANUP_BOUND_MS,
@@ -2677,6 +2706,8 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   };
 }
 
+export const __testFinalizeTurn = finalizeTurn;
+
 export const __testComposerMutation = {
   remainingComposerMutationMs,
   readComposerReadiness,
@@ -2685,7 +2716,14 @@ export const __testComposerMutation = {
   waitForComposer,
 };
 
-export async function runStateLightTurn(argv: readonly string[]): Promise<number> {
+export type StateLightTurnDependencies = {
+  readonly runTurn?: (args: ParsedTurnArgs) => Promise<TurnRunOutcome>;
+};
+
+export async function runStateLightTurn(
+  argv: readonly string[],
+  dependencies: StateLightTurnDependencies = {},
+): Promise<number> {
   let args: ParsedTurnArgs;
   try {
     args = parseTurnArgs(argv);
@@ -2708,7 +2746,7 @@ export async function runStateLightTurn(argv: readonly string[]): Promise<number
     return 22;
   }
 
-  const result = await finalizeTurn(await runTurn(args));
+  const result = await finalizeTurn(await (dependencies.runTurn ?? runTurn)(args));
   emit(result);
   return turnExitCode(result.state);
 }

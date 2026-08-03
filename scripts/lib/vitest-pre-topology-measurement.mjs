@@ -26,6 +26,9 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/worker-smoke.test.ts': 120,
   'scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts': 120,
   'scripts/chatgpt-browser-turn/state-light-page-observation.test.ts': 120,
+  // Issue #1238 lifecycle tests were locally measured at 350ms and 23ms.
+  'scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts': 0.350,
+  'scripts/chatgpt-browser-turn/tab-lifecycle.test.ts': 0.023,
   // Issue #1142 adds two fast, deterministic light-lane contract suites. Fixed
   // estimates avoid consuming the bounded pre-topology live-measurement budget
   // before runtime-history refresh records their measured weights.

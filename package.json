@@ -24,6 +24,7 @@
     "test:issue-1120": "npm run check:node-major --silent && vitest run --config scripts/toolchain/vitest-foundation.config.ts scripts/stage-completeness-guard.test.ts",
     "test:issue-1152": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run scripts/lib/create-issue-stage-record.test.ts",
     "test:issue-1122": "npm run check:node-major --silent && node scripts/run-vitest-with-harness.mjs run --maxWorkers=1 scripts/browser-gpt-page-probe.test.ts",
+    "test:issue-1238": "npm run check:node-major --silent && timeout --signal=TERM --kill-after=5s 180s npm test -- --maxWorkers=1 scripts/chatgpt-browser-turn/tab-lifecycle.test.ts scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts scripts/chatgpt-browser-turn/state-light-page-observation.test.ts scripts/browser-gpt-page-probe.test.ts scripts/toolchain/chatgpt-browser-turn.test.ts scripts/toolchain/chatgpt-browser-turn.review-fixes.test.ts",
     "pack-gpt-review": "node --experimental-strip-types scripts/lib/Invoke-TypeScriptCli.ts --script scripts/pack-gpt-review.ts --",
     "chatgpt-browser-turn": "npm run check:node-major --silent && node --experimental-strip-types scripts/chatgpt-browser-turn/state-light-entry.ts",
     "flow-manager-long-running-child": "npm run check:node-major --silent && node --experimental-strip-types scripts/flow-manager-long-running-child.ts",

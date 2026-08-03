@@ -78,8 +78,9 @@ invocation.
 6. observe/poll only that owned tab until the final assistant node has page-level
    completion UI, no visible generation/tool/continuation activity, and stable
    final text across bounded reads, advancing continuation UI when needed;
-7. atomically publish the captured final reply;
-8. close only the invocation-owned tab and release the CDP client connection.
+7. atomically publish the captured final reply when a stable reply exists;
+8. close only the retained invocation-owned tab when the cleanup partition permits it,
+   then release only this Playwright CDP client connection.
 
 The input remains content-neutral. Existing stable-input validation and atomic
 publication primitives are reused; they do not become workflow admission state.
@@ -216,19 +217,20 @@ create a profile/browser admission wall.
 Every canonical turn creates a dedicated owned tab. This removes the old shared-
 tab cleanup ambiguity.
 
-- success closes that owned tab;
-- real pre-send/post-send failures close that owned tab when the process still has
-  it;
-- an elapsed soft observation threshold while the owned page remains reachable is
-  not a failure/cleanup boundary and does not close the tab;
-- close failure is a direct incident and is reported, but a reply already captured
-  successfully is not discarded because cleanup could not be confirmed;
-- sibling/foreign tabs are never helper cleanup targets;
-- disconnecting the Playwright CDP client never terminates the operator's Chrome.
+- a pre-send terminal with `send_count: 0` may close the exact retained tab;
+- a post-send turn closes that exact tab only after the final-path publisher returns
+  `committed_ok`;
+- every post-send/no-publication result preserves the reachable retained tab and
+  grants no resend or orphan-close authority;
+- a definitely lost page receives no second close attempt;
+- bounded page-close failure is subordinate to the already-determined result and
+  never widens the close target set;
+- the connected browser release runs after that page decision and only disconnects
+  this Playwright client; sibling/foreign tabs remain outside the cleanup target set.
 
-A process crash can of course prevent local cleanup. Later flows may progressively
-clean only tabs they can establish they own; they must not sweep arbitrary ChatGPT
-tabs.
+A helper crash can leave an orphan. The supported follow-up is the explicit,
+one-shot read-only page probe for bounded diagnosis; no later process derives page-close
+authority from metadata, URLs, target IDs, age, focus, or liveness.
 
 ## Fresh-conversation prepare bounds and advisory walls
 
@@ -264,8 +266,8 @@ identity plus unexpired status. After every awaited fresh-chat observation pass
 and immediately before continuation or late-result publication, it re-reads the
 canonical fresh claim the same way. Fence loss suppresses the protected effect:
 before-dispatch loss keeps `send_count: 0`; after-dispatch loss preserves the
-owned page and returns without resend, continuation, publication, cleanup, or
-release. Expiry wins over PID uncertainty; expired/corrupt records recover
+owned page and returns without resend or page-close authority. The finalizer still
+performs the bounded connected-client release. Expiry wins over PID uncertainty; expired/corrupt records recover
 through bounded retry, stale cleanup, exclusive create, and post-create
 revalidation.
 
