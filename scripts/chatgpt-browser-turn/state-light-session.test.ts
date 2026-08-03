@@ -11,7 +11,6 @@ import {
 } from './state-light-session.ts';
 import {
   createDirectPublicationObservationState,
-  directPublicationCapabilityCapture,
   directPublicationReceipt,
   observeDirectPublicationPayload,
   observeDirectPublicationPayloadTree,
@@ -703,7 +702,7 @@ describe('direct-publication terminal matrix', () => {
       .toBe('direct_publication_wrong_target_candidate');
   });
 
-  it('captures nested SSE publication fields without persisting parser classification', () => {
+  it('captures nested SSE publication fields for ordinary settlement', () => {
     const state = createDirectPublicationObservationState();
     observeDirectPublicationPayloadTree(state, {
       payload: [
@@ -740,19 +739,17 @@ describe('direct-publication terminal matrix', () => {
 
     expect(state.invocations).toHaveLength(1);
     expect(state.results).toHaveLength(1);
-    const capture = JSON.parse(directPublicationCapabilityCapture(state, 'success')) as {
-      results: Array<Record<string, unknown>>;
-    };
-    expect(capture.results).toHaveLength(1);
-    expect(capture.results[0]).toMatchObject({
+    expect(state.results[0]).toMatchObject({
       status: 201,
       commentId: '989',
       commentUrl: 'https://github.com/example/nested',
       successMarker: true,
       responseComplete: true,
+      outcome: 'success',
     });
-    expect(capture.results[0]).not.toHaveProperty('outcome');
-    expect(capture.results[0]).not.toHaveProperty('noCommitClass');
+    const settlement = settleDirectPublication(state, target);
+    expect(settlement.state).toBe('success');
+    expect(settlement.sourceBytes).toBe(successComment);
   });
 
 });
