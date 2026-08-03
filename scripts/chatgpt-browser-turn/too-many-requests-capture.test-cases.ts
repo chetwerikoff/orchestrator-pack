@@ -104,12 +104,12 @@ class Locator {
   }
 }
 
-function exactDialog(): ElementNode {
+function exactDialog(visible = true): ElementNode {
   return new ElementNode('DIV', {
     role: 'dialog',
     'aria-modal': 'true',
     'aria-owns': null,
-  })
+  }, undefined, undefined, visible)
     .append(new ElementNode('H2', {}, 'heading', 'Too many requests'))
     .append(new ElementNode('BUTTON', {}, 'button', 'Got it'));
 }
@@ -135,11 +135,16 @@ function capturePage(
   const waitFor = vi.fn(async (options: { state: string; timeout: number }) => {
     await waitHook?.(setDialogs, options);
   });
+  const waitForTimeout = vi.fn(async (timeout: number) => {
+    await waitHook?.(setDialogs, { state: 'visible', timeout });
+  });
   return {
     page: {
       locator: vi.fn(() => new Locator(() => dialogs, waitFor)),
+      waitForTimeout,
     },
     waitFor,
+    waitForTimeout,
   };
 }
 
@@ -166,8 +171,18 @@ describe('issue 1168 r20 Phase A capture wait', () => {
     const source = await captureTooManyRequestsSourceWithWait(fixture.page, 321, sourceOptions);
 
     expect(source.shape.dialog.tag_name).toBe('div');
-    expect(fixture.waitFor).toHaveBeenCalledOnce();
-    expect(fixture.waitFor).toHaveBeenCalledWith({ state: 'visible', timeout: 321 });
+    expect(fixture.waitForTimeout).toHaveBeenCalledOnce();
+    expect(fixture.waitForTimeout.mock.calls[0]?.[0]).toBeLessThanOrEqual(321);
+  });
+
+  it('waits past hidden dialogs until one later dialog becomes visible', async () => {
+    const fixture = capturePage([exactDialog(false), exactDialog(false)], async (setDialogs) => {
+      setDialogs([exactDialog(true), exactDialog(false)]);
+    });
+    const source = await captureTooManyRequestsSourceWithWait(fixture.page, 321, sourceOptions);
+
+    expect(source.shape.dialog.page_dialog_ordinal).toBe(0);
+    expect(fixture.waitForTimeout).toHaveBeenCalledOnce();
   });
 
   it('returns modal_timeout when no visible dialog appears by the deadline', async () => {
@@ -175,7 +190,7 @@ describe('issue 1168 r20 Phase A capture wait', () => {
 
     await expect(captureTooManyRequestsSourceWithWait(fixture.page, 17, sourceOptions))
       .rejects.toThrow('modal_timeout');
-    expect(fixture.waitFor).toHaveBeenCalledWith({ state: 'visible', timeout: 17 });
+    expect(fixture.waitForTimeout).toHaveBeenCalled();
   });
 
   it('returns capture_ambiguous_visible_match for several visible dialogs', async () => {
@@ -183,7 +198,7 @@ describe('issue 1168 r20 Phase A capture wait', () => {
 
     await expect(captureTooManyRequestsSourceWithWait(fixture.page, 250, sourceOptions))
       .rejects.toThrow('capture_ambiguous_visible_match');
-    expect(fixture.waitFor).not.toHaveBeenCalled();
+    expect(fixture.waitForTimeout).not.toHaveBeenCalled();
   });
 
   it('returns capture_ambiguous_visible_match for a foreign visible dialog', async () => {
@@ -191,7 +206,7 @@ describe('issue 1168 r20 Phase A capture wait', () => {
 
     await expect(captureTooManyRequestsSourceWithWait(fixture.page, 250, sourceOptions))
       .rejects.toThrow('capture_ambiguous_visible_match');
-    expect(fixture.waitFor).not.toHaveBeenCalled();
+    expect(fixture.waitForTimeout).not.toHaveBeenCalled();
   });
 });
 

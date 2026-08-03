@@ -32,12 +32,18 @@ export async function captureTooManyRequestsSourceWithWait(
 
   if (visible.length === 0) {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error('modal_timeout');
-    try {
-      await dialogs.waitFor({ state: 'visible', timeout: timeoutMs });
-    } catch {
-      // The authoritative outcome comes from the bounded post-wait public-surface reread below.
+    const deadline = Date.now() + timeoutMs;
+    while (visible.length === 0) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      const waitMs = Math.min(remainingMs, 50);
+      if (typeof page.waitForTimeout === 'function') {
+        await page.waitForTimeout(waitMs);
+      } else {
+        await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+      }
+      visible = await visibleDialogs(dialogs);
     }
-    visible = await visibleDialogs(dialogs);
   }
 
   if (visible.length === 0) throw new Error('modal_timeout');
