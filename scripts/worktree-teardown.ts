@@ -8,8 +8,8 @@
 // Default is DRY-RUN. --apply executes. --json outputs one JSON object to stdout; otherwise human-readable output.
 // Exit 0 = reaped_clean; nonzero = blocked_* or partial_* (normal outcomes after successful merge).
 
-import fs from 'node:fs';
-import path from 'node:path';
+import { realpathSync, existsSync, statSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import { runProcessSync } from '#opk-kernel/subprocess';
 
 type TeardownOutcome =
@@ -110,7 +110,7 @@ function gitRunSync(args: string[], cwd?: string) {
 
 function realpath(p: string): string | null {
   try {
-    return fs.realpathSync(p);
+    return realpathSync(p);
   } catch {
     return null;
   }
@@ -119,19 +119,22 @@ function realpath(p: string): string | null {
 // ===== LOCK MANAGEMENT =====
 function acquireLock(lockPath: string): boolean {
   try {
-    fs.mkdirSync(lockPath, { exclusive: true });
-    return true;
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
+    // Check if lock already held
+    if (existsSync(lockPath)) {
       return false;
     }
-    throw e;
+    // Try to create lock file atomically
+    writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+    return true;
+  } catch {
+    // File already exists or other error
+    return false;
   }
 }
 
 function releaseLock(lockPath: string) {
   try {
-    fs.rmSync(lockPath, { recursive: true });
+    unlinkSync(lockPath);
   } catch {
     // ignore
   }
@@ -146,12 +149,12 @@ interface ValidationResult {
 }
 
 function validateTarget(worktreePath: string): ValidationResult {
-  const pathExists = fs.existsSync(worktreePath);
+  const pathExists = existsSync(worktreePath);
   let gitFileStatus: 'directory' | 'file' | 'missing' = 'missing';
 
   if (pathExists) {
     try {
-      const stat = fs.statSync(path.join(worktreePath, '.git'));
+      const stat = statSync(join(worktreePath, '.git'));
       if (stat.isDirectory()) {
         gitFileStatus = 'directory';
       } else if (stat.isFile()) {
@@ -263,13 +266,13 @@ function snapshotProcs(): Map<number, ProcessSnapshot> {
   const procDir = '/proc';
 
   try {
-    const pids = fs.readdirSync(procDir).filter((d) => /^\d+$/.test(d));
+    const pids = readdirSync(procDir).filter((d) => /^\d+$/.test(d));
 
     for (const pidStr of pids) {
       const pid = parseInt(pidStr, 10);
       let stat: string;
       try {
-        stat = fs.readFileSync(path.join(procDir, pidStr, 'stat'), 'utf8');
+        stat = readFileSync(join(procDir, pidStr, 'stat'), 'utf8');
       } catch {
         continue;
       }
@@ -277,21 +280,21 @@ function snapshotProcs(): Map<number, ProcessSnapshot> {
       const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
       let cwd: string | null = null;
       try {
-        cwd = fs.readlinkSync(path.join(procDir, pidStr, 'cwd'));
+        cwd = readlinkSync(join(procDir, pidStr, 'cwd'));
       } catch {
         // ignore
       }
 
       let cmd = '';
       try {
-        cmd = fs.readFileSync(path.join(procDir, pidStr, 'cmdline'), 'utf8').replace(/\0/g, ' ').trim();
+        cmd = readFileSync(join(procDir, pidStr, 'cmdline'), 'utf8').replace(/\0/g, ' ').trim();
       } catch {
         // ignore
       }
 
       let exe: string | null = null;
       try {
-        exe = fs.readlinkSync(path.join(procDir, pidStr, 'exe'));
+        exe = readlinkSync(join(procDir, pidStr, 'exe'));
       } catch {
         // ignore
       }
@@ -389,7 +392,7 @@ function computeKillSet(
 
 function stillSame(pid: number, starttime: string): boolean {
   try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
     return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] === starttime;
   } catch {
     return false;
@@ -510,7 +513,7 @@ async function main() {
     process.exit(outcome.startsWith('blocked_') ? 1 : 0);
   }
 
-  const lockPath = path.join('/tmp', `orca-teardown-lock-${Date.now()}`);
+  const lockPath = join('/tmp', `orca-teardown-lock-${Date.now()}`);
   const lockAcquired = acquireLock(lockPath);
 
   if (!lockAcquired) {
@@ -528,7 +531,11 @@ async function main() {
 
     // Validate target
     const validation = validateTarget(wtPath);
-    report.validation = validation;
+    report.validation = {
+      is_primary_checkout: validation.isPrimaryCheckout,
+      is_in_inventory: validation.isInInventory,
+      path_exists: validation.pathExists,
+    };
 
     if (validation.isPrimaryCheckout) {
       outcome = 'blocked_invalid_target';
