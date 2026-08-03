@@ -1,12 +1,13 @@
-# Pack-review waiver merge (operator)
+# Pack-review waiver merge (operator authorization)
 
-Operator runbook for merging a PR when **`orchestrator-pack/pack-review`** is the
-**only** required check still failing and the operator explicitly accepts the open
-finding(s).
+Operator runbook for merging a PR when **`orchestrator-pack/pack-review`** is either
+**FAILURE** or has no status for the current head, and the operator explicitly
+authorizes the merge.
 
 This is **not** a routine merge path. Default remains: fix the finding, re-run pack
-review, merge on green. Use a waiver only when the operator has weighed the risk and
-recorded an explicit decision.
+review, and merge on green. For a missing status, do not start pack-review-runner
+just to manufacture one. Use a waiver only when the operator has weighed the risk
+and recorded an explicit decision.
 
 **Incident reference:** PR [#919](https://github.com/chetwerikoff/orchestrator-pack/pull/919)
 (2026-07-21) — all other required CI green; one blocking P1 finding on non-Linux egress
@@ -20,11 +21,12 @@ Post-merge pull, orchestrator worktree sync, and adoption still follow
 
 | Situation | Action |
 |-----------|--------|
-| `orchestrator-pack/pack-review` = **FAILURE**, all other required contexts **SUCCESS** (or SKIPPED where expected) | Waiver path **may** apply after explicit operator authorization |
+| `orchestrator-pack/pack-review` = **FAILURE**, all other required contexts **SUCCESS** (or SKIPPED where expected) | Failed-review waiver path **may** apply after explicit operator authorization |
+| No `orchestrator-pack/pack-review` status for the current head, all other required contexts **SUCCESS** (or SKIPPED where expected) | Missing-status waiver path **may** apply after explicit operator authorization; missing status alone is not permission |
 | Any **other** required check red / pending / never reported | **No waiver** — fix CI or delegate to worker (`merge-with-local-adoption` Step 3b) |
 | `mergeable: CONFLICTING` | **No waiver** — resolve conflicts on the PR branch first |
 | PR not `OPEN` or still draft | Normalize per merge skill Step 3a (`gh pr ready`, `gh pr update-branch`) |
-| Operator has not explicitly waived the finding | **Stop** — report blocking finding; do not merge |
+| Operator has not explicitly authorized the merge in writing | **Stop** — report the missing authorization; do not merge |
 
 ## Why `--admin` is not enough
 
@@ -48,10 +50,13 @@ not override a failing required check when `enforce_admins` is on.
 `orchestrator-pack/pack-review` is a **commit status** posted by the pack review
 delivery layer (`scripts/lib/pack-review-delivery.ts`), not an exclusive GitHub App
 check. A repo admin can publish a newer status on the **same PR head SHA** via the
-[Statuses API](https://docs.github.com/en/rest/commits/statuses).
+[Statuses API](https://docs.github.com/en/rest/commits/statuses). When the status is
+missing, branch protection still requires posting a `success` status on the exact
+head, with a description stating the operator authorized merging without pack review.
 
 Branch protection uses the **latest** status for that context. A new `success` status
-on the head commit satisfies the merge gate. This does **not**:
+on the head commit satisfies the merge gate. This status is an authorization record,
+not evidence that a pack review ran or was clean. It does **not**:
 
 - dismiss or resolve findings in the pack review-run store;
 - remove GitHub review comments;
@@ -75,8 +80,10 @@ Confirm:
 1. `state` = `OPEN`, `isDraft` = false, `mergeable` ≠ `CONFLICTING`.
 2. Every required context except `orchestrator-pack/pack-review` is green (or an
    expected skip).
-3. Operator has given **explicit written authorization** to merge with the open
-   finding (chat, issue comment, or ticket — not implied silence).
+3. The `orchestrator-pack/pack-review` context is either **FAILURE** or has no
+   status for this exact `HEAD_SHA`.
+4. Operator has given **explicit written authorization** to merge (chat, issue
+   comment, or ticket — not implied silence).
 
 Capture the current head SHA:
 
@@ -85,7 +92,7 @@ HEAD_SHA="$(./scripts/gh pr view "$P" --json headRefOid -q .headRefOid)"
 echo "$HEAD_SHA"
 ```
 
-Inspect the blocking finding (pack store):
+For the failed-review path, inspect the blocking finding (pack store):
 
 ```bash
 export P=919
@@ -102,11 +109,18 @@ node --experimental-strip-types scripts/pack-review-runner.ts list \
     });'
 ```
 
-## Waiver procedure
+## Waiver procedure (failed review or missing status)
 
 Replace `P`, `HEAD_SHA`, and the description with live values.
 
-### 1. Post operator waiver status (exact head)
+### 1. Post operator authorization status (exact head)
+
+For either waiver path, branch protection requires a `success` commit status on the
+exact PR head. The description must state that the operator authorized merging
+without pack review. For a failed review, identify the open finding; for a missing
+status, state that the review status was absent for this head. Posting this status
+does not show that a review ran or was clean. Do not start `pack-review-runner` just
+to manufacture the status.
 
 ```bash
 P=919
@@ -115,11 +129,12 @@ HEAD_SHA="$(./scripts/gh pr view "$P" --json headRefOid -q .headRefOid)"
 ./scripts/gh api "repos/chetwerikoff/orchestrator-pack/statuses/${HEAD_SHA}" \
   -f state=success \
   -f context='orchestrator-pack/pack-review' \
-  -f description="Operator waiver: merge authorized with open pack-review finding — <one-line reason>"
+  -f description="Operator authorization: merge without pack review — <finding or reason; state if status was absent for this head>"
 ```
 
 Use a concrete reason (finding title, issue link, or operator ticket). Avoid empty or
-generic descriptions.
+generic descriptions. This POST records authorization; it does not create review
+evidence.
 
 ### 2. Verify the status flipped
 
@@ -164,6 +179,7 @@ In the Step 10 report, record verbatim:
 | Artifact | State after waiver |
 |----------|-------------------|
 | Pack review-run store (`pack-review-runner.ts list`) | Still `changes_requested` / findings on the reviewed head |
+| Missing `orchestrator-pack/pack-review` status on the merged head | Remains absent as review evidence; the posted `success` status records operator authorization only |
 | GitHub PR review comments | Unchanged |
 | Open finding on a **later** PR | Still must be fixed or waived again — waiver is per-head |
 | Follow-up work | Optional issue/PR to address waived finding if still desired |
@@ -187,6 +203,7 @@ Do not hand-edit review-run JSON on disk.
 
 - Waive red **non–pack-review** CI — fix or delegate.
 - Post `success` without explicit operator authorization.
+- Start `pack-review-runner` just to manufacture a missing status.
 - Assume waiver clears findings for merge policy helpers (`evaluateMergePolicy`, triage
   gates) on **future** heads.
 - Use `git push --force` to `main` as a workaround.
