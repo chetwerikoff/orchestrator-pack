@@ -286,3 +286,14 @@ decision carried out by hand, not a step in this procedure.
    from one that was already there, which is why step 1 is not optional.
 
 To stop a worker, use `close_terminal(handle)` with the handle bound in step 6.
+
+## Don't
+
+- Forge or hand-edit `docs/declarations/*.json`.
+- Use the `scope-guard-degraded` label to bypass snapshot requirements.
+- Merge with `gh pr merge --admin` to skip review or failing checks.
+- Put `declared_paths` in the issue body — only `denylist` / `allowed-roots`
+  fences + snapshot.
+- Invent producer flags — unknown arguments are rejected.
+- Commit from a checkout without first confirming whose branch and whose
+  uncommitted work is in it.
