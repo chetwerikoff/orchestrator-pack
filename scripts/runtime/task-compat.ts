@@ -1,5 +1,15 @@
 import { realpathSync } from 'node:fs';
-import type { OrcaRunOptions } from '../orca-runtime/native.ts';
+import type {
+  OrcaOperationFailure,
+  OrcaTerminalCreateResult,
+  OrcaWorktreeProbeResult,
+} from '../orca-runtime/compat.ts';
+import type {
+  OrcaJsonResponse,
+  OrcaOperationName,
+  OrcaRunOptions,
+  OrcaTerminalReadResult,
+} from '../orca-runtime/native.ts';
 import {
   type RuntimeAdapter,
   type RuntimeCallOptions,
@@ -13,91 +23,12 @@ import {
   type RuntimeAdapterInstanceOptions,
 } from './registry.ts';
 
-export const ORCA_WORKER_SMOKE_CONTRACT_EVIDENCE_DIR =
-  'tests/external-output-references/captures/orca-worker-smoke';
-
-export const ORCA_SMOKE_CONTROL_PLANE_CODES = [
-  'channel_stale_handle',
-  'channel_lookup_empty',
-  'channel_control_unavailable',
-  'channel_control_overwritten',
-] as const;
-
-export type OrcaSmokeControlPlaneCode = (typeof ORCA_SMOKE_CONTROL_PLANE_CODES)[number];
-
-export type OrcaOperationName =
-  | 'worktree_current'
-  | 'terminal_create'
-  | 'terminal_list'
-  | 'terminal_show'
-  | 'terminal_send'
-  | 'terminal_read'
-  | 'terminal_wait'
-  | 'terminal_submit'
-  | 'terminal_close';
-
-export type OrcaLocalOutcomeCategory =
-  | 'process_launch_failed'
-  | 'empty_stdout'
-  | 'invalid_json'
-  | 'recognized_control_plane_code'
-  | 'supported_operation_failure';
-
-export interface OrcaJsonResponse<T = unknown> {
-  ok: boolean;
-  result?: T;
-  error?: { code?: string; message?: string };
-  operation?: OrcaOperationName;
-  outcomeCategory?: OrcaLocalOutcomeCategory;
-}
-
-export interface OrcaTerminalHandle {
-  handle: string;
-  tabId?: string;
-  worktreeId?: string;
-  title?: string | null;
-  ptyId?: string | null;
-  incarnationId?: string | null;
-}
-
-export interface OrcaTerminalReadResult {
-  lines?: string[];
-  nextCursor?: number;
-  oldestCursor?: number;
-}
-
-export interface OrcaOperationFailure {
-  ok: false;
-  reason: string;
-  operation: OrcaOperationName;
-  outcomeCategory?: OrcaLocalOutcomeCategory;
-  errorCode?: string;
-}
-
-export type OrcaWorktreeProbeResult =
-  | {
-    ok: true;
-    worktreePath: string;
-    headSha?: string;
-    linkedIssue?: number | null;
-  }
-  | OrcaOperationFailure;
-
-export type OrcaTerminalCreateResult =
-  | { ok: true; terminal: OrcaTerminalHandle }
-  | OrcaOperationFailure;
-
 type LegacyOptions = OrcaRunOptions;
-
-interface CursorBinding {
-  readonly token: RuntimeObservationToken;
-  readonly worker: RuntimeWorkerIdentity;
-}
 
 interface CursorState {
   next: number;
   latest?: number;
-  readonly byCompat: Map<number, CursorBinding>;
+  readonly byCompat: Map<number, RuntimeObservationToken>;
 }
 
 function legacyOperation(operation: RuntimeOperationName): OrcaOperationName {
@@ -114,15 +45,11 @@ function legacyOperation(operation: RuntimeOperationName): OrcaOperationName {
   }
 }
 
-function failureCode(failure: RuntimeOperationFailure): string {
-  return failure.reason || `runtime_${failure.status}`;
-}
-
 function legacyFailure(
   failure: RuntimeOperationFailure,
   operation = legacyOperation(failure.operation),
 ): OrcaOperationFailure {
-  const code = failureCode(failure);
+  const code = failure.reason || `runtime_${failure.status}`;
   return {
     ok: false,
     operation,
@@ -138,10 +65,10 @@ function legacyFailure(
   };
 }
 
-function responseFailure(
+function responseFailure<T = never>(
   failure: RuntimeOperationFailure,
   operation = legacyOperation(failure.operation),
-): OrcaJsonResponse {
+): OrcaJsonResponse<T> {
   const mapped = legacyFailure(failure, operation);
   return {
     ok: false,
@@ -152,10 +79,7 @@ function responseFailure(
 }
 
 function callOptions(options: LegacyOptions): RuntimeCallOptions {
-  return {
-    cwd: options.cwd,
-    timeoutMs: options.timeoutMs,
-  };
+  return { cwd: options.cwd, timeoutMs: options.timeoutMs };
 }
 
 function instanceOptions(options: LegacyOptions): RuntimeAdapterInstanceOptions {
@@ -169,12 +93,6 @@ function instanceOptions(options: LegacyOptions): RuntimeAdapterInstanceOptions 
       killSignal: options.killSignal,
     },
   };
-}
-
-export function isOrcaSmokeControlPlaneCode(
-  value: string | undefined,
-): value is OrcaSmokeControlPlaneCode {
-  return (ORCA_SMOKE_CONTROL_PLANE_CODES as readonly string[]).includes(value ?? '');
 }
 
 export class RuntimeTaskCompatibilityFacade {
@@ -233,7 +151,7 @@ export class RuntimeTaskCompatibilityFacade {
     options: LegacyOptions,
   ):
     | { ok: true; identity: RuntimeWorkerIdentity }
-    | { ok: false; response: OrcaJsonResponse } {
+    | { ok: false; response: OrcaJsonResponse<never> } {
     const remembered = this.#identityMap(adapter).get(handle);
     if (remembered) return { ok: true, identity: remembered };
     const found = adapter.findWorkerById(handle, callOptions(options));
@@ -354,29 +272,21 @@ export class RuntimeTaskCompatibilityFacade {
         ok: false,
         operation: 'terminal_read',
         outcomeCategory: 'supported_operation_failure',
-        error: {
-          code: 'observation_token_unsupported',
-          message: 'observation_token_unsupported',
-        },
+        error: { code: 'observation_token_unsupported', message: 'observation_token_unsupported' },
       };
     }
     const result = adapter.readBoundedOutput(
-      {
-        worker: resolved.identity,
-        previousToken: previous?.token,
-        limit: options.limit,
-      },
+      { worker: resolved.identity, previousToken: previous, limit: options.limit },
       callOptions(options),
     );
-    if (result.status !== 'ok') return responseFailure(result, 'terminal_read');
+    if (result.status !== 'ok') {
+      return responseFailure<OrcaTerminalReadResult>(result, 'terminal_read');
+    }
     let cursor = state.latest;
     if (!cursor || result.value.changed || !state.byCompat.has(cursor)) {
       cursor = state.next++;
       state.latest = cursor;
-      state.byCompat.set(cursor, {
-        token: result.value.observationToken,
-        worker: result.value.worker,
-      });
+      state.byCompat.set(cursor, result.value.observationToken);
     }
     return {
       ok: true,
@@ -430,7 +340,7 @@ const runnerAdapters = new WeakMap<object, RuntimeAdapter>();
 const transportAdapters = new Map<string, RuntimeAdapter>();
 
 function defaultAdapterForOptions(options: LegacyOptions): RuntimeAdapter {
-  if (options.runner && (typeof options.runner === 'function' || typeof options.runner === 'object')) {
+  if (options.runner) {
     const key = options.runner as object;
     let adapter = runnerAdapters.get(key);
     if (!adapter) {
@@ -460,10 +370,7 @@ const defaultFacade = new RuntimeTaskCompatibilityFacade({
   adapterForOptions: defaultAdapterForOptions,
 });
 
-export function probeOrcaWorktree(
-  cwd: string,
-  options: { readonly executable?: string; readonly runner?: OrcaRunOptions['runner']; readonly timeoutMs?: number } = {},
-): OrcaWorktreeProbeResult {
+export function probeOrcaWorktree(cwd: string, options: LegacyOptions = {}): OrcaWorktreeProbeResult {
   return defaultFacade.probeWorktree(cwd, options);
 }
 
@@ -478,38 +385,28 @@ export function createOrcaTerminal(input: {
   return defaultFacade.createTerminal(input);
 }
 
-export function sendOrcaTerminal(
-  handle: string,
-  text: string,
-  options: OrcaRunOptions = {},
-): OrcaJsonResponse {
+export function sendOrcaTerminal(handle: string, text: string, options: LegacyOptions = {}): OrcaJsonResponse {
   return defaultFacade.dispatch(handle, { text }, options);
 }
 
-export function submitOrcaTerminalComposer(
-  handle: string,
-  options: OrcaRunOptions = {},
-): OrcaJsonResponse {
+export function submitOrcaTerminalComposer(handle: string, options: LegacyOptions = {}): OrcaJsonResponse {
   return defaultFacade.dispatch(handle, { submitOnly: true }, options);
 }
 
 export function readOrcaTerminal(
   handle: string,
-  options: OrcaRunOptions & { readonly cursor?: number; readonly limit?: number } = {},
+  options: LegacyOptions & { readonly cursor?: number; readonly limit?: number } = {},
 ): OrcaJsonResponse<OrcaTerminalReadResult> {
   return defaultFacade.readTerminal(handle, options);
 }
 
 export function waitOrcaTerminal(
   handle: string,
-  input: OrcaRunOptions & { readonly for: 'exit' | 'tui-idle'; readonly timeoutMs: number },
+  input: LegacyOptions & { readonly for: 'exit' | 'tui-idle'; readonly timeoutMs: number },
 ): OrcaJsonResponse {
   return defaultFacade.waitTerminal(handle, input);
 }
 
-export function closeOrcaTerminal(
-  handle: string,
-  options: OrcaRunOptions = {},
-): OrcaJsonResponse {
+export function closeOrcaTerminal(handle: string, options: LegacyOptions = {}): OrcaJsonResponse {
   return defaultFacade.closeTerminal(handle, options);
 }
