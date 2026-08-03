@@ -12,6 +12,7 @@ import type { RuntimeAdapter } from './runtime/contracts.ts';
 
 export interface WorkerNudgeCliOptions {
   workerId: string;
+  workerGeneration: string;
   prNumber: number;
   issueNumber: number;
   headSha: string;
@@ -35,6 +36,7 @@ function parsePositiveInteger(value: string | undefined): number {
 export function parseWorkerNudgeArgs(argv: readonly string[]): WorkerNudgeCliOptions {
   const options: WorkerNudgeCliOptions = {
     workerId: '',
+    workerGeneration: '',
     prNumber: 0,
     issueNumber: 0,
     headSha: '',
@@ -53,6 +55,7 @@ export function parseWorkerNudgeArgs(argv: readonly string[]): WorkerNudgeCliOpt
   for (let index = 0; index < args.length; index += 1) {
     switch (args[index]) {
       case '--worker-id': options.workerId = args[++index]?.trim() ?? ''; break;
+      case '--worker-generation': options.workerGeneration = args[++index]?.trim() ?? ''; break;
       case '--pr': options.prNumber = parsePositiveInteger(args[++index]); break;
       case '--issue': options.issueNumber = parsePositiveInteger(args[++index]); break;
       case '--head-sha': options.headSha = args[++index]?.trim().toLowerCase() ?? ''; break;
@@ -70,6 +73,7 @@ export function parseWorkerNudgeArgs(argv: readonly string[]): WorkerNudgeCliOpt
     }
   }
   if (!options.workerId) throw new Error('--worker-id is required');
+  if (!options.workerGeneration) throw new Error('--worker-generation is required');
   return options;
 }
 
@@ -87,6 +91,7 @@ function buildClassificationInput(options: WorkerNudgeCliOptions, message: strin
     transitionId: options.transitionId,
     episodeKey: options.episodeKey,
     targetId: options.workerId,
+    targetGeneration: options.workerGeneration,
     projectId: options.projectId,
   };
 }
@@ -113,7 +118,7 @@ export function resolveWorkerNudgeIdentity(
   return {
     intentClass: classified,
     cycleKey,
-    idempotencyKey: `${ownerKey}|${cycleKey}|${classified}|worker:${options.workerId}`,
+    idempotencyKey: `${ownerKey}|${cycleKey}|${classified}|worker:${options.workerId}:${options.workerGeneration}`,
   };
 }
 
@@ -134,6 +139,7 @@ export async function runGatedWorkerNudge(input: {
     trustedPackRoot: input.options.repoRoot,
     repoRoot: input.options.repoRoot,
     workerId: input.options.workerId,
+    expectedWorkerGeneration: input.options.workerGeneration,
     projectId: input.options.projectId,
     prNumber: input.options.prNumber,
     issueNumber: input.options.issueNumber,
