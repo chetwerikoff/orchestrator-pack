@@ -4,6 +4,7 @@
   "declared_paths": [
     "scripts/chatgpt-browser-turn.ts",
     "scripts/chatgpt-browser-turn/diagnostics.ts",
+    "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts",
     "scripts/chatgpt-browser-turn/too-many-requests-capture.test-cases.ts",
     "scripts/chatgpt-browser-turn/too-many-requests-capture.test.ts",
     "scripts/chatgpt-browser-turn/too-many-requests-capture.ts"
@@ -56,5 +57,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json"
   ],
-  "source_revision": "fb7d5de9401b8015e19664a603a53060b1ec0867"
+  "source_revision": "795c69e0e21b1a6516d7a9be199a6224b11b32af"
 }
