@@ -150,7 +150,7 @@ export interface RuntimeAdapter {
    * admitted cleanup. The adapter only validates path/head and performs the
    * native operation; it never derives cleanup authority from runtime metadata.
    */
-  removeWorkspace(
+  removeWorkspace?(
     input: {
       readonly workspacePath: string;
       readonly expectedHeadSha?: string;
