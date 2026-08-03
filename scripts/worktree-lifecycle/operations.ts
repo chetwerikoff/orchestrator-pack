@@ -29,6 +29,7 @@ import {
   type OrcaWorktreeRow,
   type WorktreeClassificationReport,
 } from './core.ts';
+import { WORKTREE_IGNORED_DIRECTORY_ALLOWLIST } from './policy.ts';
 
 export interface CommandInvocation {
   readonly command: string;
@@ -50,7 +51,7 @@ export interface ProcessEvidence {
   readonly pid: number;
   readonly ppid: number;
   readonly starttime: string;
-  readonly cwd: string;
+  readonly cwd: string | null;
 }
 
 export interface TerminalEvidence {
@@ -84,6 +85,7 @@ export interface RecoveryGates {
 export type LifecycleOutcome =
   | 'ready_to_spawn'
   | 'replacement_required'
+  | 'cleanup_eligible'
   | 'cleanup_complete'
   | 'cleanup_deferred'
   | 'git_only_recovery_eligible'
@@ -113,17 +115,6 @@ interface OrcaAgentInventoryRow extends OrcaWorktreeRow {
 }
 
 const DEFAULT_LOCK_PATH = '/tmp/opk-worktree-teardown.lock';
-const IGNORED_DIRECTORY_ALLOWLIST = [
-  'node_modules/',
-  '.venv/',
-  'venv/',
-  'dist/',
-  'build/',
-  '.turbo/',
-  '.next/',
-  'coverage/',
-  '__pycache__/',
-] as const;
 
 function defaultRunner(invocation: CommandInvocation): ProcessResult {
   return runProcessSync({
@@ -205,36 +196,56 @@ function parseTerminalPayload(payload: unknown): TerminalEvidence[] {
   });
 }
 
+function readProcessSnapshot(name: string): ProcessEvidence | null {
+  const pid = Number.parseInt(name, 10);
+  if (!Number.isInteger(pid) || pid <= 1) return null;
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+  } catch {
+    return null;
+  }
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+  const ppid = Number.parseInt(fields[1] ?? '0', 10);
+  const starttime = fields[19] ?? '';
+  let cwd: string | null = null;
+  try {
+    cwd = normalizeWorktreePath(readlinkSync(`/proc/${name}/cwd`).replace(/ \(deleted\)$/, ''));
+  } catch {
+    cwd = null;
+  }
+  return { pid, ppid, starttime, cwd };
+}
+
 export function collectProcessEvidence(worktreePath: string): ProcessEvidence[] {
   const target = normalizeWorktreePath(worktreePath);
-  const result: ProcessEvidence[] = [];
   let names: string[];
   try {
     names = readdirSync('/proc').filter((name) => /^\d+$/.test(name));
   } catch {
-    return result;
+    return [];
   }
-  for (const name of names) {
-    const pid = Number.parseInt(name, 10);
-    let cwd: string;
-    let stat: string;
-    try {
-      cwd = readlinkSync(`/proc/${name}/cwd`).replace(/ \(deleted\)$/, '');
-      stat = readFileSync(`/proc/${name}/stat`, 'utf8');
-    } catch {
-      continue;
+  const snapshots = names
+    .map(readProcessSnapshot)
+    .filter((row): row is ProcessEvidence => row !== null);
+  const selected = new Set(
+    snapshots
+      .filter((row) => row.cwd === target || row.cwd?.startsWith(`${target}/`))
+      .map((row) => row.pid),
+  );
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const row of snapshots) {
+      if (!selected.has(row.pid) && selected.has(row.ppid)) {
+        selected.add(row.pid);
+        changed = true;
+      }
     }
-    const normalizedCwd = normalizeWorktreePath(cwd);
-    if (normalizedCwd !== target && !normalizedCwd.startsWith(`${target}/`)) continue;
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    result.push({
-      pid,
-      ppid: Number.parseInt(fields[1] ?? '0', 10),
-      starttime: fields[19] ?? '',
-      cwd: normalizedCwd,
-    });
   }
-  return result.sort((left, right) => left.pid - right.pid);
+  return snapshots
+    .filter((row) => selected.has(row.pid))
+    .sort((left, right) => left.pid - right.pid);
 }
 
 export function collectCensus(
@@ -394,7 +405,7 @@ function checkIgnored(expected: ExpectedWorktreeIdentity, runner: CommandRunner)
   if (!result.ok) return false;
   return result.stdout.split(/\r?\n/).filter((line) => line.startsWith('!! ')).every((line) => {
     const path = line.slice(3).trim();
-    return IGNORED_DIRECTORY_ALLOWLIST.some((allowed) => path.startsWith(allowed));
+    return WORKTREE_IGNORED_DIRECTORY_ALLOWLIST.some((allowed) => path.startsWith(allowed));
   });
 }
 
@@ -454,8 +465,13 @@ function relevantInventoryFingerprint(
   expected: ExpectedWorktreeIdentity,
   census: ReturnType<typeof collectCensus>,
 ): string {
-  const matches = (row: { path: string; headSha?: string; branchName?: string; linkedIssue?: number | null; linkedPR?: number | null }) =>
-    row.path === expected.path
+  const matches = (row: {
+    path: string;
+    headSha?: string;
+    branchName?: string;
+    linkedIssue?: number | null;
+    linkedPR?: number | null;
+  }) => row.path === expected.path
     || row.headSha === expected.headSha
     || row.branchName === expected.branchName
     || (expected.bindingKind === 'issue' && row.linkedIssue === expected.bindingNumber)
@@ -729,7 +745,7 @@ function standardTeardown(
   return {
     schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
     context: 'post-merge-cleanup',
-    outcome: result.ok ? 'cleanup_complete' : 'cleanup_deferred',
+    outcome: result.ok ? (apply ? 'cleanup_complete' : 'cleanup_eligible') : 'cleanup_deferred',
     pipelineContinues: true,
     classification: census.classification,
     decision,
