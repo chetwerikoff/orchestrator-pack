@@ -20,7 +20,9 @@ export type BoundedOrcaCreateResult =
   };
 
 function compatibilityCreateErrorCode(value: string | undefined): string {
-  if (value === 'runtime_timeout') return 'orca_create_timeout';
+  if (value === 'runtime_timeout' || value === 'orca_operation_timeout') {
+    return 'orca_create_timeout';
+  }
   return value ?? 'terminal_create_failed';
 }
 
