@@ -253,7 +253,6 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const owned = this.#owned.get(handle);
     if (owned && generation !== owned.identity.generation) {
       this.#owned.delete(handle);
-      this.#knownWorkspace.delete(identityKey(owned.identity));
       this.#dropObservations(owned.identity);
     }
     const currentOwned = this.#owned.get(handle);
