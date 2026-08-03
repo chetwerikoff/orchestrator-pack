@@ -7,9 +7,25 @@ export type RuntimeFailureStatus =
   | 'unknown'
   | 'not_owned';
 
+export type RuntimeFailureReason =
+  | 'adapter_unavailable'
+  | 'unsupported_response'
+  | 'workspace_not_found'
+  | 'worker_generation_not_found'
+  | 'observation_token_invalid'
+  | 'external_worker_not_owned'
+  | 'workspace_not_owned_by_runtime'
+  | 'spawn_failed'
+  | 'output_observation_unknown'
+  | 'stop_unknown'
+  | 'workspace_remove_unknown';
+
 export type RuntimeResult<T> =
   | { readonly status: 'ok'; readonly value: T }
-  | { readonly status: RuntimeFailureStatus; readonly reason: string };
+  | {
+    readonly status: RuntimeFailureStatus;
+    readonly reason: RuntimeFailureReason;
+  };
 
 export interface RuntimeWorkerIdentity {
   readonly id: string;
@@ -39,10 +55,15 @@ export type RuntimeDispatchStatus =
   | 'send_failed'
   | 'dispatch_unknown';
 
+export type RuntimeDispatchReason =
+  | 'worker_generation_not_found'
+  | 'adapter_send_failed'
+  | 'adapter_dispatch_unknown';
+
 export interface RuntimeDispatchResult {
   readonly status: RuntimeDispatchStatus;
   readonly attempts: 1;
-  readonly reason?: string;
+  readonly reason?: RuntimeDispatchReason;
 }
 
 export type RuntimeLiveness = 'busy' | 'idle' | 'gone' | 'unknown';
