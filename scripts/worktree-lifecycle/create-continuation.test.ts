@@ -179,6 +179,28 @@ describe('bounded worktree creation', () => {
     expect(value.creates).toEqual(['issue-1298', replacement()]);
   });
 
+  it('creates one replacement beside a stale Orca-only row for the same Issue', () => {
+    const value = fixture();
+    value.orcaRows.push({
+      path: join(value.root, 'worktrees', 'stale-orca-only'),
+      head: OTHER_HEAD,
+      branch: 'refs/heads/stale-issue-1298',
+      linkedIssue: ISSUE,
+    });
+    value.handlers.push((name) => {
+      value.addDual(name);
+      return processResult({ stdout: JSON.stringify({ ok: true }) });
+    });
+
+    const report = execute(value);
+
+    expect(report).toMatchObject({ outcome: 'ready_to_spawn', terminalSpawnAuthorized: true });
+    expect(report.attempts.map((attempt) => attempt.kind)).toEqual(['replacement']);
+    expect(report.selected?.path).toBe(join(value.root, 'worktrees', replacement()));
+    expect(value.creates).toEqual([replacement()]);
+    expect(value.orcaRows.some((row) => row.branch === 'refs/heads/stale-issue-1298')).toBe(true);
+  });
+
   it('recovers an effect whose create receipt was lost without a blind retry', () => {
     const value = fixture();
     value.handlers.push((name) => {
