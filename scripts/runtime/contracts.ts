@@ -49,6 +49,7 @@ export interface RuntimeBoundedOutput {
 export type RuntimeOperationName =
   | 'readiness'
   | 'list_workers'
+  | 'find_worker_by_id'
   | 'find_worker'
   | 'spawn_worker'
   | 'dispatch_input'
@@ -91,6 +92,12 @@ export interface RuntimeAdapter {
     input: { readonly workspace?: 'active' | string },
     options?: RuntimeCallOptions,
   ): RuntimeResult<readonly RuntimeWorker[]>;
+
+  /** Resolve the current composite identity for one opaque runtime id. */
+  findWorkerById(
+    id: string,
+    options?: RuntimeCallOptions,
+  ): RuntimeResult<RuntimeWorker | null>;
 
   findWorker(
     identity: RuntimeWorkerIdentity,
