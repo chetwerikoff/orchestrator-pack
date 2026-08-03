@@ -1,6 +1,6 @@
 ---
 name: discuss-with-gpt
-description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". Brief-only creation routes through create-issue-draft. Standalone artifact challenge keeps driver.mjs. Tracked create/review turns use the state-light send-once Browser-GPT helper from Issue #1120: dedicated owned tab, page polling, no legacy status/clear/capability/recovery admission authority. OpenCode is the default flow-manager when no runtime is selected; a capable operator-selected runtime such as Cursor or Codex may manage create-issue-draft without becoming a reviewer-engine substitute.
+description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". Brief-only creation routes through create-issue-draft. Standalone artifact challenge keeps driver.mjs. Tracked create/review turns use the state-light send-once Browser-GPT helper from Issue #1120: `npm run chatgpt-browser-turn -- turn ...`, one dedicated owned tab, one exact prompt send, and stable page/DOM completion; shell/PID/log liveness is not evidence. Legacy status/clear/capability/recovery/mutex/lease state is diagnostic only, incidents are invocation-local, sibling tabs are untouched, and possible or post-send ambiguity forbids resend. OpenCode is the default flow-manager when no runtime is selected; a capable operator-selected runtime such as Cursor or Codex may manage create-issue-draft without becoming a reviewer-engine substitute.
 ---
 
 # discuss-with-gpt
@@ -97,14 +97,21 @@ The helper is a **single-invocation fast path**, not admission/recovery authorit
 5. publish the captured final reply and close only the owned tab;
 6. emit one compact `turn-result/v1` result plus direct incident information.
 
+The tracked contract has one owned tab and one send boundary. Page/DOM
+completion is sufficient; shell/PID/log/background-job liveness and service
+terminal/network witnesses are not completion evidence. Sibling or foreign
+tabs are never closed, commandeered, or used to admit, veto, restart, or
+invalidate this invocation.
+
 ### Completion and attribution
 
 - Page/DOM completion is sufficient. Do not require service-terminal/network
   witness or capability/Gate-B evidence after the final assistant reply is stable.
 - Progress/intermediate assistant nodes are not concatenated into the final result.
 - The invocation must observe its own exact user prompt after the page baseline.
-  Additional/interleaved user activity makes only that invocation
-  `observation_uncertain`/degraded; it never blocks a sibling tab.
+  Additional/interleaved user activity, page loss, UI failure, cleanup failure,
+  timeout, output conflict, or publication conflict makes only that invocation
+  `observation_uncertain`/degraded; it never blocks or changes a sibling tab.
 - A normal generating/wait poll is not an incident.
 - Login, quota, challenge, unusable composer, redirect/UI mismatch, or publication
   conflict are local invocation results.
@@ -119,6 +126,11 @@ When a process/page/chat is genuinely lost and cheap continuation is unavailable
 the flow-manager may start a **fresh invocation in a fresh chat and send again**.
 A duplicate recoverable GPT text request is an accepted residual risk. Do not
 query or clear legacy helper state to authorize the replacement.
+
+Any possible delivery, post-send failure, ambiguous delivery, output conflict,
+missing terminal result, or `send_count: 1` forbids resend within that
+invocation; retain it as invocation-local incident evidence. Only a proven
+pre-send zero-send failure may use the separately defined bounded retry.
 
 ### Legacy control/recovery state is non-authoritative
 

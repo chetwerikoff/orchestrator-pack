@@ -1,6 +1,6 @@
 ---
 name: create-issue-draft
-description: Use for GPT-authored orchestrator-pack task specs. The GitHub Issue is the live spec. T1/T2 use one terminal GPT architectural source. T3 competitive and architectural-review use the configured independent 01..N source set in one triple-source/v1 stageAttemptId; the default N is 3. Claude and terminal architectural remain singular. Canonical receipt inventory, immutable tier-intake authority, verified relay equality, occurrence accounting, bounded zero-send retry, and the #1171 Issue-lifetime activation contract is binding.
+description: Use for GPT-authored orchestrator-pack task specs. The GitHub Issue is the live spec. T1/T2 use one terminal GPT architectural source. T3 competitive and architectural-review use the configured independent 01..N source set in one triple-source/v1 stageAttemptId; the default N is 3. Claude and terminal architectural remain singular. Canonical receipt inventory, immutable tier-intake authority, verified relay equality, occurrence accounting, bounded zero-send retry, and the #1171 Issue-lifetime activation contract is binding. Tracked Browser-GPT turns use `npm run chatgpt-browser-turn -- turn ...` with one owned tab and one exact prompt send; stable page/DOM completion is sufficient, not shell/PID/log liveness. Legacy status/clear/capability/recovery/mutex/lease state is diagnostic only, incidents are invocation-local, and possible or post-send ambiguity forbids resend. Standalone adversarial review remains separate.
 ---
 
 # create-issue-draft — GPT-chat authoring flow
@@ -59,7 +59,10 @@ or new store for this role boundary.
 
 ## Browser-GPT transport — Issues #1120 and #1150
 
-Use `npm run chatgpt-browser-turn -- turn ...` as the routine monitor.
+Use `npm run chatgpt-browser-turn -- turn ...` as the tracked helper entrypoint
+for each create/review invocation. It opens one dedicated owned tab, submits
+the exact prompt once, and observes that same tab until the helper reports a
+terminal result.
 ### Long-running Browser-GPT child launcher (#1164)
 
 For applicable long-running create-issue-draft Browser-GPT turns, use the
@@ -93,18 +96,28 @@ Canonical mechanics: [`docs/flow-manager-long-running-child-runbook.md`](../../d
 - One invocation owns one newly opened tab, sends the exact prompt once, polls
   that tab, and closes only that tab.
 - Page/DOM final assistant state is sufficient. Do not require service-terminal
-  network witnesses.
+  network witnesses, shell/PID/log liveness, or background-job state as
+  completion evidence.
 - Progress nodes are not concatenated; capture only the final eligible assistant
   node for the owned user turn.
-- Foreign activity or UI failure degrades only that invocation.
-- Legacy `status/list`, `clear`, capability/Gate-B, profile walls, claims, queues,
-  leases, and stale recovery state are not admission or completion authority.
+- Foreign/interleaved activity, page loss, UI failure, cleanup failure, timeout,
+  output conflict, or publication conflict is an invocation-local incident;
+  it cannot gate, restart, or invalidate a sibling invocation.
+- Sibling or foreign tabs are never closed, commandeered, or used as evidence
+  for this invocation.
+- Legacy `status/list`, `clear`, capability/Gate-B, profile walls, mutexes,
+  claims, queues, leases, and stale recovery state are diagnostic or historical
+  only; they cannot admit, veto, restart, or invalidate new tracked work.
 - Polling is bounded and low-frequency. Ordinary generating/waiting is not an
   incident.
 - Direct unexpected events append best-effort to
   `~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl` and are also
   reported in the current flow-manager result. The journal is advisory and never
   scanned to grant or deny work.
+- Any possible delivery, post-send failure, ambiguous delivery, output conflict,
+  or missing terminal result forbids resend. Retain the event as
+  invocation-local incident evidence; only the separately defined proven
+  pre-send zero-send retry may send again.
 - Do not add a second monitor, raw-CDP fallback, profile-wide lock, 10–15 minute
   watchdog, or tab sweeper.
 
