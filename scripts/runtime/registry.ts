@@ -1,3 +1,4 @@
+import type { OrcaRunOptions } from '../orca-runtime/native.ts';
 import type { RuntimeAdapter } from './contracts.ts';
 
 export interface RuntimeAdapterInstanceOptions {
@@ -16,25 +17,21 @@ export type RuntimeAdapterFactory = (
   options?: RuntimeAdapterInstanceOptions,
 ) => RuntimeAdapter | Promise<RuntimeAdapter>;
 
+type LoadedRuntimeAdapterFactory = (
+  options?: RuntimeAdapterInstanceOptions,
+) => RuntimeAdapter;
+
+type RuntimeAdapterLoader = () => Promise<LoadedRuntimeAdapterFactory>;
+
 /** Static literal map: no discovery, registration side effects, or fallback. */
-const DEFAULT_FACTORIES: Readonly<Record<string, RuntimeAdapterFactory>> = {
-  orca: async (options = {}) => {
-    const [{ OrcaTaskRuntimeAdapter }, { runOrcaJson }] = await Promise.all([
-      import('../orca-runtime/task-adapter.ts'),
-      import('../orca-runtime/native.ts'),
-    ]);
-    return new OrcaTaskRuntimeAdapter({
+const DEFAULT_LOADERS: Readonly<Record<string, RuntimeAdapterLoader>> = {
+  orca: async () => {
+    const { OrcaTaskRuntimeAdapter } = await import('../orca-runtime/task-adapter.ts');
+    return (options = {}) => new OrcaTaskRuntimeAdapter({
       cwd: options.cwd,
       timeoutMs: options.timeoutMs,
       executable: options.transport?.executable,
-      runner: options.transport?.runner as typeof runOrcaJson extends (
-        args: readonly string[],
-        options?: infer T,
-      ) => unknown
-        ? T extends { runner?: infer R }
-          ? R
-          : never
-        : never,
+      runner: options.transport?.runner as OrcaRunOptions['runner'],
       env: options.transport?.env,
       killSignal: options.transport?.killSignal,
     });
@@ -44,23 +41,15 @@ const DEFAULT_FACTORIES: Readonly<Record<string, RuntimeAdapterFactory>> = {
 export interface RuntimeSelectionOptions {
   readonly adapter?: string;
   readonly env?: NodeJS.ProcessEnv;
+  /** Test-only deterministic factories; production selection uses DEFAULT_LOADERS. */
   readonly factories?: Readonly<Record<string, RuntimeAdapterFactory>>;
 }
 
-function resolveSelection(options: RuntimeSelectionOptions): {
-  readonly requested: string;
-  readonly factory: RuntimeAdapterFactory;
-} {
-  const requested = options.adapter
+function requestedAdapter(options: RuntimeSelectionOptions): string {
+  return options.adapter
     ?? options.env?.OPK_RUNTIME_ADAPTER
     ?? process.env.OPK_RUNTIME_ADAPTER
     ?? 'orca';
-  const factories = options.factories ?? DEFAULT_FACTORIES;
-  const factory = factories[requested];
-  if (!factory) {
-    throw new Error(`unsupported_runtime_adapter:${requested}`);
-  }
-  return { requested, factory };
 }
 
 /**
@@ -69,21 +58,14 @@ function resolveSelection(options: RuntimeSelectionOptions): {
  */
 export async function selectRuntimeAdapterFactory(
   options: RuntimeSelectionOptions = {},
-): Promise<(instanceOptions?: RuntimeAdapterInstanceOptions) => RuntimeAdapter> {
-  const { factory } = resolveSelection(options);
-  return asyncFactoryToLoadedFactory(factory);
-}
-
-async function asyncFactoryToLoadedFactory(
-  factory: RuntimeAdapterFactory,
-): Promise<(instanceOptions?: RuntimeAdapterInstanceOptions) => RuntimeAdapter> {
-  /*
-   * Load the selected adapter exactly once before exposing a synchronous caller
-   * factory. The default factory returns a fresh adapter for every invocation;
-   * focused tests can still supply a deterministic synchronous factory.
-   */
-  const first = await factory();
-  if (!(first instanceof Promise)) {
+): Promise<LoadedRuntimeAdapterFactory> {
+  const requested = requestedAdapter(options);
+  if (options.factories) {
+    const factory = options.factories[requested];
+    if (!factory) {
+      throw new Error(`unsupported_runtime_adapter:${requested}`);
+    }
+    const first = await factory();
     let firstAvailable = true;
     return (instanceOptions = {}) => {
       if (firstAvailable && Object.keys(instanceOptions).length === 0) {
@@ -92,18 +74,31 @@ async function asyncFactoryToLoadedFactory(
       }
       const next = factory(instanceOptions);
       if (next instanceof Promise) {
-        throw new Error('runtime_adapter_factory_became_async_after_selection');
+        throw new Error('runtime_test_factory_requires_async_selection');
       }
       return next;
     };
   }
-  throw new Error('runtime_adapter_factory_load_contract_invalid');
+
+  const loader = DEFAULT_LOADERS[requested];
+  if (!loader) {
+    throw new Error(`unsupported_runtime_adapter:${requested}`);
+  }
+  return loader();
 }
 
 export async function selectRuntimeAdapter(
   options: RuntimeSelectionOptions = {},
   instanceOptions: RuntimeAdapterInstanceOptions = {},
 ): Promise<RuntimeAdapter> {
-  const { factory } = resolveSelection(options);
+  if (options.factories) {
+    const requested = requestedAdapter(options);
+    const factory = options.factories[requested];
+    if (!factory) {
+      throw new Error(`unsupported_runtime_adapter:${requested}`);
+    }
+    return factory(instanceOptions);
+  }
+  const factory = await selectRuntimeAdapterFactory(options);
   return factory(instanceOptions);
 }
