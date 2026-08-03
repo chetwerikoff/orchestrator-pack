@@ -64,6 +64,15 @@ foreach ($arg in $cli.ForwardArgs) {
 
 Add-PackReviewAutoForwardArgs -ForwardArgs $forwardArgs -RepoRoot $resolvedRoot | Out-Null
 
+# A carry-over run must focus the reviewer on the immutable replay bundle.
+$carryoverBundle = [string]$env:PACK_REVIEW_CARRYOVER_BUNDLE_PATH
+if ($reviewer -ne 'gpt' -and -not [string]::IsNullOrWhiteSpace($carryoverBundle) -and (Test-Path -LiteralPath $carryoverBundle -PathType Leaf)) {
+    if (-not $forwardArgs.Contains('--source')) {
+        $forwardArgs.Add('--source') | Out-Null
+        $forwardArgs.Add($carryoverBundle) | Out-Null
+    }
+}
+
 # Codex-only auto-forward flags must not reach the browser GPT adapter.
 if ($reviewer -eq 'gpt') {
     for ($index = $forwardArgs.Count - 1; $index -ge 0; $index--) {

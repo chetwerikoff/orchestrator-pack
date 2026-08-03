@@ -2,11 +2,14 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 898,
   "declared_paths": [
+    "agent-orchestrator.yaml.example",
     "docs/merge-triage-primary-paths.v1.json",
+    "docs/migration_notes.md",
     "docs/pack-review-issue-898.md",
     "plugins/ao-codex-pr-reviewer/lib/review_core.ts",
     "plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts",
     "scripts/emit-vitest-heavy-topology.mjs",
+    "scripts/invoke-pack-review.ps1",
     "scripts/lib/Merge-TriageGate.ps1",
     "scripts/merge-triage-evidence.test.ts",
     "scripts/merge-triage-evidence.ts",
@@ -108,5 +111,5 @@
     "scripts/vitest-ci-lanes.config.json",
     "scripts/vitest-runtime-history.json"
   ],
-  "source_revision": "35a29aeb18fd9486aa8b095d6534799bffe7625a"
+  "source_revision": "27e671c3586edf101362eacc02118bf2576bac47"
 }

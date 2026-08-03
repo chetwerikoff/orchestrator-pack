@@ -78,6 +78,10 @@ projects:
       PACK_REVIEWER (operator selector — single source of truth; set before ao start):
         Recognized values: codex | claude. Dispatches to tracked wrappers only (not REVIEW_COMMAND).
         Unset or unrecognized PACK_REVIEWER: invoke-pack-review.ps1 exits non-zero and runs no reviewer (fail-closed; no Codex default).
+
+      LIVE PACK REVIEW BUDGET:
+        AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS=2400000
+        Set this in the operator environment inherited by the review runner; it yields a 2700-second runner timeout.
         Switch reviewers by changing PACK_REVIEWER only — do not edit REVIEW_COMMAND. See docs/reviewer-switch-runbook.md.
         Gitignored .ao paths are deprecated; never use .ao/ in REVIEW_COMMAND.
       NAMED REVIEW_COMMAND (reviewer-agnostic entrypoint; run from the reviewed repo root):

@@ -314,18 +314,27 @@ function validateCycle(cycle: PackReviewCycle | null): void {
   if (normalized.length > cycle.frozenCap) {
     throw new PackReviewAuthorityError('cap_state_invalid', 'consumed heads exceed frozen cap');
   }
+  if (!['open', 'at_cap_open_findings', 'at_cap_continuation_required', 'closed'].includes(cycle.state)) {
+    throw new PackReviewAuthorityError('cap_state_invalid', `unknown cycle state ${cycle.state}`);
+  }
+  if (![PACK_REVIEW_CAP_MAP_VERSION, PACK_REVIEW_LEGACY_CAP_MAP_VERSION].includes(cycle.capMapVersion)) {
+    throw new PackReviewAuthorityError('cap_state_invalid', `unknown cap map ${cycle.capMapVersion}`);
+  }
   if (cycle.capMapVersion === PACK_REVIEW_CAP_MAP_VERSION
-      && cycle.frozenCap !== PACK_REVIEW_CAPS[cycle.frozenTier]) {
-    throw new PackReviewAuthorityError('cap_state_invalid', 'current-map cycle has mismatched frozen cap');
+      && (cycle.frozenCap !== PACK_REVIEW_CAPS[cycle.frozenTier] || cycle.frozenMapOrigin !== undefined)) {
+    throw new PackReviewAuthorityError('cap_state_invalid', 'current-map cycle has mismatched discriminator');
   }
   if (cycle.capMapVersion === PACK_REVIEW_LEGACY_CAP_MAP_VERSION
       && cycle.frozenMapOrigin !== 'persisted-open-cycle') {
     throw new PackReviewAuthorityError('cap_state_invalid', 'legacy cycle lacks persisted origin');
   }
   const atCap = normalized.length === cycle.frozenCap;
-  if ((cycle.state === 'at_cap_open_findings' || cycle.state === 'at_cap_continuation_required')
-      && (!atCap || !cycle.atCapHash)) {
+  const atCapState = cycle.state === 'at_cap_open_findings' || cycle.state === 'at_cap_continuation_required';
+  if (atCapState && (!atCap || !cycle.atCapHash || !/^[0-9a-f]{64}$/.test(cycle.atCapHash))) {
     throw new PackReviewAuthorityError('cap_state_invalid', 'at-cap cycle lacks full consumption/hash');
+  }
+  if (!atCapState && cycle.atCapHash !== undefined) {
+    throw new PackReviewAuthorityError('cap_state_invalid', 'non-at-cap cycle carries atCapHash');
   }
 }
 
@@ -723,13 +732,14 @@ export function selectPackReviewEvidence(input: {
       if (evidenceRecords.some((entry) => entry.malformed)) {
         throw new PackReviewAuthorityError('evidence_selection_invalid', 'malformed evidence record');
       }
-      const matches = evidenceRecords.filter((entry) => {
-        if (!entry.value || typeof entry.value !== 'object' || Array.isArray(entry.value)) return false;
-        const record = entry.value as { evidenceId?: unknown; expectedEvidenceKey?: unknown };
-        return record.evidenceId === selectedEvidenceId
-          && record.expectedEvidenceKey === expectedEvidenceKey
-          && entry.digest === selectedEvidenceDigest;
-      });
+      const matches = evidenceRecords.filter((entry) =>
+        canonicalEvidenceRecordMatches(
+          entry.value,
+          expectedEvidenceKey,
+          selectedEvidenceId,
+          current,
+        ) && entry.digest === selectedEvidenceDigest,
+      );
       if (matches.length !== 1) {
         throw new PackReviewAuthorityError(
           'evidence_selection_invalid',
@@ -758,11 +768,23 @@ export function commitPackReviewTriage(input: {
     nextPhase: 'triage_committed',
     mutate(current) {
       if (input.triage.source === 'automatic') {
-        if (!current.evidence) {
-          throw new PackReviewAuthorityError('triage_invalid', 'automatic triage lacks selected evidence');
-        }
         if (input.triage.verdict === 'DEFER') {
           throw new PackReviewAuthorityError('triage_invalid', 'automatic DEFER is not authoritative');
+        }
+        if (input.triage.verdict !== 'PENDING_OPERATOR' && !current.evidence) {
+          throw new PackReviewAuthorityError('triage_invalid', 'automatic triage lacks selected evidence');
+        }
+        if (current.evidence) {
+          const evidenceRecords = listPackReviewImmutableRecordsUnlocked('evidence', input.options);
+          if (evidenceRecords.some((entry) => entry.malformed)
+              || !evidenceRecords.some((entry) => canonicalEvidenceRecordMatches(
+                entry.value,
+                current.evidence!.expectedEvidenceKey,
+                current.evidence!.selectedEvidenceId,
+                current,
+              ) && entry.digest === current.evidence!.selectedEvidenceDigest)) {
+            throw new PackReviewAuthorityError('triage_invalid', 'automatic triage evidence is not canonical');
+          }
         }
       } else if (!['BLOCK', 'DEFER'].includes(input.triage.verdict)) {
         throw new PackReviewAuthorityError('triage_invalid', 'architect verdict must be BLOCK or DEFER');
@@ -778,10 +800,11 @@ export function recordPackReviewPublication(input: {
   expectedTransitionSeq: number;
   publication: PackReviewPublicationState;
   options: PackReviewAuthorityOptions;
+  nextPhase?: PackReviewAuthorityPhase;
 }): PackReviewAuthorityDocument {
   return commitPackReviewAuthorityTransition({
     ...input,
-    nextPhase: 'external_published',
+    nextPhase: input.nextPhase ?? 'external_published',
     mutate(current) {
       if (!current.terminal || current.terminal.runId !== input.publication.terminalRunId) {
         throw new PackReviewAuthorityError('publication_invalid', 'terminal is not authoritative');
@@ -829,6 +852,32 @@ export function acknowledgePackReviewReset(input: {
       return current;
     },
   });
+}
+
+function canonicalEvidenceRecordMatches(
+  value: unknown,
+  expectedEvidenceKey: string,
+  selectedEvidenceId: string,
+  authority: PackReviewAuthorityDocument,
+): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !authority.cycle) return false;
+  const record = value as Record<string, unknown>;
+  const tuple = record.tuple;
+  if (!tuple || typeof tuple !== 'object' || Array.isArray(tuple)) return false;
+  const tupleRecord = tuple as Record<string, unknown>;
+  return record.schema === 'merge-triage-evidence/v1'
+    && record.pathId === 'scope-denylist-current-head/v1'
+    && record.producer === 'scripts/merge-triage-evidence.ts'
+    && record.evidenceId === `mte-${expectedEvidenceKey}`
+    && record.evidenceId === selectedEvidenceId
+    && record.expectedEvidenceKey === expectedEvidenceKey
+    && tupleRecord.prNumber === authority.prNumber
+    && tupleRecord.cycleId === authority.cycle.cycleId
+    && tupleRecord.currentHeadSha === authority.currentHeadSha
+    && Array.isArray(record.changedPaths)
+    && Array.isArray(record.denylistPatterns)
+    && Array.isArray(record.matchedPaths)
+    && (record.predicateResult === 'intersection' || record.predicateResult === 'no_intersection');
 }
 
 function listPackReviewImmutableRecordsUnlocked(

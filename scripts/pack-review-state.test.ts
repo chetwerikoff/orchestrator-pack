@@ -209,15 +209,26 @@ describe('Issue #898 authority and cap state', () => {
     });
     const staged = stagePackReviewImmutableRecord({
       kind: 'evidence',
-      key: 'row-a',
-      value: { evidenceId: 'evidence-a', expectedEvidenceKey: 'key-a' },
+      key: 'mte-key-a',
+      value: {
+        schema: 'merge-triage-evidence/v1',
+        evidenceId: 'mte-key-a',
+        expectedEvidenceKey: 'key-a',
+        pathId: 'scope-denylist-current-head/v1',
+        producer: 'scripts/merge-triage-evidence.ts',
+        tuple: { prNumber: 898, cycleId: state.cycle!.cycleId, currentHeadSha: sha('a') },
+        changedPaths: [],
+        denylistPatterns: ['packages/core/**'],
+        matchedPaths: [],
+        predicateResult: 'no_intersection',
+      },
       options: storeOptions,
     });
     expect(() => selectPackReviewEvidence({
       prNumber: 898,
       expectedTransitionSeq: state.transitionSeq,
       expectedEvidenceKey: 'key-a',
-      selectedEvidenceId: 'evidence-a',
+      selectedEvidenceId: 'mte-key-a',
       selectedEvidenceDigest: 'forged',
       options: storeOptions,
     })).toThrow(/evidence_selection_invalid/);
@@ -226,13 +237,13 @@ describe('Issue #898 authority and cap state', () => {
       prNumber: 898,
       expectedTransitionSeq: state.transitionSeq,
       expectedEvidenceKey: 'key-a',
-      selectedEvidenceId: 'evidence-a',
+      selectedEvidenceId: 'mte-key-a',
       selectedEvidenceDigest: staged.digest,
       options: storeOptions,
     });
     expect(state.evidence).toMatchObject({
       expectedEvidenceKey: 'key-a',
-      selectedEvidenceId: 'evidence-a',
+      selectedEvidenceId: 'mte-key-a',
       selectedEvidenceDigest: staged.digest,
     });
   });
