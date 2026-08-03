@@ -1,13 +1,25 @@
 // @vitest-ci-lane light
 // @vitest-pre-topology-seconds 120
-import { describe, expect, it } from 'vitest';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   MAX_EFFECTIVE_BUDGET_MS,
+  buildReviewerBudgetSpawnEnv,
   createReviewerBudgetLedger,
   resolveReviewerBudgetDecision,
   resolveSoftDeadlineMs,
   resolveTestBudgetMs,
 } from '../plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts';
+import { startPackReview } from './pack-review-runner.ts';
+
+const roots: string[] = [];
+
+afterEach(() => {
+  delete process.env.AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS;
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 describe('Issue #898 effective reviewer budget contract', () => {
   it('keeps 600000 default and applies 2400000 live override with ceil-to-second runner deadline', () => {
@@ -60,6 +72,37 @@ describe('Issue #898 effective reviewer budget contract', () => {
       runnerTimeoutSeconds: 901,
       runnerTimeoutMs: 901000,
       runnerTimeoutSource: 'explicit',
+    });
+  });
+
+  it('rejects invalid budget and preempting timeout before runner store or claim effects', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'pack-review-budget-preflight-'));
+    roots.push(parent);
+    const storeRoot = join(parent, 'store-not-created');
+    process.env.AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS = '6e5';
+    await expect(startPackReview({ storeRoot })).rejects.toThrow(/reviewer_budget_invalid/);
+    expect(existsSync(storeRoot)).toBe(false);
+
+    delete process.env.AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS;
+    await expect(startPackReview({ storeRoot, timeoutSeconds: '899' })).rejects.toThrow(
+      /below required 900/,
+    );
+    expect(existsSync(storeRoot)).toBe(false);
+  });
+
+  it('propagates one ledger into child timeout telemetry without recomputation', () => {
+    const ledger = createReviewerBudgetLedger({
+      AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS: '2400000',
+    }, 1_000);
+    expect(buildReviewerBudgetSpawnEnv(ledger, {})).toMatchObject({
+      AO_REVIEW_EFFECTIVE_BUDGET_MS: '2400000',
+      AO_REVIEW_SOFT_DEADLINE_MS: '2040000',
+      AO_REVIEW_TEST_BUDGET_MS: '120000',
+      AO_REVIEW_HARD_DEADLINE_MS: '2401000',
+      AO_REVIEW_BUDGET_STARTED_MS: '1000',
+      AO_REVIEW_RUNNER_TIMEOUT_REQUIRED_MS: '2700000',
+      AO_REVIEW_RUNNER_TIMEOUT_SECONDS: '2700',
+      AO_REVIEW_RUNNER_TIMEOUT_MS: '2700000',
     });
   });
 
