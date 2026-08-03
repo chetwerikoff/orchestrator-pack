@@ -4,27 +4,25 @@ import '../toolchain/native-entrypoint-preflight.ts';
 import { randomUUID } from 'node:crypto';
 import {
   closeSync,
-  existsSync,
   fsyncSync,
   openSync,
   readFileSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
 import { resolveOrcaExecutable } from '../orca-runtime/native.ts';
 import {
   normalizeHeadSha,
   normalizeWorktreePath,
-  parseGitWorktreePorcelain,
-  parseOrcaWorktreePayload,
   type ExpectedWorktreeIdentity,
   type GitWorktreeRow,
   type OrcaWorktreeRow,
 } from './core.ts';
 import {
+  collectCensus,
   runLifecycle,
   type CommandInvocation,
   type CommandRunner,
@@ -90,13 +88,15 @@ interface LockHandle {
   readonly token: string;
 }
 
+interface SelectedCandidate {
+  readonly expected: ExpectedWorktreeIdentity;
+  readonly report: LifecycleTerminalReport;
+}
+
 interface AttemptResult {
   readonly report: CreateAttemptReport;
   readonly snapshot: InventorySnapshot;
-  readonly selected?: {
-    expected: ExpectedWorktreeIdentity;
-    report: LifecycleTerminalReport;
-  };
+  readonly selected?: SelectedCandidate;
 }
 
 function defaultRunner(invocation: CommandInvocation): ProcessResult {
@@ -109,25 +109,15 @@ function defaultRunner(invocation: CommandInvocation): ProcessResult {
   });
 }
 
-function commandError(result: ProcessResult, invocation: CommandInvocation): string {
-  return result.stderr.trim()
-    || result.error
-    || `${invocation.command} ${invocation.args.join(' ')} exited ${String(result.exitCode)}`;
-}
-
-function parseJson(text: string, label: string): unknown {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch (error) {
-    throw new TypeError(`${label} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
-  }
+function invocationError(result: ProcessResult, invocation: CommandInvocation): string {
+  const fallback = `${invocation.command} ${invocation.args.join(' ')} exited ${String(result.exitCode)}`;
+  return result.stderr.trim() || result.error || fallback;
 }
 
 function processStarttime(pid: number): string | null {
   try {
     const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    return fields[19] ?? null;
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null;
   } catch {
     return null;
   }
@@ -142,22 +132,17 @@ function processExists(pid: number): boolean {
   }
 }
 
-function parseLockRecord(raw: string): { pid: number; starttime: string | null; token: string | null } | null {
-  const lines = raw.trim().split(/\r?\n/);
-  const pid = Number.parseInt(lines[0] ?? '', 10);
+function decodeLock(raw: string): { pid: number; starttime: string | null; token: string | null } | null {
+  const [pidText, starttimeText, tokenText] = raw.trim().split(/\r?\n/);
+  const pid = Number.parseInt(pidText ?? '', 10);
   if (!Number.isInteger(pid) || pid <= 1) return null;
-  return {
-    pid,
-    starttime: lines[1]?.trim() || null,
-    token: lines[2]?.trim() || null,
-  };
+  return { pid, starttime: starttimeText?.trim() || null, token: tokenText?.trim() || null };
 }
 
-function lockOwnerAlive(record: ReturnType<typeof parseLockRecord>): boolean {
+function lockOwnerAlive(record: ReturnType<typeof decodeLock>): boolean {
   if (!record || !processExists(record.pid)) return false;
-  if (!record.starttime) return true;
   const observed = processStarttime(record.pid);
-  return observed === null || observed === record.starttime;
+  return !record.starttime || observed === null || observed === record.starttime;
 }
 
 function acquireLifecycleLock(path: string): LockHandle | null {
@@ -169,16 +154,15 @@ function acquireLifecycleLock(path: string): LockHandle | null {
       fsyncSync(fd);
       return { fd, token };
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') return null;
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return null;
       let firstRead: string;
       try {
         firstRead = readFileSync(path, 'utf8');
       } catch {
         return null;
       }
-      const record = parseLockRecord(firstRead);
-      if (record === null || lockOwnerAlive(record)) return null;
+      const record = decodeLock(firstRead);
+      if (!record || lockOwnerAlive(record)) return null;
       try {
         if (readFileSync(path, 'utf8') !== firstRead) return null;
         unlinkSync(path);
@@ -194,57 +178,54 @@ function releaseLifecycleLock(path: string, handle: LockHandle): void {
   try {
     closeSync(handle.fd);
   } catch {
-    // The token check below still prevents unlinking a replacement owner.
+    // Token ownership still guards unlink below.
   }
   try {
-    const record = parseLockRecord(readFileSync(path, 'utf8'));
-    if (record?.token === handle.token) unlinkSync(path);
+    if (decodeLock(readFileSync(path, 'utf8'))?.token === handle.token) unlinkSync(path);
   } catch {
-    // Missing-at-release is harmless; mismatched ownership remains fail-closed.
+    // Missing-at-release or changed ownership is fail-closed and harmless.
   }
 }
 
-function collectInventory(
-  repositoryRoot: string,
-  operations: CreateContinuationOperations,
-): InventorySnapshot {
-  const runner = operations.runner ?? defaultRunner;
-  const orcaExecutable = operations.orcaExecutable ?? resolveOrcaExecutable();
-  const errors: string[] = [];
-  let gitRows: GitWorktreeRow[] = [];
-  let orcaRows: OrcaWorktreeRow[] = [];
-
-  const gitInvocation: CommandInvocation = {
-    command: 'git',
-    args: ['-C', repositoryRoot, 'worktree', 'list', '--porcelain'],
+function lifecycleOperations(operations: CreateContinuationOperations): LifecycleOperations {
+  return {
+    ...(operations.runner ? { runner: operations.runner } : {}),
+    ...(operations.orcaExecutable ? { orcaExecutable: operations.orcaExecutable } : {}),
+    ...(operations.lockPath ? { lockPath: operations.lockPath } : {}),
   };
-  const gitResult = runner(gitInvocation);
-  if (!gitResult.ok) {
-    errors.push(commandError(gitResult, gitInvocation));
-  } else {
-    try {
-      gitRows = parseGitWorktreePorcelain(gitResult.stdout);
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
-    }
-  }
+}
 
-  const orcaInvocation: CommandInvocation = {
-    command: orcaExecutable,
-    args: ['worktree', 'list', '--json'],
+function collectInventory(input: {
+  repositoryRoot: string;
+  issueNumber: number;
+  expectedHead: string;
+  probeName: string;
+  operations: CreateContinuationOperations;
+}): InventorySnapshot {
+  const probe: ExpectedWorktreeIdentity = {
+    repositoryRoot: input.repositoryRoot,
+    path: join(input.repositoryRoot, '.opk-worktree-lifecycle-probe', input.probeName),
+    headSha: input.expectedHead,
+    mode: 'branch-bound',
+    branchName: input.probeName,
+    bindingKind: 'issue',
+    bindingNumber: input.issueNumber,
   };
-  const orcaResult = runner(orcaInvocation);
-  if (!orcaResult.ok) {
-    errors.push(commandError(orcaResult, orcaInvocation));
-  } else {
-    try {
-      orcaRows = parseOrcaWorktreePayload(parseJson(orcaResult.stdout, 'orca worktree list'));
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
-    }
+  const census = collectCensus(probe, lifecycleOperations(input.operations));
+  const evidence = census.classification.evidence;
+  const errors = [...census.errors];
+  if (evidence.git.status !== 'ok' && !errors.some((item) => item.includes('git'))) {
+    errors.push(evidence.git.error ?? 'git inventory unavailable');
   }
-
-  return { ok: errors.length === 0, gitRows, orcaRows, errors };
+  if (evidence.orca.status !== 'ok' && !errors.some((item) => item.toLowerCase().includes('orca'))) {
+    errors.push(evidence.orca.error ?? 'Orca inventory unavailable');
+  }
+  return {
+    ok: evidence.git.status === 'ok' && evidence.orca.status === 'ok' && errors.length === 0,
+    gitRows: evidence.git.rows,
+    orcaRows: evidence.orca.rows,
+    errors,
+  };
 }
 
 function expectedFromRow(
@@ -277,30 +258,17 @@ function expectedFromRow(
   return null;
 }
 
-function lifecycleOperations(
-  operations: CreateContinuationOperations,
-): LifecycleOperations {
-  return {
-    ...(operations.runner ? { runner: operations.runner } : {}),
-    ...(operations.orcaExecutable ? { orcaExecutable: operations.orcaExecutable } : {}),
-    ...(operations.lockPath ? { lockPath: operations.lockPath } : {}),
-  };
-}
-
-function evaluateCandidateRows(input: {
+function evaluateCandidates(input: {
   rows: readonly GitWorktreeRow[];
   repositoryRoot: string;
   issueNumber: number;
   expectedHead: string;
   operations: CreateContinuationOperations;
-}): {
-  reports: LifecycleTerminalReport[];
-  selected?: { expected: ExpectedWorktreeIdentity; report: LifecycleTerminalReport };
-} {
+}): { reports: LifecycleTerminalReport[]; selected?: SelectedCandidate } {
   const reports: LifecycleTerminalReport[] = [];
-  const evaluated: Array<{ expected: ExpectedWorktreeIdentity; report: LifecycleTerminalReport }> = [];
+  const ready: SelectedCandidate[] = [];
   for (const row of input.rows) {
-    if (row.headSha !== input.expectedHead || row.path === input.repositoryRoot) continue;
+    if (row.path === input.repositoryRoot || row.headSha !== input.expectedHead) continue;
     const expected = expectedFromRow(row, input.repositoryRoot, input.issueNumber);
     if (!expected) continue;
     const first = runLifecycle({
@@ -312,9 +280,7 @@ function evaluateCandidateRows(input: {
     reports.push(first);
     if (first.outcome !== 'ready_to_spawn'
       || first.classification.classification !== 'exact_dual'
-      || !first.decision.terminalSpawnAuthorized) {
-      continue;
-    }
+      || !first.decision.terminalSpawnAuthorized) continue;
     const fresh = runLifecycle({
       expected,
       context: 'post-create',
@@ -325,50 +291,41 @@ function evaluateCandidateRows(input: {
     if (fresh.outcome === 'ready_to_spawn'
       && fresh.classification.classification === 'exact_dual'
       && fresh.decision.terminalSpawnAuthorized) {
-      evaluated.push({ expected, report: fresh });
+      ready.push({ expected, report: fresh });
     }
   }
-  return evaluated.length === 1 && input.rows.length === 1
-    ? { reports, selected: evaluated[0] }
-    : { reports };
+  return ready.length === 1 ? { reports, selected: ready[0] } : { reports };
 }
 
-function acknowledged(result: ProcessResult): boolean {
-  if (!result.stdout.trim()) return false;
+function responseAcknowledged(result: ProcessResult): boolean {
   try {
-    const payload = JSON.parse(result.stdout) as { ok?: unknown };
-    return payload.ok === true;
+    const parsed = JSON.parse(result.stdout.trim()) as { ok?: unknown };
+    return parsed.ok === true;
   } catch {
     return false;
   }
 }
 
-function createCommand(
-  repositoryRoot: string,
-  issueNumber: number,
-  expectedHead: string,
-  name: string,
-  orcaExecutable: string,
-): CommandInvocation {
+function createInvocation(input: {
+  repositoryRoot: string;
+  issueNumber: number;
+  expectedHead: string;
+  name: string;
+  orcaExecutable: string;
+}): CommandInvocation {
   return {
-    command: orcaExecutable,
+    command: input.orcaExecutable,
     args: [
-      'worktree',
-      'create',
-      '--name',
-      name,
-      '--repo',
-      `path:${repositoryRoot}`,
-      '--base-branch',
-      expectedHead,
-      '--issue',
-      String(issueNumber),
-      '--setup',
-      'skip',
+      'worktree', 'create',
+      '--name', input.name,
+      '--repo', `path:${input.repositoryRoot}`,
+      '--base-branch', input.expectedHead,
+      '--issue', String(input.issueNumber),
+      '--setup', 'skip',
       '--activate',
       '--json',
     ],
-    cwd: repositoryRoot,
+    cwd: input.repositoryRoot,
   };
 }
 
@@ -382,22 +339,27 @@ function runCreateAttempt(input: {
   operations: CreateContinuationOperations;
 }): AttemptResult {
   const runner = input.operations.runner ?? defaultRunner;
-  const orcaExecutable = input.operations.orcaExecutable ?? resolveOrcaExecutable();
-  const invocation = createCommand(
-    input.repositoryRoot,
-    input.issueNumber,
-    input.expectedHead,
-    input.name,
-    orcaExecutable,
-  );
-  const commandResult = runner(invocation);
-  const snapshot = collectInventory(input.repositoryRoot, input.operations);
-  const beforeGitPaths = new Set(input.before.gitRows.map((row) => row.path));
-  const beforeOrcaPaths = new Set(input.before.orcaRows.map((row) => row.path));
-  const newGitRows = snapshot.gitRows.filter((row) => !beforeGitPaths.has(row.path));
-  const newOrcaRows = snapshot.orcaRows.filter((row) => !beforeOrcaPaths.has(row.path));
+  const invocation = createInvocation({
+    repositoryRoot: input.repositoryRoot,
+    issueNumber: input.issueNumber,
+    expectedHead: input.expectedHead,
+    name: input.name,
+    orcaExecutable: input.operations.orcaExecutable ?? resolveOrcaExecutable(),
+  });
+  const command = runner(invocation);
+  const snapshot = collectInventory({
+    repositoryRoot: input.repositoryRoot,
+    issueNumber: input.issueNumber,
+    expectedHead: input.expectedHead,
+    probeName: input.name,
+    operations: input.operations,
+  });
+  const oldGitPaths = new Set(input.before.gitRows.map((row) => row.path));
+  const oldOrcaPaths = new Set(input.before.orcaRows.map((row) => row.path));
+  const newGitRows = snapshot.gitRows.filter((row) => !oldGitPaths.has(row.path));
+  const newOrcaRows = snapshot.orcaRows.filter((row) => !oldOrcaPaths.has(row.path));
   const evaluated = snapshot.ok
-    ? evaluateCandidateRows({
+    ? evaluateCandidates({
         rows: newGitRows,
         repositoryRoot: input.repositoryRoot,
         issueNumber: input.issueNumber,
@@ -405,24 +367,23 @@ function runCreateAttempt(input: {
         operations: input.operations,
       })
     : { reports: [] as LifecycleTerminalReport[] };
-  const report: CreateAttemptReport = {
-    kind: input.kind,
-    name: input.name,
-    command: {
-      outcome: commandResult.outcome,
-      ok: commandResult.ok,
-      exitCode: commandResult.exitCode,
-      timedOut: commandResult.timedOut,
-      acknowledged: acknowledged(commandResult),
-      ...(!commandResult.ok ? { error: commandError(commandResult, invocation) } : {}),
-    },
-    newGitPaths: newGitRows.map((row) => row.path).sort(),
-    newOrcaPaths: newOrcaRows.map((row) => row.path).sort(),
-    candidateReports: evaluated.reports,
-    inventoryErrors: snapshot.errors,
-  };
   return {
-    report,
+    report: {
+      kind: input.kind,
+      name: input.name,
+      command: {
+        outcome: command.outcome,
+        ok: command.ok,
+        exitCode: command.exitCode,
+        timedOut: command.timedOut,
+        acknowledged: responseAcknowledged(command),
+        ...(!command.ok ? { error: invocationError(command, invocation) } : {}),
+      },
+      newGitPaths: newGitRows.map((row) => row.path).sort(),
+      newOrcaPaths: newOrcaRows.map((row) => row.path).sort(),
+      candidateReports: evaluated.reports,
+      inventoryErrors: snapshot.errors,
+    },
     snapshot,
     ...(evaluated.selected ? { selected: evaluated.selected } : {}),
   };
@@ -432,7 +393,7 @@ function ready(input: {
   issueNumber: number;
   expectedHead: string;
   resumedExisting: boolean;
-  selected: { expected: ExpectedWorktreeIdentity; report: LifecycleTerminalReport };
+  selected: SelectedCandidate;
   attempts: readonly CreateAttemptReport[];
   effects: readonly string[];
 }): WorktreeCreateContinuationReport {
@@ -473,11 +434,29 @@ function degraded(input: {
 }
 
 function replacementName(name: string, operations: CreateContinuationOperations): string {
-  const token = (operations.replacementToken ?? randomUUID)()
-    .replace(/[^A-Za-z0-9]/g, '')
-    .slice(0, 10);
-  const suffix = `-replacement-${token || 'bounded'}`;
+  const raw = (operations.replacementToken ?? randomUUID)();
+  const token = raw.replace(/[^A-Za-z0-9]/g, '').slice(0, 10) || 'bounded';
+  const suffix = `-replacement-${token}`;
   return `${name.slice(0, Math.max(1, 80 - suffix.length))}${suffix}`;
+}
+
+function relatedExistingRows(input: {
+  snapshot: InventorySnapshot;
+  issueNumber: number;
+  expectedHead: string;
+  primaryName: string;
+  repositoryRoot: string;
+}): GitWorktreeRow[] {
+  const issuePaths = new Set(
+    input.snapshot.orcaRows
+      .filter((row) => row.linkedIssue === input.issueNumber)
+      .map((row) => row.path),
+  );
+  return input.snapshot.gitRows.filter((row) => row.path !== input.repositoryRoot
+    && row.headSha === input.expectedHead
+    && (issuePaths.has(row.path)
+      || row.branchName === input.primaryName
+      || basename(row.path) === input.primaryName));
 }
 
 export function runCreateContinuation(input: {
@@ -507,7 +486,13 @@ export function runCreateContinuation(input: {
   }
 
   try {
-    let snapshot = collectInventory(repositoryRoot, operations);
+    let snapshot = collectInventory({
+      repositoryRoot,
+      issueNumber: input.issueNumber,
+      expectedHead,
+      probeName: input.name,
+      operations,
+    });
     if (!snapshot.ok) {
       return degraded({
         issueNumber: input.issueNumber,
@@ -516,14 +501,15 @@ export function runCreateContinuation(input: {
       });
     }
 
-    const existingGitRows = snapshot.gitRows.filter(
-      (row) => row.path !== repositoryRoot && row.headSha === expectedHead,
-    );
-    const existingOrcaRows = snapshot.orcaRows.filter(
-      (row) => row.linkedIssue === input.issueNumber || row.headSha === expectedHead,
-    );
-    const existing = evaluateCandidateRows({
-      rows: existingGitRows,
+    const relatedRows = relatedExistingRows({
+      snapshot,
+      issueNumber: input.issueNumber,
+      expectedHead,
+      primaryName: input.name,
+      repositoryRoot,
+    });
+    const existing = evaluateCandidates({
+      rows: relatedRows,
       repositoryRoot,
       issueNumber: input.issueNumber,
       expectedHead,
@@ -542,8 +528,9 @@ export function runCreateContinuation(input: {
 
     const attempts: CreateAttemptReport[] = [];
     const effects: string[] = [];
-    const hasDisputedExisting = existingGitRows.length > 0 || existingOrcaRows.length > 0;
-    if (!hasDisputedExisting) {
+    const hasIssueOrPrimaryState = relatedRows.length > 0
+      || snapshot.orcaRows.some((row) => row.linkedIssue === input.issueNumber);
+    if (!hasIssueOrPrimaryState) {
       const initial = runCreateAttempt({
         kind: 'initial',
         name: input.name,
@@ -578,7 +565,7 @@ export function runCreateContinuation(input: {
     }
 
     const replacement = replacementName(input.name, operations);
-    const replacementAttempt = runCreateAttempt({
+    const finalAttempt = runCreateAttempt({
       kind: 'replacement',
       name: replacement,
       repositoryRoot,
@@ -587,14 +574,14 @@ export function runCreateContinuation(input: {
       before: snapshot,
       operations,
     });
-    attempts.push(replacementAttempt.report);
+    attempts.push(finalAttempt.report);
     effects.push(`orca worktree create attempted: ${replacement}`);
-    if (replacementAttempt.selected) {
+    if (finalAttempt.selected) {
       return ready({
         issueNumber: input.issueNumber,
         expectedHead,
         resumedExisting: false,
-        selected: replacementAttempt.selected,
+        selected: finalAttempt.selected,
         attempts,
         effects,
       });
@@ -604,9 +591,9 @@ export function runCreateContinuation(input: {
       expectedHead,
       attempts,
       effects,
-      error: replacementAttempt.snapshot.ok
+      error: finalAttempt.snapshot.ok
         ? 'initial/current state and the single isolated replacement did not reach exact dual agreement'
-        : `post-replacement inventory unavailable: ${replacementAttempt.snapshot.errors.join('; ')}`,
+        : `post-replacement inventory unavailable: ${finalAttempt.snapshot.errors.join('; ')}`,
     });
   } finally {
     releaseLifecycleLock(lockPath, lock);
@@ -614,34 +601,38 @@ export function runCreateContinuation(input: {
 }
 
 interface ParsedArgs {
-  readonly repositoryRoot: string | null;
-  readonly issueNumber: number | null;
-  readonly expectedHead: string | null;
-  readonly name: string | null;
-  readonly apply: boolean;
-  readonly json: boolean;
-}
-
-function valueAfter(argv: readonly string[], name: string): string | null {
-  const index = argv.indexOf(name);
-  return index === -1 ? null : argv[index + 1] ?? null;
-}
-
-function positiveInteger(value: string | null): number | null {
-  if (value === null) return null;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  repositoryRoot: string | null;
+  issueNumber: number | null;
+  expectedHead: string | null;
+  name: string | null;
+  apply: boolean;
+  json: boolean;
 }
 
 function parseArgs(argv = process.argv.slice(2)): ParsedArgs {
-  return {
-    repositoryRoot: valueAfter(argv, '--repo-root'),
-    issueNumber: positiveInteger(valueAfter(argv, '--issue')),
-    expectedHead: valueAfter(argv, '--expected-head'),
-    name: valueAfter(argv, '--name'),
-    apply: argv.includes('--apply'),
-    json: argv.includes('--json'),
+  const parsed: ParsedArgs = {
+    repositoryRoot: null,
+    issueNumber: null,
+    expectedHead: null,
+    name: null,
+    apply: false,
+    json: false,
   };
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === '--apply') parsed.apply = true;
+    else if (token === '--json') parsed.json = true;
+    else if (token === '--repo-root') parsed.repositoryRoot = argv[++index] ?? null;
+    else if (token === '--expected-head') parsed.expectedHead = argv[++index] ?? null;
+    else if (token === '--name') parsed.name = argv[++index] ?? null;
+    else if (token === '--issue') {
+      const value = Number.parseInt(argv[++index] ?? '', 10);
+      parsed.issueNumber = Number.isInteger(value) && value > 0 ? value : null;
+    } else {
+      throw new TypeError(`unknown argument: ${String(token)}`);
+    }
+  }
+  return parsed;
 }
 
 function usageError(args: ParsedArgs): string | null {
@@ -663,7 +654,29 @@ function emitHuman(report: WorktreeCreateContinuationReport): void {
 }
 
 function main(): void {
-  const args = parseArgs();
+  let args: ParsedArgs;
+  try {
+    args = parseArgs();
+  } catch (error) {
+    args = {
+      repositoryRoot: null,
+      issueNumber: null,
+      expectedHead: null,
+      name: null,
+      apply: false,
+      json: process.argv.includes('--json'),
+    };
+    const payload = {
+      schema: 'orchestrator-pack/worktree-create-continuation-cli-error/v1',
+      outcome: 'invalid_arguments',
+      pipelineContinues: true,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    if (args.json) console.log(JSON.stringify(payload, null, 2));
+    else console.error(`Invalid arguments: ${payload.error}`);
+    process.exitCode = 2;
+    return;
+  }
   const error = usageError(args);
   if (error) {
     const payload = {
@@ -700,7 +713,4 @@ function main(): void {
   }
 }
 
-if (process.argv[1]
-  && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main();
-}
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main();
