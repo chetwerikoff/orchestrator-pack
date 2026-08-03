@@ -138,23 +138,26 @@ async function observeOrcaThroughRuntime(
 ): Promise<WatchResult> {
   const remaining = Math.floor(workDeadline - now());
   if (remaining <= 0) return deadlineResult(request, 'orca-terminal-read', 'orca_read_deadline');
-  const listed = runtime.listWorkers({ workspace: root }, { cwd: root, timeoutMs: remaining });
-  if (listed.status !== 'ok') {
-    if (listed.reason === 'runtime_timeout') {
+  const resolved = runtime.findWorkerById(
+    request.terminalHandle ?? '',
+    { cwd: root, timeoutMs: remaining },
+  );
+  if (resolved.status !== 'ok') {
+    if (resolved.reason === 'runtime_timeout') {
       return deadlineResult(request, 'orca-terminal-read', 'orca_read_deadline');
     }
     return watchResult('source-unavailable', {
       operation: 'orca-terminal-read', sourceId: request.sourceId, predicateId: request.predicateId,
-      reasonCode: `runtime_${listed.status}`, deadlineMs: request.deadlineMs,
-      evidence: { reason: listed.reason, runtime: runtime.id }, remediation: 'inspect-source',
+      reasonCode: `runtime_${resolved.status}`, deadlineMs: request.deadlineMs,
+      evidence: { reason: resolved.reason, runtime: runtime.id }, remediation: 'inspect-source',
     });
   }
-  const worker = listed.value.find((candidate) => candidate.identity.id === request.terminalHandle);
+  const worker = resolved.value;
   if (!worker) {
     return watchResult('source-unavailable', {
       operation: 'orca-terminal-read', sourceId: request.sourceId, predicateId: request.predicateId,
       reasonCode: 'runtime_worker_not_found', deadlineMs: request.deadlineMs,
-      evidence: { runtime: runtime.id, workspace: root }, remediation: 'inspect-source',
+      evidence: { runtime: runtime.id }, remediation: 'inspect-source',
     });
   }
   const outputRemaining = Math.floor(workDeadline - now());
