@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   runtimeFailure,
   runtimeUnsupported,
@@ -48,11 +48,9 @@ interface NormalizedTerminalRead {
   readonly terminalState: 'running' | 'exited' | 'unknown';
 }
 
-interface EncodedObservation {
-  readonly version: 2;
-  readonly workerId: string;
-  readonly generation: string;
-  readonly cursor: string | null;
+interface ObservationBinding {
+  readonly workerKey: string;
+  readonly nativeCursor: string | null;
   readonly fingerprint: string;
 }
 
@@ -83,53 +81,6 @@ function outputFingerprint(
   return createHash('sha256')
     .update(JSON.stringify({ lines, terminalState }), 'utf8')
     .digest('base64url');
-}
-
-function encodeObservationToken(
-  worker: RuntimeWorkerIdentity,
-  cursor: string | null,
-  fingerprint: string,
-): RuntimeObservationToken {
-  const payload: EncodedObservation = {
-    version: 2,
-    workerId: worker.id,
-    generation: worker.generation,
-    cursor,
-    fingerprint,
-  };
-  return {
-    opaque: `${OBSERVATION_TOKEN_PREFIX}${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`,
-  };
-}
-
-function decodeObservationToken(
-  worker: RuntimeWorkerIdentity,
-  token: RuntimeObservationToken,
-): RuntimeResult<DecodedObservation> {
-  if (!token.opaque.startsWith(OBSERVATION_TOKEN_PREFIX)) {
-    return runtimeUnsupported('read_bounded_output', 'observation_token_unsupported');
-  }
-  try {
-    const decoded = JSON.parse(
-      Buffer.from(token.opaque.slice(OBSERVATION_TOKEN_PREFIX.length), 'base64url').toString('utf8'),
-    ) as Partial<EncodedObservation>;
-    if (decoded.version !== 2
-      || decoded.workerId !== worker.id
-      || decoded.generation !== worker.generation
-      || (decoded.cursor !== null && typeof decoded.cursor !== 'string')
-      || typeof decoded.fingerprint !== 'string') {
-      return runtimeFailure('read_bounded_output', 'observation_token_scope_mismatch');
-    }
-    return {
-      status: 'ok',
-      value: {
-        nativeCursor: decoded.cursor,
-        fingerprint: decoded.fingerprint,
-      },
-    };
-  } catch {
-    return runtimeUnsupported('read_bounded_output', 'observation_token_unsupported');
-  }
 }
 
 function normalizeTerminalRead(
@@ -177,6 +128,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   readonly #now: () => number;
   readonly #owned = new Map<string, OwnedWorkerRecord>();
   readonly #knownWorkspace = new Map<string, KnownWorkspaceRecord>();
+  readonly #observations = new Map<string, ObservationBinding>();
 
   constructor(options: OrcaRuntimeAdapterOptions = {}) {
     this.#options = options;
@@ -205,6 +157,56 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
 
   #remaining(deadline: number): number {
     return Math.max(0, Math.floor(deadline - this.#now()));
+  }
+
+  #resolveObservation(
+    worker: RuntimeWorkerIdentity,
+    token: RuntimeObservationToken,
+  ): RuntimeResult<DecodedObservation> {
+    if (!token.opaque.startsWith(OBSERVATION_TOKEN_PREFIX)) {
+      return runtimeUnsupported('read_bounded_output', 'observation_token_unsupported');
+    }
+    const binding = this.#observations.get(token.opaque);
+    if (!binding) {
+      return runtimeUnsupported('read_bounded_output', 'observation_token_unsupported');
+    }
+    if (binding.workerKey !== identityKey(worker)) {
+      return runtimeFailure('read_bounded_output', 'observation_token_scope_mismatch');
+    }
+    return {
+      status: 'ok',
+      value: { nativeCursor: binding.nativeCursor, fingerprint: binding.fingerprint },
+    };
+  }
+
+  #observationToken(
+    worker: RuntimeWorkerIdentity,
+    nativeCursor: string | null,
+    fingerprint: string,
+    previousToken?: RuntimeObservationToken | null,
+  ): RuntimeObservationToken {
+    if (previousToken) {
+      const previous = this.#observations.get(previousToken.opaque);
+      if (previous?.workerKey === identityKey(worker)
+        && previous.nativeCursor === nativeCursor
+        && previous.fingerprint === fingerprint) {
+        return previousToken;
+      }
+    }
+    const token = { opaque: `${OBSERVATION_TOKEN_PREFIX}${randomUUID()}` };
+    this.#observations.set(token.opaque, {
+      workerKey: identityKey(worker),
+      nativeCursor,
+      fingerprint,
+    });
+    return token;
+  }
+
+  #dropObservations(worker: RuntimeWorkerIdentity): void {
+    const workerKey = identityKey(worker);
+    for (const [token, binding] of this.#observations) {
+      if (binding.workerKey === workerKey) this.#observations.delete(token);
+    }
   }
 
   readiness(options: RuntimeCallOptions = {}): RuntimeResult<RuntimeReadiness> {
@@ -256,6 +258,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       if (owned && reportedGeneration && reportedGeneration !== owned.identity.generation) {
         this.#owned.delete(handle);
         this.#knownWorkspace.delete(identityKey(owned.identity));
+        this.#dropObservations(owned.identity);
       }
       const currentOwned = this.#owned.get(handle);
       const generation = reportedGeneration;
@@ -394,7 +397,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       return runtimeFailure('read_bounded_output', 'runtime_identity_mismatch');
     }
     const previous = input.previousToken
-      ? decodeObservationToken(input.worker, input.previousToken)
+      ? this.#resolveObservation(input.worker, input.previousToken)
       : null;
     if (previous && previous.status !== 'ok') return previous;
 
@@ -418,10 +421,11 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     const normalized = normalizeTerminalRead(response.result);
     if (normalized.status !== 'ok') return normalized;
     const fingerprint = outputFingerprint(normalized.value.lines, normalized.value.terminalState);
-    const observationToken = encodeObservationToken(
+    const observationToken = this.#observationToken(
       input.worker,
       normalized.value.nativeCursor,
       fingerprint,
+      input.previousToken,
     );
     const changed = previous?.status === 'ok'
       ? previous.value.nativeCursor !== normalized.value.nativeCursor
@@ -502,6 +506,7 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     }
     this.#owned.delete(worker.id);
     this.#knownWorkspace.delete(identityKey(worker));
+    this.#dropObservations(worker);
     return { status: 'ok', value: { stopped: true } };
   }
 }
