@@ -148,9 +148,10 @@ interface ValidationResult {
   gitFileStatus: 'directory' | 'file' | 'missing';
 }
 
-function validateTarget(worktreePath: string): ValidationResult {
+function validateTarget(worktreePath: string): ValidationResult & { gitFileError?: string } {
   const pathExists = existsSync(worktreePath);
   let gitFileStatus: 'directory' | 'file' | 'missing' = 'missing';
+  let gitFileError: string | undefined;
 
   if (pathExists) {
     try {
@@ -158,9 +159,29 @@ function validateTarget(worktreePath: string): ValidationResult {
       if (stat.isDirectory()) {
         gitFileStatus = 'directory';
       } else if (stat.isFile()) {
-        gitFileStatus = 'file';
+        // Validate .git file contents: must start with "gitdir: " and point to existing path
+        try {
+          const gitFileContent = readFileSync(join(worktreePath, '.git'), 'utf8').trim();
+          if (!gitFileContent.startsWith('gitdir: ')) {
+            gitFileError = '.git file does not start with "gitdir: "';
+            gitFileStatus = 'missing'; // treat as invalid
+          } else {
+            const gitdirPath = gitFileContent.slice(8); // Remove "gitdir: " prefix
+            if (!existsSync(gitdirPath)) {
+              gitFileError = `gitdir path does not exist: ${gitdirPath}`;
+              gitFileStatus = 'missing'; // treat as invalid
+            } else {
+              // Validation passed
+              gitFileStatus = 'file';
+            }
+          }
+        } catch (e) {
+          gitFileError = `cannot read .git file: ${(e as Error).message}`;
+          gitFileStatus = 'missing'; // treat as invalid
+        }
       }
-    } catch {
+    } catch (e) {
+      // .git not found or not accessible
       gitFileStatus = 'missing';
     }
   }
@@ -171,6 +192,7 @@ function validateTarget(worktreePath: string): ValidationResult {
     isInInventory: false, // would check against runtime inventory in full impl
     pathExists,
     gitFileStatus,
+    gitFileError,
   };
 }
 
@@ -183,13 +205,56 @@ interface GateResults {
   g4: boolean;
   g5: boolean;
   failedGate?: string;
+  prBranchName?: string;
+  isBranchBound?: boolean;
+  savedHeadSha?: string;
 }
 
-function checkG1Identity(worktreePath: string, expectedBranch: string): boolean {
-  const result = gitRunSync(['symbolic-ref', '--short', 'HEAD'], worktreePath);
-  if (!result.ok) return false;
-  const currentBranch = result.stdout.trim();
-  return currentBranch === expectedBranch;
+interface PRInfo {
+  headRefName: string;
+  state: string;
+  headRefOid: string;
+  mergeCommit?: { oid: string };
+  headRepository?: { nameWithOwner: string };
+  baseRefName?: string;
+}
+
+// Fetch PR information from GitHub
+function getPRInfo(prNumber: number): PRInfo | null {
+  const result = runProcessSync({
+    command: 'gh',
+    args: ['pr', 'view', String(prNumber), '--json', 'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName'],
+    inheritParentEnv: true,
+  });
+  if (!result.ok) {
+    return null;
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+function checkG1Identity(worktreePath: string, prInfo: PRInfo): { pass: boolean; mode: 'branch-bound' | 'detached-confirmed'; savedSha?: string } {
+  // Try to get current branch
+  const branchResult = gitRunSync(['symbolic-ref', '--short', 'HEAD'], worktreePath);
+
+  if (branchResult.ok) {
+    // Branch-bound mode: check if current branch matches PR headRefName
+    const currentBranch = branchResult.stdout.trim();
+    const pass = currentBranch === prInfo.headRefName;
+    return { pass, mode: 'branch-bound' };
+  }
+
+  // Detached mode: check if HEAD SHA matches PR headRefOid
+  const shaResult = gitRunSync(['rev-parse', 'HEAD'], worktreePath);
+  if (!shaResult.ok) {
+    return { pass: false, mode: 'detached-confirmed' };
+  }
+  const currentSha = shaResult.stdout.trim();
+  const pass = currentSha === prInfo.headRefOid;
+  return { pass, mode: 'detached-confirmed', savedSha: currentSha };
 }
 
 function checkG2aClean(worktreePath: string): boolean {
@@ -214,41 +279,120 @@ function checkG2bIgnored(worktreePath: string): boolean {
   return true;
 }
 
-function checkG3Merged(worktreePath: string): boolean {
+function checkG3Merged(worktreePath: string, prInfo: PRInfo): boolean {
   // Proof (a): merge-base --is-ancestor HEAD origin/main
-  const result = gitRunSync(['merge-base', '--is-ancestor', 'HEAD', 'origin/main'], worktreePath);
-  return result.ok && result.exitCode === 0;
+  const proofA = gitRunSync(['merge-base', '--is-ancestor', 'HEAD', 'origin/main'], worktreePath);
+  if (proofA.ok && proofA.exitCode === 0) {
+    return true;
+  }
+
+  // Proof (b): state == MERGED && headRefOid == HEAD && mergeCommit is ancestor of origin/main
+  if (prInfo.state !== 'MERGED') {
+    return false;
+  }
+
+  const headResult = gitRunSync(['rev-parse', 'HEAD'], worktreePath);
+  if (!headResult.ok) {
+    return false;
+  }
+
+  const currentSha = headResult.stdout.trim();
+  if (currentSha !== prInfo.headRefOid) {
+    return false;
+  }
+
+  if (!prInfo.mergeCommit?.oid) {
+    return false;
+  }
+
+  // Fetch origin to ensure we have fresh data
+  gitRunSync(['fetch', 'origin', 'main'], worktreePath);
+
+  // Check if mergeCommit is ancestor of origin/main
+  const ancestorResult = gitRunSync(['merge-base', '--is-ancestor', prInfo.mergeCommit.oid, 'origin/main'], worktreePath);
+  return ancestorResult.ok && ancestorResult.exitCode === 0;
 }
 
-function checkG4Ownership(_worktreePath: string, _prNumber: number): boolean {
-  // Would verify PR ownership, no other open PR with same headRef
-  // Stub for now
-  return true;
+function checkG4Ownership(prNumber: number, prInfo: PRInfo): boolean {
+  // Check if no other open PR has the same headRepository + headRefName pair
+  if (!prInfo.headRepository?.nameWithOwner) {
+    // Can't verify without repo info, refuse
+    return false;
+  }
+
+  const result = runProcessSync({
+    command: 'gh',
+    args: [
+      'pr', 'list',
+      '--state', 'open',
+      '--json', 'number,headRefName,headRepository',
+      '--repo', prInfo.headRepository.nameWithOwner,
+    ],
+    inheritParentEnv: true,
+  });
+
+  if (!result.ok) {
+    return false;
+  }
+
+  try {
+    const prs: Array<{ number: number; headRefName: string; headRepository?: { nameWithOwner: string } }> = JSON.parse(result.stdout);
+    const sameHeadCount = prs.filter(
+      (p) => p.headRefName === prInfo.headRefName && p.number !== prNumber,
+    ).length;
+    return sameHeadCount === 0;
+  } catch {
+    return false;
+  }
 }
 
 function checkG5Agents(_worktreePath: string): boolean {
   // Would check agent state from runtime inventory
-  // Stub for now
+  // Cannot implement without runtime integration; documented as limitation
   return true;
 }
 
 function runGates(worktreePath: string, prNumber: number): GateResults {
-  const g1 = checkG1Identity(worktreePath, `pr-${prNumber}`);
+  const prInfo = getPRInfo(prNumber);
+  if (!prInfo) {
+    return {
+      g1: false,
+      g2a: false,
+      g2b: false,
+      g3: false,
+      g4: false,
+      g5: false,
+      failedGate: 'blocked_state_desync',
+    };
+  }
+
+  const g1Result = checkG1Identity(worktreePath, prInfo);
   const g2a = checkG2aClean(worktreePath);
   const g2b = checkG2bIgnored(worktreePath);
-  const g3 = checkG3Merged(worktreePath);
-  const g4 = checkG4Ownership(worktreePath, prNumber);
+  const g3 = checkG3Merged(worktreePath, prInfo);
+  const g4 = checkG4Ownership(prNumber, prInfo);
   const g5 = checkG5Agents(worktreePath);
 
   let failedGate: string | undefined;
-  if (!g1) failedGate = 'blocked_identity_drift';
+  if (!g1Result.pass) failedGate = 'blocked_identity_drift';
   else if (!g2a) failedGate = 'blocked_dirty_worktree';
   else if (!g2b) failedGate = 'blocked_ignored_operator_data';
   else if (!g3) failedGate = 'blocked_unmerged_work';
   else if (!g4) failedGate = 'blocked_shared_head_ref';
   else if (!g5) failedGate = 'blocked_state_desync';
 
-  return { g1, g2a, g2b, g3, g4, g5, failedGate };
+  return {
+    g1: g1Result.pass,
+    g2a,
+    g2b,
+    g3,
+    g4,
+    g5,
+    failedGate,
+    prBranchName: prInfo.headRefName,
+    isBranchBound: g1Result.mode === 'branch-bound',
+    savedHeadSha: g1Result.savedSha,
+  };
 }
 
 // ===== PROCESS REAPING (transposed from reap-worktree.mjs) =====
@@ -548,8 +692,11 @@ async function main() {
     if (validation.gitFileStatus === 'missing' && validation.pathExists) {
       outcome = 'blocked_invalid_target';
       report.outcome = outcome;
+      if (validation.gitFileError) {
+        report.error = validation.gitFileError;
+      }
       if (args.json) console.log(JSON.stringify(report, null, 2));
-      else console.log('REFUSE: target exists but has no .git');
+      else console.log(`REFUSE: target exists but .git is invalid${validation.gitFileError ? ': ' + validation.gitFileError : ''}`);
       process.exit(1);
     }
 
@@ -570,6 +717,8 @@ async function main() {
       process.exit(1);
     }
 
+    const prBranchName = gates.prBranchName || `pr-${args.pr}`;
+
     // Reap processes
     const protectedPaths = new Set<string>();
     const knownWorktrees = new Set<string>();
@@ -585,7 +734,7 @@ async function main() {
     }
 
     // Delete branch
-    const branchDel = deleteBranch(wtPath, `pr-${args.pr}`, args.apply);
+    const branchDel = deleteBranch(wtPath, prBranchName, args.apply);
     report.branch_deletion = branchDel;
 
     // Output

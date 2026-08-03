@@ -391,295 +391,52 @@ fresh `orca terminal create`. If `--ff-only` fails, **stop** — never force a s
 From the operator terminal, after Step 7 (and Step 8 when it ran). This step exists
 because `orca worktree rm` alone leaks: it stops nothing and reaps nothing.
 
-### 9a — Resolve the worktree (branch is the only join key)
+**Rule zero:** do not touch a worktree path without branch or PR identity proof. Never guess on
+name heuristics or `active` status. Ask the operator once and require an explicit answer.
+
+**How to invoke:**
 
 ```bash
-RUNTIME.worktrees > "$RUN_DIR/wt.json"          # active runtime: orca worktree list --json
-node -e '
-const r=JSON.parse(require("fs").readFileSync("$RUN_DIR/wt.json","utf8")).result.worktrees, ref=process.argv[1];
-const repo=r.find(w=>w.path==="/home/che/projects/orchestrator-pack").repoId;
-const m=r.filter(w=>w.repoId===repo && !w.isMainWorktree && !w.isArchived &&
-  (w.branch||"").replace(/^refs\/heads\//,"")===ref);
-console.log(JSON.stringify(m.map(w=>({path:w.path,name:w.displayName,branch:w.branch})),null,2));
-' "$HEAD_REF"
+node --experimental-strip-types scripts/worktree-teardown.ts \
+  --worktree "<resolved-abs-path>" --pr <number> [--apply] [--json]
 ```
 
-(The parsing above reads the active runtime's field names — if you swap runtimes, re-map
-them from the Runtime profile table; the *ladder* below is runtime-independent.)
+Default is **dry-run**: prints plan and results without executing. Pass `--apply` to execute.
+Pass `--json` to output one JSON object to stdout with all gate results, process counts, and
+terminal actions.
 
-Ladder — stop at the first rung that resolves:
+**Gate checks (each has its own failure code):**
 
-- **R1 — `linkedPR === P`.** Always null today; keep the rung for when worktree creation
-  starts setting it (see "Follow-ups" below).
-- **R2 — exact branch equality**, scoped to this repo, `isMainWorktree: false`,
-  `isArchived: false`. **Exactly one match is the only auto-teardown authorization in
-  this skill.** Git forbids one branch in two worktrees, so >1 is structurally impossible
-  — if it happens, **stop** (registry corruption). Zero matches → R3.
-- **R3 — ask once, don't guess.** List every non-main worktree with `displayName`,
-  `branch` (or `(detached)`), `head`, and `agents[].state`, and ask the operator to name
-  one or say "none". **Never** act on a name or issue-number substring heuristic.
+- **G1 identity:** Branch matches PR `headRefName` (branch-bound mode) or HEAD SHA matches PR `headRefOid` (detached mode). Saved on first check, used again on re-check.
+- **G2a clean:** `git status --porcelain --untracked-files=all` is empty (Rule zero).
+- **G2b ignored:** Ignored files checked against closed allowlist (`node_modules/`, `.venv/`, etc.). Anything else blocks teardown.
+- **G3 merged:** Proof (a) — HEAD is ancestor of `origin/main`, OR Proof (b) — PR `state==MERGED` AND `headRefOid==HEAD` AND `mergeCommit` is ancestor of `origin/main`. Both proofs checked; proof (b) handles squash-merge.
+- **G4 ownership:** No other open PR on same `headRefName` (checked from `gh pr list`).
+- **G5 agents:** Exactly one agent row in runtime inventory with `state=="done"` and `interrupted==false` (stub: cannot implement without runtime).
 
-**Why this does not reap a long-lived manager.** A manager worktree matches R2 only if its
-branch *is literally the merged PR's head* — merely having touched, reviewed, or driven
-the PR is invisible to a branch join, and a detached manager (`mgr-1196`, empty `branch`)
-can never match at all. The residual case is real but narrow: a PR opened **from** a
-manager's own branch would match, and there the worktree genuinely is that PR's worktree.
-The **9b G6 agent-state gate** is what protects it — an active manager never passes it.
-Never weaken R2 into a name heuristic on the theory that the gate will catch mistakes:
-the two guards are independent on purpose.
+**Expected outcomes (closed vocabulary):**
 
-**Fail closed:** `orca worktree list` erroring, returning non-`ok`, or an empty `HEAD_REF`
-⇒ **no teardown at all**. Report it; the merge still stands. Absence of evidence is never
-authorization to delete.
+- `reaped_clean` — all gates pass, processes reaped, worktree removed. Exit code 0.
+- `blocked_*` — gates failed (e.g. `blocked_dirty_worktree`, `blocked_unmerged_work`). Not an error; merge is valid. Exit code 1.
+- `partial_residual_processes` — gates pass but residual processes survived reap. Worktree kept. Exit code 1.
+- `terminal_stop_failed`, `worktree_remove_failed` — operational error during cleanup. Exit code 1.
 
-### 9b — Safety gate (every check must pass; one failure aborts teardown)
+**After teardown** (whether it succeeds, blocks, or partials):
 
-**Concurrency and scratch files.** Two teardowns must never overlap. A shell-local
-`exec 9>…; flock -n 9` is **useless here** — each command block you run is a separate shell, so
-the lock dies the moment that block ends and the next block runs unprotected.
-
-Use a lock that outlives the process, and private scratch files (a fixed `$RUN_DIR/wt.json` both races
-a concurrent run and follows a planted symlink on redirect):
-
-```bash
-RUN_DIR="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/opk-teardown.XXXXXX")"   # mode 0700
-LOCK="${XDG_RUNTIME_DIR:-/tmp}/opk-teardown.lockdir"
-mkdir "$LOCK" 2>/dev/null || { echo "another teardown holds $LOCK — stop"; exit 1; }
-# mkdir is atomic and its result persists across separate shells, unlike a shell-local flock FD.
-```
-
-Every subsequent step writes only under `$RUN_DIR` (`$RUN_DIR/wt.json`, `$RUN_DIR/rt-worktrees.json`).
-Release with `rmdir "$LOCK"` **only** at the very end of Step 9, including on the abort paths — and
-report if you ever find a stale `$LOCK` you did not create rather than removing it blindly.
-
-```bash
-WP=<resolved abs path>
-git -C "$WP" symbolic-ref -q --short HEAD                 # G1: must equal $HEAD_REF (no drift since 9a)
-git -C "$WP" status --porcelain --untracked-files=all     # G2a: must be EMPTY
-git -C "$WP" status --porcelain --ignored=matching \
-  | grep '^!! ' | grep -vE '^!! (node_modules|\.venv|venv|dist|build|\.turbo|\.next|coverage|__pycache__)/' \
-                                                          # G2b: must be EMPTY (see below)
-git fetch origin
-git -C "$WP" merge-base --is-ancestor HEAD origin/main     # G3 proof (a): exit 0 ⇒ contained, PASS
-# if (a) fails, try proof (b) — squash/rebase — before concluding anything:
-gh pr view <PR> --json state,headRefOid -q '.state, .headRefOid'
-git -C "$WP" rev-parse HEAD          # (b) passes iff state==MERGED and headRefOid==this SHA
-RUNTIME.agents                                            # G6: agent state all "done"; interrupted false
-```
-
-**G2b exists because `--untracked-files=all` does not show ignored files, and in this repo
-gitignored does not mean worthless** — `agent-orchestrator.yaml` and
-`.claude/skills/*/local.config.json` are both gitignored operator config. The grep is a
-**closed allowlist of provably disposable build artefacts**; anything ignored outside it
-stops teardown and goes to the operator. Never widen that list by judging at runtime
-whether a file "looks like junk" — add a root to the allowlist deliberately or stop.
-
-Stop conditions, verbatim — on any of these, **abort teardown, report, leave everything
-running**. No `--force`, no retry, no partial teardown:
-
-1. **G1** branch drifted between resolution and action. `git -C "$WP" symbolic-ref -q --short HEAD`
-   must equal `$HEAD_REF`. **Detached case:** on a detached HEAD this command exits non-zero and
-   prints nothing, so a worktree the operator explicitly confirmed at R3 could never pass — its
-   processes would leak forever. When (and only when) the operator confirmed a detached row at R3,
-   substitute an identity check that works: `git -C "$WP" rev-parse HEAD` must equal the runtime
-   row's `head` recorded at 9a, and that commit must be contained in `origin/main`. Record in the
-   report that the detached path was used.
-2. **G2** uncommitted or untracked work exists in the worktree. (Rule zero.)
-3. **G3 — is every commit in this worktree already merged?** Two accepted proofs; try them in
-   order, and **stop only if both fail**:
-
-   ```bash
-   # (a) ordinary merge commit — the branch is literally contained in main
-   git -C "$WP" merge-base --is-ancestor HEAD origin/main            # exit 0 ⇒ PASS
-
-   # (b) squash/rebase — the branch's commits were rewritten, so (a) can never pass.
-   #     Proof of containment is that HEAD is EXACTLY the head that got merged.
-   gh pr view <PR-that-owned-this-branch> --json state,headRefOid -q '.state, .headRefOid'
-   #     state must be MERGED  AND  headRefOid must equal `git -C "$WP" rev-parse HEAD`
-   ```
-
-   **Do not test this by comparing trees.** `git diff origin/main` fires whenever the worktree is
-   merely *behind* main — verified live 2026-08-03 on a worktree whose 13 commits were fully
-   squash-merged: the tree diff showed 12 changed files purely because `main` had advanced past
-   it. A tree comparison cannot tell "I am behind" from "I hold unmerged work", so it both blocks
-   safe teardowns and could wave through real work. Commit identity against the merged PR head
-   distinguishes them exactly.
-
-   If (b) is what passed, the branch's SHAs are absent from `main` by construction — so `git
-   branch -d` in 9f will refuse, and `-D` is the sanctioned form for this case alone (name it in
-   the report). Any commit in the worktree **newer** than the merged head is genuine post-merge
-   work → **stop**.
-4. **G5** — folded into G3 above. There is no separate ancestry gate: ancestry is proof (a), and
-   the merged-PR-head identity is proof (b). Requiring ancestry *on its own* would permanently
-   block every squash-merged worktree, which is the common case, not an edge case.
-5. **G6** any agent `state !== "done"`, or `interrupted: true`. **Never kill a running agent as a
-   merge side effect** — stop and ask. Select the row **exactly**: the single `RUNTIME.agents`
-   row whose worktree path equals `WP` (the command is global across repos — filtering is
-   mandatory, and a global "any agent busy anywhere" reading is wrong). Zero or multiple matching
-   rows → **refuse** (state desync). Freshness: treat the row as busy if it produced output within
-   the last 120 s, measured from the runtime's last-output timestamp; if the active runtime exposes
-   no such field, say so in the report and rely on `state`/`interrupted` alone — never invent a
-   substitute signal.
-6. `WP` is a main checkout or the operator's own current worktree → **refuse**.
-
-**Note — there is deliberately no stash gate.** Git stores stashes per *repository*, not per
-worktree (`refs/stash` lives in the shared git dir), so `git -C "$WP" stash list` shows every
-stash in the repo — 36 of them on the current operator host. Gating on an empty stash list would
-block every teardown forever while protecting nothing, and the premise that stashes die with the
-worktree is simply false: they survive `worktree rm`. Report the stash count if you like; never
-block on it.
-
-### 9c — Stop terminals, then close tabs
-
-```bash
-RUNTIME.stop_terminals("$WP")
-RUNTIME.terminals_all > "$RUN_DIR/terms.json"   # GLOBAL census — the tab guard needs every tab
-RUNTIME.terminals("$WP")                        # → remaining handles for this worktree
-```
-
-For each remaining handle `H` with tab `T`, decide from the **global** census:
-
-- every terminal whose tab is `T` has worktree path `$WP` → `RUNTIME.close_tab("$H")`;
-- the tab is **mixed** (any terminal on `T` belongs elsewhere) → `RUNTIME.close_pane("$H")`,
-  never `close_tab` — closing the tab would take another worktree's terminal down with it.
-
-```bash
-RUNTIME.terminals("$WP")            # must be empty before 9d
-```
-
-If a mixed tab cannot be reduced to empty by pane-closes, **stop** and report — do not fall back
-to `close_tab`. Fail closed rather than destroy a bystander's terminal.
-
-The tab guard is load-bearing: `--tab` closes the whole tab, so a tab holding panes from
-another worktree would take that worktree's terminal down with it. Verify tab membership
-before closing; if a tab is mixed, close the pane without `--tab`.
-
-Terminals stop **before** the reap because the worktree's PTY leader is a child of the
-Orca daemon — SIGTERMing it under a live PTY invites a reincarnation race (terminal rows
-carry `incarnationId` and `orphaned`, which implies respawn semantics).
-
-### 9d — Reap the process tree
-
-**ABA guard first.** `/proc` carries a textual path with no incarnation identity, so if a
-*previous* worktree at this same path left orphans behind, they are indistinguishable from
-the current one's processes:
-
-Build the neutral inventory once (see Runtime profile), then:
-
-```bash
-REAP=".claude/skills/merge-with-local-adoption/reap-worktree.mjs"
-RT="$RUN_DIR/rt-worktrees.json"    # produced by the Runtime profile snippet, private dir
-
-node "$REAP" --runtime-worktrees "$RT" --scan-orphans --json \
-  | grep -F "$WP"     # any hit ⇒ a dead namesake's orphans share this path ⇒ STOP, ask the operator
-```
-
-```bash
-node "$REAP" --runtime-worktrees "$RT" --path "$WP"                  # DRY RUN first
-node "$REAP" --runtime-worktrees "$RT" --path "$WP" --apply --json
-```
-
-**Show the dry-run set to the operator before applying.** The reaper selects by CWD +
-descendant closure, refuses any target outside the Orca workspaces root or any main
-checkout, immunizes the operator's own process chain, excludes sibling worktrees, escalates
-SIGTERM → 10 s → SIGKILL, revalidates each PID's start time before signalling (PID-reuse
-guard), and re-scans `/proc` from scratch to verify.
-
-**`--apply` must exit 0.** A non-zero exit means processes survived: **stop with the
-worktree intact** and hand the operator a live, inspectable directory. Never proceed to
-`rm` with a dirty residual — that is exactly how the existing 37 orphans were created.
-
-### 9e — Re-verify, then remove the worktree
-
-**Re-run the G2/G3 checks before `rm`.** A SIGKILL can land mid-write and leave an
-`index.lock` or a half-written file, so cleanliness proven *before* the reap is not
-cleanliness *after* it:
-
-```bash
-git -C "$WP" symbolic-ref -q --short HEAD                 # must STILL equal $HEAD_REF (re-check G1)
-git -C "$WP" status --porcelain --untracked-files=all     # must still be EMPTY
-git -C "$WP" rev-parse HEAD                               # must still be the SHA G3 accepted
-RUNTIME.worktrees                                         # row for $WP must still exist, same branch
-```
-
-Re-checking **G1 and the runtime row**, not just cleanliness, is the point: terminals were stopped
-and up to ~11 s of SIGTERM/SIGKILL elapsed since 9b, and in that window another actor could have
-switched `$WP` onto a different — also clean, also merged — branch. G2/G3 alone would stay green
-and you would delete a worktree that no longer matches `HEAD_REF`.
-
-Dirty now → **leave the worktree in place** with its processes already stopped, and report.
-The merge stands; only teardown is blocked.
-
-```bash
-RUNTIME.remove_worktree("$WP")
-```
-
-No force flag (the 9b gate is what authorizes this; forcing would paper over a gate you
-should have obeyed).
-
-**Never run the runtime's archive/removal hooks** (`--run-hooks` on the active runtime). It executes `orca.yaml` archive hooks — repo-defined code from a
-branch-local checkout — as the operator, immediately after merging that branch. That is an
-arbitrary-code-execution path a PR author could control. The repo has no `orca.yaml` today,
-but the prohibition is about the trust boundary, not the current file list: do not pass the
-flag even if one appears.
-
-### 9f — Delete the local branch
-
-`gh pr merge --delete-branch` removes only the *remote* ref, and git refuses to delete a branch
-still checked out in a worktree — so this comes after 9e:
-
-```bash
-git branch --list "$HEAD_REF"        # empty ⇒ already gone, this step is DONE, not failed
-git branch -d "$HEAD_REF"            # only when the list above was non-empty
-```
-
-**`branch -d` failing with `branch … not found` is a SUCCESS, not an error** (verified live
-2026-08-03): the active runtime may delete the local branch itself during `remove_worktree` when
-it was the one that created it. Check first and skip; never retry, never escalate to `-D` because
-of this message. Conversely, older branches created outside the runtime **do** survive — so the
-step cannot be dropped either. Report which of the two happened.
-
-**`-d`, never `-D`** — `-d` performs its own merged-ness check, so a divergence appearing
-between G5 and here still fails safe.
-
-### 9g — Post-check and orphan census
-
-```bash
-RUNTIME.worktrees                        # no row for $WP
-RUNTIME.terminals("$WP")                 # empty
-ls -d "$WP" 2>/dev/null && echo "RESIDUE: directory still present"
-node "$REAP" --runtime-worktrees "$RT" --scan-orphans     # refresh $RT first
-```
-
-The census is **report-only — never sweep as part of a merge.** Pre-existing orphans belong
-to worktrees the operator did not name in this run, and an orphan is not provably garbage:
-the pack deliberately `setsid`-detaches long-running jobs so terminal teardown will not
-kill them, and at least one current orphan group is holding a live test run. Killing it
-mid-merge would break an unrelated task. Sweeping is a separate, explicitly-invoked
-operator chore (`--scan-orphans` to inspect, then a per-worktree `--path … --apply` after
-the operator confirms that group).
-
-Report the count in Step 10 every run, so the debt stays visible instead of silently
-growing.
+Locked by file-based lock in `/tmp` that persists across shells and is released via `finally` block,
+including on all error paths. Atomic and safe under concurrent invocation.
 
 ### What this teardown does *not* guarantee
 
-Say this plainly in the report rather than claiming a clean machine:
+- **CWD + ancestry is inference, not ownership.** A process that chdir'd away, double-forked and
+  reparented before teardown is unreachable. On this host the inference is empirically complete,
+  but that is an observation, not a proof. Durable fix: launch-time cgroup containment (follow-up).
+- **A clean `git status` does not prove no unsaved work** — external editor may hold unsaved buffer.
+- **Killing processes does not undo their side effects** — killed agent may have already mutated remote state.
 
-- **CWD + ancestry is inference, not ownership.** A process that chdir'd away, double-forked
-  and reparented before teardown is unreachable by any post-hoc signal. On this host the
-  inference is empirically complete (descendant and pgid/sid closure add zero processes),
-  but that is an observation, not a proof. The durable fix is launch-time containment —
-  follow-up 2 below.
-- **A clean `git status` does not prove no unsaved work** — an external editor may hold an
-  unsaved buffer over a file in the worktree. Not automatically detectable.
-- **Killing processes does not undo their side effects.** A reaped agent may already have
-  posted GitHub comments or mutated remote state.
-
-State teardown outcomes as one of: *reaped clean*, *blocked* (with the gate that stopped it),
-or *partial* (with the residual). A blocked teardown after a successful merge is a correct,
-reportable outcome — **never** describe the whole run as failed, and never retry by
-loosening a gate.
+A blocked teardown after a successful merge is a correct, reportable outcome. **Never** describe
+the whole run as failed, and **never** retry by loosening a gate. Report the blocked gate and let
+the operator decide.
 
 ## Step 10 — Final report (required, user's language)
 
