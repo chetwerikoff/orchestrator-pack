@@ -21,19 +21,19 @@
     "scripts/runtime/runtime-contract-cases.ts"
   ],
   "denylist": [
-    ".ao/**",
-    ".orca/**",
-    "credentials/**",
-    "packages/core/**",
-    "secrets/**",
-    "vendor/**"
+    ".ao/",
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
   ],
   "allowed_roots": [
-    "docs/**",
+    "docs/",
     "package-lock.json",
     "package.json",
-    "scripts/ao-legacy-runtime/**",
-    "scripts/launch-watch/**",
+    "scripts/ao-legacy-runtime/",
+    "scripts/launch-watch/",
     "scripts/lib/orca-cli.ts",
     "scripts/lib/worker-smoke-bounded-create.ts",
     "scripts/lib/worker-smoke-control-plane-regressions.ts",
@@ -45,11 +45,11 @@
     "scripts/lib/worker-smoke-lifecycle-regressions.ts",
     "scripts/lib/worker-smoke-lifecycle.ts",
     "scripts/lib/worker-smoke-receipt.ts",
-    "scripts/orca-runtime/**",
-    "scripts/runtime/**",
+    "scripts/orca-runtime/",
+    "scripts/runtime/",
     "scripts/worker-smoke-run.ts",
     "scripts/worker-smoke.test.ts",
-    "tests/orca-runtime/**",
-    "tests/runtime/**"
+    "tests/orca-runtime/",
+    "tests/runtime/"
   ]
 }
