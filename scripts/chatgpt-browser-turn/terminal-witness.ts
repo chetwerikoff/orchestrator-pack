@@ -404,6 +404,7 @@ export interface DirectPublicationConfig {
   readonly target: DirectPublicationTarget;
   readonly reviewerSource: string;
   readonly reviewerSourceOutput: string;
+  readonly capabilityProbe?: 'success' | 'definitive-no-commit';
 }
 
 export interface DirectPublicationInvocation {
@@ -432,6 +433,11 @@ export interface DirectPublicationResult {
   readonly commentUrl?: string;
   readonly assistantMessageId?: string;
   readonly parentUserMessageId?: string;
+  readonly successMarker?: boolean;
+  readonly noExternalRequest?: boolean;
+  readonly requestDispatched?: boolean;
+  readonly responseComplete?: boolean;
+  readonly errorMarker?: boolean;
 }
 
 export interface DirectPublicationObservationState {
@@ -441,6 +447,43 @@ export interface DirectPublicationObservationState {
 
 export function createDirectPublicationObservationState(): DirectPublicationObservationState {
   return { invocations: [], results: [] };
+}
+
+export function directPublicationCapabilityCapture(
+  state: DirectPublicationObservationState,
+  probe: 'success' | 'definitive-no-commit',
+): string {
+  const results = state.results.map(({ outcome, noCommitClass, ...raw }) => raw);
+  return JSON.stringify({ probe, invocations: state.invocations, results }, null, 2) + '\n';
+}
+
+export function observeDirectPublicationPayloadTree(
+  state: DirectPublicationObservationState,
+  value: unknown,
+): void {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === '[DONE]') return;
+    try {
+      observeDirectPublicationPayloadTree(state, JSON.parse(trimmed));
+      return;
+    } catch { /* try SSE data lines below */ }
+    for (const rawLine of value.split(/\r?\n/)) {
+      const line = rawLine.trim().startsWith('data:') ? rawLine.trim().slice(5).trim() : rawLine.trim();
+      if (!line || line === '[DONE]') continue;
+      try { observeDirectPublicationPayloadTree(state, JSON.parse(line)); } catch { /* opaque stream line */ }
+    }
+    return;
+  }
+  observeDirectPublicationPayload(state, value);
+  if (Array.isArray(value)) {
+    for (const item of value) observeDirectPublicationPayloadTree(state, item);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    observeDirectPublicationPayloadTree(state, child);
+  }
 }
 
 export interface DirectPublicationSettlement {
@@ -525,7 +568,13 @@ function targetFields(value: Record<string, unknown>): {
       value.issue_number,
       value.issueNumber,
     ),
-    comment: stringValue(source.comment, source.body, value.comment),
+    comment: typeof source.comment === 'string'
+      ? source.comment
+      : typeof source.body === 'string'
+        ? source.body
+        : typeof value.comment === 'string'
+          ? value.comment
+          : undefined,
   };
 }
 
@@ -541,12 +590,13 @@ function recordNoCommitClass(
     || value.dispatch_status === 'not_dispatched'
     || response?.no_external_request === true
     || response?.request_dispatched === false;
-  if (dispatchFalse) return 'adapter-rejected-before-dispatch';
   const complete = value.response_complete === true
     || value.complete === true
-    || status !== undefined
-    || (response?.status !== undefined && response?.status !== null);
-  if (complete && status !== undefined && DEFINITIVE_REJECTION_STATUSES.has(status)) {
+    || response?.response_complete === true
+    || response?.complete === true;
+  if (!complete) return undefined;
+  if (dispatchFalse) return 'adapter-rejected-before-dispatch';
+  if (status !== undefined && DEFINITIVE_REJECTION_STATUSES.has(status)) {
     return 'github-create-comment-definitive-rejection';
   }
   return undefined;
@@ -602,18 +652,27 @@ function observeDirectPublicationObject(
   }
 
   const status = numberValue(value.status, value.http_status, value.httpStatus, recordValue(value.response)?.status);
+  const successMarker = value.success === true || value.ok === true;
+  const noExternalRequest = value.no_external_request === true;
+  const requestDispatched = value.request_dispatched === true;
+  const responseRecord = recordValue(value.response);
+  const responseComplete = value.response_complete === true
+    || value.complete === true
+    || responseRecord?.response_complete === true
+    || responseRecord?.complete === true;
+  const errorMarker = value.error !== undefined;
   const commentId = stringValue(
     value.comment_id,
     value.commentId,
-    recordValue(value.response)?.comment_id,
-    recordValue(value.response)?.id,
+    responseRecord?.comment_id,
+    responseRecord?.id,
   );
   const commentUrl = stringValue(
     value.comment_url,
     value.commentUrl,
     value.url,
-    recordValue(value.response)?.comment_url,
-    recordValue(value.response)?.html_url,
+    responseRecord?.comment_url,
+    responseRecord?.html_url,
   );
   const looksLikeResult = Boolean(
     id
@@ -649,9 +708,39 @@ function observeDirectPublicationObject(
       ...(commentUrl ? { commentUrl } : {}),
       ...(assistantMessageId ? { assistantMessageId } : {}),
       ...(parentUserMessageId ? { parentUserMessageId } : {}),
+      ...(successMarker ? { successMarker } : {}),
+      ...(noExternalRequest ? { noExternalRequest } : {}),
+      ...(requestDispatched ? { requestDispatched } : {}),
+      ...(responseComplete ? { responseComplete } : {}),
+      ...(errorMarker ? { errorMarker } : {}),
     };
-    const signature = JSON.stringify(result);
-    if (!state.results.some((item) => JSON.stringify(item) === signature)) state.results.push(result);
+    const existingIndex = state.results.findIndex((item) => (
+      item.toolCallId === result.toolCallId
+      && item.repositoryFullName === result.repositoryFullName
+      && item.issueNumber === result.issueNumber
+    ));
+    if (existingIndex < 0) {
+      state.results.push(result);
+    } else {
+      const existing = state.results[existingIndex]!;
+      const conflicting = Boolean(existing.errorMarker || result.errorMarker)
+        || (['status', 'commentId', 'commentUrl', 'assistantMessageId', 'parentUserMessageId'] as const)
+          .some((key) => existing[key] !== undefined && result[key] !== undefined && existing[key] !== result[key]);
+      if (conflicting) {
+        state.results.push(result);
+      } else {
+        const rank = (outcome: DirectPublicationResult['outcome']): number => (
+          outcome === 'success' ? 3 : outcome === 'no-commit' ? 2 : 1
+        );
+        const preferred = rank(result.outcome) > rank(existing.outcome) ? result : existing;
+        state.results[existingIndex] = {
+          ...existing,
+          ...result,
+          outcome: preferred.outcome,
+          ...(preferred.noCommitClass ? { noCommitClass: preferred.noCommitClass } : {}),
+        };
+      }
+    }
   }
 }
 
@@ -716,13 +805,27 @@ export function observeDirectPublicationPayload(
 function matchingDirectPublicationPairs(
   state: DirectPublicationObservationState,
   target: DirectPublicationTarget,
-): { invocations: DirectPublicationInvocation[]; results: DirectPublicationResult[] } {
+): {
+  invocations: DirectPublicationInvocation[];
+  results: DirectPublicationResult[];
+  hasWrongTargetCandidate: boolean;
+} {
   const invocations = state.invocations.filter((item) =>
     item.repositoryFullName === target.repositoryFullName
     && item.issueNumber === target.issueNumber);
   const results = state.results.filter((item) =>
     item.repositoryFullName === target.repositoryFullName && item.issueNumber === target.issueNumber);
-  return { invocations, results };
+  const ownedInvocations = target.userMessageId
+    ? state.invocations.filter((item) => item.parentUserMessageId === target.userMessageId)
+    : [];
+  const ownedResults = target.userMessageId
+    ? state.results.filter((item) => item.parentUserMessageId === target.userMessageId)
+    : [];
+  const wrongTargetInvocation = ownedInvocations.some((item) =>
+    item.repositoryFullName !== target.repositoryFullName || item.issueNumber !== target.issueNumber);
+  const wrongTargetResult = ownedResults.some((item) =>
+    item.repositoryFullName !== target.repositoryFullName || item.issueNumber !== target.issueNumber);
+  return { invocations, results, hasWrongTargetCandidate: wrongTargetInvocation || wrongTargetResult };
 }
 
 export function settleDirectPublication(
@@ -733,6 +836,9 @@ export function settleDirectPublication(
   const matching = matchingDirectPublicationPairs(state, target);
   if (!target.userMessageId) {
     return { state: 'possible-delivery', cause: 'direct_publication_owned_parent_missing' };
+  }
+  if (matching.hasWrongTargetCandidate) {
+    return { state: 'possible-delivery', cause: 'direct_publication_wrong_target_candidate' };
   }
   if (matching.invocations.length !== 1) {
     return { state: 'possible-delivery', cause: 'direct_publication_invocation_ambiguous' };

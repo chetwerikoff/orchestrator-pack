@@ -27,9 +27,10 @@ import {
 } from './contracts.ts';
 import {
   createDirectPublicationObservationState,
+  directPublicationCapabilityCapture,
   directPublicationReceipt,
   DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN,
-  observeDirectPublicationPayload,
+  observeDirectPublicationPayloadTree,
   reviewerSourceMetadata,
   settleDirectPublication,
   validateDirectPublicationInputs,
@@ -781,7 +782,7 @@ function directPublicationConfig(
   prompt: string,
 ): DirectPublicationConfig | undefined {
   const sourceOutput = stringOption(args, 'reviewer-source-output');
-  const directKeys = ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision'];
+  const directKeys = ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision', 'capability-probe'];
   const hasDirectOptions = directKeys.some((key) => args.options.has(key));
   if (!sourceOutput) {
     if (hasDirectOptions) throw new Error('input_invalid:direct_publication_requires_source_output');
@@ -791,7 +792,13 @@ function directPublicationConfig(
   const issueNumber = parseInteger(requireOption(args, 'issue-number'), 1);
   const sourceRevision = requireOption(args, 'source-revision');
   const reviewerSource = requireOption(args, 'reviewer-source');
-  if (!DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN) {
+  const capabilityProbe = stringOption(args, 'capability-probe');
+  if (
+    capabilityProbe !== undefined
+    && capabilityProbe !== 'success'
+    && capabilityProbe !== 'definitive-no-commit'
+  ) throw new Error('input_invalid:capability_probe_invalid');
+  if (!DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN && capabilityProbe === undefined) {
     throw new Error('input_invalid:direct_publication_capability_witness_unproven');
   }
   const validation = validateDirectPublicationInputs({
@@ -807,6 +814,7 @@ function directPublicationConfig(
     target: { repositoryFullName, issueNumber, sourceRevision, invocationId },
     reviewerSource,
     reviewerSourceOutput: sourceOutput,
+    ...(capabilityProbe ? { capabilityProbe } : {}),
   };
 }
 
@@ -816,11 +824,7 @@ function installDirectPublicationObserver(
 ): void {
   const consume = (payload: string): void => {
     if (!payload) return;
-    try {
-      observeDirectPublicationPayload(state, JSON.parse(payload) as unknown);
-    } catch {
-      observeDirectPublicationPayload(state, payload);
-    }
+    observeDirectPublicationPayloadTree(state, payload);
   };
   page.on?.('response', async (response: any) => {
     try {
@@ -1450,6 +1454,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     'repository',
     'issue-number',
     'source-revision',
+    'capability-probe',
   ]);
   const invocationId = stringOption(args, 'invocation-id') ?? randomUUID();
   let profileKey = 'profile-unresolved';
@@ -2283,6 +2288,44 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             );
           }
           const captureReply = bestReadyReply.length >= decision.reply.length ? bestReadyReply : decision.reply;
+          if (config.directPublication?.capabilityProbe) {
+            const probeCapture = directPublicationCapabilityCapture(
+              directObservation,
+              config.directPublication.capabilityProbe,
+            );
+            const targetInvocations = directObservation.invocations.filter((item) => (
+              item.repositoryFullName === config.directPublication?.target.repositoryFullName
+              && item.issueNumber === config.directPublication?.target.issueNumber
+            ));
+            const targetResults = directObservation.results.filter((item) => (
+              item.repositoryFullName === config.directPublication?.target.repositoryFullName
+              && item.issueNumber === config.directPublication?.target.issueNumber
+            ));
+            const sourcePublication = publishStateLightReply(
+              config.directPublication.reviewerSourceOutput,
+              invocationId,
+              probeCapture,
+            );
+            if (sourcePublication.state !== 'committed_ok') {
+              incident('capability_probe_capture_error', sourcePublication.cause ?? sourcePublication.state, 'return_local_error');
+              return {
+                page,
+                browser,
+                preserveOwnedPage: false,
+                result: compactResult('driver_error', 'invocation', sourcePublication.cause ?? sourcePublication.state, invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
+              };
+            }
+            const complete = targetInvocations.length === 1 && targetResults.length === 1;
+            if (!complete) {
+              incident('capability_probe_incomplete', `invocations=${targetInvocations.length};results=${targetResults.length}`, 'retain_capture_no_resend');
+            }
+            return {
+              page,
+              browser,
+              preserveOwnedPage: false,
+              result: compactResult(complete ? 'ok' : 'recovery_required', 'invocation', complete ? 'capability_probe_captured' : 'capability_probe_incomplete', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
+            };
+          }
           const ownedParentIds = new Set(
             directObservation.invocations
               .filter((item) => (

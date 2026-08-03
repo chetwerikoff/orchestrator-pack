@@ -11,8 +11,10 @@ import {
 } from './state-light-session.ts';
 import {
   createDirectPublicationObservationState,
+  directPublicationCapabilityCapture,
   directPublicationReceipt,
   observeDirectPublicationPayload,
+  observeDirectPublicationPayloadTree,
   parseCanonicalSourceRevision,
   parseReviewerSourceIdentity,
   reviewerSourceMetadata,
@@ -584,6 +586,30 @@ describe('direct-publication terminal matrix', () => {
     expect(reviewerSourceMetadata(settlement, target)?.comment_url).toBeUndefined();
   });
 
+  it('requires an explicit complete response before accepting definitive rejection', () => {
+    const state = createDirectPublicationObservationState();
+    observeDirectPublicationPayload(state, {
+      action: 'add_comment_to_issue',
+      tool_call_id: 'call-incomplete-rejection',
+      parent_user_message_id: 'user-01',
+      arguments: {
+        repository: target.repositoryFullName,
+        issue_number: target.issueNumber,
+        comment: successComment,
+      },
+    });
+    observeDirectPublicationPayload(state, {
+      action: 'add_comment_to_issue',
+      tool_call_id: 'call-incomplete-rejection',
+      parent_user_message_id: 'user-01',
+      repository: target.repositoryFullName,
+      issue_number: target.issueNumber,
+      response: { status: 422 },
+    });
+    expect(settleDirectPublication(state, target, `${successComment}\nFallback findings`).state)
+      .toBe('possible-delivery');
+  });
+
   it('accepts adapter no-dispatch and rejects timeout or ambiguous results', () => {
     const noDispatch = createDirectPublicationObservationState();
     observeDirectPublicationPayload(noDispatch, {
@@ -602,9 +628,31 @@ describe('direct-publication terminal matrix', () => {
       parent_user_message_id: 'user-01',
       repository: target.repositoryFullName,
       issue_number: target.issueNumber,
+      response_complete: true,
       no_external_request: true,
     });
     expect(settleDirectPublication(noDispatch, target, successComment).state).toBe('failed-write');
+
+    const incompleteNoDispatch = createDirectPublicationObservationState();
+    observeDirectPublicationPayload(incompleteNoDispatch, {
+      action: 'add_comment_to_issue',
+      tool_call_id: 'call-incomplete-adapter',
+      parent_user_message_id: 'user-01',
+      arguments: {
+        repository: target.repositoryFullName,
+        issue_number: target.issueNumber,
+        comment: successComment,
+      },
+    });
+    observeDirectPublicationPayload(incompleteNoDispatch, {
+      action: 'add_comment_to_issue',
+      tool_call_id: 'call-incomplete-adapter',
+      parent_user_message_id: 'user-01',
+      repository: target.repositoryFullName,
+      issue_number: target.issueNumber,
+      no_external_request: true,
+    });
+    expect(settleDirectPublication(incompleteNoDispatch, target, successComment).state).toBe('possible-delivery');
 
     const timeout = observeSuccess();
     observeDirectPublicationPayload(timeout, {
@@ -639,6 +687,72 @@ describe('direct-publication terminal matrix', () => {
       success: true,
     });
     expect(settleDirectPublication(unpaired, target).cause).toBe('direct_publication_result_ambiguous');
+
+    const wrongTarget = createDirectPublicationObservationState();
+    observeDirectPublicationPayload(wrongTarget, {
+      action: 'add_comment_to_issue',
+      tool_call_id: 'call-wrong-target',
+      parent_user_message_id: 'user-01',
+      arguments: {
+        repository: target.repositoryFullName,
+        issue_number: target.issueNumber + 1,
+        comment: successComment,
+      },
+    });
+    expect(settleDirectPublication(wrongTarget, target).cause)
+      .toBe('direct_publication_wrong_target_candidate');
+  });
+
+  it('captures nested SSE publication fields without persisting parser classification', () => {
+    const state = createDirectPublicationObservationState();
+    observeDirectPublicationPayloadTree(state, {
+      payload: [
+        {
+          type: 'tool_call',
+          action: 'add_comment_to_issue',
+          tool_call_id: 'call-nested',
+          assistant_message_id: 'assistant-nested',
+          parent_user_message_id: 'user-01',
+          arguments: {
+            repository: target.repositoryFullName,
+            issue_number: target.issueNumber,
+            comment: successComment,
+          },
+        },
+        {
+          payload: `data: ${JSON.stringify({
+            action: 'add_comment_to_issue',
+            tool_call_id: 'call-nested',
+            parent_user_message_id: 'user-01',
+            repository: target.repositoryFullName,
+            issue_number: target.issueNumber,
+            response_complete: true,
+            response: {
+              status: 201,
+              comment_id: '989',
+              comment_url: 'https://github.com/example/nested',
+            },
+            success: true,
+          })}\n`,
+        },
+      ],
+    });
+
+    expect(state.invocations).toHaveLength(1);
+    expect(state.results).toHaveLength(1);
+    const capture = JSON.parse(directPublicationCapabilityCapture(state, 'success')) as {
+      results: Array<Record<string, unknown>>;
+    };
+    expect(capture.results).toHaveLength(1);
+    expect(capture.results[0]).toMatchObject({
+      status: 201,
+      commentId: '989',
+      commentUrl: 'https://github.com/example/nested',
+      successMarker: true,
+      responseComplete: true,
+    });
+    expect(capture.results[0]).not.toHaveProperty('outcome');
+    expect(capture.results[0]).not.toHaveProperty('noCommitClass');
   });
 
 });
@@ -648,6 +762,15 @@ describe('direct-publication input and source bindings', () => {
     expect(parseReviewerSourceIdentity('slot-01#capture=direct-publication/v1')?.policy)
       .toBe('direct-publication/v1');
     expect(parseReviewerSourceIdentity('slot-01#capture=service-observed-issue-comment/v1')).toBeNull();
+    expect(parseReviewerSourceIdentity('slot-01#capture=direct-publication/v2')).toBeNull();
+    expect(validateDirectPublicationInputs({
+      invocationId: target.invocationId,
+      prompt: `INVOCATION_ID_TO_ECHO: ${target.invocationId}`,
+      reviewerSource: 'direct-publication/v1',
+      repositoryFullName: target.repositoryFullName,
+      issueNumber: target.issueNumber,
+      sourceRevision: target.sourceRevision,
+    })).toBe('reviewer_source_policy_invalid');
     expect(validateDirectPublicationInputs({
       invocationId: target.invocationId,
       prompt: `INVOCATION_ID_TO_ECHO: ${target.invocationId}`,

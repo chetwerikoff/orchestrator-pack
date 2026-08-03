@@ -34,6 +34,7 @@ export const SINGLE_SOURCE_POLICY_VERSION = 'single-source/v1' as const;
 export const REVIEWER_CARDINALITY_CONTROL_ENV = 'OPK_GPT_REVIEWER_CARDINALITY';
 
 const REVIEWER_SOURCE_POLICY_RE = /^([^#\s]+)#capture=(final-node\/v1|issue-comment-api-harvest\/v1|direct-publication\/v1)$/;
+const BARE_REVIEWER_SOURCE_POLICY_RE = /^(?:final-node|issue-comment-api-harvest|direct-publication)\/v[0-9]+$/;
 export function parseReviewerSourcePolicy(value: string): { independentSourceId: string; capturePolicy: 'final-node/v1' | 'issue-comment-api-harvest/v1' | 'direct-publication/v1' } | null {
   const match = REVIEWER_SOURCE_POLICY_RE.exec(value);
   return match
@@ -412,7 +413,10 @@ function parseInvocation(
   const invocationId = nonEmpty(value.invocationId) ? value.invocationId.trim() : '';
   const terminalResultIdentity = nonEmpty(value.terminalResultIdentity) ? value.terminalResultIdentity.trim() : '';
   const reviewerSource = nonEmpty(value.reviewerSource) ? value.reviewerSource.trim() : '';
-  if (reviewerSource.includes('#capture=') && !parseReviewerSourcePolicy(reviewerSource)) {
+  if (
+    (reviewerSource.includes('#capture=') && !parseReviewerSourcePolicy(reviewerSource))
+    || BARE_REVIEWER_SOURCE_POLICY_RE.test(reviewerSource)
+  ) {
     errors.push(`${label} reviewerSource has an unknown or malformed capture policy`);
   }
   const slot = nonEmpty(value.reviewerSlot) ? value.reviewerSlot.trim() : '';
