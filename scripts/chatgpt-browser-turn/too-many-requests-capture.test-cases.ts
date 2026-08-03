@@ -8,15 +8,28 @@ import { captureTooManyRequestsSourceWithWait } from './too-many-requests-captur
 class ElementNode {
   parentElement: ElementNode | null = null;
   readonly children: ElementNode[] = [];
+  readonly tagName: string;
+  readonly attributes: Record<string, string | null>;
+  readonly accessibleRole: string | undefined;
+  readonly accessibleName: string | undefined;
+  readonly visible: boolean;
+  readonly enabled: boolean;
 
   constructor(
-    readonly tagName: string,
-    readonly attributes: Record<string, string | null> = {},
-    readonly accessibleRole?: string,
-    readonly accessibleName?: string,
-    readonly visible = true,
-    readonly enabled = true,
-  ) {}
+    tagName: string,
+    attributes: Record<string, string | null> = {},
+    accessibleRole?: string,
+    accessibleName?: string,
+    visible = true,
+    enabled = true,
+  ) {
+    this.tagName = tagName;
+    this.attributes = attributes;
+    this.accessibleRole = accessibleRole;
+    this.accessibleName = accessibleName;
+    this.visible = visible;
+    this.enabled = enabled;
+  }
 
   append(child: ElementNode): this {
     child.parentElement = this;
@@ -26,10 +39,16 @@ class ElementNode {
 }
 
 class Locator {
+  private readonly readElements: () => ElementNode[];
+  private readonly waitHook: ((options: { state: string; timeout: number }) => Promise<void>) | undefined;
+
   constructor(
-    private readonly readElements: () => ElementNode[],
-    private readonly waitHook?: (options: { state: string; timeout: number }) => Promise<void>,
-  ) {}
+    readElements: () => ElementNode[],
+    waitHook?: (options: { state: string; timeout: number }) => Promise<void>,
+  ) {
+    this.readElements = readElements;
+    this.waitHook = waitHook;
+  }
 
   async count(): Promise<number> {
     return this.readElements().length;
