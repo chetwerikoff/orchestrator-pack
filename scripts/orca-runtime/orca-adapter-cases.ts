@@ -1,6 +1,27 @@
 import type { spawnSync } from 'node:child_process';
 import { createOrcaRuntimeAdapter } from './adapter.ts';
 
+function terminalList(
+  handle: string,
+  ptyId: string,
+  input: { readonly title?: string; readonly incarnationId?: string } = {},
+): unknown {
+  return {
+    ok: true,
+    result: {
+      terminals: [{
+        handle,
+        worktreePath: '/workspace',
+        title: input.title ?? 'worker',
+        tabId: 'tab',
+        leafId: 'leaf',
+        ptyId,
+        ...(input.incarnationId ? { incarnationId: input.incarnationId } : {}),
+      }],
+    },
+  };
+}
+
 function runnerFrom(payloads: readonly unknown[], calls: string[][]): typeof spawnSync {
   let index = 0;
   return ((command: string, args: readonly string[]) => {
@@ -25,6 +46,7 @@ export function registerOrcaAdapterCases(input: {
   readonly it: typeof import('vitest').it;
 }): void {
   const { describe, expect, it } = input;
+
   describe('Orca runtime adapter', () => {
     it('maps spawn, one-attempt dispatch, bounded output, and busy/idle liveness', () => {
       const calls: string[][] = [];
@@ -32,11 +54,16 @@ export function registerOrcaAdapterCases(input: {
         cwd: '/workspace',
         executable: 'orca-test',
         runner: runnerFrom([
-          { ok: true, result: { terminal: { handle: 'term-a', worktreeId: 'wt', title: 'worker' } } },
+          { ok: true, result: { terminal: { handle: 'term-a', worktreeId: 'wt', title: 'worker', ptyId: 'pty-a' } } },
+          terminalList('term-a', 'pty-a'),
           { ok: true, result: { send: { handle: 'term-a', bytesWritten: 4 } } },
+          terminalList('term-a', 'pty-a'),
           { ok: true, result: { lines: [], nextCursor: 7 } },
+          terminalList('term-a', 'pty-a'),
           { ok: true, result: { lines: ['new'], nextCursor: 8 } },
+          terminalList('term-a', 'pty-a'),
           { ok: true, result: { wait: { satisfied: false, status: 'running' } } },
+          terminalList('term-a', 'pty-a'),
           { ok: true, result: { wait: { satisfied: true, status: 'running' } } },
         ], calls),
       });
@@ -67,19 +94,10 @@ export function registerOrcaAdapterCases(input: {
 
     it('returns same-workspace external workers without granting ownership', () => {
       const calls: string[][] = [];
+      const external = terminalList('external-handle', 'external-pty', { title: 'outside' });
       const adapter = createOrcaRuntimeAdapter({
         executable: 'orca-test',
-        runner: runnerFrom([
-          {
-            ok: true,
-            result: {
-              terminals: [{
-                handle: 'external-handle', title: 'outside', connected: true,
-                worktreePath: '/workspace', tabId: 'tab', leafId: 'leaf',
-              }],
-            },
-          },
-        ], calls),
+        runner: runnerFrom([external, external], calls),
       });
       const listed = adapter.listWorkers({ workspacePath: '/workspace' });
       expect(listed.status).toBe('ok');
@@ -88,21 +106,15 @@ export function registerOrcaAdapterCases(input: {
       expect(listed.value[0]?.provenance).toBe('external');
       expect(adapter.stopWorker({ identity: listed.value[0]!.identity }))
         .toEqual({ status: 'not_owned', reason: 'external_worker_not_owned' });
-      expect(calls).toHaveLength(1);
+      expect(calls).toHaveLength(2);
     });
 
     it('changes generation when Orca reports a new terminal incarnation', () => {
       const adapter = createOrcaRuntimeAdapter({
         executable: 'orca-test',
         runner: runnerFrom([
-          { ok: true, result: { terminals: [{
-            handle: 'same-handle', worktreePath: '/workspace', title: 'worker',
-            tabId: 'tab', leafId: 'leaf', ptyId: 'pty', incarnationId: 'incarnation-a',
-          }] } },
-          { ok: true, result: { terminals: [{
-            handle: 'same-handle', worktreePath: '/workspace', title: 'worker',
-            tabId: 'tab', leafId: 'leaf', ptyId: 'pty', incarnationId: 'incarnation-b',
-          }] } },
+          terminalList('same-handle', 'pty', { incarnationId: 'incarnation-a' }),
+          terminalList('same-handle', 'pty', { incarnationId: 'incarnation-b' }),
         ], []),
       });
       const first = adapter.listWorkers({ workspacePath: '/workspace' });
@@ -116,8 +128,10 @@ export function registerOrcaAdapterCases(input: {
       const adapter = createOrcaRuntimeAdapter({
         executable: 'orca-test',
         runner: runnerFrom([
-          { ok: true, result: { terminal: { handle: 'term-b' } } },
+          { ok: true, result: { terminal: { handle: 'term-b', ptyId: 'pty-b' } } },
+          terminalList('term-b', 'pty-b'),
           { ok: true, result: { terminal: { tail: [], nextCursor: 'cursor-a' } } },
+          terminalList('term-b', 'pty-b'),
           { ok: true, result: { terminal: { tail: [], nextCursor: 'cursor-a' } } },
         ], []),
       });
@@ -141,7 +155,8 @@ export function registerOrcaAdapterCases(input: {
       const adapter = createOrcaRuntimeAdapter({
         executable: 'orca-test',
         runner: runnerFrom([
-          { ok: true, result: { terminal: { handle: 'term-c' } } },
+          { ok: true, result: { terminal: { handle: 'term-c', ptyId: 'pty-c' } } },
+          terminalList('term-c', 'pty-c'),
           { ok: false, error: { code: 'orca_operation_timeout' } },
         ], calls),
       });
@@ -156,7 +171,8 @@ export function registerOrcaAdapterCases(input: {
       const adapter = createOrcaRuntimeAdapter({
         executable: 'orca-test',
         runner: runnerFrom([
-          { ok: true, result: { terminal: { handle: 'term-d' } } },
+          { ok: true, result: { terminal: { handle: 'term-d', ptyId: 'pty-d' } } },
+          terminalList('term-d', 'pty-d'),
           { ok: true, result: { terminal: { tail: [] } } },
         ], []),
       });
