@@ -104,32 +104,32 @@ export function registerRuntimeContractCases(input: {
     it('instantiates only the explicitly selected static adapter', () => {
       const calls: string[] = [];
       const selected = selectRuntimeAdapter({
-        runtimeName: 'orca',
+        runtimeName: 'primary',
         factories: {
-          orca: () => { calls.push('orca'); return new DeterministicAdapter('orca'); },
-          future: () => { calls.push('future'); return new DeterministicAdapter('future'); },
+          primary: () => { calls.push('primary'); return new DeterministicAdapter('primary'); },
+          secondary: () => { calls.push('secondary'); return new DeterministicAdapter('secondary'); },
         },
       });
-      expect(selected.name).toBe('orca');
-      expect(calls).toEqual(['orca']);
+      expect(selected.name).toBe('primary');
+      expect(calls).toEqual(['primary']);
     });
 
     it('fails before effects for unknown or unavailable selections', () => {
       expect(() => selectRuntimeAdapter({ runtimeName: 'missing', factories: {} }))
         .toThrowError(RuntimeSelectionError);
-      const unavailable = new DeterministicAdapter('orca');
+      const unavailable = new DeterministicAdapter('primary');
       unavailable.isAvailable = () => false;
-      expect(() => selectRuntimeAdapter({ runtimeName: 'orca', factories: { orca: () => unavailable } }))
-        .toThrowError(/runtime_unavailable:orca/u);
+      expect(() => selectRuntimeAdapter({ runtimeName: 'primary', factories: { primary: () => unavailable } }))
+        .toThrowError(/runtime_unavailable:primary/u);
     });
 
     it('lets the same observer caller consume a deterministic replacement adapter', () => {
-      const first = observerSnapshot(new DeterministicAdapter('orca'));
-      const second = observerSnapshot(new DeterministicAdapter('test'));
+      const first = observerSnapshot(new DeterministicAdapter('primary'));
+      const second = observerSnapshot(new DeterministicAdapter('replacement'));
       expect(first.liveness).toBe('idle');
       expect(second.liveness).toBe('idle');
-      expect(first.workers[0]?.runtime).toBe('orca');
-      expect(second.workers[0]?.runtime).toBe('test');
+      expect(first.workers[0]?.runtime).toBe('primary');
+      expect(second.workers[0]?.runtime).toBe('replacement');
     });
 
     it('keeps generation and output observations distinct across restart and new output', () => {
