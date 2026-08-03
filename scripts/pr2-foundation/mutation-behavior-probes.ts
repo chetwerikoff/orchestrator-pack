@@ -112,7 +112,7 @@ addProbe([
 ], () => runBehaviorFixture('scheduler-inert'));
 addProbe(['AC1:registry-changed'], () => assertDigest('scripts/orchestrator-side-process-registry.json'));
 addProbe(['AC1:live-store-opened'], () => runBehaviorFixture('migration-live-root-refused'));
-addProbe(['AC1:legacy-starter-disabled'], () => assertDigest('scripts/review-trigger-reconcile.ps1'));
+addProbe(['AC1:legacy-starter-disabled'], () => assertDigest('scripts/orchestrator-wake-supervisor.ts'));
 addProbe(['AC1:non-notification-runtime-delta'], () => assertDigest('scripts/pack-review-runner.ts'));
 addProbe(['AC1:notification-config-reader-absent'], () => requireSource(
   'scripts/pr2-foundation/worker-notification.ts',
@@ -273,8 +273,8 @@ addProbe([
   'AC9:declaration-snapshot-missing',
   'AC9:declaration-created-after-implementation',
 ], () => runVitestFile('scripts/pr2-foundation/real-scope-proof.test.ts'));
-addProbe(['AC9:cutover-path-modified'], () => assertDigest('scripts/review-trigger-reconcile.ps1'));
-addProbe(['AC9:registry-or-supervisor-modified'], () => assertDigest('scripts/orchestrator-wake-supervisor.ps1'));
+addProbe(['AC9:cutover-path-modified'], () => assertDigest('scripts/orchestrator-wake-supervisor.ts'));
+addProbe(['AC9:registry-or-supervisor-modified'], () => assertDigest('scripts/orchestrator-wake-supervisor.ts'));
 addProbe(['AC9:capture-corpus-overreach'], () => assertDigest('tests/external-output-references/capture-manifest.json'));
 addProbe(['AC9:raw-capture-added'], () => assertAbsent('tests/external-output-references/captures/issue-923/raw-live-ac9.json'));
 addProbe([

@@ -73,10 +73,32 @@ foreach ($rel in ($textByRel.Keys | Sort-Object)) {
     }
 }
 
+$claimBridgePath = Join-Path $RepoRoot 'scripts/lib/Review-StartClaimLifecycle.ps1'
+$claimStorePath = Join-Path $RepoRoot 'scripts/lib/review-start-claim-store.ts'
+$packReviewRunnerPath = Join-Path $RepoRoot 'scripts/pack-review-runner.ts'
+$hardCut = -not (Test-Path -LiteralPath $claimBridgePath -PathType Leaf)
+if ($hardCut) {
+    if (-not (Test-Path -LiteralPath $claimStorePath -PathType Leaf)) {
+        $violations += 'TypeScript review-start claim authority is missing after PowerShell bridge removal'
+    }
+    if (-not (Test-Path -LiteralPath $packReviewRunnerPath -PathType Leaf)) {
+        $violations += 'pack-review runner is missing after PowerShell bridge removal'
+    }
+    else {
+        $runnerSource = Get-Content -LiteralPath $packReviewRunnerPath -Raw
+        if ($runnerSource -notmatch 'from\s+[''"]\./lib/review-start-claim-store\.ts[''"]') {
+            $violations += 'pack-review runner is not bound directly to the TypeScript claim authority'
+        }
+        if ($runnerSource -match 'Review-StartClaimLifecycle\.ps1') {
+            $violations += 'pack-review runner still references the removed PowerShell claim bridge'
+        }
+    }
+}
+
 $conformancePath = Join-Path $RepoRoot 'scripts/pr2a/final-conformance.ts'
 $gitDir = Join-Path $RepoRoot '.git'
 $pr2aLandingCommit = '17ac39d725ba9ae7c881816405d5225e541177c7'
-if ($violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathType Leaf) -and (Test-Path -LiteralPath $gitDir)) {
+if (-not $hardCut -and $violations.Count -eq 0 -and (Test-Path -LiteralPath $conformancePath -PathType Leaf) -and (Test-Path -LiteralPath $gitDir)) {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) {
         $violations += 'Node 22 is required for Issue #948 final conformance'
@@ -169,6 +191,10 @@ if (remaining.length > 0) {
             }
         }
     }
+}
+
+if ($hardCut -and $violations.Count -eq 0) {
+    Write-Host '[PASS] Issue #1248 hard cut: PowerShell claim bridge absent and pack-review runner bound to TypeScript authority'
 }
 
 if ($violations.Count -gt 0) {
