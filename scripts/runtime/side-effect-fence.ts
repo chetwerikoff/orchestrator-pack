@@ -8,6 +8,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  type Stats,
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -65,7 +66,7 @@ function parseOwner(path: string): SideEffectFenceOwner | null {
   }
 }
 
-function sameFile(path: string, before: ReturnType<typeof statSync>): boolean {
+function sameFile(path: string, before: Stats): boolean {
   try {
     const after = statSync(path);
     return before.dev === after.dev && before.ino === after.ino;
@@ -84,14 +85,12 @@ export function reclaimStaleSideEffectFence(
   options: { readonly nowMs?: number; readonly ownerlessMaxAgeMs?: number } = {},
 ): boolean {
   if (!existsSync(path)) return false;
-  const before = (() => {
-    try {
-      return statSync(path);
-    } catch {
-      return null;
-    }
-  })();
-  if (!before) return false;
+  let before: Stats;
+  try {
+    before = statSync(path) as Stats;
+  } catch {
+    return false;
+  }
 
   const owner = parseOwner(path);
   const nowMs = options.nowMs ?? Date.now();
