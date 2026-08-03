@@ -167,6 +167,19 @@ export function registerOrcaAdapterCases(input: {
       expect(calls.filter((call) => call[2] === 'send')).toHaveLength(1);
     });
 
+    it('maps confirmed generation absence to gone without a process-existence shortcut', () => {
+      const adapter = createOrcaRuntimeAdapter({
+        executable: 'orca-test',
+        runner: runnerFrom([
+          { ok: true, result: { terminal: { handle: 'term-g', ptyId: 'pty-g' } } },
+          { ok: false, error: { code: 'terminal_handle_stale' } },
+        ], []),
+      });
+      const spawned = adapter.spawnWorker({ workspacePath: '/workspace', title: 'worker', command: 'codex' });
+      if (spawned.status !== 'ok') throw new Error('spawn failed');
+      expect(adapter.liveness({ identity: spawned.value.identity, boundMs: 25 })).toBe('gone');
+    });
+
     it('maps bounded inability to refresh liveness to unknown, not gone', () => {
       const adapter = createOrcaRuntimeAdapter({
         executable: 'orca-test',
