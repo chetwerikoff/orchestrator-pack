@@ -54,6 +54,10 @@ export class DeterministicRuntimeAdapter implements RuntimeAdapter {
     };
   }
 
+  findWorkerById(id: string): RuntimeResult<RuntimeWorker | null> {
+    return { status: 'ok', value: this.#workers.get(id)?.worker ?? null };
+  }
+
   findWorker(identity: RuntimeWorkerIdentity): RuntimeResult<RuntimeWorker | null> {
     const state = this.#workers.get(identity.id);
     return {
