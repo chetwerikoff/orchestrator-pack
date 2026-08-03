@@ -807,7 +807,14 @@ export async function reconcileStalePackReviewRuns(
 }
 
 export async function startPackReview(input: StartInput): Promise<Record<string, unknown>> {
-  const budgetLedger = createReviewerBudgetLedger(process.env, Date.now(), input.timeoutSeconds);
+  const fixtureShortTimeout = process.env.OPK_VITEST_HARNESS === '1'
+    && (input.fixtureReviewStdout !== undefined || input.fixtureReviewTimedOut === true);
+  const budgetLedger = createReviewerBudgetLedger(
+    process.env,
+    Date.now(),
+    input.timeoutSeconds,
+    { allowShortTimeout: fixtureShortTimeout },
+  );
   const timeoutSeconds = budgetLedger.runnerTimeoutSeconds;
   const trusted = resolveTrustedRunnerPaths();
   const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;

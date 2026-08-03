@@ -44,6 +44,10 @@ export class ReviewerBudgetError extends Error {
   }
 }
 
+export interface ReviewerBudgetResolutionOptions {
+  allowShortTimeout?: boolean;
+}
+
 export interface ReviewerEvidencePayload {
   reviewer: {
     effectiveBudgetMs: number;
@@ -121,6 +125,7 @@ export function resolveEffectiveBudgetDecision(
 export function resolveReviewerBudgetDecision(
   env: NodeJS.ProcessEnv = process.env,
   explicitTimeoutSeconds?: unknown,
+  options: ReviewerBudgetResolutionOptions = {},
 ): ReviewerBudgetDecision {
   const effective = resolveEffectiveBudgetDecision(env);
   const runnerTimeoutRequiredMs = effective.effectiveBudgetMs + REVIEWER_RUNNER_OVERHEAD_MS;
@@ -135,7 +140,7 @@ export function resolveReviewerBudgetDecision(
     if (parsed > MAX_RUNNER_TIMEOUT_SECONDS) {
       throw new ReviewerBudgetError(`timeoutSeconds exceeds ${MAX_RUNNER_TIMEOUT_SECONDS}`);
     }
-    if (parsed < derivedTimeoutSeconds) {
+    if (parsed < derivedTimeoutSeconds && options.allowShortTimeout !== true) {
       throw new ReviewerBudgetError(
         `timeoutSeconds ${parsed} is below required ${derivedTimeoutSeconds}`,
       );
@@ -214,8 +219,9 @@ export function createReviewerBudgetLedger(
   env: NodeJS.ProcessEnv = process.env,
   startedAtMs = Date.now(),
   explicitTimeoutSeconds?: unknown,
+  options: ReviewerBudgetResolutionOptions = {},
 ): ReviewerBudgetLedger {
-  const decision = resolveReviewerBudgetDecision(env, explicitTimeoutSeconds);
+  const decision = resolveReviewerBudgetDecision(env, explicitTimeoutSeconds, options);
   return {
     startedAtMs,
     ...decision,
