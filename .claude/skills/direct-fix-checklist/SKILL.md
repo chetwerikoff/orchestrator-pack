@@ -194,7 +194,7 @@ will otherwise succeed against the wrong fleet, silently.
 
 | Capability | Active runtime = `orca` |
 |---|---|
-| `workspace_for(issue)` | `orca worktree create --name <name> --repo "path:<repo-root>" --base-branch origin/main --issue <N> --setup skip --activate` |
+| `workspace_for(issue)` | `node --experimental-strip-types scripts/worktree-lifecycle/create-continuation.ts --repo-root "<repo-root>" --issue <N> --expected-head <source-sha> --name <name> --apply --json` |
 | `spawn_worker(wt)` | `orca terminal create --worktree "path:<wt>" --title "<role> #<N>" --command "<agent-cli> --model <model>" --focus` |
 | `agents` | `orca worktree ps --json` → `result.worktrees[].agents[]` (`state`, `interrupted`) |
 | `terminals(wt)` | `orca terminal list --worktree "path:<wt>" --json` → `result.terminals[]` (`handle`, `worktreePath`) |
@@ -203,17 +203,18 @@ will otherwise succeed against the wrong fleet, silently.
 
 Left-column names are identifiers, not commands. Every step below means: look up
 the capability in this table, then execute the command it maps to. Postconditions
-the mapping must preserve on any runtime: the workspace is created from
-`origin/main` and bound to the issue; the worker is **visible to the operator**;
-the agent starts **as part of creating its session**, with its model passed
-explicitly — never typed into a shell afterwards.
+the mapping must preserve on any runtime: the workspace is created from the
+exact intended source SHA and bound to the issue; the worker is **visible to the
+operator**; the agent starts **as part of creating its session**, with its model
+passed explicitly — never typed into a shell afterwards.
 
 **Resolve every placeholder before acting, and fail closed if you cannot:**
 `<N>` = the issue number; `<repo-root>` = `git rev-parse --show-toplevel`;
-`<name>` = a workspace name containing `N`; `<role>` = what the worker is for;
-`<agent-cli>` and `<model>` = the worker agent and model the operator's standing
-routing prescribes — if that is unstated, **ask**, do not guess; `<wt>` = the
-workspace path returned by `workspace_for`.
+`<source-sha>` = the fresh full 40-hex SHA of the intended source ref;
+`<name>` = a fresh safe workspace name containing `N`; `<role>` = what the worker
+is for; `<agent-cli>` and `<model>` = the worker agent and model the operator's
+standing routing prescribes — if that is unstated, **ask**, do not guess; `<wt>` =
+`selected.path` from the successful lifecycle report.
 
 **Mutation fails closed; the scheduler does not.** If the active runtime has no
 row for a capability or a placeholder has no authoritative value, do not guess,
@@ -233,57 +234,47 @@ Stop the direct path and hand the change over when:
 
 **Pivot boundary.** Before you have made edits, hand off freely. **Once edits
 exist, stop and report** the exact branch, commit, and pending diff, then wait.
-Do not start a handoff on top of live edits: the bindings above only create a
-workspace from `origin/main`, so there is no way to hand an existing branch to a
-worker from here — proceeding would leave your edits stranded and produce a
+Do not start a handoff on top of live edits: the bindings above create a new
+workspace from the intended source SHA; they do not adopt an arbitrary branch
+with uncommitted edits. Proceeding would leave the edits stranded and produce a
 second, diverging implementation. Adopting an existing branch is an operator
 decision carried out by hand, not a step in this procedure.
 
 ### Handoff steps
 
-1. **Census first.** Execute `terminals(wt)` for the target workspace, or note
-   that the workspace does not exist yet. Keep the set of existing handles — the
-   terminal read-back depends on knowing the "before" state.
-2. Execute `workspace_for(issue)` **once**; note the returned workspace path as
-   `<wt>`. A timeout or lost receipt is an unknown outcome, not permission to
-   issue a blind second create.
-3. **Mandatory post-create dual read-back before spawn.** Resolve the created
-   worktree's full `HEAD` and branch (or confirmed detached mode) from Git, then
-   run:
+1. **Freeze the source identity.** Fetch the intended source ref, resolve its full
+   40-hex commit SHA as `<source-sha>`, and choose one fresh safe `<name>` that
+   contains `<N>`. Do not pass the symbolic ref to the create actuator.
+2. **Run the bounded lifecycle actuator once.** Execute `workspace_for(issue)`.
+   It owns the initial create, authoritative Git/Orca read-back, at most one
+   isolated replacement, and the shared create/recovery/teardown exclusion. A
+   timeout or missing create receipt is resolved by read-back inside this one
+   command; do not issue a second command manually.
+3. **Accept exactly one verified selection.** Proceed only when the report has
+   all of:
+   - `outcome: ready_to_spawn`;
+   - `terminalSpawnAuthorized: true`;
+   - one `selected.path`;
+   - `selectedReadBack.classification.classification: exact_dual`;
+   - `selectedReadBack.decision.terminalSpawnAuthorized: true`.
 
-   ```bash
-   node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
-     --context post-create \
-     --repo-root "<repo-root>" \
-     --worktree "<wt>" \
-     --issue <N> \
-     --expected-head <full-40-hex-head> \
-     --expected-branch <branch> \
-     --json
-   ```
-
-   Replace `--expected-branch` with `--detached` only when Git itself confirms
-   detached HEAD. Proceed only for `outcome: ready_to_spawn`,
-   `classification.classification: exact_dual`, and
-   `decision.terminalSpawnAuthorized: true`.
-4. **Bounded continuation, not a global stop.** For any other post-create result,
-   preserve the disputed target. Do not spawn in it and do not destructively
-   recover it by Issue number. Perform at most one isolated replacement create
-   with a fresh unique `<name>` and path, still rooted at the exact intended
-   source SHA and bound to the same Issue. Run step 3 against the replacement.
-   If the replacement is also not exact dual, return task-level degraded control
-   immediately; do not loop and do not stop unrelated scheduler work.
-5. Execute `spawn_worker(wt)` only for the exact-dual original or replacement;
-   note the returned terminal handle.
+   Set `<wt>` to that exact `selected.path`. Any other result preserves disputed
+   state and returns task-level degraded control; do not loop, force-remove,
+   create a third worktree, or stop unrelated scheduler work.
+4. **Census terminals before spawn.** Execute `terminals(wt)` and keep the set of
+   existing handles. The lifecycle actuator creates worktrees only; it never
+   creates a terminal.
+5. Execute `spawn_worker(wt)` **once** for the verified `<wt>` and note the
+   returned terminal handle.
 6. **Read back and bind.** Execute `terminals(wt)` again: there must be **exactly
-   one handle that was not in the step-1 set**, and that handle is your worker.
+   one handle that was not in the step-4 set**, and that handle is your worker.
    Zero new handles means the spawn did not take. More than one means something
    else is also creating terminals — preserve the state and return task-level
    degraded control rather than guessing. Use `agents` to confirm the bound
    handle is running.
 7. **Never blindly retry a spawn whose outcome is unknown.** A timeout does not
    mean failure — read back first. Counting agents alone cannot tell your worker
-   from one that was already there, which is why step 1 is not optional.
+   from one that was already there, which is why step 4 is not optional.
 
 To stop a worker, use `close_terminal(handle)` with the handle bound in step 6.
 
