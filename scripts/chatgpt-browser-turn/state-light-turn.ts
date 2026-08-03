@@ -292,7 +292,7 @@ function normalizeMarkdownEchoText(value: string): string {
       .replace(/^#{1,6}\s*/gm, '')
       .replace(/^\s*[-*+]\s+/gm, '')
       .replace(/\*\*([^*]+)\*\*/g, '$1')
-      .replace(/\*([^*]+)\*\*/g, '$1'),
+      .replace(/\*([^*]+)\*/g, '$1'),
   );
 }
 
