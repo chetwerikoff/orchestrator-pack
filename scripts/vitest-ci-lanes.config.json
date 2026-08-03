@@ -118,6 +118,8 @@
     "scripts/chatgpt-browser-turn/state-light-fresh-conversation.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-page-observation.test.ts": "light",
     "scripts/chatgpt-browser-turn/state-light-session.test.ts": "light",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.subprocess.test.ts": "light",
+    "scripts/chatgpt-browser-turn/tab-lifecycle.test.ts": "light",
     "scripts/flow-manager-long-running-child.test.ts": "light",
     "scripts/flow-manager-authority-contract.test.ts": "light",
     "scripts/ci-preflight/contract.test.ts": "light",
