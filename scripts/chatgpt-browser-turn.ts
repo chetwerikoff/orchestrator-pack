@@ -79,6 +79,10 @@ import {
   type WitnessSurfaceProbe,
   verifyProfile,
 } from './chatgpt-browser-turn/ui-adapter.ts';
+import {
+  captureTooManyRequestsSource,
+  writeCapturedSource,
+} from './chatgpt-browser-turn/too-many-requests-source.ts';
 
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 const STALE_PRE_SEND_MS = 120_000;
@@ -945,6 +949,46 @@ async function runStatus(args: ParsedArgs): Promise<number> {
   return emitControlAndCode(statusListForConfiguredProfile(profile, cdp));
 }
 
+async function runTooManyRequestsSourceCapture(args: ParsedArgs): Promise<number> {
+  assertAllowedOptions(args, [
+    'profile',
+    'cdp',
+    'project-url',
+    'timeout-ms',
+    'capture-too-many-requests-source',
+  ]);
+  const outputPath = required(args, 'capture-too-many-requests-source');
+  const profile = required(args, 'profile');
+  const cdp = required(args, 'cdp');
+  const projectUrl = required(args, 'project-url');
+  const timeoutRaw = option(args, 'timeout-ms');
+  const timeoutMs = timeoutRaw ? parseInteger(timeoutRaw, 1) : DEFAULT_TIMEOUT_MS;
+  const config: BrowserConfig = {
+    profile,
+    cdp,
+    projectUrl,
+    newChat: true,
+    timeoutMs,
+  };
+  const segmentBudget = createPreSendSegmentBudget(timeoutMs);
+  let browser: Awaited<ReturnType<ReturnType<typeof loadChromium>['connectOverCDP']>> | undefined;
+  let opened: { page: any; owned: boolean; provisionalId?: string } | undefined;
+  try {
+    const verification = await verifyProfile(config, segmentBudget);
+    if (verification.state !== 'verified') throw new Error(`capture_profile_${verification.cause}`);
+    browser = await connectCdpBrowser(loadChromium(), cdp);
+    opened = await openTurnPage(browser, config, { segmentBudget });
+    if (!opened.owned) throw new Error('capture_page_not_owned');
+    const source = await captureTooManyRequestsSource(opened.page);
+    writeCapturedSource(outputPath, source);
+    emit(source);
+    return 0;
+  } finally {
+    await closeOwnedTurnPage(opened, { retainPage: false });
+    await releaseCdpBrowser(browser, RESOURCE_CLEANUP_BOUND_MS);
+  }
+}
+
 
 async function runGateBCharacterizationCommand(args: ParsedArgs): Promise<number> {
   assertAllowedOptions(args, ['profile', 'cdp', 'chat-url']);
@@ -1146,6 +1190,10 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     return 22;
   }
   try {
+    if (option(args, 'capture-too-many-requests-source')) {
+      if (args.command !== 'turn') throw new Error('argument_invalid');
+      return await runTooManyRequestsSourceCapture(args);
+    }
     if (args.command === 'turn') return await runTurn(args);
     if (args.command === 'status/list') return await runStatus(args);
     if (args.command === 'clear') return await runClear(args);
