@@ -6,13 +6,12 @@
     ".claude/skills/merge-with-local-adoption/SKILL.md",
     "docs/investigations/orca-worktree-lifecycle/2026-08-04-executor-observations.md",
     "docs/orca-runtime-boundary.md",
-    "scripts/vitest-ci-lanes.config.json",
-    "scripts/worktree-lifecycle/README.md",
     "scripts/worktree-lifecycle/cli.ts",
     "scripts/worktree-lifecycle/core.test.ts",
     "scripts/worktree-lifecycle/core.ts",
     "scripts/worktree-lifecycle/operations.test.ts",
-    "scripts/worktree-lifecycle/operations.ts"
+    "scripts/worktree-lifecycle/operations.ts",
+    "scripts/worktree-lifecycle/README.md"
   ],
   "denylist": [
     ".orca/",
@@ -33,5 +32,5 @@
     "scripts/worktree-teardown-runtime-profile.ts",
     "scripts/worktree-teardown.ts"
   ],
-  "source_revision": "b481fef6a399f16830f44a4037939c5ce827daa0"
+  "source_revision": "e5c5fdbc1d0b3a4074bcf8f935e17630b3695ce4"
 }
