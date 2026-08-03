@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import '../toolchain/native-entrypoint-preflight.ts';
 import { runLifecycle } from './operations.ts';
 import {
   normalizeBranchName,
