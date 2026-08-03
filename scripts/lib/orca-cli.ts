@@ -33,6 +33,8 @@ import type {
   OrcaTerminalReadResult,
 } from '../orca-runtime/native.ts';
 
+type RuntimeCreateInput = Parameters<typeof createRuntimeTerminal>[0];
+
 export { RuntimeTaskCompatibilityFacade } from '../runtime/task-compat.ts';
 
 export function probeOrcaWorktree(
@@ -44,14 +46,7 @@ export function probeOrcaWorktree(
     : probeRuntimeWorktree(cwd, options);
 }
 
-export function createOrcaTerminal(input: {
-  readonly cwd: string;
-  readonly title: string;
-  readonly command: string;
-  readonly executable?: string;
-  readonly runner?: OrcaRunOptions['runner'];
-  readonly timeoutMs?: number;
-}): OrcaTerminalCreateResult {
+export function createOrcaTerminal(input: RuntimeCreateInput): OrcaTerminalCreateResult {
   return input.runner ? createNativeTerminal(input) : createRuntimeTerminal(input);
 }
 
