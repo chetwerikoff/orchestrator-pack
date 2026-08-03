@@ -150,6 +150,37 @@ export function registerOrcaAdapterCases(input: {
       expect(String(second.value.observationToken)).not.toContain('cursor-a');
     });
 
+    it('uses an internal output fingerprint when the native cursor is null', () => {
+      const adapter = createOrcaRuntimeAdapter({
+        executable: 'orca-test',
+        runner: runnerFrom([
+          { ok: true, result: { terminal: { handle: 'term-n', ptyId: 'pty-n' } } },
+          terminalList('term-n', 'pty-n'),
+          { ok: true, result: { lines: ['same'], nextCursor: null } },
+          terminalList('term-n', 'pty-n'),
+          { ok: true, result: { lines: ['same'], nextCursor: null } },
+          terminalList('term-n', 'pty-n'),
+          { ok: true, result: { lines: ['same', 'new'], nextCursor: null } },
+        ], []),
+      });
+      const spawned = adapter.spawnWorker({ workspacePath: '/workspace', title: 'worker', command: 'codex' });
+      if (spawned.status !== 'ok') throw new Error('spawn failed');
+      const first = adapter.readBoundedOutput({ identity: spawned.value.identity });
+      if (first.status !== 'ok') throw new Error('read failed');
+      const unchanged = adapter.readBoundedOutput({
+        identity: spawned.value.identity,
+        previousObservationToken: first.value.observationToken,
+      });
+      if (unchanged.status !== 'ok') throw new Error('second read failed');
+      expect(unchanged.value.changed).toBe(false);
+      expect(unchanged.value.observationToken).toBe(first.value.observationToken);
+      const changed = adapter.readBoundedOutput({
+        identity: spawned.value.identity,
+        previousObservationToken: unchanged.value.observationToken,
+      });
+      expect(changed.status === 'ok' && changed.value.changed).toBe(true);
+    });
+
     it('maps ambiguous dispatch to dispatch_unknown without an automatic resend', () => {
       const calls: string[][] = [];
       const adapter = createOrcaRuntimeAdapter({
