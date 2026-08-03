@@ -16,10 +16,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Pack source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Pack source and dependencies
         run: tar --exclude=.git -czf /tmp/pr1281-source.tar.gz .
       - uses: actions/upload-artifact@v4
         with:
           name: pr1281-source
           path: /tmp/pr1281-source.tar.gz
+          compression-level: 0
           retention-days: 1
