@@ -2511,6 +2511,8 @@ async function finalizeTurn(outcome: TurnRunOutcome): Promise<CompactTurnResult>
   };
 }
 
+export const __testFinalizeTurn = finalizeTurn;
+
 export const __testComposerMutation = {
   remainingComposerMutationMs,
   readComposerReadiness,
