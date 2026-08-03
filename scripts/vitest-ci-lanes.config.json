@@ -133,6 +133,7 @@
     "scripts/launch-watch/launch-watch.test.ts": "light",
     "scripts/launch-watch/watch.test.ts": "light",
     "scripts/merge-triage-evidence.test.ts": "light",
+    "scripts/worktree-lifecycle/create-continuation.test.ts": "light",
     "scripts/worktree-lifecycle/core.test.ts": "light",
     "scripts/worktree-lifecycle/operations.test.ts": "light"
   },
