@@ -58,6 +58,10 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   // Issue #1328 exact merged-worktree teardown is deterministic fixture coverage.
   // Keep the pre-topology plan bounded until runtime-history harvest records it.
   'scripts/worktree-teardown.test.ts': 120,
+  // Issue #1248 adds two fast runtime-boundary contract suites. Fixed estimates
+  // keep the bounded topology producer stable until runtime history is refreshed.
+  'scripts/runtime/caller-census.test.ts': 120,
+  'scripts/runtime/task-compat.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
