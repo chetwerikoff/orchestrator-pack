@@ -49,14 +49,16 @@ Field mapping for the active runtime: worktree rows expose `path`, `head`, `bran
 empty when detached), `isMainWorktree`, `isArchived`, `displayName`, `repoId`; agent rows expose
 `state` and `interrupted`; terminal rows expose `handle`, `worktreePath`, `tabId`.
 
-**Neutral inventory for the reaper** — the reaper never calls a runtime CLI. Produce its input by
-normalising `RUNTIME.worktrees` to `[{path, isMain}]`:
+**Neutral inventory** — the standalone reaper (`reap-worktree.mjs`, used for the orphan census and
+for one-off orphan cleanup) never calls a runtime CLI; it takes `[{path, isMain}]` on `--runtime-worktrees`.
+The teardown script builds this itself from the profile above, so you only need this by hand when
+running the reaper standalone:
 
 ```bash
 orca worktree list --json | node -e '
 let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
   const w=JSON.parse(s).result.worktrees.map(x=>({path:x.path,isMain:!!x.isMainWorktree}));
-  process.stdout.write(JSON.stringify(w));})' > "$RUN_DIR/rt-worktrees.json"
+  process.stdout.write(JSON.stringify(w));})' > "$(mktemp -d)/rt-worktrees.json"
 ```
 
 **Why a profile table and not the pack adapter:** the repo's runtime-neutral contract
@@ -113,12 +115,15 @@ AO-era artifacts and are **not** part of this flow.
 **FORBIDDEN:** `git reset --hard`; `git clean`; `git checkout -- .` / `git restore`
 (anything discarding work); `git switch -f` / `checkout -f`; `git stash drop/clear`;
 `git pull --rebase` on a dirty tree; autostash without a same-run pop + report; deleting
-or overwriting files the user had modified or untracked; `git branch -D` (use `-d`, which is
-itself an ancestry check — the **only** exception is the squash/rebase path in 9b G5, after tree
-containment has been proven, and it must be named in the report); `orca worktree rm --force`;
-`orca worktree rm --run-hooks`
-(executes repo-defined code from the merged branch as the operator — see 9e); `rm -rf` on
-any worktree. Never run two teardowns concurrently — take the 9b lock.
+or overwriting files the user had modified or untracked; `orca worktree rm --force`;
+`orca worktree rm --run-hooks` (executes repo-defined code from the merged branch as the
+operator); `rm -rf` on any worktree.
+
+**Branch deletion is decided by the teardown script, not by hand.** `-d` is the norm; `-D` is
+used only on the squash/rebase path, and only when the script has proven all of: the worktree SHA
+equals the merged PR's `headRefOid`, that PR's merge commit is an ancestor of `origin/main`, and
+the pre-removal re-check passed. Never run either by hand to "finish" a blocked teardown.
+Concurrency is handled by the script's own lock — do not hand-roll one.
 
 **FORBIDDEN in process teardown:** killing by command line or process name. `pkill -f
 'synto serve'`, `pkill -f codex`, `killall node` and every relative of theirs are banned
