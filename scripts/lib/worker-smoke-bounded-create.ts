@@ -44,7 +44,9 @@ export function createBoundedOrcaTerminal(input: {
     return {
       ok: false,
       reason: created.reason,
-      errorCode: created.errorCode ?? 'terminal_create_failed',
+      errorCode: created.errorCode === 'orca_operation_timeout'
+        ? 'orca_create_timeout'
+        : created.errorCode ?? 'terminal_create_failed',
       ambiguousUnbound: true,
       elapsedMs,
     };
