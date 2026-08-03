@@ -2,6 +2,7 @@
 // @vitest-pre-topology-seconds 120
 
 import { describe, expect, it } from 'vitest';
+import type { ProcessResult } from '../kernel/subprocess.ts';
 import {
   classifyWorktree,
   decideContinuation,
@@ -11,6 +12,11 @@ import {
   type CensusEvidence,
   type ExpectedWorktreeIdentity,
 } from './core.ts';
+import {
+  createPrHeadBoundRunner,
+  validateExpectedPrBinding,
+} from './head-bound-runner.ts';
+import type { CommandRunner } from './operations.ts';
 
 const HEAD = 'a'.repeat(40);
 const OTHER_HEAD = 'b'.repeat(40);
@@ -66,6 +72,20 @@ const evidence = (
   git: { status: statuses.git ?? 'ok', rows: gitRows },
   orca: { status: statuses.orca ?? 'ok', rows: orcaRows },
 });
+
+function commandResult(input: Partial<ProcessResult> = {}): ProcessResult {
+  return {
+    outcome: input.outcome ?? 'exit',
+    ok: input.ok ?? true,
+    exitCode: input.exitCode ?? 0,
+    signal: input.signal ?? null,
+    stdout: input.stdout ?? '',
+    stderr: input.stderr ?? '',
+    timedOut: input.timedOut ?? false,
+    cancelled: input.cancelled ?? false,
+    ...(input.error ? { error: input.error } : {}),
+  };
+}
 
 describe('worktree lifecycle classifier', () => {
   it('classifies exact issue-bound Git and Orca agreement', () => {
@@ -178,5 +198,67 @@ describe('continuation policy', () => {
     expect(decideContinuation('exact_git_only', 'post-merge-cleanup').action)
       .toBe('try_guarded_git_only_recovery');
     expect(decideContinuation('absent', 'post-merge-cleanup').action).toBe('already_absent');
+  });
+});
+
+describe('current PR-head effect binding', () => {
+  const prExpected = expected({ bindingKind: 'pr', bindingNumber: 1300 });
+
+  it('rejects a different PR head, branch, or non-merged state', () => {
+    expect(validateExpectedPrBinding(prExpected, {
+      headRefName: BRANCH,
+      headRefOid: OTHER_HEAD,
+      state: 'MERGED',
+    })).toMatch(/does not match/);
+    expect(validateExpectedPrBinding(prExpected, {
+      headRefName: 'agent/other',
+      headRefOid: HEAD,
+      state: 'MERGED',
+    })).toMatch(/head branch/);
+    expect(validateExpectedPrBinding(prExpected, {
+      headRefName: BRANCH,
+      headRefOid: HEAD,
+      state: 'OPEN',
+    })).toMatch(/not MERGED/);
+    expect(validateExpectedPrBinding(prExpected, {
+      headRefName: BRANCH,
+      headRefOid: HEAD,
+      state: 'MERGED',
+    })).toBeNull();
+  });
+
+  it('revalidates immediately before a destructive effect and blocks a moved head', () => {
+    let liveHead = OTHER_HEAD;
+    const forwarded: string[] = [];
+    const runner: CommandRunner = (invocation) => {
+      if (invocation.command.endsWith('/scripts/gh')) {
+        return commandResult({
+          stdout: JSON.stringify({
+            headRefName: BRANCH,
+            headRefOid: liveHead,
+            state: 'MERGED',
+          }),
+        });
+      }
+      forwarded.push(`${invocation.command} ${invocation.args.join(' ')}`);
+      return commandResult();
+    };
+    const guarded = createPrHeadBoundRunner(prExpected, runner);
+    const effect = {
+      command: 'git',
+      args: ['-C', prExpected.repositoryRoot, 'worktree', 'remove', prExpected.path],
+    } as const;
+
+    const blocked = guarded(effect);
+    expect(blocked.ok).toBe(false);
+    expect(blocked.stderr).toMatch(/effect blocked/);
+    expect(forwarded).toEqual([]);
+
+    liveHead = HEAD;
+    const allowed = guarded(effect);
+    expect(allowed.ok).toBe(true);
+    expect(forwarded).toEqual([
+      `git -C ${prExpected.repositoryRoot} worktree remove ${prExpected.path}`,
+    ]);
   });
 });
