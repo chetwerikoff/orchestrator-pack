@@ -10,6 +10,11 @@ import {
   type LifecycleContext,
   type WorktreeBindingKind,
 } from './core.ts';
+import {
+  createPrHeadBoundRunner,
+  readLivePrBinding,
+  validateExpectedPrBinding,
+} from './head-bound-runner.ts';
 
 interface ParsedArgs {
   readonly context: LifecycleContext | null;
@@ -123,10 +128,21 @@ function main(): void {
       bindingKind,
       bindingNumber,
     };
+
+    const operations = bindingKind === 'pr'
+      ? { runner: createPrHeadBoundRunner(expected) }
+      : undefined;
+    if (bindingKind === 'pr') {
+      const live = readLivePrBinding(expected, operations!.runner);
+      const mismatch = validateExpectedPrBinding(expected, live);
+      if (mismatch) throw new TypeError(mismatch);
+    }
+
     const report = runLifecycle({
       expected,
       context: args.context!,
       apply: args.apply,
+      ...(operations ? { operations } : {}),
     });
     if (args.json) console.log(JSON.stringify(report, null, 2));
     else emitHuman(report);
