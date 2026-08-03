@@ -22,7 +22,7 @@ jobs:
       - name: Checkout PR base
         uses: actions/checkout@v4
         with:
-          ref: 66cae1267a66f04a263e767aaaca35c64485239a
+          ref: 5fe7e0fd1d7c09654d3121e6dfab46dc330672cc
           path: base
       - uses: actions/setup-node@v4
         with:
