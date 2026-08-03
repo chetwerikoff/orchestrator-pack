@@ -389,8 +389,6 @@ export function registerLegacyObservation(
 export const DIRECT_PUBLICATION_POLICY = 'direct-publication/v1' as const;
 export const SERVICE_OBSERVED_ISSUE_COMMENT = 'service-observed-issue-comment/v1' as const;
 export const FAILED_WRITE_FINAL_ASSISTANT = 'failed-write-final-assistant/v1' as const;
-// AC#4 is not satisfied in this checkout: never admit the parser from fixtures or self-certifying tests.
-export const DIRECT_PUBLICATION_CAPABILITY_WITNESSES_PROVEN = false;
 
 export interface DirectPublicationTarget {
   readonly repositoryFullName: string;
@@ -404,7 +402,6 @@ export interface DirectPublicationConfig {
   readonly target: DirectPublicationTarget;
   readonly reviewerSource: string;
   readonly reviewerSourceOutput: string;
-  readonly capabilityProbe?: 'success' | 'definitive-no-commit';
 }
 
 export interface DirectPublicationInvocation {
@@ -447,14 +444,6 @@ export interface DirectPublicationObservationState {
 
 export function createDirectPublicationObservationState(): DirectPublicationObservationState {
   return { invocations: [], results: [] };
-}
-
-export function directPublicationCapabilityCapture(
-  state: DirectPublicationObservationState,
-  probe: 'success' | 'definitive-no-commit',
-): string {
-  const results = state.results.map(({ outcome, noCommitClass, ...raw }) => raw);
-  return JSON.stringify({ probe, invocations: state.invocations, results }, null, 2) + '\n';
 }
 
 export function observeDirectPublicationPayloadTree(
