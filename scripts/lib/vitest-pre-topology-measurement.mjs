@@ -52,6 +52,7 @@ export const PRE_TOPOLOGY_MEASUREMENT_ESTIMATES = Object.freeze({
   'scripts/worktree-lifecycle/create-continuation.test.ts': 120,
   'scripts/worktree-lifecycle/core.test.ts': 120,
   'scripts/worktree-lifecycle/operations.test.ts': 120,
+  'scripts/worktree-lifecycle/recovery-regression.test.ts': 120,
 });
 // The longest known changed wallclock suite is about 430 seconds. Keep the
 // producer bounded at eight minutes per file so the topology job remains
