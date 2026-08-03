@@ -14,6 +14,8 @@ import {
   observePackReviewHead,
   readPackReviewAuthority,
   retainPersistedOpenCycle,
+  selectPackReviewEvidence,
+  stagePackReviewImmutableRecord,
   terminalConsumesCapSlot,
   validateTerminalV2,
 } from './pack-review-state.ts';
@@ -187,6 +189,52 @@ describe('Issue #898 authority and cap state', () => {
     expect(terminalConsumesCapSlot({ status: 'failed', findingCount: 0 })).toBe(false);
     expect(terminalConsumesCapSlot({ status: 'failed', findingCount: 2 })).toBe(true);
     expect(terminalConsumesCapSlot({ status: 'changes_requested', findingCount: 2 })).toBe(true);
+  });
+
+  it('only selects an immutable evidence row matching its ID, key, and digest', () => {
+    const storeOptions = options();
+    let state = initializePackReviewAuthority({
+      prNumber: 898,
+      headSha: sha('a'),
+      tier: 'T1',
+      options: storeOptions,
+    });
+    state = commitPackReviewTerminal({
+      prNumber: 898,
+      expectedTransitionSeq: state.transitionSeq,
+      terminal: findingsTerminal('run-a', sha('a')),
+      status: 'changes_requested',
+      findingCount: 1,
+      options: storeOptions,
+    });
+    const staged = stagePackReviewImmutableRecord({
+      kind: 'evidence',
+      key: 'row-a',
+      value: { evidenceId: 'evidence-a', expectedEvidenceKey: 'key-a' },
+      options: storeOptions,
+    });
+    expect(() => selectPackReviewEvidence({
+      prNumber: 898,
+      expectedTransitionSeq: state.transitionSeq,
+      expectedEvidenceKey: 'key-a',
+      selectedEvidenceId: 'evidence-a',
+      selectedEvidenceDigest: 'forged',
+      options: storeOptions,
+    })).toThrow(/evidence_selection_invalid/);
+
+    state = selectPackReviewEvidence({
+      prNumber: 898,
+      expectedTransitionSeq: state.transitionSeq,
+      expectedEvidenceKey: 'key-a',
+      selectedEvidenceId: 'evidence-a',
+      selectedEvidenceDigest: staged.digest,
+      options: storeOptions,
+    });
+    expect(state.evidence).toMatchObject({
+      expectedEvidenceKey: 'key-a',
+      selectedEvidenceId: 'evidence-a',
+      selectedEvidenceDigest: staged.digest,
+    });
   });
 
   it('requires complete composite terminal-v2 authority under schema-v1 storage', () => {

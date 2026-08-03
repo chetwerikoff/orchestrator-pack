@@ -16,6 +16,20 @@ import {
   type ReviewerBudgetLedger,
 } from '../plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
+import { sha256Bytes } from './merge-triage-evidence.ts';
+import {
+  PACK_REVIEW_AUTHORITY_PHASES,
+  commitPackReviewAuthorityTransition,
+  commitPackReviewTerminal,
+  initializePackReviewAuthority,
+  observePackReviewHead,
+  readPackReviewAuthority,
+  recordPackReviewPublication,
+  type PackReviewAuthorityDocument,
+  type PackReviewAuthorityOptions,
+  type PackReviewAuthorityPhase,
+  type PackReviewTerminalV2,
+} from './pack-review-state.ts';
 import {
   acquireReviewStartClaim,
   completeAfterRunInvoke,
@@ -86,6 +100,7 @@ interface StartInput {
   surface?: string;
   storeRoot?: string;
   timeoutSeconds?: unknown;
+  tier?: 'T1' | 'T2' | 'T3';
   claimMode?: 'acquire' | 'preacquired';
   onRunStarted?: (event: {
     prNumber: number;
@@ -259,6 +274,43 @@ function positiveInteger(value: unknown, label: string): number | undefined {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) throw new Error(`${label} must be a positive integer`);
   return number;
+}
+
+function advancePackReviewAuthority(
+  authority: PackReviewAuthorityDocument,
+  nextPhase: PackReviewAuthorityPhase,
+  prNumber: number,
+  options: PackReviewAuthorityOptions,
+): PackReviewAuthorityDocument {
+  const currentIndex = PACK_REVIEW_AUTHORITY_PHASES.indexOf(authority.phase);
+  const nextIndex = PACK_REVIEW_AUTHORITY_PHASES.indexOf(nextPhase);
+  if (currentIndex >= nextIndex) return authority;
+  return commitPackReviewAuthorityTransition({
+    prNumber,
+    expectedTransitionSeq: authority.transitionSeq,
+    nextPhase,
+    mutate: (current) => current,
+    options,
+  });
+}
+
+function terminalV2FromPayload(input: {
+  runId: string;
+  targetSha: string;
+  verdict: ReviewPayload['verdict'];
+  findingCount: number;
+  findings: ReviewPayload['findings'];
+}): PackReviewTerminalV2 {
+  return {
+    schemaVersion: 1,
+    terminalContractVersion: 2,
+    terminalSource: 'normal',
+    runId: input.runId,
+    targetSha: input.targetSha,
+    reviewVerdict: input.verdict,
+    findingCount: input.findingCount,
+    findingsDigest: sha256Bytes(JSON.stringify(input.findings)),
+  };
 }
 
 async function runGit(repoRoot: string, args: readonly string[], label: string): Promise<string> {
@@ -821,6 +873,34 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   const baseRef = trim(input.baseRef) || DEFAULT_BASE_REF;
   const target = await resolveTarget(input, trusted.trustedPackRoot);
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
+  const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
+  let authority = initializePackReviewAuthority({
+    prNumber: target.prNumber,
+    headSha: target.headSha,
+    tier: input.tier ?? 'T3',
+    options: authorityOptions,
+  });
+  if (authority.currentHeadSha !== target.headSha) {
+    authority = observePackReviewHead({
+      prNumber: target.prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      headSha: target.headSha,
+      options: authorityOptions,
+    });
+  }
+  if (authority.cycle
+      && ['at_cap_open_findings', 'at_cap_continuation_required'].includes(authority.cycle.state)) {
+    return {
+      ok: false,
+      created: false,
+      reused: false,
+      reason: 'at_cap_continuation_required',
+      prNumber: target.prNumber,
+      headSha: target.headSha,
+      cycleId: authority.cycle.cycleId,
+      httpStatus: 409,
+    };
+  }
   await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
@@ -871,6 +951,13 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
   }
+
+  authority = advancePackReviewAuthority(
+    authority,
+    'claim_acquired',
+    target.prNumber,
+    authorityOptions,
+  );
 
   try {
     if (resumeCandidate) {
@@ -941,6 +1028,12 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       canonicalRepository: target.repoSlug,
     });
     run = created.run;
+    authority = advancePackReviewAuthority(
+      authority,
+      'review_or_bundle_staged',
+      target.prNumber,
+      authorityOptions,
+    );
     if (created.reused) {
       if (claimLease) await claimLease.release('run_started', listPackReviewRuns({ projectId, storeRoot }));
       return {
@@ -1101,6 +1194,21 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       }
     }
 
+    authority = commitPackReviewTerminal({
+      prNumber: target.prNumber,
+      expectedTransitionSeq: authority.transitionSeq,
+      terminal: terminalV2FromPayload({
+        runId: run.id,
+        targetSha: target.headSha,
+        verdict: payload.verdict,
+        findingCount: payload.findingCount,
+        findings: payload.findings,
+      }),
+      status: payload.verdict === 'clean' ? 'clean' : 'changes_requested',
+      findingCount: payload.findingCount,
+      options: authorityOptions,
+    });
+
     const deliveryRun = run;
     const delivered = await deliverPackReviewVerdict({
       run: deliveryRun,
@@ -1133,6 +1241,28 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         sessionId: target.sessionId,
         request,
       })),
+    });
+    const currentAuthority = readPackReviewAuthority(target.prNumber, authorityOptions);
+    if (!currentAuthority
+        || currentAuthority.currentHeadSha !== target.headSha
+        || currentAuthority.terminal?.runId !== run.id) {
+      throw new Error('pack review authority changed before publication');
+    }
+    authority = recordPackReviewPublication({
+      prNumber: target.prNumber,
+      expectedTransitionSeq: currentAuthority.transitionSeq,
+      publication: {
+        headSha: target.headSha,
+        terminalRunId: run.id,
+        status: 'succeeded',
+        publicationDigest: sha256Bytes(JSON.stringify({
+          status: delivered.status,
+          githubReviewId: delivered.githubReviewId,
+          githubReviewUrl: delivered.githubReviewUrl,
+        })),
+        recordedAtUtc: new Date().toISOString(),
+      },
+      options: authorityOptions,
     });
     terminal = true;
     const runs = listPackReviewRuns({ projectId, storeRoot });

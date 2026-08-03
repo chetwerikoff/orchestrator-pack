@@ -109,4 +109,18 @@ describe('Issue #898 trusted at-cap evidence', () => {
       reason: 'evidence_ambiguous',
     });
   });
+
+  it('routes truncated immutable evidence to pending operator', () => {
+    const options = makeRoot();
+    const tuple = makeTuple();
+    const malformedPath = join(options.storeRoot, 'immutable', 'evidence', 'truncated.json');
+    mkdirSync(dirname(malformedPath), { recursive: true });
+    writeFileSync(malformedPath, '{"schema":', 'utf8');
+
+    expect(selectMergeTriageEvidence({ tuple, options })).toEqual({
+      kind: 'missing',
+      verdict: 'PENDING_OPERATOR',
+      reason: 'evidence_malformed',
+    });
+  });
 });

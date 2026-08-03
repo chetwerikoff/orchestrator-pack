@@ -716,10 +716,30 @@ export function selectPackReviewEvidence(input: {
       if (!current.cycle || !['at_cap_open_findings', 'at_cap_continuation_required'].includes(current.cycle.state)) {
         throw new PackReviewAuthorityError('evidence_selection_invalid', 'cycle is not at cap');
       }
+      const expectedEvidenceKey = nonEmpty(input.expectedEvidenceKey, 'expectedEvidenceKey');
+      const selectedEvidenceId = nonEmpty(input.selectedEvidenceId, 'selectedEvidenceId');
+      const selectedEvidenceDigest = nonEmpty(input.selectedEvidenceDigest, 'selectedEvidenceDigest');
+      const evidenceRecords = listPackReviewImmutableRecordsUnlocked('evidence', input.options);
+      if (evidenceRecords.some((entry) => entry.malformed)) {
+        throw new PackReviewAuthorityError('evidence_selection_invalid', 'malformed evidence record');
+      }
+      const matches = evidenceRecords.filter((entry) => {
+        if (!entry.value || typeof entry.value !== 'object' || Array.isArray(entry.value)) return false;
+        const record = entry.value as { evidenceId?: unknown; expectedEvidenceKey?: unknown };
+        return record.evidenceId === selectedEvidenceId
+          && record.expectedEvidenceKey === expectedEvidenceKey
+          && entry.digest === selectedEvidenceDigest;
+      });
+      if (matches.length !== 1) {
+        throw new PackReviewAuthorityError(
+          'evidence_selection_invalid',
+          'selected evidence does not match the immutable current-head record',
+        );
+      }
       current.evidence = {
-        expectedEvidenceKey: nonEmpty(input.expectedEvidenceKey, 'expectedEvidenceKey'),
-        selectedEvidenceId: nonEmpty(input.selectedEvidenceId, 'selectedEvidenceId'),
-        selectedEvidenceDigest: nonEmpty(input.selectedEvidenceDigest, 'selectedEvidenceDigest'),
+        expectedEvidenceKey,
+        selectedEvidenceId,
+        selectedEvidenceDigest,
         selectedAtUtc: nowIso(input.options),
       };
       return current;
@@ -811,20 +831,30 @@ export function acknowledgePackReviewReset(input: {
   });
 }
 
+function listPackReviewImmutableRecordsUnlocked(
+  kind: 'terminal' | 'bundle' | 'evidence',
+  options: PackReviewAuthorityOptions,
+): Array<{ path: string; value: unknown; digest: string; malformed?: boolean }> {
+  const dir = join(immutableRoot(options), kind);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith('.json'))
+    .sort()
+    .map((name) => {
+      const path = join(dir, name);
+      const bytes = readFileSync(path);
+      const digest = sha256(bytes);
+      try {
+        return { path, value: JSON.parse(bytes.toString('utf8')), digest };
+      } catch {
+        return { path, value: undefined, digest, malformed: true };
+      }
+    });
+}
+
 export function listPackReviewImmutableRecords(
   kind: 'terminal' | 'bundle' | 'evidence',
   options: PackReviewAuthorityOptions,
-): Array<{ path: string; value: unknown; digest: string }> {
-  const dir = join(immutableRoot(options), kind);
-  return withPackReviewAuthorityLock(options, () => {
-    if (!existsSync(dir)) return [];
-    return readdirSync(dir)
-      .filter((name) => name.endsWith('.json'))
-      .sort()
-      .map((name) => {
-        const path = join(dir, name);
-        const bytes = readFileSync(path);
-        return { path, value: JSON.parse(bytes.toString('utf8')), digest: sha256(bytes) };
-      });
-  });
+): Array<{ path: string; value: unknown; digest: string; malformed?: boolean }> {
+  return withPackReviewAuthorityLock(options, () => listPackReviewImmutableRecordsUnlocked(kind, options));
 }

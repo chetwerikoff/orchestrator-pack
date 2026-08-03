@@ -234,7 +234,11 @@ export function selectMergeTriageEvidence(input: {
   options: PackReviewAuthorityOptions;
 }): MergeTriageSelection {
   const expectedKey = expectedMergeTriageEvidenceKey(input.tuple);
-  const matches = listPackReviewImmutableRecords('evidence', input.options)
+  const records = listPackReviewImmutableRecords('evidence', input.options);
+  if (records.some((entry) => entry.malformed)) {
+    return { kind: 'missing', verdict: 'PENDING_OPERATOR', reason: 'evidence_malformed' };
+  }
+  const matches = records
     .filter((entry): entry is typeof entry & { value: MergeTriageEvidenceRecord } =>
       isEvidenceRecord(entry.value),
     )
