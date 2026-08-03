@@ -1,17 +1,16 @@
 import {
+  closeSync,
   existsSync,
   lstatSync,
   openSync,
-  closeSync,
   readFileSync,
   readlinkSync,
   readdirSync,
-  realpathSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
 import { resolveOrcaExecutable } from '../orca-runtime/native.ts';
 import {
@@ -19,6 +18,7 @@ import {
   decideContinuation,
   normalizeBranchName,
   normalizeExpectedIdentity,
+  normalizeHeadSha,
   normalizeWorktreePath,
   parseGitWorktreePorcelain,
   parseOrcaWorktreePayload,
@@ -81,7 +81,9 @@ export interface RecoveryGates {
   readonly freshRecheck: boolean;
 }
 
-export type CleanupOutcome =
+export type LifecycleOutcome =
+  | 'ready_to_spawn'
+  | 'replacement_required'
   | 'cleanup_complete'
   | 'cleanup_deferred'
   | 'git_only_recovery_eligible'
@@ -92,7 +94,7 @@ export type CleanupOutcome =
 export interface LifecycleTerminalReport {
   readonly schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1';
   readonly context: LifecycleContext;
-  readonly outcome: CleanupOutcome;
+  readonly outcome: LifecycleOutcome;
   readonly pipelineContinues: true;
   readonly classification: WorktreeClassificationReport;
   readonly decision: ReturnType<typeof decideContinuation>;
@@ -167,7 +169,10 @@ function mergeAgentRows(
   agentRows: readonly OrcaWorktreeRow[],
 ): OrcaAgentInventoryRow[] {
   const agentsByPath = new Map(agentRows.map((row) => [row.path, row.agents]));
-  const merged = worktrees.map((row) => ({ ...row, agents: agentsByPath.get(row.path) ?? row.agents }));
+  const merged: OrcaAgentInventoryRow[] = worktrees.map((row) => ({
+    ...row,
+    agents: agentsByPath.get(row.path) ?? row.agents,
+  }));
   for (const row of agentRows) {
     if (!worktrees.some((worktree) => worktree.path === row.path)) merged.push(row);
   }
@@ -272,11 +277,17 @@ export function collectCensus(
   const agentResult = runner({ command: orcaExecutable, args: ['worktree', 'ps', '--json'] });
   const terminalResult = runner({ command: orcaExecutable, args: ['terminal', 'list', '--json'] });
   try {
-    if (!worktreeResult.ok) throw new TypeError(commandError(worktreeResult, orcaExecutable, ['worktree', 'list', '--json']));
+    if (!worktreeResult.ok) {
+      throw new TypeError(commandError(worktreeResult, orcaExecutable, ['worktree', 'list', '--json']));
+    }
     orcaRows = parseOrcaWorktreePayload(parseJson(worktreeResult.stdout, 'orca worktree list'));
-    if (!agentResult.ok) throw new TypeError(commandError(agentResult, orcaExecutable, ['worktree', 'ps', '--json']));
+    if (!agentResult.ok) {
+      throw new TypeError(commandError(agentResult, orcaExecutable, ['worktree', 'ps', '--json']));
+    }
     agentRows = parseOrcaWorktreePayload(parseJson(agentResult.stdout, 'orca worktree ps'));
-    if (!terminalResult.ok) throw new TypeError(commandError(terminalResult, orcaExecutable, ['terminal', 'list', '--json']));
+    if (!terminalResult.ok) {
+      throw new TypeError(commandError(terminalResult, orcaExecutable, ['terminal', 'list', '--json']));
+    }
     terminals = parseTerminalPayload(parseJson(terminalResult.stdout, 'orca terminal list'));
   } catch (error) {
     orcaStatus = worktreeResult.ok && agentResult.ok && terminalResult.ok ? 'malformed' : 'unavailable';
@@ -336,8 +347,8 @@ export function readPrIdentity(
   return {
     headRefName: normalizeBranchName(row.headRefName)!,
     state: row.state,
-    headRefOid: String(row.headRefOid).trim().toLowerCase(),
-    ...(typeof mergeCommit?.oid === 'string' ? { mergeCommitOid: mergeCommit.oid.trim().toLowerCase() } : {}),
+    headRefOid: normalizeHeadSha(row.headRefOid),
+    ...(typeof mergeCommit?.oid === 'string' ? { mergeCommitOid: normalizeHeadSha(mergeCommit.oid) } : {}),
     ...(typeof headRepository?.nameWithOwner === 'string' ? { headRepository: headRepository.nameWithOwner } : {}),
     ...(typeof row.baseRefName === 'string' ? { baseRefName: row.baseRefName } : {}),
   };
@@ -357,8 +368,12 @@ function validateGitLink(expected: ExpectedWorktreeIdentity, runner: CommandRunn
     const rawGitdir = content.slice('gitdir: '.length).trim();
     const gitdir = normalizeWorktreePath(isAbsolute(rawGitdir) ? rawGitdir : resolve(expected.path, rawGitdir));
     if (!existsSync(gitdir)) return false;
-    const targetCommon = gitResult(runner, ['-C', expected.path, 'rev-parse', '--path-format=absolute', '--git-common-dir']);
-    const repoCommon = gitResult(runner, ['-C', expected.repositoryRoot, 'rev-parse', '--path-format=absolute', '--git-common-dir']);
+    const targetCommon = gitResult(runner, [
+      '-C', expected.path, 'rev-parse', '--path-format=absolute', '--git-common-dir',
+    ]);
+    const repoCommon = gitResult(runner, [
+      '-C', expected.repositoryRoot, 'rev-parse', '--path-format=absolute', '--git-common-dir',
+    ]);
     if (!targetCommon.ok || !repoCommon.ok) return false;
     const targetCommonPath = normalizeWorktreePath(targetCommon.stdout.trim());
     const repoCommonPath = normalizeWorktreePath(repoCommon.stdout.trim());
@@ -427,7 +442,8 @@ function checkBranchOwnership(
   try {
     const rows = JSON.parse(result.stdout) as Array<{ number?: number; headRefName?: string }>;
     return rows.filter(
-      (row) => normalizeBranchName(row.headRefName) === expected.branchName && row.number !== expected.prNumber,
+      (row) => normalizeBranchName(row.headRefName) === expected.branchName
+        && row.number !== expected.bindingNumber,
     ).length === 0;
   } catch {
     return false;
@@ -438,15 +454,17 @@ function relevantInventoryFingerprint(
   expected: ExpectedWorktreeIdentity,
   census: ReturnType<typeof collectCensus>,
 ): string {
+  const matches = (row: { path: string; headSha?: string; branchName?: string; linkedIssue?: number | null; linkedPR?: number | null }) =>
+    row.path === expected.path
+    || row.headSha === expected.headSha
+    || row.branchName === expected.branchName
+    || (expected.bindingKind === 'issue' && row.linkedIssue === expected.bindingNumber)
+    || (expected.bindingKind === 'pr' && row.linkedPR === expected.bindingNumber);
   const git = census.classification.evidence.git.rows.filter(
     (row) => row.path === expected.path || row.headSha === expected.headSha || row.branchName === expected.branchName,
   );
-  const orca = census.classification.evidence.orca.rows.filter(
-    (row) => row.path === expected.path || row.headSha === expected.headSha || row.branchName === expected.branchName,
-  );
-  const agents = census.agentRows.filter(
-    (row) => row.path === expected.path || row.headSha === expected.headSha || row.branchName === expected.branchName,
-  );
+  const orca = census.classification.evidence.orca.rows.filter(matches);
+  const agents = census.agentRows.filter(matches);
   const terminals = census.terminals.filter((row) => row.worktreePath === expected.path);
   return digest({ git, orca, agents, terminals });
 }
@@ -481,27 +499,45 @@ function releaseLock(path: string, fd: number): void {
   }
 }
 
+function deferred(
+  context: LifecycleContext,
+  classification: WorktreeClassificationReport,
+  error: string,
+): LifecycleTerminalReport {
+  return {
+    schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
+    context,
+    outcome: 'cleanup_deferred',
+    pipelineContinues: true,
+    classification,
+    decision: decideContinuation(classification.classification, context),
+    effects: [],
+    error,
+  };
+}
+
 function recoverGitOnly(
   expectedInput: ExpectedWorktreeIdentity,
   apply: boolean,
   operations: LifecycleOperations,
 ): LifecycleTerminalReport {
   const expected = normalizeExpectedIdentity(expectedInput);
+  const initial = collectCensus(expected, operations);
+  if (expected.bindingKind !== 'pr') {
+    return deferred(
+      'explicit-recovery',
+      initial.classification,
+      'destructive recovery requires a PR-bound identity; issue-bound post-create state must use replacement flow',
+    );
+  }
   const runner = operations.runner ?? defaultRunner;
   const lockPath = operations.lockPath ?? DEFAULT_LOCK_PATH;
   const lockFd = acquireLock(lockPath);
-  const initial = collectCensus(expected, operations);
   const decision = decideContinuation(initial.classification.classification, 'explicit-recovery');
   if (lockFd === null) {
     return {
-      schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
-      context: 'explicit-recovery',
-      outcome: 'cleanup_deferred',
-      pipelineContinues: true,
-      classification: initial.classification,
+      ...deferred('explicit-recovery', initial.classification, `lifecycle exclusion lock is held at ${lockPath}`),
       decision,
-      effects: [],
-      error: `lifecycle exclusion lock is held at ${lockPath}`,
     };
   }
   try {
@@ -517,36 +553,29 @@ function recoverGitOnly(
       };
     }
     if (initial.classification.classification !== 'exact_git_only') {
-      return {
-        schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
-        context: 'explicit-recovery',
-        outcome: 'cleanup_deferred',
-        pipelineContinues: true,
-        classification: initial.classification,
-        decision,
-        effects: [],
-        error: `guarded Git-only recovery requires exact_git_only, got ${initial.classification.classification}`,
-      };
+      return deferred(
+        'explicit-recovery',
+        initial.classification,
+        `guarded Git-only recovery requires exact_git_only, got ${initial.classification.classification}`,
+      );
     }
 
     let pr: PrIdentity;
     try {
-      pr = readPrIdentity(expected.repositoryRoot, expected.prNumber, operations);
+      pr = readPrIdentity(expected.repositoryRoot, expected.bindingNumber, operations);
     } catch (error) {
-      return {
-        schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
-        context: 'explicit-recovery',
-        outcome: 'cleanup_deferred',
-        pipelineContinues: true,
-        classification: initial.classification,
-        decision,
-        effects: [],
-        error: error instanceof Error ? error.message : String(error),
-      };
+      return deferred(
+        'explicit-recovery',
+        initial.classification,
+        error instanceof Error ? error.message : String(error),
+      );
     }
     const targetTerminals = initial.terminals.filter((row) => row.worktreePath === expected.path);
     const targetAgents = initial.agentRows.filter(
-      (row) => row.path === expected.path || row.headSha === expected.headSha || row.branchName === expected.branchName,
+      (row) => row.path === expected.path
+        || row.headSha === expected.headSha
+        || row.branchName === expected.branchName
+        || row.linkedPR === expected.bindingNumber,
     );
     const processes = (operations.processCensus ?? collectProcessEvidence)(expected.path);
     const initialFingerprint = relevantInventoryFingerprint(expected, initial);
@@ -648,8 +677,14 @@ function standardTeardown(
   apply: boolean,
   operations: LifecycleOperations,
 ): LifecycleTerminalReport {
-  const runner = operations.runner ?? defaultRunner;
   const census = collectCensus(expected, operations);
+  if (expected.bindingKind !== 'pr') {
+    return deferred(
+      'post-merge-cleanup',
+      census.classification,
+      'post-merge cleanup requires --pr authority, not an issue-only binding',
+    );
+  }
   const decision = decideContinuation(census.classification.classification, 'post-merge-cleanup');
   if (census.classification.classification === 'absent') {
     return {
@@ -667,24 +702,20 @@ function standardTeardown(
     return { ...recovered, context: 'post-merge-cleanup' };
   }
   if (census.classification.classification !== 'exact_dual') {
-    return {
-      schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
-      context: 'post-merge-cleanup',
-      outcome: 'cleanup_deferred',
-      pipelineContinues: true,
-      classification: census.classification,
-      decision,
-      effects: [],
-      error: census.errors.join('; ') || 'disputed worktree identity was preserved',
-    };
+    return deferred(
+      'post-merge-cleanup',
+      census.classification,
+      census.errors.join('; ') || 'disputed worktree identity was preserved',
+    );
   }
+  const runner = operations.runner ?? defaultRunner;
   const args = [
     '--experimental-strip-types',
     join(expected.repositoryRoot, 'scripts', 'worktree-teardown.ts'),
     '--worktree',
     expected.path,
     '--pr',
-    String(expected.prNumber),
+    String(expected.bindingNumber),
     '--json',
     ...(apply ? ['--apply'] : []),
   ];
@@ -723,7 +754,7 @@ export function runLifecycle(input: {
   return {
     schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
     context: 'post-create',
-    outcome: census.classification.classification === 'exact_dual' ? 'cleanup_complete' : 'task_degraded',
+    outcome: census.classification.classification === 'exact_dual' ? 'ready_to_spawn' : 'replacement_required',
     pipelineContinues: true,
     classification: census.classification,
     decision,
