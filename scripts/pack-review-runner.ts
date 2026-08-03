@@ -10,6 +10,11 @@ import {
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  buildReviewerBudgetSpawnEnv,
+  createReviewerBudgetLedger,
+  type ReviewerBudgetLedger,
+} from '../plugins/ao-codex-pr-reviewer/lib/reviewer_budget.ts';
 import { runProcess, type ProcessResult } from './kernel/subprocess.ts';
 import {
   acquireReviewStartClaim,
@@ -80,7 +85,7 @@ interface StartInput {
   startReason?: string;
   surface?: string;
   storeRoot?: string;
-  timeoutSeconds?: number;
+  timeoutSeconds?: unknown;
   claimMode?: 'acquire' | 'preacquired';
   onRunStarted?: (event: {
     prNumber: number;
@@ -145,7 +150,6 @@ interface ReviewPayload {
   findings: ReviewPayloadFinding[];
 }
 
-
 interface ClaimLease {
   acquired: boolean;
   reason: string;
@@ -158,7 +162,6 @@ const REVIEWER_RELATIVE_PATH = 'scripts/invoke-pack-review.ps1';
 const CLAIM_RELATIVE_PATH = 'scripts/lib/review-start-claim-store.ts';
 const DEFAULT_PROJECT_ID = 'orchestrator-pack';
 const DEFAULT_BASE_REF = 'origin/main';
-const DEFAULT_TIMEOUT_SECONDS = 45 * 60;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
 function trim(value: unknown): string {
@@ -268,7 +271,6 @@ async function runGit(repoRoot: string, args: readonly string[], label: string):
   }), label);
 }
 
-
 async function resolveCurrentPrHead(repoRoot: string, repoSlug: string, prNumber: number): Promise<string> {
   const result = await runProcess({
     command: 'gh',
@@ -297,7 +299,6 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
   const binding = input.prNumber ? undefined : resolveBindingFromCache(sessionId);
   const prNumber = positiveInteger(input.prNumber ?? binding?.prNumber, 'prNumber');
   if (!prNumber) throw new Error('pack review runner could not resolve PR number');
-
   const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trustedPackRoot);
   const fixtureCurrentHead = trim(input.fixtureCurrentPrHeadSha).toLowerCase();
   const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1'
@@ -399,7 +400,6 @@ function formatGithubReviewBody(run: PackReviewRunRecord, payload: ReviewPayload
   lines.push('---', '_Automated review by orchestrator-pack pack-owned runner_');
   return lines.join('\n');
 }
-
 
 async function postGithubReview(options: {
   repoRoot: string;
@@ -564,7 +564,7 @@ async function invokeReviewer(options: {
   prNumber: number;
   issueNumber?: number;
   sessionId: string;
-  timeoutSeconds: number;
+  budgetLedger: ReviewerBudgetLedger;
   runId: string;
   projectId: string;
   storeRoot: string;
@@ -628,6 +628,7 @@ async function invokeReviewer(options: {
 
   const args = reviewerArgs;
   const env: NodeJS.ProcessEnv = {
+    ...buildReviewerBudgetSpawnEnv(options.budgetLedger, {}),
     AO_PR_NUMBER: String(options.prNumber),
     GITHUB_PR_NUMBER: String(options.prNumber),
     AO_REVIEW_RUN_ID: options.runId,
@@ -650,7 +651,7 @@ async function invokeReviewer(options: {
     inheritParentEnv: true,
     env,
     allowEmptyStdout: true,
-    timeoutMs: options.timeoutSeconds * 1_000,
+    timeoutMs: options.budgetLedger.runnerTimeoutMs,
     onSpawn: (pid) => {
       updatePackReviewRun(options.runId, {
         runnerPid: process.pid,
@@ -806,10 +807,11 @@ export async function reconcileStalePackReviewRuns(
 }
 
 export async function startPackReview(input: StartInput): Promise<Record<string, unknown>> {
+  const budgetLedger = createReviewerBudgetLedger(process.env, Date.now(), input.timeoutSeconds);
+  const timeoutSeconds = budgetLedger.runnerTimeoutSeconds;
   const trusted = resolveTrustedRunnerPaths();
   const projectId = trim(input.projectId) || DEFAULT_PROJECT_ID;
   const baseRef = trim(input.baseRef) || DEFAULT_BASE_REF;
-  const timeoutSeconds = positiveInteger(input.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS, 'timeoutSeconds') ?? DEFAULT_TIMEOUT_SECONDS;
   const target = await resolveTarget(input, trusted.trustedPackRoot);
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
   await reconcileStalePackReviewRuns({
@@ -919,7 +921,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
 
-
     const created = createPackReviewRun({
       projectId,
       storeRoot,
@@ -999,7 +1000,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         prNumber: target.prNumber,
         issueNumber: target.issueNumber,
         sessionId: target.sessionId,
-        timeoutSeconds,
+        budgetLedger,
         runId: run.id,
         projectId,
         storeRoot,
@@ -1219,7 +1220,7 @@ function parseArgs(argv: string[]): Record<string, unknown> {
     if (!key) throw new Error(`unknown argument '${flag}'\n${usage()}`);
     const value = argv[++index];
     if (value === undefined) throw new Error(`missing value for ${flag}`);
-    result[key] = key === 'prNumber' || key === 'timeoutSeconds' ? Number(value) : value;
+    result[key] = key === 'prNumber' ? Number(value) : value;
   }
   return result;
 }
