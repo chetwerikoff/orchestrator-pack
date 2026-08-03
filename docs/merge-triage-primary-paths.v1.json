@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "paths": [
+    {
+      "path_id": "scope-denylist-current-head/v1",
+      "kind": "pure_predicate",
+      "producer": "scripts/merge-triage-evidence.ts",
+      "predicate": "exact-current-head changed paths intersect the bound Issue denylist"
+    }
+  ]
+}

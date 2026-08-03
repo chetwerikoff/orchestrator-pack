@@ -1,3 +1,19 @@
+## 2026-08-03 — Issue #898 live authority and review budget adoption
+
+The pack review runner now owns the Issue #898 authority lifecycle, including carry-over,
+trusted cap triage evidence, audited cap reset, legacy cap migration, and resumed-delivery
+publication finalization. Configure the live reviewer budget in the operator environment:
+`AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS=2400000` (2700-second runner timeout).
+
+### Operator adoption
+
+1. Pull the merged pack into the operator checkout and the AO runtime worktree if separate.
+2. Export `AO_CODEX_REVIEW_EFFECTIVE_BUDGET_MS=2400000` in the environment inherited by the
+   supervised review runner; restart/recycle only affected review processes as required by the
+   local supervisor.
+3. Verify one real-head review run and retain the authority record; use the runner's audited
+   `reset` command for cap continuation, never by editing state files.
+
 ## 2026-08-02 — Issue-lifetime review rounds and terminal binding (Issue #1171)
 
 Issue #1171 activates the landed #1150 plural-source topology for final T3
