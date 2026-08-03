@@ -1,0 +1,48 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1245,
+  "declared_paths": [
+    "docs/declarations/1245.json",
+    "docs/orca-runtime-boundary.md",
+    "scripts/launch-watch/watch.test.ts",
+    "scripts/launch-watch/watch.ts",
+    "scripts/lib/orca-cli.ts",
+    "scripts/orca-runtime/adapter.ts",
+    "scripts/orca-runtime/compat.ts",
+    "scripts/orca-runtime/native.ts",
+    "scripts/runtime/contracts.ts",
+    "scripts/runtime/registry.ts",
+    "scripts/runtime/test-adapter.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".orca/",
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "docs/",
+    "package-lock.json",
+    "package.json",
+    "scripts/ao-legacy-runtime/",
+    "scripts/launch-watch/",
+    "scripts/lib/orca-cli.ts",
+    "scripts/lib/worker-smoke-bounded-create.ts",
+    "scripts/lib/worker-smoke-control-plane-regressions.ts",
+    "scripts/lib/worker-smoke-core-base.ts",
+    "scripts/lib/worker-smoke-core.ts",
+    "scripts/lib/worker-smoke-findings-regressions.ts",
+    "scripts/lib/worker-smoke-lifecycle-base.ts",
+    "scripts/lib/worker-smoke-lifecycle-regressions-base.ts",
+    "scripts/lib/worker-smoke-lifecycle-regressions.ts",
+    "scripts/lib/worker-smoke-lifecycle.ts",
+    "scripts/lib/worker-smoke-receipt.ts",
+    "scripts/orca-runtime/",
+    "scripts/runtime/",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
+  ],
+  "source_revision": "#1245 r05"
+}
