@@ -1,5 +1,7 @@
+import { resolve } from 'node:path';
 import {
   runtimeFailure,
+  runtimeUnsupported,
   sameRuntimeWorker,
   type RuntimeCallOptions,
   type RuntimeResult,
@@ -13,9 +15,11 @@ import {
 import {
   runOrcaJson,
   type OrcaJsonResponse,
+  type OrcaWorktreeRemoveResult,
+  type OrcaWorktreeShow,
 } from './native.ts';
 
-function neutralStopFailure(response: OrcaJsonResponse): string {
+function neutralDestructiveFailure(response: OrcaJsonResponse): string {
   if (response.error?.code === 'orca_operation_timeout') return 'runtime_timeout';
   switch (response.outcomeCategory) {
     case 'process_launch_failed':
@@ -51,6 +55,17 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     this.#runJson = options.runJson ?? runOrcaJson;
   }
 
+  #run<T>(args: readonly string[], options: RuntimeCallOptions): OrcaJsonResponse<T> {
+    return this.#runJson<T>(args, {
+      cwd: options.cwd ?? this.#options.cwd,
+      timeoutMs: options.timeoutMs ?? this.#options.timeoutMs,
+      executable: this.#options.executable,
+      runner: this.#options.runner,
+      env: this.#options.env,
+      killSignal: this.#options.killSignal,
+    });
+  }
+
   override spawnWorker(
     input: {
       readonly title: string;
@@ -82,22 +97,62 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('stop_worker', 'worker_generation_not_found');
     }
 
-    const response = this.#runJson(
+    const response = this.#run(
       ['terminal', 'close', '--terminal', worker.id],
-      {
-        cwd: options.cwd ?? this.#options.cwd,
-        timeoutMs: options.timeoutMs ?? this.#options.timeoutMs,
-        executable: this.#options.executable,
-        runner: this.#options.runner,
-        env: this.#options.env,
-        killSignal: this.#options.killSignal,
-      },
+      options,
     );
     if (!response.ok) {
-      return runtimeFailure('stop_worker', neutralStopFailure(response));
+      return runtimeFailure('stop_worker', neutralDestructiveFailure(response));
     }
 
     this.#ownedForStop.delete(worker.id);
     return { status: 'ok', value: { stopped: true } };
+  }
+
+  removeWorkspace(
+    input: {
+      readonly workspacePath: string;
+      readonly expectedHeadSha?: string;
+    },
+    options: RuntimeCallOptions = {},
+  ): RuntimeResult<{ readonly removed: true }> {
+    const requestedPath = resolve(input.workspacePath.trim());
+    if (!input.workspacePath.trim()) {
+      return runtimeFailure('remove_workspace', 'runtime_workspace_path_missing');
+    }
+
+    const shown = this.#run<OrcaWorktreeShow>(
+      ['worktree', 'show', '--worktree', `path:${requestedPath}`],
+      options,
+    );
+    if (!shown.ok) {
+      return runtimeFailure('remove_workspace', neutralDestructiveFailure(shown));
+    }
+    const worktree = shown.result?.worktree;
+    const observedPath = worktree?.path?.trim();
+    const worktreeId = worktree?.id?.trim();
+    if (!observedPath || !worktreeId) {
+      return runtimeUnsupported('remove_workspace', 'runtime_workspace_identity_missing');
+    }
+    if (resolve(observedPath) !== requestedPath) {
+      return runtimeFailure('remove_workspace', 'runtime_workspace_path_mismatch');
+    }
+    const expectedHeadSha = input.expectedHeadSha?.trim().toLowerCase();
+    const observedHeadSha = worktree.head?.trim().toLowerCase();
+    if (expectedHeadSha && observedHeadSha !== expectedHeadSha) {
+      return runtimeFailure('remove_workspace', 'runtime_workspace_head_mismatch');
+    }
+
+    const removed = this.#run<OrcaWorktreeRemoveResult>(
+      ['worktree', 'rm', '--worktree', `id:${worktreeId}`, '--force'],
+      options,
+    );
+    if (!removed.ok) {
+      return runtimeFailure('remove_workspace', neutralDestructiveFailure(removed));
+    }
+    if (removed.result?.removed === false) {
+      return runtimeFailure('remove_workspace', 'runtime_workspace_not_removed');
+    }
+    return { status: 'ok', value: { removed: true } };
   }
 }
