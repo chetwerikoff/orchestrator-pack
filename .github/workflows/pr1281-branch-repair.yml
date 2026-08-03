@@ -1,0 +1,40 @@
+name: PR 1281 branch repair
+
+on:
+  push:
+    branches:
+      - agent/issue-1248-runtime-callers
+    paths:
+      - .github/workflows/pr1281-branch-repair.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr1281-branch-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply reviewed repair patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat scripts/.pr1281-repair.part0 scripts/.pr1281-repair.part1 scripts/.pr1281-repair.part2 scripts/.pr1281-repair.part3 \
+            | base64 -d | gzip -d > /tmp/pr1281-repair.patch
+          echo "b169ac584d14f4dccfeb4e4406f22ceb7ec2a1472193d225986a46622ba9f231  /tmp/pr1281-repair.patch" | sha256sum --check
+          git apply --check /tmp/pr1281-repair.patch
+          git apply /tmp/pr1281-repair.patch
+          rm .github/workflows/pr1281-branch-repair.yml scripts/.pr1281-repair.part{0,1,2,3}
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(runtime): complete TypeScript hard cut"
+          git push origin HEAD:agent/issue-1248-runtime-callers
