@@ -16,7 +16,8 @@
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
   ],
   "denylist": [
     ".github/workflows/",
@@ -41,7 +42,8 @@
     "scripts/pack-review-runner.ts",
     "scripts/pack-review-state.test.ts",
     "scripts/pack-review-state.ts",
-    "scripts/vitest-ci-lanes.config.json"
+    "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-runtime-history.json"
   ],
   "source_revision": "7342fa8150e850e79e2b62f960fe3f42cb454ba6"
 }
