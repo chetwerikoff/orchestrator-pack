@@ -2,29 +2,27 @@ import { describe, expect, it, vi } from 'vitest';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import { DeterministicRuntimeAdapter } from './test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from './task-lifecycle.ts';
+import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 
-function fakeOrcaRunner() {
+function fakeOrcaTransport() {
   const handle = 'term-1248';
   const generation = 'incarnation-1248';
   const lines = ['started:cursor-agent'];
-  return vi.fn((_command: string, args: readonly string[]) => {
+  return vi.fn((args: readonly string[]): OrcaJsonResponse => {
     const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
-    let payload: unknown;
     switch (operation) {
       case 'worktree current':
-        payload = {
+        return {
           ok: true,
           result: { worktree: { path: process.cwd(), head: 'a'.repeat(40) } },
         };
-        break;
       case 'terminal create':
-        payload = {
+        return {
           ok: true,
           result: { terminal: { handle, incarnationId: generation, title: 'issue-1248' } },
         };
-        break;
       case 'terminal list':
-        payload = {
+        return {
           ok: true,
           result: {
             terminals: [{
@@ -36,15 +34,13 @@ function fakeOrcaRunner() {
             }],
           },
         };
-        break;
       case 'terminal send': {
         const textIndex = args.indexOf('--text');
         if (textIndex >= 0) lines.push(String(args[textIndex + 1] ?? ''));
-        payload = { ok: true, result: { send: { accepted: true } } };
-        break;
+        return { ok: true, result: { send: { accepted: true } } };
       }
       case 'terminal read':
-        payload = {
+        return {
           ok: true,
           result: {
             terminal: {
@@ -56,23 +52,18 @@ function fakeOrcaRunner() {
             },
           },
         };
-        break;
       case 'terminal wait':
-        payload = {
+        return {
           ok: true,
           result: {
             wait: { handle, condition: 'tui-idle', satisfied: true, status: 'running' },
           },
         };
-        break;
       case 'terminal close':
-        payload = { ok: true, result: { close: { handle, closed: true } } };
-        break;
+        return { ok: true, result: { close: { handle, closed: true } } };
       default:
-        payload = { ok: false, error: { code: 'unexpected_operation', message: operation } };
-        break;
+        return { ok: false, error: { code: 'unexpected_operation', message: operation } };
     }
-    return { stdout: JSON.stringify(payload), stderr: '', status: 0 };
   });
 }
 
@@ -94,10 +85,10 @@ describe('direct runtime-neutral task caller', () => {
   });
 
   it('runs unchanged with the Orca adapter', () => {
-    const runner = fakeOrcaRunner();
-    const result = exercise(new OrcaTaskRuntimeAdapter({ runner: runner as never }));
-    expect(result.status).toBe('ok');
-    expect(runner).toHaveBeenCalled();
+    const runJson = fakeOrcaTransport();
+    const result = exercise(new OrcaTaskRuntimeAdapter({ runJson: runJson as never }));
+    expect(result).toMatchObject({ status: 'ok' });
+    expect(runJson).toHaveBeenCalled();
   });
 
   it('acquires the claim before the first runtime side effect', () => {
@@ -137,8 +128,8 @@ describe('direct runtime-neutral task caller', () => {
   });
 
   it('refuses stale-generation destructive cleanup before close transport', () => {
-    const runner = fakeOrcaRunner();
-    const adapter = new OrcaTaskRuntimeAdapter({ runner: runner as never });
+    const runJson = fakeOrcaTransport();
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
     const created = adapter.spawnWorker({ title: 'owned', command: 'cursor-agent' });
     expect(created.status).toBe('ok');
     if (created.status !== 'ok') return;
@@ -147,9 +138,9 @@ describe('direct runtime-neutral task caller', () => {
       ...created.value.identity,
       generation: `${created.value.identity.generation}-stale`,
     };
-    const before = runner.mock.calls.filter((call) => call[1]?.[1] === 'close').length;
+    const before = runJson.mock.calls.filter((call) => call[0]?.[1] === 'close').length;
     const stopped = adapter.stopWorker(stale);
-    const after = runner.mock.calls.filter((call) => call[1]?.[1] === 'close').length;
+    const after = runJson.mock.calls.filter((call) => call[0]?.[1] === 'close').length;
 
     expect(stopped).toEqual({
       status: 'failed',
