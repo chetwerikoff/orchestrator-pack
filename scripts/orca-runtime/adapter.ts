@@ -291,8 +291,11 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     readonly boundMs: number;
   }): RuntimeLiveness {
     if (!Number.isFinite(input.boundMs) || input.boundMs <= 0) return 'unknown';
+    const startedAt = Date.now();
     const binding = this.resolveBinding(input.identity, input.boundMs);
     if (binding.status !== 'ok') return binding.status === 'gone' ? 'gone' : 'unknown';
+    const remainingMs = Math.floor(input.boundMs - (Date.now() - startedAt));
+    if (remainingMs <= 0) return 'unknown';
     const response = this.runJson<unknown>([
       'terminal',
       'wait',
@@ -301,8 +304,8 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
       '--for',
       'tui-idle',
       '--timeout-ms',
-      String(input.boundMs),
-    ], { timeoutMs: input.boundMs, killSignal: 'SIGKILL' });
+      String(remainingMs),
+    ], { timeoutMs: remainingMs, killSignal: 'SIGKILL' });
     if (!response.ok) return confirmedGone(response) ? 'gone' : 'unknown';
     const result = object(response.result);
     const wait = object(result?.wait);
