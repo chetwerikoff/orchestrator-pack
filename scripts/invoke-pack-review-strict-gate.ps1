@@ -20,7 +20,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib/Get-PackReviewCommand.ps1')
-. (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+if ($Live) {
+    . (Join-Path $PSScriptRoot 'lib/Invoke-AoCliJson.ps1')
+}
 
 $PackRoot = Split-Path -Parent $PSScriptRoot
 $DefaultFixtureDir = Join-Path $PackRoot 'tests/fixtures/pack-review-strict-gate'
