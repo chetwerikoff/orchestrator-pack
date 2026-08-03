@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { defaultGhTransport } from '../lib/create-issue-stage-record-gh.ts';
 
 const SOURCE_MARKER = '<!-- issue-1168-too-many-requests-production-shape:v2 -->';
 const SOURCE_SCHEMA = 'issue-1168-too-many-requests-production-shape/v2';
@@ -188,6 +187,7 @@ class StrictJsonParser {
     let escaped = false;
     while (this.offset < this.source.length) {
       const char = this.source[this.offset++];
+      if (char === undefined) break;
       if (escaped) {
         escaped = false;
         continue;
@@ -445,17 +445,17 @@ function parseLiveComment(text: string): { id: number; html_url: string; updated
   };
 }
 
-export function verifyLiveSource(
+export async function verifyLiveSource(
   input: { bindingPath: string; fixturePath: string; selector: VerificationSelector },
   dependencies: { transport?: GhTransportLike } = {},
-): VerificationSuccess | VerificationRejected {
+): Promise<VerificationSuccess | VerificationRejected> {
   try {
     if (input.selector !== 'too-many-requests-live-source-receipt'
       && input.selector !== 'too-many-requests-source-verifier') {
       throw new VerificationError('identity_mismatch');
     }
     const binding = parseBinding(readFileSync(input.bindingPath, 'utf8'));
-    const transport = dependencies.transport ?? (defaultGhTransport() as unknown as GhTransportLike);
+    const transport = dependencies.transport ?? ((await import('../lib/create-issue-stage-record-gh.ts')).defaultGhTransport() as unknown as GhTransportLike);
     const response = transport.runGh(['gh', 'api', `repos/${REPO}/issues/comments/${binding.comment_id}`]);
     if (response.exitCode !== 0) throw new VerificationError('identity_mismatch');
     const comment = parseLiveComment(response.stdout);
@@ -607,7 +607,7 @@ function parseCli(argv: readonly string[]): Map<string, string> {
   return options;
 }
 
-export function runTooManyRequestsSourceCli(argv: readonly string[]): number {
+export async function runTooManyRequestsSourceCli(argv: readonly string[]): Promise<number> {
   let result: VerificationSuccess | VerificationRejected;
   try {
     if (argv[0] !== 'verify-live') throw new Error('command_invalid');
@@ -621,7 +621,7 @@ export function runTooManyRequestsSourceCli(argv: readonly string[]): number {
         && selector !== 'too-many-requests-source-verifier')) {
       throw new Error('argument_invalid');
     }
-    result = verifyLiveSource({ bindingPath, fixturePath, selector });
+    result = await verifyLiveSource({ bindingPath, fixturePath, selector });
   } catch {
     result = { schema: VERIFICATION_SCHEMA, status: 'rejected', reason: 'identity_mismatch' };
   }
@@ -630,5 +630,5 @@ export function runTooManyRequestsSourceCli(argv: readonly string[]): number {
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
-  process.exitCode = runTooManyRequestsSourceCli(process.argv.slice(2));
+  process.exitCode = await runTooManyRequestsSourceCli(process.argv.slice(2));
 }

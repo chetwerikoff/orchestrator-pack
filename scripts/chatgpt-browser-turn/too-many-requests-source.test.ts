@@ -178,9 +178,9 @@ describe('too-many-requests production source', () => {
       .toThrow('source_schema_invalid');
   });
 
-  it('verifies the immutable live comment and exact fixture bytes', () => {
+  it('verifies the immutable live comment and exact fixture bytes', async () => {
     const evidence = writeEvidence();
-    const result = verifyLiveSource({
+    const result = await verifyLiveSource({
       bindingPath: evidence.binding,
       fixturePath: evidence.fixture,
       selector: 'too-many-requests-source-verifier',
@@ -214,7 +214,7 @@ describe('too-many-requests production source', () => {
     });
   });
 
-  it('keeps body, shape, and fixture failures distinct', () => {
+  it('keeps body, shape, and fixture failures distinct', async () => {
     const evidence = writeEvidence();
     const comment = (body: string) => ({
       runGh: () => ({
@@ -228,14 +228,14 @@ describe('too-many-requests production source', () => {
         stderr: '',
       }),
     });
-    expect(verifyLiveSource({
+    expect(await verifyLiveSource({
       bindingPath: evidence.binding,
       fixturePath: evidence.fixture,
       selector: 'too-many-requests-live-source-receipt',
     }, { transport: comment(`${evidence.body} `) })).toMatchObject({ status: 'rejected', reason: 'body_digest_mismatch' });
 
     writeFileSync(evidence.fixture, `${readFileSync(evidence.fixture, 'utf8')}\n`);
-    expect(verifyLiveSource({
+    expect(await verifyLiveSource({
       bindingPath: evidence.binding,
       fixturePath: evidence.fixture,
       selector: 'too-many-requests-source-verifier',
