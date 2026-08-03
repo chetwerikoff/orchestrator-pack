@@ -10,6 +10,7 @@ import type {
   OrcaRunOptions,
   OrcaTerminalReadResult,
 } from '../orca-runtime/native.ts';
+import { decodeRuntimeCompatibilityDiagnostic } from './compat-diagnostic.ts';
 import {
   type RuntimeAdapter,
   type RuntimeCallOptions,
@@ -45,10 +46,28 @@ function legacyOperation(operation: RuntimeOperationName): OrcaOperationName {
   }
 }
 
+function decodedLegacyFailure(
+  reason: string,
+  operation: OrcaOperationName,
+): OrcaOperationFailure | null {
+  const diagnostic = decodeRuntimeCompatibilityDiagnostic(reason);
+  if (!diagnostic) return null;
+  const message = diagnostic.message ?? diagnostic.errorCode ?? reason;
+  return {
+    ok: false,
+    operation,
+    reason: message,
+    errorCode: diagnostic.errorCode ?? message,
+    outcomeCategory: diagnostic.outcomeCategory,
+  };
+}
+
 function legacyFailure(
   failure: RuntimeOperationFailure,
   operation = legacyOperation(failure.operation),
 ): OrcaOperationFailure {
+  const decoded = decodedLegacyFailure(failure.reason, operation);
+  if (decoded) return decoded;
   const code = failure.reason || `runtime_${failure.status}`;
   return {
     ok: false,
@@ -248,9 +267,19 @@ export class RuntimeTaskCompatibilityFacade {
     if (result.status === 'dispatched') {
       return { ok: true, operation: input.submitOnly ? 'terminal_submit' : 'terminal_send' };
     }
+    const operation = input.submitOnly ? 'terminal_submit' : 'terminal_send';
+    const decoded = decodedLegacyFailure(result.reason, operation);
+    if (decoded) {
+      return {
+        ok: false,
+        operation,
+        outcomeCategory: decoded.outcomeCategory,
+        error: { code: decoded.errorCode, message: decoded.reason },
+      };
+    }
     return {
       ok: false,
-      operation: input.submitOnly ? 'terminal_submit' : 'terminal_send',
+      operation,
       outcomeCategory: result.status === 'dispatch_unknown'
         ? 'invalid_json'
         : 'supported_operation_failure',
