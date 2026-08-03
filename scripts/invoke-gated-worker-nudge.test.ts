@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,21 @@ import {
   resolveWorkerNudgeIdentity,
   runGatedWorkerNudge,
 } from './invoke-gated-worker-nudge.ts';
+
+let previousRealAdapter: string | undefined;
+
+beforeEach(() => {
+  previousRealAdapter = process.env.PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER;
+  process.env.PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER = '1';
+});
+
+afterEach(() => {
+  if (previousRealAdapter === undefined) {
+    delete process.env.PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER;
+  } else {
+    process.env.PACK_REVIEW_WORKER_NOTIFICATION_REAL_ADAPTER = previousRealAdapter;
+  }
+});
 
 describe('TypeScript gated worker nudge', () => {
   it('preserves issue-keyed task continuation and deduplicates before dispatch', async () => {
