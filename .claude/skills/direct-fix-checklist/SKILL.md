@@ -183,11 +183,9 @@ P0/P1 before merge; P2 may be tracked in the issue if accepted.
 ### Vendor command bindings
 
 This table is where the vendor commands live, so they are in one place instead of
-scattered through the steps. It is **not** a runtime-neutral seam: the
-capabilities are shaped like the active runtime's worktree/terminal lifecycle, so
-a runtime built on remote jobs or containers needs these steps rewritten, not
-just this column. The durable fix is an executable seam over
-`selectRuntimeAdapter`; it does not exist yet.
+scattered through the steps. It is **not** the broad runtime-neutral lifecycle
+seam owned by Issue #1248. The bounded Git/Orca read-back and continuity decision
+for the current Orca path is implemented in `scripts/worktree-lifecycle/**`.
 
 **Before any effect, confirm the active runtime matches this table's header.**
 Read the authoritative selection (`OPK_RUNTIME_ADAPTER`, default `orca`) rather
@@ -217,12 +215,12 @@ explicitly — never typed into a shell afterwards.
 routing prescribes — if that is unstated, **ask**, do not guess; `<wt>` = the
 workspace path returned by `workspace_for`.
 
-**Fail closed.** If the active runtime has no row for a capability a step needs,
-or a placeholder has no authoritative value, **stop and report blocked**. Never
-improvise a substitute command, and never fall back to the direct path because
-the handoff was inconvenient. The blocked report must name: the active runtime,
-the missing capability or value, the last step completed, the current
-branch/PR/head state, and confirmation that no substitute command was run.
+**Mutation fails closed; the scheduler does not.** If the active runtime has no
+row for a capability or a placeholder has no authoritative value, do not guess,
+force-delete, or use a disputed workspace. Return a bounded task-level degraded
+result to the caller/scheduler, naming the active runtime, missing capability or
+value, last completed step, branch/PR/head state, and confirmation that no
+substitute command ran. Unrelated work must continue.
 
 ### When to pivot
 
@@ -245,29 +243,46 @@ decision carried out by hand, not a step in this procedure.
 
 1. **Census first.** Execute `terminals(wt)` for the target workspace, or note
    that the workspace does not exist yet. Keep the set of existing handles — the
-   whole read-back depends on knowing the "before" state.
-2. Execute `workspace_for(issue)`; note the returned workspace path as `<wt>`.
-3. Execute `spawn_worker(wt)`; note the returned terminal handle.
-4. **Read back and bind.** Execute `terminals(wt)` again: there must be **exactly
+   terminal read-back depends on knowing the "before" state.
+2. Execute `workspace_for(issue)` **once**; note the returned workspace path as
+   `<wt>`. A timeout or lost receipt is an unknown outcome, not permission to
+   issue a blind second create.
+3. **Mandatory post-create dual read-back before spawn.** Resolve the created
+   worktree's full `HEAD` and branch (or confirmed detached mode) from Git, then
+   run:
+
+   ```bash
+   node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
+     --context post-create \
+     --repo-root "<repo-root>" \
+     --worktree "<wt>" \
+     --issue <N> \
+     --expected-head <full-40-hex-head> \
+     --expected-branch <branch> \
+     --json
+   ```
+
+   Replace `--expected-branch` with `--detached` only when Git itself confirms
+   detached HEAD. Proceed only for `outcome: ready_to_spawn`,
+   `classification.classification: exact_dual`, and
+   `decision.terminalSpawnAuthorized: true`.
+4. **Bounded continuation, not a global stop.** For any other post-create result,
+   preserve the disputed target. Do not spawn in it and do not destructively
+   recover it by Issue number. Perform at most one isolated replacement create
+   with a fresh unique `<name>` and path, still rooted at the exact intended
+   source SHA and bound to the same Issue. Run step 3 against the replacement.
+   If the replacement is also not exact dual, return task-level degraded control
+   immediately; do not loop and do not stop unrelated scheduler work.
+5. Execute `spawn_worker(wt)` only for the exact-dual original or replacement;
+   note the returned terminal handle.
+6. **Read back and bind.** Execute `terminals(wt)` again: there must be **exactly
    one handle that was not in the step-1 set**, and that handle is your worker.
    Zero new handles means the spawn did not take. More than one means something
-   else is also creating terminals — stop and report rather than guess. Use
-   `agents` to confirm the bound handle is running.
-5. **Never blindly retry a spawn whose outcome is unknown.** A timeout does not
+   else is also creating terminals — preserve the state and return task-level
+   degraded control rather than guessing. Use `agents` to confirm the bound
+   handle is running.
+7. **Never blindly retry a spawn whose outcome is unknown.** A timeout does not
    mean failure — read back first. Counting agents alone cannot tell your worker
    from one that was already there, which is why step 1 is not optional.
 
-To stop a worker, use `close_terminal(handle)` with the handle bound in step 4.
-`stop_terminals(wt)` stops **every** terminal in the workspace — use it only when
-you have confirmed the workspace holds nothing else.
-
-## Don't
-
-- Forge or hand-edit `docs/declarations/*.json`.
-- Use the `scope-guard-degraded` label to bypass snapshot requirements.
-- Merge with `gh pr merge --admin` to skip review or failing checks.
-- Put `declared_paths` in the issue body — only `denylist` / `allowed-roots`
-  fences + snapshot.
-- Invent producer flags — unknown arguments are rejected.
-- Commit from a checkout without first confirming whose branch and whose
-  uncommitted work is in it.
+To stop a worker, use `close_terminal(handle)` with the handle bound in step 6.
