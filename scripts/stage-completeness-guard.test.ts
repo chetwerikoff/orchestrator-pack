@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checkFindingLedgerGuard, runCli as runFindingLedgerCli } from './finding-ledger-guard.mjs';
 import { loadCanonicalReceiptInventory } from './stage-completeness-guard.ts';
+import { stageFinalizeUsage } from './lib/create-issue-stage-record-cli.ts';
+import { ACCEPTANCE_ARTIFACT_OUTPUT_NAMES, ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS } from './lib/create-issue-stage-record-artifacts.ts';
 import {
   deriveReviewEpisodeState,
   parseReviewerCardinalityControl,
@@ -440,6 +442,9 @@ describe('Issue #1150 receipt-backed ledger', () => {
     const fixture = preLens(3, [finding, CLEAN, CLEAN]);
     const good = { version: 2, counts: { rawFindingCount: 1, distinctFindingCount: 1, processedDistinctCount: 1 }, findings: [{ id: 'SEC', type: 'security', occurrences: ['architectural-review-attempt-1:1'], defectDisposition: 'addressed', remedyDisposition: 'accepted', 'persistent-machinery': 'no', architectPending: true }] };
     expect(checkFindingLedgerGuard(fixture.texts, JSON.stringify(good), ledgerOptions(fixture)).ok).toBe(true);
+    const { remoteAuthorities, ...withoutRemoteAuthority } = ledgerOptions(fixture);
+    void remoteAuthorities;
+    expect(checkFindingLedgerGuard(fixture.texts, JSON.stringify(good), withoutRemoteAuthority).ok).toBe(true);
     const truncated = [...fixture.texts]; truncated[3] += 'x';
     expect(checkFindingLedgerGuard(truncated, JSON.stringify(good), ledgerOptions(fixture)).errors.join('\n')).toMatch(/byteLength mismatch|sha256 mismatch/);
     const bad = { version: 2, counts: { rawFindingCount: 1, distinctFindingCount: 2, processedDistinctCount: 2 }, findings: [{ ...good.findings[0], type: 'quality' }, { id: 'DECOY', type: 'security', occurrences: [], defectDisposition: 'addressed', remedyDisposition: 'accepted', 'persistent-machinery': 'no' }] };
@@ -461,13 +466,34 @@ describe('Issue #1150 receipt-backed ledger', () => {
       writeFileSync(join(dir, 'verified-relay-evidence.json'), JSON.stringify(fixture.relay));
       fixture.captures.forEach((item, index) => writeFileSync(join(dir, item.name), fixture.texts[index]!));
       writeFileSync(join(dir, 'ledger.json'), JSON.stringify({ version: 2, counts: { rawFindingCount: 0, distinctFindingCount: 0, processedDistinctCount: 0 }, findings: [] }));
-      const remoteAuthorityPath = join(dir, 'remote-authority.json');
-      writeFileSync(remoteAuthorityPath, JSON.stringify(ledgerOptions(fixture).remoteAuthorities));
-      expect(runFindingLedgerCli(['node', 'scripts/finding-ledger-guard.mjs', '--ledger', join(dir, 'ledger.json'), '--captures-dir', dir, '--phase', 'pre-lens', '--stage-terminal', '--receipt-directory', canonical, '--tier-intake', join(canonical, 'tier-intake.json'), '--verified-relay-evidence', join(dir, 'verified-relay-evidence.json'), '--remote-authority', remoteAuthorityPath])).toBe(0);
+      expect(runFindingLedgerCli(['node', 'scripts/finding-ledger-guard.mjs', '--ledger', join(dir, 'ledger.json'), '--captures-dir', dir, '--phase', 'pre-lens', '--stage-terminal', '--receipt-directory', canonical, '--tier-intake', join(canonical, 'tier-intake.json'), '--verified-relay-evidence', join(dir, 'verified-relay-evidence.json')])).toBe(0);
     } finally {
       if (previousStateRoot === undefined) delete process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT;
       else process.env.OPK_CREATE_ISSUE_DRAFT_STATE_ROOT = previousStateRoot;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+
+describe('Issue #1287 acceptance inventory parity', () => {
+  it('keeps the Skill inventory aligned with acceptance inputs and outputs', () => {
+    const skill = readFileSync(join(process.cwd(), '.claude/skills/create-issue-draft/SKILL.md'), 'utf8');
+    const start = skill.indexOf('## Review artifacts');
+    const end = skill.indexOf('## GitHub issue journal', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const inventory = skill.slice(start, end);
+    const producerOutputs = inventory.slice(inventory.indexOf('### Producer outputs'), inventory.indexOf('### Conditional evidence/waiver'));
+
+    for (const input of ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS) {
+      expect(inventory).toContain(input.file);
+      expect(inventory).toContain(`(\`${input.schema}\`)`);
+      expect(inventory).toContain(input.classification);
+      expect(stageFinalizeUsage()).toContain(input.flag);
+    }
+    expect(producerOutputs).toContain('stage-completeness-receipt-<stageAttemptId>.json');
+    for (const output of ACCEPTANCE_ARTIFACT_OUTPUT_NAMES) expect(producerOutputs).toContain(output);
+    expect(inventory).toContain('Do not persist an episode receipt or consolidated reviewer output.');
   });
 });

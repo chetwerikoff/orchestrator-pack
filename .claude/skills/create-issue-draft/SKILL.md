@@ -911,23 +911,46 @@ Content fixes belong to the GPT author. Use `publish-issue-body-sync.ts edit` an
 
 ## Review artifacts
 
-Durable audit state remains outside the repository and includes:
+Durable review state remains outside the repository. The closed inventory below
+classifies every acceptance input and review artifact by its owner and role.
 
-```text
-tier-intake.json
-chats.md
-round-NN-author-reply.md
-reviewer-invocation-envelope-<stage>-<slot>-<attempt>.json
-stage-completeness-receipt-<stageAttemptId>.json
-verified-relay-evidence.json
-pass-NN-competitive-SS.capture.txt
-pass-NN-architectural-review-SS.capture.txt
-pass-NN-architectural-lens.capture.txt
-pass-NN-architectural.capture.txt
-claude-producer-evidence.json OR claude-unavailable-waiver.json
-finding-disposition-ledger.json
-rNN/tier-gate-receipt.json
-```
+### Flow-manager-authored inputs
+
+Each item in this section is a flow-manager-authored input.
+
+- `tier-intake.json` (`tier-intake/v1`)
+- `attempt-NNN.json` (`create-issue-stage-evidence/v1`) for each recorded stage result
+- `author-dispositions.json` (`create-issue-author-dispositions/v1`)
+
+The flow-manager records stage evidence and author dispositions from evidence it
+already holds. No repository writer exists for either input.
+
+### Producer outputs
+
+- `stage-completeness-receipt-<stageAttemptId>.json` (`stage-completeness-receipt/v1`)
+- `verified-relay-evidence.json`
+- `finding-disposition-ledger.json`
+- `review-episode-inventory.json`
+- `acceptance-artifacts.json`
+
+`produce-artifacts` is the only named producer for these derived acceptance
+files. It does not produce `remote-authority.json`; `--remote-authority` remains
+an optional explicit validation input when supplied.
+
+### Conditional evidence/waiver
+
+- `reviewer-invocation-envelope-<stage>-<slot>-<attempt>.json`
+- `pass-NN-competitive-SS.capture.txt`
+- `pass-NN-architectural-review-SS.capture.txt`
+- `pass-NN-architectural-lens.capture.txt`
+- `pass-NN-architectural.capture.txt`
+- `claude-producer-evidence.json` OR `claude-unavailable-waiver.json`
+
+### Audit-only records
+
+- `chats.md`
+- `round-NN-author-reply.md`
+- `rNN/tier-gate-receipt.json`
 
 Do not persist an episode receipt or consolidated reviewer output.
 

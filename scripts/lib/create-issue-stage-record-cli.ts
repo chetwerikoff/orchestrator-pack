@@ -116,7 +116,7 @@ function runParsedCli<T>(
   return run(opts);
 }
 
-function stageFinalizeUsage(): string {
+export function stageFinalizeUsage(): string {
   return [
     'Usage:',
     '  create-issue-stage-finalize.ts start-cycle --repo <owner/name> --issue-number <n> --source-revision <rNN> [--stage-attempt-id <id>] --tier <T1|T2|T3> [--permitted-lane-override <normal|disputed>] [--public-actor <actor>] [--predecessor-cycle-id <id>] [--workdir <path>] [--json]',

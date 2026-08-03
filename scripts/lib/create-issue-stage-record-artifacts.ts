@@ -36,6 +36,19 @@ export const STAGE_EVIDENCE_SCHEMA = 'create-issue-stage-evidence/v1' as const;
 export const AUTHOR_DISPOSITIONS_SCHEMA = 'create-issue-author-dispositions/v1' as const;
 export const ARTIFACT_MANIFEST_SCHEMA = 'create-issue-acceptance-artifacts/v1' as const;
 
+export const ACCEPTANCE_ARTIFACT_REQUIRED_INPUTS = [
+  { flag: '--tier-intake', file: 'tier-intake.json', schema: 'tier-intake/v1', classification: 'flow-manager-authored input' },
+  { flag: '--stage-evidence', file: 'attempt-NNN.json', schema: STAGE_EVIDENCE_SCHEMA, classification: 'flow-manager-authored input' },
+  { flag: '--author-dispositions', file: 'author-dispositions.json', schema: AUTHOR_DISPOSITIONS_SCHEMA, classification: 'flow-manager-authored input' },
+] as const;
+
+export const ACCEPTANCE_ARTIFACT_OUTPUT_NAMES = [
+  'verified-relay-evidence.json',
+  'finding-disposition-ledger.json',
+  'review-episode-inventory.json',
+  'acceptance-artifacts.json',
+] as const;
+
 export const DEFECT_DISPOSITION_VALUES = [
   'addressed',
   'rejected-as-false',
@@ -732,12 +745,7 @@ function expectedStages(tier: ReviewTier, phase: 'pre-lens' | 'final-acceptance'
   return ['architectural'];
 }
 
-const PRODUCED_ARTIFACT_NAMES = new Set([
-  'verified-relay-evidence.json',
-  'finding-disposition-ledger.json',
-  'review-episode-inventory.json',
-  'acceptance-artifacts.json',
-]);
+const PRODUCED_ARTIFACT_NAMES = new Set<string>(ACCEPTANCE_ARTIFACT_OUTPUT_NAMES);
 
 function isProducedArtifactName(name: string): boolean {
   return PRODUCED_ARTIFACT_NAMES.has(name)
@@ -966,10 +974,7 @@ export function produceAcceptanceArtifacts(
 
   const files = [
     ...receipts.map((receipt) => `stage-completeness-receipt-${receipt.stageAttemptId}.json`),
-    'verified-relay-evidence.json',
-    'finding-disposition-ledger.json',
-    'review-episode-inventory.json',
-    'acceptance-artifacts.json',
+    ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
   ];
   const manifest = {
     schema: ARTIFACT_MANIFEST_SCHEMA,
@@ -1166,10 +1171,7 @@ export function inspectAcceptanceArtifacts(
   const expectedOutputNames = [
     ...new Set([
       ...stageReceiptNames,
-      'verified-relay-evidence.json',
-      'finding-disposition-ledger.json',
-      'review-episode-inventory.json',
-      'acceptance-artifacts.json',
+      ...ACCEPTANCE_ARTIFACT_OUTPUT_NAMES,
     ]),
   ];
   const outputValues = new Map<string, unknown>();

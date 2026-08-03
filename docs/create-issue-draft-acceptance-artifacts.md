@@ -4,6 +4,15 @@ The flow-manager produces acceptance inputs from the evidence it already holds.
 The validators remain the authority; this producer only materializes files that
 the validators already consume.
 
+The acceptance inventory has four roles: `tier-intake.json`, each
+`attempt-NNN.json` stage-evidence input (`create-issue-stage-evidence/v1`), and
+`author-dispositions.json` (`create-issue-author-dispositions/v1`) are
+flow-manager-authored inputs; the files in Produced files are producer outputs;
+reviewer captures and Claude producer evidence/waivers are conditional
+evidence; chats, author replies, and tier-gate receipts are audit-only records.
+The flow-manager records the two manual input schemas; this component has no
+writer for them and no writer for `remote-authority.json`.
+
 ## Pre-acceptance path
 
 Run the missing-input check before acceptance:
