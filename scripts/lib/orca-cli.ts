@@ -19,7 +19,6 @@ export {
 export {
   closeOrcaTerminal as closeOrcaTerminalNative,
   createOrcaTerminal as createOrcaTerminalNative,
-  isOrcaSmokeControlPlaneCode,
   probeOrcaWorktree as probeOrcaWorktreeNative,
   readOrcaTerminal as readOrcaTerminalNative,
   sendOrcaTerminal as sendOrcaTerminalNative,
@@ -34,6 +33,7 @@ export {
   ORCA_SMOKE_CONTROL_PLANE_CODES,
   ORCA_WORKER_SMOKE_CONTRACT_EVIDENCE_DIR,
   findExecutableOnPath,
+  isOrcaSmokeControlPlaneCode,
   orcaExecutableLooksAvailable,
   resolveOrcaExecutable,
   resolveOrcaOperation,
