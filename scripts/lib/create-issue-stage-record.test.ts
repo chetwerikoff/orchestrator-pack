@@ -483,22 +483,41 @@ describe('create-issue-stage-record trusted comment admission and pagination', (
     const state = createMockGhState({ issue: { title: 't', body: 'revision r01', labels: [] }, failCreate: true });
     const transport = createMockTransport(state);
     const workdir = makeTempDir();
-    const failed = startReviewCycle(transport, {
-      repo,
-      issueNumber: 1152,
-      sourceRevision: 'r01',
-      tier: 'T2',
-      publicActor: 'cursor-flow-manager',
-      workdir,
-    });
-    expect(failed.ok).toBe(false);
-    expect(readPendingEvent(workdir, failed.eventKey!)).toMatchObject({ delivery: 'delayed', deliveryFailureClass: 'comment-create' });
-    state.failCreate = false;
-    const retried = retryPendingEvents(transport, repo, 1152, workdir, { pageSize: 10 });
-    expect(retried).toHaveLength(1);
-    expect(retried[0]?.ok).toBe(true);
-    expect(state.issue.labels).toContain('spec-review:in-progress');
-    expect(readPendingEvent(workdir, failed.eventKey!)).toBeNull();
+    vi.useFakeTimers({ now: new Date('2026-08-03T00:00:00.000Z') });
+    try {
+      const failed = startReviewCycle(transport, {
+        repo,
+        issueNumber: 1152,
+        sourceRevision: 'r01',
+        tier: 'T2',
+        publicActor: 'cursor-flow-manager',
+        workdir,
+      });
+      expect(failed.ok).toBe(false);
+      const pending = readPendingEvent(workdir, failed.eventKey!);
+      expect(pending).toMatchObject({
+        delivery: 'delayed',
+        deliveryFailureClass: 'comment-create',
+      });
+      expect(pending?.body).toEqual(expect.any(String));
+
+      state.failCreate = false;
+      const retried = retryPendingEvents(transport, repo, 1152, workdir, { pageSize: 10 });
+
+      expect(retried).toHaveLength(1);
+      expect(retried[0]?.ok).toBe(true);
+      expect(state.commentCreateAttempts).toEqual([
+        { body: pending?.body, succeeded: false },
+        { body: pending?.body, succeeded: true },
+      ]);
+      expect(state.comments).toHaveLength(1);
+      expect(state.comments[0]?.body).toBe(pending?.body);
+      expect(state.issue.labels).toContain('spec-review:in-progress');
+      expect(readPendingEvent(workdir, failed.eventKey!)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      rmSync(workdir, { recursive: true, force: true });
+    }
   });
 
   it('retains the published event but leaves projection repair pending when label sync fails', () => {
