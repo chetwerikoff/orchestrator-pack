@@ -64,6 +64,9 @@ foreach ($arg in $cli.ForwardArgs) {
 
 Add-PackReviewAutoForwardArgs -ForwardArgs $forwardArgs -RepoRoot $resolvedRoot | Out-Null
 
+# Carry-over transport is an environment contract consumed by review_core.
+# Do not reinterpret the bundle path as the reviewer source selector.
+
 # Codex-only auto-forward flags must not reach the browser GPT adapter.
 if ($reviewer -eq 'gpt') {
     for ($index = $forwardArgs.Count - 1; $index -ge 0; $index--) {

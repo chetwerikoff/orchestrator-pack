@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildReviewPrompt } from './prompt.ts';
@@ -96,6 +96,19 @@ export function hasReviewRuntimeDeps(root: string): boolean {
   return existsSync(join(root, 'node_modules', '@orchestrator-pack', 'shared', 'package.json'));
 }
 
+function carryoverBundlePath(): string | undefined {
+  const value = process.env.PACK_REVIEW_CARRYOVER_BUNDLE_PATH?.trim();
+  return value || undefined;
+}
+
+function appendCarryoverEvidence(payload: string, bundlePath: string | undefined): string {
+  if (!bundlePath) return payload;
+  const bundle = JSON.parse(readFileSync(bundlePath, 'utf8')) as { bundleDigest?: unknown };
+  if (typeof bundle.bundleDigest !== 'string') return payload;
+  const parsed = JSON.parse(payload) as Record<string, unknown>;
+  return JSON.stringify({ ...parsed, bundleDigest: bundle.bundleDigest });
+}
+
 /** Roots to probe for installed workspace dependencies: pack checkout first, then optional reviewed repo. */
 export function reviewDependencySearchRoots(repoRoot: string): string[] {
   const packRoot = resolvePackRepoRoot();
@@ -121,6 +134,9 @@ function assertReviewDependencies(repoRoot: string): void {
 }
 
 export function executeReview(options: ReviewOptions): ReviewResult {
+  // Budget syntax/range must fail before dependency probes, issue/scope reads, prompt
+  // construction, claims, subprocesses, or any durable/external effect.
+  const budgetLedger = createReviewerBudgetLedger();
   const source = options.source ?? defaultSourceFromEnv();
   const logLines: string[] = [];
 
@@ -140,7 +156,10 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     issueNumber,
   });
 
-  const prompt = buildReviewPrompt({ scope, source, baseRef: options.baseRef });
+  const bundlePath = carryoverBundlePath();
+  const prompt = bundlePath
+    ? `${buildReviewPrompt({ scope, source, baseRef: options.baseRef })}\n\n## Conflict carry-over review (mandatory)\n\nRead the immutable merge-resolution bundle at \`${bundlePath}\` and review the exact H1 resolution described by it before returning a verdict.\n`
+    : buildReviewPrompt({ scope, source, baseRef: options.baseRef });
 
   if (options.skipCodex && options.fixtureStdout === undefined) {
     return {
@@ -150,8 +169,6 @@ export function executeReview(options: ReviewOptions): ReviewResult {
       structuredFindings: [],
     };
   }
-
-  const budgetLedger = createReviewerBudgetLedger();
 
   const codex = runCodexReview({
     repoRoot: options.repoRoot,
@@ -230,10 +247,13 @@ export function executeReview(options: ReviewOptions): ReviewResult {
     return {
       exitCode: 0,
       logLines,
-      aoStdout: emitTerminalVerdictPayload({
-        verdict: 'clean',
-        findings: toAoFindings(findings),
-      }),
+      aoStdout: appendCarryoverEvidence(
+        emitTerminalVerdictPayload({
+          verdict: 'clean',
+          findings: toAoFindings(findings),
+        }),
+        bundlePath,
+      ),
       structuredFindings: findings,
       githubComment,
     };
@@ -263,7 +283,10 @@ export function executeReview(options: ReviewOptions): ReviewResult {
   return {
     exitCode: 0,
     logLines,
-    aoStdout: emitAoReviewPayload(toAoFindings(findings)),
+    aoStdout: appendCarryoverEvidence(
+      emitAoReviewPayload(toAoFindings(findings)),
+      bundlePath,
+    ),
     structuredFindings: findings,
     githubComment,
   };
