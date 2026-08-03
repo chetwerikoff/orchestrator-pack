@@ -1,0 +1,32 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1248,
+  "declared_paths": [
+    "docs/declarations/1248.json",
+    "docs/orca-runtime-caller-census.md",
+    "scripts/lib/orca-cli.ts",
+    "scripts/lib/worker-smoke-bounded-create.ts",
+    "scripts/orca-runtime/task-adapter.ts",
+    "scripts/runtime/caller-census.test.ts",
+    "scripts/runtime/caller-census.ts",
+    "scripts/runtime/registry.ts",
+    "scripts/runtime/task-compat.test.ts",
+    "scripts/runtime/task-compat.ts"
+  ],
+  "denylist": [
+    ".ao/",
+    ".orca/",
+    "packages/core/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/",
+    "package-lock.json",
+    "package.json",
+    "scripts/",
+    "tests/"
+  ],
+  "source_revision": "#1248"
+}
