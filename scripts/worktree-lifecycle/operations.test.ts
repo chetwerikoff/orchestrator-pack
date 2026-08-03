@@ -61,7 +61,8 @@ function fixture(): {
       headSha: HEAD,
       mode: 'branch-bound',
       branchName: BRANCH,
-      prNumber: 1300,
+      bindingKind: 'pr',
+      bindingNumber: 1300,
     },
   };
 }
@@ -191,12 +192,39 @@ describe('dual census', () => {
       path: paths.worktree,
       head: OTHER_HEAD,
       branch: `refs/heads/${BRANCH}`,
+      linkedPR: 1300,
       isMainWorktree: false,
       isArchived: false,
     }];
     const stale = collectCensus(paths.expected, operations(paths, state));
     expect(stale.classification.classification).toBe('conflict');
     expect(stale.classification.disagreeingFields).toContain('orca.head');
+  });
+
+  it('binds post-create agreement to the exact linked issue', () => {
+    const paths = fixture();
+    const issueExpected: ExpectedWorktreeIdentity = {
+      ...paths.expected,
+      bindingKind: 'issue',
+      bindingNumber: 1298,
+    };
+    const state: RunnerState = {
+      removed: false,
+      invocations: [],
+      orcaRows: [{
+        path: paths.worktree,
+        head: HEAD,
+        branch: `refs/heads/${BRANCH}`,
+        linkedIssue: 1298,
+        isMainWorktree: false,
+        isArchived: false,
+      }],
+    };
+    expect(collectCensus(issueExpected, operations(paths, state)).classification.classification)
+      .toBe('exact_dual');
+    state.orcaRows = [{ ...state.orcaRows[0] as object, linkedIssue: 1299 }];
+    expect(collectCensus(issueExpected, operations(paths, state)).classification.classification)
+      .toBe('conflict');
   });
 
   it('fails closed when an external response shape is malformed', () => {
@@ -241,6 +269,20 @@ describe('guarded Git-only recovery', () => {
       },
       effects: [],
     });
+    expect(state.removed).toBe(false);
+  });
+
+  it('does not run destructive PR recovery with issue-only authority', () => {
+    const paths = fixture();
+    const state: RunnerState = { removed: false, invocations: [] };
+    const report = runLifecycle({
+      expected: { ...paths.expected, bindingKind: 'issue', bindingNumber: 1298 },
+      context: 'explicit-recovery',
+      apply: true,
+      operations: operations(paths, state),
+    });
+    expect(report).toMatchObject({ outcome: 'cleanup_deferred', pipelineContinues: true });
+    expect(report.error).toMatch(/PR-bound/);
     expect(state.removed).toBe(false);
   });
 
@@ -305,6 +347,7 @@ describe('nonblocking caller contract', () => {
         path: paths.worktree,
         head: HEAD,
         branch: `refs/heads/${BRANCH}`,
+        linkedPR: 1300,
         isMainWorktree: false,
         isArchived: false,
       }],
@@ -312,6 +355,7 @@ describe('nonblocking caller contract', () => {
         path: paths.worktree,
         head: HEAD,
         branch: `refs/heads/${BRANCH}`,
+        linkedPR: 1300,
         isMainWorktree: false,
         isArchived: false,
         agents: [{ state: 'done', interrupted: false }],
@@ -340,6 +384,7 @@ describe('nonblocking caller contract', () => {
         path: paths.worktree,
         head: OTHER_HEAD,
         branch: `refs/heads/${BRANCH}`,
+        linkedPR: 1300,
         isMainWorktree: false,
         isArchived: false,
       }],
@@ -358,22 +403,45 @@ describe('nonblocking caller contract', () => {
     expect(state.removed).toBe(false);
   });
 
-  it('never authorizes post-create terminal spawn for a disputed target', () => {
+  it('authorizes post-create spawn only for exact issue-bound dual read-back', () => {
     const paths = fixture();
-    const state: RunnerState = { removed: false, invocations: [] };
-    const report = runLifecycle({
-      expected: paths.expected,
+    const issueExpected: ExpectedWorktreeIdentity = {
+      ...paths.expected,
+      bindingKind: 'issue',
+      bindingNumber: 1298,
+    };
+    const disputedState: RunnerState = { removed: false, invocations: [] };
+    expect(runLifecycle({
+      expected: issueExpected,
       context: 'post-create',
       apply: false,
-      operations: operations(paths, state),
-    });
-    expect(report).toMatchObject({
-      outcome: 'task_degraded',
+      operations: operations(paths, disputedState),
+    })).toMatchObject({
+      outcome: 'replacement_required',
       pipelineContinues: true,
-      decision: {
-        action: 'try_guarded_git_only_recovery',
-        terminalSpawnAuthorized: false,
-      },
+      decision: { terminalSpawnAuthorized: false },
+    });
+
+    const exactState: RunnerState = {
+      removed: false,
+      invocations: [],
+      orcaRows: [{
+        path: paths.worktree,
+        head: HEAD,
+        branch: `refs/heads/${BRANCH}`,
+        linkedIssue: 1298,
+        isMainWorktree: false,
+        isArchived: false,
+      }],
+    };
+    expect(runLifecycle({
+      expected: issueExpected,
+      context: 'post-create',
+      apply: false,
+      operations: operations(paths, exactState),
+    })).toMatchObject({
+      outcome: 'ready_to_spawn',
+      decision: { terminalSpawnAuthorized: true },
     });
   });
 });
