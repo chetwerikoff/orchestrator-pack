@@ -59,10 +59,15 @@ capture object or mismatching asserted capture identity is rejected.
 
 For every completed browser invocation, the producer also reads the referenced
 `turnResultPath` as a `turn-result/v1` artifact. Its `invocation_id` must match
-the stage evidence, its state must be `ok`, and its committed output byte length
-and SHA-256 must match the capture bytes. The recorded
-`terminalResultIdentity` is derived from the referenced result file; a missing,
-malformed, stale, or mismatched result is a named input error.
+the stage evidence and its state must be `ok`. Historical final-node and API-
+harvest results retain the rule that committed output bytes match the capture.
+For `service-observed-issue-comment/v1`, `reviewer_source` instead binds the
+capture byte length, SHA-256, target, tool call, revision, and finding count;
+`output` remains the separate receipt identity. For
+`failed-write-final-assistant/v1`, output and source bytes must match and
+publication fields must be absent. The recorded `terminalResultIdentity` is
+derived from the referenced result file; a missing, malformed, stale, or
+mismatched result is a named input error.
 
 `author-dispositions.json` has this shape:
 

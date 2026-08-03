@@ -26,7 +26,12 @@ import {
   isMessageAttributedToUserTurn,
   registerLegacyObservation,
   hasTerminalWitnessActivityForAssistant,
+  observeDirectPublicationPayload,
   resolveWholeTurnTerminal,
+  settleDirectPublication,
+  type DirectPublicationConfig,
+  type DirectPublicationObservationState,
+  type DirectPublicationSettlement,
   type TerminalWitnessState,
 } from './terminal-witness.ts';
 import {
@@ -59,6 +64,7 @@ export interface BrowserConfig {
   chatUrl?: string;
   newChat: boolean;
   timeoutMs: number;
+  directPublication?: DirectPublicationConfig;
 }
 
 export interface ProfileVerification {
@@ -430,6 +436,8 @@ interface NetworkWitnessState {
   readonly serviceSubmittedUserIds: Set<string>;
   readonly rejectedServiceUserIds: Set<string>;
   readonly terminal: TerminalWitnessState;
+  readonly directPublication: DirectPublicationObservationState;
+  directPublicationEnabled: boolean;
   dispatchArmed: boolean;
   turnDispatchCommitted: boolean;
   ingestingDispatchServiceFrames: boolean;
@@ -1244,6 +1252,7 @@ function collectInputMessageWitness(
 }
 
 function ingestWitnessJsonTree(state: NetworkWitnessState, value: unknown): void {
+  observeDirectPublicationPayload(state.directPublication, value);
   ingestServicePayloadTree(state.terminal, value);
   collectInputMessageWitness(state, value);
   walkEncodedItemEnvelopes(state, value);
@@ -1298,6 +1307,8 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
     serviceSubmittedUserIds: new Set<string>(),
     rejectedServiceUserIds: new Set<string>(),
     terminal: createTerminalWitnessState(),
+    directPublication: { invocations: [], results: [] },
+    directPublicationEnabled: false,
     dispatchArmed: false,
     turnDispatchCommitted: false,
     ingestingDispatchServiceFrames: false,
@@ -1338,7 +1349,7 @@ function attachNetworkWitness(page: any): NetworkWitnessState {
   page.on('response', async (response: any) => {
     try {
       const url = String(response.url());
-      if (!/conversation|messages|responses/i.test(url)) return;
+      if (!state.directPublicationEnabled && !/conversation|messages|responses/i.test(url)) return;
       const body = await response.text();
       state.messages.push(...parseStreamingBody(body));
       try {
@@ -1699,6 +1710,7 @@ export interface TurnBrowserResult {
   assistantMessageId?: string;
   reply?: string;
   possibleDelivery: boolean;
+  directPublication?: DirectPublicationSettlement;
 }
 
 
@@ -1814,6 +1826,7 @@ export async function sendTurn(
   freshIdentity?: FreshIdentityRetention,
 ): Promise<TurnBrowserResult> {
   const network = attachNetworkWitness(page);
+  network.directPublicationEnabled = Boolean(config.directPublication);
   if (config.newChat && freshIdentity) {
     page.on('framenavigated', () => {
       try {
@@ -2242,6 +2255,15 @@ export async function sendTurn(
                 assistantMessageId: boundAssistantId,
                 ...(conversationId ? { conversationId } : {}),
                 reply: replyCandidate,
+                ...(config.directPublication
+                  ? {
+                    directPublication: settleDirectPublication(
+                      network.directPublication,
+                      { ...config.directPublication.target, userMessageId: userId },
+                      replyCandidate,
+                    ),
+                  }
+                  : {}),
               };
             }
           } else {

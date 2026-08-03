@@ -20,6 +20,7 @@ import {
   deriveStageReceiptId,
   validateReviewEpisodeTopology,
   CLAUDE_PRODUCER_EVIDENCE_SCHEMA,
+  parseReviewerSourcePolicy,
   type CaptureIdentityV1,
   type ReviewerInvocationEnvelopeV1,
   type ReviewEpisodeDerivationAuthorityV1,
@@ -375,10 +376,43 @@ function readTurnResultForInvocation(
     || !/^[0-9a-f]{64}$/.test(output.sha256)
   ) {
     errors.push(`turn-result/v1 artifact for ${label} has invalid output metadata: ${resolved}`);
-  } else if (capture) {
-    if (Number(output.byte_length) !== capture.byteLength || output.sha256 !== capture.sha256) {
-      errors.push(`turn-result/v1 artifact for ${label} output does not match capture bytes: ${resolved}`);
+  }
+  const reviewerSource = isRecord(value.reviewer_source) ? value.reviewer_source : null;
+  const reviewerSourceKind = reviewerSource?.kind;
+  const directSuccess = reviewerSourceKind === 'service-observed-issue-comment/v1';
+  const directFailure = reviewerSourceKind === 'failed-write-final-assistant/v1';
+  const frozenPolicy = parseReviewerSourcePolicy(
+    typeof invocation.reviewerSource === 'string' ? invocation.reviewerSource : '',
+  )?.capturePolicy;
+  if (frozenPolicy === 'direct-publication/v1' && !directSuccess && !directFailure) {
+    errors.push(`turn-result/v1 artifact for ${label} direct-publication policy requires terminal reviewer_source metadata: ${resolved}`);
+  }
+  if (frozenPolicy !== 'direct-publication/v1' && (directSuccess || directFailure)) {
+    errors.push(`turn-result/v1 artifact for ${label} direct reviewer_source kind conflicts with frozen policy: ${resolved}`);
+  }
+  if (directSuccess || directFailure) {
+    if (!capture) errors.push(`turn-result/v1 artifact for ${label} direct reviewer_source requires capture bytes: ${resolved}`);
+    if (
+      !reviewerSource
+      || !Number.isInteger(reviewerSource.byte_length)
+      || Number(reviewerSource.byte_length) !== capture?.byteLength
+      || typeof reviewerSource.sha256 !== 'string'
+      || reviewerSource.sha256 !== capture?.sha256
+      || typeof reviewerSource.tool_call_id !== 'string'
+      || typeof reviewerSource.repository_full_name !== 'string'
+      || !Number.isInteger(reviewerSource.issue_number)
+      || typeof reviewerSource.source_revision !== 'string'
+      || !Number.isInteger(reviewerSource.finding_count)
+      || (directSuccess && (typeof reviewerSource.comment_id !== 'string' || typeof reviewerSource.comment_url !== 'string'))
+      || (directFailure && (reviewerSource.comment_id !== undefined || reviewerSource.comment_url !== undefined))
+    ) {
+      errors.push(`turn-result/v1 artifact for ${label} has invalid reviewer_source metadata: ${resolved}`);
     }
+  }
+  if (directFailure && capture && output && (Number(output.byte_length) !== capture.byteLength || output.sha256 !== capture.sha256)) {
+    errors.push(`turn-result/v1 artifact for ${label} output does not match failed-write source bytes: ${resolved}`);
+  } else if (!directSuccess && !directFailure && capture && output && (Number(output.byte_length) !== capture.byteLength || output.sha256 !== capture.sha256)) {
+    errors.push(`turn-result/v1 artifact for ${label} output does not match capture bytes: ${resolved}`);
   }
   const identity = turnResultIdentity(basename(resolved), sha256(text));
   if (invocation.terminalResultIdentity !== identity) {

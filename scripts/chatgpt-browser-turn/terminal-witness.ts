@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export type WitnessMessageRole = 'user' | 'assistant' | 'tool' | 'system';
 
 export interface WitnessMessage {
@@ -382,4 +384,485 @@ export function registerLegacyObservation(
     role: observation.role,
     parent: observation.parent ?? existing?.parent,
   });
+}
+
+export const DIRECT_PUBLICATION_POLICY = 'direct-publication/v1' as const;
+export const SERVICE_OBSERVED_ISSUE_COMMENT = 'service-observed-issue-comment/v1' as const;
+export const FAILED_WRITE_FINAL_ASSISTANT = 'failed-write-final-assistant/v1' as const;
+
+export interface DirectPublicationTarget {
+  readonly repositoryFullName: string;
+  readonly issueNumber: number;
+  readonly sourceRevision: string;
+  readonly invocationId: string;
+  readonly userMessageId?: string;
+}
+
+export interface DirectPublicationConfig {
+  readonly target: DirectPublicationTarget;
+  readonly reviewerSource: string;
+  readonly reviewerSourceOutput: string;
+}
+
+export interface DirectPublicationInvocation {
+  readonly action: 'add_comment_to_issue';
+  readonly toolCallId: string;
+  readonly repositoryFullName: string;
+  readonly issueNumber: number;
+  readonly comment: string;
+  readonly assistantMessageId?: string;
+  readonly parentUserMessageId?: string;
+}
+
+export type DirectPublicationNoCommitClass =
+  | 'adapter-rejected-before-dispatch'
+  | 'github-create-comment-definitive-rejection';
+
+export interface DirectPublicationResult {
+  readonly toolCallId: string;
+  readonly action: 'add_comment_to_issue';
+  readonly repositoryFullName: string;
+  readonly issueNumber: number;
+  readonly outcome: 'success' | 'no-commit' | 'other';
+  readonly noCommitClass?: DirectPublicationNoCommitClass;
+  readonly status?: number;
+  readonly commentId?: string;
+  readonly commentUrl?: string;
+  readonly assistantMessageId?: string;
+  readonly parentUserMessageId?: string;
+}
+
+export interface DirectPublicationObservationState {
+  readonly invocations: DirectPublicationInvocation[];
+  readonly results: DirectPublicationResult[];
+}
+
+export function createDirectPublicationObservationState(): DirectPublicationObservationState {
+  return { invocations: [], results: [] };
+}
+
+export interface DirectPublicationSettlement {
+  readonly state: 'success' | 'failed-write' | 'possible-delivery';
+  readonly cause: string;
+  readonly invocation?: DirectPublicationInvocation;
+  readonly result?: DirectPublicationResult;
+  readonly sourceBytes?: string;
+}
+
+const ISSUE_COMMENT_ACTION = 'add_comment_to_issue';
+const DEFINITIVE_REJECTION_STATUSES = new Set([401, 403, 404, 410, 422]);
+const DIRECT_POLICY_IDENTITY_RE = /^([^#\s]+)#capture=(final-node\/v1|issue-comment-api-harvest\/v1|direct-publication\/v1)$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const REVISION_LINE_RE = /^Read revision: #([1-9][0-9]*) (r[0-9]+)$/;
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function stringValue(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === 'string' && value.length > 0);
+}
+
+function numberValue(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+    if (typeof value === 'string' && /^[0-9]+$/.test(value)) return Number(value);
+  }
+  return undefined;
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'string') return recordValue(value);
+  try {
+    return recordValue(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+}
+
+function actionName(value: Record<string, unknown>): string | undefined {
+  const fn = recordValue(value.function);
+  const tool = recordValue(value.tool);
+  const action = stringValue(
+    value.name,
+    value.tool_name,
+    value.toolName,
+    value.action,
+    value.operation,
+    fn?.name,
+    tool?.name,
+  );
+  return action?.toLowerCase();
+}
+
+function toolCallId(value: Record<string, unknown>): string | undefined {
+  return stringValue(value.tool_call_id, value.toolCallId, value.call_id, value.callId);
+}
+
+function targetFields(value: Record<string, unknown>): {
+  repositoryFullName?: string;
+  issueNumber?: number;
+  comment?: string;
+} {
+  const args = jsonRecord(value.arguments ?? value.args ?? value.parameters ?? value.input);
+  const source = args ?? value;
+  return {
+    repositoryFullName: stringValue(
+      source.repository_full_name,
+      source.repository,
+      source.repo,
+      value.repository_full_name,
+      value.repository,
+    ),
+    issueNumber: numberValue(
+      source.issue_number,
+      source.issueNumber,
+      source.issue,
+      value.issue_number,
+      value.issueNumber,
+    ),
+    comment: stringValue(source.comment, source.body, value.comment),
+  };
+}
+
+function recordNoCommitClass(
+  value: Record<string, unknown>,
+  status: number | undefined,
+): DirectPublicationNoCommitClass | undefined {
+  const response = jsonRecord(value.response ?? value.result ?? value.output);
+  const dispatchFalse = value.no_external_request === true
+    || value.no_request_dispatched === true
+    || value.request_dispatched === false
+    || value.external_request_dispatched === false
+    || value.dispatch_status === 'not_dispatched'
+    || response?.no_external_request === true
+    || response?.request_dispatched === false;
+  if (dispatchFalse) return 'adapter-rejected-before-dispatch';
+  const complete = value.response_complete === true
+    || value.complete === true
+    || status !== undefined
+    || (response?.status !== undefined && response?.status !== null);
+  if (complete && status !== undefined && DEFINITIVE_REJECTION_STATUSES.has(status)) {
+    return 'github-create-comment-definitive-rejection';
+  }
+  return undefined;
+}
+
+function resultOutcome(
+  value: Record<string, unknown>,
+  status: number | undefined,
+  commentId: string | undefined,
+  commentUrl: string | undefined,
+): { outcome: DirectPublicationResult['outcome']; noCommitClass?: DirectPublicationNoCommitClass } {
+  const noCommitClass = recordNoCommitClass(value, status);
+  const success = value.success === true
+    || value.ok === true
+    || (commentId !== undefined && commentUrl !== undefined);
+  if (success && commentId && commentUrl) return { outcome: 'success' };
+  if (noCommitClass && !success && !commentId && !commentUrl) return { outcome: 'no-commit', noCommitClass };
+  return { outcome: 'other' };
+}
+
+function observeDirectPublicationObject(
+  state: DirectPublicationObservationState,
+  value: Record<string, unknown>,
+): void {
+  const action = actionName(value);
+  const fields = targetFields(value);
+  const id = toolCallId(value);
+  const assistantMessageId = stringValue(value.assistant_message_id, value.assistantMessageId, value.message_id);
+  const parentUserMessageId = stringValue(value.parent_user_message_id, value.parentUserMessageId, value.parent);
+  if (
+    action === ISSUE_COMMENT_ACTION
+    && id
+    && fields.repositoryFullName
+    && fields.issueNumber !== undefined
+    && fields.comment !== undefined
+  ) {
+    const invocation: DirectPublicationInvocation = {
+      action: ISSUE_COMMENT_ACTION,
+      toolCallId: id,
+      repositoryFullName: fields.repositoryFullName,
+      issueNumber: fields.issueNumber,
+      comment: fields.comment,
+      ...(assistantMessageId ? { assistantMessageId } : {}),
+      ...(parentUserMessageId ? { parentUserMessageId } : {}),
+    };
+    const existingIndex = state.invocations.findIndex((item) =>
+      item.toolCallId === invocation.toolCallId
+      && item.repositoryFullName === invocation.repositoryFullName
+      && item.issueNumber === invocation.issueNumber
+      && item.comment === invocation.comment);
+    if (existingIndex < 0) state.invocations.push(invocation);
+    else state.invocations[existingIndex] = { ...state.invocations[existingIndex]!, ...invocation };
+  }
+
+  const status = numberValue(value.status, value.http_status, value.httpStatus, recordValue(value.response)?.status);
+  const commentId = stringValue(
+    value.comment_id,
+    value.commentId,
+    recordValue(value.response)?.comment_id,
+    recordValue(value.response)?.id,
+  );
+  const commentUrl = stringValue(
+    value.comment_url,
+    value.commentUrl,
+    value.url,
+    recordValue(value.response)?.comment_url,
+    recordValue(value.response)?.html_url,
+  );
+  const looksLikeResult = Boolean(
+    id
+    && value.arguments === undefined
+    && value.args === undefined
+    && value.parameters === undefined
+    && value.input === undefined
+    && (value.result !== undefined
+      || value.response !== undefined
+      || value.error !== undefined
+      || value.success !== undefined
+      || value.ok !== undefined
+      || value.status !== undefined
+      || value.no_external_request !== undefined
+      || value.request_dispatched !== undefined),
+  );
+  if (
+    looksLikeResult
+    && fields.repositoryFullName
+    && fields.issueNumber !== undefined
+    && action === ISSUE_COMMENT_ACTION
+  ) {
+    const classified = resultOutcome(value, status, commentId, commentUrl);
+    const result: DirectPublicationResult = {
+      toolCallId: id!,
+      action: ISSUE_COMMENT_ACTION,
+      repositoryFullName: fields.repositoryFullName,
+      issueNumber: fields.issueNumber,
+      outcome: classified.outcome,
+      ...(classified.noCommitClass ? { noCommitClass: classified.noCommitClass } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...(commentId ? { commentId } : {}),
+      ...(commentUrl ? { commentUrl } : {}),
+      ...(assistantMessageId ? { assistantMessageId } : {}),
+      ...(parentUserMessageId ? { parentUserMessageId } : {}),
+    };
+    const signature = JSON.stringify(result);
+    if (!state.results.some((item) => JSON.stringify(item) === signature)) state.results.push(result);
+  }
+}
+
+export function observeDirectPublicationPayload(
+  state: DirectPublicationObservationState,
+  value: unknown,
+): void {
+  if (!value || typeof value !== 'object') {
+    if (typeof value === 'string') {
+      const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      let parsedAny = false;
+      for (const line of lines) {
+        const data = line.startsWith('data:') ? line.slice(5).trim() : line;
+        if (!data || data === '[DONE]') continue;
+        const parsed = jsonRecord(data);
+        if (parsed) {
+          parsedAny = true;
+          observeDirectPublicationPayload(state, parsed);
+        }
+      }
+      if (!parsedAny) {
+        const parsed = jsonRecord(value);
+        if (parsed) observeDirectPublicationPayload(state, parsed);
+      }
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) observeDirectPublicationPayload(state, item);
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  observeDirectPublicationObject(state, record);
+  const inherited = {
+    ...(actionName(record) ? { action: actionName(record) } : {}),
+    ...(toolCallId(record) ? { tool_call_id: toolCallId(record) } : {}),
+    ...(targetFields(record).repositoryFullName ? { repository: targetFields(record).repositoryFullName } : {}),
+    ...(targetFields(record).issueNumber !== undefined ? { issue_number: targetFields(record).issueNumber } : {}),
+  };
+  for (const child of Object.values(record)) {
+    if (child && typeof child === 'object' && !Array.isArray(child) && Object.keys(inherited).length > 0) {
+      const childRecord = child as Record<string, unknown>;
+      const enriched = {
+        ...inherited,
+        ...childRecord,
+        ...(actionName(childRecord) ? {} : { action: inherited.action }),
+        ...(toolCallId(childRecord) ? {} : { tool_call_id: inherited.tool_call_id }),
+      };
+      observeDirectPublicationPayload(state, enriched);
+    } else {
+      observeDirectPublicationPayload(state, child);
+    }
+  }
+}
+
+function matchingDirectPublicationPairs(
+  state: DirectPublicationObservationState,
+  target: DirectPublicationTarget,
+): { invocations: DirectPublicationInvocation[]; results: DirectPublicationResult[] } {
+  const invocations = state.invocations.filter((item) =>
+    item.repositoryFullName === target.repositoryFullName
+    && item.issueNumber === target.issueNumber
+    && (!target.userMessageId || !item.parentUserMessageId || item.parentUserMessageId === target.userMessageId));
+  const results = state.results.filter((item) =>
+    item.repositoryFullName === target.repositoryFullName && item.issueNumber === target.issueNumber);
+  return { invocations, results };
+}
+
+export function settleDirectPublication(
+  state: DirectPublicationObservationState,
+  target: DirectPublicationTarget,
+  finalAssistantOutput?: string,
+): DirectPublicationSettlement {
+  const matching = matchingDirectPublicationPairs(state, target);
+  if (matching.invocations.length !== 1) {
+    return { state: 'possible-delivery', cause: 'direct_publication_invocation_ambiguous' };
+  }
+  const invocation = matching.invocations[0]!;
+  const results = matching.results.filter((item) => item.toolCallId === invocation.toolCallId);
+  if (results.length !== 1) {
+    return {
+      state: 'possible-delivery',
+      cause: results.length === 0 ? 'direct_publication_result_missing' : 'direct_publication_result_ambiguous',
+      invocation,
+    };
+  }
+  const result = results[0]!;
+  if (result.outcome === 'success' && result.commentId && result.commentUrl) {
+    return {
+      state: 'success',
+      cause: 'direct_publication_success',
+      invocation,
+      result,
+      sourceBytes: invocation.comment,
+    };
+  }
+  if (result.outcome === 'no-commit' && result.noCommitClass && finalAssistantOutput !== undefined) {
+    return {
+      state: 'failed-write',
+      cause: result.noCommitClass,
+      invocation,
+      result,
+      sourceBytes: finalAssistantOutput,
+    };
+  }
+  return {
+    state: 'possible-delivery',
+    cause: 'direct_publication_possible_delivery',
+    invocation,
+    result,
+  };
+}
+
+export interface ParsedSourceRevision {
+  readonly issueNumber: number;
+  readonly sourceRevision: string;
+  readonly findingCount: number;
+}
+
+export function rawFindingCount(source: string): number {
+  let fenced = false;
+  let count = 0;
+  for (const line of source.split(/\n/)) {
+    const normalized = line.endsWith('\r') ? line.slice(0, -1) : line;
+    if (/^\s*```/.test(normalized)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (!fenced && !/^\s*>/.test(normalized) && /^\s*id:\s*/i.test(normalized)) count += 1;
+  }
+  return count;
+}
+
+export function parseCanonicalSourceRevision(
+  source: string,
+  target: Pick<DirectPublicationTarget, 'repositoryFullName' | 'issueNumber' | 'sourceRevision'>,
+): ParsedSourceRevision | null {
+  const lines = source.split(/\n/);
+  const firstNonEmpty = lines.find((line) => line.trim().length > 0)?.replace(/\r$/, '');
+  const match = firstNonEmpty ? REVISION_LINE_RE.exec(firstNonEmpty) : null;
+  const declarations = lines.filter((line) => REVISION_LINE_RE.test(line.replace(/\r$/, ''))).length;
+  if (!match || declarations !== 1) return null;
+  const issueNumber = Number(match[1]);
+  const sourceRevision = match[2]!;
+  if (issueNumber !== target.issueNumber || sourceRevision !== target.sourceRevision) return null;
+  return { issueNumber, sourceRevision, findingCount: rawFindingCount(source) };
+}
+
+export function reviewerSourceMetadata(
+  settlement: DirectPublicationSettlement,
+  target: DirectPublicationTarget,
+): import('./contracts.ts').ReviewerSourceV1 | null {
+  if (!settlement.sourceBytes || !settlement.invocation || !settlement.result) return null;
+  const parsed = parseCanonicalSourceRevision(settlement.sourceBytes, target);
+  if (!parsed) return null;
+  const metadata: import('./contracts.ts').ReviewerSourceV1 = {
+    kind: settlement.state === 'success' ? SERVICE_OBSERVED_ISSUE_COMMENT : FAILED_WRITE_FINAL_ASSISTANT,
+    byte_length: Buffer.byteLength(settlement.sourceBytes, 'utf8'),
+    sha256: createHash('sha256').update(settlement.sourceBytes, 'utf8').digest('hex'),
+    tool_call_id: settlement.invocation.toolCallId,
+    repository_full_name: target.repositoryFullName,
+    issue_number: target.issueNumber,
+    source_revision: parsed.sourceRevision,
+    finding_count: parsed.findingCount,
+    ...(settlement.state === 'success' && settlement.result.commentId ? { comment_id: settlement.result.commentId } : {}),
+    ...(settlement.state === 'success' && settlement.result.commentUrl ? { comment_url: settlement.result.commentUrl } : {}),
+  };
+  return metadata;
+}
+
+export function directPublicationReceipt(
+  settlement: DirectPublicationSettlement,
+  target: DirectPublicationTarget,
+): string | null {
+  if (settlement.state !== 'success') return null;
+  const metadata = reviewerSourceMetadata(settlement, target);
+  if (!metadata || !settlement.sourceBytes || !settlement.result?.commentUrl) return null;
+  const verdict = settlement.sourceBytes.match(/^VERDICT:\s*(\S.*)$/m)?.[1]?.trim();
+  if (!verdict) return null;
+  return [
+    `VERDICT: ${verdict}`,
+    `COMMENT_URL: ${settlement.result.commentUrl}`,
+    `REVISION: ${metadata.source_revision}`,
+    `INVOCATION_ID: ${target.invocationId}`,
+    `FINDING_COUNT: ${metadata.finding_count}`,
+  ].join('\n');
+}
+
+export function parseReviewerSourceIdentity(
+  value: string,
+): { independentSourceId: string; policy: import('./contracts.ts').ReviewerSourcePolicy } | null {
+  const match = DIRECT_POLICY_IDENTITY_RE.exec(value);
+  return match
+    ? { independentSourceId: match[1]!, policy: match[2]! as import('./contracts.ts').ReviewerSourcePolicy }
+    : null;
+}
+
+export function validateDirectPublicationInputs(input: {
+  readonly invocationId: string;
+  readonly prompt: string;
+  readonly reviewerSource: string;
+  readonly repositoryFullName: string;
+  readonly issueNumber: number;
+  readonly sourceRevision: string;
+}): string | null {
+  if (!UUID_RE.test(input.invocationId)) return 'invocation_id_invalid';
+  const marker = `INVOCATION_ID_TO_ECHO: ${input.invocationId}`;
+  if (input.prompt.split(/\r?\n/).filter((line) => line === marker).length !== 1) return 'invocation_id_prompt_mismatch';
+  const sourceIdentity = parseReviewerSourceIdentity(input.reviewerSource);
+  if (!sourceIdentity || sourceIdentity.policy !== DIRECT_PUBLICATION_POLICY) return 'reviewer_source_policy_invalid';
+  if (!input.repositoryFullName || !Number.isSafeInteger(input.issueNumber) || input.issueNumber < 1) {
+    return 'reviewer_target_invalid';
+  }
+  if (!/^r[0-9]+$/.test(input.sourceRevision)) return 'reviewer_revision_invalid';
+  return null;
 }

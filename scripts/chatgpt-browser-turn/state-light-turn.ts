@@ -25,6 +25,16 @@ import {
   type TurnResultV1,
   type TurnState,
 } from './contracts.ts';
+import {
+  createDirectPublicationObservationState,
+  directPublicationReceipt,
+  observeDirectPublicationPayload,
+  reviewerSourceMetadata,
+  settleDirectPublication,
+  validateDirectPublicationInputs,
+  type DirectPublicationConfig,
+  type DirectPublicationObservationState,
+} from './terminal-witness.ts';
 import { readStableInput } from './input.ts';
 import {
   generateOwnedPromptMarker,
@@ -182,7 +192,7 @@ interface TurnRunOutcome {
   readonly ownershipForfeited?: boolean;
 }
 
-interface StateLightPublicationResult {
+export interface StateLightPublicationResult {
   readonly state: 'committed_ok' | 'conflict' | 'error';
   readonly cause?: string;
   readonly output_bytes?: number;
@@ -594,7 +604,7 @@ function bestEffortUnlink(path: string): void {
   }
 }
 
-function publishStateLightReply(
+export function publishStateLightReply(
   outputPath: string,
   invocationId: string,
   reply: string,
@@ -762,6 +772,63 @@ function browserConfig(args: ParsedTurnArgs): BrowserConfig & { pollMs: number }
     ...(chatUrl ? { chatUrl } : {}),
     ...(projectUrl ? { projectUrl } : {}),
   };
+}
+
+function directPublicationConfig(
+  args: ParsedTurnArgs,
+  invocationId: string,
+  prompt: string,
+): DirectPublicationConfig | undefined {
+  const sourceOutput = stringOption(args, 'reviewer-source-output');
+  const directKeys = ['invocation-id', 'reviewer-source', 'repository', 'issue-number', 'source-revision'];
+  const hasDirectOptions = directKeys.some((key) => args.options.has(key));
+  if (!sourceOutput) {
+    if (hasDirectOptions) throw new Error('input_invalid:direct_publication_requires_source_output');
+    return undefined;
+  }
+  const repositoryFullName = requireOption(args, 'repository');
+  const issueNumber = parseInteger(requireOption(args, 'issue-number'), 1);
+  const sourceRevision = requireOption(args, 'source-revision');
+  const reviewerSource = requireOption(args, 'reviewer-source');
+  const validation = validateDirectPublicationInputs({
+    invocationId,
+    prompt,
+    reviewerSource,
+    repositoryFullName,
+    issueNumber,
+    sourceRevision,
+  });
+  if (validation) throw new Error(`input_invalid:${validation}`);
+  return {
+    target: { repositoryFullName, issueNumber, sourceRevision, invocationId },
+    reviewerSource,
+    reviewerSourceOutput: sourceOutput,
+  };
+}
+
+function installDirectPublicationObserver(
+  page: any,
+  state: DirectPublicationObservationState,
+): void {
+  const consume = (payload: string): void => {
+    if (!payload) return;
+    try {
+      observeDirectPublicationPayload(state, JSON.parse(payload) as unknown);
+    } catch {
+      observeDirectPublicationPayload(state, payload);
+    }
+  };
+  page.on?.('response', async (response: any) => {
+    try {
+      void response.url?.();
+      consume(await response.text());
+    } catch {
+      // Opaque or unavailable response bodies remain possible delivery.
+    }
+  });
+  page.on?.('websocket', (socket: any) => {
+    socket.on?.('framereceived', (frame: { payload?: string }) => consume(frame.payload ?? ''));
+  });
 }
 
 function compactResult(
@@ -1343,8 +1410,14 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     'project-url',
     'timeout-ms',
     'poll-ms',
+    'invocation-id',
+    'reviewer-source-output',
+    'reviewer-source',
+    'repository',
+    'issue-number',
+    'source-revision',
   ]);
-  const invocationId = randomUUID();
+  const invocationId = stringOption(args, 'invocation-id') ?? randomUUID();
   let profileKey = 'profile-unresolved';
   let browser: any;
   let page: any;
@@ -1367,8 +1440,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
   };
 
   try {
-    const config = browserConfig(args);
-    if (config.timeoutMs > STATE_LIGHT_MAX_TIMEOUT_MS) {
+    const baseConfig = browserConfig(args);
+    if (baseConfig.timeoutMs > STATE_LIGHT_MAX_TIMEOUT_MS) {
       incident('input_invalid', 'timeout_ms_exceeds_maximum', 'return_local_error');
       return {
         result: compactResult(
@@ -1376,7 +1449,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
           'invocation',
           'timeout_ms_exceeds_maximum',
           invocationId,
-          configuredProfileKey(config.profile, config.cdp),
+          configuredProfileKey(baseConfig.profile, baseConfig.cdp),
           0,
           pollCount,
           navigation,
@@ -1386,9 +1459,15 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
         ),
       };
     }
-    profileKey = configuredProfileKey(config.profile, config.cdp);
+    profileKey = configuredProfileKey(baseConfig.profile, baseConfig.cdp);
     const snapshot = readStableInput(requireOption(args, 'input'));
+    const direct = directPublicationConfig(args, invocationId, snapshot.text);
     const destination = destinationIdentity(requireOption(args, 'output'));
+    const reviewerSourceDestination = direct ? destinationIdentity(direct.reviewerSourceOutput) : undefined;
+    if (direct && reviewerSourceDestination?.finalPath === destination.finalPath) {
+      throw new Error('input_invalid:direct_publication_artifact_alias');
+    }
+    const config = direct ? { ...baseConfig, directPublication: direct } : baseConfig;
 
     const profile = await verifyProfile(config);
     if (profile.state !== 'verified') {
@@ -1415,6 +1494,8 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
     browser = await chromium.connectOverCDP(config.cdp, { timeout: Math.min(30_000, config.timeoutMs) });
     page = await createDedicatedTurnPage(browser);
     await navigateOwnedTurnPage(page, config, navigation);
+    const directObservation = createDirectPublicationObservationState();
+    if (config.directPublication) installDirectPublicationObserver(page, directObservation);
 
     let baselineCount = 0;
     let ownedConversationUrl: string | undefined;
@@ -2168,10 +2249,66 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
             );
           }
           const captureReply = bestReadyReply.length >= decision.reply.length ? bestReadyReply : decision.reply;
+          const directSettlement = config.directPublication
+            ? settleDirectPublication(
+              directObservation,
+              { ...config.directPublication.target, userMessageId: undefined },
+              captureReply,
+            )
+            : undefined;
+          let managerReply = captureReply;
+          let reviewerSource = null as ReturnType<typeof reviewerSourceMetadata>;
+          if (config.directPublication) {
+            if (!directSettlement || directSettlement.state === 'possible-delivery') {
+              incident('direct_publication_possible_delivery', directSettlement?.cause ?? 'direct_publication_observation_missing', 'retain_owned_page_no_resend');
+              return {
+                page,
+                browser,
+                preserveOwnedPage: true,
+                result: compactResult('recovery_required', 'conversation', directSettlement?.cause ?? 'direct_publication_observation_missing', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
+              };
+            }
+            reviewerSource = reviewerSourceMetadata(directSettlement, config.directPublication.target);
+            if (!reviewerSource) {
+              incident('direct_publication_source_invalid', 'direct_publication_source_revision_or_binding_invalid', 'retain_owned_page_no_resend');
+              return {
+                page,
+                browser,
+                preserveOwnedPage: true,
+                result: compactResult('recovery_required', 'conversation', 'direct_publication_source_invalid', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
+              };
+            }
+            managerReply = directSettlement.state === 'success'
+              ? directPublicationReceipt(directSettlement, config.directPublication.target) ?? ''
+              : captureReply;
+            if (!managerReply) {
+              incident('direct_publication_receipt_invalid', 'direct_publication_receipt_invalid', 'retain_owned_page_no_resend');
+              return {
+                page,
+                browser,
+                preserveOwnedPage: true,
+                result: compactResult('recovery_required', 'conversation', 'direct_publication_receipt_invalid', invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
+              };
+            }
+            const sourcePublication = publishStateLightReply(
+              config.directPublication.reviewerSourceOutput,
+              invocationId,
+              directSettlement.sourceBytes ?? captureReply,
+            );
+            if (sourcePublication.state !== 'committed_ok') {
+              incident('reviewer_source_publication_error', sourcePublication.cause ?? sourcePublication.state, 'retain_owned_page_no_resend');
+              return {
+                page,
+                browser,
+                preserveOwnedPage: true,
+                result: compactResult('recovery_required', 'conversation', sourcePublication.cause ?? sourcePublication.state, invocationId, profileKey, sendCount, pollCount, navigation, incidents, {}, journalWriteFailed),
+              };
+            }
+          }
           const publication = publishStateLightReply(
             destination.finalPath,
             invocationId,
-            captureReply,
+            managerReply,
           );
           if (publication.state !== 'committed_ok') {
             incident('output_publication_error', publication.cause ?? publication.state, 'return_local_error');
@@ -2211,6 +2348,7 @@ async function runTurn(args: ParsedTurnArgs): Promise<TurnRunOutcome> {
                   byte_length: publication.output_bytes!,
                   sha256: publication.output_sha256!,
                 },
+                ...(reviewerSource ? { reviewer_source: reviewerSource } : {}),
               },
               journalWriteFailed,
             ),
