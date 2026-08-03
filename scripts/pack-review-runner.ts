@@ -307,7 +307,7 @@ function terminalV2FromPayload(input: {
     terminalSource: 'normal',
     runId: input.runId,
     targetSha: input.targetSha,
-    reviewVerdict: input.verdict,
+    reviewVerdict: input.verdict === 'clean' && input.findingCount === 0 ? 'clean' : 'findings',
     findingCount: input.findingCount,
     findingsDigest: sha256Bytes(JSON.stringify(input.findings)),
   };
