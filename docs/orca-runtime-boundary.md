@@ -25,6 +25,38 @@ Operations required only by remaining supervisor/recovery callers are intentiona
 - The current public Orca CLI closes terminals only by handle and exposes no expected-generation binding. Therefore the shared Orca adapter does not issue a destructive close and returns `runtime_generation_bound_stop_unsupported` for an otherwise owned worker. The existing worker-smoke compatibility facade retains its current close behavior until #1248 can bind migration to a generation-safe native operation; the shared boundary does not claim atomicity that Orca cannot provide.
 - Current upstream Orca output (`result.terminal.tail`, string-or-null cursor plus optional `latestCursor`) and the captured legacy smoke shape (`result.lines`, numeric cursor) are normalized internally. Any unsupported consumed response or progress shape returns the named `unsupported` result.
 
+## Worktree lifecycle continuity (Issue #1298)
+
+Worktree creation and teardown are deliberately not added to `RuntimeAdapter` by this task. Issue
+#1248 still owns the broad caller migration and any future runtime-neutral lifecycle expansion.
+Issue #1298 adds one smaller pack-owned boundary at `scripts/worktree-lifecycle/**` because the
+current production problem is disagreement between two native authorities:
+
+- Git's common worktree registry and target `.git` link;
+- Orca's supported worktree, agent, and terminal inventories.
+
+The seam performs a bounded dual census and emits one exact classification:
+`exact_dual`, `exact_git_only`, `orca_only`, `conflict`, or `absent`. Runtime-specific commands and
+response validation stay at the edge; normalized identity and continuation decisions stay in the
+pure classifier.
+
+The lifecycle seam does not become a universal registry and stores no durable state. Discovery
+never grants mutation authority. Terminal spawn is allowed only after exact Git/Orca agreement on
+repository, canonical path, PR, branch-or-detached mode, and full HEAD SHA. Unsupported or
+malformed Orca output is a conflict.
+
+For cleanup, mutation safety and work continuity are separate decisions. Existing teardown gates
+remain fail-closed for the target. A blocked or ambiguous cleanup returns a structured
+`cleanup_deferred` result with `pipelineContinues: true`; it does not invalidate an already
+successful merge/adoption or stop unrelated scheduler work. Exact Git-only recovery is explicit,
+dry-run-first, and permits only Git's non-force worktree removal after the complete identity,
+cleanliness, merge, ownership, terminal, process, exclusion, and fresh-read-back checks pass.
+
+No watcher, daemon, lease service, second state store, bulk orphan sweep, private Orca persistence
+edit, force removal, or path-only delete is introduced. A future native Orca adopt/register branch
+requires installed-version production capture proving its exact command and identity-preserving
+read-back; until then it is treated as unsupported.
+
 ## Adding a future adapter
 
 A future adapter needs an implementation of `RuntimeAdapter`, a static composition-root factory, focused contract tests, and this document updated. Runtime-specific command lines, response fields, handles, cursors, and error text must remain inside that adapter. The deterministic adapter is test-only and is injected by tests; it is not registered as a production runtime.
