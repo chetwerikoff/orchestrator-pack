@@ -10,6 +10,7 @@
     "scripts/orca-runtime/task-adapter.ts",
     "scripts/runtime/caller-census.test.ts",
     "scripts/runtime/caller-census.ts",
+    "scripts/runtime/compat-diagnostic.ts",
     "scripts/runtime/registry.ts",
     "scripts/runtime/task-compat.test.ts",
     "scripts/runtime/task-compat.ts",
