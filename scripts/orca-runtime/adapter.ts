@@ -229,8 +229,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     readonly timeoutMs?: number;
   }): RuntimeDispatchResult {
     const binding = this.resolveBinding(input.identity, input.timeoutMs);
-    if (!binding) return { status: 'send_failed', attempts: 1, reason: 'worker_generation_not_found' };
-    return dispatchResult(this.sendTerminal(binding.handle, input.text, { timeoutMs: input.timeoutMs }));
+    if (binding.status !== 'ok') {
+      return { status: 'send_failed', attempts: 1, reason: binding.reason };
+    }
+    return dispatchResult(this.sendTerminal(binding.value.handle, input.text, { timeoutMs: input.timeoutMs }));
   }
 
   submitInput(input: {
@@ -238,8 +240,10 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     readonly timeoutMs?: number;
   }): RuntimeDispatchResult {
     const binding = this.resolveBinding(input.identity, input.timeoutMs);
-    if (!binding) return { status: 'send_failed', attempts: 1, reason: 'worker_generation_not_found' };
-    return dispatchResult(this.submitTerminal(binding.handle, { timeoutMs: input.timeoutMs }));
+    if (binding.status !== 'ok') {
+      return { status: 'send_failed', attempts: 1, reason: binding.reason };
+    }
+    return dispatchResult(this.submitTerminal(binding.value.handle, { timeoutMs: input.timeoutMs }));
   }
 
   readBoundedOutput(input: {
@@ -249,14 +253,16 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     readonly timeoutMs?: number;
   }): RuntimeResult<RuntimeBoundedOutput> {
     const binding = this.resolveBinding(input.identity, input.timeoutMs);
-    if (!binding) return failure('gone', 'worker_generation_not_found');
+    if (binding.status !== 'ok') {
+      return failure(binding.status === 'gone' ? 'gone' : 'unknown', binding.reason);
+    }
     const previous = input.previousObservationToken
       ? this.observationByToken.get(input.previousObservationToken)
       : undefined;
     if (input.previousObservationToken && (!previous || previous.identityKey !== identityKey(input.identity))) {
       return failure('unknown', 'observation_token_invalid_for_generation');
     }
-    const args = ['terminal', 'read', '--terminal', binding.handle];
+    const args = ['terminal', 'read', '--terminal', binding.value.handle];
     if (previous?.nativeCursor !== null && previous?.nativeCursor !== undefined) {
       args.push('--cursor', String(previous.nativeCursor));
     }
@@ -286,12 +292,12 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
   }): RuntimeLiveness {
     if (!Number.isFinite(input.boundMs) || input.boundMs <= 0) return 'unknown';
     const binding = this.resolveBinding(input.identity, input.boundMs);
-    if (!binding) return 'gone';
+    if (binding.status !== 'ok') return binding.status === 'gone' ? 'gone' : 'unknown';
     const response = this.runJson<unknown>([
       'terminal',
       'wait',
       '--terminal',
-      binding.handle,
+      binding.value.handle,
       '--for',
       'tui-idle',
       '--timeout-ms',
@@ -310,11 +316,13 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     readonly timeoutMs?: number;
   }): RuntimeResult<{ readonly stopped: true }> {
     const binding = this.resolveBinding(input.identity, input.timeoutMs);
-    if (!binding) return failure('gone', 'worker_generation_not_found');
-    if (binding.worker.provenance !== 'internal' || !this.ownedGenerations.has(input.identity.generation)) {
+    if (binding.status !== 'ok') {
+      return failure(binding.status === 'gone' ? 'gone' : 'unknown', binding.reason);
+    }
+    if (binding.value.worker.provenance !== 'internal' || !this.ownedGenerations.has(input.identity.generation)) {
       return failure('not_owned', 'external_worker_not_owned');
     }
-    const response = this.closeTerminal(binding.handle, { timeoutMs: input.timeoutMs });
+    const response = this.closeTerminal(binding.value.handle, { timeoutMs: input.timeoutMs });
     if (!response.ok) return failure(confirmedGone(response) ? 'gone' : 'unknown', nativeReason(response));
     this.bindingByGeneration.delete(input.identity.generation);
     this.ownedGenerations.delete(input.identity.generation);
@@ -339,17 +347,20 @@ export class OrcaRuntimeAdapter implements RuntimeAdapter {
     return success({ removed: true });
   }
 
-  private resolveBinding(identity: RuntimeWorkerIdentity, timeoutMs?: number): WorkerBinding | undefined {
+  private resolveBinding(
+    identity: RuntimeWorkerIdentity,
+    timeoutMs?: number,
+  ): RuntimeResult<WorkerBinding> {
     const known = this.bindingByGeneration.get(identity.generation);
     const listed = this.listWorkers({
       workspacePath: known?.worker.workspacePath,
       timeoutMs,
     });
-    if (listed.status !== 'ok') return undefined;
+    if (listed.status !== 'ok') return listed as RuntimeResult<WorkerBinding>;
     const refreshed = this.bindingByGeneration.get(identity.generation);
     return refreshed && identityKey(refreshed.worker.identity) === identityKey(identity)
-      ? refreshed
-      : undefined;
+      ? success(refreshed)
+      : failure('gone', 'worker_generation_not_found');
   }
 }
 
