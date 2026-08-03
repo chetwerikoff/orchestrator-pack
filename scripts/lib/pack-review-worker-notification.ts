@@ -41,6 +41,7 @@ export interface WorkerNotificationOptions {
   workerId?: string;
   /** Transitional parameter name at old call sites; interpreted only as a runtime worker id. */
   sessionId?: string;
+  expectedWorkerGeneration?: string;
   request: PackReviewWorkerNotificationRequest;
   repoRoot?: string;
   projectId?: string;
@@ -100,11 +101,15 @@ async function currentHead(workspacePath: string): Promise<string> {
 async function resolveWorker(input: {
   adapter: RuntimeAdapter;
   workerId: string;
+  expectedGeneration: string;
   expectedHeadSha: string;
 }): Promise<RuntimeWorker> {
   const found = input.adapter.findWorkerById(input.workerId);
   if (found.status !== 'ok') throw new Error(`${found.operation}:${found.reason}`);
   if (!found.value) throw new Error('worker_not_found');
+  if (input.expectedGeneration && found.value.identity.generation !== input.expectedGeneration) {
+    throw new Error('worker_generation_mismatch');
+  }
   if (input.expectedHeadSha) {
     const observed = await currentHead(found.value.workspacePath);
     if (observed !== input.expectedHeadSha) throw new Error('worker_head_mismatch');
@@ -168,10 +173,7 @@ async function admitNotification(input: {
   });
 }
 
-async function finalizeJournal(
-  admission: JournalAdmission,
-  outcome: string,
-): Promise<void> {
+async function finalizeJournal(admission: JournalAdmission, outcome: string): Promise<void> {
   await withJournalLock(admission.journalPath, 3, () => {
     const finalized = finalizeDispatchJournalRecord(
       readJournal(admission.journalPath),
@@ -245,6 +247,7 @@ export async function sendPackReviewWorkerNotification(
     worker = await resolveWorker({
       adapter,
       workerId,
+      expectedGeneration: trim(options.expectedWorkerGeneration),
       expectedHeadSha: trim(options.headSha).toLowerCase(),
     });
   } catch (error) {
