@@ -136,7 +136,8 @@
     "scripts/merge-triage-evidence.test.ts": "light",
     "scripts/worktree-lifecycle/create-continuation.test.ts": "light",
     "scripts/worktree-lifecycle/core.test.ts": "light",
-    "scripts/worktree-lifecycle/operations.test.ts": "light"
+    "scripts/worktree-lifecycle/operations.test.ts": "light",
+    "scripts/worktree-lifecycle/recovery-regression.test.ts": "light"
   },
   "heavyTopology": {
     "targetShardSeconds": 900,
