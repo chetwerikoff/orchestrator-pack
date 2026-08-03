@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type {
   RuntimeDispatchResult,
+  RuntimeFailureReason,
   RuntimeResult,
   RuntimeWorkerIdentity,
 } from '../runtime/contracts.ts';
@@ -46,9 +47,9 @@ export function success<T>(value: T): RuntimeResult<T> {
 
 export function failure<T>(
   status: Exclude<RuntimeResult<T>['status'], 'ok'>,
-  reason: string,
+  reason: RuntimeFailureReason,
 ): RuntimeResult<T> {
-  return { status, reason } as RuntimeResult<T>;
+  return { status, reason };
 }
 
 export function nativeReason(response: OrcaJsonResponse): string {
@@ -67,7 +68,7 @@ function parseNativeCursor(value: unknown): NativeCursor | undefined {
 
 export function parseBoundedOutputPayload(payload: unknown):
   | { readonly ok: true; readonly lines: readonly string[]; readonly nativeCursor: NativeCursor }
-  | { readonly ok: false; readonly reason: string } {
+  | { readonly ok: false; readonly reason: 'orca_read_invalid_response_shape' } {
   const result = object(payload);
   const terminal = object(result?.terminal);
   const linesValue = result?.lines ?? terminal?.tail;
@@ -88,7 +89,7 @@ export function parseBoundedOutputPayload(payload: unknown):
 
 export function parseTerminalRows(payload: unknown):
   | { readonly ok: true; readonly rows: readonly TerminalRow[] }
-  | { readonly ok: false; readonly reason: string } {
+  | { readonly ok: false; readonly reason: 'orca_terminal_list_unsupported' } {
   const result = object(payload);
   if (!result || !Array.isArray(result.terminals)) {
     return { ok: false, reason: 'orca_terminal_list_unsupported' };
@@ -123,6 +124,6 @@ export function dispatchResult(response: OrcaJsonResponse): RuntimeDispatchResul
   return {
     status: ambiguous ? 'dispatch_unknown' : 'send_failed',
     attempts: 1,
-    reason: nativeReason(response),
+    reason: ambiguous ? 'adapter_dispatch_unknown' : 'adapter_send_failed',
   };
 }
