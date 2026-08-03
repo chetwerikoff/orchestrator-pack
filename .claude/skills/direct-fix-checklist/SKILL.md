@@ -1,147 +1,273 @@
 ---
 name: direct-fix-checklist
-description: Use when the user explicitly authorizes the architect to open a direct PR that edits tracked files (not gitignored local config). Skip for normal work — spawn an AO worker instead — and skip for gitignored-only changes (agent-orchestrator.yaml, .ao/) that need no PR scope guard.
+description: Use when the user explicitly authorizes the architect to open a direct PR that edits tracked files. Skip for normal queue work — the default is to hand the change to a worker — and skip for gitignored-only local config edits that produce no tracked diff and need no PR scope guard.
 ---
 
 # direct-fix-checklist
 
 Authorized override when the user explicitly asks the architect to land a
-direct PR. Architect role context: `CLAUDE.md` (default is worker spawn;
-this skill is the only supported bypass).
+direct PR. Architect role context: `CLAUDE.md` (default is handing the change
+to a worker; this skill is the only supported bypass).
 
 ## When to invoke
 
-- User clearly authorizes **this PR** to be an architect-direct edit (e.g.
-  "fix it yourself", "open a PR for this doc change now").
-- The change must touch tracked files that CI scope-guard enforces.
+- User authorizes **this specific change, for this one direct-PR run** (e.g.
+  "fix it yourself", "open a PR for this doc change now"). The PR does not have
+  to exist yet — authorization is per change, not per PR number.
+- The change touches tracked files that the CI scope guard enforces.
 
 ## When to skip
 
-- Normal queue work → spawn `ao spawn` / let the planner declare and implement.
-- Gitignored-only edits (`agent-orchestrator.yaml`, `.ao/**`) with no tracked diff.
-- User has not named a specific authorized direct PR.
+- Normal queue work → hand the change to a worker (§ Hand off to a worker).
+- Gitignored-only edits that leave the tracked diff empty — no PR, no scope guard.
+- The user asked for implementation generally, without authorizing the architect
+  to be the one who writes it.
 
-## CI checks the PR must pass
+## The direct-PR spine
 
-From `.github/workflows/scope-guard.yml` (job `name` fields):
+The order that matters. Sections after it cover the steps that need detail;
+CI and review are separate concerns and have their own sections.
 
-| Job name | What it runs |
-|----------|----------------|
-| **Verify orchestrator-pack structure** | `./scripts/verify.ps1`, `./scripts/check-reusable.ps1` |
-| **PR scope guard** | `scripts/pr-scope-check.ps1` (trusted base copy + PR head diff vs declaration snapshot + issue fences) |
-| **Run pack contract tests** | `npm ci`, `tsc`, `./scripts/test-all.ps1` |
-| **Self-architect lint** | `./scripts/lint-self-architect.ps1 -Strict` (PRs only) |
-
-All four must be green before merge. AO does **not** auto-run Codex review on
-architect-direct PRs — run manual review (below).
-
-## PR body issue reference
-
-**Implementation** direct PRs **must** include a closing reference the scope
-guard parses:
-
-- `Closes #N`, `Fixes #N`, or `Resolves #N` (case-insensitive, `#` required).
-
-**Spec-only docs** direct PRs (draft publish to `main`) use the lighter path
-documented in [`docs/repository_policy.md`](../../../docs/repository_policy.md#spec-only-docs-prs):
-`<!-- pr-type: spec-only -->` plus a non-closing `Refs #N` (no snapshot, issue
-stays open). Do not use closing keywords on spec-only PRs.
+1. **Confirm authorization** covers this change (§ When to invoke).
+2. **Open or identify the issue** and note its number `N`. Implementation PRs
+   need one. If you create it, the body **must** carry a fenced `denylist` block
+   or step 8 will refuse to run (§ Declaration snapshot).
+3. **Work off a base you control.** Confirm the current branch and whether the
+   checkout holds anyone's uncommitted work: `git branch --show-current` and
+   `git status --porcelain=v1`. If it is shared, dirty, or not yours, create a
+   separate worktree from `origin/main` and do everything there.
+4. **Branch** from `origin/main` (fetch first — `origin/main` must be current).
+5. **Edit** only the paths you intend to declare.
+6. **Audit the pending change before committing.** The union of
+   `git status --porcelain=v1` (staged, unstaged, untracked) and
+   `git diff --name-only origin/main` must equal exactly the paths you intend.
+   Anything else present is someone else's work or a stray artifact — find out
+   which before you commit. Do **not** use `origin/main..HEAD` here: it compares
+   committed trees and cannot see the edits you just made.
+7. **Commit the edits.** Do this before step 8 so the snapshot's
+   `source_revision` pins the tree being reviewed.
+8. **Produce the declaration snapshot** (§ Declaration snapshot).
+9. **Commit the snapshot** on its own — the edits are already in step 7.
+10. **Pre-push self-check** (§ Pre-push local self-check).
+11. **Push**, then **open the PR** with the right body contract (§ PR body issue
+    reference).
+12. **Read the PR back** — it exists, targets `main`, and
+    `git diff --name-only origin/main...HEAD` lists exactly your paths plus the
+    snapshot.
 
 ## Declaration snapshot
 
-- **Path:** `docs/declarations/<issue_number>.<iteration_id>.json`
-- **Owner:** `ao-task-declaration` plugin via `ao-declare` — never hand-edit or forge JSON.
-- **Iteration id:** comes from `AO_SESSION_ID` under AO (e.g. issue #6 →
-  `6.op-4.json`, **not** `6.6.json`). Read the real id from `ao status` or the
-  snapshot filename after declare — do not assume `op-<issue-number>`.
+- **Path:** `docs/declarations/<issue_number>.pr-scope.json` — no iteration or
+  session id in the filename. Older files in that directory use the retired
+  `<issue>.<iteration_id>.json` form; the guard discovers `<issue>.*.json`, but
+  only a valid current-schema declaration resolves — a legacy-schema payload is
+  rejected fail-closed. Produce a new snapshot; never revive an old one.
+- **Owner:** `scripts/pr-scope-declaration.ts` — never hand-edit or forge the JSON.
+- **No worker, no session, no runtime needed.** The producer is standalone.
 
-### Obtain a snapshot without a full worker implementation
+**Prerequisites.** The issue body must contain a fenced `denylist` block or the
+producer refuses to run; an `allowed-roots` fence is optional and narrows the
+repository ceiling when present. The repository's own `scripts/gh` wrapper must
+exist and work — the producer executes `<repo-root>/scripts/gh` directly to read
+that body, resolving it by path, so it does **not** need to be on `PATH`. Pass
+`--issue-body-file <file>` to skip the lookup entirely.
 
-1. Spawn a worker scoped to declaration only, then claim or reuse its session:
-   ```powershell
-   ao spawn --issue <N>   # planner declares; worker may stop after snapshot
-   ao status              # note session id (e.g. op-4)
-   ```
-2. Or, on a clean worktree with the issue already on GitHub:
-   ```powershell
-   $env:AO_ISSUE_NUMBER = '<N>'
-   $env:AO_SESSION_ID = 'op-<your-session>'   # if not already set by AO
-   npx ao-declare --issue <N> `
-     --declared-paths path/one.ts,path/two.md `
-     --declared-globs 'plugins/foo/**'
-   ```
-   Flags (only these exist on `plugins/ao-task-declaration/bin/declare.ts`):
-   `--issue`, `--declared-paths`, `--declared-globs`, `--iteration-id`,
-   `--amend`, `--reason`, `--actor`, `--repo-root`.
+```bash
+node --experimental-strip-types scripts/pr-scope-declaration.ts \
+  --issue <N> \
+  --declared-paths path/one.ts,path/two.md \
+  --declared-prefixes 'plugins/foo/**'
 
-3. Commit **only** the snapshot (plus in-scope edits):
-   ```powershell
-   git add docs/declarations/<N>.<iteration_id>.json
-   ```
+git add docs/declarations/<N>.pr-scope.json
+```
 
-Amend once per iteration if scope must change: `ao-declare --amend --reason "..."`.
+Canonical flags: `--issue`, `--declared-paths`, `--declared-prefixes`,
+`--issue-body-file`, `--repo-root`, `--output`. `--declared-globs` is a
+deprecated alias for `--declared-prefixes`; `--amend` is a compatibility spelling
+that only prints a notice. Unknown arguments are rejected, so do not invent
+flags. At least one of paths/prefixes is required, and any `--output` must stay
+under `docs/declarations/`.
+
+**Scope changed ⇒ re-run the producer** — unless a pivot trigger applies, in
+which case stop instead of re-declaring (§ When to pivot). Regenerating is for
+changes still inside the authorized change; it is not a way to absorb growth the
+operator never authorized. There is no amendment budget.
+
+## PR body issue reference
+
+Three shapes exist, and the diff decides which one you are in —
+[`docs/repository_policy.md`](../../../docs/repository_policy.md) is the authority.
+
+- **Implementation** — any path outside the markdown union (`CLAUDE.md`,
+  `scripts/**`, `.github/**`, `docs/declarations/**`). Needs a declaration
+  snapshot and a closing reference the guard parses: `Closes #N`, `Fixes #N`, or
+  `Resolves #N` (case-insensitive, `#` required).
+- **Spec-only docs** — whole diff inside the markdown union, signalled with
+  `<!-- pr-type: spec-only -->` alone on one line plus a non-closing `Refs #N`.
+  No snapshot; the issue stays open. Closing keywords are forbidden.
+- **No-ceremony markdown** — whole diff inside the markdown union, detected from
+  diff content alone. No snapshot, no signal, and the body must reference **no**
+  issue at all; any issue link fails the guard.
+
+The markdown union is `docs/issues_drafts/**/*.md`, `docs/issue_queue_index.md`,
+`docs/architecture.md`, `.claude/skills/**/*.md`, and `.cursor/skills/**/*.md`.
+A single path outside it drops the whole PR to the implementation shape.
 
 ## Pre-push local self-check
 
-From repository root:
+From the repository root:
 
 ```powershell
 .\scripts\verify.ps1
 .\scripts\test-all.ps1
 ```
 
-Fix failures before push — do not use CI as the first scope check.
+**Fix only failures your diff caused.** When a failure looks unrelated, re-run
+the same check on a clean `origin/main` worktree. If it reproduces there it is
+pre-existing: report it, and do not touch unrelated files to make it green —
+that is scope creep the guard will reject. Do not use CI as the first scope check.
 
-## Manual Codex review (direct PRs)
+## CI checks the PR must pass
 
-AO auto-review runs on **worker** PRs only. For architect-direct PRs, run the
-pack reviewer wrapper locally after the PR exists (or against the branch diff).
+The authority is the **required checks reported for the PR's current head** —
+read them from the PR rather than from any list here, which goes stale.
+
+**The scope guard runs from the trusted _base_ checkout, not your branch.** A fix
+to the guard itself does not take effect on the PR that introduces it.
+
+## PR review (operator-initiated only)
+
+**Never self-initiate a review** — architectural or PR, on any engine. Opening
+the PR does not authorize starting one. The user decides when a review runs.
+
+When the operator orders a review, run the pack-owned runner **from the trusted
+pack checkout**, never from the reviewed worktree:
+
+```bash
+node --experimental-strip-types scripts/pack-review-runner.ts start --pr-number <n>
+```
+
+Optional head pin: `--head-sha <40-hex>`. Status: `... list`. `--session-id` is
+for worker PRs; a direct architect PR needs only `--pr-number`.
+
+The reviewer engine is selected by the `PACK_REVIEWER` env var (`codex | claude |
+gpt`), resolved in `scripts/lib/resolve-pack-reviewer.ts` and bound into the
+reviewer child by the runner. To change it, use the `switch-pack-reviewer` skill —
+do not invoke a reviewer plugin directly; the runner owns claim, cap, head
+binding, and is the sole GitHub publisher.
+
+Merging requires an operator-requested pack review at the **current head** under
+the configured `PACK_REVIEWER`, with material findings fixed or rebutted and
+required CI green. The requirement is the review, not any one engine.
+
+**Verdict contract** — the runner needs a valid verdict JSON object, either as
+the whole stdout or on one parseable non-empty line (it scans lines in reverse
+and takes the first valid payload):
+
+| Reviewer stdout | Meaning |
+|-----------------|---------|
+| `{"verdict":"clean","findingCount":0,"findings":[]}` | Clean — safe to merge after CI |
+| `{"verdict":"findings",...}` with matching `findingCount` | Actionable findings — fix or rebut before merge |
+| Empty stdout | **Not** clean — the run failed |
+| Prose narration ("No concrete bugs…") | **Not** clean — no valid verdict payload |
+| `NO_FINDINGS` sentinel | **Not** clean — the runner does not recognize it |
+
+`findingCount` must equal `findings.length` or the runner hard-errors. Treat
+P0/P1 before merge; P2 may be tracked in the issue if accepted.
 
 **Not for issue drafts:** architect spec review uses `codex review` or
-`scripts/review-architect-artifact.ts` — see `create-issue-draft` skill.
-`codex exec review` is the worker **PR code** path only.
+`scripts/review-architect-artifact.ts` — see the `create-issue-draft` skill.
 
-```powershell
-# Replace <session> with worker session id if reusing one; else use --issue + --pr-number
-node --import tsx plugins/ao-codex-pr-reviewer/bin/review.ts `
-  --repo-root . `
-  --base origin/main `
-  --issue <N> `
-  --pr-number <pr>
-```
+## Hand off to a worker
 
-**Clean vs findings** (contract in `docs/issues_drafts/06-codex-reviewer-scope-context.md`, Issue #9):
+### Vendor command bindings
 
-| Trimmed stdout | Meaning |
-|----------------|---------|
-| Exactly `NO_FINDINGS` | Clean — zero findings; safe to merge after CI |
-| JSON `{"findings":[...]}` | Actionable findings — fix or rebut before merge |
-| Empty stdout | **Not** clean — wrapper/run failed |
-| Prose like "No concrete bugs…" | **Not** clean — forbidden narration |
+This table is where the vendor commands live, so they are in one place instead of
+scattered through the steps. It is **not** a runtime-neutral seam: the
+capabilities are shaped like the active runtime's worktree/terminal lifecycle, so
+a runtime built on remote jobs or containers needs these steps rewritten, not
+just this column. The durable fix is an executable seam over
+`selectRuntimeAdapter`; it does not exist yet.
 
-Treat P0/P1 before merge; P2 may be tracked in the issue if accepted.
+**Before any effect, confirm the active runtime matches this table's header.**
+Read the authoritative selection (`OPK_RUNTIME_ADAPTER`, default `orca`) rather
+than assuming an installed binary is the selected runtime — a leftover vendor CLI
+will otherwise succeed against the wrong fleet, silently.
 
-## Pivot back to worker flow
+| Capability | Active runtime = `orca` |
+|---|---|
+| `workspace_for(issue)` | `orca worktree create --name <name> --repo "path:<repo-root>" --base-branch origin/main --issue <N> --setup skip --activate` |
+| `spawn_worker(wt)` | `orca terminal create --worktree "path:<wt>" --title "<role> #<N>" --command "<agent-cli> --model <model>" --focus` |
+| `agents` | `orca worktree ps --json` → `result.worktrees[].agents[]` (`state`, `interrupted`) |
+| `terminals(wt)` | `orca terminal list --worktree "path:<wt>" --json` → `result.terminals[]` (`handle`, `worktreePath`) |
+| `close_terminal(handle)` | `orca terminal close --terminal <handle> --json` |
+| `stop_terminals(wt)` | `orca terminal stop --worktree "path:<wt>" --json` |
 
-Stop the direct path and spawn a worker when:
+Left-column names are identifiers, not commands. Every step below means: look up
+the capability in this table, then execute the command it maps to. Postconditions
+the mapping must preserve on any runtime: the workspace is created from
+`origin/main` and bound to the issue; the worker is **visible to the operator**;
+the agent starts **as part of creating its session**, with its model passed
+explicitly — never typed into a shell afterwards.
 
-- Scope grows beyond what you declared (needs `--amend` twice or new iteration).
+**Resolve every placeholder before acting, and fail closed if you cannot:**
+`<N>` = the issue number; `<repo-root>` = `git rev-parse --show-toplevel`;
+`<name>` = a workspace name containing `N`; `<role>` = what the worker is for;
+`<agent-cli>` and `<model>` = the worker agent and model the operator's standing
+routing prescribes — if that is unstated, **ask**, do not guess; `<wt>` = the
+workspace path returned by `workspace_for`.
+
+**Fail closed.** If the active runtime has no row for a capability a step needs,
+or a placeholder has no authoritative value, **stop and report blocked**. Never
+improvise a substitute command, and never fall back to the direct path because
+the handoff was inconvenient. The blocked report must name: the active runtime,
+the missing capability or value, the last step completed, the current
+branch/PR/head state, and confirmation that no substitute command was run.
+
+### When to pivot
+
+Stop the direct path and hand the change over when:
+
+- Scope grows beyond the change the operator authorized.
 - Implementation touches plugins/scripts/tests you did not declare.
-- Codex or scope-guard reports repeated scope violations.
-- User did not actually authorize a direct PR.
+- The reviewer or scope guard reports repeated scope violations.
+- The user did not actually authorize a direct PR.
 
-```powershell
-ao status                    # read real session id
-ao session kill <session-id> # only if abandoning a stuck worker
-ao spawn --issue <N>
-```
+**Pivot boundary.** Before you have made edits, hand off freely. **Once edits
+exist, stop and report** the exact branch, commit, and pending diff, then wait.
+Do not start a handoff on top of live edits: the bindings above only create a
+workspace from `origin/main`, so there is no way to hand an existing branch to a
+worker from here — proceeding would leave your edits stranded and produce a
+second, diverging implementation. Adopting an existing branch is an operator
+decision carried out by hand, not a step in this procedure.
 
-Do **not** kill a session using `op-<issue-number>` unless `ao status` shows that id.
+### Handoff steps
+
+1. **Census first.** Execute `terminals(wt)` for the target workspace, or note
+   that the workspace does not exist yet. Keep the set of existing handles — the
+   whole read-back depends on knowing the "before" state.
+2. Execute `workspace_for(issue)`; note the returned workspace path as `<wt>`.
+3. Execute `spawn_worker(wt)`; note the returned terminal handle.
+4. **Read back and bind.** Execute `terminals(wt)` again: there must be **exactly
+   one handle that was not in the step-1 set**, and that handle is your worker.
+   Zero new handles means the spawn did not take. More than one means something
+   else is also creating terminals — stop and report rather than guess. Use
+   `agents` to confirm the bound handle is running.
+5. **Never blindly retry a spawn whose outcome is unknown.** A timeout does not
+   mean failure — read back first. Counting agents alone cannot tell your worker
+   from one that was already there, which is why step 1 is not optional.
+
+To stop a worker, use `close_terminal(handle)` with the handle bound in step 4.
+`stop_terminals(wt)` stops **every** terminal in the workspace — use it only when
+you have confirmed the workspace holds nothing else.
 
 ## Don't
 
 - Forge or hand-edit `docs/declarations/*.json`.
 - Use the `scope-guard-degraded` label to bypass snapshot requirements.
 - Merge with `gh pr merge --admin` to skip review or failing checks.
-- Put `declared_paths` in the issue body — only `denylist` / `allowed-roots` fences + snapshot.
-- Invent `ao-declare` flags (`--paths`, `--globs`, etc.) — use `--declared-paths` / `--declared-globs`.
+- Put `declared_paths` in the issue body — only `denylist` / `allowed-roots`
+  fences + snapshot.
+- Invent producer flags — unknown arguments are rejected.
+- Commit from a checkout without first confirming whose branch and whose
+  uncommitted work is in it.
