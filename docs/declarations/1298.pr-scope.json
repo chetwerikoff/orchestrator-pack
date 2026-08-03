@@ -8,14 +8,14 @@
     "docs/orca-runtime-boundary.md",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json",
-    "scripts/worktree-lifecycle/README.md",
     "scripts/worktree-lifecycle/cli.ts",
     "scripts/worktree-lifecycle/core.test.ts",
     "scripts/worktree-lifecycle/core.ts",
     "scripts/worktree-lifecycle/head-bound-runner.ts",
     "scripts/worktree-lifecycle/operations.test.ts",
     "scripts/worktree-lifecycle/operations.ts",
-    "scripts/worktree-lifecycle/policy.ts"
+    "scripts/worktree-lifecycle/policy.ts",
+    "scripts/worktree-lifecycle/README.md"
   ],
   "denylist": [
     ".orca/",
@@ -37,5 +37,5 @@
     "scripts/worktree-teardown-runtime-profile.ts",
     "scripts/worktree-teardown.ts"
   ],
-  "source_revision": "cdc580895b4bef7ce20263e1c59e8649fc1a0629"
+  "source_revision": "bb8d49448b84dcc23497c747adc74b2a2255a7c7"
 }
