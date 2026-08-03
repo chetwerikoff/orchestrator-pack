@@ -23,7 +23,8 @@ const expected = (overrides: Partial<ExpectedWorktreeIdentity> = {}): ExpectedWo
   headSha: HEAD,
   mode: 'branch-bound',
   branchName: BRANCH,
-  prNumber: 1300,
+  bindingKind: 'issue',
+  bindingNumber: 1298,
   ...overrides,
 });
 
@@ -35,20 +36,27 @@ const git = (input: { path?: string; head?: string; branch?: string; detached?: 
     '',
   ].join('\n'));
 
-const orca = (input: { path?: string; head?: string; branch?: string } = {}) =>
-  parseOrcaWorktreePayload({
-    ok: true,
-    result: {
-      worktrees: [{
-        path: input.path ?? PATH,
-        head: input.head ?? HEAD,
-        branch: input.branch === '' ? '' : `refs/heads/${input.branch ?? BRANCH}`,
-        isMainWorktree: false,
-        isArchived: false,
-        repoId: 'repo-1',
-      }],
-    },
-  });
+const orca = (input: {
+  path?: string;
+  head?: string;
+  branch?: string;
+  linkedIssue?: number | null;
+  linkedPR?: number | null;
+} = {}) => parseOrcaWorktreePayload({
+  ok: true,
+  result: {
+    worktrees: [{
+      path: input.path ?? PATH,
+      head: input.head ?? HEAD,
+      branch: input.branch === '' ? '' : `refs/heads/${input.branch ?? BRANCH}`,
+      linkedIssue: input.linkedIssue === undefined ? 1298 : input.linkedIssue,
+      linkedPR: input.linkedPR,
+      isMainWorktree: false,
+      isArchived: false,
+      repoId: 'repo-1',
+    }],
+  },
+});
 
 const evidence = (
   gitRows = git(),
@@ -60,7 +68,7 @@ const evidence = (
 });
 
 describe('worktree lifecycle classifier', () => {
-  it('classifies exact Git and Orca agreement', () => {
+  it('classifies exact issue-bound Git and Orca agreement', () => {
     const report = classifyWorktree({ expected: expected(), evidence: evidence() });
     expect(report.classification).toBe('exact_dual');
     expect(report.exactGitRows).toHaveLength(1);
@@ -79,6 +87,27 @@ describe('worktree lifecycle classifier', () => {
       .toBe('orca_only');
     expect(classifyWorktree({ expected: expected(), evidence: evidence([], []) }).classification)
       .toBe('absent');
+  });
+
+  it('rejects the right path/head/branch when Orca links another issue', () => {
+    const report = classifyWorktree({
+      expected: expected(),
+      evidence: evidence(git(), orca({ linkedIssue: 1299 })),
+    });
+    expect(report.classification).toBe('conflict');
+    expect(report.disagreeingFields).toContain('orca.linkedIssue');
+  });
+
+  it('accepts optional exact linkedPR but rejects a conflicting linkedPR', () => {
+    const prExpected = expected({ bindingKind: 'pr', bindingNumber: 1300 });
+    expect(classifyWorktree({
+      expected: prExpected,
+      evidence: evidence(git(), orca({ linkedIssue: null, linkedPR: 1300 })),
+    }).classification).toBe('exact_dual');
+    expect(classifyWorktree({
+      expected: prExpected,
+      evidence: evidence(git(), orca({ linkedIssue: null, linkedPR: 1301 })),
+    }).classification).toBe('conflict');
   });
 
   it('fails closed on stale, duplicate, and unavailable evidence', () => {
