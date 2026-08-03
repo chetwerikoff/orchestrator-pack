@@ -15,15 +15,25 @@ jobs:
   snapshot:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          path: head
+      - name: Checkout PR base
+        uses: actions/checkout@v4
+        with:
+          ref: 66cae1267a66f04a263e767aaaca35c64485239a
+          path: base
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Install dependencies
+          cache-dependency-path: head/package-lock.json
+      - name: Install head dependencies
+        working-directory: head
         run: npm ci
-      - name: Pack source and dependencies
-        run: tar --exclude=.git -czf /tmp/pr1281-source.tar.gz .
+      - name: Pack source, dependencies, and base
+        run: tar --exclude='head/.git' --exclude='base/.git' -czf /tmp/pr1281-source.tar.gz head base
       - uses: actions/upload-artifact@v4
         with:
           name: pr1281-source
