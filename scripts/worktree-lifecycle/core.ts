@@ -303,13 +303,11 @@ function orcaIdentityMatches(row: OrcaWorktreeRow, expected: ExpectedWorktreeIde
 
 function gitIdentityCollision(row: GitWorktreeRow, expected: ExpectedWorktreeIdentity): boolean {
   if (row.path === expected.path) return !gitIdentityMatches(row, expected);
-  if (row.headSha === expected.headSha) return true;
   return expected.mode === 'branch-bound' && row.branchName === expected.branchName;
 }
 
 function orcaIdentityCollision(row: OrcaWorktreeRow, expected: ExpectedWorktreeIdentity): boolean {
   if (row.path === expected.path) return !orcaIdentityMatches(row, expected);
-  if (row.headSha === expected.headSha) return true;
   if (expected.mode === 'branch-bound' && row.branchName === expected.branchName) return true;
   if (expected.bindingKind === 'issue' && row.linkedIssue === expected.bindingNumber) return true;
   return expected.bindingKind === 'pr' && row.linkedPR === expected.bindingNumber;
