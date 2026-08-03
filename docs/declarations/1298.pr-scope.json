@@ -6,14 +6,16 @@
     ".claude/skills/merge-with-local-adoption/SKILL.md",
     "docs/investigations/orca-worktree-lifecycle/2026-08-04-executor-observations.md",
     "docs/orca-runtime-boundary.md",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json",
+    "scripts/worktree-lifecycle/README.md",
     "scripts/worktree-lifecycle/cli.ts",
     "scripts/worktree-lifecycle/core.test.ts",
     "scripts/worktree-lifecycle/core.ts",
+    "scripts/worktree-lifecycle/head-bound-runner.ts",
     "scripts/worktree-lifecycle/operations.test.ts",
     "scripts/worktree-lifecycle/operations.ts",
-    "scripts/worktree-lifecycle/policy.ts",
-    "scripts/worktree-lifecycle/README.md"
+    "scripts/worktree-lifecycle/policy.ts"
   ],
   "denylist": [
     ".orca/",
@@ -29,10 +31,11 @@
     "docs/investigations/orca-worktree-lifecycle/",
     "docs/migration_notes.md",
     "docs/orca-runtime-boundary.md",
+    "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json",
     "scripts/worktree-lifecycle/",
     "scripts/worktree-teardown-runtime-profile.ts",
     "scripts/worktree-teardown.ts"
   ],
-  "source_revision": "fc64f0e6e4e01abb543c71f4bcca457f56a1bc72"
+  "source_revision": "cdc580895b4bef7ce20263e1c59e8649fc1a0629"
 }
