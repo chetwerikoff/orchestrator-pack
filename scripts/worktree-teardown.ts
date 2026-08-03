@@ -1,16 +1,23 @@
 #!/usr/bin/env node
-// scripts/worktree-teardown.ts — unified worktree teardown: validation, gates, terminal stop, process reap, deletion.
-//
-// Invocation:
-//   node --experimental-strip-types scripts/worktree-teardown.ts \
-//     --worktree <abs-path> --pr <number> [--apply] [--json] [--orphan] [--i-know-this-path]
-//
-// Default is DRY-RUN. --apply executes. --json outputs one JSON object to stdout; otherwise human-readable output.
-// Exit 0 = reaped_clean; nonzero = blocked_* or partial_* (normal outcomes after successful merge).
+// Unified worktree teardown: validation, gates, terminal stop/close, process reap, re-check, removal.
+// Default is DRY-RUN. --apply executes. Exit 0 only for reaped_clean.
 
-import { realpathSync, existsSync, statSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
-import { runProcessSync } from '#opk-kernel/subprocess';
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  readdirSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { runProcessSync, type ProcessResult } from './kernel/subprocess.ts';
+import {
+  WORKTREE_TEARDOWN_RUNTIME_PROFILE as RUNTIME,
+  type RuntimeCommand,
+} from './worktree-teardown-runtime-profile.ts';
 
 type TeardownOutcome =
   | 'reaped_clean'
@@ -29,19 +36,14 @@ type TeardownOutcome =
   | 'terminal_stop_failed'
   | 'worktree_remove_failed';
 
+type GateVerdict = 'pass' | 'fail';
+
 interface TeardownReport {
   worktree: string;
   pr: number;
   outcome: TeardownOutcome;
   apply_mode: boolean;
-  gates: {
-    g1: 'pass' | 'fail';
-    g2a: 'pass' | 'fail';
-    g2b: 'pass' | 'fail';
-    g3: 'pass' | 'fail';
-    g4: 'pass' | 'fail';
-    g5: 'pass' | 'fail';
-  };
+  gates: Record<'g1' | 'g2a' | 'g2b' | 'g3' | 'g4' | 'g5', GateVerdict>;
   validation: {
     is_primary_checkout: boolean;
     is_in_inventory: boolean;
@@ -59,155 +61,25 @@ interface TeardownReport {
     sigkilled: number;
     residual: number;
   };
-  recheck?: {
-    g1: 'pass' | 'fail';
-    g2a: 'pass' | 'fail';
-    g2b: 'pass' | 'fail';
-    g5: 'pass' | 'fail';
+  recheck?: Record<'g1' | 'g2a' | 'g2b' | 'g5', GateVerdict>;
+  worktree_removal?: {
+    attempted: boolean;
+    removed: boolean;
   };
   branch_deletion?: {
-    method: 'd' | 'D' | 'skipped';
+    method: 'd' | 'skipped';
     reason: string;
   };
   error?: string;
 }
 
-// ===== ARGV PARSING =====
-function parseArgs(): {
+interface ParsedArgs {
   worktree: string | null;
   pr: number | null;
   apply: boolean;
   json: boolean;
   orphan: boolean;
   iKnowThisPath: boolean;
-} {
-  const argv = process.argv.slice(2);
-  const arg = (n: string) => {
-    const i = argv.indexOf(n);
-    return i >= 0 ? argv[i + 1] : null;
-  };
-
-  return {
-    worktree: arg('--worktree'),
-    pr: arg('--pr') ? parseInt(arg('--pr')!, 10) : null,
-    apply: argv.includes('--apply'),
-    json: argv.includes('--json'),
-    orphan: argv.includes('--orphan'),
-    iKnowThisPath: argv.includes('--i-know-this-path'),
-  };
-}
-
-// ===== GIT HELPERS =====
-function gitRunSync(args: string[], cwd?: string) {
-  const result = runProcessSync({
-    command: 'git',
-    args,
-    cwd,
-    inheritParentEnv: true,
-  });
-  return result;
-}
-
-function realpath(p: string): string | null {
-  try {
-    return realpathSync(p);
-  } catch {
-    return null;
-  }
-}
-
-// ===== LOCK MANAGEMENT =====
-function acquireLock(lockPath: string): boolean {
-  try {
-    // Check if lock already held
-    if (existsSync(lockPath)) {
-      return false;
-    }
-    // Try to create lock file atomically
-    writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
-    return true;
-  } catch {
-    // File already exists or other error
-    return false;
-  }
-}
-
-function releaseLock(lockPath: string) {
-  try {
-    unlinkSync(lockPath);
-  } catch {
-    // ignore
-  }
-}
-
-// ===== VALIDATION =====
-interface ValidationResult {
-  isPrimaryCheckout: boolean;
-  isInInventory: boolean;
-  pathExists: boolean;
-  gitFileStatus: 'directory' | 'file' | 'missing';
-}
-
-function validateTarget(worktreePath: string): ValidationResult & { gitFileError?: string } {
-  const pathExists = existsSync(worktreePath);
-  let gitFileStatus: 'directory' | 'file' | 'missing' = 'missing';
-  let gitFileError: string | undefined;
-
-  if (pathExists) {
-    try {
-      const stat = statSync(join(worktreePath, '.git'));
-      if (stat.isDirectory()) {
-        gitFileStatus = 'directory';
-      } else if (stat.isFile()) {
-        // Validate .git file contents: must start with "gitdir: " and point to existing path
-        try {
-          const gitFileContent = readFileSync(join(worktreePath, '.git'), 'utf8').trim();
-          if (!gitFileContent.startsWith('gitdir: ')) {
-            gitFileError = '.git file does not start with "gitdir: "';
-            gitFileStatus = 'missing'; // treat as invalid
-          } else {
-            const gitdirPath = gitFileContent.slice(8); // Remove "gitdir: " prefix
-            if (!existsSync(gitdirPath)) {
-              gitFileError = `gitdir path does not exist: ${gitdirPath}`;
-              gitFileStatus = 'missing'; // treat as invalid
-            } else {
-              // Validation passed
-              gitFileStatus = 'file';
-            }
-          }
-        } catch (e) {
-          gitFileError = `cannot read .git file: ${(e as Error).message}`;
-          gitFileStatus = 'missing'; // treat as invalid
-        }
-      }
-    } catch (e) {
-      // .git not found or not accessible
-      gitFileStatus = 'missing';
-    }
-  }
-
-  const isPrimaryCheckout = gitFileStatus === 'directory';
-  return {
-    isPrimaryCheckout,
-    isInInventory: false, // would check against runtime inventory in full impl
-    pathExists,
-    gitFileStatus,
-    gitFileError,
-  };
-}
-
-// ===== GATES =====
-interface GateResults {
-  g1: boolean;
-  g2a: boolean;
-  g2b: boolean;
-  g3: boolean;
-  g4: boolean;
-  g5: boolean;
-  failedGate?: string;
-  prBranchName?: string;
-  isBranchBound?: boolean;
-  savedHeadSha?: string;
 }
 
 interface PRInfo {
@@ -219,183 +91,44 @@ interface PRInfo {
   baseRefName?: string;
 }
 
-// Fetch PR information from GitHub
-function getPRInfo(prNumber: number): PRInfo | null {
-  const result = runProcessSync({
-    command: 'gh',
-    args: ['pr', 'view', String(prNumber), '--json', 'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName'],
-    inheritParentEnv: true,
-  });
-  if (!result.ok) {
-    return null;
-  }
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    return null;
-  }
+interface RuntimeAgent {
+  state?: string;
+  interrupted?: boolean;
 }
 
-function checkG1Identity(worktreePath: string, prInfo: PRInfo): { pass: boolean; mode: 'branch-bound' | 'detached-confirmed'; savedSha?: string } {
-  // Try to get current branch
-  const branchResult = gitRunSync(['symbolic-ref', '--short', 'HEAD'], worktreePath);
-
-  if (branchResult.ok) {
-    // Branch-bound mode: check if current branch matches PR headRefName
-    const currentBranch = branchResult.stdout.trim();
-    const pass = currentBranch === prInfo.headRefName;
-    return { pass, mode: 'branch-bound' };
-  }
-
-  // Detached mode: check if HEAD SHA matches PR headRefOid
-  const shaResult = gitRunSync(['rev-parse', 'HEAD'], worktreePath);
-  if (!shaResult.ok) {
-    return { pass: false, mode: 'detached-confirmed' };
-  }
-  const currentSha = shaResult.stdout.trim();
-  const pass = currentSha === prInfo.headRefOid;
-  return { pass, mode: 'detached-confirmed', savedSha: currentSha };
+interface RuntimeWorktree {
+  path?: string;
+  head?: string;
+  branch?: string;
+  isMainWorktree?: boolean;
+  agents?: RuntimeAgent[];
 }
 
-function checkG2aClean(worktreePath: string): boolean {
-  const result = gitRunSync(['status', '--porcelain', '--untracked-files=all'], worktreePath);
-  if (!result.ok) return false;
-  return result.stdout.trim() === '';
+interface RuntimeTerminal {
+  handle?: string;
+  worktreePath?: string;
+  tabId?: string;
 }
 
-function checkG2bIgnored(worktreePath: string): boolean {
-  const result = gitRunSync(['status', '--porcelain', '--ignored=matching'], worktreePath);
-  if (!result.ok) return false;
-
-  const WHITELIST = ['node_modules/', '.venv/', 'venv/', 'dist/', 'build/', '.turbo/', '.next/', 'coverage/', '__pycache__/'];
-  const lines = result.stdout.split('\n').filter((l) => l.startsWith('!! '));
-
-  for (const line of lines) {
-    const path_part = line.slice(3).trim();
-    if (!WHITELIST.some((w) => path_part.startsWith(w))) {
-      return false;
-    }
-  }
-  return true;
+interface IdentitySnapshot {
+  mode: 'branch-bound' | 'detached-confirmed';
+  headSha: string;
+  branchName?: string;
 }
 
-function checkG3Merged(worktreePath: string, prInfo: PRInfo): boolean {
-  // Proof (a): merge-base --is-ancestor HEAD origin/main
-  const proofA = gitRunSync(['merge-base', '--is-ancestor', 'HEAD', 'origin/main'], worktreePath);
-  if (proofA.ok && proofA.exitCode === 0) {
-    return true;
-  }
-
-  // Proof (b): state == MERGED && headRefOid == HEAD && mergeCommit is ancestor of origin/main
-  if (prInfo.state !== 'MERGED') {
-    return false;
-  }
-
-  const headResult = gitRunSync(['rev-parse', 'HEAD'], worktreePath);
-  if (!headResult.ok) {
-    return false;
-  }
-
-  const currentSha = headResult.stdout.trim();
-  if (currentSha !== prInfo.headRefOid) {
-    return false;
-  }
-
-  if (!prInfo.mergeCommit?.oid) {
-    return false;
-  }
-
-  // Fetch origin to ensure we have fresh data
-  gitRunSync(['fetch', 'origin', 'main'], worktreePath);
-
-  // Check if mergeCommit is ancestor of origin/main
-  const ancestorResult = gitRunSync(['merge-base', '--is-ancestor', prInfo.mergeCommit.oid, 'origin/main'], worktreePath);
-  return ancestorResult.ok && ancestorResult.exitCode === 0;
+interface GateResults {
+  g1: boolean;
+  g2a: boolean;
+  g2b: boolean;
+  g3: boolean;
+  g4: boolean;
+  g5: boolean;
+  failedOutcome?: TeardownOutcome;
+  prBranchName?: string;
+  identity?: IdentitySnapshot;
+  detail?: string;
 }
 
-function checkG4Ownership(prNumber: number, prInfo: PRInfo): boolean {
-  // Check if no other open PR has the same headRepository + headRefName pair
-  if (!prInfo.headRepository?.nameWithOwner) {
-    // Can't verify without repo info, refuse
-    return false;
-  }
-
-  const result = runProcessSync({
-    command: 'gh',
-    args: [
-      'pr', 'list',
-      '--state', 'open',
-      '--json', 'number,headRefName,headRepository',
-      '--repo', prInfo.headRepository.nameWithOwner,
-    ],
-    inheritParentEnv: true,
-  });
-
-  if (!result.ok) {
-    return false;
-  }
-
-  try {
-    const prs: Array<{ number: number; headRefName: string; headRepository?: { nameWithOwner: string } }> = JSON.parse(result.stdout);
-    const sameHeadCount = prs.filter(
-      (p) => p.headRefName === prInfo.headRefName && p.number !== prNumber,
-    ).length;
-    return sameHeadCount === 0;
-  } catch {
-    return false;
-  }
-}
-
-function checkG5Agents(_worktreePath: string): boolean {
-  // Would check agent state from runtime inventory
-  // Cannot implement without runtime integration; documented as limitation
-  return true;
-}
-
-function runGates(worktreePath: string, prNumber: number): GateResults {
-  const prInfo = getPRInfo(prNumber);
-  if (!prInfo) {
-    return {
-      g1: false,
-      g2a: false,
-      g2b: false,
-      g3: false,
-      g4: false,
-      g5: false,
-      failedGate: 'blocked_state_desync',
-    };
-  }
-
-  const g1Result = checkG1Identity(worktreePath, prInfo);
-  const g2a = checkG2aClean(worktreePath);
-  const g2b = checkG2bIgnored(worktreePath);
-  const g3 = checkG3Merged(worktreePath, prInfo);
-  const g4 = checkG4Ownership(prNumber, prInfo);
-  const g5 = checkG5Agents(worktreePath);
-
-  let failedGate: string | undefined;
-  if (!g1Result.pass) failedGate = 'blocked_identity_drift';
-  else if (!g2a) failedGate = 'blocked_dirty_worktree';
-  else if (!g2b) failedGate = 'blocked_ignored_operator_data';
-  else if (!g3) failedGate = 'blocked_unmerged_work';
-  else if (!g4) failedGate = 'blocked_shared_head_ref';
-  else if (!g5) failedGate = 'blocked_state_desync';
-
-  return {
-    g1: g1Result.pass,
-    g2a,
-    g2b,
-    g3,
-    g4,
-    g5,
-    failedGate,
-    prBranchName: prInfo.headRefName,
-    isBranchBound: g1Result.mode === 'branch-bound',
-    savedHeadSha: g1Result.savedSha,
-  };
-}
-
-// ===== PROCESS REAPING (transposed from reap-worktree.mjs) =====
 interface ProcessSnapshot {
   pid: number;
   ppid: number;
@@ -405,80 +138,6 @@ interface ProcessSnapshot {
   exe: string | null;
 }
 
-function snapshotProcs(): Map<number, ProcessSnapshot> {
-  const result = new Map<number, ProcessSnapshot>();
-  const procDir = '/proc';
-
-  try {
-    const pids = readdirSync(procDir).filter((d) => /^\d+$/.test(d));
-
-    for (const pidStr of pids) {
-      const pid = parseInt(pidStr, 10);
-      let stat: string;
-      try {
-        stat = readFileSync(join(procDir, pidStr, 'stat'), 'utf8');
-      } catch {
-        continue;
-      }
-
-      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-      let cwd: string | null = null;
-      try {
-        cwd = readlinkSync(join(procDir, pidStr, 'cwd'));
-      } catch {
-        // ignore
-      }
-
-      let cmd = '';
-      try {
-        cmd = readFileSync(join(procDir, pidStr, 'cmdline'), 'utf8').replace(/\0/g, ' ').trim();
-      } catch {
-        // ignore
-      }
-
-      let exe: string | null = null;
-      try {
-        exe = readlinkSync(join(procDir, pidStr, 'exe'));
-      } catch {
-        // ignore
-      }
-
-      result.set(pid, {
-        pid,
-        ppid: parseInt(fields[1], 10),
-        starttime: fields[19],
-        cwd: cwd || null,
-        cmd,
-        exe,
-      });
-    }
-  } catch {
-    // ignore
-  }
-
-  return result;
-}
-
-function norm(c: string | null): string | null {
-  return c ? c.replace(/ \(deleted\)$/, '') : null;
-}
-
-function under(c: string | null, root: string): boolean {
-  const n = norm(c);
-  return !!n && (n === root || n.startsWith(root + '/'));
-}
-
-function selfChain(procs: Map<number, ProcessSnapshot>): Set<number> {
-  const out = new Set<number>();
-  let p = process.pid;
-  while (p && p !== 0 && procs.has(p) && !out.has(p)) {
-    out.add(p);
-    p = procs.get(p)!.ppid;
-  }
-  out.add(1);
-  return out;
-}
-
 interface ReapResult {
   selected: number;
   termed: number;
@@ -486,52 +145,487 @@ interface ReapResult {
   residual: number;
 }
 
+interface RuntimeJsonResult<T> {
+  ok: boolean;
+  value?: T;
+  error?: string;
+}
+
+const LOCK_PATH = '/tmp/opk-worktree-teardown.lock';
+const IGNORED_DIRECTORY_ALLOWLIST = [
+  'node_modules/',
+  '.venv/',
+  'venv/',
+  'dist/',
+  'build/',
+  '.turbo/',
+  '.next/',
+  'coverage/',
+  '__pycache__/',
+] as const;
+
+function parseArgs(): ParsedArgs {
+  const argv = process.argv.slice(2);
+  const value = (name: string): string | null => {
+    const index = argv.indexOf(name);
+    return index >= 0 ? argv[index + 1] ?? null : null;
+  };
+  const prValue = value('--pr');
+  const parsedPr = prValue === null ? null : Number.parseInt(prValue, 10);
+  return {
+    worktree: value('--worktree'),
+    pr: parsedPr !== null && Number.isInteger(parsedPr) && parsedPr > 0 ? parsedPr : null,
+    apply: argv.includes('--apply'),
+    json: argv.includes('--json'),
+    orphan: argv.includes('--orphan'),
+    iKnowThisPath: argv.includes('--i-know-this-path'),
+  };
+}
+
+function gitRunSync(args: readonly string[], cwd?: string): ProcessResult {
+  return runProcessSync({ command: 'git', args, cwd, inheritParentEnv: true });
+}
+
+function normalizePath(pathValue: string): string {
+  const normalized = pathValue.replace(/\/+$/, '');
+  return normalized || '/';
+}
+
+function existingRealpath(pathValue: string): string | null {
+  try {
+    return normalizePath(realpathSync(pathValue));
+  } catch {
+    return null;
+  }
+}
+
+function acquireLock(): boolean {
+  try {
+    writeFileSync(LOCK_PATH, `${process.pid}\n`, { flag: 'wx', mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function releaseLock(): void {
+  try {
+    unlinkSync(LOCK_PATH);
+  } catch {
+    // The owner removes only the lock it acquired; missing-at-release is harmless.
+  }
+}
+
+function runtimeJson<T>(command: RuntimeCommand): RuntimeJsonResult<T> {
+  const result = runProcessSync({
+    command: command.command,
+    args: command.args,
+    inheritParentEnv: true,
+  });
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: result.stderr.trim() || result.error || `${command.args.join(' ')} failed`,
+    };
+  }
+  try {
+    const parsed = JSON.parse(result.stdout) as { ok?: boolean; result?: T; error?: { message?: string; code?: string } };
+    if (parsed.ok === false) {
+      return {
+        ok: false,
+        error: parsed.error?.message ?? parsed.error?.code ?? `${command.args.join(' ')} returned ok=false`,
+      };
+    }
+    if (parsed.result === undefined) {
+      return { ok: false, error: `${command.args.join(' ')} omitted result` };
+    }
+    return { ok: true, value: parsed.result };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `invalid runtime JSON for ${command.args.join(' ')}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+function runtimeWorktrees(): RuntimeJsonResult<RuntimeWorktree[]> {
+  const response = runtimeJson<{ worktrees?: RuntimeWorktree[] }>(RUNTIME.worktrees());
+  if (!response.ok) return { ok: false, error: response.error };
+  if (!Array.isArray(response.value?.worktrees)) {
+    return { ok: false, error: 'runtime worktree inventory omitted result.worktrees[]' };
+  }
+  return { ok: true, value: response.value.worktrees };
+}
+
+function runtimeAgentRows(): RuntimeJsonResult<RuntimeWorktree[]> {
+  const response = runtimeJson<{ worktrees?: RuntimeWorktree[] }>(RUNTIME.agents());
+  if (!response.ok) return { ok: false, error: response.error };
+  if (!Array.isArray(response.value?.worktrees)) {
+    return { ok: false, error: 'runtime agent inventory omitted result.worktrees[]' };
+  }
+  return { ok: true, value: response.value.worktrees };
+}
+
+function runtimeTerminals(command: RuntimeCommand): RuntimeJsonResult<RuntimeTerminal[]> {
+  const response = runtimeJson<{ terminals?: RuntimeTerminal[] }>(command);
+  if (!response.ok) return { ok: false, error: response.error };
+  if (!Array.isArray(response.value?.terminals)) {
+    return { ok: false, error: 'runtime terminal inventory omitted result.terminals[]' };
+  }
+  return { ok: true, value: response.value.terminals };
+}
+
+function validateTarget(worktreePath: string): {
+  pathExists: boolean;
+  isPrimaryCheckout: boolean;
+  gitFileStatus: 'directory' | 'file' | 'missing';
+  gitFileError?: string;
+} {
+  if (!existsSync(worktreePath)) {
+    return { pathExists: false, isPrimaryCheckout: false, gitFileStatus: 'missing' };
+  }
+  const gitPath = join(worktreePath, '.git');
+  try {
+    const stat = lstatSync(gitPath);
+    if (stat.isDirectory()) {
+      return { pathExists: true, isPrimaryCheckout: true, gitFileStatus: 'directory' };
+    }
+    if (!stat.isFile()) {
+      return {
+        pathExists: true,
+        isPrimaryCheckout: false,
+        gitFileStatus: 'missing',
+        gitFileError: '.git is neither a directory nor a regular file',
+      };
+    }
+    const content = readFileSync(gitPath, 'utf8').trim();
+    if (!content.startsWith('gitdir: ')) {
+      return {
+        pathExists: true,
+        isPrimaryCheckout: false,
+        gitFileStatus: 'missing',
+        gitFileError: '.git file does not start with "gitdir: "',
+      };
+    }
+    const rawGitdir = content.slice('gitdir: '.length).trim();
+    const gitdir = isAbsolute(rawGitdir) ? rawGitdir : resolve(worktreePath, rawGitdir);
+    if (!existsSync(gitdir)) {
+      return {
+        pathExists: true,
+        isPrimaryCheckout: false,
+        gitFileStatus: 'missing',
+        gitFileError: `gitdir path does not exist: ${gitdir}`,
+      };
+    }
+    return { pathExists: true, isPrimaryCheckout: false, gitFileStatus: 'file' };
+  } catch (error) {
+    return {
+      pathExists: true,
+      isPrimaryCheckout: false,
+      gitFileStatus: 'missing',
+      gitFileError: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function getPrimaryCheckout(worktreePath: string): string | null {
+  const result = gitRunSync(['rev-parse', '--path-format=absolute', '--git-common-dir'], worktreePath);
+  if (!result.ok) return null;
+  const commonDir = normalizePath(result.stdout.trim());
+  return dirname(commonDir);
+}
+
+function getPRInfo(prNumber: number): PRInfo | null {
+  const result = runProcessSync({
+    command: 'gh',
+    args: [
+      'pr',
+      'view',
+      String(prNumber),
+      '--json',
+      'headRefName,state,headRefOid,mergeCommit,headRepository,baseRefName',
+    ],
+    inheritParentEnv: true,
+  });
+  if (!result.ok) return null;
+  try {
+    const parsed = JSON.parse(result.stdout) as PRInfo;
+    return typeof parsed.headRefName === 'string'
+      && typeof parsed.headRefOid === 'string'
+      && typeof parsed.state === 'string'
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function captureG1Identity(worktreePath: string, prInfo: PRInfo): { pass: boolean; snapshot?: IdentitySnapshot } {
+  const headResult = gitRunSync(['rev-parse', 'HEAD'], worktreePath);
+  if (!headResult.ok) return { pass: false };
+  const headSha = headResult.stdout.trim();
+  const branchResult = gitRunSync(['symbolic-ref', '--short', 'HEAD'], worktreePath);
+  if (branchResult.ok) {
+    const branchName = branchResult.stdout.trim();
+    return {
+      pass: branchName === prInfo.headRefName,
+      snapshot: { mode: 'branch-bound', headSha, branchName },
+    };
+  }
+  return {
+    pass: headSha === prInfo.headRefOid,
+    snapshot: { mode: 'detached-confirmed', headSha },
+  };
+}
+
+function recheckG1Identity(worktreePath: string, snapshot: IdentitySnapshot): boolean {
+  const headResult = gitRunSync(['rev-parse', 'HEAD'], worktreePath);
+  if (!headResult.ok || headResult.stdout.trim() !== snapshot.headSha) return false;
+  const branchResult = gitRunSync(['symbolic-ref', '--short', 'HEAD'], worktreePath);
+  if (snapshot.mode === 'detached-confirmed') return !branchResult.ok;
+  return branchResult.ok && branchResult.stdout.trim() === snapshot.branchName;
+}
+
+function checkG2aClean(worktreePath: string): boolean {
+  const result = gitRunSync(['status', '--porcelain', '--untracked-files=all'], worktreePath);
+  return result.ok && result.stdout.trim() === '';
+}
+
+function checkG2bIgnored(worktreePath: string): boolean {
+  const result = gitRunSync(['status', '--porcelain', '--ignored=matching'], worktreePath);
+  if (!result.ok) return false;
+  const ignored = result.stdout.split('\n').filter((line) => line.startsWith('!! '));
+  return ignored.every((line) => {
+    const relativePath = line.slice(3).trim();
+    return IGNORED_DIRECTORY_ALLOWLIST.some((allowed) => relativePath.startsWith(allowed));
+  });
+}
+
+function checkG3Merged(worktreePath: string, prInfo: PRInfo): boolean {
+  const proofA = gitRunSync(['merge-base', '--is-ancestor', 'HEAD', 'origin/main'], worktreePath);
+  if (proofA.ok && proofA.exitCode === 0) return true;
+  if (prInfo.state !== 'MERGED') return false;
+  const headResult = gitRunSync(['rev-parse', 'HEAD'], worktreePath);
+  if (!headResult.ok || headResult.stdout.trim() !== prInfo.headRefOid) return false;
+  if (!prInfo.mergeCommit?.oid) return false;
+  gitRunSync(['fetch', 'origin', 'main'], worktreePath);
+  const proofB = gitRunSync(
+    ['merge-base', '--is-ancestor', prInfo.mergeCommit.oid, 'origin/main'],
+    worktreePath,
+  );
+  return proofB.ok && proofB.exitCode === 0;
+}
+
+function checkG4Ownership(prNumber: number, prInfo: PRInfo): boolean {
+  if (!prInfo.headRepository?.nameWithOwner) return false;
+  const result = runProcessSync({
+    command: 'gh',
+    args: [
+      'pr',
+      'list',
+      '--state',
+      'open',
+      '--json',
+      'number,headRefName,headRepository',
+      '--repo',
+      prInfo.headRepository.nameWithOwner,
+    ],
+    inheritParentEnv: true,
+  });
+  if (!result.ok) return false;
+  try {
+    const rows = JSON.parse(result.stdout) as Array<{
+      number: number;
+      headRefName: string;
+      headRepository?: { nameWithOwner: string };
+    }>;
+    return rows.filter((row) => row.headRefName === prInfo.headRefName && row.number !== prNumber).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+function checkG5Agents(worktreePath: string): { pass: boolean; desync: boolean; detail?: string } {
+  const inventory = runtimeAgentRows();
+  if (!inventory.ok) return { pass: false, desync: true, detail: inventory.error };
+  const target = normalizePath(worktreePath);
+  const rows = inventory.value!.filter(
+    (row) => typeof row.path === 'string' && normalizePath(row.path) === target,
+  );
+  if (rows.length !== 1) {
+    return {
+      pass: false,
+      desync: true,
+      detail: `runtime agent inventory matched ${rows.length} rows for ${target}`,
+    };
+  }
+  const row = rows[0];
+  if (!row || !Array.isArray(row.agents)) {
+    return { pass: false, desync: true, detail: 'target runtime row omitted agents[]' };
+  }
+  const pass = row.agents.every(
+    (agent) => agent.state === 'done' && agent.interrupted === false,
+  );
+  return {
+    pass,
+    desync: false,
+    ...(pass ? {} : { detail: 'one or more target agents are not done or were interrupted' }),
+  };
+}
+
+function runInitialGates(worktreePath: string, prNumber: number): GateResults {
+  const prInfo = getPRInfo(prNumber);
+  if (!prInfo) {
+    return {
+      g1: false,
+      g2a: false,
+      g2b: false,
+      g3: false,
+      g4: false,
+      g5: false,
+      failedOutcome: 'blocked_state_desync',
+      detail: 'unable to read PR identity',
+    };
+  }
+  const g1Result = captureG1Identity(worktreePath, prInfo);
+  const g2a = checkG2aClean(worktreePath);
+  const g2b = checkG2bIgnored(worktreePath);
+  const g3 = checkG3Merged(worktreePath, prInfo);
+  const g4 = checkG4Ownership(prNumber, prInfo);
+  const g5Result = checkG5Agents(worktreePath);
+  let failedOutcome: TeardownOutcome | undefined;
+  if (!g1Result.pass) failedOutcome = 'blocked_identity_drift';
+  else if (!g2a) failedOutcome = 'blocked_dirty_worktree';
+  else if (!g2b) failedOutcome = 'blocked_ignored_operator_data';
+  else if (!g3) failedOutcome = 'blocked_unmerged_work';
+  else if (!g4) failedOutcome = 'blocked_shared_head_ref';
+  else if (!g5Result.pass) failedOutcome = 'blocked_state_desync';
+  return {
+    g1: g1Result.pass,
+    g2a,
+    g2b,
+    g3,
+    g4,
+    g5: g5Result.pass,
+    failedOutcome,
+    prBranchName: prInfo.headRefName,
+    identity: g1Result.snapshot,
+    detail: g5Result.detail,
+  };
+}
+
+function snapshotProcs(): Map<number, ProcessSnapshot> {
+  const result = new Map<number, ProcessSnapshot>();
+  try {
+    for (const pidText of readdirSync('/proc').filter((name) => /^\d+$/.test(name))) {
+      const pid = Number.parseInt(pidText, 10);
+      let stat: string;
+      try {
+        stat = readFileSync(join('/proc', pidText, 'stat'), 'utf8');
+      } catch {
+        continue;
+      }
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      let cwd: string | null = null;
+      let cmd = '';
+      let exe: string | null = null;
+      try {
+        cwd = readlinkSync(join('/proc', pidText, 'cwd'));
+      } catch {
+        // Process may exit or deny access between reads.
+      }
+      try {
+        cmd = readFileSync(join('/proc', pidText, 'cmdline'), 'utf8').replace(/\0/g, ' ').trim();
+      } catch {
+        // Diagnostic only.
+      }
+      try {
+        exe = readlinkSync(join('/proc', pidText, 'exe'));
+      } catch {
+        // Diagnostic only.
+      }
+      result.set(pid, {
+        pid,
+        ppid: Number.parseInt(fields[1] ?? '0', 10),
+        starttime: fields[19] ?? '',
+        cwd,
+        cmd,
+        exe,
+      });
+    }
+  } catch {
+    // An unreadable /proc produces an empty, therefore non-destructive, selection.
+  }
+  return result;
+}
+
+function normalizedCwd(cwd: string | null): string | null {
+  return cwd ? cwd.replace(/ \(deleted\)$/, '') : null;
+}
+
+function cwdUnder(cwd: string | null, root: string): boolean {
+  const normalized = normalizedCwd(cwd);
+  return normalized !== null && (normalized === root || normalized.startsWith(`${root}/`));
+}
+
+function selfChain(processes: Map<number, ProcessSnapshot>): Set<number> {
+  const result = new Set<number>();
+  let current = process.pid;
+  while (current !== 0 && processes.has(current) && !result.has(current)) {
+    result.add(current);
+    current = processes.get(current)!.ppid;
+  }
+  result.add(1);
+  return result;
+}
+
 function computeKillSet(
-  procs: Map<number, ProcessSnapshot>,
-  wtPath: string,
+  processes: Map<number, ProcessSnapshot>,
+  worktreePath: string,
   protectedPaths: Set<string>,
   knownWorktrees: Set<string>,
 ): ProcessSnapshot[] {
-  const kids = new Map<number, number[]>();
-  for (const p of procs.values()) {
-    if (!kids.has(p.ppid)) kids.set(p.ppid, []);
-    kids.get(p.ppid)!.push(p.pid);
+  const children = new Map<number, number[]>();
+  for (const row of processes.values()) {
+    const current = children.get(row.ppid) ?? [];
+    current.push(row.pid);
+    children.set(row.ppid, current);
   }
-
-  const inWt = (c: string | null) => under(c, wtPath);
-  const seed: number[] = [];
-  for (const p of procs.values()) {
-    if (inWt(p.cwd)) seed.push(p.pid);
-  }
-
-  const killSet = new Set(seed);
-  const stack = [...seed];
-  while (stack.length) {
-    const x = stack.pop()!;
-    for (const k of kids.get(x) || []) {
-      if (!killSet.has(k)) {
-        killSet.add(k);
-        stack.push(k);
+  const seeds = [...processes.values()]
+    .filter((row) => cwdUnder(row.cwd, worktreePath))
+    .map((row) => row.pid);
+  const killSet = new Set(seeds);
+  const stack = [...seeds];
+  while (stack.length > 0) {
+    const parent = stack.pop()!;
+    for (const child of children.get(parent) ?? []) {
+      if (!killSet.has(child)) {
+        killSet.add(child);
+        stack.push(child);
       }
     }
   }
-
-  const immune = selfChain(procs);
-  const out: ProcessSnapshot[] = [];
-
+  const immune = selfChain(processes);
+  const selected: ProcessSnapshot[] = [];
   for (const pid of killSet) {
-    const p = procs.get(pid);
-    if (!p) continue;
-    if (pid <= 1 || immune.has(pid)) continue;
-
-    const n = norm(p.cwd);
-    if (n && [...protectedPaths].some((q) => n === q || n.startsWith(q + '/'))) continue;
-    if (n && !inWt(p.cwd) && [...knownWorktrees].some((q) => q !== wtPath && (n === q || n.startsWith(q + '/')))) continue;
-
-    out.push(p);
+    const row = processes.get(pid);
+    if (!row || pid <= 1 || immune.has(pid)) continue;
+    const cwd = normalizedCwd(row.cwd);
+    if (cwd && [...protectedPaths].some((pathValue) => cwd === pathValue || cwd.startsWith(`${pathValue}/`))) {
+      continue;
+    }
+    if (
+      cwd
+      && !cwdUnder(row.cwd, worktreePath)
+      && [...knownWorktrees].some(
+        (pathValue) => pathValue !== worktreePath && (cwd === pathValue || cwd.startsWith(`${pathValue}/`)),
+      )
+    ) {
+      continue;
+    }
+    selected.push(row);
   }
-
-  return out.sort((a, b) => b.pid - a.pid);
+  return selected.sort((left, right) => right.pid - left.pid);
 }
 
 function stillSame(pid: number, starttime: string): boolean {
@@ -543,60 +637,47 @@ function stillSame(pid: number, starttime: string): boolean {
   }
 }
 
-function signalProc(pid: number, starttime: string, sig: NodeJS.Signals): boolean {
+function signalProc(pid: number, starttime: string, signal: NodeJS.Signals): boolean {
   if (pid <= 1 || !stillSame(pid, starttime)) return false;
   try {
-    process.kill(pid, sig);
+    process.kill(pid, signal);
     return true;
   } catch {
     return false;
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+function processExists(row: ProcessSnapshot): boolean {
+  try {
+    process.kill(row.pid, 0);
+    return stillSame(row.pid, row.starttime);
+  } catch {
+    return false;
+  }
 }
 
-async function reapProcesses(wtPath: string, protectedPaths: Set<string>, knownWorktrees: Set<string>, apply: boolean): Promise<ReapResult> {
-  const victims = computeKillSet(snapshotProcs(), wtPath, protectedPaths, knownWorktrees);
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
+}
 
-  if (!apply) {
-    return { selected: victims.length, termed: 0, sigkilled: 0, residual: 0 };
-  }
-
-  for (const v of victims) {
-    signalProc(v.pid, v.starttime, 'SIGTERM');
-  }
-
+async function reapProcesses(
+  worktreePath: string,
+  protectedPaths: Set<string>,
+  knownWorktrees: Set<string>,
+  apply: boolean,
+): Promise<ReapResult> {
+  const victims = computeKillSet(snapshotProcs(), worktreePath, protectedPaths, knownWorktrees);
+  if (!apply) return { selected: victims.length, termed: 0, sigkilled: 0, residual: 0 };
+  for (const victim of victims) signalProc(victim.pid, victim.starttime, 'SIGTERM');
   let waited = 0;
-  while (waited < 10000 && victims.some((v) => {
-    try {
-      process.kill(v.pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  })) {
+  while (waited < 10_000 && victims.some(processExists)) {
     await sleep(500);
     waited += 500;
   }
-
-  const stubborn = victims.filter((v) => {
-    try {
-      process.kill(v.pid, 0);
-      return stillSame(v.pid, v.starttime);
-    } catch {
-      return false;
-    }
-  });
-
-  for (const v of stubborn) {
-    signalProc(v.pid, v.starttime, 'SIGKILL');
-  }
-
-  await sleep(1000);
-  const residual = computeKillSet(snapshotProcs(), wtPath, protectedPaths, knownWorktrees);
-
+  const stubborn = victims.filter(processExists);
+  for (const victim of stubborn) signalProc(victim.pid, victim.starttime, 'SIGKILL');
+  await sleep(1_000);
+  const residual = computeKillSet(snapshotProcs(), worktreePath, protectedPaths, knownWorktrees);
   return {
     selected: victims.length,
     termed: victims.length - stubborn.length,
@@ -605,155 +686,375 @@ async function reapProcesses(wtPath: string, protectedPaths: Set<string>, knownW
   };
 }
 
-// ===== BRANCH DELETION =====
-function deleteBranch(worktreePath: string, branchName: string, apply: boolean): { method: 'd' | 'D' | 'skipped'; reason: string } {
-  if (!apply) {
-    return { method: 'skipped', reason: 'dry-run' };
-  }
-
-  const listResult = gitRunSync(['branch', '--list', branchName], worktreePath);
-  if (!listResult.ok || listResult.stdout.trim() === '') {
-    return { method: 'skipped', reason: 'branch not found (already deleted by runtime)' };
-  }
-
-  const delResult = gitRunSync(['branch', '-d', branchName], worktreePath);
-  if (delResult.ok) {
-    return { method: 'd', reason: 'deleted with -d' };
-  }
-
-  return { method: 'skipped', reason: 'branch -d failed, not forced' };
+function terminalBelongsTo(terminal: RuntimeTerminal, worktreePath: string): boolean {
+  return typeof terminal.worktreePath === 'string'
+    && normalizePath(terminal.worktreePath) === worktreePath;
 }
 
-// ===== MAIN =====
-async function main() {
-  const args = parseArgs();
-  let outcome: TeardownOutcome = 'reaped_clean';
-  const report: TeardownReport = {
-    worktree: args.worktree || '',
-    pr: args.pr || 0,
-    outcome,
-    apply_mode: args.apply,
-    gates: {
-      g1: 'fail',
-      g2a: 'fail',
-      g2b: 'fail',
-      g3: 'fail',
-      g4: 'fail',
-      g5: 'fail',
-    },
-    validation: {
-      is_primary_checkout: false,
-      is_in_inventory: false,
-      path_exists: false,
+function applyRuntimeCommand(command: RuntimeCommand): { ok: boolean; error?: string } {
+  const result = runtimeJson<unknown>(command);
+  return result.ok ? { ok: true } : { ok: false, error: result.error };
+}
+
+function planTerminalActions(worktreePath: string): RuntimeJsonResult<NonNullable<TeardownReport['terminals']>> {
+  const census = runtimeTerminals(RUNTIME.terminals_all());
+  if (!census.ok) return { ok: false, error: census.error };
+  const targetRows = census.value!.filter((terminal) => terminalBelongsTo(terminal, worktreePath));
+  const targetByTab = new Map<string, RuntimeTerminal[]>();
+  for (const terminal of targetRows) {
+    const key = terminal.tabId?.trim() || `pane:${terminal.handle ?? ''}`;
+    const rows = targetByTab.get(key) ?? [];
+    rows.push(terminal);
+    targetByTab.set(key, rows);
+  }
+  let closedTabs = 0;
+  let closedPanes = 0;
+  let mixedTabFound = false;
+  for (const rowsForTarget of targetByTab.values()) {
+    const tabId = rowsForTarget[0]?.tabId?.trim();
+    const allRowsForTab = tabId
+      ? census.value!.filter((terminal) => terminal.tabId?.trim() === tabId)
+      : rowsForTarget;
+    const targetOnly = tabId !== undefined
+      && allRowsForTab.length > 0
+      && allRowsForTab.every((terminal) => terminalBelongsTo(terminal, worktreePath));
+    if (targetOnly) {
+      closedTabs += 1;
+    } else {
+      closedPanes += rowsForTarget.length;
+      mixedTabFound = mixedTabFound
+        || Boolean(tabId && allRowsForTab.some((terminal) => !terminalBelongsTo(terminal, worktreePath)));
+    }
+  }
+  return {
+    ok: true,
+    value: {
+      stopped: targetRows.length,
+      closed_panes: closedPanes,
+      closed_tabs: closedTabs,
+      mixed_tab_found: mixedTabFound,
     },
   };
-
-  if (!args.worktree || !args.pr) {
-    outcome = 'blocked_invalid_target';
-    report.outcome = outcome;
-    report.error = 'Missing --worktree or --pr';
-    if (args.json) console.log(JSON.stringify(report, null, 2));
-    else console.log(`REFUSE: --worktree and --pr are required`);
-    process.exit(outcome.startsWith('blocked_') ? 1 : 0);
-  }
-
-  const lockPath = join('/tmp', `orca-teardown-lock-${Date.now()}`);
-  const lockAcquired = acquireLock(lockPath);
-
-  if (!lockAcquired) {
-    outcome = 'blocked_lock_held';
-    report.outcome = outcome;
-    if (args.json) console.log(JSON.stringify(report, null, 2));
-    else console.log('REFUSE: Another teardown is in progress (lock held)');
-    process.exit(1);
-  }
-
-  try {
-    const wtReal = realpath(args.worktree);
-    const wtPath = wtReal || args.worktree;
-    report.worktree = wtPath;
-
-    // Validate target
-    const validation = validateTarget(wtPath);
-    report.validation = {
-      is_primary_checkout: validation.isPrimaryCheckout,
-      is_in_inventory: validation.isInInventory,
-      path_exists: validation.pathExists,
-    };
-
-    if (validation.isPrimaryCheckout) {
-      outcome = 'blocked_invalid_target';
-      report.outcome = outcome;
-      if (args.json) console.log(JSON.stringify(report, null, 2));
-      else console.log('REFUSE: target is a primary checkout (has .git directory)');
-      process.exit(1);
-    }
-
-    if (validation.gitFileStatus === 'missing' && validation.pathExists) {
-      outcome = 'blocked_invalid_target';
-      report.outcome = outcome;
-      if (validation.gitFileError) {
-        report.error = validation.gitFileError;
-      }
-      if (args.json) console.log(JSON.stringify(report, null, 2));
-      else console.log(`REFUSE: target exists but .git is invalid${validation.gitFileError ? ': ' + validation.gitFileError : ''}`);
-      process.exit(1);
-    }
-
-    // Run gates
-    const gates = runGates(wtPath, args.pr);
-    report.gates.g1 = gates.g1 ? 'pass' : 'fail';
-    report.gates.g2a = gates.g2a ? 'pass' : 'fail';
-    report.gates.g2b = gates.g2b ? 'pass' : 'fail';
-    report.gates.g3 = gates.g3 ? 'pass' : 'fail';
-    report.gates.g4 = gates.g4 ? 'pass' : 'fail';
-    report.gates.g5 = gates.g5 ? 'pass' : 'fail';
-
-    if (gates.failedGate) {
-      outcome = gates.failedGate as TeardownOutcome;
-      report.outcome = outcome;
-      if (args.json) console.log(JSON.stringify(report, null, 2));
-      else console.log(`Gate check failed: ${gates.failedGate}`);
-      process.exit(1);
-    }
-
-    const prBranchName = gates.prBranchName || `pr-${args.pr}`;
-
-    // Reap processes
-    const protectedPaths = new Set<string>();
-    const knownWorktrees = new Set<string>();
-    const reapResult = await reapProcesses(wtPath, protectedPaths, knownWorktrees, args.apply);
-    report.processes = reapResult;
-
-    if (reapResult.residual > 0) {
-      outcome = 'partial_residual_processes';
-      report.outcome = outcome;
-      if (args.json) console.log(JSON.stringify(report, null, 2));
-      else console.log(`Residual processes detected (${reapResult.residual}); worktree not deleted`);
-      process.exit(1);
-    }
-
-    // Delete branch
-    const branchDel = deleteBranch(wtPath, prBranchName, args.apply);
-    report.branch_deletion = branchDel;
-
-    // Output
-    outcome = 'reaped_clean';
-    report.outcome = outcome;
-    if (args.json) {
-      console.log(JSON.stringify(report, null, 2));
-    } else {
-      console.log(`Outcome: ${outcome}`);
-      console.log(`Processes: ${reapResult.selected} selected, ${reapResult.termed} SIGTERM, ${reapResult.sigkilled} SIGKILL`);
-      console.log(`Branch: ${branchDel.method} (${branchDel.reason})`);
-    }
-    process.exit(0);
-  } finally {
-    releaseLock(lockPath);
-  }
 }
 
-main().catch((err) => {
-  console.error('Fatal error:', err);
-  process.exit(2);
-});
+function stopAndCloseTerminals(worktreePath: string): {
+  ok: boolean;
+  outcome?: TeardownOutcome;
+  report: NonNullable<TeardownReport['terminals']>;
+  error?: string;
+} {
+  // Tab membership must be captured globally before stop mutates terminal state.
+  const globalCensus = runtimeTerminals(RUNTIME.terminals_all());
+  if (!globalCensus.ok) {
+    return {
+      ok: false,
+      outcome: 'terminal_stop_failed',
+      report: { stopped: 0, closed_panes: 0, closed_tabs: 0, mixed_tab_found: false },
+      error: globalCensus.error,
+    };
+  }
+  const targetRows = globalCensus.value!.filter((terminal) => terminalBelongsTo(terminal, worktreePath));
+  const targetByTab = new Map<string, RuntimeTerminal[]>();
+  for (const terminal of targetRows) {
+    const key = terminal.tabId?.trim() || `pane:${terminal.handle ?? ''}`;
+    const rows = targetByTab.get(key) ?? [];
+    rows.push(terminal);
+    targetByTab.set(key, rows);
+  }
+
+  const stop = applyRuntimeCommand(RUNTIME.stop_terminals(worktreePath));
+  if (!stop.ok) {
+    return {
+      ok: false,
+      outcome: 'terminal_stop_failed',
+      report: {
+        stopped: targetRows.length,
+        closed_panes: 0,
+        closed_tabs: 0,
+        mixed_tab_found: false,
+      },
+      error: stop.error,
+    };
+  }
+
+  let closedPanes = 0;
+  let closedTabs = 0;
+  let mixedTabFound = false;
+  const errors: string[] = [];
+  for (const [tabKey, rowsForTarget] of targetByTab) {
+    const tabId = rowsForTarget[0]?.tabId?.trim();
+    const allRowsForTab = tabId
+      ? globalCensus.value!.filter((terminal) => terminal.tabId?.trim() === tabId)
+      : rowsForTarget;
+    const tabIsTargetOnly = tabId !== undefined
+      && allRowsForTab.length > 0
+      && allRowsForTab.every((terminal) => terminalBelongsTo(terminal, worktreePath));
+    if (tabIsTargetOnly) {
+      const handle = rowsForTarget.find((terminal) => terminal.handle?.trim())?.handle?.trim();
+      if (!handle) {
+        errors.push(`tab ${tabKey} has no closable terminal handle`);
+        continue;
+      }
+      const close = applyRuntimeCommand(RUNTIME.close_tab(handle));
+      if (close.ok) closedTabs += 1;
+      else errors.push(close.error ?? `failed to close tab ${tabKey}`);
+      continue;
+    }
+
+    mixedTabFound = mixedTabFound
+      || Boolean(tabId && allRowsForTab.some((terminal) => !terminalBelongsTo(terminal, worktreePath)));
+    for (const terminal of rowsForTarget) {
+      const handle = terminal.handle?.trim();
+      if (!handle) {
+        errors.push(`target pane in ${tabKey} has no handle`);
+        continue;
+      }
+      const close = applyRuntimeCommand(RUNTIME.close_pane(handle));
+      if (close.ok) closedPanes += 1;
+      else errors.push(close.error ?? `failed to close pane ${handle}`);
+    }
+  }
+
+  const finalGlobal = runtimeTerminals(RUNTIME.terminals_all());
+  const residual = finalGlobal.ok
+    ? finalGlobal.value!.filter((terminal) => terminalBelongsTo(terminal, worktreePath))
+    : targetRows;
+  const report = {
+    stopped: targetRows.length,
+    closed_panes: closedPanes,
+    closed_tabs: closedTabs,
+    mixed_tab_found: mixedTabFound,
+  };
+  if (!finalGlobal.ok || residual.length > 0 || errors.length > 0) {
+    return {
+      ok: false,
+      outcome: 'blocked_mixed_tab',
+      report,
+      error: [finalGlobal.error, ...errors, residual.length > 0 ? `${residual.length} target terminals remain` : undefined]
+        .filter((value): value is string => Boolean(value))
+        .join('; '),
+    };
+  }
+  return { ok: true, report };
+}
+
+function recheckState(worktreePath: string, identity: IdentitySnapshot): {
+  g1: boolean;
+  g2a: boolean;
+  g2b: boolean;
+  g5: boolean;
+  detail?: string;
+} {
+  const g5 = checkG5Agents(worktreePath);
+  return {
+    g1: recheckG1Identity(worktreePath, identity),
+    g2a: checkG2aClean(worktreePath),
+    g2b: checkG2bIgnored(worktreePath),
+    g5: g5.pass,
+    detail: g5.detail,
+  };
+}
+
+function deleteBranch(primaryCheckout: string | null, branchName: string, apply: boolean): NonNullable<TeardownReport['branch_deletion']> {
+  if (!apply) return { method: 'skipped', reason: 'dry-run' };
+  if (!primaryCheckout) return { method: 'skipped', reason: 'primary checkout could not be resolved' };
+  const present = gitRunSync(['branch', '--list', branchName], primaryCheckout);
+  if (!present.ok || present.stdout.trim() === '') {
+    return { method: 'skipped', reason: 'branch not found' };
+  }
+  const deleted = gitRunSync(['branch', '-d', branchName], primaryCheckout);
+  return deleted.ok
+    ? { method: 'd', reason: 'deleted after runtime worktree removal' }
+    : { method: 'skipped', reason: 'branch -d refused; no force deletion attempted' };
+}
+
+function markGates(report: TeardownReport, gates: GateResults): void {
+  report.gates = {
+    g1: gates.g1 ? 'pass' : 'fail',
+    g2a: gates.g2a ? 'pass' : 'fail',
+    g2b: gates.g2b ? 'pass' : 'fail',
+    g3: gates.g3 ? 'pass' : 'fail',
+    g4: gates.g4 ? 'pass' : 'fail',
+    g5: gates.g5 ? 'pass' : 'fail',
+  };
+}
+
+function emit(report: TeardownReport, json: boolean): void {
+  if (json) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+  console.log(`Outcome: ${report.outcome}`);
+  console.log(`Gates: G1=${report.gates.g1} G2a=${report.gates.g2a} G2b=${report.gates.g2b} G3=${report.gates.g3} G4=${report.gates.g4} G5=${report.gates.g5}`);
+  if (report.terminals) {
+    console.log(`Terminals: stop=${report.terminals.stopped} tabs=${report.terminals.closed_tabs} panes=${report.terminals.closed_panes}`);
+  }
+  if (report.processes) {
+    console.log(`Processes: selected=${report.processes.selected} SIGTERM=${report.processes.termed} SIGKILL=${report.processes.sigkilled} residual=${report.processes.residual}`);
+  }
+  if (report.error) console.log(`Detail: ${report.error}`);
+}
+
+async function execute(args: ParsedArgs, report: TeardownReport): Promise<number> {
+  if (!args.worktree || !args.pr) {
+    report.outcome = 'blocked_invalid_target';
+    report.error = 'both --worktree and --pr are required';
+    return 1;
+  }
+  const target = existingRealpath(args.worktree) ?? normalizePath(resolve(args.worktree));
+  report.worktree = target;
+  const validation = validateTarget(target);
+  report.validation.path_exists = validation.pathExists;
+  report.validation.is_primary_checkout = validation.isPrimaryCheckout;
+  if (validation.isPrimaryCheckout) {
+    report.outcome = 'blocked_invalid_target';
+    report.error = 'target is the primary checkout';
+    return 1;
+  }
+  if (!validation.pathExists) {
+    report.outcome = args.orphan && args.iKnowThisPath
+      ? 'blocked_unprovable_orphan'
+      : 'blocked_invalid_target';
+    report.error = 'target path does not exist; identity and git-state gates cannot be proven';
+    return 1;
+  }
+  if (validation.gitFileStatus !== 'file') {
+    report.outcome = 'blocked_invalid_target';
+    report.error = validation.gitFileError ?? 'target .git file is invalid';
+    return 1;
+  }
+  const worktreeInventory = runtimeWorktrees();
+  if (!worktreeInventory.ok) {
+    report.outcome = 'blocked_state_desync';
+    report.error = worktreeInventory.error;
+    return 1;
+  }
+  const inventoryMatches = worktreeInventory.value!.filter(
+    (row) => typeof row.path === 'string' && normalizePath(row.path) === target,
+  );
+  report.validation.is_in_inventory = inventoryMatches.length === 1;
+  if (inventoryMatches.length !== 1) {
+    report.outcome = 'blocked_state_desync';
+    report.error = `runtime worktree inventory matched ${inventoryMatches.length} rows for target`;
+    return 1;
+  }
+  const gates = runInitialGates(target, args.pr);
+  markGates(report, gates);
+  if (gates.failedOutcome) {
+    report.outcome = gates.failedOutcome;
+    report.error = gates.detail;
+    return 1;
+  }
+  if (!gates.identity || !gates.prBranchName) {
+    report.outcome = 'blocked_state_desync';
+    report.error = 'initial identity snapshot is incomplete';
+    return 1;
+  }
+  const knownWorktrees = new Set(
+    worktreeInventory.value!
+      .map((row) => typeof row.path === 'string' ? existingRealpath(row.path) ?? normalizePath(row.path) : null)
+      .filter((value): value is string => value !== null),
+  );
+  const protectedPaths = new Set(
+    worktreeInventory.value!
+      .filter((row) => row.isMainWorktree === true && typeof row.path === 'string')
+      .map((row) => existingRealpath(row.path!) ?? normalizePath(row.path!)),
+  );
+  const primaryCheckout = getPrimaryCheckout(target);
+  if (!args.apply) {
+    const terminalPlan = planTerminalActions(target);
+    if (!terminalPlan.ok) {
+      report.outcome = 'blocked_state_desync';
+      report.error = terminalPlan.error;
+      return 1;
+    }
+    report.terminals = terminalPlan.value;
+    report.processes = await reapProcesses(target, protectedPaths, knownWorktrees, false);
+    const dryRunRecheck = recheckState(target, gates.identity);
+    report.recheck = {
+      g1: dryRunRecheck.g1 ? 'pass' : 'fail',
+      g2a: dryRunRecheck.g2a ? 'pass' : 'fail',
+      g2b: dryRunRecheck.g2b ? 'pass' : 'fail',
+      g5: dryRunRecheck.g5 ? 'pass' : 'fail',
+    };
+    if (!dryRunRecheck.g1 || !dryRunRecheck.g2a || !dryRunRecheck.g2b || !dryRunRecheck.g5) {
+      report.outcome = 'blocked_state_drift';
+      report.error = dryRunRecheck.detail ?? 'state changed during dry-run evaluation';
+      return 1;
+    }
+    report.worktree_removal = { attempted: false, removed: false };
+    report.branch_deletion = deleteBranch(primaryCheckout, gates.prBranchName, false);
+    report.outcome = 'reaped_clean';
+    return 0;
+  }
+  const terminalResult = stopAndCloseTerminals(target);
+  report.terminals = terminalResult.report;
+  if (!terminalResult.ok) {
+    report.outcome = terminalResult.outcome ?? 'terminal_stop_failed';
+    report.error = terminalResult.error;
+    return 1;
+  }
+  const reapResult = await reapProcesses(target, protectedPaths, knownWorktrees, true);
+  report.processes = reapResult;
+  if (reapResult.residual > 0) {
+    report.outcome = 'partial_residual_processes';
+    report.error = `${reapResult.residual} selected processes remain`;
+    return 1;
+  }
+  const recheck = recheckState(target, gates.identity);
+  report.recheck = {
+    g1: recheck.g1 ? 'pass' : 'fail',
+    g2a: recheck.g2a ? 'pass' : 'fail',
+    g2b: recheck.g2b ? 'pass' : 'fail',
+    g5: recheck.g5 ? 'pass' : 'fail',
+  };
+  if (!recheck.g1 || !recheck.g2a || !recheck.g2b || !recheck.g5) {
+    report.outcome = 'blocked_state_drift';
+    report.error = recheck.detail ?? 'pre-removal state differs from the saved identity/git/runtime snapshot';
+    return 1;
+  }
+  report.worktree_removal = { attempted: true, removed: false };
+  const removal = applyRuntimeCommand(RUNTIME.remove_worktree(target));
+  if (!removal.ok) {
+    report.outcome = 'worktree_remove_failed';
+    report.error = removal.error;
+    return 1;
+  }
+  report.worktree_removal.removed = true;
+  report.branch_deletion = deleteBranch(primaryCheckout, gates.prBranchName, true);
+  report.outcome = 'reaped_clean';
+  return 0;
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs();
+  const report: TeardownReport = {
+    worktree: args.worktree ?? '',
+    pr: args.pr ?? 0,
+    outcome: 'blocked_invalid_target',
+    apply_mode: args.apply,
+    gates: { g1: 'fail', g2a: 'fail', g2b: 'fail', g3: 'fail', g4: 'fail', g5: 'fail' },
+    validation: { is_primary_checkout: false, is_in_inventory: false, path_exists: false },
+  };
+  if (!acquireLock()) {
+    report.outcome = 'blocked_lock_held';
+    report.error = `teardown lock already exists at ${LOCK_PATH}; stale locks are not removed automatically`;
+    emit(report, args.json);
+    process.exitCode = 1;
+    return;
+  }
+  let exitCode = 1;
+  try {
+    exitCode = await execute(args, report);
+  } catch (error) {
+    report.outcome = 'blocked_state_desync';
+    report.error = error instanceof Error ? error.message : String(error);
+    exitCode = 1;
+  } finally {
+    releaseLock();
+  }
+  emit(report, args.json);
+  process.exitCode = exitCode;
+}
+
+void main();
