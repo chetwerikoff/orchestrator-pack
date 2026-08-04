@@ -288,9 +288,9 @@ const trace = process.env.TASK311_TRACE_FILE;
 const expectedPr = process.env.TASK311_EXPECTED_PR;
 const expectedHead = process.env.TASK311_EXPECTED_HEAD;
 const expectedSession = process.env.TASK311_EXPECTED_SESSION;
-const fail = (message) => { process.stderr.write(message + '\n'); process.exit(64); };
+const fail = (message) => { process.stderr.write(message + '\\n'); process.exit(64); };
 const valueAfter = (flag) => { const index = args.indexOf(flag); return index >= 0 ? args[index + 1] : ''; };
-if (!args.some((value) => /plugins[\\/]ao-codex-pr-reviewer[\\/]bin[\\/]review\.ts$/.test(value))) fail('real plugin reviewer wrapper was not invoked');
+if (!args.some((value) => /plugins[\\\\/]ao-codex-pr-reviewer[\\\\/]bin[\\\\/]review\\.ts$/.test(value))) fail('real plugin reviewer wrapper was not invoked');
 if (valueAfter('--pr-number') !== expectedPr) fail('reviewer argv lost exact PR');
 const reviewRoot = valueAfter('--repo-root');
 if (!reviewRoot) fail('reviewer argv lost worktree root');
@@ -300,9 +300,9 @@ const observed = cp.spawnSync('git', ['-C', reviewRoot, 'rev-parse', 'HEAD'], { 
 if (observed.status !== 0) fail('reviewer could not resolve checked-out worktree head: ' + String(observed.stderr || observed.error || 'unknown'));
 const observedHead = String(observed.stdout || '').trim().toLowerCase();
 if (observedHead !== expectedHead) fail('reviewer worktree head mismatch: ' + observedHead + ' != ' + expectedHead);
-const sequence = fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8').split(/\r?\n/).filter(Boolean).length + 1 : 1;
-fs.appendFileSync(trace, JSON.stringify({ event: 'reviewer-wrapper', sequence, atMs: Date.now(), argv: args, prNumber: Number(expectedPr), expectedHeadSha: expectedHead, observedHeadSha: observedHead, reviewTargetRoot: reviewRoot, sessionId: expectedSession }) + '\n');
-process.stdout.write(JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }) + '\n');
+const sequence = fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8').split(/\\r?\\n/).filter(Boolean).length + 1 : 1;
+fs.appendFileSync(trace, JSON.stringify({ event: 'reviewer-wrapper', sequence, atMs: Date.now(), argv: args, prNumber: Number(expectedPr), expectedHeadSha: expectedHead, observedHeadSha: observedHead, reviewTargetRoot: reviewRoot, sessionId: expectedSession }) + '\\n');
+process.stdout.write(JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }) + '\\n');
 `, 'utf8');
   if (process.platform === 'win32') {
     writeExecutable(path.join(bin, 'node.cmd'), `@echo off\r\nset args=%*\r\necho %args% | findstr /C:"plugins\\ao-codex-pr-reviewer\\bin\\review.ts" >nul\r\nif %errorlevel%==0 ("${process.execPath}" "${fakeReviewer}" %*) else ("${process.execPath}" %*)\r\n`);
