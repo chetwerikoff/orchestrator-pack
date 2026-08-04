@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 
 export type WorktreeIdentityMode = 'branch-bound' | 'detached-confirmed';
 export type WorktreeBindingKind = 'issue' | 'pr';
+export type OrcaBranchShape = 'branch' | 'detached' | 'invalid';
 
 export interface ExpectedWorktreeIdentity {
   readonly repositoryRoot: string;
@@ -30,10 +31,12 @@ export interface OrcaAgentRow {
 }
 
 export interface OrcaWorktreeRow {
+  readonly id?: string;
   readonly path: string;
   readonly headSha?: string;
   readonly branchRef?: string;
   readonly branchName?: string;
+  readonly branchShape: OrcaBranchShape;
   readonly repoId?: string;
   readonly linkedIssue?: number | null;
   readonly linkedPR?: number | null;
@@ -235,6 +238,82 @@ function optionalIntegerField(
   return undefined;
 }
 
+function parseOrcaCompositeId(
+  row: Record<string, unknown>,
+  path: string,
+  malformedFields: string[],
+): { id?: string; repoId?: string } {
+  const id = optionalString(row.id);
+  if (!id) {
+    malformedFields.push('id');
+    return {};
+  }
+  const separator = id.indexOf('::');
+  if (separator <= 0 || separator === id.length - 2) {
+    malformedFields.push('id');
+    return { id };
+  }
+  const repoId = id.slice(0, separator).trim();
+  const idPath = id.slice(separator + 2).trim();
+  if (!repoId || !idPath) {
+    malformedFields.push('id');
+    return { id };
+  }
+  try {
+    if (normalizeWorktreePath(idPath) !== path) malformedFields.push('id.path');
+  } catch {
+    malformedFields.push('id.path');
+  }
+  if (Object.prototype.hasOwnProperty.call(row, 'repoId')) {
+    const legacyRepoId = optionalString(row.repoId);
+    if (!legacyRepoId || legacyRepoId !== repoId) malformedFields.push('repoId');
+  }
+  return { id, repoId };
+}
+
+function parseOrcaBranch(
+  row: Record<string, unknown>,
+  malformedFields: string[],
+): { branchRef?: string; branchName?: string; branchShape: OrcaBranchShape } {
+  if (!Object.prototype.hasOwnProperty.call(row, 'branch') || typeof row.branch !== 'string') {
+    malformedFields.push('branch');
+    return { branchShape: 'invalid' };
+  }
+  if (row.branch === '') return { branchRef: '', branchShape: 'detached' };
+  const branchRef = row.branch.trim();
+  if (!branchRef) {
+    malformedFields.push('branch');
+    return { branchShape: 'invalid' };
+  }
+  const branchName = normalizeBranchName(branchRef);
+  if (!branchName) {
+    malformedFields.push('branch');
+    return { branchShape: 'invalid' };
+  }
+  return { branchRef, branchName, branchShape: 'branch' };
+}
+
+function parseOrcaAgents(value: unknown, malformedFields: string[]): OrcaAgentRow[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    malformedFields.push('agents');
+    return undefined;
+  }
+  const agents: OrcaAgentRow[] = [];
+  for (const rawAgent of value) {
+    const agent = objectRecord(rawAgent);
+    if (!agent
+      || typeof agent.state !== 'string'
+      || !agent.state.trim()
+      || typeof agent.interrupted !== 'boolean') {
+      malformedFields.push('agents');
+      continue;
+    }
+    agents.push({ state: agent.state.trim(), interrupted: agent.interrupted });
+  }
+  return agents;
+}
+
 export function parseOrcaWorktreePayload(payload: unknown): OrcaWorktreeRow[] {
   const root = objectRecord(payload);
   if (!root) throw new TypeError('Orca response must be an object');
@@ -249,6 +328,8 @@ export function parseOrcaWorktreePayload(payload: unknown): OrcaWorktreeRow[] {
     const malformedFields: string[] = [];
     const rawPath = optionalString(row.path);
     if (!rawPath) throw new TypeError(`Orca worktree row ${index} omitted path`);
+    const path = normalizeWorktreePath(rawPath);
+    const identity = parseOrcaCompositeId(row, path, malformedFields);
     const headValue = optionalString(row.head);
     let headSha: string | undefined;
     if (headValue) {
@@ -260,27 +341,15 @@ export function parseOrcaWorktreePayload(payload: unknown): OrcaWorktreeRow[] {
     } else {
       malformedFields.push('head');
     }
-    const branchRef = optionalString(row.branch);
-    const branchName = normalizeBranchName(branchRef);
-    const repoId = optionalString(row.repoId);
-    if (!repoId) malformedFields.push('repoId');
-    const agents = Array.isArray(row.agents)
-      ? row.agents.map((agentValue) => {
-        const agent = objectRecord(agentValue);
-        return {
-          ...(typeof agent?.state === 'string' ? { state: agent.state } : {}),
-          ...(typeof agent?.interrupted === 'boolean' ? { interrupted: agent.interrupted } : {}),
-        };
-      })
-      : undefined;
+    const branch = parseOrcaBranch(row, malformedFields);
+    const agents = parseOrcaAgents(row.agents, malformedFields);
     if (typeof row.isMainWorktree !== 'boolean') malformedFields.push('isMainWorktree');
     if (typeof row.isArchived !== 'boolean') malformedFields.push('isArchived');
     return {
-      path: normalizeWorktreePath(rawPath),
+      ...identity,
+      path,
       headSha,
-      branchRef,
-      branchName,
-      repoId,
+      ...branch,
       linkedIssue: optionalIntegerField(row, 'linkedIssue', malformedFields),
       linkedPR: optionalIntegerField(row, 'linkedPR', malformedFields),
       isMainWorktree: row.isMainWorktree === true,
@@ -315,8 +384,8 @@ function orcaIdentityMatches(row: OrcaWorktreeRow, expected: ExpectedWorktreeIde
   ) {
     return false;
   }
-  if (expected.mode === 'detached-confirmed') return !row.branchName;
-  return row.branchName === expected.branchName;
+  if (expected.mode === 'detached-confirmed') return row.branchShape === 'detached';
+  return row.branchShape === 'branch' && row.branchName === expected.branchName;
 }
 
 function gitIdentityCollision(row: GitWorktreeRow, expected: ExpectedWorktreeIdentity): boolean {
@@ -351,7 +420,7 @@ function disagreementFields(
     if (row.isMainWorktree) fields.add('orca.isMainWorktree');
     if (row.isArchived) fields.add('orca.isArchived');
     if (expected.mode === 'branch-bound' && row.branchName !== expected.branchName) fields.add('orca.branch');
-    if (expected.mode === 'detached-confirmed' && row.branchName) fields.add('orca.detached');
+    if (expected.mode === 'detached-confirmed' && row.branchShape !== 'detached') fields.add('orca.detached');
     if (!orcaBindingMatches(row, expected)) {
       fields.add(expected.bindingKind === 'issue' ? 'orca.linkedIssue' : 'orca.linkedPR');
     }
