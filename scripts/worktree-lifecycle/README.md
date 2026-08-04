@@ -7,8 +7,12 @@ watcher, daemon, or background reconciler.
 ## Contract
 
 - Git and Orca are read independently and validated before use.
-- The exact identity is active Orca repository id + repository root + canonical worktree path +
-  issue-or-PR authority + branch or detached mode + full 40-hex HEAD SHA.
+- The exact Orca repository identity is derived from the capture-shaped composite
+  `result.worktrees[].id` value (`<repository-id>::<canonical-worktree-path>`). The embedded path
+  must equal the separately returned canonical `path`; a missing, malformed, or inconsistent id
+  fails closed.
+- The complete identity is repository id + repository root + canonical worktree path +
+  issue-or-PR authority + branch or capture-proven detached mode + full 40-hex HEAD SHA.
 - Pre-PR create/handoff uses Issue authority and requires the exact Orca `linkedIssue`.
 - Post-merge cleanup and destructive recovery use PR authority; issue-only authority can never
   authorize removal.
@@ -17,6 +21,9 @@ watcher, daemon, or background reconciler.
 - `exact_git_only` may use the guarded PR-bound recovery path; it is never deleted by path alone.
 - Archived, main-worktree, wrong-repository, duplicate, malformed, unavailable, Orca-only, or
   conflicting evidence preserves the disputed target.
+- Missing, malformed, active, or interrupted `worktree ps` agent evidence blocks candidate use.
+- An explicit empty Orca branch string is the only accepted detached representation. Missing,
+  non-string, or whitespace-only branch data is malformed rather than detached.
 - A target-level mutation block never stops the global work pipeline. The terminal report carries
   `cleanup_deferred`, `replacement_required`, or `task_degraded`, `pipelineContinues: true`, and
   an actionable continuation decision.
@@ -41,22 +48,30 @@ node --experimental-strip-types scripts/worktree-lifecycle/create-continuation.t
 
 The command:
 
-1. acquires the same process-local exclusion path used by guarded teardown/recovery;
-2. reads Git and Orca before any create and proves one active main-worktree repository id;
-3. recognizes the Issue family independently of a caller-chosen name and resumes one exact-dual
-   Issue-bound worktree only when it has no terminal;
-4. otherwise performs at most one stable primary create (`issue-<N>`);
-5. reads both authorities even when the create response is missing, invalid, or timed out;
-6. preserves disputed state and performs at most one stable isolated replacement
+1. acquires the same owner-token exclusion path used by guarded teardown/recovery;
+2. reads Git and Orca before any create and proves one active main-worktree repository id from the
+   composite Orca id;
+3. recognizes the complete Issue family independently of current HEAD or a caller-chosen name;
+4. refuses another effect when any same-repository Issue-family row is old-head, malformed, active,
+   interrupted, already terminal-bound, or otherwise disputed;
+5. otherwise performs at most one stable primary create (`issue-<N>`);
+6. reads both authorities even when the create response is missing, invalid, or timed out;
+7. treats any terminal materialized by `worktree create` as create-owned activity: the new target is
+   preserved and the actuator returns `task_degraded` without replacement or a separate terminal;
+8. requires one exact, valid `worktree ps` row whose agents are all done and not interrupted before
+   using a candidate;
+9. preserves other disputed same-head state and performs at most one stable isolated replacement
    (`issue-<N>-replacement`) rooted at the exact source SHA;
-7. performs two fresh exact-dual reads, creates one terminal while still holding the exclusion,
-   and performs two more fresh reads proving exactly one new terminal handle;
-8. returns `task_degraded` with `pipelineContinues: true` when no safe candidate or unique terminal
-   result exists.
+10. performs two fresh exact-dual reads, creates one terminal while still holding the exclusion,
+    and performs two more fresh reads proving exactly one new terminal handle;
+11. returns `task_degraded` with `pipelineContinues: true` when no safe candidate or unique terminal
+    result exists.
 
-A dead local lock owner may be recovered using PID/start-time evidence. A live, malformed, or
-changed lock remains fail-closed. A repeated or concurrent invocation that observes an existing
-Issue-family terminal performs no create and no second terminal spawn.
+The exclusion records PID, process start time, and an unguessable owner token. A dead owner may be
+recovered only after a stable compare-before-unlink check. A live, malformed, changed, or replaced
+lock remains fail-closed, and only the recorded owner may unlink it. The teardown child borrows the
+parent token without taking ownership, so create, recovery, child teardown, and dual post-readback
+share one exclusion interval.
 
 Successful output has this shape:
 
@@ -132,10 +147,12 @@ node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
   --json
 ```
 
-The wrapper always reads Git and Orca after the teardown child returns, fails, or times out.
-`cleanup_complete` is emitted only when the exact target is absent from both authorities and
-unrelated inventory is unchanged. Effect-before-receipt may settle complete from that read-back;
-a successful child exit without dual absence settles `task_degraded`.
+The wrapper holds the shared owner-token exclusion across the authoritative pre-effect census,
+teardown child, and dual post-effect readback. The child validates and borrows the parent token; it
+does not unlink the parent lock. `cleanup_complete` is emitted only when the exact target is absent
+from both authorities and unrelated in-repository inventory is unchanged. Effect-before-receipt may
+settle complete from that readback; a successful child exit without dual absence settles
+`task_degraded`.
 
 A valid lifecycle terminal report exits zero even when its target result is `cleanup_deferred`,
 `replacement_required`, or `task_degraded`. This is intentional: the report blocks unsafe mutation
