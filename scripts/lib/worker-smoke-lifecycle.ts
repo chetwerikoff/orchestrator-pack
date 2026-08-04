@@ -1,28 +1,22 @@
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
   renameSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import * as base from './worker-smoke-lifecycle-base.ts';
+import {
+  isCleanCloseOutcome,
+  readCloseReceipt,
+  readHistoricalCloseReceipt,
+  recordCloseReceipt,
+  smokeCloseReceiptPath,
+} from './worker-smoke-receipt.ts';
 
 export * from './worker-smoke-lifecycle-base.ts';
-
-interface CloseReceipt {
-  version: 1;
-  runId: string;
-  terminalHandle: string;
-  closeOutcome: string;
-  recordedAtMs: number;
-}
-
-type JsonRecord = Record<string, unknown>;
-
-const isRecord = (value: unknown): value is JsonRecord =>
-  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+export { smokeCloseReceiptPath } from './worker-smoke-receipt.ts';
 
 const blockingState = (registry: base.SmokeLifecycleRegistry): boolean =>
   registry.spawnState !== 'clean' && registry.spawnState !== 'abandoned_unbound';
@@ -37,97 +31,75 @@ function atomicJson(path: string, value: unknown): void {
   renameSync(temporary, path);
 }
 
-function readJson(path: string): unknown | undefined {
-  if (!existsSync(path)) return undefined;
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-function cleanCloseOutcome(outcome: string): boolean {
-  return outcome === 'closed_owned_handle'
-    || outcome === 'closed_owned_handle_already_absent';
-}
-
-export const smokeCloseReceiptPath = (artifactDir: string): string =>
-  join(artifactDir, 'close-receipt.json');
-
-function readCloseReceipt(
-  artifactDir: string,
-  runId: string,
-  terminalHandle: string,
-): CloseReceipt | undefined {
-  const value = readJson(smokeCloseReceiptPath(artifactDir));
-  if (!isRecord(value)) return undefined;
-  const receipt: CloseReceipt = {
-    version: 1,
-    runId: String(value.runId ?? '').trim(),
-    terminalHandle: String(value.terminalHandle ?? '').trim(),
-    closeOutcome: String(value.closeOutcome ?? '').trim(),
-    recordedAtMs: Number(value.recordedAtMs),
-  };
-  if (
-    Number(value.version) !== 1
-    || receipt.runId !== runId
-    || receipt.terminalHandle !== terminalHandle
-    || !cleanCloseOutcome(receipt.closeOutcome)
-    || !Number.isFinite(receipt.recordedAtMs)
-  ) return undefined;
-  return receipt;
-}
-
-function recordCloseReceipt(input: {
-  artifactDir: string;
-  runId: string;
-  terminalHandle: string;
-  closeOutcome: string;
-  nowMs: number;
-}): boolean {
-  if (!cleanCloseOutcome(input.closeOutcome)) return false;
-  try {
-    atomicJson(smokeCloseReceiptPath(input.artifactDir), {
-      version: 1,
-      runId: input.runId,
-      terminalHandle: input.terminalHandle,
-      closeOutcome: input.closeOutcome,
-      recordedAtMs: input.nowMs,
-    } satisfies CloseReceipt);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function closeWithReceipt(input: {
   artifactDir: string;
   runId: string;
   terminalHandle: string;
+  settlementId?: string;
+  settlementReason?: string;
   nowMs: number;
   closeBoundHandle: (handle: string, artifactDir: string) => string;
 }): string {
-  const existing = readCloseReceipt(
-    input.artifactDir,
-    input.runId,
-    input.terminalHandle,
-  );
-  if (existing) return existing.closeOutcome;
+  const registry = base.readSmokeLifecycleRegistry(input.artifactDir);
+  if (
+    !registry
+    || registry.runId !== input.runId
+    || registry.terminalHandle !== input.terminalHandle
+    || registry.closeAttemptedAtMs === undefined
+  ) return 'close_failed:registry_unreadable';
+  const existing = readCloseReceipt(input.artifactDir, registry);
+  if (existing.state === 'closed') return existing.receipt.closeOutcome;
+  if (existing.state !== 'missing') return 'close_receipt_invalid';
+
+  const settlementId = input.settlementId ?? `${registry.runId}:post-settlement`;
+  const settlementReason = input.settlementReason ?? 'post_settlement_cleanup';
+  const settlementAtMs = input.nowMs;
+  try {
+    atomicJson(smokeCloseReceiptPath(input.artifactDir), {
+      version: 2,
+      phase: 'settlement_recorded',
+      runId: registry.runId,
+      terminalHandle: registry.terminalHandle,
+      headSha: registry.headSha,
+      artifactDir: resolve(registry.artifactDir),
+      settlementId,
+      settlementReason,
+      settlementAtMs,
+      closeAttemptedAtMs: registry.closeAttemptedAtMs,
+      closeOutcome: '',
+      recordedAtMs: settlementAtMs,
+    });
+  } catch {
+    return 'settlement_record_failed';
+  }
 
   const outcome = input.closeBoundHandle(input.terminalHandle, input.artifactDir);
   if (outcome === 'close_failed:channel_stale_handle') {
     return 'close_failed:unproven_channel_stale_handle';
   }
-  if (!cleanCloseOutcome(outcome)) return outcome;
+  if (outcome === 'closed_owned_handle_already_absent') {
+    return 'close_failed:unproven_already_absent';
+  }
+  if (!isCleanCloseOutcome(outcome)) return outcome;
   return recordCloseReceipt({
     artifactDir: input.artifactDir,
-    runId: input.runId,
-    terminalHandle: input.terminalHandle,
+    registry,
+    settlementId,
+    settlementReason,
+    settlementAtMs,
     closeOutcome: outcome,
     nowMs: input.nowMs,
   })
     ? outcome
     : 'close_receipt_write_failed';
+}
+
+export function hasValidSmokeCloseReceipt(artifactDir: string): boolean {
+  const registry = base.readSmokeLifecycleRegistry(artifactDir);
+  return Boolean(
+    registry
+    && readCloseReceipt(artifactDir, registry).state === 'closed',
+  );
 }
 
 function runDirectories(repoRoot: string): string[] | undefined {
@@ -182,7 +154,15 @@ export function evaluateSmokeLifecycleCleanliness(
   if (!directories) return evaluated;
 
   for (const artifactDir of directories) {
-    if (existsSync(base.smokeLifecycleRegistryPath(artifactDir))) continue;
+    if (existsSync(base.smokeLifecycleRegistryPath(artifactDir))) {
+      const registry = base.readSmokeLifecycleRegistry(artifactDir);
+      if (registry?.spawnState === 'clean' && !hasValidSmokeCloseReceipt(artifactDir)) {
+        const reason = `unproven_cleanup_receipt:${registry.runId}`;
+        if (!reasons.includes(reason)) reasons.push(reason);
+        if (!blockingRunIds.includes(registry.runId)) blockingRunIds.push(registry.runId);
+      }
+      continue;
+    }
     const evidence = extraRegistrylessEvidence(artifactDir);
     if (evidence.length === 0) continue;
     const runId = basename(artifactDir);
@@ -261,10 +241,20 @@ export function preflightSmokeLifecycle(
       if (!registry || registry.terminalHandle !== handle) {
         return 'close_failed:registry_unreadable';
       }
+      if (
+        registry.spawnState === 'cleanup_failed'
+        || (registry.spawnState === 'cleanup_pending' && registry.cleanup?.closeOutcome)
+      ) {
+        return registry.cleanup?.closeOutcome ?? 'cleanup_attempt_already_settled';
+      }
+      const historical = readHistoricalCloseReceipt(artifactDir, registry);
+      if (historical) return historical.closeOutcome;
       return closeWithReceipt({
         artifactDir,
         runId: registry.runId,
         terminalHandle: handle,
+        settlementId: `${registry.runId}:restart-recovery`,
+        settlementReason: 'restart_recovery',
         nowMs,
         closeBoundHandle: input.closeBoundHandle,
       });
@@ -276,14 +266,32 @@ export function cleanupSmokeLifecycle(
   input: Parameters<typeof base.cleanupSmokeLifecycle>[0],
 ): base.SmokeCleanupResult {
   const nowMs = input.nowMs ?? Date.now();
-  return base.cleanupSmokeLifecycle({
+  const current = base.readSmokeLifecycleRegistry(input.artifactDir);
+  if (current?.spawnState === 'cleanup_pending' || current?.spawnState === 'cleanup_failed') {
+    return {
+      clean: false,
+      cooperativeAcknowledgementObserved:
+        current.cleanup?.cooperativeAcknowledgementObserved
+        ?? input.cooperativeAcknowledgementObserved,
+      closeOutcome: current.cleanup?.closeOutcome ?? 'cleanup_attempt_already_settled',
+      operatorFilesCleared: current.cleanup?.operatorFilesCleared ?? false,
+      reason: current.cleanup?.reason ?? input.reason,
+    };
+  }
+  const result = base.cleanupSmokeLifecycle({
     ...input,
     closeBoundHandle: (handle) => closeWithReceipt({
       artifactDir: input.artifactDir,
       runId: input.runId,
       terminalHandle: handle,
+      settlementId: `${input.runId}:${input.reason}`,
+      settlementReason: input.reason,
       nowMs,
       closeBoundHandle: (ownedHandle) => input.closeBoundHandle(ownedHandle),
     }),
   });
+  if (result.clean && !hasValidSmokeCloseReceipt(input.artifactDir)) {
+    return { ...result, clean: false, closeOutcome: 'close_receipt_unproven' };
+  }
+  return result;
 }
