@@ -1,15 +1,6 @@
 #!/usr/bin/env node
 
 import '../toolchain/native-entrypoint-preflight.ts';
-import { randomUUID } from 'node:crypto';
-import {
-  closeSync,
-  fsyncSync,
-  openSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runProcessSync, type ProcessResult } from '../kernel/subprocess.ts';
@@ -22,6 +13,11 @@ import {
   type OrcaWorktreeRow,
 } from './core.ts';
 import {
+  acquireLifecycleExclusion,
+  DEFAULT_WORKTREE_LIFECYCLE_EXCLUSION_PATH,
+  releaseLifecycleExclusion,
+} from './exclusion.ts';
+import {
   collectCensus,
   runLifecycle,
   type CommandInvocation,
@@ -31,10 +27,7 @@ import {
   type TerminalEvidence,
 } from './operations.ts';
 
-export const WORKTREE_LIFECYCLE_EXCLUSION_PATH = resolve(
-  '/tmp',
-  `${['opk', 'worktree', 'teardown'].join('-')}.lock`,
-);
+export const WORKTREE_LIFECYCLE_EXCLUSION_PATH = DEFAULT_WORKTREE_LIFECYCLE_EXCLUSION_PATH;
 
 export interface CreateContinuationOperations {
   readonly runner?: CommandRunner;
@@ -47,6 +40,7 @@ export interface InventorySnapshot {
   readonly repositoryId: string;
   readonly gitRows: readonly GitWorktreeRow[];
   readonly orcaRows: readonly OrcaWorktreeRow[];
+  readonly agentRows: readonly OrcaWorktreeRow[];
   readonly terminals: readonly TerminalEvidence[];
   readonly errors: readonly string[];
 }
@@ -66,6 +60,8 @@ export interface CreateAttemptReport {
   readonly command: CommandSummary;
   readonly newGitPaths: readonly string[];
   readonly newOrcaPaths: readonly string[];
+  readonly createOwnedTerminals: readonly TerminalEvidence[];
+  readonly unsafeAgentPaths: readonly string[];
   readonly candidateReports: readonly LifecycleTerminalReport[];
   readonly inventoryErrors: readonly string[];
 }
@@ -95,11 +91,6 @@ export interface WorktreeCreateContinuationReport {
   readonly error?: string;
 }
 
-interface LockHandle {
-  readonly fd: number;
-  readonly token: string;
-}
-
 interface SelectedCandidate {
   readonly expected: ExpectedWorktreeIdentity;
   readonly report: LifecycleTerminalReport;
@@ -108,6 +99,8 @@ interface SelectedCandidate {
 interface AttemptResult {
   readonly report: CreateAttemptReport;
   readonly snapshot: InventorySnapshot;
+  readonly createOwnedTerminalConflict: boolean;
+  readonly unsafeAgentConflict: boolean;
   readonly selected?: SelectedCandidate;
 }
 
@@ -135,79 +128,6 @@ function summarizeCommand(result: ProcessResult, invocation: CommandInvocation):
     acknowledged: responseAcknowledged(result),
     ...(!result.ok ? { error: invocationError(result, invocation) } : {}),
   };
-}
-
-function processStarttime(pid: number): string | null {
-  try {
-    const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
-    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function processExists(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-function decodeLock(raw: string): { pid: number; starttime: string | null; token: string | null } | null {
-  const [pidText, starttimeText, tokenText] = raw.trim().split(/\r?\n/);
-  const pid = Number.parseInt(pidText ?? '', 10);
-  if (!Number.isInteger(pid) || pid <= 1) return null;
-  return { pid, starttime: starttimeText?.trim() || null, token: tokenText?.trim() || null };
-}
-
-function lockOwnerAlive(record: ReturnType<typeof decodeLock>): boolean {
-  if (!record || !processExists(record.pid)) return false;
-  const observed = processStarttime(record.pid);
-  return !record.starttime || observed === null || observed === record.starttime;
-}
-
-function acquireLifecycleLock(path: string): LockHandle | null {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const fd = openSync(path, 'wx', 0o600);
-      const token = randomUUID();
-      writeFileSync(fd, `${String(process.pid)}\n${processStarttime(process.pid) ?? ''}\n${token}\n`, 'utf8');
-      fsyncSync(fd);
-      return { fd, token };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return null;
-      let firstRead: string;
-      try {
-        firstRead = readFileSync(path, 'utf8');
-      } catch {
-        return null;
-      }
-      const record = decodeLock(firstRead);
-      if (!record || lockOwnerAlive(record)) return null;
-      try {
-        if (readFileSync(path, 'utf8') !== firstRead) return null;
-        unlinkSync(path);
-      } catch {
-        return null;
-      }
-    }
-  }
-  return null;
-}
-
-function releaseLifecycleLock(path: string, handle: LockHandle): void {
-  try {
-    closeSync(handle.fd);
-  } catch {
-    // Token ownership still guards unlink below.
-  }
-  try {
-    if (decodeLock(readFileSync(path, 'utf8'))?.token === handle.token) unlinkSync(path);
-  } catch {
-    // Missing-at-release or changed ownership is fail-closed and harmless.
-  }
 }
 
 function lifecycleOperations(operations: CreateContinuationOperations): LifecycleOperations {
@@ -259,6 +179,7 @@ function collectInventory(input: {
     repositoryId,
     gitRows: evidence.git.rows,
     orcaRows: evidence.orca.rows,
+    agentRows: census.agentRows,
     terminals: census.terminals,
     errors,
   };
@@ -298,9 +219,26 @@ function targetTerminals(report: LifecycleTerminalReport): TerminalEvidence[] {
   return [...(report.terminals ?? [])];
 }
 
+function agentRowSafe(row: OrcaWorktreeRow): boolean {
+  return row.malformedFields.length === 0
+    && Array.isArray(row.agents)
+    && row.agents.every((agent) => agent.state === 'done' && agent.interrupted === false);
+}
+
+function candidateAgentSafe(
+  agentRows: readonly OrcaWorktreeRow[],
+  repositoryId: string,
+  path: string,
+): boolean {
+  const rows = agentRows.filter((row) => row.repoId === repositoryId && row.path === path);
+  return rows.length === 1 && rows.every(agentRowSafe);
+}
+
 function evaluateCandidates(input: {
   rows: readonly GitWorktreeRow[];
   repositoryRoot: string;
+  repositoryId: string;
+  agentRows: readonly OrcaWorktreeRow[];
   issueNumber: number;
   expectedHead: string;
   operations: CreateContinuationOperations;
@@ -309,6 +247,7 @@ function evaluateCandidates(input: {
   const ready: SelectedCandidate[] = [];
   for (const row of input.rows) {
     if (row.path === input.repositoryRoot || row.headSha !== input.expectedHead) continue;
+    if (!candidateAgentSafe(input.agentRows, input.repositoryId, row.path)) continue;
     const expected = expectedFromRow(row, input.repositoryRoot, input.issueNumber);
     if (!expected) continue;
     const first = runLifecycle({
@@ -390,6 +329,10 @@ function terminalInvocation(input: {
   };
 }
 
+function terminalKey(terminal: TerminalEvidence): string {
+  return `${terminal.worktreePath}\n${terminal.handle ?? ''}\n${terminal.tabId ?? ''}`;
+}
+
 function runCreateAttempt(input: {
   kind: 'initial' | 'replacement';
   name: string;
@@ -417,12 +360,22 @@ function runCreateAttempt(input: {
   });
   const oldGitPaths = new Set(input.before.gitRows.map((row) => row.path));
   const oldOrcaPaths = new Set(input.before.orcaRows.map((row) => row.path));
+  const oldTerminalKeys = new Set(input.before.terminals.map(terminalKey));
   const newGitRows = snapshot.gitRows.filter((row) => !oldGitPaths.has(row.path));
   const newOrcaRows = snapshot.orcaRows.filter((row) => !oldOrcaPaths.has(row.path));
-  const evaluated = snapshot.ok
+  const newPaths = new Set([...newGitRows.map((row) => row.path), ...newOrcaRows.map((row) => row.path)]);
+  const createOwnedTerminals = snapshot.terminals.filter(
+    (terminal) => newPaths.has(terminal.worktreePath) && !oldTerminalKeys.has(terminalKey(terminal)),
+  );
+  const unsafeAgentPaths = [...newPaths].filter(
+    (path) => !candidateAgentSafe(snapshot.agentRows, snapshot.repositoryId, path),
+  ).sort();
+  const evaluated = snapshot.ok && createOwnedTerminals.length === 0 && unsafeAgentPaths.length === 0
     ? evaluateCandidates({
         rows: newGitRows,
         repositoryRoot: input.repositoryRoot,
+        repositoryId: snapshot.repositoryId,
+        agentRows: snapshot.agentRows,
         issueNumber: input.issueNumber,
         expectedHead: input.expectedHead,
         operations: input.operations,
@@ -435,10 +388,14 @@ function runCreateAttempt(input: {
       command: summarizeCommand(command, invocation),
       newGitPaths: newGitRows.map((row) => row.path).sort(),
       newOrcaPaths: newOrcaRows.map((row) => row.path).sort(),
+      createOwnedTerminals,
+      unsafeAgentPaths,
       candidateReports: evaluated.reports,
       inventoryErrors: snapshot.errors,
     },
     snapshot,
+    createOwnedTerminalConflict: createOwnedTerminals.length > 0,
+    unsafeAgentConflict: unsafeAgentPaths.length > 0,
     ...(evaluated.selected ? { selected: evaluated.selected } : {}),
   };
 }
@@ -491,7 +448,7 @@ function runTerminalSpawn(input: {
     && fresh.classification.classification === 'exact_dual'
     && newHandles.length === 1
     && firstHandles.length === beforeHandles.length + 1
-    && firstHandles[0] === afterHandles[0]
+    && firstHandles.join('\n') === afterHandles.join('\n')
     && Boolean(terminal);
   return {
     report: {
@@ -577,17 +534,24 @@ function repositoryIssueRows(
   );
 }
 
+function repositoryIssueAgentRows(
+  snapshot: InventorySnapshot,
+  issueNumber: number,
+): OrcaWorktreeRow[] {
+  return snapshot.agentRows.filter(
+    (row) => row.repoId === snapshot.repositoryId && row.linkedIssue === issueNumber,
+  );
+}
+
 function relatedExistingRows(input: {
   snapshot: InventorySnapshot;
   issueNumber: number;
-  expectedHead: string;
   repositoryRoot: string;
 }): GitWorktreeRow[] {
   const issuePaths = new Set(
     repositoryIssueRows(input.snapshot, input.issueNumber).map((row) => row.path),
   );
   return input.snapshot.gitRows.filter((row) => row.path !== input.repositoryRoot
-    && row.headSha === input.expectedHead
     && (issuePaths.has(row.path)
       || issueMarker(row.branchName, input.issueNumber)
       || issueMarker(basename(row.path), input.issueNumber)));
@@ -601,6 +565,30 @@ function isReplacementIdentity(row: { path: string; branchName?: string }, issue
 
 function issueStateHasTerminal(snapshot: InventorySnapshot, paths: ReadonlySet<string>): boolean {
   return snapshot.terminals.some((terminal) => paths.has(terminal.worktreePath));
+}
+
+function issueStateHasUnsafeAgent(snapshot: InventorySnapshot, issueNumber: number): boolean {
+  const rows = repositoryIssueAgentRows(snapshot, issueNumber);
+  return rows.some((row) => !agentRowSafe(row));
+}
+
+function familyHeadMismatch(
+  gitRows: readonly GitWorktreeRow[],
+  orcaRows: readonly OrcaWorktreeRow[],
+  expectedHead: string,
+): boolean {
+  return gitRows.some((row) => row.headSha !== expectedHead)
+    || orcaRows.some((row) => row.headSha !== expectedHead || row.malformedFields.length > 0);
+}
+
+function attemptConflictError(attempt: AttemptResult): string | null {
+  if (attempt.createOwnedTerminalConflict) {
+    return 'Orca worktree create materialized one or more startup terminals; the candidate is preserved and no replacement or separate spawn is authorized';
+  }
+  if (attempt.unsafeAgentConflict) {
+    return 'post-create agent census was missing, malformed, active, or interrupted; the candidate is preserved and no further create is authorized';
+  }
+  return null;
 }
 
 function spawnOrDegrade(input: {
@@ -668,7 +656,7 @@ export function runCreateContinuation(input: {
   if (!input.terminalCommand.trim()) throw new TypeError('terminalCommand must be non-empty');
   const names = canonicalNames(input.issueNumber);
   const lockPath = operations.lockPath ?? WORKTREE_LIFECYCLE_EXCLUSION_PATH;
-  const lock = acquireLifecycleLock(lockPath);
+  const lock = acquireLifecycleExclusion(lockPath);
   if (!lock) {
     return degraded({
       issueNumber: input.issueNumber,
@@ -693,14 +681,13 @@ export function runCreateContinuation(input: {
       });
     }
 
-    let relatedRows = relatedExistingRows({
+    let familyGitRows = relatedExistingRows({
       snapshot,
       issueNumber: input.issueNumber,
-      expectedHead,
       repositoryRoot,
     });
-    const issueOrcaRows = repositoryIssueRows(snapshot, input.issueNumber);
-    const relatedPaths = new Set([...relatedRows.map((row) => row.path), ...issueOrcaRows.map((row) => row.path)]);
+    let issueOrcaRows = repositoryIssueRows(snapshot, input.issueNumber);
+    const relatedPaths = new Set([...familyGitRows.map((row) => row.path), ...issueOrcaRows.map((row) => row.path)]);
     if (issueStateHasTerminal(snapshot, relatedPaths)) {
       return degraded({
         issueNumber: input.issueNumber,
@@ -708,7 +695,21 @@ export function runCreateContinuation(input: {
         error: 'an existing or ambiguous Issue-family terminal prevents another worker spawn',
       });
     }
-    if (relatedRows.length > 1 || issueOrcaRows.length > 1) {
+    if (issueStateHasUnsafeAgent(snapshot, input.issueNumber)) {
+      return degraded({
+        issueNumber: input.issueNumber,
+        expectedHead,
+        error: 'an active, interrupted, or malformed Issue-family agent prevents another worker spawn',
+      });
+    }
+    if (familyHeadMismatch(familyGitRows, issueOrcaRows, expectedHead)) {
+      return degraded({
+        issueNumber: input.issueNumber,
+        expectedHead,
+        error: 'an old-head or malformed Issue-family candidate consumes the bounded create budget',
+      });
+    }
+    if (familyGitRows.length > 1 || issueOrcaRows.length > 1) {
       return degraded({
         issueNumber: input.issueNumber,
         expectedHead,
@@ -717,8 +718,10 @@ export function runCreateContinuation(input: {
     }
 
     const existing = evaluateCandidates({
-      rows: relatedRows,
+      rows: familyGitRows,
       repositoryRoot,
+      repositoryId: snapshot.repositoryId,
+      agentRows: snapshot.agentRows,
       issueNumber: input.issueNumber,
       expectedHead,
       operations,
@@ -738,7 +741,7 @@ export function runCreateContinuation(input: {
       });
     }
 
-    const preexistingReplacement = relatedRows.some((row) => isReplacementIdentity(row, input.issueNumber))
+    const preexistingReplacement = familyGitRows.some((row) => isReplacementIdentity(row, input.issueNumber))
       || issueOrcaRows.some((row) => isReplacementIdentity(row, input.issueNumber));
     if (preexistingReplacement) {
       return degraded({
@@ -750,7 +753,7 @@ export function runCreateContinuation(input: {
 
     const attempts: CreateAttemptReport[] = [];
     const effects: string[] = [];
-    if (relatedRows.length === 0 && issueOrcaRows.length === 0) {
+    if (familyGitRows.length === 0 && issueOrcaRows.length === 0) {
       const initial = runCreateAttempt({
         kind: 'initial',
         name: names.primary,
@@ -762,6 +765,10 @@ export function runCreateContinuation(input: {
       });
       attempts.push(initial.report);
       effects.push(`orca worktree create attempted: ${names.primary}`);
+      const conflict = attemptConflictError(initial);
+      if (conflict) {
+        return degraded({ issueNumber: input.issueNumber, expectedHead, attempts, effects, error: conflict });
+      }
       if (initial.selected) {
         return spawnOrDegrade({
           candidate: initial.selected,
@@ -786,15 +793,25 @@ export function runCreateContinuation(input: {
         });
       }
       snapshot = initial.snapshot;
-      relatedRows = relatedExistingRows({
+      familyGitRows = relatedExistingRows({
         snapshot,
         issueNumber: input.issueNumber,
-        expectedHead,
         repositoryRoot,
       });
+      issueOrcaRows = repositoryIssueRows(snapshot, input.issueNumber);
+      if (familyHeadMismatch(familyGitRows, issueOrcaRows, expectedHead)) {
+        return degraded({
+          issueNumber: input.issueNumber,
+          expectedHead,
+          attempts,
+          effects,
+          error: 'post-initial read-back contains an old-head or malformed Issue-family candidate',
+        });
+      }
     }
 
-    if (relatedRows.some((row) => isReplacementIdentity(row, input.issueNumber))) {
+    if (familyGitRows.some((row) => isReplacementIdentity(row, input.issueNumber))
+      || issueOrcaRows.some((row) => isReplacementIdentity(row, input.issueNumber))) {
       return degraded({
         issueNumber: input.issueNumber,
         expectedHead,
@@ -814,6 +831,10 @@ export function runCreateContinuation(input: {
     });
     attempts.push(finalAttempt.report);
     effects.push(`orca worktree create attempted: ${names.replacement}`);
+    const finalConflict = attemptConflictError(finalAttempt);
+    if (finalConflict) {
+      return degraded({ issueNumber: input.issueNumber, expectedHead, attempts, effects, error: finalConflict });
+    }
     if (finalAttempt.selected) {
       return spawnOrDegrade({
         candidate: finalAttempt.selected,
@@ -838,7 +859,7 @@ export function runCreateContinuation(input: {
         : `post-replacement inventory unavailable: ${finalAttempt.snapshot.errors.join('; ')}`,
     });
   } finally {
-    releaseLifecycleLock(lockPath, lock);
+    releaseLifecycleExclusion(lockPath, lock);
   }
 }
 
