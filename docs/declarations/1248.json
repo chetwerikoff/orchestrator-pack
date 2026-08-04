@@ -5,6 +5,7 @@
     "docs/declarations/1248.json",
     "docs/orca-runtime-caller-census.md",
     "scripts/check-ao-dead-argv-bypass.ps1",
+    "scripts/check-review-delivery-no-visibility-poll.ps1",
     "scripts/check-review-start-claim-guard.ps1",
     "scripts/ci-failure-notification-reconcile.ps1",
     "scripts/ci-green-wake-reconcile.ps1",
@@ -118,8 +119,7 @@
     "docs/",
     "package-lock.json",
     "package.json",
-    "scripts/",
-    "tests/"
+    "scripts/"
   ],
-  "source_revision": "#1248-hard-cut-r4"
+  "source_revision": "#1248-hard-cut-r5"
 }
