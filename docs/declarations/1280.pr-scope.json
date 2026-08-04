@@ -1,0 +1,35 @@
+{
+  "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
+  "issue_number": 1280,
+  "declared_paths": [
+    ".claude/skills/merge-with-local-adoption/reap-worktree.mjs",
+    ".claude/skills/merge-with-local-adoption/SKILL.md",
+    "scripts/worktree-teardown-runtime-profile.ts",
+    "scripts/worktree-teardown.ts"
+  ],
+  "denylist": [
+    "credentials/",
+    "packages/core/",
+    "secrets/",
+    "vendor/"
+  ],
+  "allowed_roots": [
+    ".claude/skills/",
+    ".cursor/rules/",
+    ".cursor/skills/",
+    ".github/workflows/",
+    "agent-orchestrator.yaml.example",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/",
+    "docs/declarations/",
+    "package-lock.json",
+    "package.json",
+    "plugins/",
+    "prompts/",
+    "README.md",
+    "scripts/",
+    "tests/external-output-references/"
+  ],
+  "source_revision": "f27a75c66ab59bdd5521e674d9ea4f97ab95ce42"
+}

@@ -4,6 +4,16 @@ The flow-manager produces acceptance inputs from the evidence it already holds.
 The validators remain the authority; this producer only materializes files that
 the validators already consume.
 
+The acceptance inventory has four roles: `tier-intake.json`, each
+`attempt-NNN.json` stage-evidence input (`create-issue-stage-evidence/v1`), and
+`author-dispositions.json` (`create-issue-author-dispositions/v1`) are
+flow-manager-authored inputs; the files in Produced files are producer outputs;
+reviewer captures, `turn-result/v1` artifacts, and Claude producer evidence/waivers
+are conditional evidence; chats, author replies, and tier-gate receipts are
+audit-only records.
+The flow-manager records the two manual input schemas; this component has no
+writer for them and no writer for `remote-authority.json`.
+
 ## Pre-acceptance path
 
 Run the missing-input check before acceptance:
@@ -57,8 +67,9 @@ The producer reads every `capturePath`. It computes the capture byte length,
 SHA-256, raw finding count, and capture identity from the bytes. A supplied
 capture object or mismatching asserted capture identity is rejected.
 
-For every completed browser invocation, the producer also reads the referenced
-`turnResultPath` as a `turn-result/v1` artifact. Its `invocation_id` must match
+Each completed browser invocation must have a referenced `turnResultPath` for a
+`turn-result/v1` file. The producer reads it as a `turn-result/v1` artifact; its
+`invocation_id` must match
 the stage evidence and its state must be `ok`. Historical final-node and API-
 harvest results retain the rule that committed output bytes match the capture.
 For `service-observed-issue-comment/v1`, `reviewer_source` instead binds the
