@@ -23,7 +23,6 @@ import {
   observeSmokeCancellationAcknowledgement,
   observeSmokeCompletionEvidence,
   observeSmokeDeliveryEstablished,
-  observeSmokeUnsubmittedComposerPaste,
   ownedSmokeTerminalClosedFromReports,
   resolveSmokeRequirement,
   resolveSmokeRunArtifactDir,
@@ -290,7 +289,7 @@ export interface RuntimeSmokeDeliveryResult {
   submitCount: number;
 }
 
-/** One prompt dispatch. dispatch_unknown is terminal for this attempt and is never resent. */
+/** Exactly one prompt dispatch. Output heuristics never authorize a second actuation. */
 export function establishRuntimeSmokeDelivery(input: {
   adapter: RuntimeAdapter;
   worker: RuntimeWorkerIdentity;
@@ -310,7 +309,7 @@ export function establishRuntimeSmokeDelivery(input: {
   }
 
   let token: RuntimeObservationToken | undefined;
-  let submitCount = 0;
+  const submitCount = 0;
   while (now() < deadline) {
     if (observeSmokeDeliveryEstablished(input.binding)) {
       return { ok: true, observationToken: token, submitCount };
@@ -324,20 +323,6 @@ export function establishRuntimeSmokeDelivery(input: {
       return { ok: false, reason: failureReason(read), submitCount };
     }
     token = read.value.observationToken;
-    if (
-      submitCount === 0
-      && !observeSmokeDeliveryEstablished(input.binding)
-      && observeSmokeUnsubmittedComposerPaste(read.value.lines)
-    ) {
-      const submit = input.adapter.dispatchInput({
-        worker: input.worker,
-        submitOnly: true,
-      }, { cwd: input.cwd });
-      submitCount += 1;
-      if (submit.status !== 'dispatched') {
-        return { ok: false, reason: `${submit.status}:${submit.reason}`, submitCount };
-      }
-    }
     sleepMs(Math.min(SMOKE_LIFECYCLE_POLL_MS, Math.max(1, deadline - now())));
   }
   return { ok: false, reason: 'prompt_delivery_unconfirmed', observationToken: token, submitCount };
