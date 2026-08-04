@@ -19,8 +19,6 @@
     ".cursor/skills/create-issue-draft/",
     "credentials/",
     "packages/core/",
-    "scripts/create-issue-/",
-    "scripts/lib/create-issue-/",
     "scripts/lib/stage-completeness-core.ts",
     "scripts/stage-completeness-guard.ts",
     "secrets/",
@@ -48,5 +46,5 @@
     "scripts/review-delivery.test.ts",
     "scripts/run-pack-review-gpt.ts"
   ],
-  "source_revision": "41e0d8d5804a32fb86509c533f49d2333237fcde"
+  "source_revision": "c57b96e4ec68880fb2514dee5e8149f05a975031"
 }
