@@ -1,11 +1,11 @@
-import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
 import { DeterministicRuntimeAdapter } from './test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from './task-lifecycle.ts';
-import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
+import type { OrcaJsonResponse, OrcaRunOptions } from '../orca-runtime/native.ts';
 
 function fakeOrcaTransport() {
   const handle = 'term-1248';
@@ -295,11 +295,34 @@ describe('direct runtime-neutral task caller', () => {
       writeFileSync(fixturePath, hermeticOrcaFixture(statePath, root), 'utf8');
       chmodSync(fixturePath, 0o755);
       const environment: NodeJS.ProcessEnv = { ...process.env, PATH: root };
-      const subprocessRunner: typeof spawnSync = ((
+      const subprocessRunner = ((
         _command: string,
-        args?: readonly string[],
-        options?: Parameters<typeof spawnSync>[2],
-      ) => spawnSync(process.execPath, [fixturePath, ...(args ?? [])], options)) as typeof spawnSync;
+        args: readonly string[] = [],
+        options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number } = {},
+      ) => {
+        const outcome = runProcessSync({
+          command: process.execPath,
+          args: [fixturePath, ...args],
+          cwd: options.cwd,
+          env: options.env,
+          encoding: 'utf8',
+          timeoutMs: options.timeout,
+        });
+        const error = outcome.ok
+          ? undefined
+          : Object.assign(new Error(outcome.error ?? outcome.outcome), {
+              code: outcome.timedOut ? 'ETIMEDOUT' : 'ECHILD',
+            });
+        return {
+          pid: 0,
+          output: [null, outcome.stdout, outcome.stderr],
+          stdout: outcome.stdout,
+          stderr: outcome.stderr,
+          status: outcome.exitCode,
+          signal: outcome.signal,
+          error,
+        };
+      }) as unknown as NonNullable<OrcaRunOptions['runner']>;
       const adapter = new OrcaTaskRuntimeAdapter({
         cwd: root,
         executable: fixturePath,
