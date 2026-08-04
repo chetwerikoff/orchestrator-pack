@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  writeFileSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -8,7 +9,6 @@ import {
   renameSync,
   rmSync,
   statSync,
-  writeFileSync,
   type Stats,
 } from 'node:fs';
 import { dirname } from 'node:path';
