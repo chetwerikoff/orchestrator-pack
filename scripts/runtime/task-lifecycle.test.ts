@@ -312,8 +312,10 @@ describe('direct runtime-neutral task caller', () => {
         ),
       ) as NodeJS.ProcessEnv;
       environment.PATH = root;
+      environment.OPK_VITEST_HARNESS = '';
+      environment.OPK_VITEST_SKIP_CHILD_ENV_MERGE = '1';
       const observingRunJson: typeof runOrcaJson = <T>(args: readonly string[], options = {}) => {
-        const response = runOrcaJson<T>(args, options);
+        const response = runOrcaJson<T>(args, { ...options, inheritParentEnv: false });
         nativeCalls.push({ args: [...args], response: response as OrcaJsonResponse });
         return response;
       };
