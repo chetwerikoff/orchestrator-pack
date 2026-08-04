@@ -12,6 +12,19 @@ export const RUNTIME_CALLER_DISPOSITIONS = [
 ] as const;
 export type RuntimeCallerDisposition = (typeof RUNTIME_CALLER_DISPOSITIONS)[number];
 
+export const RUNTIME_ADAPTER_METHOD_OPERATIONS = {
+  readiness: 'readiness',
+  listWorkers: 'list',
+  findWorkerById: 'find',
+  findWorker: 'find',
+  spawnWorker: 'spawn',
+  dispatchInput: 'send',
+  readBoundedOutput: 'read',
+  liveness: 'liveness',
+  stopWorker: 'stop',
+  removeWorkspace: 'workspace-remove',
+} as const;
+
 export interface RuntimeCallerCensusRow {
   readonly surface: string;
   readonly operations: readonly string[];
@@ -38,6 +51,20 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     note: 'Uses the selected RuntimeAdapter with composite identity and one dispatch attempt.',
   },
   {
+    surface: 'scripts/runtime/task-lifecycle.ts',
+    operations: ['spawn', 'send', 'read', 'liveness', 'stop'],
+    kind: 'runtime-port',
+    disposition: 'already-runtime-neutral',
+    note: 'Focused direct lifecycle caller; ambiguous dispatch retains exact spawned identity without resend.',
+  },
+  {
+    surface: 'scripts/pr2-foundation/fleet-observer.ts',
+    operations: ['list', 'find', 'read', 'liveness'],
+    kind: 'runtime-port',
+    disposition: 'already-runtime-neutral',
+    note: 'Observer-only runtime-neutral fleet census; no actuation or compatibility bridge.',
+  },
+  {
     surface: 'scripts/invoke-gated-worker-nudge.ts',
     operations: ['find', 'send'],
     kind: 'runtime-port',
@@ -56,14 +83,14 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     operations: ['list', 'find', 'liveness', 'workspace-remove', 'spawn'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
-    note: 'One pack claim spans exact workspace cleanup and spawn; cleanup and spawn selectors are distinct.',
+    note: 'One pack claim spans head-bound cleanup and a distinct spawn selector.',
   },
   {
     surface: 'scripts/runtime/worker-recovery.ts',
     operations: ['list', 'find', 'liveness', 'workspace-remove', 'spawn'],
     kind: 'runtime-port',
     disposition: 'use-runtime-interface',
-    note: 'Revalidates every exact-workspace worker after claim and blocks live or unknown ownership.',
+    note: 'Revalidates exact id + generation + provenance after claim before head-bound cleanup.',
   },
   {
     surface: 'scripts/orchestrator-wake-supervisor.ts',
@@ -84,7 +111,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     operations: ['side-effect-fence'],
     kind: 'runtime-port',
     disposition: 'already-runtime-neutral',
-    note: 'Exact owner nonce/PID release and inode-bound stale reclamation.',
+    note: 'Stable kernel-held lock serializes stale replacement and exact owner release.',
   },
   {
     surface: 'scripts/runtime/crash-backoff.ts',
@@ -98,7 +125,7 @@ export const RUNTIME_CALLER_CENSUS: readonly RuntimeCallerCensusRow[] = [
     operations: ['single-instance-lease'],
     kind: 'runtime-port',
     disposition: 'already-runtime-neutral',
-    note: 'Binds singleton ownership to PID plus process start ticks plus generation.',
+    note: 'Kernel-held singleton lock with PID, process start ticks, and generation payload.',
   },
   {
     surface: 'scripts/lib/review-start-claim-store.ts',
