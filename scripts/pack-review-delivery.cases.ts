@@ -388,6 +388,35 @@ describe('pack review journal-first delivery (Issue #894)', () => {
     });
   });
 
+  it('does not reuse an unpublished pending marker as delivered evidence', async () => {
+    const storeRoot = tempRoot('opk-review-pending-recovery-');
+    const run = createRun(storeRoot);
+    updatePackReviewRun(run.id, {
+      status: 'running',
+      latestRunStatus: 'running',
+      deliveryOutcomes: {
+        requiredStatus: {
+          state: 'failed',
+          recordedAtUtc: '2026-08-04T04:00:00.000Z',
+          reason: 'status_pending_unpublished',
+          idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${HEAD_SHA}:pending`,
+        },
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const requests: PackReviewRequiredStatusRequest[] = [];
+
+    const outcome = await restorePackReviewAuthoritativeRequiredStatus({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run: getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })!,
+      writeRequiredStatus: async (request) => { requests.push(request); },
+    });
+
+    expect(outcome).toMatchObject({ state: 'succeeded', reason: 'status_pending' });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.state).toBe('pending');
+  });
+
   it('publishes error for malformed stdout without creating a verdict journal', async () => {
     const storeRoot = tempRoot('opk-review-malformed-');
     const run = createRun(storeRoot);

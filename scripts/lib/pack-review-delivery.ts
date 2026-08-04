@@ -705,7 +705,7 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
   }
   if (PACK_REVIEW_ACTIVE_STATUSES.has(run.status)) {
     const pendingKey = packReviewPendingRequiredStatusIdempotencyKey(run);
-    let pendingOutcome = outcome('succeeded', 'status_pending', pendingKey, options.clock);
+    let pendingOutcome = outcome('failed', 'status_pending_unpublished', pendingKey, options.clock);
     persistRequiredStatusOutcome(run.id, pendingOutcome, options);
     try {
       await options.writeRequiredStatus({
@@ -719,6 +719,8 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
       persistRequiredStatusOutcome(run.id, pendingOutcome, options);
       return pendingOutcome;
     }
+    pendingOutcome = outcome('succeeded', 'status_pending', pendingKey, options.clock);
+    persistRequiredStatusOutcome(run.id, pendingOutcome, options);
     if (options.pauseAfterPendingWrite) await options.pauseAfterPendingWrite();
     const fresh = reload();
     if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(fresh.status)) {
@@ -774,7 +776,7 @@ export async function recordPackReviewPendingStatus(
   options: RecordPendingReviewOptions,
 ): Promise<PackReviewDeliveryOutcome> {
   const idempotencyKey = packReviewPendingRequiredStatusIdempotencyKey(options.run);
-  let statusOutcome = outcome('succeeded', 'status_pending', idempotencyKey, options.clock);
+  let statusOutcome = outcome('failed', 'status_pending_unpublished', idempotencyKey, options.clock);
   persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
   try {
     await options.writeRequiredStatus({
@@ -786,7 +788,10 @@ export async function recordPackReviewPendingStatus(
   } catch (error) {
     statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
     persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
+    return statusOutcome;
   }
+  statusOutcome = outcome('succeeded', 'status_pending', idempotencyKey, options.clock);
+  persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
   return statusOutcome;
 }
 
