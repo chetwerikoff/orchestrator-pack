@@ -1487,10 +1487,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     tier: authoritative.tier,
     roundOrdinal,
   });
-  if (reviewer === 'gpt' && cardinality > 1
-      && (trim(process.env.PACK_GPT_BROWSER_CHAT_URL) || !trim(process.env.PACK_GPT_BROWSER_PROJECT_URL))) {
-    throw new Error('plural GPT review requires PACK_GPT_BROWSER_PROJECT_URL and no fixed chat URL');
-  }
   const gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt'
     && (authoritative.snapshotDigest !== 'harness-unbound-fixture'
       || input.tier !== undefined
@@ -1510,6 +1506,10 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         })),
       }
     : undefined;
+  if (gptRound
+      && (trim(process.env.PACK_GPT_BROWSER_CHAT_URL) || !trim(process.env.PACK_GPT_BROWSER_PROJECT_URL))) {
+    throw new Error('plural GPT review requires PACK_GPT_BROWSER_PROJECT_URL and no fixed chat URL');
+  }
   await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
