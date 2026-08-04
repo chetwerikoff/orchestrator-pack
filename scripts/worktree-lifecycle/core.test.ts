@@ -132,6 +132,25 @@ describe('worktree lifecycle classifier', () => {
     expect(report.conflictingOrcaRows).toHaveLength(0);
   });
 
+  it('ignores the same PR and branch in a foreign Orca repository', () => {
+    const prExpected = expected({ bindingKind: 'pr', bindingNumber: 1300 });
+    const exact = orca({ linkedIssue: null, linkedPR: 1300 });
+    const foreign = orca({
+      path: '/tmp/orca/workspaces/foreign/issue-1298',
+      branch: BRANCH,
+      linkedIssue: null,
+      linkedPR: 1300,
+      repoId: 'foreign-repository',
+    });
+    const report = classifyWorktree({
+      expected: prExpected,
+      evidence: evidence(git(), [...exact, ...foreign]),
+    });
+
+    expect(report.classification).toBe('exact_dual');
+    expect(report.conflictingOrcaRows).toHaveLength(0);
+  });
+
   it('rejects the right path/head/branch when Orca links another issue', () => {
     const report = classifyWorktree({
       expected: expected(),
