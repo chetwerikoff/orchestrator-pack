@@ -14,7 +14,7 @@ import {
   parsePackGptReviewArgs,
   runPackGptReviewCommand,
 } from './pack-gpt-review.js';
-import { startPackReview } from './pack-review-runner.js';
+import { isRetryablePackReviewZeroSendCollision, startPackReview } from './pack-review-runner.js';
 import { createPackReviewRun, getPackReviewRun } from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
@@ -101,6 +101,41 @@ function writeClosedPrGhFixture(binRoot: string): void {
 afterEach(() => {
   process.env = { ...originalEnv };
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe('GPT zero-send collision retry tuples (Issue #1276 AC20)', () => {
+  const failedTurn = (state: string, cause: string, sendCount: number) => ({
+    outcome: 'exit' as const,
+    ok: false,
+    exitCode: 13,
+    signal: null,
+    stdout: JSON.stringify({
+      schema: 'turn-result/v1',
+      state,
+      scope: state === 'profile_busy' ? 'profile' : 'invocation',
+      cause,
+      invocation_id: 'collision-test',
+      send_count: sendCount,
+    }),
+    stderr: '',
+    timedOut: false,
+    cancelled: false,
+  });
+
+  it('retries canonical profile and composer zero-send collisions only', () => {
+    expect(isRetryablePackReviewZeroSendCollision(
+      failedTurn('profile_busy', 'profile_busy', 0),
+    )).toBe(true);
+    expect(isRetryablePackReviewZeroSendCollision(
+      failedTurn('ui_contract_mismatch', 'composer_unavailable', 0),
+    )).toBe(true);
+    expect(isRetryablePackReviewZeroSendCollision(
+      failedTurn('profile_busy', 'profile_busy', 1),
+    )).toBe(false);
+    expect(isRetryablePackReviewZeroSendCollision(
+      failedTurn('ui_contract_mismatch', 'composer_unavailable', 1),
+    )).toBe(false);
+  });
 });
 
 describe('GPT stale-head guard (Issue #1031 AC10)', () => {

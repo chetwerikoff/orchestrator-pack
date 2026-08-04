@@ -907,10 +907,13 @@ function parseLastGptTerminalTurnResult(stdout: string): GptTerminalTurnResult |
 
 export function isRetryablePackReviewZeroSendCollision(result: ProcessResult): boolean {
   const terminal = parseLastGptTerminalTurnResult(result.stdout);
-  return !result.ok
-    && terminal?.state === 'driver_error'
-    && terminal.cause === 'state_light_new_chat_send_slot_timeout'
-    && terminal.send_count === 0;
+  if (result.ok || terminal?.send_count !== 0) return false;
+  return (terminal.state === 'driver_error'
+      && terminal.cause === 'state_light_new_chat_send_slot_timeout')
+    || (terminal.state === 'profile_busy'
+      && terminal.cause === 'profile_busy')
+    || (terminal.state === 'ui_contract_mismatch'
+      && terminal.cause === 'composer_unavailable');
 }
 
 function updateGptRoundSlot(
