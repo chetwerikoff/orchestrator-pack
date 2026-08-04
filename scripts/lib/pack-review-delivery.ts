@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { runProcess } from '../kernel/subprocess.ts';
 import {
   describePackReviewError as describeError,
@@ -954,4 +954,47 @@ export async function publishPackReviewRequiredStatus(options: {
   }
 }
 
-export { sendPackReviewWorkerNotification } from './pack-review-worker-notification.ts';
+export async function sendPackReviewWorkerNotification(options: {
+  trustedPackRoot: string;
+  sessionId: string;
+  request: PackReviewWorkerNotificationRequest;
+}): Promise<PackReviewWorkerNotificationResult> {
+  const sessionId = trim(options.sessionId);
+  if (!sessionId) return { state: 'escalated', reason: 'worker_session_unresolved' };
+  const capture = trim(process.env.PACK_REVIEW_WORKER_NOTIFICATION_CAPTURE_FILE);
+  if (process.env.OPK_VITEST_HARNESS === '1') {
+    if (capture) {
+      writeCapture(capture, {
+        sessionId,
+        message: options.request.message,
+        idempotencyKey: options.request.idempotencyKey,
+        reviewRunId: options.request.reviewRunId,
+      });
+    }
+    return { state: 'delivered', reason: 'fixture_dispatched' };
+  }
+
+  const adapter = join(options.trustedPackRoot, 'scripts', 'journaled-worker-send.ps1');
+  const result = await runProcess({
+    command: 'pwsh',
+    args: [
+      '-NoProfile',
+      '-File', adapter,
+      sessionId,
+      '-Source', 'pack-review-runner',
+      '-SourceKey', options.request.idempotencyKey,
+      '-NoWait',
+    ],
+    input: options.request.message,
+    cwd: options.trustedPackRoot,
+    inheritParentEnv: true,
+    allowEmptyStdout: true,
+    timeoutMs: 30_000,
+  });
+  if (result.ok) return { state: 'delivered', reason: 'adapter_dispatched' };
+  const reason = trim(result.stderr || result.error || result.stdout) || result.outcome;
+  return {
+    state: result.timedOut || result.cancelled ? 'escalated' : 'failed',
+    reason,
+  };
+}

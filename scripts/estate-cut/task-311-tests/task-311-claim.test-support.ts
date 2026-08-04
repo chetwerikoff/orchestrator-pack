@@ -1,17 +1,13 @@
 import { rmSync } from 'node:fs';
+import path from 'node:path';
 
-import {
-  acquireReviewStartClaim,
-  atomicWriteJson,
-  completeReviewStartClaim,
-  getActiveRecords,
-  readClaimRecord,
-  reaperSweep,
-} from '../../lib/review-start-claim-store.ts';
 import {
   invariant,
   jsonClone,
   mutationRecord,
+  psString,
+  repoRoot,
+  runPwsh,
   tempRoot,
   validateMutationArray,
   type MutationRecord,
@@ -39,93 +35,226 @@ function expectActualRowRed(
   const candidate = jsonClone(baseline) as any;
   candidate[rowName] = actualBadRow;
   let red = false;
-  try { validateClaimMatrix(candidate); } catch { red = true; }
+  try {
+    validateClaimMatrix(candidate);
+  } catch {
+    red = true;
+  }
   invariant(red, `AC3/${mutationId} actual faulty claim scenario stayed green`);
   validateClaimMatrix(baseline);
   return mutationRecord(mutationId);
 }
 
-function claim(namespace: string, prNumber: number, headSha: string, surface: string, reviewRuns: unknown[] = []) {
-  return acquireReviewStartClaim({ prNumber, headSha, surface, namespace, reviewRuns });
-}
-
 export function runClaimMatrix(): { claim: Record<string, unknown>; mutations: MutationRecord[] } {
   const root = tempRoot('task-311-claim-');
+  const helperPath = path.join(repoRoot, 'scripts', 'lib', 'Review-StartClaimLifecycle.ps1');
   const shaA = 'a'.repeat(40);
   const shaB = 'b'.repeat(40);
   try {
-    const ns1 = `${root}/c1`;
-    const c1 = claim(ns1, 311, shaA, 'task-311-c1');
-    const c1Run = { id: 'task-311-c1-run', prNumber: 311, targetSha: shaA, status: 'running' };
-    const c1Complete = completeReviewStartClaim(c1, 'run_started', [c1Run]) as any;
+    const script = String.raw`
+$ErrorActionPreference = 'Stop'
+$WarningPreference = 'SilentlyContinue'
+$helperPath = ${psString(helperPath)}
+. $helperPath
+$root = ${psString(root)}
+$shaA = ${psString(shaA)}
+$shaB = ${psString(shaB)}
+function New-Task311Namespace([string]$name) {
+  $ns = Join-Path $root $name
+  Initialize-ReviewStartClaimNamespace -Namespace $ns
+  return $ns
+}
+function Set-DeadLocalHolder([string]$path) {
+  $record = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+  $record.holder.pid = 2147483000
+  $record.holder.host = Get-ReviewStartClaimLocalHostName
+  $record.holder.PSObject.Properties.Remove('startTimeTicks')
+  $record.holder.PSObject.Properties.Remove('bootIdHash')
+  ($record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $path -Encoding UTF8
+}
+function Invoke-Task311ClaimRace {
+  param(
+    [string]$Namespace,
+    [int]$PrNumber,
+    [string]$HeadSha,
+    [int]$Count,
+    [string]$MonotonicNow,
+    [string]$SurfacePrefix
+  )
+  $raceRoot = Join-Path $root ("race-" + [guid]::NewGuid().ToString('n'))
+  $resultDir = Join-Path $raceRoot 'results'
+  $startPath = Join-Path $raceRoot 'start'
+  $releasePath = Join-Path $raceRoot 'release'
+  New-Item -ItemType Directory -Path $resultDir -Force | Out-Null
+  $jobs = @()
+  try {
+    $jobs = 1..$Count | ForEach-Object {
+      $index = $_
+      $surface = "$SurfacePrefix-$index"
+      $resultPath = Join-Path $resultDir "$index.json"
+      Start-Job -ScriptBlock {
+        param($helper, $ns, $pr, $sha, $surface, $mono, $start, $release, $result)
+        $ErrorActionPreference = 'Stop'
+        $WarningPreference = 'SilentlyContinue'
+        $env:AO_REVIEW_CLAIM_DIR = $ns
+        $env:AO_REVIEW_START_MONOTONIC_NOW_MS = $mono
+        . $helper
+        while (-not (Test-Path -LiteralPath $start -PathType Leaf)) { Start-Sleep -Milliseconds 10 }
+        $claim = Acquire-ReviewStartClaim -PrNumber $pr -HeadSha $sha -Surface $surface -Namespace $ns -ReviewRuns @()
+        [ordered]@{
+          acquired = [bool]$claim.acquired
+          recovered = [bool]$claim.recovered
+          reason = [string]$claim.reason
+          holder = if ($claim.claim) { [string]$claim.claim.holder.processGuid } elseif ($claim.holder) { [string]$claim.holder.processGuid } else { '' }
+        } | ConvertTo-Json -Compress | Set-Content -LiteralPath $result -Encoding UTF8
+        while (-not (Test-Path -LiteralPath $release -PathType Leaf)) { Start-Sleep -Milliseconds 10 }
+      } -ArgumentList $helperPath, $Namespace, $PrNumber, $HeadSha, $surface, $MonotonicNow, $startPath, $releasePath, $resultPath
+    }
+    Set-Content -LiteralPath $startPath -Value 'go' -Encoding UTF8
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    while (@(Get-ChildItem -LiteralPath $resultDir -File -Filter '*.json' -ErrorAction SilentlyContinue).Count -lt $Count) {
+      if ([DateTimeOffset]::UtcNow -ge $deadline) {
+        $states = @($jobs | Select-Object Id, State)
+        throw "claim race timed out: $($states | ConvertTo-Json -Compress)"
+      }
+      $failed = @($jobs | Where-Object { $_.State -eq 'Failed' })
+      if ($failed.Count -gt 0) {
+        $errors = @($failed | Receive-Job -ErrorAction SilentlyContinue 2>&1 | Out-String)
+        throw "claim race child failed: $errors"
+      }
+      Start-Sleep -Milliseconds 20
+    }
+    $rows = @(Get-ChildItem -LiteralPath $resultDir -File -Filter '*.json' | Sort-Object Name | ForEach-Object {
+      Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+    })
+    Set-Content -LiteralPath $releasePath -Value 'release' -Encoding UTF8
+    $jobs | Wait-Job | Receive-Job -ErrorAction Stop | Out-Null
+    return $rows
+  }
+  finally {
+    Set-Content -LiteralPath $releasePath -Value 'release' -Encoding UTF8 -ErrorAction SilentlyContinue
+    if ($jobs) {
+      $jobs | Stop-Job -ErrorAction SilentlyContinue
+      $jobs | Remove-Job -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
 
-    const ns2 = `${root}/c2`;
-    const c2Rows = Array.from({ length: 6 }, (_, index) => claim(ns2, 312, shaA, `task-311-c2-${index}`));
+# C1-C7 positive matrix.
+$ns1 = New-Task311Namespace 'c1'
+$c1 = Acquire-ReviewStartClaim -PrNumber 311 -HeadSha $shaA -Surface 'task-311-c1' -Namespace $ns1 -ReviewRuns @()
+$c1Run = @{ id='task-311-c1-run'; prNumber=311; targetSha=$shaA; status='running' }
+$c1Complete = Complete-ReviewStartClaim -ClaimResult $c1 -Outcome 'run_started' -ReviewRuns @($c1Run)
 
-    const ns3 = `${root}/c3`;
-    const c3a = claim(ns3, 313, shaA, 'task-311-c3-a');
-    const c3b = claim(ns3, 313, shaA, 'task-311-c3-b');
+$ns2 = New-Task311Namespace 'c2'
+$c2Rows = Invoke-Task311ClaimRace -Namespace $ns2 -PrNumber 312 -HeadSha $shaA -Count 6 -MonotonicNow '1000' -SurfacePrefix 'task-311-c2'
 
-    const ns4 = `${root}/c4`;
-    const c4a = claim(ns4, 314, shaA, 'task-311-c4-a');
-    const c4Run = { id: 'task-311-c4-run', prNumber: 314, targetSha: shaA, status: 'running' };
-    const c4b = claim(ns4, 314, shaA, 'task-311-c4-b', [c4Run]);
+$ns3 = New-Task311Namespace 'c3'
+$c3a = Acquire-ReviewStartClaim -PrNumber 313 -HeadSha $shaA -Surface 'task-311-c3-a' -Namespace $ns3 -ReviewRuns @()
+$c3b = Acquire-ReviewStartClaim -PrNumber 313 -HeadSha $shaA -Surface 'task-311-c3-b' -Namespace $ns3 -ReviewRuns @()
 
-    const ns5 = `${root}/c5`;
-    const c5old = claim(ns5, 315, shaA, 'task-311-c5-dead');
-    const c5read = readClaimRecord(c5old.path!);
-    invariant(c5read.ok && c5read.record, 'C5 seed unreadable');
-    c5read.record.holder.pid = 2_147_483_000;
-    delete c5read.record.holder.startTimeTicks;
-    delete c5read.record.holder.bootIdHash;
-    c5read.record.acquiredAtUtc = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    atomicWriteJson(c5old.path!, c5read.record);
-    const c5sweep = reaperSweep({ namespace: ns5, projectId: 'orchestrator-pack', reviewRuns: [] }) as any;
-    const c5Rows = Array.from({ length: 4 }, (_, index) => claim(ns5, 315, shaA, `task-311-c5-${index}`));
+$ns4 = New-Task311Namespace 'c4'
+$c4a = Acquire-ReviewStartClaim -PrNumber 314 -HeadSha $shaA -Surface 'task-311-c4-a' -Namespace $ns4 -ReviewRuns @()
+$c4Run = @{ id='task-311-c4-run'; prNumber=314; targetSha=$shaA; status='running' }
+$c4b = Acquire-ReviewStartClaim -PrNumber 314 -HeadSha $shaA -Surface 'task-311-c4-b' -Namespace $ns4 -ReviewRuns @($c4Run)
 
-    const ns6 = `${root}/c6`;
-    const c6old = claim(ns6, 316, shaA, 'task-311-c6-foreign');
-    const c6read = readClaimRecord(c6old.path!);
-    invariant(c6read.ok && c6read.record, 'C6 seed unreadable');
-    c6read.record.holder.host = 'foreign-task-311.example';
-    c6read.record.acquiredAtUtc = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    atomicWriteJson(c6old.path!, c6read.record);
-    const c6sweep = reaperSweep({ namespace: ns6, projectId: 'orchestrator-pack', reviewRuns: [] }) as any;
-    const c6retry = claim(ns6, 316, shaA, 'task-311-c6-retry');
+$ns5 = New-Task311Namespace 'c5'
+$c5old = Acquire-ReviewStartClaim -PrNumber 315 -HeadSha $shaA -Surface 'task-311-c5-dead' -Namespace $ns5 -ReviewRuns @()
+Set-DeadLocalHolder $c5old.path
+$c5sweep = Invoke-ReviewStartClaimReaperSweep -Namespace $ns5 -ProjectId 'orchestrator-pack' -ReviewRuns @()
+$c5Rows = Invoke-Task311ClaimRace -Namespace $ns5 -PrNumber 315 -HeadSha $shaA -Count 4 -MonotonicNow '2000' -SurfacePrefix 'task-311-c5'
 
-    const ns7 = `${root}/c7`;
-    const c7a = claim(ns7, 317, shaA, 'task-311-c7-a');
-    const c7b = claim(ns7, 318, shaB, 'task-311-c7-b');
+$ns6 = New-Task311Namespace 'c6'
+$c6old = Acquire-ReviewStartClaim -PrNumber 316 -HeadSha $shaA -Surface 'task-311-c6-foreign' -Namespace $ns6 -ReviewRuns @()
+$c6record = Get-Content -LiteralPath $c6old.path -Raw -Encoding UTF8 | ConvertFrom-Json
+$c6record.holder.host = 'foreign-task-311.example'
+($c6record | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $c6old.path -Encoding UTF8
+$c6sweep = Invoke-ReviewStartClaimReaperSweep -Namespace $ns6 -ProjectId 'orchestrator-pack' -ReviewRuns @()
+$c6retry = Acquire-ReviewStartClaim -PrNumber 316 -HeadSha $shaA -Surface 'task-311-c6-retry' -Namespace $ns6 -ReviewRuns @()
 
-    const baseline: Record<string, unknown> = {
-      classes: 'C1-C7-pass',
-      C1: { winners: Number(c1.acquired), runStarts: Number(c1Complete.ok === true) },
-      C2: { winners: c2Rows.filter((row) => row.acquired).length, activeCount: getActiveRecords(ns2).length },
-      C3: { firstAcquired: c3a.acquired, secondAcquired: c3b.acquired, loserReason: c3b.reason, sameOwner: c3a.claim?.holder.processGuid === c3b.holder?.processGuid },
-      C4: { covered: c4b.reason === 'covered_by_run', replacementStarted: c4b.acquired },
-      C5: { reclaimed: c5sweep.results?.filter((row: any) => row.reclaimed).length === 1, winners: c5Rows.filter((row) => row.acquired).length, activeCount: getActiveRecords(ns5).length },
-      C6: { blocked: c6sweep.results?.some((row: any) => row.blocking || row.manual) === true || c6retry.blocking === true, reason: c6retry.reason, runStarted: c6retry.acquired },
-      C7: { firstAcquired: c7a.acquired, secondAcquired: c7b.acquired, activeCount: getActiveRecords(ns7).length },
-    };
-    validateClaimMatrix(baseline);
-    const controls = {
-      doubleAcquisition: { winners: 2, activeCount: 2 },
-      liveClaimTheft: { firstAcquired: true, secondAcquired: true, loserReason: '', sameOwner: false },
-      crossKeyInterference: { firstAcquired: true, secondAcquired: false, activeCount: 1 },
-      staleNotRecovered: { reclaimed: false, winners: 0, activeCount: 1 },
-      ambiguousRecovered: { blocked: false, reason: 'reclaimed', runStarted: true },
-      duplicateVisibleRun: { covered: false, replacementStarted: true },
-    };
+$ns7 = New-Task311Namespace 'c7'
+$c7a = Acquire-ReviewStartClaim -PrNumber 317 -HeadSha $shaA -Surface 'task-311-c7-a' -Namespace $ns7 -ReviewRuns @()
+$c7b = Acquire-ReviewStartClaim -PrNumber 318 -HeadSha $shaB -Surface 'task-311-c7-b' -Namespace $ns7 -ReviewRuns @()
+
+$baseline = [ordered]@{
+  classes = 'C1-C7-pass'
+  C1 = @{ winners=@([bool]$c1.acquired | Where-Object { $_ }).Count; runStarts=@([bool]$c1Complete.ok | Where-Object { $_ }).Count }
+  C2 = @{ winners=@($c2Rows | Where-Object { $_.acquired }).Count; activeCount=@((Get-ChildItem -LiteralPath $ns2 -File -Filter 'pr-312-*.json')).Count }
+  C3 = @{ firstAcquired=[bool]$c3a.acquired; secondAcquired=[bool]$c3b.acquired; loserReason=[string]$c3b.reason; sameOwner=([string]$c3a.claim.holder.processGuid -eq [string]$c3b.holder.processGuid) }
+  C4 = @{ covered=([string]$c4b.reason -eq 'covered_by_run'); replacementStarted=[bool]$c4b.acquired }
+  C5 = @{ reclaimed=@($c5sweep.results | Where-Object { $_.reclaimed }).Count -eq 1; winners=@($c5Rows | Where-Object { $_.acquired }).Count; activeCount=@((Get-ChildItem -LiteralPath $ns5 -File -Filter 'pr-315-*.json')).Count }
+  C6 = @{ blocked=[bool]$c6retry.blocking; reason=[string]$c6retry.reason; runStarted=[bool]$c6retry.acquired }
+  C7 = @{ firstAcquired=[bool]$c7a.acquired; secondAcquired=[bool]$c7b.acquired; activeCount=@((Get-ChildItem -LiteralPath $ns7 -File -Filter 'pr-*.json')).Count }
+}
+
+# Behavioral fault: split the atomic namespace, producing two real winners.
+$md1 = New-Task311Namespace 'm-double-a'
+$md2 = New-Task311Namespace 'm-double-b'
+$mdA = Acquire-ReviewStartClaim -PrNumber 401 -HeadSha $shaA -Surface 'm-double-a' -Namespace $md1 -ReviewRuns @()
+$mdB = Acquire-ReviewStartClaim -PrNumber 401 -HeadSha $shaA -Surface 'm-double-b' -Namespace $md2 -ReviewRuns @()
+
+# Behavioral fault: delete the live durable claim before the second starter.
+$ml = New-Task311Namespace 'm-live-theft'
+$mlA = Acquire-ReviewStartClaim -PrNumber 402 -HeadSha $shaA -Surface 'm-live-a' -Namespace $ml -ReviewRuns @()
+$mlOwner = [string]$mlA.claim.holder.processGuid
+Remove-Item -LiteralPath $mlA.path -Force
+$mlB = Acquire-ReviewStartClaim -PrNumber 402 -HeadSha $shaA -Surface 'm-live-b' -Namespace $ml -ReviewRuns @()
+
+# Behavioral fault: route two logical keys through the same physical key.
+$mx = New-Task311Namespace 'm-cross-key'
+$mxA = Acquire-ReviewStartClaim -PrNumber 403 -HeadSha $shaA -Surface 'm-cross-a' -Namespace $mx -ReviewRuns @()
+$mxB = Acquire-ReviewStartClaim -PrNumber 403 -HeadSha $shaA -Surface 'm-cross-b' -Namespace $mx -ReviewRuns @()
+
+# Behavioral fault: leave the provably dead claim active by omitting reclaim/retry entirely.
+$ms = New-Task311Namespace 'm-stale-not-recovered'
+$msOld = Acquire-ReviewStartClaim -PrNumber 404 -HeadSha $shaA -Surface 'm-stale-old' -Namespace $ms -ReviewRuns @()
+Set-DeadLocalHolder $msOld.path
+$msActive = @((Get-ChildItem -LiteralPath $ms -File -Filter 'pr-404-*.json')).Count
+
+# Behavioral fault: rewrite a foreign ambiguous holder as local/dead before the reaper evaluates it.
+$ma = New-Task311Namespace 'm-ambiguous-recovered'
+$maOld = Acquire-ReviewStartClaim -PrNumber 405 -HeadSha $shaA -Surface 'm-amb-old' -Namespace $ma -ReviewRuns @()
+$maRecord = Get-Content -LiteralPath $maOld.path -Raw -Encoding UTF8 | ConvertFrom-Json
+$maRecord.holder.host = 'foreign-task-311.example'
+($maRecord | ConvertTo-Json -Compress -Depth 20) | Set-Content -LiteralPath $maOld.path -Encoding UTF8
+Set-DeadLocalHolder $maOld.path
+$maSweep = Invoke-ReviewStartClaimReaperSweep -Namespace $ma -ProjectId 'orchestrator-pack' -ReviewRuns @()
+$maRetry = Acquire-ReviewStartClaim -PrNumber 405 -HeadSha $shaA -Surface 'm-amb-retry' -Namespace $ma -ReviewRuns @()
+
+# Behavioral fault: restart drops the visible covering run when reacquiring.
+$mv = New-Task311Namespace 'm-visible-run-dropped'
+$mvA = Acquire-ReviewStartClaim -PrNumber 406 -HeadSha $shaA -Surface 'm-visible-a' -Namespace $mv -ReviewRuns @()
+$mvRun = @{ id='m-visible-run'; prNumber=406; targetSha=$shaA; status='running' }
+$mvComplete = Complete-ReviewStartClaim -ClaimResult $mvA -Outcome 'run_started' -ReviewRuns @($mvRun)
+$mvB = Acquire-ReviewStartClaim -PrNumber 406 -HeadSha $shaA -Surface 'm-visible-b' -Namespace $mv -ReviewRuns @()
+
+[ordered]@{
+  baseline = $baseline
+  controls = [ordered]@{
+    doubleAcquisition = @{ winners=@(@([bool]$mdA.acquired, [bool]$mdB.acquired) | Where-Object { $_ }).Count; activeCount=2 }
+    liveClaimTheft = @{ firstAcquired=[bool]$mlA.acquired; secondAcquired=[bool]$mlB.acquired; loserReason=[string]$mlB.reason; sameOwner=($mlOwner -eq [string]$mlB.claim.holder.processGuid) }
+    crossKeyInterference = @{ firstAcquired=[bool]$mxA.acquired; secondAcquired=[bool]$mxB.acquired; activeCount=@((Get-ChildItem -LiteralPath $mx -File -Filter 'pr-*.json')).Count }
+    staleNotRecovered = @{ reclaimed=$false; winners=0; activeCount=$msActive }
+    ambiguousRecovered = @{ blocked=[bool]$maRetry.blocking; reason=[string]$maRetry.reason; runStarted=[bool]$maRetry.acquired }
+    duplicateVisibleRun = @{ covered=([string]$mvB.reason -eq 'covered_by_run'); replacementStarted=[bool]$mvB.acquired }
+  }
+} | ConvertTo-Json -Compress -Depth 15
+`;
+    const result = JSON.parse(runPwsh(script, {
+      AO_REVIEW_CLAIM_DIR: root,
+      AO_REVIEW_START_MONOTONIC_NOW_MS: '1000',
+    })) as { baseline: Record<string, unknown>; controls: Record<string, Record<string, unknown>> };
+    validateClaimMatrix(result.baseline);
     const mutations = [
-      expectActualRowRed(baseline, 'double-acquisition', 'C2', controls.doubleAcquisition),
-      expectActualRowRed(baseline, 'live-claim-theft', 'C3', controls.liveClaimTheft),
-      expectActualRowRed(baseline, 'cross-key-interference', 'C7', controls.crossKeyInterference),
-      expectActualRowRed(baseline, 'stale-claim-not-recovered', 'C5', controls.staleNotRecovered),
-      expectActualRowRed(baseline, 'ambiguous-ownership-recovered', 'C6', controls.ambiguousRecovered),
-      expectActualRowRed(baseline, 'duplicate-start-with-visible-run', 'C4', controls.duplicateVisibleRun),
+      expectActualRowRed(result.baseline, 'double-acquisition', 'C2', result.controls.doubleAcquisition!),
+      expectActualRowRed(result.baseline, 'live-claim-theft', 'C3', result.controls.liveClaimTheft!),
+      expectActualRowRed(result.baseline, 'cross-key-interference', 'C7', result.controls.crossKeyInterference!),
+      expectActualRowRed(result.baseline, 'stale-claim-not-recovered', 'C5', result.controls.staleNotRecovered!),
+      expectActualRowRed(result.baseline, 'ambiguous-ownership-recovered', 'C6', result.controls.ambiguousRecovered!),
+      expectActualRowRed(result.baseline, 'duplicate-start-with-visible-run', 'C4', result.controls.duplicateVisibleRun!),
     ];
     validateMutationArray('AC3', mutations);
-    return { claim: baseline, mutations };
+    return { claim: result.baseline, mutations };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

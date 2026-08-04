@@ -18,6 +18,7 @@ const ISSUE_928_CUTOVER_MARKERS = Object.freeze([
   'scripts/orchestrator-cutover-activate.ts',
   'scripts/pr2a/final-conformance-precutover.ts',
 ]);
+const TERMINALIZED_FOUNDATION_MUTATION_KEY = 'AC9:registry-or-supervisor-modified';
 
 function issue928CutoverPresent(): boolean {
   return ISSUE_928_CUTOVER_MARKERS.every((file) => existsSync(path.resolve(file)));
@@ -31,10 +32,6 @@ function mutationKeys(): string[] {
 
 const importsMutationRecipes = /(?:from\s+|import\s*\(\s*)['"]\.\/mutation-behavior-recipes\.ts['"]/u;
 const importsSemanticGates = /(?:from\s+|import\s*\(\s*)['"]\.\/mutation-semantic-gates\.ts['"]/u;
-const CREATE_MUTATION_KEYS = new Set([
-  'AC2:raw-live-capture-committed',
-  'AC9:raw-capture-added',
-]);
 
 describe('[AC8] independent behavioral mutation probes', () => {
   it('binds every declared control to an explicit behavioral mutation without semantic-gate fallback', () => {
@@ -49,7 +46,7 @@ describe('[AC8] independent behavioral mutation probes', () => {
     expect(recipes).toContain('behavioral_mutation_recipe_set_mismatch');
   });
 
-  it('builds a bounded non-empty mutation plan for every live declared control after the #1248 TypeScript cut', () => {
+  it('builds a bounded non-empty mutation plan for every live declared control and terminalizes only the #928-owned legacy supervisor control', () => {
     const terminalized: string[] = [];
     const cutoverPresent = issue928CutoverPresent();
     for (const [ac, ids] of Object.entries(AC_MUTATION_CONTROLS)) {
@@ -60,7 +57,7 @@ describe('[AC8] independent behavioral mutation probes', () => {
         expect(bindingPath, key).toBeTruthy();
         const absolute = path.resolve(bindingPath!);
         const source = existsSync(absolute) ? readFileSync(absolute, 'utf8') : null;
-        if (source === null && !CREATE_MUTATION_KEYS.has(key)) {
+        if (source === null && cutoverPresent && key === TERMINALIZED_FOUNDATION_MUTATION_KEY) {
           terminalized.push(key);
           continue;
         }
@@ -70,7 +67,7 @@ describe('[AC8] independent behavioral mutation probes', () => {
         expect(plan.content, key).not.toBe(source);
       }
     }
-    expect(terminalized).toEqual([]);
+    expect(terminalized).toEqual(cutoverPresent ? [TERMINALIZED_FOUNDATION_MUTATION_KEY] : []);
   });
 
   it('binds the full control set to a checker authority independent from mutation recipes', () => {

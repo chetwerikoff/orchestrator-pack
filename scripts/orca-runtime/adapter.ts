@@ -63,7 +63,7 @@ function isNativeTimeout(response: OrcaJsonResponse): boolean {
   return response.error?.code === 'orca_operation_timeout';
 }
 
-export function neutralFailureReason(response: OrcaJsonResponse): string {
+function neutralFailureReason(response: OrcaJsonResponse): string {
   if (isNativeTimeout(response)) return 'runtime_timeout';
   switch (response.outcomeCategory) {
     case 'process_launch_failed':
