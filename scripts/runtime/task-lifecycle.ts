@@ -11,7 +11,11 @@ import type {
 export type RuntimeTaskLifecycleFailure =
   | { readonly stage: 'claim'; readonly reason: string }
   | { readonly stage: 'spawn' | 'read' | 'stop'; readonly failure: RuntimeOperationFailure }
-  | { readonly stage: 'dispatch'; readonly result: Exclude<RuntimeDispatchResult, { status: 'dispatched' }> };
+  | {
+      readonly stage: 'dispatch';
+      readonly result: Exclude<RuntimeDispatchResult, { status: 'dispatched' }>;
+      readonly worker: RuntimeWorker;
+    };
 
 export interface RuntimeTaskLifecycleResult {
   readonly status: 'ok';
@@ -26,8 +30,9 @@ export interface RuntimeTaskLifecycleResult {
  * callers that need one bounded spawn/send/read/liveness/stop lifecycle.
  *
  * The claim hook runs before adapter.spawnWorker, so a failed reservation cannot
- * produce a worktree or terminal side effect. Dispatch is attempted exactly once;
- * dispatch_unknown is returned to the caller and is never retried here.
+ * produce a worktree or terminal side effect. Dispatch is attempted exactly once.
+ * A non-dispatched result retains the exact spawned identity for explicit
+ * recovery; this caller never retries or guesses whether transport succeeded.
  */
 export function executeRuntimeTaskLifecycle(input: {
   readonly adapter: RuntimeAdapter;
@@ -54,7 +59,7 @@ export function executeRuntimeTaskLifecycle(input: {
     text: input.prompt,
   }, input.options);
   if (dispatched.status !== 'dispatched') {
-    return { stage: 'dispatch', result: dispatched };
+    return { stage: 'dispatch', result: dispatched, worker: spawned.value };
   }
 
   const output = input.adapter.readBoundedOutput({
