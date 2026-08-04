@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { OrcaJsonResponse } from './native.ts';
 import { OrcaTaskRuntimeAdapter } from './task-adapter.ts';
 
 function workspaceRunner() {
@@ -22,7 +23,7 @@ function workspaceRunner() {
   });
 }
 
-describe('Orca task adapter destructive workspace operation', () => {
+describe('Orca task adapter destructive operations', () => {
   it('prevalidates exact path and head before one remove', () => {
     const runner = workspaceRunner();
     const adapter = new OrcaTaskRuntimeAdapter({ runner: runner as never });
@@ -66,16 +67,78 @@ describe('Orca task adapter destructive workspace operation', () => {
           },
         },
       }),
-      stderr: '',
-      status: 0,
+      stderr: '', status: 0,
     }));
     const adapter = new OrcaTaskRuntimeAdapter({ runner: runner as never });
-    const result = adapter.removeWorkspace({ workspacePath: '/tmp/worktree-1248' });
+    const result = adapter.removeWorkspace({
+      workspacePath: '/tmp/worktree-1248',
+      expectedHeadSha: 'a'.repeat(40),
+    });
     expect(result).toEqual({
       status: 'failed',
       operation: 'remove_workspace',
       reason: 'runtime_workspace_path_mismatch',
     });
     expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('consumes close authority before an ambiguous transport result', () => {
+    const handle = 'owned-terminal';
+    const generation = 'owned-generation';
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      switch (operation) {
+        case 'terminal create':
+          return {
+            ok: true,
+            result: { terminal: { handle, incarnationId: generation, title: 'owned' } },
+          };
+        case 'worktree current':
+          return {
+            ok: true,
+            result: { worktree: { path: '/tmp/worktree-1248', head: 'a'.repeat(40) } },
+          };
+        case 'terminal list':
+          return {
+            ok: true,
+            result: {
+              terminals: [{
+                handle,
+                incarnationId: generation,
+                title: 'owned',
+                worktreePath: '/tmp/worktree-1248',
+                status: 'running',
+              }],
+            },
+          };
+        case 'terminal close':
+          return {
+            ok: false,
+            outcomeCategory: 'empty_stdout',
+            error: { code: 'empty_stdout', message: 'ambiguous close result' },
+          };
+        default:
+          return {
+            ok: false,
+            error: { code: 'unexpected_operation', message: operation },
+          };
+      }
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    const spawned = adapter.spawnWorker({ title: 'owned', command: 'cursor-agent' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    expect(adapter.stopWorker(spawned.value.identity)).toEqual({
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: 'runtime_response_invalid',
+    });
+    expect(adapter.stopWorker(spawned.value.identity)).toEqual({
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: 'worker_not_owned_by_runtime_instance',
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'close')).toHaveLength(1);
   });
 });
