@@ -859,5 +859,10 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       terminalClass: 'possible_delivery/missing_result',
       terminalResult: { noResend: true },
     });
+    expect(recovered.run.reviewRound?.sourceSlots[2]).toMatchObject({
+      lifecycle: 'terminal',
+      terminalClass: 'pre_launch_interrupted',
+      terminalResult: { noResend: true },
+    });
   });
 });

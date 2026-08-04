@@ -498,17 +498,26 @@ export function terminalizePackReviewStaleRun(
     return { changed: false, run: existing };
   }
   let recoveredRound = existing.reviewRound;
-  if (existing.reviewRound?.sourceSlots.some((slot) => slot.lifecycle === 'invocation_started')) {
+  if (existing.reviewRound?.sourceSlots.some((slot) => slot.lifecycle !== 'terminal')) {
     const reviewRound = {
       ...existing.reviewRound,
-      sourceSlots: existing.reviewRound.sourceSlots.map((slot) => slot.lifecycle === 'invocation_started'
-        ? {
+      sourceSlots: existing.reviewRound.sourceSlots.map((slot) => {
+        if (slot.lifecycle === 'terminal') return slot;
+        if (slot.lifecycle === 'invocation_started') {
+          return {
             ...slot,
             lifecycle: 'terminal' as const,
             terminalClass: 'possible_delivery/missing_result',
             terminalResult: { kind: 'missing_terminal_result', noResend: true },
-          }
-        : slot),
+          };
+        }
+        return {
+          ...slot,
+          lifecycle: 'terminal' as const,
+          terminalClass: 'pre_launch_interrupted',
+          terminalResult: { kind: 'stale_pre_launch_interruption', noResend: true },
+        };
+      }),
     };
     recoveredRound = updatePackReviewRun(runId, { reviewRound }, options).reviewRound;
   }

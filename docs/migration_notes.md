@@ -9,10 +9,10 @@ head, cap, delivery, and status effects.
 
 Plural rounds require `PACK_GPT_BROWSER_PROJECT_URL` and fail closed when only a
 fixed `PACK_GPT_BROWSER_CHAT_URL` is configured. Caller admission starts are
-spaced by 10 seconds; the existing profile send slot stays enabled. Only the
-exact proven zero-send `state_light_new_chat_send_slot_timeout` tuple receives
-one same-slot retry. Generic UI mismatch, missing/malformed terminal evidence,
-and possible delivery are non-retryable.
+spaced by 10 seconds; the existing profile send slot stays enabled. Each of the
+following exact zero-send tuples receives one same-slot retry: `state_light_new_chat_send_slot_timeout`,
+`profile_busy`, and `composer_unavailable`. Generic UI mismatch, missing/malformed
+terminal evidence, and possible delivery are non-retryable.
 
 ### Operator adoption
 
