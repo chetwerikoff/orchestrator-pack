@@ -182,6 +182,7 @@ const PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK: Record<PackReviewSourceSlotLifecyc
   invocation_started: 1,
   terminal: 2,
 };
+const COMPLETE_GPT_TERMINAL_CLASSES = new Set(['complete_clean', 'complete_findings']);
 
 function sleepSync(milliseconds: number): void {
   const cell = new Int32Array(new SharedArrayBuffer(4));
@@ -259,6 +260,141 @@ function requiredJsonPositiveInteger(value: unknown, name: string, path = ''): n
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid ${name}`);
   }
   return value;
+}
+
+function requiredJsonNonNegativeInteger(value: unknown, name: string, path: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid ${name}`);
+  }
+  return value;
+}
+
+function validateCompleteGptPayload(payload: unknown, terminalClass: string, path: string): void {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error(`corrupt pack review run record at ${path}: ${terminalClass} requires a valid payload`);
+  }
+  const raw = payload as Record<string, unknown>;
+  if (raw.verdict !== 'clean' && raw.verdict !== 'findings') {
+    throw new Error(`corrupt pack review run record at ${path}: invalid complete-source payload verdict`);
+  }
+  const findingCount = requiredJsonNonNegativeInteger(raw.findingCount, 'payload findingCount', path);
+  if (!Array.isArray(raw.findings)) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid complete-source payload findings`);
+  }
+  if (raw.findings.length !== findingCount) {
+    throw new Error(`corrupt pack review run record at ${path}: payload findingCount does not match findings length`);
+  }
+  if (raw.findings.some((finding) => !finding || typeof finding !== 'object' || Array.isArray(finding))) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid complete-source finding`);
+  }
+  if (terminalClass === 'complete_clean'
+    && (raw.verdict !== 'clean' || findingCount !== 0)) {
+    throw new Error(`corrupt pack review run record at ${path}: complete_clean payload is class-inconsistent`);
+  }
+  if (terminalClass === 'complete_findings'
+    && (raw.verdict !== 'findings' || findingCount === 0)) {
+    throw new Error(`corrupt pack review run record at ${path}: complete_findings payload is class-inconsistent`);
+  }
+}
+
+function validateGptTerminalEvidence(slot: PackReviewSourceSlotRecord, path: string): void {
+  if (slot.lifecycle !== 'terminal') {
+    if (slot.terminalClass !== undefined || slot.terminalResult !== undefined || slot.payload !== undefined) {
+      throw new Error(`corrupt pack review run record at ${path}: terminal evidence requires terminal lifecycle`);
+    }
+    return;
+  }
+
+  const terminalClass = typeof slot.terminalClass === 'string' ? slot.terminalClass.trim() : '';
+  if (!terminalClass) {
+    throw new Error(`corrupt pack review run record at ${path}: terminal source slot lacks terminal outcome`);
+  }
+  if (!slot.terminalResult || typeof slot.terminalResult !== 'object' || Array.isArray(slot.terminalResult)) {
+    throw new Error(`corrupt pack review run record at ${path}: terminal source slot lacks valid terminalResult`);
+  }
+  const result = slot.terminalResult as Record<string, unknown>;
+  const complete = COMPLETE_GPT_TERMINAL_CLASSES.has(terminalClass);
+
+  if (result.schema === 'turn-result/v1') {
+    const state = requiredJsonString(result.state, 'terminalResult state', path);
+    requiredJsonString(result.scope, 'terminalResult scope', path);
+    const cause = requiredJsonString(result.cause, 'terminalResult cause', path);
+    const invocationId = requiredJsonString(result.invocation_id, 'terminalResult invocation_id', path);
+    const sendCount = requiredJsonNonNegativeInteger(result.send_count, 'terminalResult send_count', path);
+    if (slot.invocationId !== invocationId) {
+      throw new Error(`corrupt pack review run record at ${path}: terminalResult invocation_id is not bound to slot`);
+    }
+
+    if (complete) {
+      if (state !== 'ok' || sendCount < 1) {
+        throw new Error(`corrupt pack review run record at ${path}: ${terminalClass} requires successful sent terminalResult`);
+      }
+      validateCompleteGptPayload(slot.payload, terminalClass, path);
+      return;
+    }
+    if (slot.payload !== undefined) {
+      throw new Error(`corrupt pack review run record at ${path}: non-complete terminal class cannot carry payload`);
+    }
+    if (terminalClass === 'reviewer_output_malformed') return;
+    if (terminalClass === 'possible_delivery') {
+      if (sendCount < 1) {
+        throw new Error(`corrupt pack review run record at ${path}: possible_delivery requires send_count >= 1`);
+      }
+      return;
+    }
+    if (terminalClass === 'explicit_refusal:zero_send_collision_exhausted') {
+      const retryableCollision = sendCount === 0 && (
+        (state === 'profile_busy' && cause === 'profile_busy')
+        || (state === 'ui_contract_mismatch' && cause === 'composer_unavailable')
+        || (state === 'driver_error' && cause === 'state_light_new_chat_send_slot_timeout')
+      );
+      if (!retryableCollision) {
+        throw new Error(`corrupt pack review run record at ${path}: exhausted collision class is terminalResult-inconsistent`);
+      }
+      return;
+    }
+    if (terminalClass !== `${state}:${cause}`) {
+      throw new Error(`corrupt pack review run record at ${path}: terminal class is inconsistent with turn-result/v1`);
+    }
+    return;
+  }
+
+  if (typeof result.kind === 'string' && result.kind.trim()) {
+    if (slot.payload !== undefined) {
+      throw new Error(`corrupt pack review run record at ${path}: non-complete terminal class cannot carry payload`);
+    }
+    const expectedKind = terminalClass === 'possible_delivery/missing_result'
+      ? 'missing_terminal_result'
+      : terminalClass === 'pre_launch_interrupted'
+        ? 'stale_pre_launch_interruption'
+        : '';
+    if (!expectedKind || result.kind.trim() !== expectedKind || result.noResend !== true) {
+      throw new Error(`corrupt pack review run record at ${path}: stale terminal evidence is class-inconsistent`);
+    }
+    return;
+  }
+
+  const hasExitCode = Object.prototype.hasOwnProperty.call(result, 'exitCode');
+  const hasStderr = Object.prototype.hasOwnProperty.call(result, 'stderr');
+  if (!hasExitCode && !hasStderr) {
+    throw new Error(`corrupt pack review run record at ${path}: unsupported terminalResult evidence`);
+  }
+  if (hasExitCode && result.exitCode !== null && !Number.isInteger(result.exitCode)) {
+    throw new Error(`corrupt pack review run record at ${path}: invalid terminalResult exitCode`);
+  }
+  if (hasStderr && typeof result.stderr !== 'string') {
+    throw new Error(`corrupt pack review run record at ${path}: invalid terminalResult stderr`);
+  }
+  if (complete) {
+    throw new Error(`corrupt pack review run record at ${path}: ${terminalClass} requires turn-result/v1 evidence`);
+  }
+  if (slot.payload !== undefined) {
+    throw new Error(`corrupt pack review run record at ${path}: non-complete terminal class cannot carry payload`);
+  }
+  if (terminalClass !== 'reviewer_output_malformed'
+    && terminalClass !== 'possible_delivery/missing_result') {
+    throw new Error(`corrupt pack review run record at ${path}: process terminal evidence is class-inconsistent`);
+  }
 }
 
 function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackReviewGptRoundRecord {
@@ -344,7 +480,7 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
       terminalClass = requiredJsonString(slot.terminalClass, 'terminalClass', slotPath);
     }
 
-    return {
+    const normalizedSlot: PackReviewSourceSlotRecord = {
       ...(slot as unknown as PackReviewSourceSlotRecord),
       slotId,
       ordinal,
@@ -354,6 +490,8 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
       ...(admissionStartedAtUtc === undefined ? {} : { admissionStartedAtUtc }),
       ...(terminalClass === undefined ? {} : { terminalClass }),
     };
+    validateGptTerminalEvidence(normalizedSlot, slotPath);
+    return normalizedSlot;
   });
 
   for (let ordinal = 1; ordinal <= cardinality; ordinal += 1) {
@@ -514,11 +652,10 @@ function assertCompleteGptRound(round: PackReviewGptRoundRecord, path: string): 
         `corrupt pack review run record at ${path}: mandatory source slot ${slot.slotId} is not terminal`,
       );
     }
-    if (typeof slot.terminalClass !== 'string' || !slot.terminalClass.trim()) {
-      throw new Error(
-        `corrupt pack review run record at ${path}: mandatory source slot ${slot.slotId} lacks terminal outcome`,
-      );
-    }
+    validateGptTerminalEvidence(
+      slot,
+      `${path}.reviewRound.sourceSlots[${slot.ordinal - 1}]`,
+    );
   }
 }
 
