@@ -79,7 +79,10 @@ function assertDigest(file: string): void {
   const expected = IMMUTABLE_DIGESTS[file];
   invariant(expected, `probe_digest_missing:${file}`);
   const actual = createHash('sha256').update(readFileSync(path.resolve(file))).digest('hex');
-  invariant(actual === expected, `immutable_behavior_changed:${file}`);
+  invariant(
+    actual === expected,
+    `stale_digest_pin:${file}:expected=${expected}:actual=${actual} — the pinned baseline no longer matches this file; if the change was intended, refresh this pin. A mismatch alone is not evidence that the current task broke behaviour.`,
+  );
 }
 
 function assertAbsent(file: string): void {

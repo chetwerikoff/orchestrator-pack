@@ -474,7 +474,7 @@ function legacyCheck(captures, ledger, errors) {
 
 export function checkFindingLedgerGuard(captureOrCaptures, ledgerText, options = {}) {
   const remoteInputs = options.remoteAuthorities ?? (options.remoteAuthority ? [options.remoteAuthority] : []);
-  if ((options.reviewEconomics === true && options.stageReceipts !== undefined) || options.requireRemoteAuthority === true) {
+  if (options.requireRemoteAuthority === true) {
     if (remoteInputs.length === 0) {
       return { ok: false, errors: ['finding-ledger: remote authority is required for receipt-backed production validation'], ledger: { version: 1, draft: null, counts: null, findings: [] }, captureFindings: [], protectedSignals: [] };
     }
@@ -561,12 +561,23 @@ function canonicalReceiptInputs(args) {
 }
 function loadRelayEvidence(path) { if (!path) return []; const value = readJson(path); if (Array.isArray(value)) return value; if (isRecord(value) && Array.isArray(value.evidence)) return value.evidence; throw new Error('--verified-relay-evidence must contain an array or {evidence:[...]}'); }
 function loadRemoteAuthorities(args) {
-  const paths = repeatedArgs(args, '--remote-authority');
+  const paths = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== '--remote-authority') continue;
+    const path = args[index + 1];
+    if (typeof path !== 'string' || path.length === 0 || path.startsWith('--')) {
+      throw new Error('--remote-authority requires a path');
+    }
+    paths.push(path);
+  }
   return paths.flatMap((path) => {
     const value = readJson(path);
-    if (Array.isArray(value)) return value;
+    if (Array.isArray(value)) {
+      if (value.length === 0) throw new Error('--remote-authority must contain at least one authority object');
+      return value;
+    }
     if (isRecord(value)) return [value];
-    throw new Error('--remote-authority must contain an object or array');
+    throw new Error('--remote-authority must contain an object or non-empty array');
   });
 }
 function loadCaptures(args) {
@@ -585,10 +596,14 @@ export function runCli(argv) {
   try {
     const ledgerFile = readArg(args, '--ledger', '--ledger-file'); const loaded = loadCaptures(args); if (!ledgerFile || loaded.files.length === 0) return 1;
     const receiptBacked = Boolean(readArg(args, '--receipt-directory') || repeatedArgs(args, '--stage-receipt').length);
+    const reviewEconomicsRequested = args.includes('--review-economics');
+    if (reviewEconomicsRequested && !receiptBacked) {
+      console.error('finding-ledger: canonical receipt authority is required for --review-economics');
+      return 1;
+    }
     const receiptInputs = receiptBacked ? canonicalReceiptInputs(args) : null;
     const result = checkFindingLedgerGuard(loaded.texts, readFileSync(ledgerFile, 'utf8'), {
-      reviewEconomics: receiptBacked || args.includes('--review-economics'),
-      requireRemoteAuthority: receiptBacked || args.includes('--review-economics'),
+      reviewEconomics: receiptBacked || reviewEconomicsRequested,
       phase: readArg(args, '--phase') ?? 'final-acceptance',
       adoptionTimestampMs: parseAdoptionTimestamp(readArg(args, '--adoption-timestamp')),
       issueRevision: readArg(args, '--issue-revision') ?? '',
