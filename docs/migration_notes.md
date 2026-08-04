@@ -2789,3 +2789,11 @@ Until those live checks are recorded, treat AC5 as operator-pending; do not subs
 ## Issue #1200 remote review publication authority
 
 The create-issue-draft publication path now treats the source Issue as the authority for immutable review topology and exact raw reviewer records. Retry a completed turn by re-harvesting the durable result; do not resend a reviewer turn. The three parked migrations are fixed to Issues #1168, #1173, and #1188 and must be confirmed before strict consumer cutover.
+
+
+## Issue #1258 — S1 fleet observer adoption
+
+- The runtime-neutral prerequisite #1245 landed at exact commit `54cf33decf062a7f38fa5a8a02d02053f5089db1` (PR #1264).
+- After merge, operators may create the optional `~/.config/orchestrator-pack/fleet-observer.json` using exact `{schedulerGeneration,unitRef}` values from the current snapshot. Invalid configuration fails closed.
+- The observer writes only `~/.local/state/orchestrator-pack/fleet-observer/snapshot.json`; old local state may be removed during rollback.
+- No service, watcher, timer owner, supervisor child, or worker action is started. The existing scheduler remains the sole cadence owner and its action phase remains independent of observer evidence.
