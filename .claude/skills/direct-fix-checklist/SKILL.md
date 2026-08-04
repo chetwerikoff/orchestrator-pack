@@ -182,39 +182,35 @@ P0/P1 before merge; P2 may be tracked in the issue if accepted.
 
 ### Vendor command bindings
 
-This table is where the vendor commands live, so they are in one place instead of
-scattered through the steps. It is **not** the broad runtime-neutral lifecycle
-seam owned by Issue #1248. The bounded Git/Orca read-back and continuity decision
-for the current Orca path is implemented in `scripts/worktree-lifecycle/**`.
+This table keeps vendor commands in one place. It is **not** the broad
+runtime-neutral lifecycle seam owned by Issue #1248. The bounded Git/Orca
+identity, create, replacement, terminal-start, recovery, and teardown decisions
+for the current Orca path are implemented in `scripts/worktree-lifecycle/**`.
 
 **Before any effect, confirm the active runtime matches this table's header.**
 Read the authoritative selection (`OPK_RUNTIME_ADAPTER`, default `orca`) rather
-than assuming an installed binary is the selected runtime — a leftover vendor CLI
-will otherwise succeed against the wrong fleet, silently.
+than assuming an installed binary is the selected runtime.
 
 | Capability | Active runtime = `orca` |
 |---|---|
-| `workspace_for(issue)` | `node --experimental-strip-types scripts/worktree-lifecycle/create-continuation.ts --repo-root "<repo-root>" --issue <N> --expected-head <source-sha> --name <name> --apply --json` |
-| `spawn_worker(wt)` | `orca terminal create --worktree "path:<wt>" --title "<role> #<N>" --command "<agent-cli> --model <model>" --focus` |
+| `create_and_start_worker(issue)` | `node --experimental-strip-types scripts/worktree-lifecycle/create-continuation.ts --repo-root "<repo-root>" --issue <N> --expected-head <source-sha> --terminal-title "<role> #<N>" --terminal-command "<agent-cli> --model <model>" --apply --json` |
 | `agents` | `orca worktree ps --json` → `result.worktrees[].agents[]` (`state`, `interrupted`) |
 | `terminals(wt)` | `orca terminal list --worktree "path:<wt>" --json` → `result.terminals[]` (`handle`, `worktreePath`) |
 | `close_terminal(handle)` | `orca terminal close --terminal <handle> --json` |
 | `stop_terminals(wt)` | `orca terminal stop --worktree "path:<wt>" --json` |
 
-Left-column names are identifiers, not commands. Every step below means: look up
-the capability in this table, then execute the command it maps to. Postconditions
-the mapping must preserve on any runtime: the workspace is created from the
-exact intended source SHA and bound to the issue; the worker is **visible to the
-operator**; the agent starts **as part of creating its session**, with its model
-passed explicitly — never typed into a shell afterwards.
+Left-column names are identifiers, not commands. The atomic capability must
+create from the exact intended source SHA, bind the worktree to the Issue, and
+start the agent while still holding the lifecycle exclusion. It returns the
+verified worktree and terminal identities; there is no later transferable spawn
+authorization.
 
 **Resolve every placeholder before acting, and fail closed if you cannot:**
-`<N>` = the issue number; `<repo-root>` = `git rev-parse --show-toplevel`;
+`<N>` = the Issue number; `<repo-root>` = `git rev-parse --show-toplevel`;
 `<source-sha>` = the fresh full 40-hex SHA of the intended source ref;
-`<name>` = a fresh safe workspace name containing `N`; `<role>` = what the worker
-is for; `<agent-cli>` and `<model>` = the worker agent and model the operator's
-standing routing prescribes — if that is unstated, **ask**, do not guess; `<wt>` =
-`selected.path` from the successful lifecycle report.
+`<role>` = what the worker is for; `<agent-cli>` and `<model>` = the worker agent
+and model prescribed by the operator's standing routing. Do not guess a missing
+agent or model.
 
 **Mutation fails closed; the scheduler does not.** If the active runtime has no
 row for a capability or a placeholder has no authoritative value, do not guess,
@@ -234,49 +230,41 @@ Stop the direct path and hand the change over when:
 
 **Pivot boundary.** Before you have made edits, hand off freely. **Once edits
 exist, stop and report** the exact branch, commit, and pending diff, then wait.
-Do not start a handoff on top of live edits: the bindings above create a new
-workspace from the intended source SHA; they do not adopt an arbitrary branch
-with uncommitted edits. Proceeding would leave the edits stranded and produce a
-second, diverging implementation. Adopting an existing branch is an operator
-decision carried out by hand, not a step in this procedure.
+Do not start a handoff on top of live edits: the atomic actuator creates a new
+Issue-bound workspace from the intended source SHA; it does not adopt an
+arbitrary branch with uncommitted edits.
 
 ### Handoff steps
 
-1. **Freeze the source identity.** Fetch the intended source ref, resolve its full
-   40-hex commit SHA as `<source-sha>`, and choose one fresh safe `<name>` that
-   contains `<N>`. Do not pass the symbolic ref to the create actuator.
-2. **Run the bounded lifecycle actuator once.** Execute `workspace_for(issue)`.
-   It owns the initial create, authoritative Git/Orca read-back, at most one
-   isolated replacement, and the shared create/recovery/teardown exclusion. A
-   timeout or missing create receipt is resolved by read-back inside this one
-   command; do not issue a second command manually.
-3. **Accept exactly one verified selection.** Proceed only when the report has
-   all of:
-   - `outcome: ready_to_spawn`;
-   - `terminalSpawnAuthorized: true`;
+1. **Freeze source and routing.** Fetch the intended source ref and resolve its
+   full 40-hex SHA as `<source-sha>`. Resolve `<agent-cli>`, `<model>`, and
+   `<role>` before any effect.
+2. **Run the atomic lifecycle actuator once.** Execute
+   `create_and_start_worker(issue)`. It owns the initial create, authoritative
+   Git/Orca read-back, at most one stable Issue-family replacement, terminal
+   creation, terminal read-back, and the shared create/recovery/teardown
+   exclusion. Do not issue a manual second create or a separate terminal create.
+3. **Accept only a completed worker start.** Proceed only when the report has all
+   of:
+   - `outcome: worker_spawned`;
+   - `terminalSpawnCompleted: true`;
+   - `terminalSpawnAuthorized: false`;
    - one `selected.path`;
    - `selectedReadBack.classification.classification: exact_dual`;
-   - `selectedReadBack.decision.terminalSpawnAuthorized: true`.
+   - one `terminal.handle`;
+   - `terminal.worktreePath` exactly equal to `selected.path`.
 
-   Set `<wt>` to that exact `selected.path`. Any other result preserves disputed
-   state and returns task-level degraded control; do not loop, force-remove,
-   create a third worktree, or stop unrelated scheduler work.
-4. **Census terminals before spawn.** Execute `terminals(wt)` and keep the set of
-   existing handles. The lifecycle actuator creates worktrees only; it never
-   creates a terminal.
-5. Execute `spawn_worker(wt)` **once** for the verified `<wt>` and note the
-   returned terminal handle.
-6. **Read back and bind.** Execute `terminals(wt)` again: there must be **exactly
-   one handle that was not in the step-4 set**, and that handle is your worker.
-   Zero new handles means the spawn did not take. More than one means something
-   else is also creating terminals — preserve the state and return task-level
-   degraded control rather than guessing. Use `agents` to confirm the bound
-   handle is running.
-7. **Never blindly retry a spawn whose outcome is unknown.** A timeout does not
-   mean failure — read back first. Counting agents alone cannot tell your worker
-   from one that was already there, which is why step 4 is not optional.
+   Any other result preserves disputed state and returns task-level degraded
+   control. Do not loop, force-remove, create a third worktree, or spawn another
+   terminal.
+4. **Observe, do not recreate.** Use `agents` and `terminals(wt)` to observe the
+   returned worker. A timeout or missing create/terminal receipt has already
+   been settled by read-back inside the actuator. A repeated invocation that
+   sees an Issue-family terminal must perform no new create and no new spawn.
 
-To stop a worker, use `close_terminal(handle)` with the handle bound in step 6.
+To stop a worker, use `close_terminal(handle)` with the exact handle returned by
+the actuator. `stop_terminals(wt)` is a broad workspace operation and is not a
+substitute for exact-handle ownership.
 
 ## Don't
 
