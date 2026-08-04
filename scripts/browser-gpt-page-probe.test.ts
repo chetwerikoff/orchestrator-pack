@@ -532,6 +532,34 @@ test('URL-bound inspection fails when the page navigates, while target-ID inspec
   assert.equal((result.snapshot as any).page_url, movedUrl);
 });
 
+test('legacy inspection preserves readable loading snapshots outside acquired readiness', async () => {
+  const loadingNodes = [
+    new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-loading' }),
+    new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-loading' }),
+  ];
+  const evaluate = async (_target: any, expression: string) => await evaluateExpression(
+    expression,
+    loadingNodes,
+    false,
+    'https://chatgpt.com/c/test',
+    'loading',
+  );
+
+  const byId = await runProbe(
+    { operation: 'inspect', cdp: 'http://127.0.0.1:9222', targetId: 'target-1' },
+    deps({ evaluate }),
+  );
+  assert.equal(byId.status, 'ok');
+  assert.equal((byId.snapshot as any).ready_state, 'loading');
+
+  const byUrl = await runProbe(
+    { operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/test' },
+    deps({ evaluate }),
+  );
+  assert.equal(byUrl.status, 'ok');
+  assert.equal((byUrl.snapshot as any).ready_state, 'loading');
+});
+
 test('generation observation degrades to unknown when the fixed marker query cannot be interpreted', async () => {
   const document = {
     title: 'Fixture title',
@@ -726,6 +754,46 @@ test('acquisition rejects redirect and malformed creation, while exposing cleanu
   );
 });
 
+test('acquired readiness accepts stable user nodes across interactive to complete', async () => {
+  const requested = 'https://chatgpt.com/c/interactive-complete';
+  const createdTarget: CdpTarget = {
+    id: 'owned-interactive-complete',
+    type: 'page',
+    url: 'about:blank',
+    title: 'Loading',
+    webSocketDebuggerUrl: 'ws://example/owned-interactive-complete',
+  };
+  const readyStates: Array<'interactive' | 'complete'> = ['interactive', 'complete'];
+  let evaluateCalls = 0;
+  const closeCalls: string[] = [];
+
+  const result = await runProbe({
+    operation: 'inspect',
+    cdp: 'http://127.0.0.1:9222',
+    conversationUrl: requested,
+    openIfMissing: true,
+  }, deps({
+    listTargets: async () => [],
+    createPage: async () => createdTarget,
+    closePage: async (_cdp, targetId) => {
+      closeCalls.push(targetId);
+      return 'closed';
+    },
+    evaluate: async (_target, expression) => {
+      const readyState = readyStates[Math.min(evaluateCalls++, readyStates.length - 1)]!;
+      return evaluateExpression(expression, [
+        new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-transition' }),
+        new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-transition' }),
+      ], false, requested, readyState);
+    },
+  }));
+
+  assert.equal(result.status, 'ok');
+  assert.equal(evaluateCalls, 2);
+  assert.equal((result.snapshot as any).ready_state, 'complete');
+  assert.deepEqual(closeCalls, [createdTarget.id]);
+});
+
 test('created ownership survives transient URLs and rejects contradictory target IDs', async () => {
   const requested = 'https://chatgpt.com/c/transient';
   const closeCalls: string[] = [];
@@ -761,6 +829,70 @@ test('created ownership survives transient URLs and rejects contradictory target
     (error: any) => error.status === 'unavailable' && error.reason === 'create_result_contradictory',
   );
   assert.deepEqual(contradictoryCloseCalls, []);
+});
+
+test('acquisition rejects collisions with pre-existing non-page target IDs without cleanup', async () => {
+  const closeCalls: string[] = [];
+  await assert.rejects(
+    runProbe({
+      operation: 'inspect',
+      cdp: 'http://127.0.0.1:9222',
+      conversationUrl: 'https://chatgpt.com/c/non-page-collision',
+      openIfMissing: true,
+    }, deps({
+      listTargets: async () => [{
+        id: 'foreign-worker',
+        type: 'service_worker',
+        url: 'https://chatgpt.com/c/non-page-collision',
+      }],
+      createPage: async () => ({
+        id: 'foreign-worker',
+        type: 'page',
+        url: 'https://chatgpt.com/c/non-page-collision',
+        title: 'Contradictory',
+        webSocketDebuggerUrl: 'ws://example/foreign-worker',
+      }),
+      closePage: async (_cdp, targetId) => {
+        closeCalls.push(targetId);
+        return 'closed';
+      },
+    })),
+    (error: any) => error.status === 'unavailable' && error.reason === 'create_result_contradictory',
+  );
+  assert.deepEqual(closeCalls, []);
+});
+
+test('acquisition reports already_gone after successful inspection and exact owner cleanup', async () => {
+  const ownedId = 'owned-already-gone';
+  const closeCalls: string[] = [];
+  const result = await runProbe({
+    operation: 'inspect',
+    cdp: 'http://127.0.0.1:9222',
+    conversationUrl: 'https://chatgpt.com/c/already-gone',
+    openIfMissing: true,
+  }, deps({
+    listTargets: async () => [],
+    createPage: async () => ({
+      id: ownedId,
+      type: 'page',
+      url: 'about:blank',
+      title: 'Loading',
+      webSocketDebuggerUrl: `ws://example/${ownedId}`,
+    }),
+    closePage: async (_cdp, targetId) => {
+      closeCalls.push(targetId);
+      return 'already_gone';
+    },
+    evaluate: async (_target, expression) => await evaluateExpression(expression, [
+      new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-already-gone' }),
+      new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-already-gone' }),
+    ], false, 'https://chatgpt.com/c/already-gone'),
+  }));
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.cleanup, 'already_gone');
+  assert.equal(result.owned_target_id, ownedId);
+  assert.deepEqual(closeCalls, [ownedId]);
 });
 
 test('readiness rejects loading documents at the bounded deadline', async () => {

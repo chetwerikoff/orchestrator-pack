@@ -82,7 +82,7 @@ export interface NodeSummary {
 
 export interface InspectionSnapshot {
   readonly page_url: string;
-  readonly ready_state: 'interactive' | 'complete';
+  readonly ready_state: 'loading' | 'interactive' | 'complete';
   readonly title: string;
   readonly generation_in_progress: boolean | 'unknown';
   readonly observed_user_nodes: number;
@@ -386,7 +386,9 @@ function validateInspectionSnapshot(
   }
   if (value.status !== 'ok'
     || !isBoundedString(value.page_url, MAX_NORMALIZED_URL_CODE_POINTS)
-    || (value.ready_state !== 'interactive' && value.ready_state !== 'complete')
+    || (value.ready_state !== 'loading'
+      && value.ready_state !== 'interactive'
+      && value.ready_state !== 'complete')
     || !isBoundedString(value.title, MAX_TEXT_CODE_POINTS)
     || (typeof value.generation_in_progress !== 'boolean' && value.generation_in_progress !== 'unknown')
     || !isNonNegativeSafeInteger(value.observed_user_nodes)
@@ -949,7 +951,6 @@ function withTimeout<T>(
 
 function readinessKey(snapshot: InspectionSnapshot): string {
   return JSON.stringify({
-    ready_state: snapshot.ready_state,
     observed_user_nodes: snapshot.observed_user_nodes,
     user_nodes: snapshot.nodes
       .filter((node) => node.role === 'user')
@@ -1008,9 +1009,13 @@ async function inspectWithReadiness(
       if (snapshot.page_url !== requestedIdentity) {
         throw new ProbeError('surface_unknown', 'conversation_identity_mismatch');
       }
-      const key = readinessKey(snapshot);
-      if (key === previousKey) return snapshot;
-      previousKey = key;
+      if (snapshot.ready_state !== 'loading') {
+        const key = readinessKey(snapshot);
+        if (key === previousKey) return snapshot;
+        previousKey = key;
+      } else {
+        previousKey = undefined;
+      }
     } catch (error) {
       if (!(error instanceof ProbeError) || error.status !== 'surface_unknown') throw error;
     }
@@ -1062,7 +1067,7 @@ async function inspectAcquiredUrl(
   const targets = toCompatibleTargets(rawTargets);
   const preExistingTargetIds = new Set(
     rawTargets
-      .filter((target) => target.type === 'page' && typeof target.id === 'string' && TARGET_ID_RE.test(target.id))
+      .filter((target) => typeof target.id === 'string' && TARGET_ID_RE.test(target.id))
       .map((target) => target.id as string),
   );
   const matches = targets.filter((target) => target.normalized_url === requestedIdentity);
