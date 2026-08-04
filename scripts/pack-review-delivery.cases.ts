@@ -1066,7 +1066,7 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
     markRunStale(storeRoot, staleRunId);
     let newerCount = 0;
     const writes: PackReviewRequiredStatusRequest[] = [];
-    createPackReviewRun({
+    const initialNewer = createPackReviewRun({
       projectId: 'orchestrator-pack',
       storeRoot,
       prNumber: 1067,
@@ -1078,6 +1078,7 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
       sourceRepoRoot: repoRoot,
       canonicalRepository: STALE_REPO_A,
     });
+    let latestNewerId = initialNewer.run.id;
 
     const result = await reconcileStalePackReviewRuns({
       repoSlug: STALE_REPO_A,
@@ -1087,7 +1088,12 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
       fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
       fixturePauseAfterPendingRestoreWrite: async () => {
         newerCount += 1;
-        createPackReviewRun({
+        updatePackReviewRun(latestNewerId, {
+          status: 'timed_out',
+          latestRunStatus: 'timed_out',
+          failureReason: 'reviewer_process_timeout',
+        }, { projectId: 'orchestrator-pack', storeRoot });
+        const nextNewer = createPackReviewRun({
           projectId: 'orchestrator-pack',
           storeRoot,
           prNumber: 1067,
@@ -1099,6 +1105,7 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
           sourceRepoRoot: repoRoot,
           canonicalRepository: STALE_REPO_A,
         });
+        latestNewerId = nextNewer.run.id;
       },
     });
 
@@ -1107,7 +1114,7 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
       statusReconciled: false,
       reason: 'newer_run_authority_race',
     });
-    expect(writes).toHaveLength(3);
+    expect(writes).toHaveLength(6);
   });
 
   it('force-republishes newer authority after a superseding stale write', async () => {
