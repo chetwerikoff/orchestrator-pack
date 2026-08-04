@@ -22,6 +22,7 @@ import {
   pathMatchesEntries,
   policySubset,
   selectDeclarationArtifact,
+  selectLiveIssueScope,
   type PrScopeDeclaration,
 } from './pr-scope-declaration.ts';
 import { listIssueSnapshots } from '../plugins/ao-task-declaration/lib/snapshot.ts';
@@ -128,6 +129,7 @@ export type PrScopeCheckResult =
       mode: 'implementation' | 'spec-only' | 'no-ceremony' | 'runtime-history-delivery';
       snapshot?: DeclarationSnapshot;
       declarationPath?: string;
+      scopeSource?: 'declaration' | 'live-issue';
       issueNumber?: number;
       checkedPaths: string[];
       skippedControlArtifacts: string[];
@@ -438,6 +440,24 @@ function checkPrPathsAgainstSnapshot(
   });
 }
 
+function checkPrPathsAgainstLiveIssueScope(
+  prPaths: string[],
+  scope: {
+    allowed_roots: string[];
+    denylist: string[];
+  },
+): PrPathSnapshotCheckResult {
+  const { declared_paths, declared_globs } =
+    splitIssueAllowedRootsToDeclaredScope(scope.allowed_roots);
+  return checkPrPathsAgainstDeclaredScope(prPaths, {
+    declaredPaths: declared_paths,
+    declaredGlobs: declared_globs,
+    denylist: [...REPOSITORY_DENYLIST, ...scope.denylist],
+    outOfScopeMessage:
+      'PR diff includes paths outside the bound declaration-free live-Issue scope',
+  });
+}
+
 function checkNoCeremonyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
   if (hasNoCeremonyIssueLink(input.prBody)) {
     return {
@@ -663,6 +683,49 @@ function checkImplementationPrScope(
 
   const selected = selectDeclarationArtifact(input.repoRoot, issueNumber);
   if (!selected.ok) {
+    if (selected.reason === 'missing') {
+      const liveIssueScope = selectLiveIssueScope(input.issueBody, issueConstraints);
+      if (liveIssueScope.ok) {
+        const pathCheck = checkPrPathsAgainstLiveIssueScope(
+          input.prPaths,
+          liveIssueScope,
+        );
+        if (!pathCheck.ok) {
+          return {
+            ok: false,
+            reason: pathCheck.reason,
+            message: pathCheck.message,
+            violations: pathCheck.violations,
+          };
+        }
+
+        return {
+          ok: true,
+          mode: 'implementation',
+          scopeSource: 'live-issue',
+          issueNumber,
+          checkedPaths: pathCheck.checkedPaths,
+          skippedControlArtifacts: pathCheck.skippedControlArtifacts,
+          unverifiedIssueConstraints: false,
+          warnings: [
+            'declaration-free live-Issue scope selected; no declaration artifact was required',
+          ],
+        };
+      }
+
+      return {
+        ok: false,
+        reason: 'declaration-selection-failed',
+        message: liveIssueScope.message,
+        violations: {
+          outOfScope: [],
+          denied: [],
+          declarationErrors: [liveIssueScope.message],
+          invalidPaths: [],
+        },
+      };
+    }
+
     return {
       ok: false,
       reason: 'declaration-selection-failed',
@@ -713,6 +776,7 @@ function checkImplementationPrScope(
   return {
     ok: true,
     mode: 'implementation',
+    scopeSource: 'declaration',
     declarationPath: selected.path,
     issueNumber,
     checkedPaths: pathCheck.checkedPaths,
@@ -959,11 +1023,13 @@ export function formatScopeCheckComment(result: PrScopeCheckResult): string {
     const lines = [
       '## Scope guard — passed',
       '',
-      ...(result.declarationPath
-        ? [`Active declaration: \`${result.declarationPath}\``]
-        : result.snapshot
-          ? [`Active snapshot: \`docs/declarations/${result.snapshot.issue_number}.${result.snapshot.iteration_id}.json\``]
-          : ['Active declaration: _none_']),
+      ...(result.scopeSource === 'live-issue'
+        ? ['Active scope: declaration-free live Issue']
+        : result.declarationPath
+          ? [`Active declaration: \`${result.declarationPath}\``]
+          : result.snapshot
+            ? [`Active snapshot: \`docs/declarations/${result.snapshot.issue_number}.${result.snapshot.iteration_id}.json\``]
+            : ['Active declaration: _none_']),
       `Checked paths: ${result.checkedPaths.length}`,
     ];
     if (result.skippedControlArtifacts.length > 0) {

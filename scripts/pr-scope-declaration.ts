@@ -18,7 +18,11 @@ import {
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
+import {
+  parseIssueBody,
+  type IssueConstraints,
+} from '@orchestrator-pack/shared/lib/issue_parser.js';
+import { validateDeclaredScope } from '../plugins/ao-task-declaration/lib/validate.ts';
 
 export const PR_SCOPE_DECLARATION_SCHEMA =
   'orchestrator-pack/pr-scope-declaration/v1';
@@ -493,6 +497,100 @@ export type DeclarationSelectionResult =
       message: string;
       candidates: DeclarationCandidate[];
     };
+
+export type LiveIssueScopeSelectionResult =
+  | {
+      ok: true;
+      allowed_roots: string[];
+      denylist: string[];
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
+const ISSUE_SCOPE_FENCE_PATTERN =
+  /```(denylist|allowed-roots)\s*\r?\n([\s\S]*?)```/gi;
+
+function hasDuplicateEntries(entries: readonly string[]): boolean {
+  return new Set(entries).size !== entries.length;
+}
+
+/**
+ * Select the current Issue's explicit scope when no declaration candidate exists.
+ *
+ * This is intentionally stricter than parseIssueBody: a declaration-free
+ * selection needs one unambiguous scope contract, not a merged interpretation
+ * of repeated fences or a repository-wide fallback.
+ */
+export function selectLiveIssueScope(
+  issueBody: string,
+  issueConstraints: IssueConstraints,
+): LiveIssueScopeSelectionResult {
+  const fenceCounts = { denylist: 0, 'allowed-roots': 0 };
+  let match: RegExpExecArray | null;
+  const pattern = new RegExp(
+    ISSUE_SCOPE_FENCE_PATTERN.source,
+    ISSUE_SCOPE_FENCE_PATTERN.flags,
+  );
+  while ((match = pattern.exec(issueBody)) !== null) {
+    const label = match[1] as keyof typeof fenceCounts;
+    fenceCounts[label] += 1;
+  }
+
+  if (fenceCounts.denylist !== 1 || fenceCounts['allowed-roots'] !== 1) {
+    return {
+      ok: false,
+      message:
+        'live-Issue scope selection failed: exactly one denylist and one allowed-roots fence are required; FAIL/no-selection/fresh-declaration',
+    };
+  }
+
+  const allowed_roots = issueConstraints.allowed_roots;
+  if (!allowed_roots || allowed_roots.length === 0) {
+    return {
+      ok: false,
+      message:
+        'live-Issue scope selection failed: explicit allowed-roots are required; repository-wide fallback is forbidden; FAIL/no-selection/fresh-declaration',
+    };
+  }
+
+  if (
+    hasDuplicateEntries(issueConstraints.denylist) ||
+    hasDuplicateEntries(allowed_roots)
+  ) {
+    return {
+      ok: false,
+      message:
+        'live-Issue scope selection failed: scope entries contain duplicates; FAIL/no-selection/fresh-declaration',
+    };
+  }
+
+  if (!policySubset(allowed_roots, REPOSITORY_ALLOWED_ROOTS)) {
+    return {
+      ok: false,
+      message:
+        'live-Issue scope selection failed: allowed-roots widen the repository ceiling; FAIL/no-selection/fresh-declaration',
+    };
+  }
+
+  const valid = validateDeclaredScope(
+    { declared_paths: [], declared_globs: allowed_roots },
+    { denylist: issueConstraints.denylist, allowed_roots },
+  );
+  if (!valid.ok) {
+    return {
+      ok: false,
+      message: `live-Issue scope selection failed: ${valid.errors.join('; ')}; FAIL/no-selection/fresh-declaration`,
+    };
+  }
+
+  return {
+    ok: true,
+    allowed_roots,
+    denylist: issueConstraints.denylist,
+  };
+}
 
 function issueFromFilename(filename: string): number | null {
   const match = /^(\d+)\.[^/]+$/.exec(filename);

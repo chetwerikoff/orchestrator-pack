@@ -268,6 +268,107 @@ describe('AO-free PR scope declaration contract', () => {
     });
   });
 
+  it('uses one explicit live-Issue scope only when no declaration candidate exists', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+    const inScopePaths = Array.from(
+      { length: 8 },
+      (_, index) => `scripts/allowed-${index}.ts`,
+    );
+
+    const base = {
+      repoRoot: root,
+      prBody: 'Closes #42',
+      issueBody,
+      prPaths: inScopePaths,
+      degradedMode: false,
+      forkPr: false,
+    };
+
+    expect(checkPrScope(base)).toMatchObject({
+      ok: true,
+      mode: 'implementation',
+      scopeSource: 'live-issue',
+      issueNumber: 42,
+      checkedPaths: inScopePaths,
+    });
+
+    const ninthPath = checkPrScope({
+      ...base,
+      prPaths: [...inScopePaths, 'README.md'],
+    });
+    expect(ninthPath).toMatchObject({
+      ok: false,
+      reason: 'scope_violation',
+    });
+    if (ninthPath.ok) throw new Error('expected the ninth path to fail closed');
+    expect(ninthPath.violations?.outOfScope).toEqual([
+      expect.stringContaining('README.md'),
+    ]);
+
+    expect(
+      checkPrScope({
+        ...base,
+        issueBody: `${issueBody}\n\`\`\`allowed-roots\nscripts/**\n\`\`\`\n`,
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: 'declaration-selection-failed',
+    });
+  });
+
+  it('does not let malformed current-Issue candidates use the live-Issue path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+    mkdirSync(join(root, 'docs', 'declarations'), { recursive: true });
+    writeFileSync(
+      join(root, 'docs', 'declarations', '42.bad.json'),
+      '{not-json',
+      'utf8',
+    );
+
+    expect(
+      checkPrScope({
+        repoRoot: root,
+        prBody: 'Closes #42',
+        issueBody,
+        prPaths: ['scripts/allowed.ts'],
+        degradedMode: false,
+        forkPr: false,
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: 'declaration-selection-failed',
+    });
+  });
+
+  it('does not let duplicate current-Issue candidates use the live-Issue path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+    mkdirSync(join(root, 'docs', 'declarations'), { recursive: true });
+    for (const suffix of ['a', 'b']) {
+      writeFileSync(
+        join(root, 'docs', 'declarations', `42.${suffix}.json`),
+        `${JSON.stringify(declaration())}\n`,
+        'utf8',
+      );
+    }
+
+    expect(
+      checkPrScope({
+        repoRoot: root,
+        prBody: 'Closes #42',
+        issueBody,
+        prPaths: ['scripts/allowed.ts'],
+        degradedMode: false,
+        forkPr: false,
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: 'declaration-selection-failed',
+    });
+  });
+
   it('does not treat an unavailable diff as an empty successful diff', () => {
     expect(
       checkPrScope({
