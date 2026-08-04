@@ -73,6 +73,7 @@ function fixture(): Paths {
 interface RunnerState {
   gitPresent: boolean;
   orcaPresent: boolean;
+  linkedIssue?: number;
   dirty?: boolean;
   ignoredSequence?: string[];
   terminals?: unknown[];
@@ -92,7 +93,7 @@ function targetOrca(paths: Paths, state: RunnerState, includeAgents: boolean): o
     path: paths.worktree,
     head: HEAD,
     branch: `refs/heads/${BRANCH}`,
-    linkedPR: 1300,
+    ...(state.linkedIssue === undefined ? { linkedPR: 1300 } : { linkedIssue: state.linkedIssue }),
     repoId: REPOSITORY_ID,
     isMainWorktree: false,
     isArchived: false,
@@ -466,7 +467,7 @@ describe('standard teardown post-effect settlement', () => {
 describe('post-create observation', () => {
   it('reports exact dual without exporting terminal authority', () => {
     const paths = fixture();
-    const value = state({ orcaPresent: true });
+    const value = state({ orcaPresent: true, linkedIssue: 1298 });
     const report = runLifecycle({
       expected: { ...paths.expected, bindingKind: 'issue', bindingNumber: 1298 },
       context: 'post-create',
