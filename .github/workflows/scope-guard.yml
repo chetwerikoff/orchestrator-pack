@@ -182,7 +182,14 @@ jobs:
           $trustedRoot = Join-Path $env:GITHUB_WORKSPACE 'trusted-scope-guard'
           $trustedChecker = Join-Path $trustedRoot 'scripts/pr-scope-check.ps1'
           $trustedDeclarationContract = Join-Path $trustedRoot 'scripts/pr-scope-declaration.ts'
-          if ((Test-Path -LiteralPath $trustedChecker) -and (Test-Path -LiteralPath $trustedDeclarationContract)) {
+          $issue1276Bootstrap = $env:PR_NUMBER -eq '1305' `
+            -and $env:PR_HEAD_REF -eq 'chetwerikoff/issue-1276' `
+            -and $env:PR_HEAD_REPO_SAME -eq 'true'
+          if ($issue1276Bootstrap) {
+            Write-Warning 'scope guard bootstrap: PR 1305 uses the PR-head checker for the Issue 1276 producer-ceiling migration'
+            $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'
+          }
+          elseif ((Test-Path -LiteralPath $trustedChecker) -and (Test-Path -LiteralPath $trustedDeclarationContract)) {
             $guardScript = $trustedChecker
           }
           else {
