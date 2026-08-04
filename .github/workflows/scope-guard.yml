@@ -201,20 +201,18 @@ jobs:
               $issuePayload = & $packGh issue view $issueNumber --repo $env:GITHUB_REPOSITORY --json body 2>$null
               if ($LASTEXITCODE -ne 0) { throw 'scope guard bootstrap: unable to read linked Issue body' }
               $issueBody = ([string]($issuePayload | ConvertFrom-Json).body)
-              $fences = [regex]::Matches($issueBody, '(?ms)```(?:json)?\s*\r?\n(?<json>\{.*?\})\s*\r?\n```')
+              $fences = [regex]::Matches($issueBody, '(?ms)```scope-guard-bootstrap/v1\s*\r?\n(?<json>\{.*?\})\s*\r?\n```')
               $bootstrapCandidates = @()
               foreach ($fence in $fences) {
                 try { $candidate = $fence.Groups['json'].Value | ConvertFrom-Json -ErrorAction Stop }
-                catch {
-                  if ($fence.Groups['json'].Value -match 'scope-guard-bootstrap/v1') {
-                    throw 'scope guard bootstrap: malformed bootstrap declaration'
-                  }
-                  continue
-                }
-                if ($candidate.schema -eq 'scope-guard-bootstrap/v1') { $bootstrapCandidates += $candidate }
+                catch { throw 'scope guard bootstrap: malformed bootstrap declaration' }
+                if ($candidate.schema -ne 'scope-guard-bootstrap/v1') { throw 'scope guard bootstrap: malformed bootstrap schema' }
+                $bootstrapCandidates += $candidate
               }
               if ($bootstrapCandidates.Count -ne 1) { throw 'scope guard bootstrap: expected exactly one bootstrap declaration' }
               $bootstrap = $bootstrapCandidates[0]
+              $revisionMatch = [regex]::Match($issueBody, '(?m)^<!--\s*source-revision:\s*(?<revision>r\d+)\s*-->$')
+              if (-not $revisionMatch.Success) { throw 'scope guard bootstrap: missing source revision' }
               $expectedPaths = @(
                 'scripts/pr-scope-check.ts',
                 'scripts/pr-scope-check.ps1',
@@ -225,7 +223,7 @@ jobs:
               $declaredPaths = @($bootstrap.allowedImplementationPaths | ForEach-Object { [string]$_ })
               $bindingValid =
                 $bootstrap.issueNumber -eq $issueNumber -and
-                -not [string]::IsNullOrWhiteSpace([string]$bootstrap.sourceRevision) -and
+                $bootstrap.sourceRevision -eq $revisionMatch.Groups['revision'].Value -and
                 $bootstrap.prNumber -eq [int]$env:PR_NUMBER -and
                 $bootstrap.headSha -eq $env:PR_HEAD_SHA -and
                 $bootstrap.workflowPath -eq '.github/workflows/scope-guard.yml' -and
