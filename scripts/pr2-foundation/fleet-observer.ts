@@ -15,6 +15,7 @@ import path from 'node:path';
 import {
   RUNTIME_LIVENESS_RESULTS,
   sameRuntimeWorker,
+  runtimeFailure,
   type RuntimeAdapter,
   type RuntimeBoundedOutput,
   type RuntimeCallOptions,
