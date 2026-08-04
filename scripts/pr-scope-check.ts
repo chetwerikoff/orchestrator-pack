@@ -116,6 +116,7 @@ export interface PrScopeCheckInput {
   prPaths: string[];
   degradedMode: boolean;
   forkPr: boolean;
+  prNumber?: number;
   prHeadRef?: string;
   sameRepo?: boolean;
   /** Required by the CI entrypoint; direct callers may provide prPaths for unit tests. */
@@ -517,7 +518,6 @@ function checkSpecOnlyPrScope(input: PrScopeCheckInput): PrScopeCheckResult {
         'spec-only PRs must not use GitHub closing keywords (Closes/Fixes/Resolves #N); use a non-closing reference such as Refs #N so the implementation issue stays open',
     };
   }
-
   const issueNumber = extractNonClosingIssueNumber(input.prBody);
   if (issueNumber === null) {
     return {
@@ -684,7 +684,15 @@ function checkImplementationPrScope(
   const selected = selectDeclarationArtifact(input.repoRoot, issueNumber);
   if (!selected.ok) {
     if (selected.reason === 'missing') {
-      const liveIssueScope = selectLiveIssueScope(input.issueBody, issueConstraints);
+      const liveIssueScope = selectLiveIssueScope(
+        input.issueBody,
+        issueConstraints,
+        {
+          issueNumber,
+          prNumber: input.prNumber,
+          headSha: input.headSha,
+        },
+      );
       if (liveIssueScope.ok) {
         const pathCheck = checkPrPathsAgainstLiveIssueScope(
           input.prPaths,
@@ -1161,6 +1169,7 @@ function readJsonInput(): PrScopeCheckInput {
     prPaths: parsed.prPaths,
     degradedMode: Boolean(parsed.degradedMode),
     forkPr: Boolean(parsed.forkPr),
+    prNumber: typeof parsed.prNumber === 'number' ? parsed.prNumber : undefined,
     prHeadRef: typeof parsed.prHeadRef === 'string' ? parsed.prHeadRef : '',
     sameRepo: Boolean(parsed.sameRepo),
     baseSha: typeof parsed.baseSha === 'string' ? parsed.baseSha : undefined,

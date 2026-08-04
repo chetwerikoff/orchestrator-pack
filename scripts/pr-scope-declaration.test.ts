@@ -2,14 +2,17 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
+import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
 import {
   PR_SCOPE_DECLARATION_SCHEMA,
   producePrScopeDeclaration,
   selectDeclarationArtifact,
+  selectLiveIssueScope,
   validatePrScopeDeclaration,
 } from './pr-scope-declaration.ts';
 import { runProcessSync } from './kernel/subprocess.ts';
 import { checkPrScope } from './pr-scope-check.ts';
+import { normalizeIssueConstraints } from '../plugins/ao-task-declaration/lib/validate.ts';
 
 const issueBody = [
   '```denylist',
@@ -37,6 +40,80 @@ const firstPartySurfaceIssueBody = [
   'prompts/**',
   '```',
 ].join('\n');
+
+const bootstrapAllowedPaths = [
+  'scripts/pr-scope-check.ts',
+  'scripts/pr-scope-check.ps1',
+  'scripts/pr-scope-declaration.ts',
+  'scripts/pr-scope-declaration.test.ts',
+  '.github/workflows/scope-guard.yml',
+];
+const bootstrapHeadSha = '0123456789abcdef0123456789abcdef01234567';
+
+type BootstrapIssueOptions = {
+  markerRevision?: string;
+  bootstrapRevision?: string;
+  bootstrapHeadSha?: string;
+  allowedImplementationPaths?: string[];
+  allowedRoots?: string[];
+  duplicateBootstrap?: boolean;
+  duplicateMarker?: boolean;
+  malformedBootstrap?: boolean;
+};
+
+function bootstrapIssueBody(options: BootstrapIssueOptions = {}): string {
+  const markerRevision = options.markerRevision ?? 'r05';
+  const bootstrap = {
+    schema: 'scope-guard-bootstrap/v1',
+    issueNumber: 1314,
+    sourceRevision: options.bootstrapRevision ?? markerRevision,
+    prNumber: 1316,
+    headSha: options.bootstrapHeadSha ?? bootstrapHeadSha,
+    workflowPath: '.github/workflows/scope-guard.yml',
+    allowedImplementationPaths:
+      options.allowedImplementationPaths ?? bootstrapAllowedPaths,
+    declarationArtifactsAllowed: false,
+    expiresOnMismatch: true,
+  };
+  const bootstrapFence = options.malformedBootstrap
+    ? ['```scope-guard-bootstrap/v1', '{not-json', '```'].join('\n')
+    : [
+        '```scope-guard-bootstrap/v1',
+        JSON.stringify(bootstrap, null, 2),
+        '```',
+      ].join('\n');
+  return [
+    `<!-- source-revision: ${markerRevision} -->`,
+    ...(options.duplicateMarker
+      ? [`<!-- source-revision: ${markerRevision} -->`]
+      : []),
+    bootstrapFence,
+    ...(options.duplicateBootstrap ? [bootstrapFence] : []),
+    '```denylist',
+    'vendor/**',
+    'packages/core/**',
+    '```',
+    '```allowed-roots',
+    ...(options.allowedRoots ?? bootstrapAllowedPaths),
+    '```',
+  ].join('\n');
+}
+
+function selectBootstrapScope(
+  body: string,
+  binding: { issueNumber?: number; prNumber?: number; headSha?: string } = {},
+) {
+  return selectLiveIssueScope(
+    body,
+    normalizeIssueConstraints(parseIssueBody(body)),
+    {
+      issueNumber: 1314,
+      prNumber: 1316,
+      headSha: bootstrapHeadSha,
+      ...binding,
+    },
+  );
+}
 
 function declaration(issueNumber = 42): Record<string, unknown> {
   return {
@@ -315,6 +392,67 @@ describe('AO-free PR scope declaration contract', () => {
       ok: false,
       reason: 'declaration-selection-failed',
     });
+  });
+
+  it('accepts a valid bootstrap-bound live scope', () => {
+    expect(selectBootstrapScope(bootstrapIssueBody())).toEqual({
+      ok: true,
+      allowed_roots: bootstrapAllowedPaths,
+      denylist: ['vendor/**', 'packages/core/**'],
+    });
+  });
+
+  it('fails closed on stale bootstrap head or source revision', () => {
+    expect(
+      selectBootstrapScope(bootstrapIssueBody(), {
+        headSha: 'fedcba9876543210fedcba9876543210fedcba98',
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      selectBootstrapScope(
+        bootstrapIssueBody({ bootstrapRevision: 'r04' }),
+      ),
+    ).toMatchObject({ ok: false });
+  });
+
+  it('fails closed on substituted or mismatched bootstrap paths', () => {
+    expect(
+      selectBootstrapScope(
+        bootstrapIssueBody({
+          allowedImplementationPaths: [
+            ...bootstrapAllowedPaths.slice(0, -1),
+            'scripts/substituted.ts',
+          ],
+        }),
+      ),
+    ).toMatchObject({ ok: false });
+    expect(
+      selectBootstrapScope(
+        bootstrapIssueBody({
+          allowedRoots: [
+            ...bootstrapAllowedPaths.slice(0, -1),
+            'scripts/substituted.ts',
+          ],
+        }),
+      ),
+    ).toMatchObject({ ok: false });
+  });
+
+  it('fails closed on missing context and malformed or duplicate bindings', () => {
+    expect(
+      selectBootstrapScope(bootstrapIssueBody(), {
+        issueNumber: undefined,
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      selectBootstrapScope(bootstrapIssueBody({ malformedBootstrap: true })),
+    ).toMatchObject({ ok: false });
+    expect(
+      selectBootstrapScope(bootstrapIssueBody({ duplicateBootstrap: true })),
+    ).toMatchObject({ ok: false });
+    expect(
+      selectBootstrapScope(bootstrapIssueBody({ duplicateMarker: true })),
+    ).toMatchObject({ ok: false });
   });
 
   it('does not let malformed current-Issue candidates use the live-Issue path', () => {
