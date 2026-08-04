@@ -1,11 +1,8 @@
 import {
   existsSync,
-  mkdirSync,
   readdirSync,
-  renameSync,
-  writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import * as base from './worker-smoke-lifecycle-base.ts';
 import {
   isCleanCloseOutcome,
@@ -13,6 +10,7 @@ import {
   readHistoricalCloseReceipt,
   recordCloseReceipt,
   smokeCloseReceiptPath,
+  writeAtomicJson,
 } from './worker-smoke-receipt.ts';
 
 export * from './worker-smoke-lifecycle-base.ts';
@@ -20,16 +18,6 @@ export { smokeCloseReceiptPath } from './worker-smoke-receipt.ts';
 
 const blockingState = (registry: base.SmokeLifecycleRegistry): boolean =>
   registry.spawnState !== 'clean' && registry.spawnState !== 'abandoned_unbound';
-
-function atomicJson(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: 'utf8',
-    flag: 'wx',
-  });
-  renameSync(temporary, path);
-}
 
 function closeWithReceipt(input: {
   artifactDir: string;
@@ -55,7 +43,7 @@ function closeWithReceipt(input: {
   const settlementReason = input.settlementReason ?? 'post_settlement_cleanup';
   const settlementAtMs = input.nowMs;
   try {
-    atomicJson(smokeCloseReceiptPath(input.artifactDir), {
+    writeAtomicJson(smokeCloseReceiptPath(input.artifactDir), {
       version: 2,
       phase: 'settlement_recorded',
       runId: registry.runId,

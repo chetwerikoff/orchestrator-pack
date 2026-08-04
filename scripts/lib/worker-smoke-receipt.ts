@@ -44,7 +44,7 @@ type JsonRecord = Record<string, unknown>;
 const isRecord = (value: unknown): value is JsonRecord =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-function atomicJson(path: string, value: unknown): void {
+export function writeAtomicJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${Date.now()}`;
   writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
@@ -144,14 +144,16 @@ export function recordCloseReceipt(input: {
   nowMs: number;
 }): boolean {
   if (!isCleanCloseOutcome(input.closeOutcome)) return false;
+  const terminalHandle = input.registry.terminalHandle;
+  if (!terminalHandle) return false;
   try {
     const current = readCloseReceipt(input.artifactDir, input.registry);
     if (current.state !== 'settlement_recorded') return false;
-    atomicJson(smokeCloseReceiptPath(input.artifactDir), {
+    writeAtomicJson(smokeCloseReceiptPath(input.artifactDir), {
       version: 2,
       phase: 'closed',
       runId: input.registry.runId,
-      terminalHandle: input.registry.terminalHandle,
+      terminalHandle,
       headSha: input.registry.headSha,
       artifactDir: resolve(input.registry.artifactDir),
       settlementId: input.settlementId,
