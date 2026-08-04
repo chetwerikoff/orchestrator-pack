@@ -480,7 +480,9 @@ async function boundedCall<T>(
   });
   try {
     const value = await Promise.race([
-      Promise.resolve().then(operation).then((result) => ({ completed: true, value: result })),
+      Promise.resolve().then(operation).then((result) => now() < deadlineMs
+        ? { completed: true, value: result }
+        : { completed: false }),
       timeout,
     ]);
     return value;
@@ -805,7 +807,8 @@ export class FleetObserver {
     if (!existsSync(this.#snapshotPath)) return { snapshot: null, rawBytes: null };
     try {
       const rawBytes = readFileSync(this.#snapshotPath, 'utf8');
-      return { snapshot: parseSnapshot(rawBytes), rawBytes };
+      const snapshot = parseSnapshot(rawBytes);
+      return { snapshot, rawBytes: snapshot ? rawBytes : null };
     } catch {
       return { snapshot: null, rawBytes: null };
     }
@@ -852,7 +855,7 @@ export class FleetObserver {
       deadlineMs,
       this.#now,
     );
-    if (this.#activeTick !== tickSequence) return undefined;
+    if (this.#activeTick !== tickSequence || this.#now() >= deadlineMs) return undefined;
     if (!findCall.completed || !findCall.value || findCall.value.status !== 'ok'
       || !findCall.value.value || !sameIdentity(findCall.value.value.identity, listed.identity)) {
       state.livelockStreak = 0;
@@ -888,15 +891,33 @@ export class FleetObserver {
       ),
     ]);
 
-    if (this.#activeTick !== tickSequence) return undefined;
+    if (this.#activeTick !== tickSequence || this.#now() >= deadlineMs) return undefined;
     const output = outputCall.value;
     const liveness = livenessCall.value;
     const live = livenessCall.completed && liveness && this.validLiveness(liveness, listed.identity)
       ? liveness
       : null;
+    const outputValue = outputCall.completed && output && output.status === 'ok'
+      && sameIdentity(output.value.worker, listed.identity)
+      && typeof output.value.changed === 'boolean'
+      && output.value.observationToken !== null
+      && typeof output.value.observationToken === 'object'
+      ? output.value
+      : null;
     if (live?.status === 'gone') {
-      if (outputCall.completed && output && output.status === 'ok'
-        && output.value.terminalState === 'running') {
+      if (!outputValue) {
+        state.livelockStreak = 0;
+        state.class = 'unknown';
+        return {
+          kind: 'row',
+          state,
+          row: this.row(state, 'unknown', 'identity-contradiction', {
+            output: outputCall.completed ? 'failed' : 'expired',
+            liveness: 'gone',
+          }),
+        };
+      }
+      if (outputValue.terminalState === 'running') {
         state.livelockStreak = 0;
         state.class = 'unknown';
         return {
@@ -908,16 +929,12 @@ export class FleetObserver {
           }),
         };
       }
+      state.token = null;
+      state.hasBaseline = false;
+      state.livelockStreak = 0;
+      state.class = null;
       return { kind: 'gone', state };
     }
-
-    const outputValue = outputCall.completed && output && output.status === 'ok'
-      && sameIdentity(output.value.worker, listed.identity)
-      && typeof output.value.changed === 'boolean'
-      && output.value.observationToken !== null
-      && typeof output.value.observationToken === 'object'
-      ? output.value
-      : null;
     const probes: ProbeOutcomes = {
       output: outputValue ? 'valid' : outputCall.completed ? 'failed' : 'expired',
       liveness: live?.status ?? (livenessCall.completed ? 'failed' : 'expired'),
@@ -942,14 +959,14 @@ export class FleetObserver {
       state.livelockStreak = 0;
       classification = 'unknown';
       reason = 'missing-output-baseline';
-    } else if (changed) {
-      state.livelockStreak = 0;
-      classification = 'busy';
-      reason = 'new-output';
     } else if (this.exceptionApplies(config, state.unitRef)) {
       state.livelockStreak = 0;
       classification = 'exempt';
       reason = 'exempt';
+    } else if (changed) {
+      state.livelockStreak = 0;
+      classification = 'busy';
+      reason = 'new-output';
     } else if (live.status === 'busy') {
       state.livelockStreak += 1;
       if (state.livelockStreak >= config.livelockTicks) {
@@ -1028,11 +1045,40 @@ export class FleetObserver {
 
   private commit(snapshot: FleetObserverSnapshot, deadlineMs: number, tickSequence: number): boolean {
     if (this.#activeTick !== tickSequence || this.#now() >= deadlineMs) return false;
+    const previousBytes = this.#previous.snapshot ? this.#previous.rawBytes : null;
+    let tempPath: string | null = null;
+    let replaced = false;
+    const removeIfPresent = (target: string): void => {
+      try {
+        rmSync(target, { force: true });
+      } catch {
+        // A failed cleanup cannot make an unverified candidate authoritative.
+      }
+    };
+    const rollback = (): void => {
+      try {
+        if (previousBytes) {
+          const restorePath = `${this.#snapshotPath}.restore-${process.pid}-${tickSequence}`;
+          writeFileSync(restorePath, previousBytes, 'utf8');
+          const restoreFd = openSync(restorePath, 'r');
+          try {
+            fsyncSync(restoreFd);
+          } finally {
+            closeSync(restoreFd);
+          }
+          renameSync(restorePath, this.#snapshotPath);
+        } else {
+          removeIfPresent(this.#snapshotPath);
+        }
+      } catch {
+        removeIfPresent(this.#snapshotPath);
+      }
+    };
     try {
       mkdirSync(this.#stateDirectory, { recursive: true });
       const bytes = serializeFleetSnapshot(snapshot);
       if (Buffer.byteLength(bytes, 'utf8') > MAX_SNAPSHOT_BYTES) return false;
-      const tempPath = `${this.#snapshotPath}.tmp-${process.pid}-${tickSequence}`;
+      tempPath = `${this.#snapshotPath}.tmp-${process.pid}-${tickSequence}`;
       writeFileSync(tempPath, bytes, 'utf8');
       const fd = openSync(tempPath, 'r');
       try {
@@ -1041,35 +1087,35 @@ export class FleetObserver {
         closeSync(fd);
       }
       if (this.#activeTick !== tickSequence || this.#now() >= deadlineMs) {
-        rmSync(tempPath, { force: true });
+        removeIfPresent(tempPath);
+        tempPath = null;
         return false;
       }
       renameSync(tempPath, this.#snapshotPath);
+      tempPath = null;
+      replaced = true;
       const readBack = readFileSync(this.#snapshotPath, 'utf8');
-      if (this.#now() >= deadlineMs || readBack !== bytes || parseSnapshot(readBack)?.tickSequence !== tickSequence) {
-        if (this.#previous.rawBytes) {
-          try {
-            const restorePath = `${this.#snapshotPath}.restore-${process.pid}-${tickSequence}`;
-            writeFileSync(restorePath, this.#previous.rawBytes, 'utf8');
-            renameSync(restorePath, this.#snapshotPath);
-          } catch {
-            // The accepted in-memory snapshot remains authoritative if restoration fails.
-          }
-        }
+      const readBackSnapshot = parseSnapshot(readBack);
+      if (this.#now() >= deadlineMs || readBack !== bytes || !readBackSnapshot
+        || readBackSnapshot.schedulerGeneration !== this.#schedulerGeneration
+        || readBackSnapshot.tickSequence !== tickSequence) {
+        rollback();
         return false;
       }
+      const dirFd = openSync(this.#stateDirectory, 'r');
       try {
-        const dirFd = openSync(this.#stateDirectory, 'r');
-        try {
-          fsyncSync(dirFd);
-        } finally {
-          closeSync(dirFd);
-        }
-      } catch {
-        // Directory synchronization is best effort on filesystems that do not expose it.
+        fsyncSync(dirFd);
+      } finally {
+        closeSync(dirFd);
+      }
+      if (this.#activeTick !== tickSequence || this.#now() >= deadlineMs) {
+        rollback();
+        return false;
       }
       return true;
     } catch {
+      if (tempPath) removeIfPresent(tempPath);
+      if (replaced) rollback();
       return false;
     }
   }

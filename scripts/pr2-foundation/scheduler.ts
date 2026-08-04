@@ -257,12 +257,17 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
   const repoRoot = process.cwd();
   const cadence = parsed.config.scheduler.pollIntervalMs;
-  const runtime = await selectRuntimeAdapter();
-  const fleetObserver = new FleetObserver({ source: runtime });
+  let fleetObserver: FleetObserver | undefined;
+  try {
+    const runtime = await selectRuntimeAdapter();
+    fleetObserver = new FleetObserver({ source: runtime });
+  } catch {
+    // Runtime adapter failure is observer evidence; the existing action phase remains authoritative.
+  }
   return {
     boundary: productionSchedulerBoundary({
       repoRoot,
-      fleetObserver,
+      ...(fleetObserver ? { fleetObserver } : {}),
       schedulerIntervalMs: cadence,
     }),
     cadence,

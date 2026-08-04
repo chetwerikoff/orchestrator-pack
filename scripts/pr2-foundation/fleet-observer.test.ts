@@ -116,6 +116,23 @@ class ContradictoryGenerationSource extends FakeFleetSource {
   }
 }
 
+class WrongIdentityGoneOutputSource extends FakeFleetSource {
+  override readBoundedOutput(input: {
+    worker: RuntimeWorkerIdentity;
+    previousToken?: RuntimeObservationToken | null;
+  }): RuntimeResult<RuntimeBoundedOutput> {
+    const result = super.readBoundedOutput(input);
+    if (result.status !== 'ok') return result;
+    return {
+      status: 'ok',
+      value: {
+        ...result.value,
+        worker: { ...result.value.worker, generation: 'wrong-generation' },
+      },
+    };
+  }
+}
+
 class ConcurrentFleetSource extends FakeFleetSource {
   active = 0;
   peak = 0;
@@ -211,6 +228,7 @@ describe('S1 fleet observer', () => {
       livelockTicks: 2,
       exceptions: [{ kind: 'HELD', schedulerGeneration: observer.schedulerGeneration, unitRef: 'u-000001' }],
     }));
+    source.setChanged('idle', true);
     const exempt = await observer.tick({ schedulerIntervalMs: 1_000 });
     expect(exempt.snapshot?.census.find((row) => row.unitRef === 'u-000001')?.class).toBe('exempt');
   });
@@ -302,6 +320,19 @@ describe('S1 fleet observer', () => {
     expect(result).toMatchObject({ attempted: 0, started: 0, skipped: 0 });
     expect(result.observer?.snapshotCommitted).toBe(true);
     expect(boundary.start).not.toHaveBeenCalled();
+
+    const observerFailureBoundary = {
+      ...boundary,
+      listCandidates: vi.fn(() => []),
+      fleetObserver: { tick: vi.fn(async () => { throw new Error('adapter unavailable'); }) },
+    };
+    const afterObserverFailure = await runSchedulerTick(observerFailureBoundary, {
+      ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
+      ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+      ORCHESTRATOR_CUTOVER_NONCE: nonce,
+    });
+    expect(observerFailureBoundary.listCandidates).toHaveBeenCalled();
+    expect(afterObserverFailure).toMatchObject({ attempted: 0, started: 0, skipped: 0 });
   });
 
   it('covers smoke scenario 3 at the exact UTF-8 snapshot byte boundary', async () => {
@@ -354,6 +385,16 @@ describe('S1 fleet observer', () => {
 
     expect(result.snapshot?.census[0]?.class).toBe('unknown');
     expect(result.snapshot?.census[0]?.reason).toBe('identity-contradiction');
+    expect(result.snapshot?.transitions.some((transition) => transition.reason === 'positive-gone')).toBe(false);
+  });
+
+  it('does not settle gone when output identity differs', async () => {
+    const source = new WrongIdentityGoneOutputSource();
+    source.add('worker', 'gen-1', 'gone');
+    const observer = observerFor(source);
+    const result = await observer.tick({ schedulerIntervalMs: 1_000 });
+
+    expect(result.snapshot?.census[0]?.class).toBe('unknown');
     expect(result.snapshot?.transitions.some((transition) => transition.reason === 'positive-gone')).toBe(false);
   });
 
