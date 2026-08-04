@@ -684,6 +684,41 @@ function checkImplementationPrScope(
   const selected = selectDeclarationArtifact(input.repoRoot, issueNumber);
   if (!selected.ok) {
     if (selected.reason === 'missing') {
+      if (!issueBlocksCommittedDeclarationSnapshots(issueConstraints)) {
+        return {
+          ok: false,
+          reason: 'declaration-selection-failed',
+          message: selected.message,
+          violations: {
+            outOfScope: [],
+            denied: [],
+            declarationErrors: [selected.message],
+            invalidPaths: [],
+          },
+        };
+      }
+
+      const closingIssueReferences = [
+        ...input.prBody.matchAll(
+          new RegExp(ISSUE_LINK_PATTERN.source, ISSUE_LINK_PATTERN.flags),
+        ),
+      ];
+      if (closingIssueReferences.length !== 1) {
+        const message =
+          'ambiguous Issue binding: declaration-free live-Issue scope requires exactly one closing Issue reference; FAIL/no-selection/fresh-declaration';
+        return {
+          ok: false,
+          reason: 'declaration-selection-failed',
+          message,
+          violations: {
+            outOfScope: [],
+            denied: [],
+            declarationErrors: [message],
+            invalidPaths: [],
+          },
+        };
+      }
+
       const liveIssueScope = selectLiveIssueScope(
         input.issueBody,
         issueConstraints,
