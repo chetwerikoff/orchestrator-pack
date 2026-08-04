@@ -15,6 +15,7 @@ import type { RuntimeAdapter } from './runtime/contracts.ts';
 
 export interface WorkerRecoveryCliOptions {
   workerId: string;
+  workerGeneration: string;
   cleanupWorkspacePath: string;
   expectedHeadSha: string;
   spawnWorkspace: 'active' | string;
@@ -27,14 +28,25 @@ export interface WorkerRecoveryCliOptions {
   dryRun: boolean;
 }
 
-function claimKeyFor(input: Pick<WorkerRecoveryCliOptions, 'workerId' | 'cleanupWorkspacePath'>): string {
-  const source = `${input.workerId}|${resolve(input.cleanupWorkspacePath)}`;
+function claimKeyFor(
+  input: Pick<WorkerRecoveryCliOptions, 'workerId' | 'workerGeneration' | 'cleanupWorkspacePath'>,
+): string {
+  const source = `${input.workerId}|${input.workerGeneration}|${resolve(input.cleanupWorkspacePath)}`;
   return `recovery-${createHash('sha256').update(source, 'utf8').digest('hex').slice(0, 24)}`;
+}
+
+function requiredOptionValue(args: readonly string[], index: number, option: string): string {
+  const value = args[index + 1]?.trim() ?? '';
+  if (!value || value.startsWith('--')) {
+    throw new Error(`${option} requires a non-empty value`);
+  }
+  return value;
 }
 
 export function parseWorkerRecoveryArgs(argv: readonly string[]): WorkerRecoveryCliOptions {
   const options: WorkerRecoveryCliOptions = {
     workerId: '',
+    workerGeneration: '',
     cleanupWorkspacePath: '',
     expectedHeadSha: '',
     spawnWorkspace: 'active',
@@ -48,26 +60,75 @@ export function parseWorkerRecoveryArgs(argv: readonly string[]): WorkerRecovery
   };
   const args = [...argv];
   for (let index = 0; index < args.length; index += 1) {
-    switch (args[index]) {
-      case '--worker-id': options.workerId = args[++index]?.trim() ?? ''; break;
-      case '--cleanup-workspace': options.cleanupWorkspacePath = resolve(args[++index] ?? ''); break;
-      case '--expected-head-sha': options.expectedHeadSha = args[++index]?.trim().toLowerCase() ?? ''; break;
+    const option = args[index];
+    switch (option) {
+      case '--worker-id':
+        options.workerId = requiredOptionValue(args, index, option);
+        index += 1;
+        break;
+      case '--worker-generation':
+        options.workerGeneration = requiredOptionValue(args, index, option);
+        index += 1;
+        break;
+      case '--cleanup-workspace':
+        options.cleanupWorkspacePath = resolve(requiredOptionValue(args, index, option));
+        index += 1;
+        break;
+      case '--expected-head-sha':
+        options.expectedHeadSha = requiredOptionValue(args, index, option).toLowerCase();
+        index += 1;
+        break;
       case '--spawn-workspace': {
-        const value = args[++index]?.trim() ?? '';
+        const value = requiredOptionValue(args, index, option);
         options.spawnWorkspace = value === 'active' ? 'active' : resolve(value);
+        index += 1;
         break;
       }
-      case '--title': options.title = args[++index]?.trim() || options.title; break;
-      case '--command': options.command = args[++index]?.trim() || options.command; break;
-      case '--claim-key': options.claimKey = args[++index]?.trim() ?? ''; break;
-      case '--project-id': options.projectId = args[++index]?.trim() || options.projectId; break;
-      case '--surface': options.surface = args[++index]?.trim() || options.surface; break;
-      case '--repo-root': options.repoRoot = resolve(args[++index] ?? options.repoRoot); break;
-      case '--dry-run': options.dryRun = true; break;
-      default: throw new Error(`unknown argument: ${args[index]}`);
+      case '--title':
+        options.title = requiredOptionValue(args, index, option);
+        index += 1;
+        break;
+      case '--command':
+        options.command = requiredOptionValue(args, index, option);
+        index += 1;
+        break;
+      case '--claim-key':
+        options.claimKey = requiredOptionValue(args, index, option);
+        index += 1;
+        break;
+      case '--project-id':
+        options.projectId = requiredOptionValue(args, index, option);
+        index += 1;
+        break;
+      case '--surface':
+        options.surface = requiredOptionValue(args, index, option);
+        index += 1;
+        break;
+      case '--repo-root':
+        options.repoRoot = resolve(requiredOptionValue(args, index, option));
+        index += 1;
+        break;
+      case '--dry-run':
+        options.dryRun = true;
+        break;
+      default:
+        throw new Error(`unknown argument: ${option}`);
     }
   }
+
   if (!options.cleanupWorkspacePath) throw new Error('--cleanup-workspace is required');
+  if (!options.expectedHeadSha) throw new Error('--expected-head-sha is required');
+  if (options.workerId && !options.workerGeneration) {
+    throw new Error('--worker-generation is required with --worker-id');
+  }
+  if (!options.workerId && options.workerGeneration) {
+    throw new Error('--worker-id is required with --worker-generation');
+  }
+  if (options.spawnWorkspace !== 'active'
+    && resolve(options.spawnWorkspace) === resolve(options.cleanupWorkspacePath)) {
+    throw new Error('--spawn-workspace must differ from --cleanup-workspace');
+  }
+
   options.claimKey ||= claimKeyFor(options);
   return options;
 }
@@ -83,12 +144,13 @@ export async function runWorkerRecovery(input: {
       outcome: 'dry_run',
       claimKey: options.claimKey,
       cleanupWorkspacePath: options.cleanupWorkspacePath,
+      expectedHeadSha: options.expectedHeadSha,
       spawnWorkspace: options.spawnWorkspace,
+      workerId: options.workerId || undefined,
+      workerGeneration: options.workerGeneration || undefined,
     };
   }
 
-  // Adapter selection is read-only and occurs before claim ownership so a
-  // composition-root failure cannot strand an active recovery claim.
   let adapter: RuntimeAdapter;
   try {
     adapter = input.adapter ?? await selectRuntimeAdapter({}, { cwd: options.repoRoot });
@@ -107,6 +169,7 @@ export async function runWorkerRecovery(input: {
     claimKey: options.claimKey,
     workspacePath: options.cleanupWorkspacePath,
     workerId: options.workerId || undefined,
+    workerGeneration: options.workerGeneration || undefined,
     surface: options.surface,
   });
   if (!claim.acquired) {
@@ -117,10 +180,11 @@ export async function runWorkerRecovery(input: {
     const result = recoverRuntimeWorker({
       adapter,
       targetId: options.workerId || undefined,
+      targetGeneration: options.workerGeneration || undefined,
       workspace: options.spawnWorkspace,
       cleanupWorkspace: {
         workspacePath: options.cleanupWorkspacePath,
-        expectedHeadSha: options.expectedHeadSha || undefined,
+        expectedHeadSha: options.expectedHeadSha,
       },
       title: options.title,
       command: options.command,
