@@ -1,3 +1,32 @@
+## 2026-08-04 — GPT plural PR-review source rounds (Issue #1276)
+
+GPT PR review now freezes one logical round with its authoritative bound Issue
+tier, source cardinality, and slot identities in the existing pack-review run
+store. Round one uses three sources for T1/T2/T3; later T3 rounds use three and
+later T1/T2 rounds use one. The runner aggregates source-attributed outputs and
+non-complete outcomes before the existing single publication owner performs
+head, cap, delivery, and status effects.
+
+Plural rounds require `PACK_GPT_BROWSER_PROJECT_URL` and fail closed when only a
+fixed `PACK_GPT_BROWSER_CHAT_URL` is configured. Caller admission starts are
+spaced by 10 seconds; the existing profile send slot stays enabled. Only the
+exact proven zero-send `state_light_new_chat_send_slot_timeout` tuple receives
+one same-slot retry. Generic UI mismatch, missing/malformed terminal evidence,
+and possible delivery are non-retryable.
+
+### Operator adoption
+
+- Configure the dedicated GPT automation profile and
+  `PACK_GPT_BROWSER_PROJECT_URL`; do not configure a fixed chat URL for plural
+  rounds.
+- Keep the profile send slot enabled; do not set
+  `OPK_STATE_LIGHT_DISABLE_NEW_CHAT_SEND_SLOT`.
+- Verify a current-head plural round through the existing pack-review runner and
+  inspect the run-store source census. No daemon, queue, watcher, or second
+  store is introduced.
+
+Rollback is a plain revert to the prior single-source GPT runner and runbook.
+
 ## 2026-08-03 — Issue #898 live authority and review budget adoption
 
 The pack review runner now owns the Issue #898 authority lifecycle, including carry-over,

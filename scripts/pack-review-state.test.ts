@@ -14,6 +14,7 @@ import {
   observePackReviewHead,
   readPackReviewAuthority,
   retainPersistedOpenCycle,
+  selectPackReviewGptSourceCardinality,
   selectPackReviewEvidence,
   stagePackReviewImmutableRecord,
   terminalConsumesCapSlot,
@@ -320,5 +321,23 @@ describe('Issue #898 authority and cap state', () => {
     expect(() => validateTerminalV2({ ...row, terminalContractVersion: 3 })).toThrow(
       /terminal_contract_invalid/,
     );
+  });
+});
+
+
+describe('Issue #1276 GPT source cardinality', () => {
+  it.each([
+    ['T1', 1, 3],
+    ['T2', 1, 3],
+    ['T3', 1, 3],
+    ['T1', 2, 1],
+    ['T2', 2, 1],
+    ['T3', 2, 3],
+  ] as const)('selects %s round %s as %s source(s)', (tier, roundOrdinal, expected) => {
+    expect(selectPackReviewGptSourceCardinality({ reviewer: 'gpt', tier, roundOrdinal })).toBe(expected);
+  });
+
+  it('keeps non-GPT reviewers single-source', () => {
+    expect(selectPackReviewGptSourceCardinality({ reviewer: 'codex', tier: 'T3', roundOrdinal: 1 })).toBe(1);
   });
 });

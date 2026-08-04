@@ -15,7 +15,7 @@ import {
   runPackGptReviewCommand,
 } from './pack-gpt-review.js';
 import { startPackReview } from './pack-review-runner.js';
-import { createPackReviewRun } from './lib/pack-review-run-store.js';
+import { createPackReviewRun, getPackReviewRun } from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
 
@@ -537,5 +537,38 @@ describe('canonical Browser-GPT PR command (Issue #1111)', () => {
     expect(timedOut.result).toMatchObject({ created: true, status: 'timed_out' });
     expect(String(timedOut.result.reason)).toContain('reviewer process timed out');
     expect(stderr).toHaveLength(1);
+  });
+});
+
+
+describe('GPT plural source round (Issue #1276)', () => {
+  it('freezes three slots and settles every source before publication', async () => {
+    const storeRoot = tempRoot('opk-gpt-plural-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 1276,
+      headSha: HEAD_A,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixturePrState: 'OPEN',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixturePostReviewHeadSha: HEAD_A,
+      fixtureReviewStdout: cleanTerminalPayload(),
+      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      claimMode: 'preacquired',
+    });
+
+    expect(result.ok).toBe(true);
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(run?.reviewRound).toMatchObject({ tier: 'T1', roundOrdinal: 1, cardinality: 3 });
+    expect(run?.reviewRound?.sourceSlots).toHaveLength(3);
+    expect(run?.reviewRound?.sourceSlots.every((slot) => slot.lifecycle === 'terminal')).toBe(true);
   });
 });

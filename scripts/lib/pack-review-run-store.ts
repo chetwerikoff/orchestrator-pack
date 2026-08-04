@@ -80,6 +80,31 @@ export interface PackReviewJournalOutcome {
   attempts: number;
 }
 
+export type PackReviewSourceSlotLifecycle = 'planned' | 'invocation_started' | 'terminal';
+
+export interface PackReviewSourceSlotRecord {
+  slotId: string;
+  ordinal: number;
+  lifecycle: PackReviewSourceSlotLifecycle;
+  invocationId?: string;
+  attemptOrdinal?: number;
+  admissionStartedAtUtc?: string;
+  terminalClass?: string;
+  terminalResult?: unknown;
+  payload?: unknown;
+}
+
+export interface PackReviewGptRoundRecord {
+  schema: 'pack-review-gpt-round/v1';
+  reviewer: 'gpt';
+  tier: 'T1' | 'T2' | 'T3';
+  roundOrdinal: number;
+  cardinality: number;
+  issueNumber: number;
+  boundIssueSnapshotDigest: string;
+  sourceSlots: PackReviewSourceSlotRecord[];
+}
+
 export interface PackReviewRunRecord {
   schemaVersion: 1;
   id: string;
@@ -114,6 +139,7 @@ export interface PackReviewRunRecord {
   journalOutcome?: PackReviewJournalOutcome;
   deliveryOutcomes: Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>;
   canonicalRepository?: string;
+  reviewRound?: PackReviewGptRoundRecord;
   stale?: boolean;
 }
 
@@ -134,6 +160,7 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   trustedPackRoot: string;
   sourceRepoRoot: string;
   canonicalRepository?: string;
+  reviewRound?: PackReviewGptRoundRecord;
 }
 
 interface LockHandle {
@@ -376,6 +403,9 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
     surface: String(raw.surface ?? ''),
     trustedPackRoot: String(raw.trustedPackRoot ?? ''),
     sourceRepoRoot: String(raw.sourceRepoRoot ?? ''),
+    reviewRound: raw.reviewRound && typeof raw.reviewRound === 'object' && !Array.isArray(raw.reviewRound)
+      ? raw.reviewRound as PackReviewGptRoundRecord
+      : undefined,
     runnerPid: Number(raw.runnerPid ?? 0),
     createdAt,
     updatedAt,
@@ -467,10 +497,26 @@ export function terminalizePackReviewStaleRun(
   if (!isPackReviewRunStale(existing, options.now)) {
     return { changed: false, run: existing };
   }
+  let recoveredRound = existing.reviewRound;
+  if (existing.reviewRound?.sourceSlots.some((slot) => slot.lifecycle === 'invocation_started')) {
+    const reviewRound = {
+      ...existing.reviewRound,
+      sourceSlots: existing.reviewRound.sourceSlots.map((slot) => slot.lifecycle === 'invocation_started'
+        ? {
+            ...slot,
+            lifecycle: 'terminal' as const,
+            terminalClass: 'possible_delivery/missing_result',
+            terminalResult: { kind: 'missing_terminal_result', noResend: true },
+          }
+        : slot),
+    };
+    recoveredRound = updatePackReviewRun(runId, { reviewRound }, options).reviewRound;
+  }
   const run = setPackReviewRunTerminal(runId, 'failed', {
     failureReason: PACK_REVIEW_STALE_FAILURE_REASON,
     stale: true,
     exitCode: 1,
+    ...(recoveredRound ? { reviewRound: recoveredRound } : {}),
   }, options);
   return { changed: true, run };
 }
@@ -546,6 +592,20 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       return { created: false, reused: true, reason: 'active_run_exists', run: consumerRow(active[0]!), storeRoot };
     }
 
+    const uncertain = records
+      .filter((record) => record.key === key && record.reviewRound?.sourceSlots.some((slot) =>
+        slot.terminalClass === 'possible_delivery/missing_result'))
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+    if (uncertain.length > 0) {
+      return {
+        created: false,
+        reused: true,
+        reason: 'possible_delivery_requires_settlement',
+        run: consumerRow(uncertain[0]!),
+        storeRoot,
+      };
+    }
+
     const completed = records
       .filter((record) => record.key === key
         && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
@@ -577,6 +637,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       trustedPackRoot: resolve(input.trustedPackRoot),
       sourceRepoRoot: resolve(input.sourceRepoRoot),
       canonicalRepository,
+      ...(input.reviewRound ? { reviewRound: input.reviewRound } : {}),
       runnerPid: process.pid,
       createdAt: now,
       updatedAt: now,

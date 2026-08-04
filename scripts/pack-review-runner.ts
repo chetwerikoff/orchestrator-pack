@@ -44,6 +44,8 @@ import {
   type PackReviewAuthorityPhase,
   type PackReviewTerminalV2,
   type PackReviewTier,
+  PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS,
+  selectPackReviewGptSourceCardinality,
 } from './pack-review-state.ts';
 import {
   acquireReviewStartClaim,
@@ -66,8 +68,10 @@ import {
   setPackReviewRunTerminal,
   terminalizePackReviewStaleRun,
   updatePackReviewRun,
+  type PackReviewGptRoundRecord,
   type PackReviewRunRecord,
   type PackReviewRunStatus,
+  type PackReviewSourceSlotRecord,
 } from './lib/pack-review-run-store.ts';
 import {
   createGithubReviewTransport,
@@ -100,7 +104,12 @@ import {
   type PackReviewerLayerOverrides,
 } from './lib/resolve-pack-reviewer.ts';
 import { resolveRepositorySlug } from './lib/pack-gpt-reviewer.ts';
-import { loadValidatedBoundSnapshotBody } from './lib/reverify-bound-issue-snapshot.ts';
+import {
+  computeBoundIssueSnapshotHash,
+  loadValidatedBoundSnapshotBody,
+  resolveBoundIssueSnapshot,
+} from './lib/reverify-bound-issue-snapshot.ts';
+import { parseComplexityTierFromIssueBody } from '../docs/review-cycle-cap.mjs';
 export { resolveRepositorySlug };
 
 interface StartInput {
@@ -179,6 +188,7 @@ interface ReviewPayloadFinding {
   body?: string;
   severity?: string;
   filePath?: string;
+  sourceSlotId?: string;
 }
 
 interface ReviewPayload {
@@ -392,27 +402,42 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
   sourceRepoRoot: string;
 }> {
   const sessionId = trim(input.sessionId || input.linkedSessionId);
-  const binding = input.prNumber ? undefined : resolveBindingFromCache(sessionId);
-  const prNumber = positiveInteger(input.prNumber ?? binding?.prNumber, 'prNumber');
+  const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1'
+    && Boolean(input.prNumber && (input.headSha || trim(input.fixtureCurrentPrHeadSha)));
+  const binding = sessionId ? resolveBindingFromCache(sessionId) : undefined;
+  if (!harnessExplicit && !binding) {
+    throw new Error('pack review target requires an immutable session PR/Issue binding');
+  }
+  const requestedPr = positiveInteger(input.prNumber, 'prNumber');
+  if (binding && requestedPr && binding.prNumber !== requestedPr) {
+    throw new Error(`pack review PR does not match session binding: requested #${requestedPr}, bound #${binding.prNumber}`);
+  }
+  const prNumber = positiveInteger(requestedPr ?? binding?.prNumber, 'prNumber');
   if (!prNumber) throw new Error('pack review runner could not resolve PR number');
   const sourceRepoRoot = resolve(trim(input.sourceRepoRoot || input.repoRoot) || trustedPackRoot);
   const fixtureCurrentHead = trim(input.fixtureCurrentPrHeadSha).toLowerCase();
-  const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1'
+  const harnessTarget = process.env.OPK_VITEST_HARNESS === '1'
     && Boolean(input.prNumber && (input.headSha || fixtureCurrentHead));
-  if (!harnessExplicit && !existsSync(join(sourceRepoRoot, '.git')) && !existsSync(join(sourceRepoRoot, 'HEAD'))) {
+  if (!harnessTarget && !existsSync(join(sourceRepoRoot, '.git')) && !existsSync(join(sourceRepoRoot, 'HEAD'))) {
     throw new Error(`source repository root is not a git checkout: ${sourceRepoRoot}`);
   }
   const requestedHead = trim(input.headSha || binding?.headSha).toLowerCase();
-  const repoSlug = harnessExplicit
+  const repoSlug = harnessTarget
     ? trim(input.fixtureRepoSlug) || trim(binding?.repoSlug) || 'fixture/orchestrator-pack'
     : trim(binding?.repoSlug) || await resolveRepositorySlug(sourceRepoRoot);
-  if (harnessExplicit && trim(input.fixturePrState || 'OPEN').toUpperCase() !== 'OPEN') {
+  if (harnessTarget && trim(input.fixturePrState || 'OPEN').toUpperCase() !== 'OPEN') {
     throw new Error(`PR #${prNumber} is not open`);
   }
-  const liveHead = harnessExplicit
+  const liveHead = harnessTarget
     ? fixtureCurrentHead || requestedHead
     : await resolveCurrentPrHead(sourceRepoRoot, repoSlug, prNumber);
   if (!/^[0-9a-f]{40}$/.test(liveHead)) throw new Error(`review target head is not a full SHA for PR #${prNumber}`);
+  if (binding?.headSha && requestedHead && binding.headSha.toLowerCase() !== requestedHead) {
+    throw new Error('pack review head does not match session binding');
+  }
+  if (binding?.repoSlug && repoSlug && binding.repoSlug.toLowerCase() !== repoSlug.toLowerCase()) {
+    throw new Error('pack review repository does not match session binding');
+  }
   if (requestedHead && requestedHead !== liveHead) {
     throw new Error(`review target head changed for PR #${prNumber}: requested ${requestedHead}, live ${liveHead}`);
   }
@@ -424,6 +449,85 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
     repoSlug,
     sourceRepoRoot,
   };
+}
+
+
+interface AuthoritativeReviewContext {
+  tier: PackReviewTier;
+  issueNumber: number;
+  snapshotDigest: string;
+}
+
+function parseAuthoritativeTier(body: string): PackReviewTier {
+  const parsed = parseComplexityTierFromIssueBody(body);
+  const tier = String(parsed.kind === 'tier' ? parsed.tier : '').toUpperCase();
+  if (parsed.kind !== 'tier' || !['T1', 'T2', 'T3'].includes(tier)) {
+    throw new Error(`authoritative Issue tier is ${parsed.kind === 'invalid' ? 'invalid' : 'missing'}`);
+  }
+  return tier as PackReviewTier;
+}
+
+function resolveAuthoritativeReviewContext(input: StartInput, target: {
+  prNumber: number;
+  headSha: string;
+  issueNumber?: number;
+}, projectId: string): AuthoritativeReviewContext {
+  let body: string | undefined = input.fixtureIssueBody;
+  let snapshotDigest = '';
+  const issueNumber = target.issueNumber
+    ?? (process.env.OPK_VITEST_HARNESS === '1' ? Number(process.env.AO_ISSUE_NUMBER ?? 0) : 0);
+
+  if (body !== undefined) {
+    snapshotDigest = computeBoundIssueSnapshotHash(body);
+  } else if (issueNumber > 0) {
+    let snapshotPath = trim(process.env.OPK_BOUND_ISSUE_SNAPSHOT_PATH);
+    if (!snapshotPath) {
+      const resolved = resolveBoundIssueSnapshot({
+        projectId,
+        prNumber: target.prNumber,
+        prHeadSha: target.headSha,
+        issueNumber,
+        storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+      });
+      if (resolved.status !== 'found' || !resolved.snapshotPath) {
+        throw new Error(`authoritative bound Issue snapshot ${resolved.status}`);
+      }
+      snapshotPath = resolved.snapshotPath;
+    }
+    const snapshot = loadValidatedBoundSnapshotBody({
+      projectId,
+      prNumber: target.prNumber,
+      prHeadSha: target.headSha,
+      issueNumber,
+      snapshotFilePath: snapshotPath,
+      storeDirOverride: process.env.OPK_BOUND_ISSUE_SNAPSHOT_STORE_DIR,
+    });
+    body = snapshot.body;
+    snapshotDigest = snapshot.snapshotHash;
+  }
+
+  if (body === undefined) {
+    if (process.env.OPK_VITEST_HARNESS !== '1') {
+      throw new Error('authoritative bound Issue snapshot unavailable');
+    }
+    const fixtureTier = String(input.tier ?? 'T3').toUpperCase();
+    if (!['T1', 'T2', 'T3'].includes(fixtureTier)) throw new Error('invalid fixture tier');
+    return {
+      tier: fixtureTier as PackReviewTier,
+      issueNumber: issueNumber > 0 ? issueNumber : 0,
+      snapshotDigest: 'harness-unbound-fixture',
+    };
+  }
+
+  if (issueNumber <= 0 && process.env.OPK_VITEST_HARNESS !== '1') {
+    throw new Error('authoritative bound Issue number unavailable');
+  }
+  const tier = parseAuthoritativeTier(body);
+  if (input.tier && input.tier !== tier) {
+    throw new Error(`caller tier ${input.tier} conflicts with authoritative Issue tier ${tier}`);
+  }
+  if (issueNumber <= 0) throw new Error('authoritative bound Issue number unavailable');
+  return { tier, issueNumber, snapshotDigest };
 }
 
 function parseReviewPayload(stdout: string): ReviewPayload {
@@ -671,6 +775,8 @@ async function invokeReviewer(options: {
   fixtureReviewerLayerOverrides?: PackReviewerLayerOverrides;
   fixtureEmulateWin32Selector?: boolean;
   carryoverBundlePath?: string;
+  sourceSlotId?: string;
+  attemptOrdinal?: number;
 }): Promise<{ result: ProcessResult; resolvedReviewer: PackReviewer | null }> {
   const resolvedReviewer = resolvePackReviewerFromEnv(process.env, {
     layerOverrides: options.fixtureReviewerLayerOverrides,
@@ -731,6 +837,8 @@ async function invokeReviewer(options: {
     AO_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_TARGET_HEAD_SHA: options.headSha,
+    ...(options.sourceSlotId ? { PACK_REVIEW_GPT_SOURCE_SLOT: options.sourceSlotId } : {}),
+    ...(options.attemptOrdinal ? { PACK_REVIEW_GPT_ATTEMPT_ORDINAL: String(options.attemptOrdinal) } : {}),
   };
   if (resolvedReviewer) {
     env.PACK_REVIEWER = resolvedReviewer;
@@ -765,6 +873,213 @@ async function invokeReviewer(options: {
     },
   });
   return { result, resolvedReviewer };
+}
+
+
+interface GptTerminalTurnResult {
+  schema: 'turn-result/v1';
+  state: string;
+  scope: string;
+  cause: string;
+  invocation_id: string;
+  send_count: number;
+  [key: string]: unknown;
+}
+
+function parseLastGptTerminalTurnResult(stdout: string): GptTerminalTurnResult | null {
+  for (const line of stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).reverse()) {
+    try {
+      const parsed = JSON.parse(line) as Partial<GptTerminalTurnResult>;
+      if (parsed.schema === 'turn-result/v1'
+        && typeof parsed.state === 'string'
+        && typeof parsed.scope === 'string'
+        && typeof parsed.cause === 'string'
+        && typeof parsed.invocation_id === 'string'
+        && Number.isInteger(parsed.send_count)) {
+        return parsed as GptTerminalTurnResult;
+      }
+    } catch {
+      // The adapter may also emit heartbeat or diagnostic lines.
+    }
+  }
+  return null;
+}
+
+export function isRetryablePackReviewZeroSendCollision(result: ProcessResult): boolean {
+  const terminal = parseLastGptTerminalTurnResult(result.stdout);
+  return !result.ok
+    && terminal?.state === 'driver_error'
+    && terminal.cause === 'state_light_new_chat_send_slot_timeout'
+    && terminal.send_count === 0;
+}
+
+function updateGptRoundSlot(
+  runId: string,
+  round: PackReviewGptRoundRecord,
+  slotId: string,
+  patch: Partial<PackReviewSourceSlotRecord>,
+  options: { projectId: string; storeRoot: string },
+): PackReviewGptRoundRecord {
+  const persisted = getPackReviewRun(runId, options);
+  const base = persisted?.reviewRound ?? round;
+  const slots = base.sourceSlots.map((slot) => slot.slotId === slotId ? { ...slot, ...patch } : slot);
+  if (slots.filter((slot) => slot.slotId === slotId).length !== 1) {
+    throw new Error(`unknown GPT source slot ${slotId}`);
+  }
+  const next = { ...base, sourceSlots: slots };
+  updatePackReviewRun(runId, { reviewRound: next }, options);
+  return next;
+}
+
+function terminalClassForGptResult(result: ProcessResult, terminal: GptTerminalTurnResult | null): string {
+  if (terminal?.send_count !== undefined && terminal.send_count >= 1) return 'possible_delivery';
+  if (terminal) return `${terminal.state}:${terminal.cause}`;
+  return 'possible_delivery/missing_result';
+}
+
+function incompleteGptFinding(slot: PackReviewSourceSlotRecord): ReviewPayloadFinding {
+  return {
+    title: `GPT source ${slot.slotId} did not complete`,
+    body: `The frozen GPT source slot settled as ${slot.terminalClass ?? 'non-complete'}; the round cannot be clean.`,
+    severity: 'blocking',
+    sourceSlotId: slot.slotId,
+  };
+}
+
+async function runGptSourceBatch(options: {
+  run: PackReviewRunRecord;
+  round: PackReviewGptRoundRecord;
+  reviewerPath: string;
+  trustedPackRoot: string;
+  reviewTargetRoot: string;
+  baseRef: string;
+  target: { prNumber: number; headSha: string; issueNumber?: number; sessionId: string };
+  budgetLedger: ReviewerBudgetLedger;
+  projectId: string;
+  storeRoot: string;
+  input: StartInput;
+  carryoverBundlePath: string;
+}): Promise<ReviewPayload> {
+  const admissionInterval = process.env.OPK_VITEST_HARNESS === '1'
+    ? 0
+    : PACK_REVIEW_GPT_SOURCE_ADMISSION_INTERVAL_MS;
+  let nextAdmissionAt = 0;
+  let admissionTail = Promise.resolve();
+  const admit = async (): Promise<number> => {
+    let release!: () => void;
+    const predecessor = admissionTail;
+    admissionTail = new Promise<void>((resolveRelease) => { release = resolveRelease; });
+    await predecessor;
+    const remaining = nextAdmissionAt - Date.now();
+    if (remaining > 0) await new Promise<void>((resolveWait) => setTimeout(resolveWait, remaining));
+    const startedAt = Date.now();
+    nextAdmissionAt = startedAt + admissionInterval;
+    release();
+    return startedAt;
+  };
+
+  const outcomes = await Promise.all(options.round.sourceSlots.map(async (planned) => {
+    const slotId = planned.slotId;
+    let round = options.round;
+    let attemptOrdinal = 1;
+    const markInvocationStarted = (admissionStartedAt: number): void => {
+      round = updateGptRoundSlot(options.run.id, round, slotId, {
+        lifecycle: 'invocation_started',
+        admissionStartedAtUtc: new Date(admissionStartedAt).toISOString(),
+        attemptOrdinal,
+      }, { projectId: options.projectId, storeRoot: options.storeRoot });
+    };
+    markInvocationStarted(await admit());
+    let invocation: { result: ProcessResult; resolvedReviewer: PackReviewer | null };
+    while (true) {
+      try {
+        invocation = await invokeReviewer({
+          reviewerPath: options.reviewerPath,
+          trustedPackRoot: options.trustedPackRoot,
+          reviewTargetRoot: options.reviewTargetRoot,
+          baseRef: options.baseRef,
+          prNumber: options.target.prNumber,
+          issueNumber: options.target.issueNumber,
+          sessionId: options.target.sessionId,
+          budgetLedger: options.budgetLedger,
+          runId: options.run.id,
+          projectId: options.projectId,
+          storeRoot: options.storeRoot,
+          fixtureReviewStdout: options.input.fixtureReviewStdout,
+          fixtureReviewExitCode: options.input.fixtureReviewExitCode,
+          fixtureReviewTimedOut: options.input.fixtureReviewTimedOut,
+          fixtureReviewerLayerOverrides: options.input.fixtureReviewerLayerOverrides,
+          fixtureEmulateWin32Selector: options.input.fixtureEmulateWin32Selector,
+          carryoverBundlePath: options.carryoverBundlePath,
+          headSha: options.target.headSha,
+          sourceSlotId: slotId,
+          attemptOrdinal,
+        });
+      } catch (error) {
+        invocation = {
+          resolvedReviewer: 'gpt',
+          result: {
+            outcome: 'exit' as const,
+            ok: false,
+            exitCode: null,
+            signal: null,
+            stdout: '',
+            stderr: describeError(error),
+            timedOut: false,
+            cancelled: false,
+          },
+        };
+        break;
+      }
+      if (!(attemptOrdinal === 1 && isRetryablePackReviewZeroSendCollision(invocation.result))) break;
+      attemptOrdinal = 2;
+      markInvocationStarted(await admit());
+    }
+
+    const terminal = parseLastGptTerminalTurnResult(invocation.result.stdout);
+    let payload: ReviewPayload | undefined;
+    let terminalClass: string;
+    if (invocation.result.ok) {
+      try {
+        payload = parseReviewPayload(invocation.result.stdout);
+        terminalClass = payload.verdict === 'clean' && payload.findingCount === 0 ? 'complete_clean' : 'complete_findings';
+      } catch {
+        terminalClass = 'reviewer_output_malformed';
+      }
+    } else {
+      terminalClass = terminalClassForGptResult(invocation.result, terminal);
+      if (attemptOrdinal === 2 && isRetryablePackReviewZeroSendCollision(invocation.result)) {
+        terminalClass = 'explicit_refusal:zero_send_collision_exhausted';
+      }
+    }
+    const currentSlot = round.sourceSlots.find((slot) => slot.slotId === slotId)!;
+    round = updateGptRoundSlot(options.run.id, round, slotId, {
+      lifecycle: 'terminal',
+      attemptOrdinal,
+      invocationId: terminal?.invocation_id,
+      terminalClass,
+      terminalResult: terminal ?? { exitCode: invocation.result.exitCode, stderr: invocation.result.stderr },
+      ...(payload ? { payload } : {}),
+    }, { projectId: options.projectId, storeRoot: options.storeRoot });
+    return { slot: { ...currentSlot, ...round.sourceSlots.find((slot) => slot.slotId === slotId)! }, payload };
+  }));
+
+  const findings: ReviewPayloadFinding[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.payload) {
+      findings.push(...outcome.payload.findings.map((finding) => ({
+        ...finding,
+        sourceSlotId: outcome.slot.slotId,
+      })));
+    } else {
+      findings.push(incompleteGptFinding(outcome.slot));
+    }
+  }
+  return {
+    verdict: findings.length > 0 ? 'findings' : 'clean',
+    findingCount: findings.length,
+    findings,
+  };
 }
 
 async function resolvePackReviewRunCanonicalRepository(
@@ -1126,11 +1441,17 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   const target = await resolveTarget(input, trusted.trustedPackRoot);
   const storeRoot = resolvePackReviewRunStoreRoot({ projectId, storeRoot: input.storeRoot });
   const authorityOptions: PackReviewAuthorityOptions = { storeRoot };
+  const reviewer = resolvePackReviewerFromEnv(process.env, {
+    layerOverrides: input.fixtureReviewerLayerOverrides,
+    emulateWin32: input.fixtureEmulateWin32Selector,
+  });
+  if (!reviewer) throw new Error('pack review reviewer selector did not resolve');
+  const authoritative = resolveAuthoritativeReviewContext(input, target, projectId);
   const retainedOpenCycle = readRetainedLegacyOpenCycle(projectId, target.prNumber);
   let authority = initializePackReviewAuthority({
     prNumber: target.prNumber,
     headSha: target.headSha,
-    tier: input.tier ?? 'T3',
+    tier: authoritative.tier,
     retainedOpenCycle,
     options: authorityOptions,
   });
@@ -1158,6 +1479,35 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       httpStatus: 409,
     };
   }
+  const roundOrdinal = (authority.cycle?.consumedHeadShas.length ?? 0) + 1;
+  const cardinality = selectPackReviewGptSourceCardinality({
+    reviewer,
+    tier: authoritative.tier,
+    roundOrdinal,
+  });
+  if (reviewer === 'gpt' && cardinality > 1
+      && (trim(process.env.PACK_GPT_BROWSER_CHAT_URL) || !trim(process.env.PACK_GPT_BROWSER_PROJECT_URL))) {
+    throw new Error('plural GPT review requires PACK_GPT_BROWSER_PROJECT_URL and no fixed chat URL');
+  }
+  const gptRound: PackReviewGptRoundRecord | undefined = reviewer === 'gpt'
+    && (authoritative.snapshotDigest !== 'harness-unbound-fixture'
+      || input.tier !== undefined
+      || process.env.OPK_VITEST_HARNESS !== '1')
+    ? {
+        schema: 'pack-review-gpt-round/v1',
+        reviewer: 'gpt',
+        tier: authoritative.tier,
+        roundOrdinal,
+        cardinality,
+        issueNumber: authoritative.issueNumber,
+        boundIssueSnapshotDigest: authoritative.snapshotDigest,
+        sourceSlots: Array.from({ length: cardinality }, (_, index) => ({
+          slotId: `source-${String(index + 1).padStart(2, '0')}`,
+          ordinal: index + 1,
+          lifecycle: 'planned' as const,
+        })),
+      }
+    : undefined;
   await reconcileStalePackReviewRuns({
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
@@ -1354,6 +1704,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       trustedPackRoot: trusted.trustedPackRoot,
       sourceRepoRoot: target.sourceRepoRoot,
       canonicalRepository: target.repoSlug,
+      ...(gptRound ? { reviewRound: gptRound } : {}),
     });
     run = created.run;
     authority = advancePackReviewAuthority(
@@ -1423,44 +1774,70 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     heartbeat.unref();
 
     let result: ProcessResult;
-    let resolvedReviewer: PackReviewer | null = null;
+    let resolvedReviewer: PackReviewer | null = reviewer;
+    let payload: ReviewPayload;
     try {
-      const invocation = carryover?.replay.kind === 'conflict_free_carryover'
-        ? {
-            resolvedReviewer: null,
-            result: {
-              outcome: 'exit' as const,
-              ok: true,
-              exitCode: 0,
-              signal: null,
-              stdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
-              stderr: '',
-              timedOut: false,
-              cancelled: false,
-            },
-          }
-        : await invokeReviewer({
-            reviewerPath: trusted.reviewerPath,
-            trustedPackRoot: trusted.trustedPackRoot,
-            reviewTargetRoot: worktree,
-            baseRef,
-            prNumber: target.prNumber,
-            issueNumber: target.issueNumber,
-            sessionId: target.sessionId,
-            budgetLedger,
-            runId: run.id,
-            projectId,
-            storeRoot,
-            fixtureReviewStdout: input.fixtureReviewStdout,
-            fixtureReviewExitCode: input.fixtureReviewExitCode,
-            fixtureReviewTimedOut: input.fixtureReviewTimedOut,
-            fixtureReviewerLayerOverrides: input.fixtureReviewerLayerOverrides,
-            fixtureEmulateWin32Selector: input.fixtureEmulateWin32Selector,
-            carryoverBundlePath,
-            headSha: target.headSha,
-          });
-      result = invocation.result;
-      resolvedReviewer = invocation.resolvedReviewer;
+      if (carryover?.replay.kind === 'conflict_free_carryover') {
+        result = {
+          outcome: 'exit' as const,
+          ok: true,
+          exitCode: 0,
+          signal: null,
+          stdout: JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] }),
+          stderr: '',
+          timedOut: false,
+          cancelled: false,
+        };
+        payload = parseReviewPayload(result.stdout);
+      } else if (gptRound) {
+        payload = await runGptSourceBatch({
+          run,
+          round: gptRound,
+          reviewerPath: trusted.reviewerPath,
+          trustedPackRoot: trusted.trustedPackRoot,
+          reviewTargetRoot: worktree,
+          baseRef,
+          target,
+          budgetLedger,
+          projectId,
+          storeRoot,
+          input,
+          carryoverBundlePath,
+        });
+        result = {
+          outcome: 'exit' as const,
+          ok: true,
+          exitCode: 0,
+          signal: null,
+          stdout: JSON.stringify(payload),
+          stderr: '',
+          timedOut: false,
+          cancelled: false,
+        };
+      } else {
+        const invocation = await invokeReviewer({
+          reviewerPath: trusted.reviewerPath,
+          trustedPackRoot: trusted.trustedPackRoot,
+          reviewTargetRoot: worktree,
+          baseRef,
+          prNumber: target.prNumber,
+          issueNumber: target.issueNumber,
+          sessionId: target.sessionId,
+          budgetLedger,
+          runId: run.id,
+          projectId,
+          storeRoot,
+          fixtureReviewStdout: input.fixtureReviewStdout,
+          fixtureReviewExitCode: input.fixtureReviewExitCode,
+          fixtureReviewTimedOut: input.fixtureReviewTimedOut,
+          fixtureReviewerLayerOverrides: input.fixtureReviewerLayerOverrides,
+          fixtureEmulateWin32Selector: input.fixtureEmulateWin32Selector,
+          carryoverBundlePath,
+          headSha: target.headSha,
+        });
+        result = invocation.result;
+        resolvedReviewer = invocation.resolvedReviewer;
+      }
     } finally {
       clearInterval(heartbeat);
     }
@@ -1483,7 +1860,6 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       throw new Error(`reviewer process failed (exit ${String(result.exitCode)})`);
     }
 
-    let payload: ReviewPayload;
     try {
       payload = parseReviewPayload(result.stdout);
     } catch (error) {

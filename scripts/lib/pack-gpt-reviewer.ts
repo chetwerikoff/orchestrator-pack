@@ -58,6 +58,35 @@ export interface GptReviewRequest {
   baseRef?: string;
 }
 
+export interface GptTurnResultV1 {
+  schema: 'turn-result/v1';
+  state: string;
+  scope: string;
+  cause: string;
+  invocation_id: string;
+  send_count: number;
+  [key: string]: unknown;
+}
+
+export function extractLastGptTurnResult(stdout: string): GptTurnResultV1 | null {
+  const rows = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const row of rows.reverse()) {
+    try {
+      const parsed = JSON.parse(row) as Partial<GptTurnResultV1>;
+      if (parsed.schema !== 'turn-result/v1'
+        || typeof parsed.state !== 'string'
+        || typeof parsed.scope !== 'string'
+        || typeof parsed.cause !== 'string'
+        || typeof parsed.invocation_id !== 'string'
+        || !Number.isInteger(parsed.send_count)) continue;
+      return parsed as GptTurnResultV1;
+    } catch {
+      // Heartbeats and diagnostic text are not terminal turn results.
+    }
+  }
+  return null;
+}
+
 export interface GptReviewDependencies {
   resolveBrowserConfig: (env: NodeJS.ProcessEnv) => GptBrowserTurnConfig;
   runBrowserTurn: (options: {
@@ -221,8 +250,15 @@ export async function runGptPackReview(
       return { stdout: '', stderr: 'GPT browser turn timed out', exitCode: 124 };
     }
     if (!turn.ok) {
-      const detail = trim(turn.stderr || turn.stdout || turn.error) || 'GPT browser turn failed';
-      return { stdout: '', stderr: detail, exitCode: turn.exitCode ?? 1 };
+      const terminal = extractLastGptTurnResult(turn.stdout);
+      const detail = trim(turn.stderr || turn.error)
+        || (terminal ? `${terminal.state}:${terminal.cause}` : trim(turn.stdout))
+        || 'GPT browser turn failed';
+      return {
+        stdout: terminal ? `${JSON.stringify(terminal)}\n` : '',
+        stderr: detail,
+        exitCode: turn.exitCode ?? 1,
+      };
     }
     const reply = readFileSync(outputPath, 'utf8');
     const evidenceDir = trim(env.PACK_GPT_BROWSER_EVIDENCE_DIR);

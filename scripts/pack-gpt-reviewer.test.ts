@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   assertGptHarnessFixtureAllowed,
+  extractLastGptTurnResult,
   mapGptReplyToTerminalStdout,
   runGptPackReview,
   type GptReviewDependencies,
@@ -165,6 +166,18 @@ describe('GPT pack reviewer adapter', () => {
     expect(capturedPrompt).toContain('https://github.com/example/repo/pull/42');
     expect(capturedPrompt).toContain('b'.repeat(40));
     expect(capturedPrompt).not.toContain('git diff origin/main...HEAD');
+  });
+
+  it('extracts the final structured Browser-GPT result while ignoring heartbeats', () => {
+    expect(extractLastGptTurnResult([
+      JSON.stringify({ schema: 'observation-heartbeat/v1', poll_count: 1 }),
+      JSON.stringify({
+        schema: 'turn-result/v1', state: 'driver_error', scope: 'profile',
+        cause: 'state_light_new_chat_send_slot_timeout', invocation_id: 'inv-1', send_count: 0,
+      }),
+    ].join('\n'))).toMatchObject({
+      schema: 'turn-result/v1', cause: 'state_light_new_chat_send_slot_timeout', send_count: 0,
+    });
   });
 
   it('does not silently succeed on malformed GPT output', async () => {
