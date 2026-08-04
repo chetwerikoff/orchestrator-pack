@@ -293,7 +293,7 @@ describe('bounded worktree creation and worker spawn', () => {
     expect(value.creates).toEqual([REPLACEMENT]);
   });
 
-  it('creates one replacement beside a same-head Orca-only row', () => {
+  it('blocks replacement beside a same-head Orca-only row with duplicate Issue binding', () => {
     const value = fixture();
     value.orcaRows.push({
       path: join(value.root, 'worktrees', 'stale-orca-only'),
@@ -309,9 +309,10 @@ describe('bounded worktree creation and worker spawn', () => {
 
     const report = execute(value);
 
-    expect(report.outcome).toBe('worker_spawned');
+    expect(report.outcome).toBe('task_degraded');
     expect(report.attempts.map((attempt) => attempt.kind)).toEqual(['replacement']);
     expect(value.creates).toEqual([REPLACEMENT]);
+    expect(value.terminalCreates).toEqual([]);
   });
 
   it('blocks old-head Git and Orca family rows from reopening the create budget', () => {
@@ -332,6 +333,23 @@ describe('bounded worktree creation and worker spawn', () => {
     expect(orcaOld.creates).toEqual([]);
   });
 
+  it('degrades when a target terminal row is missing its handle', () => {
+    const value = fixture();
+    value.createHandlers.push((name) => {
+      value.addDual(name);
+      return processResult({ stdout: JSON.stringify({ ok: true }) });
+    });
+    value.terminalHandler = (path) => {
+      value.addTerminal(path);
+      value.terminals.push({ worktreePath: path, tabId: 'malformed-tab' } as unknown as TerminalRow);
+      return processResult({ stdout: JSON.stringify({ ok: true }) });
+    };
+
+    expect(execute(value)).toMatchObject({
+      outcome: 'task_degraded',
+      terminalSpawnCompleted: false,
+    });
+  });
   it('preserves create-owned fallback/default terminals without replacement or second spawn', () => {
     for (const count of [1, 2]) {
       const value = fixture();

@@ -204,8 +204,11 @@ function parseTerminalPayload(payload: unknown): TerminalEvidence[] {
     if (typeof row.worktreePath !== 'string' || !row.worktreePath.trim()) {
       throw new TypeError(`Orca terminal row ${index} omitted worktreePath`);
     }
+    if (typeof row.handle !== 'string' || !row.handle.trim()) {
+      throw new TypeError(`Orca terminal row ${index} omitted handle`);
+    }
     return {
-      ...(typeof row.handle === 'string' && row.handle.trim() ? { handle: row.handle.trim() } : {}),
+      handle: row.handle.trim(),
       worktreePath: normalizeWorktreePath(row.worktreePath),
       ...(typeof row.tabId === 'string' && row.tabId.trim() ? { tabId: row.tabId.trim() } : {}),
     };

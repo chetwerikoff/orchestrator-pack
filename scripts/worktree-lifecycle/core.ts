@@ -397,6 +397,7 @@ function orcaIdentityCollision(row: OrcaWorktreeRow, expected: ExpectedWorktreeI
   if (row.path === expected.path) return !orcaIdentityMatches(row, expected);
   if (!expected.repositoryId || row.repoId !== expected.repositoryId) return false;
   if (expected.mode === 'branch-bound' && row.branchName === expected.branchName) return true;
+  if (expected.bindingKind === 'issue' && row.linkedIssue === expected.bindingNumber) return true;
   return expected.bindingKind === 'pr' && row.linkedPR === expected.bindingNumber;
 }
 
@@ -443,12 +444,22 @@ export function classifyWorktree(input: {
 
   let classification: WorktreeClassification;
   const sourceUnavailable = input.evidence.git.status !== 'ok' || input.evidence.orca.status !== 'ok';
+  const sameIssueDifferentPath = conflictingOrcaRows.filter(
+    (row) => expected.bindingKind === 'issue'
+      && row.path !== expected.path
+      && row.linkedIssue === expected.bindingNumber,
+  );
+  const duplicateIssueBinding = exactOrcaRows.length > 0 && sameIssueDifferentPath.length > 0;
+  const unrelatedOrcaConflicts = conflictingOrcaRows.filter(
+    (row) => !sameIssueDifferentPath.includes(row),
+  );
   const hasConflict = sourceUnavailable
     || !expected.repositoryId
     || exactGitRows.length > 1
     || exactOrcaRows.length > 1
     || conflictingGitRows.length > 0
-    || conflictingOrcaRows.length > 0;
+    || unrelatedOrcaConflicts.length > 0
+    || duplicateIssueBinding;
   if (hasConflict) classification = 'conflict';
   else if (exactGitRows.length === 1 && exactOrcaRows.length === 1) classification = 'exact_dual';
   else if (exactGitRows.length === 1) classification = 'exact_git_only';

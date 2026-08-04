@@ -171,6 +171,15 @@ describe('worktree lifecycle classifier', () => {
     expect(report.disagreeingFields).toContain('orca.linkedIssue');
   });
 
+  it('rejects another same-repository worktree bound to the same Issue', () => {
+    const otherPath = '/tmp/orca/workspaces/orchestrator-pack/issue-1298-duplicate';
+    const report = classifyWorktree({
+      expected: expected(),
+      evidence: evidence(git(), [...orca(), ...orca({ path: otherPath, idPath: otherPath, branch: 'refs/heads/duplicate-1298' })]),
+    });
+    expect(report.classification).toBe('conflict');
+    expect(report.conflictingOrcaRows).toHaveLength(1);
+  });
   it('accepts optional exact linkedPR but rejects a conflicting linkedPR', () => {
     const prExpected = expected({ bindingKind: 'pr', bindingNumber: 1300 });
     expect(classifyWorktree({
