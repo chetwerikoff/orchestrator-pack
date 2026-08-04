@@ -130,7 +130,7 @@ if (-not $SkipPester) {
             "$(Join-Path $Root 'scripts/lib/Ci-Red-Watchdog.Tests.ps1'):8"
             "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):297"
             "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):319"
-            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):421"
+            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):420"
             "$(Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'):374"
             "$(Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'):414"
         )
