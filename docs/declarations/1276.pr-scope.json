@@ -48,5 +48,5 @@
     "scripts/review-delivery.test.ts",
     "scripts/run-pack-review-gpt.ts"
   ],
-  "source_revision": "31cf7ed9fdba849b70c2881a96e78aea23b5776e"
+  "source_revision": "41e0d8d5804a32fb86509c533f49d2333237fcde"
 }
