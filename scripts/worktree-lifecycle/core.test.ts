@@ -22,9 +22,11 @@ const HEAD = 'a'.repeat(40);
 const OTHER_HEAD = 'b'.repeat(40);
 const PATH = '/tmp/orca/workspaces/orchestrator-pack/issue-1298';
 const BRANCH = 'agent/issue-1298';
+const REPOSITORY_ID = 'repo-1';
 
 const expected = (overrides: Partial<ExpectedWorktreeIdentity> = {}): ExpectedWorktreeIdentity => ({
   repositoryRoot: '/tmp/orchestrator-pack',
+  repositoryId: REPOSITORY_ID,
   path: PATH,
   headSha: HEAD,
   mode: 'branch-bound',
@@ -48,6 +50,9 @@ const orca = (input: {
   branch?: string;
   linkedIssue?: number | null;
   linkedPR?: number | null;
+  repoId?: string;
+  archived?: boolean;
+  main?: boolean;
 } = {}) => parseOrcaWorktreePayload({
   ok: true,
   result: {
@@ -57,9 +62,9 @@ const orca = (input: {
       branch: input.branch === '' ? '' : `refs/heads/${input.branch ?? BRANCH}`,
       linkedIssue: input.linkedIssue === undefined ? 1298 : input.linkedIssue,
       linkedPR: input.linkedPR,
-      isMainWorktree: false,
-      isArchived: false,
-      repoId: 'repo-1',
+      isMainWorktree: input.main ?? false,
+      isArchived: input.archived ?? false,
+      repoId: input.repoId ?? REPOSITORY_ID,
     }],
   },
 });
@@ -148,6 +153,55 @@ describe('worktree lifecycle classifier', () => {
     }).classification).toBe('conflict');
   });
 
+  it('rejects wrong-repository and archived Orca rows', () => {
+    const wrongRepository = classifyWorktree({
+      expected: expected(),
+      evidence: evidence(git(), orca({ repoId: 'another-repository' })),
+    });
+    expect(wrongRepository.classification).toBe('conflict');
+    expect(wrongRepository.disagreeingFields).toContain('orca.repoId');
+
+    const archived = classifyWorktree({
+      expected: expected(),
+      evidence: evidence(git(), orca({ archived: true })),
+    });
+    expect(archived.classification).toBe('conflict');
+    expect(archived.disagreeingFields).toContain('orca.isArchived');
+  });
+
+  it('rejects present-invalid binding data instead of treating it as absent', () => {
+    const malformed = parseOrcaWorktreePayload({
+      ok: true,
+      result: {
+        worktrees: [{
+          path: PATH,
+          head: HEAD,
+          branch: `refs/heads/${BRANCH}`,
+          linkedIssue: null,
+          linkedPR: '1300',
+          isMainWorktree: false,
+          isArchived: false,
+          repoId: REPOSITORY_ID,
+        }],
+      },
+    });
+    const report = classifyWorktree({
+      expected: expected({ bindingKind: 'pr', bindingNumber: 1300 }),
+      evidence: evidence(git(), malformed),
+    });
+    expect(report.classification).toBe('conflict');
+    expect(report.disagreeingFields).toContain('orca.linkedPR');
+  });
+
+  it('fails closed when repository authority is missing', () => {
+    const report = classifyWorktree({
+      expected: expected({ repositoryId: undefined }),
+      evidence: evidence(),
+    });
+    expect(report.classification).toBe('conflict');
+    expect(report.disagreeingFields).toContain('orca.repositoryId');
+  });
+
   it('fails closed on stale, duplicate, and unavailable evidence', () => {
     const stale = classifyWorktree({
       expected: expected(),
@@ -189,10 +243,10 @@ describe('worktree lifecycle classifier', () => {
 });
 
 describe('continuation policy', () => {
-  it('authorizes terminal spawn only after exact dual post-create read-back', () => {
+  it('does not export terminal-spawn authority outside the bounded actuator', () => {
     const exact = decideContinuation('exact_dual', 'post-create');
     expect(exact.action).toBe('continue_existing');
-    expect(exact.terminalSpawnAuthorized).toBe(true);
+    expect(exact.terminalSpawnAuthorized).toBe(false);
     expect(exact.globalPipelineContinues).toBe(true);
 
     for (const classification of ['exact_git_only', 'orca_only', 'conflict', 'absent'] as const) {
