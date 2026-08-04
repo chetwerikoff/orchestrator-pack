@@ -1048,14 +1048,21 @@ export class FleetObserver {
     const previousBytes = this.#previous.snapshot ? this.#previous.rawBytes : null;
     let tempPath: string | null = null;
     let replaced = false;
-    const removeIfPresent = (target: string): void => {
+    const invalidateSnapshot = (target: string): boolean => {
       try {
         rmSync(target, { force: true });
+        if (!existsSync(target)) return true;
       } catch {
-        // A failed cleanup cannot make an unverified candidate authoritative.
+        // Fall through to an invalid empty marker when deletion is unavailable.
+      }
+      try {
+        writeFileSync(target, '', 'utf8');
+        return true;
+      } catch {
+        return false;
       }
     };
-    const rollback = (): void => {
+    const rollback = (): boolean => {
       try {
         if (previousBytes) {
           const restorePath = `${this.#snapshotPath}.restore-${process.pid}-${tickSequence}`;
@@ -1067,11 +1074,11 @@ export class FleetObserver {
             closeSync(restoreFd);
           }
           renameSync(restorePath, this.#snapshotPath);
-        } else {
-          removeIfPresent(this.#snapshotPath);
+          return true;
         }
+        return invalidateSnapshot(this.#snapshotPath);
       } catch {
-        removeIfPresent(this.#snapshotPath);
+        return invalidateSnapshot(this.#snapshotPath);
       }
     };
     try {
@@ -1087,7 +1094,7 @@ export class FleetObserver {
         closeSync(fd);
       }
       if (this.#activeTick !== tickSequence || this.#now() >= deadlineMs) {
-        removeIfPresent(tempPath);
+        invalidateSnapshot(tempPath);
         tempPath = null;
         return false;
       }
@@ -1114,7 +1121,7 @@ export class FleetObserver {
       }
       return true;
     } catch {
-      if (tempPath) removeIfPresent(tempPath);
+      if (tempPath) invalidateSnapshot(tempPath);
       if (replaced) rollback();
       return false;
     }

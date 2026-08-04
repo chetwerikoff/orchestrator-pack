@@ -1,7 +1,17 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+const mocks = vi.hoisted(() => ({
+  fsyncSync: vi.fn(),
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  mocks.fsyncSync.mockImplementation(actual.fsyncSync);
+  return { ...actual, fsyncSync: mocks.fsyncSync };
+});
 import { runSchedulerTick } from './scheduler.ts';
 import {
   FleetObserver,
@@ -464,6 +474,37 @@ describe('S1 fleet observer', () => {
     expect(failed.status).toBe('failed');
     expect(failed.reason).toBe('snapshot-publication-failed');
     expect(failed.snapshot?.census).toEqual(accepted.snapshot?.census);
+  });
+
+  it('invalidates an unvalidated replacement when directory sync and rollback both fail', async () => {
+    const source = new FakeFleetSource();
+    source.add('rollback-fault');
+    const observer = observerFor(source);
+    await observer.tick({ schedulerIntervalMs: 1_000 });
+
+    let fsyncCalls = 0;
+    const fsync = vi.mocked(fs.fsyncSync);
+    const originalFsync = fsync.getMockImplementation();
+    fsync.mockImplementation((fd) => {
+      fsyncCalls += 1;
+      if (fsyncCalls >= 2) throw new Error('injected fsync failure');
+      return originalFsync!(fd);
+    });
+
+    let failed;
+    try {
+      failed = await observer.tick({ schedulerIntervalMs: 1_000 });
+    } finally {
+      fsync.mockImplementation(originalFsync!);
+    }
+
+    expect(fsyncCalls).toBeGreaterThanOrEqual(3);
+    expect(failed.snapshotCommitted).toBe(false);
+    expect(failed.status).toBe('failed');
+    const snapshotBytes = existsSync(observer.snapshotPath)
+      ? readFileSync(observer.snapshotPath, 'utf8')
+      : null;
+    expect(snapshotBytes === null || !isAcceptedFleetSnapshot(snapshotBytes)).toBe(true);
   });
 
   it('covers smoke scenario 12 by rejecting stale completion after supersession', async () => {
