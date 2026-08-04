@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -294,10 +295,16 @@ describe('direct runtime-neutral task caller', () => {
       writeFileSync(fixturePath, hermeticOrcaFixture(statePath, root), 'utf8');
       chmodSync(fixturePath, 0o755);
       const environment: NodeJS.ProcessEnv = { ...process.env, PATH: root };
+      const subprocessRunner: typeof spawnSync = ((
+        _command: string,
+        args?: readonly string[],
+        options?: Parameters<typeof spawnSync>[2],
+      ) => spawnSync(process.execPath, [fixturePath, ...(args ?? [])], options)) as typeof spawnSync;
       const adapter = new OrcaTaskRuntimeAdapter({
         cwd: root,
         executable: fixturePath,
         env: environment,
+        runner: subprocessRunner,
         timeoutMs: 5_000,
       });
 
@@ -310,7 +317,7 @@ describe('direct runtime-neutral task caller', () => {
         options: { cwd: root, timeoutMs: 5_000 },
       });
 
-      expect(result.status).toBe('ok');
+      expect(result).toMatchObject({ status: 'ok' });
       if (result.status !== 'ok') return;
       expect(result.lines).toContain('implement the issue');
       expect(result.liveness).toBe('idle');
