@@ -5,12 +5,16 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   fsyncSync: vi.fn(),
+  rmSync: vi.fn(),
+  writeFileSync: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   mocks.fsyncSync.mockImplementation(actual.fsyncSync);
-  return { ...actual, fsyncSync: mocks.fsyncSync };
+  mocks.rmSync.mockImplementation(actual.rmSync);
+  mocks.writeFileSync.mockImplementation(actual.writeFileSync);
+  return { ...actual, fsyncSync: mocks.fsyncSync, rmSync: mocks.rmSync, writeFileSync: mocks.writeFileSync };
 });
 import { runSchedulerTick } from './scheduler.ts';
 import {
@@ -476,35 +480,62 @@ describe('S1 fleet observer', () => {
     expect(failed.snapshot?.census).toEqual(accepted.snapshot?.census);
   });
 
-  it('invalidates an unvalidated replacement when directory sync and rollback both fail', async () => {
-    const source = new FakeFleetSource();
-    source.add('rollback-fault');
-    const observer = observerFor(source);
-    await observer.tick({ schedulerIntervalMs: 1_000 });
+  it('keeps result, memory, and disk authority aligned across rollback invalidation faults', async () => {
+    const exercise = async (truncateFails: boolean): Promise<void> => {
+      const source = new FakeFleetSource();
+      source.add('rollback-fault');
+      const observer = observerFor(source);
+      const accepted = await observer.tick({ schedulerIntervalMs: 1_000 });
 
-    let fsyncCalls = 0;
-    const fsync = vi.mocked(fs.fsyncSync);
-    const originalFsync = fsync.getMockImplementation();
-    fsync.mockImplementation((fd) => {
-      fsyncCalls += 1;
-      if (fsyncCalls >= 2) throw new Error('injected fsync failure');
-      return originalFsync!(fd);
-    });
+      let fsyncCalls = 0;
+      const fsync = vi.mocked(fs.fsyncSync);
+      const rm = vi.mocked(fs.rmSync);
+      const write = vi.mocked(fs.writeFileSync);
+      const originalFsync = fsync.getMockImplementation();
+      const originalRm = rm.getMockImplementation();
+      const originalWrite = write.getMockImplementation();
+      fsync.mockImplementation((fd) => {
+        fsyncCalls += 1;
+        if (fsyncCalls >= 2) throw new Error('injected restoration and directory sync failure');
+        return originalFsync!(fd);
+      });
+      rm.mockImplementation((target, options) => {
+        if (target === observer.snapshotPath) throw new Error('injected deletion failure');
+        return originalRm!(target, options);
+      });
+      write.mockImplementation((target, data, options) => {
+        if (truncateFails && target === observer.snapshotPath && data === '') {
+          throw new Error('injected truncation failure');
+        }
+        return originalWrite!(target, data, options);
+      });
 
-    let failed;
-    try {
-      failed = await observer.tick({ schedulerIntervalMs: 1_000 });
-    } finally {
-      fsync.mockImplementation(originalFsync!);
-    }
+      let failed: Awaited<ReturnType<FleetObserver['tick']>> | undefined;
+      try {
+        failed = await observer.tick({ schedulerIntervalMs: 1_000 });
+      } finally {
+        fsync.mockImplementation(originalFsync!);
+        rm.mockImplementation(originalRm!);
+        write.mockImplementation(originalWrite!);
+      }
 
-    expect(fsyncCalls).toBeGreaterThanOrEqual(3);
-    expect(failed.snapshotCommitted).toBe(false);
-    expect(failed.status).toBe('failed');
-    const snapshotBytes = existsSync(observer.snapshotPath)
-      ? readFileSync(observer.snapshotPath, 'utf8')
-      : null;
-    expect(snapshotBytes === null || !isAcceptedFleetSnapshot(snapshotBytes)).toBe(true);
+      expect(fsyncCalls).toBeGreaterThanOrEqual(3);
+      expect(failed?.snapshotCommitted).toBe(false);
+      expect(failed?.status).toBe('failed');
+      expect(failed?.snapshot?.census).toEqual(accepted.snapshot?.census);
+      const snapshotBytes = existsSync(observer.snapshotPath)
+        ? readFileSync(observer.snapshotPath, 'utf8')
+        : null;
+      expect(snapshotBytes === null || !isAcceptedFleetSnapshot(snapshotBytes)).toBe(true);
+
+      source.remove('rollback-fault');
+      const next = await observer.tick({ schedulerIntervalMs: 1_000 });
+      expect(next.snapshot?.census).toEqual([]);
+      expect(next.snapshot?.progress.filter((entry) => entry.type === 'tick-complete')).toHaveLength(1);
+    };
+
+    await exercise(false);
+    await exercise(true);
   });
 
   it('covers smoke scenario 12 by rejecting stale completion after supersession', async () => {

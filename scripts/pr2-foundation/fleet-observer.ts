@@ -1062,6 +1062,16 @@ export class FleetObserver {
         return false;
       }
     };
+    const quarantineUncommitted = (target: string): boolean => {
+      const quarantinePath = `${target}.invalid-${process.pid}-${tickSequence}`;
+      try {
+        renameSync(target, quarantinePath);
+        try { rmSync(quarantinePath, { force: true }); } catch { /* best effort */ }
+        return !existsSync(target);
+      } catch {
+        return false;
+      }
+    };
     const rollback = (): boolean => {
       try {
         if (previousBytes) {
@@ -1078,8 +1088,14 @@ export class FleetObserver {
         }
         return invalidateSnapshot(this.#snapshotPath);
       } catch {
-        return invalidateSnapshot(this.#snapshotPath);
+        const invalidated = invalidateSnapshot(this.#snapshotPath);
+        if (!invalidated) quarantineUncommitted(this.#snapshotPath);
+        return false;
       }
+    };
+    const clearPreviousAuthority = (): void => {
+      this.#previous.snapshot = null;
+      this.#previous.rawBytes = null;
     };
     try {
       mkdirSync(this.#stateDirectory, { recursive: true });
@@ -1116,13 +1132,13 @@ export class FleetObserver {
         closeSync(dirFd);
       }
       if (this.#activeTick !== tickSequence || this.#now() >= deadlineMs) {
-        rollback();
+        if (!rollback()) clearPreviousAuthority();
         return false;
       }
       return true;
     } catch {
       if (tempPath) invalidateSnapshot(tempPath);
-      if (replaced) rollback();
+      if (replaced && !rollback()) clearPreviousAuthority();
       return false;
     }
   }
