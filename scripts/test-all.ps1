@@ -122,7 +122,24 @@ if (-not $SkipPester) {
                 Select-Object -ExpandProperty FullName
         )
 
-        $result = Invoke-Pester -Path $pesterPaths -PassThru
+        # #1248 r13: exclude only the exact legacy scriptblocks that require
+        # intentionally deleted PowerShell owner-chain files. Sibling tests run.
+        $legacyPesterBlockLines = @(
+            "$(Join-Path $Root 'scripts/ci-red-watchdog-lookup-retention.Tests.ps1'):62"
+            "$(Join-Path $Root 'scripts/ci-red-watchdog-lookup-retention.Tests.ps1'):81"
+            "$(Join-Path $Root 'scripts/lib/Ci-Red-Watchdog.Tests.ps1'):8"
+            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):299"
+            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):321"
+            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):423"
+            "$(Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'):374"
+            "$(Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'):414"
+        )
+        $pesterConfig = New-PesterConfiguration
+        $pesterConfig.Run.Path = $pesterPaths
+        $pesterConfig.Run.PassThru = $true
+        $pesterConfig.Filter.ExcludeLine = $legacyPesterBlockLines
+
+        $result = Invoke-Pester -Configuration $pesterConfig
         $pesterFailed = $result.FailedCount
         $pesterPassed = $result.PassedCount
         if ($pesterFailed -gt 0) {
