@@ -15,6 +15,9 @@ import type { CommandRunner } from './operations.ts';
 const HEAD = 'a'.repeat(40);
 const OTHER_HEAD = 'b'.repeat(40);
 const ISSUE = 1298;
+const REPOSITORY_ID = 'repo-1298';
+const PRIMARY = 'issue-1298';
+const REPLACEMENT = 'issue-1298-replacement';
 const roots: string[] = [];
 
 const processResult = (overrides: Partial<ProcessResult> = {}): ProcessResult => ({
@@ -32,7 +35,16 @@ interface OrcaRow {
   path: string;
   head: string;
   branch: string;
-  linkedIssue: number;
+  linkedIssue?: number | null;
+  repoId?: string;
+  isMainWorktree?: boolean;
+  isArchived?: boolean;
+}
+
+interface TerminalRow {
+  handle: string;
+  worktreePath: string;
+  tabId: string;
 }
 
 interface Fixture {
@@ -41,20 +53,24 @@ interface Fixture {
   lockPath: string;
   gitRows: GitRow[];
   orcaRows: OrcaRow[];
+  terminals: TerminalRow[];
   creates: string[];
-  handlers: Array<(name: string) => ProcessResult>;
+  terminalCreates: string[];
+  createHandlers: Array<(name: string) => ProcessResult>;
+  terminalHandler?: (path: string) => ProcessResult;
   runner: CommandRunner;
   addGit(name: string, head?: string): string;
   addDual(name: string): string;
+  addTerminal(path: string): TerminalRow;
 }
 
-function gitPayload(fixture: Fixture): string {
+function gitPayload(value: Fixture): string {
   return [
-    `worktree ${fixture.repo}`,
+    `worktree ${value.repo}`,
     `HEAD ${OTHER_HEAD}`,
     'branch refs/heads/main',
     '',
-    ...fixture.gitRows.flatMap((row) => [
+    ...value.gitRows.flatMap((row) => [
       `worktree ${row.path}`,
       `HEAD ${row.head}`,
       `branch refs/heads/${row.branch}`,
@@ -63,11 +79,26 @@ function gitPayload(fixture: Fixture): string {
   ].join('\n');
 }
 
-function orcaPayload(rows: readonly OrcaRow[]): string {
+function orcaPayload(value: Fixture): string {
   return JSON.stringify({
     ok: true,
     result: {
-      worktrees: rows.map((row) => ({ ...row, isMainWorktree: false, isArchived: false })),
+      worktrees: [
+        {
+          path: value.repo,
+          head: OTHER_HEAD,
+          branch: 'refs/heads/main',
+          repoId: REPOSITORY_ID,
+          isMainWorktree: true,
+          isArchived: false,
+        },
+        ...value.orcaRows.map((row) => ({
+          ...row,
+          repoId: row.repoId ?? REPOSITORY_ID,
+          isMainWorktree: row.isMainWorktree ?? false,
+          isArchived: row.isArchived ?? false,
+        })),
+      ],
     },
   });
 }
@@ -83,8 +114,10 @@ function fixture(): Fixture {
     lockPath: join(root, 'lifecycle.lock'),
     gitRows: [] as GitRow[],
     orcaRows: [] as OrcaRow[],
+    terminals: [] as TerminalRow[],
     creates: [] as string[],
-    handlers: [] as Array<(name: string) => ProcessResult>,
+    terminalCreates: [] as string[],
+    createHandlers: [] as Array<(name: string) => ProcessResult>,
     runner: (() => processResult()) as CommandRunner,
     addGit(name: string, head = HEAD): string {
       const path = join(root, 'worktrees', name);
@@ -96,72 +129,90 @@ function fixture(): Fixture {
       this.orcaRows.push({ path, head: HEAD, branch: `refs/heads/${name}`, linkedIssue: ISSUE });
       return path;
     },
+    addTerminal(path: string): TerminalRow {
+      const terminal = {
+        handle: `terminal-${String(this.terminals.length + 1)}`,
+        worktreePath: path,
+        tabId: `tab-${String(this.terminals.length + 1)}`,
+      };
+      this.terminals.push(terminal);
+      return terminal;
+    },
   } satisfies Fixture;
   value.runner = (invocation) => {
     const args = [...invocation.args];
     if (invocation.command === 'git' && args.includes('worktree') && args.includes('list')) {
       return processResult({ stdout: gitPayload(value) });
     }
-    if (args[0] === 'worktree' && args[1] === 'list') {
-      return processResult({ stdout: orcaPayload(value.orcaRows) });
-    }
-    if (args[0] === 'worktree' && args[1] === 'ps') {
-      return processResult({ stdout: orcaPayload(value.orcaRows) });
+    if (args[0] === 'worktree' && (args[1] === 'list' || args[1] === 'ps')) {
+      return processResult({ stdout: orcaPayload(value) });
     }
     if (args[0] === 'terminal' && args[1] === 'list') {
-      return processResult({ stdout: JSON.stringify({ ok: true, result: { terminals: [] } }) });
+      return processResult({ stdout: JSON.stringify({ ok: true, result: { terminals: value.terminals } }) });
     }
     if (args[0] === 'worktree' && args[1] === 'create') {
       const name = args[args.indexOf('--name') + 1]!;
       value.creates.push(name);
-      const handler = value.handlers.shift();
+      const handler = value.createHandlers.shift();
       if (!handler) throw new Error(`unexpected create: ${name}`);
       return handler(name);
+    }
+    if (args[0] === 'terminal' && args[1] === 'create') {
+      const rawPath = args[args.indexOf('--worktree') + 1]!;
+      const path = rawPath.replace(/^path:/, '');
+      value.terminalCreates.push(path);
+      if (value.terminalHandler) return value.terminalHandler(path);
+      value.addTerminal(path);
+      return processResult({ stdout: JSON.stringify({ ok: true }) });
     }
     throw new Error(`unexpected invocation: ${invocation.command} ${args.join(' ')}`);
   };
   return value;
 }
 
-function execute(value: Fixture, name = 'issue-1298'): WorktreeCreateContinuationReport {
+function execute(value: Fixture): WorktreeCreateContinuationReport {
   return runCreateContinuation({
     repositoryRoot: value.repo,
     issueNumber: ISSUE,
     expectedHead: HEAD,
-    name,
+    terminalTitle: 'worker #1298',
+    terminalCommand: 'agent --model test',
     operations: {
       runner: value.runner,
       orcaExecutable: 'orca-fixture',
       lockPath: value.lockPath,
-      replacementToken: () => 'fixedtoken',
     },
   });
 }
-
-const replacement = (name = 'issue-1298'): string => `${name}-replacement-fixedtoken`;
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('bounded worktree creation', () => {
-  it('authorizes spawn only after one create and two exact-dual reads', () => {
+describe('bounded worktree creation and worker spawn', () => {
+  it('creates one exact worktree and one terminal under the same exclusion', () => {
     const value = fixture();
-    value.handlers.push((name) => {
+    value.createHandlers.push((name) => {
       value.addDual(name);
       return processResult({ stdout: JSON.stringify({ ok: true }) });
     });
 
     const report = execute(value);
 
-    expect(report).toMatchObject({ outcome: 'ready_to_spawn', terminalSpawnAuthorized: true });
+    expect(report).toMatchObject({
+      outcome: 'worker_spawned',
+      terminalSpawnCompleted: true,
+      terminalSpawnAuthorized: false,
+      terminal: { handle: 'terminal-1' },
+    });
     expect(report.attempts[0]?.candidateReports).toHaveLength(2);
-    expect(value.creates).toEqual(['issue-1298']);
+    expect(value.creates).toEqual([PRIMARY]);
+    expect(value.terminalCreates).toEqual([join(value.root, 'worktrees', PRIMARY)]);
   });
 
-  it('preserves Git-only state and performs exactly one same-source replacement', () => {
+  it('preserves Git-only state and performs one stable same-source replacement', () => {
     const value = fixture();
-    value.handlers.push(
+    value.createHandlers.push(
       (name) => {
         value.addGit(name);
         return processResult({ stdout: JSON.stringify({ ok: true }) });
@@ -174,9 +225,25 @@ describe('bounded worktree creation', () => {
 
     const report = execute(value);
 
-    expect(report.selected?.path).toBe(join(value.root, 'worktrees', replacement()));
+    expect(report.outcome).toBe('worker_spawned');
+    expect(report.selected?.path).toBe(join(value.root, 'worktrees', REPLACEMENT));
     expect(report.attempts.map((attempt) => attempt.kind)).toEqual(['initial', 'replacement']);
-    expect(value.creates).toEqual(['issue-1298', replacement()]);
+    expect(value.creates).toEqual([PRIMARY, REPLACEMENT]);
+  });
+
+  it('recognizes a changed-name interrupted primary by stable Issue marker', () => {
+    const value = fixture();
+    value.addGit('caller-selected-1298-attempt');
+    value.createHandlers.push((name) => {
+      value.addDual(name);
+      return processResult({ stdout: JSON.stringify({ ok: true }) });
+    });
+
+    const report = execute(value);
+
+    expect(report.outcome).toBe('worker_spawned');
+    expect(report.attempts.map((attempt) => attempt.kind)).toEqual(['replacement']);
+    expect(value.creates).toEqual([REPLACEMENT]);
   });
 
   it('creates one replacement beside a stale Orca-only row for the same Issue', () => {
@@ -187,83 +254,104 @@ describe('bounded worktree creation', () => {
       branch: 'refs/heads/stale-issue-1298',
       linkedIssue: ISSUE,
     });
-    value.handlers.push((name) => {
+    value.createHandlers.push((name) => {
       value.addDual(name);
       return processResult({ stdout: JSON.stringify({ ok: true }) });
     });
 
     const report = execute(value);
 
-    expect(report).toMatchObject({ outcome: 'ready_to_spawn', terminalSpawnAuthorized: true });
+    expect(report.outcome).toBe('worker_spawned');
     expect(report.attempts.map((attempt) => attempt.kind)).toEqual(['replacement']);
-    expect(report.selected?.path).toBe(join(value.root, 'worktrees', replacement()));
-    expect(value.creates).toEqual([replacement()]);
-    expect(value.orcaRows.some((row) => row.branch === 'refs/heads/stale-issue-1298')).toBe(true);
+    expect(value.creates).toEqual([REPLACEMENT]);
   });
 
-  it('recovers an effect whose create receipt was lost without a blind retry', () => {
+  it('recovers create and terminal effects whose receipts were lost', () => {
     const value = fixture();
-    value.handlers.push((name) => {
+    value.createHandlers.push((name) => {
       value.addDual(name);
       return processResult({
-        outcome: 'timeout', ok: false, exitCode: null, timedOut: true, stderr: 'receipt lost',
+        outcome: 'timeout', ok: false, exitCode: null, timedOut: true, stderr: 'create receipt lost',
       });
     });
+    value.terminalHandler = (path) => {
+      value.addTerminal(path);
+      return processResult({
+        outcome: 'timeout', ok: false, exitCode: null, timedOut: true, stderr: 'terminal receipt lost',
+      });
+    };
 
     const report = execute(value);
 
-    expect(report.outcome).toBe('ready_to_spawn');
+    expect(report.outcome).toBe('worker_spawned');
     expect(report.attempts[0]?.command).toMatchObject({ acknowledged: false, timedOut: true });
-    expect(value.creates).toEqual(['issue-1298']);
+    expect(report.terminalSpawn?.command).toMatchObject({ acknowledged: false, timedOut: true });
+    expect(value.creates).toEqual([PRIMARY]);
+    expect(value.terminals).toHaveLength(1);
   });
 
-  it('resumes an existing exact Issue-bound worktree with no create', () => {
+  it('resumes an exact Issue-bound worktree and spawns once', () => {
     const value = fixture();
-    const path = value.addDual('issue-1298');
+    const path = value.addDual(PRIMARY);
 
     expect(execute(value)).toMatchObject({
-      outcome: 'ready_to_spawn', resumedExisting: true, selected: { path }, attempts: [], effects: [],
+      outcome: 'worker_spawned',
+      resumedExisting: true,
+      selected: { path },
+      attempts: [],
+      terminal: { handle: 'terminal-1' },
     });
     expect(value.creates).toEqual([]);
   });
 
-  it('uses only replacement after a pre-existing disputed create', () => {
+  it('refuses a sequential second caller after the first terminal exists', () => {
     const value = fixture();
-    value.addGit('issue-1298');
-    value.handlers.push((name) => {
-      value.addDual(name);
-      return processResult({ stdout: JSON.stringify({ ok: true }) });
+    value.addDual(PRIMARY);
+
+    expect(execute(value).outcome).toBe('worker_spawned');
+    const second = execute(value);
+
+    expect(second).toMatchObject({
+      outcome: 'task_degraded',
+      terminalSpawnCompleted: false,
+      attempts: [],
+      effects: [],
     });
-
-    const report = execute(value);
-
-    expect(report.attempts.map((attempt) => attempt.kind)).toEqual(['replacement']);
-    expect(value.creates).toEqual([replacement()]);
+    expect(second.error).toMatch(/existing or ambiguous Issue-family terminal/);
+    expect(value.terminals).toHaveLength(1);
+    expect(value.terminalCreates).toHaveLength(1);
   });
 
-  it('does not adopt an ABA-reused path', () => {
+  it('gives a caller entering during terminal creation no-effect degraded control', () => {
     const value = fixture();
-    const reused = value.addGit('issue-1298', OTHER_HEAD);
-    value.handlers.push(
-      () => {
-        value.gitRows[0] = { path: reused, head: HEAD, branch: 'issue-1298' };
-        return processResult({ stdout: JSON.stringify({ ok: true }) });
-      },
-      (name) => {
-        value.addDual(name);
-        return processResult({ stdout: JSON.stringify({ ok: true }) });
-      },
-    );
+    value.addDual(PRIMARY);
+    let loser: WorktreeCreateContinuationReport | undefined;
+    value.terminalHandler = (path) => {
+      loser = execute(value);
+      value.addTerminal(path);
+      return processResult({ stdout: JSON.stringify({ ok: true }) });
+    };
+
+    expect(execute(value).outcome).toBe('worker_spawned');
+    expect(loser).toMatchObject({ outcome: 'task_degraded', attempts: [], effects: [] });
+    expect(value.terminals).toHaveLength(1);
+  });
+
+  it('does not create a third worktree after primary and replacement are disputed', () => {
+    const value = fixture();
+    value.addGit(PRIMARY);
+    value.addGit(REPLACEMENT);
 
     const report = execute(value);
 
-    expect(report.selected?.path).not.toBe(reused);
-    expect(report.attempts[0]?.newGitPaths).toEqual([]);
+    expect(report).toMatchObject({ outcome: 'task_degraded', attempts: [], effects: [] });
+    expect(report.error).toMatch(/multiple pre-existing Issue-family candidates/);
+    expect(value.creates).toEqual([]);
   });
 
   it('degrades after one replacement instead of creating a third worktree', () => {
     const value = fixture();
-    value.handlers.push(
+    value.createHandlers.push(
       (name) => {
         value.addGit(name);
         return processResult({ stdout: JSON.stringify({ ok: true }) });
@@ -276,32 +364,19 @@ describe('bounded worktree creation', () => {
 
     const report = execute(value);
 
-    expect(report).toMatchObject({ outcome: 'task_degraded', terminalSpawnAuthorized: false });
-    expect(value.creates).toEqual(['issue-1298', replacement()]);
-  });
-
-  it('gives a concurrent caller no-effect degraded control', () => {
-    const value = fixture();
-    let loser: WorktreeCreateContinuationReport | undefined;
-    value.handlers.push((name) => {
-      loser = execute(value, 'concurrent-1298');
-      value.addDual(name);
-      return processResult({ stdout: JSON.stringify({ ok: true }) });
-    });
-
-    expect(execute(value).outcome).toBe('ready_to_spawn');
-    expect(loser).toMatchObject({ outcome: 'task_degraded', attempts: [], effects: [] });
-    expect(value.creates).toEqual(['issue-1298']);
+    expect(report).toMatchObject({ outcome: 'task_degraded', terminalSpawnCompleted: false });
+    expect(value.creates).toEqual([PRIMARY, REPLACEMENT]);
+    expect(value.terminalCreates).toEqual([]);
   });
 
   it('recovers a dead lock owner and blocks a live owner', () => {
     const stale = fixture();
     writeFileSync(stale.lockPath, '99999999\n\nold-token\n', 'utf8');
-    stale.handlers.push((name) => {
+    stale.createHandlers.push((name) => {
       stale.addDual(name);
       return processResult({ stdout: JSON.stringify({ ok: true }) });
     });
-    expect(execute(stale).outcome).toBe('ready_to_spawn');
+    expect(execute(stale).outcome).toBe('worker_spawned');
 
     const live = fixture();
     writeFileSync(live.lockPath, `${String(process.pid)}\n`, 'utf8');
