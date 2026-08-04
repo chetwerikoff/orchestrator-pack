@@ -506,6 +506,7 @@ function relevantInventoryFingerprint(
   expected: ExpectedWorktreeIdentity,
   census: ReturnType<typeof collectCensus>,
 ): string {
+  const repositoryId = census.classification.expected.repositoryId ?? expected.repositoryId;
   const matches = (row: {
     path: string;
     headSha?: string;
@@ -520,16 +521,23 @@ function relevantInventoryFingerprint(
   const git = census.classification.evidence.git.rows.filter(
     (row) => row.path === expected.path || row.headSha === expected.headSha || row.branchName === expected.branchName,
   );
-  const orca = census.classification.evidence.orca.rows.filter(matches);
-  const agents = census.agentRows.filter(matches);
+  const orca = census.classification.evidence.orca.rows.filter(
+    (row) => row.repoId === repositoryId && matches(row),
+  );
+  const agents = census.agentRows.filter(
+    (row) => row.repoId === repositoryId && matches(row),
+  );
   const terminals = census.terminals.filter((row) => row.worktreePath === expected.path);
   return digest({ git, orca, agents, terminals });
 }
 
 function nonTargetFingerprint(expected: ExpectedWorktreeIdentity, census: ReturnType<typeof collectCensus>): string {
+  const repositoryId = census.classification.expected.repositoryId ?? expected.repositoryId;
   return digest({
     git: census.classification.evidence.git.rows.filter((row) => row.path !== expected.path),
-    orca: census.classification.evidence.orca.rows.filter((row) => row.path !== expected.path),
+    orca: census.classification.evidence.orca.rows.filter(
+      (row) => row.repoId === repositoryId && row.path !== expected.path,
+    ),
   });
 }
 
@@ -574,11 +582,13 @@ function deferred(
 }
 
 function targetAgents(expected: ExpectedWorktreeIdentity, census: ReturnType<typeof collectCensus>): OrcaAgentInventoryRow[] {
+  const repositoryId = census.classification.expected.repositoryId ?? expected.repositoryId;
   return census.agentRows.filter(
-    (row) => row.path === expected.path
-      || row.branchName === expected.branchName
-      || (expected.bindingKind === 'pr' && row.linkedPR === expected.bindingNumber)
-      || (expected.bindingKind === 'issue' && row.linkedIssue === expected.bindingNumber),
+    (row) => row.repoId === repositoryId
+      && (row.path === expected.path
+        || row.branchName === expected.branchName
+        || (expected.bindingKind === 'pr' && row.linkedPR === expected.bindingNumber)
+        || (expected.bindingKind === 'issue' && row.linkedIssue === expected.bindingNumber)),
   );
 }
 
@@ -626,9 +636,10 @@ function collectRecoverySnapshot(
   };
 }
 
-function recoverySnapshotFingerprint(expected: ExpectedWorktreeIdentity, snapshot: RecoverySnapshot): string {
+function recoverySnapshotFingerprint(_expected: ExpectedWorktreeIdentity, snapshot: RecoverySnapshot): string {
+  const authoritativeExpected = snapshot.census.classification.expected;
   return digest({
-    inventory: relevantInventoryFingerprint(expected, snapshot.census),
+    inventory: relevantInventoryFingerprint(authoritativeExpected, snapshot.census),
     pr: snapshot.pr,
     gates: snapshot.gates,
     processes: snapshot.processes,
