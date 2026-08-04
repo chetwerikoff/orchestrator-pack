@@ -144,23 +144,6 @@ export function tempRoot(prefix: string): string {
   return mkdtempSync(path.join(tmpdir(), prefix));
 }
 
-export function psString(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-export function runPwsh(script: string, env: NodeJS.ProcessEnv = {}): string {
-  const result = runProcessSync({
-    command: 'pwsh',
-    args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
-    cwd: repoRoot,
-    env: { ...process.env, ...env },
-    inheritParentEnv: false,
-    encoding: 'utf8',
-  });
-  invariant(result.exitCode === 0, `pwsh failed ${result.exitCode ?? result.outcome}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
-  return result.stdout.trim();
-}
-
 export function runGit(args: readonly string[], cwd = repoRoot): string {
   const result = runProcessSync({
     command: 'git',
