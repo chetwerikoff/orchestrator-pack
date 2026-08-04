@@ -1,106 +1,124 @@
 ---
-description: Flow-manager MUST use the state-light send-once Browser-GPT helper for tracked turns
+description: Flow-manager browser-turn operating contract for tracked Browser-GPT work
 alwaysApply: true
 ---
 
 # Flow-manager browser-turn monitoring (binding)
 
-Canonical contract:
-Canonical long-running launcher runbook: [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md) — use `npm run flow-manager-browser-gpt-long-run` for applicable long turns; the Cursor rule remains a thin pointer.
- [`.claude/skills/create-issue-draft/SKILL.md`](../../.claude/skills/create-issue-draft/SKILL.md) — **Browser-GPT turn transport — Issues #1120 and #1150**.
+This file is the canonical tracked manager-facing carrier for Browser-GPT
+launch, observation, attribution, retry, publication, cleanup, diagnosis, and
+handoff mechanics. The portable operator procedure is
+[`docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
+Workflow and role rules remain in the canonical skills; CLI and result-schema
+reference remains in [`scripts/chatgpt-browser-turn/README.md`](../../scripts/chatgpt-browser-turn/README.md).
+Applicable long-running launcher internals remain in
+[`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
 
-## One normal monitoring path
+## Launch and observation
 
-For create-issue-draft and pack-review Browser-GPT work, `npm run chatgpt-browser-turn -- turn ...` is the normal low-token fast path and the only routine browser-turn monitor.
+For tracked create-issue and pack-review turns, use
+`npm run chatgpt-browser-turn -- turn ...`. Applicable long-running manager
+turns use `npm run flow-manager-browser-gpt-long-run -- ...` and its handoff
+receipt. Before launch, use a trusted current checkout, the configured local
+headed automation browser, and the applicable workflow/role. One invocation
+opens one dedicated owned tab, sends one exact user payload, and observes that
+same tab. Page/DOM completion is sufficient once the final assistant reply is
+stable and no longer generating; PID, shell state, silence, log growth,
+service-terminal witnesses, and heartbeats are not completion authority.
 
-- One invocation opens one dedicated owned ChatGPT tab, sends the exact user prompt once, and then observes that same tab until completion or an invocation-local failure.
-- Page/DOM completion is sufficient. Do not require service-terminal/network witness fields after the final assistant reply is visibly stable and no longer generating.
-- The helper may use bounded low-frequency polling after initial dispatch observation. A normal waiting/generating poll is not an incident.
-- A direct helper failure affects only that invocation. It does not authorize a profile-, conversation-, task-, Issue-, PR-, or agent-wide gate.
-- Owned-tab cleanup is progressive and local. Never close or commandeer sibling/foreign ChatGPT tabs.
+The transport-owned `OPKTURNV1...` marker is inserted per payload. Exactly one
+current user node with that marker proves ownership and page-path delivery;
+zero or multiple matches fail closed. Product ids and prompt-text matching are
+diagnostic only. Do not fabricate the marker in a prompt or use a second monitor.
+The helper emits `turn-result/v1`; the long-running adapter additionally owns
+the terminal envelope and handoff receipt. A direct event is invocation-local,
+must be retained and reported, and must not gate siblings or the account.
 
-## Configured plural-source launch contract (#1150)
+## Stage and retry boundary
 
-T3 `competitive` and `architectural-review` are each one staggered concurrent batch with one `stageAttemptId` and policy `triple-source/v1`.
+T1/T2 remain singular; T3 stage cardinality and order belong to the canonical
+create-issue workflow and are not redefined here. Relay or adjudication starts
+only after every launched invocation is terminal, no retry runs or remains
+eligible, and frozen revision checks match. Partial, blocked, and incident
+attempts remain ordered evidence.
 
-`OPK_GPT_REVIEWER_CARDINALITY` is the single operator control. The default T3 cardinality is 3; T1/T2 remain singular. Every stage receipt and invocation envelope freezes the selected `reviewerCardinality` and `cardinalityConfigIdentity`. Required slots are exact `01..N`, not hard-coded `01/02/03`.
+One paced retry under the same slot and `stageAttemptId` is legal only for a
+proven pre-send quota/composer/fill failure with `send_count: 0`. It uses
+`attemptOrdinal: 2` and `retryAttempt: true`, consumes the only retry, and may
+settle blocked/exhausted. A possible or confirmed send, post-send failure,
+ambiguous delivery, output conflict, missing terminal result, or
+`send_count: 1` forbids resend. A zero-send result with unused eligibility
+keeps the attempt unsettled until retry or explicit abandonment.
 
-- Start all N slots before harvesting or adjudicating any sibling result. Preserve 10–15 second spacing and bounded observation of earlier slots; do not invent an account-wide concurrency cap.
-- Every invocation emits one immutable `reviewer-invocation-envelope/v1` bound to `reviewEpisodeId`, `stageAttemptId`, policy, stage, frozen `sourceRevision`, cardinality/config identity, reviewer slot/ordinal, invocation identity, reviewer-source identity, terminal-result identity, revision checks, capacity observation, `send_count`, retry-attempt state, retry class, and terminal classification.
-- Successful siblings write separate source-suffixed captures: `pass-NN-competitive-SS.capture.txt` or `pass-NN-architectural-review-SS.capture.txt`. Never consolidate, rewrite, or move sibling captures to satisfy a file-count guard.
-- The final `stage-completeness-receipt/v1` is the only persisted stage authority. It belongs to one task-wide no-overwrite receipt sequence with canonical previous links and cumulative census.
-- The immutable `tier-intake/v1` task identity plus first frozen revision roots the episode. Guards read every stage receipt in the canonical review directory; a caller-selected subset or later-revision re-root is not authority.
-- Episode-wide governed/relayed unions and counts are derived, never persisted as an episode receipt.
-- One exact configured-N capture `stageAttemptId` is one logical round. Final T3 activation remains blocked until #1123 replaces Issue-lifetime capture-file counting with logical-round authority.
+## Publication and tab lifecycle
 
-## Invocation-local retry and settlement
+Direct target-Issue publication and receipt-only manager output follow the
+canonical create-issue workflow. Final output publication must succeed before
+the exact retained invocation page may close. After send with no publication,
+preserve the reachable page; release only this browser client. A lost page
+receives no later close authority. Never close or commandeer a foreign,
+sibling, or orphan tab by URL, target id, age, focus, metadata, or liveness.
 
-Blind restart is forbidden after any possible or confirmed send.
+## Observation loss and incident attribution
 
-- One paced retry under the same slot and `stageAttemptId` is permitted only when the terminal helper result proves a pre-send zero-send quota/composer/fill failure and reports `send_count: 0`.
-- The retry uses `attemptOrdinal: 2` and `retryAttempt: true`; it consumes the only retry and cannot remain retry-eligible. A failed retry may settle blocked/exhausted.
-- A post-send failure, ambiguous delivery, output conflict, missing terminal result, or any result with `send_count: 1` is incident evidence and forbids resend.
-- A proven zero-send result with unused retry eligibility keeps the stage attempt unsettled until the retry runs or eligibility is explicitly abandoned and the attempt settles blocked.
-- Relay/adjudication begins only after every launched invocation is terminal, no retry runs or remains eligible, and final revision checks match the frozen attempt revision.
-- Every partial, blocked, or incident attempt remains ordered evidence. A later stage cannot start before the preceding required stage has credentialed.
+Missing `turn-result/v1`, `page_or_browser_lost_after_send`,
+`fresh_conversation_landing_mismatch`, `owned_conversation_identity_mismatch`,
+or an owned turn with no returned result is not proof of non-delivery.
+Non-delivery is proven only by observing the conversation and finding no user
+node containing the owned prompt. After post-send observation loss, re-resolve
+the current target from the conversation URL, continue sanctioned observation,
+and harvest the answer. A saved target id may be stale and is not authoritative.
+Escalate only after the probe shows no delivery or sanctioned observation is
+unavailable. Every blocker names the exact probe and its observed result.
+Probe mechanics remain owned by Issues #1272 and #1122.
 
-## Claude producer evidence
+A failure belongs to the current work only when it is reproducible and
+causally linked to the current head/diff. Clean-base reproduction,
+`stale_digest_pin`, and live-fleet `snapshot_changed` for `${AO_BASE}`,
+`${WAKE_STATE}`, or temporary class fences are not current-work evidence.
+Rerun once after fleet quiescence; report a current-work blocker only if it
+still reproduces and remains head/diff-causal. Do not rebind `TMPDIR` or
+`AO_BASE_DIR` after failure outside the sanctioned
+`scripts/lib/vitest-live-store-harness.mjs` flow to make a guard pass without
+frozen `OPK_VITEST_PRODUCTION_TMP` /
+`OPK_VITEST_PRODUCTION_AO_BASE` roots and an active production-store guard.
+The existing `applyOpkVitestHarnessEnv` redirection is valid isolation.
 
-A Claude `architectural-lens` receipt cannot prove its own producer provenance. A counted Claude capture requires a separately produced immutable `claude-producer-evidence/v1` artifact matching episode, attempt, revision, invocation, producing run, terminal result, exit status, M3 status, and capture bytes/hash. A valid unavailable waiver contributes no capture or M3 authority.
+## Legacy state and diagnostic probe
 
-## Legacy state is not admission authority
+`status/list`, `clear`, capability/Gate-B, `possible_delivery`, profile walls,
+stale recovery/orphan records, locks, queues, leases, and shell liveness are
+not admission or completion authority. Unexpected events are appended
+best-effort to the local recurrence journal and included in the current report;
+do not use that journal to authorize work.
 
-Do **not** gate create/review progress on any of the following:
+When direct diagnosis is genuinely needed, run the sanctioned one-shot,
+read-only page probe with local variables such as `${CDP_ENDPOINT}` and an
+exact target identity. It never navigates, sends, clicks, focuses, reloads,
+creates, closes, publishes, retries, or progresses a stage. Do not replace it
+with raw CDP, Playwright, salvage scripts, selectors, JavaScript, or a watch
+loop.
 
-- `status/list`, `clear`, capability/Gate-B;
-- `possible_delivery`, `profile_wall`, stale recovery/orphan records;
-- browser/profile/conversation mutexes, claims, queues, leases, or helper-wide blocked state;
-- shell PID/log growth as evidence that ChatGPT is still generating.
+For contract-evidence authoring, `binding-id` uses
+`producer:datum:expected`, for example
+`orchestrator-pack:$.status:closed`. The producer must be listed in the closed
+`scripts/contract-evidence-producer-registry.json`; repo-owned examples include
+`orchestrator-pack` and `orchestrator-pack-scripts`. This is authoring
+guidance, not validator documentation.
 
-Legacy control commands may remain available for compatibility/evidence lookup, but they cannot decide whether a new Browser-GPT invocation may start.
+## Same-PR maintenance and handoff
 
-## Unexpected events and restart
+Keep this carrier, the runbook, workflow skills, and implementation reference
+synchronized in the same PR:
 
-When the helper directly observes foreign/interleaved user activity, page loss, UI contract failure, cleanup failure, timeout, output conflict, or another unexpected browser-turn event:
+| Changed contract | Same-PR documentation obligation |
+| --- | --- |
+| launch, observation, attribution, retry, publication, cleanup, probe, handoff | update this carrier and audit the runbook |
+| CLI option, result field, or component boundary | update the transport README; update carrier/runbook when operator behavior changes |
+| role, direct publication, receipt, or invocation identity | update the owning skill and corresponding runbook template |
+| local configuration or setup prerequisite | update the runbook and owning reference |
+| link or Issue authority supersession | repair all in-scope pointers and current-authority wording |
 
-1. retain and report the invocation-local terminal result or explicit missing-terminal incident;
-2. append the compact event best-effort to `~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl`;
-3. include the same direct event in the current flow-manager report;
-4. leave sibling Browser-GPT work alone;
-5. do not restart unless the result proves an eligible zero-send failure under the rule above.
-
-Duplicate recoverable text is not a reason to reintroduce global recovery/clear machinery. Source-preserving receipts and relay verification govern what may progress.
-
-## Sanctioned one-shot page probe
-
-When direct page diagnosis is genuinely needed, use only the canonical read-only utility:
-
-```bash
-npm run browser-gpt-page-probe -- list --cdp http://127.0.0.1:9222
-npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --target-id <exact-target-id>
-```
-
-An exact normalized ChatGPT conversation URL may replace `--target-id` for inspection only when it resolves to exactly one already-open target. The probe runs once and exits. It never navigates, sends, clicks, focuses, scrolls, reloads, creates, closes, or reorders tabs.
-
-The probe is **diagnostic only**:
-
-- `generation_in_progress: false` is not completion evidence;
-- node counts, hashes, witnesses, and an exported node file do not authorize publication, retry, resend, cleanup, admission, recovery, review capture, or stage progression;
-- use inspection output to select exactly one node representation for optional offline export; never request or construct a transcript dump;
-- exported text may be sensitive. The caller supplies a new path in an existing directory and owns protection and cleanup of the resulting file.
-
-Do not replace this command with raw CDP WebSocket scripts, Playwright snippets, `salvage-*.mjs`, caller-supplied selectors/JavaScript, a watch loop, or a second supported probe.
-
-## Forbidden duplicate monitoring and authority
-
-- No independent 5–10 or 10–15 minute watchdog layered over the helper.
-- No periodic browser-tab sweeper that closes tabs it did not open.
-- No reporting "still running" from shell/PID/log state alone.
-- No probe-driven takeover, helper bypass, resend, or workflow progression.
-- No flow-manager consolidation or content judgment over sibling reviewer output.
-
-The one-shot page probe diagnoses an already-open page; it is not a fallback state machine or browser-turn owner.
-
-## Session handoff
-
-Never end a flow-manager turn with only "background job running". Status must name the owned chat URL when known, the helper result or latest direct observation, the `reviewEpisodeId`/`stageAttemptId`/slot when applicable, any direct incident surfaced by the helper, and the next flow action.
+Never finish with only “background job running”. Report Issue and revision,
+owned chat when known, invocation/stage/slot identities, terminal result or
+incident, and the next legal action.

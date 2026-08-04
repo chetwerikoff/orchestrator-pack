@@ -5,6 +5,14 @@ cuts the canonical create/review `turn` path over to a state-light, send-once
 helper while retaining the pre-cutover implementation files and control commands
 only for diagnostics/rollback compatibility.
 
+Manager-facing launch, observation, attribution, retry/no-resend,
+publication, cleanup, diagnostic-probe, and handoff policy is canonical in
+[`../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc).
+The portable operator procedure and prompt templates are in
+[`../../docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
+This README is only the implementation-local CLI, result-schema, and component
+reference.
+
 The helper connects to the operator's already-running headed automation Chrome.
 It does not launch Chrome, edit prompts, choose workflow stages, or replace the
 standalone `.claude/skills/discuss-with-gpt/driver.mjs` adversarial driver.
@@ -16,21 +24,21 @@ Existing conversation:
 
 ```bash
 npm run chatgpt-browser-turn -- turn \
-  --profile /absolute/path/to/automation-profile \
-  --cdp http://127.0.0.1:9222 \
-  --input /absolute/path/to/message.txt \
-  --output /absolute/path/to/reply.txt \
-  --chat-url https://chatgpt.com/c/<conversation-id>
+  --profile ${BROWSER_PROFILE} \
+  --cdp ${CDP_ENDPOINT} \
+  --input ${INPUT_FILE} \
+  --output ${OUTPUT_FILE} \
+  --chat-url ${CHAT_URL}
 ```
 
 Fresh conversation:
 
 ```bash
 npm run chatgpt-browser-turn -- turn \
-  --profile /absolute/path/to/automation-profile \
-  --cdp http://127.0.0.1:9222 \
-  --input /absolute/path/to/message.txt \
-  --output /absolute/path/to/reply.txt \
+  --profile ${BROWSER_PROFILE} \
+  --cdp ${CDP_ENDPOINT} \
+  --input ${INPUT_FILE} \
+  --output ${OUTPUT_FILE} \
   --new-chat \
   --project-url <configured-project-url>
 ```
@@ -48,9 +56,9 @@ that may exit before the turn completes:
 ```bash
 npm run flow-manager-browser-gpt-long-run -- \
   --run-identity <id> --attempt-identity <id> \
-  --handoff-receipt /path/receipt.json \
-  --terminal-envelope /path/envelope.json \
-  --output /path/reply.txt \
+  --handoff-receipt ${HANDOFF_RECEIPT} \
+  --terminal-envelope ${TERMINAL_ENVELOPE} \
+  --output ${OUTPUT_FILE} \
   --profile ... --cdp ... --input ... --chat-url ...
 ```
 
@@ -141,31 +149,11 @@ Unrecognized owned prompts on a readable page never produce journal incidents.
 
 ## Send-once and retry boundary
 
-Inside one live invocation there is exactly one user-message send attempt. After
-the send boundary the helper only observes the same page. Fresh-conversation
-collision recovery follows the same discipline: a second send is allowed only on
-positive page-state evidence that the prior send did not land (no user message
-with the sent text, no conversation URL materialized, composer still holding the
-text). Ambiguous evidence or a landed send on a contended surface terminates the
-invocation locally; the caller decides whether to open a fresh chat.
-
-Slow generation,
-missing historical witness state, an elapsed observation threshold, or process-
-liveness uncertainty never authorizes a second send inside that invocation.
-Once `send_count >= 1`, observation-window expiry alone never yields `send_failed`
-or any other resend-licensing terminal while the owned page stays reachable.
-
-`--timeout-ms` is a **soft post-send observation threshold**. If the helper still
-owns a reachable page after it elapses, the same invocation keeps polling that
-page at the configured low-frequency cadence; elapsed time alone neither closes
-the tab nor returns fresh-resend authorization. A fresh replacement is legal only
-when the process/page/chat is genuinely lost or another real local failure makes
-the owned turn unavailable.
-
-A genuinely lost/crashed process, tab, or chat may be replaced by a fresh
-invocation in a fresh chat. A rare duplicate recoverable GPT text request is an
-explicitly accepted Issue #1120 risk; preventing it is not worth a cross-agent
-admission/recovery protocol.
+Inside one live invocation there is exactly one user-message send attempt. The
+manager-facing possible-delivery, observation-loss, and no-resend decisions
+are owned by the canonical carrier and runbook. This component only reports
+its local send count and terminal result; slow generation, missing witnesses,
+time thresholds, or process liveness do not create a second send.
 
 ## No create/review admission control plane
 
@@ -347,7 +335,7 @@ policy is a separate follow-up.
 Unexpected directly observed Browser-GPT events append best-effort JSONL rows to:
 
 ```text
-~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl
+${LOCAL_STATE_DIR}/create-issue-draft/browser-turn-recurrence.jsonl
 ```
 
 Compact rows may include timestamp, Issue/PR when known, surface, event class,

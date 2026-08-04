@@ -57,72 +57,24 @@ Exactly one flow-manager authority exists. The latest explicit handoff in audit
 state ends predecessor authority. Do not add lease, heartbeat, ownership service,
 or new store for this role boundary.
 
-## Browser-GPT transport — Issues #1120 and #1150
+## Browser-GPT tracked-turn mechanics
 
-Use `npm run chatgpt-browser-turn -- turn ...` as the routine monitor.
-### Long-running Browser-GPT child launcher (#1164)
+The canonical manager-facing launch, observation, marker attribution,
+publication, tab lifecycle, diagnostic-probe, failure-attribution, retry/no-
+resend, and handoff contract lives in
+[`.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc).
+The portable startup procedure and universal author/reviewer templates live in
+[`docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
+The transport README remains the implementation-local authority for supported
+CLI forms, argument names, result schemas, and component boundaries.
 
-For applicable long-running create-issue-draft Browser-GPT turns, use the
-deterministic adapter — not a direct `chatgpt-browser-turn` spawn from the
-flow-manager caller:
-
-```bash
-npm run flow-manager-browser-gpt-long-run -- ...
-```
-
-Canonical mechanics: [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
-
-- One canonical launcher (`flow-manager-long-running-child`) is the sole
-  terminal-envelope writer; the adapter starts it at the detached boundary and
-  waits for a committed `flow-manager-long-running-child-handoff/v1` receipt
-  before acknowledging acceptance.
-- `completion_mode` is fixed to `browser-turn-result-v1`; no caller-facing
-  completion-mode selector exists.
-- Receipt, terminal envelope, and Browser `--output` destinations must be
-  pairwise distinct before handoff commit.
-- Browser success requires one valid child-produced `turn-result/v1` on stdout
-  plus bounded child-exit/stdout-EOF finalization; child exit alone is not
-  missing-result authority.
-- Waiter deadline expiry is non-terminal and carries no success or retry
-  authority.
-- Delivery remains exactly `not-sent`, `POSSIBLY_DELIVERED`, or `landed`; blind
-  re-send after ambiguous post-send loss is forbidden.
-
-
-
-- One invocation owns one newly opened tab, sends the exact prompt once, polls
-  that tab, and closes only that tab.
-- Page/DOM final assistant state is sufficient. Do not require service-terminal
-  network witnesses.
-- Progress nodes are not concatenated; capture only the final eligible assistant
-  node for the owned user turn.
-- Foreign activity or UI failure degrades only that invocation.
-- Legacy `status/list`, `clear`, capability/Gate-B, profile walls, claims, queues,
-  leases, and stale recovery state are not admission or completion authority.
-- Polling is bounded and low-frequency. Ordinary generating/waiting is not an
-  incident.
-- Direct unexpected events append best-effort to
-  `~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl` and are also
-  reported in the current flow-manager result. The journal is advisory and never
-  scanned to grant or deny work.
-- Do not add a second monitor, raw-CDP fallback, profile-wide lock, 10–15 minute
-  watchdog, or tab sweeper.
-
-### Retry boundary
-
-A fresh send is **not** generic crash recovery.
-
-One paced retry under the same reviewer slot and `stageAttemptId` is allowed only
-when the terminal helper result proves an invocation-local pre-send
-quota/composer/fill failure with `send_count: 0`. Record first attempt as
-`attemptOrdinal: 1`, `retryAttempt: false`, `retryClass: eligible-zero-send`.
-The retry uses `attemptOrdinal: 2`, `retryAttempt: true`, consumes the only retry,
-and cannot remain retry-eligible. A failed retry may settle blocked/exhausted.
-
-Any possible/post-send failure, ambiguous delivery, output conflict, missing
-terminal result, or result with `send_count: 1` forbids resend. Retain it as
-incident evidence. A zero-send result with unused eligibility keeps the stage
-attempt unsettled until retry or explicit abandonment to a blocked settlement.
+For applicable long-running turns, use
+`npm run flow-manager-browser-gpt-long-run -- ...`; its launcher internals are
+owned by [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
+This skill retains the create-issue workflow, tiering, review-stage, capture,
+direct-publication, receipt, relay, ledger, and acceptance rules below. It does
+not duplicate tracked helper launch, polling, retry, tab-close, probe, or
+observation-loss mechanics.
 
 ## Fixed per-tier pipeline
 
@@ -269,10 +221,10 @@ credentialed.
 ## Workdir and immutable revision layout
 
 ```text
-~/.local/state/create-issue-draft/<N>/
+${LOCAL_STATE_DIR}/create-issue-draft/<N>/
   docs/issues_drafts/<N>-<slug>.md
   r01/ r02/ …
-~/.local/state/create-issue-draft/.review/<N>/
+${LOCAL_STATE_DIR}/create-issue-draft/.review/<N>/
 ```
 
 The numeric Issue identity owns review history. A new workdir/replay cannot hide

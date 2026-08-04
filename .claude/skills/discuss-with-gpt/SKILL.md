@@ -1,6 +1,6 @@
 ---
 name: discuss-with-gpt
-description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". Brief-only creation routes through create-issue-draft. Standalone artifact challenge keeps driver.mjs. Tracked create/review turns use the state-light send-once Browser-GPT helper from Issue #1120: dedicated owned tab, page polling, no legacy status/clear/capability/recovery admission authority. OpenCode is the default flow-manager when no runtime is selected; a capable operator-selected runtime such as Cursor or Codex may manage create-issue-draft without becoming a reviewer-engine substitute.
+description: Use when the user asks to adversarially challenge a draft/artifact with GPT (the custom ChatGPT project) — triggers «с gpt», «с гпт», «обсуди с gpt», «обсуди с гпт», «посоветуйся с gpt», «выясни с gpt», «драфт с gpt», «создай задачу с gpt», "draft with gpt", "discuss with gpt", "challenge with gpt". Brief-only creation routes through create-issue-draft. Standalone artifact challenge keeps driver.mjs. Tracked create/review turns follow the canonical Browser-GPT carrier and portable manager runbook; this skill retains routing and standalone-driver policy. OpenCode is the default flow-manager when no runtime is selected; a capable operator-selected runtime such as Cursor or Codex may manage create-issue-draft without becoming a reviewer-engine substitute.
 ---
 
 # discuss-with-gpt
@@ -30,129 +30,27 @@ the required T3 Claude lens.
 |---------|-------|
 | «с gpt» / «с гпт» / «обсуди с gpt» / "discuss with gpt" over an existing local artifact | standalone `driver.mjs` flow in this skill |
 | «создай задачу с gpt» / brief-only "draft with gpt" | `create-issue-draft` brief-only entry; effective tier floor T2 |
-| GPT-authored Issue task, with or without historical task-chat URL | `create-issue-draft`; this skill supplies tracked Browser-GPT mechanics |
+| GPT-authored Issue task, with or without historical task-chat URL | `create-issue-draft`; tracked mechanics are supplied by the canonical carrier and runbook |
 | «с кодексом» / "with codex" over an existing artifact for challenge/review | `adversarial-draft-review` |
 | explicit request to create or manage a task with Codex | `create-issue-draft` with Codex selected as flow-manager |
 | bug/root-cause consult | `investigate-root-cause` / `codex:rescue` |
 
 Do not impose the standalone adversarial loop on normal create-issue-draft stages.
 
-## Browser preconditions
+## Browser preconditions and tracked-turn pointer
 
-Both paths connect to an already-running automation Chrome with a logged-in
-ChatGPT session. Never type credentials.
+Both standalone and tracked paths require the already-running configured headed
+automation Chrome with a logged-in ChatGPT session. Never type credentials.
+Use the local launcher and gitignored configuration; do not place profile,
+project, conversation, CDP, input, or output values in tracked content.
 
-```bash
-bash .claude/skills/discuss-with-gpt/launch-chrome.sh
-```
-
-- Exit 0 means the launcher found/started the configured automation browser.
-- Do not wrap the launcher in `timeout`; it owns its bounded startup wait.
-- Do not launch parallel hand-rolled diagnostics or a second Chrome owner.
-- Automation Chrome uses the dedicated configured profile and loopback CDP port.
-
-Operator configuration remains local/gitignored:
-
-| Setting | Env var | `local.config.json` key |
-|---------|---------|---------------------------|
-| Custom GPT project URL | `DISCUSS_WITH_GPT_PROJECT_URL` | `projectUrl` |
-| Chrome user-data-dir | `DISCUSS_WITH_GPT_CHROME_USER_DATA_DIR` | `chromeUserDataDir` |
-| Chrome executable (optional) | `DISCUSS_WITH_GPT_CHROME_PATH` | `chromePath` |
-
-## Tracked helper for create/review — Issue #1120
-
-Use the package entrypoint so the Node-major guard runs first.
-
-Existing conversation:
-
-```bash
-npm run chatgpt-browser-turn -- \
-  --profile /absolute/path/to/automation-profile \
-  --cdp http://127.0.0.1:9222 \
-  --input /absolute/path/to/message.txt \
-  --output /absolute/path/to/reply.txt \
-  --chat-url https://chatgpt.com/c/<conversation-id>
-```
-
-Fresh conversation:
-
-```bash
-npm run chatgpt-browser-turn -- \
-  --profile /absolute/path/to/automation-profile \
-  --cdp http://127.0.0.1:9222 \
-  --input /absolute/path/to/message.txt \
-  --output /absolute/path/to/reply.txt \
-  --new-chat \
-  --project-url <configured-project-url>
-```
-
-The current flow-manager prepares exact argv plus absolute input/output paths.
-The helper is a **single-invocation fast path**, not admission/recovery authority:
-
-1. verify the local browser/profile/UI preconditions needed for this invocation;
-2. open one dedicated owned tab, even when `--chat-url` names an existing chat;
-3. navigate, snapshot input, and submit the user prompt once;
-4. observe only that owned tab until one final assistant node is stable and no
-   longer generating, advancing continuation UI when applicable;
-5. publish the captured final reply and close only the owned tab;
-6. emit one compact `turn-result/v1` result plus direct incident information.
-
-### Completion and attribution
-
-- Page/DOM completion is sufficient. Do not require service-terminal/network
-  witness or capability/Gate-B evidence after the final assistant reply is stable.
-- Progress/intermediate assistant nodes are not concatenated into the final result.
-- The invocation must observe its own exact user prompt after the page baseline.
-  Additional/interleaved user activity makes only that invocation
-  `observation_uncertain`/degraded; it never blocks a sibling tab.
-- A normal generating/wait poll is not an incident.
-- Login, quota, challenge, unusable composer, redirect/UI mismatch, or publication
-  conflict are local invocation results.
-
-### Send-once and lost-state policy
-
-The live invocation has exactly one user-message send boundary. After that the
-helper only polls/reads the same tab. It never silently re-sends because of a
-slow reply, timeout, missing old witness, or ambiguous local process state.
-
-When a process/page/chat is genuinely lost and cheap continuation is unavailable,
-the flow-manager may start a **fresh invocation in a fresh chat and send again**.
-A duplicate recoverable GPT text request is an accepted residual risk. Do not
-query or clear legacy helper state to authorize the replacement.
-
-### Legacy control/recovery state is non-authoritative
-
-Tracked create/review progression must not wait for or clear:
-
-- `status/list`, `clear`, capability, Gate-B characterization;
-- `publication-status` as delivery/admission authority;
-- `possible_delivery`, `profile_wall`, tombstone/orphan recovery state;
-- profile/conversation/task/Issue/PR mutexes, claims, queues, leases, or adoption
-  records.
-
-Old files/control commands may remain for historical compatibility or diagnosis,
-but they are not live create/review gates. Do not copy the old retained-recovery
-root or require candidate/gate digests before a normal turn.
-
-### Incident journal and reporting
-
-Direct unexpected helper events append best-effort to:
-
-```text
-~/.local/state/create-issue-draft/browser-turn-recurrence.jsonl
-```
-
-The journal is append-only retrospective analytics. Never scan it before a turn,
-never lock/dedupe it, and never let historical rows or append failure grant/veto
-browser work. Carry the same directly observed incident class into the current
-flow-manager report. Cleanup failure after a captured reply is an incident but
-must not invalidate the captured reply or close foreign tabs.
-
-### No second tracked monitor in #1120
-
-Do not add or run a parallel direct-CDP inspector/watchdog for tracked turns, and
-do not infer "GPT is still generating" from PID/log/background-job liveness. The
-dedicated direct-agent fallback/supervision policy is a separate follow-up task.
+For tracked create/review turns, follow the canonical carrier
+[`.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc)
+and [`docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
+Those documents own launch order, observation, marker attribution, publication,
+retry/no-resend, tab lifecycle, probe, and handoff mechanics. This skill keeps
+only routing and the standalone `driver.mjs` contract here. The create-issue
+skill owns workflow, tier, stage, capture, receipt, and acceptance policy.
 
 ## create-issue-draft chat topology
 
