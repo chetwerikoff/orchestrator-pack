@@ -183,6 +183,33 @@ class SupersedingFleetSource extends FakeFleetSource {
   }
 }
 
+class DeferredListingFleetSource extends FakeFleetSource {
+  private readonly pending: Array<() => void> = [];
+  private readonly queuedListings: RuntimeWorker[][] = [];
+
+  queueListing(workers: RuntimeWorker[]): void {
+    this.queuedListings.push(workers);
+  }
+
+  override listWorkers(): Promise<RuntimeResult<readonly RuntimeWorker[]>> {
+    const workers = this.queuedListings.shift()
+      ?? [...this.workers.values()].map((state) => state.worker);
+    return new Promise((resolve) => {
+      this.pending.push(() => resolve({ status: 'ok', value: workers }));
+    });
+  }
+
+  async waitForPending(count: number): Promise<void> {
+    while (this.pending.length < count) await Promise.resolve();
+  }
+
+  releaseNext(): void {
+    const release = this.pending.shift();
+    if (!release) throw new Error('missing deferred list result');
+    release();
+  }
+}
+
 const roots: string[] = [];
 
 afterEach(() => {
@@ -407,6 +434,39 @@ describe('S1 fleet observer', () => {
     expect(result.snapshot?.census[0]?.class).toBe('unknown');
     expect(result.snapshot?.census[0]?.reason).toBe('identity-contradiction');
     expect(result.snapshot?.transitions.some((transition) => transition.reason === 'positive-gone')).toBe(false);
+  });
+
+  it('rejects a stale list result before mutating shared state', async () => {
+    const source = new DeferredListingFleetSource();
+    const existing = source.add('existing-listing');
+    source.queueListing([existing]);
+    const observer = observerFor(source);
+    const initialPromise = observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 1 });
+    await source.waitForPending(1);
+    source.releaseNext();
+    const initial = await initialPromise;
+    const initialUnitRef = initial.snapshot?.census[0]?.unitRef;
+    expect(initialUnitRef).toBe('u-000001');
+
+    source.remove('existing-listing');
+    const stale = source.add('stale-listing');
+    source.remove('stale-listing');
+    source.add('existing-listing');
+    source.queueListing([stale]);
+    source.queueListing([existing]);
+
+    const stalePromise = observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 2 });
+    const currentPromise = observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 3 });
+    await source.waitForPending(2);
+    source.releaseNext();
+    const staleResult = await stalePromise;
+    expect(staleResult.staleCompletionRejected).toBe(true);
+    expect(staleResult.snapshotCommitted).toBe(false);
+
+    source.releaseNext();
+    const currentResult = await currentPromise;
+    expect(currentResult.snapshotCommitted).toBe(true);
+    expect(currentResult.snapshot?.census[0]?.unitRef).toBe(initialUnitRef);
   });
 
   it('does not settle gone when output identity differs', async () => {

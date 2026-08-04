@@ -616,6 +616,8 @@ export class FleetObserver {
       );
       if (!listCall.completed || !listCall.value || listCall.value.status !== 'ok') {
         failureReason = listCall.completed ? 'list-failed' : 'phase-budget-expired';
+      } else if (this.#activeTick !== tickSequence || this.#now() >= admissionDeadline) {
+        return this.resultFor(undefined, start, hardDeadline, tickSequence, true, false);
       } else if (listCall.value.value.length > MAX_UNITS) {
         failureReason = 'fleet-cap-exceeded';
       } else {
@@ -1122,7 +1124,7 @@ export class FleetObserver {
       if (this.#now() >= deadlineMs || readBack !== bytes || !readBackSnapshot
         || readBackSnapshot.schedulerGeneration !== this.#schedulerGeneration
         || readBackSnapshot.tickSequence !== tickSequence) {
-        rollback();
+        if (!rollback()) clearPreviousAuthority();
         return false;
       }
       const dirFd = openSync(this.#stateDirectory, 'r');
