@@ -191,7 +191,31 @@ jobs:
               Write-Warning 'scope guard bootstrap: AO-free declaration contract is not on base ref yet; using PR head scripts for this migration PR'
               # A PR-head checker is allowed only for the one live, head-bound bootstrap.
               # The base checkout must not silently trust arbitrary PR workflow code.
-              $packGh = Join-Path $env:GITHUB_WORKSPACE 'scripts/gh'
+              $expectedPaths = @(
+                'scripts/pr-scope-check.ts',
+                'scripts/pr-scope-check.ps1',
+                'scripts/pr-scope-declaration.ts',
+                'scripts/pr-scope-declaration.test.ts',
+                '.github/workflows/scope-guard.yml'
+              )
+              $changedOutput = & git -C $env:GITHUB_WORKSPACE diff --name-only --no-renames "$env:PR_BASE_SHA...$env:PR_HEAD_SHA"
+              if ($LASTEXITCODE -ne 0) { throw 'scope guard bootstrap: unable to read PR changed paths' }
+              $changedPaths = @(
+                $changedOutput |
+                  ForEach-Object { [string]$_ } |
+                  Where-Object { $_ -ne '' }
+              )
+              $changedPathDifference = @(
+                Compare-Object -ReferenceObject ($expectedPaths | Sort-Object) -DifferenceObject ($changedPaths | Sort-Object)
+              )
+              if (
+                $changedPaths.Count -ne $expectedPaths.Count -or
+                $changedPathDifference.Count -ne 0
+              ) {
+                throw 'scope guard bootstrap: PR changed paths do not match the authorized implementation set'
+              }
+
+              $packGh = Join-Path $trustedRoot 'scripts/gh'
               $prPayload = & $packGh pr view $env:PR_NUMBER --repo $env:GITHUB_REPOSITORY --json body 2>$null
               if ($LASTEXITCODE -ne 0) { throw 'scope guard bootstrap: unable to read PR body' }
               $prBody = ([string]($prPayload | ConvertFrom-Json).body)
@@ -213,13 +237,6 @@ jobs:
               $bootstrap = $bootstrapCandidates[0]
               $revisionMatch = [regex]::Match($issueBody, '(?m)^<!--\s*source-revision:\s*(?<revision>r\d+)\s*-->$')
               if (-not $revisionMatch.Success) { throw 'scope guard bootstrap: missing source revision' }
-              $expectedPaths = @(
-                'scripts/pr-scope-check.ts',
-                'scripts/pr-scope-check.ps1',
-                'scripts/pr-scope-declaration.ts',
-                'scripts/pr-scope-declaration.test.ts',
-                '.github/workflows/scope-guard.yml'
-              )
               $declaredPaths = @($bootstrap.allowedImplementationPaths | ForEach-Object { [string]$_ })
               $bindingValid =
                 $bootstrap.issueNumber -eq $issueNumber -and
