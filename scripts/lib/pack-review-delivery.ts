@@ -4,6 +4,7 @@ import { runProcess } from '../kernel/subprocess.ts';
 import {
   describePackReviewError as describeError,
   getPackReviewRun,
+  hasPersistedPackReviewVerdict,
   setPackReviewRunTerminal,
   updatePackReviewRun,
   trimPackReviewValue as trim,
@@ -61,10 +62,9 @@ export function packReviewRequiredStatusNeedsStaleReconciliation(run: PackReview
   if (packReviewRequiredStatusStaleReconciliationComplete(run)) return false;
   const outcome = run.deliveryOutcomes?.requiredStatus;
   const pendingKey = packReviewPendingRequiredStatusIdempotencyKey(run);
-  const staleKey = packReviewStaleRequiredStatusIdempotencyKey(run);
   if (!outcome) return isPackReviewStaleTerminalRun(run);
   if (outcome.idempotencyKey === pendingKey && outcome.state === 'succeeded') return true;
-  if (outcome.idempotencyKey === staleKey && outcome.state === 'failed') return true;
+  if (outcome.state === 'failed') return true;
   return false;
 }
 
@@ -172,6 +172,15 @@ interface RecordMalformedReviewOptions extends PackReviewStoreOptions {
   run: PackReviewRunRecord;
   failureReason: string;
   writeRequiredStatus: PackReviewRequiredStatusWriter;
+  clock?: () => Date;
+}
+
+interface RecordUnfinishedReviewOptions extends PackReviewStoreOptions {
+  run: PackReviewRunRecord;
+  status: Extract<PackReviewRunStatus, 'failed' | 'timed_out' | 'cancelled'>;
+  failureReason: string;
+  writeRequiredStatus: PackReviewRequiredStatusWriter;
+  exitCode?: number | null;
   clock?: () => Date;
 }
 
@@ -381,6 +390,10 @@ async function journalVerdict(
       return { ok: true, run, outcome: persisted };
     } catch (error) {
       lastError = describeError(error);
+      const durable = safeGetPackReviewRun(options.run.id, options);
+      if (durable && hasPersistedPackReviewVerdict(durable) && durable.journalOutcome?.state === 'persisted') {
+        return { ok: true, run: durable, outcome: durable.journalOutcome };
+      }
       if (attempt < JOURNAL_WRITE_ATTEMPTS) await delay(JOURNAL_RETRY_DELAY_MS * attempt);
     }
   }
@@ -591,6 +604,9 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
   if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
     return publishPackReviewTerminalRequiredStatus(run, options);
   }
+  if (run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled') {
+    return publishPackReviewUnfinishedRequiredStatus(run, options);
+  }
   if (PACK_REVIEW_ACTIVE_STATUSES.has(run.status)) {
     const pendingKey = packReviewPendingRequiredStatusIdempotencyKey(run);
     let pendingOutcome = outcome('succeeded', 'status_pending', pendingKey, options.clock);
@@ -611,6 +627,9 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
     const fresh = reload();
     if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(fresh.status)) {
       return publishPackReviewTerminalRequiredStatus(fresh, options);
+    }
+    if (fresh.status === 'failed' || fresh.status === 'timed_out' || fresh.status === 'cancelled') {
+      return publishPackReviewUnfinishedRequiredStatus(fresh, options);
     }
     return pendingOutcome;
   }
@@ -666,42 +685,98 @@ export async function recordPackReviewPendingStatus(
   return statusOutcome;
 }
 
+function unfinishedRequiredStatusDescription(failureReason: string): string {
+  if (failureReason.startsWith('reviewer_output_malformed')) {
+    return 'Pack review did not produce a valid reviewer judgment.';
+  }
+  if (failureReason === 'reviewer_process_timeout') {
+    return 'Pack review execution did not finish; no reviewer judgment was produced.';
+  }
+  if (failureReason === 'reviewer_process_failed') {
+    return 'Pack review process failed before a reviewer judgment was produced.';
+  }
+  if (failureReason === 'runner_disappeared_stale') {
+    return 'Pack review runner disappeared before completion; no reviewer judgment was produced.';
+  }
+  if (failureReason === 'stale_head_before_terminal') {
+    return 'Pack review could not publish because the bound head changed; no reviewer judgment was produced.';
+  }
+  return 'Pack review execution failed before a reviewer judgment was produced.';
+}
+
+function unfinishedRequiredStatusKey(run: PackReviewRunRecord, failureReason: string): string {
+  if (failureReason === 'runner_disappeared_stale') return packReviewStaleRequiredStatusIdempotencyKey(run);
+  if (failureReason.startsWith('reviewer_output_malformed')) {
+    return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:malformed`;
+  }
+  return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:unfinished:${failureReason}`;
+}
+
+async function publishPackReviewUnfinishedRequiredStatus(
+  run: PackReviewRunRecord,
+  options: RecordPendingReviewOptions,
+): Promise<PackReviewDeliveryOutcome> {
+  const failureReason = trim(run.failureReason) || 'runner_internal_failure';
+  const idempotencyKey = unfinishedRequiredStatusKey(run, failureReason);
+  let statusOutcome: PackReviewDeliveryOutcome;
+  try {
+    await options.writeRequiredStatus({
+      state: 'error',
+      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+      description: unfinishedRequiredStatusDescription(failureReason),
+      idempotencyKey,
+    });
+    statusOutcome = outcome('succeeded', 'status_unfinished_execution', idempotencyKey, options.clock);
+  } catch (error) {
+    statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
+  }
+  persistChannelOutcome(run.id, 'requiredStatus', statusOutcome, options);
+  return statusOutcome;
+}
+
+export async function recordPackReviewUnfinishedTerminalStatus(options: RecordUnfinishedReviewOptions): Promise<{
+  ok: false;
+  reason: string;
+  status: Extract<PackReviewRunStatus, 'failed' | 'timed_out' | 'cancelled'>;
+  run: PackReviewRunRecord;
+  deliveryOutcome: PackReviewDeliveryOutcome;
+}> {
+  const failureReason = trim(options.failureReason) || 'runner_internal_failure';
+  const terminal = setPackReviewRunTerminal(options.run.id, options.status, {
+    exitCode: options.exitCode ?? (options.status === 'timed_out' ? null : 1),
+    failureReason,
+  }, storeOptions(options));
+  const persisted = safeGetPackReviewRun(options.run.id, options);
+  if (!persisted || persisted.status !== options.status || persisted.failureReason !== failureReason) {
+    throw new Error('pack review terminal state was not durably persisted');
+  }
+  const deliveryOutcome = await publishPackReviewUnfinishedRequiredStatus(persisted, options);
+  return {
+    ok: false,
+    reason: failureReason,
+    status: options.status,
+    run: safeGetPackReviewRun(options.run.id, options) ?? terminal,
+    deliveryOutcome,
+  };
+}
+
 export async function recordMalformedPackReviewStatus(options: RecordMalformedReviewOptions): Promise<{
   ok: false;
   reason: string;
   status: 'failed';
   run: PackReviewRunRecord | null;
 }> {
-  const idempotencyKey = `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${options.run.targetSha}:malformed`;
-  let statusOutcome: PackReviewDeliveryOutcome;
-  try {
-    await options.writeRequiredStatus({
-      state: 'error',
-      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-      description: 'Pack review produced a malformed terminal verdict.',
-      idempotencyKey,
-    });
-    statusOutcome = outcome('succeeded', 'status_error', idempotencyKey, options.clock);
-  } catch (error) {
-    statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
-  }
-  persistChannelOutcome(options.run.id, 'requiredStatus', statusOutcome, options);
-
-  let run: PackReviewRunRecord | null = null;
-  try {
-    run = setPackReviewRunTerminal(options.run.id, 'failed', {
-      exitCode: 0,
-      failureReason: classifyPackReviewFailureReason('reviewer_output_malformed'),
-      deliveryOutcomes: { requiredStatus: statusOutcome },
-    }, storeOptions(options));
-  } catch {
-    run = safeGetPackReviewRun(options.run.id, options);
-  }
+  const malformed = await recordPackReviewUnfinishedTerminalStatus({
+    ...options,
+    status: 'failed',
+    failureReason: classifyPackReviewFailureReason('reviewer_output_malformed'),
+    exitCode: 0,
+  });
   return {
     ok: false,
     reason: trim(options.failureReason) || 'reviewer produced no valid terminal verdict payload',
     status: 'failed',
-    run,
+    run: malformed.run,
   };
 }
 

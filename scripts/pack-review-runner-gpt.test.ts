@@ -15,7 +15,7 @@ import {
   runPackGptReviewCommand,
 } from './pack-gpt-review.js';
 import { startPackReview } from './pack-review-runner.js';
-import { createPackReviewRun } from './lib/pack-review-run-store.js';
+import { createPackReviewRun, listPackReviewRuns } from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
 
@@ -189,6 +189,7 @@ describe('GPT failure matrix (Issue #1031 AC5)', () => {
       const invocationLog = path.join(storeRoot, 'invocations.jsonl');
       harnessEnv(storeRoot, capture);
       process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
+      const statusRequests: Array<{ state: string }> = [];
 
       const result = await startPackReview({
         projectId: 'orchestrator-pack',
@@ -202,9 +203,16 @@ describe('GPT failure matrix (Issue #1031 AC5)', () => {
         fixtureReviewStdout: failureCase.timedOut ? undefined : failureCase.stdout,
         fixtureReviewExitCode: failureCase.exitCode,
         fixtureReviewTimedOut: failureCase.timedOut,
+        fixtureRequiredStatusWriter: async (request) => {
+          statusRequests.push(request);
+          if (request.state === 'error') {
+            expect(listPackReviewRuns({ projectId: 'orchestrator-pack', storeRoot })[0]?.status).toMatch(/failed|timed_out/);
+          }
+        },
       });
 
       expect(result.ok).toBe(false);
+      expect(statusRequests.map((request) => request.state)).toEqual(['pending', 'error']);
       expect(process.env.PACK_REVIEWER).toBe('gpt');
       expect(() => readFileSync(capture, 'utf8')).toThrow();
       expect(process.env.PACK_REVIEWER).toBe('gpt');

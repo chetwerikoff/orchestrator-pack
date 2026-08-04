@@ -101,6 +101,7 @@ export interface PackReviewRunRecord {
   createdAt: string;
   updatedAt: string;
   heartbeatAtUtc: string;
+  sameKeyOrder?: number;
   completedAtUtc?: string;
   exitCode?: number | null;
   failureReason?: string;
@@ -380,6 +381,9 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
     createdAt,
     updatedAt,
     heartbeatAtUtc: String(raw.heartbeatAtUtc ?? updatedAt),
+    sameKeyOrder: raw.sameKeyOrder === undefined
+      ? undefined
+      : requiredPositiveInteger(raw.sameKeyOrder, 'sameKeyOrder', path),
     reviewVerdict: raw.reviewVerdict === 'clean' || raw.reviewVerdict === 'findings'
       ? raw.reviewVerdict
       : undefined,
@@ -475,17 +479,87 @@ export function terminalizePackReviewStaleRun(
   return { changed: true, run };
 }
 
+export type PackReviewRunOrderResolution =
+  | { kind: 'newer'; run: PackReviewRunRecord }
+  | { kind: 'none' }
+  | { kind: 'ambiguous'; reason: 'legacy_order_ambiguous' };
+
+function compareSameKeyRuns(left: PackReviewRunRecord, right: PackReviewRunRecord): number | null {
+  if (left.sameKeyOrder !== undefined && right.sameKeyOrder !== undefined) {
+    if (left.sameKeyOrder === right.sameKeyOrder) return null;
+    return left.sameKeyOrder > right.sameKeyOrder ? 1 : -1;
+  }
+  if (left.sameKeyOrder !== undefined) return 1;
+  if (right.sameKeyOrder !== undefined) return -1;
+  const leftCreatedAt = Date.parse(left.createdAt);
+  const rightCreatedAt = Date.parse(right.createdAt);
+  if (!Number.isFinite(leftCreatedAt) || !Number.isFinite(rightCreatedAt)) return null;
+  if (leftCreatedAt === rightCreatedAt) return null;
+  return leftCreatedAt > rightCreatedAt ? 1 : -1;
+}
+
+function hasLegacyOrderAmbiguity(records: readonly PackReviewRunRecord[], key: string): boolean {
+  const legacy = records.filter((record) => record.key === key && record.sameKeyOrder === undefined);
+  for (let index = 0; index < legacy.length; index += 1) {
+    for (let next = index + 1; next < legacy.length; next += 1) {
+      if (Date.parse(legacy[index]!.createdAt) === Date.parse(legacy[next]!.createdAt)) return true;
+    }
+  }
+  return false;
+}
+
+export function resolvePackReviewRunOrder(
+  records: readonly PackReviewRunRecord[],
+  run: PackReviewRunRecord,
+): PackReviewRunOrderResolution {
+  if (hasLegacyOrderAmbiguity(records, run.key)) {
+    return { kind: 'ambiguous', reason: 'legacy_order_ambiguous' };
+  }
+  let newer: PackReviewRunRecord | undefined;
+  for (const candidate of records) {
+    if (candidate.key !== run.key || candidate.id === run.id) continue;
+    const comparison = compareSameKeyRuns(candidate, run);
+    if (comparison === null) return { kind: 'ambiguous', reason: 'legacy_order_ambiguous' };
+    if (comparison <= 0) continue;
+    if (!newer) {
+      newer = candidate;
+      continue;
+    }
+    const latestComparison = compareSameKeyRuns(candidate, newer);
+    if (latestComparison === null) return { kind: 'ambiguous', reason: 'legacy_order_ambiguous' };
+    if (latestComparison > 0) newer = candidate;
+  }
+  return newer ? { kind: 'newer', run: newer } : { kind: 'none' };
+}
+
+function selectLatestSameKeyRun(
+  records: readonly PackReviewRunRecord[],
+  candidates: readonly PackReviewRunRecord[],
+): PackReviewRunRecord | null {
+  if (candidates.length === 0) return null;
+  const key = candidates[0]!.key;
+  if (hasLegacyOrderAmbiguity(records, key)) {
+    throw new Error(`ambiguous pack review run order for ${key}: legacy_order_ambiguous`);
+  }
+  let latest = candidates[0]!;
+  for (const candidate of candidates.slice(1)) {
+    const comparison = compareSameKeyRuns(candidate, latest);
+    if (comparison === null) {
+      throw new Error(`ambiguous pack review run order for ${key}: legacy_order_ambiguous`);
+    }
+    if (comparison > 0) latest = candidate;
+  }
+  return latest;
+}
+
 export function hasNewerPackReviewRunForKey(
   records: readonly PackReviewRunRecord[],
   run: PackReviewRunRecord,
 ): boolean {
-  const createdAt = Date.parse(run.createdAt);
-  return records.some((candidate) => candidate.key === run.key
-    && candidate.id !== run.id
-    && Date.parse(candidate.createdAt) > createdAt);
+  return resolvePackReviewRunOrder(records, run).kind === 'newer';
 }
 
-function hasPersistedPackReviewVerdict(record: PackReviewRunRecord): boolean {
+export function hasPersistedPackReviewVerdict(record: PackReviewRunRecord): boolean {
   return record.journalOutcome?.state === 'persisted'
     && (record.reviewVerdict === 'clean' || record.reviewVerdict === 'findings')
     && Number.isInteger(record.findingCount)
@@ -511,7 +585,12 @@ export function listPackReviewRuns(options: PackReviewStoreOptions = {}): PackRe
   const now = options.now ?? new Date();
   return withStoreLock(storeRoot, () => readRecordsUnlocked(storeRoot)
     .filter((record) => !options.projectId || record.projectId === options.projectId)
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+    .sort((left, right) => {
+      if (left.key !== right.key) return Date.parse(right.createdAt) - Date.parse(left.createdAt);
+      const comparison = compareSameKeyRuns(right, left);
+      if (comparison === null) throw new Error(`ambiguous pack review run order for ${left.key}: legacy_order_ambiguous`);
+      return comparison;
+    })
     .map((record) => consumerRow(record, now)));
 }
 
@@ -549,16 +628,20 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
     const completed = records
       .filter((record) => record.key === key
         && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
-        && hasPersistedPackReviewVerdict(record))
-      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-    if (completed.length > 0) {
-      return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(completed[0]!), storeRoot };
+        && hasPersistedPackReviewVerdict(record));
+    const latestCompleted = selectLatestSameKeyRun(records, completed);
+    if (latestCompleted) {
+      return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(latestCompleted), storeRoot };
     }
 
     const canonicalRepository = input.canonicalRepository
       ? normalizePackReviewCanonicalRepository(input.canonicalRepository)
       : undefined;
     const now = (input.now ?? new Date()).toISOString();
+    const sameKeyOrders = records
+      .filter((record) => record.key === key && record.sameKeyOrder !== undefined)
+      .map((record) => record.sameKeyOrder!);
+    const sameKeyOrder = (sameKeyOrders.length > 0 ? Math.max(...sameKeyOrders) : 0) + 1;
     const runId = `prr-${randomUUID().replaceAll('-', '')}`;
     const record: PackReviewRunRecord = {
       schemaVersion: 1,
@@ -581,6 +664,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       createdAt: now,
       updatedAt: now,
       heartbeatAtUtc: now,
+      sameKeyOrder,
       findings: [],
       deliveryOutcomes: {},
     };
@@ -603,6 +687,7 @@ export function updatePackReviewRun(
     const next = parseRecord({
       ...existing,
       ...fields,
+      sameKeyOrder: existing.sameKeyOrder,
       id: existing.id,
       runId: existing.runId,
       key: existing.key,

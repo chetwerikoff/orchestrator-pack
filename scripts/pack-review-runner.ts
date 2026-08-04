@@ -54,7 +54,8 @@ import {
 import {
   createPackReviewRun,
   getPackReviewRun,
-  hasNewerPackReviewRunForKey,
+  hasPersistedPackReviewVerdict,
+  resolvePackReviewRunOrder,
   heartbeatPackReviewRun,
   isPackReviewRunStale,
   isPackReviewStaleTerminalRun,
@@ -84,6 +85,7 @@ import {
   packReviewRequiredStatusNeedsStaleReconciliation,
   publishPackReviewRequiredStatus,
   recordMalformedPackReviewStatus,
+  recordPackReviewUnfinishedTerminalStatus,
   recordPackReviewPendingStatus,
   recordPackReviewStaleRequiredStatus,
   restorePackReviewAuthoritativeRequiredStatus,
@@ -815,6 +817,17 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
 
+    const initialOrder = resolvePackReviewRunOrder(records, candidate);
+    if (initialOrder.kind === 'ambiguous') {
+      results.push({
+        runId: candidate.id,
+        terminalized: false,
+        statusReconciled: false,
+        reason: initialOrder.reason,
+      });
+      continue;
+    }
+
     let terminalized = false;
     let run = candidate;
     if (activeStale) {
@@ -825,7 +838,17 @@ export async function reconcileStalePackReviewRuns(
 
     if (!isPackReviewStaleTerminalRun(run)) continue;
 
-    if (hasNewerPackReviewRunForKey(records, run)) {
+    const currentOrder = resolvePackReviewRunOrder(records, run);
+    if (currentOrder.kind === 'ambiguous') {
+      results.push({
+        runId: run.id,
+        terminalized,
+        statusReconciled: false,
+        reason: currentOrder.reason,
+      });
+      continue;
+    }
+    if (currentOrder.kind === 'newer') {
       results.push({
         runId: run.id,
         terminalized,
@@ -849,7 +872,17 @@ export async function reconcileStalePackReviewRuns(
     if (beforeWrite) await beforeWrite(run);
 
     const recordsBeforeStaleStatusWrite = listPackReviewRunRecordsRaw({ projectId, storeRoot });
-    if (hasNewerPackReviewRunForKey(recordsBeforeStaleStatusWrite, run)) {
+    const orderBeforeStaleStatusWrite = resolvePackReviewRunOrder(recordsBeforeStaleStatusWrite, run);
+    if (orderBeforeStaleStatusWrite.kind === 'ambiguous') {
+      results.push({
+        runId: run.id,
+        terminalized,
+        statusReconciled: false,
+        reason: orderBeforeStaleStatusWrite.reason,
+      });
+      continue;
+    }
+    if (orderBeforeStaleStatusWrite.kind === 'newer') {
       results.push({
         runId: run.id,
         terminalized,
@@ -866,19 +899,15 @@ export async function reconcileStalePackReviewRuns(
         headSha: run.targetSha,
         request,
       }));
-    const authorizeStaleWrite = () => !hasNewerPackReviewRunForKey(
-      listPackReviewRunRecordsRaw({ projectId, storeRoot }),
-      run,
-    );
+    const authorizeStaleWrite = () => {
+      const order = resolvePackReviewRunOrder(listPackReviewRunRecordsRaw({ projectId, storeRoot }), run);
+      return order.kind === 'none';
+    };
     const repairSupersededStaleWrite = async () => {
-      const newerRun = listPackReviewRunRecordsRaw({ projectId, storeRoot })
-        .filter((candidate) => candidate.key === run.key
-          && candidate.id !== run.id
-          && Date.parse(candidate.createdAt) > Date.parse(run.createdAt))
-        .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
-      if (!newerRun) return;
+      const order = resolvePackReviewRunOrder(listPackReviewRunRecordsRaw({ projectId, storeRoot }), run);
+      if (order.kind !== 'newer') return;
       await restorePackReviewAuthoritativeRequiredStatus({
-        run: newerRun,
+        run: order.run,
         projectId,
         storeRoot,
         writeRequiredStatus: statusWriter,
@@ -1467,18 +1496,38 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     writeRunLogs(storeRoot, run.id, result.stdout, result.stderr);
 
     if (result.timedOut) {
-      setPackReviewRunTerminal(run.id, 'timed_out', {
+      await recordPackReviewUnfinishedTerminalStatus({
+        run,
+        status: 'timed_out',
+        failureReason: classifyPackReviewFailureReason('reviewer_process_timeout'),
         exitCode: result.exitCode,
-        failureReason: 'reviewer_process_timeout',
-      }, { projectId, storeRoot });
+        projectId,
+        storeRoot,
+        writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+          repoRoot: target.sourceRepoRoot,
+          repoSlug: target.repoSlug,
+          headSha: target.headSha,
+          request,
+        })),
+      });
       terminal = true;
       throw new Error('reviewer process timed out');
     }
     if (!result.ok) {
-      setPackReviewRunTerminal(run.id, 'failed', {
-        exitCode: result.exitCode,
+      await recordPackReviewUnfinishedTerminalStatus({
+        run,
+        status: 'failed',
         failureReason: classifyPackReviewFailureReason('reviewer_process_failed'),
-      }, { projectId, storeRoot });
+        exitCode: result.exitCode,
+        projectId,
+        storeRoot,
+        writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+          repoRoot: target.sourceRepoRoot,
+          repoSlug: target.repoSlug,
+          headSha: target.headSha,
+          request,
+        })),
+      });
       terminal = true;
       throw new Error(`reviewer process failed (exit ${String(result.exitCode)})`);
     }
@@ -1574,10 +1623,19 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         });
       }
     } catch (error) {
-      setPackReviewRunTerminal(run.id, 'failed', {
-        exitCode: 1,
+      await recordPackReviewUnfinishedTerminalStatus({
+        run,
+        status: 'failed',
         failureReason: 'stale_head_before_terminal',
-      }, { projectId, storeRoot });
+        projectId,
+        storeRoot,
+        writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+          repoRoot: target.sourceRepoRoot,
+          repoSlug: target.repoSlug,
+          headSha: target.headSha,
+          request,
+        })),
+      });
       terminal = true;
       const runs = listPackReviewRuns({ projectId, storeRoot });
       if (claimLease) await claimLease.release('run_started', runs);
@@ -1706,10 +1764,23 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   } catch (error) {
     if (run && !terminal) {
       try {
-        setPackReviewRunTerminal(run.id, 'failed', {
-          exitCode: 1,
-          failureReason: classifyPackReviewFailureReason('runner_internal_failure'),
-        }, { projectId, storeRoot });
+        const persisted = getPackReviewRun(run.id, { projectId, storeRoot });
+        if (!persisted || !hasPersistedPackReviewVerdict(persisted)) {
+          await recordPackReviewUnfinishedTerminalStatus({
+            run: persisted ?? run,
+            status: 'failed',
+            failureReason: classifyPackReviewFailureReason('runner_internal_failure'),
+            projectId,
+            storeRoot,
+            writeRequiredStatus: input.fixtureRequiredStatusWriter ?? ((request) => publishPackReviewRequiredStatus({
+              repoRoot: target.sourceRepoRoot,
+              repoSlug: target.repoSlug,
+              headSha: target.headSha,
+              request,
+            })),
+          });
+          terminal = true;
+        }
       } catch {
         // Preserve the primary failure; store corruption remains fail-closed on next read.
       }
