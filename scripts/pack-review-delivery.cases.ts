@@ -564,10 +564,72 @@ describe('pack review corrective contracts (Issue #1307)', () => {
       surface: 'pack-review-delivery-test',
       trustedPackRoot: repoRoot,
       sourceRepoRoot: repoRoot,
+      legacyRepositoryBySourceRoot: { [repoRoot]: 'chetwerikoff/orchestrator-pack' },
     });
 
     expect(unqualified.created).toBe(true);
     expect(unqualified.run.sameKeyOrder).toBeGreaterThan(canonical.sameKeyOrder!);
+  });
+
+  it('binds a canonical cross-checkout start to a legacy repository row', () => {
+    const storeRoot = tempRoot('opk-1307-cross-checkout-identity-');
+    const legacy = createRun(storeRoot);
+    updatePackReviewRun(legacy.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'reviewer_process_failed',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const recordPath = path.join(storeRoot, 'runs', `${legacy.id}.json`);
+    const record = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>;
+    delete record.canonicalRepository;
+    writeFileSync(recordPath, `${JSON.stringify(record)}\n`);
+
+    const next = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: legacy.prNumber,
+      headSha: legacy.targetSha,
+      linkedSessionId: 'worker-1307-cross-checkout',
+      startReason: 'mixed-identity-cross-checkout',
+      surface: 'pack-review-delivery-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: path.join(storeRoot, 'other-checkout'),
+      canonicalRepository: 'chetwerikoff/orchestrator-pack',
+      legacyRepositoryBySourceRoot: { [repoRoot]: 'chetwerikoff/orchestrator-pack' },
+    });
+
+    expect(next.created).toBe(true);
+    expect(next.run.sameKeyOrder).toBeGreaterThan(legacy.sameKeyOrder!);
+  });
+
+  it('lets an ordered run outrank an equal-time legacy tie', () => {
+    const storeRoot = tempRoot('opk-1307-ordered-over-legacy-tie-');
+    const first = createRun(storeRoot);
+    updatePackReviewRun(first.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'runner_disappeared_stale',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const second = createRun(storeRoot);
+    updatePackReviewRun(second.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'runner_disappeared_stale',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const ordered = createRun(storeRoot);
+    const legacyTime = '2026-08-04T04:00:00.000Z';
+    for (const run of [first, second]) {
+      const recordPath = path.join(storeRoot, 'runs', `${run.id}.json`);
+      const record = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>;
+      delete record.sameKeyOrder;
+      record.createdAt = legacyTime;
+      writeFileSync(recordPath, `${JSON.stringify(record)}\n`);
+    }
+
+    expect(resolvePackReviewRunOrder(
+      listPackReviewRunRecordsRaw({ projectId: 'orchestrator-pack', storeRoot }),
+      first,
+    )).toEqual({ kind: 'newer', run: expect.objectContaining({ id: ordered.id }) });
   });
 
   it.each([
@@ -614,6 +676,37 @@ describe('pack review corrective contracts (Issue #1307)', () => {
       expect(requests[0]?.description).toContain('no reviewer judgment');
     }
     expect(getPackReviewRun(newer.id, { projectId: 'orchestrator-pack', storeRoot })?.status).toBe(status);
+  });
+
+  it('restores a persisted verdict even when its run was terminalized as failed', async () => {
+    const storeRoot = tempRoot('opk-1307-failed-with-verdict-');
+    const run = createRun(storeRoot);
+    updatePackReviewRun(run.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'reviewer_process_failed',
+      reviewVerdict: 'clean',
+      findingCount: 0,
+      findings: [],
+      journalOutcome: {
+        state: 'persisted',
+        recordedAtUtc: '2026-08-04T04:00:00.000Z',
+        reason: 'verdict_persisted',
+        idempotencyKey: `verdict:${run.id}:${HEAD_SHA}`,
+        attempts: 1,
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const requests: PackReviewRequiredStatusRequest[] = [];
+
+    const outcome = await restorePackReviewAuthoritativeRequiredStatus({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      run,
+      writeRequiredStatus: async (request) => { requests.push(request); },
+    });
+
+    expect(outcome).toMatchObject({ state: 'succeeded', reason: 'status_success_restored' });
+    expect(requests).toEqual([expect.objectContaining({ state: 'success' })]);
   });
 
   it('does not write any status when legacy same-key order is ambiguous', async () => {
@@ -852,6 +945,44 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
       reason: 'newer_run_authoritative',
     });
     expect(JSON.parse(readFileSync(newerCapture, 'utf8')).state).toBe('pending');
+  });
+
+  it('reports newer-authority restoration failure instead of claiming reconciliation', async () => {
+    const storeRoot = tempRoot('opk-1307-newer-restore-failure-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+
+    createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-newer-failure',
+      startReason: 'newer-failure',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async () => {
+        throw new Error('required status unavailable');
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      runId: staleRunId,
+      statusReconciled: false,
+      reason: 'newer_run_restore_failed',
+    });
   });
 
   it('resumes required-status reconciliation after local terminalization only (AC8)', async () => {

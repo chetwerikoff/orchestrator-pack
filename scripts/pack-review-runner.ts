@@ -644,20 +644,26 @@ async function acquireClaimLease(options: {
   };
 }
 
-function findJournaledDeliveryResumeCandidate(options: {
+async function findJournaledDeliveryResumeCandidate(options: {
   projectId: string;
   storeRoot: string;
   prNumber: number;
   headSha: string;
-}): PackReviewRunRecord | null {
+  repoSlug: string;
+}): Promise<PackReviewRunRecord | null> {
   const candidates = listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot })
     .filter((candidate) => candidate.prNumber === options.prNumber
       && candidate.targetSha === options.headSha
       && packReviewDeliveryNeedsResume(candidate));
-  if (candidates.length > 1) {
+  const repositoryBoundCandidates: PackReviewRunRecord[] = [];
+  for (const candidate of candidates) {
+    const identity = await resolvePackReviewRunCanonicalRepository(candidate, resolveRepositorySlug);
+    if (identity.ok && identity.slug === options.repoSlug) repositoryBoundCandidates.push(candidate);
+  }
+  if (repositoryBoundCandidates.length > 1) {
     throw new Error(`ambiguous journaled pack review deliveries for PR #${options.prNumber} head ${options.headSha}`);
   }
-  return candidates[0] ?? null;
+  return repositoryBoundCandidates[0] ?? null;
 }
 
 async function invokeReviewer(options: {
@@ -804,8 +810,52 @@ export async function reconcileStalePackReviewRuns(
   const repoSlug = trim(input.repoSlug);
   if (!repoSlug) throw new Error('pack review stale reconciliation requires a canonical repository slug');
   const resolveSlug = input.resolveRepositorySlug ?? resolveRepositorySlug;
-  const records = listPackReviewRunRecordsRaw({ projectId, storeRoot });
+  const bindRepositoryIdentity = async (record: PackReviewRunRecord): Promise<PackReviewRunRecord> => {
+    if (record.canonicalRepository) return record;
+    const identity = await resolvePackReviewRunCanonicalRepository(record, resolveSlug);
+    return identity.ok ? { ...record, canonicalRepository: identity.slug } : record;
+  };
+  const readBoundRecords = async (): Promise<PackReviewRunRecord[]> => Promise.all(
+    listPackReviewRunRecordsRaw({ projectId, storeRoot }).map(bindRepositoryIdentity),
+  );
+  const records = await readBoundRecords();
   const results: Array<Record<string, unknown>> = [];
+  const restoreLatestAuthority = async (
+    staleRun: PackReviewRunRecord,
+    writeRequiredStatus: PackReviewRequiredStatusWriter,
+  ) => {
+    let restored: Awaited<ReturnType<typeof restorePackReviewAuthoritativeRequiredStatus>> = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const currentOrder = resolvePackReviewRunOrder(await readBoundRecords(), staleRun);
+      if (currentOrder.kind !== 'newer') {
+        return {
+          outcome: restored,
+          reason: currentOrder.kind === 'ambiguous' ? currentOrder.reason : 'authority_not_newer',
+        };
+      }
+      const selectedId = currentOrder.run.id;
+      restored = await restorePackReviewAuthoritativeRequiredStatus({
+        run: currentOrder.run,
+        projectId,
+        storeRoot,
+        writeRequiredStatus,
+        pauseAfterPendingWrite: input.fixturePauseAfterPendingRestoreWrite,
+      });
+      const afterWrite = resolvePackReviewRunOrder(await readBoundRecords(), staleRun);
+      if (afterWrite.kind === 'newer' && afterWrite.run.id !== selectedId) continue;
+      return {
+        outcome: restored,
+        reason: afterWrite.kind === 'ambiguous'
+          ? afterWrite.reason
+          : restored?.state === 'succeeded'
+            ? 'newer_run_authoritative'
+            : restored
+              ? 'newer_run_restore_failed'
+              : 'newer_authority_malformed',
+      };
+    }
+    return { outcome: restored, reason: 'newer_run_authority_race' };
+  };
 
   for (const candidate of records) {
     const activeStale = isPackReviewRunStale(candidate);
@@ -846,7 +896,9 @@ export async function reconcileStalePackReviewRuns(
     if (activeStale) {
       const terminal = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
       terminalized = terminal.changed;
-      run = getPackReviewRun(run.id, { projectId, storeRoot }) ?? terminal.run;
+      run = await bindRepositoryIdentity(
+        getPackReviewRun(run.id, { projectId, storeRoot }) ?? terminal.run,
+      );
     }
 
     if (!isPackReviewUnfinishedTerminalRun(run)) continue;
@@ -862,18 +914,12 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
     if (currentOrder.kind === 'newer') {
-      await restorePackReviewAuthoritativeRequiredStatus({
-        run: currentOrder.run,
-        projectId,
-        storeRoot,
-        writeRequiredStatus: statusWriter,
-        pauseAfterPendingWrite: input.fixturePauseAfterPendingRestoreWrite,
-      });
+      const restoration = await restoreLatestAuthority(run, statusWriter);
       results.push({
         runId: run.id,
         terminalized,
-        statusReconciled: true,
-        reason: 'newer_run_authoritative',
+        statusReconciled: restoration.outcome?.state === 'succeeded',
+        reason: restoration.reason,
       });
       continue;
     }
@@ -891,7 +937,7 @@ export async function reconcileStalePackReviewRuns(
     const beforeWrite = input.beforeStaleStatusWrite;
     if (beforeWrite) await beforeWrite(run);
 
-    const recordsBeforeStaleStatusWrite = listPackReviewRunRecordsRaw({ projectId, storeRoot });
+    const recordsBeforeStaleStatusWrite = await readBoundRecords();
     const orderBeforeStaleStatusWrite = resolvePackReviewRunOrder(recordsBeforeStaleStatusWrite, run);
     if (orderBeforeStaleStatusWrite.kind === 'ambiguous') {
       results.push({
@@ -903,28 +949,23 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
     if (orderBeforeStaleStatusWrite.kind === 'newer') {
-      await restorePackReviewAuthoritativeRequiredStatus({
-        run: orderBeforeStaleStatusWrite.run,
-        projectId,
-        storeRoot,
-        writeRequiredStatus: statusWriter,
-        pauseAfterPendingWrite: input.fixturePauseAfterPendingRestoreWrite,
-      });
+      const restoration = await restoreLatestAuthority(run, statusWriter);
       results.push({
         runId: run.id,
         terminalized,
-        statusReconciled: true,
-        reason: 'newer_run_authoritative',
+        statusReconciled: restoration.outcome?.state === 'succeeded',
+        reason: restoration.reason,
       });
       continue;
     }
 
     const authorizeStaleWrite = () => {
-      const order = resolvePackReviewRunOrder(listPackReviewRunRecordsRaw({ projectId, storeRoot }), run);
-      return order.kind === 'none';
+      return readBoundRecords().then((freshRecords) => (
+        resolvePackReviewRunOrder(freshRecords, run).kind === 'none'
+      ));
     };
     const repairSupersededStaleWrite = async () => {
-      const order = resolvePackReviewRunOrder(listPackReviewRunRecordsRaw({ projectId, storeRoot }), run);
+      const order = resolvePackReviewRunOrder(await readBoundRecords(), run);
       if (order.kind !== 'newer') return;
       await restorePackReviewAuthoritativeRequiredStatus({
         run: order.run,
@@ -1215,11 +1256,12 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     beforeStaleStatusWrite: input.fixtureBeforeStaleStatusWrite,
   });
   const claimMode = input.claimMode ?? 'acquire';
-  const resumeCandidate = findJournaledDeliveryResumeCandidate({
+  const resumeCandidate = await findJournaledDeliveryResumeCandidate({
     projectId,
     storeRoot,
     prNumber: target.prNumber,
     headSha: target.headSha,
+    repoSlug: target.repoSlug,
   });
   const githubReviewTransport = createGithubReviewTransport({
     repoRoot: target.sourceRepoRoot,
@@ -1233,8 +1275,15 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   let worktree = '';
   let terminal = false;
   let retainClaimDirectory = false;
+  let terminalPersistenceAttempted = false;
   let carryover: { replay: CarryoverReplayResult; sourceCleanRunId: string } | null = null;
   let carryoverBundlePath = '';
+  const recordUnfinishedTerminal = async (
+    options: Parameters<typeof recordPackReviewUnfinishedTerminalStatus>[0],
+  ) => {
+    terminalPersistenceAttempted = true;
+    await recordPackReviewUnfinishedTerminalStatus(options);
+  };
 
   if (claimMode === 'acquire') {
     claimLease = await acquireClaimLease({
@@ -1393,6 +1442,12 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       };
     }
 
+    const legacyRepositoryBySourceRoot: Record<string, string> = {};
+    for (const record of listPackReviewRunRecordsRaw({ projectId, storeRoot })) {
+      if (record.canonicalRepository || !record.sourceRepoRoot) continue;
+      const identity = await resolvePackReviewRunCanonicalRepository(record, resolveRepositorySlug);
+      if (identity.ok) legacyRepositoryBySourceRoot[resolve(record.sourceRepoRoot)] = identity.slug;
+    }
     const created = createPackReviewRun({
       projectId,
       storeRoot,
@@ -1404,6 +1459,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       trustedPackRoot: trusted.trustedPackRoot,
       sourceRepoRoot: target.sourceRepoRoot,
       canonicalRepository: target.repoSlug,
+      legacyRepositoryBySourceRoot,
     });
     run = created.run;
     authority = advancePackReviewAuthority(
@@ -1517,7 +1573,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     writeRunLogs(storeRoot, run.id, result.stdout, result.stderr);
 
     if (result.timedOut) {
-      await recordPackReviewUnfinishedTerminalStatus({
+      await recordUnfinishedTerminal({
         run,
         status: 'timed_out',
         failureReason: classifyPackReviewFailureReason('reviewer_process_timeout'),
@@ -1535,7 +1591,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       throw new Error('reviewer process timed out');
     }
     if (!result.ok) {
-      await recordPackReviewUnfinishedTerminalStatus({
+      await recordUnfinishedTerminal({
         run,
         status: 'failed',
         failureReason: classifyPackReviewFailureReason('reviewer_process_failed'),
@@ -1644,7 +1700,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
         });
       }
     } catch (error) {
-      await recordPackReviewUnfinishedTerminalStatus({
+      await recordUnfinishedTerminal({
         run,
         status: 'failed',
         failureReason: 'stale_head_before_terminal',
@@ -1790,9 +1846,11 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           && isPackReviewUnfinishedTerminalRun(persisted)
           && packReviewRequiredStatusNeedsStaleReconciliation(persisted)) {
           retainClaimDirectory = true;
-        } else if (!persisted
-          || (!hasPersistedPackReviewVerdict(persisted) && !isPackReviewUnfinishedTerminalRun(persisted))) {
-          await recordPackReviewUnfinishedTerminalStatus({
+        } else if (terminalPersistenceAttempted) {
+          retainClaimDirectory = true;
+        } else if (!terminalPersistenceAttempted && (!persisted
+          || (!hasPersistedPackReviewVerdict(persisted) && !isPackReviewUnfinishedTerminalRun(persisted)))) {
+          await recordUnfinishedTerminal({
             run: persisted ?? run,
             status: 'failed',
             failureReason: classifyPackReviewFailureReason('runner_internal_failure'),
@@ -1808,7 +1866,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           terminal = true;
         }
       } catch (terminalError) {
-        if (isTerminalPersistenceFailure(terminalError)) retainClaimDirectory = true;
+        if (terminalPersistenceAttempted || isTerminalPersistenceFailure(terminalError)) {
+          retainClaimDirectory = true;
+        }
         // Preserve the primary failure; store corruption remains fail-closed on next read.
       }
     }

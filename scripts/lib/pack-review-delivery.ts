@@ -623,6 +623,9 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
   const storeOpts = storeOptions(options);
   const reload = () => safeGetPackReviewRun(options.run.id, options) ?? options.run;
   const run = reload();
+  if (hasPersistedPackReviewVerdict(run)) {
+    return publishPackReviewTerminalRequiredStatus(run, options);
+  }
   if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
     return publishPackReviewTerminalRequiredStatus(run, options);
   }

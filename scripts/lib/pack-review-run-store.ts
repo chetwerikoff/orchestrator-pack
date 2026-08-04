@@ -135,6 +135,7 @@ export interface CreatePackReviewRunInput extends PackReviewStoreOptions {
   trustedPackRoot: string;
   sourceRepoRoot: string;
   canonicalRepository?: string;
+  legacyRepositoryBySourceRoot?: Record<string, string>;
 }
 
 interface LockHandle {
@@ -574,7 +575,9 @@ function hasLegacyOrderAmbiguity(
   records: readonly PackReviewRunRecord[],
   run: PackReviewRunRecord,
 ): boolean {
-  const legacy = records.filter((record) => samePackReviewRunIdentity(record, run) && record.sameKeyOrder === undefined);
+  const sameKeyRecords = records.filter((record) => samePackReviewRunIdentity(record, run));
+  if (sameKeyRecords.some((record) => record.sameKeyOrder !== undefined)) return false;
+  const legacy = sameKeyRecords.filter((record) => record.sameKeyOrder === undefined);
   for (let index = 0; index < legacy.length; index += 1) {
     for (let next = index + 1; next < legacy.length; next += 1) {
       if (Date.parse(legacy[index]!.createdAt) === Date.parse(legacy[next]!.createdAt)) return true;
@@ -612,6 +615,18 @@ function selectLatestSameKeyRun(
   candidates: readonly PackReviewRunRecord[],
 ): PackReviewRunRecord | null {
   if (candidates.length === 0) return null;
+  const orderedCandidates = candidates.filter((candidate) => candidate.sameKeyOrder !== undefined);
+  if (orderedCandidates.length > 0) {
+    let latest = orderedCandidates[0]!;
+    for (const candidate of orderedCandidates.slice(1)) {
+      const comparison = compareSameKeyRuns(candidate, latest);
+      if (comparison === null) {
+        throw new Error(`ambiguous pack review run order for ${latest.key}: legacy_order_ambiguous`);
+      }
+      if (comparison > 0) latest = candidate;
+    }
+    return latest;
+  }
   const reference = candidates[0]!;
   if (hasLegacyOrderAmbiguity(records, reference)) {
     throw new Error(`ambiguous pack review run order for ${reference.key}: legacy_order_ambiguous`);
@@ -691,11 +706,23 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
   const storeRoot = resolvePackReviewRunStoreRoot(input);
   return withStoreLock(storeRoot, () => {
     const records = readRecordsUnlocked(storeRoot);
+    const legacyRepositoryBindings = new Map(
+      Object.entries(input.legacyRepositoryBySourceRoot ?? {}).map(([sourceRoot, repository]) => [
+        resolve(sourceRoot),
+        normalizePackReviewCanonicalRepository(repository),
+      ]),
+    );
+    const boundRecords = records.map((record) => {
+      if (record.canonicalRepository) return record;
+      const repository = canonicalRepositoryFromRunKey(record.key, record.prNumber, record.targetSha)
+        ?? legacyRepositoryBindings.get(resolve(record.sourceRepoRoot));
+      return repository ? { ...record, canonicalRepository: repository } : record;
+    });
     const canonicalRepository = input.canonicalRepository
       ? normalizePackReviewCanonicalRepository(input.canonicalRepository)
       : undefined;
     const key = packReviewRunKey(input.prNumber, headSha, canonicalRepository);
-    const active = records.filter((record) => matchesPackReviewRunInput(
+    const active = boundRecords.filter((record) => matchesPackReviewRunInput(
       record,
       projectId,
       input.prNumber,
@@ -710,7 +737,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       return { created: false, reused: true, reason: 'active_run_exists', run: consumerRow(active[0]!), storeRoot };
     }
 
-    const completed = records
+    const completed = boundRecords
       .filter((record) => matchesPackReviewRunInput(
         record,
         projectId,
@@ -721,13 +748,13 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       )
         && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
         && hasPersistedPackReviewVerdict(record));
-    const latestCompleted = selectLatestSameKeyRun(records, completed);
+    const latestCompleted = selectLatestSameKeyRun(boundRecords, completed);
     if (latestCompleted) {
       return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(latestCompleted), storeRoot };
     }
 
     const now = (input.now ?? new Date()).toISOString();
-    const sameKeyOrders = records
+    const sameKeyOrders = boundRecords
       .filter((record) => matchesPackReviewRunInput(
         record,
         projectId,
