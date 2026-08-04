@@ -4,13 +4,18 @@ import { runProcess } from '../kernel/subprocess.ts';
 import {
   describePackReviewError as describeError,
   getPackReviewRun,
+  hasValidPackReviewDeliveryOutcome,
+  hasValidPackReviewGithubReconciliation,
+  hasValidPackReviewJournalOutcome,
+  hasPersistedPackReviewVerdict,
   setPackReviewRunTerminal,
   updatePackReviewRun,
+  updatePackReviewRunIf,
   trimPackReviewValue as trim,
   type PackReviewDeliveryChannel,
   type PackReviewDeliveryOutcome,
   type PackReviewJournalOutcome,
-  isPackReviewStaleTerminalRun,
+  isPackReviewUnfinishedTerminalRun,
   PACK_REVIEW_ACTIVE_STATUSES,
   type PackReviewRunRecord,
   type PackReviewRunStatus,
@@ -51,21 +56,97 @@ export function packReviewStaleRequiredStatusIdempotencyKey(run: PackReviewRunRe
   return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:stale-runner-disappeared`;
 }
 
+function packReviewRequiredStatusOutcomeReason(run: PackReviewRunRecord): string | null {
+  if (hasPersistedPackReviewVerdict(run) || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
+    const payload = packReviewJournaledPayload(run);
+    if (!payload) return null;
+    return `status_${classifyPackReviewPayload(payload).requiredStatus}_restored`;
+  }
+  if (run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled') {
+    return trim(run.failureReason) === 'runner_disappeared_stale'
+      ? 'status_stale_runner_disappeared'
+      : 'status_unfinished_execution';
+  }
+  return PACK_REVIEW_ACTIVE_STATUSES.has(run.status) ? 'status_pending' : null;
+}
+
+export function packReviewRequiredStatusProjectionKey(run: PackReviewRunRecord): string | null {
+  const expectedKey = hasPersistedPackReviewVerdict(run)
+    || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)
+    ? requiredStatusIdempotencyKey(run)
+    : run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled'
+      ? unfinishedRequiredStatusKey(run, trim(run.failureReason) || 'runner_internal_failure')
+      : PACK_REVIEW_ACTIVE_STATUSES.has(run.status)
+        ? packReviewPendingRequiredStatusIdempotencyKey(run)
+        : null;
+  if (!expectedKey) return null;
+  return JSON.stringify({
+    expectedKey,
+    status: run.status,
+    failureReason: trim(run.failureReason),
+    reviewVerdict: run.reviewVerdict ?? null,
+    findingCount: run.findingCount ?? null,
+    outcomeReason: packReviewRequiredStatusOutcomeReason(run),
+    journalState: run.journalOutcome?.state ?? null,
+    journalKey: run.journalOutcome?.idempotencyKey ?? null,
+  });
+}
+
 export function packReviewRequiredStatusStaleReconciliationComplete(run: PackReviewRunRecord): boolean {
   const outcome = run.deliveryOutcomes?.requiredStatus;
-  const staleKey = packReviewStaleRequiredStatusIdempotencyKey(run);
-  return outcome?.idempotencyKey === staleKey && outcome.state === 'succeeded';
+  const failureReason = trim(run.failureReason) || 'runner_internal_failure';
+  const unfinishedKey = unfinishedRequiredStatusKey(run, failureReason);
+  return hasValidPackReviewDeliveryOutcome(outcome)
+    && outcome.state === 'succeeded'
+    && (outcome.idempotencyKey === packReviewStaleRequiredStatusIdempotencyKey(run)
+      || outcome.idempotencyKey === unfinishedKey);
 }
 
 export function packReviewRequiredStatusNeedsStaleReconciliation(run: PackReviewRunRecord): boolean {
   if (packReviewRequiredStatusStaleReconciliationComplete(run)) return false;
   const outcome = run.deliveryOutcomes?.requiredStatus;
+  if (!isPackReviewUnfinishedTerminalRun(run)) return false;
   const pendingKey = packReviewPendingRequiredStatusIdempotencyKey(run);
-  const staleKey = packReviewStaleRequiredStatusIdempotencyKey(run);
-  if (!outcome) return isPackReviewStaleTerminalRun(run);
+  const unfinishedKey = unfinishedRequiredStatusKey(
+    run,
+    trim(run.failureReason) || 'runner_internal_failure',
+  );
+  if (!hasValidPackReviewDeliveryOutcome(outcome)) return true;
   if (outcome.idempotencyKey === pendingKey && outcome.state === 'succeeded') return true;
-  if (outcome.idempotencyKey === staleKey && outcome.state === 'failed') return true;
-  return false;
+  if (outcome.idempotencyKey === unfinishedKey && outcome.state === 'succeeded') return false;
+  return outcome.state === 'failed' && outcome.idempotencyKey === unfinishedKey;
+}
+
+export function recordPackReviewNewerAuthorityReconciliation(
+  options: PackReviewStoreOptions & {
+    run: PackReviewRunRecord;
+    clock?: () => Date;
+    authorityGuard?: (records: readonly PackReviewRunRecord[]) => boolean;
+  },
+): PackReviewDeliveryOutcome {
+  const marker = outcome(
+    'succeeded',
+    'newer_run_authoritative',
+    packReviewStaleRequiredStatusIdempotencyKey(options.run),
+    options.clock,
+  );
+  if (options.authorityGuard) {
+    const persisted = updatePackReviewRunIf(
+      options.run.id,
+      options.authorityGuard,
+      (existing) => ({
+        deliveryOutcomes: {
+          ...existing.deliveryOutcomes,
+          requiredStatus: marker,
+        },
+      }),
+      options,
+    );
+    if (!persisted) throw new Error('newer_run_authority_race');
+  } else {
+    persistRequiredStatusOutcome(options.run.id, marker, options);
+  }
+  return marker;
 }
 
 const JOURNAL_WRITE_ATTEMPTS = 3;
@@ -153,11 +234,12 @@ interface RecordPendingReviewOptions extends PackReviewStoreOptions {
 
 interface RestoreAuthoritativeRequiredStatusOptions extends RecordPendingReviewOptions {
   pauseAfterPendingWrite?: () => void | Promise<void>;
+  forceRepublish?: boolean;
 }
 
 interface RecordStaleRequiredStatusOptions extends RecordPendingReviewOptions {
   authorizeWrite?: () => boolean | Promise<boolean>;
-  repairSupersededWrite?: () => void | Promise<void>;
+  repairSupersededWrite?: () => { reason: string } | Promise<{ reason: string }>;
   pauseBeforeWrite?: () => void | Promise<void>;
   pauseAfterWrite?: () => void | Promise<void>;
 }
@@ -172,6 +254,15 @@ interface RecordMalformedReviewOptions extends PackReviewStoreOptions {
   run: PackReviewRunRecord;
   failureReason: string;
   writeRequiredStatus: PackReviewRequiredStatusWriter;
+  clock?: () => Date;
+}
+
+interface RecordUnfinishedReviewOptions extends PackReviewStoreOptions {
+  run: PackReviewRunRecord;
+  status: Extract<PackReviewRunStatus, 'failed' | 'timed_out' | 'cancelled'>;
+  failureReason: string;
+  writeRequiredStatus: PackReviewRequiredStatusWriter;
+  exitCode?: number | null;
   clock?: () => Date;
 }
 
@@ -234,7 +325,7 @@ function workerNotificationIdempotencyKey(run: PackReviewRunRecord): string {
 }
 
 export function packReviewJournaledPayload(run: PackReviewRunRecord): PackReviewTerminalPayload | null {
-  if (run.journalOutcome?.state !== 'persisted') return null;
+  if (!hasValidPackReviewJournalOutcome(run)) return null;
   if (run.reviewVerdict !== 'clean' && run.reviewVerdict !== 'findings') return null;
   if (!Number.isInteger(run.findingCount) || Number(run.findingCount) < 0) return null;
   const findings = Array.isArray(run.findings) ? [...run.findings] : [];
@@ -248,7 +339,7 @@ export function packReviewJournaledPayload(run: PackReviewRunRecord): PackReview
 
 function completedGithubCommentReview(run: PackReviewRunRecord): PackReviewGithubCommentResult | null {
   const reconciliation = run.githubReviewReconciliation;
-  if (reconciliation?.phase !== 'complete') return null;
+  if (!hasValidPackReviewGithubReconciliation(reconciliation, 'complete')) return null;
   const id = run.githubReviewId ?? reconciliation.commentReviewId;
   if (id === undefined) return null;
   return {
@@ -267,13 +358,15 @@ function completedResumeChannelOutcome(
     const reconciliation = run.githubReviewReconciliation as
       | (NonNullable<PackReviewRunRecord['githubReviewReconciliation']> & { postOutcome?: unknown })
       | undefined;
-    return completedGithubCommentReview(run) !== null
-      || (reconciliation?.phase === 'prepared'
+    return (hasValidPackReviewDeliveryOutcome(run.deliveryOutcomes?.githubComment, idempotencyKey)
+      && run.deliveryOutcomes?.githubComment?.state === 'succeeded')
+      || completedGithubCommentReview(run) !== null
+      || (hasValidPackReviewGithubReconciliation(reconciliation, 'prepared')
         && reconciliation.postOutcome === 'definitely_rejected');
   }
 
   const value = run.deliveryOutcomes?.[channel];
-  if (!value || value.idempotencyKey !== idempotencyKey) return false;
+  if (!hasValidPackReviewDeliveryOutcome(value, idempotencyKey)) return false;
   if (channel === 'requiredStatus') {
     return value.state === 'succeeded' || value.state === 'failed';
   }
@@ -357,6 +450,16 @@ function persistChannelOutcome(
   }
 }
 
+function persistRequiredStatusOutcome(
+  runId: string,
+  value: PackReviewDeliveryOutcome,
+  options: PackReviewStoreOptions,
+): void {
+  if (!persistChannelOutcome(runId, 'requiredStatus', value, options)) {
+    throw new Error('required-status delivery outcome was not durably persisted');
+  }
+}
+
 async function journalVerdict(
   options: DeliverPackReviewVerdictOptions,
   classification: PackReviewVerdictClassification,
@@ -381,6 +484,10 @@ async function journalVerdict(
       return { ok: true, run, outcome: persisted };
     } catch (error) {
       lastError = describeError(error);
+      const durable = safeGetPackReviewRun(options.run.id, options);
+      if (durable && hasPersistedPackReviewVerdict(durable) && durable.journalOutcome?.state === 'persisted') {
+        return { ok: true, run: durable, outcome: durable.journalOutcome };
+      }
       if (attempt < JOURNAL_WRITE_ATTEMPTS) await delay(JOURNAL_RETRY_DELAY_MS * attempt);
     }
   }
@@ -439,7 +546,11 @@ export async function deliverPackReviewVerdict(
   let deliveryFailed = false;
   const recordChannelOutcome = (channel: PackReviewDeliveryChannel, value: PackReviewDeliveryOutcome): void => {
     deliveryOutcomes[channel] = value;
-    if (!persistChannelOutcome(options.run.id, channel, value, options)) deliveryFailed = true;
+    if (channel === 'requiredStatus') {
+      persistRequiredStatusOutcome(options.run.id, value, options);
+    } else if (!persistChannelOutcome(options.run.id, channel, value, options)) {
+      deliveryFailed = true;
+    }
   };
 
   const recoveredGithubReview = options.resumeFromJournal
@@ -575,10 +686,10 @@ async function publishPackReviewTerminalRequiredStatus(
     });
   } catch (error) {
     statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
-    persistChannelOutcome(run.id, 'requiredStatus', statusOutcome, options);
+    persistRequiredStatusOutcome(run.id, statusOutcome, options);
     return statusOutcome;
   }
-  persistChannelOutcome(run.id, 'requiredStatus', statusOutcome, options);
+  persistRequiredStatusOutcome(run.id, statusOutcome, options);
   return statusOutcome;
 }
 
@@ -588,13 +699,37 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
   const storeOpts = storeOptions(options);
   const reload = () => safeGetPackReviewRun(options.run.id, options) ?? options.run;
   const run = reload();
+  const expectedKey = hasPersistedPackReviewVerdict(run)
+    || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)
+    ? requiredStatusIdempotencyKey(run)
+    : run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled'
+      ? unfinishedRequiredStatusKey(run, trim(run.failureReason) || 'runner_internal_failure')
+      : PACK_REVIEW_ACTIVE_STATUSES.has(run.status)
+        ? packReviewPendingRequiredStatusIdempotencyKey(run)
+        : null;
+  const expectedOutcomeReason = packReviewRequiredStatusOutcomeReason(run);
+  const existingOutcome = run.deliveryOutcomes?.requiredStatus;
+  if (!options.forceRepublish
+    && expectedKey
+    && expectedOutcomeReason
+    && hasValidPackReviewDeliveryOutcome(existingOutcome, expectedKey)
+    && existingOutcome.state === 'succeeded'
+    && existingOutcome.reason === expectedOutcomeReason) {
+    return existingOutcome;
+  }
+  if (hasPersistedPackReviewVerdict(run)) {
+    return publishPackReviewTerminalRequiredStatus(run, options);
+  }
   if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
     return publishPackReviewTerminalRequiredStatus(run, options);
   }
+  if (run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled') {
+    return publishPackReviewUnfinishedRequiredStatus(run, options);
+  }
   if (PACK_REVIEW_ACTIVE_STATUSES.has(run.status)) {
     const pendingKey = packReviewPendingRequiredStatusIdempotencyKey(run);
-    let pendingOutcome = outcome('succeeded', 'status_pending', pendingKey, options.clock);
-    persistChannelOutcome(run.id, 'requiredStatus', pendingOutcome, options);
+    let pendingOutcome = outcome('failed', 'status_pending_unpublished', pendingKey, options.clock);
+    persistRequiredStatusOutcome(run.id, pendingOutcome, options);
     try {
       await options.writeRequiredStatus({
         state: 'pending',
@@ -604,13 +739,18 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
       });
     } catch (error) {
       pendingOutcome = outcome('failed', describeError(error), pendingKey, options.clock);
-      persistChannelOutcome(run.id, 'requiredStatus', pendingOutcome, options);
+      persistRequiredStatusOutcome(run.id, pendingOutcome, options);
       return pendingOutcome;
     }
+    pendingOutcome = outcome('succeeded', 'status_pending', pendingKey, options.clock);
+    persistRequiredStatusOutcome(run.id, pendingOutcome, options);
     if (options.pauseAfterPendingWrite) await options.pauseAfterPendingWrite();
     const fresh = reload();
     if (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(fresh.status)) {
       return publishPackReviewTerminalRequiredStatus(fresh, options);
+    }
+    if (fresh.status === 'failed' || fresh.status === 'timed_out' || fresh.status === 'cancelled') {
+      return publishPackReviewUnfinishedRequiredStatus(fresh, options);
     }
     return pendingOutcome;
   }
@@ -620,7 +760,9 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
 export async function recordPackReviewStaleRequiredStatus(
   options: RecordStaleRequiredStatusOptions,
 ): Promise<PackReviewDeliveryOutcome> {
-  const idempotencyKey = packReviewStaleRequiredStatusIdempotencyKey(options.run);
+  const failureReason = trim(options.run.failureReason) || 'runner_disappeared_stale';
+  const idempotencyKey = unfinishedRequiredStatusKey(options.run, failureReason);
+  const description = unfinishedRequiredStatusDescription(failureReason);
   if (options.pauseBeforeWrite) await options.pauseBeforeWrite();
   if (options.authorizeWrite && !(await options.authorizeWrite())) {
     return outcome('failed', 'newer_run_authoritative', idempotencyKey, options.clock);
@@ -630,19 +772,26 @@ export async function recordPackReviewStaleRequiredStatus(
     await options.writeRequiredStatus({
       state: 'error',
       context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-      description: 'Pack review runner disappeared before completion.',
+      description,
       idempotencyKey,
     });
-    statusOutcome = outcome('succeeded', 'status_stale_runner_disappeared', idempotencyKey, options.clock);
+    statusOutcome = outcome(
+      'succeeded',
+      failureReason === 'runner_disappeared_stale' ? 'status_stale_runner_disappeared' : 'status_unfinished_execution',
+      idempotencyKey,
+      options.clock,
+    );
   } catch (error) {
     statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
   }
   if (options.pauseAfterWrite) await options.pauseAfterWrite();
   if (options.authorizeWrite && !(await options.authorizeWrite())) {
-    if (options.repairSupersededWrite) await options.repairSupersededWrite();
-    return outcome('failed', 'newer_run_authoritative', idempotencyKey, options.clock);
+    const repair = options.repairSupersededWrite
+      ? await options.repairSupersededWrite()
+      : undefined;
+    return outcome('failed', repair?.reason ?? 'newer_run_authoritative', idempotencyKey, options.clock);
   }
-  persistChannelOutcome(options.run.id, 'requiredStatus', statusOutcome, options);
+  persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
   return statusOutcome;
 }
 
@@ -650,8 +799,8 @@ export async function recordPackReviewPendingStatus(
   options: RecordPendingReviewOptions,
 ): Promise<PackReviewDeliveryOutcome> {
   const idempotencyKey = packReviewPendingRequiredStatusIdempotencyKey(options.run);
-  let statusOutcome = outcome('succeeded', 'status_pending', idempotencyKey, options.clock);
-  persistChannelOutcome(options.run.id, 'requiredStatus', statusOutcome, options);
+  let statusOutcome = outcome('failed', 'status_pending_unpublished', idempotencyKey, options.clock);
+  persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
   try {
     await options.writeRequiredStatus({
       state: 'pending',
@@ -661,9 +810,87 @@ export async function recordPackReviewPendingStatus(
     });
   } catch (error) {
     statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
-    persistChannelOutcome(options.run.id, 'requiredStatus', statusOutcome, options);
+    persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
+    return statusOutcome;
   }
+  statusOutcome = outcome('succeeded', 'status_pending', idempotencyKey, options.clock);
+  persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
   return statusOutcome;
+}
+
+function unfinishedRequiredStatusDescription(failureReason: string): string {
+  if (failureReason.startsWith('reviewer_output_malformed')) {
+    return 'Pack review did not produce a valid reviewer judgment.';
+  }
+  if (failureReason === 'reviewer_process_timeout') {
+    return 'Pack review execution did not finish; no reviewer judgment was produced.';
+  }
+  if (failureReason === 'reviewer_process_failed') {
+    return 'Pack review process failed before a reviewer judgment was produced.';
+  }
+  if (failureReason === 'runner_disappeared_stale') {
+    return 'Pack review runner disappeared before completion; no reviewer judgment was produced.';
+  }
+  if (failureReason === 'stale_head_before_terminal') {
+    return 'Pack review could not publish because the bound head changed; no reviewer judgment was produced.';
+  }
+  return 'Pack review execution failed before a reviewer judgment was produced.';
+}
+
+function unfinishedRequiredStatusKey(run: PackReviewRunRecord, failureReason: string): string {
+  if (failureReason === 'runner_disappeared_stale') return packReviewStaleRequiredStatusIdempotencyKey(run);
+  if (failureReason.startsWith('reviewer_output_malformed')) {
+    return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:malformed`;
+  }
+  return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:unfinished:${failureReason}`;
+}
+
+async function publishPackReviewUnfinishedRequiredStatus(
+  run: PackReviewRunRecord,
+  options: RecordPendingReviewOptions,
+): Promise<PackReviewDeliveryOutcome> {
+  const failureReason = trim(run.failureReason) || 'runner_internal_failure';
+  const idempotencyKey = unfinishedRequiredStatusKey(run, failureReason);
+  let statusOutcome: PackReviewDeliveryOutcome;
+  try {
+    await options.writeRequiredStatus({
+      state: 'error',
+      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
+      description: unfinishedRequiredStatusDescription(failureReason),
+      idempotencyKey,
+    });
+    statusOutcome = outcome('succeeded', 'status_unfinished_execution', idempotencyKey, options.clock);
+  } catch (error) {
+    statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
+  }
+  persistRequiredStatusOutcome(run.id, statusOutcome, options);
+  return statusOutcome;
+}
+
+export async function recordPackReviewUnfinishedTerminalStatus(options: RecordUnfinishedReviewOptions): Promise<{
+  ok: false;
+  reason: string;
+  status: Extract<PackReviewRunStatus, 'failed' | 'timed_out' | 'cancelled'>;
+  run: PackReviewRunRecord;
+  deliveryOutcome: PackReviewDeliveryOutcome;
+}> {
+  const failureReason = trim(options.failureReason) || 'runner_internal_failure';
+  const terminal = setPackReviewRunTerminal(options.run.id, options.status, {
+    exitCode: options.exitCode ?? (options.status === 'timed_out' ? null : 1),
+    failureReason,
+  }, storeOptions(options));
+  const persisted = safeGetPackReviewRun(options.run.id, options);
+  if (!persisted || persisted.status !== options.status || persisted.failureReason !== failureReason) {
+    throw new Error('pack review terminal state was not durably persisted');
+  }
+  const deliveryOutcome = await publishPackReviewUnfinishedRequiredStatus(persisted, options);
+  return {
+    ok: false,
+    reason: failureReason,
+    status: options.status,
+    run: safeGetPackReviewRun(options.run.id, options) ?? terminal,
+    deliveryOutcome,
+  };
 }
 
 export async function recordMalformedPackReviewStatus(options: RecordMalformedReviewOptions): Promise<{
@@ -672,36 +899,17 @@ export async function recordMalformedPackReviewStatus(options: RecordMalformedRe
   status: 'failed';
   run: PackReviewRunRecord | null;
 }> {
-  const idempotencyKey = `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${options.run.targetSha}:malformed`;
-  let statusOutcome: PackReviewDeliveryOutcome;
-  try {
-    await options.writeRequiredStatus({
-      state: 'error',
-      context: PACK_REVIEW_REQUIRED_STATUS_CONTEXT,
-      description: 'Pack review produced a malformed terminal verdict.',
-      idempotencyKey,
-    });
-    statusOutcome = outcome('succeeded', 'status_error', idempotencyKey, options.clock);
-  } catch (error) {
-    statusOutcome = outcome('failed', describeError(error), idempotencyKey, options.clock);
-  }
-  persistChannelOutcome(options.run.id, 'requiredStatus', statusOutcome, options);
-
-  let run: PackReviewRunRecord | null = null;
-  try {
-    run = setPackReviewRunTerminal(options.run.id, 'failed', {
-      exitCode: 0,
-      failureReason: classifyPackReviewFailureReason('reviewer_output_malformed'),
-      deliveryOutcomes: { requiredStatus: statusOutcome },
-    }, storeOptions(options));
-  } catch {
-    run = safeGetPackReviewRun(options.run.id, options);
-  }
+  const malformed = await recordPackReviewUnfinishedTerminalStatus({
+    ...options,
+    status: 'failed',
+    failureReason: classifyPackReviewFailureReason('reviewer_output_malformed'),
+    exitCode: 0,
+  });
   return {
     ok: false,
     reason: trim(options.failureReason) || 'reviewer produced no valid terminal verdict payload',
     status: 'failed',
-    run,
+    run: malformed.run,
   };
 }
 

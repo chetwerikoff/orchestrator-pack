@@ -59,6 +59,7 @@ import {
 } from './lib/worker-smoke-core.ts';
 import { runProcessSync } from './kernel/subprocess.ts';
 import {
+  closeOwnedSmokeTerminal,
   establishSmokePromptDelivery,
   runSmokeGhSync,
   waitForSmokeChildCompletion,
@@ -313,6 +314,22 @@ describe('orca cleanup and role boundaries', () => {
       expect.any(String),
       ['terminal', 'close', '--terminal', 'term_owned', '--json'],
       expect.any(Object),
+    );
+  });
+
+  it('retries one transient runtime close failure for the owned terminal', () => {
+    const close = vi.fn()
+      .mockReturnValueOnce({ ok: false, error: { code: 'runtime_error', message: 'transient close race' } })
+      .mockReturnValueOnce({ ok: true, result: { close: { handle: 'term_owned' } } });
+
+    const result = closeOwnedSmokeTerminal('term_owned', '/tmp/smoke', close as never);
+
+    expect(result).toEqual({ terminalCleanup: 'closed_owned_handle' });
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenNthCalledWith(
+      2,
+      'term_owned',
+      { cwd: '/tmp/smoke', timeoutMs: 30_000 },
     );
   });
 
