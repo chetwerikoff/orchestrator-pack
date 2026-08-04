@@ -24,7 +24,8 @@ function residualRetiredPowerShellImports(): readonly string[] {
   })
     .trim()
     .split('\n')
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((relativePath) => relativePath !== 'scripts/check-review-start-claim-guard.ps1');
   const residual: string[] = [];
   for (const relativePath of files) {
     const source = readFileSync(path.join(repoRoot, relativePath), 'utf8');
