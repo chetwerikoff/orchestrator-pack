@@ -85,6 +85,7 @@ import {
   packReviewRequiredStatusNeedsStaleReconciliation,
   publishPackReviewRequiredStatus,
   recordMalformedPackReviewStatus,
+  recordPackReviewNewerAuthorityReconciliation,
   recordPackReviewUnfinishedTerminalStatus,
   recordPackReviewPendingStatus,
   recordPackReviewStaleRequiredStatus,
@@ -890,13 +891,52 @@ export async function reconcileStalePackReviewRuns(
               : 'newer_authority_malformed',
       };
     }
-    return { outcome: restored, reason: 'newer_run_authority_race' };
+    return { outcome: null, reason: 'newer_run_authority_race' };
+  };
+  const restoreAndSettleNewerAuthority = async (
+    staleRun: PackReviewRunRecord,
+    writeRequiredStatus: PackReviewRequiredStatusWriter,
+  ) => {
+    const needsSettlement = packReviewRequiredStatusNeedsStaleReconciliation(staleRun);
+    const restoration = await restoreLatestAuthority(staleRun, writeRequiredStatus, needsSettlement);
+    if (!needsSettlement
+      || restoration.reason !== 'newer_run_authoritative'
+      || restoration.outcome?.state !== 'succeeded') {
+      return restoration;
+    }
+    try {
+      const marker = recordPackReviewNewerAuthorityReconciliation({
+        projectId,
+        storeRoot,
+        run: staleRun,
+      });
+      return { outcome: marker, reason: marker.reason };
+    } catch {
+      return { outcome: null, reason: 'newer_authority_settlement_persist_failed' };
+    }
   };
 
   for (const candidate of records) {
     const activeStale = isPackReviewRunStale(candidate);
     const unfinishedTerminal = isPackReviewUnfinishedTerminalRun(candidate);
     if (!activeStale && !unfinishedTerminal) continue;
+
+    const unresolvedIdentity = await findUnresolvedSameHeadRepositoryIdentity({
+      projectId,
+      storeRoot,
+      prNumber: candidate.prNumber,
+      headSha: candidate.targetSha,
+      resolveSlug,
+    });
+    if (unresolvedIdentity) {
+      results.push({
+        runId: candidate.id,
+        terminalized: false,
+        statusReconciled: false,
+        reason: unresolvedIdentity.reason,
+      });
+      continue;
+    }
 
     const identity = await resolvePackReviewRunCanonicalRepository(candidate, resolveSlug);
     if (!identity.ok || identity.slug !== repoSlug) {
@@ -950,7 +990,7 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
     if (currentOrder.kind === 'newer') {
-      const restoration = await restoreLatestAuthority(run, statusWriter);
+      const restoration = await restoreAndSettleNewerAuthority(run, statusWriter);
       results.push({
         runId: run.id,
         terminalized,
@@ -985,7 +1025,7 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
     if (orderBeforeStaleStatusWrite.kind === 'newer') {
-      const restoration = await restoreLatestAuthority(run, statusWriter);
+      const restoration = await restoreAndSettleNewerAuthority(run, statusWriter);
       results.push({
         runId: run.id,
         terminalized,

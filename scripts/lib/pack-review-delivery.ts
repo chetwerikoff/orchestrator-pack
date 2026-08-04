@@ -76,6 +76,22 @@ export function packReviewRequiredStatusNeedsStaleReconciliation(run: PackReview
   return outcome.state === 'failed' && outcome.idempotencyKey === unfinishedKey;
 }
 
+export function recordPackReviewNewerAuthorityReconciliation(
+  options: PackReviewStoreOptions & {
+    run: PackReviewRunRecord;
+    clock?: () => Date;
+  },
+): PackReviewDeliveryOutcome {
+  const marker = outcome(
+    'succeeded',
+    'newer_run_authoritative',
+    packReviewStaleRequiredStatusIdempotencyKey(options.run),
+    options.clock,
+  );
+  persistRequiredStatusOutcome(options.run.id, marker, options);
+  return marker;
+}
+
 const JOURNAL_WRITE_ATTEMPTS = 3;
 const JOURNAL_RETRY_DELAY_MS = 25;
 
