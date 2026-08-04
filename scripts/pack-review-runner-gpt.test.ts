@@ -763,6 +763,36 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(readFileSync(capture, 'utf8')).toContain('finding-03');
   });
 
+  it('exhausts one zero-send collision retry without publishing clean', async () => {
+    const storeRoot = tempRoot('opk-gpt-zero-send-exhausted-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: cleanTerminalPayload() }],
+        'source-02': [
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+          { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
+        ],
+        'source-03': [{ stdout: cleanTerminalPayload() }],
+      },
+    }));
+
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    const exhausted = run?.reviewRound?.sourceSlots.find((slot) => slot.slotId === 'source-02');
+    expect(exhausted).toMatchObject({
+      lifecycle: 'terminal',
+      attemptOrdinal: 2,
+      terminalClass: 'explicit_refusal:zero_send_collision_exhausted',
+    });
+    expect(run?.reviewVerdict).toBe('findings');
+    expect(readFileSync(capture, 'utf8')).toContain('zero_send_collision_exhausted');
+  });
+
   it('keeps a possible-delivery source non-retryable and non-clean', async () => {
     const storeRoot = tempRoot('opk-gpt-possible-delivery-');
     const capture = path.join(storeRoot, 'github-review.json');
