@@ -24,6 +24,7 @@ function resolveFrozenScope(env: NodeJS.ProcessEnv): ResolvedScopeContext | unde
   if (!raw) return undefined;
   try {
     const parsed = JSON.parse(raw) as Partial<ResolvedScopeContext>;
+    const issueNumber = parsed.issueNumber;
     const issueConstraints = parsed.issueConstraints;
     const validIssueConstraints = issueConstraints !== null
       && typeof issueConstraints === 'object'
@@ -38,8 +39,10 @@ function resolveFrozenScope(env: NodeJS.ProcessEnv): ResolvedScopeContext | unde
       || (Array.isArray(parsed.declaredGlobs) && parsed.declaredGlobs.length > 0);
     if (!parsed || typeof parsed !== 'object'
       || !(
-        parsed.issueNumber === null
-        || (Number.isSafeInteger(parsed.issueNumber) && parsed.issueNumber > 0)
+        issueNumber === null
+        || (typeof issueNumber === 'number'
+          && Number.isSafeInteger(issueNumber)
+          && issueNumber > 0)
       )
       || typeof parsed.hasScope !== 'boolean'
       || !isStringArray(parsed.declaredPaths)
