@@ -1,8 +1,8 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { runProcessSync } from '../kernel/subprocess.ts';
 import {
   RUNTIME_CALLER_CENSUS,
   validateRuntimeCallerCensus,
@@ -18,10 +18,17 @@ const retiredPowerShellInvariants = [
 ] as const;
 
 function residualRetiredPowerShellImports(): readonly string[] {
-  const files = execFileSync('git', ['ls-files', '*.ps1'], {
+  const tracked = runProcessSync({
+    command: 'git',
+    args: ['ls-files', '*.ps1'],
     cwd: repoRoot,
+    inheritParentEnv: true,
     encoding: 'utf8',
-  })
+  });
+  if (!tracked.ok) {
+    throw new Error(`git ls-files failed: ${tracked.stderr || tracked.error || tracked.outcome}`);
+  }
+  const files = tracked.stdout
     .trim()
     .split('\n')
     .filter(Boolean)
