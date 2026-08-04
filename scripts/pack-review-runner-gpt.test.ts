@@ -15,7 +15,12 @@ import {
   runPackGptReviewCommand,
 } from './pack-gpt-review.js';
 import { isRetryablePackReviewZeroSendCollision, startPackReview } from './pack-review-runner.js';
-import { createPackReviewRun, getPackReviewRun } from './lib/pack-review-run-store.js';
+import {
+  createPackReviewRun,
+  getPackReviewRun,
+  terminalizePackReviewStaleRun,
+  updatePackReviewRun,
+} from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
 
@@ -40,6 +45,30 @@ function harnessEnv(storeRoot: string, capture: string): void {
 
 function cleanTerminalPayload(): string {
   return JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] });
+}
+
+function terminalTurnPayload(input: {
+  state: string;
+  cause: string;
+  sendCount?: number;
+  invocationId?: string;
+}): string {
+  return JSON.stringify({
+    schema: 'turn-result/v1',
+    state: input.state,
+    scope: input.state === 'profile_busy' ? 'profile' : 'invocation',
+    cause: input.cause,
+    invocation_id: input.invocationId ?? `inv-${input.state}`,
+    send_count: input.sendCount ?? 0,
+  });
+}
+
+function findingsPayload(title: string): string {
+  return JSON.stringify({
+    verdict: 'findings',
+    findingCount: 1,
+    findings: [{ title, body: `body-${title}`, severity: 'blocking' }],
+  });
 }
 
 function canonicalCommandRunner(storeRoot: string, overrides: Record<string, unknown> = {}) {
@@ -605,5 +634,196 @@ describe('GPT plural source round (Issue #1276)', () => {
     expect(run?.reviewRound).toMatchObject({ tier: 'T1', roundOrdinal: 1, cardinality: 3 });
     expect(run?.reviewRound?.sourceSlots).toHaveLength(3);
     expect(run?.reviewRound?.sourceSlots.every((slot) => slot.lifecycle === 'terminal')).toBe(true);
+  });
+});
+
+describe('Issue #1276 deterministic smoke fixtures', () => {
+  function pluralStart(
+    storeRoot: string,
+    capture: string,
+    overrides: Record<string, unknown> = {},
+  ): Parameters<typeof startPackReview>[0] {
+    return {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 1276,
+      headSha: HEAD_A,
+      fixtureCurrentPrHeadSha: HEAD_A,
+      fixturePrState: 'OPEN',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixturePostReviewHeadSha: HEAD_A,
+      fixtureReviewStdout: cleanTerminalPayload(),
+      fixtureIssueBody: '```complexity-tier\ntier: T1\n```',
+      claimMode: 'preacquired',
+      ...overrides,
+    };
+  }
+
+  it('fails plural fixed-chat configuration before invoking any source', async () => {
+    const storeRoot = tempRoot('opk-gpt-fixed-chat-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    const invocationLog = path.join(storeRoot, 'invocations.jsonl');
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    delete process.env.PACK_GPT_BROWSER_PROJECT_URL;
+    process.env.PACK_GPT_BROWSER_CHAT_URL = 'https://chatgpt.com/c/fixed';
+    process.env.PACK_REVIEW_RUNNER_INVOCATION_LOG = invocationLog;
+
+    await expect(startPackReview(pluralStart(storeRoot, capture))).rejects.toThrow(/plural GPT review requires/);
+    expect(engagementCount(invocationLog)).toBe(0);
+    expect(() => readFileSync(capture, 'utf8')).toThrow();
+  });
+
+  it('keeps sibling outcomes and records a non-complete pre-launch slot', async () => {
+    const storeRoot = tempRoot('opk-gpt-prelaunch-failure-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: cleanTerminalPayload() }],
+        'source-02': [{ stdout: terminalTurnPayload({ state: 'driver_error', cause: 'rate_limit_detected' }), exitCode: 13 }],
+        'source-03': [{ stdout: cleanTerminalPayload() }],
+      },
+    }));
+
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    expect(run?.reviewRound?.sourceSlots.map((slot) => slot.terminalClass)).toEqual([
+      'complete_clean',
+      'driver_error:rate_limit_detected',
+      'complete_clean',
+    ]);
+    expect(run?.reviewRound?.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([1, 1, 1]);
+    expect(run?.reviewRound?.sourceSlots).toHaveLength(3);
+  });
+
+  it('does not relay or publish while an earlier source is terminal and siblings are pending', async () => {
+    const storeRoot = tempRoot('opk-gpt-no-early-relay-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+    const statusStates: string[] = [];
+    const notifications: string[] = [];
+    const earlyObservations: string[] = [];
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureRequiredStatusWriter: async (request) => {
+        statusStates.push(request.state);
+      },
+      fixtureWorkerNotifier: async (request) => {
+        notifications.push(request.message);
+        return { state: 'delivered', reason: 'fixture' };
+      },
+      fixtureAfterGptSourceSlotTerminal: async ({ slotId, round }) => {
+        earlyObservations.push(`${slotId}:${round.sourceSlots.filter((slot) => slot.lifecycle === 'terminal').length}`);
+        expect(statusStates).toEqual(['pending']);
+        expect(notifications).toHaveLength(0);
+      },
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: cleanTerminalPayload() }],
+        'source-02': [{ stdout: cleanTerminalPayload() }],
+        'source-03': [{ stdout: cleanTerminalPayload() }],
+      },
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(earlyObservations).toEqual(['source-01:1', 'source-02:2', 'source-03:3']);
+    expect(statusStates).toHaveLength(2);
+    expect(notifications).toHaveLength(1);
+  });
+
+  it('retains disjoint source findings with source-slot attribution', async () => {
+    const storeRoot = tempRoot('opk-gpt-finding-union-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: findingsPayload('finding-01') }],
+        'source-02': [{ stdout: findingsPayload('finding-02') }],
+        'source-03': [{ stdout: findingsPayload('finding-03') }],
+      },
+    }));
+
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    const sourceFindings = run?.reviewRound?.sourceSlots
+      .flatMap((slot) => (slot.payload as { findings?: Array<{ title?: string }> } | undefined)?.findings ?? []);
+    expect(sourceFindings?.map((finding) => finding.title)).toEqual(['finding-01', 'finding-02', 'finding-03']);
+    expect(readFileSync(capture, 'utf8')).toContain('finding-01');
+    expect(readFileSync(capture, 'utf8')).toContain('finding-02');
+    expect(readFileSync(capture, 'utf8')).toContain('finding-03');
+  });
+
+  it('keeps a possible-delivery source non-retryable and non-clean', async () => {
+    const storeRoot = tempRoot('opk-gpt-possible-delivery-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+    process.env.AO_ISSUE_NUMBER = '1276';
+    process.env.PACK_GPT_BROWSER_PROJECT_URL = 'https://chatgpt.com/g/fixture/project';
+    delete process.env.PACK_GPT_BROWSER_CHAT_URL;
+
+    const result = await startPackReview(pluralStart(storeRoot, capture, {
+      fixtureReviewBySourceSlot: {
+        'source-01': [{ stdout: cleanTerminalPayload() }],
+        'source-02': [{ stdout: terminalTurnPayload({ state: 'driver_error', cause: 'browser_lost', sendCount: 1 }), exitCode: 13 }],
+        'source-03': [{ stdout: cleanTerminalPayload() }],
+      },
+    }));
+
+    const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
+    const uncertain = run?.reviewRound?.sourceSlots.find((slot) => slot.slotId === 'source-02');
+    expect(uncertain?.terminalClass).toBe('possible_delivery');
+    expect(uncertain?.attemptOrdinal).toBe(1);
+    expect(run?.reviewVerdict).toBe('findings');
+  });
+
+  it('terminalizes launched slots as possible-delivery evidence on stale recovery', () => {
+    const storeRoot = tempRoot('opk-gpt-stale-round-');
+    const created = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1276,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+    });
+    const reviewRound = {
+      schema: 'pack-review-gpt-round/v1' as const,
+      reviewer: 'gpt' as const,
+      tier: 'T1' as const,
+      roundOrdinal: 1,
+      cardinality: 3,
+      issueNumber: 1276,
+      boundIssueSnapshotDigest: 'fixture-digest',
+      sourceSlots: [
+        { slotId: '01', ordinal: 1, lifecycle: 'terminal' as const, terminalClass: 'complete_clean' },
+        { slotId: '02', ordinal: 2, lifecycle: 'invocation_started' as const, invocationId: 'inv-02' },
+        { slotId: '03', ordinal: 3, lifecycle: 'planned' as const },
+      ],
+    };
+    updatePackReviewRun(created.run.id, { runnerPid: 999999, reviewRound }, { projectId: 'orchestrator-pack', storeRoot });
+
+    const recovered = terminalizePackReviewStaleRun(created.run.id, {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      now: new Date(Date.now() + 11 * 60_000),
+    });
+
+    expect(recovered.changed).toBe(true);
+    expect(recovered.run.status).toBe('failed');
+    expect(recovered.run.reviewRound?.sourceSlots[1]).toMatchObject({
+      lifecycle: 'terminal',
+      terminalClass: 'possible_delivery/missing_result',
+      terminalResult: { noResend: true },
+    });
   });
 });

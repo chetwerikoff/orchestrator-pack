@@ -112,6 +112,14 @@ import {
 import { parseComplexityTierFromIssueBody } from '../docs/review-cycle-cap.mjs';
 export { resolveRepositorySlug };
 
+interface FixtureReviewOutcome {
+  stdout?: string;
+  exitCode?: number;
+  timedOut?: boolean;
+}
+
+type FixtureReviewBySourceSlot = Partial<Record<string, readonly FixtureReviewOutcome[]>>;
+
 interface StartInput {
   projectId?: string;
   sessionId?: string;
@@ -138,6 +146,11 @@ interface StartInput {
   fixtureReviewStdout?: string;
   fixtureReviewExitCode?: number;
   fixtureReviewTimedOut?: boolean;
+  fixtureReviewBySourceSlot?: FixtureReviewBySourceSlot;
+  fixtureAfterGptSourceSlotTerminal?: (event: {
+    slotId: string;
+    round: PackReviewGptRoundRecord;
+  }) => void | Promise<void>;
   fixtureReviewerLayerOverrides?: PackReviewerLayerOverrides;
   fixtureEmulateWin32Selector?: boolean;
   fixturePostReviewHeadSha?: string;
@@ -996,6 +1009,8 @@ async function runGptSourceBatch(options: {
     let invocation: { result: ProcessResult; resolvedReviewer: PackReviewer | null };
     while (true) {
       try {
+        const fixtureAttempts = options.input.fixtureReviewBySourceSlot?.[slotId];
+        const fixtureAttempt = fixtureAttempts?.[attemptOrdinal - 1] ?? fixtureAttempts?.at(-1);
         invocation = await invokeReviewer({
           reviewerPath: options.reviewerPath,
           trustedPackRoot: options.trustedPackRoot,
@@ -1008,9 +1023,9 @@ async function runGptSourceBatch(options: {
           runId: options.run.id,
           projectId: options.projectId,
           storeRoot: options.storeRoot,
-          fixtureReviewStdout: options.input.fixtureReviewStdout,
-          fixtureReviewExitCode: options.input.fixtureReviewExitCode,
-          fixtureReviewTimedOut: options.input.fixtureReviewTimedOut,
+          fixtureReviewStdout: fixtureAttempt?.stdout ?? options.input.fixtureReviewStdout,
+          fixtureReviewExitCode: fixtureAttempt?.exitCode ?? options.input.fixtureReviewExitCode,
+          fixtureReviewTimedOut: fixtureAttempt?.timedOut ?? options.input.fixtureReviewTimedOut,
           fixtureReviewerLayerOverrides: options.input.fixtureReviewerLayerOverrides,
           fixtureEmulateWin32Selector: options.input.fixtureEmulateWin32Selector,
           carryoverBundlePath: options.carryoverBundlePath,
@@ -1064,6 +1079,9 @@ async function runGptSourceBatch(options: {
       terminalResult: terminal ?? { exitCode: invocation.result.exitCode, stderr: invocation.result.stderr },
       ...(payload ? { payload } : {}),
     }, { projectId: options.projectId, storeRoot: options.storeRoot });
+    if (options.input.fixtureAfterGptSourceSlotTerminal) {
+      await options.input.fixtureAfterGptSourceSlotTerminal({ slotId, round });
+    }
     return { slot: { ...currentSlot, ...round.sourceSlots.find((slot) => slot.slotId === slotId)! }, payload };
   }));
 

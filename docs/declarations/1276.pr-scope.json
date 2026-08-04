@@ -2,15 +2,10 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1276,
   "declared_paths": [
-    "docs/migration_notes.md",
     "docs/reviewer-switch-runbook.md",
-    "scripts/lib/pack-gpt-reviewer.ts",
-    "scripts/lib/pack-review-run-store.ts",
-    "scripts/pack-gpt-reviewer.test.ts",
+    "package.json",
     "scripts/pack-review-runner-gpt.test.ts",
-    "scripts/pack-review-runner.ts",
-    "scripts/pack-review-state.test.ts",
-    "scripts/pack-review-state.ts"
+    "scripts/pack-review-runner.ts"
   ],
   "denylist": [
     ".ao/",
@@ -46,5 +41,5 @@
     "scripts/review-delivery.test.ts",
     "scripts/run-pack-review-gpt.ts"
   ],
-  "source_revision": "c57b96e4ec68880fb2514dee5e8149f05a975031"
+  "source_revision": "06d5c3717fab33644f4172d30c8d639c531cc9be"
 }
