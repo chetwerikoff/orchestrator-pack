@@ -52,27 +52,29 @@ interface Scenario {
   runner: CommandRunner;
 }
 
-function inventoryJson(scenario: Scenario, includeTarget: boolean): string {
+function inventoryJson(scenario: Scenario, includeTarget: boolean, includeAgents: boolean): string {
   return JSON.stringify({
     ok: true,
     result: {
       worktrees: [
         {
+          id: `${REPOSITORY_ID}::${scenario.repo}`,
           path: scenario.repo,
           head: MERGE_SHA,
           branch: 'refs/heads/main',
-          repoId: REPOSITORY_ID,
           isMainWorktree: true,
           isArchived: false,
+          ...(includeAgents ? { agents: [] } : {}),
         },
         ...(includeTarget ? [{
+          id: `${REPOSITORY_ID}::${scenario.target}`,
           path: scenario.target,
           head: TARGET_SHA,
           branch: `refs/heads/${TARGET_BRANCH}`,
           linkedPR: 1300,
-          repoId: REPOSITORY_ID,
           isMainWorktree: false,
           isArchived: false,
+          ...(includeAgents ? { agents: [] } : {}),
         }] : []),
       ],
     },
@@ -129,10 +131,10 @@ function buildScenario(): Scenario {
       return completed([...primary, ...secondary].join('\n'));
     }
     if (argv[0] === 'worktree' && argv[1] === 'list') {
-      return completed(inventoryJson(scenario, scenario.orcaTargetPresent));
+      return completed(inventoryJson(scenario, scenario.orcaTargetPresent, false));
     }
     if (argv[0] === 'worktree' && argv[1] === 'ps') {
-      return completed(inventoryJson(scenario, false));
+      return completed(inventoryJson(scenario, scenario.orcaTargetPresent, true));
     }
     if (argv[0] === 'terminal' && argv[1] === 'list') {
       return completed(JSON.stringify({ ok: true, result: { terminals: [] } }));
