@@ -650,6 +650,7 @@ async function findJournaledDeliveryResumeCandidate(options: {
   prNumber: number;
   headSha: string;
   repoSlug: string;
+  sourceRepoRoot: string;
 }): Promise<PackReviewRunRecord | null> {
   const candidates = listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot })
     .filter((candidate) => candidate.prNumber === options.prNumber
@@ -657,6 +658,11 @@ async function findJournaledDeliveryResumeCandidate(options: {
       && packReviewDeliveryNeedsResume(candidate));
   const repositoryBoundCandidates: PackReviewRunRecord[] = [];
   for (const candidate of candidates) {
+    if (!candidate.canonicalRepository
+      && resolve(candidate.sourceRepoRoot) === resolve(options.sourceRepoRoot)) {
+      repositoryBoundCandidates.push(candidate);
+      continue;
+    }
     const identity = await resolvePackReviewRunCanonicalRepository(candidate, resolveRepositorySlug);
     if (identity.ok && identity.slug === options.repoSlug) repositoryBoundCandidates.push(candidate);
   }
@@ -1262,6 +1268,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     prNumber: target.prNumber,
     headSha: target.headSha,
     repoSlug: target.repoSlug,
+    sourceRepoRoot: target.sourceRepoRoot,
   });
   const githubReviewTransport = createGithubReviewTransport({
     repoRoot: target.sourceRepoRoot,
