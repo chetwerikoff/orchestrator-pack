@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -24,6 +24,19 @@ const issueBody = [
   '```allowed-roots',
   'scripts/**',
   'docs/declarations/**',
+  '```',
+].join('\n');
+
+const declarationFreeIssueBody = [
+  '```denylist',
+  'vendor/**',
+  'packages/core/**',
+  'secrets/**',
+  'credentials/**',
+  'docs/declarations/**',
+  '```',
+  '```allowed-roots',
+  'scripts/**',
   '```',
 ].join('\n');
 
@@ -356,7 +369,7 @@ describe('AO-free PR scope declaration contract', () => {
     const base = {
       repoRoot: root,
       prBody: 'Closes #42',
-      issueBody,
+      issueBody: declarationFreeIssueBody,
       prPaths: inScopePaths,
       degradedMode: false,
       forkPr: false,
@@ -386,12 +399,55 @@ describe('AO-free PR scope declaration contract', () => {
     expect(
       checkPrScope({
         ...base,
-        issueBody: `${issueBody}\n\`\`\`allowed-roots\nscripts/**\n\`\`\`\n`,
+        issueBody: `${declarationFreeIssueBody}\n\`\`\`allowed-roots\nscripts/**\n\`\`\`\n`,
       }),
     ).toMatchObject({
       ok: false,
       reason: 'declaration-selection-failed',
     });
+  });
+
+  it('keeps a missing declaration fail-closed when the Issue permits declaration artifacts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+
+    expect(
+      checkPrScope({
+        repoRoot: root,
+        prBody: 'Closes #42',
+        issueBody,
+        prPaths: ['scripts/allowed.ts'],
+        degradedMode: false,
+        forkPr: false,
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: 'declaration-selection-failed',
+      message: expect.stringContaining('fresh-declaration'),
+    });
+  });
+
+  it('rejects multiple and duplicate closing links on the declaration-free path', () => {
+    const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
+    roots.push(root);
+    const base = {
+      repoRoot: root,
+      issueBody: declarationFreeIssueBody,
+      prPaths: ['scripts/allowed.ts'],
+      degradedMode: false,
+      forkPr: false,
+    };
+
+    for (const prBody of [
+      'Closes #41\nCloses #42',
+      'Closes #42\nFixes #42',
+    ]) {
+      expect(checkPrScope({ ...base, prBody })).toMatchObject({
+        ok: false,
+        reason: 'declaration-selection-failed',
+        message: expect.stringContaining('exactly one closing Issue reference'),
+      });
+    }
   });
 
   it('accepts a valid bootstrap-bound live scope', () => {
@@ -455,6 +511,24 @@ describe('AO-free PR scope declaration contract', () => {
     ).toMatchObject({ ok: false });
   });
 
+  it('does not execute a substituted PR-head GitHub wrapper before bootstrap admission', () => {
+    const workflow = readFileSync(
+      join(process.cwd(), '.github', 'workflows', 'scope-guard.yml'),
+      'utf8',
+    );
+
+    expect(workflow).toContain("$packGh = Join-Path $trustedRoot 'scripts/gh'");
+    expect(workflow).not.toContain(
+      "$packGh = Join-Path $env:GITHUB_WORKSPACE 'scripts/gh'",
+    );
+    expect(workflow).toContain(
+      'git -C $env:GITHUB_WORKSPACE diff --name-only --no-renames',
+    );
+    expect(workflow).toContain(
+      'scope guard bootstrap: PR changed paths do not match the authorized implementation set',
+    );
+  });
+
   it('does not let malformed current-Issue candidates use the live-Issue path', () => {
     const root = mkdtempSync(join(tmpdir(), 'opk-pr-scope-'));
     roots.push(root);
@@ -469,7 +543,7 @@ describe('AO-free PR scope declaration contract', () => {
       checkPrScope({
         repoRoot: root,
         prBody: 'Closes #42',
-        issueBody,
+        issueBody: declarationFreeIssueBody,
         prPaths: ['scripts/allowed.ts'],
         degradedMode: false,
         forkPr: false,
@@ -496,7 +570,7 @@ describe('AO-free PR scope declaration contract', () => {
       checkPrScope({
         repoRoot: root,
         prBody: 'Closes #42',
-        issueBody,
+        issueBody: declarationFreeIssueBody,
         prPaths: ['scripts/allowed.ts'],
         degradedMode: false,
         forkPr: false,
@@ -512,7 +586,7 @@ describe('AO-free PR scope declaration contract', () => {
       checkPrScope({
         repoRoot: process.cwd(),
         prBody: 'Closes #42',
-        issueBody,
+        issueBody: declarationFreeIssueBody,
         prPaths: [],
         degradedMode: false,
         forkPr: false,
