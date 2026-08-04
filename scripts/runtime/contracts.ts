@@ -147,13 +147,13 @@ export interface RuntimeAdapter {
 
   /**
    * Remove one exact runtime workspace after caller-owned policy and claims have
-   * admitted cleanup. The adapter only validates path/head and performs the
-   * native operation; it never derives cleanup authority from runtime metadata.
+   * admitted cleanup. The expected head is mandatory; path-only cleanup is not
+   * a destructive authority.
    */
   removeWorkspace?(
     input: {
       readonly workspacePath: string;
-      readonly expectedHeadSha?: string;
+      readonly expectedHeadSha: string;
     },
     options?: RuntimeCallOptions,
   ): RuntimeResult<{ readonly removed: true }>;
