@@ -60,6 +60,9 @@ const orca = (input: {
 } = {}) => {
   const path = input.path ?? PATH;
   const repoId = input.repoId ?? REPOSITORY_ID;
+  const branchValue = input.branchValue === undefined
+    ? (input.branch === '' ? '' : `refs/heads/${input.branch ?? BRANCH}`)
+    : input.branchValue;
   return parseOrcaWorktreePayload({
     ok: true,
     result: {
@@ -67,9 +70,7 @@ const orca = (input: {
         id: `${repoId}::${input.idPath ?? path}`,
         path,
         head: input.head ?? HEAD,
-        ...(input.includeBranch === false
-          ? {}
-          : { branch: input.branchValue ?? (input.branch === '' ? '' : `refs/heads/${input.branch ?? BRANCH}`) }),
+        ...(input.includeBranch === false ? {} : { branch: branchValue }),
         ...(input.linkedIssue === undefined ? { linkedIssue: 1298 } : { linkedIssue: input.linkedIssue }),
         ...(input.linkedPR === undefined ? {} : { linkedPR: input.linkedPR }),
         ...(input.legacyRepoId === undefined ? {} : { repoId: input.legacyRepoId }),
