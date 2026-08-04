@@ -46,6 +46,7 @@ const git = (input: { path?: string; head?: string; branch?: string; detached?: 
 
 const orca = (input: {
   path?: string;
+  idPath?: string;
   head?: string;
   branch?: string;
   linkedIssue?: number | null;
@@ -53,21 +54,31 @@ const orca = (input: {
   repoId?: string;
   archived?: boolean;
   main?: boolean;
-} = {}) => parseOrcaWorktreePayload({
-  ok: true,
-  result: {
-    worktrees: [{
-      path: input.path ?? PATH,
-      head: input.head ?? HEAD,
-      branch: input.branch === '' ? '' : `refs/heads/${input.branch ?? BRANCH}`,
-      ...(input.linkedIssue === undefined ? { linkedIssue: 1298 } : { linkedIssue: input.linkedIssue }),
-      ...(input.linkedPR === undefined ? {} : { linkedPR: input.linkedPR }),
-      isMainWorktree: input.main ?? false,
-      isArchived: input.archived ?? false,
-      repoId: input.repoId ?? REPOSITORY_ID,
-    }],
-  },
-});
+  includeBranch?: boolean;
+  branchValue?: unknown;
+  legacyRepoId?: unknown;
+} = {}) => {
+  const path = input.path ?? PATH;
+  const repoId = input.repoId ?? REPOSITORY_ID;
+  return parseOrcaWorktreePayload({
+    ok: true,
+    result: {
+      worktrees: [{
+        id: `${repoId}::${input.idPath ?? path}`,
+        path,
+        head: input.head ?? HEAD,
+        ...(input.includeBranch === false
+          ? {}
+          : { branch: input.branchValue ?? (input.branch === '' ? '' : `refs/heads/${input.branch ?? BRANCH}`) }),
+        ...(input.linkedIssue === undefined ? { linkedIssue: 1298 } : { linkedIssue: input.linkedIssue }),
+        ...(input.linkedPR === undefined ? {} : { linkedPR: input.linkedPR }),
+        ...(input.legacyRepoId === undefined ? {} : { repoId: input.legacyRepoId }),
+        isMainWorktree: input.main ?? false,
+        isArchived: input.archived ?? false,
+      }],
+    },
+  });
+};
 
 const evidence = (
   gitRows = git(),
@@ -94,11 +105,15 @@ function commandResult(input: Partial<ProcessResult> = {}): ProcessResult {
 }
 
 describe('worktree lifecycle classifier', () => {
-  it('classifies exact issue-bound Git and Orca agreement', () => {
+  it('classifies capture-shaped issue-bound Git and Orca agreement', () => {
     const report = classifyWorktree({ expected: expected(), evidence: evidence() });
     expect(report.classification).toBe('exact_dual');
-    expect(report.exactGitRows).toHaveLength(1);
-    expect(report.exactOrcaRows).toHaveLength(1);
+    expect(report.exactOrcaRows[0]).toMatchObject({
+      id: `${REPOSITORY_ID}::${PATH}`,
+      repoId: REPOSITORY_ID,
+      path: PATH,
+      branchShape: 'branch',
+    });
   });
 
   it('classifies the incident shape as exact Git-only', () => {
@@ -116,17 +131,13 @@ describe('worktree lifecycle classifier', () => {
   });
 
   it('allows another worktree to share the source SHA without sharing identity', () => {
-    const otherGit = git({ path: '/tmp/orca/workspaces/orchestrator-pack/issue-1299', branch: 'agent/issue-1299' });
-    const otherOrca = orca({
-      path: '/tmp/orca/workspaces/orchestrator-pack/issue-1299',
-      branch: 'agent/issue-1299',
-      linkedIssue: 1299,
-    });
+    const otherPath = '/tmp/orca/workspaces/orchestrator-pack/issue-1299';
+    const otherGit = git({ path: otherPath, branch: 'agent/issue-1299' });
+    const otherOrca = orca({ path: otherPath, branch: 'agent/issue-1299', linkedIssue: 1299 });
     const report = classifyWorktree({
       expected: expected(),
       evidence: evidence([...git(), ...otherGit], [...orca(), ...otherOrca]),
     });
-
     expect(report.classification).toBe('exact_dual');
     expect(report.conflictingGitRows).toHaveLength(0);
     expect(report.conflictingOrcaRows).toHaveLength(0);
@@ -146,7 +157,6 @@ describe('worktree lifecycle classifier', () => {
       expected: prExpected,
       evidence: evidence(git(), [...exact, ...foreign]),
     });
-
     expect(report.classification).toBe('exact_dual');
     expect(report.conflictingOrcaRows).toHaveLength(0);
   });
@@ -172,13 +182,20 @@ describe('worktree lifecycle classifier', () => {
     }).classification).toBe('conflict');
   });
 
-  it('rejects wrong-repository and archived Orca rows', () => {
+  it('rejects wrong-repository, inconsistent composite id, and archived rows', () => {
     const wrongRepository = classifyWorktree({
       expected: expected(),
       evidence: evidence(git(), orca({ repoId: 'another-repository' })),
     });
     expect(wrongRepository.classification).toBe('conflict');
     expect(wrongRepository.disagreeingFields).toContain('orca.repoId');
+
+    const wrongEmbeddedPath = classifyWorktree({
+      expected: expected(),
+      evidence: evidence(git(), orca({ idPath: '/tmp/orca/workspaces/orchestrator-pack/other' })),
+    });
+    expect(wrongEmbeddedPath.classification).toBe('conflict');
+    expect(wrongEmbeddedPath.disagreeingFields).toContain('orca.id.path');
 
     const archived = classifyWorktree({
       expected: expected(),
@@ -188,19 +205,20 @@ describe('worktree lifecycle classifier', () => {
     expect(archived.disagreeingFields).toContain('orca.isArchived');
   });
 
-  it('rejects present-invalid binding data instead of treating it as absent', () => {
+  it('rejects present-invalid binding and legacy repository data', () => {
     const malformed = parseOrcaWorktreePayload({
       ok: true,
       result: {
         worktrees: [{
+          id: `${REPOSITORY_ID}::${PATH}`,
           path: PATH,
           head: HEAD,
           branch: `refs/heads/${BRANCH}`,
           linkedIssue: null,
           linkedPR: '1300',
+          repoId: 'different-legacy-id',
           isMainWorktree: false,
           isArchived: false,
-          repoId: REPOSITORY_ID,
         }],
       },
     });
@@ -210,6 +228,28 @@ describe('worktree lifecycle classifier', () => {
     });
     expect(report.classification).toBe('conflict');
     expect(report.disagreeingFields).toContain('orca.linkedPR');
+    expect(report.disagreeingFields).toContain('orca.repoId');
+  });
+
+  it('accepts only the explicit empty-string detached representation', () => {
+    const detachedExpected = expected({ mode: 'detached-confirmed', branchName: undefined });
+    expect(classifyWorktree({
+      expected: detachedExpected,
+      evidence: evidence(git({ detached: true }), orca({ branch: '' })),
+    }).classification).toBe('exact_dual');
+
+    for (const invalidRows of [
+      orca({ includeBranch: false }),
+      orca({ branchValue: null }),
+      orca({ branchValue: '   ' }),
+    ]) {
+      const report = classifyWorktree({
+        expected: detachedExpected,
+        evidence: evidence(git({ detached: true }), invalidRows),
+      });
+      expect(report.classification).toBe('conflict');
+      expect(report.disagreeingFields).toContain('orca.branch');
+    }
   });
 
   it('fails closed when repository authority is missing', () => {
@@ -229,29 +269,14 @@ describe('worktree lifecycle classifier', () => {
     expect(stale.classification).toBe('conflict');
     expect(stale.disagreeingFields).toContain('git.head');
 
-    const duplicate = classifyWorktree({
+    expect(classifyWorktree({
       expected: expected(),
       evidence: evidence(git(), [...orca(), ...orca()]),
-    });
-    expect(duplicate.classification).toBe('conflict');
+    }).classification).toBe('conflict');
 
-    const unavailable = classifyWorktree({
+    expect(classifyWorktree({
       expected: expected(),
       evidence: evidence(git(), [], { orca: 'unavailable' }),
-    });
-    expect(unavailable.classification).toBe('conflict');
-  });
-
-  it('does not authorize detached identity without the exact expected SHA', () => {
-    const detachedExpected = expected({ mode: 'detached-confirmed', branchName: undefined });
-    expect(classifyWorktree({
-      expected: detachedExpected,
-      evidence: evidence(git({ detached: true }), orca({ branch: '' })),
-    }).classification).toBe('exact_dual');
-
-    expect(classifyWorktree({
-      expected: detachedExpected,
-      evidence: evidence(git({ detached: true, head: OTHER_HEAD }), orca({ branch: '' })),
     }).classification).toBe('conflict');
   });
 
