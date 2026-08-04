@@ -2,6 +2,7 @@
   "schema_version": "orchestrator-pack/pr-scope-declaration/v1",
   "issue_number": 1276,
   "declared_paths": [
+    ".github/workflows/scope-guard.yml",
     "docs/migration_notes.md",
     "docs/reviewer-switch-runbook.md",
     "package.json",
@@ -30,6 +31,7 @@
     "vendor/"
   ],
   "allowed_roots": [
+    ".github/workflows/scope-guard.yml",
     "docs/migration_notes.md",
     "docs/reviewer-switch-runbook.md",
     "package.json",
@@ -53,5 +55,5 @@
     "scripts/run-pack-review-gpt.ts",
     "tests/fixtures/pack-gpt-browser-turn-harness.mjs"
   ],
-  "source_revision": "019c675295203390893d00e4bb4b88a6f1086a51"
+  "source_revision": "364acdbe63531fb5da57cac8237e95c926a798b5"
 }
