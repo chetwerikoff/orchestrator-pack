@@ -300,11 +300,17 @@ describe('direct runtime-neutral task caller', () => {
         args: readonly string[] = [],
         options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number } = {},
       ) => {
+        const childEnvironment = Object.fromEntries(
+          Object.entries(options.env ?? {}).filter(
+            ([key]) => !key.startsWith('AO_') && !key.startsWith('AGENT_ORCHESTRATOR_'),
+          ),
+        ) as NodeJS.ProcessEnv;
+        childEnvironment.PATH = root;
         const outcome = runProcessSync({
           command: process.execPath,
           args: [fixturePath, ...args],
           cwd: options.cwd,
-          env: options.env,
+          env: childEnvironment,
           encoding: 'utf8',
           timeoutMs: options.timeout,
         });
