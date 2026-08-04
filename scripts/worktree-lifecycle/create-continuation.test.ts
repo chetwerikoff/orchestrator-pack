@@ -210,6 +210,27 @@ describe('bounded worktree creation and worker spawn', () => {
     expect(value.terminalCreates).toEqual([join(value.root, 'worktrees', PRIMARY)]);
   });
 
+  it('ignores the same Issue binding in a foreign Orca repository', () => {
+    const value = fixture();
+    value.orcaRows.push({
+      path: join(value.root, 'foreign-repo', PRIMARY),
+      head: HEAD,
+      branch: `refs/heads/${PRIMARY}`,
+      linkedIssue: ISSUE,
+      repoId: 'foreign-repository',
+    });
+    value.createHandlers.push((name) => {
+      value.addDual(name);
+      return processResult({ stdout: JSON.stringify({ ok: true }) });
+    });
+
+    const report = execute(value);
+
+    expect(report.outcome).toBe('worker_spawned');
+    expect(report.attempts.map((attempt) => attempt.kind)).toEqual(['initial']);
+    expect(value.creates).toEqual([PRIMARY]);
+  });
+
   it('preserves Git-only state and performs one stable same-source replacement', () => {
     const value = fixture();
     value.createHandlers.push(
