@@ -112,6 +112,7 @@ export interface OrcaRunOptions {
   readonly runner?: typeof spawnSync;
   readonly timeoutMs?: number;
   readonly killSignal?: NodeJS.Signals;
+  readonly inheritParentEnv?: boolean;
 }
 
 const ORCA_CANDIDATES = ['orca-dev', 'orca-ide', 'orca'] as const;
@@ -177,7 +178,9 @@ export function runOrcaJson<T>(
   try {
     result = runner(executable, [...args, '--json'], {
       cwd: options.cwd ?? process.cwd(),
-      env: { ...process.env, ...options.env },
+      env: options.inheritParentEnv === false
+        ? { ...options.env }
+        : { ...process.env, ...options.env },
       encoding: 'utf8',
       maxBuffer: 16 * 1024 * 1024,
       ...(options.timeoutMs === undefined ? {} : {
