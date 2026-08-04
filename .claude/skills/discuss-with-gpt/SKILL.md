@@ -123,9 +123,10 @@ helper only polls/reads the same tab. It never silently re-sends because of a
 slow reply, timeout, missing old witness, or ambiguous local process state.
 
 When a process/page/chat is genuinely lost and cheap continuation is unavailable,
-the flow-manager may start a **fresh invocation in a fresh chat and send again**.
-A duplicate recoverable GPT text request is an accepted residual risk. Do not
-query or clear legacy helper state to authorize the replacement.
+retain the invocation-local incident and do not send a replacement. A retry or
+fresh replacement is permitted only when the terminal helper proves a pre-send
+failure with `send_count: 0`; do not query or clear legacy helper state to
+authorize it.
 
 Any possible delivery, post-send failure, ambiguous delivery, output conflict,
 missing terminal result, or `send_count: 1` forbids resend within that
