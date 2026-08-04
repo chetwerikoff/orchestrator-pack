@@ -226,9 +226,17 @@ function packReviewRunKey(
   headSha: string,
   canonicalRepository?: string,
 ): string {
-  return canonicalRepository
-    ? `pr-${canonicalRepository}-${prNumber}-${headSha}`
-    : `pr-${prNumber}-${headSha}`;
+  void canonicalRepository;
+  return `pr-${prNumber}-${headSha}`;
+}
+
+function canonicalRepositoryFromRunKey(
+  key: string,
+  prNumber: number,
+  headSha: string,
+): string | undefined {
+  const match = key.match(new RegExp(`^pr-([^/\\s]+/[^/\\s]+)-${prNumber}-${headSha}$`));
+  return match?.[1] ? normalizePackReviewCanonicalRepository(match[1]) : undefined;
 }
 
 function samePackReviewRunIdentity(left: PackReviewRunRecord, right: PackReviewRunRecord): boolean {
@@ -237,14 +245,17 @@ function samePackReviewRunIdentity(left: PackReviewRunRecord, right: PackReviewR
     || left.targetSha !== right.targetSha) {
     return false;
   }
-  if (left.canonicalRepository || right.canonicalRepository) {
-    return Boolean(
-      left.canonicalRepository
-      && right.canonicalRepository
-      && left.canonicalRepository === right.canonicalRepository,
-    );
+  const leftRepository = left.canonicalRepository
+    ?? canonicalRepositoryFromRunKey(left.key, left.prNumber, left.targetSha);
+  const rightRepository = right.canonicalRepository
+    ?? canonicalRepositoryFromRunKey(right.key, right.prNumber, right.targetSha);
+  if (leftRepository || rightRepository) {
+    return Boolean(leftRepository && rightRepository && leftRepository === rightRepository);
   }
-  return left.key === right.key;
+  if (left.sourceRepoRoot && right.sourceRepoRoot) {
+    return resolve(left.sourceRepoRoot) === resolve(right.sourceRepoRoot);
+  }
+  return false;
 }
 
 function matchesPackReviewRunInput(
@@ -253,18 +264,27 @@ function matchesPackReviewRunInput(
   prNumber: number,
   headSha: string,
   canonicalRepository?: string,
+  sourceRepoRoot?: string,
 ): boolean {
   if (record.projectId !== projectId || record.prNumber !== prNumber || record.targetSha !== headSha) {
     return false;
   }
-  if (canonicalRepository || record.canonicalRepository) {
+  const recordRepository = record.canonicalRepository
+    ?? canonicalRepositoryFromRunKey(record.key, record.prNumber, record.targetSha);
+  if (canonicalRepository) {
+    if (recordRepository) return canonicalRepository === recordRepository;
     return Boolean(
-      canonicalRepository
-      && record.canonicalRepository
-      && canonicalRepository === record.canonicalRepository,
+      sourceRepoRoot
+      && record.sourceRepoRoot
+      && resolve(sourceRepoRoot) === resolve(record.sourceRepoRoot),
     );
   }
-  return record.key === packReviewRunKey(prNumber, headSha);
+  if (recordRepository) return false;
+  return Boolean(
+    sourceRepoRoot
+    && record.sourceRepoRoot
+    && resolve(sourceRepoRoot) === resolve(record.sourceRepoRoot),
+  );
 }
 
 export function normalizePackReviewHeadSha(value: string): string {
@@ -402,10 +422,10 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
   const canonicalRepository = raw.canonicalRepository === undefined
     ? undefined
     : normalizePackReviewCanonicalRepository(String(raw.canonicalRepository));
-  const canonicalKeyPattern = new RegExp(`^pr-[^\\s]+-${prNumber}-${targetSha}$`);
-  if (key !== packReviewRunKey(prNumber, targetSha, canonicalRepository)
-    && key !== packReviewRunKey(prNumber, targetSha)
-    && !(canonicalRepository === undefined && canonicalKeyPattern.test(key))) {
+  const canonicalKeyRepository = canonicalRepositoryFromRunKey(key, prNumber, targetSha);
+  if (key !== packReviewRunKey(prNumber, targetSha)
+    && !(canonicalKeyRepository
+      && (!canonicalRepository || canonicalRepository === canonicalKeyRepository))) {
     throw new Error(`corrupt pack review run record at ${path}: key does not match PR/head/repository`);
   }
   const status = requiredString(raw.status, 'status', path) as PackReviewRunStatus;
@@ -651,7 +671,7 @@ export function listPackReviewRuns(options: PackReviewStoreOptions = {}): PackRe
     .sort((left, right) => {
       if (!samePackReviewRunIdentity(left, right)) return Date.parse(right.createdAt) - Date.parse(left.createdAt);
       const comparison = compareSameKeyRuns(right, left);
-      if (comparison === null) throw new Error(`ambiguous pack review run order for ${left.key}: legacy_order_ambiguous`);
+      if (comparison === null) return left.id.localeCompare(right.id);
       return comparison;
     })
     .map((record) => consumerRow(record, now)));
@@ -689,6 +709,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       input.prNumber,
       headSha,
       canonicalRepository,
+      input.sourceRepoRoot,
     )
       && PACK_REVIEW_ACTIVE_STATUSES.has(record.status)
       && !isPackReviewRunStale(record));
@@ -704,6 +725,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
         input.prNumber,
         headSha,
         canonicalRepository,
+        input.sourceRepoRoot,
       )
         && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
         && hasPersistedPackReviewVerdict(record));
@@ -720,6 +742,7 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
         input.prNumber,
         headSha,
         canonicalRepository,
+        input.sourceRepoRoot,
       ) && record.sameKeyOrder !== undefined)
       .map((record) => record.sameKeyOrder!);
     const sameKeyOrder = (sameKeyOrders.length > 0 ? Math.max(...sameKeyOrders) : 0) + 1;
@@ -775,7 +798,7 @@ export function updatePackReviewRun(
       prNumber: existing.prNumber,
       targetSha: existing.targetSha,
       headSha: existing.headSha,
-      canonicalRepository: existing.canonicalRepository,
+      canonicalRepository: existing.canonicalRepository ?? fields.canonicalRepository,
       schemaVersion: 1,
       updatedAt,
       heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(fields.status ?? existing.status))

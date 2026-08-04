@@ -212,6 +212,12 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isTerminalPersistenceFailure(error: unknown): boolean {
+  const message = describeError(error);
+  return message.includes('required-status delivery outcome was not durably persisted')
+    || message.includes('pack review terminal state was not durably persisted');
+}
+
 function pathInside(candidate: string, parent: string): boolean {
   const rel = relative(resolve(parent), resolve(candidate));
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
@@ -798,8 +804,17 @@ export async function reconcileStalePackReviewRuns(
   const repoSlug = trim(input.repoSlug);
   if (!repoSlug) throw new Error('pack review stale reconciliation requires a canonical repository slug');
   const resolveSlug = input.resolveRepositorySlug ?? resolveRepositorySlug;
-  const records = listPackReviewRunRecordsRaw({ projectId, storeRoot });
+  let records = listPackReviewRunRecordsRaw({ projectId, storeRoot });
   const results: Array<Record<string, unknown>> = [];
+
+  for (const candidate of records) {
+    if (candidate.canonicalRepository) continue;
+    const identity = await resolvePackReviewRunCanonicalRepository(candidate, resolveSlug);
+    if (identity.ok && identity.slug === repoSlug) {
+      updatePackReviewRun(candidate.id, { canonicalRepository: identity.slug }, { projectId, storeRoot });
+    }
+  }
+  records = listPackReviewRunRecordsRaw({ projectId, storeRoot });
 
   for (const candidate of records) {
     const activeStale = isPackReviewRunStale(candidate);
@@ -830,6 +845,13 @@ export async function reconcileStalePackReviewRuns(
 
     let terminalized = false;
     let run = candidate;
+    const statusWriter = input.fixtureRequiredStatusWriter
+      ?? ((request) => publishPackReviewRequiredStatus({
+        repoRoot: input.sourceRepoRoot,
+        repoSlug,
+        headSha: run.targetSha,
+        request,
+      }));
     if (activeStale) {
       const terminal = terminalizePackReviewStaleRun(run.id, { projectId, storeRoot });
       terminalized = terminal.changed;
@@ -849,10 +871,17 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
     if (currentOrder.kind === 'newer') {
+      await restorePackReviewAuthoritativeRequiredStatus({
+        run: currentOrder.run,
+        projectId,
+        storeRoot,
+        writeRequiredStatus: statusWriter,
+        pauseAfterPendingWrite: input.fixturePauseAfterPendingRestoreWrite,
+      });
       results.push({
         runId: run.id,
         terminalized,
-        statusReconciled: false,
+        statusReconciled: true,
         reason: 'newer_run_authoritative',
       });
       continue;
@@ -883,22 +912,22 @@ export async function reconcileStalePackReviewRuns(
       continue;
     }
     if (orderBeforeStaleStatusWrite.kind === 'newer') {
+      await restorePackReviewAuthoritativeRequiredStatus({
+        run: orderBeforeStaleStatusWrite.run,
+        projectId,
+        storeRoot,
+        writeRequiredStatus: statusWriter,
+        pauseAfterPendingWrite: input.fixturePauseAfterPendingRestoreWrite,
+      });
       results.push({
         runId: run.id,
         terminalized,
-        statusReconciled: false,
+        statusReconciled: true,
         reason: 'newer_run_authoritative',
       });
       continue;
     }
 
-    const statusWriter = input.fixtureRequiredStatusWriter
-      ?? ((request) => publishPackReviewRequiredStatus({
-        repoRoot: input.sourceRepoRoot,
-        repoSlug,
-        headSha: run.targetSha,
-        request,
-      }));
     const authorizeStaleWrite = () => {
       const order = resolvePackReviewRunOrder(listPackReviewRunRecordsRaw({ projectId, storeRoot }), run);
       return order.kind === 'none';
@@ -1212,6 +1241,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
   let run: PackReviewRunRecord | null = null;
   let worktree = '';
   let terminal = false;
+  let retainClaimDirectory = false;
   let carryover: { replay: CarryoverReplayResult; sourceCleanRunId: string } | null = null;
   let carryoverBundlePath = '';
 
@@ -1782,11 +1812,12 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           });
           terminal = true;
         }
-      } catch {
+      } catch (terminalError) {
+        if (isTerminalPersistenceFailure(terminalError)) retainClaimDirectory = true;
         // Preserve the primary failure; store corruption remains fail-closed on next read.
       }
     }
-    if (claimLease?.acquired) {
+    if (claimLease?.acquired && !retainClaimDirectory) {
       try {
         await claimLease.release('failure', listPackReviewRuns({ projectId, storeRoot }), describeError(error));
       } catch {
@@ -1804,7 +1835,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     };
   } finally {
     if (worktree) await removeReviewWorktree(target.sourceRepoRoot, worktree);
-    if (claimLease?.directory) rmSync(claimLease.directory, { recursive: true, force: true });
+    if (claimLease?.directory && !retainClaimDirectory) {
+      rmSync(claimLease.directory, { recursive: true, force: true });
+    }
   }
 }
 
