@@ -73,7 +73,7 @@ export function packReviewRequiredStatusNeedsStaleReconciliation(run: PackReview
   if (!outcome) return true;
   if (outcome.idempotencyKey === pendingKey && outcome.state === 'succeeded') return true;
   if (outcome.idempotencyKey === unfinishedKey && outcome.state === 'succeeded') return false;
-  return outcome.state === 'failed';
+  return outcome.state === 'failed' && outcome.idempotencyKey === unfinishedKey;
 }
 
 const JOURNAL_WRITE_ATTEMPTS = 3;
@@ -165,7 +165,7 @@ interface RestoreAuthoritativeRequiredStatusOptions extends RecordPendingReviewO
 
 interface RecordStaleRequiredStatusOptions extends RecordPendingReviewOptions {
   authorizeWrite?: () => boolean | Promise<boolean>;
-  repairSupersededWrite?: () => void | Promise<void>;
+  repairSupersededWrite?: () => { reason: string } | Promise<{ reason: string }>;
   pauseBeforeWrite?: () => void | Promise<void>;
   pauseAfterWrite?: () => void | Promise<void>;
 }
@@ -623,6 +623,20 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
   const storeOpts = storeOptions(options);
   const reload = () => safeGetPackReviewRun(options.run.id, options) ?? options.run;
   const run = reload();
+  const expectedKey = hasPersistedPackReviewVerdict(run)
+    || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)
+    ? requiredStatusIdempotencyKey(run)
+    : run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled'
+      ? unfinishedRequiredStatusKey(run, trim(run.failureReason) || 'runner_internal_failure')
+      : PACK_REVIEW_ACTIVE_STATUSES.has(run.status)
+        ? packReviewPendingRequiredStatusIdempotencyKey(run)
+        : null;
+  const existingOutcome = run.deliveryOutcomes?.requiredStatus;
+  if (expectedKey
+    && existingOutcome?.state === 'succeeded'
+    && existingOutcome.idempotencyKey === expectedKey) {
+    return existingOutcome;
+  }
   if (hasPersistedPackReviewVerdict(run)) {
     return publishPackReviewTerminalRequiredStatus(run, options);
   }
@@ -690,8 +704,10 @@ export async function recordPackReviewStaleRequiredStatus(
   }
   if (options.pauseAfterWrite) await options.pauseAfterWrite();
   if (options.authorizeWrite && !(await options.authorizeWrite())) {
-    if (options.repairSupersededWrite) await options.repairSupersededWrite();
-    return outcome('failed', 'newer_run_authoritative', idempotencyKey, options.clock);
+    const repair = options.repairSupersededWrite
+      ? await options.repairSupersededWrite()
+      : undefined;
+    return outcome('failed', repair?.reason ?? 'newer_run_authoritative', idempotencyKey, options.clock);
   }
   persistRequiredStatusOutcome(options.run.id, statusOutcome, options);
   return statusOutcome;

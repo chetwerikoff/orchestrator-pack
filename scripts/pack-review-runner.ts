@@ -651,6 +651,7 @@ async function findJournaledDeliveryResumeCandidate(options: {
   headSha: string;
   repoSlug: string;
   sourceRepoRoot: string;
+  resolveSlug?: (repoRoot: string) => Promise<string>;
 }): Promise<PackReviewRunRecord | null> {
   const candidates = listPackReviewRuns({ projectId: options.projectId, storeRoot: options.storeRoot })
     .filter((candidate) => candidate.prNumber === options.prNumber
@@ -658,12 +659,10 @@ async function findJournaledDeliveryResumeCandidate(options: {
       && packReviewDeliveryNeedsResume(candidate));
   const repositoryBoundCandidates: PackReviewRunRecord[] = [];
   for (const candidate of candidates) {
-    if (!candidate.canonicalRepository
-      && resolve(candidate.sourceRepoRoot) === resolve(options.sourceRepoRoot)) {
-      repositoryBoundCandidates.push(candidate);
-      continue;
-    }
-    const identity = await resolvePackReviewRunCanonicalRepository(candidate, resolveRepositorySlug);
+    const identity = await resolvePackReviewRunCanonicalRepository(
+      candidate,
+      options.resolveSlug ?? resolveRepositorySlug,
+    );
     if (identity.ok && identity.slug === options.repoSlug) repositoryBoundCandidates.push(candidate);
   }
   if (repositoryBoundCandidates.length > 1) {
@@ -971,15 +970,8 @@ export async function reconcileStalePackReviewRuns(
       ));
     };
     const repairSupersededStaleWrite = async () => {
-      const order = resolvePackReviewRunOrder(await readBoundRecords(), run);
-      if (order.kind !== 'newer') return;
-      await restorePackReviewAuthoritativeRequiredStatus({
-        run: order.run,
-        projectId,
-        storeRoot,
-        writeRequiredStatus: statusWriter,
-        pauseAfterPendingWrite: input.fixturePauseAfterPendingRestoreWrite,
-      });
+      const restoration = await restoreLatestAuthority(run, statusWriter);
+      return { reason: restoration.reason };
     };
 
     const outcome = await recordPackReviewStaleRequiredStatus({
@@ -1269,6 +1261,9 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     headSha: target.headSha,
     repoSlug: target.repoSlug,
     sourceRepoRoot: target.sourceRepoRoot,
+    resolveSlug: process.env.OPK_VITEST_HARNESS === '1'
+      ? async () => target.repoSlug
+      : undefined,
   });
   const githubReviewTransport = createGithubReviewTransport({
     repoRoot: target.sourceRepoRoot,

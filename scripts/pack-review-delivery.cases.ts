@@ -11,6 +11,7 @@ import {
   recordMalformedPackReviewStatus,
   recordPackReviewPendingStatus,
   recordPackReviewUnfinishedTerminalStatus,
+  packReviewRequiredStatusNeedsStaleReconciliation,
   restorePackReviewAuthoritativeRequiredStatus,
   resumePackReviewVerdictDelivery,
   type PackReviewRequiredStatusRequest,
@@ -736,6 +737,28 @@ describe('pack review corrective contracts (Issue #1307)', () => {
     ]);
     expect(writes).toHaveLength(0);
   });
+
+  it('does not reconcile a failed pending outcome as unfinished evidence', () => {
+    const storeRoot = tempRoot('opk-1307-failed-pending-evidence-');
+    const run = createRun(storeRoot);
+    updatePackReviewRun(run.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'reviewer_process_timeout',
+      deliveryOutcomes: {
+        requiredStatus: {
+          state: 'failed',
+          recordedAtUtc: '2026-08-04T04:00:00.000Z',
+          reason: 'required status unavailable',
+          idempotencyKey: `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${HEAD_SHA}:pending`,
+        },
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+
+    expect(packReviewRequiredStatusNeedsStaleReconciliation(
+      getPackReviewRun(run.id, { projectId: 'orchestrator-pack', storeRoot })!,
+    )).toBe(false);
+  });
 });
 
 describe('pack review stale reconciliation (Issue #1067)', () => {
@@ -945,6 +968,44 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
       reason: 'newer_run_authoritative',
     });
     expect(JSON.parse(readFileSync(newerCapture, 'utf8')).state).toBe('pending');
+  });
+
+  it('does not rewrite a completed newer authority on repeated reconciliation', async () => {
+    const storeRoot = tempRoot('opk-1307-repeat-newer-reconcile-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+
+    createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-newer-repeat',
+      startReason: 'newer-repeat',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+
+    const input = {
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request: PackReviewRequiredStatusRequest) => {
+        writes.push(request);
+      },
+    };
+    await reconcileStalePackReviewRuns(input);
+    await reconcileStalePackReviewRuns(input);
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.state).toBe('pending');
   });
 
   it('reports newer-authority restoration failure instead of claiming reconciliation', async () => {
