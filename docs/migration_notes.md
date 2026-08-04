@@ -1,41 +1,3 @@
-## 2026-08-04 — Git/Orca worktree lifecycle continuity (Issue #1298)
-
-Issue #1298 adds one bounded pack-owned lifecycle boundary between Git's common worktree
-registry and Orca's supported worktree, agent, and terminal inventories. The canonical worker
-handoff now uses `scripts/worktree-lifecycle/create-continuation.ts`: one invocation owns the
-shared create/recovery/teardown exclusion, one primary create attempt, authoritative read-back
-after known or unknown command outcome, at most one isolated same-source replacement, and two
-fresh exact-dual reads before terminal spawn is authorized.
-
-### Operator adoption
-
-1. Pull the merged pack into the operator checkout. No configuration migration, daemon restart,
-   or durable-state rewrite is required solely for Issue #1298.
-2. Recycle only active architect/worker sessions that must reload the changed tracked handoff and
-   merge procedures.
-3. For future worker creation, resolve the exact intended full source SHA and run the canonical
-   `create-continuation.ts --apply --json` command once. Spawn a terminal only for its single
-   `selected.path` when `outcome: ready_to_spawn`, `terminalSpawnAuthorized: true`, and the fresh
-   read-back is `exact_dual`. Do not issue a manual second create after timeout or missing receipt.
-4. For an existing exact Git-only worktree belonging to a merged PR, run the documented
-   `explicit-recovery` command without `--apply`, review every gate, and repeat with `--apply` only
-   for `git_only_recovery_eligible` with the exact current merged-PR head and branch.
-5. Treat `cleanup_deferred` and `task_degraded` as target-level containment. They preserve the
-   disputed worktree and return scheduler/operator control; they do not invalidate an already
-   successful merge/adoption. Cleanup may be retried later without rerunning the merge.
-6. Never bulk-sweep, force-remove, use `rm -rf`, edit Orca persistence, delete by path alone, or
-   create a third replacement merely to make cleanup appear complete.
-7. Capture the installed Orca version and production create/list/ps/terminal/remove plus
-   interruption behavior on the operator host before enabling any native adopt/register branch or
-   declaring Issue #1298 AC #1 complete. Until then, native adopt/register remains unsupported.
-
-### Rollback
-
-Quiesce active create/recovery operations before reverting the Issue #1298 code and tracked
-procedure changes. Do not delete, rename, merge, or rewrite existing Git/Orca lifecycle state as
-part of rollback. Disputed historical worktrees remain preserved for explicit operator handling;
-rollback must not convert them into path-only cleanup targets.
-
 ## 2026-08-03 — Issue #898 live authority and review budget adoption
 
 The pack review runner now owns the Issue #898 authority lifecycle, including carry-over,
@@ -1557,8 +1519,7 @@ stays resident.
 
 **Ruled out for the instant-exit signature:** JediTerm env alone, prompt size,
 `unref` on pty-host stdio, cursor-plugin #2074 worker patch (orchestrator uses
-cat-only launch). A/B revert of `index.js` → `.orig` did not restore full-prompt
-transcripts by itself — bootstrap loop is not explained by worker argv patch alone.
+cat-only `$(cat <file>)`).
 
 #### Do not repeat (operator checklist)
 
@@ -1746,7 +1707,7 @@ Measured missed-savings follow-up to #145. No passthrough manifest change on the
 3. Restart AO (`ao stop` / `ao start`) so workers load updated **RTK read-exploration**
    guidance in `AGENTS.md`.
 
-Full method: [`docs/rtk-missed-savings-inventory.md`](coworker-rtk-runbook.md).
+Full method: [`docs/rtk-missed-savings-inventory.md`](rtk-missed-savings-inventory.md).
 
 
 ## Wake-supervisor open-PR snapshot no-child bypass (Issue #553)
@@ -2794,6 +2755,7 @@ Record positive evidence in the PR or operator log before merge when available:
 2. **Production-path canonical `conversation_id`** — run one fresh-chat browser turn on the live profile, then `status/list` and confirm the promoted `conversation_id` matches the normalized URL for that chat and correlates to the submitted exchange.
 
 Until those live checks are recorded, treat AC5 as operator-pending; do not substitute additional unit fixtures.
+"
 
 ## Issue #1200 remote review publication authority
 
