@@ -5,6 +5,7 @@ export type WorktreeBindingKind = 'issue' | 'pr';
 
 export interface ExpectedWorktreeIdentity {
   readonly repositoryRoot: string;
+  readonly repositoryId?: string;
   readonly path: string;
   readonly headSha: string;
   readonly mode: WorktreeIdentityMode;
@@ -119,6 +120,11 @@ export function normalizeHeadSha(value: string): string {
   return normalized;
 }
 
+function normalizeRepositoryId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
 export function normalizeExpectedIdentity(input: ExpectedWorktreeIdentity): ExpectedWorktreeIdentity {
   if (!Number.isInteger(input.bindingNumber) || input.bindingNumber <= 0) {
     throw new TypeError('bindingNumber must be a positive integer');
@@ -133,8 +139,10 @@ export function normalizeExpectedIdentity(input: ExpectedWorktreeIdentity): Expe
   if (input.mode === 'detached-confirmed' && branchName) {
     throw new TypeError('detached-confirmed identity must not carry branchName');
   }
+  const repositoryId = normalizeRepositoryId(input.repositoryId);
   return {
     repositoryRoot: normalizeWorktreePath(input.repositoryRoot),
+    ...(repositoryId ? { repositoryId } : {}),
     path: normalizeWorktreePath(input.path),
     headSha: normalizeHeadSha(input.headSha),
     mode: input.mode,
@@ -214,9 +222,17 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function optionalInteger(value: unknown): number | null | undefined {
+function optionalIntegerField(
+  row: Record<string, unknown>,
+  field: 'linkedIssue' | 'linkedPR',
+  malformedFields: string[],
+): number | null | undefined {
+  if (!Object.prototype.hasOwnProperty.call(row, field)) return undefined;
+  const value = row[field];
   if (value === null) return null;
-  return Number.isInteger(value) ? Number(value) : undefined;
+  if (Number.isInteger(value) && Number(value) > 0) return Number(value);
+  malformedFields.push(field);
+  return undefined;
 }
 
 export function parseOrcaWorktreePayload(payload: unknown): OrcaWorktreeRow[] {
@@ -246,6 +262,8 @@ export function parseOrcaWorktreePayload(payload: unknown): OrcaWorktreeRow[] {
     }
     const branchRef = optionalString(row.branch);
     const branchName = normalizeBranchName(branchRef);
+    const repoId = optionalString(row.repoId);
+    if (!repoId) malformedFields.push('repoId');
     const agents = Array.isArray(row.agents)
       ? row.agents.map((agentValue) => {
         const agent = objectRecord(agentValue);
@@ -255,24 +273,20 @@ export function parseOrcaWorktreePayload(payload: unknown): OrcaWorktreeRow[] {
         };
       })
       : undefined;
-    if (row.isMainWorktree !== undefined && typeof row.isMainWorktree !== 'boolean') {
-      malformedFields.push('isMainWorktree');
-    }
-    if (row.isArchived !== undefined && typeof row.isArchived !== 'boolean') {
-      malformedFields.push('isArchived');
-    }
+    if (typeof row.isMainWorktree !== 'boolean') malformedFields.push('isMainWorktree');
+    if (typeof row.isArchived !== 'boolean') malformedFields.push('isArchived');
     return {
       path: normalizeWorktreePath(rawPath),
       headSha,
       branchRef,
       branchName,
-      repoId: optionalString(row.repoId),
-      linkedIssue: optionalInteger(row.linkedIssue),
-      linkedPR: optionalInteger(row.linkedPR),
+      repoId,
+      linkedIssue: optionalIntegerField(row, 'linkedIssue', malformedFields),
+      linkedPR: optionalIntegerField(row, 'linkedPR', malformedFields),
       isMainWorktree: row.isMainWorktree === true,
       isArchived: row.isArchived === true,
       agents,
-      malformedFields,
+      malformedFields: [...new Set(malformedFields)].sort(),
     };
   });
 }
@@ -290,8 +304,12 @@ function orcaBindingMatches(row: OrcaWorktreeRow, expected: ExpectedWorktreeIden
 
 function orcaIdentityMatches(row: OrcaWorktreeRow, expected: ExpectedWorktreeIdentity): boolean {
   if (
-    row.path !== expected.path
+    !expected.repositoryId
+    || row.path !== expected.path
     || row.headSha !== expected.headSha
+    || row.repoId !== expected.repositoryId
+    || row.isMainWorktree
+    || row.isArchived
     || row.malformedFields.length > 0
     || !orcaBindingMatches(row, expected)
   ) {
@@ -318,6 +336,7 @@ function disagreementFields(
   orcaRows: readonly OrcaWorktreeRow[],
 ): string[] {
   const fields = new Set<string>();
+  if (!expected.repositoryId) fields.add('orca.repositoryId');
   for (const row of gitRows) {
     if (row.path !== expected.path) fields.add('git.path');
     if (row.headSha !== expected.headSha) fields.add('git.head');
@@ -327,6 +346,9 @@ function disagreementFields(
   for (const row of orcaRows) {
     if (row.path !== expected.path) fields.add('orca.path');
     if (row.headSha !== expected.headSha) fields.add('orca.head');
+    if (row.repoId !== expected.repositoryId) fields.add('orca.repoId');
+    if (row.isMainWorktree) fields.add('orca.isMainWorktree');
+    if (row.isArchived) fields.add('orca.isArchived');
     if (expected.mode === 'branch-bound' && row.branchName !== expected.branchName) fields.add('orca.branch');
     if (expected.mode === 'detached-confirmed' && row.branchName) fields.add('orca.detached');
     if (!orcaBindingMatches(row, expected)) {
@@ -352,6 +374,7 @@ export function classifyWorktree(input: {
   let classification: WorktreeClassification;
   const sourceUnavailable = input.evidence.git.status !== 'ok' || input.evidence.orca.status !== 'ok';
   const hasConflict = sourceUnavailable
+    || !expected.repositoryId
     || exactGitRows.length > 1
     || exactOrcaRows.length > 1
     || conflictingGitRows.length > 0
@@ -385,8 +408,7 @@ export function decideContinuation(
   if (classification === 'exact_dual') {
     if (context === 'post-create') {
       action = 'continue_existing';
-      terminalSpawnAuthorized = true;
-      reason = 'Git and Orca agree on the exact worktree identity';
+      reason = 'Git and Orca agree; the bounded create-and-spawn actuator owns terminal creation';
     } else if (context === 'post-merge-cleanup') {
       action = 'run_standard_teardown';
       reason = 'exact dual registration can use the existing guarded teardown';
