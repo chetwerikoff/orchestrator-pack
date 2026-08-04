@@ -3,12 +3,20 @@ import * as fs from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { processAlive, readProcessIdentity } from '../lib/cutover/activation-cordon.ts';
+import {
+  clearLockedFileContents,
+  readLockedFileContents,
+  releaseHeldFileLock,
+  replaceLockedFileContents,
+  tryAcquireHeldFileLock,
+} from './single-instance-lease.ts';
 
 export interface WorkerRecoveryClaimRecord {
   readonly schemaVersion: 1;
   readonly claimKey: string;
   readonly workspacePath: string;
   readonly workerId: string | null;
+  readonly workerGeneration: string | null;
   readonly holder: {
     readonly pid: number;
     readonly startTicks: string;
@@ -23,6 +31,7 @@ export interface WorkerRecoveryClaimHandle {
   readonly path: string;
   readonly namespace: string;
   readonly record: WorkerRecoveryClaimRecord;
+  readonly descriptor: number;
 }
 
 export type WorkerRecoveryClaimResult =
@@ -47,12 +56,14 @@ function terminalPath(namespace: string, claimKey: string, outcome: string): str
   );
 }
 
-function readRecord(path: string): WorkerRecoveryClaimRecord | null {
+function parseRecord(raw: string): WorkerRecoveryClaimRecord | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(path, 'utf8')) as WorkerRecoveryClaimRecord;
+    const parsed = JSON.parse(raw) as WorkerRecoveryClaimRecord;
     if (parsed.schemaVersion !== 1
       || !parsed.claimKey
       || !parsed.workspacePath
+      || (parsed.workerId !== null && typeof parsed.workerId !== 'string')
+      || (parsed.workerGeneration !== null && typeof parsed.workerGeneration !== 'string')
       || !Number.isInteger(parsed.holder?.pid)
       || !parsed.holder.startTicks
       || !parsed.holder.processGuid
@@ -61,6 +72,11 @@ function readRecord(path: string): WorkerRecoveryClaimRecord | null {
   } catch {
     return null;
   }
+}
+
+function readLockedRecord(descriptor: number): WorkerRecoveryClaimRecord | null {
+  const raw = readLockedFileContents(descriptor).trim();
+  return raw ? parseRecord(raw) : null;
 }
 
 function holderAlive(record: WorkerRecoveryClaimRecord): boolean {
@@ -74,6 +90,7 @@ function writeExclusive(path: string, value: unknown): void {
   const descriptor = fs.openSync(path, 'wx', 0o600);
   try {
     fs.writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    fs.fsyncSync(descriptor);
   } finally {
     fs.closeSync(descriptor);
   }
@@ -81,30 +98,39 @@ function writeExclusive(path: string, value: unknown): void {
 
 function terminalizeExisting(
   namespace: string,
-  path: string,
   record: WorkerRecoveryClaimRecord,
   outcome: string,
+  details: Readonly<Record<string, unknown>> = {},
 ): void {
   fs.mkdirSync(join(namespace, 'terminal'), { recursive: true });
-  const terminal = terminalPath(namespace, record.claimKey, outcome);
-  writeExclusive(terminal, {
+  writeExclusive(terminalPath(namespace, record.claimKey, outcome), {
     ...record,
     outcome,
+    details,
     completedAtMs: Date.now(),
   });
-  fs.rmSync(path, { force: true });
+}
+
+function sameClaimOwner(
+  current: WorkerRecoveryClaimRecord,
+  expected: WorkerRecoveryClaimRecord,
+): boolean {
+  return current.holder.processGuid === expected.holder.processGuid
+    && current.holder.pid === expected.holder.pid
+    && current.holder.startTicks === expected.holder.startTicks;
 }
 
 /**
- * One process-generation claim for one exact recovery workspace. A claim can be
- * reclaimed once only when its PID/start-ticks owner is dead or the bounded
- * stale age has elapsed. No retry counter or scheduler state is stored here.
+ * One process-generation claim for one exact recovery workspace. The stable
+ * active file is kernel-locked for the full claim lifetime. Reclaim, finalize,
+ * and release therefore cannot delete or replace another holder's generation.
  */
 export function acquireWorkerRecoveryClaim(input: {
   readonly namespace: string;
   readonly claimKey: string;
   readonly workspacePath: string;
   readonly workerId?: string;
+  readonly workerGeneration?: string;
   readonly surface?: string;
   readonly staleMs?: number;
 }): WorkerRecoveryClaimResult {
@@ -113,11 +139,21 @@ export function acquireWorkerRecoveryClaim(input: {
   const path = claimPath(input.namespace, input.claimKey);
   fs.mkdirSync(dirname(path), { recursive: true });
   fs.mkdirSync(join(input.namespace, 'terminal'), { recursive: true });
+
+  const held = tryAcquireHeldFileLock(path);
+  if (!held.acquired) {
+    return {
+      acquired: false,
+      reason: held.reason === 'busy' ? 'claim_held' : 'claim_untrusted',
+    };
+  }
+
   const record: WorkerRecoveryClaimRecord = {
     schemaVersion: 1,
     claimKey: safeKey(input.claimKey),
     workspacePath: input.workspacePath,
     workerId: input.workerId?.trim() || null,
+    workerGeneration: input.workerGeneration?.trim() || null,
     holder: {
       pid: identity.pid,
       startTicks: identity.startTicks,
@@ -128,24 +164,31 @@ export function acquireWorkerRecoveryClaim(input: {
     acquiredAtMs: Date.now(),
   };
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      writeExclusive(path, record);
-      return { acquired: true, handle: { path, namespace: input.namespace, record } };
-    } catch (error) {
-      const code = error && typeof error === 'object' && 'code' in error
-        ? String((error as NodeJS.ErrnoException).code ?? '')
-        : '';
-      if (code !== 'EEXIST') return { acquired: false, reason: 'claim_untrusted' };
-      const existing = readRecord(path);
-      if (!existing) return { acquired: false, reason: 'claim_untrusted' };
+  try {
+    const raw = readLockedFileContents(held.descriptor).trim();
+    if (raw) {
+      const existing = parseRecord(raw);
+      if (!existing) {
+        releaseHeldFileLock(held.descriptor);
+        return { acquired: false, reason: 'claim_untrusted' };
+      }
       const staleMs = Math.max(120_000, input.staleMs ?? 15 * 60_000);
       const stale = !holderAlive(existing) || Date.now() - existing.acquiredAtMs >= staleMs;
-      if (!stale || attempt > 0) return { acquired: false, reason: 'claim_held' };
-      terminalizeExisting(input.namespace, path, existing, 'recovered_stale');
+      if (!stale) {
+        releaseHeldFileLock(held.descriptor);
+        return { acquired: false, reason: 'claim_held' };
+      }
+      terminalizeExisting(input.namespace, existing, 'recovered_stale');
     }
+    replaceLockedFileContents(held.descriptor, `${JSON.stringify(record, null, 2)}\n`);
+    return {
+      acquired: true,
+      handle: { path, namespace: input.namespace, record, descriptor: held.descriptor },
+    };
+  } catch {
+    releaseHeldFileLock(held.descriptor);
+    return { acquired: false, reason: 'claim_untrusted' };
   }
-  return { acquired: false, reason: 'claim_held' };
 }
 
 export function finalizeWorkerRecoveryClaim(
@@ -153,25 +196,28 @@ export function finalizeWorkerRecoveryClaim(
   outcome: string,
   details: Readonly<Record<string, unknown>> = {},
 ): boolean {
-  const current = readRecord(handle.path);
-  if (!current
-    || current.holder.processGuid !== handle.record.holder.processGuid
-    || current.holder.pid !== handle.record.holder.pid
-    || current.holder.startTicks !== handle.record.holder.startTicks) return false;
-  const terminal = terminalPath(handle.namespace, current.claimKey, outcome);
-  writeExclusive(terminal, {
-    ...current,
-    outcome,
-    details,
-    completedAtMs: Date.now(),
-  });
-  fs.rmSync(handle.path, { force: true });
+  const current = readLockedRecord(handle.descriptor);
+  if (!current || !sameClaimOwner(current, handle.record)) return false;
+  terminalizeExisting(handle.namespace, current, outcome, details);
+  clearLockedFileContents(handle.descriptor);
   return true;
 }
 
 export function releaseWorkerRecoveryClaim(handle: WorkerRecoveryClaimHandle): boolean {
-  const current = readRecord(handle.path);
-  if (!current || current.holder.processGuid !== handle.record.holder.processGuid) return false;
-  fs.rmSync(handle.path, { force: true });
-  return true;
+  let released = false;
+  try {
+    const raw = readLockedFileContents(handle.descriptor).trim();
+    if (!raw) {
+      released = true;
+    } else {
+      const current = parseRecord(raw);
+      if (current && sameClaimOwner(current, handle.record)) {
+        clearLockedFileContents(handle.descriptor);
+        released = true;
+      }
+    }
+  } finally {
+    releaseHeldFileLock(handle.descriptor);
+  }
+  return released;
 }
