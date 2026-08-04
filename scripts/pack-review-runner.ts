@@ -1094,11 +1094,18 @@ async function runGptSourceBatch(options: {
     let payload: ReviewPayload | undefined;
     let terminalClass: string;
     if (invocation.result.ok) {
-      try {
-        payload = parseReviewPayload(invocation.result.stdout);
-        terminalClass = payload.verdict === 'clean' && payload.findingCount === 0 ? 'complete_clean' : 'complete_findings';
-      } catch {
+      if (!terminal
+        || terminal.state !== 'ok'
+        || terminal.send_count < 1
+        || terminal.invocation_id.trim() === '') {
         terminalClass = 'reviewer_output_malformed';
+      } else {
+        try {
+          payload = parseReviewPayload(invocation.result.stdout);
+          terminalClass = payload.verdict === 'clean' && payload.findingCount === 0 ? 'complete_clean' : 'complete_findings';
+        } catch {
+          terminalClass = 'reviewer_output_malformed';
+        }
       }
     } else {
       terminalClass = terminalClassForGptResult(invocation.result, terminal);

@@ -47,6 +47,10 @@ function cleanTerminalPayload(): string {
   return JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] });
 }
 
+function successfulCleanReviewPayload(): string {
+  return terminalTurnPayload({ state: 'ok', cause: 'completed_page_only', sendCount: 1 }) + String.fromCharCode(10) + cleanTerminalPayload();
+}
+
 function terminalTurnPayload(input: {
   state: string;
   cause: string;
@@ -64,10 +68,10 @@ function terminalTurnPayload(input: {
 }
 
 function findingsPayload(title: string): string {
-  return JSON.stringify({
+  return terminalTurnPayload({ state: 'ok', cause: 'completed_page_only', sendCount: 1 }) + String.fromCharCode(10) + JSON.stringify({
     verdict: 'findings',
     findingCount: 1,
-    findings: [{ title, body: `body-${title}`, severity: 'blocking' }],
+    findings: [{ title, body: 'body-' + title, severity: 'blocking' }],
   });
 }
 
@@ -675,7 +679,7 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
     expect(() => readFileSync(capture, 'utf8')).toThrow();
   });
 
-  it('keeps sibling outcomes and records a non-complete pre-launch slot', async () => {
+  it('rejects terminal-evidence-free clean payloads and keeps sibling outcomes', async () => {
     const storeRoot = tempRoot('opk-gpt-prelaunch-failure-');
     const capture = path.join(storeRoot, 'github-review.json');
     harnessEnv(storeRoot, capture);
@@ -693,9 +697,9 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     const run = getPackReviewRun(String(result.runId), { projectId: 'orchestrator-pack', storeRoot });
     expect(run?.reviewRound?.sourceSlots.map((slot) => slot.terminalClass)).toEqual([
-      'complete_clean',
+      'reviewer_output_malformed',
       'driver_error:rate_limit_detected',
-      'complete_clean',
+      'reviewer_output_malformed',
     ]);
     expect(run?.reviewRound?.sourceSlots.map((slot) => slot.attemptOrdinal)).toEqual([1, 1, 1]);
     expect(run?.reviewRound?.sourceSlots).toHaveLength(3);
@@ -726,9 +730,9 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
         expect(notifications).toHaveLength(0);
       },
       fixtureReviewBySourceSlot: {
-        'source-01': [{ stdout: cleanTerminalPayload() }],
-        'source-02': [{ stdout: cleanTerminalPayload() }],
-        'source-03': [{ stdout: cleanTerminalPayload() }],
+        'source-01': [{ stdout: successfulCleanReviewPayload() }],
+        'source-02': [{ stdout: successfulCleanReviewPayload() }],
+        'source-03': [{ stdout: successfulCleanReviewPayload() }],
       },
     }));
 
@@ -773,12 +777,12 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     const result = await startPackReview(pluralStart(storeRoot, capture, {
       fixtureReviewBySourceSlot: {
-        'source-01': [{ stdout: cleanTerminalPayload() }],
+        'source-01': [{ stdout: successfulCleanReviewPayload() }],
         'source-02': [
           { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
           { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
         ],
-        'source-03': [{ stdout: cleanTerminalPayload() }],
+        'source-03': [{ stdout: successfulCleanReviewPayload() }],
       },
     }));
 
@@ -803,9 +807,9 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     const result = await startPackReview(pluralStart(storeRoot, capture, {
       fixtureReviewBySourceSlot: {
-        'source-01': [{ stdout: cleanTerminalPayload() }],
+        'source-01': [{ stdout: successfulCleanReviewPayload() }],
         'source-02': [{ stdout: terminalTurnPayload({ state: 'driver_error', cause: 'browser_lost', sendCount: 1 }), exitCode: 13 }],
-        'source-03': [{ stdout: cleanTerminalPayload() }],
+        'source-03': [{ stdout: successfulCleanReviewPayload() }],
       },
     }));
 
