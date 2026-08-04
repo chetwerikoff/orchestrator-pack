@@ -200,6 +200,16 @@ const UNIT_REF_PATTERN = /^u-[0-9]{1,9}$/u;
 const GENERATION_PATTERN = /^sg-[A-Za-z0-9._~-]{1,80}$/u;
 const REASON_PATTERN = /^[a-z0-9-]{1,80}$/u;
 const EXCEPTION_KINDS = new Set<ExceptionKind>(['HELD', 'FOREIGN', 'OWED', 'STANDDOWN']);
+const UNKNOWN_ROW_REASONS = new Set([
+  'identity-contradiction',
+  'observation-failed',
+  'phase-budget-expired',
+  'liveness-unknown',
+  'missing-output-baseline',
+  'busy-without-progress',
+  'unsupported-liveness',
+  'contradictory-gone',
+]);
 const SNAPSHOT_KEYS = new Set([
   'schemaVersion',
   'commitStatus',
@@ -238,12 +248,8 @@ function sameIdentity(left: RuntimeWorkerIdentity, right: RuntimeWorkerIdentity)
   return sameRuntimeWorker(left, right);
 }
 
-function logicalKey(identity: RuntimeWorkerIdentity): string {
-  return `${identity.runtime}\u0000${identity.id}`;
-}
-
-function identityKey(identity: RuntimeWorkerIdentity): string {
-  return `${identity.runtime}\u0000${identity.id}\u0000${identity.generation}`;
+function sameLogicalWorker(left: RuntimeWorkerIdentity, right: RuntimeWorkerIdentity): boolean {
+  return left.runtime === right.runtime && left.id === right.id;
 }
 
 function iso(ms: number): string {
@@ -351,6 +357,11 @@ function parseSnapshot(rawBytes: string): FleetObserverSnapshot | null {
     || value.transitions.length > MAX_UNITS
     || value.progress.length > MAX_UNITS) return null;
 
+  const startedAtMs = Date.parse(value.startedAt);
+  const completedAtMs = Date.parse(value.completedAt);
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(completedAtMs) || completedAtMs < startedAtMs
+    || value.settlementReserveMs > value.effectiveBudgetMs) return null;
+
   const refs = new Set<string>();
   const census: CensusRow[] = [];
   for (const candidate of value.census) {
@@ -368,6 +379,15 @@ function parseSnapshot(rawBytes: string): FleetObserverSnapshot | null {
       || typeof candidate.livelockStreak !== 'number'
       || !Number.isInteger(candidate.livelockStreak)
       || candidate.livelockStreak < 0) return null;
+    const outputProbe = candidate.probes.output as ProbeOutcomes['output'];
+    const livenessProbe = candidate.probes.liveness as ProbeOutcomes['liveness'];
+    const className = candidate.class as ObserverClass;
+    const reason = candidate.reason as string;
+    if ((className === 'busy' || className === 'livelock') && (outputProbe !== 'valid' || livenessProbe !== 'busy')) return null;
+    if (className === 'idle' && (outputProbe !== 'valid' || livenessProbe !== 'idle')) return null;
+    if (className === 'exempt' && (outputProbe !== 'valid' || !['busy', 'idle'].includes(livenessProbe))) return null;
+    if (className === 'unknown' && !UNKNOWN_ROW_REASONS.has(reason)) return null;
+    if (className !== 'unknown' && !['busy', 'livelock', 'idle', 'exempt'].includes(className)) return null;
     refs.add(candidate.unitRef);
     census.push({
       unitRef: candidate.unitRef,
@@ -383,15 +403,30 @@ function parseSnapshot(rawBytes: string): FleetObserverSnapshot | null {
   }
 
   const transitions: FleetTransition[] = [];
+  const transitionKeys = new Set<string>();
   for (const candidate of value.transitions) {
     if (!isRecord(candidate)
       || !hasOnlyKeys(candidate, new Set(['type', 'unitRef', 'tickSequence', 'reason', 'fromClass', 'toClass']))
       || !['unit-appeared', 'unit-disappeared', 'class-changed'].includes(candidate.type as string)
       || !boundedString(candidate.unitRef, UNIT_REF_PATTERN)
       || !positiveInteger(candidate.tickSequence)
+      || candidate.tickSequence > value.tickSequence
       || !boundedString(candidate.reason, REASON_PATTERN)
       || (candidate.fromClass !== undefined && !OBSERVER_CLASSES.includes(candidate.fromClass as ObserverClass))
       || (candidate.toClass !== undefined && !OBSERVER_CLASSES.includes(candidate.toClass as ObserverClass))) return null;
+    if (candidate.type === 'class-changed'
+      ? candidate.fromClass === undefined || candidate.toClass === undefined || candidate.fromClass === candidate.toClass
+      : candidate.fromClass !== undefined || candidate.toClass !== undefined) return null;
+    const transitionKey = JSON.stringify([
+      candidate.type,
+      candidate.unitRef,
+      candidate.tickSequence,
+      candidate.reason,
+      candidate.fromClass ?? null,
+      candidate.toClass ?? null,
+    ]);
+    if (transitionKeys.has(transitionKey)) return null;
+    transitionKeys.add(transitionKey);
     transitions.push({
       type: candidate.type as TransitionKind,
       unitRef: candidate.unitRef,
@@ -403,14 +438,22 @@ function parseSnapshot(rawBytes: string): FleetObserverSnapshot | null {
   }
 
   const progress: FleetProgress[] = [];
+  const progressKeys = new Set<string>();
   for (const candidate of value.progress) {
     if (!isRecord(candidate)
       || !hasOnlyKeys(candidate, new Set(['type', 'schedulerGeneration', 'tickSequence', 'at', 'reason']))
       || (candidate.type !== 'tick-complete' && candidate.type !== 'tick-failed')
+      || candidate.schedulerGeneration !== value.schedulerGeneration
       || !boundedString(candidate.schedulerGeneration, GENERATION_PATTERN)
       || !positiveInteger(candidate.tickSequence)
+      || candidate.tickSequence > value.tickSequence
       || typeof candidate.at !== 'string'
-      || (candidate.reason !== undefined && !boundedString(candidate.reason, REASON_PATTERN))) return null;
+      || (candidate.reason !== undefined && !boundedString(candidate.reason, REASON_PATTERN))
+      || (candidate.type === 'tick-complete' && candidate.reason !== undefined)
+      || (candidate.type === 'tick-failed' && candidate.reason === undefined)) return null;
+    const progressKey = JSON.stringify([candidate.type, candidate.schedulerGeneration, candidate.tickSequence, candidate.reason ?? null]);
+    if (progressKeys.has(progressKey)) return null;
+    progressKeys.add(progressKey);
     progress.push({
       type: candidate.type,
       schedulerGeneration: candidate.schedulerGeneration,
@@ -419,8 +462,9 @@ function parseSnapshot(rawBytes: string): FleetObserverSnapshot | null {
       ...(candidate.reason === undefined ? {} : { reason: candidate.reason }),
     });
   }
+  const terminalProgress = progress.filter((entry) => entry.tickSequence === value.tickSequence);
   const last = progress.at(-1);
-  if (!last || last.tickSequence !== value.tickSequence
+  if (terminalProgress.length !== 1 || !last || last.tickSequence !== value.tickSequence
     || last.schedulerGeneration !== value.schedulerGeneration
     || (value.result === 'complete' && last.type !== 'tick-complete')
     || (value.result === 'failed' && last.type !== 'tick-failed')) return null;
@@ -448,8 +492,8 @@ function cloneUnitState(state: InMemoryUnit): InMemoryUnit {
   return { ...state };
 }
 
-function cloneStateMap(states: Map<string, InMemoryUnit>): Map<string, InMemoryUnit> {
-  return new Map([...states.entries()].map(([key, state]) => [key, cloneUnitState(state)]));
+function cloneStateList(states: readonly InMemoryUnit[]): InMemoryUnit[] {
+  return states.map(cloneUnitState);
 }
 
 function trim<T>(values: readonly T[], max = MAX_UNITS): T[] {
@@ -528,7 +572,7 @@ export class FleetObserver {
   readonly #stateDirectory: string;
   readonly #now: () => number;
   readonly #generationFactory: () => string;
-  readonly #states = new Map<string, InMemoryUnit>();
+  readonly #states: InMemoryUnit[] = [];
   readonly #previous: ParsedSnapshotResult;
   readonly #startupFailure: string | null;
   #schedulerGeneration: string;
@@ -599,7 +643,7 @@ export class FleetObserver {
       : effectiveBudget(defaultConfig(), input.schedulerIntervalMs);
     const hardDeadline = start + budget.effectiveBudgetMs;
     const admissionDeadline = hardDeadline - budget.settlementReserveMs;
-    const before = cloneStateMap(this.#states);
+    const before = cloneStateList(this.#states);
     const priorCensus = this.#previous.snapshot?.census ?? [];
     const transitions: FleetTransition[] = [];
     let failureReason: string | undefined;
@@ -622,16 +666,16 @@ export class FleetObserver {
         failureReason = 'fleet-cap-exceeded';
       } else {
         const workers = listCall.value.value;
-        const listedLogicalKeys = new Set(workers.map((worker) => logicalKey(worker.identity)));
-        for (const [key, state] of [...this.#states.entries()]) {
-          if (state.present && !listedLogicalKeys.has(logicalKey(state.identity))) {
+        for (const state of [...this.#states]) {
+          if (state.present && !workers.some((worker) => sameLogicalWorker(worker.identity, state.identity))) {
             transitions.push({
               type: 'unit-disappeared',
               unitRef: state.unitRef,
               tickSequence,
               reason: 'not-listed',
             });
-            this.#states.delete(key);
+            const stateIndex = this.#states.indexOf(state);
+            if (stateIndex >= 0) this.#states.splice(stateIndex, 1);
           }
         }
 
@@ -678,10 +722,10 @@ export class FleetObserver {
         for (const settlement of results) {
           if (!settlement) continue;
           if (settlement.kind === 'gone') {
-            const prior = before.get(identityKey(settlement.state.identity));
+            const prior = before.find((candidate) => sameIdentity(candidate.identity, settlement.state.identity));
             if (!prior) {
-              const previousGeneration = [...before.values()].find((candidate) =>
-                logicalKey(candidate.identity) === logicalKey(settlement.state.identity));
+              const previousGeneration = before.find((candidate) =>
+                sameLogicalWorker(candidate.identity, settlement.state.identity));
               if (previousGeneration) {
                 transitions.push({
                   type: 'unit-disappeared',
@@ -697,15 +741,16 @@ export class FleetObserver {
               tickSequence,
               reason: 'positive-gone',
             });
-            this.#states.delete(identityKey(settlement.state.identity));
+            const stateIndex = this.#states.findIndex((candidate) => sameIdentity(candidate.identity, settlement.state.identity));
+            if (stateIndex >= 0) this.#states.splice(stateIndex, 1);
             continue;
           }
           if (!settlement.row) continue;
           census.push(settlement.row);
-          const prior = before.get(identityKey(settlement.state.identity));
+          const prior = before.find((candidate) => sameIdentity(candidate.identity, settlement.state.identity));
           if (!prior) {
-            const previousGeneration = [...before.values()].find((candidate) =>
-              logicalKey(candidate.identity) === logicalKey(settlement.state.identity));
+            const previousGeneration = before.find((candidate) =>
+              sameLogicalWorker(candidate.identity, settlement.state.identity));
             if (previousGeneration) {
               transitions.push({
                 type: 'unit-disappeared',
@@ -760,8 +805,17 @@ export class FleetObserver {
       }
     }
 
-    this.#states.clear();
-    for (const [key, state] of before) this.#states.set(key, state);
+    this.#states.splice(0, this.#states.length, ...before);
+    if (this.#previous.snapshot && this.#previous.snapshot.schedulerGeneration !== this.#schedulerGeneration) {
+      return this.resultFor(
+        undefined,
+        start,
+        hardDeadline,
+        tickSequence,
+        failureReason === 'stale-completion-rejected',
+        false,
+      );
+    }
     const failed = this.buildSnapshot({
       tickSequence,
       startedAt: iso(start),
@@ -796,6 +850,16 @@ export class FleetObserver {
     );
   }
 
+  getEffectiveBudgetMs(schedulerIntervalMs: number): number {
+    const parsedConfig = this.readConfig();
+    const config = parsedConfig.ok ? parsedConfig.config : defaultConfig();
+    return effectiveBudget(config, schedulerIntervalMs).effectiveBudgetMs;
+  }
+
+  cancel(): void {
+    this.#activeTick += 1;
+  }
+
   private readConfig(): ConfigResult {
     try {
       if (!existsSync(this.#configPath)) return { ok: true, config: defaultConfig() };
@@ -817,16 +881,15 @@ export class FleetObserver {
   }
 
   private ensureState(worker: RuntimeWorker): InMemoryUnit {
-    const key = identityKey(worker.identity);
-    const existing = this.#states.get(key);
+    const existing = this.#states.find((candidate) => sameIdentity(candidate.identity, worker.identity));
     if (existing) {
       existing.present = true;
       return existing;
     }
-    const logical = logicalKey(worker.identity);
-    for (const [oldKey, oldState] of [...this.#states.entries()]) {
-      if (logicalKey(oldState.identity) === logical && !sameIdentity(oldState.identity, worker.identity)) {
-        this.#states.delete(oldKey);
+    for (const oldState of [...this.#states]) {
+      if (sameLogicalWorker(oldState.identity, worker.identity) && !sameIdentity(oldState.identity, worker.identity)) {
+        const oldIndex = this.#states.indexOf(oldState);
+        if (oldIndex >= 0) this.#states.splice(oldIndex, 1);
       }
     }
     this.#unitCounter += 1;
@@ -840,8 +903,27 @@ export class FleetObserver {
       class: null,
       present: true,
     };
-    this.#states.set(key, state);
+    this.#states.push(state);
     return state;
+  }
+
+  private validBoundedOutput(value: RuntimeBoundedOutput, listed: RuntimeWorkerIdentity): value is RuntimeBoundedOutput {
+    if (!isRecord(value)
+      || !hasOnlyKeys(value, new Set(['worker', 'lines', 'observationToken', 'changed', 'terminalState']))
+      || !isRecord(value.worker)
+      || typeof value.worker.runtime !== 'string'
+      || typeof value.worker.id !== 'string'
+      || typeof value.worker.generation !== 'string'
+      || !sameIdentity(value.worker, listed)
+      || !Array.isArray(value.lines)
+      || value.lines.length > 256
+      || !value.lines.every((line) => typeof line === 'string')
+      || !isRecord(value.observationToken)
+      || !hasOnlyKeys(value.observationToken, new Set(['opaque']))
+      || typeof value.observationToken.opaque !== 'string'
+      || typeof value.changed !== 'boolean'
+      || !['running', 'exited', 'unknown'].includes(value.terminalState)) return false;
+    return true;
   }
 
   private async probeUnit(
@@ -900,14 +982,16 @@ export class FleetObserver {
       ? liveness
       : null;
     const outputValue = outputCall.completed && output && output.status === 'ok'
-      && sameIdentity(output.value.worker, listed.identity)
-      && typeof output.value.changed === 'boolean'
-      && output.value.observationToken !== null
-      && typeof output.value.observationToken === 'object'
+      && this.validBoundedOutput(output.value, listed.identity)
       ? output.value
       : null;
     if (live?.status === 'gone') {
-      if (!outputValue) {
+      const outputFailureReason = output && output.status !== 'ok' ? output.reason : undefined;
+      const positiveContradictoryPresence = outputValue?.terminalState === 'running';
+      const malformedOutput = outputCall.completed && output?.status === 'ok' && !outputValue;
+      const disappearanceFailure = outputCall.completed && output?.status !== 'ok'
+        && ['gone', 'worker_not_found', 'worker_generation_not_found'].includes(outputFailureReason ?? '');
+      if (positiveContradictoryPresence || malformedOutput) {
         state.livelockStreak = 0;
         state.class = 'unknown';
         return {
@@ -919,14 +1003,14 @@ export class FleetObserver {
           }),
         };
       }
-      if (outputValue.terminalState === 'running') {
+      if (!outputValue && !disappearanceFailure) {
         state.livelockStreak = 0;
         state.class = 'unknown';
         return {
           kind: 'row',
           state,
-          row: this.row(state, 'unknown', 'contradictory-gone', {
-            output: 'valid',
+          row: this.row(state, 'unknown', 'observation-failed', {
+            output: outputCall.completed ? 'failed' : 'expired',
             liveness: 'gone',
           }),
         };
@@ -1025,7 +1109,9 @@ export class FleetObserver {
     readonly transitions: readonly FleetTransition[];
     readonly progress: FleetProgress;
   }): FleetObserverSnapshot | null {
-    const prior = this.#previous.snapshot;
+    const prior = this.#previous.snapshot?.schedulerGeneration === this.#schedulerGeneration
+      ? this.#previous.snapshot
+      : null;
     return {
       schemaVersion: 1,
       commitStatus: 'complete',
@@ -1186,4 +1272,16 @@ export function defaultFleetObserverPaths(env: NodeJS.ProcessEnv = process.env):
     configPath: path.join(home, '.config', 'orchestrator-pack', 'fleet-observer.json'),
     snapshotPath: path.join(home, '.local', 'state', 'orchestrator-pack', 'fleet-observer', 'snapshot.json'),
   };
+}
+
+
+export function createUnavailableFleetObserver(reason = 'runtime-adapter-unavailable'): FleetObserver {
+  return new FleetObserver({
+    source: {
+      listWorkers: () => runtimeFailure('list_workers', reason),
+      findWorker: () => runtimeFailure('find_worker', reason),
+      readBoundedOutput: () => runtimeFailure('read_bounded_output', reason),
+      liveness: (input) => ({ status: 'unknown', worker: input.worker }),
+    },
+  });
 }

@@ -5,7 +5,7 @@ import { runProcess } from '../kernel/subprocess.ts';
 import { evaluateHeadReadyForReview } from './review-head-ready.ts';
 import { listPackReviewRuns } from '../lib/pack-review-run-store.ts';
 import { startPackReview } from '../pack-review-runner.ts';
-import { FleetObserver, type FleetObserverResult } from './fleet-observer.ts';
+import { createUnavailableFleetObserver, FleetObserver, type FleetObserverResult } from './fleet-observer.ts';
 import { selectRuntimeAdapter } from '../runtime/registry.ts';
 import {
   isRowStale,
@@ -41,6 +41,9 @@ export interface ActivatedSchedulerCandidate {
   boundHeadSha: string;
 }
 
+type SchedulerFleetObserver = Pick<FleetObserver, 'tick'>
+  & Partial<Pick<FleetObserver, 'getEffectiveBudgetMs' | 'cancel'>>;
+
 export interface SchedulerBoundary {
   listCandidates(): ActivatedSchedulerCandidate[];
   readCurrentPr(candidate: ActivatedSchedulerCandidate): Promise<{ number: number; headRefOid: string; state: string; isDraft: boolean }>;
@@ -48,7 +51,7 @@ export interface SchedulerBoundary {
   listReviewRuns(): ReturnType<typeof listPackReviewRuns>;
   start(candidate: ActivatedSchedulerCandidate, freshHeadSha: string): Promise<{ ok: boolean; reason?: string }>;
   schedulerIntervalMs?: number;
-  fleetObserver?: Pick<FleetObserver, 'tick'>;
+  fleetObserver?: SchedulerFleetObserver;
 }
 
 const schedulerTickSequences = new WeakMap<object, number>();
@@ -159,7 +162,7 @@ export function productionSchedulerBoundary(input: {
   repoRoot: string;
   projectId?: string;
   env?: NodeJS.ProcessEnv;
-  fleetObserver?: Pick<FleetObserver, 'tick'>;
+  fleetObserver?: SchedulerFleetObserver;
   schedulerIntervalMs?: number;
 }): SchedulerBoundary {
   const env = input.env ?? process.env;
@@ -207,15 +210,28 @@ export async function runSchedulerTick(
 }> {
   assertSchedulerEpoch(env);
   let observer: FleetObserverResult | undefined;
-  if (boundary.fleetObserver) {
-    try {
-      observer = await boundary.fleetObserver.tick({
-        schedulerIntervalMs: boundary.schedulerIntervalMs ?? 5_000,
-        tickSequence: nextSchedulerTickSequence(boundary),
-      });
-    } catch {
-      // Observer failure is evidence only; the existing action phase remains authoritative.
-    }
+  const observerBoundary: SchedulerFleetObserver = boundary.fleetObserver ?? {
+    tick: async () => undefined as unknown as FleetObserverResult,
+  };
+  const schedulerIntervalMs = boundary.schedulerIntervalMs ?? 5_000;
+  const observerStartMs = Date.now();
+  const observerBudgetMs = observerBoundary.getEffectiveBudgetMs?.(schedulerIntervalMs)
+    ?? Math.max(1, Math.floor(schedulerIntervalMs / 4));
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    deadlineTimer = setTimeout(() => resolve(null), Math.max(1, observerBudgetMs));
+  });
+  const attempt = Promise.resolve().then(() => observerBoundary.tick({
+    schedulerIntervalMs,
+    tickSequence: nextSchedulerTickSequence(boundary),
+    phaseStartMs: observerStartMs,
+  })).catch(() => undefined);
+  const completed = await Promise.race([attempt, timeout]);
+  if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+  if (completed === null) {
+    observerBoundary.cancel?.();
+  } else if (boundary.fleetObserver) {
+    observer = completed;
   }
   let attempted = 0;
   let started = 0;
@@ -257,17 +273,17 @@ async function loadProductionBoundary(): Promise<{ boundary: SchedulerBoundary; 
   if (!parsed.ok) throw new Error(`${parsed.reason}:${parsed.path}`);
   const repoRoot = process.cwd();
   const cadence = parsed.config.scheduler.pollIntervalMs;
-  let fleetObserver: FleetObserver | undefined;
+  let fleetObserver: FleetObserver;
   try {
     const runtime = await selectRuntimeAdapter();
     fleetObserver = new FleetObserver({ source: runtime });
   } catch {
-    // Runtime adapter failure is observer evidence; the existing action phase remains authoritative.
+    fleetObserver = createUnavailableFleetObserver('runtime-adapter-unavailable');
   }
   return {
     boundary: productionSchedulerBoundary({
       repoRoot,
-      ...(fleetObserver ? { fleetObserver } : {}),
+      fleetObserver,
       schedulerIntervalMs: cadence,
     }),
     cadence,

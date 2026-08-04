@@ -325,6 +325,80 @@ describe('S1 fleet observer', () => {
     expect(result.zeroActuation).toBe(true);
   });
 
+  it('keeps delimiter-bearing opaque identities independent', async () => {
+    const source = new FakeFleetSource();
+    source.add('a\u0000b', 'c');
+    source.add('a', 'b\u0000c');
+    const observer = observerFor(source);
+    const result = await observer.tick({ schedulerIntervalMs: 1_000 });
+    expect(result.snapshot?.census).toHaveLength(2);
+    expect(new Set(result.snapshot?.census.map((row) => row.unitRef)).size).toBe(2);
+  });
+
+  it('rejects malformed output instead of granting class authority', async () => {
+    const source = new FakeFleetSource();
+    const worker = source.add('malformed-output');
+    source.readBoundedOutput = () => ({
+      status: 'ok',
+      value: {
+        worker: worker.identity,
+        lines: ['bounded'],
+        observationToken: { opaque: 'token', unexpected: true },
+        changed: false,
+        terminalState: 'running',
+      },
+    } as unknown as RuntimeResult<RuntimeBoundedOutput>);
+    const result = await observerFor(source).tick({ schedulerIntervalMs: 1_000 });
+    expect(result.snapshot?.census[0]).toMatchObject({ class: 'unknown', reason: 'observation-failed' });
+  });
+
+  it('accepts known disappearance output failure with positive same-generation gone', async () => {
+    const source = new FakeFleetSource();
+    const worker = source.add('vanishing', 'gen-1', 'gone');
+    source.readBoundedOutput = () => ({
+      status: 'failed',
+      operation: 'read_bounded_output',
+      reason: 'worker_generation_not_found',
+    });
+    const result = await observerFor(source).tick({ schedulerIntervalMs: 1_000 });
+    expect(result.snapshot?.census).toEqual([]);
+    expect(result.snapshot?.transitions.filter((entry) => entry.unitRef === 'u-000001')).toHaveLength(1);
+    expect(worker.identity.id).toBe('vanishing');
+  });
+
+  it('keeps the prior-generation snapshot authoritative after restart failure', async () => {
+    const source = new FakeFleetSource();
+    source.add('restart-failure');
+    const root = mkdtempSync(path.join(os.tmpdir(), 'fleet-observer-restart-failure-'));
+    roots.push(root);
+    const configPath = path.join(root, 'config.json');
+    const snapshotPath = path.join(root, 'snapshot.json');
+    const first = new FleetObserver({ source, configPath, snapshotPath, generationFactory: () => 'sg-before-failure' });
+    const accepted = await first.tick({ schedulerIntervalMs: 1_000 });
+    const priorBytes = readFileSync(snapshotPath, 'utf8');
+    source.listWorkers = () => ({ status: 'failed', operation: 'list_workers', reason: 'transport-down' });
+    const restarted = new FleetObserver({ source, configPath, snapshotPath, generationFactory: () => 'sg-after-failure' });
+    const failed = await restarted.tick({ schedulerIntervalMs: 1_000 });
+    expect(accepted.snapshotCommitted).toBe(true);
+    expect(failed.snapshotCommitted).toBe(false);
+    expect(failed.snapshot).toBeUndefined();
+    expect(readFileSync(snapshotPath, 'utf8')).toBe(priorBytes);
+  });
+
+  it('rejects contradictory snapshot class and probe records', async () => {
+    const source = new FakeFleetSource();
+    source.add('snapshot-validation');
+    const observer = observerFor(source);
+    const result = await observer.tick({ schedulerIntervalMs: 1_000 });
+    const invalid = JSON.parse(serializeFleetSnapshot(result.snapshot!)) as Record<string, unknown>;
+    const census = invalid.census as Array<Record<string, unknown>>;
+    const row = census[0]!;
+    row.class = 'idle';
+    row.reason = 'positive-idle';
+    row.probes = { output: 'failed', liveness: 'idle' };
+    expect(isAcceptedFleetSnapshot(JSON.stringify(invalid))).toBe(false);
+  });
+
   it('calls the observer exactly once without changing scheduler actions', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'fleet-observer-epoch-'));
     roots.push(root);
@@ -381,6 +455,33 @@ describe('S1 fleet observer', () => {
     });
     expect(observerFailureBoundary.listCandidates).toHaveBeenCalled();
     expect(afterObserverFailure).toMatchObject({ attempted: 0, started: 0, skipped: 0 });
+
+    const phaseStartedAt = { value: 0 };
+    const cancel = vi.fn();
+    const delayedObserver = {
+      tick: vi.fn(() => new Promise<FleetObserverResult>((resolve) => {
+        setTimeout(() => resolve({} as FleetObserverResult), 100);
+      })),
+      getEffectiveBudgetMs: () => 10,
+      cancel,
+    };
+    const deadlineBoundary = {
+      ...boundary,
+      listCandidates: vi.fn(() => {
+        phaseStartedAt.value = Date.now();
+        return [];
+      }),
+      fleetObserver: delayedObserver,
+    };
+    const startedAt = Date.now();
+    await runSchedulerTick(deadlineBoundary, {
+      ORCHESTRATOR_CUTOVER_EPOCH_AUTHORITY: authorityPath,
+      ORCHESTRATOR_CUTOVER_EPOCH_ID: epochId,
+      ORCHESTRATOR_CUTOVER_NONCE: nonce,
+    });
+    expect(delayedObserver.tick).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(phaseStartedAt.value - startedAt).toBeLessThan(80);
   });
 
   it('covers smoke scenario 3 at the exact UTF-8 snapshot byte boundary', async () => {
