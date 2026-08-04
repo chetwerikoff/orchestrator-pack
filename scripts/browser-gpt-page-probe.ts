@@ -461,9 +461,9 @@ export function toCompatibleTargets(targets: readonly CdpTarget[]): CompatibleTa
   const compatible: CompatibleTarget[] = [];
   for (const target of targets) {
     if (!isRecord(target) || target.type !== 'page'
-      || !target.id
+      || typeof target.id !== 'string'
       || !TARGET_ID_RE.test(target.id)
-      || !target.url
+      || typeof target.url !== 'string'
       || !isCompatibleChatGptUrl(target.url)) continue;
     let normalized: string;
     try {
@@ -476,7 +476,7 @@ export function toCompatibleTargets(targets: readonly CdpTarget[]): CompatibleTa
       target_id: target.id,
       normalized_url: normalized,
       title: safeTitle(target.title),
-      ...(target.webSocketDebuggerUrl ? { web_socket_debugger_url: target.webSocketDebuggerUrl } : {}),
+      ...(typeof target.webSocketDebuggerUrl === 'string' ? { web_socket_debugger_url: target.webSocketDebuggerUrl } : {}),
     });
   }
   return compatible;
