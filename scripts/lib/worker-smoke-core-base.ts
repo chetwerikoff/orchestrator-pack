@@ -196,6 +196,11 @@ export interface SmokeReport {
 export const SMOKE_REPORT_MARKER = 'pack-worker-smoke-report/v1';
 export const SMOKE_REPORT_PRODUCER = 'orchestrator-pack/worker-smoke-run/v1';
 
+export function isClosedOwnedSmokeTerminalCleanup(value: string | undefined): boolean {
+  return value === 'closed_owned_handle'
+    || value === 'closed_owned_handle_already_absent';
+}
+
 const FENCE_PATTERN = /```([a-z0-9-]+)\s*\r?\n([\s\S]*?)```/gi;
 const SMOKE_REPORT_BLOCK = /```worker-smoke-report\s*\r?\n([\s\S]*?)```/i;
 const SMOKE_REPORT_HEADING = /^## Worker smoke report\b/im;
@@ -683,7 +688,7 @@ export function normalizeSmokeReport(
         return { ok: false, reason: `pass_scenario_${index + 1}_not_pass` };
       }
     }
-    if (partial.terminalCleanup && partial.terminalCleanup !== 'closed_owned_handle') {
+    if (!isClosedOwnedSmokeTerminalCleanup(partial.terminalCleanup)) {
       return { ok: false, reason: 'pass_requires_terminal_cleanup' };
     }
     if (partial.producer !== SMOKE_REPORT_PRODUCER) {
@@ -876,7 +881,7 @@ export function findCurrentHeadSmokePass(
   if (!latest || latest.result !== 'PASS') {
     return null;
   }
-  if (latest.terminalCleanup !== 'closed_owned_handle') {
+  if (!isClosedOwnedSmokeTerminalCleanup(latest.terminalCleanup)) {
     return null;
   }
   return latest;
@@ -889,7 +894,7 @@ export function ownedSmokeTerminalClosedFromReports(
   issueNumber?: number,
 ): boolean {
   const latest = findLatestSmokeReportForHead(comments, prNumber, headSha, issueNumber);
-  return latest?.terminalCleanup === 'closed_owned_handle';
+  return isClosedOwnedSmokeTerminalCleanup(latest?.terminalCleanup);
 }
 
 export function smokeTerminalHandleLooksValid(handle: string | undefined): boolean {
