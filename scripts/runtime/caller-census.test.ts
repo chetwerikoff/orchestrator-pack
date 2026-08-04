@@ -95,8 +95,9 @@ describe('runtime caller census', () => {
         unclassified.push(`${surface}:row_missing_or_inactive`);
         continue;
       }
+      const declaredOperations = row.operations as readonly string[];
       for (const operation of operations) {
-        if (!row.operations.includes(operation)) {
+        if (!declaredOperations.includes(operation)) {
           unclassified.push(`${surface}:${operation}`);
         }
       }
