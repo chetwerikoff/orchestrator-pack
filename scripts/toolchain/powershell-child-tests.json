@@ -1,37 +1,8 @@
 {
   "version": 1,
   "entries": [
-    {
-      "path": "scripts/orchestrator-escalation-router.test.ts",
-      "justification": "Pre-existing PowerShell child test at the Issue #800 baseline (direct:spawnSync); preserve until that test is migrated in a later PR."
-    },
-    {
-      "path": "scripts/orchestrator-escalation.test.ts",
-      "justification": "Pre-existing PowerShell child test at the Issue #800 baseline (direct:spawnSync); preserve until that test is migrated in a later PR."
-    },
-    {
-      "path": "scripts/review-delivery.test.ts",
-      "justification": "Pre-existing PowerShell child test at the Issue #800 baseline (shared-helper:_test-pwsh-helpers); preserve until that test is migrated in a later PR."
-    },
-    {
-      "path": "scripts/review-start-claim-budget-semantics.test.ts",
-      "justification": "Pre-existing PowerShell child test at the Issue #800 baseline (shared-helper:_test-pwsh-helpers); preserve until that test is migrated in a later PR."
-    },
-    {
-      "path": "scripts/review-start-claim-run-binding.test.ts",
-      "justification": "Pre-existing PowerShell child test at the Issue #800 baseline (shared-helper:_test-pwsh-helpers); preserve until that test is migrated in a later PR."
-    },
-    {
-      "path": "scripts/review-start-claim.test.ts",
-      "justification": "Pre-existing PowerShell child test at the Issue #800 baseline (direct:spawnSync, shared-helper:_test-pwsh-helpers); preserve until that test is migrated in a later PR."
-    },
-    {
-      "path": "scripts/review-trigger-reconcile.test.ts",
-      "justification": "Pre-existing PowerShell child test at the Issue #800 baseline (direct:spawnSync); preserve until that test is migrated in a later PR."
-    },
-    {
-      "path": "scripts/worker-message-submit-reconcile.test.ts",
-      "justification": "Pre-existing PowerShell child test at the Issue #800 baseline (direct:spawnSync); preserve until that test is migrated in a later PR."
-    }
+    {"path":"scripts/orchestrator-escalation-router.test.ts","justification":"Pre-existing PowerShell child test at the Issue #800 baseline (direct:spawnSync); preserve until that test is migrated in a later PR."},
+    {"path":"scripts/orchestrator-escalation.test.ts","justification":"Pre-existing PowerShell child test at the Issue #800 baseline (direct:spawnSync); preserve until that test is migrated in a later PR."},
+    {"path":"scripts/review-delivery.test.ts","justification":"Pre-existing PowerShell child test at the Issue #800 baseline (shared-helper:_test-pwsh-helpers); preserve until that test is migrated in a later PR."}
   ]
 }
