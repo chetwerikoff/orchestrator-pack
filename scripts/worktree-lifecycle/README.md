@@ -7,32 +7,34 @@ watcher, daemon, or background reconciler.
 ## Contract
 
 - Git and Orca are read independently and validated before use.
-- The exact identity is repository root + canonical worktree path + issue-or-PR authority +
-  branch or detached mode + full 40-hex HEAD SHA.
-- Pre-PR create/handoff uses `--issue` and requires the exact Orca `linkedIssue`.
-- Post-merge cleanup and destructive recovery use `--pr`; issue-only authority can never
+- The exact identity is active Orca repository id + repository root + canonical worktree path +
+  issue-or-PR authority + branch or detached mode + full 40-hex HEAD SHA.
+- Pre-PR create/handoff uses Issue authority and requires the exact Orca `linkedIssue`.
+- Post-merge cleanup and destructive recovery use PR authority; issue-only authority can never
   authorize removal.
-- Only `exact_dual` authorizes terminal spawn.
+- A read-only `exact_dual` observation never exports terminal-spawn authority. Only the bounded
+  create-and-spawn actuator may create a worker terminal, while holding the lifecycle exclusion.
 - `exact_git_only` may use the guarded PR-bound recovery path; it is never deleted by path alone.
-- `orca_only`, duplicate, malformed, unavailable, or conflicting evidence preserves the
-  disputed target.
-- A target-level mutation block never stops the global work pipeline. The terminal report
-  carries `cleanup_deferred`, `replacement_required`, or `task_degraded`,
-  `pipelineContinues: true`, and an actionable continuation decision.
-- Multiple worktrees may legitimately start from the same source commit. A shared HEAD SHA is
-  not itself an identity collision; path, branch, binding, and the complete row decide identity.
+- Archived, main-worktree, wrong-repository, duplicate, malformed, unavailable, Orca-only, or
+  conflicting evidence preserves the disputed target.
+- A target-level mutation block never stops the global work pipeline. The terminal report carries
+  `cleanup_deferred`, `replacement_required`, or `task_degraded`, `pipelineContinues: true`, and
+  an actionable continuation decision.
+- Multiple worktrees may legitimately start from the same source commit. A shared HEAD SHA is not
+  itself an identity collision; repository, path, branch, binding, and the complete row decide
+  identity.
 
-## Mechanical create and bounded continuation
+## Mechanical create and bounded worker start
 
-The canonical create path is one executable operation. Resolve the exact intended source SHA,
-choose one safe unique primary name, and run:
+The canonical handoff is one executable operation. Resolve the exact intended source SHA and run:
 
 ```bash
 node --experimental-strip-types scripts/worktree-lifecycle/create-continuation.ts \
   --repo-root "$(git rev-parse --show-toplevel)" \
   --issue <number> \
   --expected-head <40-hex-source-head> \
-  --name <unique-primary-name> \
+  --terminal-title "<role> #<number>" \
+  --terminal-command "<agent-cli> --model <model>" \
   --apply \
   --json
 ```
@@ -40,40 +42,46 @@ node --experimental-strip-types scripts/worktree-lifecycle/create-continuation.t
 The command:
 
 1. acquires the same process-local exclusion path used by guarded teardown/recovery;
-2. reads Git and Orca before any create;
-3. resumes one already exact-dual Issue-bound worktree without recreating it;
-4. otherwise performs at most one primary `orca worktree create` attempt;
+2. reads Git and Orca before any create and proves one active main-worktree repository id;
+3. recognizes the Issue family independently of a caller-chosen name and resumes one exact-dual
+   Issue-bound worktree only when it has no terminal;
+4. otherwise performs at most one stable primary create (`issue-<N>`);
 5. reads both authorities even when the create response is missing, invalid, or timed out;
-6. preserves disputed state and performs at most one isolated replacement create with a fresh
-   name, rooted at the exact source SHA;
-7. performs two fresh exact-dual reads before returning one selected worktree;
-8. returns `task_degraded` with `pipelineContinues: true` when no safe candidate exists.
+6. preserves disputed state and performs at most one stable isolated replacement
+   (`issue-<N>-replacement`) rooted at the exact source SHA;
+7. performs two fresh exact-dual reads, creates one terminal while still holding the exclusion,
+   and performs two more fresh reads proving exactly one new terminal handle;
+8. returns `task_degraded` with `pipelineContinues: true` when no safe candidate or unique terminal
+   result exists.
 
 A dead local lock owner may be recovered using PID/start-time evidence. A live, malformed, or
-changed lock remains fail-closed. The command never creates a third worktree attempt and never
-spawns a terminal itself.
+changed lock remains fail-closed. A repeated or concurrent invocation that observes an existing
+Issue-family terminal performs no create and no second terminal spawn.
 
-Terminal creation is allowed only when the report says:
+Successful output has this shape:
 
 ```json
 {
-  "outcome": "ready_to_spawn",
-  "terminalSpawnAuthorized": true,
+  "outcome": "worker_spawned",
+  "terminalSpawnCompleted": true,
+  "terminalSpawnAuthorized": false,
   "selected": { "path": "/absolute/verified/worktree" },
   "selectedReadBack": {
-    "classification": { "classification": "exact_dual" },
-    "decision": { "terminalSpawnAuthorized": true }
+    "classification": { "classification": "exact_dual" }
+  },
+  "terminal": {
+    "handle": "runtime-terminal-handle",
+    "worktreePath": "/absolute/verified/worktree"
   }
 }
 ```
 
-Use `selected.path` as the only worktree eligible for the subsequent terminal create. A second
-concurrent caller receives a no-effect degraded result rather than another create or spawn.
+There is no later spawn authorization to transfer to another caller. Use the returned terminal
+handle for subsequent worker observation or exact-handle close.
 
 ## Read-only post-create classification
 
-For diagnostics of an already known worktree, the lower-level read-only command remains
-available:
+For diagnostics of an already known worktree, the lower-level read-only command remains available:
 
 ```bash
 node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
@@ -86,8 +94,9 @@ node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
   --json
 ```
 
-For a detached worktree, replace `--expected-branch ...` with `--detached`. This command does not
-own create or replacement effects; canonical handoff uses `create-continuation.ts`.
+For a detached worktree, replace `--expected-branch ...` with `--detached`. An exact match returns
+`exact_dual_observed`; it does not authorize a terminal effect. Canonical handoff uses the bounded
+create-and-spawn command above.
 
 ## Guarded Git-only recovery
 
@@ -105,7 +114,8 @@ node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
 ```
 
 Review every gate. Re-run the same command with `--apply` only when the dry-run outcome is
-`git_only_recovery_eligible`. Apply uses Git's non-force `worktree remove`, never
+`git_only_recovery_eligible`. Every safety gate is recollected immediately before the effect under
+the same exclusion. Apply uses Git's non-force `worktree remove`, never
 `orca worktree rm --force`, `rm -rf`, or branch `-D`.
 
 ## Nonblocking post-merge cleanup
@@ -122,10 +132,15 @@ node --experimental-strip-types scripts/worktree-lifecycle/cli.ts \
   --json
 ```
 
-A valid lifecycle terminal report exits zero even when its target result is
-`cleanup_deferred`, `replacement_required`, or `task_degraded`. This is intentional: the report
-blocks unsafe mutation of that target, not the scheduler or an already successful merge/adoption.
-Invalid CLI arguments exit 2.
+The wrapper always reads Git and Orca after the teardown child returns, fails, or times out.
+`cleanup_complete` is emitted only when the exact target is absent from both authorities and
+unrelated inventory is unchanged. Effect-before-receipt may settle complete from that read-back;
+a successful child exit without dual absence settles `task_degraded`.
+
+A valid lifecycle terminal report exits zero even when its target result is `cleanup_deferred`,
+`replacement_required`, or `task_degraded`. This is intentional: the report blocks unsafe mutation
+of that target, not the scheduler or an already successful merge/adoption. Invalid CLI arguments
+exit 2.
 
 Publication from a continuation branch still uses the repository's normal current-head and
 expected-head checks; it must not overwrite an advanced PR branch.
