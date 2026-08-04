@@ -56,19 +56,49 @@ function terminalPath(namespace: string, claimKey: string, outcome: string): str
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function nullableString(value: unknown): value is string | null | undefined {
+  return value === null || value === undefined || typeof value === 'string';
+}
+
 function parseRecord(raw: string): WorkerRecoveryClaimRecord | null {
   try {
-    const parsed = JSON.parse(raw) as WorkerRecoveryClaimRecord;
-    if (parsed.schemaVersion !== 1
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed)
+      || parsed.schemaVersion !== 1
+      || typeof parsed.claimKey !== 'string'
       || !parsed.claimKey
+      || typeof parsed.workspacePath !== 'string'
       || !parsed.workspacePath
-      || (parsed.workerId !== null && typeof parsed.workerId !== 'string')
-      || (parsed.workerGeneration !== null && typeof parsed.workerGeneration !== 'string')
-      || !Number.isInteger(parsed.holder?.pid)
+      || !nullableString(parsed.workerId)
+      || !nullableString(parsed.workerGeneration)
+      || !isRecord(parsed.holder)
+      || !Number.isInteger(parsed.holder.pid)
+      || typeof parsed.holder.startTicks !== 'string'
       || !parsed.holder.startTicks
+      || typeof parsed.holder.processGuid !== 'string'
       || !parsed.holder.processGuid
+      || typeof parsed.holder.host !== 'string'
+      || typeof parsed.holder.surface !== 'string'
       || !Number.isFinite(parsed.acquiredAtMs)) return null;
-    return parsed;
+    return {
+      schemaVersion: 1,
+      claimKey: parsed.claimKey,
+      workspacePath: parsed.workspacePath,
+      workerId: parsed.workerId?.trim() || null,
+      workerGeneration: parsed.workerGeneration?.trim() || null,
+      holder: {
+        pid: Number(parsed.holder.pid),
+        startTicks: parsed.holder.startTicks,
+        processGuid: parsed.holder.processGuid,
+        host: parsed.holder.host,
+        surface: parsed.holder.surface,
+      },
+      acquiredAtMs: Number(parsed.acquiredAtMs),
+    };
   } catch {
     return null;
   }
