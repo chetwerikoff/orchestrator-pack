@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   closeSync,
   existsSync,
@@ -10,7 +11,6 @@ import {
   writeFileSync,
   type Stats,
 } from 'node:fs';
-import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { processAlive } from '../lib/cutover/activation-cordon.ts';
 
