@@ -404,7 +404,7 @@ async function resolveTarget(input: StartInput, trustedPackRoot: string): Promis
   const sessionId = trim(input.sessionId || input.linkedSessionId);
   const harnessExplicit = process.env.OPK_VITEST_HARNESS === '1'
     && Boolean(input.prNumber && (input.headSha || trim(input.fixtureCurrentPrHeadSha)));
-  const binding = sessionId ? resolveBindingFromCache(sessionId) : undefined;
+  const binding = sessionId && !harnessExplicit ? resolveBindingFromCache(sessionId) : undefined;
   if (!harnessExplicit && !binding) {
     throw new Error('pack review target requires an immutable session PR/Issue binding');
   }
