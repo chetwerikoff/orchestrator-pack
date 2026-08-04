@@ -6,7 +6,9 @@
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-review-delivery.cases.ts",
     "scripts/pack-review-runner-gpt.test.ts",
-    "scripts/pack-review-runner.ts"
+    "scripts/pack-review-runner.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
   ],
   "denylist": [
     ".ao/",
@@ -36,7 +38,9 @@
     "scripts/lib/pack-review-run-store.ts",
     "scripts/pack-review-delivery.cases.ts",
     "scripts/pack-review-runner-gpt.test.ts",
-    "scripts/pack-review-runner.ts"
+    "scripts/pack-review-runner.ts",
+    "scripts/worker-smoke-run.ts",
+    "scripts/worker-smoke.test.ts"
   ],
-  "source_revision": "f73c41cd7ad8794e6bf21afe36f1e9a97b2a1ccc"
+  "source_revision": "bcf0635578aa76bba6013cf868a7821fe09526e0"
 }
