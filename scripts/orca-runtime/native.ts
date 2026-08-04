@@ -177,7 +177,7 @@ export function runOrcaJson<T>(
   try {
     result = runner(executable, [...args, '--json'], {
       cwd: options.cwd ?? process.cwd(),
-      env: { ...process.env, ...options.env },
+      env: options.env === undefined ? process.env : { ...options.env },
       encoding: 'utf8',
       maxBuffer: 16 * 1024 * 1024,
       ...(options.timeoutMs === undefined ? {} : {
