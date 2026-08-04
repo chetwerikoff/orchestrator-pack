@@ -1,5 +1,4 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
@@ -280,7 +279,7 @@ describe('direct runtime-neutral task caller', () => {
   });
 
   it('runs complete Orca lifecycle with AO and pwsh unavailable', () => {
-    const root = mkdtempSync(join(tmpdir(), 'issue-1248-orca-hermetic-'));
+    const root = mkdtempSync(join(process.cwd(), '.issue-1248-orca-hermetic-'));
     const fixturePath = join(root, 'orca-hermetic.mjs');
     const statePath = join(root, 'state.json');
     const removedEnvironment = new Map<string, string>();
