@@ -13,6 +13,8 @@ param(
 
     [string]$SupplementalReportsDir = '',
     [string]$SupplementalSourceSha = '',
+    [string]$SupplementalRunId = '',
+    [string]$SupplementalRunAttempt = '',
 
     [string]$RepoRoot = '',
     [string]$HistoryPath = '',
@@ -54,10 +56,15 @@ function Invoke-RuntimeHistoryRefresh {
         '--history-path', $historyFile
     )
     if ($SupplementalReportsDir -or $SupplementalSourceSha) {
-        if (-not $SupplementalReportsDir -or -not $SupplementalSourceSha) {
-            throw 'SupplementalReportsDir and SupplementalSourceSha must be supplied together'
+        if (-not $SupplementalReportsDir -or -not $SupplementalSourceSha -or -not $SupplementalRunId -or -not $SupplementalRunAttempt) {
+            throw 'SupplementalReportsDir, SupplementalSourceSha, SupplementalRunId, and SupplementalRunAttempt must be supplied together'
         }
-        $args += @('--supplemental-reports-dir', $SupplementalReportsDir, '--supplemental-source-sha', $SupplementalSourceSha)
+        $args += @(
+            '--supplemental-reports-dir', $SupplementalReportsDir,
+            '--supplemental-source-sha', $SupplementalSourceSha,
+            '--supplemental-run-id', $SupplementalRunId,
+            '--supplemental-run-attempt', $SupplementalRunAttempt
+        )
     }
     if ($BaseHistoryFile) {
         $args += @('--base-history-file', $BaseHistoryFile)

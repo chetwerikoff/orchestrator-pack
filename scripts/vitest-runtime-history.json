@@ -1,7 +1,7 @@
 {
   "issue": 556,
   "source": "ci-measured",
-  "dataChangedAt": "2026-08-04T10:14:06.370Z",
+  "dataChangedAt": "2026-08-04T05:33:05.587Z",
   "smoothingRule": "median-of-last-5-samples",
   "files": {
     "plugins/_shared/tests/declaration_schema.test.ts": 45000,
@@ -211,8 +211,7 @@
     "scripts/merge-triage-evidence.test.ts": 9,
     "scripts/pack-review-carryover.test.ts": 602,
     "scripts/pack-review-runner-issue-898.test.ts": 8,
-    "scripts/pack-review-state.test.ts": 14,
-    "scripts/pack-reviewer-preference.test.ts": 198
+    "scripts/pack-review-state.test.ts": 14
   },
   "provenance": {
     "plugins/_shared/tests/declaration_schema.test.ts": "measured",
@@ -422,8 +421,7 @@
     "scripts/merge-triage-evidence.test.ts": "measured",
     "scripts/pack-review-carryover.test.ts": "measured",
     "scripts/pack-review-runner-issue-898.test.ts": "measured",
-    "scripts/pack-review-state.test.ts": "measured",
-    "scripts/pack-reviewer-preference.test.ts": "measured"
+    "scripts/pack-review-state.test.ts": "measured"
   },
   "recentSamples": {
     "scripts/contract-evidence-legacy-list-guard.test.ts": [
@@ -657,9 +655,6 @@
       21,
       13,
       14
-    ],
-    "scripts/pack-reviewer-preference.test.ts": [
-      197.961181640625
     ]
   },
   "fileChangedAt": {
@@ -702,7 +697,6 @@
     "scripts/merge-triage-evidence.test.ts": "2026-08-03T02:37:49.984Z",
     "scripts/pack-review-carryover.test.ts": "2026-08-03T00:17:30.810Z",
     "scripts/pack-review-runner-issue-898.test.ts": "2026-08-03T00:26:20.938Z",
-    "scripts/pack-review-state.test.ts": "2026-08-03T03:45:39.625Z",
-    "scripts/pack-reviewer-preference.test.ts": "2026-08-04T10:14:06.370Z"
+    "scripts/pack-review-state.test.ts": "2026-08-03T03:45:39.625Z"
   }
 }

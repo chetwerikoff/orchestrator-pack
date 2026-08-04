@@ -68,6 +68,8 @@ function parseArgs(argv) {
     baseHistoryFile: '',
     supplementalReportsDir: '',
     supplementalSourceSha: '',
+    supplementalRunId: '',
+    supplementalRunAttempt: '',
     repoRoot: defaultRepoRoot,
     dryRun: false,
   };
@@ -82,6 +84,10 @@ function parseArgs(argv) {
       options.supplementalReportsDir = argv[++index] ?? '';
     } else if (arg === '--supplemental-source-sha') {
       options.supplementalSourceSha = argv[++index] ?? '';
+    } else if (arg === '--supplemental-run-id') {
+      options.supplementalRunId = argv[++index] ?? '';
+    } else if (arg === '--supplemental-run-attempt') {
+      options.supplementalRunAttempt = argv[++index] ?? '';
     } else if (arg === '--history-path') {
       options.historyPath = argv[++index] ?? '';
     } else if (arg === '--base-history-file') {
@@ -128,6 +134,10 @@ function main() {
     printUsage();
     process.exit(1);
   }
+  if (options.supplementalReportsDir && (!options.supplementalRunId || !options.supplementalRunAttempt)) {
+    printUsage();
+    process.exit(1);
+  }
 
   const historyPath =
     options.historyPath || join(options.repoRoot, 'scripts/vitest-runtime-history.json');
@@ -153,6 +163,8 @@ function main() {
     supplementalReports,
     expectedCommitSha: options.commitSha,
     expectedSupplementalSourceSha: options.supplementalSourceSha,
+    expectedSupplementalRunId: options.supplementalRunId,
+    expectedSupplementalRunAttempt: options.supplementalRunAttempt,
     repoRoot: options.repoRoot,
   });
 

@@ -52,12 +52,16 @@ the measured checkout. The producer rejects missing, duplicate, malformed,
 failed, wrong-lane, wrong-target, wrong-source, non-finite, zero, or negative
 evidence before changing history.
 
-Bounded provenance extends the existing status description without replacing
-ordinary refresh provenance:
+Bounded provenance uses a compact versioned status description so the full
+identities remain below GitHub’s 140-character commit-status limit:
 
 ```text
-runtime-history-provenance run=<run-id> attempt=<attempt> source=<trusted-workflow-sha> supplemental=<measured-source-sha> target=scripts/pack-reviewer-preference.test.ts trusted=<trusted-workflow-sha>
+runtime-history-provenance/v1 r=<run-id> a=<attempt> s=<trusted-workflow-sha> x=<measured-source-sha>
 ```
+
+The `x` field implies the fixed supplemental target and the trusted workflow
+revision is the `s` field; the parser rejects any incomplete or mismatched
+binding. Ordinary refreshes retain the legacy-compatible provenance form.
 
 The delivery monitor requires every status row in one episode to bind the same
 run, attempt, trusted workflow revision, measured source revision, and fixed

@@ -115,16 +115,16 @@ function provenanceStatus({
   supplementalSourceSha = null,
   supplementalTarget = 'scripts/pack-reviewer-preference.test.ts',
 } = {}) {
-  const suffix = supplementalSourceSha
-    ? ` supplemental=${supplementalSourceSha} target=${supplementalTarget} trusted=${sourceMainSha}`
-    : '';
+  const description = supplementalSourceSha
+    ? `runtime-history-provenance/v1 r=${runId} a=${attempt} s=${sourceMainSha} x=${supplementalSourceSha}`
+    : `runtime-history-provenance run=${runId} attempt=${attempt} source=${sourceMainSha}`;
   return status({
     id,
     context: PROVENANCE_CONTEXT,
     state,
     creator: 'github-actions[bot]',
     targetUrl: `https://github.com/${TARGET_REPOSITORY}/actions/runs/${runId}/attempts/${attempt}`,
-    description: `runtime-history-provenance run=${runId} attempt=${attempt} source=${sourceMainSha}${suffix}`,
+    description,
   });
 }
 
@@ -339,6 +339,7 @@ function testProvenanceMatrix() {
     GENERATED,
   );
   assert(bounded.ok, 'bounded supplemental provenance should parse');
+  assert(bounded.row.description.length <= 140, 'bounded provenance description must fit GitHub status limit');
   equal(bounded.supplementalSourceSha, supplementalSha, 'bounded provenance must retain source revision');
   equal(bounded.supplementalTarget, 'scripts/pack-reviewer-preference.test.ts', 'bounded provenance must retain target');
   equal(verifyRefreshRun(successfulRefreshRun(), bounded).state, 'success', 'bounded run must verify');

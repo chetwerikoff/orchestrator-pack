@@ -454,7 +454,7 @@ function writeSupplementalReport(dir, sourceSha, durationMs, overrides = {}) {
   const report = {
     success: true,
     numFailedTests: 0,
-    ...buildSyntheticVitestReport([{ file: target, durationMs }]),
+    ...buildSyntheticVitestReport([{ file: target, durationMs }], join(defaultRepoRoot, 'supplemental-source')),
   };
   writeFileSync(reportPath, stableStringify(report), 'utf8');
   writeFileSync(
@@ -496,6 +496,8 @@ function runSupplementalTargetFixtures() {
     supplementalReports,
     expectedCommitSha: heavyCommit,
     expectedSupplementalSourceSha: sourceSha,
+    expectedSupplementalRunId: '9001',
+    expectedSupplementalRunAttempt: '1',
     repoRoot: defaultRepoRoot,
   });
   assert(accepted.ok, 'valid fixed supplemental report must be accepted');
@@ -539,6 +541,11 @@ function runSupplementalTargetFixtures() {
       overrides: { target: 'scripts/other.test.ts' },
     },
     {
+      name: 'wrong workflow run',
+      sourceSha,
+      overrides: { runId: '9002' },
+    },
+    {
       name: 'oversized report',
       sourceSha,
       oversized: true,
@@ -560,7 +567,7 @@ function runSupplementalTargetFixtures() {
       reportPath,
       testCase.oversized
         ? `{"oversized":"${'x'.repeat(1024 * 1024)}"}`
-        : stableStringify({ success: true, numFailedTests: 0, ...buildSyntheticVitestReport(files) }),
+        : stableStringify({ success: true, numFailedTests: 0, ...buildSyntheticVitestReport(files, join(defaultRepoRoot, 'supplemental-source')) }),
       'utf8',
     );
     writeFileSync(metaPath, stableStringify({
@@ -582,6 +589,8 @@ function runSupplementalTargetFixtures() {
       supplementalReports: new Map([[SUPPLEMENTAL_TARGET, { reportPath, metaPath, meta: JSON.parse(readFileSync(metaPath, 'utf8')) }]]),
       expectedCommitSha: heavyCommit,
       expectedSupplementalSourceSha: testCase.expectedSha ?? sourceSha,
+      expectedSupplementalRunId: '9001',
+      expectedSupplementalRunAttempt: '1',
       repoRoot: defaultRepoRoot,
     });
     assert(result.rejected, `${testCase.name} supplemental evidence must be rejected`);

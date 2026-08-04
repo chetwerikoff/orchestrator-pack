@@ -17,7 +17,8 @@ export const DEFAULT_WAIT_SECONDS = 900;
 export const DEFAULT_POLL_SECONDS = 15;
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
-const PROVENANCE_RE = /^runtime-history-provenance run=(\d+) attempt=(\d+) source=([0-9a-f]{40})(?: supplemental=([0-9a-f]{40}) target=(scripts\/pack-reviewer-preference\.test\.ts) trusted=([0-9a-f]{40}))?$/i;
+const LEGACY_PROVENANCE_RE = /^runtime-history-provenance run=(\d+) attempt=(\d+) source=([0-9a-f]{40})(?: supplemental=([0-9a-f]{40}) target=(scripts\/pack-reviewer-preference\.test\.ts) trusted=([0-9a-f]{40}))?$/i;
+const COMPACT_PROVENANCE_RE = /^runtime-history-provenance\/v1 r=(\d+) a=(\d+) s=([0-9a-f]{40})(?: x=([0-9a-f]{40}))?$/i;
 const FAIL = new Set(['failure', 'failed', 'error', 'cancelled', 'timed_out', 'action_required']);
 const PASS = new Set(['success', 'successful', 'neutral', 'skipped', 'skipping']);
 const WAIT = new Set(['pending', 'queued', 'requested', 'waiting', 'in_progress']);
@@ -86,7 +87,10 @@ export function parseRefreshProvenance(history, expectedHeadSha) {
   for (const row of source) {
     const key = orderKey(row);
     const state = String(row?.state ?? '').toLowerCase();
-    const match = String(row?.description ?? '').match(PROVENANCE_RE);
+    const description = String(row?.description ?? '');
+    const legacyMatch = description.match(LEGACY_PROVENANCE_RE);
+    const compactMatch = description.match(COMPACT_PROVENANCE_RE);
+    const match = legacyMatch ?? compactMatch;
     if (!key || ids.has(key.id) || !match || !['pending', 'success', 'failure', 'error'].includes(state)) {
       return fail('provenance-invalid', 'refresh provenance status is malformed or ambiguous');
     }
@@ -94,8 +98,8 @@ export function parseRefreshProvenance(history, expectedHeadSha) {
     const runAttempt = Number(match[2]);
     const sourceMainSha = match[3].toLowerCase();
     const supplementalSourceSha = match[4]?.toLowerCase() ?? null;
-    const supplementalTarget = match[5] ?? null;
-    const trustedWorkflowSha = match[6]?.toLowerCase() ?? null;
+    const supplementalTarget = legacyMatch ? match[5] ?? null : supplementalSourceSha ? SUPPLEMENTAL_TARGET : null;
+    const trustedWorkflowSha = legacyMatch ? match[6]?.toLowerCase() ?? null : supplementalSourceSha ? sourceMainSha : null;
     if (
       (supplementalSourceSha || supplementalTarget || trustedWorkflowSha) &&
       (!supplementalSourceSha || supplementalTarget !== SUPPLEMENTAL_TARGET || trustedWorkflowSha !== sourceMainSha)

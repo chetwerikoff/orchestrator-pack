@@ -84,6 +84,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -312,6 +313,8 @@ jobs:
         env:
           COMMIT_SHA: ${{ github.sha }}
           SUPPLEMENTAL_SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
+          SUPPLEMENTAL_RUN_ID: ${{ github.run_id }}
+          SUPPLEMENTAL_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           $args = @(
             '-ReportsDir', (Join-Path $env:GITHUB_WORKSPACE 'vitest-heavy-reports-staged'),
@@ -321,7 +324,9 @@ jobs:
           if ($env:SUPPLEMENTAL_SOURCE_SHA) {
             $args += @(
               '-SupplementalReportsDir', (Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports-staged'),
-              '-SupplementalSourceSha', $env:SUPPLEMENTAL_SOURCE_SHA
+              '-SupplementalSourceSha', $env:SUPPLEMENTAL_SOURCE_SHA,
+              '-SupplementalRunId', $env:SUPPLEMENTAL_RUN_ID,
+              '-SupplementalRunAttempt', $env:SUPPLEMENTAL_RUN_ATTEMPT
             )
           }
           ./scripts/refresh-vitest-runtime-history.ps1 @args
@@ -450,9 +455,10 @@ jobs:
           SUPPLEMENTAL_SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
         run: |
           set -euo pipefail
-          description="runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}"
           if [ -n "${SUPPLEMENTAL_SOURCE_SHA:-}" ]; then
-            description="${description} supplemental=${SUPPLEMENTAL_SOURCE_SHA} target=scripts/pack-reviewer-preference.test.ts trusted=${GITHUB_SHA}"
+            description="runtime-history-provenance/v1 r=${GITHUB_RUN_ID} a=${GITHUB_RUN_ATTEMPT} s=${GITHUB_SHA} x=${SUPPLEMENTAL_SOURCE_SHA}"
+          else
+            description="runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}"
           fi
           ./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${DELIVERY_HEAD}" \
             -f state=pending \
@@ -497,9 +503,10 @@ jobs:
           SUPPLEMENTAL_SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
         run: |
           set -euo pipefail
-          description="runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}"
           if [ -n "${SUPPLEMENTAL_SOURCE_SHA:-}" ]; then
-            description="${description} supplemental=${SUPPLEMENTAL_SOURCE_SHA} target=scripts/pack-reviewer-preference.test.ts trusted=${GITHUB_SHA}"
+            description="runtime-history-provenance/v1 r=${GITHUB_RUN_ID} a=${GITHUB_RUN_ATTEMPT} s=${GITHUB_SHA} x=${SUPPLEMENTAL_SOURCE_SHA}"
+          else
+            description="runtime-history-provenance run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT} source=${GITHUB_SHA}"
           fi
           ./scripts/gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${DELIVERY_HEAD}" \
             -f state=success \

@@ -230,7 +230,13 @@ export function validateReportSet(shardReports, expectedCommitSha, repoRoot = de
   return { ok: true, errors: [], durations, heavy };
 }
 
-export function validateSupplementalTargetMeta(meta, expectedSourceSha, target = SUPPLEMENTAL_TARGET) {
+export function validateSupplementalTargetMeta(
+  meta,
+  expectedSourceSha,
+  target = SUPPLEMENTAL_TARGET,
+  expectedRunId = "",
+  expectedRunAttempt = "",
+) {
   if (!meta || typeof meta !== 'object') {
     return 'missing supplemental report metadata';
   }
@@ -268,6 +274,12 @@ export function validateSupplementalTargetMeta(meta, expectedSourceSha, target =
   if (!/^\d+$/.test(String(meta.runId ?? '')) || !/^\d+$/.test(String(meta.runAttempt ?? ''))) {
     return 'supplemental report run identity is invalid';
   }
+  if (String(expectedRunId ?? '').trim() && String(meta.runId) !== String(expectedRunId).trim()) {
+    return `supplemental report run mismatch: expected ${expectedRunId}, got ${meta.runId}`;
+  }
+  if (String(expectedRunAttempt ?? '').trim() && String(meta.runAttempt) !== String(expectedRunAttempt).trim()) {
+    return `supplemental report attempt mismatch: expected ${expectedRunAttempt}, got ${meta.runAttempt}`;
+  }
   return null;
 }
 
@@ -295,7 +307,10 @@ export function extractSupplementalReportDurations(reportPath, repoRoot, target 
     return { error: 'supplemental report must contain exactly one file', durations: new Map() };
   }
   const entry = parsed.files[0];
-  if (entry.file !== target) {
+  const normalizedFile = entry.file.startsWith('supplemental-source/')
+    ? entry.file.slice('supplemental-source/'.length)
+    : entry.file;
+  if (normalizedFile !== target) {
     return { error: `supplemental report target mismatch: expected ${target}, got ${entry.file}`, durations: new Map() };
   }
   if (!Number.isFinite(entry.durationMs) || entry.durationMs <= 0) {
@@ -309,6 +324,8 @@ export function validateSupplementalReportSet(
   expectedSourceSha,
   repoRoot = defaultRepoRoot,
   heavyFiles = [],
+  expectedRunId = "",
+  expectedRunAttempt = "",
 ) {
   const errors = [];
   const entries = supplementalReports instanceof Map ? [...supplementalReports.entries()] : [];
@@ -323,7 +340,13 @@ export function validateSupplementalReportSet(
   if (!entry?.reportPath || !existsSync(entry.reportPath)) {
     errors.push(`missing supplemental report for ${target}`);
   }
-  const metaError = validateSupplementalTargetMeta(entry?.meta ?? null, expectedSourceSha, target);
+  const metaError = validateSupplementalTargetMeta(
+    entry?.meta ?? null,
+    expectedSourceSha,
+    target,
+    expectedRunId,
+    expectedRunAttempt,
+  );
   if (metaError) {
     errors.push(metaError);
   }
@@ -457,6 +480,8 @@ export function refreshRuntimeHistory({
   supplementalReports = null,
   expectedCommitSha,
   expectedSupplementalSourceSha = '',
+  expectedSupplementalRunId = '',
+  expectedSupplementalRunAttempt = '',
   repoRoot = defaultRepoRoot,
 }) {
   const normalizedBase = normalizeHistory(baseHistory);
@@ -468,6 +493,8 @@ export function refreshRuntimeHistory({
         expectedSupplementalSourceSha,
         repoRoot,
         validation.heavy,
+        expectedSupplementalRunId,
+        expectedSupplementalRunAttempt,
       )
     : { ok: true, errors: [], durations: new Map() };
   const errors = [...validation.errors, ...supplementalValidation.errors];
