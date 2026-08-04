@@ -11,6 +11,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 export const PACK_REVIEW_RUN_STORE_SCHEMA_VERSION = 1;
 export const PACK_REVIEW_ACTIVE_STATUSES = new Set(['queued', 'preparing', 'running', 'reviewing']);
@@ -176,6 +177,11 @@ const LOCK_UNREADABLE_STALE_MS = 30_000;
 const RECORD_RENAME_ATTEMPTS = 4;
 const RECORD_RENAME_BACKOFF_MS = 10;
 const TRANSIENT_RENAME_ERROR_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
+const PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK: Record<PackReviewSourceSlotLifecycle, number> = {
+  planned: 0,
+  invocation_started: 1,
+  terminal: 2,
+};
 
 function sleepSync(milliseconds: number): void {
   const cell = new Int32Array(new SharedArrayBuffer(4));
@@ -239,6 +245,22 @@ function requiredPositiveInteger(value: unknown, name: string, path = ''): numbe
   return number;
 }
 
+function requiredJsonString(value: unknown, name: string, path = ''): string {
+  if (typeof value !== 'string') {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid ${name} type`);
+  }
+  const text = value.trim();
+  if (!text) throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: missing ${name}`);
+  return text;
+}
+
+function requiredJsonPositiveInteger(value: unknown, name: string, path = ''): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid ${name}`);
+  }
+  return value;
+}
+
 function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackReviewGptRoundRecord {
   const raw = asObject(value);
   if (raw.schema !== 'pack-review-gpt-round/v1') {
@@ -250,10 +272,10 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
   if (raw.tier !== 'T1' && raw.tier !== 'T2' && raw.tier !== 'T3') {
     throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound tier`);
   }
-  const roundOrdinal = requiredPositiveInteger(raw.roundOrdinal, 'reviewRound roundOrdinal', path);
-  const cardinality = requiredPositiveInteger(raw.cardinality, 'reviewRound cardinality', path);
-  const issueNumber = requiredPositiveInteger(raw.issueNumber, 'reviewRound issueNumber', path);
-  const boundIssueSnapshotDigest = requiredString(
+  const roundOrdinal = requiredJsonPositiveInteger(raw.roundOrdinal, 'reviewRound roundOrdinal', path);
+  const cardinality = requiredJsonPositiveInteger(raw.cardinality, 'reviewRound cardinality', path);
+  const issueNumber = requiredJsonPositiveInteger(raw.issueNumber, 'reviewRound issueNumber', path);
+  const boundIssueSnapshotDigest = requiredJsonString(
     raw.boundIssueSnapshotDigest,
     'reviewRound boundIssueSnapshotDigest',
     path,
@@ -273,8 +295,8 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
   const sourceSlots = raw.sourceSlots.map((value, index): PackReviewSourceSlotRecord => {
     const slotPath = `${path || '<record>'}.reviewRound.sourceSlots[${index}]`;
     const slot = asObject(value);
-    const slotId = requiredString(slot.slotId, 'slotId', slotPath);
-    const ordinal = requiredPositiveInteger(slot.ordinal, 'ordinal', slotPath);
+    const slotId = requiredJsonString(slot.slotId, 'slotId', slotPath);
+    const ordinal = requiredJsonPositiveInteger(slot.ordinal, 'ordinal', slotPath);
     if (ordinal > cardinality) {
       throw new Error(`corrupt pack review run record at ${slotPath}: ordinal exceeds cardinality`);
     }
@@ -293,14 +315,14 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
     slotIds.add(slotId);
     ordinals.add(ordinal);
 
-    const lifecycle = requiredString(slot.lifecycle, 'lifecycle', slotPath) as PackReviewSourceSlotLifecycle;
+    const lifecycle = requiredJsonString(slot.lifecycle, 'lifecycle', slotPath) as PackReviewSourceSlotLifecycle;
     if (lifecycle !== 'planned' && lifecycle !== 'invocation_started' && lifecycle !== 'terminal') {
       throw new Error(`corrupt pack review run record at ${slotPath}: invalid lifecycle '${lifecycle}'`);
     }
 
     let invocationId: string | undefined;
     if (slot.invocationId !== undefined) {
-      invocationId = requiredString(slot.invocationId, 'invocationId', slotPath);
+      invocationId = requiredJsonString(slot.invocationId, 'invocationId', slotPath);
       if (invocationIds.has(invocationId)) {
         throw new Error(`corrupt pack review run record at ${slotPath}: duplicate invocationId '${invocationId}'`);
       }
@@ -309,7 +331,17 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
 
     let attemptOrdinal: number | undefined;
     if (slot.attemptOrdinal !== undefined) {
-      attemptOrdinal = requiredPositiveInteger(slot.attemptOrdinal, 'attemptOrdinal', slotPath);
+      attemptOrdinal = requiredJsonPositiveInteger(slot.attemptOrdinal, 'attemptOrdinal', slotPath);
+    }
+
+    let admissionStartedAtUtc: string | undefined;
+    if (slot.admissionStartedAtUtc !== undefined) {
+      admissionStartedAtUtc = requiredJsonString(slot.admissionStartedAtUtc, 'admissionStartedAtUtc', slotPath);
+    }
+
+    let terminalClass: string | undefined;
+    if (slot.terminalClass !== undefined) {
+      terminalClass = requiredJsonString(slot.terminalClass, 'terminalClass', slotPath);
     }
 
     return {
@@ -319,6 +351,8 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
       lifecycle,
       ...(invocationId === undefined ? {} : { invocationId }),
       ...(attemptOrdinal === undefined ? {} : { attemptOrdinal }),
+      ...(admissionStartedAtUtc === undefined ? {} : { admissionStartedAtUtc }),
+      ...(terminalClass === undefined ? {} : { terminalClass }),
     };
   });
 
@@ -341,6 +375,161 @@ function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackRevie
     boundIssueSnapshotDigest,
     sourceSlots,
   };
+}
+
+function assertFrozenGptRoundIdentity(
+  existing: PackReviewGptRoundRecord,
+  incoming: PackReviewGptRoundRecord,
+  path: string,
+): void {
+  const immutableFields: Array<keyof Pick<
+    PackReviewGptRoundRecord,
+    'schema' | 'reviewer' | 'tier' | 'roundOrdinal' | 'cardinality' | 'issueNumber' | 'boundIssueSnapshotDigest'
+  >> = [
+    'schema',
+    'reviewer',
+    'tier',
+    'roundOrdinal',
+    'cardinality',
+    'issueNumber',
+    'boundIssueSnapshotDigest',
+  ];
+  for (const field of immutableFields) {
+    if (existing[field] !== incoming[field]) {
+      throw new Error(`corrupt pack review run record at ${path}: frozen reviewRound ${field} cannot change`);
+    }
+  }
+  if (existing.sourceSlots.length !== incoming.sourceSlots.length) {
+    throw new Error(`corrupt pack review run record at ${path}: frozen reviewRound source census cannot change`);
+  }
+  for (const existingSlot of existing.sourceSlots) {
+    const incomingSlot = incoming.sourceSlots.find((slot) => slot.ordinal === existingSlot.ordinal);
+    if (!incomingSlot || incomingSlot.slotId !== existingSlot.slotId) {
+      throw new Error(
+        `corrupt pack review run record at ${path}: frozen reviewRound source slot ${existingSlot.slotId} cannot change`,
+      );
+    }
+  }
+}
+
+function mergeFrozenGptSlot(
+  existing: PackReviewSourceSlotRecord,
+  incoming: PackReviewSourceSlotRecord,
+  path: string,
+): PackReviewSourceSlotRecord {
+  const existingAttempt = existing.attemptOrdinal;
+  const incomingAttempt = incoming.attemptOrdinal;
+  if (existing.lifecycle === 'terminal'
+    && incomingAttempt !== undefined
+    && incomingAttempt > (existingAttempt ?? 0)) {
+    throw new Error(`corrupt pack review run record at ${path}: terminal source slot attempt cannot advance`);
+  }
+
+  let invocationId = existing.invocationId ?? incoming.invocationId;
+  if (existing.invocationId !== undefined
+    && incoming.invocationId !== undefined
+    && existing.invocationId !== incoming.invocationId) {
+    throw new Error(`corrupt pack review run record at ${path}: invocationId cannot change`);
+  }
+
+  const attemptOrdinal = existingAttempt === undefined
+    ? incomingAttempt
+    : incomingAttempt === undefined
+      ? existingAttempt
+      : Math.max(existingAttempt, incomingAttempt);
+
+  let admissionStartedAtUtc = existing.admissionStartedAtUtc ?? incoming.admissionStartedAtUtc;
+  if (existing.admissionStartedAtUtc !== undefined
+    && incoming.admissionStartedAtUtc !== undefined
+    && existing.admissionStartedAtUtc !== incoming.admissionStartedAtUtc) {
+    if ((incomingAttempt ?? 0) > (existingAttempt ?? 0)) {
+      admissionStartedAtUtc = incoming.admissionStartedAtUtc;
+    } else if ((incomingAttempt ?? 0) < (existingAttempt ?? 0)) {
+      admissionStartedAtUtc = existing.admissionStartedAtUtc;
+    } else {
+      throw new Error(`corrupt pack review run record at ${path}: admissionStartedAtUtc changed without a new attempt`);
+    }
+  }
+
+  const mergeEvidence = (name: 'terminalClass' | 'terminalResult' | 'payload'): unknown => {
+    const existingValue = existing[name];
+    const incomingValue = incoming[name];
+    if (existingValue !== undefined
+      && incomingValue !== undefined
+      && !isDeepStrictEqual(existingValue, incomingValue)) {
+      throw new Error(`corrupt pack review run record at ${path}: ${name} cannot change`);
+    }
+    return existingValue ?? incomingValue;
+  };
+
+  const terminalClass = mergeEvidence('terminalClass') as string | undefined;
+  const terminalResult = mergeEvidence('terminalResult');
+  const payload = mergeEvidence('payload');
+  const lifecycle = PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[existing.lifecycle]
+    >= PACK_REVIEW_SOURCE_SLOT_LIFECYCLE_RANK[incoming.lifecycle]
+    ? existing.lifecycle
+    : incoming.lifecycle;
+
+  invocationId = invocationId?.trim() || undefined;
+  return {
+    ...existing,
+    ...incoming,
+    slotId: existing.slotId,
+    ordinal: existing.ordinal,
+    lifecycle,
+    ...(invocationId === undefined ? { invocationId: undefined } : { invocationId }),
+    ...(attemptOrdinal === undefined ? { attemptOrdinal: undefined } : { attemptOrdinal }),
+    ...(admissionStartedAtUtc === undefined
+      ? { admissionStartedAtUtc: undefined }
+      : { admissionStartedAtUtc }),
+    ...(terminalClass === undefined ? { terminalClass: undefined } : { terminalClass }),
+    ...(terminalResult === undefined ? { terminalResult: undefined } : { terminalResult }),
+    ...(payload === undefined ? { payload: undefined } : { payload }),
+  };
+}
+
+function mergeFrozenGptRound(
+  existing: PackReviewGptRoundRecord,
+  incoming: PackReviewGptRoundRecord,
+  path: string,
+): PackReviewGptRoundRecord {
+  assertFrozenGptRoundIdentity(existing, incoming, path);
+  return {
+    ...existing,
+    sourceSlots: existing.sourceSlots.map((existingSlot) => {
+      const incomingSlot = incoming.sourceSlots.find((slot) => slot.ordinal === existingSlot.ordinal)!;
+      return mergeFrozenGptSlot(
+        existingSlot,
+        incomingSlot,
+        `${path}.reviewRound.sourceSlots[${existingSlot.ordinal - 1}]`,
+      );
+    }),
+  };
+}
+
+function assertCompleteGptRound(round: PackReviewGptRoundRecord, path: string): void {
+  for (const slot of round.sourceSlots) {
+    if (slot.lifecycle !== 'terminal') {
+      throw new Error(
+        `corrupt pack review run record at ${path}: mandatory source slot ${slot.slotId} is not terminal`,
+      );
+    }
+    if (typeof slot.terminalClass !== 'string' || !slot.terminalClass.trim()) {
+      throw new Error(
+        `corrupt pack review run record at ${path}: mandatory source slot ${slot.slotId} lacks terminal outcome`,
+      );
+    }
+  }
+}
+
+function hasRecordedGptRoundLifecycleOrEvidence(record: PackReviewRunRecord): boolean {
+  return record.reviewRound?.sourceSlots.some((slot) => slot.lifecycle !== 'planned'
+    || slot.invocationId !== undefined
+    || slot.attemptOrdinal !== undefined
+    || slot.admissionStartedAtUtc !== undefined
+    || slot.terminalClass !== undefined
+    || slot.terminalResult !== undefined
+    || slot.payload !== undefined) ?? false;
 }
 
 export function normalizePackReviewCanonicalRepository(value: string): string {
@@ -493,6 +682,22 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
   const reviewRound = raw.reviewRound === undefined || raw.reviewRound === null
     ? undefined
     : normalizePackReviewGptRoundRecord(raw.reviewRound, path);
+  const reviewVerdict = raw.reviewVerdict === 'clean' || raw.reviewVerdict === 'findings'
+    ? raw.reviewVerdict
+    : undefined;
+  const findingCount = Number.isInteger(raw.findingCount) ? Number(raw.findingCount) : undefined;
+  const findings = Array.isArray(raw.findings) ? [...raw.findings] : [];
+  const journalOutcome = raw.journalOutcome && typeof raw.journalOutcome === 'object' && !Array.isArray(raw.journalOutcome)
+    ? raw.journalOutcome as unknown as PackReviewJournalOutcome
+    : undefined;
+  const deliveryOutcomes = raw.deliveryOutcomes && typeof raw.deliveryOutcomes === 'object' && !Array.isArray(raw.deliveryOutcomes)
+    ? raw.deliveryOutcomes as Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>
+    : {};
+  if (reviewRound && (PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(status)
+    || reviewVerdict !== undefined
+    || journalOutcome?.state === 'persisted')) {
+    assertCompleteGptRound(reviewRound, path || '<record>');
+  }
   return {
     ...(raw as unknown as PackReviewRunRecord),
     schemaVersion: 1,
@@ -515,17 +720,11 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
     createdAt,
     updatedAt,
     heartbeatAtUtc: String(raw.heartbeatAtUtc ?? updatedAt),
-    reviewVerdict: raw.reviewVerdict === 'clean' || raw.reviewVerdict === 'findings'
-      ? raw.reviewVerdict
-      : undefined,
-    findingCount: Number.isInteger(raw.findingCount) ? Number(raw.findingCount) : undefined,
-    findings: Array.isArray(raw.findings) ? [...raw.findings] : [],
-    journalOutcome: raw.journalOutcome && typeof raw.journalOutcome === 'object' && !Array.isArray(raw.journalOutcome)
-      ? raw.journalOutcome as unknown as PackReviewJournalOutcome
-      : undefined,
-    deliveryOutcomes: raw.deliveryOutcomes && typeof raw.deliveryOutcomes === 'object' && !Array.isArray(raw.deliveryOutcomes)
-      ? raw.deliveryOutcomes as Partial<Record<PackReviewDeliveryChannel, PackReviewDeliveryOutcome>>
-      : {},
+    reviewVerdict,
+    findingCount,
+    findings,
+    journalOutcome,
+    deliveryOutcomes,
   };
 }
 
@@ -707,6 +906,15 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       return { created: false, reused: true, reason: 'active_run_exists', run: consumerRow(active[0]!), storeRoot };
     }
 
+    const completed = records
+      .filter((record) => record.key === key
+        && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
+        && hasPersistedPackReviewVerdict(record))
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+    if (completed.length > 0) {
+      return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(completed[0]!), storeRoot };
+    }
+
     const uncertain = records
       .filter((record) => record.key === key && record.reviewRound?.sourceSlots.some((slot) =>
         slot.terminalClass === 'possible_delivery/missing_result'))
@@ -721,13 +929,17 @@ export function createPackReviewRun(input: CreatePackReviewRunInput): {
       };
     }
 
-    const completed = records
-      .filter((record) => record.key === key
-        && PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(record.status)
-        && hasPersistedPackReviewVerdict(record))
+    const persistedGptRound = records
+      .filter((record) => record.key === key && hasRecordedGptRoundLifecycleOrEvidence(record))
       .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-    if (completed.length > 0) {
-      return { created: false, reused: true, reason: 'terminal_run_exists', run: consumerRow(completed[0]!), storeRoot };
+    if (persistedGptRound.length > 0) {
+      return {
+        created: false,
+        reused: true,
+        reason: 'gpt_round_requires_settlement',
+        run: consumerRow(persistedGptRound[0]!),
+        storeRoot,
+      };
     }
 
     const canonicalRepository = input.canonicalRepository
@@ -776,7 +988,7 @@ export function updatePackReviewRun(
     if (!existsSync(path)) throw new Error(`pack review run not found: ${runId}`);
     const existing = parseRecord(JSON.parse(readFileSync(path, 'utf8')), path);
     const updatedAt = (options.now ?? new Date()).toISOString();
-    const next = parseRecord({
+    const candidate: Record<string, unknown> = {
       ...existing,
       ...fields,
       id: existing.id,
@@ -791,7 +1003,20 @@ export function updatePackReviewRun(
       heartbeatAtUtc: PACK_REVIEW_ACTIVE_STATUSES.has(String(fields.status ?? existing.status))
         ? updatedAt
         : String(fields.heartbeatAtUtc ?? existing.heartbeatAtUtc),
-    }, path);
+    };
+    if (existing.reviewRound) {
+      if (candidate.reviewRound === undefined || candidate.reviewRound === null) {
+        throw new Error(`corrupt pack review run record at ${path}: frozen reviewRound cannot be removed`);
+      }
+      candidate.reviewRound = mergeFrozenGptRound(
+        existing.reviewRound,
+        normalizePackReviewGptRoundRecord(candidate.reviewRound, path),
+        path,
+      );
+    } else if (candidate.reviewRound !== undefined && candidate.reviewRound !== null) {
+      candidate.reviewRound = normalizePackReviewGptRoundRecord(candidate.reviewRound, path);
+    }
+    const next = parseRecord(candidate, path);
     writeRecordUnlocked(storeRoot, next);
     return next;
   });
