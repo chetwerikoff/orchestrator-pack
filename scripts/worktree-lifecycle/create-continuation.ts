@@ -231,6 +231,7 @@ function candidateAgentSafe(
   path: string,
 ): boolean {
   const rows = agentRows.filter((row) => row.repoId === repositoryId && row.path === path);
+  if (rows.length === 0) return true;
   return rows.length === 1 && rows.every(agentRowSafe);
 }
 
@@ -367,9 +368,10 @@ function runCreateAttempt(input: {
   const createOwnedTerminals = snapshot.terminals.filter(
     (terminal) => newPaths.has(terminal.worktreePath) && !oldTerminalKeys.has(terminalKey(terminal)),
   );
-  const unsafeAgentPaths = [...newPaths].filter(
-    (path) => !candidateAgentSafe(snapshot.agentRows, snapshot.repositoryId, path),
-  ).sort();
+  const unsafeAgentPaths = newOrcaRows
+    .map((row) => row.path)
+    .filter((path) => !candidateAgentSafe(snapshot.agentRows, snapshot.repositoryId, path))
+    .sort();
   const evaluated = snapshot.ok && createOwnedTerminals.length === 0 && unsafeAgentPaths.length === 0
     ? evaluateCandidates({
         rows: newGitRows,
