@@ -128,7 +128,7 @@ function Test-WorkerMessageSendAdoptionPreflight {
     $effectiveJournalPath = if ($JournalPath) { $JournalPath } else { Get-WorkerMessageDispatchJournalPath }
     $statePath = Get-WorkerMessageSendAdoptionPreflightStatePath -Path $StateFile
     if ($DryRun) {
-        $root = Join-Path ([System.IO.Path]::GetTempPath()) 'worker-message-send-adoption-dryrun'
+        $root = Join-Path ([System.IO.Path]::GetTempPath()) ('worker-message-send-adoption-dryrun-' + [guid]::NewGuid().ToString('N'))
         if (-not (Test-Path -LiteralPath $root)) { New-Item -ItemType Directory -Path $root -Force | Out-Null }
         $statePath = Join-Path $root 'adoption-state.json'
         $effectiveJournalPath = Join-Path $root 'dispatch-journal.json'
