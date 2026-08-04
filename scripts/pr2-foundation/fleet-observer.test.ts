@@ -255,12 +255,19 @@ describe('S1 fleet observer', () => {
     const accepted = await observer.tick({ schedulerIntervalMs: 1_000 });
     expect(accepted.snapshotCommitted).toBe(true);
     source.remove('one');
+    for (let index = 0; index < MAX_UNITS; index += 1) source.add(`at-limit-${index}`);
+    const atLimit = await observer.tick({ schedulerIntervalMs: 1_000 });
+    expect(atLimit.status).toBe('complete');
+    expect(atLimit.snapshotCommitted).toBe(true);
+    expect(atLimit.snapshot?.census).toHaveLength(MAX_UNITS);
+
+    for (let index = 0; index < MAX_UNITS; index += 1) source.remove(`at-limit-${index}`);
     for (let index = 0; index < MAX_UNITS + 1; index += 1) source.add(`worker-${index}`);
     const capped = await observer.tick({ schedulerIntervalMs: 1_000 });
     expect(capped.status).toBe('failed');
     expect(capped.reason).toBe('fleet-cap-exceeded');
-    expect(capped.snapshot?.census).toEqual(accepted.snapshot?.census);
-    expect(capped.snapshot?.transitions).toEqual(accepted.snapshot?.transitions);
+    expect(capped.snapshot?.census).toEqual(atLimit.snapshot?.census);
+    expect(capped.snapshot?.transitions).toEqual(atLimit.snapshot?.transitions);
   });
 
   it('rejects stale and private snapshot content, and accepts the atomic result', async () => {
