@@ -62,15 +62,15 @@ or new store for this role boundary.
 The canonical manager-facing launch, observation, marker attribution,
 publication, tab lifecycle, diagnostic-probe, failure-attribution, retry/no-
 resend, and handoff contract lives in
-[`.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc).
+[`.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc).
 The portable startup procedure and universal author/reviewer templates live in
-[`docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
+[`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md).
 The transport README remains the implementation-local authority for supported
 CLI forms, argument names, result schemas, and component boundaries.
 
 For applicable long-running turns, use
 `npm run flow-manager-browser-gpt-long-run -- ...`; its launcher internals are
-owned by [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-manager-long-running-child-runbook.md).
+owned by [`docs/flow-manager-long-running-child-runbook.md`](../../../docs/flow-manager-long-running-child-runbook.md).
 This skill retains the create-issue workflow, tiering, review-stage, capture,
 direct-publication, receipt, relay, ledger, and acceptance rules below. It does
 not duplicate tracked helper launch, polling, retry, tab-close, probe, or

@@ -45,8 +45,8 @@ Use the local launcher and gitignored configuration; do not place profile,
 project, conversation, CDP, input, or output values in tracked content.
 
 For tracked create/review turns, follow the canonical carrier
-[`.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc)
-and [`docs/browser-gpt-turn-runbook.md`](../../docs/browser-gpt-turn-runbook.md).
+[`.cursor/rules/flow-manager-browser-turn-monitoring.mdc`](../../../.cursor/rules/flow-manager-browser-turn-monitoring.mdc)
+and [`docs/browser-gpt-turn-runbook.md`](../../../docs/browser-gpt-turn-runbook.md).
 Those documents own launch order, observation, marker attribution, publication,
 retry/no-resend, tab lifecycle, probe, and handoff mechanics. This skill keeps
 only routing and the standalone `driver.mjs` contract here. The create-issue
