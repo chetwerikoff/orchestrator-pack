@@ -5,7 +5,6 @@
     ".claude/skills/direct-fix-checklist/SKILL.md",
     ".claude/skills/merge-with-local-adoption/SKILL.md",
     "docs/investigations/orca-worktree-lifecycle/2026-08-04-executor-observations.md",
-    "docs/migration_notes.md",
     "docs/orca-runtime-boundary.md",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json",
@@ -14,12 +13,14 @@
     "scripts/worktree-lifecycle/core.ts",
     "scripts/worktree-lifecycle/create-continuation.test.ts",
     "scripts/worktree-lifecycle/create-continuation.ts",
+    "scripts/worktree-lifecycle/exclusion.ts",
     "scripts/worktree-lifecycle/head-bound-runner.ts",
     "scripts/worktree-lifecycle/operations.test.ts",
     "scripts/worktree-lifecycle/operations.ts",
     "scripts/worktree-lifecycle/policy.ts",
     "scripts/worktree-lifecycle/README.md",
-    "scripts/worktree-lifecycle/recovery-regression.test.ts"
+    "scripts/worktree-lifecycle/recovery-regression.test.ts",
+    "scripts/worktree-teardown.ts"
   ],
   "denylist": [
     ".orca/",
@@ -41,5 +42,5 @@
     "scripts/worktree-teardown-runtime-profile.ts",
     "scripts/worktree-teardown.ts"
   ],
-  "source_revision": "f13383e6f5b908a84011007b27e088417d7dc6e9"
+  "source_revision": "9003cca6fd326b97d8f6eaa3ed003f599326b844"
 }
