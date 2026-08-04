@@ -86,17 +86,18 @@ interface RunnerState {
   standardTeardownEffect?: 'both-absent' | 'git-only-absent' | 'none';
   removeCount: number;
   ignoredReads: number;
+  childLockTokens: string[];
   invocations: CommandInvocation[];
 }
 
 function targetOrca(paths: Paths, state: RunnerState, includeAgents: boolean): object[] {
   if (!state.orcaPresent) return [];
   return [{
+    id: `${REPOSITORY_ID}::${paths.worktree}`,
     path: paths.worktree,
     head: HEAD,
     branch: `refs/heads/${BRANCH}`,
     ...(state.linkedIssue === undefined ? { linkedPR: 1300 } : { linkedIssue: state.linkedIssue }),
-    repoId: REPOSITORY_ID,
     isMainWorktree: false,
     isArchived: false,
     ...(includeAgents ? { agents: state.agents ?? [] } : {}),
@@ -109,12 +110,13 @@ function orcaPayload(paths: Paths, state: RunnerState, includeAgents = false): s
     result: {
       worktrees: [
         {
+          id: `${REPOSITORY_ID}::${paths.repo}`,
           path: paths.repo,
           head: OTHER_HEAD,
           branch: 'refs/heads/main',
-          repoId: REPOSITORY_ID,
           isMainWorktree: true,
           isArchived: false,
+          ...(includeAgents ? { agents: [] } : {}),
         },
         ...targetOrca(paths, state, includeAgents),
         ...(state.foreignOrcaRows ?? []),
@@ -198,6 +200,11 @@ function runner(paths: Paths, state: RunnerState): CommandRunner {
       return result({ stdout: JSON.stringify({ ok: true, result: { terminals: state.terminals ?? [] } }) });
     }
     if (invocation.command === process.execPath) {
+      const tokenIndex = args.indexOf('--lifecycle-lock-token');
+      const pathIndex = args.indexOf('--lifecycle-lock-path');
+      expect(tokenIndex).toBeGreaterThan(-1);
+      expect(pathIndex).toBeGreaterThan(-1);
+      state.childLockTokens.push(args[tokenIndex + 1]!);
       if (state.standardTeardownEffect === 'both-absent') {
         state.gitPresent = false;
         state.orcaPresent = false;
@@ -219,25 +226,31 @@ function state(overrides: Partial<RunnerState> = {}): RunnerState {
     orcaPresent: false,
     removeCount: 0,
     ignoredReads: 0,
+    childLockTokens: [],
     invocations: [],
     ...overrides,
   };
 }
 
 function foreignRow(paths: Paths, suffix: string): object {
+  const path = join(paths.root, 'foreign-repository', suffix);
   return {
-    path: join(paths.root, 'foreign-repository', suffix),
+    id: `foreign-repository::${path}`,
+    path,
     head: HEAD,
     branch: `refs/heads/${BRANCH}`,
     linkedPR: 1300,
-    repoId: 'foreign-repository',
     isMainWorktree: false,
     isArchived: false,
     agents: [{ state: 'working', interrupted: false }],
   };
 }
 
-function operations(paths: Paths, value: RunnerState, processCensus: LifecycleOperations['processCensus'] = () => []): LifecycleOperations {
+function operations(
+  paths: Paths,
+  value: RunnerState,
+  processCensus: LifecycleOperations['processCensus'] = () => [],
+): LifecycleOperations {
   return {
     runner: runner(paths, value),
     orcaExecutable: 'orca-fixture',
@@ -251,7 +264,7 @@ afterEach(() => {
 });
 
 describe('dual census authority', () => {
-  it('derives repository identity from the active main Orca row', () => {
+  it('derives repository identity from the active main Orca composite id', () => {
     const paths = fixture();
     const value = state({ orcaPresent: true });
     const census = collectCensus(paths.expected, operations(paths, value));
@@ -328,6 +341,30 @@ describe('guarded Git-only recovery', () => {
     });
     expect(value.ignoredReads).toBe(2);
     expect(value.removeCount).toBe(0);
+  });
+
+  it('recovers a dead shared lock and blocks a live owner', () => {
+    const stalePaths = fixture();
+    const staleState = state();
+    const staleOps = operations(stalePaths, staleState);
+    writeFileSync(staleOps.lockPath!, '99999999\n\nstale-token\n', 'utf8');
+    expect(runLifecycle({
+      expected: stalePaths.expected,
+      context: 'explicit-recovery',
+      apply: false,
+      operations: staleOps,
+    }).outcome).toBe('git_only_recovery_eligible');
+
+    const livePaths = fixture();
+    const liveState = state();
+    const liveOps = operations(livePaths, liveState);
+    writeFileSync(liveOps.lockPath!, `${String(process.pid)}\n`, 'utf8');
+    expect(runLifecycle({
+      expected: livePaths.expected,
+      context: 'explicit-recovery',
+      apply: false,
+      operations: liveOps,
+    }).outcome).toBe('cleanup_deferred');
   });
 
   it('blocks when ignored data appears between initial and pre-effect snapshots', () => {
@@ -439,7 +476,7 @@ describe('guarded Git-only recovery', () => {
 });
 
 describe('standard teardown post-effect settlement', () => {
-  it('reports complete only after dual absence is proven', () => {
+  it('holds one borrowed child token through dual absence read-back', () => {
     const paths = fixture();
     const value = state({ orcaPresent: true, standardTeardownEffect: 'both-absent' });
     const report = runLifecycle({
@@ -453,6 +490,8 @@ describe('standard teardown post-effect settlement', () => {
       outcome: 'cleanup_complete',
       postClassification: { classification: 'absent' },
     });
+    expect(value.childLockTokens).toHaveLength(1);
+    expect(value.childLockTokens[0]).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it('ignores foreign-repository inventory changes during post-effect settlement', () => {
