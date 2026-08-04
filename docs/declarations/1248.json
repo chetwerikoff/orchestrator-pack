@@ -23,6 +23,7 @@
     "scripts/lib/Orchestrator-SideProcessDegradedBackoff.ps1",
     "scripts/lib/Orchestrator-WakeSupervisor.ps1",
     "scripts/lib/Orchestrator-WakeSupervisorLease.ps1",
+    "scripts/lib/pack-review-delivery.ts",
     "scripts/lib/pack-review-worker-notification.ts",
     "scripts/lib/Review-StartClaimLifecycle.ps1",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
