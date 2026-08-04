@@ -985,3 +985,170 @@ describe('GPT run-store source-slot identity validation (Issue #1276 scenario 23
     })).toThrow(/not bound to ordinal/);
   });
 });
+
+function plannedStoredGptRound(): PackReviewGptRoundRecord {
+  const round = storedGptRound();
+  round.sourceSlots = round.sourceSlots.map((slot) => ({
+    slotId: slot.slotId,
+    ordinal: slot.ordinal,
+    lifecycle: 'planned',
+  }));
+  return round;
+}
+
+function terminalStoredSlot(slot: PackReviewGptRoundRecord['sourceSlots'][number]) {
+  return {
+    ...slot,
+    lifecycle: 'terminal' as const,
+    invocationId: `inv-${slot.ordinal}`,
+    attemptOrdinal: 1,
+    terminalClass: 'complete_clean',
+    terminalResult: { kind: 'completed', sendCount: 1 },
+    payload: { verdict: 'clean', findingCount: 0, findings: [] },
+  };
+}
+
+describe('GPT frozen census persistence and stale recovery (Issue #1276 r08)', () => {
+  it('rejects a self-consistent replacement census while preserving intermediate updates', () => {
+    const storeRoot = tempRoot('opk-gpt-frozen-census-');
+    const created = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1276,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      reviewRound: plannedStoredGptRound(),
+    });
+    const intermediate = plannedStoredGptRound();
+    intermediate.sourceSlots[0] = {
+      ...intermediate.sourceSlots[0]!,
+      lifecycle: 'invocation_started',
+      attemptOrdinal: 1,
+      admissionStartedAtUtc: new Date().toISOString(),
+    };
+    const updated = updatePackReviewRun(
+      created.run.id,
+      { reviewRound: intermediate },
+      { projectId: 'orchestrator-pack', storeRoot },
+    );
+    expect(updated.reviewRound?.sourceSlots[0]?.lifecycle).toBe('invocation_started');
+
+    const replacement: PackReviewGptRoundRecord = {
+      ...plannedStoredGptRound(),
+      cardinality: 1,
+      sourceSlots: [{ slotId: 'source-01', ordinal: 1, lifecycle: 'planned' }],
+    };
+    expect(() => updatePackReviewRun(
+      created.run.id,
+      { reviewRound: replacement },
+      { projectId: 'orchestrator-pack', storeRoot },
+    )).toThrow(/frozen reviewRound cardinality cannot change/);
+    expect(getPackReviewRun(created.run.id, {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+    })?.reviewRound?.sourceSlots).toHaveLength(3);
+  });
+
+  it('blocks verdict terminal settlement until every frozen source slot is terminal', () => {
+    const storeRoot = tempRoot('opk-gpt-incomplete-terminal-');
+    const round = plannedStoredGptRound();
+    round.sourceSlots[0] = terminalStoredSlot(round.sourceSlots[0]!);
+    const created = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1276,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      reviewRound: round,
+    });
+
+    expect(() => setPackReviewRunTerminal(
+      created.run.id,
+      'commented',
+      { reviewVerdict: 'findings', findingCount: 0, findings: [] },
+      { projectId: 'orchestrator-pack', storeRoot },
+    )).toThrow(/mandatory source slot source-02 is not terminal/);
+    expect(getPackReviewRun(created.run.id, {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+    })?.status).toBe('queued');
+  });
+
+  it('rejects string-coerced decision-bearing round fields', () => {
+    const storeRoot = tempRoot('opk-gpt-strict-round-types-');
+    const malformed = plannedStoredGptRound() as unknown as Record<string, unknown>;
+    malformed.cardinality = '3';
+    expect(() => createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1276,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      reviewRound: malformed as unknown as PackReviewGptRoundRecord,
+    })).toThrow(/invalid reviewRound cardinality/);
+  });
+
+  it('never opens a same-head replacement after terminal or mixed source evidence is stale', () => {
+    const variants: Array<{ name: string; round: PackReviewGptRoundRecord }> = [
+      {
+        name: 'terminal-plus-planned',
+        round: (() => {
+          const round = plannedStoredGptRound();
+          round.sourceSlots[0] = terminalStoredSlot(round.sourceSlots[0]!);
+          return round;
+        })(),
+      },
+      {
+        name: 'all-terminal-unjournaled',
+        round: (() => {
+          const round = plannedStoredGptRound();
+          round.sourceSlots = round.sourceSlots.map(terminalStoredSlot);
+          return round;
+        })(),
+      },
+    ];
+
+    for (const variant of variants) {
+      const storeRoot = tempRoot(`opk-gpt-stale-no-replacement-${variant.name}-`);
+      const staleAt = new Date(Date.now() - 11 * 60_000);
+      const created = createPackReviewRun({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        prNumber: 1276,
+        headSha: HEAD_A,
+        trustedPackRoot: repoRoot,
+        sourceRepoRoot: repoRoot,
+        reviewRound: variant.round,
+        now: staleAt,
+      });
+      updatePackReviewRun(
+        created.run.id,
+        { runnerPid: 999999 },
+        { projectId: 'orchestrator-pack', storeRoot, now: staleAt },
+      );
+      const recovered = terminalizePackReviewStaleRun(created.run.id, {
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        now: new Date(),
+      });
+      expect(recovered.run.status, variant.name).toBe('failed');
+
+      const replacement = createPackReviewRun({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        prNumber: 1276,
+        headSha: HEAD_A,
+        trustedPackRoot: repoRoot,
+        sourceRepoRoot: repoRoot,
+        reviewRound: plannedStoredGptRound(),
+      });
+      expect(replacement.created, variant.name).toBe(false);
+      expect(replacement.reused, variant.name).toBe(true);
+      expect(replacement.reason, variant.name).toBe('gpt_round_requires_settlement');
+      expect(replacement.run.id, variant.name).toBe(created.run.id);
+    }
+  });
+});
