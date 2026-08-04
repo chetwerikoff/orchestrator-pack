@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,8 @@ import {
   MAX_UNITS,
   calculateFleetObserverBudget,
   isAcceptedFleetSnapshot,
+  serializeFleetSnapshot,
+  snapshotByteLength,
   type FleetObserverSource,
 } from './fleet-observer.ts';
 import type {
@@ -97,6 +99,56 @@ class FakeFleetSource implements FleetObserverSource {
         : 'gone',
       worker: input.worker,
     };
+  }
+}
+
+class ContradictoryGenerationSource extends FakeFleetSource {
+  override findWorker(identity: RuntimeWorkerIdentity): RuntimeResult<RuntimeWorker | null> {
+    const found = super.findWorker(identity);
+    if (found.status !== 'ok' || !found.value) return found;
+    return {
+      status: 'ok',
+      value: {
+        ...found.value,
+        identity: { ...found.value.identity, generation: 'gen-contradictory' },
+      },
+    };
+  }
+}
+
+class ConcurrentFleetSource extends FakeFleetSource {
+  active = 0;
+  peak = 0;
+
+  override async readBoundedOutput(input: {
+    worker: RuntimeWorkerIdentity;
+    previousToken?: RuntimeObservationToken | null;
+  }): Promise<RuntimeResult<RuntimeBoundedOutput>> {
+    this.active += 1;
+    this.peak = Math.max(this.peak, this.active);
+    await Promise.resolve();
+    const result = super.readBoundedOutput(input);
+    this.active -= 1;
+    return result;
+  }
+}
+
+class SupersedingFleetSource extends FakeFleetSource {
+  private releaseGate: (() => void) | undefined;
+  private readonly gate = new Promise<void>((resolve) => {
+    this.releaseGate = resolve;
+  });
+
+  release(): void {
+    this.releaseGate?.();
+  }
+
+  override async readBoundedOutput(input: {
+    worker: RuntimeWorkerIdentity;
+    previousToken?: RuntimeObservationToken | null;
+  }): Promise<RuntimeResult<RuntimeBoundedOutput>> {
+    await this.gate;
+    return super.readBoundedOutput(input);
   }
 }
 
@@ -250,5 +302,135 @@ describe('S1 fleet observer', () => {
     expect(result).toMatchObject({ attempted: 0, started: 0, skipped: 0 });
     expect(result.observer?.snapshotCommitted).toBe(true);
     expect(boundary.start).not.toHaveBeenCalled();
+  });
+
+  it('covers smoke scenario 3 at the exact UTF-8 snapshot byte boundary', async () => {
+    const source = new FakeFleetSource();
+    source.add('byte-boundary');
+    const observer = observerFor(source);
+    const result = await observer.tick({ schedulerIntervalMs: 1_000 });
+    const base = serializeFleetSnapshot(result.snapshot!);
+    const exact = `${base}${' '.repeat(MAX_SNAPSHOT_BYTES - snapshotByteLength(result.snapshot!))}`;
+    const over = `${exact} `;
+
+    expect(Buffer.byteLength(exact, 'utf8')).toBe(1_048_576);
+    expect(Buffer.byteLength(over, 'utf8')).toBe(1_048_577);
+    expect(isAcceptedFleetSnapshot(exact)).toBe(true);
+    expect(isAcceptedFleetSnapshot(over)).toBe(false);
+    expect(readFileSync(observer.snapshotPath, 'utf8')).toBe(base);
+  });
+
+  it('covers smoke scenario 4 by invalidating a near-deadline publication', async () => {
+    let expired = false;
+    const source = new FakeFleetSource();
+    source.add('near-deadline');
+    const configRoot = mkdtempSync(path.join(os.tmpdir(), 'fleet-observer-deadline-'));
+    const stateRoot = mkdtempSync(path.join(os.tmpdir(), 'fleet-observer-deadline-state-'));
+    roots.push(configRoot, stateRoot);
+    const observer = new FleetObserver({
+      source,
+      configPath: path.join(configRoot, 'config.json'),
+      snapshotPath: path.join(stateRoot, 'snapshot.json'),
+      generationFactory: () => 'sg-deadline',
+      now: () => (expired ? 26 : 0),
+    });
+    const original = source.readBoundedOutput.bind(source);
+    source.readBoundedOutput = (input) => {
+      const output = original(input);
+      expired = true;
+      return output;
+    };
+
+    const result = await observer.tick({ schedulerIntervalMs: 100, phaseStartMs: 0 });
+    expect(result.snapshotCommitted).toBe(false);
+    expect(result.schedulerReturnedWithinBudget).toBe(false);
+  });
+
+  it('covers smoke scenario 6 without emitting disappearance for contradictory generation evidence', async () => {
+    const source = new ContradictoryGenerationSource();
+    source.add('contradictory', 'gen-1', 'gone');
+    const observer = observerFor(source);
+    const result = await observer.tick({ schedulerIntervalMs: 1_000 });
+
+    expect(result.snapshot?.census[0]?.class).toBe('unknown');
+    expect(result.snapshot?.census[0]?.reason).toBe('identity-contradiction');
+    expect(result.snapshot?.transitions.some((transition) => transition.reason === 'positive-gone')).toBe(false);
+  });
+
+  it('covers smoke scenario 7 with bounded deterministic fleet concurrency', async () => {
+    const source = new ConcurrentFleetSource();
+    for (let index = 0; index < 12; index += 1) source.add(`delayed-${index}`);
+    const observer = observerFor(source, { schemaVersion: 1, maxConcurrency: 3 });
+    const result = await observer.tick({ schedulerIntervalMs: 1_000 });
+
+    expect(source.peak).toBeLessThanOrEqual(3);
+    expect(result.snapshotCommitted).toBe(true);
+    expect(result.snapshot?.census).toHaveLength(12);
+    expect(result.schedulerReturnedWithinBudget).toBe(true);
+  });
+
+  it('covers smoke scenario 9 with a restart-safe unit reference collision', async () => {
+    const source = new FakeFleetSource();
+    source.add('restart-worker');
+    const root = mkdtempSync(path.join(os.tmpdir(), 'fleet-observer-restart-'));
+    roots.push(root);
+    const configPath = path.join(root, 'config.json');
+    const snapshotPath = path.join(root, 'snapshot.json');
+    const first = new FleetObserver({
+      source,
+      configPath,
+      snapshotPath,
+      generationFactory: () => 'sg-before-restart',
+    });
+    const firstResult = await first.tick({ schedulerIntervalMs: 1_000 });
+    writeFileSync(configPath, JSON.stringify({
+      schemaVersion: 1,
+      exceptions: [{ kind: 'HELD', schedulerGeneration: 'sg-before-restart', unitRef: 'u-000001' }],
+    }));
+    const restarted = new FleetObserver({
+      source,
+      configPath,
+      snapshotPath,
+      generationFactory: () => 'sg-after-restart',
+    });
+    const restartedResult = await restarted.tick({ schedulerIntervalMs: 1_000 });
+
+    expect(firstResult.snapshot?.census[0]?.unitRef).toBe('u-000001');
+    expect(restarted.schedulerGeneration).toBe('sg-after-restart');
+    expect(restartedResult.snapshot?.census[0]?.unitRef).toBe('u-000001');
+    expect(restartedResult.snapshot?.census[0]?.class).toBe('idle');
+    expect(restartedResult.exceptionCollisionRejected).toBe(true);
+  });
+
+  it('covers smoke scenario 11 by retaining the prior result on publication failure', async () => {
+    const source = new FakeFleetSource();
+    source.add('publication-fault');
+    const observer = observerFor(source);
+    const accepted = await observer.tick({ schedulerIntervalMs: 1_000 });
+    rmSync(observer.snapshotPath);
+    mkdirSync(observer.snapshotPath);
+    const failed = await observer.tick({ schedulerIntervalMs: 1_000 });
+
+    expect(accepted.snapshotCommitted).toBe(true);
+    expect(failed.snapshotCommitted).toBe(false);
+    expect(failed.status).toBe('failed');
+    expect(failed.reason).toBe('snapshot-publication-failed');
+    expect(failed.snapshot?.census).toEqual(accepted.snapshot?.census);
+  });
+
+  it('covers smoke scenario 12 by rejecting stale completion after supersession', async () => {
+    const source = new SupersedingFleetSource();
+    source.add('stale-completion');
+    const observer = observerFor(source, undefined, 'sg-stale');
+    const firstPromise = observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 1 });
+    await Promise.resolve();
+    const secondPromise = observer.tick({ schedulerIntervalMs: 1_000, tickSequence: 2 });
+    source.release();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    expect(first.staleCompletionRejected).toBe(true);
+    expect(first.snapshotCommitted).toBe(false);
+    expect(second.snapshotCommitted).toBe(true);
+    expect(second.snapshot?.tickSequence).toBe(2);
   });
 });
