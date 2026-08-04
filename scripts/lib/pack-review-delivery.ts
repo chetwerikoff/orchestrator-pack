@@ -52,6 +52,20 @@ export function packReviewStaleRequiredStatusIdempotencyKey(run: PackReviewRunRe
   return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:stale-runner-disappeared`;
 }
 
+function packReviewRequiredStatusOutcomeReason(run: PackReviewRunRecord): string | null {
+  if (hasPersistedPackReviewVerdict(run) || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)) {
+    const payload = packReviewJournaledPayload(run);
+    if (!payload) return null;
+    return `status_${classifyPackReviewPayload(payload).requiredStatus}_restored`;
+  }
+  if (run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled') {
+    return trim(run.failureReason) === 'runner_disappeared_stale'
+      ? 'status_stale_runner_disappeared'
+      : 'status_unfinished_execution';
+  }
+  return PACK_REVIEW_ACTIVE_STATUSES.has(run.status) ? 'status_pending' : null;
+}
+
 export function packReviewRequiredStatusProjectionKey(run: PackReviewRunRecord): string | null {
   const expectedKey = hasPersistedPackReviewVerdict(run)
     || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)
@@ -68,6 +82,7 @@ export function packReviewRequiredStatusProjectionKey(run: PackReviewRunRecord):
     failureReason: trim(run.failureReason),
     reviewVerdict: run.reviewVerdict ?? null,
     findingCount: run.findingCount ?? null,
+    outcomeReason: packReviewRequiredStatusOutcomeReason(run),
     journalState: run.journalOutcome?.state ?? null,
     journalKey: run.journalOutcome?.idempotencyKey ?? null,
   });
@@ -669,11 +684,14 @@ export async function restorePackReviewAuthoritativeRequiredStatus(
       : PACK_REVIEW_ACTIVE_STATUSES.has(run.status)
         ? packReviewPendingRequiredStatusIdempotencyKey(run)
         : null;
+  const expectedOutcomeReason = packReviewRequiredStatusOutcomeReason(run);
   const existingOutcome = run.deliveryOutcomes?.requiredStatus;
   if (!options.forceRepublish
     && expectedKey
+    && expectedOutcomeReason
     && existingOutcome?.state === 'succeeded'
-    && existingOutcome.idempotencyKey === expectedKey) {
+    && existingOutcome.idempotencyKey === expectedKey
+    && existingOutcome.reason === expectedOutcomeReason) {
     return existingOutcome;
   }
   if (hasPersistedPackReviewVerdict(run)) {

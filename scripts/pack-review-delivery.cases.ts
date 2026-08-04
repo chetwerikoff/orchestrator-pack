@@ -1167,6 +1167,68 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
       .toContain(':unfinished:reviewer_process_timeout');
   });
 
+  it('rechecks the effective terminal status when finding severity changes', async () => {
+    const storeRoot = tempRoot('opk-1307-terminal-projection-race-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+    const newer = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-terminal-projection-race',
+      startReason: 'terminal-projection-race',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+    updatePackReviewRun(newer.run.id, {
+      status: 'commented',
+      latestRunStatus: 'commented',
+      reviewVerdict: 'findings',
+      findingCount: 1,
+      findings: [{ severity: 'warning' }],
+      journalOutcome: {
+        state: 'persisted',
+        recordedAtUtc: '2026-08-04T04:00:00.000Z',
+        reason: 'verdict_persisted',
+        idempotencyKey: `verdict:${newer.run.id}:${STALE_HEAD_A}`,
+        attempts: 1,
+      },
+    }, { projectId: 'orchestrator-pack', storeRoot });
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    let transitioned = false;
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+      fixturePauseAfterRestoreRead: async (run) => {
+        if (transitioned) return;
+        transitioned = true;
+        updatePackReviewRun(run.id, {
+          findings: [{ severity: 'blocking' }],
+        }, { projectId: 'orchestrator-pack', storeRoot });
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      runId: staleRunId,
+      statusReconciled: true,
+      reason: 'newer_run_authoritative',
+    });
+    expect(writes.map((request) => request.state)).toEqual(['success', 'failure']);
+    expect(getPackReviewRun(newer.run.id, { projectId: 'orchestrator-pack', storeRoot })
+      ?.deliveryOutcomes.requiredStatus?.reason)
+      .toBe('status_failure_restored');
+  });
+
   it('force-republishes newer authority after a superseding stale write', async () => {
     const storeRoot = tempRoot('opk-1307-force-republish-');
     const run = createRun(storeRoot);
