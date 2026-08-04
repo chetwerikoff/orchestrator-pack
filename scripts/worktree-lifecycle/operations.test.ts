@@ -79,6 +79,8 @@ interface RunnerState {
   terminals?: unknown[];
   agents?: unknown[];
   openPrs?: Array<{ number: number; headRefName: string }>;
+  foreignOrcaRows?: object[];
+  foreignOrcaRowsAfterTeardown?: object[];
   removalResult?: ProcessResult;
   standardTeardownResult?: ProcessResult;
   standardTeardownEffect?: 'both-absent' | 'git-only-absent' | 'none';
@@ -115,6 +117,7 @@ function orcaPayload(paths: Paths, state: RunnerState, includeAgents = false): s
           isArchived: false,
         },
         ...targetOrca(paths, state, includeAgents),
+        ...(state.foreignOrcaRows ?? []),
       ],
     },
   });
@@ -201,6 +204,9 @@ function runner(paths: Paths, state: RunnerState): CommandRunner {
       } else if (state.standardTeardownEffect === 'git-only-absent') {
         state.gitPresent = false;
       }
+      if (state.foreignOrcaRowsAfterTeardown) {
+        state.foreignOrcaRows = state.foreignOrcaRowsAfterTeardown;
+      }
       return state.standardTeardownResult ?? result({ stdout: JSON.stringify({ outcome: 'reaped_clean' }) });
     }
     throw new Error(`unexpected invocation: ${invocation.command} ${args.join(' ')}`);
@@ -215,6 +221,19 @@ function state(overrides: Partial<RunnerState> = {}): RunnerState {
     ignoredReads: 0,
     invocations: [],
     ...overrides,
+  };
+}
+
+function foreignRow(paths: Paths, suffix: string): object {
+  return {
+    path: join(paths.root, 'foreign-repository', suffix),
+    head: HEAD,
+    branch: `refs/heads/${BRANCH}`,
+    linkedPR: 1300,
+    repoId: 'foreign-repository',
+    isMainWorktree: false,
+    isArchived: false,
+    agents: [{ state: 'working', interrupted: false }],
   };
 }
 
@@ -247,6 +266,22 @@ describe('dual census authority', () => {
     const paths = fixture();
     const census = collectCensus(paths.expected, operations(paths, state()));
     expect(census.classification.classification).toBe('exact_git_only');
+  });
+
+  it('ignores matching PR, branch, and active agents in a foreign repository', () => {
+    const paths = fixture();
+    const value = state({ foreignOrcaRows: [foreignRow(paths, 'active')] });
+    const report = runLifecycle({
+      expected: paths.expected,
+      context: 'explicit-recovery',
+      apply: false,
+      operations: operations(paths, value),
+    });
+
+    expect(report).toMatchObject({
+      outcome: 'git_only_recovery_eligible',
+      gates: { runtimeAgentsAbsent: true, freshRecheck: true },
+    });
   });
 
   it('fails closed when repository authority cannot be proven', () => {
@@ -407,6 +442,27 @@ describe('standard teardown post-effect settlement', () => {
   it('reports complete only after dual absence is proven', () => {
     const paths = fixture();
     const value = state({ orcaPresent: true, standardTeardownEffect: 'both-absent' });
+    const report = runLifecycle({
+      expected: paths.expected,
+      context: 'post-merge-cleanup',
+      apply: true,
+      operations: operations(paths, value),
+    });
+
+    expect(report).toMatchObject({
+      outcome: 'cleanup_complete',
+      postClassification: { classification: 'absent' },
+    });
+  });
+
+  it('ignores foreign-repository inventory changes during post-effect settlement', () => {
+    const paths = fixture();
+    const value = state({
+      orcaPresent: true,
+      foreignOrcaRows: [foreignRow(paths, 'before')],
+      foreignOrcaRowsAfterTeardown: [foreignRow(paths, 'after')],
+      standardTeardownEffect: 'both-absent',
+    });
     const report = runLifecycle({
       expected: paths.expected,
       context: 'post-merge-cleanup',
