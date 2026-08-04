@@ -58,7 +58,7 @@ import {
   resolvePackReviewRunOrder,
   heartbeatPackReviewRun,
   isPackReviewRunStale,
-  isPackReviewStaleTerminalRun,
+  isPackReviewUnfinishedTerminalRun,
   listPackReviewRunRecordsRaw,
   listPackReviewRuns,
   packReviewLogsDir,
@@ -803,8 +803,8 @@ export async function reconcileStalePackReviewRuns(
 
   for (const candidate of records) {
     const activeStale = isPackReviewRunStale(candidate);
-    const staleTerminal = isPackReviewStaleTerminalRun(candidate);
-    if (!activeStale && !staleTerminal) continue;
+    const unfinishedTerminal = isPackReviewUnfinishedTerminalRun(candidate);
+    if (!activeStale && !unfinishedTerminal) continue;
 
     const identity = await resolvePackReviewRunCanonicalRepository(candidate, resolveSlug);
     if (!identity.ok || identity.slug !== repoSlug) {
@@ -836,7 +836,7 @@ export async function reconcileStalePackReviewRuns(
       run = getPackReviewRun(run.id, { projectId, storeRoot }) ?? terminal.run;
     }
 
-    if (!isPackReviewStaleTerminalRun(run)) continue;
+    if (!isPackReviewUnfinishedTerminalRun(run)) continue;
 
     const currentOrder = resolvePackReviewRunOrder(records, run);
     if (currentOrder.kind === 'ambiguous') {
@@ -1765,7 +1765,8 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     if (run && !terminal) {
       try {
         const persisted = getPackReviewRun(run.id, { projectId, storeRoot });
-        if (!persisted || !hasPersistedPackReviewVerdict(persisted)) {
+        if (!persisted
+          || (!hasPersistedPackReviewVerdict(persisted) && !isPackReviewUnfinishedTerminalRun(persisted))) {
           await recordPackReviewUnfinishedTerminalStatus({
             run: persisted ?? run,
             status: 'failed',
