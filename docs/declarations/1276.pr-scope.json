@@ -8,6 +8,7 @@
     "package.json",
     "scripts/lib/pack-gpt-reviewer.ts",
     "scripts/lib/pack-review-run-store.ts",
+    "scripts/lib/worker-smoke-core-base.ts",
     "scripts/pack-gpt-browser-path.test.ts",
     "scripts/pack-gpt-reviewer.test.ts",
     "scripts/pack-review-runner-gpt.test.ts",
@@ -16,6 +17,7 @@
     "scripts/pack-review-state.ts",
     "scripts/pr-scope-declaration.ts",
     "scripts/run-pack-review-gpt.ts",
+    "scripts/worker-smoke.test.ts",
     "tests/fixtures/pack-gpt-browser-turn-harness.mjs"
   ],
   "denylist": [
@@ -40,6 +42,7 @@
     "scripts/lib/pack-gpt-reviewer.ts",
     "scripts/lib/pack-review-delivery.ts",
     "scripts/lib/pack-review-run-store.ts",
+    "scripts/lib/worker-smoke-core-base.ts",
     "scripts/pack-gpt-browser-path.test.ts",
     "scripts/pack-gpt-reviewer.test.ts",
     "scripts/pack-pr-review-contract.test.ts",
@@ -53,7 +56,8 @@
     "scripts/pr2-foundation/scheduler.ts",
     "scripts/review-delivery.test.ts",
     "scripts/run-pack-review-gpt.ts",
+    "scripts/worker-smoke.test.ts",
     "tests/fixtures/pack-gpt-browser-turn-harness.mjs"
   ],
-  "source_revision": "6467533d2757db7f00efa591356c3a58f44008ec"
+  "source_revision": "42d967eb0489a3f31c99b550a285d432043162ab"
 }
