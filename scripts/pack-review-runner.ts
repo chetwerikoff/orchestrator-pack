@@ -804,17 +804,8 @@ export async function reconcileStalePackReviewRuns(
   const repoSlug = trim(input.repoSlug);
   if (!repoSlug) throw new Error('pack review stale reconciliation requires a canonical repository slug');
   const resolveSlug = input.resolveRepositorySlug ?? resolveRepositorySlug;
-  let records = listPackReviewRunRecordsRaw({ projectId, storeRoot });
+  const records = listPackReviewRunRecordsRaw({ projectId, storeRoot });
   const results: Array<Record<string, unknown>> = [];
-
-  for (const candidate of records) {
-    if (candidate.canonicalRepository) continue;
-    const identity = await resolvePackReviewRunCanonicalRepository(candidate, resolveSlug);
-    if (identity.ok && identity.slug === repoSlug) {
-      updatePackReviewRun(candidate.id, { canonicalRepository: identity.slug }, { projectId, storeRoot });
-    }
-  }
-  records = listPackReviewRunRecordsRaw({ projectId, storeRoot });
 
   for (const candidate of records) {
     const activeStale = isPackReviewRunStale(candidate);

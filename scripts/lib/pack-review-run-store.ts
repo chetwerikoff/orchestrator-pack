@@ -249,8 +249,8 @@ function samePackReviewRunIdentity(left: PackReviewRunRecord, right: PackReviewR
     ?? canonicalRepositoryFromRunKey(left.key, left.prNumber, left.targetSha);
   const rightRepository = right.canonicalRepository
     ?? canonicalRepositoryFromRunKey(right.key, right.prNumber, right.targetSha);
-  if (leftRepository || rightRepository) {
-    return Boolean(leftRepository && rightRepository && leftRepository === rightRepository);
+  if (leftRepository && rightRepository) {
+    return leftRepository === rightRepository;
   }
   if (left.sourceRepoRoot && right.sourceRepoRoot) {
     return resolve(left.sourceRepoRoot) === resolve(right.sourceRepoRoot);

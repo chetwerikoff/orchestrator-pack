@@ -818,7 +818,7 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
     });
     expect(result.results[0]).toMatchObject({
       runId: staleRunId,
-      statusReconciled: false,
+      statusReconciled: true,
       reason: 'newer_run_authoritative',
     });
     expect(JSON.parse(readFileSync(newerCapture, 'utf8')).state).toBe('pending');
