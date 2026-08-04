@@ -28,6 +28,7 @@ import {
   type CommandRunner,
   type LifecycleOperations,
   type LifecycleTerminalReport,
+  type TerminalEvidence,
 } from './operations.ts';
 
 export const WORKTREE_LIFECYCLE_EXCLUSION_PATH = resolve(
@@ -35,50 +36,60 @@ export const WORKTREE_LIFECYCLE_EXCLUSION_PATH = resolve(
   `${['opk', 'worktree', 'teardown'].join('-')}.lock`,
 );
 
-const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
-
 export interface CreateContinuationOperations {
   readonly runner?: CommandRunner;
   readonly orcaExecutable?: string;
   readonly lockPath?: string;
-  readonly replacementToken?: () => string;
 }
 
 export interface InventorySnapshot {
   readonly ok: boolean;
   readonly gitRows: readonly GitWorktreeRow[];
   readonly orcaRows: readonly OrcaWorktreeRow[];
+  readonly terminals: readonly TerminalEvidence[];
   readonly errors: readonly string[];
+}
+
+interface CommandSummary {
+  readonly outcome: ProcessResult['outcome'];
+  readonly ok: boolean;
+  readonly exitCode: number | null;
+  readonly timedOut: boolean;
+  readonly acknowledged: boolean;
+  readonly error?: string;
 }
 
 export interface CreateAttemptReport {
   readonly kind: 'initial' | 'replacement';
   readonly name: string;
-  readonly command: {
-    readonly outcome: ProcessResult['outcome'];
-    readonly ok: boolean;
-    readonly exitCode: number | null;
-    readonly timedOut: boolean;
-    readonly acknowledged: boolean;
-    readonly error?: string;
-  };
+  readonly command: CommandSummary;
   readonly newGitPaths: readonly string[];
   readonly newOrcaPaths: readonly string[];
   readonly candidateReports: readonly LifecycleTerminalReport[];
   readonly inventoryErrors: readonly string[];
 }
 
+export interface TerminalSpawnReport {
+  readonly command: CommandSummary;
+  readonly beforeHandles: readonly string[];
+  readonly afterHandles: readonly string[];
+  readonly readBacks: readonly LifecycleTerminalReport[];
+}
+
 export interface WorktreeCreateContinuationReport {
-  readonly schema: 'orchestrator-pack/worktree-create-continuation/v1';
-  readonly outcome: 'ready_to_spawn' | 'task_degraded';
+  readonly schema: 'orchestrator-pack/worktree-create-continuation/v2';
+  readonly outcome: 'worker_spawned' | 'task_degraded';
   readonly pipelineContinues: true;
-  readonly terminalSpawnAuthorized: boolean;
+  readonly terminalSpawnCompleted: boolean;
+  readonly terminalSpawnAuthorized: false;
   readonly issueNumber: number;
   readonly expectedHead: string;
   readonly resumedExisting: boolean;
   readonly selected?: ExpectedWorktreeIdentity;
   readonly selectedReadBack?: LifecycleTerminalReport;
+  readonly terminal?: TerminalEvidence;
   readonly attempts: readonly CreateAttemptReport[];
+  readonly terminalSpawn?: TerminalSpawnReport;
   readonly effects: readonly string[];
   readonly error?: string;
 }
@@ -112,6 +123,17 @@ function defaultRunner(invocation: CommandInvocation): ProcessResult {
 function invocationError(result: ProcessResult, invocation: CommandInvocation): string {
   const fallback = `${invocation.command} ${invocation.args.join(' ')} exited ${String(result.exitCode)}`;
   return result.stderr.trim() || result.error || fallback;
+}
+
+function summarizeCommand(result: ProcessResult, invocation: CommandInvocation): CommandSummary {
+  return {
+    outcome: result.outcome,
+    ok: result.ok,
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    acknowledged: responseAcknowledged(result),
+    ...(!result.ok ? { error: invocationError(result, invocation) } : {}),
+  };
 }
 
 function processStarttime(pid: number): string | null {
@@ -195,6 +217,13 @@ function lifecycleOperations(operations: CreateContinuationOperations): Lifecycl
   };
 }
 
+function canonicalNames(issueNumber: number): { primary: string; replacement: string } {
+  return {
+    primary: `issue-${String(issueNumber)}`,
+    replacement: `issue-${String(issueNumber)}-replacement`,
+  };
+}
+
 function collectInventory(input: {
   repositoryRoot: string;
   issueNumber: number;
@@ -214,7 +243,7 @@ function collectInventory(input: {
   const census = collectCensus(probe, lifecycleOperations(input.operations));
   const evidence = census.classification.evidence;
   const errors = [...census.errors];
-  if (evidence.git.status !== 'ok' && !errors.some((item) => item.includes('git'))) {
+  if (evidence.git.status !== 'ok' && !errors.some((item) => item.toLowerCase().includes('git'))) {
     errors.push(evidence.git.error ?? 'git inventory unavailable');
   }
   if (evidence.orca.status !== 'ok' && !errors.some((item) => item.toLowerCase().includes('orca'))) {
@@ -224,6 +253,7 @@ function collectInventory(input: {
     ok: evidence.git.status === 'ok' && evidence.orca.status === 'ok' && errors.length === 0,
     gitRows: evidence.git.rows,
     orcaRows: evidence.orca.rows,
+    terminals: census.terminals,
     errors,
   };
 }
@@ -258,6 +288,10 @@ function expectedFromRow(
   return null;
 }
 
+function targetTerminals(report: LifecycleTerminalReport): TerminalEvidence[] {
+  return [...(report.terminals ?? [])];
+}
+
 function evaluateCandidates(input: {
   rows: readonly GitWorktreeRow[];
   repositoryRoot: string;
@@ -278,20 +312,20 @@ function evaluateCandidates(input: {
       operations: lifecycleOperations(input.operations),
     });
     reports.push(first);
-    if (first.outcome !== 'ready_to_spawn'
+    if (first.outcome !== 'exact_dual_observed'
       || first.classification.classification !== 'exact_dual'
-      || !first.decision.terminalSpawnAuthorized) continue;
+      || targetTerminals(first).length !== 0) continue;
     const fresh = runLifecycle({
-      expected,
+      expected: first.classification.expected,
       context: 'post-create',
       apply: false,
       operations: lifecycleOperations(input.operations),
     });
     reports.push(fresh);
-    if (fresh.outcome === 'ready_to_spawn'
+    if (fresh.outcome === 'exact_dual_observed'
       && fresh.classification.classification === 'exact_dual'
-      && fresh.decision.terminalSpawnAuthorized) {
-      ready.push({ expected, report: fresh });
+      && targetTerminals(fresh).length === 0) {
+      ready.push({ expected: fresh.classification.expected, report: fresh });
     }
   }
   return ready.length === 1 ? { reports, selected: ready[0] } : { reports };
@@ -326,6 +360,27 @@ function createInvocation(input: {
       '--json',
     ],
     cwd: input.repositoryRoot,
+  };
+}
+
+function terminalInvocation(input: {
+  candidate: SelectedCandidate;
+  title: string;
+  command: string;
+  focus: boolean;
+  orcaExecutable: string;
+}): CommandInvocation {
+  return {
+    command: input.orcaExecutable,
+    args: [
+      'terminal', 'create',
+      '--worktree', `path:${input.candidate.expected.path}`,
+      '--title', input.title,
+      '--command', input.command,
+      ...(input.focus ? ['--focus'] : []),
+      '--json',
+    ],
+    cwd: input.candidate.expected.repositoryRoot,
   };
 }
 
@@ -371,14 +426,7 @@ function runCreateAttempt(input: {
     report: {
       kind: input.kind,
       name: input.name,
-      command: {
-        outcome: command.outcome,
-        ok: command.ok,
-        exitCode: command.exitCode,
-        timedOut: command.timedOut,
-        acknowledged: responseAcknowledged(command),
-        ...(!command.ok ? { error: invocationError(command, invocation) } : {}),
-      },
+      command: summarizeCommand(command, invocation),
       newGitPaths: newGitRows.map((row) => row.path).sort(),
       newOrcaPaths: newOrcaRows.map((row) => row.path).sort(),
       candidateReports: evaluated.reports,
@@ -389,25 +437,93 @@ function runCreateAttempt(input: {
   };
 }
 
-function ready(input: {
+function terminalHandles(report: LifecycleTerminalReport): string[] {
+  return targetTerminals(report)
+    .map((row) => row.handle)
+    .filter((handle): handle is string => Boolean(handle))
+    .sort();
+}
+
+function runTerminalSpawn(input: {
+  candidate: SelectedCandidate;
+  title: string;
+  command: string;
+  focus: boolean;
+  operations: CreateContinuationOperations;
+}): { report: TerminalSpawnReport; selectedReadBack: LifecycleTerminalReport; terminal?: TerminalEvidence } {
+  const runner = input.operations.runner ?? defaultRunner;
+  const beforeHandles = terminalHandles(input.candidate.report);
+  const invocation = terminalInvocation({
+    candidate: input.candidate,
+    title: input.title,
+    command: input.command,
+    focus: input.focus,
+    orcaExecutable: input.operations.orcaExecutable ?? resolveOrcaExecutable(),
+  });
+  const command = runner(invocation);
+  const first = runLifecycle({
+    expected: input.candidate.expected,
+    context: 'post-create',
+    apply: false,
+    operations: lifecycleOperations(input.operations),
+  });
+  const fresh = runLifecycle({
+    expected: first.classification.expected,
+    context: 'post-create',
+    apply: false,
+    operations: lifecycleOperations(input.operations),
+  });
+  const afterHandles = terminalHandles(fresh);
+  const newHandles = afterHandles.filter((handle) => !beforeHandles.includes(handle));
+  const firstHandles = terminalHandles(first);
+  const terminal = newHandles.length === 1
+    ? targetTerminals(fresh).find((row) => row.handle === newHandles[0])
+    : undefined;
+  const proven = first.outcome === 'exact_dual_observed'
+    && fresh.outcome === 'exact_dual_observed'
+    && first.classification.classification === 'exact_dual'
+    && fresh.classification.classification === 'exact_dual'
+    && newHandles.length === 1
+    && firstHandles.length === beforeHandles.length + 1
+    && firstHandles[0] === afterHandles[0]
+    && Boolean(terminal);
+  return {
+    report: {
+      command: summarizeCommand(command, invocation),
+      beforeHandles,
+      afterHandles,
+      readBacks: [first, fresh],
+    },
+    selectedReadBack: fresh,
+    ...(proven && terminal ? { terminal } : {}),
+  };
+}
+
+function spawned(input: {
   issueNumber: number;
   expectedHead: string;
   resumedExisting: boolean;
   selected: SelectedCandidate;
+  selectedReadBack: LifecycleTerminalReport;
+  terminal: TerminalEvidence;
   attempts: readonly CreateAttemptReport[];
+  terminalSpawn: TerminalSpawnReport;
   effects: readonly string[];
 }): WorktreeCreateContinuationReport {
   return {
-    schema: 'orchestrator-pack/worktree-create-continuation/v1',
-    outcome: 'ready_to_spawn',
+    schema: 'orchestrator-pack/worktree-create-continuation/v2',
+    outcome: 'worker_spawned',
     pipelineContinues: true,
-    terminalSpawnAuthorized: true,
+    terminalSpawnCompleted: true,
+    terminalSpawnAuthorized: false,
     issueNumber: input.issueNumber,
     expectedHead: input.expectedHead,
     resumedExisting: input.resumedExisting,
     selected: input.selected.expected,
-    selectedReadBack: input.selected.report,
+    selectedReadBack: input.selectedReadBack,
+    terminal: input.terminal,
     attempts: input.attempts,
+    terminalSpawn: input.terminalSpawn,
     effects: input.effects,
   };
 }
@@ -415,36 +531,41 @@ function ready(input: {
 function degraded(input: {
   issueNumber: number;
   expectedHead: string;
+  resumedExisting?: boolean;
+  selected?: ExpectedWorktreeIdentity;
+  selectedReadBack?: LifecycleTerminalReport;
   attempts?: readonly CreateAttemptReport[];
+  terminalSpawn?: TerminalSpawnReport;
   effects?: readonly string[];
   error: string;
 }): WorktreeCreateContinuationReport {
   return {
-    schema: 'orchestrator-pack/worktree-create-continuation/v1',
+    schema: 'orchestrator-pack/worktree-create-continuation/v2',
     outcome: 'task_degraded',
     pipelineContinues: true,
+    terminalSpawnCompleted: false,
     terminalSpawnAuthorized: false,
     issueNumber: input.issueNumber,
     expectedHead: input.expectedHead,
-    resumedExisting: false,
+    resumedExisting: input.resumedExisting ?? false,
+    ...(input.selected ? { selected: input.selected } : {}),
+    ...(input.selectedReadBack ? { selectedReadBack: input.selectedReadBack } : {}),
     attempts: input.attempts ?? [],
+    ...(input.terminalSpawn ? { terminalSpawn: input.terminalSpawn } : {}),
     effects: input.effects ?? [],
     error: input.error,
   };
 }
 
-function replacementName(name: string, operations: CreateContinuationOperations): string {
-  const raw = (operations.replacementToken ?? randomUUID)();
-  const token = raw.replace(/[^A-Za-z0-9]/g, '').slice(0, 10) || 'bounded';
-  const suffix = `-replacement-${token}`;
-  return `${name.slice(0, Math.max(1, 80 - suffix.length))}${suffix}`;
+function issueMarker(value: string | undefined, issueNumber: number): boolean {
+  if (!value) return false;
+  return new RegExp(`(?:^|[^0-9])${String(issueNumber)}(?:[^0-9]|$)`).test(value);
 }
 
 function relatedExistingRows(input: {
   snapshot: InventorySnapshot;
   issueNumber: number;
   expectedHead: string;
-  primaryName: string;
   repositoryRoot: string;
 }): GitWorktreeRow[] {
   const issuePaths = new Set(
@@ -452,21 +573,76 @@ function relatedExistingRows(input: {
       .filter((row) => row.linkedIssue === input.issueNumber)
       .map((row) => row.path),
   );
-  const replacementPrefix = `${input.primaryName}-replacement-`;
   return input.snapshot.gitRows.filter((row) => row.path !== input.repositoryRoot
     && row.headSha === input.expectedHead
     && (issuePaths.has(row.path)
-      || row.branchName === input.primaryName
-      || row.branchName?.startsWith(replacementPrefix)
-      || basename(row.path) === input.primaryName
-      || basename(row.path).startsWith(replacementPrefix)));
+      || issueMarker(row.branchName, input.issueNumber)
+      || issueMarker(basename(row.path), input.issueNumber)));
+}
+
+function isReplacementIdentity(row: { path: string; branchName?: string }, issueNumber: number): boolean {
+  return issueMarker(row.branchName, issueNumber) || issueMarker(basename(row.path), issueNumber)
+    ? /replacement/i.test(`${row.branchName ?? ''} ${basename(row.path)}`)
+    : false;
+}
+
+function issueStateHasTerminal(snapshot: InventorySnapshot, paths: ReadonlySet<string>): boolean {
+  return snapshot.terminals.some((terminal) => paths.has(terminal.worktreePath));
+}
+
+function spawnOrDegrade(input: {
+  candidate: SelectedCandidate;
+  resumedExisting: boolean;
+  issueNumber: number;
+  expectedHead: string;
+  terminalTitle: string;
+  terminalCommand: string;
+  focus: boolean;
+  attempts: readonly CreateAttemptReport[];
+  effects: readonly string[];
+  operations: CreateContinuationOperations;
+}): WorktreeCreateContinuationReport {
+  const spawnedTerminal = runTerminalSpawn({
+    candidate: input.candidate,
+    title: input.terminalTitle,
+    command: input.terminalCommand,
+    focus: input.focus,
+    operations: input.operations,
+  });
+  const effects = [...input.effects, 'orca terminal create attempted'];
+  if (!spawnedTerminal.terminal) {
+    return degraded({
+      issueNumber: input.issueNumber,
+      expectedHead: input.expectedHead,
+      resumedExisting: input.resumedExisting,
+      selected: input.candidate.expected,
+      selectedReadBack: spawnedTerminal.selectedReadBack,
+      attempts: input.attempts,
+      terminalSpawn: spawnedTerminal.report,
+      effects,
+      error: 'terminal create outcome was not proven as exactly one new handle under the lifecycle exclusion',
+    });
+  }
+  return spawned({
+    issueNumber: input.issueNumber,
+    expectedHead: input.expectedHead,
+    resumedExisting: input.resumedExisting,
+    selected: input.candidate,
+    selectedReadBack: spawnedTerminal.selectedReadBack,
+    terminal: spawnedTerminal.terminal,
+    attempts: input.attempts,
+    terminalSpawn: spawnedTerminal.report,
+    effects,
+  });
 }
 
 export function runCreateContinuation(input: {
   readonly repositoryRoot: string;
   readonly issueNumber: number;
   readonly expectedHead: string;
-  readonly name: string;
+  readonly terminalTitle: string;
+  readonly terminalCommand: string;
+  readonly focus?: boolean;
   readonly operations?: CreateContinuationOperations;
 }): WorktreeCreateContinuationReport {
   const operations = input.operations ?? {};
@@ -475,9 +651,9 @@ export function runCreateContinuation(input: {
   if (!Number.isInteger(input.issueNumber) || input.issueNumber <= 0) {
     throw new TypeError('issueNumber must be a positive integer');
   }
-  if (!NAME_PATTERN.test(input.name)) {
-    throw new TypeError('name must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/');
-  }
+  if (!input.terminalTitle.trim()) throw new TypeError('terminalTitle must be non-empty');
+  if (!input.terminalCommand.trim()) throw new TypeError('terminalCommand must be non-empty');
+  const names = canonicalNames(input.issueNumber);
   const lockPath = operations.lockPath ?? WORKTREE_LIFECYCLE_EXCLUSION_PATH;
   const lock = acquireLifecycleLock(lockPath);
   if (!lock) {
@@ -493,7 +669,7 @@ export function runCreateContinuation(input: {
       repositoryRoot,
       issueNumber: input.issueNumber,
       expectedHead,
-      probeName: input.name,
+      probeName: names.primary,
       operations,
     });
     if (!snapshot.ok) {
@@ -504,13 +680,29 @@ export function runCreateContinuation(input: {
       });
     }
 
-    const relatedRows = relatedExistingRows({
+    let relatedRows = relatedExistingRows({
       snapshot,
       issueNumber: input.issueNumber,
       expectedHead,
-      primaryName: input.name,
       repositoryRoot,
     });
+    const issueOrcaRows = snapshot.orcaRows.filter((row) => row.linkedIssue === input.issueNumber);
+    const relatedPaths = new Set([...relatedRows.map((row) => row.path), ...issueOrcaRows.map((row) => row.path)]);
+    if (issueStateHasTerminal(snapshot, relatedPaths)) {
+      return degraded({
+        issueNumber: input.issueNumber,
+        expectedHead,
+        error: 'an existing or ambiguous Issue-family terminal prevents another worker spawn',
+      });
+    }
+    if (relatedRows.length > 1 || issueOrcaRows.length > 1) {
+      return degraded({
+        issueNumber: input.issueNumber,
+        expectedHead,
+        error: 'multiple pre-existing Issue-family candidates are disputed; no additional create is authorized',
+      });
+    }
+
     const existing = evaluateCandidates({
       rows: relatedRows,
       repositoryRoot,
@@ -519,32 +711,36 @@ export function runCreateContinuation(input: {
       operations,
     });
     if (existing.selected) {
-      return ready({
+      return spawnOrDegrade({
+        candidate: existing.selected,
+        resumedExisting: true,
         issueNumber: input.issueNumber,
         expectedHead,
-        resumedExisting: true,
-        selected: existing.selected,
+        terminalTitle: input.terminalTitle,
+        terminalCommand: input.terminalCommand,
+        focus: input.focus ?? true,
         attempts: [],
         effects: [],
+        operations,
       });
     }
 
-    const issueOrcaRows = snapshot.orcaRows.filter((row) => row.linkedIssue === input.issueNumber);
-    if (relatedRows.length > 1 || issueOrcaRows.length > 1) {
+    const preexistingReplacement = relatedRows.some((row) => isReplacementIdentity(row, input.issueNumber))
+      || issueOrcaRows.some((row) => isReplacementIdentity(row, input.issueNumber));
+    if (preexistingReplacement) {
       return degraded({
         issueNumber: input.issueNumber,
         expectedHead,
-        error: 'multiple pre-existing primary/replacement candidates are disputed; no third create is authorized',
+        error: 'a pre-existing disputed replacement is preserved; no third create is authorized',
       });
     }
 
     const attempts: CreateAttemptReport[] = [];
     const effects: string[] = [];
-    const hasIssueOrPrimaryState = relatedRows.length > 0 || issueOrcaRows.length > 0;
-    if (!hasIssueOrPrimaryState) {
+    if (relatedRows.length === 0 && issueOrcaRows.length === 0) {
       const initial = runCreateAttempt({
         kind: 'initial',
-        name: input.name,
+        name: names.primary,
         repositoryRoot,
         issueNumber: input.issueNumber,
         expectedHead,
@@ -552,15 +748,19 @@ export function runCreateContinuation(input: {
         operations,
       });
       attempts.push(initial.report);
-      effects.push(`orca worktree create attempted: ${input.name}`);
+      effects.push(`orca worktree create attempted: ${names.primary}`);
       if (initial.selected) {
-        return ready({
+        return spawnOrDegrade({
+          candidate: initial.selected,
+          resumedExisting: false,
           issueNumber: input.issueNumber,
           expectedHead,
-          resumedExisting: false,
-          selected: initial.selected,
+          terminalTitle: input.terminalTitle,
+          terminalCommand: input.terminalCommand,
+          focus: input.focus ?? true,
           attempts,
           effects,
+          operations,
         });
       }
       if (!initial.snapshot.ok) {
@@ -573,12 +773,26 @@ export function runCreateContinuation(input: {
         });
       }
       snapshot = initial.snapshot;
+      relatedRows = relatedExistingRows({
+        snapshot,
+        issueNumber: input.issueNumber,
+        expectedHead,
+        repositoryRoot,
+      });
     }
 
-    const replacement = replacementName(input.name, operations);
+    if (relatedRows.some((row) => isReplacementIdentity(row, input.issueNumber))) {
+      return degraded({
+        issueNumber: input.issueNumber,
+        expectedHead,
+        attempts,
+        effects,
+        error: 'the single replacement already exists in disputed state; no third create is authorized',
+      });
+    }
     const finalAttempt = runCreateAttempt({
       kind: 'replacement',
-      name: replacement,
+      name: names.replacement,
       repositoryRoot,
       issueNumber: input.issueNumber,
       expectedHead,
@@ -586,15 +800,19 @@ export function runCreateContinuation(input: {
       operations,
     });
     attempts.push(finalAttempt.report);
-    effects.push(`orca worktree create attempted: ${replacement}`);
+    effects.push(`orca worktree create attempted: ${names.replacement}`);
     if (finalAttempt.selected) {
-      return ready({
+      return spawnOrDegrade({
+        candidate: finalAttempt.selected,
+        resumedExisting: false,
         issueNumber: input.issueNumber,
         expectedHead,
-        resumedExisting: false,
-        selected: finalAttempt.selected,
+        terminalTitle: input.terminalTitle,
+        terminalCommand: input.terminalCommand,
+        focus: input.focus ?? true,
         attempts,
         effects,
+        operations,
       });
     }
     return degraded({
@@ -615,7 +833,9 @@ interface ParsedArgs {
   repositoryRoot: string | null;
   issueNumber: number | null;
   expectedHead: string | null;
-  name: string | null;
+  terminalTitle: string | null;
+  terminalCommand: string | null;
+  focus: boolean;
   apply: boolean;
   json: boolean;
 }
@@ -625,7 +845,9 @@ function parseArgs(argv = process.argv.slice(2)): ParsedArgs {
     repositoryRoot: null,
     issueNumber: null,
     expectedHead: null,
-    name: null,
+    terminalTitle: null,
+    terminalCommand: null,
+    focus: true,
     apply: false,
     json: false,
   };
@@ -633,9 +855,11 @@ function parseArgs(argv = process.argv.slice(2)): ParsedArgs {
     const token = argv[index];
     if (token === '--apply') parsed.apply = true;
     else if (token === '--json') parsed.json = true;
+    else if (token === '--no-focus') parsed.focus = false;
     else if (token === '--repo-root') parsed.repositoryRoot = argv[++index] ?? null;
     else if (token === '--expected-head') parsed.expectedHead = argv[++index] ?? null;
-    else if (token === '--name') parsed.name = argv[++index] ?? null;
+    else if (token === '--terminal-title') parsed.terminalTitle = argv[++index] ?? null;
+    else if (token === '--terminal-command') parsed.terminalCommand = argv[++index] ?? null;
     else if (token === '--issue') {
       const value = Number.parseInt(argv[++index] ?? '', 10);
       parsed.issueNumber = Number.isInteger(value) && value > 0 ? value : null;
@@ -650,16 +874,18 @@ function usageError(args: ParsedArgs): string | null {
   if (!args.repositoryRoot) return '--repo-root is required';
   if (!args.issueNumber) return '--issue must be a positive integer';
   if (!args.expectedHead) return '--expected-head is required and must be a full 40-hex SHA';
-  if (!args.name || !NAME_PATTERN.test(args.name)) return '--name must be a safe Orca worktree name';
-  if (!args.apply) return '--apply is required because this command owns the bounded create effect';
+  if (!args.terminalTitle?.trim()) return '--terminal-title is required';
+  if (!args.terminalCommand?.trim()) return '--terminal-command is required';
+  if (!args.apply) return '--apply is required because this command owns create and terminal effects';
   return null;
 }
 
 function emitHuman(report: WorktreeCreateContinuationReport): void {
   console.log(`Outcome: ${report.outcome}`);
   console.log(`Pipeline continues: ${report.pipelineContinues ? 'yes' : 'no'}`);
-  console.log(`Terminal spawn authorized: ${report.terminalSpawnAuthorized ? 'yes' : 'no'}`);
+  console.log(`Terminal spawn completed: ${report.terminalSpawnCompleted ? 'yes' : 'no'}`);
   if (report.selected) console.log(`Selected worktree: ${report.selected.path}`);
+  if (report.terminal?.handle) console.log(`Terminal handle: ${report.terminal.handle}`);
   console.log(`Create attempts: ${String(report.attempts.length)}`);
   if (report.error) console.log(`Detail: ${report.error}`);
 }
@@ -673,7 +899,9 @@ function main(): void {
       repositoryRoot: null,
       issueNumber: null,
       expectedHead: null,
-      name: null,
+      terminalTitle: null,
+      terminalCommand: null,
+      focus: true,
       apply: false,
       json: process.argv.includes('--json'),
     };
@@ -706,7 +934,9 @@ function main(): void {
       repositoryRoot: args.repositoryRoot!,
       issueNumber: args.issueNumber!,
       expectedHead: args.expectedHead!,
-      name: args.name!,
+      terminalTitle: args.terminalTitle!,
+      terminalCommand: args.terminalCommand!,
+      focus: args.focus,
     });
     if (args.json) console.log(JSON.stringify(report, null, 2));
     else emitHuman(report);
