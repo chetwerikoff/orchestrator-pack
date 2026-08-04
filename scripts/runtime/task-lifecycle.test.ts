@@ -1,10 +1,10 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { OrcaTaskRuntimeAdapter } from '../orca-runtime/task-adapter.ts';
+import { runOrcaJson, type OrcaJsonResponse } from '../orca-runtime/native.ts';
 import { DeterministicRuntimeAdapter } from './test-adapter.ts';
 import { executeRuntimeTaskLifecycle } from './task-lifecycle.ts';
-import type { OrcaJsonResponse } from '../orca-runtime/native.ts';
 
 function fakeOrcaTransport() {
   const handle = 'term-1248';
@@ -78,12 +78,17 @@ function exercise(adapter: DeterministicRuntimeAdapter | OrcaTaskRuntimeAdapter)
   });
 }
 
-function hermeticOrcaFixture(statePath: string, expectedPath: string): string {
+function hermeticOrcaFixture(
+  statePath: string,
+  capturePath: string,
+  expectedPath: string,
+): string {
   return `#!${process.execPath}
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter } from 'node:path';
 
 const statePath = ${JSON.stringify(statePath)};
+const capturePath = ${JSON.stringify(capturePath)};
 const expectedPath = ${JSON.stringify(expectedPath)};
 const args = process.argv.slice(2).filter((arg) => arg !== '--json');
 const operation = \`\${args[0] ?? ''} \${args[1] ?? ''}\`;
@@ -104,6 +109,13 @@ const forbiddenEnvironment = Object.keys(process.env).filter(
   (key) => key.startsWith('AO_') || key.startsWith('AGENT_ORCHESTRATOR_'),
 );
 const pathEntries = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
+writeFileSync(capturePath, \`\${JSON.stringify({
+  args,
+  operation,
+  forbiddenEnvironment,
+  pathEntries,
+  expectedPath,
+})}\\n\`, 'utf8');
 if (forbiddenEnvironment.length > 0 || pathEntries.length !== 1 || pathEntries[0] !== expectedPath) {
   process.stdout.write(JSON.stringify({
     ok: false,
@@ -282,7 +294,12 @@ describe('direct runtime-neutral task caller', () => {
     const root = mkdtempSync(join(process.cwd(), '.issue-1248-orca-hermetic-'));
     const fixturePath = join(root, 'orca-hermetic.mjs');
     const statePath = join(root, 'state.json');
+    const capturePath = join(root, 'capture.json');
     const removedEnvironment = new Map<string, string>();
+    const nativeCalls: Array<{
+      readonly args: readonly string[];
+      readonly response: OrcaJsonResponse;
+    }> = [];
     try {
       for (const key of Object.keys(process.env)) {
         if (!key.startsWith('AO_') && !key.startsWith('AGENT_ORCHESTRATOR_')) continue;
@@ -291,13 +308,23 @@ describe('direct runtime-neutral task caller', () => {
         delete process.env[key];
       }
 
-      writeFileSync(fixturePath, hermeticOrcaFixture(statePath, root), 'utf8');
+      writeFileSync(
+        fixturePath,
+        hermeticOrcaFixture(statePath, capturePath, root),
+        'utf8',
+      );
       chmodSync(fixturePath, 0o755);
       const environment: NodeJS.ProcessEnv = { ...process.env, PATH: root };
+      const observingRunJson: typeof runOrcaJson = <T>(args: readonly string[], options = {}) => {
+        const response = runOrcaJson<T>(args, options);
+        nativeCalls.push({ args: [...args], response: response as OrcaJsonResponse });
+        return response;
+      };
       const adapter = new OrcaTaskRuntimeAdapter({
         cwd: root,
         executable: fixturePath,
         env: environment,
+        runJson: observingRunJson,
         timeoutMs: 5_000,
       });
 
@@ -310,8 +337,12 @@ describe('direct runtime-neutral task caller', () => {
         options: { cwd: root, timeoutMs: 5_000 },
       });
 
-      expect(result).toMatchObject({ status: 'ok' });
-      if (result.status !== 'ok') return;
+      if (result.status !== 'ok') {
+        const capture = existsSync(capturePath)
+          ? readFileSync(capturePath, 'utf8').trim()
+          : 'capture_missing';
+        throw new Error(`lifecycle=${JSON.stringify(result)} native=${JSON.stringify(nativeCalls)} capture=${capture}`);
+      }
       expect(result.lines).toContain('implement the issue');
       expect(result.liveness).toBe('idle');
 
@@ -329,6 +360,19 @@ describe('direct runtime-neutral task caller', () => {
       ]));
       expect(state.operations.filter((operation) => operation === 'terminal send')).toHaveLength(1);
       expect(state.operations.filter((operation) => operation === 'terminal close')).toHaveLength(1);
+
+      const capture = JSON.parse(readFileSync(capturePath, 'utf8')) as {
+        operation: string;
+        forbiddenEnvironment: string[];
+        pathEntries: string[];
+        expectedPath: string;
+      };
+      expect(capture).toMatchObject({
+        operation: 'terminal close',
+        forbiddenEnvironment: [],
+        pathEntries: [root],
+        expectedPath: root,
+      });
     } finally {
       for (const [key, value] of removedEnvironment) process.env[key] = value;
       rmSync(root, { recursive: true, force: true });
