@@ -64,7 +64,10 @@ describe('runtime-neutral worker recovery', () => {
     const remove = vi.spyOn(adapter, 'removeWorkspace');
     const result = recoverRuntimeWorker({
       adapter,
-      cleanupWorkspace: { workspacePath: '/tmp/recovery-workspace' },
+      cleanupWorkspace: {
+        workspacePath: '/tmp/recovery-workspace',
+        expectedHeadSha: 'test-head',
+      },
       title: 'recovered-worker',
       command: 'cursor-agent',
       acquireClaim: () => ({ ok: false, reason: 'claim_busy' }),
@@ -87,6 +90,7 @@ describe('runtime-neutral worker recovery', () => {
     const result = recoverRuntimeWorker({
       adapter,
       targetId: created.value.identity.id,
+      targetGeneration: created.value.identity.generation,
       title: 'replacement',
       command: 'cursor-agent',
       acquireClaim: claim,
@@ -113,12 +117,122 @@ describe('runtime-neutral worker recovery', () => {
     const remove = vi.spyOn(adapter, 'removeWorkspace');
     const result = recoverRuntimeWorker({
       adapter,
-      cleanupWorkspace: { workspacePath: '/tmp/recovery-workspace' },
+      cleanupWorkspace: {
+        workspacePath: '/tmp/recovery-workspace',
+        expectedHeadSha: 'test-head',
+      },
       title: 'replacement',
       command: 'cursor-agent',
       acquireClaim: () => ({ ok: true }),
     });
     expect(result).toEqual({ outcome: 'claim_lost', reason: 'post_claim_runtime_busy' });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('rejects cleanup and spawn selector reuse before runtime or claim work', () => {
+    const adapter = new DeterministicRuntimeAdapter();
+    const list = vi.spyOn(adapter, 'listWorkers');
+    const remove = vi.spyOn(adapter, 'removeWorkspace');
+    const spawn = vi.spyOn(adapter, 'spawnWorker');
+    const claim = vi.fn(() => ({ ok: true as const }));
+    const result = recoverRuntimeWorker({
+      adapter,
+      workspace: '/tmp/same-workspace',
+      cleanupWorkspace: {
+        workspacePath: '/tmp/same-workspace',
+        expectedHeadSha: 'test-head',
+      },
+      title: 'replacement',
+      command: 'cursor-agent',
+      acquireClaim: claim,
+    });
+    expect(result).toEqual({
+      outcome: 'skipped_ambiguous',
+      reason: 'cleanup_spawn_workspace_reuse',
+    });
+    expect(list).not.toHaveBeenCalled();
+    expect(claim).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('rejects a target id without its expected generation before runtime work', () => {
+    const adapter = new DeterministicRuntimeAdapter();
+    const find = vi.spyOn(adapter, 'findWorkerById');
+    const claim = vi.fn(() => ({ ok: true as const }));
+    const result = recoverRuntimeWorker({
+      adapter,
+      targetId: 'recycled-handle',
+      title: 'replacement',
+      command: 'cursor-agent',
+      acquireClaim: claim,
+    });
+    expect(result).toEqual({
+      outcome: 'skipped_ambiguous',
+      reason: 'target_generation_missing',
+    });
+    expect(find).not.toHaveBeenCalled();
+    expect(claim).not.toHaveBeenCalled();
+  });
+
+  it('rejects a recycled id generation after claim before cleanup or spawn', () => {
+    const adapter = new DeterministicRuntimeAdapter();
+    const created = adapter.spawnWorker({
+      title: 'stale',
+      command: 'cursor-agent',
+      workspace: '/tmp/recovery-workspace',
+    });
+    expect(created.status).toBe('ok');
+    if (created.status !== 'ok') return;
+    adapter.setLiveness(created.value.identity, 'gone');
+    const remove = vi.spyOn(adapter, 'removeWorkspace');
+    const spawn = vi.spyOn(adapter, 'spawnWorker');
+
+    const result = recoverRuntimeWorker({
+      adapter,
+      targetId: created.value.identity.id,
+      targetGeneration: created.value.identity.generation,
+      cleanupWorkspace: {
+        workspacePath: '/tmp/recovery-workspace',
+        expectedHeadSha: 'test-head',
+      },
+      title: 'replacement',
+      command: 'cursor-agent',
+      acquireClaim: () => {
+        adapter.recreateWorker(created.value.identity);
+        return { ok: true };
+      },
+    });
+
+    expect(result).toEqual({
+      outcome: 'claim_lost',
+      reason: 'post_claim_worker_identity_mismatch',
+    });
+    expect(remove).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('requires an expected head before any destructive recovery work', () => {
+    const adapter = new DeterministicRuntimeAdapter();
+    const list = vi.spyOn(adapter, 'listWorkers');
+    const claim = vi.fn(() => ({ ok: true as const }));
+    const remove = vi.spyOn(adapter, 'removeWorkspace');
+    const result = recoverRuntimeWorker({
+      adapter,
+      cleanupWorkspace: {
+        workspacePath: '/tmp/recovery-workspace',
+        expectedHeadSha: '',
+      },
+      title: 'replacement',
+      command: 'cursor-agent',
+      acquireClaim: claim,
+    });
+    expect(result).toEqual({
+      outcome: 'skipped_ambiguous',
+      reason: 'cleanup_expected_head_missing',
+    });
+    expect(list).not.toHaveBeenCalled();
+    expect(claim).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
   });
 });
