@@ -189,12 +189,15 @@ export class DeterministicRuntimeAdapter implements RuntimeAdapter {
 
   removeWorkspace(input: {
     readonly workspacePath: string;
-    readonly expectedHeadSha?: string;
+    readonly expectedHeadSha: string;
   }): RuntimeResult<{ readonly removed: true }> {
     if (!input.workspacePath.trim()) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_path_missing');
     }
-    if (input.expectedHeadSha && input.expectedHeadSha !== 'test-head') {
+    if (!input.expectedHeadSha.trim()) {
+      return runtimeFailure('remove_workspace', 'runtime_workspace_expected_head_missing');
+    }
+    if (input.expectedHeadSha !== 'test-head') {
       return runtimeFailure('remove_workspace', 'runtime_workspace_head_mismatch');
     }
     if ([...this.#workers.values()].some(({ worker }) => worker.workspacePath === input.workspacePath)) {
