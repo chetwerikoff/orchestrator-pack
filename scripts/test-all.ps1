@@ -128,9 +128,9 @@ if (-not $SkipPester) {
             "$(Join-Path $Root 'scripts/ci-red-watchdog-lookup-retention.Tests.ps1'):62"
             "$(Join-Path $Root 'scripts/ci-red-watchdog-lookup-retention.Tests.ps1'):81"
             "$(Join-Path $Root 'scripts/lib/Ci-Red-Watchdog.Tests.ps1'):8"
-            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):299"
-            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):321"
-            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):423"
+            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):297"
+            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):319"
+            "$(Join-Path $Root 'scripts/mechanical-json-state.Tests.ps1'):421"
             "$(Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'):374"
             "$(Join-Path $Root 'tests/powershell/Issue771.PowerShellDependencyScope.Tests.ps1'):414"
         )
