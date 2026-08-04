@@ -18,6 +18,7 @@ import type { ExpectedWorktreeIdentity } from './core.ts';
 const HEAD = 'a'.repeat(40);
 const OTHER_HEAD = 'b'.repeat(40);
 const BRANCH = 'agent/issue-1298';
+const REPOSITORY_ID = 'repo-1298';
 const roots: string[] = [];
 
 function result(input: Partial<ProcessResult> & { stdout?: string } = {}): ProcessResult {
@@ -34,13 +35,15 @@ function result(input: Partial<ProcessResult> & { stdout?: string } = {}): Proce
   };
 }
 
-function fixture(): {
+interface Paths {
   root: string;
   repo: string;
   worktree: string;
   common: string;
   expected: ExpectedWorktreeIdentity;
-} {
+}
+
+function fixture(): Paths {
   const root = mkdtempSync(join(tmpdir(), 'opk-worktree-lifecycle-'));
   roots.push(root);
   const repo = join(root, 'repo');
@@ -67,50 +70,76 @@ function fixture(): {
   };
 }
 
-function gitPorcelain(input: {
-  worktree: string;
-  includeTarget?: boolean;
-  targetHead?: string;
-  targetBranch?: string;
-}): string {
-  return [
-    `worktree ${input.worktree}/main`,
-    `HEAD ${OTHER_HEAD}`,
-    'branch refs/heads/main',
-    '',
-    ...(input.includeTarget === false ? [] : [
-      `worktree ${input.worktree}`,
-      `HEAD ${input.targetHead ?? HEAD}`,
-      `branch refs/heads/${input.targetBranch ?? BRANCH}`,
-      '',
-    ]),
-  ].join('\n');
-}
-
-function orcaPayload(rows: unknown[]): string {
-  return JSON.stringify({ ok: true, result: { worktrees: rows } });
-}
-
-function terminalPayload(rows: unknown[] = []): string {
-  return JSON.stringify({ ok: true, result: { terminals: rows } });
-}
-
 interface RunnerState {
-  removed: boolean;
+  gitPresent: boolean;
+  orcaPresent: boolean;
   dirty?: boolean;
+  ignoredSequence?: string[];
   terminals?: unknown[];
   agents?: unknown[];
-  orcaRows?: unknown[];
-  standardTeardownOk?: boolean;
+  openPrs?: Array<{ number: number; headRefName: string }>;
+  removalResult?: ProcessResult;
+  standardTeardownResult?: ProcessResult;
+  standardTeardownEffect?: 'both-absent' | 'git-only-absent' | 'none';
+  removeCount: number;
+  ignoredReads: number;
   invocations: CommandInvocation[];
 }
 
-function makeRunner(paths: ReturnType<typeof fixture>, state: RunnerState): CommandRunner {
+function targetOrca(paths: Paths, state: RunnerState, includeAgents: boolean): object[] {
+  if (!state.orcaPresent) return [];
+  return [{
+    path: paths.worktree,
+    head: HEAD,
+    branch: `refs/heads/${BRANCH}`,
+    linkedPR: 1300,
+    repoId: REPOSITORY_ID,
+    isMainWorktree: false,
+    isArchived: false,
+    ...(includeAgents ? { agents: state.agents ?? [] } : {}),
+  }];
+}
+
+function orcaPayload(paths: Paths, state: RunnerState, includeAgents = false): string {
+  return JSON.stringify({
+    ok: true,
+    result: {
+      worktrees: [
+        {
+          path: paths.repo,
+          head: OTHER_HEAD,
+          branch: 'refs/heads/main',
+          repoId: REPOSITORY_ID,
+          isMainWorktree: true,
+          isArchived: false,
+        },
+        ...targetOrca(paths, state, includeAgents),
+      ],
+    },
+  });
+}
+
+function gitPayload(paths: Paths, state: RunnerState): string {
+  return [
+    `worktree ${paths.repo}`,
+    `HEAD ${OTHER_HEAD}`,
+    'branch refs/heads/main',
+    '',
+    ...(state.gitPresent ? [
+      `worktree ${paths.worktree}`,
+      `HEAD ${HEAD}`,
+      `branch refs/heads/${BRANCH}`,
+      '',
+    ] : []),
+  ].join('\n');
+}
+
+function runner(paths: Paths, state: RunnerState): CommandRunner {
   return (invocation) => {
     state.invocations.push(invocation);
     const args = [...invocation.args];
     if (invocation.command === 'git' && args.includes('worktree') && args.includes('list')) {
-      return result({ stdout: gitPorcelain({ worktree: paths.worktree, includeTarget: !state.removed }) });
+      return result({ stdout: gitPayload(paths, state) });
     }
     if (invocation.command.endsWith('/scripts/gh') && args[0] === 'pr' && args[1] === 'view') {
       return result({
@@ -125,7 +154,7 @@ function makeRunner(paths: ReturnType<typeof fixture>, state: RunnerState): Comm
       });
     }
     if (invocation.command.endsWith('/scripts/gh') && args[0] === 'pr' && args[1] === 'list') {
-      return result({ stdout: '[]' });
+      return result({ stdout: JSON.stringify(state.openPrs ?? []) });
     }
     if (invocation.command === 'git' && args.includes('rev-parse') && args.includes('--git-common-dir')) {
       return result({ stdout: `${paths.common}\n` });
@@ -134,46 +163,66 @@ function makeRunner(paths: ReturnType<typeof fixture>, state: RunnerState): Comm
       return result({ stdout: state.dirty ? ' M tracked.txt\n' : '' });
     }
     if (invocation.command === 'git' && args.includes('status') && args.includes('--ignored=matching')) {
-      return result({ stdout: '' });
+      const sequence = state.ignoredSequence ?? [''];
+      const value = sequence[Math.min(state.ignoredReads, sequence.length - 1)] ?? '';
+      state.ignoredReads += 1;
+      return result({ stdout: value });
     }
-    if (invocation.command === 'git' && args.includes('merge-base')) return result({ stdout: '' });
-    if (invocation.command === 'git' && args.includes('fetch')) return result({ stdout: '' });
+    if (invocation.command === 'git' && (args.includes('merge-base') || args.includes('fetch'))) {
+      return result();
+    }
     if (invocation.command === 'git' && args.includes('worktree') && args.includes('remove')) {
       expect(args).not.toContain('--force');
-      state.removed = true;
-      return result({ stdout: '' });
+      state.removeCount += 1;
+      state.gitPresent = false;
+      return state.removalResult ?? result();
     }
     if (invocation.command === 'git' && args.includes('branch') && args.includes('--list')) {
-      return result({ stdout: state.removed ? `${BRANCH}\n` : '' });
+      return result({ stdout: `${BRANCH}\n` });
     }
     if (invocation.command === 'git' && args.includes('branch') && args.includes('-d')) {
       expect(args).not.toContain('-D');
-      return result({ stdout: '' });
+      return result();
     }
     if (args[0] === 'worktree' && args[1] === 'list') {
-      return result({ stdout: orcaPayload(state.orcaRows ?? []) });
+      return result({ stdout: orcaPayload(paths, state) });
     }
     if (args[0] === 'worktree' && args[1] === 'ps') {
-      return result({ stdout: orcaPayload(state.agents ?? []) });
+      return result({ stdout: orcaPayload(paths, state, true) });
     }
     if (args[0] === 'terminal' && args[1] === 'list') {
-      return result({ stdout: terminalPayload(state.terminals ?? []) });
+      return result({ stdout: JSON.stringify({ ok: true, result: { terminals: state.terminals ?? [] } }) });
     }
     if (invocation.command === process.execPath) {
-      return state.standardTeardownOk === false
-        ? result({ ok: false, exitCode: 1, stdout: JSON.stringify({ outcome: 'blocked_dirty_worktree' }) })
-        : result({ stdout: JSON.stringify({ outcome: 'reaped_clean' }) });
+      if (state.standardTeardownEffect === 'both-absent') {
+        state.gitPresent = false;
+        state.orcaPresent = false;
+      } else if (state.standardTeardownEffect === 'git-only-absent') {
+        state.gitPresent = false;
+      }
+      return state.standardTeardownResult ?? result({ stdout: JSON.stringify({ outcome: 'reaped_clean' }) });
     }
     throw new Error(`unexpected invocation: ${invocation.command} ${args.join(' ')}`);
   };
 }
 
-function operations(paths: ReturnType<typeof fixture>, state: RunnerState): LifecycleOperations {
+function state(overrides: Partial<RunnerState> = {}): RunnerState {
   return {
-    runner: makeRunner(paths, state),
+    gitPresent: true,
+    orcaPresent: false,
+    removeCount: 0,
+    ignoredReads: 0,
+    invocations: [],
+    ...overrides,
+  };
+}
+
+function operations(paths: Paths, value: RunnerState, processCensus: LifecycleOperations['processCensus'] = () => []): LifecycleOperations {
+  return {
+    runner: runner(paths, value),
     orcaExecutable: 'orca-fixture',
     lockPath: join(paths.root, 'lifecycle.lock'),
-    processCensus: () => [],
+    processCensus,
   };
 }
 
@@ -181,80 +230,52 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('dual census', () => {
-  it('classifies production-shaped Git-only and conflict states', () => {
+describe('dual census authority', () => {
+  it('derives repository identity from the active main Orca row', () => {
     const paths = fixture();
-    const state: RunnerState = { removed: false, invocations: [] };
-    const gitOnly = collectCensus(paths.expected, operations(paths, state));
-    expect(gitOnly.classification.classification).toBe('exact_git_only');
+    const value = state({ orcaPresent: true });
+    const census = collectCensus(paths.expected, operations(paths, value));
 
-    state.orcaRows = [{
-      path: paths.worktree,
-      head: OTHER_HEAD,
-      branch: `refs/heads/${BRANCH}`,
-      linkedPR: 1300,
-      isMainWorktree: false,
-      isArchived: false,
-    }];
-    const stale = collectCensus(paths.expected, operations(paths, state));
-    expect(stale.classification.classification).toBe('conflict');
-    expect(stale.classification.disagreeingFields).toContain('orca.head');
+    expect(census.classification).toMatchObject({
+      classification: 'exact_dual',
+      expected: { repositoryId: REPOSITORY_ID },
+    });
   });
 
-  it('binds post-create agreement to the exact linked issue', () => {
+  it('classifies the production incident as exact Git-only', () => {
     const paths = fixture();
-    const issueExpected: ExpectedWorktreeIdentity = {
-      ...paths.expected,
-      bindingKind: 'issue',
-      bindingNumber: 1298,
-    };
-    const state: RunnerState = {
-      removed: false,
-      invocations: [],
-      orcaRows: [{
-        path: paths.worktree,
-        head: HEAD,
-        branch: `refs/heads/${BRANCH}`,
-        linkedIssue: 1298,
-        isMainWorktree: false,
-        isArchived: false,
-      }],
-    };
-    expect(collectCensus(issueExpected, operations(paths, state)).classification.classification)
-      .toBe('exact_dual');
-    state.orcaRows = [{ ...state.orcaRows[0] as object, linkedIssue: 1299 }];
-    expect(collectCensus(issueExpected, operations(paths, state)).classification.classification)
-      .toBe('conflict');
+    const census = collectCensus(paths.expected, operations(paths, state()));
+    expect(census.classification.classification).toBe('exact_git_only');
   });
 
-  it('fails closed when an external response shape is malformed', () => {
+  it('fails closed when repository authority cannot be proven', () => {
     const paths = fixture();
-    const state: RunnerState = { removed: false, invocations: [] };
-    const base = makeRunner(paths, state);
+    const value = state();
+    const base = runner(paths, value);
     const census = collectCensus(paths.expected, {
-      ...operations(paths, state),
+      ...operations(paths, value),
       runner: (invocation) => invocation.args[0] === 'worktree' && invocation.args[1] === 'list'
-        ? result({ stdout: '{"ok":true,"result":{}}' })
+        ? result({ stdout: JSON.stringify({ ok: true, result: { worktrees: [] } }) })
         : base(invocation),
     });
     expect(census.classification.classification).toBe('conflict');
-    expect(census.errors.join(' ')).toMatch(/worktrees/);
+    expect(census.errors.join(' ')).toMatch(/repository identity/);
   });
 });
 
 describe('guarded Git-only recovery', () => {
-  it('is dry-run first and reports eligibility without effects', () => {
+  it('runs every gate twice and reports dry-run eligibility', () => {
     const paths = fixture();
-    const state: RunnerState = { removed: false, invocations: [] };
+    const value = state();
     const report = runLifecycle({
       expected: paths.expected,
       context: 'explicit-recovery',
       apply: false,
-      operations: operations(paths, state),
+      operations: operations(paths, value),
     });
+
     expect(report).toMatchObject({
       outcome: 'git_only_recovery_eligible',
-      pipelineContinues: true,
       gates: {
         identity: true,
         gitLink: true,
@@ -269,179 +290,194 @@ describe('guarded Git-only recovery', () => {
       },
       effects: [],
     });
-    expect(state.removed).toBe(false);
+    expect(value.ignoredReads).toBe(2);
+    expect(value.removeCount).toBe(0);
   });
 
-  it('does not run destructive PR recovery with issue-only authority', () => {
+  it('blocks when ignored data appears between initial and pre-effect snapshots', () => {
     const paths = fixture();
-    const state: RunnerState = { removed: false, invocations: [] };
+    const value = state({ ignoredSequence: ['', '!! private-cache/\n'] });
     const report = runLifecycle({
-      expected: { ...paths.expected, bindingKind: 'issue', bindingNumber: 1298 },
+      expected: paths.expected,
       context: 'explicit-recovery',
       apply: true,
-      operations: operations(paths, state),
+      operations: operations(paths, value),
     });
-    expect(report).toMatchObject({ outcome: 'cleanup_deferred', pipelineContinues: true });
-    expect(report.error).toMatch(/PR-bound/);
-    expect(state.removed).toBe(false);
+
+    expect(report).toMatchObject({
+      outcome: 'cleanup_deferred',
+      gates: { ignoredData: false, freshRecheck: false },
+      effects: [],
+    });
+    expect(value.removeCount).toBe(0);
   });
 
-  it('blocks target mutation for dirty, active-terminal, and residual-process states', () => {
+  it('treats process-census failure as unavailable evidence', () => {
     const paths = fixture();
-    const cases: Array<Partial<RunnerState> & { processCensus?: LifecycleOperations['processCensus'] }> = [
-      { dirty: true },
-      { terminals: [{ handle: 't1', worktreePath: paths.worktree, tabId: 'tab-1' }] },
-      { processCensus: () => [{ pid: 99, ppid: 1, starttime: '1', cwd: paths.worktree }] },
+    const value = state();
+    const report = runLifecycle({
+      expected: paths.expected,
+      context: 'explicit-recovery',
+      apply: true,
+      operations: operations(paths, value, () => { throw new Error('proc unavailable'); }),
+    });
+
+    expect(report).toMatchObject({
+      outcome: 'cleanup_deferred',
+      gates: { processesAbsent: false, freshRecheck: false },
+      effects: [],
+    });
+    expect(report.error).toMatch(/proc unavailable/);
+    expect(value.removeCount).toBe(0);
+  });
+
+  it('blocks dirty, active-terminal, residual-process, and branch-reuse states', () => {
+    const paths = fixture();
+    const cases: Array<{
+      value: RunnerState;
+      processCensus?: LifecycleOperations['processCensus'];
+    }> = [
+      { value: state({ dirty: true }) },
+      { value: state({ terminals: [{ handle: 't1', worktreePath: paths.worktree, tabId: 'tab-1' }] }) },
+      { value: state(), processCensus: () => [{ pid: 99, ppid: 1, starttime: '1', cwd: paths.worktree }] },
+      { value: state({ openPrs: [{ number: 1301, headRefName: BRANCH }] }) },
     ];
     for (const item of cases) {
-      const state: RunnerState = { removed: false, invocations: [], ...item };
-      const baseOperations = operations(paths, state);
       const report = runLifecycle({
         expected: paths.expected,
         context: 'explicit-recovery',
         apply: true,
-        operations: { ...baseOperations, ...(item.processCensus ? { processCensus: item.processCensus } : {}) },
+        operations: operations(paths, item.value, item.processCensus ?? (() => [])),
       });
       expect(report.outcome).toBe('cleanup_deferred');
-      expect(report.pipelineContinues).toBe(true);
-      expect(state.removed).toBe(false);
+      expect(item.value.removeCount).toBe(0);
     }
   });
 
-  it('uses non-force Git removal, reads both authorities back, and becomes idempotent', () => {
+  it('uses non-force removal, proves dual absence, and becomes idempotent', () => {
     const paths = fixture();
-    const state: RunnerState = { removed: false, invocations: [] };
-    const opts = operations(paths, state);
+    const value = state();
+    const opts = operations(paths, value);
     const applied = runLifecycle({
       expected: paths.expected,
       context: 'explicit-recovery',
       apply: true,
       operations: opts,
     });
+
     expect(applied).toMatchObject({
       outcome: 'git_only_recovered',
-      pipelineContinues: true,
       branchDeletion: 'deleted',
+      postClassification: { classification: 'absent' },
     });
-    expect(applied.effects).toEqual(['git worktree remove (non-force)', 'git branch -d']);
-    expect(applied.postClassification?.classification).toBe('absent');
-
-    const repeated = runLifecycle({
+    expect(value.removeCount).toBe(1);
+    expect(runLifecycle({
       expected: paths.expected,
       context: 'explicit-recovery',
       apply: true,
       operations: opts,
+    })).toMatchObject({ outcome: 'already_absent', effects: [] });
+  });
+
+  it('settles effect-before-receipt removal from authoritative read-back', () => {
+    const paths = fixture();
+    const value = state({
+      removalResult: result({
+        outcome: 'timeout',
+        ok: false,
+        exitCode: null,
+        timedOut: true,
+        stderr: 'receipt lost',
+      }),
     });
-    expect(repeated).toMatchObject({ outcome: 'already_absent', effects: [] });
+    const report = runLifecycle({
+      expected: paths.expected,
+      context: 'explicit-recovery',
+      apply: true,
+      operations: operations(paths, value),
+    });
+
+    expect(report).toMatchObject({ outcome: 'git_only_recovered', postClassification: { classification: 'absent' } });
+    expect(value.removeCount).toBe(1);
   });
 });
 
-describe('nonblocking caller contract', () => {
-  it('converts an ordinary teardown block into cleanup_deferred after merge', () => {
+describe('standard teardown post-effect settlement', () => {
+  it('reports complete only after dual absence is proven', () => {
     const paths = fixture();
-    const state: RunnerState = {
-      removed: false,
-      invocations: [],
-      standardTeardownOk: false,
-      orcaRows: [{
-        path: paths.worktree,
-        head: HEAD,
-        branch: `refs/heads/${BRANCH}`,
-        linkedPR: 1300,
-        isMainWorktree: false,
-        isArchived: false,
-      }],
-      agents: [{
-        path: paths.worktree,
-        head: HEAD,
-        branch: `refs/heads/${BRANCH}`,
-        linkedPR: 1300,
-        isMainWorktree: false,
-        isArchived: false,
-        agents: [{ state: 'done', interrupted: false }],
-      }],
-    };
+    const value = state({ orcaPresent: true, standardTeardownEffect: 'both-absent' });
     const report = runLifecycle({
       expected: paths.expected,
       context: 'post-merge-cleanup',
       apply: true,
-      operations: operations(paths, state),
+      operations: operations(paths, value),
     });
+
     expect(report).toMatchObject({
-      outcome: 'cleanup_deferred',
-      pipelineContinues: true,
+      outcome: 'cleanup_complete',
+      postClassification: { classification: 'absent' },
+    });
+  });
+
+  it('degrades when the child succeeds but Orca still retains the target', () => {
+    const paths = fixture();
+    const value = state({ orcaPresent: true, standardTeardownEffect: 'git-only-absent' });
+    const report = runLifecycle({
+      expected: paths.expected,
+      context: 'post-merge-cleanup',
+      apply: true,
+      operations: operations(paths, value),
+    });
+
+    expect(report).toMatchObject({
+      outcome: 'task_degraded',
+      postClassification: { classification: 'orca_only' },
+    });
+    expect(report.error).toMatch(/did not prove absence/);
+  });
+
+  it('accepts effect-before-receipt only when dual read-back proves completion', () => {
+    const paths = fixture();
+    const value = state({
+      orcaPresent: true,
+      standardTeardownEffect: 'both-absent',
+      standardTeardownResult: result({
+        outcome: 'timeout',
+        ok: false,
+        exitCode: null,
+        timedOut: true,
+        stderr: 'child receipt lost',
+      }),
+    });
+    const report = runLifecycle({
+      expected: paths.expected,
+      context: 'post-merge-cleanup',
+      apply: true,
+      operations: operations(paths, value),
+    });
+
+    expect(report).toMatchObject({
+      outcome: 'cleanup_complete',
+      postClassification: { classification: 'absent' },
+    });
+  });
+});
+
+describe('post-create observation', () => {
+  it('reports exact dual without exporting terminal authority', () => {
+    const paths = fixture();
+    const value = state({ orcaPresent: true });
+    const report = runLifecycle({
+      expected: { ...paths.expected, bindingKind: 'issue', bindingNumber: 1298 },
+      context: 'post-create',
+      apply: false,
+      operations: operations(paths, value),
+    });
+
+    expect(report).toMatchObject({
+      outcome: 'exact_dual_observed',
       classification: { classification: 'exact_dual' },
-      standardTeardown: { outcome: 'blocked_dirty_worktree' },
-    });
-  });
-
-  it('preserves a conflicting target and returns control instead of mutating it', () => {
-    const paths = fixture();
-    const state: RunnerState = {
-      removed: false,
-      invocations: [],
-      orcaRows: [{
-        path: paths.worktree,
-        head: OTHER_HEAD,
-        branch: `refs/heads/${BRANCH}`,
-        linkedPR: 1300,
-        isMainWorktree: false,
-        isArchived: false,
-      }],
-    };
-    const report = runLifecycle({
-      expected: paths.expected,
-      context: 'post-merge-cleanup',
-      apply: true,
-      operations: operations(paths, state),
-    });
-    expect(report).toMatchObject({
-      outcome: 'cleanup_deferred',
-      pipelineContinues: true,
-      decision: { action: 'cleanup_deferred', targetMutationAuthorized: false },
-    });
-    expect(state.removed).toBe(false);
-  });
-
-  it('authorizes post-create spawn only for exact issue-bound dual read-back', () => {
-    const paths = fixture();
-    const issueExpected: ExpectedWorktreeIdentity = {
-      ...paths.expected,
-      bindingKind: 'issue',
-      bindingNumber: 1298,
-    };
-    const disputedState: RunnerState = { removed: false, invocations: [] };
-    expect(runLifecycle({
-      expected: issueExpected,
-      context: 'post-create',
-      apply: false,
-      operations: operations(paths, disputedState),
-    })).toMatchObject({
-      outcome: 'replacement_required',
-      pipelineContinues: true,
       decision: { terminalSpawnAuthorized: false },
-    });
-
-    const exactState: RunnerState = {
-      removed: false,
-      invocations: [],
-      orcaRows: [{
-        path: paths.worktree,
-        head: HEAD,
-        branch: `refs/heads/${BRANCH}`,
-        linkedIssue: 1298,
-        isMainWorktree: false,
-        isArchived: false,
-      }],
-    };
-    expect(runLifecycle({
-      expected: issueExpected,
-      context: 'post-create',
-      apply: false,
-      operations: operations(paths, exactState),
-    })).toMatchObject({
-      outcome: 'ready_to_spawn',
-      decision: { terminalSpawnAuthorized: true },
     });
   });
 });
