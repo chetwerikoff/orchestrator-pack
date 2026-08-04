@@ -6,8 +6,12 @@
     ".claude/skills/merge-with-local-adoption/SKILL.md",
     "docs/investigations/orca-worktree-lifecycle/2026-08-04-executor-observations.md",
     "docs/orca-runtime-boundary.md",
+    "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-live-store-inventory.json",
+    "scripts/worker-message-send-adoption-preflight.ps1",
+    "scripts/worker-message-submit-reconcile.test.ts",
     "scripts/worktree-lifecycle/cli.ts",
     "scripts/worktree-lifecycle/core.test.ts",
     "scripts/worktree-lifecycle/core.ts",
@@ -36,11 +40,15 @@
     "docs/investigations/orca-worktree-lifecycle/",
     "docs/migration_notes.md",
     "docs/orca-runtime-boundary.md",
+    "scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1",
     "scripts/lib/vitest-pre-topology-measurement.mjs",
     "scripts/vitest-ci-lanes.config.json",
+    "scripts/vitest-live-store-inventory.json",
+    "scripts/worker-message-send-adoption-preflight.ps1",
+    "scripts/worker-message-submit-reconcile.test.ts",
     "scripts/worktree-lifecycle/",
     "scripts/worktree-teardown-runtime-profile.ts",
     "scripts/worktree-teardown.ts"
   ],
-  "source_revision": "9003cca6fd326b97d8f6eaa3ed003f599326b844"
+  "source_revision": "57ce70bc941e4656d61f71b63e180fe0cc9e16de"
 }
