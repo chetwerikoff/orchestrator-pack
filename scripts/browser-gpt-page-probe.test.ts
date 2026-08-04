@@ -10,7 +10,12 @@ import { test } from 'vitest';
 import { runProcess } from './kernel/subprocess.ts';
 import {
   buildExportExpression,
+  CDP_REQUEST_TIMEOUT_MS,
   INSPECTION_EXPRESSION,
+  LIVENESS_EXPRESSION,
+  LIVENESS_FAN_OUT,
+  LIVENESS_TARGET_TIMEOUT_MS,
+  LIVENESS_TOTAL_TIMEOUT_MS,
   MAX_NORMALIZED_URL_CODE_POINTS,
   MAX_TARGETS,
   normalizeConversationUrl,
@@ -102,6 +107,13 @@ test('closed CLI rejects arbitrary selectors, JavaScript, watch mode, and ambigu
   assert.throws(() => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--selector', 'body']), /unknown_option/);
   assert.throws(() => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--target-id', 'x', '--url', 'https://chatgpt.com/c/x']), /exactly_one_page_selector_required/);
   assert.throws(() => parseCliArgs(['export', '--cdp', 'http://127.0.0.1:9222', '--target-id', 'x', '--role', 'assistant', '--ordinal', '0', '--representation', 'innerText', '--expected-byte-length', '1', '--expected-sha256', 'a'.repeat(64), '--output', '/tmp/x', '--javascript', 'alert(1)']), /unknown_option/);
+  assert.deepEqual(
+    parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--url', 'https://chatgpt.com/c/x', '--open-if-missing', 'true']),
+    { operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/x', openIfMissing: true },
+  );
+  assert.throws(() => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--url', 'https://chatgpt.com/c/x', '--open-if-missing', 'false']), /open_if_missing_must_be_true/);
+  assert.throws(() => parseCliArgs(['inspect', '--cdp', 'http://127.0.0.1:9222', '--target-id', 'x', '--open-if-missing', 'true']), /open_if_missing_requires_url/);
+  assert.deepEqual(parseCliArgs(['liveness', '--cdp', 'http://127.0.0.1:9222']), { operation: 'liveness', cdp: 'http://127.0.0.1:9222' });
 });
 
 test('target listing is bounded, passive, and excludes unrelated pages', async () => {
@@ -540,6 +552,185 @@ test('generation observation degrades to unknown when the fixed marker query can
   });
   assert.equal(value.status, 'ok');
   assert.equal(value.generation_in_progress, 'unknown');
+});
+
+test('contract proof: owner isolation and deadline-isolated liveness', async () => {
+  const requested = 'https://chat.openai.com/c/proof';
+  const ownedId = 'created-proof';
+  const closeCalls: string[] = [];
+  let sample = 0;
+  let fakeNow = 0;
+  const createdTarget: CdpTarget = {
+    id: ownedId,
+    type: 'page',
+    url: requested,
+    title: 'Created proof',
+    webSocketDebuggerUrl: `ws://example/${ownedId}`,
+  };
+  const acquired = await runProbe({
+    operation: 'inspect',
+    cdp: 'http://127.0.0.1:9222',
+    conversationUrl: requested,
+    openIfMissing: true,
+  }, deps({
+    listTargets: async () => [],
+    createPage: async () => createdTarget,
+    closePage: async (_cdp, targetId) => { closeCalls.push(targetId); return 'closed'; },
+    now: () => fakeNow,
+    sleep: async (delay) => { fakeNow += delay; },
+    evaluate: async (_target, expression) => {
+      assert.equal(expression, INSPECTION_EXPRESSION);
+      sample += 1;
+      return sample === 1
+        ? await evaluateExpression(INSPECTION_EXPRESSION, [], false, requested)
+        : await evaluateExpression(INSPECTION_EXPRESSION, [
+          new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-proof' }),
+          new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-proof' }),
+        ], false, requested);
+    },
+  }));
+  assert.equal(acquired.status, 'ok');
+  assert.equal(acquired.acquisition, 'created');
+  assert.equal(acquired.owned_target_id, ownedId);
+  assert.deepEqual(closeCalls, [ownedId]);
+
+  const reusedCloseCalls: string[] = [];
+  const reused = await runProbe({
+    operation: 'inspect',
+    cdp: 'http://127.0.0.1:9222',
+    conversationUrl: 'https://chatgpt.com/c/reused',
+    openIfMissing: true,
+  }, deps({
+    listTargets: async () => [{
+      id: 'reused', type: 'page', url: 'https://chatgpt.com/c/reused', title: 'Reused',
+      webSocketDebuggerUrl: 'ws://example/reused',
+    }],
+    closePage: async (_cdp, targetId) => { reusedCloseCalls.push(targetId); return 'closed'; },
+    evaluate: async (_target, expression) => await evaluateExpression(expression, [
+      new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-reused' }),
+      new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-reused' }),
+    ], false, 'https://chatgpt.com/c/reused'),
+  }));
+  assert.equal(reused.acquisition, 'reused');
+  assert.deepEqual(reusedCloseCalls, []);
+
+  const starts: string[] = [];
+  const settled: string[] = [];
+  let settledBeforeAllStarted = false;
+  let mutations = 0;
+  const livenessTargets: CdpTarget[] = Array.from({ length: LIVENESS_FAN_OUT }, (_, index) => ({
+    id: `live-${index}`,
+    type: 'page',
+    url: `https://chatgpt.com/c/live-${index}`,
+    title: `Live ${index}`,
+    webSocketDebuggerUrl: `ws://example/live-${index}`,
+  }));
+  const liveness = await runProbe({ operation: 'liveness', cdp: 'http://127.0.0.1:9222' }, deps({
+    listTargets: async () => livenessTargets,
+    evaluate: async (target, expression) => {
+      assert.equal(expression, LIVENESS_EXPRESSION);
+      starts.push(target.target_id);
+      if (target.target_id === 'live-0') return await new Promise<never>(() => {});
+      return Promise.resolve({ status: 'ok', ready_state: 'complete' }).then((value) => {
+        if (starts.length < LIVENESS_FAN_OUT) settledBeforeAllStarted = true;
+        settled.push(target.target_id);
+        return value;
+      });
+    },
+    createPage: async () => { mutations += 1; return createdTarget; },
+    closePage: async () => { mutations += 1; return 'closed'; },
+  }));
+  assert.equal(liveness.status, 'ok');
+  assert.equal(CDP_REQUEST_TIMEOUT_MS + LIVENESS_TARGET_TIMEOUT_MS < LIVENESS_TOTAL_TIMEOUT_MS, true);
+  assert.equal((liveness.targets as unknown[]).length, LIVENESS_FAN_OUT);
+  assert.equal(starts.length, LIVENESS_FAN_OUT);
+  assert.deepEqual(liveness.unresponsive_target_ids, ['live-0']);
+  assert.equal((liveness.targets as any[]).every((row) => row.liveness !== 'not_started'), true);
+  assert.equal(mutations, 0);
+  assert.equal(settled.length, LIVENESS_FAN_OUT - 1);
+  assert.equal(settledBeforeAllStarted, false);
+  const proof = {
+    schema: 'browser-gpt-page-probe-contract-proof/v1',
+    result: 'owner-isolation-and-liveness-deadline-isolation',
+    created_target_id: ownedId,
+    close_calls: closeCalls,
+    reused_close_calls: reusedCloseCalls,
+    admitted_target_ids: starts,
+    started_target_ids: starts,
+    settled_target_ids: [...settled, 'live-0'],
+    admitted_target_count: starts.length,
+    settled_target_count: (liveness.targets as unknown[]).length,
+    unresponsive_target_ids: liveness.unresponsive_target_ids,
+    retry_count: 0,
+    diagnostic_only: true,
+    workflow_authority: 'none',
+  };
+  process.stdout.write(`${JSON.stringify(proof)}\n`);
+});
+
+test('acquisition rejects redirect and malformed creation, while exposing cleanup failure', async () => {
+  const requested = 'https://chat.openai.com/c/redirect';
+  const createdTarget: CdpTarget = {
+    id: 'owned-redirect', type: 'page', url: requested, title: 'Owned',
+    webSocketDebuggerUrl: 'ws://example/owned-redirect',
+  };
+  const closeCalls: string[] = [];
+  await assert.rejects(
+    runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: requested, openIfMissing: true }, deps({
+      listTargets: async () => [],
+      createPage: async () => createdTarget,
+      closePage: async (_cdp, targetId) => { closeCalls.push(targetId); return 'closed'; },
+      evaluate: async (_target, expression) => await evaluateExpression(expression, [
+        new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-redirect' }),
+      ], false, 'https://chatgpt.com/c/redirect'),
+    })),
+    (error: any) => error.status === 'surface_unknown'
+      && error.reason === 'conversation_identity_mismatch'
+      && error.details?.cleanup === 'closed',
+  );
+  assert.deepEqual(closeCalls, ['owned-redirect']);
+
+  let malformedCloseCalls = 0;
+  await assert.rejects(
+    runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/malformed', openIfMissing: true }, deps({
+      listTargets: async () => [],
+      createPage: async () => [createdTarget, createdTarget],
+      closePage: async () => { malformedCloseCalls += 1; return 'closed'; },
+    })),
+    (error: any) => error.status === 'unavailable' && error.reason === 'create_result_ambiguous',
+  );
+  assert.equal(malformedCloseCalls, 0);
+
+  let samples = 0;
+  await assert.rejects(
+    runProbe({ operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/cleanup', openIfMissing: true }, deps({
+      listTargets: async () => [],
+      createPage: async () => ({ ...createdTarget, id: 'owned-cleanup', url: 'https://chatgpt.com/c/cleanup' }),
+      closePage: async () => { throw new Error('refused'); },
+      now: () => samples * 250,
+      sleep: async () => { samples += 1; },
+      evaluate: async (_target, expression) => await evaluateExpression(expression, [
+        new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-cleanup' }),
+      ], false, 'https://chatgpt.com/c/cleanup'),
+    })),
+    (error: any) => error.status === 'cleanup_failed' && error.details?.cleanup === 'cleanup_failed',
+  );
+});
+
+test('liveness reports unavailable targets and truncation without mutation', async () => {
+  let evaluateCalls = 0;
+  const result = await runProbe({ operation: 'liveness', cdp: 'http://127.0.0.1:9222' }, deps({
+    listTargets: async () => [
+      { id: 'without-ws', type: 'page', url: 'https://chatgpt.com/c/without-ws', title: 'No WS' },
+      { id: 'with-ws', type: 'page', url: 'https://chatgpt.com/c/with-ws', title: 'With WS', webSocketDebuggerUrl: 'ws://example/with-ws' },
+    ],
+    evaluate: async (_target, expression) => { evaluateCalls += 1; assert.equal(expression, LIVENESS_EXPRESSION); return { status: 'ok', ready_state: 'interactive' }; },
+  }));
+  assert.equal(result.status, 'ok');
+  assert.deepEqual((result.targets as any[]).map((row) => row.liveness), ['unavailable', 'responsive']);
+  assert.equal((result.targets as any[])[0].reason, 'target_websocket_unavailable');
+  assert.equal(result.targets_truncated, false);
+  assert.equal(evaluateCalls, 1);
 });
 
 test('the canonical npm entrypoint emits exactly one JSON result line', async () => {

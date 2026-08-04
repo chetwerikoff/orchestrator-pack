@@ -73,19 +73,23 @@ Duplicate recoverable text is not a reason to reintroduce global recovery/clear 
 
 ## Sanctioned one-shot page probe
 
-When direct page diagnosis is genuinely needed, use only the canonical read-only utility:
+When direct page diagnosis is genuinely needed, use only the canonical one-shot utility:
 
 ```bash
 npm run browser-gpt-page-probe -- list --cdp http://127.0.0.1:9222
 npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --target-id <exact-target-id>
+npm run browser-gpt-page-probe -- inspect --cdp http://127.0.0.1:9222 --url <exact-conversation-url> --open-if-missing true
+npm run browser-gpt-page-probe -- liveness --cdp http://127.0.0.1:9222
 ```
 
-An exact normalized ChatGPT conversation URL may replace `--target-id` for inspection only when it resolves to exactly one already-open target. The probe runs once and exits. It never navigates, sends, clicks, focuses, scrolls, reloads, creates, closes, or reorders tabs.
+The exact URL form remains existing-target-only unless `--open-if-missing true` is explicitly supplied. It reuses exactly one normalized match without closing it; with zero matches it may create one page, waits for exact normalized conversation identity and bounded readable SPA state, then closes only the valid target identity returned by that same invocation. A redirect or same-path cross-host result is `surface_unknown` with `conversation_identity_mismatch`. Duplicate matches, malformed creation, cleanup failure, and every reused-page path fail closed without guessed or delayed cleanup.
+
+`liveness` is a single passive census with immediate `MAX_TARGETS` fan-out and independent target deadlines. It reports responsive, unresponsive, or unavailable rows and exact unresponsive IDs; it never creates, closes, navigates, sends, reloads, or infers process death. Every operation runs once and exits with no watch loop, daemon, retry, background owner, or retained state.
 
 The probe is **diagnostic only**:
 
 - `generation_in_progress: false` is not completion evidence;
-- node counts, hashes, witnesses, and an exported node file do not authorize publication, retry, resend, cleanup, admission, recovery, review capture, or stage progression;
+- node counts, hashes, witnesses, liveness rows, acquisition metadata, and an exported node file do not authorize publication, completion, retry, resend, cleanup, admission, recovery, review capture, or stage progression;
 - use inspection output to select exactly one node representation for optional offline export; never request or construct a transcript dump;
 - exported text may be sensitive. The caller supplies a new path in an existing directory and owns protection and cleanup of the resulting file.
 
@@ -99,7 +103,7 @@ Do not replace this command with raw CDP WebSocket scripts, Playwright snippets,
 - No probe-driven takeover, helper bypass, resend, or workflow progression.
 - No flow-manager consolidation or content judgment over sibling reviewer output.
 
-The one-shot page probe diagnoses an already-open page; it is not a fallback state machine or browser-turn owner.
+The one-shot page probe diagnoses an already-open page, or one explicitly acquired under the zero-match ownership contract; it is not a fallback state machine or browser-turn owner.
 
 ## Session handoff
 
