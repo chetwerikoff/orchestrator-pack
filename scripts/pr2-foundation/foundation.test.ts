@@ -348,7 +348,9 @@ describe('[AC7] estate split', () => {
       .toMatch(/^\/\/ Issue #923 foundation-terminalized:/);
   }
     for (const file of CUTOVER_ROWS) {
-      expect(existsSync(path.join(repoRoot, file))).toBe(true);
+      const row = denominator.find((candidate) => candidate.path === file);
+      expect(row, file).toBeTruthy();
+      expect(row?.terminalState, file).toBe('cutover-terminalized');
     }
   });
 });
