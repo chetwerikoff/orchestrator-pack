@@ -45,7 +45,7 @@ in Issue #1298, and hermetic command-runner regressions for the pack-owned decis
   `worktree list --json`, `worktree ps --json`, `terminal list --json`, terminal stop/close, and
   non-force `worktree rm`.
 - Before Issue #1298, `.claude/skills/direct-fix-checklist/SKILL.md` created a worktree and then a
-  terminal without one mechanical exact-dual Git/Orca gate owning create and replacement.
+  terminal without one mechanical exact-dual Git/Orca gate owning create, replacement, and spawn.
 - `.claude/skills/merge-with-local-adoption/SKILL.md` already stated that a cleanup block must not
   invalidate a successful merge, but its canonical command returned non-zero for every blocked
   teardown outcome.
@@ -76,41 +76,59 @@ Ranked only by proximity to the observed boundary; none is proven.
 
 ## Implemented pack-owned boundary
 
-The implementation now contains one executable bounded create/continuation actuator in
+The implementation now contains one executable bounded create-and-start actuator in
 `scripts/worktree-lifecycle/create-continuation.ts`. It:
 
 - acquires the same process-local exclusion path used by recovery/teardown;
-- reads Git and Orca before create;
-- resumes one already exact-dual Issue-bound target without another create;
-- otherwise performs one primary create attempt and always reads both authorities back, including
-  after timeout or missing receipt;
-- preserves disputed state and performs at most one isolated replacement create;
+- reads Git and Orca before create and proves one active main-worktree repository id;
+- recognizes the Issue family independently of arbitrary caller naming;
+- resumes one already exact-dual Issue-bound target only when it has no terminal;
+- otherwise performs one stable primary create attempt and always reads both authorities back,
+  including after timeout or missing receipt;
+- preserves disputed state and performs at most one stable isolated replacement create;
 - roots both attempts at the exact intended full source SHA;
-- performs two fresh exact-dual reads before returning one terminal-spawn-authorized path;
-- returns task-level degraded control without a third create when the bound cannot be satisfied.
+- performs two fresh exact-dual reads, creates one terminal while retaining the exclusion, then
+  performs two fresh reads proving exactly one new terminal handle;
+- returns task-level degraded control without a third create or second terminal when the bound
+  cannot be satisfied.
 
-The classifier was corrected so a shared source commit alone is not an identity collision. This is
-necessary because the required replacement intentionally starts from the same source SHA. Path,
-branch, Issue/PR binding, mode, and the complete validated row remain collision authorities.
+A read-only post-create census reports `exact_dual_observed` but exports no spawn authority. The
+successful atomic result is `worker_spawned` and contains the exact worktree path and terminal
+handle already created under the exclusion.
 
-Guarded PR-bound recovery additionally verifies the live merged PR head and branch before lifecycle
-evaluation and again immediately before worktree removal, branch deletion, or standard teardown.
-Caller-supplied expected identity alone is not destructive authority.
+The classifier treats a shared source commit alone as non-conflicting because the required
+replacement intentionally starts from the same SHA. Exact Orca identity additionally requires the
+active repository id, canonical path, branch/mode, Issue or PR binding, active non-main/non-archived
+state, and a row with no malformed consumed fields. Present-invalid binding data, wrong-repository,
+archived, main-worktree, or unavailable evidence is conflict evidence.
+
+Guarded PR-bound recovery verifies the live merged PR identity and recollects the complete gate set
+immediately before removal: exact Git-only identity, `.git` link, clean and ignored-data state,
+merge proof, branch ownership, agents, terminals, processes, and exclusion. Process-census failure
+is unavailable evidence rather than proof of zero processes. Branch ownership is checked again
+before branch deletion.
+
+Standard teardown is settled by a fresh Git/Orca census after the child succeeds, fails, or times
+out. `cleanup_complete` requires exact target absence from both authorities with unrelated
+inventory unchanged. Child exit zero alone is not completion evidence; effect-before-receipt may
+settle complete only from the dual read-back.
 
 ## Executable regression evidence
 
 Hermetic production-shaped command-runner tests cover:
 
-- one initial create plus at most one replacement;
-- effect-before-receipt create timeout with authoritative read-back and no blind retry;
-- rerun after a completed exact-dual create without another create;
-- disputed pre-existing state selecting replacement only;
+- one stable initial create plus at most one stable replacement;
+- arbitrary prior caller naming recognized by the Issue marker;
+- effect-before-receipt create and terminal outcomes with authoritative read-back and no blind retry;
+- sequential and concurrent invocations with one terminal winner and no duplicate worker;
+- rerun after a completed exact-dual worktree without another worktree create;
+- stale Orca-only and disputed replacement states;
+- wrong-repository, archived, malformed binding, and missing repository authority;
 - ABA path reuse rejection;
-- concurrent create callers with one exclusion winner and one no-effect loser;
 - dead-owner lock recovery and live-owner fail-closed behavior;
-- interrupted removal where the effect completed before receipt loss, followed by idempotent
-  already-absent settlement;
-- partial Git/Orca disappearance without repeated removal;
+- full fresh-gate invalidation when ignored data appears before the effect;
+- process-census failure as a destructive block;
+- interrupted removal and teardown with dual post-effect settlement;
 - branch reuse and non-allowlisted ignored-data preservation.
 
 These tests establish the pack-owned decision behavior. They do not substitute for the missing
@@ -138,5 +156,5 @@ follow-up artifact containing:
 7. caller/scheduler evidence that one degraded task returns control without stopping unrelated
    work.
 
-Until that capture exists, the supported behavior is bounded replacement, guarded non-force
+Until that capture exists, the supported behavior is atomic bounded worker start, guarded non-force
 Git-only recovery, or preserved/deferred cleanup. No native adopt/register path is authorized.
