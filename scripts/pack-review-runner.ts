@@ -1528,6 +1528,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
       }
     : undefined;
   if (gptRound
+      && gptRound.cardinality > 1
       && (trim(process.env.PACK_GPT_BROWSER_CHAT_URL) || !trim(process.env.PACK_GPT_BROWSER_PROJECT_URL))) {
     throw new Error('plural GPT review requires PACK_GPT_BROWSER_PROJECT_URL and no fixed chat URL');
   }
