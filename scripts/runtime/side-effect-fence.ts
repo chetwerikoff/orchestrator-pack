@@ -1,18 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import {
-  writeFileSync,
-  closeSync,
-  existsSync,
+  fstatSync,
   mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  type Stats,
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { processAlive } from '../lib/cutover/activation-cordon.ts';
+import {
+  clearLockedFileContents,
+  readLockedFileContents,
+  releaseHeldFileLock,
+  replaceLockedFileContents,
+  tryAcquireHeldFileLock,
+} from './single-instance-lease.ts';
 
 export interface SideEffectFenceOwner {
   readonly schemaVersion: 1;
@@ -25,6 +24,7 @@ export interface SideEffectFenceOwner {
 export interface SideEffectFenceHandle {
   readonly path: string;
   readonly owner: SideEffectFenceOwner;
+  readonly descriptor: number;
 }
 
 export type SideEffectFenceAcquireResult =
@@ -35,9 +35,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function parseOwner(path: string): SideEffectFenceOwner | null {
+function parseOwnerRaw(raw: string): SideEffectFenceOwner | null {
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)
       || parsed.schemaVersion !== 1
       || !Number.isInteger(parsed.pid)
@@ -57,44 +57,41 @@ function parseOwner(path: string): SideEffectFenceOwner | null {
   }
 }
 
-function sameFile(path: string, before: Stats): boolean {
-  try {
-    const after = statSync(path);
-    return before.dev === after.dev && before.ino === after.ino;
-  } catch {
-    return false;
-  }
+function existingFenceDisposition(input: {
+  readonly descriptor: number;
+  readonly ownerlessMaxAgeMs: number;
+  readonly nowMs: number;
+}): 'empty' | 'live' | 'stale' | 'untrusted' {
+  const raw = readLockedFileContents(input.descriptor).trim();
+  if (!raw) return 'empty';
+  const owner = parseOwnerRaw(raw);
+  if (owner) return processAlive(owner.pid) ? 'live' : 'stale';
+  const ageMs = input.nowMs - fstatSync(input.descriptor).mtimeMs;
+  return ageMs >= input.ownerlessMaxAgeMs ? 'stale' : 'untrusted';
 }
 
 /**
- * Reclaim only an observed-dead owner, or an ownerless/malformed record whose
- * file age exceeds the explicit fallback bound. The same inode must still be
- * present at deletion time, so a concurrent replacement is never removed.
+ * Reclaim only while holding the stable fence file's kernel lock. A concurrent
+ * replacement cannot be unlinked because reclamation truncates the locked inode
+ * instead of deleting a path selected by an earlier stat/read.
  */
 export function reclaimStaleSideEffectFence(
   path: string,
   options: { readonly nowMs?: number; readonly ownerlessMaxAgeMs?: number } = {},
 ): boolean {
-  if (!existsSync(path)) return false;
-  let before: Stats;
+  const held = tryAcquireHeldFileLock(path);
+  if (!held.acquired) return false;
   try {
-    before = statSync(path) as Stats;
-  } catch {
-    return false;
-  }
-
-  const owner = parseOwner(path);
-  const nowMs = options.nowMs ?? Date.now();
-  const ownerlessMaxAgeMs = options.ownerlessMaxAgeMs ?? 3 * 60 * 60 * 1_000;
-  const stale = owner
-    ? !processAlive(owner.pid)
-    : nowMs - before.mtimeMs >= ownerlessMaxAgeMs;
-  if (!stale || !sameFile(path, before)) return false;
-  try {
-    rmSync(path, { force: false });
+    const disposition = existingFenceDisposition({
+      descriptor: held.descriptor,
+      nowMs: options.nowMs ?? Date.now(),
+      ownerlessMaxAgeMs: options.ownerlessMaxAgeMs ?? 3 * 60 * 60 * 1_000,
+    });
+    if (disposition !== 'stale') return false;
+    clearLockedFileContents(held.descriptor);
     return true;
-  } catch {
-    return false;
+  } finally {
+    releaseHeldFileLock(held.descriptor);
   }
 }
 
@@ -104,6 +101,28 @@ export function acquireSideEffectFence(input: {
   readonly ownerlessMaxAgeMs?: number;
 }): SideEffectFenceAcquireResult {
   mkdirSync(dirname(input.path), { recursive: true });
+  const held = tryAcquireHeldFileLock(input.path);
+  if (!held.acquired) {
+    return {
+      acquired: false,
+      reason: held.reason === 'busy' ? 'side_effect_busy' : 'side_effect_fence_untrusted',
+    };
+  }
+
+  const disposition = existingFenceDisposition({
+    descriptor: held.descriptor,
+    nowMs: Date.now(),
+    ownerlessMaxAgeMs: input.ownerlessMaxAgeMs ?? 3 * 60 * 60 * 1_000,
+  });
+  if (disposition === 'live') {
+    releaseHeldFileLock(held.descriptor);
+    return { acquired: false, reason: 'side_effect_busy' };
+  }
+  if (disposition === 'untrusted') {
+    releaseHeldFileLock(held.descriptor);
+    return { acquired: false, reason: 'side_effect_fence_untrusted' };
+  }
+
   const owner: SideEffectFenceOwner = {
     schemaVersion: 1,
     pid: process.pid,
@@ -111,38 +130,24 @@ export function acquireSideEffectFence(input: {
     startedAtMs: Date.now(),
     metadata: input.metadata ?? {},
   };
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let descriptor: number | null = null;
-    try {
-      descriptor = openSync(input.path, 'wx', 0o600);
-      writeFileSync(descriptor, `${JSON.stringify(owner)}\n`, 'utf8');
-      return { acquired: true, handle: { path: input.path, owner } };
-    } catch (error) {
-      const code = error && typeof error === 'object' && 'code' in error
-        ? String((error as NodeJS.ErrnoException).code ?? '')
-        : '';
-      if (code !== 'EEXIST') return { acquired: false, reason: 'side_effect_fence_untrusted' };
-      if (attempt === 0 && reclaimStaleSideEffectFence(input.path, {
-        ownerlessMaxAgeMs: input.ownerlessMaxAgeMs,
-      })) continue;
-      return { acquired: false, reason: parseOwner(input.path) ? 'side_effect_busy' : 'side_effect_fence_untrusted' };
-    } finally {
-      if (descriptor !== null) closeSync(descriptor);
-    }
-  }
-  return { acquired: false, reason: 'side_effect_busy' };
+  replaceLockedFileContents(held.descriptor, `${JSON.stringify(owner)}\n`);
+  return {
+    acquired: true,
+    handle: { path: input.path, owner, descriptor: held.descriptor },
+  };
 }
 
 export function releaseSideEffectFence(handle: SideEffectFenceHandle): boolean {
-  const owner = parseOwner(handle.path);
-  if (!owner || owner.nonce !== handle.owner.nonce || owner.pid !== handle.owner.pid) return false;
-  const tombstone = `${handle.path}.${handle.owner.nonce}.release`;
+  let owner: SideEffectFenceOwner | null = null;
   try {
-    renameSync(handle.path, tombstone);
-    rmSync(tombstone, { force: true });
+    owner = parseOwnerRaw(readLockedFileContents(handle.descriptor).trim());
+    if (!owner || owner.nonce !== handle.owner.nonce || owner.pid !== handle.owner.pid) {
+      return false;
+    }
+    clearLockedFileContents(handle.descriptor);
     return true;
-  } catch {
-    return false;
+  } finally {
+    releaseHeldFileLock(handle.descriptor);
   }
 }
 
