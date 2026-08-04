@@ -7,6 +7,7 @@
     "scripts/check-ao-dead-argv-bypass.ps1",
     "scripts/check-review-start-claim-guard.ps1",
     "scripts/estate-cut/task-311-tests/task-311-claim.test-support.ts",
+    "scripts/estate-cut/task-311-tests/task-311-common.test-support.ts",
     "scripts/fleet-liveness-census.cases.ts",
     "scripts/fleet-liveness.cases.ts",
     "scripts/gate-runner/fleet-liveness-census.ts",
