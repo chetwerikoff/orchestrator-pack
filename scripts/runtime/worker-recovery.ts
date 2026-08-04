@@ -1,9 +1,12 @@
+import { resolve } from 'node:path';
 import {
   runtimeUnsupported,
+  sameRuntimeWorker,
   type RuntimeAdapter,
   type RuntimeCallOptions,
   type RuntimeOperationFailure,
   type RuntimeWorker,
+  type RuntimeWorkerIdentity,
 } from './contracts.ts';
 
 export type WorkerRecoveryResult =
@@ -53,23 +56,35 @@ function verifyWorkspaceHasNoLiveOwner(input: {
   return { ok: true };
 }
 
+function expectedIdentity(
+  adapter: RuntimeAdapter,
+  targetId: string,
+  targetGeneration: string,
+): RuntimeWorkerIdentity {
+  return {
+    runtime: adapter.id,
+    id: targetId,
+    generation: targetGeneration,
+  };
+}
+
 /**
  * Runtime-only worker recovery caller. It never derives authority from runtime
  * metadata such as linkedPR and never owns retry scheduling.
  *
- * The existing pack claim is acquired before workspace removal or spawn. After
- * claim acquisition every worker in the exact cleanup workspace is observed
- * again. Any live or unknown owner blocks cleanup. Cleanup and spawn selectors
- * are distinct: a removed stale workspace is never reused as the spawn target.
+ * Destructive cleanup requires a complete expected worker identity and expected
+ * workspace head. Cleanup/spawn selectors are validated before any runtime call
+ * or claim acquisition, and the exact identity is re-read after the claim.
  */
 export function recoverRuntimeWorker(input: {
   readonly adapter: RuntimeAdapter;
   readonly targetId?: string;
+  readonly targetGeneration?: string;
   /** Selector for the new worker. Defaults to the current active workspace. */
   readonly workspace?: 'active' | string;
   readonly cleanupWorkspace?: {
     readonly workspacePath: string;
-    readonly expectedHeadSha?: string;
+    readonly expectedHeadSha: string;
   };
   readonly title: string;
   readonly command: string;
@@ -77,14 +92,44 @@ export function recoverRuntimeWorker(input: {
   readonly acquireClaim: () => { readonly ok: true } | { readonly ok: false; readonly reason: string };
   readonly options?: RuntimeCallOptions;
 }): WorkerRecoveryResult {
+  const targetId = input.targetId?.trim() ?? '';
+  const targetGeneration = input.targetGeneration?.trim() ?? '';
+  if (targetId && !targetGeneration) {
+    return { outcome: 'skipped_ambiguous', reason: 'target_generation_missing' };
+  }
+  if (!targetId && targetGeneration) {
+    return { outcome: 'skipped_ambiguous', reason: 'target_id_missing' };
+  }
+
+  const cleanupPath = input.cleanupWorkspace?.workspacePath.trim() ?? '';
+  const expectedHeadSha = input.cleanupWorkspace?.expectedHeadSha.trim() ?? '';
+  if (input.cleanupWorkspace && !cleanupPath) {
+    return { outcome: 'skipped_ambiguous', reason: 'cleanup_workspace_missing' };
+  }
+  if (input.cleanupWorkspace && !expectedHeadSha) {
+    return { outcome: 'skipped_ambiguous', reason: 'cleanup_expected_head_missing' };
+  }
+
   const spawnWorkspace = input.workspace ?? 'active';
-  const observationWorkspace = input.cleanupWorkspace?.workspacePath ?? spawnWorkspace;
+  if (input.cleanupWorkspace && spawnWorkspace !== 'active'
+    && resolve(spawnWorkspace) === resolve(cleanupPath)) {
+    return { outcome: 'skipped_ambiguous', reason: 'cleanup_spawn_workspace_reuse' };
+  }
+
+  const observationWorkspace = cleanupPath || spawnWorkspace;
   const observationWindowMs = input.observationWindowMs ?? 50;
+  const expected = targetId
+    ? expectedIdentity(input.adapter, targetId, targetGeneration)
+    : null;
   let selected: RuntimeWorker | null = null;
-  if (input.targetId) {
-    const found = input.adapter.findWorkerById(input.targetId, input.options);
+
+  if (expected) {
+    const found = input.adapter.findWorkerById(expected.id, input.options);
     if (found.status !== 'ok') return { outcome: 'runtime_failed', failure: found };
     selected = found.value;
+    if (selected && (!sameRuntimeWorker(selected.identity, expected) || selected.provenance !== 'internal')) {
+      return { outcome: 'skipped_ambiguous', worker: selected, reason: 'worker_identity_mismatch' };
+    }
   } else {
     const listed = input.adapter.listWorkers({ workspace: observationWorkspace }, input.options);
     if (listed.status !== 'ok') return { outcome: 'runtime_failed', failure: listed };
@@ -95,10 +140,13 @@ export function recoverRuntimeWorker(input: {
       return { outcome: 'skipped_ambiguous', reason: 'multiple_runtime_workers' };
     }
     selected = candidates[0] ?? null;
+    if (selected?.provenance === 'external') {
+      return { outcome: 'skipped_ambiguous', worker: selected, reason: 'external_worker_not_authority' };
+    }
   }
 
   if (selected && input.cleanupWorkspace
-    && selected.workspacePath !== input.cleanupWorkspace.workspacePath) {
+    && resolve(selected.workspacePath) !== resolve(cleanupPath)) {
     return { outcome: 'skipped_ambiguous', worker: selected, reason: 'workspace_identity_mismatch' };
   }
 
@@ -118,11 +166,22 @@ export function recoverRuntimeWorker(input: {
   const claim = input.acquireClaim();
   if (!claim.ok) return { outcome: 'spawn_denied', reason: claim.reason };
 
+  if (expected) {
+    const current = input.adapter.findWorkerById(expected.id, input.options);
+    if (current.status !== 'ok') return { outcome: 'runtime_failed', failure: current };
+    if (current.value && (
+      !sameRuntimeWorker(current.value.identity, expected)
+      || current.value.provenance !== 'internal'
+    )) {
+      return { outcome: 'claim_lost', reason: 'post_claim_worker_identity_mismatch' };
+    }
+  }
+
   let workspaceRemoved = false;
   if (input.cleanupWorkspace) {
     const revalidated = verifyWorkspaceHasNoLiveOwner({
       adapter: input.adapter,
-      workspacePath: input.cleanupWorkspace.workspacePath,
+      workspacePath: cleanupPath,
       observationWindowMs,
       options: input.options,
     });
@@ -136,13 +195,20 @@ export function recoverRuntimeWorker(input: {
         failure: runtimeUnsupported('remove_workspace', 'runtime_workspace_remove_unsupported'),
       };
     }
-    const removed = input.adapter.removeWorkspace(input.cleanupWorkspace, input.options);
+    const removed = input.adapter.removeWorkspace({
+      workspacePath: cleanupPath,
+      expectedHeadSha,
+    }, input.options);
     if (removed.status !== 'ok') return { outcome: 'runtime_failed', failure: removed };
     workspaceRemoved = true;
-  } else if (input.targetId) {
-    const current = input.adapter.findWorkerById(input.targetId, input.options);
+  } else if (expected) {
+    const current = input.adapter.findWorkerById(expected.id, input.options);
     if (current.status !== 'ok') return { outcome: 'runtime_failed', failure: current };
     if (current.value) {
+      if (!sameRuntimeWorker(current.value.identity, expected)
+        || current.value.provenance !== 'internal') {
+        return { outcome: 'claim_lost', reason: 'post_claim_worker_identity_mismatch' };
+      }
       const liveness = input.adapter.liveness({
         worker: current.value.identity,
         observationWindowMs,
