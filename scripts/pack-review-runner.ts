@@ -83,6 +83,7 @@ import {
   packReviewDeliveryNeedsResume,
   packReviewJournaledPayload,
   packReviewRequiredStatusNeedsStaleReconciliation,
+  packReviewRequiredStatusProjectionKey,
   publishPackReviewRequiredStatus,
   recordMalformedPackReviewStatus,
   recordPackReviewNewerAuthorityReconciliation,
@@ -165,6 +166,7 @@ export interface ReconcileStalePackReviewRunsInput {
   fixturePauseBeforeStaleStatusWrite?: () => void | Promise<void>;
   fixturePauseAfterStaleStatusWrite?: () => void | Promise<void>;
   fixturePauseAfterPendingRestoreWrite?: () => void | Promise<void>;
+  fixturePauseAfterRestoreRead?: (run: PackReviewRunRecord) => void | Promise<void>;
 }
 
 interface ListInput {
@@ -870,6 +872,7 @@ export async function reconcileStalePackReviewRuns(
         };
       }
       const selectedId = currentOrder.run.id;
+      const selectedProjection = packReviewRequiredStatusProjectionKey(currentOrder.run);
       restored = await restorePackReviewAuthoritativeRequiredStatus({
         run: currentOrder.run,
         projectId,
@@ -878,8 +881,14 @@ export async function reconcileStalePackReviewRuns(
         pauseAfterPendingWrite: input.fixturePauseAfterPendingRestoreWrite,
         forceRepublish,
       });
+      if (input.fixturePauseAfterRestoreRead) {
+        await input.fixturePauseAfterRestoreRead(currentOrder.run);
+      }
       const afterWrite = resolvePackReviewRunOrder(await readBoundRecords(), staleRun);
-      if (afterWrite.kind === 'newer' && afterWrite.run.id !== selectedId) continue;
+      if (afterWrite.kind === 'newer') {
+        const afterProjection = packReviewRequiredStatusProjectionKey(afterWrite.run);
+        if (afterWrite.run.id !== selectedId || afterProjection !== selectedProjection) continue;
+      }
       return {
         outcome: restored,
         reason: afterWrite.kind === 'ambiguous'

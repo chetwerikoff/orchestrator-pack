@@ -52,6 +52,27 @@ export function packReviewStaleRequiredStatusIdempotencyKey(run: PackReviewRunRe
   return `required-status:${PACK_REVIEW_REQUIRED_STATUS_CONTEXT}:${run.targetSha}:stale-runner-disappeared`;
 }
 
+export function packReviewRequiredStatusProjectionKey(run: PackReviewRunRecord): string | null {
+  const expectedKey = hasPersistedPackReviewVerdict(run)
+    || PACK_REVIEW_VERDICT_TERMINAL_STATUSES.has(run.status)
+    ? requiredStatusIdempotencyKey(run)
+    : run.status === 'failed' || run.status === 'timed_out' || run.status === 'cancelled'
+      ? unfinishedRequiredStatusKey(run, trim(run.failureReason) || 'runner_internal_failure')
+      : PACK_REVIEW_ACTIVE_STATUSES.has(run.status)
+        ? packReviewPendingRequiredStatusIdempotencyKey(run)
+        : null;
+  if (!expectedKey) return null;
+  return JSON.stringify({
+    expectedKey,
+    status: run.status,
+    failureReason: trim(run.failureReason),
+    reviewVerdict: run.reviewVerdict ?? null,
+    findingCount: run.findingCount ?? null,
+    journalState: run.journalOutcome?.state ?? null,
+    journalKey: run.journalOutcome?.idempotencyKey ?? null,
+  });
+}
+
 export function packReviewRequiredStatusStaleReconciliationComplete(run: PackReviewRunRecord): boolean {
   const outcome = run.deliveryOutcomes?.requiredStatus;
   const failureReason = trim(run.failureReason) || 'runner_internal_failure';

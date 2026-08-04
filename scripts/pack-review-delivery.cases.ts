@@ -1117,6 +1117,56 @@ describe('pack review stale reconciliation (Issue #1067)', () => {
     expect(writes).toHaveLength(6);
   });
 
+  it('rechecks a same-id newer projection before settling', async () => {
+    const storeRoot = tempRoot('opk-1307-same-id-projection-race-');
+    const staleCapture = path.join(storeRoot, 'stale.json');
+    harnessStaleEnv(storeRoot, staleCapture);
+    const staleRunId = seedActiveStaleRun(storeRoot);
+    await writePendingForStaleRun(storeRoot, staleRunId, staleCapture);
+    markRunStale(storeRoot, staleRunId);
+    const newer = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1067,
+      headSha: STALE_HEAD_A,
+      linkedSessionId: 'worker-newer-same-id-race',
+      startReason: 'newer-same-id-race',
+      surface: 'pack-review-stale-reconcile-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      canonicalRepository: STALE_REPO_A,
+    });
+    const writes: PackReviewRequiredStatusRequest[] = [];
+    let transitioned = false;
+
+    const result = await reconcileStalePackReviewRuns({
+      repoSlug: STALE_REPO_A,
+      sourceRepoRoot: repoRoot,
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      fixtureRequiredStatusWriter: async (request) => { writes.push(request); },
+      fixturePauseAfterRestoreRead: async (run) => {
+        if (transitioned) return;
+        transitioned = true;
+        updatePackReviewRun(run.id, {
+          status: 'timed_out',
+          latestRunStatus: 'timed_out',
+          failureReason: 'reviewer_process_timeout',
+        }, { projectId: 'orchestrator-pack', storeRoot });
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      runId: staleRunId,
+      statusReconciled: true,
+      reason: 'newer_run_authoritative',
+    });
+    expect(writes.map((request) => request.state)).toEqual(['pending', 'error']);
+    const restoredNewer = getPackReviewRun(newer.run.id, { projectId: 'orchestrator-pack', storeRoot });
+    expect(restoredNewer?.deliveryOutcomes.requiredStatus?.idempotencyKey)
+      .toContain(':unfinished:reviewer_process_timeout');
+  });
+
   it('force-republishes newer authority after a superseding stale write', async () => {
     const storeRoot = tempRoot('opk-1307-force-republish-');
     const run = createRun(storeRoot);
