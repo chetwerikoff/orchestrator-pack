@@ -12,6 +12,7 @@ import { runLifecycle, type CommandRunner } from './operations.ts';
 const TARGET_SHA = 'a'.repeat(40);
 const MERGE_SHA = 'b'.repeat(40);
 const TARGET_BRANCH = 'agent/issue-1298';
+const REPOSITORY_ID = 'repo-1298';
 const temporaryRoots = new Set<string>();
 
 const completed = (stdout = ''): ProcessResult => ({
@@ -51,8 +52,31 @@ interface Scenario {
   runner: CommandRunner;
 }
 
-function inventoryJson(rows: object[]): string {
-  return JSON.stringify({ ok: true, result: { worktrees: rows } });
+function inventoryJson(scenario: Scenario, includeTarget: boolean): string {
+  return JSON.stringify({
+    ok: true,
+    result: {
+      worktrees: [
+        {
+          path: scenario.repo,
+          head: MERGE_SHA,
+          branch: 'refs/heads/main',
+          repoId: REPOSITORY_ID,
+          isMainWorktree: true,
+          isArchived: false,
+        },
+        ...(includeTarget ? [{
+          path: scenario.target,
+          head: TARGET_SHA,
+          branch: `refs/heads/${TARGET_BRANCH}`,
+          linkedPR: 1300,
+          repoId: REPOSITORY_ID,
+          isMainWorktree: false,
+          isArchived: false,
+        }] : []),
+      ],
+    },
+  });
 }
 
 function buildScenario(): Scenario {
@@ -105,19 +129,11 @@ function buildScenario(): Scenario {
       return completed([...primary, ...secondary].join('\n'));
     }
     if (argv[0] === 'worktree' && argv[1] === 'list') {
-      const rows = scenario.orcaTargetPresent
-        ? [{
-            path: target,
-            head: TARGET_SHA,
-            branch: `refs/heads/${TARGET_BRANCH}`,
-            linkedPR: 1300,
-            isMainWorktree: false,
-            isArchived: false,
-          }]
-        : [];
-      return completed(inventoryJson(rows));
+      return completed(inventoryJson(scenario, scenario.orcaTargetPresent));
     }
-    if (argv[0] === 'worktree' && argv[1] === 'ps') return completed(inventoryJson([]));
+    if (argv[0] === 'worktree' && argv[1] === 'ps') {
+      return completed(inventoryJson(scenario, false));
+    }
     if (argv[0] === 'terminal' && argv[1] === 'list') {
       return completed(JSON.stringify({ ok: true, result: { terminals: [] } }));
     }
@@ -172,11 +188,11 @@ afterAll(() => {
 });
 
 describe('unknown recovery outcomes', () => {
-  test('settles effect-before-receipt as already absent without another removal', () => {
+  test('settles effect-before-receipt from dual absence without another removal', () => {
     const scenario = buildScenario();
     scenario.removalResponse = lostReceipt('response lost after Git removed the target');
 
-    expect(invoke(scenario, true).outcome).toBe('cleanup_deferred');
+    expect(invoke(scenario, true).outcome).toBe('git_only_recovered');
     expect(invoke(scenario, true).outcome).toBe('already_absent');
     expect(scenario.removalAttempts).toBe(1);
   });
@@ -193,7 +209,7 @@ describe('unknown recovery outcomes', () => {
       return response;
     };
 
-    invoke(scenario, true);
+    expect(invoke(scenario, true).outcome).toBe('cleanup_deferred');
     const settlement = invoke(scenario, true);
 
     expect(settlement).toMatchObject({ outcome: 'cleanup_deferred', pipelineContinues: true });
