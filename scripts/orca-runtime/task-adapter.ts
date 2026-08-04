@@ -82,6 +82,9 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('stop_worker', 'worker_generation_not_found');
     }
 
+    // Consume authority before transport. Timeout, empty output, invalid JSON,
+    // or another ambiguous result may mean Orca already closed the terminal.
+    this.#ownedForStop.delete(worker.id);
     const response = this.#run(
       ['terminal', 'close', '--terminal', worker.id],
       options,
@@ -90,20 +93,23 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
       return runtimeFailure('stop_worker', neutralFailureReason(response));
     }
 
-    this.#ownedForStop.delete(worker.id);
     return { status: 'ok', value: { stopped: true } };
   }
 
   removeWorkspace(
     input: {
       readonly workspacePath: string;
-      readonly expectedHeadSha?: string;
+      readonly expectedHeadSha: string;
     },
     options: RuntimeCallOptions = {},
   ): RuntimeResult<{ readonly removed: true }> {
     const rawPath = input.workspacePath.trim();
     if (!rawPath) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_path_missing');
+    }
+    const expectedHeadSha = input.expectedHeadSha.trim().toLowerCase();
+    if (!expectedHeadSha) {
+      return runtimeFailure('remove_workspace', 'runtime_workspace_expected_head_missing');
     }
     const requestedPath = resolve(rawPath);
 
@@ -123,9 +129,8 @@ export class OrcaTaskRuntimeAdapter extends OrcaRuntimeAdapter {
     if (resolve(observedPath) !== requestedPath) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_path_mismatch');
     }
-    const expectedHeadSha = input.expectedHeadSha?.trim().toLowerCase();
     const observedHeadSha = worktree?.head?.trim().toLowerCase();
-    if (expectedHeadSha && observedHeadSha !== expectedHeadSha) {
+    if (observedHeadSha !== expectedHeadSha) {
       return runtimeFailure('remove_workspace', 'runtime_workspace_head_mismatch');
     }
 
