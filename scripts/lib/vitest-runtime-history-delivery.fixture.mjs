@@ -114,10 +114,13 @@ function provenanceStatus({
   sourceMainSha = SOURCE_MAIN,
   supplementalSourceSha = null,
   supplementalTarget = 'scripts/pack-reviewer-preference.test.ts',
+  compactWithoutSource = false,
 } = {}) {
-  const description = supplementalSourceSha
-    ? `runtime-history-provenance/v1 r=${runId} a=${attempt} s=${sourceMainSha} x=${supplementalSourceSha}`
-    : `runtime-history-provenance run=${runId} attempt=${attempt} source=${sourceMainSha}`;
+  const description = compactWithoutSource
+    ? `runtime-history-provenance/v1 r=${runId} a=${attempt} s=${sourceMainSha}`
+    : supplementalSourceSha
+      ? `runtime-history-provenance/v1 r=${runId} a=${attempt} s=${sourceMainSha} x=${supplementalSourceSha}`
+      : `runtime-history-provenance run=${runId} attempt=${attempt} source=${sourceMainSha}`;
   return status({
     id,
     context: PROVENANCE_CONTEXT,
@@ -343,6 +346,11 @@ function testProvenanceMatrix() {
   equal(bounded.supplementalSourceSha, supplementalSha, 'bounded provenance must retain source revision');
   equal(bounded.supplementalTarget, 'scripts/pack-reviewer-preference.test.ts', 'bounded provenance must retain target');
   equal(verifyRefreshRun(successfulRefreshRun(), bounded).state, 'success', 'bounded run must verify');
+  equal(
+    parseRefreshProvenance([provenanceStatus({ compactWithoutSource: true })], GENERATED).outcome,
+    'provenance-invalid',
+    'compact provenance without measured source must fail',
+  );
   equal(
     parseRefreshProvenance(
       [

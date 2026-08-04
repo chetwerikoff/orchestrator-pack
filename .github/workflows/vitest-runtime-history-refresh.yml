@@ -130,6 +130,31 @@ jobs:
             exit 1
           }
 
+      - name: Validate trusted supplemental source ancestry
+        if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != '' && matrix.shard == 1
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.supplemental_source_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
+          parent_count="$(git rev-list --parents -n 1 "${SOURCE_SHA}" | awk '{print NF - 1}')"
+          test "${parent_count}" -eq 1 || {
+            echo 'supplemental_source_sha must identify a non-merge commit' >&2
+            exit 1
+          }
+          trusted_branch=false
+          while read -r branch_sha branch_ref; do
+            if git merge-base --is-ancestor "${SOURCE_SHA}" "${branch_sha}"; then
+              trusted_branch=true
+              break
+            fi
+          done < <(git for-each-ref --format='%(objectname) %(refname)' refs/remotes/origin/)
+          test "${trusted_branch}" = true || {
+            echo 'supplemental_source_sha must be reachable from a trusted base-repository branch' >&2
+            exit 1
+          }
+
       - name: Checkout exact supplemental source revision
         if: github.event_name == 'workflow_dispatch' && inputs.supplemental_source_sha != '' && matrix.shard == 1
         uses: actions/checkout@v4
@@ -300,7 +325,7 @@ jobs:
           $source = Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports'
           $dest = Join-Path $env:GITHUB_WORKSPACE 'vitest-supplemental-reports-staged'
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          $report = Join-Path $source '.vitest-runtime-report-supplemental-pack-reviewer-preference.json'
+          $report = Join-Path $source 'supplemental-source/.vitest-runtime-report-supplemental-pack-reviewer-preference.json'
           $meta = Join-Path $source '.vitest-runtime-report-supplemental-pack-reviewer-preference.json.meta.json'
           if (-not (Test-Path -LiteralPath $report) -or -not (Test-Path -LiteralPath $meta)) {
             throw 'missing fixed supplemental report or companion metadata'

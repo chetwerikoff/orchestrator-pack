@@ -18,7 +18,7 @@ export const DEFAULT_POLL_SECONDS = 15;
 
 const SHA_RE = /^[0-9a-f]{40}$/i;
 const LEGACY_PROVENANCE_RE = /^runtime-history-provenance run=(\d+) attempt=(\d+) source=([0-9a-f]{40})(?: supplemental=([0-9a-f]{40}) target=(scripts\/pack-reviewer-preference\.test\.ts) trusted=([0-9a-f]{40}))?$/i;
-const COMPACT_PROVENANCE_RE = /^runtime-history-provenance\/v1 r=(\d+) a=(\d+) s=([0-9a-f]{40})(?: x=([0-9a-f]{40}))?$/i;
+const COMPACT_PROVENANCE_RE = /^runtime-history-provenance\/v1 r=(\d+) a=(\d+) s=([0-9a-f]{40}) x=([0-9a-f]{40})$/i;
 const FAIL = new Set(['failure', 'failed', 'error', 'cancelled', 'timed_out', 'action_required']);
 const PASS = new Set(['success', 'successful', 'neutral', 'skipped', 'skipping']);
 const WAIT = new Set(['pending', 'queued', 'requested', 'waiting', 'in_progress']);
