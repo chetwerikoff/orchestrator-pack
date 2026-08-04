@@ -1,7 +1,7 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-  Dead-argv bypass scan for AO session/status reads (Issue #619 AC#9) and journaled send transport (Issue #640 AC#7).
+  Dead-argv bypass scan for the remaining AO service/operator surfaces after the #1248 runtime hard cut.
 #>
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -10,19 +10,12 @@ $SessionStatusInScopeRelativePaths = @(
     'scripts/lib/Invoke-AoCliJson.ps1',
     'scripts/wait-orchestrator-launch.ps1',
     'scripts/lib/Autonomous-ClaimPrResumeGate.ps1',
-    'scripts/dead-worker-reconcile.ps1',
-    'scripts/lib/Worker-NudgeClaim.ps1',
-    'scripts/lib/Get-ClaimedReviewStartSnapshot.ps1',
-    'scripts/lib/Invoke-ReviewWakeTrigger.ps1',
-    'scripts/ci-failure-notification-reconcile.ps1',
-    'scripts/ci-green-wake-reconcile.ps1'
+    'scripts/lib/Worker-NudgeClaim.ps1'
 )
 
 $SendTransportInScopeRelativePaths = @(
     'scripts/lib/Invoke-WorkerMessageSendAdoptionPreflight.ps1',
-    'scripts/worker-message-send-adoption-preflight.ps1',
-    'scripts/ci-failure-notification-reconcile.ps1',
-    'scripts/ci-green-wake-reconcile.ps1'
+    'scripts/worker-message-send-adoption-preflight.ps1'
 )
 
 $AllowlistedRelativePaths = @(
@@ -98,5 +91,5 @@ if ($violations.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[PASS] dead-argv bypass scan (Issues #619 / #640)'
+Write-Host '[PASS] dead-argv bypass scan: only remaining non-runtime AO service/operator surfaces inspected'
 exit 0
