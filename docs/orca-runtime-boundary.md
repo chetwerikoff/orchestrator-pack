@@ -39,23 +39,42 @@ The seam performs a bounded dual census and emits one exact classification:
 `exact_dual`, `exact_git_only`, `orca_only`, `conflict`, or `absent`. Runtime-specific commands and
 response validation stay at the edge; normalized identity and continuation decisions stay in the
 pure classifier. Multiple worktrees may legitimately share the same source commit, so equality of
-HEAD SHA alone is not a collision. Exact identity requires the active Orca repository id,
-canonical path, branch or detached mode, Issue/PR binding, active non-main/non-archived state, and
-the complete validated row.
+HEAD SHA alone is not a collision.
+
+Orca repository authority is derived from the capture-shaped composite worktree `id`
+(`<repository-id>::<canonical-worktree-path>`), not from a synthetic standalone `repoId` field. The
+embedded path must equal the separately returned canonical `path`. Exact identity additionally
+requires branch or the explicit capture-proven detached representation, Issue/PR binding, full
+HEAD SHA, active non-main/non-archived state, and a complete validated row. Missing, malformed, or
+inconsistent identity evidence is conflict evidence.
 
 The canonical create/handoff surface is
-`scripts/worktree-lifecycle/create-continuation.ts`. One invocation owns the process-local
+`scripts/worktree-lifecycle/create-continuation.ts`. One invocation owns the shared owner-token
 exclusion across pre-create dual census, one stable primary create, authoritative read-back after
 known or unknown command outcome, at most one stable same-source replacement, terminal creation,
-and two fresh read-backs proving exactly one new terminal handle. The successful result is
-`worker_spawned`; it returns the verified worktree and terminal identities and deliberately exports
-no later terminal-spawn authorization. A repeated, concurrent, or exhausted caller receives a
-no-effect task-level degraded result and returns control to the scheduler.
+and two fresh read-backs proving exactly one new terminal handle. A dead owner is recovered only
+through PID/start-time validation plus stable compare-before-unlink; a borrowed teardown child
+validates the parent token and never unlinks the parent's lock.
+
+The Issue-family budget is independent of the current expected HEAD. An old-head, malformed,
+active, interrupted, already terminal-bound, or otherwise disputed same-repository Issue-family
+row consumes or blocks the bounded create slots instead of reopening the primary/replacement
+sequence. `worktree ps` evidence is retained and validated; an Orca-managed candidate is usable
+only when its exact agent row is complete and every agent is done and not interrupted.
+
+A bare Orca `worktree create` may itself materialize fallback/default terminals. Any terminal that
+appears with the new candidate during create read-back is treated as create-owned activity: the
+candidate is preserved and the actuator returns bounded `task_degraded` without creating a
+replacement or a second terminal. The successful result is `worker_spawned`; it returns the
+verified worktree and terminal identities and deliberately exports no later terminal-spawn
+authorization. A repeated, concurrent, or exhausted caller receives a no-effect task-level
+degraded result and returns control to the scheduler.
 
 The lifecycle seam does not become a universal registry and stores no durable state. Discovery
 never grants mutation authority. The read-only post-create classifier can report
 `exact_dual_observed`, but it cannot authorize a terminal effect. Unsupported, malformed,
-wrong-repository, archived, main-worktree, or present-invalid binding output is a conflict.
+wrong-repository, archived, main-worktree, present-invalid binding, or ambiguous detached output is
+a conflict.
 
 For cleanup, mutation safety and work continuity are separate decisions. Existing teardown gates
 remain fail-closed for the target. A blocked or ambiguous cleanup returns a structured
@@ -66,10 +85,10 @@ cleanliness, ignored-data, merge, branch-ownership, terminal, process, exclusion
 checks are recollected immediately before the effect. Process-census failure is unavailable
 evidence, never proof of zero processes.
 
-Standard teardown is also settled from both authorities after the child returns, fails, or times
-out. `cleanup_complete` requires exact target absence in Git and Orca with unrelated inventory
-unchanged; child exit zero alone is not completion evidence. Effect-before-receipt may settle
-complete only from that dual read-back.
+Standard teardown holds the same owner-token exclusion across the decisive census, delegated child,
+and dual post-effect read-back. `cleanup_complete` requires exact target absence in Git and Orca
+with unrelated in-repository inventory unchanged; child exit zero alone is not completion evidence.
+Effect-before-receipt may settle complete only from that dual read-back.
 
 No watcher, daemon, lease service, second state store, bulk orphan sweep, private Orca persistence
 edit, force removal, or path-only delete is introduced. A future native Orca adopt/register branch
