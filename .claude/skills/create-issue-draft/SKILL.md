@@ -74,7 +74,8 @@ owned by [`docs/flow-manager-long-running-child-runbook.md`](../../docs/flow-man
 This skill retains the create-issue workflow, tiering, review-stage, capture,
 direct-publication, receipt, relay, ledger, and acceptance rules below. It does
 not duplicate tracked helper launch, polling, retry, tab-close, probe, or
-observation-loss mechanics.
+observation-loss mechanics. The long-running adapter completion mode remains
+`browser-turn-result-v1`.
 
 ## Fixed per-tier pipeline
 
