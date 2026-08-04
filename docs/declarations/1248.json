@@ -31,6 +31,7 @@
     "scripts/lib/Invoke-ReviewReadyReportStateSeed.ps1",
     "scripts/lib/Invoke-ReviewTriggerReeval.ps1",
     "scripts/lib/Invoke-ReviewWakeTrigger.ps1",
+    "scripts/lib/Invoke-ScriptedReviewPostSubmitDelivery.ps1",
     "scripts/lib/Invoke-ScriptedReviewStdoutDelivery.ps1",
     "scripts/lib/orchestrator-side-process-supervisor.ts",
     "scripts/lib/Orchestrator-SideEffectFence.ps1",
@@ -119,7 +120,8 @@
     "docs/",
     "package-lock.json",
     "package.json",
-    "scripts/"
+    "scripts/",
+    "tests/"
   ],
-  "source_revision": "#1248-hard-cut-r5"
+  "source_revision": "#1248-hard-cut-r6"
 }
