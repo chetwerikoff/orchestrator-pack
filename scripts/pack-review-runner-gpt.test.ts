@@ -15,7 +15,7 @@ import {
   runPackGptReviewCommand,
 } from './pack-gpt-review.js';
 import { startPackReview } from './pack-review-runner.js';
-import { createPackReviewRun, listPackReviewRuns } from './lib/pack-review-run-store.js';
+import { createPackReviewRun, getPackReviewRun, listPackReviewRuns } from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
 
@@ -227,6 +227,44 @@ describe('GPT failure matrix (Issue #1031 AC5)', () => {
       }
     });
   }
+});
+
+describe('GPT terminal persistence claim handling (Issue #1307)', () => {
+  it('retains the acquired claim when required-status outcome persistence fails', async () => {
+    const storeRoot = tempRoot('opk-1307-claim-persistence-');
+    const capture = path.join(storeRoot, 'github-review.json');
+    harnessEnv(storeRoot, capture);
+
+    const result = await startPackReview({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      sourceRepoRoot: repoRoot,
+      prNumber: 1031,
+      headSha: HEAD_A,
+      claimMode: 'acquire',
+      fixtureRepoSlug: 'chetwerikoff/orchestrator-pack',
+      fixtureReviewStdout: '',
+      fixtureReviewExitCode: 1,
+      fixtureRequiredStatusWriter: async (request) => {
+        if (request.state === 'error') {
+          chmodSync(path.join(storeRoot, 'runs'), 0o555);
+        }
+      },
+    });
+
+    chmodSync(path.join(storeRoot, 'runs'), 0o755);
+    expect(result.ok).toBe(false);
+    expect(getPackReviewRun(result.runId, { projectId: 'orchestrator-pack', storeRoot })?.deliveryOutcomes.requiredStatus)
+      .toMatchObject({ state: 'succeeded', reason: 'status_pending' });
+    expect(existsSync(path.join(
+      storeRoot,
+      'ao-base',
+      'projects',
+      'orchestrator-pack',
+      'review-start-claims',
+      `pr-1031-${HEAD_A}.json`,
+    ))).toBe(true);
+  });
 });
 
 describe('GPT claim race (Issue #1031 AC11)', () => {

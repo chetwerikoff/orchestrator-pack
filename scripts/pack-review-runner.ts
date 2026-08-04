@@ -1786,7 +1786,11 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
     if (run && !terminal) {
       try {
         const persisted = getPackReviewRun(run.id, { projectId, storeRoot });
-        if (!persisted
+        if (persisted
+          && isPackReviewUnfinishedTerminalRun(persisted)
+          && packReviewRequiredStatusNeedsStaleReconciliation(persisted)) {
+          retainClaimDirectory = true;
+        } else if (!persisted
           || (!hasPersistedPackReviewVerdict(persisted) && !isPackReviewUnfinishedTerminalRun(persisted))) {
           await recordPackReviewUnfinishedTerminalStatus({
             run: persisted ?? run,

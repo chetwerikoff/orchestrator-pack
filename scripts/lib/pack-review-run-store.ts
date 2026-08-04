@@ -271,15 +271,7 @@ function matchesPackReviewRunInput(
   }
   const recordRepository = record.canonicalRepository
     ?? canonicalRepositoryFromRunKey(record.key, record.prNumber, record.targetSha);
-  if (canonicalRepository) {
-    if (recordRepository) return canonicalRepository === recordRepository;
-    return Boolean(
-      sourceRepoRoot
-      && record.sourceRepoRoot
-      && resolve(sourceRepoRoot) === resolve(record.sourceRepoRoot),
-    );
-  }
-  if (recordRepository) return false;
+  if (canonicalRepository && recordRepository) return canonicalRepository === recordRepository;
   return Boolean(
     sourceRepoRoot
     && record.sourceRepoRoot

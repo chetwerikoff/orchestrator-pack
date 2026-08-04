@@ -540,6 +540,36 @@ describe('pack review corrective contracts (Issue #1307)', () => {
     expect(resolvePackReviewRunOrder(records, first)).toEqual({ kind: 'ambiguous', reason: 'legacy_order_ambiguous' });
   });
 
+  it('matches an unqualified same-repository start to a canonical run', () => {
+    const storeRoot = tempRoot('opk-1307-mixed-identity-');
+    const canonical = createRun(storeRoot);
+    updatePackReviewRun(canonical.id, {
+      status: 'failed',
+      latestRunStatus: 'failed',
+      failureReason: 'reviewer_process_failed',
+    }, { projectId: 'orchestrator-pack', storeRoot });
+
+    const recordPath = path.join(storeRoot, 'runs', `${canonical.id}.json`);
+    const legacy = JSON.parse(readFileSync(recordPath, 'utf8')) as Record<string, unknown>;
+    delete legacy.canonicalRepository;
+    writeFileSync(recordPath, `${JSON.stringify(legacy)}\n`);
+
+    const unqualified = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: canonical.prNumber,
+      headSha: canonical.targetSha,
+      linkedSessionId: 'worker-1307-legacy',
+      startReason: 'mixed-identity',
+      surface: 'pack-review-delivery-test',
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+    });
+
+    expect(unqualified.created).toBe(true);
+    expect(unqualified.run.sameKeyOrder).toBeGreaterThan(canonical.sameKeyOrder!);
+  });
+
   it.each([
     ['active', 'running', undefined, 'pending'],
     ['verdict', 'up_to_date', undefined, 'success'],
