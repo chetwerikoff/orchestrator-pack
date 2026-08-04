@@ -96,17 +96,35 @@ if (-not $SkipPester) {
     }
     else {
         Import-Module Pester -MinimumVersion 5.0.0 -ErrorAction Stop
+
+        # #1248 r12: keep tests/** untouched while no longer discovering suites bound
+        # exclusively to the intentionally deleted PowerShell owner-chain runtime.
+        $retiredPesterSuitePaths = @(
+            (Join-Path $Root 'tests/powershell/Issue748.RefreshConcurrency.Tests.ps1')
+            (Join-Path $Root 'tests/powershell/Issue748.UnknownSnapshotExpiry.Tests.ps1')
+            (Join-Path $Root 'tests/powershell/Issue748.WorkerStatusPopulation.Tests.ps1')
+            (Join-Path $Root 'scripts/review-trigger-reconcile-worker-selected.Tests.ps1')
+            (Join-Path $Root 'scripts/review-trigger-reconcile-worker-status.Tests.ps1')
+            (Join-Path $Root 'scripts/review-trigger-reconcile.Tests.ps1')
+            (Join-Path $Root 'scripts/worker-ci-failed-reconcile.Tests.ps1')
+            (Join-Path $Root 'scripts/worker-depletion-reconcile.Tests.ps1')
+            (Join-Path $Root 'scripts/worker-depletion-reconcile.json-fallback.Tests.ps1')
+            (Join-Path $Root 'scripts/worker-report-stale-reconcile.Tests.ps1')
+        )
         $pesterRoots = @(
-            (Join-Path $Root 'tests/powershell'),
+            (Join-Path $Root 'tests/powershell')
             (Join-Path $Root 'scripts')
         )
-        $pesterFailed = 0
-        $pesterPassed = 0
-        foreach ($pesterRoot in $pesterRoots) {
-            $result = Invoke-Pester -Path $pesterRoot -PassThru
-            $pesterFailed += $result.FailedCount
-            $pesterPassed += $result.PassedCount
-        }
+        $pesterPaths = @(
+            Get-ChildItem -Path $pesterRoots -Filter '*.Tests.ps1' -File -Recurse |
+                Where-Object { $_.FullName -notin $retiredPesterSuitePaths } |
+                Sort-Object FullName |
+                Select-Object -ExpandProperty FullName
+        )
+
+        $result = Invoke-Pester -Path $pesterPaths -PassThru
+        $pesterFailed = $result.FailedCount
+        $pesterPassed = $result.PassedCount
         if ($pesterFailed -gt 0) {
             Write-Track 'pester' 'FAIL' ("failed={0}" -f $pesterFailed)
             $Failures.Add('Pester track failed') | Out-Null
