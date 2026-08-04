@@ -45,9 +45,10 @@ class FakeNode {
   }
 }
 
-async function evaluateExpression(expression: string, nodes: FakeNode[], generating = false, pageUrl = 'https://chatgpt.com/c/test'): Promise<any> {
+async function evaluateExpression(expression: string, nodes: FakeNode[], generating = false, pageUrl = 'https://chatgpt.com/c/test', readyState: 'loading' | 'interactive' | 'complete' = 'complete'): Promise<any> {
   const document = {
     title: 'Fixture title',
+    readyState,
     querySelectorAll(selector: string) {
       assert.equal(selector, '[data-message-author-role]');
       return nodes;
@@ -616,6 +617,7 @@ test('contract proof: owner isolation and deadline-isolated liveness', async () 
 
   const starts: string[] = [];
   const settled: string[] = [];
+  const evaluateCalls: string[] = [];
   let settledBeforeAllStarted = false;
   let mutations = 0;
   const livenessTargets: CdpTarget[] = Array.from({ length: LIVENESS_FAN_OUT }, (_, index) => ({
@@ -630,6 +632,7 @@ test('contract proof: owner isolation and deadline-isolated liveness', async () 
     evaluate: async (target, expression) => {
       assert.equal(expression, LIVENESS_EXPRESSION);
       starts.push(target.target_id);
+      evaluateCalls.push(target.target_id);
       if (target.target_id === 'live-0') return await new Promise<never>(() => {});
       return Promise.resolve({ status: 'ok', ready_state: 'complete' }).then((value) => {
         if (starts.length < LIVENESS_FAN_OUT) settledBeforeAllStarted = true;
@@ -649,6 +652,12 @@ test('contract proof: owner isolation and deadline-isolated liveness', async () 
   assert.equal(mutations, 0);
   assert.equal(settled.length, LIVENESS_FAN_OUT - 1);
   assert.equal(settledBeforeAllStarted, false);
+  const observedRows = liveness.targets as Array<{ target_id: string; liveness: string }>;
+  const observedSettledTargetIds = observedRows.filter((row) => row.liveness !== 'unresponsive').map((row) => row.target_id);
+  const observedUnresponsiveTargetIds = starts.filter((targetId) => !settled.includes(targetId));
+  assert.deepEqual([...observedSettledTargetIds].sort(), [...settled].sort());
+  assert.deepEqual(liveness.unresponsive_target_ids, observedUnresponsiveTargetIds);
+  assert.equal(evaluateCalls.length - starts.length, 0);
   const proof = {
     schema: 'browser-gpt-page-probe-contract-proof/v1',
     result: 'owner-isolation-and-liveness-deadline-isolation',
@@ -657,11 +666,11 @@ test('contract proof: owner isolation and deadline-isolated liveness', async () 
     reused_close_calls: reusedCloseCalls,
     admitted_target_ids: starts,
     started_target_ids: starts,
-    settled_target_ids: [...settled, 'live-0'],
+    settled_target_ids: [...observedSettledTargetIds, ...observedUnresponsiveTargetIds],
     admitted_target_count: starts.length,
-    settled_target_count: (liveness.targets as unknown[]).length,
-    unresponsive_target_ids: liveness.unresponsive_target_ids,
-    retry_count: 0,
+    settled_target_count: observedRows.length,
+    unresponsive_target_ids: observedUnresponsiveTargetIds,
+    retry_count: evaluateCalls.length - starts.length,
     diagnostic_only: true,
     workflow_authority: 'none',
   };
@@ -715,6 +724,79 @@ test('acquisition rejects redirect and malformed creation, while exposing cleanu
     })),
     (error: any) => error.status === 'cleanup_failed' && error.details?.cleanup === 'cleanup_failed',
   );
+});
+
+test('created ownership survives transient URLs and rejects contradictory target IDs', async () => {
+  const requested = 'https://chatgpt.com/c/transient';
+  const closeCalls: string[] = [];
+  const acquired = await runProbe({
+    operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: requested, openIfMissing: true,
+  }, deps({
+    listTargets: async () => [],
+    createPage: async () => ({
+      id: 'created-transient', type: 'page', url: 'about:blank', title: 'Loading',
+      webSocketDebuggerUrl: 'ws://example/created-transient',
+    }),
+    closePage: async (_cdp, targetId) => { closeCalls.push(targetId); return 'closed'; },
+    evaluate: async (_target, expression) => evaluateExpression(expression, [
+      new FakeNode('user', 'Question', 'Question', { 'data-message-id': 'u-transient' }),
+      new FakeNode('assistant', 'Answer', 'Answer', { 'data-message-id': 'a-transient' }),
+    ], false, requested),
+  }));
+  assert.equal(acquired.status, 'ok');
+  assert.deepEqual(closeCalls, ['created-transient']);
+
+  const contradictoryCloseCalls: string[] = [];
+  await assert.rejects(
+    runProbe({
+      operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/contradictory', openIfMissing: true,
+    }, deps({
+      listTargets: async () => [{ id: 'foreign', type: 'page', url: 'about:blank', title: 'Foreign' }],
+      createPage: async () => ({
+        id: 'foreign', type: 'page', url: 'https://chatgpt.com/c/contradictory', title: 'Foreign',
+        webSocketDebuggerUrl: 'ws://example/foreign',
+      }),
+      closePage: async (_cdp, targetId) => { contradictoryCloseCalls.push(targetId); return 'closed'; },
+    })),
+    (error: any) => error.status === 'unavailable' && error.reason === 'create_result_contradictory',
+  );
+  assert.deepEqual(contradictoryCloseCalls, []);
+});
+
+test('readiness rejects loading documents at the bounded deadline', async () => {
+  let sample = 0;
+  await assert.rejects(
+    runProbe({
+      operation: 'inspect', cdp: 'http://127.0.0.1:9222', conversationUrl: 'https://chatgpt.com/c/loading', openIfMissing: true,
+    }, deps({
+      listTargets: async () => [],
+      createPage: async () => ({
+        id: 'loading', type: 'page', url: 'about:blank', title: 'Loading',
+        webSocketDebuggerUrl: 'ws://example/loading',
+      }),
+      closePage: async () => 'closed',
+      now: () => sample * 250,
+      sleep: async () => { sample += 1; },
+      evaluate: async (_target, expression) => evaluateExpression(expression, [
+        new FakeNode('user', 'Question', 'Question'),
+        new FakeNode('assistant', 'Answer', 'Answer'),
+      ], false, 'https://chatgpt.com/c/loading', 'loading'),
+    })),
+    (error: any) => error.status === 'surface_unknown' && error.reason === 'readiness_timeout',
+  );
+});
+
+test('production-shaped liveness evaluation timeout is unresponsive', async () => {
+  const result = await runProbe({ operation: 'liveness', cdp: 'http://127.0.0.1:9222' }, deps({
+    listTargets: async () => [{
+      id: 'hung', type: 'page', url: 'https://chatgpt.com/c/hung', title: 'Hung',
+      webSocketDebuggerUrl: 'ws://example/hung',
+    }],
+    evaluate: async () => { throw new Error('cdp_evaluate_timeout'); },
+  }));
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.unresponsive_target_ids, ['hung']);
+  assert.equal((result.targets as any[])[0].reason, 'liveness_target_timeout');
 });
 
 test('liveness reports unavailable targets and truncation without mutation', async () => {

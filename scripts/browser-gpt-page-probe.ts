@@ -82,6 +82,7 @@ export interface NodeSummary {
 
 export interface InspectionSnapshot {
   readonly page_url: string;
+  readonly ready_state: 'interactive' | 'complete';
   readonly title: string;
   readonly generation_in_progress: boolean | 'unknown';
   readonly observed_user_nodes: number;
@@ -99,6 +100,7 @@ interface InspectionExpressionResult {
   readonly status: 'ok' | 'surface_unknown';
   readonly reason?: string;
   readonly page_url?: string;
+  readonly ready_state?: 'loading' | 'interactive' | 'complete';
   readonly title?: string;
   readonly generation_in_progress?: boolean | 'unknown';
   readonly observed_user_nodes?: number;
@@ -384,6 +386,7 @@ function validateInspectionSnapshot(
   }
   if (value.status !== 'ok'
     || !isBoundedString(value.page_url, MAX_NORMALIZED_URL_CODE_POINTS)
+    || (value.ready_state !== 'interactive' && value.ready_state !== 'complete')
     || !isBoundedString(value.title, MAX_TEXT_CODE_POINTS)
     || (typeof value.generation_in_progress !== 'boolean' && value.generation_in_progress !== 'unknown')
     || !isNonNegativeSafeInteger(value.observed_user_nodes)
@@ -443,6 +446,7 @@ function validateInspectionSnapshot(
   }
   return {
     page_url: requireActualTargetIdentity(target, value.page_url, requireResolvedUrlMatch),
+    ready_state: value.ready_state,
     title: boundedCodePoints(value.title),
     generation_in_progress: value.generation_in_progress,
     observed_user_nodes: value.observed_user_nodes,
@@ -826,7 +830,7 @@ function inspectionExpression(): string {
       const ordinal = roleCounts[role]++;
       observed.push({ node, documentOrdinal, role, ordinal, rawMessageId: node.getAttribute('data-message-id') });
     }
-    if (observed.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href };
+    if (observed.length === 0) return { status: 'surface_unknown', reason: 'message_nodes_missing', page_url: location.href, ready_state: document.readyState };
     const messageIdCounts = new Map();
     for (const entry of observed) if (entry.rawMessageId) messageIdCounts.set(entry.rawMessageId, (messageIdCounts.get(entry.rawMessageId) || 0) + 1);
     const selected = observed.slice(Math.max(0, observed.length - MAX_NODES));
@@ -834,7 +838,7 @@ function inspectionExpression(): string {
     for (const entry of selected) {
       const innerText = typeof entry.node.innerText === 'string' ? entry.node.innerText : null;
       const textContent = typeof entry.node.textContent === 'string' ? entry.node.textContent : null;
-      if (innerText === null || textContent === null) return { status: 'surface_unknown', reason: 'text_representation_unavailable' };
+      if (innerText === null || textContent === null) return { status: 'surface_unknown', reason: 'text_representation_unavailable', page_url: location.href, ready_state: document.readyState };
       const attrs = {};
       for (const name of ATTRS) {
         const value = entry.node.getAttribute(name);
@@ -856,7 +860,7 @@ function inspectionExpression(): string {
     let lastDigest = null;
     if (lastAssistant) {
       const lastInnerText = typeof lastAssistant.node.innerText === 'string' ? lastAssistant.node.innerText : null;
-      if (lastInnerText === null) return { status: 'surface_unknown', reason: 'last_assistant_text_unavailable' };
+      if (lastInnerText === null) return { status: 'surface_unknown', reason: 'last_assistant_text_unavailable', page_url: location.href, ready_state: document.readyState };
       lastDigest = await digest(lastInnerText.replace(/\\s+/gu, ' ').trim());
     }
     let generating = 'unknown';
@@ -870,6 +874,7 @@ function inspectionExpression(): string {
     return {
       status: 'ok',
       page_url: location.href,
+      ready_state: document.readyState,
       title: head(document.title || ''),
       generation_in_progress: generating,
       observed_user_nodes: roleCounts.user,
@@ -944,6 +949,7 @@ function withTimeout<T>(
 
 function readinessKey(snapshot: InspectionSnapshot): string {
   return JSON.stringify({
+    ready_state: snapshot.ready_state,
     observed_user_nodes: snapshot.observed_user_nodes,
     user_nodes: snapshot.nodes
       .filter((node) => node.role === 'user')
@@ -974,11 +980,23 @@ async function inspectWithReadiness(
 ): Promise<InspectionSnapshot> {
   const deadline = clockNow(deps) + ACQUISITION_READINESS_TIMEOUT_MS;
   let previousKey: string | undefined;
-  while (clockNow(deps) <= deadline) {
+  while (clockNow(deps) < deadline) {
+    const remaining = deadline - clockNow(deps);
+    if (remaining <= 0) break;
     let value: unknown;
     try {
-      value = await deps.evaluate(target, INSPECTION_EXPRESSION);
+      value = await withTimeout(
+        deps.evaluate(target, INSPECTION_EXPRESSION, Math.min(CDP_REQUEST_TIMEOUT_MS, remaining)),
+        remaining,
+        deps,
+        'readiness_sample_timeout',
+      );
+      if (clockNow(deps) >= deadline) throw new ProbeError('unavailable', 'readiness_sample_timeout');
     } catch (error) {
+      if ((error instanceof ProbeError && error.reason === 'readiness_sample_timeout')
+        || (error instanceof Error && error.message === 'cdp_evaluate_timeout')) {
+        throw new ProbeError('surface_unknown', 'readiness_timeout');
+      }
       throw new ProbeError('unavailable', 'target_read_unavailable', boundedDetail(error));
     }
     const actualIdentity = normalizedConversationIdentity(value);
@@ -1002,19 +1020,37 @@ async function inspectWithReadiness(
   throw new ProbeError('surface_unknown', 'readiness_timeout');
 }
 
-function validateCreatedTarget(value: unknown, requestedIdentity: string): CompatibleTarget {
+function validateCreatedTarget(
+  value: unknown,
+  requestedIdentity: string,
+  preExistingTargetIds: ReadonlySet<string>,
+): CompatibleTarget {
   if (Array.isArray(value)) throw new ProbeError('unavailable', 'create_result_ambiguous');
   if (!isRecord(value)) throw new ProbeError('unavailable', 'create_result_malformed');
-  const targets = toCompatibleTargets([value as CdpTarget]);
-  if (targets.length !== 1) throw new ProbeError('unavailable', 'create_result_malformed');
-  const target = targets[0]!;
-  if (!isDebuggerWebSocketUrl(target.web_socket_debugger_url)) {
+  const rawTarget = value as CdpTarget;
+  if (rawTarget.type !== 'page'
+    || typeof rawTarget.id !== 'string'
+    || !TARGET_ID_RE.test(rawTarget.id)
+    || preExistingTargetIds.has(rawTarget.id)) {
+    throw new ProbeError('unavailable', preExistingTargetIds.has(rawTarget.id ?? '') ? 'create_result_contradictory' : 'create_result_malformed');
+  }
+  if (!isDebuggerWebSocketUrl(rawTarget.webSocketDebuggerUrl)) {
     throw new ProbeError('unavailable', 'create_target_websocket_unavailable');
   }
-  if (target.normalized_url !== requestedIdentity) {
-    throw new ProbeError('unavailable', 'create_result_identity_mismatch');
+  let normalizedUrl = requestedIdentity;
+  if (typeof rawTarget.url === 'string' && isCompatibleChatGptUrl(rawTarget.url)) {
+    try {
+      normalizedUrl = normalizeConversationUrl(rawTarget.url);
+    } catch {
+      normalizedUrl = requestedIdentity;
+    }
   }
-  return target;
+  return {
+    target_id: rawTarget.id,
+    normalized_url: normalizedUrl,
+    title: safeTitle(rawTarget.title),
+    web_socket_debugger_url: rawTarget.webSocketDebuggerUrl,
+  };
 }
 
 async function inspectAcquiredUrl(
@@ -1022,7 +1058,13 @@ async function inspectAcquiredUrl(
   deps: ProbeDependencies,
 ): Promise<ProbeEnvelope> {
   const requestedIdentity = normalizeConversationUrl(args.conversationUrl!);
-  const targets = await availableTargets(args.cdp, deps);
+  const rawTargets = await listTargetCensus(args.cdp, deps);
+  const targets = toCompatibleTargets(rawTargets);
+  const preExistingTargetIds = new Set(
+    rawTargets
+      .filter((target) => target.type === 'page' && typeof target.id === 'string' && TARGET_ID_RE.test(target.id))
+      .map((target) => target.id as string),
+  );
   const matches = targets.filter((target) => target.normalized_url === requestedIdentity);
   if (matches.length > 1) throw new ProbeError('ambiguous', 'target_url_ambiguous');
   if (matches.length === 1) {
@@ -1048,7 +1090,7 @@ async function inspectAcquiredUrl(
       deps,
       'page_create_timeout',
     );
-    ownedTarget = validateCreatedTarget(created, requestedIdentity);
+    ownedTarget = validateCreatedTarget(created, requestedIdentity, preExistingTargetIds);
   } catch (error) {
     if (error instanceof ProbeError) throw error;
     throw new ProbeError('unavailable', 'page_create_failed', boundedDetail(error));
@@ -1139,8 +1181,9 @@ async function settleLivenessTarget(target: CompatibleTarget, deps: ProbeDepende
     }
     return livenessRow(target, 'responsive', 'target_probe_ok');
   } catch (error) {
-    if (error instanceof ProbeError && error.reason === 'liveness_target_timeout') {
-      return livenessRow(target, 'unresponsive', error.reason);
+    if ((error instanceof ProbeError && error.reason === 'liveness_target_timeout')
+      || (error instanceof Error && error.message === 'cdp_evaluate_timeout')) {
+      return livenessRow(target, 'unresponsive', 'liveness_target_timeout');
     }
     return livenessRow(target, 'unavailable', boundedDetail(error));
   }
@@ -1167,7 +1210,6 @@ async function runLiveness(args: ParsedLivenessArgs, deps: ProbeDependencies): P
   const admitted = targets.slice(0, LIVENESS_FAN_OUT);
   const rows = await Promise.all(admitted.map((target) => settleLivenessTarget(target, deps)));
   const elapsed = clockNow(deps) - startedAt;
-  if (elapsed > LIVENESS_TOTAL_TIMEOUT_MS) throw new ProbeError('unavailable', 'liveness_total_timeout');
   return {
     ...baseEnvelope('liveness', 'ok'),
     targets: rows,
@@ -1178,6 +1220,7 @@ async function runLiveness(args: ParsedLivenessArgs, deps: ProbeDependencies): P
     liveness_target_timeout_ms: LIVENESS_TARGET_TIMEOUT_MS,
     liveness_total_timeout_ms: LIVENESS_TOTAL_TIMEOUT_MS,
     liveness_elapsed_ms: Math.max(0, elapsed),
+    liveness_total_deadline_exceeded: elapsed > LIVENESS_TOTAL_TIMEOUT_MS,
   };
 }
 
@@ -1258,12 +1301,16 @@ function resolveTargetByUrl(targets: readonly CompatibleTarget[], conversationUr
   return matches[0]!;
 }
 
-async function availableTargets(cdp: string, deps: ProbeDependencies): Promise<CompatibleTarget[]> {
+async function listTargetCensus(cdp: string, deps: ProbeDependencies): Promise<readonly CdpTarget[]> {
   try {
-    return toCompatibleTargets(await deps.listTargets(cdp));
+    return await withTimeout(deps.listTargets(cdp), CDP_REQUEST_TIMEOUT_MS, deps, 'target_census_timeout');
   } catch (error) {
     throw new ProbeError('unavailable', 'cdp_unavailable', boundedDetail(error));
   }
+}
+
+async function availableTargets(cdp: string, deps: ProbeDependencies): Promise<CompatibleTarget[]> {
+  return toCompatibleTargets(await listTargetCensus(cdp, deps));
 }
 
 function requireActualTargetIdentity(
