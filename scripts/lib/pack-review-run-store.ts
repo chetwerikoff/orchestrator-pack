@@ -239,6 +239,110 @@ function requiredPositiveInteger(value: unknown, name: string, path = ''): numbe
   return number;
 }
 
+function normalizePackReviewGptRoundRecord(value: unknown, path = ''): PackReviewGptRoundRecord {
+  const raw = asObject(value);
+  if (raw.schema !== 'pack-review-gpt-round/v1') {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound schema`);
+  }
+  if (raw.reviewer !== 'gpt') {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound reviewer`);
+  }
+  if (raw.tier !== 'T1' && raw.tier !== 'T2' && raw.tier !== 'T3') {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: invalid reviewRound tier`);
+  }
+  const roundOrdinal = requiredPositiveInteger(raw.roundOrdinal, 'reviewRound roundOrdinal', path);
+  const cardinality = requiredPositiveInteger(raw.cardinality, 'reviewRound cardinality', path);
+  const issueNumber = requiredPositiveInteger(raw.issueNumber, 'reviewRound issueNumber', path);
+  const boundIssueSnapshotDigest = requiredString(
+    raw.boundIssueSnapshotDigest,
+    'reviewRound boundIssueSnapshotDigest',
+    path,
+  );
+  if (!Array.isArray(raw.sourceSlots)) {
+    throw new Error(`corrupt pack review run record${path ? ` at ${path}` : ''}: missing reviewRound sourceSlots`);
+  }
+  if (raw.sourceSlots.length !== cardinality) {
+    throw new Error(
+      `corrupt pack review run record${path ? ` at ${path}` : ''}: reviewRound sourceSlots cardinality mismatch`,
+    );
+  }
+
+  const slotIds = new Set<string>();
+  const ordinals = new Set<number>();
+  const invocationIds = new Set<string>();
+  const sourceSlots = raw.sourceSlots.map((value, index): PackReviewSourceSlotRecord => {
+    const slotPath = `${path || '<record>'}.reviewRound.sourceSlots[${index}]`;
+    const slot = asObject(value);
+    const slotId = requiredString(slot.slotId, 'slotId', slotPath);
+    const ordinal = requiredPositiveInteger(slot.ordinal, 'ordinal', slotPath);
+    if (ordinal > cardinality) {
+      throw new Error(`corrupt pack review run record at ${slotPath}: ordinal exceeds cardinality`);
+    }
+    const expectedSlotId = `source-${String(ordinal).padStart(2, '0')}`;
+    if (slotId !== expectedSlotId) {
+      throw new Error(
+        `corrupt pack review run record at ${slotPath}: slotId '${slotId}' is not bound to ordinal ${ordinal}`,
+      );
+    }
+    if (slotIds.has(slotId)) {
+      throw new Error(`corrupt pack review run record at ${slotPath}: duplicate slotId '${slotId}'`);
+    }
+    if (ordinals.has(ordinal)) {
+      throw new Error(`corrupt pack review run record at ${slotPath}: duplicate ordinal ${ordinal}`);
+    }
+    slotIds.add(slotId);
+    ordinals.add(ordinal);
+
+    const lifecycle = requiredString(slot.lifecycle, 'lifecycle', slotPath) as PackReviewSourceSlotLifecycle;
+    if (lifecycle !== 'planned' && lifecycle !== 'invocation_started' && lifecycle !== 'terminal') {
+      throw new Error(`corrupt pack review run record at ${slotPath}: invalid lifecycle '${lifecycle}'`);
+    }
+
+    let invocationId: string | undefined;
+    if (slot.invocationId !== undefined) {
+      invocationId = requiredString(slot.invocationId, 'invocationId', slotPath);
+      if (invocationIds.has(invocationId)) {
+        throw new Error(`corrupt pack review run record at ${slotPath}: duplicate invocationId '${invocationId}'`);
+      }
+      invocationIds.add(invocationId);
+    }
+
+    let attemptOrdinal: number | undefined;
+    if (slot.attemptOrdinal !== undefined) {
+      attemptOrdinal = requiredPositiveInteger(slot.attemptOrdinal, 'attemptOrdinal', slotPath);
+    }
+
+    return {
+      ...(slot as unknown as PackReviewSourceSlotRecord),
+      slotId,
+      ordinal,
+      lifecycle,
+      ...(invocationId === undefined ? {} : { invocationId }),
+      ...(attemptOrdinal === undefined ? {} : { attemptOrdinal }),
+    };
+  });
+
+  for (let ordinal = 1; ordinal <= cardinality; ordinal += 1) {
+    if (!ordinals.has(ordinal)) {
+      throw new Error(
+        `corrupt pack review run record${path ? ` at ${path}` : ''}: missing source slot ordinal ${ordinal}`,
+      );
+    }
+  }
+
+  return {
+    ...(raw as unknown as PackReviewGptRoundRecord),
+    schema: 'pack-review-gpt-round/v1',
+    reviewer: 'gpt',
+    tier: raw.tier,
+    roundOrdinal,
+    cardinality,
+    issueNumber,
+    boundIssueSnapshotDigest,
+    sourceSlots,
+  };
+}
+
 export function normalizePackReviewCanonicalRepository(value: string): string {
   const slug = String(value ?? '').trim();
   if (!/^[^/\s]+\/[^/\s]+$/.test(slug)) {
@@ -386,6 +490,9 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
   }
   const createdAt = requiredString(raw.createdAt, 'createdAt', path);
   const updatedAt = requiredString(raw.updatedAt, 'updatedAt', path);
+  const reviewRound = raw.reviewRound === undefined || raw.reviewRound === null
+    ? undefined
+    : normalizePackReviewGptRoundRecord(raw.reviewRound, path);
   return {
     ...(raw as unknown as PackReviewRunRecord),
     schemaVersion: 1,
@@ -403,9 +510,7 @@ function parseRecord(value: unknown, path = ''): PackReviewRunRecord {
     surface: String(raw.surface ?? ''),
     trustedPackRoot: String(raw.trustedPackRoot ?? ''),
     sourceRepoRoot: String(raw.sourceRepoRoot ?? ''),
-    reviewRound: raw.reviewRound && typeof raw.reviewRound === 'object' && !Array.isArray(raw.reviewRound)
-      ? raw.reviewRound as PackReviewGptRoundRecord
-      : undefined,
+    reviewRound,
     runnerPid: Number(raw.runnerPid ?? 0),
     createdAt,
     updatedAt,
@@ -551,9 +656,10 @@ function hasPersistedPackReviewVerdict(record: PackReviewRunRecord): boolean {
 function writeRecordUnlocked(storeRoot: string, record: PackReviewRunRecord, createOnly = false): void {
   const path = recordPath(storeRoot, record.id);
   if (createOnly && existsSync(path)) throw new Error(`pack review run already exists: ${record.id}`);
+  const validated = parseRecord(record, path);
   mkdirSync(dirname(path), { recursive: true });
   const temp = join(dirname(path), `.${randomUUID()}.tmp`);
-  writeFileSync(temp, `${JSON.stringify(record)}\n`, 'utf8');
+  writeFileSync(temp, `${JSON.stringify(validated)}\n`, 'utf8');
   try {
     renameRecordWithRetry(temp, path);
   } finally {
