@@ -144,6 +144,68 @@ describe('Orca task adapter destructive operations', () => {
     expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'close')).toHaveLength(1);
   });
 
+  it('retries close once only after an explicit runtime_error rejection', () => {
+    const handle = 'retry-terminal';
+    const generation = 'retry-generation';
+    let closeAttempts = 0;
+    const runJson = vi.fn((args: readonly string[]): OrcaJsonResponse => {
+      const operation = `${args[0] ?? ''} ${args[1] ?? ''}`;
+      switch (operation) {
+        case 'terminal create':
+          return {
+            ok: true,
+            result: { terminal: { handle, incarnationId: generation, title: 'owned' } },
+          };
+        case 'worktree current':
+          return {
+            ok: true,
+            result: { worktree: { path: '/tmp/worktree-1248', head: 'a'.repeat(40) } },
+          };
+        case 'terminal list':
+          return {
+            ok: true,
+            result: {
+              terminals: [{
+                handle,
+                incarnationId: generation,
+                title: 'owned',
+                worktreePath: '/tmp/worktree-1248',
+                status: 'running',
+              }],
+            },
+          };
+        case 'terminal close':
+          closeAttempts += 1;
+          return closeAttempts === 1
+            ? {
+                ok: false,
+                error: { code: 'runtime_error', message: 'transient explicit rejection' },
+              }
+            : { ok: true, result: { closed: true } };
+        default:
+          return {
+            ok: false,
+            error: { code: 'unexpected_operation', message: operation },
+          };
+      }
+    });
+    const adapter = new OrcaTaskRuntimeAdapter({ runJson: runJson as never });
+    const spawned = adapter.spawnWorker({ title: 'owned', command: 'cursor-agent' });
+    expect(spawned.status).toBe('ok');
+    if (spawned.status !== 'ok') return;
+
+    expect(adapter.stopWorker(spawned.value.identity)).toEqual({
+      status: 'ok',
+      value: { stopped: true },
+    });
+    expect(runJson.mock.calls.filter((call) => call[0]?.[1] === 'close')).toHaveLength(2);
+    expect(adapter.stopWorker(spawned.value.identity)).toEqual({
+      status: 'failed',
+      operation: 'stop_worker',
+      reason: 'worker_not_owned_by_runtime_instance',
+    });
+  });
+
   it('retains deterministic worker identity after one ambiguous dispatch', () => {
     const adapter = new DeterministicRuntimeAdapter();
     const dispatch = vi.spyOn(adapter, 'dispatchInput').mockReturnValue({
