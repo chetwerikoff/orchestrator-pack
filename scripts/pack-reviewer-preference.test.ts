@@ -5,6 +5,7 @@ import { runProcessSync } from './kernel/subprocess.js';
 import {
   getPackReviewerPreferencePath,
   readPackReviewerPreference,
+  replacePreferenceFile,
   writePackReviewerPreference,
 } from './lib/pack-reviewer-preference.ts';
 import {
@@ -37,6 +38,21 @@ describe('persistent pack reviewer preference', () => {
     expect(() => getPackReviewerPreferencePath({})).toThrow(/CONFIG_ROOT_MISSING/);
   });
 
+  it('fails closed on a missing config root instead of using legacy environment state', () => {
+    const resolution = resolvePackReviewerResolution({
+      XDG_CONFIG_HOME: '',
+      HOME: '',
+      PACK_REVIEWER: 'codex',
+    });
+
+    expect(resolution).toMatchObject({
+      reviewer: null,
+      source: 'none',
+      preferencePath: null,
+    });
+    expect(resolution.errorMessage).toMatch(/CONFIG_ROOT_MISSING/);
+  });
+
   it('persists a valid reviewer and rereads it', () => {
     const { filePath } = preferenceFixture();
     const result = writePackReviewerPreference('gpt', filePath);
@@ -55,6 +71,34 @@ describe('persistent pack reviewer preference', () => {
       expect(statSync(dirname(filePath)).mode & 0o777).toBe(0o700);
       expect(statSync(filePath).mode & 0o777).toBe(0o600);
     }
+  });
+
+  it('retains the previous preference when Windows replacement and rollback both fail', () => {
+    let renameCalls = 0;
+    const renameSync = vi.fn((source: string, destination: string) => {
+      renameCalls += 1;
+      if (renameCalls === 1) {
+        throw Object.assign(new Error('destination exists'), { code: 'EPERM' });
+      }
+      if (renameCalls === 3) {
+        throw Object.assign(new Error('replacement failed'), { code: 'EEXIST' });
+      }
+      if (renameCalls === 4) {
+        throw Object.assign(new Error('rollback failed'), { code: 'EPERM' });
+      }
+      void source;
+      void destination;
+    }) as typeof import('node:fs').renameSync;
+    const rmSync = vi.fn() as typeof import('node:fs').rmSync;
+
+    expect(() => replacePreferenceFile(
+      '/tmp/new-preference.tmp',
+      '/tmp/live-preference.json',
+      { renameSync, rmSync },
+      'win32',
+    )).toThrow(/previous preference is preserved/);
+    expect(renameSync).toHaveBeenCalledTimes(4);
+    expect(rmSync).not.toHaveBeenCalled();
   });
 
   it('prefers the saved reviewer over stale legacy environment state', () => {

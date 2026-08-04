@@ -37,7 +37,10 @@ describe('PACK_REVIEWER selector (Issue #1031)', () => {
   });
 
   it('reads PACK_REVIEWER from env', () => {
-    expect(resolvePackReviewerFromEnv({ PACK_REVIEWER: 'gpt' })).toBe('gpt');
+    expect(resolvePackReviewerFromEnv({
+      HOME: '/tmp/opk-reviewer-home',
+      PACK_REVIEWER: 'gpt',
+    })).toBe('gpt');
     expect(resolvePackReviewerFromEnv({}, { preferenceFilePath: missingPreferenceFile })).toBeNull();
   });
 

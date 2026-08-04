@@ -134,26 +134,6 @@ function resolvePackReviewer(
   }
 
   if (!path) {
-    const legacyRaw = legacyReviewerValue(env, options);
-    if (legacyRaw) {
-      const legacy = normalizePackReviewer(legacyRaw);
-      if (legacy) {
-        return {
-          selectorValue: legacy,
-          reviewer: legacy,
-          source: 'legacy-env',
-          preferencePath: null,
-          preference: null,
-          errorMessage: null,
-        };
-      }
-      return noAuthority(
-        legacyRaw,
-        `PACK_REVIEWER has unrecognized value '${legacyRaw}'. Set PACK_REVIEWER to gpt, claude, or codex.`,
-        null,
-        null,
-      );
-    }
     return noAuthority(
       null,
       'OPK_REVIEWER_CONFIG_ROOT_MISSING: set XDG_CONFIG_HOME or HOME before accessing the persistent reviewer preference.',

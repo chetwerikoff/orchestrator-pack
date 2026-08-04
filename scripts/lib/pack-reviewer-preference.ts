@@ -43,6 +43,11 @@ export interface PackReviewerPreferencePathEnv {
   readonly HOME?: string;
 }
 
+export interface PackReviewerPreferenceFileOperations {
+  readonly renameSync: typeof renameSync;
+  readonly rmSync: typeof rmSync;
+}
+
 function nonEmpty(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -168,12 +173,17 @@ function enforceMode(filePath: string, mode: number, kind: 'directory' | 'file')
   }
 }
 
-function replacePreferenceFile(temporaryPath: string, filePath: string): void {
+export function replacePreferenceFile(
+  temporaryPath: string,
+  filePath: string,
+  operations: PackReviewerPreferenceFileOperations = { renameSync, rmSync },
+  platform: NodeJS.Platform = process.platform,
+): void {
   try {
-    renameSync(temporaryPath, filePath);
+    operations.renameSync(temporaryPath, filePath);
     return;
   } catch (error) {
-    if (process.platform !== 'win32'
+    if (platform !== 'win32'
       || ((error as NodeJS.ErrnoException).code !== 'EEXIST'
         && (error as NodeJS.ErrnoException).code !== 'EPERM')) {
       throw error;
@@ -182,29 +192,32 @@ function replacePreferenceFile(temporaryPath: string, filePath: string): void {
 
   // Node's Windows rename cannot replace an existing file. Move the old
   // bytes aside first and roll them back if the replacement cannot complete.
-  // POSIX callers take the atomic same-directory rename path above.
+  // POSIX callers take the atomic same-directory rename path above. If either
+  // replacement or rollback fails, retain the backup rather than destroying
+  // the only known-good copy of the preference.
   const backupPath = `${filePath}.${process.pid}.${randomUUID()}.bak`;
-  let backupCreated = false;
+  operations.renameSync(filePath, backupPath);
   try {
-    renameSync(filePath, backupPath);
-    backupCreated = true;
-    renameSync(temporaryPath, filePath);
-    rmSync(backupPath, { force: true });
-  } catch (error) {
-    if (backupCreated) {
-      try {
-        rmSync(filePath, { force: true });
-      } catch {
-        // The replacement target may not exist after a failed rename.
-      }
-      try {
-        renameSync(backupPath, filePath);
-      } catch {
-        // Preserve the original failure; the caller still fails closed.
-      }
+    operations.renameSync(temporaryPath, filePath);
+  } catch (replacementError) {
+    try {
+      operations.renameSync(backupPath, filePath);
+    } catch (rollbackError) {
+      throw new Error(
+        `OPK_REVIEWER_REPLACEMENT_FAILED: replacement and rollback failed; ` +
+        `the previous preference is preserved at ${backupPath}. ` +
+        `replacement=${String(replacementError)} rollback=${String(rollbackError)}`,
+      );
     }
-    throw error;
-  } finally {
-    rmSync(backupPath, { force: true });
+    throw replacementError;
+  }
+
+  try {
+    operations.rmSync(backupPath, { force: true });
+  } catch (cleanupError) {
+    throw new Error(
+      `OPK_REVIEWER_REPLACEMENT_CLEANUP_FAILED: the new preference is active, ` +
+      `but the previous preference remains at ${backupPath}. ${String(cleanupError)}`,
+    );
   }
 }
