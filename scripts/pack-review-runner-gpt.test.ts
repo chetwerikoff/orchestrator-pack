@@ -49,8 +49,13 @@ function cleanTerminalPayload(): string {
   return JSON.stringify({ verdict: 'clean', findingCount: 0, findings: [] });
 }
 
-function successfulCleanReviewPayload(): string {
-  return terminalTurnPayload({ state: 'ok', cause: 'completed_page_only', sendCount: 1 }) + String.fromCharCode(10) + cleanTerminalPayload();
+function successfulCleanReviewPayload(invocationId: string): string {
+  return terminalTurnPayload({
+    state: 'ok',
+    cause: 'completed_page_only',
+    sendCount: 1,
+    invocationId,
+  }) + String.fromCharCode(10) + cleanTerminalPayload();
 }
 
 function terminalTurnPayload(input: {
@@ -70,7 +75,12 @@ function terminalTurnPayload(input: {
 }
 
 function findingsPayload(title: string): string {
-  return terminalTurnPayload({ state: 'ok', cause: 'completed_page_only', sendCount: 1 }) + String.fromCharCode(10) + JSON.stringify({
+  return terminalTurnPayload({
+    state: 'ok',
+    cause: 'completed_page_only',
+    sendCount: 1,
+    invocationId: `inv-${title}`,
+  }) + String.fromCharCode(10) + JSON.stringify({
     verdict: 'findings',
     findingCount: 1,
     findings: [{ title, body: 'body-' + title, severity: 'blocking' }],
@@ -732,9 +742,9 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
         expect(notifications).toHaveLength(0);
       },
       fixtureReviewBySourceSlot: {
-        'source-01': [{ stdout: successfulCleanReviewPayload() }],
-        'source-02': [{ stdout: successfulCleanReviewPayload() }],
-        'source-03': [{ stdout: successfulCleanReviewPayload() }],
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
+        'source-02': [{ stdout: successfulCleanReviewPayload('inv-source-02') }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
       },
     }));
 
@@ -779,12 +789,12 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     const result = await startPackReview(pluralStart(storeRoot, capture, {
       fixtureReviewBySourceSlot: {
-        'source-01': [{ stdout: successfulCleanReviewPayload() }],
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
         'source-02': [
           { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
           { stdout: terminalTurnPayload({ state: 'profile_busy', cause: 'profile_busy' }), exitCode: 13 },
         ],
-        'source-03': [{ stdout: successfulCleanReviewPayload() }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
       },
     }));
 
@@ -809,9 +819,9 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
 
     const result = await startPackReview(pluralStart(storeRoot, capture, {
       fixtureReviewBySourceSlot: {
-        'source-01': [{ stdout: successfulCleanReviewPayload() }],
+        'source-01': [{ stdout: successfulCleanReviewPayload('inv-source-01') }],
         'source-02': [{ stdout: terminalTurnPayload({ state: 'driver_error', cause: 'browser_lost', sendCount: 1 }), exitCode: 13 }],
-        'source-03': [{ stdout: successfulCleanReviewPayload() }],
+        'source-03': [{ stdout: successfulCleanReviewPayload('inv-source-03') }],
       },
     }));
 
