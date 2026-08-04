@@ -1,13 +1,9 @@
 import {
-  closeSync,
   existsSync,
   lstatSync,
-  openSync,
   readFileSync,
   readlinkSync,
   readdirSync,
-  unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -29,6 +25,12 @@ import {
   type OrcaWorktreeRow,
   type WorktreeClassificationReport,
 } from './core.ts';
+import {
+  acquireLifecycleExclusion,
+  DEFAULT_WORKTREE_LIFECYCLE_EXCLUSION_PATH,
+  releaseLifecycleExclusion,
+  type LifecycleExclusionHandle,
+} from './exclusion.ts';
 import { WORKTREE_IGNORED_DIRECTORY_ALLOWLIST } from './policy.ts';
 
 export interface CommandInvocation {
@@ -123,8 +125,6 @@ interface RecoverySnapshot {
   readonly errors: readonly string[];
 }
 
-const DEFAULT_LOCK_PATH = '/tmp/opk-worktree-teardown.lock';
-
 function defaultRunner(invocation: CommandInvocation): ProcessResult {
   return runProcessSync({
     command: invocation.command,
@@ -168,13 +168,20 @@ function mergeAgentRows(
   worktrees: readonly OrcaWorktreeRow[],
   agentRows: readonly OrcaWorktreeRow[],
 ): OrcaAgentInventoryRow[] {
-  const agentsByPath = new Map(agentRows.map((row) => [row.path, row.agents]));
-  const merged: OrcaAgentInventoryRow[] = worktrees.map((row) => ({
-    ...row,
-    agents: agentsByPath.get(row.path) ?? row.agents,
-  }));
+  const merged: OrcaAgentInventoryRow[] = worktrees.map((worktree) => {
+    const matches = agentRows.filter((row) => row.id === worktree.id && row.path === worktree.path);
+    const agent = matches.length === 1 ? matches[0] : undefined;
+    const malformedFields = new Set(worktree.malformedFields);
+    if (matches.length !== 1) malformedFields.add('agents.census');
+    for (const field of agent?.malformedFields ?? []) malformedFields.add(field);
+    return {
+      ...worktree,
+      agents: agent?.agents,
+      malformedFields: [...malformedFields].sort(),
+    };
+  });
   for (const row of agentRows) {
-    if (!worktrees.some((worktree) => worktree.path === row.path)) merged.push(row);
+    if (!worktrees.some((worktree) => worktree.id === row.id && worktree.path === row.path)) merged.push(row);
   }
   return merged;
 }
@@ -541,29 +548,6 @@ function nonTargetFingerprint(expected: ExpectedWorktreeIdentity, census: Return
   });
 }
 
-function acquireLock(path: string): number | null {
-  try {
-    const fd = openSync(path, 'wx', 0o600);
-    writeFileSync(fd, `${process.pid}\n`, 'utf8');
-    return fd;
-  } catch {
-    return null;
-  }
-}
-
-function releaseLock(path: string, fd: number): void {
-  try {
-    closeSync(fd);
-  } catch {
-    // Best effort; unlink below still attempts owner cleanup.
-  }
-  try {
-    unlinkSync(path);
-  } catch {
-    // Missing-at-release is harmless.
-  }
-}
-
 function deferred(
   context: LifecycleContext,
   classification: WorktreeClassificationReport,
@@ -651,6 +635,7 @@ function recoverGitOnly(
   expectedInput: ExpectedWorktreeIdentity,
   apply: boolean,
   operations: LifecycleOperations,
+  heldExclusion?: LifecycleExclusionHandle,
 ): LifecycleTerminalReport {
   const expected = normalizeExpectedIdentity(expectedInput);
   if (expected.bindingKind !== 'pr') {
@@ -662,9 +647,9 @@ function recoverGitOnly(
     );
   }
   const runner = operations.runner ?? defaultRunner;
-  const lockPath = operations.lockPath ?? DEFAULT_LOCK_PATH;
-  const lockFd = acquireLock(lockPath);
-  if (lockFd === null) {
+  const lockPath = operations.lockPath ?? DEFAULT_WORKTREE_LIFECYCLE_EXCLUSION_PATH;
+  const lock = heldExclusion ?? acquireLifecycleExclusion(lockPath);
+  if (!lock) {
     const initial = collectCensus(expected, operations);
     return deferred('explicit-recovery', initial.classification, `lifecycle exclusion lock is held at ${lockPath}`);
   }
@@ -785,7 +770,7 @@ function recoverGitOnly(
         : {}),
     };
   } finally {
-    releaseLock(lockPath, lockFd);
+    if (!heldExclusion) releaseLifecycleExclusion(lockPath, lock);
   }
 }
 
@@ -794,90 +779,104 @@ function standardTeardown(
   apply: boolean,
   operations: LifecycleOperations,
 ): LifecycleTerminalReport {
-  const census = collectCensus(expected, operations);
+  const initial = collectCensus(expected, operations);
   if (expected.bindingKind !== 'pr') {
     return deferred(
       'post-merge-cleanup',
-      census.classification,
+      initial.classification,
       'post-merge cleanup requires --pr authority, not an issue-only binding',
     );
   }
-  const decision = decideContinuation(census.classification.classification, 'post-merge-cleanup');
-  if (census.classification.classification === 'absent') {
-    return {
-      schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
-      context: 'post-merge-cleanup',
-      outcome: 'already_absent',
-      pipelineContinues: true,
-      classification: census.classification,
-      decision,
-      effects: [],
-    };
+  const lockPath = operations.lockPath ?? DEFAULT_WORKTREE_LIFECYCLE_EXCLUSION_PATH;
+  const lock = acquireLifecycleExclusion(lockPath);
+  if (!lock) {
+    return deferred('post-merge-cleanup', initial.classification, `lifecycle exclusion lock is held at ${lockPath}`);
   }
-  if (census.classification.classification === 'exact_git_only') {
-    const recovered = recoverGitOnly(expected, apply, operations);
-    return { ...recovered, context: 'post-merge-cleanup' };
-  }
-  if (census.classification.classification !== 'exact_dual') {
-    return deferred(
-      'post-merge-cleanup',
-      census.classification,
-      census.errors.join('; ') || 'disputed worktree identity was preserved',
-    );
-  }
-  const runner = operations.runner ?? defaultRunner;
-  const beforeNonTarget = nonTargetFingerprint(expected, census);
-  const args = [
-    '--experimental-strip-types',
-    join(expected.repositoryRoot, 'scripts', 'worktree-teardown.ts'),
-    '--worktree',
-    expected.path,
-    '--pr',
-    String(expected.bindingNumber),
-    '--json',
-    ...(apply ? ['--apply'] : []),
-  ];
-  const result = runner({ command: process.execPath, args, cwd: expected.repositoryRoot });
-  let child: unknown;
   try {
-    child = JSON.parse(result.stdout) as unknown;
-  } catch {
-    child = { raw_stdout: result.stdout.trim(), raw_stderr: result.stderr.trim() };
-  }
-  if (!apply) {
+    const census = collectCensus(expected, operations);
+    const decision = decideContinuation(census.classification.classification, 'post-merge-cleanup');
+    if (census.classification.classification === 'absent') {
+      return {
+        schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
+        context: 'post-merge-cleanup',
+        outcome: 'already_absent',
+        pipelineContinues: true,
+        classification: census.classification,
+        decision,
+        effects: [],
+      };
+    }
+    if (census.classification.classification === 'exact_git_only') {
+      const recovered = recoverGitOnly(expected, apply, operations, lock);
+      return { ...recovered, context: 'post-merge-cleanup' };
+    }
+    if (census.classification.classification !== 'exact_dual') {
+      return deferred(
+        'post-merge-cleanup',
+        census.classification,
+        census.errors.join('; ') || 'disputed worktree identity was preserved',
+      );
+    }
+    const runner = operations.runner ?? defaultRunner;
+    const beforeNonTarget = nonTargetFingerprint(expected, census);
+    const args = [
+      '--experimental-strip-types',
+      join(expected.repositoryRoot, 'scripts', 'worktree-teardown.ts'),
+      '--worktree',
+      expected.path,
+      '--pr',
+      String(expected.bindingNumber),
+      '--json',
+      '--lifecycle-lock-path',
+      lockPath,
+      '--lifecycle-lock-token',
+      lock.token,
+      ...(apply ? ['--apply'] : []),
+    ];
+    const result = runner({ command: process.execPath, args, cwd: expected.repositoryRoot });
+    let child: unknown;
+    try {
+      child = JSON.parse(result.stdout) as unknown;
+    } catch {
+      child = { raw_stdout: result.stdout.trim(), raw_stderr: result.stderr.trim() };
+    }
+    if (!apply) {
+      return {
+        schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
+        context: 'post-merge-cleanup',
+        outcome: result.ok ? 'cleanup_eligible' : 'cleanup_deferred',
+        pipelineContinues: true,
+        classification: census.classification,
+        decision,
+        effects: [],
+        standardTeardown: child,
+        ...(!result.ok ? { error: 'standard teardown dry-run blocked; completed merge/adoption remains successful' } : {}),
+      };
+    }
+
+    const post = collectCensus(expected, operations);
+    const absent = post.classification.classification === 'absent';
+    const unrelatedStable = nonTargetFingerprint(expected, post) === beforeNonTarget;
+    const complete = absent && unrelatedStable;
     return {
       schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
       context: 'post-merge-cleanup',
-      outcome: result.ok ? 'cleanup_eligible' : 'cleanup_deferred',
+      outcome: complete ? 'cleanup_complete' : 'task_degraded',
       pipelineContinues: true,
       classification: census.classification,
       decision,
-      effects: [],
+      effects: ['standard guarded teardown attempted'],
+      postClassification: post.classification,
       standardTeardown: child,
-      ...(!result.ok ? { error: 'standard teardown dry-run blocked; completed merge/adoption remains successful' } : {}),
+      ...(!complete
+        ? { error: result.ok
+            ? 'standard teardown returned success but dual post-read-back did not prove absence with unrelated inventory unchanged'
+            : `standard teardown outcome was unknown or failed and read-back remained disputed: ${commandError(result, process.execPath, args)}` }
+        : {}),
     };
+  } finally {
+    releaseLifecycleExclusion(lockPath, lock);
   }
-
-  const post = collectCensus(expected, operations);
-  const absent = post.classification.classification === 'absent';
-  const unrelatedStable = nonTargetFingerprint(expected, post) === beforeNonTarget;
-  const complete = absent && unrelatedStable;
-  return {
-    schema: 'orchestrator-pack/worktree-lifecycle-terminal/v1',
-    context: 'post-merge-cleanup',
-    outcome: complete ? 'cleanup_complete' : 'task_degraded',
-    pipelineContinues: true,
-    classification: census.classification,
-    decision,
-    effects: ['standard guarded teardown attempted'],
-    postClassification: post.classification,
-    standardTeardown: child,
-    ...(!complete
-      ? { error: result.ok
-          ? 'standard teardown returned success but dual post-read-back did not prove absence with unrelated inventory unchanged'
-          : `standard teardown outcome was unknown or failed and read-back remained disputed: ${commandError(result, process.execPath, args)}` }
-      : {}),
-  };
 }
 
 export function runLifecycle(input: {
