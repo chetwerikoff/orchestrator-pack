@@ -185,10 +185,55 @@ jobs:
           if ((Test-Path -LiteralPath $trustedChecker) -and (Test-Path -LiteralPath $trustedDeclarationContract)) {
             $guardScript = $trustedChecker
           }
-          else {
-            Write-Warning 'scope guard bootstrap: AO-free declaration contract is not on base ref yet; using PR head scripts for this migration PR'
-            $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'
-          }
+            else {
+              Write-Warning 'scope guard bootstrap: AO-free declaration contract is not on base ref yet; using PR head scripts for this migration PR'
+              # A PR-head checker is allowed only for the one live, head-bound bootstrap.
+              # The base checkout must not silently trust arbitrary PR workflow code.
+              $packGh = Join-Path $env:GITHUB_WORKSPACE 'scripts/gh'
+              $prPayload = & $packGh pr view $env:PR_NUMBER --repo $env:GITHUB_REPOSITORY --json body 2>$null
+              if ($LASTEXITCODE -ne 0) { throw 'scope guard bootstrap: unable to read PR body' }
+              $prBody = ([string]($prPayload | ConvertFrom-Json).body)
+              $issueMatches = [regex]::Matches($prBody, '(?im)^\s*(?:closes|fixes|resolves)\s+#(?<number>\d+)\s*$')
+              if ($issueMatches.Count -ne 1) { throw 'scope guard bootstrap: expected exactly one linked Issue' }
+              $issueNumber = [int]$issueMatches[0].Groups['number'].Value
+              $issuePayload = & $packGh issue view $issueNumber --repo $env:GITHUB_REPOSITORY --json body 2>$null
+              if ($LASTEXITCODE -ne 0) { throw 'scope guard bootstrap: unable to read linked Issue body' }
+              $issueBody = ([string]($issuePayload | ConvertFrom-Json).body)
+              $fences = [regex]::Matches($issueBody, '(?ms)```(?:json)?\s*\r?\n(?<json>\{.*?\})\s*\r?\n```')
+              $bootstrapCandidates = @()
+              foreach ($fence in $fences) {
+                try { $candidate = $fence.Groups['json'].Value | ConvertFrom-Json -ErrorAction Stop }
+                catch {
+                  if ($fence.Groups['json'].Value -match 'scope-guard-bootstrap/v1') {
+                    throw 'scope guard bootstrap: malformed bootstrap declaration'
+                  }
+                  continue
+                }
+                if ($candidate.schema -eq 'scope-guard-bootstrap/v1') { $bootstrapCandidates += $candidate }
+              }
+              if ($bootstrapCandidates.Count -ne 1) { throw 'scope guard bootstrap: expected exactly one bootstrap declaration' }
+              $bootstrap = $bootstrapCandidates[0]
+              $expectedPaths = @(
+                'scripts/pr-scope-check.ts',
+                'scripts/pr-scope-check.ps1',
+                'scripts/pr-scope-declaration.ts',
+                'scripts/pr-scope-declaration.test.ts',
+                '.github/workflows/scope-guard.yml'
+              )
+              $declaredPaths = @($bootstrap.allowedImplementationPaths | ForEach-Object { [string]$_ })
+              $bindingValid =
+                $bootstrap.issueNumber -eq $issueNumber -and
+                -not [string]::IsNullOrWhiteSpace([string]$bootstrap.sourceRevision) -and
+                $bootstrap.prNumber -eq [int]$env:PR_NUMBER -and
+                $bootstrap.headSha -eq $env:PR_HEAD_SHA -and
+                $bootstrap.workflowPath -eq '.github/workflows/scope-guard.yml' -and
+                $bootstrap.declarationArtifactsAllowed -eq $false -and
+                $bootstrap.expiresOnMismatch -eq $true -and
+                $declaredPaths.Count -eq $expectedPaths.Count -and
+                -not (Compare-Object -ReferenceObject ($expectedPaths | Sort-Object) -DifferenceObject ($declaredPaths | Sort-Object))
+              if (-not $bindingValid) { throw 'scope guard bootstrap: live Issue binding does not authorize PR-head checker' }
+              $guardScript = Join-Path $env:GITHUB_WORKSPACE 'scripts/pr-scope-check.ps1'
+            }
 
           Push-Location $trustedRoot
           try {
