@@ -18,8 +18,10 @@ import { isRetryablePackReviewZeroSendCollision, startPackReview } from './pack-
 import {
   createPackReviewRun,
   getPackReviewRun,
+  setPackReviewRunTerminal,
   terminalizePackReviewStaleRun,
   updatePackReviewRun,
+  type PackReviewGptRoundRecord,
 } from './lib/pack-review-run-store.js';
 import { acquireReviewStartClaim } from './lib/review-start-claim-store.js';
 import { PACK_REVIEW_BOUND_REVIEWER_ENV } from './lib/resolve-pack-reviewer.js';
@@ -839,9 +841,9 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       issueNumber: 1276,
       boundIssueSnapshotDigest: 'fixture-digest',
       sourceSlots: [
-        { slotId: '01', ordinal: 1, lifecycle: 'terminal' as const, terminalClass: 'complete_clean' },
-        { slotId: '02', ordinal: 2, lifecycle: 'invocation_started' as const, invocationId: 'inv-02' },
-        { slotId: '03', ordinal: 3, lifecycle: 'planned' as const },
+        { slotId: 'source-01', ordinal: 1, lifecycle: 'terminal' as const, terminalClass: 'complete_clean' },
+        { slotId: 'source-02', ordinal: 2, lifecycle: 'invocation_started' as const, invocationId: 'inv-02' },
+        { slotId: 'source-03', ordinal: 3, lifecycle: 'planned' as const },
       ],
     };
     updatePackReviewRun(created.run.id, { runnerPid: 999999, reviewRound }, { projectId: 'orchestrator-pack', storeRoot });
@@ -864,5 +866,112 @@ describe('Issue #1276 deterministic smoke fixtures', () => {
       terminalClass: 'pre_launch_interrupted',
       terminalResult: { noResend: true },
     });
+  });
+});
+
+function storedGptRound(): PackReviewGptRoundRecord {
+  return {
+    schema: 'pack-review-gpt-round/v1',
+    reviewer: 'gpt',
+    tier: 'T1',
+    roundOrdinal: 1,
+    cardinality: 3,
+    issueNumber: 1276,
+    boundIssueSnapshotDigest: 'fixture-digest',
+    sourceSlots: Array.from({ length: 3 }, (_, index) => ({
+      slotId: `source-${String(index + 1).padStart(2, '0')}`,
+      ordinal: index + 1,
+      lifecycle: 'terminal' as const,
+      invocationId: `inv-${index + 1}`,
+      attemptOrdinal: 1,
+      terminalClass: 'complete_clean',
+    })),
+  };
+}
+
+describe('GPT run-store source-slot identity validation (Issue #1276 scenario 23)', () => {
+  it('rejects malformed source census on create, update, read, and terminal settlement', () => {
+    const malformedCases: Array<{
+      name: string;
+      mutate: (round: PackReviewGptRoundRecord) => void;
+    }> = [
+      {
+        name: 'missing slot',
+        mutate: (round) => { round.sourceSlots.pop(); },
+      },
+      {
+        name: 'duplicate slot identity',
+        mutate: (round) => { round.sourceSlots[1] = { ...round.sourceSlots[0]! }; },
+      },
+      {
+        name: 'missing slot id',
+        mutate: (round) => { round.sourceSlots[1]!.slotId = ''; },
+      },
+      {
+        name: 'unbound slot id',
+        mutate: (round) => { round.sourceSlots[1]!.slotId = 'source-99'; },
+      },
+      {
+        name: 'ordinal outside cardinality',
+        mutate: (round) => { round.sourceSlots[1]!.ordinal = 4; },
+      },
+      {
+        name: 'duplicate invocation identity',
+        mutate: (round) => { round.sourceSlots[1]!.invocationId = round.sourceSlots[0]!.invocationId; },
+      },
+    ];
+
+    for (const malformedCase of malformedCases) {
+      const storeRoot = tempRoot(`opk-gpt-source-id-${malformedCase.name.replaceAll(' ', '-')}-`);
+      const reviewRound = storedGptRound();
+      malformedCase.mutate(reviewRound);
+      expect(() => createPackReviewRun({
+        projectId: 'orchestrator-pack',
+        storeRoot,
+        prNumber: 1276,
+        headSha: HEAD_A,
+        trustedPackRoot: repoRoot,
+        sourceRepoRoot: repoRoot,
+        reviewRound,
+      }), malformedCase.name).toThrow(/reviewRound|sourceSlots|slotId|ordinal|invocationId/);
+    }
+
+    const storeRoot = tempRoot('opk-gpt-source-id-boundary-');
+    const created = createPackReviewRun({
+      projectId: 'orchestrator-pack',
+      storeRoot,
+      prNumber: 1276,
+      headSha: HEAD_A,
+      trustedPackRoot: repoRoot,
+      sourceRepoRoot: repoRoot,
+      reviewRound: storedGptRound(),
+    });
+
+    const missingSlotRound = storedGptRound();
+    missingSlotRound.sourceSlots.pop();
+    expect(() => updatePackReviewRun(
+      created.run.id,
+      { reviewRound: missingSlotRound },
+      { projectId: 'orchestrator-pack', storeRoot },
+    )).toThrow(/sourceSlots cardinality mismatch/);
+
+    const duplicateInvocationRound = storedGptRound();
+    duplicateInvocationRound.sourceSlots[1]!.invocationId = duplicateInvocationRound.sourceSlots[0]!.invocationId;
+    expect(() => setPackReviewRunTerminal(
+      created.run.id,
+      'commented',
+      { reviewRound: duplicateInvocationRound },
+      { projectId: 'orchestrator-pack', storeRoot },
+    )).toThrow(/duplicate invocationId/);
+    expect(getPackReviewRun(created.run.id, { projectId: 'orchestrator-pack', storeRoot })?.status).toBe('queued');
+
+    const recordPath = path.join(storeRoot, 'runs', `${created.run.id}.json`);
+    const raw = JSON.parse(readFileSync(recordPath, 'utf8')) as { reviewRound: PackReviewGptRoundRecord };
+    raw.reviewRound.sourceSlots[1]!.slotId = 'source-99';
+    writeFileSync(recordPath, `${JSON.stringify(raw)}\n`, 'utf8');
+    expect(() => getPackReviewRun(created.run.id, {
+      projectId: 'orchestrator-pack',
+      storeRoot,
+    })).toThrow(/not bound to ordinal/);
   });
 });
