@@ -110,6 +110,8 @@ import {
   resolveBoundIssueSnapshot,
 } from './lib/reverify-bound-issue-snapshot.ts';
 import { parseComplexityTierFromIssueBody } from '../docs/review-cycle-cap.mjs';
+import { parseIssueBody } from '@orchestrator-pack/shared/lib/issue_parser.js';
+import type { ResolvedScopeContext } from '../plugins/ao-codex-pr-reviewer/lib/scope_context.ts';
 export { resolveRepositorySlug };
 
 interface FixtureReviewOutcome {
@@ -469,6 +471,7 @@ interface AuthoritativeReviewContext {
   tier: PackReviewTier;
   issueNumber: number;
   snapshotDigest: string;
+  frozenScope: ResolvedScopeContext;
 }
 
 function parseAuthoritativeTier(body: string): PackReviewTier {
@@ -529,6 +532,14 @@ function resolveAuthoritativeReviewContext(input: StartInput, target: {
       tier: fixtureTier as PackReviewTier,
       issueNumber: issueNumber > 0 ? issueNumber : 0,
       snapshotDigest: 'harness-unbound-fixture',
+      frozenScope: {
+        issueNumber: issueNumber > 0 ? issueNumber : null,
+        hasScope: false,
+        issueConstraints: null,
+        declaredPaths: [],
+        declaredGlobs: [],
+        unverifiedIssueConstraints: true,
+      },
     };
   }
 
@@ -540,7 +551,28 @@ function resolveAuthoritativeReviewContext(input: StartInput, target: {
     throw new Error(`caller tier ${input.tier} conflicts with authoritative Issue tier ${tier}`);
   }
   if (issueNumber <= 0) throw new Error('authoritative bound Issue number unavailable');
-  return { tier, issueNumber, snapshotDigest };
+  let frozenScope: ResolvedScopeContext;
+  try {
+    const issueConstraints = parseIssueBody(body);
+    frozenScope = {
+      issueNumber,
+      hasScope: true,
+      issueConstraints,
+      declaredPaths: [],
+      declaredGlobs: [],
+      unverifiedIssueConstraints: false,
+    };
+  } catch {
+    frozenScope = {
+      issueNumber,
+      hasScope: false,
+      issueConstraints: null,
+      declaredPaths: [],
+      declaredGlobs: [],
+      unverifiedIssueConstraints: true,
+    };
+  }
+  return { tier, issueNumber, snapshotDigest, frozenScope };
 }
 
 function parseReviewPayload(stdout: string): ReviewPayload {
@@ -790,6 +822,7 @@ async function invokeReviewer(options: {
   carryoverBundlePath?: string;
   sourceSlotId?: string;
   attemptOrdinal?: number;
+  frozenScope?: ResolvedScopeContext;
 }): Promise<{ result: ProcessResult; resolvedReviewer: PackReviewer | null }> {
   const resolvedReviewer = resolvePackReviewerFromEnv(process.env, {
     layerOverrides: options.fixtureReviewerLayerOverrides,
@@ -850,6 +883,7 @@ async function invokeReviewer(options: {
     AO_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_RUN_ID: options.runId,
     PACK_REVIEW_TARGET_HEAD_SHA: options.headSha,
+    ...(options.frozenScope ? { PACK_REVIEW_FROZEN_SCOPE_JSON: JSON.stringify(options.frozenScope) } : {}),
     ...(options.sourceSlotId ? { PACK_REVIEW_GPT_SOURCE_SLOT: options.sourceSlotId } : {}),
     ...(options.attemptOrdinal ? { PACK_REVIEW_GPT_ATTEMPT_ORDINAL: String(options.attemptOrdinal) } : {}),
   };
@@ -975,6 +1009,7 @@ async function runGptSourceBatch(options: {
   storeRoot: string;
   input: StartInput;
   carryoverBundlePath: string;
+  frozenScope: ResolvedScopeContext;
 }): Promise<ReviewPayload> {
   const admissionInterval = process.env.OPK_VITEST_HARNESS === '1'
     ? 0
@@ -1032,6 +1067,7 @@ async function runGptSourceBatch(options: {
           headSha: options.target.headSha,
           sourceSlotId: slotId,
           attemptOrdinal,
+          frozenScope: options.frozenScope,
         });
       } catch (error) {
         invocation = {
@@ -1827,6 +1863,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           storeRoot,
           input,
           carryoverBundlePath,
+          frozenScope: authoritative.frozenScope,
         });
         result = {
           outcome: 'exit' as const,
@@ -1858,6 +1895,7 @@ export async function startPackReview(input: StartInput): Promise<Record<string,
           fixtureEmulateWin32Selector: input.fixtureEmulateWin32Selector,
           carryoverBundlePath,
           headSha: target.headSha,
+          frozenScope: authoritative.frozenScope,
         });
         result = invocation.result;
         resolvedReviewer = invocation.resolvedReviewer;

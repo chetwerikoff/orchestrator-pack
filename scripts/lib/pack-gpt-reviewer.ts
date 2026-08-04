@@ -8,6 +8,7 @@ import {
 import {
   resolveIssueNumber,
   resolveScopeContext,
+  type ResolvedScopeContext,
 } from '../../plugins/ao-codex-pr-reviewer/lib/scope_context.ts';
 import { parseCodexOutput } from '../../plugins/ao-codex-pr-reviewer/lib/parse_output.ts';
 import { runProcess, type ProcessResult } from '../kernel/subprocess.ts';
@@ -56,6 +57,7 @@ export interface GptReviewRequest {
   headSha: string;
   issueNumber?: number;
   baseRef?: string;
+  frozenScope?: ResolvedScopeContext;
 }
 
 export interface GptTurnResultV1 {
@@ -208,12 +210,21 @@ export async function runGptPackReview(
   }
 
   const packRoot = resolvePackRepoRoot();
-  const issueNumber = request.issueNumber ?? resolveIssueNumber({
+  const issueNumber = request.frozenScope?.issueNumber ?? request.issueNumber ?? resolveIssueNumber({
     repoRoot: request.repoRoot,
     prNumber: request.prNumber,
     explicitIssue: undefined,
   });
-  const scope = resolveScopeContext({
+  if (request.frozenScope
+    && request.issueNumber !== undefined
+    && request.frozenScope.issueNumber !== request.issueNumber) {
+    return {
+      stdout: '',
+      stderr: `frozen scope Issue binding mismatch: scope #${String(request.frozenScope.issueNumber)}, request #${request.issueNumber}`,
+      exitCode: 1,
+    };
+  }
+  const scope = request.frozenScope ?? resolveScopeContext({
     repoRoot: request.repoRoot,
     issueNumber,
   });
@@ -260,6 +271,21 @@ export async function runGptPackReview(
         exitCode: turn.exitCode ?? 1,
       };
     }
+    const terminal = extractLastGptTurnResult(turn.stdout);
+    if (!terminal) {
+      return {
+        stdout: '',
+        stderr: 'GPT browser turn completed without terminal turn-result/v1 evidence',
+        exitCode: 1,
+      };
+    }
+    if (terminal.send_count < 1) {
+      return {
+        stdout: `${JSON.stringify(terminal)}\n`,
+        stderr: `GPT browser turn completed without a successful send (send_count=${terminal.send_count})`,
+        exitCode: 1,
+      };
+    }
     const reply = readFileSync(outputPath, 'utf8');
     const evidenceDir = trim(env.PACK_GPT_BROWSER_EVIDENCE_DIR);
     if (evidenceDir) {
@@ -268,7 +294,7 @@ export async function runGptPackReview(
       writeFileSync(join(evidenceDir, 'terminal-reply.txt'), reply, 'utf8');
     }
     try {
-      const stdout = mapGptReplyToTerminalStdout(reply);
+      const stdout = `${JSON.stringify(terminal)}\n${mapGptReplyToTerminalStdout(reply)}`;
       if (evidenceDir) {
         writeFileSync(join(evidenceDir, 'adapter-stdout.json'), `${stdout}\n`, 'utf8');
       }
